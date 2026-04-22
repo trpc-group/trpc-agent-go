@@ -14,16 +14,14 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // mockFlow implements flow.Flow returning predefined events.
@@ -43,54 +41,86 @@ func (m *mockFlow) Run(ctx context.Context, inv *agent.Invocation) (<-chan *even
 func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
-	originalProvider := trace.TracerProvider
-	originalTracer := trace.Tracer
-	trace.TracerProvider = provider
-	trace.Tracer = provider.Tracer("llm-agent-disable-tracing-test")
+	originalProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
 	t.Cleanup(func() {
 		_ = provider.Shutdown(context.Background())
-		trace.TracerProvider = originalProvider
-		trace.Tracer = originalTracer
+		otel.SetTracerProvider(originalProvider)
 	})
 	return recorder
 }
 
-func TestFinalizeWrappedTelemetry_MarksSpanFromFallbackErrorType(t *testing.T) {
+func TestLLMAgent_RunWithPlugins_RecordsInvokeAgentSpan(t *testing.T) {
 	recorder := useSpanRecorder(t)
-	ctx, span := trace.Tracer.Start(context.Background(), "wrap")
-	var trackerErr error
-	tracker := itelemetry.NewInvokeAgentTracker(
-		ctx,
-		&agent.Invocation{InvocationID: "id", AgentName: "agent"},
-		false,
-		&trackerErr,
+	a := New(
+		"agent",
+		WithDescription("agent description"),
+		WithInstruction("agent instruction"),
+		WithGlobalInstruction("system prompt"),
 	)
-	wrappedChan := make(chan *event.Event)
+	a.flow = &testResponseFlow{
+		response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done"),
+			}},
+		},
+	}
+	invocation := &agent.Invocation{
+		InvocationID: "id",
+		Message:      model.NewUserMessage("hello"),
+	}
 
-	finalizeWrappedTelemetry(
-		span,
-		tracker,
-		nil,
-		"rate_limit_429",
-		nil,
-		true,
-		wrappedChan,
-	)
-
-	select {
-	case _, ok := <-wrappedChan:
-		require.False(t, ok, "wrapped channel should be closed")
-	default:
-		t.Fatal("wrapped channel should be closed")
+	events, err := agent.RunWithPlugins(context.Background(), invocation, a)
+	require.NoError(t, err)
+	for range events {
 	}
 
 	spans := recorder.Ended()
-	require.Len(t, spans, 1)
-	require.Equal(t, codes.Error, spans[0].Status().Code)
+	require.NotEmpty(t, spans)
+	spanName := "invoke_agent agent"
+	var invokeSpan sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		if span.Name() == spanName {
+			invokeSpan = span
+			break
+		}
+	}
+	require.NotNil(t, invokeSpan)
 	require.True(
 		t,
-		hasSpanAttr(spans[0].Attributes(), semconvtrace.KeyErrorType, "rate_limit_429"),
+		hasSpanAttr(
+			invokeSpan.Attributes(),
+			semconvtrace.KeyGenAIAgentDescription,
+			"agent description",
+		),
 	)
+	require.True(
+		t,
+		hasSpanAttr(
+			invokeSpan.Attributes(),
+			semconvtrace.KeyGenAISystemInstructions,
+			"system promptagent instruction",
+		),
+	)
+}
+
+type testResponseFlow struct {
+	response *model.Response
+}
+
+func (m *testResponseFlow) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		if m.response != nil {
+			ch <- event.NewResponseEvent(inv.InvocationID, inv.AgentName, m.response)
+		}
+	}()
+	return ch, nil
 }
 
 func hasSpanAttr(attrs []attribute.KeyValue, key string, value string) bool {
@@ -229,7 +259,7 @@ func TestLLMAgent_Run_DisableTracingSkipsSpanCreation(t *testing.T) {
 			DisableTracing: true,
 		},
 	}
-	events, err := a.Run(context.Background(), invocation)
+	events, err := agent.RunWithPlugins(context.Background(), invocation, a)
 	require.NoError(t, err)
 	for range events {
 	}

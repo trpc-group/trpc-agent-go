@@ -49,6 +49,9 @@ const (
 
 	// flusherStateKey is the invocation state key used by flush.Attach.
 	flusherStateKey = "__flush_session__"
+	// lastPersistableEmittedEventIDStateKey tracks the most recent emitted event
+	// that should eventually become visible in session-backed history.
+	lastPersistableEmittedEventIDStateKey = "__last_persistable_emitted_event_id__"
 	// barrierStateKey is the invocation state key used by internal barrier flag.
 	barrierStateKey = "__graph_barrier__"
 	// appenderStateKey is the invocation state key used by internal appender
@@ -97,6 +100,18 @@ type Invocation struct {
 	SessionService session.Service
 	// Model is the model that is being used for the invocation.
 	Model model.Model
+	// InvokeAgentDescription is optional invoke_agent telemetry metadata
+	// written to gen_ai.agent.description for this invocation.
+	//
+	// Agents that implement InvocationPreparer populate this field before
+	// centralized invoke_agent tracing starts in RunWithPlugins.
+	InvokeAgentDescription string
+	// InvokeAgentInstructions is optional invoke_agent telemetry metadata
+	// written to gen_ai.system_instructions for this invocation.
+	//
+	// Agents that implement InvocationPreparer populate this field before
+	// centralized invoke_agent tracing starts in RunWithPlugins.
+	InvokeAgentInstructions string
 	// Message is the message that is being sent to the agent.
 	Message model.Message
 	// RunOptions is the options for the Run method.
@@ -1160,6 +1175,8 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 		Session:              inv.Session,
 		SessionService:       inv.SessionService,
 		Model:                inv.Model,
+		InvokeAgentDescription:  inv.InvokeAgentDescription,
+		InvokeAgentInstructions: inv.InvokeAgentInstructions,
 		Message:              inv.Message,
 		RunOptions:           inv.RunOptions,
 		TransferInfo:         inv.TransferInfo,
@@ -1203,6 +1220,8 @@ func (inv *Invocation) SyncView(view *Invocation) {
 	inv.Session = view.Session
 	inv.SessionService = view.SessionService
 	inv.Model = view.Model
+	inv.InvokeAgentDescription = view.InvokeAgentDescription
+	inv.InvokeAgentInstructions = view.InvokeAgentInstructions
 	inv.Message = view.Message
 	inv.TransferInfo = view.TransferInfo
 	inv.Plugins = view.Plugins
@@ -1309,7 +1328,37 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 		e.Branch,
 		agentName,
 	)
-	return event.EmitEvent(ctx, ch, e)
+	err := event.EmitEvent(ctx, ch, e)
+	if err == nil && inv != nil && emittedEventShouldReachSession(e) {
+		inv.SetState(lastPersistableEmittedEventIDStateKey, e.ID)
+	}
+	return err
+}
+
+// LastPersistableEmittedEventID returns the latest emitted event ID that should
+// eventually appear in session-backed history.
+func LastPersistableEmittedEventID(inv *Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	id, _ := GetStateValue[string](inv, lastPersistableEmittedEventIDStateKey)
+	return id
+}
+
+func emittedEventShouldReachSession(e *event.Event) bool {
+	if e == nil {
+		return false
+	}
+	if len(e.StateDelta) > 0 {
+		return true
+	}
+	if e.Response == nil {
+		return false
+	}
+	if e.IsPartial {
+		return false
+	}
+	return e.IsValidContent()
 }
 
 // GetAppendEventNoticeKey get append event notice key.

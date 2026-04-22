@@ -2996,20 +2996,6 @@ func TestStartNodeSpan_DisableTracingUsesNoopSpan(t *testing.T) {
 	span.SetAttributes(attribute.String("key", "value"))
 	span.RecordError(errors.New("boom"))
 	span.SetStatus(codes.Error, "boom")
-	itelemetry.TraceAfterInvokeAgent(
-		span,
-		event.NewResponseEvent(
-			"invocation-id",
-			"agent-name",
-			&model.Response{
-				ID:      "response-id",
-				Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}},
-			},
-		),
-		nil,
-		0,
-		model.ErrorTypeFlowError,
-	)
 
 	require.Empty(t, parentSpan.attributes)
 	require.Empty(t, parentSpan.recordedErrors)

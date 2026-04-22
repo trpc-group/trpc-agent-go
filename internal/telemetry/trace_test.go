@@ -24,6 +24,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	invokeagenttelemetry "trpc.group/trpc-go/trpc-agent-go/internal/invokeagenttelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
@@ -69,6 +70,36 @@ func (d dummyModel) Info() model.Info {
 func newStubSpan() *stubSpan {
 	_, baseSpan := trace.NewNoopTracerProvider().Tracer("test").Start(context.Background(), "test")
 	return &stubSpan{Span: baseSpan}
+}
+
+func testInvokeAgentView(inv *agent.Invocation) *invokeagenttelemetry.InvocationView {
+	if inv == nil {
+		return nil
+	}
+	var callbacks []func(trace.SpanContext)
+	if len(inv.RunOptions.TraceStartedCallbacks) > 0 {
+		callbacks = make([]func(trace.SpanContext), 0, len(inv.RunOptions.TraceStartedCallbacks))
+		for _, callback := range inv.RunOptions.TraceStartedCallbacks {
+			if callback == nil {
+				callbacks = append(callbacks, nil)
+				continue
+			}
+			cb := callback
+			callbacks = append(callbacks, func(spanContext trace.SpanContext) {
+				cb(spanContext)
+			})
+		}
+	}
+	return &invokeagenttelemetry.InvocationView{
+		AgentName:             inv.AgentName,
+		InvocationID:          inv.InvocationID,
+		Message:               inv.Message,
+		Session:               inv.Session,
+		Model:                 inv.Model,
+		SpanAttributes:        inv.RunOptions.SpanAttributes,
+		TraceStartedCallbacks: callbacks,
+		HasParent:             inv.GetParentInvocation() != nil,
+	}
 }
 
 // recordingSpan captures attributes and status for assertions.
@@ -274,8 +305,8 @@ func TestTraceFunctions_NonRecordingSpan_ReturnsEarly(t *testing.T) {
 	require.False(t, span.IsRecording(), "expected noop span to be non-recording")
 
 	TraceWorkflow(span, &Workflow{Name: "wf", ID: "wf-1"})
-	TraceBeforeInvokeAgent(span, nil, "", "", nil)
-	TraceAfterInvokeAgent(span, nil, nil, 0, model.ErrorTypeRunError)
+	invokeagenttelemetry.TraceBeforeInvokeAgent(span, nil, "", "", nil)
+	invokeagenttelemetry.TraceAfterInvokeAgent(span, nil, nil, 0, model.ErrorTypeRunError)
 	TraceChat(span, nil)
 }
 
@@ -285,7 +316,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	gc := &model.GenerationConfig{Stop: []string{"END"}, FrequencyPenalty: &fp, MaxTokens: &mt, PresencePenalty: &pp, Temperature: &tp, TopP: &topP, Stream: true}
 	inv := &agent.Invocation{AgentName: "alpha", InvocationID: "inv-1", Session: &session.Session{ID: "sess-1", UserID: "u-1"}}
 	s := newRecordingSpan()
-	TraceBeforeInvokeAgent(s, inv, "desc", "inst", gc)
+	invokeagenttelemetry.TraceBeforeInvokeAgent(s, testInvokeAgentView(inv), "desc", "inst", gc)
 	if !hasAttr(s.attrs, semconvtrace.KeyGenAIAgentName, "alpha") {
 		t.Fatalf("missing agent name")
 	}
@@ -308,7 +339,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	}
 	evt := event.New("eid", "alpha", event.WithResponse(rsp))
 	s2 := newRecordingSpan()
-	TraceAfterInvokeAgent(s2, evt, nil, 0, model.ErrorTypeRunError)
+	invokeagenttelemetry.TraceAfterInvokeAgent(s2, evt, nil, 0, model.ErrorTypeRunError)
 	if s2.status != codes.Error {
 		t.Fatalf("expected error status")
 	}
@@ -416,7 +447,7 @@ func TestTraceBeforeInvokeAgent_WithSpanAttributes(t *testing.T) {
 		RunOptions:   agent.RunOptions{SpanAttributes: []attribute.KeyValue{attribute.String("custom.attr", "v1")}},
 	}
 	span := newRecordingSpan()
-	TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+	invokeagenttelemetry.TraceBeforeInvokeAgent(span, testInvokeAgentView(inv), "desc", "inst", nil)
 	require.True(t, hasAttr(span.attrs, "custom.attr", "v1"), "custom span attribute should be applied")
 }
 
@@ -435,7 +466,7 @@ func TestTraceBeforeInvokeAgent_WithTraceStartedCallback(t *testing.T) {
 	}
 	span := newRecordingSpan()
 
-	TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+	invokeagenttelemetry.TraceBeforeInvokeAgent(span, testInvokeAgentView(inv), "desc", "inst", nil)
 
 	require.Equal(t, span.SpanContext(), got)
 }
@@ -453,7 +484,7 @@ func TestTraceBeforeInvokeAgent_IgnoresNilTraceStartedCallback(t *testing.T) {
 	span := newRecordingSpan()
 
 	require.NotPanics(t, func() {
-		TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+		invokeagenttelemetry.TraceBeforeInvokeAgent(span, testInvokeAgentView(inv), "desc", "inst", nil)
 	})
 }
 
@@ -470,7 +501,7 @@ func TestTraceBeforeInvokeAgent_SkipsChildTraceStartedCallback(
 	span := newRecordingSpan()
 
 	require.NotPanics(t, func() {
-		TraceBeforeInvokeAgent(span, child, "desc", "inst", nil)
+		invokeagenttelemetry.TraceBeforeInvokeAgent(span, testInvokeAgentView(child), "desc", "inst", nil)
 	})
 }
 
@@ -666,7 +697,7 @@ func TestTraceBeforeInvokeAgent_NilPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			span := newRecordingSpan()
-			TraceBeforeInvokeAgent(span, tt.invoke, "desc", "instructions", tt.genConfig)
+			invokeagenttelemetry.TraceBeforeInvokeAgent(span, testInvokeAgentView(tt.invoke), "desc", "instructions", tt.genConfig)
 
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, "test-agent"))
@@ -682,7 +713,7 @@ func TestTraceBeforeInvokeAgent_UsesInvocationAgentNameOnly(t *testing.T) {
 		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
 	}
 
-	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
+	invokeagenttelemetry.TraceBeforeInvokeAgent(span, testInvokeAgentView(inv), "desc", "instructions", nil)
 
 	require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyGenAIAgentName))
 	require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyGenAIAgentID))
@@ -693,13 +724,13 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 	tests := []struct {
 		name             string
 		rspEvent         *event.Event
-		tokenUsage       *TokenUsage
+		tokenUsage       *invokeagenttelemetry.TokenUsage
 		timeToFirstToken time.Duration
 	}{
 		{
 			name:     "nil rspEvent still records token usage and ttft",
 			rspEvent: nil,
-			tokenUsage: &TokenUsage{
+			tokenUsage: &invokeagenttelemetry.TokenUsage{
 				PromptTokens:     10,
 				CompletionTokens: 20,
 				TotalTokens:      30,
@@ -719,7 +750,7 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 				Model:   "gpt-4",
 				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "test"}}},
 			})),
-			tokenUsage: &TokenUsage{
+			tokenUsage: &invokeagenttelemetry.TokenUsage{
 				PromptTokens:     10,
 				CompletionTokens: 20,
 				TotalTokens:      30,
@@ -731,7 +762,7 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			span := newRecordingSpan()
-			TraceAfterInvokeAgent(
+			invokeagenttelemetry.TraceAfterInvokeAgent(
 				span,
 				tt.rspEvent,
 				tt.tokenUsage,
@@ -753,7 +784,7 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 func TestTraceAfterInvokeAgent_UsesFallbackForCodeOnlyErrors(t *testing.T) {
 	code := "70002"
 	span := newRecordingSpan()
-	TraceAfterInvokeAgent(
+	invokeagenttelemetry.TraceAfterInvokeAgent(
 		span,
 		event.New("evt-code", "author", event.WithResponse(&model.Response{
 			Error: &model.ResponseError{
@@ -1161,7 +1192,7 @@ func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
 		Message:      model.Message{Role: model.RoleUser, Content: "test"},
 	}
 
-	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
+	invokeagenttelemetry.TraceBeforeInvokeAgent(span, testInvokeAgentView(inv), "desc", "instructions", nil)
 
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, "test-agent"))
@@ -1180,7 +1211,7 @@ func TestTraceBeforeAfterInvokeAgent_NormalizesToolResponseMessageFields(t *test
 		},
 	}
 
-	TraceBeforeInvokeAgent(beforeSpan, inv, "desc", "instructions", nil)
+	invokeagenttelemetry.TraceBeforeInvokeAgent(beforeSpan, testInvokeAgentView(inv), "desc", "instructions", nil)
 	beforeJSON, ok := attrStringValue(beforeSpan.attrs, semconvtrace.KeyGenAIInputMessages)
 	require.True(t, ok)
 	require.Contains(t, beforeJSON, `"tool_call_id":"call-before"`)
@@ -1202,7 +1233,7 @@ func TestTraceBeforeAfterInvokeAgent_NormalizesToolResponseMessageFields(t *test
 			},
 		}},
 	}
-	TraceAfterInvokeAgent(afterSpan, event.New("evt1", "author", event.WithResponse(rsp)), nil, 0, model.ErrorTypeRunError)
+	invokeagenttelemetry.TraceAfterInvokeAgent(afterSpan, event.New("evt1", "author", event.WithResponse(rsp)), nil, 0, model.ErrorTypeRunError)
 	afterJSON, ok := attrStringValue(afterSpan.attrs, semconvtrace.KeyGenAIOutputMessages)
 	require.True(t, ok)
 	require.Contains(t, afterJSON, `"tool_call_id":"call-after"`)

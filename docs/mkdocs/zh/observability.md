@@ -222,16 +222,19 @@ func processAgentRequest(ctx context.Context, meter metric.Meter) error {
 
 ### Agent 执行追踪
 
-框架会自动为 Agent 的关键组件添加监控埋点：
+框架会自动为框架托管的 Agent 调用添加埋点。通过 `runner.Run`、
+`agent.RunWithPlugins`、`AgentTool`，以及 Chain / Parallel / Cycle /
+Graph agent node 等内置多 Agent 组合触发的调用，都会自动生成一致的
+`invoke_agent` span 和 metrics，并且覆盖嵌套调用。
 
-```go
-// Agent 执行会自动生成以下监控数据：
-// 
-// Traces:
-// - agent.execution: Agent 整体执行过程
-// - tool.invocation: Tool 调用过程  
-// - model.api_call: 模型 API 调用过程
-```
+因此，大多数场景下不需要在自定义 Agent 内手动补 `invoke_agent` 埋点；
+只有在你刻意绕开这些框架入口时，才需要自行处理。
+
+框架会自动产生的常见观测数据包括：
+
+- `invoke_agent <agent-name>`：每次 Agent 调用一个 span，嵌套调用同样会记录。
+- `execute_tool <tool-name>`：Tool 执行 span。
+- `chat <model-name>` / `generate_content <model-name>`：模型请求 span。
 
 ## 监控数据分析
 

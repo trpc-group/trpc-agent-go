@@ -17,10 +17,6 @@ import (
 	"reflect"
 	"sync"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/trace"
-
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
@@ -30,15 +26,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
-	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
-	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
@@ -1033,54 +1026,17 @@ func codeExecutorSupportsWorkspaceExecSessions(
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
-	a.setupInvocation(invocation)
-	ctx, span, startedSpan := itrace.StartSpan(
-		ctx,
-		invocation,
-		fmt.Sprintf(
-			"%s %s",
-			itelemetry.OperationInvokeAgent,
-			invocation.AgentName,
-		),
-	)
-	effectiveGenConfig := a.genConfig
-	effectiveGenConfig.Stream = iagent.ResolveInvokeAgentStream(invocation, &effectiveGenConfig)
-	promptText := a.systemPromptForInvocation(invocation) +
-		a.instructionForInvocation(invocation)
-	if startedSpan {
-		itelemetry.TraceBeforeInvokeAgent(
-			span,
-			invocation,
-			a.description,
-			promptText,
-			&effectiveGenConfig,
-		)
-	}
-	tracker := itelemetry.NewInvokeAgentTracker(
-		ctx,
-		invocation,
-		effectiveGenConfig.Stream,
-		&err,
-	)
+	a.PrepareInvocation(invocation)
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {
 		// Check if this is a custom response error (early return)
 		var customErr *haveCustomResponseError
 		if errors.As(err, &customErr) {
-			if startedSpan {
-				span.End()
-			}
 			return customErr.EventChan, nil
-		}
-		// Handle actual errors
-		if startedSpan {
-			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
-			span.End()
 		}
 		return nil, err
 	}
-	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker, startedSpan), nil
+	return a.wrapEventChannelWithCallbacks(ctx, invocation, flowEventChan), nil
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.
@@ -1128,8 +1084,11 @@ func (e *haveCustomResponseError) Error() string {
 	return "custom response provided, returning early"
 }
 
-// setupInvocation sets up the invocation
-func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
+// PrepareInvocation prepares the invocation for execution.
+func (a *LLMAgent) PrepareInvocation(invocation *agent.Invocation) {
+	if invocation == nil {
+		return
+	}
 	// Set agent identity before resolving node-scoped surfaces.
 	invocation.Agent = a
 	invocation.AgentName = a.name
@@ -1178,44 +1137,41 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// treat them as "no limit", preserving existing behavior.
 	invocation.MaxLLMCalls = a.option.MaxLLMCalls
 	invocation.MaxToolIterations = a.option.MaxToolIterations
+
+	effectiveGenConfig := a.genConfig
+	effectiveGenConfig.Stream = iagent.ResolveInvokeAgentStream(
+		invocation,
+		&effectiveGenConfig,
+	)
+	if invocation.RunOptions.Stream == nil {
+		stream := effectiveGenConfig.Stream
+		invocation.RunOptions.Stream = &stream
+	}
+	invocation.InvokeAgentDescription = a.description
+	invocation.InvokeAgentInstructions = a.systemPromptForInvocation(invocation) +
+		a.instructionForInvocation(invocation)
 }
 
-// wrapEventChannel wraps the event channel to apply after agent callbacks.
-func (a *LLMAgent) wrapEventChannelWithTelemetry(
+func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
+	a.PrepareInvocation(invocation)
+}
+
+// wrapEventChannelWithCallbacks wraps the event channel to apply after agent callbacks.
+func (a *LLMAgent) wrapEventChannelWithCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	originalChan <-chan *event.Event,
-	span sdktrace.Span,
-	tracker *itelemetry.InvokeAgentTracker,
-	startedSpan bool,
 ) <-chan *event.Event {
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
+		defer close(wrappedChan)
 		var fullRespEvent *event.Event
-		var responseErrorType string
-		tokenUsage := &itelemetry.TokenUsage{}
-		defer func() {
-			finalizeWrappedTelemetry(
-				span,
-				tracker,
-				fullRespEvent,
-				responseErrorType,
-				tokenUsage,
-				startedSpan,
-				wrappedChan,
-			)
-		}()
 		// Forward all events from the original channel
 		for evt := range originalChan {
-			if trackedEvent := recordWrappedEventTelemetry(
-				evt,
-				tracker,
-				tokenUsage,
-				&responseErrorType,
-			); trackedEvent != nil {
-				fullRespEvent = trackedEvent
+			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
+				fullRespEvent = evt
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
@@ -1228,88 +1184,6 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 	}(runCtx)
 
 	return wrappedChan
-}
-
-func finalizeWrappedTelemetry(
-	span sdktrace.Span,
-	tracker *itelemetry.InvokeAgentTracker,
-	fullRespEvent *event.Event,
-	responseErrorType string,
-	tokenUsage *itelemetry.TokenUsage,
-	startedSpan bool,
-	wrappedChan chan *event.Event,
-) {
-	responseErrorType = resolveWrappedResponseErrorType(fullRespEvent, responseErrorType)
-	if startedSpan {
-		if fullRespEvent != nil {
-			itelemetry.TraceAfterInvokeAgent(
-				span,
-				fullRespEvent,
-				tokenUsage,
-				tracker.FirstTokenTimeDuration(),
-				model.ErrorTypeRunError,
-			)
-		} else if responseErrorType != "" {
-			span.SetStatus(codes.Error, responseErrorType)
-			span.SetAttributes(
-				attribute.String(semconvtrace.KeyErrorType, responseErrorType),
-			)
-		}
-	}
-	tracker.SetResponseErrorType(responseErrorType)
-	tracker.RecordMetrics()()
-	if startedSpan {
-		span.End()
-	}
-	close(wrappedChan)
-}
-
-func resolveWrappedResponseErrorType(fullRespEvent *event.Event, responseErrorType string) string {
-	if fullRespEvent == nil || fullRespEvent.Response == nil {
-		return responseErrorType
-	}
-	if fullRespEvent.Response.Error == nil {
-		return ""
-	}
-	return itelemetry.FormatResponseErrorLabel(
-		fullRespEvent.Response.Error,
-		model.ErrorTypeRunError,
-	)
-}
-
-func recordWrappedEventTelemetry(
-	evt *event.Event,
-	tracker *itelemetry.InvokeAgentTracker,
-	tokenUsage *itelemetry.TokenUsage,
-	responseErrorType *string,
-) *event.Event {
-	if evt == nil {
-		return nil
-	}
-	var fullRespEvent *event.Event
-	if evt.Response != nil {
-		tracker.TrackResponse(evt.Response)
-		if !evt.Response.IsPartial {
-			addWrappedTokenUsage(tokenUsage, evt.Response.Usage)
-			fullRespEvent = evt
-		}
-	}
-	if evt.Error != nil {
-		*responseErrorType = itelemetry.FormatResponseErrorLabel(
-			evt.Error,
-			model.ErrorTypeRunError,
-		)
-	}
-	return fullRespEvent
-}
-
-func addWrappedTokenUsage(tokenUsage *itelemetry.TokenUsage, usage *model.Usage) {
-	if usage == nil {
-		return
-	}
-	tokenUsage.PromptTokens += usage.PromptTokens
-	tokenUsage.CompletionTokens += usage.CompletionTokens
-	tokenUsage.TotalTokens += usage.TotalTokens
 }
 
 func (a *LLMAgent) runAfterAgentCallback(

@@ -16,32 +16,28 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	oteltrace "go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	invokeagenttelemetry "trpc.group/trpc-go/trpc-agent-go/internal/invokeagenttelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -180,14 +176,11 @@ func (m *disableTracingModel) Info() model.Info {
 func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 	recorder := tracetest.NewSpanRecorder()
 	provider := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(recorder))
-	originalProvider := trace.TracerProvider
-	originalTracer := trace.Tracer
-	trace.TracerProvider = provider
-	trace.Tracer = provider.Tracer("graph-agent-disable-tracing-test")
+	originalProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
 	t.Cleanup(func() {
 		_ = provider.Shutdown(context.Background())
-		trace.TracerProvider = originalProvider
-		trace.Tracer = originalTracer
+		otel.SetTracerProvider(originalProvider)
 	})
 	return recorder
 }
@@ -3471,219 +3464,7 @@ func TestGraphAgent_WithExecutorOptions_OverrideMappedOptions(t *testing.T) {
 	require.True(t, done, "Execution should complete")
 }
 
-// recordingSpanForEmitError captures span operations for testing emit error handling.
-type recordingSpanForEmitError struct {
-	oteltrace.Span
-	mu         sync.Mutex
-	name       string
-	statusCode codes.Code
-	statusDesc string
-	attributes []attribute.KeyValue
-}
-
-func (s *recordingSpanForEmitError) SetStatus(code codes.Code, description string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.statusCode = code
-	s.statusDesc = description
-	s.Span.SetStatus(code, description)
-}
-
-func (s *recordingSpanForEmitError) SetAttributes(kv ...attribute.KeyValue) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.attributes = append(s.attributes, kv...)
-	s.Span.SetAttributes(kv...)
-}
-
-func (s *recordingSpanForEmitError) IsRecording() bool {
-	return true
-}
-
-func (s *recordingSpanForEmitError) getStatus() (codes.Code, string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.statusCode, s.statusDesc
-}
-
-func (s *recordingSpanForEmitError) getAttributes() []attribute.KeyValue {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	result := make([]attribute.KeyValue, len(s.attributes))
-	copy(result, s.attributes)
-	return result
-}
-
-// recordingTracerForEmitError returns a tracer that creates recording spans.
-type recordingTracerForEmitError struct {
-	oteltrace.Tracer
-	mu    sync.Mutex
-	spans []*recordingSpanForEmitError
-}
-
-func newRecordingTracerForEmitError() *recordingTracerForEmitError {
-	baseTracer := noop.NewTracerProvider().Tracer("test")
-	return &recordingTracerForEmitError{Tracer: baseTracer}
-}
-
-func (t *recordingTracerForEmitError) Start(ctx context.Context, spanName string, opts ...oteltrace.SpanStartOption) (context.Context, oteltrace.Span) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	_, baseSpan := t.Tracer.Start(ctx, spanName, opts...)
-	recordingSpan := &recordingSpanForEmitError{Span: baseSpan, name: spanName}
-	t.spans = append(t.spans, recordingSpan)
-	return ctx, recordingSpan
-}
-
-func findRecordingSpanForEmitErrorByName(spans []*recordingSpanForEmitError, spanName string) *recordingSpanForEmitError {
-	for _, span := range spans {
-		if span.name == spanName {
-			return span
-		}
-	}
-	return nil
-}
-
-func TestRecordTraceEvent(t *testing.T) {
-	newTracker := func() *itelemetry.InvokeAgentTracker {
-		var trackerErr error
-		return itelemetry.NewInvokeAgentTracker(
-			context.Background(),
-			&agent.Invocation{AgentName: "trace-agent"},
-			true,
-			&trackerErr,
-		)
-	}
-	newUsage := func() *model.Usage {
-		return &model.Usage{
-			PromptTokens:     1,
-			CompletionTokens: 2,
-			TotalTokens:      3,
-		}
-	}
-
-	tests := []struct {
-		name           string
-		buildEvent     func() *event.Event
-		sleepBefore    time.Duration
-		wantUpdate     bool
-		wantTokenUsage itelemetry.TokenUsage
-		wantFirstToken bool
-	}{
-		{
-			name:           "ignores nil event",
-			buildEvent:     func() *event.Event { return nil },
-			wantTokenUsage: itelemetry.TokenUsage{},
-		},
-		{
-			name: "ignores event without response",
-			buildEvent: func() *event.Event {
-				return &event.Event{InvocationID: "inv", Author: "graph-agent"}
-			},
-			wantTokenUsage: itelemetry.TokenUsage{},
-		},
-		{
-			name: "tracks partial response without updating final event",
-			buildEvent: func() *event.Event {
-				return event.NewResponseEvent("inv", "graph-agent", &model.Response{
-					IsPartial: true,
-					Choices: []model.Choice{{
-						Delta: model.Message{
-							Role:    model.RoleAssistant,
-							Content: "chunk",
-						},
-					}},
-					Usage: newUsage(),
-				})
-			},
-			sleepBefore:    time.Millisecond,
-			wantTokenUsage: itelemetry.TokenUsage{},
-			wantFirstToken: true,
-		},
-		{
-			name: "ignores invalid non terminal response",
-			buildEvent: func() *event.Event {
-				return event.NewResponseEvent("inv", "graph-agent", &model.Response{
-					Usage: newUsage(),
-				})
-			},
-			wantTokenUsage: itelemetry.TokenUsage{},
-		},
-		{
-			name: "records graph execution completion response",
-			buildEvent: func() *event.Event {
-				return event.NewResponseEvent("inv", "graph-agent", &model.Response{
-					Object: graph.ObjectTypeGraphExecution,
-					Done:   true,
-					Usage:  newUsage(),
-				})
-			},
-			wantUpdate: true,
-			wantTokenUsage: itelemetry.TokenUsage{
-				PromptTokens:     1,
-				CompletionTokens: 2,
-				TotalTokens:      3,
-			},
-		},
-		{
-			name: "records error response",
-			buildEvent: func() *event.Event {
-				evt := event.NewErrorEvent("inv", "graph-agent", model.ErrorTypeFlowError, "boom")
-				evt.Usage = newUsage()
-				return evt
-			},
-			wantUpdate: true,
-			wantTokenUsage: itelemetry.TokenUsage{
-				PromptTokens:     1,
-				CompletionTokens: 2,
-				TotalTokens:      3,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tracker := newTracker()
-			tokenUsage := &itelemetry.TokenUsage{}
-			initialFullRespEvent := event.NewResponseEvent("inv", "graph-agent", &model.Response{
-				Choices: []model.Choice{{
-					Message: model.NewAssistantMessage("existing"),
-				}},
-			})
-
-			if tt.sleepBefore > 0 {
-				time.Sleep(tt.sleepBefore)
-			}
-			evt := tt.buildEvent()
-			got := recordTraceEvent(tracker, tokenUsage, initialFullRespEvent, evt)
-
-			if tt.wantUpdate {
-				require.Same(t, evt, got)
-			} else {
-				require.Same(t, initialFullRespEvent, got)
-			}
-			require.Equal(t, tt.wantTokenUsage, *tokenUsage)
-
-			if tt.wantFirstToken {
-				require.Greater(t, tracker.FirstTokenTimeDuration(), time.Duration(0))
-			} else {
-				require.Zero(t, tracker.FirstTokenTimeDuration())
-			}
-		})
-	}
-}
-
 func TestGraphAgent_RunWithBarrier_EmitEventError(t *testing.T) {
-	// Save original tracer
-	originalTracer := trace.Tracer
-	defer func() {
-		trace.Tracer = originalTracer
-	}()
-
-	// Create recording tracer
-	recordingTracer := newRecordingTracerForEmitError()
-	trace.Tracer = recordingTracer
-
 	// Create a simple graph that produces events
 	schema := graph.NewStateSchema().
 		AddField("output", graph.StateField{
@@ -3735,35 +3516,6 @@ func TestGraphAgent_RunWithBarrier_EmitEventError(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for runWithBarrier to complete")
 	}
-
-	// Verify that span operations were called
-	recordingTracer.mu.Lock()
-	spans := recordingTracer.spans
-	recordingTracer.mu.Unlock()
-
-	require.NotEmpty(t, spans, "expected at least one span to be created")
-
-	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, inv.AgentName)
-	agentSpan := findRecordingSpanForEmitErrorByName(spans, expectedSpanName)
-	require.NotNil(t, agentSpan, "expected agent span to be created")
-
-	// Verify SetStatus was called with Error code
-	statusCode, statusDesc := agentSpan.getStatus()
-	require.Equal(t, codes.Error, statusCode, "expected span status to be Error")
-	require.NotEmpty(t, statusDesc, "expected span status description to be set")
-
-	// Verify SetAttributes was called with error type
-	attrs := agentSpan.getAttributes()
-	var errorTypeAttr *attribute.KeyValue
-	for i := range attrs {
-		if string(attrs[i].Key) == string(semconvtrace.KeyErrorType) {
-			errorTypeAttr = &attrs[i]
-			break
-		}
-	}
-	require.NotNil(t, errorTypeAttr, "expected error type attribute to be set")
-	errorTypeValue := errorTypeAttr.Value.AsString()
-	require.Equal(t, model.ErrorTypeFlowError, errorTypeValue, "expected error type to be FlowError")
 }
 
 func TestGraphAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
@@ -3794,17 +3546,14 @@ func TestGraphAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			originalTracer := trace.Tracer
-			defer func() {
-				trace.Tracer = originalTracer
-			}()
-
 			spanRecorder := tracetest.NewSpanRecorder()
 			tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
 			defer func() {
 				_ = tp.Shutdown(context.Background())
 			}()
-			trace.Tracer = tp.Tracer("test")
+			originalProvider := otel.GetTracerProvider()
+			otel.SetTracerProvider(tp)
+			defer otel.SetTracerProvider(originalProvider)
 
 			schema := graph.NewStateSchema().
 				AddField("output", graph.StateField{
@@ -3832,13 +3581,13 @@ func TestGraphAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 				},
 			}
 
-			events, err := ga.Run(context.Background(), invocation)
+			events, err := agent.RunWithPlugins(context.Background(), invocation, ga)
 			require.NoError(t, err)
 			for range events {
 			}
 
 			var agentSpan tracesdk.ReadOnlySpan
-			expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName)
+			expectedSpanName := fmt.Sprintf("%s %s", invokeagenttelemetry.OperationInvokeAgent, invocation.AgentName)
 			for _, span := range spanRecorder.Ended() {
 				if span.Name() == expectedSpanName {
 					agentSpan = span
@@ -3860,94 +3609,8 @@ func TestGraphAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 	}
 }
 
-func TestGraphAgent_GraphTerminalMessagesOnly_TracksHiddenNodeUsage(
-	t *testing.T,
-) {
-	originalTracer := trace.Tracer
-	defer func() {
-		trace.Tracer = originalTracer
-	}()
-
-	spanRecorder := tracetest.NewSpanRecorder()
-	tp := tracesdk.NewTracerProvider(
-		tracesdk.WithSpanProcessor(spanRecorder),
-	)
-	defer func() {
-		_ = tp.Shutdown(context.Background())
-	}()
-	trace.Tracer = tp.Tracer("graph-terminal-usage-test")
-
-	firstUsage := model.Usage{
-		PromptTokens:     2,
-		CompletionTokens: 3,
-		TotalTokens:      5,
-	}
-	finalUsage := model.Usage{
-		PromptTokens:     5,
-		CompletionTokens: 7,
-		TotalTokens:      12,
-	}
-	ga := newSerialUsageTerminalMessageGraphAgent(
-		t,
-		firstUsage,
-		finalUsage,
-	)
-
-	invocation := agent.NewInvocation(
-		agent.WithInvocationMessage(model.NewUserMessage("test")),
-		agent.WithInvocationRunOptions(agent.NewRunOptions(
-			agent.WithGraphEmitFinalModelResponses(true),
-			agent.WithGraphTerminalMessagesOnly(true),
-		)),
-	)
-
-	events, err := ga.Run(context.Background(), invocation)
-	require.NoError(t, err)
-	for range events {
-	}
-
-	expectedSpanName := fmt.Sprintf(
-		"%s %s",
-		itelemetry.OperationInvokeAgent,
-		ga.Info().Name,
-	)
-	var agentSpan tracesdk.ReadOnlySpan
-	for _, span := range spanRecorder.Ended() {
-		if span.Name() == expectedSpanName {
-			agentSpan = span
-			break
-		}
-	}
-	require.NotNil(t, agentSpan)
-	require.True(
-		t,
-		hasInt64Attr(
-			agentSpan.Attributes(),
-			semconvtrace.KeyGenAIUsageInputTokens,
-			int64(firstUsage.PromptTokens+finalUsage.PromptTokens),
-		),
-	)
-	require.True(
-		t,
-		hasInt64Attr(
-			agentSpan.Attributes(),
-			semconvtrace.KeyGenAIUsageOutputTokens,
-			int64(
-				firstUsage.CompletionTokens+
-					finalUsage.CompletionTokens,
-			),
-		),
-	)
-}
-
 func TestGraphAgent_Run_TraceAfterInvokeAgent(t *testing.T) {
-	originalTracer := trace.Tracer
-	defer func() {
-		trace.Tracer = originalTracer
-	}()
-
-	recordingTracer := newRecordingTracerForEmitError()
-	trace.Tracer = recordingTracer
+	recorder := useSpanRecorder(t)
 
 	g := buildTrivialGraph(t)
 	callbacks := agent.NewCallbacks().
@@ -3966,27 +3629,30 @@ func TestGraphAgent_Run_TraceAfterInvokeAgent(t *testing.T) {
 	defer cancel()
 
 	stream := true
-	eventChan, err := ga.Run(ctx, &agent.Invocation{
+	eventChan, err := agent.RunWithPlugins(ctx, &agent.Invocation{
 		InvocationID: "inv-trace-after",
 		Message:      model.NewUserMessage("test"),
 		RunOptions:   agent.RunOptions{Stream: &stream},
-	})
+	}, ga)
 	require.NoError(t, err)
 
 	for range eventChan {
 	}
 
-	recordingTracer.mu.Lock()
-	spans := recordingTracer.spans
-	recordingTracer.mu.Unlock()
-
+	spans := recorder.Ended()
 	require.NotEmpty(t, spans, "expected at least one span to be created")
 
-	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, ga.Info().Name)
-	agentSpan := findRecordingSpanForEmitErrorByName(spans, expectedSpanName)
+	expectedSpanName := fmt.Sprintf("%s %s", invokeagenttelemetry.OperationInvokeAgent, ga.Info().Name)
+	var agentSpan tracesdk.ReadOnlySpan
+	for _, span := range spans {
+		if span.Name() == expectedSpanName {
+			agentSpan = span
+			break
+		}
+	}
 	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
 
-	attrs := agentSpan.getAttributes()
+	attrs := agentSpan.Attributes()
 	var requestIsStream bool
 	var foundRequestIsStream bool
 	for _, attr := range attrs {
@@ -4233,68 +3899,6 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 			},
 		},
 	}, normalizeGraphAgentTraceForAssertion(executionTrace))
-}
-
-func TestResolveGraphAgentErrorType(t *testing.T) {
-	code := "70002"
-	testCases := []struct {
-		name               string
-		fullRespEvent      *event.Event
-		operationErrorType string
-		want               string
-	}{
-		{
-			name: "operation error wins over final success",
-			fullRespEvent: event.NewResponseEvent(
-				"inv",
-				"graph-agent",
-				&model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}}},
-			),
-			operationErrorType: model.ErrorTypeFlowError,
-			want:               model.ErrorTypeFlowError,
-		},
-		{
-			name: "final success clears prior response errors",
-			fullRespEvent: event.NewResponseEvent(
-				"inv",
-				"graph-agent",
-				&model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}}},
-			),
-			want: "",
-		},
-		{
-			name: "final error response is reported when no operation error",
-			fullRespEvent: event.NewErrorEvent(
-				"inv",
-				"graph-agent",
-				agent.ErrorTypeAgentCallbackError,
-				"callback failed",
-			),
-			want: agent.ErrorTypeAgentCallbackError,
-		},
-		{
-			name: "final error response keeps code suffix",
-			fullRespEvent: event.NewResponseEvent(
-				"inv",
-				"graph-agent",
-				&model.Response{
-					Error: &model.ResponseError{
-						Type:    model.ErrorTypeFlowError,
-						Code:    &code,
-						Message: "graph failed",
-					},
-				},
-			),
-			want: model.ErrorTypeFlowError + "_70002",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resolveGraphAgentErrorType(tc.fullRespEvent, tc.operationErrorType)
-			require.Equal(t, tc.want, got)
-		})
-	}
 }
 
 func newStreamingChildGraphAgent(

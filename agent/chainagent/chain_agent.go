@@ -17,10 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
-	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -95,32 +92,7 @@ func (a *ChainAgent) executeChainRun(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
-	// Setup invocation before tracing so span name and telemetry attributes
-	// share the same invocation agent identity.
-	a.setupInvocation(invocation)
-	stream := iagent.ResolveInvokeAgentStream(invocation, nil)
-	ctx, span, startedSpan := itrace.StartSpan(
-		ctx,
-		invocation,
-		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName),
-	)
-	if startedSpan {
-		itelemetry.TraceBeforeInvokeAgent(
-			span,
-			invocation,
-			"chain-agent",
-			"",
-			&model.GenerationConfig{Stream: stream},
-		)
-	}
-	var trackerErr error
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
-	defer func() {
-		tracker.RecordMetrics()()
-		if startedSpan {
-			span.End()
-		}
-	}()
+	a.PrepareInvocation(invocation)
 
 	// Handle before agent callbacks.
 	var shouldReturn bool
@@ -129,35 +101,27 @@ func (a *ChainAgent) executeChainRun(
 		return
 	}
 	// Execute sub-agents in sequence.
-	e, tokenUsage := a.executeSubAgents(ctx, invocation, eventChan, tracker)
+	e := a.executeSubAgents(ctx, invocation, eventChan)
 	// Handle after agent callbacks.
 	if a.agentCallbacks != nil {
 		if afterEvent := a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e); afterEvent != nil {
 			e = afterEvent
 		}
 	}
-	if e != nil && e.Error != nil {
-		trackerErr = fmt.Errorf("%s: %s", e.Error.Type, e.Error.Message)
-		tracker.SetResponseErrorType(
-			itelemetry.FormatResponseErrorLabel(e.Error, model.ErrorTypeFlowError),
-		)
-	}
-	if startedSpan {
-		itelemetry.TraceAfterInvokeAgent(
-			span,
-			e,
-			tokenUsage,
-			tracker.FirstTokenTimeDuration(),
-			model.ErrorTypeFlowError,
-		)
-	}
 }
 
-// setupInvocation prepares the invocation for execution.
-func (a *ChainAgent) setupInvocation(invocation *agent.Invocation) {
+// PrepareInvocation prepares the invocation for execution.
+func (a *ChainAgent) PrepareInvocation(invocation *agent.Invocation) {
+	if invocation == nil {
+		return
+	}
 	// Set agent and agent name.
 	invocation.Agent = a
 	invocation.AgentName = a.name
+}
+
+func (a *ChainAgent) setupInvocation(invocation *agent.Invocation) {
+	a.PrepareInvocation(invocation)
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
@@ -205,9 +169,7 @@ func (a *ChainAgent) executeSubAgents(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-	tracker *itelemetry.InvokeAgentTracker,
-) (*event.Event, *itelemetry.TokenUsage) {
-	tokenUsage := &itelemetry.TokenUsage{}
+) *event.Event {
 	var fullRespEvent *event.Event
 	pathAllocator := istructure.NewPathAllocator(agent.InvocationTraceNodeID(invocation))
 	predecessors := agent.NextExecutionTracePredecessors(invocation)
@@ -241,19 +203,13 @@ func (a *ChainAgent) executeSubAgents(
 				err.Error(),
 			)
 			agent.EmitEvent(ctx, invocation, eventChan, e)
-			return e, tokenUsage
+			return e
 		}
 
 		// Forward all events from the sub-agent.
 		var emittedAssistantResponseIDs map[string]struct{}
 		for subEvent := range subEventChan {
 			if subEvent != nil && subEvent.Response != nil {
-				tracker.TrackResponse(subEvent.Response)
-				if subEvent.Response.Usage != nil && !subEvent.Response.IsPartial {
-					tokenUsage.PromptTokens += subEvent.Response.Usage.PromptTokens
-					tokenUsage.CompletionTokens += subEvent.Response.Usage.CompletionTokens
-					tokenUsage.TotalTokens += subEvent.Response.Usage.TotalTokens
-				}
 				if !subEvent.Response.IsPartial {
 					fullRespEvent = subEvent
 				}
@@ -265,7 +221,7 @@ func (a *ChainAgent) executeSubAgents(
 					subInvocation.AgentName,
 				); ok {
 					if err := event.EmitEvent(ctx, eventChan, visibleEvent); err != nil {
-						return nil, tokenUsage
+						return nil
 					}
 					if callbackFullRespEvent != nil &&
 						callbackFullRespEvent.Response != nil &&
@@ -280,14 +236,14 @@ func (a *ChainAgent) executeSubAgents(
 				continue
 			}
 			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
-				return nil, tokenUsage
+				return nil
 			}
 			emittedAssistantResponseIDs = graph.RecordAssistantResponseID(
 				emittedAssistantResponseIDs,
 				subEvent,
 			)
 			if subEvent != nil && subEvent.Error != nil {
-				return subEvent, tokenUsage
+				return subEvent
 			}
 		}
 
@@ -300,11 +256,11 @@ func (a *ChainAgent) executeSubAgents(
 				fmt.Sprintf("chain agent %q cancelled execution of sub-agent %q: %v", a.name, subAgent.Info().Name, err),
 			)
 			agent.EmitEvent(ctx, invocation, eventChan, e)
-			return e, tokenUsage
+			return e
 		}
 		predecessors = agent.NextExecutionTracePredecessors(subInvocation)
 	}
-	return fullRespEvent, tokenUsage
+	return fullRespEvent
 }
 
 // handleAfterAgentCallbacks handles post-execution callbacks.

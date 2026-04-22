@@ -18,10 +18,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
-	sdktrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -29,11 +26,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
-	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -163,52 +157,39 @@ func (r *A2AAgent) validateA2ARequestOptions(invocation *agent.Invocation) error
 	return nil
 }
 
-func (r *A2AAgent) setupInvocation(invocation *agent.Invocation) {
+func (r *A2AAgent) PrepareInvocation(invocation *agent.Invocation) {
+	if invocation == nil {
+		return
+	}
 	invocation.Agent = r
 	invocation.AgentName = r.name
+	invocation.InvokeAgentDescription = r.description
+	if invocation.RunOptions.Stream == nil {
+		useStreaming := r.shouldUseStreaming(invocation)
+		invocation.RunOptions.Stream = &useStreaming
+	}
+}
+
+func (r *A2AAgent) setupInvocation(invocation *agent.Invocation) {
+	r.PrepareInvocation(invocation)
 }
 
 // Run implements the Agent interface
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	var err error
 	if invocation != nil {
-		r.setupInvocation(invocation)
+		r.PrepareInvocation(invocation)
 	}
 	useStreaming := r.shouldUseStreaming(invocation)
-	ctx, span, startedSpan := itrace.StartSpan(
-		ctx,
-		invocation,
-		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, r.name),
-	)
-	if startedSpan {
-		itelemetry.TraceBeforeInvokeAgent(
-			span,
-			invocation,
-			r.description,
-			"",
-			&model.GenerationConfig{Stream: useStreaming},
-		)
-	}
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)
 	if r.a2aClient == nil {
-		if startedSpan {
-			span.SetStatus(codes.Error, "A2A client is nil")
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
-			span.End()
-		}
 		return nil, fmt.Errorf("A2A client is nil")
 	}
 	// Validate A2A request options early
 	if err := r.validateA2ARequestOptions(invocation); err != nil {
-		if startedSpan {
-			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
-			span.End()
-		}
 		return nil, err
 	}
 	var (
 		eventChan <-chan *event.Event
+		err      error
 	)
 	if useStreaming {
 		eventChan, err = r.runStreaming(ctx, invocation)
@@ -216,14 +197,9 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		eventChan, err = r.runNonStreaming(ctx, invocation)
 	}
 	if err != nil {
-		if startedSpan {
-			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
-			span.End()
-		}
 		return nil, err
 	}
-	return r.wrapEventChannelWithTelemetry(ctx, invocation, eventChan, span, tracker, startedSpan), nil
+	return eventChan, nil
 }
 
 // shouldUseStreaming determines whether to use streaming protocol.
@@ -678,74 +654,6 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 		}
 	}(runCtx)
 	return eventChan, nil
-}
-
-func (r *A2AAgent) wrapEventChannelWithTelemetry(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	originalChan <-chan *event.Event,
-	span sdktrace.Span,
-	tracker *itelemetry.InvokeAgentTracker,
-	startedSpan bool,
-) <-chan *event.Event {
-	wrappedChan := make(chan *event.Event, cap(originalChan))
-	runCtx := agent.CloneContext(ctx)
-	go func(ctx context.Context) {
-		var fullRespEvent *event.Event
-		var responseErrorType string
-		tokenUsage := &itelemetry.TokenUsage{}
-		defer func() {
-			if fullRespEvent != nil && fullRespEvent.Response != nil {
-				responseErrorType = ""
-				if fullRespEvent.Response.Error != nil {
-					responseErrorType = itelemetry.FormatResponseErrorLabel(
-						fullRespEvent.Response.Error,
-						model.ErrorTypeRunError,
-					)
-				}
-			}
-			if startedSpan && fullRespEvent != nil {
-				log.DebugContext(ctx, "fullRespEvent is not ni")
-				itelemetry.TraceAfterInvokeAgent(
-					span,
-					fullRespEvent,
-					tokenUsage,
-					tracker.FirstTokenTimeDuration(),
-					model.ErrorTypeRunError,
-				)
-			}
-			tracker.SetResponseErrorType(responseErrorType)
-			tracker.RecordMetrics()()
-			if startedSpan {
-				span.End()
-			}
-			close(wrappedChan)
-		}()
-		for evt := range originalChan {
-			if evt != nil && evt.Response != nil {
-				tracker.TrackResponse(evt.Response)
-				if !evt.Response.IsPartial {
-					if evt.Response.Usage != nil {
-						tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
-						tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
-						tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
-					}
-					fullRespEvent = evt
-				}
-			}
-			if evt != nil && evt.Error != nil {
-				responseErrorType = itelemetry.FormatResponseErrorLabel(
-					evt.Error,
-					model.ErrorTypeRunError,
-				)
-			}
-			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
-				return
-			}
-		}
-	}(runCtx)
-
-	return wrappedChan
 }
 
 // Tools implements the Agent interface

@@ -2441,6 +2441,69 @@ func TestTool_HistoryScope_ParentBranch_Call_InheritsParentHistory(t *testing.T)
 	}
 }
 
+func TestTool_HistoryScope_ParentBranch_Call_FlushesAcrossWrappedEventHop(t *testing.T) {
+	ia := &inspectAgent{name: "child"}
+	at := NewTool(ia, WithHistoryScope(HistoryScopeParentBranch))
+
+	sess := session.NewSession("parent-app", "parent-user", "parent-session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent-branch"),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parentEvt := event.NewResponseEvent(parent.InvocationID, "parent", &model.Response{
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("PARENT")}},
+	})
+	parentEventCh := make(chan *event.Event, 1)
+	require.NoError(t, agent.EmitEvent(ctx, parent, parentEventCh, parentEvt))
+	<-parentEventCh
+
+	flushCh := make(chan *flush.FlushRequest, 4)
+	flush.Attach(ctx, parent, flushCh)
+	appender.Attach(parent, func(context.Context, *event.Event) error { return nil })
+
+	var mu sync.Mutex
+	flushCount := 0
+	go func() {
+		for {
+			select {
+			case req := <-flushCh:
+				if req == nil {
+					return
+				}
+				mu.Lock()
+				flushCount++
+				if flushCount == 2 {
+					sess.Events = append(sess.Events, *parentEvt)
+				}
+				mu.Unlock()
+				close(req.ACK)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	out, err := at.Call(
+		agent.NewInvocationContext(ctx, parent),
+		[]byte(`{"request":"CHILD"}`),
+	)
+	require.NoError(t, err)
+
+	result, ok := out.(string)
+	require.True(t, ok)
+	require.Contains(t, result, "PARENT")
+	require.NotContains(t, result, `{"request":"CHILD"}`)
+
+	mu.Lock()
+	gotFlushCount := flushCount
+	mu.Unlock()
+	require.GreaterOrEqual(t, gotFlushCount, 2)
+}
+
 func TestTool_HistoryScope_Isolated_Streamable_NoParentPrefix(t *testing.T) {
 	sa := &streamingMockAgent{name: "stream-agent"}
 	at := NewTool(sa, WithStreamInner(true), WithHistoryScope(HistoryScopeIsolated))
