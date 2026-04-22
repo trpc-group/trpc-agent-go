@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -67,8 +66,6 @@ func main() {
 }
 
 func runExample(ctx context.Context, factory evaluatorFactory, opts runOptions) error {
-	restoreModelName := setModelNameEnv(opts.ModelName)
-	defer restoreModelName()
 	agentEvaluator, err := factory(appName, opts)
 	if err != nil {
 		return fmt.Errorf("create evaluator: %w", err)
@@ -82,25 +79,13 @@ func runExample(ctx context.Context, factory evaluatorFactory, opts runOptions) 
 	return nil
 }
 
-func setModelNameEnv(modelName string) func() {
-	if modelName == "" {
-		return func() {}
-	}
-	originalValue, existed := os.LookupEnv("MODEL_NAME")
-	_ = os.Setenv("MODEL_NAME", modelName)
-	return func() {
-		if existed {
-			_ = os.Setenv("MODEL_NAME", originalValue)
-			return
-		}
-		_ = os.Unsetenv("MODEL_NAME")
-	}
-}
-
 func newLocalEvaluator(appName string, opts runOptions) (exampleEvaluator, error) {
 	run := runner.NewRunner(appName, newQAAgent(opts.ModelName, opts.Streaming))
 	evalSetManager := evalsetlocal.New(evalset.WithBaseDir(opts.DataDir))
-	metricManager := metriclocal.New(metric.WithBaseDir(opts.DataDir))
+	metricManager := &judgeModelMetricManager{
+		Manager:   metriclocal.New(metric.WithBaseDir(opts.DataDir)),
+		modelName: opts.ModelName,
+	}
 	evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(opts.OutputDir))
 	reg := registry.New()
 	agentEvaluator, err := evaluation.New(
@@ -119,6 +104,35 @@ func newLocalEvaluator(appName string, opts runOptions) (exampleEvaluator, error
 		AgentEvaluator: agentEvaluator,
 		runner:         run,
 	}, nil
+}
+
+type judgeModelMetricManager struct {
+	metric.Manager
+	modelName string
+}
+
+func (m *judgeModelMetricManager) Get(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+	evalMetric, err := m.Manager.Get(ctx, appName, evalSetID, metricName)
+	if err != nil {
+		return nil, err
+	}
+	return overrideJudgeModelName(evalMetric, m.modelName), nil
+}
+
+func overrideJudgeModelName(evalMetric *metric.EvalMetric, modelName string) *metric.EvalMetric {
+	if evalMetric == nil || modelName == "" || evalMetric.Criterion == nil ||
+		evalMetric.Criterion.LLMJudge == nil || evalMetric.Criterion.LLMJudge.JudgeModel == nil {
+		return evalMetric
+	}
+	metricCopy := *evalMetric
+	criterionCopy := *evalMetric.Criterion
+	llmJudgeCopy := *evalMetric.Criterion.LLMJudge
+	judgeModelCopy := *evalMetric.Criterion.LLMJudge.JudgeModel
+	judgeModelCopy.ModelName = modelName
+	llmJudgeCopy.JudgeModel = &judgeModelCopy
+	criterionCopy.LLMJudge = &llmJudgeCopy
+	metricCopy.Criterion = &criterionCopy
+	return &metricCopy
 }
 
 func printSummary(result *evaluation.EvaluationResult, outDir string) {

@@ -21,6 +21,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	metriccriterion "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	metricllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -93,27 +96,6 @@ func TestRunExampleReturnsEvaluateError(t *testing.T) {
 	assert.Contains(t, err.Error(), "evaluate")
 }
 
-func TestRunExampleSetsModelNameForJudge(t *testing.T) {
-	t.Setenv("MODEL_NAME", "original-model")
-	stub := &stubEvaluator{
-		result: &evaluation.EvaluationResult{
-			AppName:       appName,
-			EvalSetID:     "template-basic",
-			OverallStatus: status.EvalStatusPassed,
-		},
-	}
-	err := runExample(context.Background(), func(gotAppName string, opts runOptions) (exampleEvaluator, error) {
-		assert.Equal(t, appName, gotAppName)
-		assert.Equal(t, "judge-model", os.Getenv("MODEL_NAME"))
-		return stub, nil
-	}, runOptions{
-		ModelName: "judge-model",
-		EvalSetID: "template-basic",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "original-model", os.Getenv("MODEL_NAME"))
-}
-
 func TestNewLocalEvaluator(t *testing.T) {
 	dataDir := filepath.Join("data")
 	outputDir := t.TempDir()
@@ -159,6 +141,33 @@ func TestPrintSummary(t *testing.T) {
 	assert.Contains(t, output, "Runs: 0")
 }
 
+func TestJudgeModelMetricManagerOverridesJudgeModel(t *testing.T) {
+	baseMetric := &metric.EvalMetric{
+		MetricName: "template",
+		Criterion: &metriccriterion.Criterion{
+			LLMJudge: &metricllm.LLMCriterion{
+				JudgeModel: &metricllm.JudgeModelOptions{
+					ModelName: "metric-model",
+				},
+			},
+		},
+	}
+	manager := &judgeModelMetricManager{
+		Manager: &stubMetricManager{
+			metric: baseMetric,
+		},
+		modelName: "flag-model",
+	}
+	result, err := manager.Get(context.Background(), appName, "template-basic", "template")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.Criterion)
+	require.NotNil(t, result.Criterion.LLMJudge)
+	require.NotNil(t, result.Criterion.LLMJudge.JudgeModel)
+	assert.Equal(t, "flag-model", result.Criterion.LLMJudge.JudgeModel.ModelName)
+	assert.Equal(t, "metric-model", baseMetric.Criterion.LLMJudge.JudgeModel.ModelName)
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	origin := os.Stdout
@@ -174,4 +183,32 @@ func captureStdout(t *testing.T, fn func()) string {
 	_, err = io.Copy(&buf, reader)
 	require.NoError(t, err)
 	return buf.String()
+}
+
+type stubMetricManager struct {
+	metric *metric.EvalMetric
+}
+
+func (m *stubMetricManager) List(ctx context.Context, appName, evalSetID string) ([]string, error) {
+	return []string{"template"}, nil
+}
+
+func (m *stubMetricManager) Get(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+	return m.metric, nil
+}
+
+func (m *stubMetricManager) Add(ctx context.Context, appName, evalSetID string, metric *metric.EvalMetric) error {
+	return nil
+}
+
+func (m *stubMetricManager) Delete(ctx context.Context, appName, evalSetID, metricName string) error {
+	return nil
+}
+
+func (m *stubMetricManager) Update(ctx context.Context, appName, evalSetID string, metric *metric.EvalMetric) error {
+	return nil
+}
+
+func (m *stubMetricManager) Close() error {
+	return nil
 }

@@ -7,7 +7,7 @@
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "${MODEL_NAME}",
+          "modelName": "gpt-5.2",
           "baseURL": "${OPENAI_BASE_URL}",
           "apiKey": "${OPENAI_API_KEY}",
           "numSamples": 1,
@@ -55,7 +55,7 @@
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "${MODEL_NAME}",
+          "modelName": "gpt-5.2",
           "baseURL": "${OPENAI_BASE_URL}",
           "apiKey": "${OPENAI_API_KEY}",
           "numSamples": 1,
