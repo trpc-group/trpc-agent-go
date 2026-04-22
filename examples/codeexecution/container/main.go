@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
@@ -85,18 +86,20 @@ func main() {
 
 	name := "container_data_agent"
 	// Create an LLMAgent with the Container code executor.
+	// llmagent.WithCodeExecutor auto-executes a response only when the assistant
+	// reply is exactly one runnable fenced code block, so the instruction below
+	// asks the model to produce such a reply deterministically.
 	llmAgent := llmagent.New(
 		name,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("agent for data science tasks running in a sandboxed Docker container"),
 		llmagent.WithInstruction(`You are a data assistant. Your code is executed inside an isolated Docker container with no network access.
-You need to assist the user with their queries by writing small Python snippets and analyzing the results.
 
 Your workflow:
 1. Understand the user's data analysis request.
-2. Write a single self-contained Python snippet to analyze the data.
+2. When computation is needed, reply with exactly one runnable fenced `+"`python`"+` code block and no surrounding prose, explanations, or additional text. The framework will auto-execute this block via WithCodeExecutor.
 3. Print the results so they appear in the execution output.
-4. Summarize the findings for the user.
+4. After the execution output is available, summarize the findings for the user.
 
 Constraints:
 - You should NEVER install any package on your own like pip install .... The container does not have internet access.
@@ -118,9 +121,17 @@ Constraints:
 	query := "analyze some sample data: 5, 12, 8, 15, 7, 9, 11. " +
 		"Compute the mean, median, variance and standard deviation using only Python's standard library."
 
-	eventChan, err := r.Run(context.Background(), "user-id", "session-id", model.NewUserMessage(query))
+	// Use a bounded context so a hanging model or container cannot block the
+	// process indefinitely and so deferred cleanup runs in time.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	eventChan, err := r.Run(ctx, "user-id", "session-id", model.NewUserMessage(query))
 	if err != nil {
-		log.Fatalf("Failed to run LLMAgent: %v", err)
+		// Use Printf + return (not Fatalf) so the deferred r.Close() and
+		// containerExecutor.Close() still run and remove the Docker container.
+		log.Printf("Failed to run LLMAgent: %v", err)
+		return
 	}
 
 	fmt.Println("\n=== LLMAgent with Container Execution ===")

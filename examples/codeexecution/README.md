@@ -1,15 +1,15 @@
 # Code Execution Example
 
-This example demonstrates how to use the code execution capabilities with both `LocalCodeExecutor` and `ContainerCodeExecutor` implementations.
+This example demonstrates how to use code execution with the three available executor backends: `LocalCodeExecutor`, `ContainerCodeExecutor`, and `JupyterCodeExecutor`.
 
 ## What is Code Execution?
 
-The code execution system allows you to execute code snippets in various programming languages (Python, Bash) either locally or in isolated Docker containers.
+The code execution system allows you to execute code snippets in various programming languages (Python, Bash) locally, in isolated Docker containers, or against a Jupyter kernel.
 
 ### Key Features
 
-- **Multiple Executors**: Support for both local execution and containerized execution
-- **Multi-language Support**: Execute Python, and Bash code
+- **Multiple Executors**: Support for local execution, containerized execution, and Jupyter-kernel execution
+- **Multi-language Support**: Execute Python and Bash code
 - **Configurable**: Custom working directories, timeouts, and cleanup options
 - **Code Block Extraction**: Automatically extract code blocks from markdown-formatted text
 - **Safe Execution**: Isolated environments with resource limits (containers) or controlled local execution
@@ -18,7 +18,8 @@ The code execution system allows you to execute code snippets in various program
 
 - Go 1.23.0 or later
 - Valid OpenAI API key (or compatible API endpoint) for LLM functionality
-- Docker installed and running (for ContainerCodeExecutor)
+- Docker installed and running (for ContainerCodeExecutor, see `./container`)
+- Python 3.x with `jupyter_kernel_gateway` installed (for JupyterCodeExecutor, see `./jupyter`)
 - Python 3.x, Go, and Bash interpreters (for LocalCodeExecutor)
 
 ## Code Executors

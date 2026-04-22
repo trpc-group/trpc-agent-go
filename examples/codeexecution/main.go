@@ -64,12 +64,12 @@ You should NEVER install any package on your own like pip install ....
 	`,
 		),
 		llmagent.WithGenerationConfig(genConfig),
-		// A Docker-based container executor is also available, see the
-		// ./container sub-example:
-		//   import "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
-		//   exec, _ := container.New()
-		//   llmagent.WithCodeExecutor(exec)
-		// Or a Jupyter kernel executor, see the ./jupyter sub-example.
+		// A Docker-based container executor is also available in
+		// the ./container sub-example. The full error-handling and
+		// lifecycle pattern is documented there; see
+		//   examples/codeexecution/container/main.go
+		// for the recommended usage of container.New().
+		// A Jupyter kernel executor is available in the ./jupyter sub-example.
 		llmagent.WithCodeExecutor(local.New()),
 	)
 

@@ -4,11 +4,11 @@ This example demonstrates how to use the `ContainerCodeExecutor` to run model-ge
 
 ## What is Container Code Execution?
 
-`codeexecutor/container` runs each code block produced by the LLM inside a disposable Docker container. It is a good fit for production-like setups where you want stronger isolation than the local executor and do not need persistent kernel state like the Jupyter executor provides.
+`codeexecutor/container` creates a disposable Docker container owned by the executor instance, and runs LLM-produced code blocks inside that same container via `docker exec` until `Close()` stops and removes it. It is a good fit for production-like setups where you want stronger isolation than the local executor and do not need persistent kernel state like the Jupyter executor provides.
 
 ### Key Features
 
-- **Docker Isolation**: Every invocation runs in a dedicated container that is removed on cleanup
+- **Docker Isolation**: One executor-owned container is reused for successive `ExecuteCode` calls and removed on `Close()`
 - **Configurable Image**: Use the default `python:3.9-slim` image, a custom image, or build one from a `Dockerfile`
 - **Multi-language Support**: Execute Python (default) and Bash code blocks
 - **No Network by Default**: The container is started with `network=none` for safety
@@ -84,9 +84,25 @@ executor, err := container.New(
 
 ### Building an Image from a Dockerfile
 
+`WithDockerFilePath` reuses `containerConfig.Image` as the build tag. When you
+build from a local Dockerfile, pair it with `WithContainerConfig` so the build
+gets a dedicated tag instead of overwriting the default `python:3.9-slim`:
+
 ```go
+import (
+    dockercontainer "github.com/docker/docker/api/types/container"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
+)
+
 executor, err := container.New(
     container.WithDockerFilePath("./docker"),
+    container.WithContainerConfig(dockercontainer.Config{
+        Image:      "my-agent-sandbox:latest",
+        WorkingDir: "/",
+        Cmd:        []string{"tail", "-f", "/dev/null"},
+        Tty:        true,
+        OpenStdin:  true,
+    }),
 )
 ```
 
@@ -170,5 +186,5 @@ docker pull python:3.9-slim
 `AutoRemove` is enabled by default. If cleanup is skipped (e.g. the process was killed), remove stale containers manually:
 
 ```bash
-docker ps -a --filter "name=trpc-agent-go-codeexec" -q | xargs -r docker rm -f
+docker ps -a --filter "name=trpc.go.agent-code-exec-" -q | xargs -r docker rm -f
 ```
