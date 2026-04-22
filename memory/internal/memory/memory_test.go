@@ -124,7 +124,7 @@ func TestBuildSearchTokens(t *testing.T) {
 		{"chinese words", "中文测试", []string{"中文", "测试"}},
 		{"chinese with punctuation", "中文，测试！", []string{"中文", "测试"}},
 		{"chinese with spaces", "中文 测试", []string{"中文", "测试"}},
-		{"mixed chinese and english", "hello中文world", []string{"hello", "中文", "world"}},
+		{"mixed chinese and english", "hello中文world", []string{"中文", "hello", "world"}},
 		{"only punctuation", "!@#$%", []string{}},
 		{"only stopwords", "the and or", []string{}},
 	}
@@ -763,6 +763,89 @@ func TestSearchResultDeduplicationHelpers(t *testing.T) {
 			map[string]struct{}{"john": {}, "museum": {}},
 		), 1e-9)
 	})
+
+	t.Run("deduplicate drops chain duplicates against higher-scored entries", func(t *testing.T) {
+		// A~B above threshold, B~C above threshold, A!~C. The dedup
+		// pass must still drop C because a higher-scored
+		// near-duplicate (B) existed in the input, even though C's
+		// only surviving higher-scored neighbor (A) is below the
+		// threshold. Without the prefix scan this regresses to
+		// keeping both A and C.
+		a := &memory.Entry{
+			ID:    "A",
+			Score: 0.95,
+			Memory: &memory.Memory{
+				Memory: "alpha bravo charlie delta echo foxtrot golf hotel india juliet",
+			},
+		}
+		b := &memory.Entry{
+			ID:    "B",
+			Score: 0.90,
+			Memory: &memory.Memory{
+				Memory: "alpha bravo charlie delta echo foxtrot golf hotel india kilo",
+			},
+		}
+		c := &memory.Entry{
+			ID:    "C",
+			Score: 0.80,
+			Memory: &memory.Memory{
+				Memory: "bravo charlie delta echo foxtrot golf hotel india kilo lima",
+			},
+		}
+		deduped := DeduplicateResults([]*memory.Entry{a, b, c})
+		// Only A must survive; B is a duplicate of A, C is a
+		// duplicate of B (a higher-scored input entry).
+		require.Len(t, deduped, 1)
+		assert.Equal(t, "A", deduped[0].ID)
+	})
+
+	t.Run("deduplicate tolerates nil entries without panicking", func(t *testing.T) {
+		live := &memory.Entry{
+			ID:    "live",
+			Score: 0.9,
+			Memory: &memory.Memory{
+				Memory: "John went to the library with his kids on Saturday",
+			},
+		}
+		// Interleave nil entries before and after the live entry so
+		// the sort comparator and the Jaccard pass both observe them.
+		// The contract under test is that nil entries do not panic
+		// and do not cause the live entry to be dropped.
+		deduped := DeduplicateResults([]*memory.Entry{nil, live, nil})
+		var saw bool
+		for _, e := range deduped {
+			if e != nil && e.ID == "live" {
+				saw = true
+			}
+		}
+		assert.True(t, saw, "live entry should survive alongside nil entries")
+	})
+
+	t.Run("deduplicate does not collapse tokenless entries into one", func(t *testing.T) {
+		// Two distinct memories whose content produces no comparable
+		// tokens (punctuation / stopwords only) must both survive.
+		// Without the tokenless guard, jaccardAtLeast(empty, empty)
+		// trivially returned 1.0 and the second entry got dropped.
+		a := &memory.Entry{
+			ID:    "pa",
+			Score: 0.9,
+			Memory: &memory.Memory{
+				Memory: "!!!",
+				Topics: []string{"punct"},
+			},
+		}
+		b := &memory.Entry{
+			ID:    "pb",
+			Score: 0.8,
+			Memory: &memory.Memory{
+				Memory: "???",
+				Topics: []string{"other"},
+			},
+		}
+		deduped := DeduplicateResults([]*memory.Entry{a, b})
+		assert.Len(t, deduped, 2,
+			"tokenless entries carry no lexical evidence of duplication and must both survive")
+	})
 }
 
 func TestMatchMemoryEntry_FallbackNoTokens(t *testing.T) {
@@ -883,6 +966,26 @@ func TestBuildSearchTokens_MixedContent(t *testing.T) {
 	assert.NotNil(t, result)
 	// Should have both English words and CJK lexical tokens.
 	assert.NotEmpty(t, result)
+}
+
+// TestBuildFieldSearchStats_MixedNoDoubleCount guards against a
+// regression where the gse segmenter and collectEnglishTokens both
+// emitted the same Latin tokens for mixed Han/Latin text. Under the
+// non-deduplicating scoring path (buildFieldSearchStats), that caused
+// inflated BM25 term frequencies and document lengths. The helper now
+// relies on collectEnglishTokens alone for Latin tokens, so each
+// distinct token must appear exactly once in the resulting term
+// frequency map.
+func TestBuildFieldSearchStats_MixedNoDoubleCount(t *testing.T) {
+	stats := buildFieldSearchStats("hello中文world")
+	assert.Equal(t, 1, stats.termFreq["hello"],
+		"hello must be counted exactly once in mixed Han/Latin text")
+	assert.Equal(t, 1, stats.termFreq["world"],
+		"world must be counted exactly once in mixed Han/Latin text")
+	assert.Equal(t, 1, stats.termFreq["中文"],
+		"中文 must be counted exactly once in mixed Han/Latin text")
+	assert.Equal(t, 3, stats.length,
+		"document length must equal the number of distinct Latin and CJK tokens")
 }
 
 func TestBuildSearchTokens_OnlyPunctuation(t *testing.T) {

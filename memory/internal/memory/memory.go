@@ -505,6 +505,8 @@ func tokenizePrimarySearchText(text string, opts tokenOptions) []string {
 	return tokens
 }
 
+// containsHan reports whether the text contains any Han (Chinese)
+// character. Short-circuits on the first match.
 func containsHan(text string) bool {
 	for _, r := range text {
 		if isHan(r) {
@@ -514,6 +516,8 @@ func containsHan(text string) bool {
 	return false
 }
 
+// containsCJKText reports whether the text contains any CJK-family
+// character (Han / Hiragana / Katakana / Hangul). Short-circuits.
 func containsCJKText(text string) bool {
 	for _, r := range text {
 		if isCJK(r) {
@@ -536,9 +540,13 @@ func segmentCJKTokens(text string, keepSingleCJKRune bool) []string {
 			continue
 		}
 		if isASCIIAlnumToken(token) {
-			if len(token) < minEnglishTokenLen || isStopword(token) {
-				continue
-			}
+			// Latin tokens inside mixed Han/Latin text are emitted by
+			// collectEnglishTokens later in tokenizePrimarySearchText.
+			// Skipping them here prevents double-counting in the
+			// deduplicate=false scoring paths (buildFieldSearchStats),
+			// which would otherwise inflate BM25 term frequencies and
+			// document lengths for mixed-language memories.
+			continue
 		}
 		if isCJKToken(token) {
 			if !keepSingleCJKRune &&
@@ -1463,14 +1471,14 @@ func MergeSearchResults(
 	preferredKind memory.Kind,
 	maxResults int,
 ) []*memory.Entry {
-	seen := make(map[string]bool, len(primary))
+	seen := make(map[string]struct{}, len(primary))
 	for _, e := range primary {
-		seen[e.ID] = true
+		seen[e.ID] = struct{}{}
 	}
 
 	var kindMatch, kindOther []*memory.Entry
 	for _, e := range fallback {
-		if seen[e.ID] {
+		if _, ok := seen[e.ID]; ok {
 			continue
 		}
 		if EffectiveKind(e.Memory) == preferredKind {
@@ -1544,72 +1552,186 @@ func MergeHybridResults(
 // DeduplicateResults removes near-duplicate memories based on word-level
 // Jaccard similarity. When two results have >80% word overlap, the
 // lower-scored one is dropped.
+//
+// Implementation notes:
+//   - Decisions use a score-descending pass so the highest-scored entry
+//     of each near-duplicate cluster survives, regardless of the input
+//     ordering.
+//   - Output preserves the caller's original slice ordering among the
+//     survivors, matching the long-standing contract of this helper.
+//   - Each candidate is compared against every higher-scored entry
+//     (whether already kept or already dropped) so pairwise semantics
+//     hold: a chain such as A~B, B~C, A!~C still drops C because C has
+//     a higher-scored near-duplicate (B) in the input.
 func DeduplicateResults(results []*memory.Entry) []*memory.Entry {
 	const jaccardThreshold = 0.80
+	if len(results) < 2 {
+		return results
+	}
 
-	type wordSet map[string]struct{}
-	sets := make([]wordSet, len(results))
+	// Build token sets once per entry; reused across all comparisons.
+	sets := make([]map[string]struct{}, len(results))
 	for i, r := range results {
-		ws := make(wordSet)
-		if r != nil && r.Memory != nil {
-			for _, w := range dedupStrings(append(
-				BuildSearchTokens(r.Memory.Memory),
-				buildFallbackCJKTrigrams(r.Memory.Memory)...,
-			)) {
-				ws[w] = struct{}{}
+		sets[i] = entryTokenSet(r)
+	}
+
+	// Visit indices in score-descending order so that the first
+	// representative we pick for any duplicate cluster is the one
+	// with the highest score. Stable ordering on ties keeps behavior
+	// deterministic for equal-scored near-duplicates.
+	order := make([]int, len(results))
+	for i := range order {
+		order[i] = i
+	}
+	// Treat nil entries as having the lowest possible score so they
+	// sort last instead of panicking in the comparator. The Jaccard
+	// pass below is already nil-safe via entryTokenSet, so keeping
+	// nils at the tail is enough to preserve overall safety.
+	entryScore := func(e *memory.Entry) float64 {
+		if e == nil {
+			return math.Inf(-1)
+		}
+		return e.Score
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return entryScore(results[order[a]]) > entryScore(results[order[b]])
+	})
+
+	// Compare each candidate against every already-visited index, not
+	// just survivors. Without this, a chain A~B and B~C (with A not
+	// similar to C) can leave both A and C in the output, which would
+	// contradict the documented pairwise semantics: every dropped
+	// entry must have at least one higher-scored near-duplicate in
+	// the final output *or* in the set of already-dropped duplicates.
+	// Comparing against all higher-scored entries (via the prefix of
+	// the sorted order) preserves that invariant.
+	kept := make([]bool, len(results))
+	kept[order[0]] = true
+	for pos := 1; pos < len(order); pos++ {
+		idx := order[pos]
+		isDup := false
+		for prev := 0; prev < pos; prev++ {
+			k := order[prev]
+			if jaccardAtLeast(sets[idx], sets[k], jaccardThreshold) {
+				isDup = true
+				break
 			}
 		}
-		sets[i] = ws
-	}
-
-	keep := make([]bool, len(results))
-	for i := range keep {
-		keep[i] = true
-	}
-
-	for i := 0; i < len(results); i++ {
-		if !keep[i] {
+		if isDup {
 			continue
 		}
-		for j := i + 1; j < len(results); j++ {
-			if !keep[j] {
-				continue
-			}
-			if jaccardSimilarity(sets[i], sets[j]) >= jaccardThreshold {
-				if results[i].Score >= results[j].Score {
-					keep[j] = false
-				} else {
-					keep[i] = false
-					break
-				}
-			}
-		}
+		kept[idx] = true
 	}
 
+	// Emit survivors in the original input order so callers relying on
+	// the historical ordering semantics keep working.
 	deduped := make([]*memory.Entry, 0, len(results))
 	for i, r := range results {
-		if keep[i] {
+		if kept[i] {
 			deduped = append(deduped, r)
 		}
 	}
 	return deduped
 }
 
+// entryTokenSet builds a Jaccard-friendly token set from an entry's
+// memory content. Returns an empty set for nil / empty entries.
+func entryTokenSet(e *memory.Entry) map[string]struct{} {
+	if e == nil || e.Memory == nil {
+		return map[string]struct{}{}
+	}
+	// Pre-size the map to avoid rehashing; the typical short memory
+	// has ~10-30 unique tokens after dedup.
+	set := make(map[string]struct{}, 16)
+	for _, w := range BuildSearchTokens(e.Memory.Memory) {
+		set[w] = struct{}{}
+	}
+	for _, w := range buildFallbackCJKTrigrams(e.Memory.Memory) {
+		set[w] = struct{}{}
+	}
+	return set
+}
+
 func jaccardSimilarity(a, b map[string]struct{}) float64 {
-	if len(a) == 0 && len(b) == 0 {
+	la, lb := len(a), len(b)
+	if la == 0 && lb == 0 {
 		return 1.0
 	}
+	if la == 0 || lb == 0 {
+		return 0
+	}
+	// Iterate over the smaller set to minimize probe count, and look
+	// up in the larger one.
+	small, large := a, b
+	ls, ll := la, lb
+	if lb < la {
+		small, large = b, a
+		ls, ll = lb, la
+	}
 	intersection := 0
-	for w := range a {
-		if _, ok := b[w]; ok {
+	for w := range small {
+		if _, ok := large[w]; ok {
 			intersection++
 		}
 	}
-	union := len(a) + len(b) - intersection
+	union := ls + ll - intersection
 	if union == 0 {
 		return 0
 	}
 	return float64(intersection) / float64(union)
+}
+
+// jaccardAtLeast reports whether Jaccard(a, b) >= threshold, doing as
+// little work as possible. It returns early on size mismatch (the
+// sets cannot reach the threshold when their cardinalities differ
+// beyond a ratio bound) and on running-intersection lower bounds.
+// This is what DeduplicateResults actually needs — the exact ratio
+// is never read — so the helper avoids the full intersection scan
+// in the common "clearly not similar" case.
+//
+// Two empty sets are treated as non-comparable (returns false) for
+// dedup purposes: entryTokenSet yields an empty set for nil /
+// punctuation-only / stopword-only memories, and without this guard
+// a pair of such unrelated entries would be collapsed purely because
+// neither produced any lexical evidence.
+func jaccardAtLeast(a, b map[string]struct{}, threshold float64) bool {
+	la, lb := len(a), len(b)
+	if la == 0 || lb == 0 {
+		return false
+	}
+	small, large := a, b
+	ls, ll := la, lb
+	if lb < la {
+		small, large = b, a
+		ls, ll = lb, la
+	}
+	// Upper bound on Jaccard given only set sizes: |small| / |large|.
+	// If even that cannot hit the threshold, skip the probe entirely.
+	if float64(ls)/float64(ll) < threshold {
+		return false
+	}
+	// Minimum intersection count that satisfies
+	// |I| / (|a| + |b| - |I|) >= T, solved for |I|:
+	//   |I| >= T * (|a| + |b|) / (1 + T)
+	needed := int(math.Ceil(threshold * float64(la+lb) / (1 + threshold)))
+	inter := 0
+	// maxPossible tracks how many matches are still reachable; stop
+	// early when even matching every remaining small-set token cannot
+	// reach the needed count.
+	remaining := ls
+	for w := range small {
+		if _, ok := large[w]; ok {
+			inter++
+			if inter >= needed {
+				return true
+			}
+		}
+		remaining--
+		if inter+remaining < needed {
+			return false
+		}
+	}
+	return inter >= needed
 }
 
 func passesMinScore(score float64, minScore float64) bool {
