@@ -142,23 +142,132 @@ func TestGetDimensions(t *testing.T) {
 	}
 }
 
-// TestIsTextEmbedding3Model tests the helper function.
-func TestIsTextEmbedding3Model(t *testing.T) {
+// TestRequestDimensionsForwarding verifies how the dimensions parameter is
+// forwarded to the embeddings API:
+//
+//   - Explicit WithDimensions: always forwarded for any model id (this is the
+//     regression test for issue #1664, where dimensions configured for
+//     text-embedding-v4 on a DashScope-compatible gateway was silently dropped).
+//   - Implicit (no WithDimensions) on the text-embedding-3-* family: the
+//     historical default (DefaultDimensions=1536) is forwarded to preserve the
+//     existing wire contract for callers who already provisioned downstream
+//     stores against that default.
+//   - Implicit on any other model: the parameter is omitted so the model's
+//     server-side default is used and gateways/models that reject the field
+//     keep working.
+func TestRequestDimensionsForwarding(t *testing.T) {
 	tests := []struct {
-		model    string
-		expected bool
+		name           string
+		opts           []Option
+		wantDimensions int64 // 0 means "must be omitted"
 	}{
-		{ModelTextEmbedding3Small, true},
-		{ModelTextEmbedding3Large, true},
-		{ModelTextEmbeddingAda002, false},
-		{"text-davinci-003", false},
-		{"", false},
+		{
+			name:           "explicit dimensions on text-embedding-3-small",
+			opts:           []Option{WithModel(ModelTextEmbedding3Small), WithDimensions(256)},
+			wantDimensions: 256,
+		},
+		{
+			name:           "explicit dimensions on text-embedding-v4",
+			opts:           []Option{WithModel("text-embedding-v4"), WithDimensions(1536)},
+			wantDimensions: 1536,
+		},
+		{
+			name:           "implicit dimensions on text-embedding-3-small (legacy default)",
+			opts:           []Option{WithModel(ModelTextEmbedding3Small)},
+			wantDimensions: int64(DefaultDimensions),
+		},
+		{
+			name:           "implicit dimensions on text-embedding-3-large (legacy default)",
+			opts:           []Option{WithModel(ModelTextEmbedding3Large)},
+			wantDimensions: int64(DefaultDimensions),
+		},
+		{
+			name:           "no explicit dimensions on ada-002 (model rejects param)",
+			opts:           []Option{WithModel(ModelTextEmbeddingAda002)},
+			wantDimensions: 0,
+		},
+		{
+			name:           "no explicit dimensions on text-embedding-v4",
+			opts:           []Option{WithModel("text-embedding-v4")},
+			wantDimensions: 0,
+		},
+		{
+			name:           "no explicit dimensions on custom OpenAI-compatible model",
+			opts:           []Option{WithModel("custom-embedder")},
+			wantDimensions: 0,
+		},
+		{
+			// Guard against the text-embedding-3 prefix accidentally
+			// matching unrelated ids that share the leading characters.
+			name:           "no explicit dimensions on text-embedding-30 (prefix-collision guard)",
+			opts:           []Option{WithModel("text-embedding-30")},
+			wantDimensions: 0,
+		},
+		{
+			name:           "no explicit dimensions on text-embedding-3rd-party (prefix-collision guard)",
+			opts:           []Option{WithModel("text-embedding-3rd-party")},
+			wantDimensions: 0,
+		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.model, func(t *testing.T) {
-			if got := isTextEmbedding3Model(tt.model); got != tt.expected {
-				t.Errorf("isTextEmbedding3Model(%s) = %v, want %v", tt.model, got, tt.expected)
+		t.Run(tt.name, func(t *testing.T) {
+			// captured is written by the handler goroutine and read by the
+			// test goroutine after GetEmbedding returns. The HTTP round trip
+			// provides the happens-before edge, so a plain shared variable
+			// is safe; decode errors are surfaced via decodeErr instead of
+			// t.Fatalf, since t.Fatalf from a non-test goroutine only exits
+			// that goroutine and would leave the test running with bad data.
+			var (
+				captured  map[string]any
+				decodeErr error
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/embeddings") {
+					http.Error(w, "not found", http.StatusNotFound)
+					return
+				}
+				if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+					decodeErr = err
+					http.Error(w, "bad request", http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"object": "list",
+					"data": []map[string]any{
+						{"object": "embedding", "index": 0, "embedding": []float64{0.1}},
+					},
+					"usage": map[string]any{"prompt_tokens": 1, "total_tokens": 1},
+				})
+			}))
+			defer srv.Close()
+
+			opts := append([]Option{WithBaseURL(srv.URL), WithAPIKey("dummy")}, tt.opts...)
+			emb := New(opts...)
+			if _, err := emb.GetEmbedding(context.Background(), "hello"); err != nil {
+				t.Fatalf("GetEmbedding err: %v", err)
+			}
+			if decodeErr != nil {
+				t.Fatalf("decode request body: %v", decodeErr)
+			}
+
+			got, present := captured["dimensions"]
+			if tt.wantDimensions == 0 {
+				if present {
+					t.Fatalf("dimensions should not be sent, but got %v", got)
+				}
+				return
+			}
+			if !present {
+				t.Fatalf("dimensions=%d expected in request, but absent", tt.wantDimensions)
+			}
+			gotF, ok := got.(float64)
+			if !ok {
+				t.Fatalf("dimensions field is not numeric: %T (%v)", got, got)
+			}
+			if int64(gotF) != tt.wantDimensions {
+				t.Errorf("dimensions = %v, want %d", got, tt.wantDimensions)
 			}
 		})
 	}
