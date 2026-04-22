@@ -26,7 +26,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -45,6 +44,7 @@ const (
 	appName            = "a2aagent-customdatapart-demo"
 	customEventTag     = "demo.custom_data"
 	customDataPartType = "custom_data"
+	customDataPartKind = "custom_part_kind"
 	customEventExtKey  = "trpc.a2a.custom_payload"
 	customEventHint    = "Curstom data part data"
 	colorReset         = "\033[0m"
@@ -77,7 +77,7 @@ func startChat(a2aAgent *a2aagent.A2AAgent) {
 	fmt.Printf("\nExample flow\n")
 	fmt.Printf("1. Remote agent emits normal text\n")
 	fmt.Printf("2. Wrapper emits one extra graph.node.custom event with payload hint in event.Extensions\n")
-	fmt.Printf("3. a2a.WithEventToA2APartMapper converts that extension into DataPart(type=%q)\n", customDataPartType)
+	fmt.Printf("3. a2a.WithEventToA2APartMapper converts that extension into a custom DataPart(kind=%q)\n", customDataPartType)
 	fmt.Printf("4. a2aagent.WithA2ADataPartMapper restores that DataPart into event.Extensions\n")
 	fmt.Printf("5. Demo UI reads the extension payload and prints a custom line\n\n")
 	fmt.Printf("Reasoning content is shown in %scyan%s. Type 'new' for a new session, or 'exit' to quit.\n\n", colorCyan, colorReset)
@@ -247,10 +247,7 @@ func customDataPartMapper(ctx context.Context, evt *event.Event) ([]protocol.Par
 		return nil, nil
 	}
 	dp := protocol.NewDataPart(map[string]any{"payload": payload})
-	if dp.Metadata == nil {
-		dp.Metadata = make(map[string]any)
-	}
-	dp.Metadata[ia2a.DataPartMetadataTypeKey] = customDataPartType
+	markAsCustomDataPart(&dp)
 	return []protocol.Part{&dp}, nil
 }
 
@@ -279,22 +276,13 @@ func buildA2AAgent(httpURL string) *a2aagent.A2AAgent {
 			if part == nil || result == nil {
 				return false, nil
 			}
-			// Ignore all built-in and unrelated DataParts; this mapper only handles
-			// the custom payload emitted by the demo server-side mapper.
-			if ia2a.GetDataPartType(part.Metadata) != customDataPartType {
-				return false, nil
-			}
-			dataMap, ok := part.Data.(map[string]any)
-			if !ok {
-				return false, nil
-			}
-			payloadMap, ok := dataMap["payload"].(map[string]any)
+			payload, ok := customDataPartPayload(part)
 			if !ok {
 				return false, nil
 			}
 			// Rehydrate the wire-format DataPart payload back into event.Extensions
 			// so the rest of the local pipeline can consume typed structured data.
-			if err := result.SetEventExtension(customEventExtKey, payloadMap); err != nil {
+			if err := result.SetEventExtension(customEventExtKey, payload); err != nil {
 				return false, err
 			}
 			return true, nil
@@ -425,6 +413,35 @@ func waitForAgentCardReady(host string, serverErrCh <-chan error, timeout time.D
 func intPtr(v int) *int { return &v }
 
 func floatPtr(v float64) *float64 { return &v }
+
+func markAsCustomDataPart(part *protocol.DataPart) {
+	if part == nil {
+		return
+	}
+	if part.Metadata == nil {
+		part.Metadata = make(map[string]any)
+	}
+	part.Metadata[customDataPartKind] = customDataPartType
+}
+
+func customDataPartPayload(part *protocol.DataPart) (any, bool) {
+	if part == nil {
+		return nil, false
+	}
+	typeValue, ok := part.Metadata[customDataPartKind].(string)
+	if !ok || typeValue != customDataPartType {
+		return nil, false
+	}
+	dataMap, ok := part.Data.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	value, ok := dataMap["payload"]
+	if !ok {
+		return nil, false
+	}
+	return value, true
+}
 
 func getEnvOrDefault(key, defaultValue string) string {
 	if value, ok := os.LookupEnv(key); ok {
