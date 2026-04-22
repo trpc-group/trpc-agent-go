@@ -6,7 +6,7 @@ As conversations grow, maintaining complete event history can consume significan
 
 ## Key Features
 
-- **Auto-trigger**: Automatically generates summaries based on event count, token count, or time thresholds
+- **Auto-trigger**: During summary checks, automatically generates summaries based on event count, token count, or time thresholds
 - **Incremental processing**: Only processes new events since the last summary, avoiding redundant computation
 - **LLM-driven**: Uses any configured LLM model to generate high-quality, context-aware summaries
 - **Non-destructive**: Original events are fully preserved; summaries are stored separately
@@ -34,7 +34,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(
         summary.CheckEventThreshold(20),
         summary.CheckTokenThreshold(4000),
-        summary.CheckTimeThreshold(5*time.Minute),
+        summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
     ),
     summary.WithMaxSummaryWords(200),
 )
@@ -185,7 +185,7 @@ context before calling the session APIs and read the value inside your
 | --- | --- |
 | `WithEventThreshold(eventCount int)` | Trigger when event count since last summary exceeds threshold |
 | `WithTokenThreshold(tokenCount int)` | Trigger when token count since last summary exceeds threshold |
-| `WithTimeThreshold(interval time.Duration)` | Trigger when time since last event exceeds interval |
+| `WithTimeThreshold(interval time.Duration)` | Evaluated during summary checks; wraps `CheckTimeThreshold` and triggers when the checked session's last event is older than the interval |
 
 ### Combined Conditions
 
@@ -323,7 +323,7 @@ type Checker func(sess *session.Session) bool
 | Checker | Description |
 | --- | --- |
 | `CheckEventThreshold(eventCount int)` | Returns true when the number of delta events since the last summary exceeds the threshold |
-| `CheckTimeThreshold(interval time.Duration)` | Returns true when time since last event exceeds interval |
+| `CheckTimeThreshold(interval time.Duration)` | Returns true when the checked session's last event is older than the interval |
 | `CheckTokenThreshold(tokenCount int)` | Returns true when the estimated token count of delta events since the last summary exceeds the threshold (estimated via `TokenCounter` from extracted conversation text, not `event.Response.Usage.TotalTokens`) |
 | `ChecksAll(checks []Checker)` | Combines multiple Checkers; returns true only when all return true (AND) |
 | `ChecksAny(checks []Checker)` | Combines multiple Checkers; returns true when any returns true (OR) |
@@ -541,8 +541,10 @@ The Runner automatically checks trigger conditions after each conversation compl
 
 - Event count exceeds threshold (`WithEventThreshold`)
 - Token count exceeds threshold (`WithTokenThreshold`)
-- Time since last event exceeds interval (`WithTimeThreshold`)
+- On a summary check, the checked session's last event is older than the interval (`WithTimeThreshold`)
 - Custom combined conditions met (`WithChecksAny` / `WithChecksAll`)
+
+`WithTimeThreshold` is not a standalone background timer. The condition is only evaluated when a summary check runs, typically after a conversation turn completes or when you call summary APIs manually. It checks the last event of the session being evaluated; in the Runner's normal delta-summary flow, that session contains only pending events, so this effectively means the latest unsummarized event. For example, `5*time.Minute` means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."
 
 ### Manual Trigger
 
@@ -969,7 +971,7 @@ func main() {
         summary.WithChecksAny(
             summary.CheckEventThreshold(20),
             summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute),
+            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
         ),
     )
 
