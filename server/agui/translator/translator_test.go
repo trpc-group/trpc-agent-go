@@ -144,6 +144,96 @@ func TestTranslateErrorResponse(t *testing.T) {
 	assert.Equal(t, "run", runErr.RunID())
 }
 
+func TestTranslateEventSourceMetadataDisabledByDefault(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+	rsp := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "Hello",
+			},
+		}},
+	}
+	events, err := translator.Translate(
+		context.Background(),
+		&agentevent.Event{
+			ID:           "evt-1",
+			Author:       "member-a",
+			InvocationID: "inv-1",
+			Response:     rsp,
+		},
+	)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, events)
+	for _, evt := range events {
+		assert.Nil(t, evt.GetBaseEvent().RawEvent)
+	}
+}
+
+func TestTranslateAttachesEventSourceMetadataWhenEnabled(t *testing.T) {
+	translator := newTranslatorForTest(
+		t,
+		WithEventSourceMetadataEnabled(true),
+	)
+	if translator == nil {
+		return
+	}
+	rsp := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "search",
+						Arguments: []byte(`{"q":"agent"}`),
+					},
+				}},
+			},
+		}},
+	}
+	events, err := translator.Translate(
+		context.Background(),
+		&agentevent.Event{
+			ID:                 "evt-1",
+			Author:             "member-a",
+			InvocationID:       "inv-1",
+			ParentInvocationID: "parent-1",
+			Branch:             "root.member-a",
+			Response:           rsp,
+		},
+	)
+	assert.NoError(t, err)
+	assert.Len(t, events, 3)
+
+	want := eventSourceMetadata{
+		EventID:            "evt-1",
+		Author:             "member-a",
+		InvocationID:       "inv-1",
+		ParentInvocationID: "parent-1",
+		Branch:             "root.member-a",
+	}
+	for _, evt := range events {
+		got, ok := evt.GetBaseEvent().RawEvent.(eventSourceMetadata)
+		assert.True(t, ok)
+		assert.Equal(t, want, got)
+	}
+
+	payload, err := json.Marshal(events[0])
+	assert.NoError(t, err)
+	assert.Contains(t, string(payload), `"rawEvent":`)
+	assert.Contains(t, string(payload), `"author":"member-a"`)
+	assert.Contains(t, string(payload), `"invocationId":"inv-1"`)
+}
+
 func TestTextMessageEventStreamingAndCompletion(t *testing.T) {
 	translator := newTranslatorImplForTest(t)
 	if translator == nil {

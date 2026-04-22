@@ -72,6 +72,7 @@ func New(ctx context.Context, threadID, runID string, opts ...Option) (Translato
 		graphNodeInterruptActivityEnabled:      options.graphNodeInterruptActivityEnabled,
 		graphNodeInterruptActivityTopLevelOnly: options.graphNodeInterruptActivityTopLevelOnly,
 		reasoningContentEnabled:                options.reasoningContentEnabled,
+		eventSourceMetadataEnabled:             options.eventSourceMetadataEnabled,
 		streamingToolResultActivityEnabled:     options.streamingToolResultActivityEnabled,
 		streamingToolResultContent:             make(map[string]string),
 	}, nil
@@ -91,8 +92,17 @@ type translator struct {
 	graphNodeInterruptActivityEnabled      bool
 	graphNodeInterruptActivityTopLevelOnly bool
 	reasoningContentEnabled                bool
+	eventSourceMetadataEnabled             bool
 	streamingToolResultActivityEnabled     bool
 	streamingToolResultContent             map[string]string
+}
+
+type eventSourceMetadata struct {
+	EventID            string `json:"eventId,omitempty"`
+	Author             string `json:"author,omitempty"`
+	InvocationID       string `json:"invocationId,omitempty"`
+	ParentInvocationID string `json:"parentInvocationId,omitempty"`
+	Branch             string `json:"branch,omitempty"`
 }
 
 const skillRunArtifactsStateKey = skill.StateKeyArtifacts
@@ -127,14 +137,14 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 	rsp := event.Response
 	if rsp == nil {
 		if len(events) > 0 || hasGraphDelta {
-			return events, nil
+			return t.finalizeEvents(event, events), nil
 		}
 		return nil, errors.New("event response is nil")
 	}
 	if rsp.Error != nil {
 		log.Errorf("agui: threadID: %s, runID: %s, error in response: %v", t.threadID, t.runID, rsp.Error)
 		events = append(events, aguievents.NewRunErrorEvent(rsp.Error.Message, aguievents.WithRunID(t.runID)))
-		return events, nil
+		return t.finalizeEvents(event, events), nil
 	}
 	if rsp.Object == model.ObjectTypeChatCompletionChunk || rsp.Object == model.ObjectTypeChatCompletion {
 		if t.reasoningContentEnabled {
@@ -183,7 +193,7 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		events = append(events, finalizationEvents...)
 		events = append(events, aguievents.NewRunFinishedEvent(t.threadID, t.runID))
 	}
-	return events, nil
+	return t.finalizeEvents(event, events), nil
 }
 
 // PostRunFinalizationEvents closes any active reasoning or text streams after a run ends.
@@ -206,6 +216,51 @@ func (t *translator) PostRunFinalizationEvents(context.Context) ([]aguievents.Ev
 		t.receivingMessage = false
 	}
 	return events, nil
+}
+
+func (t *translator) finalizeEvents(
+	src *agentevent.Event,
+	events []aguievents.Event,
+) []aguievents.Event {
+	if t == nil ||
+		!t.eventSourceMetadataEnabled ||
+		len(events) == 0 {
+		return events
+	}
+	metadata, ok := newEventSourceMetadata(src)
+	if !ok {
+		return events
+	}
+	for _, evt := range events {
+		if evt == nil {
+			continue
+		}
+		base := evt.GetBaseEvent()
+		if base == nil || base.RawEvent != nil {
+			continue
+		}
+		base.RawEvent = metadata
+	}
+	return events
+}
+
+func newEventSourceMetadata(
+	ev *agentevent.Event,
+) (eventSourceMetadata, bool) {
+	if ev == nil {
+		return eventSourceMetadata{}, false
+	}
+	metadata := eventSourceMetadata{
+		EventID:            ev.ID,
+		Author:             ev.Author,
+		InvocationID:       ev.InvocationID,
+		ParentInvocationID: ev.ParentInvocationID,
+		Branch:             ev.Branch,
+	}
+	if metadata == (eventSourceMetadata{}) {
+		return eventSourceMetadata{}, false
+	}
+	return metadata, true
 }
 
 type artifactRef struct {

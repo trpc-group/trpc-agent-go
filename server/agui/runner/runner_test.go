@@ -57,10 +57,115 @@ func TestNew(t *testing.T) {
 	assert.NotNil(t, runner.runOptionResolver)
 	assert.False(t, runner.toolResultInputTranslationEnabled)
 	assert.False(t, runner.streamingToolResultActivityEnabled)
+	assert.False(t, runner.eventSourceMetadataEnabled)
 	userID, err := runner.userIDResolver(context.Background(),
 		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NoError(t, err)
 	assert.Equal(t, "user", userID)
+}
+
+func TestRunEventSourceMetadataEnabledAttachesRawEvent(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 3)
+	agentEvents <- &agentevent.Event{
+		ID:                 "evt-tool-call",
+		Author:             "member-a",
+		InvocationID:       "inv-1",
+		ParentInvocationID: "parent-1",
+		Branch:             "root.member-a",
+		Response: &model.Response{
+			ID:     "msg-tool-call",
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:   "call-1",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "search",
+							Arguments: []byte(`{"q":"agent"}`),
+						},
+					}},
+				},
+			}},
+		},
+	}
+	agentEvents <- &agentevent.Event{
+		ID:                 "evt-tool-result",
+		Author:             "member-a",
+		InvocationID:       "inv-1",
+		ParentInvocationID: "parent-1",
+		Branch:             "root.member-a",
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  "call-1",
+					Content: "done",
+				},
+			}},
+		},
+	}
+	agentEvents <- &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+	close(agentEvents)
+
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	rr, ok := New(
+		underlying,
+		WithEventSourceMetadataEnabled(true),
+	).(*runner)
+	require.True(t, ok)
+
+	eventsCh, err := rr.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 6)
+
+	want := map[string]any{
+		"eventId":            "evt-tool-call",
+		"author":             "member-a",
+		"invocationId":       "inv-1",
+		"parentInvocationId": "parent-1",
+		"branch":             "root.member-a",
+	}
+	for _, idx := range []int{1, 2, 3} {
+		payload, marshalErr := json.Marshal(evts[idx].GetBaseEvent().RawEvent)
+		require.NoError(t, marshalErr)
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(payload, &decoded))
+		assert.Equal(t, want, decoded)
+	}
+
+	payload, err := json.Marshal(evts[1])
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(payload, &decoded))
+	assert.Equal(t, want, decoded["rawEvent"])
+
+	resultPayload, err := json.Marshal(evts[4].GetBaseEvent().RawEvent)
+	require.NoError(t, err)
+	var resultDecoded map[string]any
+	require.NoError(t, json.Unmarshal(resultPayload, &resultDecoded))
+	assert.Equal(t, "evt-tool-result", resultDecoded["eventId"])
+	assert.Equal(t, "member-a", resultDecoded["author"])
 }
 
 func TestRunEmitsGraphNodeStartActivityWhenEnabled(t *testing.T) {
