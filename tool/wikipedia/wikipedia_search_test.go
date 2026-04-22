@@ -624,17 +624,24 @@ func TestWithTimeout_OrderIndependent(t *testing.T) {
 	assert.Equal(t, 5*time.Second, custom.Timeout, "original must not be mutated regardless of order")
 }
 
-func TestWithTimeout_EnforcedAtCallPath(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(80 * time.Millisecond)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"batchcomplete":"","query":{"searchinfo":{"totalhits":0},"search":[]}}`))
-	}))
-	defer server.Close()
+// blockingRoundTripper blocks until the request context is cancelled. This lets
+// us exercise the http.Client.Timeout path deterministically - when the timeout
+// fires, net/http cancels the request context and RoundTrip returns its error.
+// No time.Sleep, no race, no real server.
+type blockingRoundTripper struct{}
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+func (blockingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
+
+func TestWithTimeout_EnforcedAtCallPath(t *testing.T) {
+	httpClient := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: blockingRoundTripper{},
+	}
 	timeout := 10 * time.Millisecond
-	testClient := client.New(server.URL, "test-agent/1.0", resolveHTTPClient(&config{
+	testClient := client.New("http://wikipedia.invalid/test", "test-agent/1.0", resolveHTTPClient(&config{
 		httpClient: httpClient,
 		timeout:    &timeout,
 	}))
@@ -644,12 +651,15 @@ func TestWithTimeout_EnforcedAtCallPath(t *testing.T) {
 	reqJSON, _ := json.Marshal(wikipediaSearchRequest{Query: "anything"})
 
 	_, err := searchFunc.Call(context.Background(), reqJSON)
-	require.Error(t, err, "expected timeout error from slow server")
+	require.Error(t, err, "expected timeout error from blocking transport")
 	low := strings.ToLower(err.Error())
 	assert.True(t,
-		strings.Contains(low, "deadline") || strings.Contains(low, "timeout"),
-		"error should reference timeout/deadline, got: %s", err.Error())
+		strings.Contains(low, "deadline") || strings.Contains(low, "timeout") ||
+			strings.Contains(low, "canceled") || strings.Contains(low, "cancelled"),
+		"error should reference timeout/deadline/cancel, got: %s", err.Error())
 	assert.Equal(t, 30*time.Second, httpClient.Timeout, "original client must remain unmutated")
+	assert.Equal(t, http.RoundTripper(blockingRoundTripper{}), httpClient.Transport,
+		"original transport must remain unmutated")
 }
 
 func TestConvertHTMLToMarkdown(t *testing.T) {

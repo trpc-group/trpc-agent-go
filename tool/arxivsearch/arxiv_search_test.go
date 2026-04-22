@@ -446,33 +446,43 @@ func TestWithTimeout_OrderIndependent(t *testing.T) {
 	assert.Equal(t, 5*time.Second, custom.Timeout, "original must not be mutated regardless of order")
 }
 
-func TestWithTimeout_EnforcedAtCallPath(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(80 * time.Millisecond)
-		w.Header().Set("Content-Type", "application/xml")
-		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>`))
-	}))
-	defer server.Close()
+// blockingRoundTripper blocks until the request context is cancelled. This lets
+// us exercise the Client.Timeout path deterministically - when the timeout
+// fires, net/http cancels the request context and RoundTrip returns its error.
+// No time.Sleep, no race, no real server.
+type blockingRoundTripper struct{}
 
-	original := &http.Client{Timeout: 30 * time.Second}
+func (blockingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
+
+func TestWithTimeout_EnforcedAtCallPath(t *testing.T) {
+	original := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: blockingRoundTripper{},
+	}
 	toolSet, err := NewToolSet(
+		WithBaseURL("http://arxiv.invalid/test"),
 		WithHTTPClient(original),
 		WithTimeout(10*time.Millisecond),
-		WithDelaySeconds(1),
+		WithDelaySeconds(time.Nanosecond),
 		WithNumRetries(1),
 	)
 	require.NoError(t, err)
-	toolSet.client.BaseURL = server.URL
 
 	_, err = toolSet.search(context.Background(), searchRequest{
 		Search: arxiv.Search{Query: "anything"},
 	})
-	require.Error(t, err, "expected timeout error from slow server")
+	require.Error(t, err, "expected timeout error from blocking transport")
 	low := strings.ToLower(err.Error())
 	assert.True(t,
-		strings.Contains(low, "deadline") || strings.Contains(low, "timeout"),
-		"error should reference timeout/deadline, got: %s", err.Error())
+		strings.Contains(low, "deadline") || strings.Contains(low, "timeout") ||
+			strings.Contains(low, "canceled") || strings.Contains(low, "cancelled"),
+		"error should reference timeout/deadline/cancel, got: %s", err.Error())
 	assert.Equal(t, 30*time.Second, original.Timeout, "original client must remain unmutated")
+	assert.Equal(t, http.RoundTripper(blockingRoundTripper{}), original.Transport,
+		"original transport must remain unmutated")
 }
 
 // TestNewTool tests the NewToolSet function

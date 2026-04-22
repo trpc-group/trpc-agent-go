@@ -45,9 +45,13 @@ func NewClient(config ClientConfig) *Client {
 	if config.NumRetries <= 0 {
 		config.NumRetries = 3
 	}
+	base := config.BaseURL
+	if base == "" {
+		base = baseURL
+	}
 
 	return &Client{
-		BaseURL:    baseURL,
+		BaseURL:    base,
 		config:     config,
 		httpClient: resolveHTTPClient(config),
 	}
