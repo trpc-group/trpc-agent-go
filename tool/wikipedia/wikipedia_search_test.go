@@ -542,6 +542,116 @@ func TestWikiSearchTool_IncludeAll(t *testing.T) {
 	}
 }
 
+// applyOpts builds a config and calls the production resolveHTTPClient,
+// so tests exercise the same code path as NewToolSet.
+func applyOpts(opts ...Option) *http.Client {
+	cfg := &config{
+		httpClient: &http.Client{Timeout: defaultTimeout},
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return resolveHTTPClient(cfg)
+}
+
+func TestWithHTTPClient_Set(t *testing.T) {
+	custom := &http.Client{Timeout: 7 * time.Second, Transport: http.DefaultTransport}
+	got := applyOpts(WithHTTPClient(custom))
+	assert.Equal(t, custom, got, "WithHTTPClient should pass through caller's client when no timeout override")
+}
+
+func TestWithHTTPClient_NilFallsBackToDefault(t *testing.T) {
+	got := applyOpts(WithHTTPClient(nil))
+	assert.NotNil(t, got)
+	assert.Equal(t, defaultTimeout, got.Timeout)
+}
+
+func TestWithHTTPClient_NilPlusTimeout(t *testing.T) {
+	got := applyOpts(WithHTTPClient(nil), WithTimeout(45*time.Second))
+	assert.NotNil(t, got)
+	assert.Equal(t, 45*time.Second, got.Timeout)
+}
+
+func TestWithTimeout_Standalone(t *testing.T) {
+	got := applyOpts(WithTimeout(60 * time.Second))
+	assert.Equal(t, 60*time.Second, got.Timeout)
+}
+
+func TestWithTimeout_DoesNotMutateOriginalClient(t *testing.T) {
+	original := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: http.DefaultTransport,
+	}
+
+	got := applyOpts(WithHTTPClient(original), WithTimeout(99*time.Second))
+
+	assert.Equal(t, 99*time.Second, got.Timeout)
+	assert.Equal(t, 10*time.Second, original.Timeout, "original client timeout must not be mutated")
+	assert.Equal(t, http.DefaultTransport, original.Transport, "original client transport must be preserved")
+}
+
+func TestWithTimeout_PreservesCustomTransport(t *testing.T) {
+	customTransport := &http.Transport{MaxIdleConns: 42}
+	original := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: customTransport,
+	}
+
+	got := applyOpts(WithHTTPClient(original), WithTimeout(120*time.Second))
+
+	assert.Equal(t, 120*time.Second, got.Timeout)
+	assert.Equal(t, customTransport, got.Transport, "custom transport must be preserved after WithTimeout")
+}
+
+func TestWithTimeout_ZeroDisablesDefault(t *testing.T) {
+	got := applyOpts(WithTimeout(0))
+	assert.Equal(t, time.Duration(0), got.Timeout, "WithTimeout(0) should disable default timeout")
+}
+
+func TestWithTimeout_NegativeIgnored(t *testing.T) {
+	got := applyOpts(WithTimeout(-1 * time.Second))
+	assert.Equal(t, defaultTimeout, got.Timeout, "negative timeout should be ignored, keeping default")
+}
+
+func TestWithTimeout_OrderIndependent(t *testing.T) {
+	custom := &http.Client{Timeout: 5 * time.Second, Transport: http.DefaultTransport}
+
+	got1 := applyOpts(WithHTTPClient(custom), WithTimeout(60*time.Second))
+	got2 := applyOpts(WithTimeout(60*time.Second), WithHTTPClient(custom))
+
+	assert.Equal(t, 60*time.Second, got1.Timeout)
+	assert.Equal(t, 60*time.Second, got2.Timeout)
+	assert.Equal(t, 5*time.Second, custom.Timeout, "original must not be mutated regardless of order")
+}
+
+func TestWithTimeout_EnforcedAtCallPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(80 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"batchcomplete":"","query":{"searchinfo":{"totalhits":0},"search":[]}}`))
+	}))
+	defer server.Close()
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	timeout := 10 * time.Millisecond
+	testClient := client.New(server.URL, "test-agent/1.0", resolveHTTPClient(&config{
+		httpClient: httpClient,
+		timeout:    &timeout,
+	}))
+	cfg := &config{language: "en", maxResults: 5}
+
+	searchFunc := createWikipediaSearchTool(testClient, cfg)
+	reqJSON, _ := json.Marshal(wikipediaSearchRequest{Query: "anything"})
+
+	_, err := searchFunc.Call(context.Background(), reqJSON)
+	require.Error(t, err, "expected timeout error from slow server")
+	low := strings.ToLower(err.Error())
+	assert.True(t,
+		strings.Contains(low, "deadline") || strings.Contains(low, "timeout"),
+		"error should reference timeout/deadline, got: %s", err.Error())
+	assert.Equal(t, 30*time.Second, httpClient.Timeout, "original client must remain unmutated")
+}
+
 func TestConvertHTMLToMarkdown(t *testing.T) {
 	htmlContent := `
 		<html>
