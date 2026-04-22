@@ -59,7 +59,7 @@ func main() {
         summary.WithChecksAny(                         // Trigger when any condition is met
             summary.CheckEventThreshold(20),           // Trigger when 20+ new events since last summary
             summary.CheckTokenThreshold(4000),         // Trigger when 4000+ new tokens since last summary
-            summary.CheckTimeThreshold(5*time.Minute), // Trigger after 5 minutes of inactivity
+            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
         ),
         summary.WithMaxSummaryWords(200), // Limit summary to 200 words
     )
@@ -183,7 +183,7 @@ As conversations continue to grow, maintaining complete event history can consum
 
 **Core Features:**
 
-- **Automatic Triggering**: Automatically generate summaries based on event count, token count, or time thresholds
+- **Automatic Triggering**: During summary checks, automatically generate summaries based on event count, token count, or time thresholds
 - **Incremental Processing**: Only process new events since the last summary, avoiding redundant computation
 - **LLM-Driven**: Use configured LLM model to generate high-quality, context-aware summaries
 - **Non-Destructive**: Original events are fully preserved, summaries stored separately
@@ -205,7 +205,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(                         // Trigger when any condition is met
         summary.CheckEventThreshold(20),           // Trigger when 20+ new events since last summary
         summary.CheckTokenThreshold(4000),         // Trigger when 4000+ new tokens since last summary
-        summary.CheckTimeThreshold(5*time.Minute), // Trigger after 5 minutes of inactivity
+        summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
     ),
     summary.WithMaxSummaryWords(200),              // Limit summary to 200 words
 )
@@ -1675,7 +1675,7 @@ As conversations grow longer, maintaining full event history can become memory-i
 
 ### Key Features
 
-- **Automatic summarization**: Automatically trigger summaries based on configurable conditions such as event count, token count, or time threshold.
+- **Automatic summarization**: During summary checks, automatically trigger summaries based on configurable conditions such as event count, token count, or time threshold.
 - **Incremental summarization**: Only new events since the last summary are processed, avoiding redundant computation.
 - **LLM-powered**: Uses any configured LLM model to generate high-quality, context-aware summaries.
 - **Non-destructive**: Original events remain unchanged; summaries are stored separately.
@@ -1860,7 +1860,7 @@ Configure the summarizer behavior with the following options:
 - **`WithContextThreshold(opts ...ContextThresholdOption)`**: Zero-configuration trigger that dynamically resolves the model's context window at evaluation time. It calculates a token threshold as a fraction of the context window (default 50%), adapting automatically when the user switches models mid-session. This is the recommended option for most use cases, similar to the auto-compact behavior in Codex CLI and Claude Code. Example: `WithContextThreshold()` for zero-config, or `WithContextThreshold(summary.WithContextThresholdRatio(0.6))` for custom ratio.
 - **`WithEventThreshold(eventCount int)`**: Trigger summarization when the number of new events since last summary exceeds the threshold. Example: `WithEventThreshold(20)` triggers when 20+ new events have occurred since last summary.
 - **`WithTokenThreshold(tokenCount int)`**: Trigger summarization when the new token count since last summary exceeds the threshold. Example: `WithTokenThreshold(4000)` triggers when 4000+ new tokens have been added since last summary.
-- **`WithTimeThreshold(interval time.Duration)`**: Trigger summarization when time elapsed since the last event exceeds the interval. Example: `WithTimeThreshold(5*time.Minute)` triggers after 5 minutes of inactivity.
+- **`WithTimeThreshold(interval time.Duration)`**: Evaluate the condition when a summary check runs; it wraps `CheckTimeThreshold` and triggers when the last event in the checked session is older than the interval. In the normal delta-summary path, that checked session contains only unsummarized events, so this effectively means the latest unsummarized event. This is not a standalone background timer. Example: `WithTimeThreshold(5*time.Minute)` means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."
 
 !!! note "Context Window Registration"
     `WithContextThreshold` and Token Tailoring both rely on the framework's built-in model context window registry. The registry includes many popular models (OpenAI, Anthropic, Google, DeepSeek, Qwen, etc.), but may not cover every model — especially private deployments, fine-tuned variants, or newer releases. If your model is not recognized (context window resolves to 0 or falls back to the default), register it manually at startup:
@@ -2218,7 +2218,7 @@ The `GetSessionSummaryText` method supports an optional `WithSummaryFilterKey` o
 
 2. **Delta Summarization**: New events are combined with the previous summary (prepended as a system event) to generate an updated summary that incorporates both old context and new information.
 
-3. **Trigger Evaluation**: Before generating a summary, the summarizer evaluates configured trigger conditions (based on incremental event count, token count, and time threshold since last summary). If conditions aren't met and `force=false`, summarization is skipped.
+3. **Trigger Evaluation**: Before generating a summary, the summarizer evaluates configured trigger conditions (based on incremental event count, incremental token count, and, for time-based checks, whether the last event in the checked session is older than the configured threshold. In the normal delta-summary path, that corresponds to the latest unsummarized event). If conditions aren't met and `force=false`, summarization is skipped.
 
 4. **Async Workers**: Summary jobs are distributed across multiple worker goroutines using hash-based distribution. This ensures jobs for the same session are processed sequentially while different sessions can be processed in parallel.
 
@@ -2351,7 +2351,7 @@ func main() {
         summary.WithChecksAny(
             summary.CheckEventThreshold(20),
             summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute),
+            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
         ),
     )
 

@@ -766,7 +766,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.SessionSummaryIdleThreshold,
 		"session-summary-idle",
 		0,
-		"Summarize when time since last event exceeds duration (0 disables)",
+		"Summarize on summary checks when the checked session's last event is older than duration (0 disables)",
 	)
 	fs.IntVar(
 		&opts.SessionSummaryMaxWords,

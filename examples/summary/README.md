@@ -221,7 +221,7 @@ The `SessionSummarizer` supports various configuration options to customize summ
 
 - **`WithTokenThreshold(tokenCount int)`**: Triggers summarization when the estimated token count exceeds the threshold (0=disabled).
 
-- **`WithTimeThreshold(interval time.Duration)`**: Triggers summarization when the time elapsed since the last event exceeds the interval (useful for periodic summarization in long-running sessions).
+- **`WithTimeThreshold(interval time.Duration)`**: Triggers summarization when the checked session's last event is older than the interval. In the normal delta-summary flow, that effectively means the latest unsummarized event (useful for periodic summarization in long-running sessions).
 
 ### Composite Trigger Options
 
