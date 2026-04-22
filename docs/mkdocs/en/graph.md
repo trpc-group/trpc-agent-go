@@ -4621,6 +4621,17 @@ graphAgent, _ := graphagent.New("workflow", g,
 )
 ```
 
+!!! note "Runner plugins and Graph agent-nodes"
+    Callbacks registered via `graphagent.WithAgentCallbacks` apply **only to
+    the GraphAgent itself**. Runner-level `PluginManager` callbacks
+    (`BeforeAgent` / `AfterAgent`) also fire for the **sub-agents** attached
+    to an agent node via `AddAgentNode(name, ...)` — once per sub-agent
+    invocation. For the full semantics (how BeforeAgent short-circuit
+    affects `SubgraphResult.FinalState`, how AfterAgent `CustomResponse`
+    overrides downstream `StateKeyLastResponse`, etc.) see the
+    "Order and early-exit (short-circuit)" section in the
+    [Plugin guide](./plugin.md) for multi-agent container caveats.
+
 ## Troubleshooting
 
 **Q1: Graph has no entry point**
