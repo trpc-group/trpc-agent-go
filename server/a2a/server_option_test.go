@@ -123,6 +123,12 @@ func TestNewContextWithUserID(t *testing.T) {
 	}
 }
 
+func TestWithEventToA2APartMapper_Nil(t *testing.T) {
+	opts := &options{}
+	WithEventToA2APartMapper(nil)(opts)
+	assert.Len(t, opts.eventPartMappers, 0)
+}
+
 func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -3803,4 +3804,98 @@ func TestDefaultEventToA2AMessage_EventPartMapperAppendsAfterStreamingText(t *te
 	assert.Equal(t, protocol.KindText, artifact.Artifact.Parts[0].GetKind())
 	assert.Equal(t, protocol.KindText, artifact.Artifact.Parts[1].GetKind())
 	assert.Equal(t, protocol.KindData, artifact.Artifact.Parts[2].GetKind())
+}
+
+func TestDefaultEventToA2AMessage_RunEventPartMappersSkipsNilAndEmpty(t *testing.T) {
+	converter := &defaultEventToA2AMessage{
+		eventPartMappers: []EventToA2APartMapper{
+			nil,
+			func(ctx context.Context, evt *event.Event) ([]protocol.Part, error) {
+				return nil, nil
+			},
+			func(ctx context.Context, evt *event.Event) ([]protocol.Part, error) {
+				part := protocol.NewDataPart(map[string]any{"trace": "ok"})
+				part.Metadata = map[string]any{
+					ia2a.DataPartMetadataTypeKey: testCustomDataPartType,
+				}
+				return []protocol.Part{&part}, nil
+			},
+		},
+	}
+
+	parts, err := converter.runEventPartMappers(context.Background(), &event.Event{})
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+}
+
+func TestDefaultEventToA2AMessage_EventPartMapperUnaryErrorOnEmptyChoices(t *testing.T) {
+	converter := &defaultEventToA2AMessage{
+		eventPartMappers: []EventToA2APartMapper{
+			func(ctx context.Context, evt *event.Event) ([]protocol.Part, error) {
+				return nil, errors.New("mapper failed")
+			},
+		},
+	}
+
+	result, err := converter.ConvertToA2AMessage(context.Background(), &event.Event{
+		Response: &model.Response{Choices: []model.Choice{}},
+	}, EventToA2AUnaryOptions{})
+	require.Error(t, err)
+	require.Nil(t, result)
+}
+
+func TestDefaultEventToA2AMessage_EventPartMapperUnaryErrorOnContentEvent(t *testing.T) {
+	converter := &defaultEventToA2AMessage{
+		eventPartMappers: []EventToA2APartMapper{
+			func(ctx context.Context, evt *event.Event) ([]protocol.Part, error) {
+				return nil, errors.New("mapper failed")
+			},
+		},
+	}
+
+	result, err := converter.ConvertToA2AMessage(context.Background(), &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{Content: "answer"},
+			}},
+		},
+	}, EventToA2AUnaryOptions{})
+	require.Error(t, err)
+	require.Nil(t, result)
+}
+
+func TestDefaultEventToA2AMessage_EventPartMapperStreamingErrorOnEmptyChoices(t *testing.T) {
+	converter := &defaultEventToA2AMessage{
+		eventPartMappers: []EventToA2APartMapper{
+			func(ctx context.Context, evt *event.Event) ([]protocol.Part, error) {
+				return nil, errors.New("mapper failed")
+			},
+		},
+	}
+
+	result, err := converter.ConvertStreamingToA2AMessage(context.Background(), &event.Event{
+		Response: &model.Response{Choices: []model.Choice{}},
+	}, EventToA2AStreamingOptions{TaskID: "task-1", CtxID: "ctx-1"})
+	require.Error(t, err)
+	require.Nil(t, result)
+}
+
+func TestDefaultEventToA2AMessage_EventPartMapperStreamingErrorOnDeltaEvent(t *testing.T) {
+	converter := &defaultEventToA2AMessage{
+		eventPartMappers: []EventToA2APartMapper{
+			func(ctx context.Context, evt *event.Event) ([]protocol.Part, error) {
+				return nil, errors.New("mapper failed")
+			},
+		},
+	}
+
+	result, err := converter.ConvertStreamingToA2AMessage(context.Background(), &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: "delta"},
+			}},
+		},
+	}, EventToA2AStreamingOptions{TaskID: "task-1", CtxID: "ctx-1"})
+	require.Error(t, err)
+	require.Nil(t, result)
 }

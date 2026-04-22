@@ -216,6 +216,67 @@ func TestNew(t *testing.T) {
 	}
 }
 
+type stubA2AEventConverter struct{}
+
+func (s *stubA2AEventConverter) ConvertToEvents(
+	result protocol.MessageResult,
+	agentName string,
+	invocation *agent.Invocation,
+) ([]*event.Event, error) {
+	return nil, nil
+}
+
+func (s *stubA2AEventConverter) ConvertStreamingToEvents(
+	result protocol.StreamingMessageEvent,
+	agentName string,
+	invocation *agent.Invocation,
+) ([]*event.Event, error) {
+	return nil, nil
+}
+
+func TestNew_DefaultEventConverterUsesDataPartMappers(t *testing.T) {
+	mapper := func(part *protocol.DataPart, result *A2ADataPartMappingResult) (bool, error) {
+		return false, nil
+	}
+
+	a2aAgent, err := New(
+		WithAgentCard(&server.AgentCard{
+			Name:        "mapper-agent",
+			Description: "mapper-aware agent",
+			URL:         "http://example.com",
+		}),
+		func(a *A2AAgent) {
+			a.dataPartMappers = append(a.dataPartMappers, nil, mapper)
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, a2aAgent)
+
+	converter, ok := a2aAgent.eventConverter.(*defaultA2AEventConverter)
+	require.True(t, ok)
+	require.Len(t, converter.dataPartMappers, 1)
+	require.NotNil(t, converter.dataPartMappers[0])
+}
+
+func TestNew_CustomEventConverterIgnoresDataPartMappers(t *testing.T) {
+	customConverter := &stubA2AEventConverter{}
+
+	a2aAgent, err := New(
+		WithAgentCard(&server.AgentCard{
+			Name:        "custom-agent",
+			Description: "custom converter",
+			URL:         "http://example.com",
+		}),
+		WithCustomEventConverter(customConverter),
+		WithA2ADataPartMapper(func(part *protocol.DataPart, result *A2ADataPartMappingResult) (bool, error) {
+			return true, nil
+		}),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, a2aAgent)
+	require.Same(t, customConverter, a2aAgent.eventConverter)
+}
+
 func TestA2AAgent_Info(t *testing.T) {
 	type testCase struct {
 		name         string

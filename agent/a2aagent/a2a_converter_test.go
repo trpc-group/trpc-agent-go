@@ -12,6 +12,7 @@ package a2aagent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -1660,6 +1661,105 @@ func TestProcessDataPartWithMappers_CustomMapperSetsEventExtension(t *testing.T)
 	}
 }
 
+func TestNewDataPartMappingResult(t *testing.T) {
+	mapped := newDataPartMappingResult(nil)
+	if mapped == nil {
+		t.Fatal("expected non-nil mapping result for nil parseResult")
+	}
+
+	raw := json.RawMessage(`{"trace":"source"}`)
+	result := &parseResult{
+		textContent:         "text",
+		reasoningContent:    "reasoning",
+		codeExecution:       "print('ok')",
+		codeExecutionResult: "ok",
+		extensions: map[string]json.RawMessage{
+			"payload": raw,
+		},
+	}
+
+	mapped = newDataPartMappingResult(result)
+	if mapped.GetTextContent() != "text" {
+		t.Fatalf("unexpected text content: %q", mapped.GetTextContent())
+	}
+	if mapped.GetReasoningContent() != "reasoning" {
+		t.Fatalf("unexpected reasoning content: %q", mapped.GetReasoningContent())
+	}
+	if mapped.GetCodeExecution() != "print('ok')" {
+		t.Fatalf("unexpected code execution: %q", mapped.GetCodeExecution())
+	}
+	if mapped.GetCodeExecutionResult() != "ok" {
+		t.Fatalf("unexpected code execution result: %q", mapped.GetCodeExecutionResult())
+	}
+
+	raw[0] = '['
+	if string(mapped.eventExtensions["payload"]) != `{"trace":"source"}` {
+		t.Fatalf("extension clone should not change after source mutation, got %s", mapped.eventExtensions["payload"])
+	}
+}
+
+func TestApplyDataPartMappingResult(t *testing.T) {
+	dst := &parseResult{
+		textContent:         "old text",
+		reasoningContent:    "old reasoning",
+		codeExecution:       "old code",
+		codeExecutionResult: "old result",
+	}
+	mapped := &A2ADataPartMappingResult{}
+	mapped.SetTextContent("new text")
+	mapped.SetReasoningContent("new reasoning")
+	mapped.SetCodeExecution("new code")
+	mapped.SetCodeExecutionResult("new result")
+	mapped.AppendToolCall(model.ToolCall{
+		ID:   "call-1",
+		Type: "function",
+		Function: model.FunctionDefinitionParam{
+			Name: "lookup",
+		},
+	})
+	mapped.AppendToolResponse(A2ADataPartToolResponse{
+		ID:      "resp-1",
+		Name:    "lookup",
+		Content: "ok",
+	})
+	if err := mapped.SetEventExtension("payload", map[string]any{"trace": "mapped"}); err != nil {
+		t.Fatalf("SetEventExtension() returned error: %v", err)
+	}
+
+	applyDataPartMappingResult(dst, mapped)
+	if dst.textContent != "new text" {
+		t.Fatalf("unexpected text content: %q", dst.textContent)
+	}
+	if dst.reasoningContent != "new reasoning" {
+		t.Fatalf("unexpected reasoning content: %q", dst.reasoningContent)
+	}
+	if dst.codeExecution != "new code" {
+		t.Fatalf("unexpected code execution: %q", dst.codeExecution)
+	}
+	if dst.codeExecutionResult != "new result" {
+		t.Fatalf("unexpected code execution result: %q", dst.codeExecutionResult)
+	}
+	if len(dst.toolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %d", len(dst.toolCalls))
+	}
+	if len(dst.toolResponses) != 1 {
+		t.Fatalf("expected one tool response, got %d", len(dst.toolResponses))
+	}
+	if string(dst.extensions["payload"]) != `{"trace":"mapped"}` {
+		t.Fatalf("unexpected extension payload: %s", dst.extensions["payload"])
+	}
+
+	mapped.eventExtensions["payload"][0] = '['
+	if string(dst.extensions["payload"]) != `{"trace":"mapped"}` {
+		t.Fatalf("destination extension should be cloned, got %s", dst.extensions["payload"])
+	}
+}
+
+func TestApplyDataPartMappingResult_NilInputs(t *testing.T) {
+	applyDataPartMappingResult(nil, &A2ADataPartMappingResult{})
+	applyDataPartMappingResult(&parseResult{}, nil)
+}
+
 func TestBuildEventResponse_WithMappedEventExtensions(t *testing.T) {
 	msg := &protocol.Message{
 		Parts: []protocol.Part{
@@ -1711,6 +1811,66 @@ func TestBuildEventResponse_WithMappedEventExtensions(t *testing.T) {
 	}
 	if evt.Response.Choices[0].Message.Content != "" {
 		t.Fatalf("expected empty message content for extension-only event, got %q", evt.Response.Choices[0].Message.Content)
+	}
+}
+
+func TestProcessDataPartWithMappers_MapperErrorFallsThroughToNextMapper(t *testing.T) {
+	result := &parseResult{}
+	part := &protocol.DataPart{
+		Data: map[string]any{"business": "payload"},
+		Metadata: map[string]any{
+			"type": "biz_custom",
+		},
+	}
+
+	secondMapperCalled := false
+	processDataPartWithMappers(part, result, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			return false, errors.New("mapper failed")
+		},
+		nil,
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			secondMapperCalled = true
+			out.SetReasoningContent("mapped after error")
+			return true, nil
+		},
+	})
+
+	if !secondMapperCalled {
+		t.Fatal("expected second mapper to run after first mapper error")
+	}
+	if result.reasoningContent != "mapped after error" {
+		t.Fatalf("expected second mapper result to be applied, got %q", result.reasoningContent)
+	}
+}
+
+func TestProcessDataPartWithMappers_BuiltInTypeSkipsCustomMappers(t *testing.T) {
+	result := &parseResult{}
+	mapperCalled := false
+	part := &protocol.DataPart{
+		Data: map[string]any{
+			ia2a.ToolCallFieldID:   "call-1",
+			ia2a.ToolCallFieldType: "function",
+			ia2a.ToolCallFieldName: "lookup",
+			ia2a.ToolCallFieldArgs: `{"query":"test"}`,
+		},
+		Metadata: map[string]any{
+			"type": ia2a.DataPartMetadataTypeFunctionCall,
+		},
+	}
+
+	processDataPartWithMappers(part, result, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			mapperCalled = true
+			return true, nil
+		},
+	})
+
+	if mapperCalled {
+		t.Fatal("expected built-in function call handling to bypass custom mappers")
+	}
+	if len(result.toolCalls) != 1 {
+		t.Fatalf("expected built-in tool call to be recorded, got %d", len(result.toolCalls))
 	}
 }
 
