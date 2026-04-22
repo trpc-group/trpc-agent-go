@@ -77,6 +77,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.False(t, opts.GraphNodeInterruptActivityEnabled)
 	assert.False(t, opts.GraphNodeInterruptActivityTopLevelOnly)
 	assert.False(t, opts.ReasoningContentEnabled)
+	assert.False(t, opts.EventSourceMetadataEnabled)
 	assert.False(t, opts.ToolResultInputTranslationEnabled)
 	assert.False(t, opts.StreamingToolResultActivityEnabled)
 }
@@ -136,6 +137,11 @@ func TestWithGraphNodeInterruptActivityTopLevelOnly(t *testing.T) {
 func TestWithReasoningContentEnabled(t *testing.T) {
 	opts := NewOptions(WithReasoningContentEnabled(true))
 	assert.True(t, opts.ReasoningContentEnabled)
+}
+
+func TestWithEventSourceMetadataEnabled(t *testing.T) {
+	opts := NewOptions(WithEventSourceMetadataEnabled(true))
+	assert.True(t, opts.EventSourceMetadataEnabled)
 }
 
 func TestWithToolResultInputTranslationEnabled(t *testing.T) {

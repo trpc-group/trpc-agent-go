@@ -388,6 +388,94 @@ For example, when using React Planner, if you want to apply different custom eve
 
 You can find the complete code example in [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react).
 
+### Expose source metadata for frontend grouping
+
+When you enable inner Agent streaming, the frontend often needs to know
+which translated AG-UI event came from which sub-agent so it can group tool
+calls, tool results, and text output together.
+
+Use `agui.WithEventSourceMetadataEnabled(true)` to attach compact source
+metadata from the original `trpc-agent-go` event into the translated AG-UI
+event's `rawEvent` field:
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithEventSourceMetadataEnabled(true),
+)
+```
+
+The same switch is also available at lower layers if you build the stack
+manually:
+
+- `aguirunner.WithEventSourceMetadataEnabled(true)`
+- `translator.WithEventSourceMetadataEnabled(true)`
+
+After enabling it, translated AG-UI events such as `TOOL_CALL_START`,
+`TOOL_CALL_ARGS`, `TOOL_CALL_END`, `TOOL_CALL_RESULT`, text events, and
+activity events will carry a `rawEvent` object similar to:
+
+```json
+{
+  "rawEvent": {
+    "eventId": "evt-tool-call",
+    "author": "member-a",
+    "invocationId": "inv-1",
+    "parentInvocationId": "parent-1",
+    "branch": "root.member-a"
+  }
+}
+```
+
+`rawEvent` is optional. It only appears on AG-UI events produced by the
+AG-UI translator or the AG-UI messages snapshot builder, and it is omitted
+when the framework has no non-empty source metadata to expose.
+
+On the `/history` route, the `MESSAGES_SNAPSHOT` event uses `rawEvent` as a
+source index instead of a single-event payload:
+
+```json
+{
+  "rawEvent": {
+    "messages": {
+      "assistant-1": {
+        "eventId": "evt-assistant",
+        "author": "member-a",
+        "invocationId": "inv-1",
+        "branch": "root.member-a"
+      }
+    },
+    "toolCalls": {
+      "tool-call-1": {
+        "eventId": "evt-tool-call",
+        "author": "member-a",
+        "invocationId": "inv-1",
+        "branch": "root.member-a"
+      }
+    }
+  }
+}
+```
+
+Recommended frontend usage:
+
+- Group by `rawEvent.author` when you want a stable "which agent emitted
+  this" label.
+- Group by `rawEvent.branch` when you want one concrete sub-agent execution
+  block per run, even if the same agent name appears multiple times.
+- Keep `rawEvent.invocationId` if you need a unique execution key but do not
+  want to expose the full branch string in UI state.
+- When restoring history from `MESSAGES_SNAPSHOT`, read
+  `rawEvent.toolCalls[toolCallId]` or `rawEvent.messages[messageId]` to
+  rebuild the same grouping state before the live stream resumes.
+
+Compatibility notes:
+
+- The option is disabled by default.
+- Enabling it is additive only: it does not change event ordering, message
+  IDs, tool call IDs, or existing payload fields.
+- Existing clients that ignore `rawEvent` continue to work unchanged.
+
 ### Thinking content
 
 AG-UI uses `REASONING_*` events to carry model thinking content, making it easier for the frontend to display the thinking process before the final answer. For more details, see the official AG-UI docs: [Reasoning](https://docs.ag-ui.com/concepts/reasoning). A typical event sequence is as follows:
