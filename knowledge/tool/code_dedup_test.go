@@ -195,3 +195,94 @@ func TestScalarFromMeta_FloatPrecisionPreserved(t *testing.T) {
 	require.True(t, ok2)
 	require.NotEqual(t, s1, s2, "distinct float64 values must map to distinct keys")
 }
+
+func TestCodeDedupFilter_NilAndKeylessResponses(t *testing.T) {
+	store := newCodeDedupStore()
+	ctx := newDedupTestCtx("inv-empty")
+
+	require.Nil(t, store.filter(ctx, nil))
+
+	empty := &KnowledgeSearchResponse{}
+	require.Same(t, empty, store.filter(ctx, empty))
+
+	resp := &KnowledgeSearchResponse{
+		Message: "unchanged",
+		Documents: []*DocumentResult{
+			{Text: "doc-a"},
+			{Text: "doc-b", Metadata: map[string]any{}},
+		},
+	}
+	out := store.filter(ctx, resp)
+	require.Same(t, resp, out)
+	require.Len(t, out.Documents, 2)
+	require.Equal(t, "unchanged", out.Message)
+}
+
+func TestCodeDedupKeyFallbacksAndScalarBranches(t *testing.T) {
+	require.Empty(t, codeDedupKey(nil))
+	require.Empty(t, codeDedupKey(&DocumentResult{}))
+
+	require.Equal(t, "repo:repo-a|full_name:pkg.F", codeDedupKey(&DocumentResult{
+		Metadata: map[string]any{
+			"trpc_ast_repo_name": "repo-a",
+			"trpc_ast_full_name": "pkg.F",
+		},
+	}))
+
+	require.Equal(t, "span:path/to/file.go:10-12", codeDedupKey(&DocumentResult{
+		Metadata: map[string]any{
+			"trpc_ast_file_path":  "path/to/file.go",
+			"trpc_ast_line_start": int64(10),
+			"trpc_ast_line_end":   float64(12),
+		},
+	}))
+
+	require.Equal(t, "repo:repo-a|file:path/to/file.go", codeDedupKey(&DocumentResult{
+		Metadata: map[string]any{
+			"trpc_ast_repo_name": "repo-a",
+			"trpc_ast_file_path": "path/to/file.go",
+		},
+	}))
+}
+
+func TestScalarFromMeta_TypeCoverage(t *testing.T) {
+	md := map[string]any{
+		"string":        "v",
+		"int":           7,
+		"int64":         int64(9),
+		"float_int":     float64(3),
+		"float_precise": 3.25,
+		"bool":          true,
+		"nil":           nil,
+	}
+
+	_, ok := scalarFromMeta(md, "missing")
+	require.False(t, ok)
+
+	_, ok = scalarFromMeta(md, "nil")
+	require.False(t, ok)
+
+	val, ok := scalarFromMeta(md, "string")
+	require.True(t, ok)
+	require.Equal(t, "v", val)
+
+	val, ok = scalarFromMeta(md, "int")
+	require.True(t, ok)
+	require.Equal(t, "7", val)
+
+	val, ok = scalarFromMeta(md, "int64")
+	require.True(t, ok)
+	require.Equal(t, "9", val)
+
+	val, ok = scalarFromMeta(md, "float_int")
+	require.True(t, ok)
+	require.Equal(t, "3", val)
+
+	val, ok = scalarFromMeta(md, "float_precise")
+	require.True(t, ok)
+	require.Equal(t, "3.25", val)
+
+	val, ok = scalarFromMeta(md, "bool")
+	require.True(t, ok)
+	require.Equal(t, "true", val)
+}

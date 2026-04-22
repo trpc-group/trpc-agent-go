@@ -386,6 +386,33 @@ func TestResolvedRepositoryUsesStructuredRepository(t *testing.T) {
 	assertEqual(t, repository.Branch, "main")
 }
 
+func TestResolvedRepositoryAndDescriptorEdgeCases(t *testing.T) {
+	t.Run("missing repository returns false", func(t *testing.T) {
+		src := New()
+		if _, ok := src.resolvedRepository(); ok {
+			t.Fatal("expected unresolved repository")
+		}
+		if _, _, ok := src.RepositoryDescriptor(); ok {
+			t.Fatal("expected no repository descriptor")
+		}
+	})
+
+	t.Run("descriptor uses configured dir and description", func(t *testing.T) {
+		repoDir := filepath.Join(t.TempDir(), "demo-repo")
+		src := New(WithRepository(Repository{
+			Dir:         repoDir,
+			Description: "demo repository",
+		}))
+
+		name, description, ok := src.RepositoryDescriptor()
+		if !ok {
+			t.Fatal("expected repository descriptor")
+		}
+		assertEqual(t, name, "demo-repo")
+		assertEqual(t, description, "demo repository")
+	})
+}
+
 func TestWithFileExtensionsCopiesCallerSlice(t *testing.T) {
 	extensions := []string{".go", ".proto"}
 	src := New(WithFileExtensions(extensions))
@@ -855,6 +882,21 @@ func TestResolveRepositoryAndBuildBaseMetadataExtraCoverage(t *testing.T) {
 	}
 	if _, ok := base[source.MetaRepoName]; ok {
 		t.Fatalf("did not expect repo name in metadata without repo info")
+	}
+}
+
+func TestResolveRepositoryRejectsInvalidStructuredInputs(t *testing.T) {
+	src := New()
+
+	if _, _, _, err := src.resolveRepository(context.Background(), Repository{}); err == nil {
+		t.Fatal("expected error when neither URL nor Dir is configured")
+	}
+
+	if _, _, _, err := src.resolveRepository(context.Background(), Repository{
+		URL: "https://example.com/demo.git",
+		Dir: t.TempDir(),
+	}); err == nil {
+		t.Fatal("expected error when both URL and Dir are configured")
 	}
 }
 

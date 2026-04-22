@@ -743,3 +743,68 @@ func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 		require.Contains(t, err.Error(), "search failed")
 	})
 }
+
+func TestSearchToolAdditionalOptionCoverage(t *testing.T) {
+	t.Run("option helpers handle conditioned filter exclude keys and nil post processor", func(t *testing.T) {
+		opts := &options{}
+		condition := &searchfilter.UniversalFilterCondition{
+			Field:    "metadata.kind",
+			Operator: searchfilter.OperatorEqual,
+			Value:    "api",
+		}
+
+		WithConditionedFilter(condition)(opts)
+		WithExcludeMetadataKeys()(opts)
+		WithExcludeMetadataKeys("", "secret", "secret", "visible")(opts)
+		WithResultPostProcessor(nil)(opts)
+
+		require.Same(t, condition, opts.conditionedFilter)
+		require.Len(t, opts.excludeMetadataKeys, 2)
+		require.Contains(t, opts.excludeMetadataKeys, "secret")
+		require.Contains(t, opts.excludeMetadataKeys, "visible")
+		require.Nil(t, opts.postProcessor)
+	})
+
+	t.Run("knowledge search applies conditioned filter exclusions and post processor", func(t *testing.T) {
+		kb := &captureKnowledge{
+			result: &knowledge.SearchResult{
+				Documents: []*knowledge.Result{{
+					Document: &document.Document{
+						Content: "doc",
+						Metadata: map[string]any{
+							"visible": "yes",
+							"secret":  "no",
+						},
+					},
+					Score: 0.9,
+				}},
+			},
+		}
+		condition := &searchfilter.UniversalFilterCondition{
+			Field:    "metadata.kind",
+			Operator: searchfilter.OperatorEqual,
+			Value:    "api",
+		}
+
+		searchTool := NewKnowledgeSearchTool(
+			kb,
+			WithConditionedFilter(condition),
+			WithExcludeMetadataKeys("secret"),
+			WithResultPostProcessor(func(ctx context.Context, resp *KnowledgeSearchResponse) *KnowledgeSearchResponse {
+				resp.Message = "post-processed"
+				return resp
+			}),
+		)
+
+		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgs(t, "hello"))
+		require.NoError(t, err)
+
+		rsp := res.(*KnowledgeSearchResponse)
+		require.Equal(t, "post-processed", rsp.Message)
+		require.NotContains(t, rsp.Documents[0].Metadata, "secret")
+		require.Equal(t, "yes", rsp.Documents[0].Metadata["visible"])
+		require.NotNil(t, kb.lastRequest)
+		require.NotNil(t, kb.lastRequest.SearchFilter)
+		require.Same(t, condition, kb.lastRequest.SearchFilter.FilterCondition)
+	})
+}

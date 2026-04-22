@@ -27,6 +27,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec v0.0.0-20260327150826-d407bd208503
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
+	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
 require (
@@ -192,5 +193,4 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/storage/milvus v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.0-20251126064502-c8c2594d2519 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.4 // indirect
-	trpc.group/trpc-go/trpc-mcp-go v0.0.10 // indirect
 )

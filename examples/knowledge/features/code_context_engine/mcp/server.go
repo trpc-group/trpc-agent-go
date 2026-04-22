@@ -115,8 +115,8 @@ Examples:
 var (
 	flagAddr        = flag.String("addr", defaultServerAddr, "HTTP listen address for the MCP server")
 	flagPath        = flag.String("path", defaultServerPath, "HTTP path prefix for the MCP endpoint")
-	flagSkipLoad    = flag.Bool("skip-load", true, "Skip repository ingestion and reuse the existing vector-store data as-is")
-	flagTruncateOld = flag.Bool("truncate-old", false, "Recreate the vector store before ingestion (deletes all existing documents); implies -skip-load=false")
+	flagSkipLoad    = flag.Bool("skip-load", false, "Skip repository ingestion and reuse the existing vector-store data as-is")
+	flagTruncateOld = flag.Bool("truncate-old", true, "Recreate the vector store before ingestion (deletes all existing documents); implies -skip-load=false")
 )
 
 func main() {
@@ -279,7 +279,7 @@ func newCodeSearchHandler(callable agenttool.CallableTool) func(ctx context.Cont
 
 		args := req.Params.Arguments
 		if args == nil {
-			args = map[string]interface{}{}
+			args = map[string]any{}
 		}
 		if q, ok := args["query"].(string); !ok || strings.TrimSpace(q) == "" {
 			return mcp.NewErrorResult("argument 'query' is required and must be a non-empty string"), nil

@@ -364,6 +364,37 @@ func TestReadFromReaderInvalidGoChunkModes(t *testing.T) {
 	assertMetadataEquals(t, docs[0].Metadata, "trpc_ast_type", "file")
 }
 
+func TestCreateFileDocumentFromInfoUsesRepoRootForExampleScope(t *testing.T) {
+	repoRoot := t.TempDir()
+	filePath := filepath.Join(repoRoot, "examples", "demo", "main.go")
+
+	r := New(reader.WithChunk(false)).(*Reader)
+	doc := r.createFileDocumentFromInfo(
+		"package main\nfunc main() {}\n",
+		filePath,
+		map[string]any{source.MetaRepoPath: repoRoot},
+		nil,
+	)
+
+	assertMetadataEquals(t, doc.Metadata, "trpc_ast_scope", "example")
+}
+
+func TestResolveScopeUsesRepoRootMetadata(t *testing.T) {
+	repoRoot := t.TempDir()
+
+	if got := resolveScope(filepath.Join(repoRoot, "examples", "demo", "main.go"), map[string]any{
+		source.MetaRepoPath: repoRoot,
+	}); got != "example" {
+		t.Fatalf("resolveScope(example) = %q, want example", got)
+	}
+
+	if got := resolveScope(filepath.Join(repoRoot, "pkg", "service.go"), map[string]any{
+		source.MetaRepoPath: repoRoot,
+	}); got != "code" {
+		t.Fatalf("resolveScope(code) = %q, want code", got)
+	}
+}
+
 func findDocByFullName(t *testing.T, docs []*document.Document, fullName string) *document.Document {
 	t.Helper()
 	for _, doc := range docs {
