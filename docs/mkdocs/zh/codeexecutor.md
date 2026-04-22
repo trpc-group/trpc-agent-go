@@ -386,8 +386,8 @@ func newAgent() *llmagent.LLMAgent {
   不会出现 "metadata 说准备好了，但文件其实已经没了" 的假阳性。
 - 同一个 workspace 的 reconcile 过程会在进程内串行化，两个并行的
   `workspace_exec` 调用不会在准备阶段互相踩踏。
-- `Required`（默认值）条目失败时，`workspace_exec` 会在用户命令执行前就返回
-  错误；`Optional` 条目只会降级为 warning。
+- 未设置 `Optional` 的条目（即默认必需）在失败时，`workspace_exec` 会在用户
+  命令执行前就返回错误；`Optional: true` 的条目只会降级为 warning。
 
 ### 关闭开关
 

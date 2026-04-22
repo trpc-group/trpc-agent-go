@@ -50,8 +50,8 @@ type WorkspaceFile struct {
 	Target string
 	// Content is inline file content. When set, Input is ignored.
 	Content []byte
-	// Mode is the POSIX mode for inline writes. Defaults to the
-	// framework's default script file mode.
+	// Mode is the POSIX mode for inline writes. When zero, inline
+	// writes fall back to DefaultScriptFileMode (0o644).
 	Mode uint32
 	// Input is a richer source spec covering artifact://, host://,
 	// workspace://, and skill:// URIs.

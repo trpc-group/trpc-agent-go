@@ -580,7 +580,7 @@ events, err := r.Run(
 - 该选项仅对当前这一次 `runner.Run(...)` 调用生效，不会修改 Agent 的默认配置。
 - 该选项仅对会读取 `RunOptions.CodeExecutor` 的 Agent 生效；如果使用自定义 Agent，请确认其实现会处理该运行参数。
 - 如果创建 Agent 时已经设置 `llmagent.WithCodeExecutor(...)`，则此处传入的执行器会在本次运行中临时覆盖默认值。
-- 本次运行中所有依赖代码执行器的能力，均会使用此处传入的执行器，例如 `workspace_exec`。
+- 本次运行中会从 `RunOptions.CodeExecutor` 解析执行器的能力（例如 `workspace_exec`）会使用此处传入的执行器。
 - 如果你不希望模型自动执行回复中的 Markdown 围栏代码，可在创建 Agent 时设置 `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。更多说明见 [Skill 文档](./skill.md)。
 
 ## ✅ 图式流程的“优雅结束”与最终结果读取

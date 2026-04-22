@@ -408,9 +408,9 @@ func newAgent() *llmagent.LLMAgent {
 - Reconciliation is serialized per workspace (in-process), so two
   parallel `workspace_exec` calls on the same session cannot step on each
   other during preparation.
-- Failures on `Required` (the default) entries abort the workspace_exec
-  call before the user command runs; `Optional` entries downgrade to a
-  logged warning.
+- Entries without `Optional` set (the default required behavior) abort
+  the `workspace_exec` call before the user command runs on failure;
+  `Optional: true` entries downgrade to a logged warning.
 
 ### Opting out
 
