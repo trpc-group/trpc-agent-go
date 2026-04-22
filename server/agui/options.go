@@ -163,6 +163,17 @@ func WithReasoningContentEnabled(enabled bool) Option {
 	}
 }
 
+// WithEventSourceMetadataEnabled controls whether translated AG-UI events
+// include source metadata from the original trpc-agent-go event in rawEvent.
+func WithEventSourceMetadataEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(
+			o.aguiRunnerOptions,
+			aguirunner.WithEventSourceMetadataEnabled(enabled),
+		)
+	}
+}
+
 // WithToolResultInputTranslationEnabled controls whether echoed tool-result inputs pass through the AG-UI translator.
 func WithToolResultInputTranslationEnabled(enabled bool) Option {
 	return func(o *options) {

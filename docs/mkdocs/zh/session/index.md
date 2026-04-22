@@ -60,7 +60,7 @@ func main() {
         summary.WithChecksAny( // 任一条件满足即触发摘要
             summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
             summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
-            summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
+            summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；若最近一个待摘要事件已超过 5 分钟则触发
         ),
         summary.WithMaxSummaryWords(200), // 限制摘要在 200 字以内
     )

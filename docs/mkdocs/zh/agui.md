@@ -385,6 +385,92 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslat
 
 完整的代码示例可以参考 [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react)。
 
+### 暴露 source 元数据供前端分组
+
+开启子 Agent 的流式透传后，前端经常需要知道某条 AG-UI 事件到底来自
+哪个 sub-agent，才能把 tool call、tool result 和文本输出按同一个成员
+归到一起展示。
+
+可以通过 `agui.WithEventSourceMetadataEnabled(true)`，把原始
+`trpc-agent-go` 事件里的精简 source 信息挂到翻译后的 AG-UI 事件
+`rawEvent` 字段中：
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithEventSourceMetadataEnabled(true),
+)
+```
+
+如果你不是直接用 `agui.New`，而是手动组装各层，也可以在更底层开启：
+
+- `aguirunner.WithEventSourceMetadataEnabled(true)`
+- `translator.WithEventSourceMetadataEnabled(true)`
+
+开启后，像 `TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`、
+`TOOL_CALL_RESULT`、文本事件以及 activity 事件，都会携带类似下面的
+`rawEvent`：
+
+```json
+{
+  "rawEvent": {
+    "eventId": "evt-tool-call",
+    "author": "member-a",
+    "invocationId": "inv-1",
+    "parentInvocationId": "parent-1",
+    "branch": "root.member-a"
+  }
+}
+```
+
+`rawEvent` 是可选字段。它只会出现在 AG-UI translator 或消息快照构建
+器生成的 AG-UI 事件上；如果当前事件没有可暴露的非空 source 元数据，
+就不会携带这个字段。
+
+在 `/history` 路由上，`MESSAGES_SNAPSHOT` 的 `rawEvent` 不是单条事件
+source，而是一份 source 索引：
+
+```json
+{
+  "rawEvent": {
+    "messages": {
+      "assistant-1": {
+        "eventId": "evt-assistant",
+        "author": "member-a",
+        "invocationId": "inv-1",
+        "branch": "root.member-a"
+      }
+    },
+    "toolCalls": {
+      "tool-call-1": {
+        "eventId": "evt-tool-call",
+        "author": "member-a",
+        "invocationId": "inv-1",
+        "branch": "root.member-a"
+      }
+    }
+  }
+}
+```
+
+前端推荐这样使用：
+
+- 想按“这是哪个 Agent 发的”分组时，用 `rawEvent.author`。
+- 想按“这一次具体的 sub-agent 执行块”分组时，用 `rawEvent.branch`。
+  这样即使同名 Agent 在一次 run 中被调用多次，也不会混在一起。
+- 如果你需要唯一执行键，但不想直接把 branch 暴露到 UI 状态里，可以
+  使用 `rawEvent.invocationId`。
+- 如果你是在恢复 `MESSAGES_SNAPSHOT` 历史消息，可以读取
+  `rawEvent.toolCalls[toolCallId]` 或 `rawEvent.messages[messageId]`，
+  用同一套规则还原前端分组状态。
+
+兼容性说明：
+
+- 该能力默认关闭。
+- 开启后只是增量增加 `rawEvent`，不会改动原有事件顺序、messageId、
+  toolCallId，也不会改变现有字段语义。
+- 现有前端如果忽略 `rawEvent`，行为保持不变。
+
 ### 思考内容
 
 AG-UI 通过`REASONING_*` 事件承载模型思考内容，便于前端在正文回复之前展示思考过程，详细可参考 [AG-UI Reasoning](https://docs.ag-ui.com/concepts/reasoning)。典型事件序列如下：
