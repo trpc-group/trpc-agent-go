@@ -1,0 +1,26 @@
+{
+  "evalSetId": "template-basic",
+  "name": "template-basic",
+  "evalCases": [
+    {
+      "evalId": "capital_of_france",
+      "conversation": [
+        {
+          "invocationId": "capital_of_france-1",
+          "userContent": {
+            "role": "user",
+            "content": "What is the capital of France? Answer with a single word."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Paris"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "template-eval-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}

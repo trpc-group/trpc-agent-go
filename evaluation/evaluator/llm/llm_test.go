@@ -427,3 +427,55 @@ func TestLLMBaseEvaluator_EvaluateUsesDefaultNumSamplesWhenNil(t *testing.T) {
 	)
 	require.NoError(t, err)
 }
+
+func TestLLMBaseEvaluator_ResolveStructuredOutputForTemplateEvaluator(t *testing.T) {
+	base := &LLMBaseEvaluator{}
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality",
+		EvaluatorName: templateEvaluatorName,
+		Threshold:     0.5,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{
+				Template: &llm.JudgeTemplateOptions{
+					ResponseScorerName: "single_score",
+				},
+			},
+		},
+	}
+
+	out, err := base.resolveStructuredOutput(context.Background(), evalMetric)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.NotNil(t, out.JSONSchema)
+	assert.Equal(t, "single_score_result", out.JSONSchema.Name)
+}
+
+func TestLLMBaseEvaluator_ResolveStructuredOutputRejectsUnsupportedScorer(t *testing.T) {
+	base := &LLMBaseEvaluator{}
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality",
+		EvaluatorName: templateEvaluatorName,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{
+				Template: &llm.JudgeTemplateOptions{
+					ResponseScorerName: "missing",
+				},
+			},
+		},
+	}
+
+	_, err := base.resolveStructuredOutput(context.Background(), evalMetric)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unsupported response scorer "missing"`)
+}
+
+func TestResolveEvaluatorNamePrefersEvaluatorName(t *testing.T) {
+	assert.Equal(t, "configured", resolveEvaluatorName(&metric.EvalMetric{
+		MetricName:    "metric-instance",
+		EvaluatorName: "configured",
+	}))
+	assert.Equal(t, "metric-instance", resolveEvaluatorName(&metric.EvalMetric{
+		MetricName: "metric-instance",
+	}))
+	assert.Equal(t, "", resolveEvaluatorName(nil))
+}

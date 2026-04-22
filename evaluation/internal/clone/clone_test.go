@@ -75,6 +75,43 @@ func TestCloneEvalMetric_NilInput(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
+	src := &metric.EvalMetric{
+		MetricName:    "metric-1",
+		EvaluatorName: "llm_judge_template",
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						{
+							TemplateVariable: "question",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldUserContent,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dst, err := CloneEvalMetric(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	require.NotNil(t, dst.Criterion)
+	require.NotNil(t, dst.Criterion.LLMJudge)
+	require.NotNil(t, dst.Criterion.LLMJudge.Template)
+	dst.Criterion.LLMJudge.Template.Prompt = "changed"
+	assert.Equal(t, "Question: {{question}}", src.Criterion.LLMJudge.Template.Prompt)
+	dst.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable = "changed"
+	assert.Equal(t, "question", src.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable)
+	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope = criterionllm.TemplateVariableScopeExpected
+	assert.Equal(t, criterionllm.TemplateVariableScopeActual, src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope)
+}
+
 func TestCloneEvalSetResult_NilInput(t *testing.T) {
 	got, err := CloneEvalSetResult(nil)
 	require.Error(t, err)
