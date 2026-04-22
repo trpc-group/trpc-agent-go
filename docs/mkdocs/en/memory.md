@@ -1633,9 +1633,102 @@ llmAgent := llmagent.New(
 )
 ```
 
+## External Long-Term Memory Integration (`mem0`)
+
+`memory/mem0` integrates [mem0](https://mem0.ai), an externally hosted long-term memory platform. It is suitable when you want mem0 to handle memory extraction and storage, while the Agent continues to query memories through standard tools.
+
+Unlike the built-in backends above, `memory/mem0` is **not** a full `memory.Service` implementation. It uses an ingest-first pattern: Runner forwards session transcripts to mem0 after each turn, mem0 performs extraction on the service side, and the Agent uses read-oriented tools to query the results.
+
+**Use case**: Hosted long-term memory, background extraction after each turn, and no local CRUD write path.
+
+### Configuration Example
+
+```go
+import (
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+mem0Svc, err := memorymem0.NewService(
+    memorymem0.WithAPIKey(os.Getenv("MEM0_API_KEY")),
+    memorymem0.WithLoadToolEnabled(true),
+)
+if err != nil {
+    panic(err)
+}
+defer mem0Svc.Close()
+
+sessionSvc := sessioninmemory.NewSessionService()
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(openai.New("deepseek-chat")),
+    llmagent.WithTools(mem0Svc.Tools()),
+)
+
+r := runner.NewRunner(
+    "my-app",
+    agent,
+    runner.WithSessionService(sessionSvc),
+    runner.WithSessionIngestor(mem0Svc),
+)
+defer r.Close()
+```
+
+**Integration points**:
+
+- Register tools with `llmagent.WithTools(mem0Svc.Tools())`
+- Use `runner.WithSessionIngestor(mem0Svc)` to send session transcripts to mem0
+- Do **not** use `runner.WithMemoryService(...)` with this integration
+
+### Why `WithSessionIngestor(...)` Instead of `WithMemoryService(...)`
+
+`runner.WithMemoryService(...)` is designed for built-in memory backends that implement the full `memory.Service` contract. In addition to read APIs, that contract includes framework-owned write semantics such as `AddMemory`, `UpdateMemory`, `DeleteMemory`, `ClearMemories`, and `EnqueueAutoMemoryJob(...)`.
+
+`memory/mem0` has a different boundary. It does not expose the full CRUD lifecycle to the framework. Instead, it accepts a completed session transcript, forwards it to mem0 for hosted extraction, and then exposes read-oriented tools for retrieval.
+
+Using `runner.WithSessionIngestor(...)` makes that boundary explicit:
+
+- Runner sends the completed session transcript after each turn
+- mem0 performs extraction and storage on the service side
+- per-request ingest fields such as `metadata`, `agent_id`, and `run_id` can be passed through `session.IngestOption`
+- the integration is not mistaken for a built-in backend that supports full framework-side CRUD or preload behavior
+
+In short, `MemoryService` means "the framework manages memories directly", while `SessionIngestor` means "the framework hands the transcript to an external memory system". `mem0` matches the second model.
+
+### Configuration Options
+
+| Option | Purpose | Default |
+| ------ | ------- | ------- |
+| `WithAPIKey(key)` | mem0 API key. Required for all requests. | required |
+| `WithHost(url)` | Override the mem0 API host/base URL. | `https://api.mem0.ai` |
+| `WithOrgProject(orgID, projectID)` | Add mem0 `org_id` / `project_id` to ingest and retrieval requests. | empty |
+| `WithAsyncMode(bool)` | Controls mem0's `async_mode` flag on ingest requests. | `true` |
+| `WithVersion(v)` | Sets the mem0 ingestion API version field. | `v2` |
+| `WithTimeout(d)` | HTTP timeout used by the client. | `10s` |
+| `WithLoadToolEnabled(bool)` | Expose `memory_load` from `Tools()`. | `false` |
+| `WithAsyncMemoryNum(n)` | Number of background ingest workers. | `1` |
+| `WithMemoryQueueSize(n)` | Queue size per ingest worker. | `10` |
+| `WithMemoryJobTimeout(d)` | Timeout for queued jobs and synchronous fallback ingest. | `30s` |
+
+### Notes
+
+- `Tools()` exposes `memory_search` by default; `memory_load` can be enabled explicitly.
+- All reads remain scoped to the current `<appName, userID>`.
+- Runner automatically passes session context into ingest. Custom callers can also use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` when needed.
+- When mem0 metadata is available, search results can still carry structured fields such as `Topics`, `Kind`, `EventTime`, `Participants`, and `Location`.
+- Call `Close()` on the service so background workers shut down cleanly.
+- If you need full CRUD tools or framework-side preload, use one of the built-in memory backends instead.
+
 ## References
 
 - [Memory Module Source](https://github.com/trpc-group/trpc-agent-go/tree/main/memory)
 - [Agentic Mode Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)
 - [Auto Mode Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
+- [mem0 Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0)
+- [Ecosystem Guide](https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/ecosystem.md)
 - [API Documentation](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)

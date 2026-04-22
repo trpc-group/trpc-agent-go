@@ -1035,6 +1035,7 @@ mathTool := agenttool.NewTool(
     mathAgent,
     agenttool.WithSkipSummarization(false), // 可选，默认 false，当设置为 true 时会跳过外层模型总结，在 tool.response 后直接结束本轮
     agenttool.WithStreamInner(true),        // 开启：把子 Agent 的流式事件转发给父流程
+    agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude), // 隐藏子 Agent 正文，仅保留内部进度
 )
 
 // 3) 在父 Agent 中使用该工具
@@ -1053,6 +1054,7 @@ parent := llmagent.New(
 - 转发的事件本质是子 Agent 里的 `event.Event`，包含增量内容（`choice.Delta.Content`）
 - 为避免重复，子 Agent 在结束时产生的“完整大段内容”不会再次作为转发事件打印；但会被聚合到最终 `tool.response` 的内容里，供下一次 LLM 调用作为工具消息使用
 - UI 层建议：展示“转发的子 Agent 增量内容”，但默认不重复打印最终聚合的 `tool.response` 内容（除非用于调试）
+- 通过 `WithInnerTextMode(agenttool.InnerTextModeExclude)`，你可以保留内部 tool 进度，同时隐藏子 Agent 的 assistant 正文。这在外层协调者还会继续总结时尤其有用。
 
 示例：仅在需要时显示工具片段，避免重复输出
 
@@ -1063,8 +1065,9 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 }
 
 // 子 Agent 转发的流式增量（作者不是父 Agent）
-if ev.Author != parentName && len(ev.Choices) > 0 {
-    if delta := ev.Choices[0].Delta.Content; delta != "" {
+if ev.Author != parentName && ev.Response != nil &&
+    len(ev.Response.Choices) > 0 {
+    if delta := ev.Response.Choices[0].Delta.Content; delta != "" {
         fmt.Print(delta)
     }
 }
@@ -1082,6 +1085,11 @@ if ev.Author != parentName && len(ev.Choices) > 0 {
   - true：把子 Agent 的事件直接转发到父流程（强烈建议父/子 Agent 都开启 `GenerationConfig{Stream: true}`）
   - false：按“仅可调用工具”处理，不做内部事件转发
 
+- WithInnerTextMode(InnerTextMode)：
+
+  - `InnerTextModeInclude`：实际默认行为，开启内部转发时继续展示子 Agent 的 assistant 文本
+  - `InnerTextModeExclude`：隐藏子 Agent 的 assistant 文本，但继续保留内部 tool call、tool.done，以及聚合后的最终工具响应
+
 - WithHistoryScope(HistoryScope)：
   - `HistoryScopeIsolated`（默认）：保持子调用完全隔离，只读取本次工具参数（不继承父历史）。
   - `HistoryScopeParentBranch`：通过分层过滤键 `父键/子名-UUID（Universally Unique Identifier，通用唯一识别码）` 继承父会话历史；内容处理器会基于前缀匹配纳入父事件，同时子事件仍写入独立子分支。典型场景：基于上一轮产出进行“编辑/优化/续写”。
@@ -1093,6 +1101,7 @@ child := agenttool.NewTool(
     childAgent,
     agenttool.WithSkipSummarization(false),
     agenttool.WithStreamInner(true),
+    agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
     agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
 )
 ```
@@ -1101,6 +1110,7 @@ child := agenttool.NewTool(
 
 - 事件完成信号：工具响应事件会被标记 `RequiresCompletion=true`，Runner 会自动发送完成信号，无需手工处理
 - 内容去重：如果已转发子 Agent 的增量内容，默认不要再把最终 `tool.response` 的聚合内容打印出来
+- “只看进度”体验：当你希望用户看到内部进度、但不想重复看到子 Agent 正文时，可组合使用 `WithStreamInner(true)` 和 `WithInnerTextMode(agenttool.InnerTextModeExclude)`
 - 模型兼容性：一些模型要求工具调用后必须跟随工具消息，AgentTool 已自动填充聚合后的工具内容满足此要求
 - `WithSkipSummarization(true)` 只会跳过额外的外层总结型 LLM 调用，不会把 `tool.response` 变成 assistant final response；如果你需要真正的终止信号，仍应持续消费到 `runner.completion`
 

@@ -59,7 +59,7 @@ func main() {
         summary.WithChecksAny( // 任一条件满足即触发摘要
             summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
             summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
-            summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
+            summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
         ),
         summary.WithMaxSummaryWords(200), // 限制摘要在 200 字以内
     )
@@ -183,7 +183,7 @@ func main() {
 
 **核心特性：**
 
-- **自动触发**：根据事件数量、token 数量或时间阈值自动生成摘要
+- **自动触发**：在执行摘要检查时，根据事件数量、token 数量或时间阈值自动生成摘要
 - **增量处理**：只处理自上次摘要以来的新事件，避免重复计算
 - **LLM 驱动**：使用配置的 LLM 模型生成高质量、上下文感知的摘要
 - **非破坏性**：原始事件完整保留，摘要单独存储
@@ -205,7 +205,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(                         // 任一条件满足即触发
         summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
         summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
-        summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
+        summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
     ),
     summary.WithMaxSummaryWords(200),              // 限制摘要在 200 字以内
 )
@@ -1651,7 +1651,7 @@ if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
 
 **核心特性：**
 
-- **自动触发**：根据事件数量、token 数量或时间阈值自动生成摘要
+- **自动触发**：在执行摘要检查时，根据事件数量、token 数量或时间阈值自动生成摘要
 - **增量处理**：只处理自上次摘要以来的新事件，避免重复计算
 - **LLM 驱动**：使用任何配置的 LLM 模型生成高质量、上下文感知的摘要
 - **非破坏性**：原始事件完整保留，摘要单独存储
@@ -1681,7 +1681,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(                     // 任一条件满足即触发
         summary.CheckEventThreshold(20),       // 自上次摘要后新增 20 个事件后触发
         summary.CheckTokenThreshold(4000),     // 自上次摘要后新增 4000 个 token 后触发
-        summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
+        summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
     ),
     summary.WithMaxSummaryWords(200),          // 限制摘要在 200 字以内
 )
@@ -1780,8 +1780,10 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 - 事件数量超过阈值（`WithEventThreshold`）
 - Token 数量超过阈值（`WithTokenThreshold`）
-- 距上次事件超过指定时间（`WithTimeThreshold`）
+- 在一次摘要检查中，被检查 session 的最后一个事件已超过指定时间；在默认增量摘要路径里，这通常就是最近一个待摘要事件（`WithTimeThreshold`）
 - 满足自定义组合条件（`WithChecksAny` / `WithChecksAll`）
+
+`WithTimeThreshold` 不是后台定时器。系统不会在“静默满 5 分钟”的瞬间主动生成摘要；只有在执行摘要检查时才会评估，通常发生在一轮对话结束后，或你手动调用摘要 API 时。它判断的是被检查 session 的最后一个事件；在默认增量摘要路径里，这个 session 只包含待摘要增量，所以 `5*time.Minute` 通常等价于：“到下一次摘要检查时，如果最近一个待摘要事件已经超过 5 分钟，就立即生成摘要。”
 
 #### 手动触发
 
@@ -1960,7 +1962,7 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - **`WithContextThreshold(opts ...ContextThresholdOption)`**：零配置触发器，在每次评估时动态感知当前模型的 context window。根据 context window 的比例（默认 50%）自动计算 token 阈值，当用户切换模型时自动适配，无需重建 Summarizer。这是大多数场景下的推荐选项，类似 Codex CLI 和 Claude Code 的 auto-compact 行为。示例：`WithContextThreshold()` 零配置使用，或 `WithContextThreshold(summary.WithContextThresholdRatio(0.6))` 自定义比例。
 - **`WithEventThreshold(eventCount int)`**：当自上次摘要后的事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在自上次摘要后新增 20 个事件后触发。
 - **`WithTokenThreshold(tokenCount int)`**：当自上次摘要后的 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在自上次摘要后新增 4000 个 token 后触发。
-- **`WithTimeThreshold(interval time.Duration)`**：当自上次事件后经过的时间超过间隔时触发摘要。示例：`WithTimeThreshold(5*time.Minute)` 在 5 分钟无活动后触发。
+- **`WithTimeThreshold(interval time.Duration)`**：在执行摘要检查时进行判断；它包装的是 `CheckTimeThreshold`，语义上比较“被检查 session 的最后一个事件”是否已超过该间隔。在默认增量摘要路径里，这通常等价于最近一个待摘要事件。它不是后台定时器。示例：`WithTimeThreshold(5*time.Minute)` 的含义是：“到下一次摘要检查时，如果被检查 session 的最后一个事件已经超过 5 分钟，就立即生成摘要。”
 
 !!! note "Context Window 注册"
     `WithContextThreshold` 和 Token Tailoring 都依赖框架内置的模型 context window 注册表。注册表已包含大量常见模型（OpenAI、Anthropic、Google、DeepSeek、Qwen 等），但不一定覆盖所有模型——特别是私有部署、微调变体或较新发布的模型。如果你的模型未被识别（context window 解析为 0 或回退到默认值），请在启动时手动注册：
@@ -2279,7 +2281,7 @@ if found {
 
 2. **增量摘要**：新事件与先前的摘要（作为系统事件前置）组合，生成一个既包含旧上下文又包含新信息的更新摘要。
 
-3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（基于自上次摘要后的增量事件计数、token 计数、时间阈值）。如果条件未满足且 `force=false`，则跳过摘要。
+3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（基于自上次摘要后的增量事件计数、增量 token 计数，以及时间检查中“被检查 session 的最后一个事件距离当前是否已超过阈值”；在默认增量摘要路径里，这对应最近一个待摘要事件）。如果条件未满足且 `force=false`，则跳过摘要。
 
 4. **异步 Worker**：摘要任务使用基于哈希的分发策略分配到多个 worker goroutine。这确保同一会话的任务按顺序处理，而不同会话可以并行处理。
 

@@ -431,6 +431,35 @@ func TestNew_MemberToolStreamInner(t *testing.T) {
 	require.True(t, pref.StreamInner())
 }
 
+func TestNew_MemberToolInnerTextMode(t *testing.T) {
+	coordinator := &testCoordinator{name: testCoordinatorName}
+	members := []agent.Agent{testAgent{name: testMemberNameOne}}
+
+	_, err := New(
+		coordinator,
+		members,
+		WithMemberToolInnerTextMode(InnerTextModeExclude),
+	)
+	require.NoError(t, err)
+
+	require.Len(t, coordinator.addedToolSets, 1)
+	ts := coordinator.addedToolSets[0]
+
+	tools := itool.NewNamedToolSet(ts).Tools(context.Background())
+	require.Len(t, tools, 1)
+
+	named, ok := tools[0].(*itool.NamedTool)
+	require.True(t, ok)
+
+	original := named.Original()
+	type innerTextPref interface {
+		InnerTextMode() InnerTextMode
+	}
+	pref, ok := original.(innerTextPref)
+	require.True(t, ok)
+	require.Equal(t, InnerTextModeExclude, pref.InnerTextMode())
+}
+
 type filterKeyAgent struct {
 	name string
 

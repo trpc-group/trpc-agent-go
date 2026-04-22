@@ -4541,6 +4541,15 @@ graphAgent, _ := graphagent.New("workflow", g,
 )
 ```
 
+!!! note "Runner 级插件与 Graph Agent 节点"
+    通过 `graphagent.WithAgentCallbacks` 注册的回调，只作用在 **GraphAgent 自身**
+    这一层。如果你在 Runner 上注册了 `PluginManager`（即 Runner 插件的
+    `BeforeAgent` / `AfterAgent`），Graph Agent 节点中用
+    `AddAgentNode(name, ...)` 挂进来的**子 Agent** 也会触发这些插件回调——
+    每个子 invocation 各触发一次。完整语义（短路影响 `SubgraphResult.FinalState`、
+    AfterAgent `CustomResponse` 会覆盖下游 `StateKeyLastResponse` 等）见
+    [Plugin 文档](./plugin.md) "执行顺序与短路" 小节中的多 Agent 容器注意事项。
+
 ## 常见问题排查
 
 **Q1: 报错 "graph must have an entry point"**
