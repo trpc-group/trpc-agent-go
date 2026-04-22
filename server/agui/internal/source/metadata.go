@@ -222,7 +222,9 @@ func recordSnapshotMetadata(
 		toolCalls[e.ToolCallID] = metadata
 	case *aguievents.ToolCallResultEvent:
 		messages[e.MessageID] = metadata
-		toolCalls[e.ToolCallID] = metadata
+		if _, exists := toolCalls[e.ToolCallID]; !exists {
+			toolCalls[e.ToolCallID] = metadata
+		}
 	case *aguievents.ActivitySnapshotEvent:
 		messages[e.MessageID] = metadata
 	case *aguievents.ActivityDeltaEvent:

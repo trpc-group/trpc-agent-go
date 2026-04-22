@@ -70,7 +70,7 @@ func TestFromRawEventSupportsMapPayload(t *testing.T) {
 
 func TestBuildSnapshotMetadataIndexesMessagesAndToolCalls(t *testing.T) {
 	assistantMetadata := Metadata{
-		EventID:      "evt-assistant",
+		EventID:      "evt-tool-call",
 		Author:       "member-a",
 		InvocationID: "inv-assistant",
 		Branch:       "root.member-a",
@@ -108,7 +108,7 @@ func TestBuildSnapshotMetadataIndexesMessagesAndToolCalls(t *testing.T) {
 			"tool-msg-1":  toolMetadata,
 		},
 		ToolCalls: map[string]Metadata{
-			"call-1": toolMetadata,
+			"call-1": assistantMetadata,
 		},
 	}, metadata)
 }
@@ -120,6 +120,36 @@ func TestBuildSnapshotMetadataIgnoresInvalidEntries(t *testing.T) {
 		newTrackEvent(t, aguievents.NewRunFinishedEvent("thread", "run")),
 	})
 	assert.True(t, metadata.IsZero())
+}
+
+func TestBuildSnapshotMetadataFallsBackToToolResultSource(t *testing.T) {
+	toolMetadata := Metadata{
+		EventID:      "evt-tool-result",
+		Author:       "member-a",
+		InvocationID: "inv-tool",
+		Branch:       "root.member-a",
+	}
+
+	trackEvents := []session.TrackEvent{
+		newTrackEvent(t, withRawEvent(
+			aguievents.NewToolCallResultEvent(
+				"tool-msg-1",
+				"call-1",
+				"done",
+			),
+			toolMetadata,
+		)),
+	}
+
+	metadata := BuildSnapshotMetadata(trackEvents)
+	assert.Equal(t, SnapshotMetadata{
+		Messages: map[string]Metadata{
+			"tool-msg-1": toolMetadata,
+		},
+		ToolCalls: map[string]Metadata{
+			"call-1": toolMetadata,
+		},
+	}, metadata)
 }
 
 func newTrackEvent(t *testing.T, event aguievents.Event) session.TrackEvent {

@@ -205,7 +205,7 @@ func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 			"tool-msg-1":  toolMetadata,
 		},
 		ToolCalls: map[string]source.Metadata{
-			"tool-call-1": toolMetadata,
+			"tool-call-1": assistantMetadata,
 		},
 	}, got)
 }
