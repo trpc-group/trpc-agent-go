@@ -260,7 +260,9 @@ func TestCodeSearchOptionHelpersAndDerivation(t *testing.T) {
 func TestCodeSearchToolAdvancedOptions(t *testing.T) {
 	t.Run("custom description is used verbatim", func(t *testing.T) {
 		searchTool := NewCodeSearchTool(&captureKnowledge{}, WithCodeSearchToolDescription("custom code search"))
-		require.Contains(t, searchTool.Declaration().Description, "tool description:custom code search")
+		require.Contains(t, searchTool.Declaration().Description, "custom code search")
+		require.Contains(t, searchTool.Declaration().Description, "== FILTER GUIDANCE ==")
+		require.NotContains(t, searchTool.Declaration().Description, "tool description:")
 	})
 
 	t.Run("conditioned filter extra fields and metadata exclusions are applied", func(t *testing.T) {

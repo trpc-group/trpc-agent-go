@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	defaultMaxResults = 10
-	defaultMinScore   = 0.0
+	defaultMaxResults        = 10
+	defaultMinScore          = 0.0
+	agenticFilterPromptIntro = "You are a helpful assistant that can search for relevant information in the knowledge base."
 )
 
 // KnowledgeSearchRequest represents the input for the knowledge search tool.
@@ -231,7 +232,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 // KnowledgeSearchRequestWithFilter represents the input with filter for the knowledge search tool.
 type KnowledgeSearchRequestWithFilter struct {
 	Query  string                                 `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
-	Filter *searchfilter.UniversalFilterCondition `json:"filter,omitempty" description:"Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."`
+	Filter *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."`
 }
 
 // NewAgenticFilterSearchTool creates a knowledge search tool with dynamic agent-controlled filtering.
@@ -305,17 +306,31 @@ func NewAgenticFilterSearchTool(
 		toolName = "knowledge_search_with_agentic_filter"
 	}
 	filterInfo := generateAgenticFilterPrompt(agenticFilterInfo)
-	description := ""
-	if opt.toolDescription == "" {
-		description = filterInfo
-	} else {
-		description = fmt.Sprintf("tool description:%s, filter info:%s", opt.toolDescription, filterInfo)
-	}
+	description := composeAgenticToolDescription(opt.toolDescription, filterInfo)
 	return function.NewFunctionTool(
 		searchFunc,
 		function.WithName(toolName),
 		function.WithDescription(description),
 	)
+}
+
+func composeAgenticToolDescription(toolDescription, filterInfo string) string {
+	toolDescription = strings.TrimSpace(toolDescription)
+	filterInfo = strings.TrimSpace(filterInfo)
+
+	switch {
+	case toolDescription == "":
+		return filterInfo
+	case filterInfo == "":
+		return toolDescription
+	}
+
+	filterAppendix := strings.TrimSpace(strings.TrimPrefix(filterInfo, agenticFilterPromptIntro))
+	if filterAppendix == "" {
+		return toolDescription
+	}
+
+	return fmt.Sprintf("%s\n\n== FILTER GUIDANCE ==\n\n%s", toolDescription, filterAppendix)
 }
 
 // applyPostProcessor runs the optional ResultPostProcessor on resp. Passing a
@@ -431,7 +446,7 @@ func filterMetadata(metadata map[string]any, excludeKeys map[string]struct{}) ma
 
 func generateAgenticFilterPrompt(agenticFilterInfo map[string][]any) string {
 	if len(agenticFilterInfo) == 0 {
-		return "You are a helpful assistant that can search for relevant information in the knowledge base."
+		return agenticFilterPromptIntro
 	}
 
 	// Build list of valid filter keys
@@ -443,7 +458,7 @@ func generateAgenticFilterPrompt(agenticFilterInfo map[string][]any) string {
 
 	var b strings.Builder
 
-	fmt.Fprintf(&b, `You are a helpful assistant that can search for relevant information in the knowledge base. Available filters: %s.
+	fmt.Fprintf(&b, `%s Available filters: %s.
 
 Filter Usage:
 - Query: Can be empty when using only metadata filters
@@ -460,7 +475,7 @@ Filter Examples (use double quotes for JSON):
 Note: For logical operators (and/or), use "value" field to specify an array of sub-conditions.
 
 Available Filter Values:
-`, keysStr)
+`, agenticFilterPromptIntro, keysStr)
 
 	// Separate keys with and without predefined values
 	var keysWithValues []string

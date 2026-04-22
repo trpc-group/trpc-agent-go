@@ -21,13 +21,14 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	util "trpc.group/trpc-go/trpc-agent-go/examples/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
@@ -46,71 +47,16 @@ const (
 	maxResults                = 5
 	embeddingModelNameEnvKey  = "EMBEDDING_MODEL_NAME"
 	defaultEmbeddingModelName = "server:277357"
+	filterSchemaDepth         = 2
 )
 
-// queryParamDescription tells the LLM what goes into the "query" field.
-// It mirrors the QUERY GUIDELINES section of the native code_search tool
-// description so that an MCP client sees the same intent-level phrasing
-// rules as a direct caller of knowledgetool.NewCodeSearchTool.
-const queryParamDescription = `Natural-language, intent-level question describing the code you want to find.
-Phrase it as a full question you would ask a human expert, not a bag of keywords.
-
-Good:
-- "Where is interface Knowledge implemented in the default package?"
-- "How does the runner propagate session state across sub-agents?"
-- "Which function registers MCP tools on the streamable HTTP transport?"
-
-Bad (too short, keyword-only, or ambiguous):
-- "Knowledge"            // single symbol: use filter on metadata.trpc_ast_full_name instead
-- "session isolation"    // two keywords: turn into a full question
-- "error handling"       // generic: add the component, e.g. "how are tool-call errors surfaced back to the LLM?"
-
-Leave empty only when you are doing a pure metadata/literal lookup via "filter".`
-
-// filterParamDescription spells out the JSON shape of the structured filter
-// that the native code_search tool accepts. The MCP input schema only lets
-// us expose this field as a generic "object", so we push the full
-// UniversalFilterCondition contract (fields, operators, enums, worked
-// examples) into the description. Keep this string in sync with
-// codeSearchToolDescription in knowledge/tool/codesearchtool.go.
-const filterParamDescription = `Optional structured filter applied on top of the semantic query.
-
-Shape: a UniversalFilterCondition JSON object.
-- Leaf condition:    {"field": "<name>", "operator": "<op>", "value": <value>}
-- Logical condition: {"operator": "and"|"or", "value": [<sub-condition>, ...]}
-
-Operators (lowercase): eq, ne, gt, gte, lt, lte, in, not in, like, not like, between, and, or.
-
-Available fields (use the EXACT name, including the "metadata." prefix where shown):
-- metadata.trpc_ast_repo_name   enum: ["trpc-agent-go"]
-- metadata.trpc_ast_scope       enum: ["code", "example"]
-- metadata.trpc_ast_type        enum: ["Function","Method","Struct","Interface","Variable","Alias","Package","Class","Module","Namespace","Template","Enum","Service","RPC","Message"]
-- metadata.trpc_ast_full_name   exact fully-qualified symbol name (use with eq)
-- metadata.trpc_ast_package     package or module path
-- metadata.trpc_ast_file_path   source file path
-- metadata.trpc_ast_signature   function or method signature
-- content                       raw code body; use with "like" and %...% to match literal snippets, error strings, log lines, or concrete API calls
-
-When to use what:
-- For exact symbol lookup, prefer metadata.trpc_ast_full_name + eq.
-- For literal error messages, log text, SQL/HTTP fragments, or exact API calls, prefer content + like (embeddings do NOT index the full raw body).
-- Combine with query (semantic) for the best precision+recall.
-
-Examples:
-1) Find a concrete API call in a specific repo:
-{"operator":"and","value":[
-  {"field":"metadata.trpc_ast_repo_name","operator":"eq","value":"trpc-agent-go"},
-  {"field":"content","operator":"like","value":"%context.WithTimeout%"}
-]}
-
-2) Restrict to AST-labelled implementation code only:
-{"operator":"and","value":[
-  {"field":"metadata.trpc_ast_repo_name","operator":"eq","value":"trpc-agent-go"},
-  {"field":"metadata.trpc_ast_scope","operator":"eq","value":"code"}
-]}
-
-3) Jump directly to a known symbol:
-{"field":"metadata.trpc_ast_full_name","operator":"eq","value":"trpc.group/trpc-go/trpc-agent-go/agent/llmagent.LLMAgent"}`
+const (
+	codeSearchQueryDescription          = "The search query to find relevant information in the knowledge base. Can be empty when using only filters."
+	codeSearchFilterDescription         = "Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."
+	codeSearchFilterFieldDescription    = "The metadata field to filter on. Use it for comparison operators and ignore it for logical operators and or."
+	codeSearchFilterOperatorDescription = "The operator to use. Valid values are eq ne gt gte lt lte in not in like not like between and or."
+	codeSearchFilterValueDescription    = "Comparison value for eq ne gt gte lt lte. Use an array for in not in between. Use an array of nested filter conditions for and or."
+)
 
 var (
 	flagAddr        = flag.String("addr", defaultServerAddr, "HTTP listen address for the MCP server")
@@ -198,16 +144,7 @@ func run() error {
 		mcp.WithServerLogger(mcp.GetDefaultLogger()),
 	)
 
-	mcpTool := mcp.NewTool(
-		decl.Name,
-		mcp.WithDescription(decl.Description),
-		mcp.WithString("query",
-			mcp.Description(queryParamDescription),
-		),
-		mcp.WithObject("filter",
-			mcp.Description(filterParamDescription),
-		),
-	)
+	mcpTool := newCodeSearchMCPTool(decl)
 
 	handler := newCodeSearchHandler(callable)
 	server.RegisterTool(mcpTool, handler)
@@ -265,6 +202,141 @@ func buildKnowledge(
 	return kb, nil
 }
 
+func newCodeSearchMCPTool(decl *agenttool.Declaration) *mcp.Tool {
+	return mcp.NewTool(
+		decl.Name,
+		mcp.WithDescription(decl.Description),
+		withInputSchema(codeSearchInputSchema()),
+	)
+}
+
+func withInputSchema(schema *openapi3.Schema) mcp.ToolOption {
+	return func(t *mcp.Tool) {
+		t.InputSchema = schema
+	}
+}
+
+func codeSearchInputSchema() *openapi3.Schema {
+	return &openapi3.Schema{
+		Type: &openapi3.Types{openapi3.TypeObject},
+		Properties: openapi3.Schemas{
+			"query":  schemaRef(stringSchema(codeSearchQueryDescription)),
+			"filter": schemaRef(codeSearchFilterConditionSchema(filterSchemaDepth)),
+		},
+		AdditionalProperties: disallowAdditionalProperties(),
+	}
+}
+
+func codeSearchFilterConditionSchema(depth int) *openapi3.Schema {
+	return &openapi3.Schema{
+		Type:        &openapi3.Types{openapi3.TypeObject},
+		Description: codeSearchFilterDescription,
+		Properties: openapi3.Schemas{
+			"field": schemaRef(stringSchema(codeSearchFilterFieldDescription)),
+			"operator": schemaRef(&openapi3.Schema{
+				Type:        &openapi3.Types{openapi3.TypeString},
+				Description: codeSearchFilterOperatorDescription,
+				Enum:        codeSearchOperatorEnum(),
+			}),
+			"value": schemaRef(codeSearchFilterValueSchema(depth)),
+		},
+		AdditionalProperties: disallowAdditionalProperties(),
+	}
+}
+
+func codeSearchFilterValueSchema(depth int) *openapi3.Schema {
+	return &openapi3.Schema{
+		Description: codeSearchFilterValueDescription,
+		AnyOf:       codeSearchFilterValueAnyOf(depth),
+	}
+}
+
+func codeSearchFilterValueAnyOf(depth int) openapi3.SchemaRefs {
+	return openapi3.SchemaRefs{
+		schemaRef(stringSchema("")),
+		schemaRef(numberSchema(openapi3.TypeNumber)),
+		schemaRef(numberSchema(openapi3.TypeInteger)),
+		schemaRef(booleanSchema()),
+		schemaRef(objectSchema()),
+		schemaRef(arraySchema(codeSearchFilterArrayItemSchema(depth))),
+	}
+}
+
+func codeSearchFilterArrayItemSchema(depth int) *openapi3.Schema {
+	itemAnyOf := openapi3.SchemaRefs{
+		schemaRef(stringSchema("")),
+		schemaRef(numberSchema(openapi3.TypeNumber)),
+		schemaRef(numberSchema(openapi3.TypeInteger)),
+		schemaRef(booleanSchema()),
+		schemaRef(objectSchema()),
+	}
+	if depth > 0 {
+		itemAnyOf = append(itemAnyOf, schemaRef(codeSearchFilterConditionSchema(depth-1)))
+	}
+	return &openapi3.Schema{
+		AnyOf: itemAnyOf,
+	}
+}
+
+func codeSearchOperatorEnum() []any {
+	return []any{
+		searchfilter.OperatorEqual,
+		searchfilter.OperatorNotEqual,
+		searchfilter.OperatorGreaterThan,
+		searchfilter.OperatorGreaterThanOrEqual,
+		searchfilter.OperatorLessThan,
+		searchfilter.OperatorLessThanOrEqual,
+		searchfilter.OperatorIn,
+		searchfilter.OperatorNotIn,
+		searchfilter.OperatorLike,
+		searchfilter.OperatorNotLike,
+		searchfilter.OperatorBetween,
+		searchfilter.OperatorAnd,
+		searchfilter.OperatorOr,
+	}
+}
+
+func schemaRef(schema *openapi3.Schema) *openapi3.SchemaRef {
+	return openapi3.NewSchemaRef("", schema)
+}
+
+func stringSchema(description string) *openapi3.Schema {
+	return &openapi3.Schema{
+		Type:        &openapi3.Types{openapi3.TypeString},
+		Description: description,
+	}
+}
+
+func numberSchema(schemaType string) *openapi3.Schema {
+	return &openapi3.Schema{
+		Type: &openapi3.Types{schemaType},
+	}
+}
+
+func booleanSchema() *openapi3.Schema {
+	return &openapi3.Schema{
+		Type: &openapi3.Types{openapi3.TypeBoolean},
+	}
+}
+
+func objectSchema() *openapi3.Schema {
+	return &openapi3.Schema{
+		Type: &openapi3.Types{openapi3.TypeObject},
+	}
+}
+
+func arraySchema(items *openapi3.Schema) *openapi3.Schema {
+	return &openapi3.Schema{
+		Type:  &openapi3.Types{openapi3.TypeArray},
+		Items: schemaRef(items),
+	}
+}
+
+func disallowAdditionalProperties() openapi3.AdditionalProperties {
+	falseValue := false
+	return openapi3.AdditionalProperties{Has: &falseValue}
+}
+
 // newCodeSearchHandler bridges an MCP CallToolRequest to the underlying
 // trpc-agent-go CallableTool. The MCP arguments are re-encoded to JSON and
 // forwarded as-is, so the behavior matches what comparison/local_agent.go
@@ -280,9 +352,6 @@ func newCodeSearchHandler(callable agenttool.CallableTool) func(ctx context.Cont
 		args := req.Params.Arguments
 		if args == nil {
 			args = map[string]any{}
-		}
-		if q, ok := args["query"].(string); !ok || strings.TrimSpace(q) == "" {
-			return mcp.NewErrorResult("argument 'query' is required and must be a non-empty string"), nil
 		}
 
 		jsonArgs, err := json.Marshal(args)
