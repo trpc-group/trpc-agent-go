@@ -112,6 +112,34 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	assert.Equal(t, criterionllm.TemplateVariableScopeActual, src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope)
 }
 
+func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {
+	assert.Nil(t, cloneTemplateVariableBindings(nil))
+	assert.Nil(t, cloneTemplateVariableBinding(nil))
+}
+
+func TestCloneEvalMetric_PreservesNilTemplateBinding(t *testing.T) {
+	src := &metric.EvalMetric{
+		MetricName:    "metric-1",
+		EvaluatorName: "llm_judge_template",
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						nil,
+					},
+				},
+			},
+		},
+	}
+	dst, err := CloneEvalMetric(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	require.Len(t, dst.Criterion.LLMJudge.Template.VariableBindings, 1)
+	assert.Nil(t, dst.Criterion.LLMJudge.Template.VariableBindings[0])
+}
+
 func TestCloneEvalSetResult_NilInput(t *testing.T) {
 	got, err := CloneEvalSetResult(nil)
 	require.Error(t, err)

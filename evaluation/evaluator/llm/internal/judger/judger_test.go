@@ -25,6 +25,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
+type marshalingFailure struct {
+	F func()
+}
+
 type fakeModel struct {
 	responses []*model.Response
 	err       error
@@ -409,4 +413,30 @@ func TestJudgeWithRunner_RejectsUnsupportedStructuredOutput(t *testing.T) {
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported structured output for judge runner")
+}
+
+func TestMaterializeStructuredOutputContent(t *testing.T) {
+	out := &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{
+			Name:   "judge_result",
+			Schema: map[string]any{"type": "object"},
+		},
+	}
+	err := materializeStructuredOutputContent(nil, nil, nil)
+	require.NoError(t, err)
+	err = materializeStructuredOutputContent(nil, map[string]any{"score": 1}, &options{structuredOutput: out})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "response is nil")
+	err = materializeStructuredOutputContent(&model.Response{}, nil, &options{structuredOutput: out})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "structured output payload is missing")
+	resp := &model.Response{}
+	err = materializeStructuredOutputContent(resp, map[string]any{"score": 1}, &options{structuredOutput: out})
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.JSONEq(t, `{"score":1}`, resp.Choices[0].Message.Content)
+	err = materializeStructuredOutputContent(&model.Response{}, marshalingFailure{F: func() {}}, &options{structuredOutput: out})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "marshal structured output payload")
 }

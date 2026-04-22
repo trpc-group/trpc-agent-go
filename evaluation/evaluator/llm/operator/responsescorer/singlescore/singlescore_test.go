@@ -36,6 +36,14 @@ func TestScoreBasedOnResponseRejectsOutOfRangeScore(t *testing.T) {
 	assert.Contains(t, err.Error(), "score must be between 0 and 1")
 }
 
+func TestScoreBasedOnResponseRejectsInvalidJSON(t *testing.T) {
+	scorer := New()
+
+	_, err := scorer.ScoreBasedOnResponse(context.Background(), makeResponse(`not-json`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal response json")
+}
+
 func makeResponse(content string) *model.Response {
 	return &model.Response{
 		Choices: []model.Choice{{Message: model.Message{Content: content}}},

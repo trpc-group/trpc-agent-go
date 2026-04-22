@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -3876,4 +3877,92 @@ func TestMaterializeOverallCriterionKeepsTemplatePrompt(t *testing.T) {
 			got.LLMJudge.Template.Prompt,
 		)
 	}
+}
+
+func TestMaterializeResultCriterionHandlesErrorsAndNonTemplateEvaluator(t *testing.T) {
+	ctx := context.Background()
+	got, err := materializeResultCriterion(ctx, nil, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "clone eval metric")
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: "llm_rubric_critic",
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}",
+					ResponseScorerName: "single_score",
+				},
+			},
+		},
+	}
+	got, err = materializeResultCriterion(ctx, evalMetric, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.LLMJudge)
+	require.NotNil(t, got.LLMJudge.Template)
+	assert.Equal(t, "Question: {{question}}", got.LLMJudge.Template.Prompt)
+}
+
+func TestMaterializeResultCriterionRejectsTemplateConstructionError(t *testing.T) {
+	ctx := context.Background()
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: llmtemplateevaluator.EvaluatorName,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						{
+							TemplateVariable: "question",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldUserContent,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	got, err := materializeResultCriterion(ctx, evalMetric, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "construct template messages")
+}
+
+func TestMaterializeOverallCriterionCloneError(t *testing.T) {
+	got, err := materializeOverallCriterion(context.Background(), nil, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "clone eval metric")
+}
+
+func TestMaterializedPrompt(t *testing.T) {
+	assert.Empty(t, materializedPrompt(nil))
+	assert.Equal(t, "single", materializedPrompt([]model.Message{{
+		Role:    model.RoleUser,
+		Content: "single",
+	}}))
+	assert.Equal(t,
+		"[user]\nquestion\n\n[assistant]\nanswer",
+		materializedPrompt([]model.Message{
+			{Role: model.RoleUser, Content: "question"},
+			{Role: model.RoleAssistant, Content: "answer"},
+		}),
+	)
+}
+
+func TestResolveEvaluatorName(t *testing.T) {
+	assert.Empty(t, resolveEvaluatorName(nil))
+	assert.Equal(t, "metric_only", resolveEvaluatorName(&metric.EvalMetric{
+		MetricName: "metric_only",
+	}))
+	assert.Equal(t, "llm_judge_template", resolveEvaluatorName(&metric.EvalMetric{
+		MetricName:    "metric_only",
+		EvaluatorName: "llm_judge_template",
+	}))
 }

@@ -20,11 +20,23 @@ func TestResolveResponseScorer(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, scorer)
 
-	output, err := StructuredOutput(ResponseScorerRubricScoresName)
+	scorer, err = ResolveResponseScorer(ResponseScorerRubricScoresName)
+	require.NoError(t, err)
+	assert.NotNil(t, scorer)
+
+	output, err := StructuredOutput(ResponseScorerSingleScoreName)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "single_score_result", output.JSONSchema.Name)
+	assert.Equal(t, "A score and a concise reason for the evaluation result.", output.JSONSchema.Description)
+
+	output, err = StructuredOutput(ResponseScorerRubricScoresName)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	require.NotNil(t, output.JSONSchema)
 	assert.Equal(t, "rubric_scores_result", output.JSONSchema.Name)
+	assert.Equal(t, "Per-rubric scores and concise reasons for the evaluation result.", output.JSONSchema.Description)
 }
 
 func TestResolveResponseScorerRejectsUnknownName(t *testing.T) {

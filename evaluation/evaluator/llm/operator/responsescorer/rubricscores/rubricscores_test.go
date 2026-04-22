@@ -36,14 +36,18 @@ func TestScoreBasedOnResponseParsesRubricScores(t *testing.T) {
 
 func TestScoreBasedOnResponseRejectsInvalidRubricScores(t *testing.T) {
 	scorer := New()
-
 	_, err := scorer.ScoreBasedOnResponse(context.Background(), makeResponse(`{"rubricScores":[]}`), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rubricScores is empty")
-
 	_, err = scorer.ScoreBasedOnResponse(context.Background(), makeResponse(`{"rubricScores":[{"id":"","score":1,"reason":"bad"}]}`), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rubric score id is empty")
+	_, err = scorer.ScoreBasedOnResponse(context.Background(), makeResponse(`{"rubricScores":[{"id":"1","score":2,"reason":"bad"}]}`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rubric score must be between 0 and 1")
+	_, err = scorer.ScoreBasedOnResponse(context.Background(), makeResponse(`not-json`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal response json")
 }
 
 func makeResponse(content string) *model.Response {

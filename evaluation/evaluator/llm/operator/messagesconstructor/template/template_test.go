@@ -166,6 +166,97 @@ func TestConstructMessagesRejectsUnsupportedSource(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported source expected.userContent")
 }
 
+func TestConstructMessagesRejectsInvalidTemplateOptions(t *testing.T) {
+	constructor := New()
+	_, err := constructor.ConstructMessages(context.Background(), nil, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing llm judge criterion")
+	_, err = constructor.ConstructMessages(context.Background(), nil, nil, &metric.EvalMetric{
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "template is nil")
+	_, err = constructor.ConstructMessages(context.Background(), nil, nil, buildTemplateEvalMetric("", nil))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "template prompt is empty")
+	metricWithEmptyScorer := buildTemplateEvalMetric("Answer: {{answer}}",
+		&criterionllm.TemplateVariableBinding{
+			TemplateVariable: "answer",
+			Source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldFinalResponse,
+			},
+		},
+	)
+	metricWithEmptyScorer.Criterion.LLMJudge.Template.ResponseScorerName = ""
+	_, err = constructor.ConstructMessages(context.Background(), nil, nil, metricWithEmptyScorer)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "template responseScorerName is empty")
+}
+
+func TestResolveTemplateValuesRejectsInvalidBindings(t *testing.T) {
+	values, err := resolveTemplateValues(nil, nil, []*criterionllm.TemplateVariableBinding{nil})
+	require.Error(t, err)
+	assert.Nil(t, values)
+	assert.Contains(t, err.Error(), "template binding is nil")
+	values, err = resolveTemplateValues(nil, nil, []*criterionllm.TemplateVariableBinding{{
+		Source: &criterionllm.TemplateVariableSource{
+			Scope: criterionllm.TemplateVariableScopeActual,
+			Field: criterionllm.TemplateVariableFieldFinalResponse,
+		},
+	}})
+	require.Error(t, err)
+	assert.Nil(t, values)
+	assert.Contains(t, err.Error(), "templateVariable is empty")
+}
+
+func TestResolveBindingValueRejectsNilAndUnsupportedSource(t *testing.T) {
+	value, err := resolveBindingValue(nil, nil, nil)
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "source is nil")
+	value, err = resolveBindingValue(nil, nil, &criterionllm.TemplateVariableSource{
+		Scope: "metric",
+		Field: criterionllm.TemplateVariableFieldFinalResponse,
+	})
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "unsupported source metric.finalResponse")
+}
+
+func TestResolveActualValueRejectsInvalidActualInput(t *testing.T) {
+	value, err := resolveActualValue(nil, criterionllm.TemplateVariableFieldFinalResponse)
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "actuals is empty")
+	value, err = resolveActualValue([]*evalset.Invocation{nil}, criterionllm.TemplateVariableFieldFinalResponse)
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "actual invocation is nil")
+	value, err = resolveActualValue([]*evalset.Invocation{{}}, criterionllm.TemplateVariableField("rubrics"))
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "unsupported source actual.rubrics")
+}
+
+func TestResolveExpectedValueRejectsInvalidExpectedInput(t *testing.T) {
+	value, err := resolveExpectedValue(nil, criterionllm.TemplateVariableFieldFinalResponse)
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "expecteds is empty")
+	value, err = resolveExpectedValue([]*evalset.Invocation{nil}, criterionllm.TemplateVariableFieldFinalResponse)
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "expected invocation is nil")
+	value, err = resolveExpectedValue([]*evalset.Invocation{{FinalResponse: &model.Message{Content: "ok"}}},
+		criterionllm.TemplateVariableFieldUserContent)
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "unsupported source expected.userContent")
+}
+
 func buildTemplateEvalMetric(promptText string,
 	bindings ...*criterionllm.TemplateVariableBinding) *metric.EvalMetric {
 	return &metric.EvalMetric{

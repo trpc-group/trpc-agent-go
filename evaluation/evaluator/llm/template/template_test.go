@@ -168,6 +168,58 @@ func TestJudgeTemplateOptionsRequiresTemplate(t *testing.T) {
 	assert.Contains(t, err.Error(), "template is nil")
 }
 
+func TestScoreBasedOnResponseRejectsUnknownScorer(t *testing.T) {
+	e := New().(*templateEvaluator)
+	_, err := e.ScoreBasedOnResponse(context.Background(), &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{Content: `{"score":1,"reason":"matched"}`},
+		}},
+	}, buildTemplateMetric("Answer: {{answer}}", "missing", "", ""))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unsupported response scorer "missing"`)
+}
+
+func TestAggregateSamplesRejectsUnknownAggregator(t *testing.T) {
+	e := New().(*templateEvaluator)
+	_, err := e.AggregateSamples(context.Background(), []*evaluator.PerInvocationResult{
+		{Score: 1, Status: status.EvalStatusPassed},
+	}, buildTemplateMetric("Answer: {{answer}}", templateresolver.ResponseScorerSingleScoreName, "missing", ""))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unsupported samples aggregator "missing"`)
+}
+
+func TestAggregateInvocationsRejectsUnknownAggregator(t *testing.T) {
+	e := New().(*templateEvaluator)
+	_, err := e.AggregateInvocations(context.Background(), []*evaluator.PerInvocationResult{
+		{Score: 1, Status: status.EvalStatusPassed},
+	}, buildTemplateMetric("Answer: {{answer}}", templateresolver.ResponseScorerSingleScoreName, "", "missing"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unsupported invocations aggregator "missing"`)
+}
+
+func TestJudgeTemplateOptionsRejectsMissingLLMJudgeCriterion(t *testing.T) {
+	_, err := judgeTemplateOptions(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing llm judge criterion")
+}
+
+func TestTemplateEvaluatorNameHelpers(t *testing.T) {
+	assert.Equal(t, templateresolver.SampleAggregatorMajorityVoteName, sampleAggregatorName(nil))
+	assert.Equal(t, templateresolver.InvocationAggregatorAverageName, invocationAggregatorName(nil))
+	assert.Equal(t, "custom_sample", sampleAggregatorName(buildTemplateMetric(
+		"Answer: {{answer}}",
+		templateresolver.ResponseScorerSingleScoreName,
+		"custom_sample",
+		"",
+	)))
+	assert.Equal(t, "custom_invocation", invocationAggregatorName(buildTemplateMetric(
+		"Answer: {{answer}}",
+		templateresolver.ResponseScorerSingleScoreName,
+		"",
+		"custom_invocation",
+	)))
+}
+
 func buildTemplateMetric(promptText string, responseScorerName string,
 	sampleAggregatorName string, invocationAggregatorName string,
 	bindings ...*criterionllm.TemplateVariableBinding) *metric.EvalMetric {

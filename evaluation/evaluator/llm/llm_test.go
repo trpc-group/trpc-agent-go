@@ -358,6 +358,72 @@ func TestLLMBaseEvaluator_UsesJudgeRunnerAndIgnoresJudgeModelNumSamples(t *testi
 	assert.Equal(t, 1, r.runCalls)
 }
 
+func TestLLMBaseEvaluator_ResolveStructuredOutput(t *testing.T) {
+	base := &LLMBaseEvaluator{}
+	output, err := base.resolveStructuredOutput(nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, output)
+	output, err = base.resolveStructuredOutput(context.Background(), &metric.EvalMetric{MetricName: "final_response"})
+	require.NoError(t, err)
+	assert.Nil(t, output)
+	output, err = base.resolveStructuredOutput(context.Background(), &metric.EvalMetric{
+		EvaluatorName: templateEvaluatorName,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{},
+		},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, output)
+	output, err = base.resolveStructuredOutput(context.Background(), &metric.EvalMetric{
+		EvaluatorName: templateEvaluatorName,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{
+				Template: &llm.JudgeTemplateOptions{
+					ResponseScorerName: "single_score",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "single_score_result", output.JSONSchema.Name)
+}
+
+func TestLLMBaseEvaluator_ResolveStructuredOutputRejectsUnknownScorer(t *testing.T) {
+	base := &LLMBaseEvaluator{}
+	output, err := base.resolveStructuredOutput(context.Background(), &metric.EvalMetric{
+		EvaluatorName: templateEvaluatorName,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{
+				Template: &llm.JudgeTemplateOptions{
+					ResponseScorerName: "missing",
+				},
+			},
+		},
+	})
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), `unsupported response scorer "missing"`)
+}
+
+func TestLLMBaseEvaluator_EvaluateRejectsTemplateStructuredOutputError(t *testing.T) {
+	base := &LLMBaseEvaluator{LLMEvaluator: &scriptedLLMEvaluator{scoreValue: 1}}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+	evalMetric.EvaluatorName = templateEvaluatorName
+	evalMetric.Criterion.LLMJudge.Template = &llm.JudgeTemplateOptions{
+		ResponseScorerName: "missing",
+	}
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{}},
+		[]*evalset.Invocation{{}},
+		evalMetric,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve structured output")
+}
+
 func TestLLMBaseEvaluator_AllowsJudgeRunnerWithoutJudgeModel(t *testing.T) {
 	stub := &fakeLLMEvaluator{}
 	base := &LLMBaseEvaluator{LLMEvaluator: stub}
