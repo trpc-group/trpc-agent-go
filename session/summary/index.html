@@ -2925,7 +2925,7 @@
 <p>As conversations grow, maintaining complete event history can consume significant memory and may exceed the LLM's context window limit. The session summary feature uses LLM to automatically compress historical conversations into concise summaries, significantly reducing memory usage and token consumption while preserving important context.</p>
 <h2 id="key-features">Key Features</h2>
 <ul>
-<li><strong>Auto-trigger</strong>: Automatically generates summaries based on event count, token count, or time thresholds</li>
+<li><strong>Auto-trigger</strong>: During summary checks, automatically generates summaries based on event count, token count, or time thresholds</li>
 <li><strong>Incremental processing</strong>: Only processes new events since the last summary, avoiding redundant computation</li>
 <li><strong>LLM-driven</strong>: Uses any configured LLM model to generate high-quality, context-aware summaries</li>
 <li><strong>Non-destructive</strong>: Original events are fully preserved; summaries are stored separately</li>
@@ -2966,7 +2966,7 @@
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithChecksAny</span><span class="p">(</span>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTokenThreshold</span><span class="p">(</span><span class="mi">4000</span><span class="p">),</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span><span class="w"> </span><span class="c1">// Evaluated on summary check; compares the checked session&#39;s last event (normally the latest unsummarized event in delta flow)</span>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="p">),</span>
 </span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">200</span><span class="p">),</span>
 </span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="p">)</span>
@@ -3207,7 +3207,7 @@ context before calling the session APIs and read the value inside your
 </tr>
 <tr>
 <td><code>WithTimeThreshold(interval time.Duration)</code></td>
-<td>Trigger when time since last event exceeds interval</td>
+<td>Evaluated during summary checks; wraps <code>CheckTimeThreshold</code> and triggers when the checked session's last event is older than the interval</td>
 </tr>
 </tbody>
 </table>
@@ -3476,7 +3476,7 @@ context before calling the session APIs and read the value inside your
 </tr>
 <tr>
 <td><code>CheckTimeThreshold(interval time.Duration)</code></td>
-<td>Returns true when time since last event exceeds interval</td>
+<td>Returns true when the checked session's last event is older than the interval</td>
 </tr>
 <tr>
 <td><code>CheckTokenThreshold(tokenCount int)</code></td>
@@ -3809,9 +3809,10 @@ conversation payload:</p>
 <ul>
 <li>Event count exceeds threshold (<code>WithEventThreshold</code>)</li>
 <li>Token count exceeds threshold (<code>WithTokenThreshold</code>)</li>
-<li>Time since last event exceeds interval (<code>WithTimeThreshold</code>)</li>
+<li>On a summary check, the checked session's last event is older than the interval (<code>WithTimeThreshold</code>)</li>
 <li>Custom combined conditions met (<code>WithChecksAny</code> / <code>WithChecksAll</code>)</li>
 </ul>
+<p><code>WithTimeThreshold</code> is not a standalone background timer. The condition is only evaluated when a summary check runs, typically after a conversation turn completes or when you call summary APIs manually. It checks the last event of the session being evaluated; in the Runner's normal delta-summary flow, that session contains only pending events, so this effectively means the latest unsummarized event. For example, <code>5*time.Minute</code> means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."</p>
 <h3 id="manual-trigger">Manual Trigger</h3>
 <p>In some scenarios, you may need to manually trigger summarization:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
@@ -4441,7 +4442,7 @@ conversation payload:</p>
 </span><span id="__span-31-25"><a id="__codelineno-31-25" name="__codelineno-31-25"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithChecksAny</span><span class="p">(</span>
 </span><span id="__span-31-26"><a id="__codelineno-31-26" name="__codelineno-31-26"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
 </span><span id="__span-31-27"><a id="__codelineno-31-27" name="__codelineno-31-27"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTokenThreshold</span><span class="p">(</span><span class="mi">4000</span><span class="p">),</span>
-</span><span id="__span-31-28"><a id="__codelineno-31-28" name="__codelineno-31-28"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
+</span><span id="__span-31-28"><a id="__codelineno-31-28" name="__codelineno-31-28"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span><span class="w"> </span><span class="c1">// Evaluated on summary check; compares the checked session&#39;s last event (normally the latest unsummarized event in delta flow)</span>
 </span><span id="__span-31-29"><a id="__codelineno-31-29" name="__codelineno-31-29"></a><span class="w">        </span><span class="p">),</span>
 </span><span id="__span-31-30"><a id="__codelineno-31-30" name="__codelineno-31-30"></a><span class="w">    </span><span class="p">)</span>
 </span><span id="__span-31-31"><a id="__codelineno-31-31" name="__codelineno-31-31"></a>
@@ -4503,7 +4504,7 @@ conversation payload:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 14, 2026 02:32:55 UTC">2026-04-14 02:32:55</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 22, 2026 07:50:35 UTC">2026-04-22 07:50:35</span>
   </span>
 
     
