@@ -49,7 +49,37 @@ func TestNewSkillRequirement_Validation(t *testing.T) {
 
 	_, err = NewSkillRequirement(SkillSpec{Name: "x"})
 	require.Error(t, err, "repository is required")
+}
 
+// TestNewSkillRequirement_RejectsUnsafeNames locks the path-traversal
+// guard. SkillSpec.Name flows into skills/<name> (via Target) and
+// skillstage cleanup; a malicious or misconfigured caller must not
+// be able to smuggle traversal components such as absolute paths,
+// backslashes, or parent references.
+func TestNewSkillRequirement_RejectsUnsafeNames(t *testing.T) {
+	repo, _ := newFSSkillRepo(t, "echoer", "body")
+
+	unsafe := []string{
+		"../evil",
+		"foo/../bar",
+		"/absolute",
+		"nested/sub",
+		`windows\path`,
+		".",
+		"..",
+		".hidden",
+	}
+	for _, name := range unsafe {
+		_, err := NewSkillRequirement(SkillSpec{
+			Name:       name,
+			Repository: repo,
+		})
+		require.Errorf(t, err,
+			"unsafe name %q must be rejected", name)
+	}
+}
+
+func TestNewSkillRequirement_MetadataSurface(t *testing.T) {
 	repo, _ := newFSSkillRepo(t, "echoer", "body")
 
 	req, err := NewSkillRequirement(SkillSpec{

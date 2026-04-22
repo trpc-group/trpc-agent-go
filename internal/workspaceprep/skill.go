@@ -53,6 +53,15 @@ func NewSkillRequirement(spec SkillSpec) (Requirement, error) {
 			"workspaceprep: SkillSpec.Name is required",
 		)
 	}
+	// spec.Name flows into skills/<name> and into skillstage cleanup.
+	// Model-driven tool invocations, untrusted skill repositories, or
+	// a misconfigured caller could otherwise smuggle traversal
+	// components (absolute paths, "..", backslash-rooted paths) and
+	// escape the workspace. Normalize and reject anything that does
+	// not resolve to a single-segment, non-traversing relative name.
+	if err := validateSkillName(name); err != nil {
+		return nil, err
+	}
 	if spec.Repository == nil {
 		return nil, fmt.Errorf(
 			"workspaceprep: SkillSpec.Repository is required",
@@ -66,6 +75,45 @@ func NewSkillRequirement(spec SkillSpec) (Requirement, error) {
 		spec:   spec,
 		stager: skillstage.New(),
 	}, nil
+}
+
+// validateSkillName rejects skill names that could escape skills/<name>.
+// The check is intentionally strict: we refuse anything that contains
+// path separators, parent references, or leading dots. Skill naming in
+// the repository layer already follows this convention, so legitimate
+// callers are unaffected.
+func validateSkillName(name string) error {
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf(
+			"workspaceprep: SkillSpec.Name %q must not contain "+
+				"path separators",
+			name,
+		)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf(
+			"workspaceprep: SkillSpec.Name %q is reserved",
+			name,
+		)
+	}
+	if strings.HasPrefix(name, ".") {
+		return fmt.Errorf(
+			"workspaceprep: SkillSpec.Name %q must not start "+
+				"with '.'",
+			name,
+		)
+	}
+	// path.Clean must be a no-op for a well-formed single-segment
+	// name; anything else implies hidden traversal or normalization
+	// surprises.
+	if path.Clean(name) != name {
+		return fmt.Errorf(
+			"workspaceprep: SkillSpec.Name %q is not a clean "+
+				"relative name",
+			name,
+		)
+	}
+	return nil
 }
 
 type skillRequirement struct {
