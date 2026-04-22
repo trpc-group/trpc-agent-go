@@ -13,6 +13,7 @@ package arxivsearch
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
@@ -89,6 +90,31 @@ func WithDelaySeconds(delaySeconds time.Duration) Option {
 func WithNumRetries(numRetries int) Option {
 	return func(config *arxiv.ClientConfig) {
 		config.NumRetries = numRetries
+	}
+}
+
+// WithHTTPClient sets the underlying HTTP client used to call the arXiv API.
+// When combined with WithTimeout, the caller's *http.Client is never mutated -
+// a shallow copy is used to apply timeout overrides, preserving custom
+// Transport/Proxy/Jar settings. Passing nil falls back to a default client
+// with the default 30s timeout.
+func WithHTTPClient(c *http.Client) Option {
+	return func(config *arxiv.ClientConfig) {
+		config.HTTPClient = c
+	}
+}
+
+// WithTimeout sets the HTTP request timeout. When combined with WithHTTPClient,
+// the custom client's Transport/Proxy/Jar settings are preserved via shallow
+// copy - the caller's original *http.Client is never mutated.
+// Passing 0 explicitly disables the default 30s timeout (Go http.Client
+// treats Timeout==0 as "no timeout"). Negative values are ignored.
+func WithTimeout(timeout time.Duration) Option {
+	return func(config *arxiv.ClientConfig) {
+		if timeout < 0 {
+			return
+		}
+		config.Timeout = &timeout
 	}
 }
 

@@ -43,6 +43,9 @@ type config struct {
 	baseURL    string
 	userAgent  string
 	httpClient *http.Client
+	// timeout, when non-nil, overrides the HTTP client's request timeout
+	// via shallow copy. A non-nil zero value explicitly disables the timeout.
+	timeout    *time.Duration
 	language   string
 	maxResults int
 }
@@ -66,10 +69,28 @@ func WithMaxResults(maxResults int) Option {
 	}
 }
 
-// WithTimeout sets the HTTP client timeout
+// WithHTTPClient sets the HTTP client used to call the Wikipedia API.
+// When combined with WithTimeout, the caller's *http.Client is never mutated -
+// a shallow copy is used to apply timeout overrides, preserving custom
+// Transport/Proxy/Jar settings. Passing nil falls back to a default client
+// with the default 30s timeout.
+func WithHTTPClient(c *http.Client) Option {
+	return func(cfg *config) {
+		cfg.httpClient = c
+	}
+}
+
+// WithTimeout sets the HTTP request timeout. When combined with WithHTTPClient,
+// the custom client's Transport/Proxy/Jar settings are preserved via shallow
+// copy - the caller's original *http.Client is never mutated.
+// Passing 0 explicitly disables the default 30s timeout (Go http.Client
+// treats Timeout==0 as "no timeout"). Negative values are ignored.
 func WithTimeout(timeout time.Duration) Option {
 	return func(c *config) {
-		c.httpClient.Timeout = timeout
+		if timeout < 0 {
+			return
+		}
+		c.timeout = &timeout
 	}
 }
 
@@ -78,6 +99,22 @@ func WithUserAgent(userAgent string) Option {
 	return func(c *config) {
 		c.userAgent = userAgent
 	}
+}
+
+// resolveHTTPClient builds the final *http.Client from config, applying
+// nil fallback and timeout override via shallow copy - the caller's
+// original client is never mutated.
+func resolveHTTPClient(cfg *config) *http.Client {
+	httpClient := cfg.httpClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: defaultTimeout}
+	}
+	if cfg.timeout != nil {
+		cloned := *httpClient
+		cloned.Timeout = *cfg.timeout
+		httpClient = &cloned
+	}
+	return httpClient
 }
 
 // WikipediaToolSet implements the ToolSet interface for Wikipedia operations.
@@ -118,7 +155,7 @@ func NewToolSet(opts ...Option) (*WikipediaToolSet, error) {
 		opt(cfg)
 	}
 	// Create the client
-	wikipediaClient := client.New(cfg.baseURL, cfg.userAgent, cfg.httpClient)
+	wikipediaClient := client.New(cfg.baseURL, cfg.userAgent, resolveHTTPClient(cfg))
 	tools := []tool.Tool{createWikipediaSearchTool(wikipediaClient, cfg)}
 
 	return &WikipediaToolSet{
