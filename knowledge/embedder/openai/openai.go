@@ -50,8 +50,15 @@ const (
 	// EncodingFormatBase64 represents the base64 encoding format.
 	EncodingFormatBase64 = "base64"
 
-	// Model prefix for text-embedding-3 series.
-	textEmbedding3Prefix = "text-embedding-3"
+	// textEmbedding3Prefix marks the text-embedding-3 model family
+	// (text-embedding-3-small, text-embedding-3-large, ...). The trailing
+	// hyphen is required so unrelated ids like text-embedding-30 or
+	// text-embedding-3rd-party do not accidentally inherit the legacy
+	// default-dimensions forwarding behavior. Members of this family have
+	// always received the configured dimensions (with a 1536 default) and
+	// we keep that default forwarding to preserve the existing wire
+	// behavior for callers that never set WithDimensions.
+	textEmbedding3Prefix = "text-embedding-3-"
 )
 
 // defaultRetryBackoff is the default backoff durations for retry attempts.
@@ -64,9 +71,14 @@ var defaultRetryBackoff = []time.Duration{
 
 // Embedder implements the embedder.Embedder interface for OpenAI API.
 type Embedder struct {
-	client         openai.Client
-	model          string
-	dimensions     int
+	client     openai.Client
+	model      string
+	dimensions int
+	// dimensionsSet indicates whether dimensions was explicitly configured
+	// via WithDimensions. When set, the value is forwarded to the API for
+	// any model; when unset, see the WithDimensions godoc for which models
+	// still receive the historical default.
+	dimensionsSet  bool
 	encodingFormat string
 	user           string
 	apiKey         string
@@ -90,10 +102,20 @@ func WithModel(model string) Option {
 }
 
 // WithDimensions sets the number of dimensions for the embedding.
-// Only works with text-embedding-3 and later models.
+//
+// When set, the value is forwarded as-is to the embeddings endpoint
+// regardless of the model id. The caller is responsible for picking a
+// value the configured model supports (e.g. text-embedding-3-*, or
+// text-embedding-v3/v4 on DashScope-compatible gateways).
+//
+// When not set, the request includes dimensions only for the
+// text-embedding-3-* family (defaulting to DefaultDimensions=1536, which
+// preserves the existing wire behavior); for any other model the
+// parameter is omitted so the model's server-side default is used.
 func WithDimensions(dimensions int) Option {
 	return func(e *Embedder) {
 		e.dimensions = dimensions
+		e.dimensionsSet = true
 	}
 }
 
@@ -330,8 +352,12 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *openai.Creat
 		request.User = openai.String(e.user)
 	}
 
-	// Set dimensions for text-embedding-3 models.
-	if isTextEmbedding3Model(e.model) {
+	// Forward dimensions when the caller explicitly configured it (any
+	// model), or implicitly for the text-embedding-3-* family to keep
+	// the historical default. For other models we omit the parameter so
+	// the server-side default applies and gateways/models that reject
+	// the field keep working.
+	if e.dimensionsSet || isTextEmbedding3Model(e.model) {
 		request.Dimensions = openai.Int(int64(e.dimensions))
 	}
 
@@ -344,12 +370,19 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *openai.Creat
 }
 
 // GetDimensions implements the embedder.Embedder interface.
-// It returns the number of dimensions in the embedding vectors.
+//
+// It returns the configured dimensions value (DefaultDimensions when the
+// caller never invoked WithDimensions). For non text-embedding-3-* models
+// where dimensions was not explicitly configured, the API may return a
+// different vector size; in that case prefer calling WithDimensions to
+// keep this method consistent with the wire response.
 func (e *Embedder) GetDimensions() int {
 	return e.dimensions
 }
 
-// isTextEmbedding3Model checks if the model is a text-embedding-3 series model.
+// isTextEmbedding3Model reports whether the model belongs to the
+// text-embedding-3 family that historically received the configured
+// dimensions value (defaulting to 1536) on every request.
 func isTextEmbedding3Model(model string) bool {
 	return strings.HasPrefix(model, textEmbedding3Prefix)
 }
