@@ -187,9 +187,10 @@ func TestInvokeAgentRecorder_ObserveAndFinish(t *testing.T) {
 		InvokeAgentOptions{Stream: true},
 	)
 
+	// This partial content only triggers valid-content detection; token counts come from explicit Usage fields below.
 	rec.Observe(&event.Event{Response: &model.Response{
 		IsPartial: true,
-		Choices:   []model.Choice{{Delta: model.Message{Content: "Hel"}}},
+		Choices:   []model.Choice{{Delta: model.Message{Content: "partial chunk"}}},
 	}})
 	rec.Observe(&event.Event{Response: &model.Response{
 		IsPartial: false,
