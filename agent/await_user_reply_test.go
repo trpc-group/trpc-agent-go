@@ -114,14 +114,9 @@ func TestAwaitUserReplyRoute_AttachEventNormalizesExtension(t *testing.T) {
 	require.Equal(t, "coordinator/clarifier", ext.LookupPath)
 }
 
-func TestMarkAwaitingUserReply_InvalidInvocation(t *testing.T) {
-	t.Run("nil invocation", func(t *testing.T) {
-		require.Error(t, MarkAwaitingUserReply(nil))
-	})
-
-	t.Run("empty agent name", func(t *testing.T) {
-		require.Error(t, MarkAwaitingUserReply(&Invocation{}))
-	})
+func TestMarkAwaitingUserReply_EmptyAgentName(t *testing.T) {
+	require.Error(t, MarkAwaitingUserReply(nil))
+	require.Error(t, MarkAwaitingUserReply(&Invocation{}))
 }
 
 func TestMarkAwaitingUserReply_UsesBranchPath(t *testing.T) {
