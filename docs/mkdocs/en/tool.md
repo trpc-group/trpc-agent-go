@@ -1542,7 +1542,7 @@ Agent.
 Use it together with `runner.WithAwaitUserReplyRouting(true)`:
 
 ```go
-agent := llmagent.New("profile-agent",
+profileAgent := llmagent.New("profile-agent",
     llmagent.WithAwaitUserReplyTool(true),
     llmagent.WithInstruction(`
 If you must ask the user for a missing field, call await_user_reply
@@ -1552,7 +1552,7 @@ immediately before your question.
 
 r := runner.NewRunner(
     "crm-app",
-    coordinatorAgent,
+    profileAgent,
     runner.WithAwaitUserReplyRouting(true),
 )
 ```

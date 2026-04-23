@@ -130,6 +130,27 @@ func TestLLMAgent_Tools_IncludesAwaitUserReplyWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestLLMAgent_FilterTools_PreservesAwaitUserReply(t *testing.T) {
+	agt := New(
+		"main",
+		WithAwaitUserReplyTool(true),
+		WithToolFilter(func(context.Context, tool.Tool) bool {
+			return false
+		}),
+	)
+
+	filtered := agt.FilterTools(context.Background())
+	for _, tl := range filtered {
+		if tl.Declaration().Name == testAwaitReplyToolName {
+			return
+		}
+	}
+
+	t.Fatalf(
+		"expected await_user_reply to be preserved by runtime filtering",
+	)
+}
+
 func TestLLMAgent_UserTools(t *testing.T) {
 	// Create agent with user tools, toolsets, knowledge, and subagents
 	userTool1 := dummyTool{

@@ -131,6 +131,52 @@ func TestRunner_Run_AwaitUserReplyRoutingConsumesRoute(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestRunner_Run_AwaitUserReplyRoutingDisabledByDefault(t *testing.T) {
+	ctx := context.Background()
+	svc := sessioninmemory.NewSessionService()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess-disabled",
+	}
+	state, err := (agent.AwaitUserReplyRoute{
+		AgentName: "child",
+	}).State()
+	require.NoError(t, err)
+	_, err = svc.CreateSession(ctx, key, state)
+	require.NoError(t, err)
+
+	parent := &awaitReplyTrackingAgent{name: "parent"}
+	child := &awaitReplyTrackingAgent{name: "child"}
+	r := NewRunner(
+		"app",
+		parent,
+		WithSessionService(svc),
+		WithAgent("child", child),
+	)
+
+	eventCh, err := r.Run(
+		ctx,
+		key.UserID,
+		key.SessionID,
+		model.NewUserMessage("follow up"),
+		agent.WithRequestID("req-await-disabled"),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	require.Equal(t, 1, parent.calls)
+	require.Equal(t, 0, child.calls)
+
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	route, ok, err := agent.PendingAwaitUserReplyRoute(sess)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "child", route.AgentName)
+}
+
 func TestRunner_Run_AwaitUserReplyRoutingExplicitAgentWins(t *testing.T) {
 	ctx := context.Background()
 	svc := sessioninmemory.NewSessionService()
@@ -173,11 +219,9 @@ func TestRunner_Run_AwaitUserReplyRoutingExplicitAgentWins(t *testing.T) {
 
 	sess, err := svc.GetSession(ctx, key)
 	require.NoError(t, err)
-	route, ok, err := agent.PendingAwaitUserReplyRoute(sess)
+	_, ok, err := agent.PendingAwaitUserReplyRoute(sess)
 	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, "child", route.AgentName)
-	require.Equal(t, "child", route.LookupPath)
+	require.False(t, ok)
 }
 
 func TestRunner_Run_AwaitUserReplyRoutingFallsBackWhenMissing(t *testing.T) {

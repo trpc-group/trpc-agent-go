@@ -60,4 +60,7 @@ func TestTool_CallInvalidJSON(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, resp.Success)
 	require.Contains(t, resp.Message, "invalid request format")
+
+	_, ok = agent.CurrentAwaitUserReplyRoute(inv)
+	require.False(t, ok)
 }

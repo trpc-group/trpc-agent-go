@@ -141,7 +141,11 @@ func (r AwaitUserReplyRoute) AttachEvent(evt *event.Event) error {
 	if evt == nil {
 		return nil
 	}
-	state, err := r.State()
+	normalized, err := normalizeAwaitUserReplyRoute(r)
+	if err != nil {
+		return err
+	}
+	state, err := normalized.State()
 	if err != nil {
 		return err
 	}
@@ -154,7 +158,7 @@ func (r AwaitUserReplyRoute) AttachEvent(evt *event.Event) error {
 	return event.SetExtension(
 		evt,
 		awaitUserReplyEventExtensionKey,
-		r,
+		normalized,
 	)
 }
 
@@ -163,6 +167,10 @@ func attachAwaitUserReplyRoute(inv *Invocation, evt *event.Event) {
 		return
 	}
 	if evt.Response.IsPartial || !evt.Response.Done || evt.IsError() {
+		return
+	}
+	if !evt.Response.IsFinalResponse() ||
+		evt.Response.IsToolResultResponse() {
 		return
 	}
 	route, ok := CurrentAwaitUserReplyRoute(inv)

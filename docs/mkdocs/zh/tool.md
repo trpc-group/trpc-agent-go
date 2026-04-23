@@ -1505,7 +1505,7 @@ runner.Run(ctx, userID, sessionID, message,
 它需要和 `runner.WithAwaitUserReplyRouting(true)` 搭配使用：
 
 ```go
-agent := llmagent.New("profile-agent",
+profileAgent := llmagent.New("profile-agent",
     llmagent.WithAwaitUserReplyTool(true),
     llmagent.WithInstruction(`
 如果你必须向用户补一个缺失字段，先调用 await_user_reply，
@@ -1515,7 +1515,7 @@ agent := llmagent.New("profile-agent",
 
 r := runner.NewRunner(
     "crm-app",
-    coordinatorAgent,
+    profileAgent,
     runner.WithAwaitUserReplyRouting(true),
 )
 ```

@@ -678,12 +678,20 @@ r := runner.NewRunner(
 // 第 2 轮（同一个 session）：
 // user: "+1-555-0101"
 // Runner 这一轮会直接从 profile-agent 开始。
-_, _ = r.Run(
+events, err := r.Run(
     context.Background(),
     "user-1",
     "session-1",
     model.NewUserMessage("+1-555-0101"),
 )
+if err != nil {
+    // handle error
+}
+for evt := range events {
+    if evt.IsRunnerCompletion() {
+        break
+    }
+}
 ```
 
 这套能力的行为边界：

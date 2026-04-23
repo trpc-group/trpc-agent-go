@@ -29,11 +29,16 @@ func (r *runner) applyAwaitUserReplyRoute(
 	if r == nil || !r.awaitUserReplyRouting {
 		return ro, "", nil
 	}
-	if ro.Agent != nil || ro.AgentByName != "" {
-		return ro, "", nil
-	}
 	if message.Role != model.RoleUser {
 		return ro, "", nil
+	}
+	if ro.Agent != nil || ro.AgentByName != "" {
+		return r.clearOverriddenAwaitUserReplyRoute(
+			ctx,
+			key,
+			sess,
+			ro,
+		)
 	}
 
 	route, ok, err := agent.PendingAwaitUserReplyRoute(sess)
@@ -79,6 +84,35 @@ func (r *runner) applyAwaitUserReplyRoute(
 	}
 	ro.Agent = selected
 	return ro, rootName, nil
+}
+
+func (r *runner) clearOverriddenAwaitUserReplyRoute(
+	ctx context.Context,
+	key session.Key,
+	sess *session.Session,
+	ro agent.RunOptions,
+) (agent.RunOptions, string, error) {
+	_, ok, err := agent.PendingAwaitUserReplyRoute(sess)
+	if err != nil {
+		if clearErr := r.clearAwaitUserReplyRoute(ctx, key, sess); clearErr != nil {
+			return ro, "", fmt.Errorf(
+				"runner: clear invalid await_user_reply route: %w",
+				clearErr,
+			)
+		}
+		log.Warnf("runner: ignore invalid await_user_reply route: %v", err)
+		return ro, "", nil
+	}
+	if !ok {
+		return ro, "", nil
+	}
+	if err := r.clearAwaitUserReplyRoute(ctx, key, sess); err != nil {
+		return ro, "", fmt.Errorf(
+			"runner: clear overridden await_user_reply route: %w",
+			err,
+		)
+	}
+	return ro, "", nil
 }
 
 func (r *runner) clearAwaitUserReplyRoute(

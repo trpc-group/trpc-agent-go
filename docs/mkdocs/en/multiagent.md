@@ -684,12 +684,20 @@ r := runner.NewRunner(
 // Turn 2 (same session):
 // user: "+1-555-0101"
 // Runner resumes directly at profile-agent for this turn.
-_, _ = r.Run(
+events, err := r.Run(
     context.Background(),
     "user-1",
     "session-1",
     model.NewUserMessage("+1-555-0101"),
 )
+if err != nil {
+    // handle error
+}
+for evt := range events {
+    if evt.IsRunnerCompletion() {
+        break
+    }
+}
 ```
 
 Important behavior:

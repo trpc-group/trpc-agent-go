@@ -80,6 +80,10 @@ type LLMAgent struct {
 	option               Options
 }
 
+const invalidOutputSchemaAwaitUserReply = "" +
+	"Invalid LLMAgent configuration: if output_schema is set, " +
+	"await_user_reply must be disabled"
+
 // New creates a new LLMAgent with the given options.
 func New(name string, opts ...Option) *LLMAgent {
 	options := defaultOptions
@@ -93,6 +97,9 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Validate output_schema configuration before registering tools.
 	if options.OutputSchema != nil {
+		if options.EnableAwaitUserReplyTool {
+			panic(invalidOutputSchemaAwaitUserReply)
+		}
 		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
 		}
