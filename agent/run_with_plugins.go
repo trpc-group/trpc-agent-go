@@ -231,12 +231,8 @@ func prepareInvocationForRunWithPlugins(invocation *Invocation, ag Agent) {
 	if invocation.Agent == nil {
 		invocation.Agent = ag
 	}
-	info := ag.Info()
 	if invocation.AgentName == "" {
-		invocation.AgentName = info.Name
-	}
-	if invocation.InvokeAgentDescription == "" {
-		invocation.InvokeAgentDescription = info.Description
+		invocation.AgentName = ag.Info().Name
 	}
 }
 
@@ -245,10 +241,20 @@ func invokeAgentOptions(invocation *Invocation) invokeagenttelemetry.InvokeAgent
 		return invokeagenttelemetry.InvokeAgentOptions{}
 	}
 	return invokeagenttelemetry.InvokeAgentOptions{
-		Description:  invocation.InvokeAgentDescription,
+		Description:  invokeAgentDescription(invocation),
 		Instructions: invocation.InvokeAgentInstructions,
 		Stream:       resolveInvokeAgentStream(invocation),
 	}
+}
+
+// invokeAgentDescription resolves the gen_ai.agent.description telemetry value
+// from the bound Agent, falling back to an empty string when the agent is not
+// available.
+func invokeAgentDescription(invocation *Invocation) string {
+	if invocation == nil || invocation.Agent == nil {
+		return ""
+	}
+	return invocation.Agent.Info().Description
 }
 
 func resolveInvokeAgentStream(invocation *Invocation) bool {

@@ -118,7 +118,6 @@ func TestInvocation_Clone(t *testing.T) {
 		WithInvocationID("test-invocation"),
 		WithInvocationMessage(model.Message{Role: model.RoleUser, Content: "Hello"}),
 	)
-	inv.InvokeAgentDescription = "root description"
 	inv.InvokeAgentInstructions = "root instructions"
 
 	subAgent := &mockAgent{name: "test-agent"}
@@ -129,11 +128,6 @@ func TestInvocation_Clone(t *testing.T) {
 	require.Equal(t, "Hello", subInv.Message.Content)
 	require.Equal(t, inv.noticeChannels, subInv.noticeChannels)
 	require.Equal(t, inv.noticeMu, subInv.noticeMu)
-	require.Empty(
-		t,
-		subInv.InvokeAgentDescription,
-		"Clone should start with fresh invoke_agent description metadata",
-	)
 	require.Empty(
 		t,
 		subInv.InvokeAgentInstructions,
@@ -153,7 +147,6 @@ func TestInvocation_View_PreservesIdentityWithoutMutatingSource(t *testing.T) {
 		WithInvocationTraceNodeID("root/node"),
 		WithInvocationMessage(model.Message{Role: model.RoleUser, Content: "Hello"}),
 	)
-	inv.InvokeAgentDescription = "source description"
 	inv.InvokeAgentInstructions = "source instructions"
 	viewConfigs := map[string]any{"view": "config"}
 	view := inv.View(
@@ -174,7 +167,6 @@ func TestInvocation_View_PreservesIdentityWithoutMutatingSource(t *testing.T) {
 	require.Equal(t, sourceConfigs, inv.RunOptions.CustomAgentConfigs)
 	require.Equal(t, "root/node", InvocationTraceNodeID(view))
 	require.Equal(t, "root/node", InvocationTraceNodeID(inv))
-	require.Equal(t, "source description", view.InvokeAgentDescription)
 	require.Equal(t, "source instructions", view.InvokeAgentInstructions)
 }
 
@@ -212,7 +204,6 @@ func TestInvocation_SyncView_CopiesExecutionVisibleState(t *testing.T) {
 	view.traceNodeID = "view/node"
 	view.MaxLLMCalls = 3
 	view.MaxToolIterations = 4
-	view.InvokeAgentDescription = "view description"
 	view.InvokeAgentInstructions = "view instructions"
 	view.timingInfo = &model.TimingInfo{FirstTokenDuration: time.Second}
 	view.llmCallCount = 1
@@ -237,7 +228,6 @@ func TestInvocation_SyncView_CopiesExecutionVisibleState(t *testing.T) {
 	require.Equal(t, "view/node", InvocationTraceNodeID(source))
 	require.Equal(t, 3, source.MaxLLMCalls)
 	require.Equal(t, 4, source.MaxToolIterations)
-	require.Equal(t, "view description", source.InvokeAgentDescription)
 	require.Equal(t, "view instructions", source.InvokeAgentInstructions)
 	require.Equal(t, time.Second, source.timingInfo.FirstTokenDuration)
 	require.Equal(t, 1, source.llmCallCount)

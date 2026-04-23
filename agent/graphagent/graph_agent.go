@@ -462,7 +462,6 @@ func (ga *GraphAgent) PrepareInvocation(invocation *agent.Invocation) {
 	// Set agent and agent name.
 	invocation.Agent = ga
 	invocation.AgentName = ga.name
-	invocation.InvokeAgentDescription = ga.description
 	if invocation.RunOptions.Stream == nil {
 		stream := resolveGraphAgentStream(invocation)
 		invocation.RunOptions.Stream = &stream

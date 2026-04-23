@@ -163,7 +163,6 @@ func (r *A2AAgent) PrepareInvocation(invocation *agent.Invocation) {
 	}
 	invocation.Agent = r
 	invocation.AgentName = r.name
-	invocation.InvokeAgentDescription = r.description
 	if invocation.RunOptions.Stream == nil {
 		useStreaming := r.shouldUseStreaming(invocation)
 		invocation.RunOptions.Stream = &useStreaming

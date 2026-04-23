@@ -1147,7 +1147,6 @@ func (a *LLMAgent) PrepareInvocation(invocation *agent.Invocation) {
 		stream := effectiveGenConfig.Stream
 		invocation.RunOptions.Stream = &stream
 	}
-	invocation.InvokeAgentDescription = a.description
 	invocation.InvokeAgentInstructions = a.systemPromptForInvocation(invocation) +
 		a.instructionForInvocation(invocation)
 }

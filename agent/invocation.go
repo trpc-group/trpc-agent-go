@@ -100,12 +100,6 @@ type Invocation struct {
 	SessionService session.Service
 	// Model is the model that is being used for the invocation.
 	Model model.Model
-	// InvokeAgentDescription is optional invoke_agent telemetry metadata
-	// written to gen_ai.agent.description for this invocation.
-	//
-	// Agents that implement InvocationPreparer populate this field before
-	// centralized invoke_agent tracing starts in RunWithPlugins.
-	InvokeAgentDescription string
 	// InvokeAgentInstructions is optional invoke_agent telemetry metadata
 	// written to gen_ai.system_instructions for this invocation.
 	//
@@ -1175,7 +1169,6 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 		Session:                 inv.Session,
 		SessionService:          inv.SessionService,
 		Model:                   inv.Model,
-		InvokeAgentDescription:  inv.InvokeAgentDescription,
 		InvokeAgentInstructions: inv.InvokeAgentInstructions,
 		Message:                 inv.Message,
 		RunOptions:              inv.RunOptions,
@@ -1220,7 +1213,6 @@ func (inv *Invocation) SyncView(view *Invocation) {
 	inv.Session = view.Session
 	inv.SessionService = view.SessionService
 	inv.Model = view.Model
-	inv.InvokeAgentDescription = view.InvokeAgentDescription
 	inv.InvokeAgentInstructions = view.InvokeAgentInstructions
 	inv.Message = view.Message
 	inv.TransferInfo = view.TransferInfo

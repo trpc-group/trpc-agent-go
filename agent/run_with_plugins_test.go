@@ -110,12 +110,11 @@ func (a *preparingTestAgent) PrepareInvocation(inv *agent.Invocation) {
 	}
 	inv.Agent = a
 	inv.AgentName = a.name
-	inv.InvokeAgentDescription = a.description
 	inv.InvokeAgentInstructions = a.instructions
 }
 
 func (a *preparingTestAgent) Info() agent.Info {
-	return agent.Info{Name: a.name, Description: "fallback"}
+	return agent.Info{Name: a.name, Description: a.description}
 }
 
 type syncErrorAgent struct {
