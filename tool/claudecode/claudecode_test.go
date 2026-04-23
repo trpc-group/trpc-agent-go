@@ -258,6 +258,29 @@ func TestToolSet_TaskOutputCoversPollingBranches(t *testing.T) {
 	require.EqualError(t, err, "no task found with ID: missing")
 }
 
+func TestToolSet_TaskOutputClampsNegativeTimeoutToZero(t *testing.T) {
+	t.Parallel()
+	runtime := newToolRuntime(t.TempDir(), maxEditableFileSize)
+	taskOutputTool, err := newTaskOutputTool(runtime)
+	require.NoError(t, err)
+	callable, ok := taskOutputTool.(tool.CallableTool)
+	require.True(t, ok)
+	runtime.taskState.tasks["running"] = &backgroundTask{
+		ID:         "running",
+		Command:    "sleep 10",
+		Type:       toolBash,
+		OutputPath: filepath.Join(t.TempDir(), "running.log"),
+		Status:     "running",
+	}
+	out := callToolAs[taskOutputOutput](t, callable, taskOutputInput{
+		TaskID:  "running",
+		Timeout: intPtr(-1),
+	})
+	require.Equal(t, "timeout", out.RetrievalStatus)
+	require.NotNil(t, out.Task)
+	require.Equal(t, "running", out.Task.Status)
+}
+
 func TestReadTaskSnapshotHandlesMissingOutputAndCopiesExitCode(t *testing.T) {
 	t.Parallel()
 	runtime := newToolRuntime(t.TempDir(), maxEditableFileSize)
@@ -860,6 +883,116 @@ func TestToolSet_WebFetchUsesPromptProcessorWhenConfigured(t *testing.T) {
 	require.Contains(t, out.Result, "prompt=List the links on the page.")
 	require.Contains(t, out.Result, "Documentation")
 	require.Contains(t, out.Result, "Blog")
+}
+
+func TestToolSet_WebFetchRejectsMissingPromptAndBlockedDomain(t *testing.T) {
+	t.Parallel()
+	ts, err := NewToolSet(WithWebFetchOptions(WebFetchOptions{
+		BlockedDomains: []string{"example.com"},
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, ts.Close())
+	})
+	fetchTool := mustCallableTool(t, ts.Tools(context.Background()), toolWebFetch)
+	_, err = callToolRaw(fetchTool, webFetchInput{
+		URL: "https://allowed.example.com/page",
+	})
+	require.EqualError(t, err, "prompt is required")
+	_, err = callToolRaw(fetchTool, webFetchInput{
+		URL:    "https://example.com/page",
+		Prompt: "Summarize the page.",
+	})
+	require.EqualError(t, err, "url is blocked by domain policy: https://example.com/page")
+}
+
+func TestFetchURLHandlesRedirectAndBodyErrorBranches(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/start":
+			http.Redirect(w, r, "/final", http.StatusFound)
+		case "/final":
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte("redirected content"))
+		case "/missing-location":
+			w.WriteHeader(http.StatusFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := &http.Client{
+		Timeout: defaultHTTPTimeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	finalURL, statusCode, statusText, body, contentType, err := fetchURL(context.Background(), client, server.URL+"/start", WebFetchOptions{})
+	require.NoError(t, err)
+	require.Equal(t, server.URL+"/final", finalURL)
+	require.Equal(t, http.StatusOK, statusCode)
+	require.Equal(t, "200 OK", statusText)
+	require.Equal(t, []byte("redirected content"), body)
+	require.Equal(t, "text/plain; charset=utf-8", contentType)
+	finalURL, statusCode, statusText, body, contentType, err = fetchURL(context.Background(), client, server.URL+"/missing-location", WebFetchOptions{})
+	require.NoError(t, err)
+	require.Equal(t, server.URL+"/missing-location", finalURL)
+	require.Equal(t, http.StatusFound, statusCode)
+	require.Equal(t, "302 Found", statusText)
+	require.Nil(t, body)
+	require.Empty(t, contentType)
+	errorClient := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(errReader{err: fs.ErrInvalid}),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+	_, _, _, _, _, err = fetchURL(context.Background(), errorClient, server.URL+"/body-error", WebFetchOptions{})
+	require.ErrorIs(t, err, fs.ErrInvalid)
+}
+
+func TestFetchURLReturnsTooManyRedirects(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		step, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
+		require.NoError(t, err)
+		http.Redirect(w, r, fmt.Sprintf("/%d", step+1), http.StatusFound)
+	}))
+	defer server.Close()
+	client := &http.Client{
+		Timeout: defaultHTTPTimeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	_, _, _, _, _, err := fetchURL(context.Background(), client, server.URL+"/0", WebFetchOptions{})
+	require.EqualError(t, err, "too many redirects")
+}
+
+func TestProcessFetchedContentAndTrimFetchResultCoverRemainingBranches(t *testing.T) {
+	t.Parallel()
+	processed, err := processFetchedContent(context.Background(), WebFetchOptions{}, webFetchInput{
+		URL:    "https://example.com/page",
+		Prompt: "Summarize the page.",
+	}, "  alpha beta gamma  ", "text/plain")
+	require.NoError(t, err)
+	require.Equal(t, "alpha beta gamma", processed)
+	_, err = processFetchedContent(context.Background(), WebFetchOptions{
+		PromptProcessor: func(context.Context, WebFetchPromptInput) (string, error) {
+			return "", fs.ErrInvalid
+		},
+	}, webFetchInput{
+		URL:    "https://example.com/page",
+		Prompt: "Summarize the page.",
+	}, "content", "text/plain")
+	require.ErrorIs(t, err, fs.ErrInvalid)
+	require.Equal(t, "abc\n\n[Content truncated due to length.]", trimFetchResult("  abcdef  ", 3))
 }
 
 func TestToolSet_WebSearchDuckDuckGoLikeHTML(t *testing.T) {
@@ -1884,8 +2017,28 @@ func TestBashAndProcessHelpersCoverTimeoutAndExitState(t *testing.T) {
 	require.Equal(t, "exited", backgroundTaskStatus(errors.New("wait failed"), nil))
 	require.Equal(t, 1, backgroundTaskExitCode(errors.New("wait failed"), nil))
 	require.Equal(t, 0, backgroundTaskExitCode(nil, nil))
+	require.Equal(t, "exited", backgroundTaskStatus(nil, nil))
 	require.Equal(t, "stdout\nstderr", joinOutput("stdout", "stderr"))
 	require.Equal(t, "stderr", joinOutput("", "stderr"))
+}
+
+func TestBashHelpersCoverForegroundAndBackgroundErrorBranches(t *testing.T) {
+	missingBaseDir := filepath.Join(t.TempDir(), "missing")
+	runtime := newToolRuntime(missingBaseDir, maxEditableFileSize)
+	out, err := runForegroundCommand(context.Background(), runtime, bashInput{Command: "printf 'hello'"})
+	require.NoError(t, err)
+	require.Equal(t, 1, out.ExitCode)
+	require.False(t, out.TimedOut)
+	require.Empty(t, out.Stdout)
+	require.Empty(t, out.Stderr)
+	tmpRoot := t.TempDir()
+	tmpFile := filepath.Join(tmpRoot, "tmp-file")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o644))
+	t.Setenv("TMPDIR", tmpFile)
+	_, err = runBackgroundCommand(newToolRuntime(t.TempDir(), maxEditableFileSize), "printf 'hello'")
+	require.Error(t, err)
+	_, err = runBackgroundCommand(runtime, "printf 'hello'")
+	require.Error(t, err)
 }
 
 func TestRunCapturedProcessAndWaitForProcess(t *testing.T) {
