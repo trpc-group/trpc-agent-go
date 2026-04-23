@@ -2336,6 +2336,38 @@ func TestBuildProcessor_RunnerWithoutAgent(t *testing.T) {
 	assert.Equal(t, "runner-only-agent", processor.agentName)
 }
 
+func TestBuildProcessor_DefaultEventConverterUsesEventPartMappers(t *testing.T) {
+	mapper := func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
+		return nil, nil
+	}
+
+	processor, err := buildProcessor(&mockAgent{name: "mapper-agent"}, inmemory.NewSessionService(), "mapper-agent", &options{
+		eventPartMappers: []EventToA2APartMapper{mapper},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, processor)
+
+	converter, ok := processor.eventToA2AConverter.(*defaultEventToA2AMessage)
+	assert.True(t, ok)
+	assert.Len(t, converter.eventPartMappers, 1)
+	assert.NotNil(t, converter.eventPartMappers[0])
+}
+
+func TestBuildProcessor_CustomEventConverterIgnoresEventPartMappers(t *testing.T) {
+	customConverter := &mockEventToA2AConverter{}
+	mapper := func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
+		return nil, nil
+	}
+
+	processor, err := buildProcessor(&mockAgent{name: "mapper-agent"}, inmemory.NewSessionService(), "mapper-agent", &options{
+		eventToA2AConverter: customConverter,
+		eventPartMappers:    []EventToA2APartMapper{mapper},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, processor)
+	assert.Same(t, customConverter, processor.eventToA2AConverter)
+}
+
 func TestBuildProcessor_NoAgentNoRunner(t *testing.T) {
 	_, err := buildProcessor(nil, inmemory.NewSessionService(), "card-only", &options{})
 	assert.Error(t, err)

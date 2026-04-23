@@ -140,7 +140,10 @@ func buildProcessor(
 			adkCompatibility:          options.adkCompatibility,
 			graphEventObjectAllowlist: options.graphEventObjectAllowlist,
 			streamingEventType:        options.streamingEventType,
+			eventPartMappers:          options.eventPartMappers,
 		}
+	} else if len(options.eventPartMappers) > 0 {
+		log.Warn("WithEventToA2APartMapper is ignored because WithEventToA2AConverter provided a custom converter")
 	}
 
 	return &messageProcessor{
