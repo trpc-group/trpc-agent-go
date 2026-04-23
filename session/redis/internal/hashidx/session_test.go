@@ -261,6 +261,44 @@ func TestClient_AppendEvent(t *testing.T) {
 	})
 }
 
+func TestClient_AppendEvent_PreservesExistingTTLWithoutRefresh(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createCfg.SessionTTL = 10 * time.Second
+	createClient := NewClient(rdb, createCfg)
+
+	appendCfg := createCfg
+	appendCfg.SessionTTL = 0
+	appendClient := NewClient(rdb, appendCfg)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "ae-ttl"}
+
+	_, err := createClient.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	metaKey := createClient.keys.SessionMetaKey(key)
+	assert.Equal(t, 10*time.Second, mr.TTL(metaKey))
+
+	mr.FastForward(4 * time.Second)
+
+	err = appendClient.AppendEvent(ctx, key, &event.Event{
+		ID:        "evt-ttl",
+		Timestamp: time.Now(),
+		StateDelta: session.StateMap{
+			"k": []byte("v"),
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 6*time.Second, mr.TTL(metaKey))
+
+	sess, err := createClient.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, []byte("v"), sess.State["k"])
+}
+
 func TestClient_DeleteSession(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())
