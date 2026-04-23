@@ -10,6 +10,7 @@ package mysql
 
 import (
 	"encoding/json"
+	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -163,19 +164,86 @@ func snapshotFunctionDefinitionParam(param model.FunctionDefinitionParam) model.
 }
 
 func snapshotExtraFields(extraFields map[string]any) map[string]any {
-	payload, err := json.Marshal(extraFields)
-	if err == nil {
-		var snap map[string]any
-		if err := json.Unmarshal(payload, &snap); err == nil {
-			return snap
-		}
-	}
-
 	snap := make(map[string]any, len(extraFields))
 	for k, v := range extraFields {
-		snap[k] = v
+		snap[k] = snapshotDynamicValue(v)
 	}
 	return snap
+}
+
+func snapshotDynamicValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	return snapshotReflectValue(reflect.ValueOf(value)).Interface()
+}
+
+func snapshotReflectValue(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := snapshotReflectValue(value.Elem())
+		result := reflect.New(value.Type()).Elem()
+		result.Set(cloned)
+		return result
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.New(value.Type().Elem())
+		cloned.Elem().Set(snapshotReflectValue(value.Elem()))
+		return cloned
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			reflect.Copy(cloned, value)
+			return cloned
+		}
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(snapshotReflectValue(value.Index(i)))
+		}
+		return cloned
+	case reflect.Array:
+		cloned := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(snapshotReflectValue(value.Index(i)))
+		}
+		return cloned
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			cloned.SetMapIndex(iter.Key(), snapshotReflectValue(iter.Value()))
+		}
+		return cloned
+	case reflect.Struct:
+		cloned := reflect.New(value.Type()).Elem()
+		cloned.Set(value)
+		for i := 0; i < value.NumField(); i++ {
+			if !cloned.Field(i).CanSet() {
+				continue
+			}
+			switch value.Field(i).Kind() {
+			case reflect.Interface, reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map, reflect.Struct:
+				cloned.Field(i).Set(snapshotReflectValue(value.Field(i)))
+			}
+		}
+		return cloned
+	default:
+		return value
+	}
 }
 
 func snapshotTrackEvent(trackEvent *session.TrackEvent) *session.TrackEvent {
