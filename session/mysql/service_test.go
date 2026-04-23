@@ -3475,6 +3475,127 @@ func TestAppendEventInternal_AsyncPersistEnqueue(t *testing.T) {
 	}
 }
 
+func TestAppendEventInternal_AsyncPersistEnqueueSnapshotsNestedMessageData(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithEnableAsyncPersist(true))
+	s.eventPairChans = []chan *sessionEventPair{
+		make(chan *sessionEventPair, 1),
+	}
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess",
+	}
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Hash = 0
+
+	messageText := "before-text"
+	deltaText := "before-delta"
+	toolIndex := 0
+	finishReason := "stop"
+	evt := event.New("inv-1", "author")
+	evt.Response = &model.Response{
+		Object: model.ObjectTypeChatCompletion,
+		Done:   true,
+		Choices: []model.Choice{
+			{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "{\"insight_text\":\"before\"}",
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: &messageText,
+						},
+						{
+							Type: model.ContentTypeFile,
+							File: &model.File{
+								Name:     "payload.json",
+								Data:     []byte("before-file"),
+								MimeType: "application/json",
+							},
+						},
+					},
+					ToolCalls: []model.ToolCall{
+						{
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "test_tool",
+								Arguments: []byte(`{"stage":"before"}`),
+							},
+							Index: &toolIndex,
+							ExtraFields: map[string]any{
+								"nested": []any{
+									map[string]any{
+										"phase": "before",
+									},
+								},
+							},
+						},
+					},
+				},
+				Delta: model.Message{
+					Role: model.RoleAssistant,
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: &deltaText,
+						},
+					},
+				},
+				FinishReason: &finishReason,
+			},
+		},
+	}
+
+	err = s.appendEventInternal(ctx, sess, evt, key)
+	require.NoError(t, err)
+
+	evt.Response.Choices[0].Message.Content = "{\"insight_text\":\"after\"}"
+	*evt.Response.Choices[0].Message.ContentParts[0].Text = "after-text"
+	evt.Response.Choices[0].Message.ContentParts[1].File.Data[0] = 'A'
+	evt.Response.Choices[0].Message.ToolCalls[0].Function.Arguments[10] = 'a'
+	*evt.Response.Choices[0].Message.ToolCalls[0].Index = 3
+	evt.Response.Choices[0].Message.ToolCalls[0].ExtraFields["nested"].([]any)[0].(map[string]any)["phase"] = "after"
+	*evt.Response.Choices[0].Delta.ContentParts[0].Text = "after-delta"
+	*evt.Response.Choices[0].FinishReason = "length"
+
+	select {
+	case pair := <-s.eventPairChans[0]:
+		require.NotNil(t, pair)
+		require.NotNil(t, pair.event)
+		require.NotNil(t, pair.event.Response)
+		require.Len(t, pair.event.Response.Choices, 1)
+
+		choice := pair.event.Response.Choices[0]
+		assert.Equal(t, "{\"insight_text\":\"before\"}", choice.Message.Content)
+		require.Len(t, choice.Message.ContentParts, 2)
+		require.NotNil(t, choice.Message.ContentParts[0].Text)
+		assert.Equal(t, "before-text", *choice.Message.ContentParts[0].Text)
+		require.NotNil(t, choice.Message.ContentParts[1].File)
+		assert.Equal(t, []byte("before-file"), choice.Message.ContentParts[1].File.Data)
+		require.Len(t, choice.Message.ToolCalls, 1)
+		assert.Equal(t, []byte(`{"stage":"before"}`), choice.Message.ToolCalls[0].Function.Arguments)
+		require.NotNil(t, choice.Message.ToolCalls[0].Index)
+		assert.Equal(t, 0, *choice.Message.ToolCalls[0].Index)
+		nested := choice.Message.ToolCalls[0].ExtraFields["nested"].([]any)
+		assert.Equal(t, "before", nested[0].(map[string]any)["phase"])
+		require.Len(t, choice.Delta.ContentParts, 1)
+		require.NotNil(t, choice.Delta.ContentParts[0].Text)
+		assert.Equal(t, "before-delta", *choice.Delta.ContentParts[0].Text)
+		require.NotNil(t, choice.FinishReason)
+		assert.Equal(t, "stop", *choice.FinishReason)
+	default:
+		t.Fatal("expected event to be enqueued")
+	}
+}
+
 func TestAppendTrackEvent_AsyncPersistEnqueueSnapshotsPayload(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
