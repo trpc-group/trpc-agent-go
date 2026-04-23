@@ -67,8 +67,9 @@ func TestNewEventTunnel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			produce := func() (*event.Event, bool) { return nil, false }
+			produce := func(context.Context) (*event.Event, bool) { return nil, false }
 			consume := func([]*event.Event) (bool, error) { return true, nil }
 
 			tunnel := newEventTunnel(tt.batchSize, tt.flushInterval, produce, consume)
@@ -147,12 +148,13 @@ func TestEventTunnel_Run_BasicFlow(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			var receivedBatches [][]*event.Event
 			var mu sync.Mutex
 
 			eventIndex := 0
-			produce := func() (*event.Event, bool) {
+			produce := func(context.Context) (*event.Event, bool) {
 				if eventIndex >= len(tt.events) {
 					return nil, false
 				}
@@ -222,7 +224,7 @@ func TestEventTunnel_Run_ContextCancellation(t *testing.T) {
 	var mu sync.Mutex
 
 	eventCount := 0
-	produce := func() (*event.Event, bool) {
+	produce := func(context.Context) (*event.Event, bool) {
 		eventCount++
 		// Simulate slow event production
 		time.Sleep(10 * time.Millisecond)
@@ -258,7 +260,7 @@ func TestEventTunnel_Run_ContextCancellation(t *testing.T) {
 func TestEventTunnel_Run_ConsumeError(t *testing.T) {
 	expectedError := errors.New("consume error")
 
-	produce := func() (*event.Event, bool) {
+	produce := func(context.Context) (*event.Event, bool) {
 		return createTestEvent("event", false), true
 	}
 
@@ -286,7 +288,7 @@ func TestEventTunnel_Run_TimerFlush(t *testing.T) {
 	var mu sync.Mutex
 
 	eventsSent := 0
-	produce := func() (*event.Event, bool) {
+	produce := func(context.Context) (*event.Event, bool) {
 		if eventsSent >= 2 {
 			return nil, false
 		}
@@ -336,7 +338,7 @@ func TestEventTunnel_Run_FinalFlush(t *testing.T) {
 	flushCount := 0
 	produced := false
 
-	produce := func() (*event.Event, bool) {
+	produce := func(context.Context) (*event.Event, bool) {
 		if produced {
 			return nil, false
 		}
@@ -372,7 +374,7 @@ func TestEventTunnel_Run_FinalFlush(t *testing.T) {
 func TestEventTunnel_Run_TimerFlushError(t *testing.T) {
 	const flushInterval = 5 * time.Millisecond
 	call := 0
-	produce := func() (*event.Event, bool) {
+	produce := func(context.Context) (*event.Event, bool) {
 		call++
 		switch call {
 		case 1:
@@ -397,7 +399,7 @@ func TestEventTunnel_Run_TimerFlushError(t *testing.T) {
 func TestEventTunnel_Run_TimerFlushStop(t *testing.T) {
 	const flushInterval = 5 * time.Millisecond
 	call := 0
-	produce := func() (*event.Event, bool) {
+	produce := func(context.Context) (*event.Event, bool) {
 		call++
 		switch call {
 		case 1:
@@ -416,6 +418,63 @@ func TestEventTunnel_Run_TimerFlushStop(t *testing.T) {
 
 	tunnel := newEventTunnel(10, flushInterval, produce, consume)
 	assert.NoError(t, tunnel.Run(context.Background()))
+}
+
+func TestEventTunnel_Run_TimerFlushWhileProduceBlocked(t *testing.T) {
+	const flushInterval = 20 * time.Millisecond
+
+	blockedProduce := make(chan struct{})
+	releaseProduce := make(chan struct{})
+	flushed := make(chan struct{}, 1)
+	call := 0
+
+	produce := func(ctx context.Context) (*event.Event, bool) {
+		call++
+		switch call {
+		case 1:
+			return createTestEvent("pending", false), true
+		case 2:
+			close(blockedProduce)
+			select {
+			case <-ctx.Done():
+				return nil, false
+			case <-releaseProduce:
+				return nil, false
+			}
+		default:
+			return nil, false
+		}
+	}
+
+	consume := func(batch []*event.Event) (bool, error) {
+		assert.Len(t, batch, 1)
+		select {
+		case flushed <- struct{}{}:
+		default:
+		}
+		return true, nil
+	}
+
+	tunnel := newEventTunnel(10, flushInterval, produce, consume)
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- tunnel.Run(context.Background())
+	}()
+
+	select {
+	case <-blockedProduce:
+	case <-time.After(time.Second):
+		t.Fatal("produce did not enter blocked state")
+	}
+
+	select {
+	case <-flushed:
+	case <-time.After(5 * flushInterval):
+		t.Fatal("expected timer flush while produce is blocked")
+	}
+
+	close(releaseProduce)
+	assert.NoError(t, <-runDone)
 }
 
 func TestEventTunnel_FlushBatch(t *testing.T) {
@@ -469,6 +528,7 @@ func TestEventTunnel_FlushBatch(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			var consumedBatch []*event.Event
 
@@ -520,7 +580,7 @@ func TestEventTunnel_Run_NilEvents(t *testing.T) {
 	var mu sync.Mutex
 
 	eventsSent := 0
-	produce := func() (*event.Event, bool) {
+	produce := func(context.Context) (*event.Event, bool) {
 		if eventsSent >= 3 {
 			return nil, false
 		}

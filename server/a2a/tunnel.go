@@ -29,7 +29,7 @@ type eventTunnel struct {
 	flushInterval time.Duration
 
 	batch   []*event.Event
-	produce func() (*event.Event, bool)
+	produce func(context.Context) (*event.Event, bool)
 	consume func([]*event.Event) (bool, error)
 
 	ctx    context.Context
@@ -40,7 +40,7 @@ type eventTunnel struct {
 func newEventTunnel(
 	batchSize int,
 	flushInterval time.Duration,
-	produce func() (*event.Event, bool),
+	produce func(context.Context) (*event.Event, bool),
 	consume func([]*event.Event) (bool, error),
 ) *eventTunnel {
 	if batchSize <= 0 {
@@ -58,6 +58,11 @@ func newEventTunnel(
 	}
 }
 
+type producedEvent struct {
+	event *event.Event
+	ok    bool
+}
+
 // Run runs the event tunnel.
 func (t *eventTunnel) Run(ctx context.Context) error {
 	t.ctx, t.cancel = context.WithCancel(ctx)
@@ -66,17 +71,45 @@ func (t *eventTunnel) Run(ctx context.Context) error {
 	ticker := time.NewTicker(t.flushInterval)
 	defer ticker.Stop()
 
+	producedEventCh := make(chan producedEvent)
+	go func() {
+		defer close(producedEventCh)
+		for {
+			event, ok := t.produce(t.ctx)
+			select {
+			case <-t.ctx.Done():
+				return
+			case producedEventCh <- producedEvent{event: event, ok: ok}:
+			}
+			if !ok {
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
-		case <-ctx.Done():
+		case <-t.ctx.Done():
 			if len(t.batch) > 0 {
 				t.flushBatch()
 			}
-			return ctx.Err()
+			return t.ctx.Err()
 
-		default:
-			event, ok := t.produce()
+		case produced, ok := <-producedEventCh:
 			if !ok {
+				if len(t.batch) > 0 {
+					_, err := t.flushBatch()
+					if err != nil {
+						return fmt.Errorf("tunnel error during final flush: %v", err)
+					}
+				}
+				if err := t.ctx.Err(); err != nil {
+					return err
+				}
+				return nil
+			}
+
+			if !produced.ok {
 				if len(t.batch) > 0 {
 					_, err := t.flushBatch()
 					if err != nil {
@@ -86,8 +119,8 @@ func (t *eventTunnel) Run(ctx context.Context) error {
 				return nil
 			}
 
-			if event != nil {
-				t.batch = append(t.batch, event)
+			if produced.event != nil {
+				t.batch = append(t.batch, produced.event)
 				if len(t.batch) >= t.batchSize {
 					ok, err := t.flushBatch()
 					if err != nil {
@@ -99,18 +132,15 @@ func (t *eventTunnel) Run(ctx context.Context) error {
 				}
 			}
 
-			select {
-			case <-ticker.C:
-				if len(t.batch) > 0 {
-					ok, err := t.flushBatch()
-					if err != nil {
-						return fmt.Errorf("tunnel error during timer flush: %v", err)
-					}
-					if !ok {
-						return nil
-					}
+		case <-ticker.C:
+			if len(t.batch) > 0 {
+				ok, err := t.flushBatch()
+				if err != nil {
+					return fmt.Errorf("tunnel error during timer flush: %v", err)
 				}
-			default:
+				if !ok {
+					return nil
+				}
 			}
 		}
 	}
