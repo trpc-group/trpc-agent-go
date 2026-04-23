@@ -900,6 +900,14 @@ func (t *RunTool) createWorkspace(
 	return t.wsr.CreateWorkspace(ctx, eng, name)
 }
 
+// stageSkill materializes the skill source under skills/<name>.
+// As of the workspaceprep migration, skillstage.StageSkill defaults
+// to a writable working copy. skill_run inherits the same writable
+// semantics during its deprecation period; this matches the
+// workspace_exec / reconciler path and avoids carrying two skill
+// staging modes in parallel. If a future caller specifically needs
+// the legacy read-only tree, it should switch to the lower-level
+// StageSkillWithOptions API.
 func (t *RunTool) stageSkill(
 	ctx context.Context,
 	eng codeexecutor.Engine,

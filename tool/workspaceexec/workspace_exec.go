@@ -21,11 +21,14 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceinput"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceprep"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -40,6 +43,16 @@ type ExecTool struct {
 	reg       *codeexecutor.WorkspaceRegistry
 	resolver  *workspacesession.Resolver
 	sessional bool
+
+	// providers contribute workspace requirements (loaded skills,
+	// bootstrap files, conversation files, ...). When non-empty,
+	// reconciler is always non-nil. These fields are populated only
+	// through the WithWorkspaceBootstrap / WithLoadedSkills options
+	// so internal workspaceprep types never leak into this tool's
+	// public surface.
+	providers              []workspaceprep.Provider
+	reconciler             workspaceprep.Reconciler
+	conversationFilesWired bool
 
 	mu       sync.Mutex
 	sessions map[string]*execSession
@@ -159,6 +172,116 @@ func WithWorkspaceRegistry(
 	return func(t *ExecTool) {
 		t.reg = reg
 	}
+}
+
+// WithWorkspaceBootstrap declares static files and one-shot commands
+// that must exist/run in the workspace before workspace_exec runs
+// user commands. The spec is converted into reconciler Requirements
+// internally; idempotency and skip-on-fingerprint-match are handled
+// by the framework. Files are staged first, then commands run, both
+// in declaration order.
+//
+// A malformed spec panics during option application: silently
+// dropping a partially-configured bootstrap would leave the agent
+// running in a state the caller did not ask for.
+//
+// Passing an empty spec (no files, no commands) is a no-op.
+func WithWorkspaceBootstrap(
+	spec codeexecutor.WorkspaceBootstrapSpec,
+) func(*ExecTool) {
+	if len(spec.Files) == 0 && len(spec.Commands) == 0 {
+		return func(*ExecTool) {}
+	}
+	provider, err := workspaceprep.NewBootstrapProvider(
+		toInternalBootstrapSpec(spec),
+	)
+	if err != nil {
+		panic(fmt.Sprintf(
+			"workspaceexec: invalid WorkspaceBootstrapSpec: %v", err,
+		))
+	}
+	return func(t *ExecTool) {
+		t.addPreparer(provider)
+	}
+}
+
+// WithLoadedSkills wires the reconciler to materialize skills that
+// have been recorded in session state via skill_load, using the
+// supplied repository to resolve skill sources. Skills are staged
+// into skills/<name> as writable working copies.
+//
+// Passing a nil repository is a no-op.
+func WithLoadedSkills(repo skill.Repository) func(*ExecTool) {
+	if repo == nil {
+		return func(*ExecTool) {}
+	}
+	provider, err := workspaceprep.NewLoadedSkillsProvider(repo)
+	if err != nil {
+		panic(fmt.Sprintf(
+			"workspaceexec: cannot build loaded-skills provider: %v",
+			err,
+		))
+	}
+	return func(t *ExecTool) {
+		t.addPreparer(provider)
+	}
+}
+
+// addPreparer records a provider and ensures the companion pieces
+// (default reconciler, conversation-files provider) are installed.
+// It is only used by the options above so that callers never see
+// an internal workspaceprep type.
+func (t *ExecTool) addPreparer(p workspaceprep.Provider) {
+	if t.reconciler == nil {
+		t.reconciler = workspaceprep.NewReconciler()
+	}
+	t.providers = append(t.providers, p)
+	if !t.conversationFilesWired {
+		t.providers = append(
+			t.providers, workspaceprep.NewConversationFilesProvider(),
+		)
+		t.conversationFilesWired = true
+	}
+}
+
+// toInternalBootstrapSpec bridges codeexecutor.WorkspaceBootstrapSpec
+// (the stable public type) to workspaceprep.BootstrapSpec (the
+// internal representation). Keeping the two struct families
+// nominally distinct lets the public surface evolve independently of
+// the reconciler internals.
+func toInternalBootstrapSpec(
+	in codeexecutor.WorkspaceBootstrapSpec,
+) workspaceprep.BootstrapSpec {
+	out := workspaceprep.BootstrapSpec{
+		Files:    make([]workspaceprep.FileSpec, 0, len(in.Files)),
+		Commands: make([]workspaceprep.CommandSpec, 0, len(in.Commands)),
+	}
+	for _, f := range in.Files {
+		out.Files = append(out.Files, workspaceprep.FileSpec{
+			Key:      f.Key,
+			Target:   f.Target,
+			Content:  f.Content,
+			Mode:     f.Mode,
+			Input:    f.Input,
+			Optional: f.Optional,
+		})
+	}
+	for _, c := range in.Commands {
+		out.Commands = append(out.Commands, workspaceprep.CommandSpec{
+			Key:               c.Key,
+			Cmd:               c.Cmd,
+			Args:              c.Args,
+			Env:               c.Env,
+			Cwd:               c.Cwd,
+			Timeout:           c.Timeout,
+			MarkerPath:        c.MarkerPath,
+			ObservedPaths:     c.ObservedPaths,
+			FingerprintInputs: c.FingerprintInputs,
+			FingerprintSalt:   c.FingerprintSalt,
+			Optional:          c.Optional,
+		})
+	}
+	return out
 }
 
 // Declaration returns the schema for workspace_exec.
@@ -348,9 +471,8 @@ func (t *ExecTool) prepareExec(
 	if err != nil {
 		return execRequest{}, err
 	}
-	_, warnings := workspaceinput.StageConversationFiles(ctx, eng, ws)
-	for _, warning := range warnings {
-		log.WarnfContext(ctx, "workspace_exec input staging warning: %s", warning)
+	if err := t.reconcileWorkspace(ctx, eng, ws); err != nil {
+		return execRequest{}, err
 	}
 	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
 	if timeout <= 0 {
@@ -542,6 +664,53 @@ func (t *KillSessionTool) Call(_ context.Context, args []byte) (any, error) {
 		SessionID: sessionID,
 		Status:    status,
 	}, nil
+}
+
+// reconcileWorkspace converges the workspace to the desired state
+// before executing a user command. When no provider is configured
+// the function preserves the legacy behavior of staging conversation
+// files inline; otherwise it delegates to the reconciler which
+// collects Requirements from every provider and applies them in
+// phase order (file -> skill -> command).
+func (t *ExecTool) reconcileWorkspace(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+) error {
+	if t == nil || len(t.providers) == 0 {
+		_, warnings := workspaceinput.StageConversationFiles(ctx, eng, ws)
+		for _, warning := range warnings {
+			log.WarnfContext(
+				ctx,
+				"workspace_exec input staging warning: %s",
+				warning,
+			)
+		}
+		return nil
+	}
+	inv, _ := agent.InvocationFromContext(ctx)
+	var all []workspaceprep.Requirement
+	for _, p := range t.providers {
+		reqs, err := p.Requirements(ctx, inv)
+		if err != nil {
+			return fmt.Errorf(
+				"workspace_exec provider %s: %w", p.Name(), err,
+			)
+		}
+		all = append(all, reqs...)
+	}
+	warnings, err := t.reconciler.Reconcile(ctx, eng, ws, all)
+	for _, warning := range warnings {
+		log.WarnfContext(
+			ctx,
+			"workspace_exec reconcile warning: %s",
+			warning,
+		)
+	}
+	if err != nil {
+		return fmt.Errorf("workspace_exec reconcile: %w", err)
+	}
+	return nil
 }
 
 func (t *ExecTool) liveEngine() (codeexecutor.Engine, error) {

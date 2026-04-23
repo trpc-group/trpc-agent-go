@@ -211,8 +211,23 @@ type Options struct {
 	// EnableCodeExecutionResponseProcessor controls whether the agent
 	// auto-executes fenced code blocks from model responses.
 	//
+	// This switch is independent of WithCodeExecutor: a CodeExecutor may
+	// be configured purely so that execution tools such as workspace_exec
+	// can be registered, without also opting into auto-executing fenced
+	// code in the assistant's final reply. When the skills auto-fallback
+	// injects a CodeExecutor (see applySkillsExecutorFallback in
+	// llm_agent.go) and the caller has not explicitly set this option,
+	// the fallback path force-disables it so the implicit executor only
+	// powers workspace_exec, never the fenced-code auto-exec chain.
+	//
 	// Default: true (preserves existing behavior).
 	EnableCodeExecutionResponseProcessor bool
+	// codeExecutionResponseProcessorExplicit records whether the caller
+	// explicitly set EnableCodeExecutionResponseProcessor via
+	// WithEnableCodeExecutionResponseProcessor. It is used by the skills
+	// auto-fallback to decide whether it may suppress the fenced-code
+	// auto-exec chain on behalf of the caller.
+	codeExecutionResponseProcessorExplicit bool
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
 	// ToolSets is the list of tool sets available to the agent.
@@ -434,7 +449,17 @@ type Options struct {
 	skillRunRequireSkillLoaded bool
 	// skillRunStager overrides how skill_run materializes a skill in
 	// the workspace.
-	skillRunStager            toolskill.SkillStager
+	skillRunStager toolskill.SkillStager
+	// workspaceBootstrap declares static files and commands that
+	// must be present/executed in the workspace before user
+	// commands run. When non-empty it is converted into a Provider
+	// and attached to workspace_exec.
+	workspaceBootstrap codeexecutor.WorkspaceBootstrapSpec
+	// disableWorkspacePreparers keeps workspace_exec on the legacy
+	// StageConversationFiles-only path even when a skills repo or
+	// bootstrap spec is configured. Useful for tests and for users
+	// that want to opt out of the new reconciler.
+	disableWorkspacePreparers bool
 	messageTimelineFilterMode string
 	messageBranchFilterMode   string
 
@@ -494,11 +519,17 @@ type SkillToolProfile string
 type SkillTool string
 
 const (
-	// SkillToolProfileFull keeps the existing behavior and registers the full
-	// built-in skill tool suite, including execution tools.
+	// SkillToolProfileFull registers the full built-in skill tool suite,
+	// including skill_run, skill_exec, and the interactive exec-session
+	// helpers. This profile is opt-in; callers that want skill-driven
+	// execution must request it explicitly. New code should prefer
+	// workspace_exec together with skill_load for script execution.
 	SkillToolProfileFull SkillToolProfile = skillprofile.Full
-	// SkillToolProfileKnowledgeOnly registers only progressive-disclosure skill
-	// tools used for knowledge injection. No execution tools are exposed.
+	// SkillToolProfileKnowledgeOnly registers only progressive-disclosure
+	// skill tools (skill_load / skill_list_docs / skill_select_docs) and
+	// omits every execution tool. This is the default profile: agents
+	// that only configure a skill repository get knowledge injection and
+	// rely on workspace_exec for running scripts.
 	SkillToolProfileKnowledgeOnly SkillToolProfile = skillprofile.KnowledgeOnly
 
 	// SkillToolLoad loads SKILL.md and optional docs into model context.
@@ -649,9 +680,21 @@ func WithWorkspaceExecSurfaceEnabled(enable bool) Option {
 // WithEnableCodeExecutionResponseProcessor controls whether the agent
 // auto-executes assistant replies that are exactly one runnable fenced
 // code block.
+//
+// This option is independent of WithCodeExecutor: configuring a
+// CodeExecutor only enables execution tools (for example, workspace_exec)
+// and does not by itself cause the agent to execute fenced code from
+// assistant replies. Use this option explicitly when you want to opt
+// into — or out of — the fenced-code auto-execution response processor.
+//
+// Calling this option (with either value) marks the setting as
+// explicit, which prevents the skills auto-fallback from quietly
+// disabling the processor when it injects a local CodeExecutor on
+// behalf of WithSkills.
 func WithEnableCodeExecutionResponseProcessor(enable bool) Option {
 	return func(opts *Options) {
 		opts.EnableCodeExecutionResponseProcessor = enable
+		opts.codeExecutionResponseProcessorExplicit = true
 	}
 }
 
@@ -684,6 +727,21 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 // WithSkills enables model-agnostic Agent Skills support using the
 // provided repository. The processor will inject a small overview
 // and on-demand content according to session state.
+//
+// Code executor auto-fallback: when WithSkills is configured without an
+// explicit WithCodeExecutor, the agent will auto-wire a local
+// codeexecutor so that workspace_exec is available and the zero-config
+// upgrade path keeps working. The fallback is skipped when any of the
+// following hold:
+//
+//   - an explicit executor was provided via WithCodeExecutor,
+//   - WithAllowedSkillTools was used to drive fine-grained selection, or
+//   - WithSkillToolProfile(SkillToolProfileKnowledgeOnly) was explicitly
+//     set (the documented opt-out for "no convenience execution").
+//
+// For production, prefer configuring an explicit code executor (for
+// example, a container-backed executor) rather than relying on the
+// local fallback.
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.skillsRepository = repo
@@ -703,8 +761,28 @@ func WithSkillFilter(filter skill.VisibilityFilter) Option {
 // skills are enabled via WithSkills.
 //
 // Supported profiles:
-//   - SkillToolProfileFull (default)
-//   - SkillToolProfileKnowledgeOnly
+//   - SkillToolProfileKnowledgeOnly (default): progressive-disclosure tools
+//     only (skill_load / skill_list_docs / skill_select_docs). Execution is
+//     expected to happen through workspace_exec against the writable skill
+//     working copy materialized under /skills/<name>.
+//   - SkillToolProfileFull: additionally registers skill_run, skill_exec,
+//     and the interactive exec-session helpers. This path predates
+//     workspace_exec-based execution and is kept for backward compatibility;
+//     new code should prefer the default profile.
+//
+// Explicit vs default: not calling WithSkillToolProfile(...) and calling
+// WithSkillToolProfile(SkillToolProfileKnowledgeOnly) register the same
+// built-in skill tool set, but carry different intent around the
+// convenience executor fallback documented on WithSkills:
+//
+//   - Unconfigured (default): if no WithCodeExecutor is supplied,
+//     the framework auto-falls back to a local executor so
+//     workspace_exec is still available out of the box.
+//   - Explicit SkillToolProfileKnowledgeOnly: the framework treats
+//     this as an opt-out and will NOT auto-fall back to a local
+//     executor. Pass this when you intentionally want a
+//     knowledge-only agent, or when you are wiring execution through
+//     your own user-registered tools.
 func WithSkillToolProfile(profile SkillToolProfile) Option {
 	return func(opts *Options) {
 		opts.skillToolProfile = string(profile)
@@ -715,7 +793,7 @@ func WithSkillToolProfile(profile SkillToolProfile) Option {
 // with an explicit allowlist.
 //
 // When not configured, built-in skill tools continue to follow
-// WithSkillToolProfile (default: full).
+// WithSkillToolProfile (default: knowledge_only).
 //
 // When configured with no tools, no built-in skill tools are registered.
 func WithAllowedSkillTools(tools ...SkillTool) Option {
@@ -915,6 +993,36 @@ func WithSkillRunRequireSkillLoaded(enable bool) Option {
 func WithSkillRunStager(stager toolskill.SkillStager) Option {
 	return func(opts *Options) {
 		opts.skillRunStager = stager
+	}
+}
+
+// WithWorkspaceBootstrap declares the static files and one-shot
+// commands that must be materialized in every workspace before
+// workspace_exec runs user commands. Files are applied first, then
+// commands execute in declaration order. The spec is converted into
+// reconcile work behind the scenes; idempotency and
+// skip-on-fingerprint-match are handled by the framework.
+//
+// This is currently the only public hook into workspace preparation.
+// The underlying Requirement / Provider / Reconciler abstractions
+// live in an internal package while their semantics are still being
+// refined; if a custom-provider extension point becomes necessary it
+// will be added here.
+func WithWorkspaceBootstrap(
+	spec codeexecutor.WorkspaceBootstrapSpec,
+) Option {
+	return func(opts *Options) {
+		opts.workspaceBootstrap = spec
+	}
+}
+
+// WithWorkspacePreparersDisabled keeps workspace_exec on its legacy
+// "stage conversation files only" path even when a skills repository
+// or a bootstrap spec is configured. Primarily useful for regression
+// tests that assert pre-reconciler behavior.
+func WithWorkspacePreparersDisabled(disabled bool) Option {
+	return func(opts *Options) {
+		opts.disableWorkspacePreparers = disabled
 	}
 }
 
