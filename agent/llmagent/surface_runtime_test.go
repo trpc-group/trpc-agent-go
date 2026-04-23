@@ -538,6 +538,104 @@ func TestLLMAgent_InvocationToolSurface_HidesWorkspaceExecWhenDisabled(
 	require.Nil(t, findTool(tools, "workspace_kill_session"))
 }
 
+// The workspace file tools are opt-in: asserting the *absence* of
+// the surface when the caller leaves the option at its default
+// protects against accidentally expanding the default surface in
+// future refactors.
+func TestLLMAgent_InvocationToolSurface_FileToolsDisabledByDefault(
+	t *testing.T,
+) {
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithCodeExecutor(&interactiveStubExec{}),
+	)
+	tools, _ := agt.InvocationToolSurface(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+			agent.WithInvocationSession(&session.Session{}),
+		),
+	)
+	// workspace_exec is still on (its own default is true) but the
+	// file tools must stay off until the caller asks for them.
+	require.NotNil(t, findTool(tools, "workspace_exec"))
+	for _, name := range []string{
+		"workspace_read_file",
+		"workspace_list_dir",
+		"workspace_search_file",
+		"workspace_search_content",
+		"workspace_write_file",
+		"workspace_replace_content",
+	} {
+		require.Nil(
+			t, findTool(tools, name),
+			"file tool %q should be hidden by default", name,
+		)
+	}
+}
+
+// When WithWorkspaceFileToolsEnabled(true) is combined with the
+// default exec surface, every file tool must be registered alongside
+// workspace_exec so the model can pick the best tool for each job.
+func TestLLMAgent_InvocationToolSurface_FileToolsEnabledRegistersAll(
+	t *testing.T,
+) {
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithCodeExecutor(&interactiveStubExec{}),
+		WithWorkspaceFileToolsEnabled(true),
+	)
+	tools, _ := agt.InvocationToolSurface(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+			agent.WithInvocationSession(&session.Session{}),
+		),
+	)
+	require.NotNil(t, findTool(tools, "workspace_exec"))
+	for _, name := range []string{
+		"workspace_read_file",
+		"workspace_list_dir",
+		"workspace_search_file",
+		"workspace_search_content",
+		"workspace_write_file",
+		"workspace_replace_content",
+	} {
+		require.NotNil(
+			t, findTool(tools, name),
+			"file tool %q should be registered", name,
+		)
+	}
+}
+
+// File-tools-only mode exercises the path where exec is disabled but
+// file tools are still opted in. This is the third supported
+// configuration called out in WithWorkspaceFileToolsEnabled's godoc.
+func TestLLMAgent_InvocationToolSurface_FileToolsOnlyWhenExecDisabled(
+	t *testing.T,
+) {
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithCodeExecutor(&interactiveStubExec{}),
+		WithWorkspaceExecSurfaceEnabled(false),
+		WithWorkspaceFileToolsEnabled(true),
+	)
+	tools, _ := agt.InvocationToolSurface(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+			agent.WithInvocationSession(&session.Session{}),
+		),
+	)
+	require.Nil(t, findTool(tools, "workspace_exec"))
+	require.Nil(t, findTool(tools, "workspace_write_stdin"))
+	require.NotNil(t, findTool(tools, "workspace_read_file"))
+	require.NotNil(t, findTool(tools, "workspace_write_file"))
+}
+
 func TestLLMAgent_SurfaceRuntimeHelpers_NilAgentBranches(t *testing.T) {
 	var agt *LLMAgent
 	require.Nil(t, agt.codeExecutorForInvocation(nil))
@@ -552,6 +650,41 @@ func TestLLMAgent_SurfaceRuntimeHelpers_NilAgentBranches(t *testing.T) {
 	require.False(t, flags.WriteStdin)
 	require.False(t, flags.PollSession)
 	require.False(t, flags.KillSession)
+}
+
+// supportsWorkspaceFileToolsForInvocation is the resolver the
+// workspace request processor reads to decide whether to emit
+// file-tools guidance. Guarantee it tracks both the opt-in and the
+// executor's ability to host a shared workspace so the guidance
+// cannot drift from the actual tool surface.
+func TestLLMAgent_SurfaceRuntimeHelpers_FileToolsResolverRespectsOptionAndExecutor(
+	t *testing.T,
+) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+	)
+
+	disabled := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithCodeExecutor(&interactiveStubExec{}),
+	)
+	require.False(t, disabled.supportsWorkspaceFileToolsForInvocation(inv))
+
+	enabled := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithCodeExecutor(&interactiveStubExec{}),
+		WithWorkspaceFileToolsEnabled(true),
+	)
+	require.True(t, enabled.supportsWorkspaceFileToolsForInvocation(inv))
+
+	noExec := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithWorkspaceFileToolsEnabled(true),
+	)
+	require.False(t, noExec.supportsWorkspaceFileToolsForInvocation(inv))
 }
 
 func TestLLMAgent_SurfaceRuntimeHelpers_WorkspaceExecOptionRespected(

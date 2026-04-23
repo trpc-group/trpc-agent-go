@@ -1836,7 +1836,7 @@ func TestLLMAgent_WorkspaceExecGuidanceWithoutSkillsRepo(t *testing.T) {
 	sys := findSystemMessageContaining(req, workspaceExecGuidanceHeader)
 	require.NotEmpty(t, sys)
 	require.Contains(t, sys, "default general shell runner")
-	require.Contains(t, sys, "workspace is its scope, not its capability limit")
+	require.Contains(t, sys, "workspace is their scope, not their capability limit")
 	require.Contains(t, sys, "Prefer work/, out/, and runs/")
 	require.Contains(t, sys, "verify first before claiming the limitation")
 	require.NotContains(t, sys, "workspace_save_artifact")

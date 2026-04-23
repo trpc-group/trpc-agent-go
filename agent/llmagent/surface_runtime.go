@@ -126,6 +126,30 @@ func (a *LLMAgent) supportsWorkspaceExecSessionsForInvocation(
 	)
 }
 
+// supportsWorkspaceFileToolsForInvocation mirrors the toolset wiring
+// logic in InvocationToolSurface/appendWorkspaceExecToolWithExecutor
+// so the request processor can emit workspace file-tool guidance
+// exactly when the matching tools will be registered for this
+// invocation. It returns true only when the caller opted into
+// WithWorkspaceFileToolsEnabled and the active executor can host the
+// shared workspace the tools rely on.
+func (a *LLMAgent) supportsWorkspaceFileToolsForInvocation(
+	inv *agent.Invocation,
+) bool {
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	options := a.option
+	a.mu.RUnlock()
+	if !workspaceFileToolsEnabled(&options) {
+		return false
+	}
+	return codeExecutorSupportsWorkspaceExec(
+		a.codeExecutorForInvocation(inv),
+	)
+}
+
 func (a *LLMAgent) skillToolFlagsForInvocation(
 	inv *agent.Invocation,
 ) skillprofile.Flags {
@@ -199,10 +223,12 @@ func (a *LLMAgent) InvocationToolSurface(
 		codeExecutorSupportsWorkspaceExec(effectiveExec)
 	workspaceExecSessions := workspaceExecEnabled &&
 		codeExecutorSupportsWorkspaceExecSessions(effectiveExec)
+	workspaceFileToolsActive := workspaceFileToolsEnabled(&options) &&
+		codeExecutorSupportsWorkspaceExec(effectiveExec)
 	var workspaceRegistry *codeexecutor.WorkspaceRegistry
 	if effectiveSkills != nil && effectiveExec != nil {
 		workspaceRegistry = buildWorkspaceRegistry()
-	} else if workspaceExecEnabled {
+	} else if workspaceExecEnabled || workspaceFileToolsActive {
 		workspaceRegistry = buildWorkspaceRegistry()
 	}
 	// Pass effectiveSkills so workspace_exec's loaded-skills
@@ -217,6 +243,7 @@ func (a *LLMAgent) InvocationToolSurface(
 		effectiveExec,
 		workspaceExecEnabled,
 		workspaceExecSessions,
+		workspaceFileToolsActive,
 		workspaceRegistry,
 		inv,
 		&options,

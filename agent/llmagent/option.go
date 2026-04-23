@@ -208,6 +208,20 @@ type Options struct {
 	//
 	// Default: true.
 	workspaceExecSurfaceEnabled *bool
+	// workspaceFileToolsEnabled controls whether the dedicated
+	// workspace file tools (workspace_read_file, workspace_list_dir,
+	// workspace_search_file, workspace_search_content,
+	// workspace_write_file, workspace_replace_content) are exposed to
+	// the model when a code executor is available.
+	//
+	// This switch is independent of workspaceExecSurfaceEnabled: file
+	// tools can be enabled without workspace_exec and vice versa.
+	// When both are enabled the two surfaces share the same ExecTool
+	// so that file tools observe the same prepared workspace
+	// workspace_exec would see on the next call.
+	//
+	// Default: false (no file tools are exposed by default).
+	workspaceFileToolsEnabled *bool
 	// EnableCodeExecutionResponseProcessor controls whether the agent
 	// auto-executes fenced code blocks from model responses.
 	//
@@ -674,6 +688,33 @@ func WithWorkspaceExecSurfaceEnabled(enable bool) Option {
 	return func(opts *Options) {
 		value := enable
 		opts.workspaceExecSurfaceEnabled = &value
+	}
+}
+
+// WithWorkspaceFileToolsEnabled controls whether the dedicated
+// workspace file tools (workspace_read_file, workspace_list_dir,
+// workspace_search_file, workspace_search_content,
+// workspace_write_file, workspace_replace_content) are exposed to
+// the model.
+//
+// The file tools are a thin, purpose-built layer over the same
+// executor workspace that workspace_exec uses, and they are always
+// safe to combine with WithWorkspaceExecSurfaceEnabled. Typical
+// configurations:
+//
+//   - exec on, file tools on   — full surface, recommended when the
+//     model should both run commands and manipulate files directly.
+//   - exec on, file tools off  — default; file operations must go
+//     through shell commands.
+//   - exec off, file tools on  — constrained surface that lets the
+//     model inspect and edit files without being able to run
+//     arbitrary commands.
+//
+// Default: false.
+func WithWorkspaceFileToolsEnabled(enable bool) Option {
+	return func(opts *Options) {
+		value := enable
+		opts.workspaceFileToolsEnabled = &value
 	}
 }
 
