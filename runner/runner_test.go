@@ -5517,6 +5517,36 @@ func TestRunner_Run_UserMessageRewriter_EmptyResultReturnsError(t *testing.T) {
 	require.Nil(t, ch)
 }
 
+func TestRunner_Run_UserMessageRewriter_NormalizesEmptyRolePayloadMessages(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	ag := &capturingRoleAgent{name: "a"}
+	r := NewRunner("app", ag, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return []model.Message{{Content: "rewritten"}}, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, model.RoleUser, ag.capturedRole)
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 1)
+	require.Equal(t, model.RoleUser, sess.Events[0].Choices[0].Message.Role)
+	require.Equal(t, authorUser, sess.Events[0].Author)
+}
+
 func TestRunner_Run_UserMessageRewriter_ReplacesCurrentMessageInsideSeedHistory(t *testing.T) {
 	svc := sessioninmemory.NewSessionService()
 	ag := &capturingInvocationMessagesAgent{name: "a"}
@@ -5943,7 +5973,7 @@ func drainChannel(ch <-chan *event.Event) <-chan struct{} {
 	return done
 }
 
-func TestMergeCurrentTurnMessagesIntoSeed_ReplacesLastMatchingMessage(t *testing.T) {
+func TestMergeCurrentTurnMessagesIntoSeed_ReplacesLastUserMessageWhenItMatchesOriginal(t *testing.T) {
 	seed := []model.Message{
 		model.NewUserMessage("first"),
 		model.NewUserMessage("current"),
@@ -5963,6 +5993,30 @@ func TestMergeCurrentTurnMessagesIntoSeed_ReplacesLastMatchingMessage(t *testing
 		model.NewUserMessage("ctx"),
 		model.NewUserMessage("rewritten"),
 		model.NewAssistantMessage("after"),
+	}, merged)
+}
+
+func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOnlyOlderMessageMatchesOriginal(t *testing.T) {
+	seed := []model.Message{
+		model.NewUserMessage("current"),
+		model.NewAssistantMessage("after"),
+		model.NewUserMessage("latest"),
+	}
+	currentTurn := []model.Message{
+		model.NewUserMessage("ctx"),
+		model.NewUserMessage("rewritten"),
+	}
+	merged := mergeCurrentTurnMessagesIntoSeed(
+		seed,
+		model.NewUserMessage("current"),
+		currentTurn,
+	)
+	require.Equal(t, []model.Message{
+		model.NewUserMessage("current"),
+		model.NewAssistantMessage("after"),
+		model.NewUserMessage("latest"),
+		model.NewUserMessage("ctx"),
+		model.NewUserMessage("rewritten"),
 	}, merged)
 }
 

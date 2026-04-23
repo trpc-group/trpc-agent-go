@@ -2040,6 +2040,11 @@ func (r *runner) rewriteUserMessage(
 	if len(rewritten) == 0 {
 		return nil, fmt.Errorf("runner: user message rewriter returned no messages")
 	}
+	for i := range rewritten {
+		if rewritten[i].Role == "" && model.HasPayload(rewritten[i]) {
+			rewritten[i].Role = model.RoleUser
+		}
+	}
 	return rewritten, nil
 }
 
@@ -2125,10 +2130,13 @@ func mergeCurrentTurnMessagesIntoSeed(
 	}
 	insertIndex := -1
 	for i := len(seed) - 1; i >= 0; i-- {
+		if seed[i].Role != model.RoleUser {
+			continue
+		}
 		if model.MessagesEqual(seed[i], original) {
 			insertIndex = i
-			break
 		}
+		break
 	}
 	if insertIndex == -1 {
 		merged := make([]model.Message, 0, len(seed)+len(currentTurn))
