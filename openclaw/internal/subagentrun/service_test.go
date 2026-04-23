@@ -383,10 +383,13 @@ func TestFormatNotification(t *testing.T) {
 		Run: publicsubagent.Run{
 			ID:      "run-1",
 			Status:  publicsubagent.StatusCompleted,
-			Summary: "finished",
+			Result:  "full result",
+			Summary: "summary only",
 		},
 	}
 	require.Contains(t, formatNotification(record), notificationPrefixCompleted)
+	require.Contains(t, formatNotification(record), "full result")
+	require.NotContains(t, formatNotification(record), "summary only")
 
 	record.Status = publicsubagent.StatusFailed
 	record.Summary = "boom"
@@ -510,13 +513,13 @@ func TestServiceHelperPaths(t *testing.T) {
 	t.Parallel()
 
 	var nilSvc *Service
-	nilSvc.Start(nil)
+	nilSvc.Start(context.Background())
 	require.NoError(t, nilSvc.Close())
 	require.NoError(t, nilSvc.persist())
 
 	svc, err := NewService(t.TempDir(), &captureRunner{reply: "ok"}, nil)
 	require.NoError(t, err)
-	svc.Start(nil)
+	svc.Start(context.Background())
 	t.Cleanup(func() {
 		require.NoError(t, svc.Close())
 	})
@@ -624,7 +627,11 @@ func TestServiceErrorBranches(t *testing.T) {
 		running: make(map[string]*runningRun),
 	}
 
-	_, _, _, err = svc.markRunning(nil, "missing", 0)
+	_, _, _, err = svc.markRunning(
+		context.Background(),
+		"missing",
+		0,
+	)
 	require.ErrorIs(t, err, publicsubagent.ErrRunNotFound)
 
 	svc.runs["run-canceled"] = &runRecord{
@@ -633,7 +640,11 @@ func TestServiceErrorBranches(t *testing.T) {
 			Status: publicsubagent.StatusCanceled,
 		},
 	}
-	_, _, _, err = svc.markRunning(nil, "run-canceled", 0)
+	_, _, _, err = svc.markRunning(
+		context.Background(),
+		"run-canceled",
+		0,
+	)
 	require.ErrorContains(t, err, "run canceled before start")
 
 	badPath := filepath.Join(t.TempDir(), "runs-dir")
@@ -648,7 +659,11 @@ func TestServiceErrorBranches(t *testing.T) {
 		},
 		OwnerUserID: "user-a",
 	}
-	_, _, _, err = svc.markRunning(nil, "run-persist", 0)
+	_, _, _, err = svc.markRunning(
+		context.Background(),
+		"run-persist",
+		0,
+	)
 	require.Error(t, err)
 	run, getErr := svc.GetForUser("user-a", "run-persist")
 	require.NoError(t, getErr)

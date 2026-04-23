@@ -169,6 +169,7 @@ func (s *Service) Spawn(
 		s.mu.Unlock()
 		return publicsubagent.Run{}, err
 	}
+	view := record.publicView()
 
 	s.wg.Add(1)
 	go func(
@@ -180,7 +181,7 @@ func (s *Service) Spawn(
 		s.execute(parent, runID, timeoutSeconds)
 	}(s.baseCtx, record.ID, req.TimeoutSeconds)
 
-	return record.publicView(), nil
+	return view, nil
 }
 
 func (s *Service) ListForUser(
@@ -281,6 +282,9 @@ func (s *Service) execute(
 	)
 	if err != nil {
 		return
+	}
+	if started.cancel != nil {
+		defer started.cancel()
 	}
 
 	result := replyAccumulator{}
@@ -482,8 +486,17 @@ func (s *Service) notifyCompletion(record *runRecord) {
 	if strings.TrimSpace(message) == "" {
 		return
 	}
+	notifyCtx := s.baseCtx
+	if notifyCtx == nil {
+		notifyCtx = context.Background()
+	}
+	notifyCtx, cancel := context.WithTimeout(
+		notifyCtx,
+		defaultNotifyTimeout,
+	)
+	defer cancel()
 	err := s.router.SendText(
-		context.Background(),
+		notifyCtx,
 		outbound.DeliveryTarget{
 			Channel: record.Delivery.Channel,
 			Target:  record.Delivery.Target,
@@ -518,10 +531,26 @@ func formatNotification(record *runRecord) string {
 	lines := []string{
 		fmt.Sprintf("%s #%s", prefix, record.ID),
 	}
-	if summary := strings.TrimSpace(record.Summary); summary != "" {
-		lines = append(lines, summary)
+	if detail := notificationDetail(record); detail != "" {
+		lines = append(lines, detail)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func notificationDetail(record *runRecord) string {
+	if record == nil {
+		return ""
+	}
+	if record.Status == publicsubagent.StatusCompleted {
+		result := strings.TrimSpace(record.Result)
+		if result != "" {
+			return result
+		}
+	}
+	if summary := strings.TrimSpace(record.Summary); summary != "" {
+		return summary
+	}
+	return strings.TrimSpace(record.Error)
 }
 
 func (s *Service) runForUser(

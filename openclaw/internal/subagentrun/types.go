@@ -29,6 +29,7 @@ const (
 
 	defaultStoredResultRunes  = 4000
 	defaultStoredSummaryRunes = 240
+	defaultNotifyTimeout      = 15 * time.Second
 
 	notificationPrefixCompleted = "✅ subagent 已完成"
 	notificationPrefixFailed    = "⚠️ subagent 失败"

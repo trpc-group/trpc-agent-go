@@ -1592,6 +1592,12 @@ func run(ctx context.Context, args []string) error {
 		cronRunner  runner.Runner
 		subagentSvc *subagentrun.Service
 	)
+	var cleanupSubagent func()
+	defer func() {
+		if cleanupSubagent != nil {
+			cleanupSubagent()
+		}
+	}()
 	if openClawTools.router != nil {
 		for _, ch := range channels {
 			openClawTools.router.Register(ch)
@@ -1639,6 +1645,13 @@ func run(ctx context.Context, args []string) error {
 		}
 		openClawTools.subagentTools.SetService(subagentSvc)
 		subagentSvc.Start(runCtx)
+		cleanupSubagent = func() {
+			openClawTools.subagentTools.SetService(nil)
+			if subagentSvc != nil {
+				_ = subagentSvc.Close()
+				subagentSvc = nil
+			}
+		}
 	}
 
 	if opts.AdminEnabled {
@@ -1749,7 +1762,10 @@ func run(ctx context.Context, args []string) error {
 		_ = cronSvc.Close()
 	}
 	if subagentSvc != nil {
+		openClawTools.subagentTools.SetService(nil)
+		cleanupSubagent = nil
 		_ = subagentSvc.Close()
+		subagentSvc = nil
 	}
 	if cronRunner != nil {
 		_ = cronRunner.Close()

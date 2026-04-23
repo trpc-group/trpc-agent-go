@@ -636,6 +636,18 @@ func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
 		t,
 		findToolDeclaration(bundle.tools, "sessions_spawn"),
 	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_list"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_get"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_cancel"),
+	)
 }
 
 func TestNewRuntime_ExposesSubagentService(t *testing.T) {

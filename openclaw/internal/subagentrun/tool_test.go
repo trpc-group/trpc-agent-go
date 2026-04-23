@@ -261,6 +261,10 @@ func TestToolAdditionalErrorPaths(t *testing.T) {
 
 	_, err = tools.cancel.Call(ctx, []byte(`{"id":"missing"}`))
 	require.ErrorIs(t, err, publicsubagent.ErrRunNotFound)
+
+	badCtx := newInvocationContext("user-a", "session-a", nil)
+	_, err = tools.spawn.Call(badCtx, []byte(`{"task":"demo"}`))
+	require.ErrorContains(t, err, "resolve delivery target")
 }
 
 func newInvocationContext(

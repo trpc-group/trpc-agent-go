@@ -275,10 +275,16 @@ func (t *spawnTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	delivery, _ := outbound.ResolveTarget(
+	delivery, err := outbound.ResolveTarget(
 		ctx,
 		outbound.DeliveryTarget{},
 	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"subagent: resolve delivery target: %w",
+			err,
+		)
+	}
 
 	run, err := t.svc.Spawn(ctx, SpawnRequest{
 		OwnerUserID:     userID,
