@@ -317,6 +317,7 @@ func TestLLMAgent_RefreshToolSetsOnRun(t *testing.T) {
 		WithTools([]tool.Tool{staticTool}),
 		WithToolSets([]tool.ToolSet{dyn}),
 		WithRefreshToolSetsOnRun(true),
+		WithAwaitUserReplyTool(true),
 	)
 
 	toolsV1 := agent.Tools()

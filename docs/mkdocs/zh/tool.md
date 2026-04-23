@@ -1210,7 +1210,7 @@ toolSet := mcp.NewMCPToolSet(
 
 - 🎯 **Per-Run 控制**：每次调用独立配置，不影响 Agent 定义
 - 💰 **成本优化**：减少发送给 LLM 的工具描述，降低 token 消耗
-- 🛡️ **智能保护**：框架工具（`transfer_to_agent`、`knowledge_search`、可选的 `await_user_reply`）自动保留，永不被过滤
+- 🛡️ **智能保护**：框架工具（`transfer_to_agent`、`knowledge_search`、`agentic_knowledge_search`、可选的 `await_user_reply`）自动保留，永不被过滤
 - 🔧 **灵活定制**：支持内置过滤器和自定义 FilterFunc
 
 #### Tool Search（自动工具筛选）

@@ -149,7 +149,8 @@ func TestMarkAwaitingUserReply_DoesNotAttachToPartialEvent(t *testing.T) {
 			"inv-partial",
 			"clarifier",
 			&model.Response{
-				Done: false,
+				Done:      false,
+				IsPartial: true,
 				Choices: []model.Choice{{
 					Index: 0,
 					Message: model.Message{
