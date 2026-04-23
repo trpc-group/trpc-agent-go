@@ -3443,17 +3443,71 @@ func TestAppendEventInternal_AsyncPersistEnqueue(t *testing.T) {
 	sess.Hash = 0
 
 	evt := event.New("inv-1", "author")
+	evt.Response = &model.Response{
+		Object: model.ObjectTypeChatCompletion,
+		Done:   true,
+		Choices: []model.Choice{
+			{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "{\"insight_text\":\"before\"}",
+				},
+			},
+		},
+	}
 
 	err = s.appendEventInternal(ctx, sess, evt, key)
 	require.NoError(t, err)
+
+	evt.Response.Choices[0].Message.Content = "{\"insight_text\":\"after\"}"
 
 	select {
 	case pair := <-s.eventPairChans[0]:
 		require.NotNil(t, pair)
 		assert.Equal(t, key, pair.key)
-		assert.Equal(t, evt, pair.event)
+		require.NotSame(t, evt, pair.event)
+		require.NotNil(t, pair.event.Response)
+		require.Len(t, pair.event.Response.Choices, 1)
+		assert.Equal(t, "{\"insight_text\":\"before\"}", pair.event.Response.Choices[0].Message.Content)
 	default:
 		t.Fatal("expected event to be enqueued")
+	}
+}
+
+func TestAppendTrackEvent_AsyncPersistEnqueueSnapshotsPayload(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithEnableAsyncPersist(true))
+	s.trackEventChans = []chan *trackEventPair{
+		make(chan *trackEventPair, 1),
+	}
+
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess")
+	sess.Hash = 0
+
+	trackEvent := &session.TrackEvent{
+		Track:     "agui",
+		Payload:   json.RawMessage(`{"delta":"before"}`),
+		Timestamp: time.Now(),
+	}
+
+	err = s.AppendTrackEvent(ctx, sess, trackEvent)
+	require.NoError(t, err)
+
+	copy(trackEvent.Payload, []byte(`{"delta":"after "}`))
+
+	select {
+	case pair := <-s.trackEventChans[0]:
+		require.NotNil(t, pair)
+		require.NotNil(t, pair.event)
+		require.NotSame(t, trackEvent, pair.event)
+		assert.Equal(t, json.RawMessage(`{"delta":"before"}`), pair.event.Payload)
+	default:
+		t.Fatal("expected track event to be enqueued")
 	}
 }
 

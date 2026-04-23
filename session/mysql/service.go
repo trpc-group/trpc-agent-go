@@ -705,8 +705,10 @@ func (s *Service) appendEventInternal(
 	key session.Key,
 	opts ...session.Option,
 ) error {
+	storedEvent := snapshotEvent(e)
+
 	// update user session with the given event
-	sess.UpdateUserSession(e, opts...)
+	sess.UpdateUserSession(storedEvent, opts...)
 
 	// persist event to MySQL asynchronously
 	if s.opts.enableAsyncPersist {
@@ -729,14 +731,14 @@ func (s *Service) appendEventInternal(
 		// Hash key to determine which worker channel to use
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: storedEvent}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.addEvent(ctx, key, e); err != nil {
+	if err := s.addEvent(ctx, key, storedEvent); err != nil {
 		return fmt.Errorf("mysql session service append event failed: %w", err)
 	}
 
@@ -750,6 +752,8 @@ func (s *Service) AppendTrackEvent(
 	trackEvent *session.TrackEvent,
 	opts ...session.Option,
 ) error {
+	storedTrackEvent := snapshotTrackEvent(trackEvent)
+
 	key := session.Key{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
@@ -758,7 +762,7 @@ func (s *Service) AppendTrackEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
-	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
+	if err := sess.AppendTrackEvent(storedTrackEvent, opts...); err != nil {
 		return fmt.Errorf("mysql session service append track event failed: %w", err)
 	}
 
@@ -775,14 +779,14 @@ func (s *Service) AppendTrackEvent(
 
 		index := sess.Hash % len(s.trackEventChans)
 		select {
-		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
+		case s.trackEventChans[index] <- &trackEventPair{key: key, event: storedTrackEvent}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.addTrackEvent(ctx, key, trackEvent); err != nil {
+	if err := s.addTrackEvent(ctx, key, storedTrackEvent); err != nil {
 		return fmt.Errorf("mysql session service append track event failed: %w", err)
 	}
 	return nil
