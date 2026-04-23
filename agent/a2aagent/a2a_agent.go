@@ -173,10 +173,6 @@ func (r *A2AAgent) PrepareInvocation(invocation *agent.Invocation) {
 	}
 }
 
-func (r *A2AAgent) setupInvocation(invocation *agent.Invocation) {
-	r.PrepareInvocation(invocation)
-}
-
 // Run implements the Agent interface
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if invocation != nil {

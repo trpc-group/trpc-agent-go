@@ -43,7 +43,7 @@ func TestLLMAgent_SurfacePatch_OverridesInstructionAndSystemPrompt(t *testing.T)
 			agent.WithSurfacePatchForNode("test-agent", patch),
 		)),
 	)
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 
 	reqProcs := buildRequestProcessorsWithAgent(agt, &agt.option)
 	var instrProc any
@@ -91,7 +91,7 @@ func TestLLMAgent_SurfacePatch_ModelOverridesLegacyRunOptions(t *testing.T) {
 		)),
 	)
 
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 	require.Equal(t, patchedModel, inv.Model)
 }
 
@@ -108,7 +108,7 @@ func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs(t *testing.T) {
 			agent.WithExecutionTraceEnabled(true),
 		)),
 	)
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 	require.Equal(
 		t,
 		[]string{
@@ -134,7 +134,7 @@ func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolSnapshot(t *te
 			agent.WithExecutionTraceEnabled(true),
 		)),
 	)
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 	inv.SetState("llmflow:has_filtered_user_tools", false)
 	require.NotContains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool")
 	inv.SetState("llmflow:has_filtered_user_tools", true)
@@ -189,7 +189,7 @@ func TestLLMAgent_SurfaceRuntimeHelpers_CoverPatchAndFallbackBranches(t *testing
 			agent.WithSurfacePatchForNode("test-agent", patch),
 		)),
 	)
-	agt.setupInvocation(patchedInv)
+	agt.PrepareInvocation(patchedInv)
 	patchedInv.SetState("llmflow:has_filtered_user_tools", false)
 	require.Len(t, agt.fewShotForInvocation(patchedInv), 1)
 	require.NotNil(t, agt.skillRepositoryForInvocation(patchedInv))
@@ -252,7 +252,7 @@ func TestLLMAgent_RunOptions_OverrideStaticInstructionAndSystemPrompt(
 			agent.WithGlobalInstruction("legacy system prompt"),
 		)),
 	)
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 
 	reqProcs := buildRequestProcessorsWithAgent(agt, &agt.option)
 	var instrProc any

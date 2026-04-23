@@ -1262,7 +1262,7 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary(t *testing.T) {
 		agent.WithInvocationMessage(model.NewUserMessage("hello")),
 		agent.WithInvocationEventFilterKey(agentName),
 	)
-	graphAgent.setupInvocation(invocation)
+	graphAgent.PrepareInvocation(invocation)
 
 	state := graphAgent.createInitialState(context.Background(), invocation)
 	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
@@ -1309,7 +1309,7 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary_Disabled(t *testing.T) 
 		agent.WithInvocationMessage(model.NewUserMessage("hello")),
 		agent.WithInvocationEventFilterKey(agentName),
 	)
-	graphAgent.setupInvocation(invocation)
+	graphAgent.PrepareInvocation(invocation)
 
 	state := graphAgent.createInitialState(context.Background(), invocation)
 	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
@@ -1390,7 +1390,7 @@ func TestGraphAgent_CreateInitialStateWithEventMessageProjector(
 	)
 	invocation.InvocationID = invocationID
 	invocation.RunOptions.RequestID = requestID
-	graphAgent.setupInvocation(invocation)
+	graphAgent.PrepareInvocation(invocation)
 
 	state := graphAgent.createInitialState(
 		context.Background(),
@@ -1463,7 +1463,7 @@ func TestGraphAgent_CreateInitialStateWithPreserveForeignMessages(t *testing.T) 
 	invocation.RunOptions.RequestID = requestID
 	invocation.AgentName = agentName
 	invocation.Branch = agentName
-	graphAgent.setupInvocation(invocation)
+	graphAgent.PrepareInvocation(invocation)
 
 	state := graphAgent.createInitialState(context.Background(), invocation)
 	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
@@ -1524,7 +1524,7 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary_FromService(t *testing.
 		agent.WithInvocationMessage(model.NewUserMessage("next turn")),
 		agent.WithInvocationEventFilterKey(agentName),
 	)
-	graphAgent.setupInvocation(invocation)
+	graphAgent.PrepareInvocation(invocation)
 
 	state := graphAgent.createInitialState(ctx, invocation)
 	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
@@ -1640,7 +1640,7 @@ func TestGraphAgent_CreateInitialStateWithContextCompaction(t *testing.T) {
 		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-current"}),
 		agent.WithInvocationEventFilterKey(agentName),
 	)
-	graphAgent.setupInvocation(invocation)
+	graphAgent.PrepareInvocation(invocation)
 
 	state := graphAgent.createInitialState(context.Background(), invocation)
 	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
@@ -1761,7 +1761,7 @@ func TestGraphAgent_CreateInitialStateWithToolMessageDoesNotSetUserInput(t *test
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(toolMsg),
 	)
-	graphAgent.setupInvocation(invocation)
+	graphAgent.PrepareInvocation(invocation)
 
 	state := graphAgent.createInitialState(context.Background(), invocation)
 	_, hasUserInput := state[graph.StateKeyUserInput]

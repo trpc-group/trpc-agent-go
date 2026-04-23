@@ -120,10 +120,6 @@ func (a *ChainAgent) PrepareInvocation(invocation *agent.Invocation) {
 	invocation.AgentName = a.name
 }
 
-func (a *ChainAgent) setupInvocation(invocation *agent.Invocation) {
-	a.PrepareInvocation(invocation)
-}
-
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
 // Returns the updated context and whether execution should stop early.
 func (a *ChainAgent) handleBeforeAgentCallbacks(

@@ -153,7 +153,7 @@ type Invocation struct {
 	//   - <= 0: no limit is applied (default, preserves existing behavior).
 	//
 	// Typical usage:
-	//   - LLMAgent copies its per-agent limits into these fields in setupInvocation.
+	//   - LLMAgent copies its per-agent limits into these fields in PrepareInvocation.
 	//   - Other agent implementations may set them explicitly when constructing
 	//     invocations. If left at zero, IncLLMCallCount/IncToolIteration are no-ops.
 	MaxLLMCalls int

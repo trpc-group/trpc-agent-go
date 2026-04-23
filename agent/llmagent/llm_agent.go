@@ -1247,10 +1247,6 @@ func (a *LLMAgent) PrepareInvocation(invocation *agent.Invocation) {
 		a.instructionForInvocation(invocation)
 }
 
-func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
-	a.PrepareInvocation(invocation)
-}
-
 // wrapEventChannelWithCallbacks wraps the event channel to apply after agent callbacks.
 func (a *LLMAgent) wrapEventChannelWithCallbacks(
 	ctx context.Context,

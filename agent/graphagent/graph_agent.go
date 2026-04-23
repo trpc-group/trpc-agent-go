@@ -472,10 +472,6 @@ func (ga *GraphAgent) PrepareInvocation(invocation *agent.Invocation) {
 	}
 }
 
-func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
-	ga.PrepareInvocation(invocation)
-}
-
 // Tools returns the list of tools available to this agent.
 func (ga *GraphAgent) Tools() []tool.Tool { return nil }
 

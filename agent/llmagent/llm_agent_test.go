@@ -1021,7 +1021,7 @@ func TestLLMAgent_OutputSchemaOnly_InjectsJSONInstructions(t *testing.T) {
 	require.NotNil(t, instrProc)
 
 	inv := &agent.Invocation{InvocationID: testModelPromptInvocationID}
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("hi")},
@@ -1401,7 +1401,7 @@ func TestLLMAgent_SetupInvocation_UsesRunStructuredOutputOverride(t *testing.T) 
 	inv := &agent.Invocation{}
 	agent.WithStructuredOutputJSON(new(runOutput), true, "run description")(&inv.RunOptions)
 
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 
 	require.NotNil(t, inv.StructuredOutput)
 	require.NotNil(t, inv.StructuredOutput.JSONSchema)
@@ -1567,7 +1567,7 @@ func TestLLMAgent_ModelInstructions(t *testing.T) {
 	inv := &agent.Invocation{
 		InvocationID: testModelPromptInvocationID,
 	}
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 
 	req := &model.Request{
 		Messages: []model.Message{},
@@ -1612,7 +1612,7 @@ func TestLLMAgent_ModelGlobalInstructions(t *testing.T) {
 	inv := &agent.Invocation{
 		InvocationID: testModelPromptInvocationID,
 	}
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 
 	req := &model.Request{
 		Messages: []model.Message{},
@@ -1667,7 +1667,7 @@ func TestLLMAgent_ModelInstructions_FallbackToDefault(t *testing.T) {
 	inv := &agent.Invocation{
 		InvocationID: testModelPromptInvocationID,
 	}
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 
 	req := &model.Request{
 		Messages: []model.Message{},
@@ -1705,7 +1705,7 @@ func TestLLMAgent_SetModelInstructions(t *testing.T) {
 	inv := &agent.Invocation{
 		InvocationID: testModelPromptInvocationID,
 	}
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 
 	req := &model.Request{
 		Messages: []model.Message{},
@@ -2110,7 +2110,7 @@ func TestLLMAgent_RunWithModel(t *testing.T) {
 		WithModel(defaultModel),
 	)
 
-	// Test 1: Verify setupInvocation uses default model when no RunOptions.Model is set.
+	// Test 1: Verify PrepareInvocation uses default model when no RunOptions.Model is set.
 	inv1 := &agent.Invocation{
 		InvocationID: "test-1",
 		AgentName:    "test-agent",
@@ -2118,10 +2118,10 @@ func TestLLMAgent_RunWithModel(t *testing.T) {
 		RunOptions:   agent.RunOptions{},
 	}
 
-	llmAgent.setupInvocation(inv1)
+	llmAgent.PrepareInvocation(inv1)
 	require.Equal(t, defaultModel, inv1.Model)
 
-	// Test 2: Verify setupInvocation uses custom model when RunOptions.Model is set.
+	// Test 2: Verify PrepareInvocation uses custom model when RunOptions.Model is set.
 	inv2 := &agent.Invocation{
 		InvocationID: "test-2",
 		AgentName:    "test-agent",
@@ -2131,7 +2131,7 @@ func TestLLMAgent_RunWithModel(t *testing.T) {
 		},
 	}
 
-	llmAgent.setupInvocation(inv2)
+	llmAgent.PrepareInvocation(inv2)
 	require.Equal(t, customModel, inv2.Model)
 
 	// Verify that the agent's default model is unchanged.
@@ -2174,7 +2174,7 @@ func TestLLMAgent_RunWithModelName(t *testing.T) {
 		}),
 	)
 
-	// Test 1: Verify setupInvocation uses gpt-4 model when ModelName is "gpt-4".
+	// Test 1: Verify PrepareInvocation uses gpt-4 model when ModelName is "gpt-4".
 	inv1 := &agent.Invocation{
 		InvocationID: "test-1",
 		AgentName:    "test-agent",
@@ -2184,10 +2184,10 @@ func TestLLMAgent_RunWithModelName(t *testing.T) {
 		},
 	}
 
-	llmAgent.setupInvocation(inv1)
+	llmAgent.PrepareInvocation(inv1)
 	require.Equal(t, gpt4Model, inv1.Model)
 
-	// Test 2: Verify setupInvocation uses gpt-3.5 model when ModelName is "gpt-3.5".
+	// Test 2: Verify PrepareInvocation uses gpt-3.5 model when ModelName is "gpt-3.5".
 	inv2 := &agent.Invocation{
 		InvocationID: "test-2",
 		AgentName:    "test-agent",
@@ -2197,7 +2197,7 @@ func TestLLMAgent_RunWithModelName(t *testing.T) {
 		},
 	}
 
-	llmAgent.setupInvocation(inv2)
+	llmAgent.PrepareInvocation(inv2)
 	require.Equal(t, gpt35Model, inv2.Model)
 }
 
@@ -2221,7 +2221,7 @@ func TestLLMAgent_RunWithModelName_NotFound(t *testing.T) {
 		WithModel(defaultModel),
 	)
 
-	// Verify setupInvocation falls back to default model when model name is not found.
+	// Verify PrepareInvocation falls back to default model when model name is not found.
 	inv := &agent.Invocation{
 		InvocationID: "test-1",
 		AgentName:    "test-agent",
@@ -2231,7 +2231,7 @@ func TestLLMAgent_RunWithModelName_NotFound(t *testing.T) {
 		},
 	}
 
-	llmAgent.setupInvocation(inv)
+	llmAgent.PrepareInvocation(inv)
 	require.Equal(t, defaultModel, inv.Model)
 }
 
@@ -2269,7 +2269,7 @@ func TestLLMAgent_RunWithModel_Priority(t *testing.T) {
 		}),
 	)
 
-	// Verify setupInvocation prioritizes Model over ModelName.
+	// Verify PrepareInvocation prioritizes Model over ModelName.
 	inv := &agent.Invocation{
 		InvocationID: "test-1",
 		AgentName:    "test-agent",
@@ -2280,13 +2280,13 @@ func TestLLMAgent_RunWithModel_Priority(t *testing.T) {
 		},
 	}
 
-	llmAgent.setupInvocation(inv)
+	llmAgent.PrepareInvocation(inv)
 	require.Equal(t, modelFromWithModel, inv.Model)
 }
 
 // TestLLMAgent_SetupInvocation_PropagatesMaxLimits verifies that per-agent
 // safety limits (MaxLLMCalls / MaxToolIterations) are copied into each
-// Invocation during setupInvocation. When the agent is created without limits,
+// Invocation during PrepareInvocation. When the agent is created without limits,
 // the invocation should see zero values, which are treated as "no limit" by
 // the Invocation helpers.
 func TestLLMAgent_SetupInvocation_PropagatesMaxLimits(t *testing.T) {
@@ -2304,7 +2304,7 @@ func TestLLMAgent_SetupInvocation_PropagatesMaxLimits(t *testing.T) {
 		Message:      model.NewUserMessage("hello"),
 	}
 
-	llmWithLimits.setupInvocation(invWithLimits)
+	llmWithLimits.PrepareInvocation(invWithLimits)
 	require.Equal(t, 3, invWithLimits.MaxLLMCalls)
 	require.Equal(t, 5, invWithLimits.MaxToolIterations)
 
@@ -2320,7 +2320,7 @@ func TestLLMAgent_SetupInvocation_PropagatesMaxLimits(t *testing.T) {
 		Message:      model.NewUserMessage("hello"),
 	}
 
-	llmNoLimits.setupInvocation(invNoLimits)
+	llmNoLimits.PrepareInvocation(invNoLimits)
 	require.Equal(t, 0, invNoLimits.MaxLLMCalls)
 	require.Equal(t, 0, invNoLimits.MaxToolIterations)
 }
