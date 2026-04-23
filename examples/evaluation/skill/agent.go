@@ -29,6 +29,10 @@ func newSkillAgent(modelName string, stream bool, repo skill.Repository) agent.A
 		llmagent.WithModel(openai.New(modelName)),
 		llmagent.WithGenerationConfig(genCfg),
 		llmagent.WithSkills(repo),
+		// This evaluation asserts skill_run behavior, so opt into the
+		// full skill tool profile; the default knowledge_only profile
+		// does not register skill_run.
+		llmagent.WithSkillToolProfile(llmagent.SkillToolProfileFull),
 		llmagent.WithCodeExecutor(localexec.New()),
 		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithInstruction(`You are running in an evaluation.

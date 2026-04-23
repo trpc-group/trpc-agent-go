@@ -142,7 +142,16 @@ func newProfileAgent(
 
 	executorLabel := "disabled"
 	if profile == llmagent.SkillToolProfileFull {
-		opts = append(opts, llmagent.WithCodeExecutor(localexec.New()))
+		opts = append(
+			opts,
+			llmagent.WithCodeExecutor(localexec.New()),
+			// The CodeExecutor here exists so skill_run /
+			// workspace_exec can run; it is not a license to
+			// auto-execute fenced code from assistant replies. Keep
+			// that orthogonal switch explicitly off so the demo
+			// showcases only the skill-tool execution path.
+			llmagent.WithEnableCodeExecutionResponseProcessor(false),
+		)
 		executorLabel = "local"
 	}
 

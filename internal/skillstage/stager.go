@@ -38,14 +38,43 @@ func New() *Stager {
 	return &Stager{}
 }
 
+// StageOptions tunes how StageSkillWithOptions materializes a skill
+// working copy. The zero value matches the default behavior expected
+// by the workspaceprep reconciler: a writable session-level working
+// copy that scripts may freely modify.
+type StageOptions struct {
+	// ReadOnly flips the staged tree to read-only after copy. This
+	// is the legacy behavior used by the now-deprecated skill_run
+	// tool and should not be used by new callers; treating skills/
+	// as a writable working copy is the default contract.
+	ReadOnly bool
+}
+
 // StageSkill copies a skill into the shared workspace and links the shared
-// work/out roots under skills/<name>.
+// work/out roots under skills/<name>. The staged tree is writable by
+// default; callers that need the legacy read-only semantics can use
+// StageSkillWithOptions.
 func (s *Stager) StageSkill(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	root string,
 	name string,
+) error {
+	return s.StageSkillWithOptions(ctx, eng, ws, root, name, StageOptions{})
+}
+
+// StageSkillWithOptions is StageSkill with explicit knobs. It exists
+// so legacy entry points can request the old read-only behavior while
+// new workspace-preparation code keeps the writable-by-default
+// contract.
+func (s *Stager) StageSkillWithOptions(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	root string,
+	name string,
+	opts StageOptions,
 ) error {
 	dg, err := codeexecutor.DirDigest(root)
 	if err != nil {
@@ -80,8 +109,12 @@ func (s *Stager) StageSkill(
 	if err := s.linkWorkspaceDirs(ctx, eng, ws, name); err != nil {
 		return err
 	}
-	if err := s.readOnlyExceptSymlinks(ctx, eng, ws, dest); err != nil {
-		return err
+	if opts.ReadOnly {
+		if err := s.readOnlyExceptSymlinks(
+			ctx, eng, ws, dest,
+		); err != nil {
+			return err
+		}
 	}
 	md.Skills[name] = codeexecutor.SkillMeta{
 		Name:     name,

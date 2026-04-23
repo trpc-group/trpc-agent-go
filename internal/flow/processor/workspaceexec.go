@@ -193,10 +193,17 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 		b.WriteString("Intermediate files usually stay in the workspace.\n")
 	}
 	if p.hasSkillsRepo(inv) {
-		b.WriteString("- Paths under skills/ are only useful when some ")
-		b.WriteString("other tool has already placed content there. ")
-		b.WriteString("workspace_exec does not stage skills ")
-		b.WriteString("automatically.\n")
+		b.WriteString("- Paths under skills/<name> become populated ")
+		b.WriteString("only after skill_load <name>: that call ")
+		b.WriteString("materializes the writable skill working copy ")
+		b.WriteString("and turns skills/<name>/ into a real directory ")
+		b.WriteString("you can run commands from. After loading, set ")
+		b.WriteString("cwd to skills/<name> for workspace_exec and ")
+		b.WriteString("run the scripts referenced in that SKILL.md ")
+		b.WriteString("(for example, the Examples section). Without ")
+		b.WriteString("a prior skill_load, paths under skills/ are ")
+		b.WriteString("not staged and workspace_exec will not see ")
+		b.WriteString("them.\n")
 	}
 	if p.sessionToolsForInvocation(inv) {
 		b.WriteString("- When workspace_exec starts a command that keeps ")
