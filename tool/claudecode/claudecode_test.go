@@ -906,6 +906,36 @@ func TestToolSet_WebFetchRejectsMissingPromptAndBlockedDomain(t *testing.T) {
 	require.EqualError(t, err, "url is blocked by domain policy: https://example.com/page")
 }
 
+func TestToolSet_WebFetchPropagatesFetchAndPromptProcessorErrors(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("alpha"))
+	}))
+	defer server.Close()
+	ts, err := NewToolSet(WithWebFetchOptions(WebFetchOptions{
+		Timeout: time.Millisecond,
+		PromptProcessor: func(context.Context, WebFetchPromptInput) (string, error) {
+			return "", fs.ErrInvalid
+		},
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, ts.Close())
+	})
+	fetchTool := mustCallableTool(t, ts.Tools(context.Background()), toolWebFetch)
+	_, err = callToolRaw(fetchTool, webFetchInput{
+		URL:    "://bad",
+		Prompt: "Summarize the page.",
+	})
+	require.Error(t, err)
+	_, err = callToolRaw(fetchTool, webFetchInput{
+		URL:    server.URL,
+		Prompt: "Summarize the page.",
+	})
+	require.ErrorIs(t, err, fs.ErrInvalid)
+}
+
 func TestFetchURLHandlesRedirectAndBodyErrorBranches(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -955,6 +985,30 @@ func TestFetchURLHandlesRedirectAndBodyErrorBranches(t *testing.T) {
 	}
 	_, _, _, _, _, err = fetchURL(context.Background(), errorClient, server.URL+"/body-error", WebFetchOptions{})
 	require.ErrorIs(t, err, fs.ErrInvalid)
+}
+
+func TestFetchURLPropagatesRequestAndRedirectParseErrors(t *testing.T) {
+	t.Parallel()
+	requestFailedClient := &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, fs.ErrInvalid
+		}),
+	}
+	_, _, _, _, _, err := fetchURL(context.Background(), requestFailedClient, "https://example.com/start", WebFetchOptions{})
+	require.ErrorIs(t, err, fs.ErrInvalid)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "://bad")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer server.Close()
+	client := &http.Client{
+		Timeout: defaultHTTPTimeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	_, _, _, _, _, err = fetchURL(context.Background(), client, server.URL, WebFetchOptions{})
+	require.Error(t, err)
 }
 
 func TestFetchURLReturnsTooManyRedirects(t *testing.T) {
