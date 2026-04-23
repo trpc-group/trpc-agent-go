@@ -444,23 +444,17 @@ func (r *runner) Run(
 		execCancel()
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
-	invocationMessage := message
-	var persistedCurrentTurnMessages []model.Message
-	if ro.UserMessageRewriter != nil {
-		currentTurnMessages, err := r.rewriteUserMessage(
-			execCtx,
-			effectiveAppName,
-			userID,
-			sessionID,
-			message,
-			ro,
-		)
-		if err != nil {
-			execCancel()
-			return nil, err
-		}
-		invocationMessage = currentTurnMessages[len(currentTurnMessages)-1]
-		persistedCurrentTurnMessages = filterPayloadMessages(currentTurnMessages)
+	invocationMessage, persistedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
+		execCtx,
+		effectiveAppName,
+		userID,
+		sessionID,
+		message,
+		ro,
+	)
+	if err != nil {
+		execCancel()
+		return nil, err
 	}
 
 	eventFilterKey := effectiveAppName
@@ -502,43 +496,14 @@ func (r *runner) Run(
 		return nil, err
 	}
 
-	if ro.UserMessageRewriter == nil {
-		if err := r.seedSessionHistory(execCtx, sess, invocation, ag, ro); err != nil {
-			steer.Clear(invocation)
-			r.unregisterRun(ro.RequestID)
-			execCancel()
-			return nil, err
-		}
-		if err := r.appendIncomingMessage(execCtx, sess, invocation, message, ro); err != nil {
-			steer.Clear(invocation)
-			r.unregisterRun(ro.RequestID)
-			execCancel()
-			return nil, err
-		}
-	} else if sess.GetEventCount() == 0 {
-		initialMessages := mergeCurrentTurnMessagesIntoSeed(
-			ro.Messages,
-			message,
-			persistedCurrentTurnMessages,
-		)
-		if err := r.appendSessionMessages(
-			execCtx,
-			sess,
-			invocation,
-			ag,
-			initialMessages,
-		); err != nil {
-			steer.Clear(invocation)
-			r.unregisterRun(ro.RequestID)
-			execCancel()
-			return nil, err
-		}
-	} else if err := r.appendSessionMessages(
+	if err := r.persistCurrentTurnMessages(
 		execCtx,
 		sess,
 		invocation,
 		ag,
+		message,
 		persistedCurrentTurnMessages,
+		ro,
 	); err != nil {
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
@@ -2076,6 +2041,57 @@ func (r *runner) rewriteUserMessage(
 		return nil, fmt.Errorf("runner: user message rewriter returned no messages")
 	}
 	return rewritten, nil
+}
+
+func (r *runner) resolveCurrentTurnMessages(
+	ctx context.Context,
+	appName string,
+	userID string,
+	sessionID string,
+	message model.Message,
+	ro agent.RunOptions,
+) (model.Message, []model.Message, error) {
+	if ro.UserMessageRewriter == nil {
+		return message, nil, nil
+	}
+	currentTurnMessages, err := r.rewriteUserMessage(
+		ctx,
+		appName,
+		userID,
+		sessionID,
+		message,
+		ro,
+	)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	return currentTurnMessages[len(currentTurnMessages)-1], filterPayloadMessages(currentTurnMessages), nil
+}
+
+func (r *runner) persistCurrentTurnMessages(
+	ctx context.Context,
+	sess *session.Session,
+	invocation *agent.Invocation,
+	ag agent.Agent,
+	message model.Message,
+	persistedCurrentTurnMessages []model.Message,
+	ro agent.RunOptions,
+) error {
+	if ro.UserMessageRewriter == nil {
+		if err := r.seedSessionHistory(ctx, sess, invocation, ag, ro); err != nil {
+			return err
+		}
+		return r.appendIncomingMessage(ctx, sess, invocation, message, ro)
+	}
+	if sess.GetEventCount() == 0 {
+		initialMessages := mergeCurrentTurnMessagesIntoSeed(
+			ro.Messages,
+			message,
+			persistedCurrentTurnMessages,
+		)
+		return r.appendSessionMessages(ctx, sess, invocation, ag, initialMessages)
+	}
+	return r.appendSessionMessages(ctx, sess, invocation, ag, persistedCurrentTurnMessages)
 }
 
 // shouldAppendUserMessage checks if the incoming user message should be
