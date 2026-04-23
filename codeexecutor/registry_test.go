@@ -12,7 +12,9 @@ package codeexecutor
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -62,4 +64,62 @@ func TestWorkspaceRegistry_Acquire_Error(t *testing.T) {
 	wm := &fakeWM{err: boom}
 	_, err := r.Acquire(context.Background(), wm, "x")
 	require.Error(t, err)
+}
+
+type blockingWM struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingWM) CreateWorkspace(
+	ctx context.Context, id string, _ WorkspacePolicy,
+) (Workspace, error) {
+	b.once.Do(func() { close(b.entered) })
+	select {
+	case <-b.release:
+		return Workspace{ID: id, Path: "/tmp/" + id}, nil
+	case <-ctx.Done():
+		return Workspace{}, ctx.Err()
+	}
+}
+
+func (b *blockingWM) Cleanup(_ context.Context, _ Workspace) error {
+	return nil
+}
+
+func TestWorkspaceRegistry_Acquire_CreateIgnoresLeaderCancel(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &blockingWM{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+
+	leaderCtx, leaderCancel := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := r.Acquire(leaderCtx, wm, "shared")
+		leaderDone <- err
+	}()
+
+	select {
+	case <-wm.entered:
+	case <-time.After(time.Second):
+		t.Fatal("leader did not start workspace creation")
+	}
+
+	followerDone := make(chan error, 1)
+	go func() {
+		ws, err := r.Acquire(context.Background(), wm, "shared")
+		if err == nil {
+			require.Equal(t, "shared", ws.ID)
+		}
+		followerDone <- err
+	}()
+
+	leaderCancel()
+	close(wm.release)
+
+	require.ErrorIs(t, <-leaderDone, context.Canceled)
+	require.NoError(t, <-followerDone)
 }
