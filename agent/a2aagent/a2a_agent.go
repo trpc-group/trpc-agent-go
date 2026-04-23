@@ -157,6 +157,10 @@ func (r *A2AAgent) validateA2ARequestOptions(invocation *agent.Invocation) error
 	return nil
 }
 
+// PrepareInvocation populates invocation-scoped metadata that the centralized
+// invoke_agent telemetry path relies on. It binds the invocation to this
+// concrete A2A agent instance and resolves the streaming preference when the
+// caller has not already set one.
 func (r *A2AAgent) PrepareInvocation(invocation *agent.Invocation) {
 	if invocation == nil {
 		return

@@ -1177,7 +1177,6 @@ func (a *LLMAgent) wrapEventChannelWithCallbacks(
 			}
 		}
 		if ctx, evt := a.runAfterAgentCallback(ctx, invocation, fullRespEvent); evt != nil {
-			fullRespEvent = evt
 			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 		}
 	}(runCtx)

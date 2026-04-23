@@ -102,11 +102,11 @@ func (a *ChainAgent) executeChainRun(
 	}
 	// Execute sub-agents in sequence.
 	e := a.executeSubAgents(ctx, invocation, eventChan)
-	// Handle after agent callbacks.
+	// Handle after agent callbacks. The result is intentionally discarded
+	// because RunWithPlugins owns the post-execution telemetry path; the
+	// callback only needs to be given a chance to emit its own event.
 	if a.agentCallbacks != nil {
-		if afterEvent := a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e); afterEvent != nil {
-			e = afterEvent
-		}
+		_ = a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e)
 	}
 }
 

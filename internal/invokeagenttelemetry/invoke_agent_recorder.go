@@ -7,6 +7,9 @@
 //
 //
 
+// Package invokeagenttelemetry provides shared invoke_agent OpenTelemetry
+// helpers used by the agent runtime to emit consistent traces and metrics
+// across all agent implementations.
 package invokeagenttelemetry
 
 import (
@@ -31,19 +34,37 @@ import (
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
+// OperationInvokeAgent is the GenAI operation name reported on every
+// invoke_agent span and metric emitted by this package.
 const OperationInvokeAgent = "invoke_agent"
 
 var (
+	// MeterProvider is the meter provider used to create invoke_agent metric
+	// instruments. It defaults to a no-op provider until [InitMeterProvider]
+	// is called by the telemetry runtime.
 	MeterProvider metric.MeterProvider = noopmetric.NewMeterProvider()
 
+	// InvokeAgentMeter is the meter used to record invoke_agent metrics. It
+	// is rebuilt by [InitMeterProvider] when a real provider is installed.
 	InvokeAgentMeter metric.Meter = MeterProvider.Meter(metricsemconv.MeterNameInvokeAgent)
 
-	InvokeAgentMetricGenAIRequestCnt              metric.Int64Counter
-	InvokeAgentMetricGenAIClientTokenUsage        *histogram.DynamicInt64Histogram
-	InvokeAgentMetricGenAIClientTimeToFirstToken  *histogram.DynamicFloat64Histogram
+	// InvokeAgentMetricGenAIRequestCnt counts invoke_agent requests.
+	InvokeAgentMetricGenAIRequestCnt metric.Int64Counter
+	// InvokeAgentMetricGenAIClientTokenUsage tracks token usage histograms
+	// (prompt vs completion) for invoke_agent operations.
+	InvokeAgentMetricGenAIClientTokenUsage *histogram.DynamicInt64Histogram
+	// InvokeAgentMetricGenAIClientTimeToFirstToken tracks the time-to-first-token
+	// histogram for streaming invoke_agent operations.
+	InvokeAgentMetricGenAIClientTimeToFirstToken *histogram.DynamicFloat64Histogram
+	// InvokeAgentMetricGenAIClientOperationDuration tracks the end-to-end
+	// duration histogram of invoke_agent operations.
 	InvokeAgentMetricGenAIClientOperationDuration *histogram.DynamicFloat64Histogram
 )
 
+// InvocationView is the immutable snapshot of an [agent.Invocation] consumed
+// by invoke_agent telemetry helpers. It captures only the fields required to
+// label spans and metrics so callers can pass either a live invocation or a
+// derived view without coupling this package to the agent runtime.
 type InvocationView struct {
 	AgentName             string
 	InvocationID          string
@@ -55,6 +76,9 @@ type InvocationView struct {
 	HasParent             bool
 }
 
+// InvokeAgentOptions carries the per-call attributes that influence the
+// invoke_agent span and metrics, such as the agent description, system
+// instructions and the resolved generation configuration.
 type InvokeAgentOptions struct {
 	Description  string
 	Instructions string
@@ -62,12 +86,17 @@ type InvokeAgentOptions struct {
 	Stream       bool
 }
 
+// TokenUsage aggregates the token counts observed during a single
+// invoke_agent operation.
 type TokenUsage struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
 }
 
+// InvokeAgentRecorder owns the lifecycle of a single invoke_agent span and
+// its associated tracker, accumulating token usage and error status until
+// [InvokeAgentRecorder.Finish] is called.
 type InvokeAgentRecorder struct {
 	started           bool
 	span              oteltrace.Span
@@ -89,6 +118,9 @@ type invokeAgentAttributes struct {
 	Error     error
 }
 
+// InvokeAgentTracker accumulates per-call telemetry state for a single
+// invoke_agent operation and is responsible for emitting the associated
+// metrics when [InvokeAgentTracker.RecordMetrics] is invoked.
 type InvokeAgentTracker struct {
 	ctx                    context.Context
 	start                  time.Time
@@ -117,6 +149,10 @@ type telemetryChoice struct {
 	FinishReason *string          `json:"finish_reason,omitempty"`
 }
 
+// InitMeterProvider rebuilds the package-level invoke_agent metric
+// instruments using the supplied [metric.MeterProvider]. It must be called
+// once when the telemetry runtime is initialized so that subsequent recorders
+// emit data through the configured exporter.
 func InitMeterProvider(mp metric.MeterProvider) error {
 	MeterProvider = mp
 	InvokeAgentMeter = mp.Meter(metricsemconv.MeterNameInvokeAgent)
@@ -163,6 +199,9 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	return nil
 }
 
+// InvokeAgentSpanName returns the canonical span name for an invoke_agent
+// operation. When the agent name is unknown, it falls back to the generic
+// operation name so spans remain attributable to invoke_agent.
 func InvokeAgentSpanName(invocation *InvocationView) string {
 	if invocation == nil || invocation.AgentName == "" {
 		return OperationInvokeAgent
@@ -170,6 +209,10 @@ func InvokeAgentSpanName(invocation *InvocationView) string {
 	return fmt.Sprintf("%s %s", OperationInvokeAgent, invocation.AgentName)
 }
 
+// StartInvokeAgent attaches an [InvokeAgentRecorder] to the supplied span
+// and seeds the underlying tracker with invocation metadata. When started is
+// true, the pre-execution span attributes are written immediately via
+// [TraceBeforeInvokeAgent].
 func StartInvokeAgent(
 	ctx context.Context,
 	invocation *InvocationView,
@@ -205,6 +248,9 @@ func StartInvokeAgent(
 	}
 }
 
+// Observe folds a single agent event into the recorder, updating the
+// running token usage, the most recent non-partial response event and the
+// derived response error type. It is safe to call on a nil recorder.
 func (r *InvokeAgentRecorder) Observe(evt *event.Event) {
 	if r == nil || evt == nil {
 		return
@@ -230,6 +276,8 @@ func (r *InvokeAgentRecorder) Observe(evt *event.Event) {
 	}
 }
 
+// SetResponseErrorType overrides the response error type that will be
+// reported on the span and metrics when the recorder is finished.
 func (r *InvokeAgentRecorder) SetResponseErrorType(errorType string) {
 	if r == nil {
 		return
@@ -237,6 +285,8 @@ func (r *InvokeAgentRecorder) SetResponseErrorType(errorType string) {
 	r.responseErrorType = errorType
 }
 
+// Finish closes the invoke_agent span and emits the accumulated metrics.
+// It is idempotent and safe to call on a nil recorder.
 func (r *InvokeAgentRecorder) Finish() {
 	if r == nil || r.finished {
 		return
@@ -281,6 +331,8 @@ func (r *InvokeAgentRecorder) Finish() {
 	}
 }
 
+// Span returns the underlying OpenTelemetry span. A no-op span is returned
+// when the recorder is nil so callers can chain attribute writes safely.
 func (r *InvokeAgentRecorder) Span() oteltrace.Span {
 	if r == nil {
 		return nooptrace.Span{}
@@ -288,6 +340,9 @@ func (r *InvokeAgentRecorder) Span() oteltrace.Span {
 	return r.span
 }
 
+// TraceStarted reports whether tracing was enabled when the recorder was
+// created. It is safe to call on a nil recorder, in which case it returns
+// false.
 func (r *InvokeAgentRecorder) TraceStarted() bool {
 	if r == nil {
 		return false
@@ -295,6 +350,9 @@ func (r *InvokeAgentRecorder) TraceStarted() bool {
 	return r.started
 }
 
+// TraceBeforeInvokeAgent writes the pre-execution invoke_agent span
+// attributes derived from the invocation view and generation configuration.
+// It is a no-op when the span is not recording.
 func TraceBeforeInvokeAgent(
 	span oteltrace.Span,
 	invoke *InvocationView,
@@ -372,6 +430,9 @@ func TraceBeforeInvokeAgent(
 	}
 }
 
+// TraceAfterInvokeAgent writes the post-execution invoke_agent span
+// attributes including token usage, output messages, finish reasons and
+// error status. It is a no-op when the span is not recording.
 func TraceAfterInvokeAgent(
 	span oteltrace.Span,
 	rspEvent *event.Event,
@@ -417,6 +478,10 @@ func TraceAfterInvokeAgent(
 	}
 }
 
+// NewInvokeAgentTracker constructs an [InvokeAgentTracker] populated with
+// the static metric attributes derived from the invocation view. The err
+// pointer captures the latest error observed by the caller and is read when
+// metrics are recorded.
 func NewInvokeAgentTracker(
 	ctx context.Context,
 	invocation *InvocationView,
@@ -445,6 +510,9 @@ func NewInvokeAgentTracker(
 	}
 }
 
+// TrackResponse updates the tracker with a single model response, recording
+// time-to-first-token on the first valid streaming chunk and accumulating
+// total token usage when a non-partial response carries usage information.
 func (t *InvokeAgentTracker) TrackResponse(response *model.Response) {
 	if response == nil {
 		return
@@ -459,10 +527,15 @@ func (t *InvokeAgentTracker) TrackResponse(response *model.Response) {
 	}
 }
 
+// SetResponseErrorType records the response error type to be exposed as a
+// metric attribute when [InvokeAgentTracker.RecordMetrics] runs.
 func (t *InvokeAgentTracker) SetResponseErrorType(errorType string) {
 	t.attributes.ErrorType = errorType
 }
 
+// RecordMetrics returns a closure that, when invoked, emits the request
+// count, total duration, time-to-first-token and token usage metrics for the
+// completed invoke_agent operation.
 func (t *InvokeAgentTracker) RecordMetrics() func() {
 	return func() {
 		requestDuration := time.Since(t.start)
@@ -500,6 +573,9 @@ func (t *InvokeAgentTracker) RecordMetrics() func() {
 	}
 }
 
+// FirstTokenTimeDuration returns the time elapsed between the start of the
+// invocation and the first valid streaming response chunk. It returns zero
+// if no qualifying chunk has been observed.
 func (t *InvokeAgentTracker) FirstTokenTimeDuration() time.Duration {
 	return t.firstTokenTimeDuration
 }
@@ -530,6 +606,10 @@ func (a invokeAgentAttributes) toAttributes() []attribute.KeyValue {
 	return attrs
 }
 
+// FormatResponseErrorLabel renders a stable error label suitable for use as
+// a metric attribute. When respErr is nil the supplied fallback is returned
+// unchanged; otherwise the response error type is preferred and the optional
+// error code is appended.
 func FormatResponseErrorLabel(respErr *model.ResponseError, fallback string) string {
 	if respErr == nil {
 		return fallback
@@ -544,6 +624,8 @@ func FormatResponseErrorLabel(respErr *model.ResponseError, fallback string) str
 	return label
 }
 
+// ToErrorType derives a stable error type label from a Go error by routing
+// it through [errs.ToResponseError] and [FormatResponseErrorLabel].
 func ToErrorType(err error, errorType string) string {
 	return FormatResponseErrorLabel(errs.ToResponseError(err), errorType)
 }
