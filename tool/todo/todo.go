@@ -253,6 +253,16 @@ func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if err := json.Unmarshal(jsonArgs, &in); err != nil {
 		return nil, fmt.Errorf("todo_write: invalid arguments: %w", err)
 	}
+	// `{"todos": null}` and a missing `todos` field both unmarshal to a
+	// nil slice. Treat them as an explicit empty list so that the tool
+	// never serialises `null` for a field declared as an array in both
+	// the input and the output schema. Semantically this matches the
+	// "submit an empty list" convention callers can already use to
+	// clear the checklist, and keeps the two persistence layers
+	// (Session.SetState + StateDelta) byte-identical.
+	if in.Todos == nil {
+		in.Todos = []Item{}
+	}
 	if err := validateTodos(in.Todos); err != nil {
 		return nil, fmt.Errorf("todo_write: %w", err)
 	}
@@ -286,21 +296,30 @@ func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 		inv.Session.SetState(key, encoded)
 	}
 
+	// Snapshot the returned lists up front: the persisted state was
+	// marshalled above, so even if a misbehaving hook mutates the
+	// slices it receives, our Output and the canonical store stay in
+	// sync. The contract on NudgeHook (see options.go) already says
+	// hooks must be read-only; these clones are belt-and-braces so a
+	// buggy hook cannot silently corrupt the tool's response.
+	outputTodos := cloneItems(newTodos)
+	outputOldTodos := cloneItems(oldTodos)
+
 	// Compose message: default nudge + hooks.
 	msg := t.opts.defaultNudge
 	for _, hook := range t.opts.nudgeHooks {
 		if hook == nil {
 			continue
 		}
-		if extra := hook(ctx, oldTodos, in.Todos); extra != "" {
+		if extra := hook(ctx, cloneItems(oldTodos), cloneItems(in.Todos)); extra != "" {
 			msg += "\n\n" + extra
 		}
 	}
 
 	return Output{
 		Message:  msg,
-		Todos:    newTodos,
-		OldTodos: oldTodos,
+		Todos:    outputTodos,
+		OldTodos: outputOldTodos,
 	}, nil
 }
 
@@ -328,6 +347,14 @@ func (t *Tool) StateDeltaForInvocation(
 	var in writeInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		return nil
+	}
+	// Mirror Call(): coerce a missing/null todos field to an empty
+	// slice so the canonical delta stays a JSON array. Call() has
+	// already done the same on its own path, this keeps the two
+	// persistence layers byte-identical even if an arg array was
+	// rewritten between Call and StateDeltaForInvocation.
+	if in.Todos == nil {
+		in.Todos = []Item{}
 	}
 	if err := validateTodos(in.Todos); err != nil {
 		return nil
@@ -417,4 +444,20 @@ func allCompleted(todos []Item) bool {
 		}
 	}
 	return true
+}
+
+// cloneItems returns a fresh []Item with the same contents as items.
+// A nil input maps to a nil output so that optional-empty semantics
+// ("first call, no OldTodos") continue to marshal as an omitted
+// field rather than `[]`.
+//
+// Item has only scalar fields, so a shallow copy is sufficient to
+// isolate callers from each other.
+func cloneItems(items []Item) []Item {
+	if items == nil {
+		return nil
+	}
+	out := make([]Item, len(items))
+	copy(out, items)
+	return out
 }

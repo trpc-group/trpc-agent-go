@@ -85,7 +85,7 @@ Interactive commands inside the chat:
 
 ## Example output
 
-```
+```text
 You (seed): Plan 3 small steps with todo_write: 1) greet, 2) define dark mode in 1 sentence, 3) suggest 2 CSS variables. Then execute them one by one, updating the list each time.
 Assistant:   [tool-call] todo_write {"todos":[
   {"content":"Greet the user","activeForm":"Greeting the user","status":"in_progress"},
@@ -124,7 +124,7 @@ Seed prompt (shortened):
 
 ### Turn 1 — partial progress, then pause
 
-```
+```text
 You (seed): I'm writing a 3-section blog post ... ASK ME ... then STOP.
 Assistant:
   [tool-call] todo_write { ... Intro in_progress, Main Body pending, Conclusion pending ... }
@@ -157,7 +157,7 @@ Main Body item truly in `in_progress`.
 
 ### Turn 2 — user answers, agent resumes from the same list
 
-```
+```text
 You: Autumn vibes, 2 candles, warm yellow lighting
 Assistant:
   [tool-call] todo_write { ... Main Body completed, Conclusion in_progress ... }

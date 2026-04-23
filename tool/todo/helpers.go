@@ -66,8 +66,10 @@ func GetTodosWithPrefix(sess *session.Session, prefix, branch string) ([]Item, e
 }
 
 // readTodos is the package-internal variant of GetTodosWithPrefix that
-// accepts a pre-computed state key. Errors from decoding are swallowed
-// so that a poisoned state entry cannot break the next write.
+// accepts a pre-computed state key. A poisoned state entry surfaces as
+// a decode error and is the caller's responsibility to discard —
+// Call() does this with `oldTodos, _ = readTodos(...)` so that a
+// single bad write cannot stop the next one from landing.
 func readTodos(sess *session.Session, key string) ([]Item, error) {
 	if sess == nil {
 		return nil, nil

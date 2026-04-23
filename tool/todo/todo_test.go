@@ -380,6 +380,130 @@ func TestAllCompleted(t *testing.T) {
 	}
 }
 
+// TestCall_NormalisesNullAndMissingTodos guards the second entry path
+// for the "todos must never marshal to null" contract: the one where
+// the LLM sends `{"todos": null}` or omits the field entirely. A plain
+// json.Unmarshal leaves Todos nil, which would then round-trip through
+// validation (empty list is legal) and marshal back to "null". Both
+// Call() and StateDeltaForInvocation() must coerce nil -> []Item{} so
+// that Output.Todos and the persisted state stay consistent with the
+// declared array schema.
+func TestCall_NormalisesNullAndMissingTodos(t *testing.T) {
+	inputs := map[string][]byte{
+		"null_todos":    []byte(`{"todos": null}`),
+		"missing_field": []byte(`{}`),
+	}
+	for name, args := range inputs {
+		t.Run(name, func(t *testing.T) {
+			ctx, sess := newTestCtx("")
+			tl := New()
+
+			res, err := tl.Call(ctx, args)
+			if err != nil {
+				t.Fatalf("Call: %v", err)
+			}
+			out, ok := res.(Output)
+			if !ok {
+				t.Fatalf("unexpected result type: %T", res)
+			}
+			if out.Todos == nil {
+				t.Fatalf("Output.Todos must be non-nil, got nil")
+			}
+			if len(out.Todos) != 0 {
+				t.Fatalf("Output.Todos must be empty, got %#v", out.Todos)
+			}
+			blob, err := json.Marshal(out)
+			if err != nil {
+				t.Fatalf("marshal Output: %v", err)
+			}
+			if !strings.Contains(string(blob), `"todos":[]`) {
+				t.Fatalf("Output should serialise todos as [], got %s", blob)
+			}
+			if strings.Contains(string(blob), `"todos":null`) {
+				t.Fatalf("Output still serialises todos as null: %s", blob)
+			}
+			// Persisted state (in-run SetState) must also be the []
+			// encoding, not null.
+			key := stateKey(DefaultStateKeyPrefix, "")
+			raw, ok := sess.GetState(key)
+			if !ok {
+				t.Fatalf("expected persisted state at %q", key)
+			}
+			if string(raw) != "[]" {
+				t.Fatalf("persisted state = %q, want %q", raw, "[]")
+			}
+
+			// Canonical state delta must match (not "null").
+			inv, _ := agent.InvocationFromContext(ctx)
+			delta := tl.StateDeltaForInvocation(inv, "", args, nil)
+			deltaRaw, ok := delta[key]
+			if !ok {
+				t.Fatalf("StateDeltaForInvocation missing key %q", key)
+			}
+			if string(deltaRaw) != "[]" {
+				t.Fatalf("state delta = %q, want %q", deltaRaw, "[]")
+			}
+		})
+	}
+}
+
+// TestCall_HookMutationsDoNotCorruptSnapshot verifies that a
+// misbehaving NudgeHook cannot affect the returned Output or the
+// persisted state. Hooks declare themselves read-only (see
+// options.go), but the framework defends against contract violations
+// via shallow clones so a buggy hook only hurts itself.
+func TestCall_HookMutationsDoNotCorruptSnapshot(t *testing.T) {
+	ctx, sess := newTestCtx("")
+
+	// Seed an initial list so OldTodos is non-empty on the next call.
+	seedTool := New()
+	_, err := seedTool.Call(ctx, mustMarshal(t, writeInput{Todos: []Item{
+		{Content: "Alpha", ActiveForm: "Doing Alpha", Status: StatusPending},
+	}}))
+	if err != nil {
+		t.Fatalf("seed Call: %v", err)
+	}
+
+	tl := New(WithNudgeHook(func(_ context.Context, oldTodos, submitted []Item) string {
+		// Malicious hook: clobber both slices in place.
+		for i := range oldTodos {
+			oldTodos[i].Content = "MUTATED_OLD"
+		}
+		for i := range submitted {
+			submitted[i].Content = "MUTATED_NEW"
+		}
+		return "ack"
+	}))
+
+	args := mustMarshal(t, writeInput{Todos: []Item{
+		{Content: "Beta", ActiveForm: "Doing Beta", Status: StatusInProgress},
+	}})
+	res, err := tl.Call(ctx, args)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	out := res.(Output)
+
+	if len(out.Todos) != 1 || out.Todos[0].Content != "Beta" {
+		t.Fatalf("Output.Todos corrupted by hook: %#v", out.Todos)
+	}
+	if len(out.OldTodos) != 1 || out.OldTodos[0].Content != "Alpha" {
+		t.Fatalf("Output.OldTodos corrupted by hook: %#v", out.OldTodos)
+	}
+
+	// Persisted state must also still reflect the submitted "Beta",
+	// since the clone happens before any hook runs.
+	key := stateKey(DefaultStateKeyPrefix, "")
+	raw, _ := sess.GetState(key)
+	var persisted []Item
+	if err := json.Unmarshal(raw, &persisted); err != nil {
+		t.Fatalf("decode persisted state: %v", err)
+	}
+	if len(persisted) != 1 || persisted[0].Content != "Beta" {
+		t.Fatalf("persisted state corrupted by hook: %#v", persisted)
+	}
+}
+
 func TestWithNudgeMessage_Empty(t *testing.T) {
 	ctx, _ := newTestCtx("")
 	// Disable default nudge; hook provides the only text.
