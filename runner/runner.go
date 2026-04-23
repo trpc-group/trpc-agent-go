@@ -135,6 +135,22 @@ func WithPlugins(plugins ...plugin.Plugin) Option {
 	}
 }
 
+// WithAwaitUserReplyRouting enables one-shot next-user-turn routing from
+// session state produced by agent.MarkAwaitingUserReply or the
+// await_user_reply framework tool.
+//
+// When enabled, Runner checks session state before each user turn. If the
+// previous turn persisted an await-user-reply route, Runner consumes that
+// route once and starts the new run from the recorded agent instead of the
+// default agent.
+//
+// Default: false.
+func WithAwaitUserReplyRouting(enabled bool) Option {
+	return func(opts *Options) {
+		opts.awaitUserReplyRouting = enabled
+	}
+}
+
 // Runner is the interface for running agents.
 type Runner interface {
 	Run(
@@ -207,16 +223,17 @@ type RunStatus struct {
 
 // runner runs agents.
 type runner struct {
-	appName          string
-	defaultAgentName string
-	agents           map[string]agent.Agent
-	agentFactories   map[string]AgentFactory
-	sessionService   session.Service
-	memoryService    memory.Service
-	ingestor         session.Ingestor
-	artifactService  artifact.Service
-	pluginManager    agent.PluginManager
-	ralphLoop        *RalphLoopConfig
+	appName               string
+	defaultAgentName      string
+	agents                map[string]agent.Agent
+	agentFactories        map[string]AgentFactory
+	sessionService        session.Service
+	memoryService         memory.Service
+	ingestor              session.Ingestor
+	artifactService       artifact.Service
+	pluginManager         agent.PluginManager
+	ralphLoop             *RalphLoopConfig
+	awaitUserReplyRouting bool
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -236,14 +253,15 @@ type runHandle struct {
 
 // Options is the options for the Runner.
 type Options struct {
-	sessionService  session.Service
-	memoryService   memory.Service
-	ingestor        session.Ingestor
-	artifactService artifact.Service
-	agents          map[string]agent.Agent
-	agentFactories  map[string]AgentFactory
-	plugins         []plugin.Plugin
-	ralphLoop       *RalphLoopConfig
+	sessionService        session.Service
+	memoryService         memory.Service
+	ingestor              session.Ingestor
+	artifactService       artifact.Service
+	agents                map[string]agent.Agent
+	agentFactories        map[string]AgentFactory
+	plugins               []plugin.Plugin
+	ralphLoop             *RalphLoopConfig
+	awaitUserReplyRouting bool
 }
 
 // newOptions creates a new Options.
@@ -283,17 +301,18 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		appid.RegisterRunner(appName, a.Info().Name)
 	}
 	return &runner{
-		appName:             appName,
-		defaultAgentName:    ag.Info().Name,
-		agents:              agents,
-		agentFactories:      options.agentFactories,
-		sessionService:      options.sessionService,
-		memoryService:       options.memoryService,
-		ingestor:            options.ingestor,
-		artifactService:     options.artifactService,
-		pluginManager:       pm,
-		ralphLoop:           options.ralphLoop,
-		ownedSessionService: ownedSessionService,
+		appName:               appName,
+		defaultAgentName:      ag.Info().Name,
+		agents:                agents,
+		agentFactories:        options.agentFactories,
+		sessionService:        options.sessionService,
+		memoryService:         options.memoryService,
+		ingestor:              options.ingestor,
+		artifactService:       options.artifactService,
+		pluginManager:         pm,
+		ralphLoop:             options.ralphLoop,
+		awaitUserReplyRouting: options.awaitUserReplyRouting,
+		ownedSessionService:   ownedSessionService,
 	}
 }
 
@@ -334,17 +353,18 @@ func NewRunnerWithAgentFactory(
 	}
 
 	return &runner{
-		appName:             appName,
-		defaultAgentName:    defaultAgentName,
-		agents:              options.agents,
-		agentFactories:      options.agentFactories,
-		sessionService:      options.sessionService,
-		memoryService:       options.memoryService,
-		ingestor:            options.ingestor,
-		artifactService:     options.artifactService,
-		pluginManager:       pm,
-		ralphLoop:           options.ralphLoop,
-		ownedSessionService: ownedSessionService,
+		appName:               appName,
+		defaultAgentName:      defaultAgentName,
+		agents:                options.agents,
+		agentFactories:        options.agentFactories,
+		sessionService:        options.sessionService,
+		memoryService:         options.memoryService,
+		ingestor:              options.ingestor,
+		artifactService:       options.artifactService,
+		pluginManager:         pm,
+		ralphLoop:             options.ralphLoop,
+		awaitUserReplyRouting: options.awaitUserReplyRouting,
+		ownedSessionService:   ownedSessionService,
 	}
 }
 
@@ -434,6 +454,18 @@ func (r *runner) Run(
 	}
 
 	sess, err := r.getOrCreateSession(execCtx, sessionKey)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
+
+	ro, err = r.applyAwaitUserReplyRoute(
+		execCtx,
+		sessionKey,
+		sess,
+		message,
+		ro,
+	)
 	if err != nil {
 		execCancel()
 		return nil, err
@@ -761,19 +793,9 @@ func (r *runner) selectAgent(
 		agentName = ro.AgentByName
 	}
 
-	if ag, ok := r.agents[agentName]; ok && ag != nil {
-		return r.wrapSelectedAgent(ag), nil
-	}
-	if factory, ok := r.agentFactories[agentName]; ok && factory != nil {
-		created, err := factory(ctx, ro)
-		if err != nil {
-			return nil, fmt.Errorf("runner: agent factory: %w", err)
-		}
-		if created == nil {
-			return nil, fmt.Errorf("runner: agent factory returned nil")
-		}
-		selected := r.wrapSelectedAgent(created)
-		appid.RegisterRunner(r.appName, selected.Info().Name)
+	if selected, ok, err := r.lookupNamedAgent(ctx, agentName, ro); err != nil {
+		return nil, err
+	} else if ok {
 		return selected, nil
 	}
 	return nil, fmt.Errorf("runner: agent %q not found", agentName)

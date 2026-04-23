@@ -225,6 +225,100 @@ _ = err
 这类边界在使用 MCP ToolSet 时尤其常见，详细说明可继续参考
 `tool` 文档中的 ToolSet 生命周期章节。
 
+### 让下一条用户消息继续回到某个 Agent
+
+在多 Agent 对话里，transfer 过去的 SubAgent 可能会向用户补问信息。下一次
+请求本质上是一次全新的 `Runner.Run(...)`，因此如果你希望下一条用户消息
+继续回到刚才那个 Agent，就必须给 Runner 一个显式信号。
+
+先在 Runner 上开启一次性路由消费能力：
+
+```go
+r := runner.NewRunner(
+    "crm-app",
+    coordinatorAgent,
+    runner.WithAwaitUserReplyRouting(true),
+)
+```
+
+然后有两种方式可以产出这条路由：
+
+1. `LLMAgent`：开启 `llmagent.WithAwaitUserReplyTool(true)`，并在
+   instruction 里要求模型在追问用户前先调用 `await_user_reply`
+2. 自定义 Agent：在发出最终追问事件前，手动调用
+   `agent.MarkAwaitingUserReply(invocation)`
+
+#### 自定义 Agent 的底层示例
+
+```go
+type clarifierAgent struct{}
+
+func (a *clarifierAgent) Run(
+    ctx context.Context,
+    inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+    ch := make(chan *event.Event, 1)
+    go func() {
+        defer close(ch)
+
+        if missingPhoneNumber(inv.Message) {
+            _ = agent.MarkAwaitingUserReply(inv)
+            _ = agent.EmitEvent(
+                ctx,
+                inv,
+                ch,
+                event.NewResponseEvent(
+                    inv.InvocationID,
+                    inv.AgentName,
+                    &model.Response{
+                        Done: true,
+                        Choices: []model.Choice{{
+                            Index: 0,
+                            Message: model.Message{
+                                Role:    model.RoleAssistant,
+                                Content: "请问要保存的手机号是多少？",
+                            },
+                        }},
+                    },
+                ),
+            )
+            return
+        }
+
+        _ = agent.EmitEvent(
+            ctx,
+            inv,
+            ch,
+            event.NewResponseEvent(
+                inv.InvocationID,
+                inv.AgentName,
+                &model.Response{
+                    Done: true,
+                    Choices: []model.Choice{{
+                        Index: 0,
+                        Message: model.Message{
+                            Role:    model.RoleAssistant,
+                            Content: "资料已更新。",
+                        },
+                    }},
+                },
+            ),
+        )
+    }()
+    return ch, nil
+}
+```
+
+这套能力的行为总结：
+
+- 路由存放在 session state 中，而不是去修改 message role
+- 它只消费一次，在下一条用户消息开始前就会被清掉
+- `agent.WithAgent(...)` 和 `agent.WithAgentByName(...)` 仍然优先
+- 如果记录的 Agent 已不存在，或者名字已无法唯一解析，Runner 会清理掉
+  脏路由，并回退到默认入口 Agent
+- 对常见的 `coordinator + WithSubAgents(...)` 结构，Runner 可以自动解析
+  唯一命名的嵌套 SubAgent，不需要额外手工注册
+
 ### 🔌 插件
 
 Runner 插件是一类全局、Runner 作用域的 Hook（钩子）。只需要在创建 Runner 时
