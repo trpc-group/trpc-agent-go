@@ -444,6 +444,18 @@ func (r *runner) Run(
 		execCancel()
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
+	invocationMessage, persistedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
+		execCtx,
+		effectiveAppName,
+		userID,
+		sessionID,
+		message,
+		ro,
+	)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
 
 	eventFilterKey := effectiveAppName
 	if ro.EventFilterKey != "" {
@@ -453,7 +465,7 @@ func (r *runner) Run(
 	invocation := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationSessionService(r.sessionService),
-		agent.WithInvocationMessage(message),
+		agent.WithInvocationMessage(invocationMessage),
 		agent.WithInvocationAgent(ag),
 		agent.WithInvocationRunOptions(ro),
 		agent.WithInvocationStructuredOutput(ro.StructuredOutput),
@@ -484,18 +496,15 @@ func (r *runner) Run(
 		return nil, err
 	}
 
-	// If caller provided a history via RunOptions and the session is empty,
-	// persist that history into the session exactly once, so subsequent turns
-	// and tool calls build on the same canonical transcript.
-	if err := r.seedSessionHistory(execCtx, sess, invocation, ag, ro); err != nil {
-		steer.Clear(invocation)
-		r.unregisterRun(ro.RequestID)
-		execCancel()
-		return nil, err
-	}
-
-	// Append the incoming message to the session if it has payload.
-	if err := r.appendIncomingMessage(execCtx, sess, invocation, message, ro); err != nil {
+	if err := r.persistCurrentTurnMessages(
+		execCtx,
+		sess,
+		invocation,
+		ag,
+		message,
+		persistedCurrentTurnMessages,
+		ro,
+	); err != nil {
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
 		execCancel()
@@ -570,20 +579,44 @@ func (r *runner) seedSessionHistory(
 	if len(ro.Messages) == 0 || sess.GetEventCount() != 0 {
 		return nil
 	}
-	for _, msg := range ro.Messages {
+	return r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, ro.Messages)
+}
+
+// appendSessionMessages persists messages into the session transcript in the
+// provided order.
+func (r *runner) appendSessionMessages(
+	ctx context.Context,
+	sess *session.Session,
+	invocation *agent.Invocation,
+	ag agent.Agent,
+	messages []model.Message,
+) error {
+	return r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, messages)
+}
+
+// appendMessagesAsSessionEvents persists messages into session events in the
+// provided order.
+func (r *runner) appendMessagesAsSessionEvents(
+	ctx context.Context,
+	sess *session.Session,
+	invocation *agent.Invocation,
+	ag agent.Agent,
+	messages []model.Message,
+) error {
+	for _, msg := range messages {
 		author := ag.Info().Name
 		if msg.Role == model.RoleUser {
 			author = authorUser
 		}
-		m := msg
-		seedEvt := event.NewResponseEvent(
+		current := msg
+		evt := event.NewResponseEvent(
 			invocation.InvocationID,
 			author,
-			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: m}}},
+			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: current}}},
 		)
-		agent.InjectIntoEvent(invocation, seedEvt)
-		seedEvt = r.applyEventPlugins(ctx, invocation, seedEvt)
-		if err := r.sessionService.AppendEvent(ctx, sess, seedEvt); err != nil {
+		agent.InjectIntoEvent(invocation, evt)
+		evt = r.applyEventPlugins(ctx, invocation, evt)
+		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
 			return err
 		}
 	}
@@ -1983,6 +2016,89 @@ func assistantChoicePrimaryContent(choices []model.Choice) string {
 	return ""
 }
 
+func (r *runner) rewriteUserMessage(
+	ctx context.Context,
+	appName string,
+	userID string,
+	sessionID string,
+	message model.Message,
+	ro agent.RunOptions,
+) ([]model.Message, error) {
+	if ro.UserMessageRewriter == nil {
+		return []model.Message{message}, nil
+	}
+	rewritten, err := ro.UserMessageRewriter(ctx, &agent.UserMessageRewriteArgs{
+		AppName:         appName,
+		UserID:          userID,
+		SessionID:       sessionID,
+		RequestID:       ro.RequestID,
+		OriginalMessage: message,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(rewritten) == 0 {
+		return nil, fmt.Errorf("runner: user message rewriter returned no messages")
+	}
+	for i := range rewritten {
+		if rewritten[i].Role == "" && model.HasPayload(rewritten[i]) {
+			rewritten[i].Role = model.RoleUser
+		}
+	}
+	return rewritten, nil
+}
+
+func (r *runner) resolveCurrentTurnMessages(
+	ctx context.Context,
+	appName string,
+	userID string,
+	sessionID string,
+	message model.Message,
+	ro agent.RunOptions,
+) (model.Message, []model.Message, error) {
+	if ro.UserMessageRewriter == nil {
+		return message, nil, nil
+	}
+	currentTurnMessages, err := r.rewriteUserMessage(
+		ctx,
+		appName,
+		userID,
+		sessionID,
+		message,
+		ro,
+	)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	return currentTurnMessages[len(currentTurnMessages)-1], filterPayloadMessages(currentTurnMessages), nil
+}
+
+func (r *runner) persistCurrentTurnMessages(
+	ctx context.Context,
+	sess *session.Session,
+	invocation *agent.Invocation,
+	ag agent.Agent,
+	message model.Message,
+	persistedCurrentTurnMessages []model.Message,
+	ro agent.RunOptions,
+) error {
+	if ro.UserMessageRewriter == nil {
+		if err := r.seedSessionHistory(ctx, sess, invocation, ag, ro); err != nil {
+			return err
+		}
+		return r.appendIncomingMessage(ctx, sess, invocation, message, ro)
+	}
+	if sess.GetEventCount() == 0 {
+		initialMessages := mergeCurrentTurnMessagesIntoSeed(
+			ro.Messages,
+			message,
+			persistedCurrentTurnMessages,
+		)
+		return r.appendSessionMessages(ctx, sess, invocation, ag, initialMessages)
+	}
+	return r.appendSessionMessages(ctx, sess, invocation, ag, persistedCurrentTurnMessages)
+}
+
 // shouldAppendUserMessage checks if the incoming user message should be
 // appended to the session.
 func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
@@ -1999,6 +2115,54 @@ func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
 		return !model.MessagesEqual(seed[i], message)
 	}
 	return true
+}
+
+func mergeCurrentTurnMessagesIntoSeed(
+	seed []model.Message,
+	original model.Message,
+	currentTurn []model.Message,
+) []model.Message {
+	if len(currentTurn) == 0 {
+		return append([]model.Message(nil), seed...)
+	}
+	if len(seed) == 0 {
+		return append([]model.Message(nil), currentTurn...)
+	}
+	insertIndex := -1
+	for i := len(seed) - 1; i >= 0; i-- {
+		if seed[i].Role != model.RoleUser {
+			continue
+		}
+		if model.MessagesEqual(seed[i], original) {
+			insertIndex = i
+		}
+		break
+	}
+	if insertIndex == -1 {
+		merged := make([]model.Message, 0, len(seed)+len(currentTurn))
+		merged = append(merged, seed...)
+		merged = append(merged, currentTurn...)
+		return merged
+	}
+	merged := make([]model.Message, 0, len(seed)-1+len(currentTurn))
+	merged = append(merged, seed[:insertIndex]...)
+	merged = append(merged, currentTurn...)
+	merged = append(merged, seed[insertIndex+1:]...)
+	return merged
+}
+
+func filterPayloadMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	filtered := make([]model.Message, 0, len(messages))
+	for _, msg := range messages {
+		if !model.HasPayload(msg) {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	return filtered
 }
 
 func normalizeQueuedUserMessage(
