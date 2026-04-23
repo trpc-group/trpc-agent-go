@@ -64,8 +64,12 @@ You should NEVER install any package on your own like pip install ....
 	`,
 		),
 		llmagent.WithGenerationConfig(genConfig),
-		// codeexecutor.NewContainerCodeExecutor() is also available.
-		// can use llmagent.WithCodeExecutor(codeexecutor.NewContainerCodeExecutor()),
+		// A Docker-based container executor is also available in
+		// the ./container sub-example. The full error-handling and
+		// lifecycle pattern is documented there; see
+		//   examples/codeexecution/container/main.go
+		// for the recommended usage of container.New().
+		// A Jupyter kernel executor is available in the ./jupyter sub-example.
 		llmagent.WithCodeExecutor(local.New()),
 	)
 
