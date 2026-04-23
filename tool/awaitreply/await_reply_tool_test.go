@@ -18,6 +18,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 )
 
+func TestTool_Declaration(t *testing.T) {
+	tl := New()
+
+	decl := tl.Declaration()
+	require.NotNil(t, decl)
+	require.Equal(t, ToolName, decl.Name)
+	require.NotNil(t, decl.InputSchema)
+	require.Equal(t, "object", decl.InputSchema.Type)
+	require.Empty(t, decl.InputSchema.Properties)
+}
+
 func TestTool_CallMarksInvocation(t *testing.T) {
 	tl := New()
 	inv := &agent.Invocation{AgentName: "clarifier"}
@@ -63,4 +74,18 @@ func TestTool_CallInvalidJSON(t *testing.T) {
 
 	_, ok = agent.CurrentAwaitUserReplyRoute(inv)
 	require.False(t, ok)
+}
+
+func TestTool_CallInvalidInvocation(t *testing.T) {
+	tl := New()
+	inv := &agent.Invocation{}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	got, err := tl.Call(ctx, []byte(`{}`))
+	require.NoError(t, err)
+
+	resp, ok := got.(Response)
+	require.True(t, ok)
+	require.False(t, resp.Success)
+	require.Contains(t, resp.Message, "non-empty agent target")
 }

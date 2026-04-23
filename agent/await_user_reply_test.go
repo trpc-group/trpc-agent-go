@@ -235,3 +235,187 @@ func TestPendingAwaitUserReplyRoute_InvalidState(t *testing.T) {
 	require.False(t, ok)
 	require.Error(t, err)
 }
+
+func TestCurrentAwaitUserReplyRoute_InvalidRoute(t *testing.T) {
+	inv := &Invocation{}
+	inv.SetState(
+		awaitUserReplyInvocationStateKey,
+		AwaitUserReplyRoute{},
+	)
+
+	_, ok := CurrentAwaitUserReplyRoute(inv)
+	require.False(t, ok)
+}
+
+func TestPendingAwaitUserReplyRoute_EdgeCases(t *testing.T) {
+	t.Run("nil session", func(t *testing.T) {
+		_, ok, err := PendingAwaitUserReplyRoute(nil)
+		require.NoError(t, err)
+		require.False(t, ok)
+	})
+
+	t.Run("missing state", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "sess")
+
+		_, ok, err := PendingAwaitUserReplyRoute(sess)
+		require.NoError(t, err)
+		require.False(t, ok)
+	})
+
+	t.Run("invalid normalized route", func(t *testing.T) {
+		sess := session.NewSession(
+			"app",
+			"user",
+			"sess",
+			session.WithSessionState(session.StateMap{
+				awaitUserReplySessionStateKey: []byte(
+					`{"agent_name":" "}`,
+				),
+			}),
+		)
+
+		_, ok, err := PendingAwaitUserReplyRoute(sess)
+		require.False(t, ok)
+		require.Error(t, err)
+	})
+}
+
+func TestSetAwaitUserReplyRootLookupName_ClearsState(t *testing.T) {
+	inv := &Invocation{}
+
+	SetAwaitUserReplyRootLookupName(inv, " coordinator ")
+	rootName, ok := GetStateValue[string](
+		inv,
+		awaitUserReplyRootLookupStateKey,
+	)
+	require.True(t, ok)
+	require.Equal(t, "coordinator", rootName)
+
+	SetAwaitUserReplyRootLookupName(inv, " ")
+	_, ok = GetStateValue[string](inv, awaitUserReplyRootLookupStateKey)
+	require.False(t, ok)
+
+	SetAwaitUserReplyRootLookupName(nil, "coordinator")
+}
+
+func TestClearAwaitUserReplyRouteState(t *testing.T) {
+	state := ClearAwaitUserReplyRouteState()
+	value, ok := state[awaitUserReplySessionStateKey]
+	require.True(t, ok)
+	require.Nil(t, value)
+}
+
+func TestAwaitUserReplyRoute_StateAndAttachEventErrors(t *testing.T) {
+	_, err := (AwaitUserReplyRoute{}).State()
+	require.Error(t, err)
+
+	require.NoError(t, (AwaitUserReplyRoute{}).AttachEvent(nil))
+
+	evt := event.NewResponseEvent(
+		"inv-1",
+		"clarifier",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Please share your city.",
+				},
+			}},
+		},
+	)
+	err = (AwaitUserReplyRoute{}).AttachEvent(evt)
+	require.Error(t, err)
+}
+
+func TestAwaitUserReplyRoute_StateInfersAgentNameFromPath(t *testing.T) {
+	state, err := (AwaitUserReplyRoute{
+		LookupPath: "parent/clarifier",
+	}).State()
+	require.NoError(t, err)
+
+	sess := session.NewSession(
+		"app",
+		"user",
+		"sess",
+		session.WithSessionState(state),
+	)
+	route, ok, routeErr := PendingAwaitUserReplyRoute(sess)
+	require.NoError(t, routeErr)
+	require.True(t, ok)
+	require.Equal(t, "clarifier", route.AgentName)
+}
+
+func TestBuildAwaitUserReplyLookupPath(t *testing.T) {
+	require.Empty(t, buildAwaitUserReplyLookupPath(nil))
+
+	inv := &Invocation{}
+	SetAwaitUserReplyRootLookupName(inv, "coordinator")
+	require.Equal(
+		t,
+		"coordinator",
+		buildAwaitUserReplyLookupPath(inv),
+	)
+
+	inv.AgentName = "clarifier"
+	inv.Branch = " runtime-root / clarifier "
+	require.Equal(
+		t,
+		"coordinator/clarifier",
+		buildAwaitUserReplyLookupPath(inv),
+	)
+}
+
+func TestAttachAwaitUserReplyRoute_WithoutPendingRoute(t *testing.T) {
+	inv := &Invocation{AgentName: "clarifier"}
+	evt := event.NewResponseEvent(
+		"inv-1",
+		"clarifier",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Please share your city.",
+				},
+			}},
+		},
+	)
+
+	attachAwaitUserReplyRoute(inv, evt)
+
+	sess := session.NewSession("app", "user", "sess")
+	sess.ApplyEventStateDelta(evt)
+	_, ok, err := PendingAwaitUserReplyRoute(sess)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestAwaitUserReplyRoute_AttachEventPreservesStateDelta(t *testing.T) {
+	evt := event.NewResponseEvent(
+		"inv-1",
+		"clarifier",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Need your city.",
+				},
+			}},
+		},
+	)
+	evt.StateDelta = session.StateMap{
+		"existing": []byte("value"),
+	}
+
+	err := (AwaitUserReplyRoute{
+		AgentName: "clarifier",
+	}).AttachEvent(evt)
+	require.NoError(t, err)
+	require.Contains(t, evt.StateDelta, "existing")
+	require.Contains(t, evt.StateDelta, awaitUserReplySessionStateKey)
+}
