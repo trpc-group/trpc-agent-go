@@ -27,7 +27,6 @@ const (
 	toolWebSearch  = "WebSearch"
 	toolTaskStop   = "TaskStop"
 	toolTaskOutput = "TaskOutput"
-	toolAskUser    = "AskUserQuestion"
 
 	defaultToolSetName     = "claudecode"
 	defaultGrepHeadLimit   = 250

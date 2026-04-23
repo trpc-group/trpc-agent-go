@@ -132,41 +132,6 @@ type taskOutputOutput struct {
 	Task            *taskOutputTask `json:"task"`
 }
 
-type askUserQuestionOption struct {
-	Label       string `json:"label"`
-	Description string `json:"description"`
-	Preview     string `json:"preview,omitempty"`
-}
-
-type askUserQuestion struct {
-	Question    string                  `json:"question"`
-	Header      string                  `json:"header"`
-	Options     []askUserQuestionOption `json:"options"`
-	MultiSelect bool                    `json:"multiSelect,omitempty"`
-}
-
-type askUserQuestionAnnotation struct {
-	Preview string `json:"preview,omitempty"`
-	Notes   string `json:"notes,omitempty"`
-}
-
-type askUserQuestionMetadata struct {
-	Source string `json:"source,omitempty"`
-}
-
-type askUserQuestionInput struct {
-	Questions   []askUserQuestion                    `json:"questions"`
-	Answers     map[string]string                    `json:"answers,omitempty"`
-	Annotations map[string]askUserQuestionAnnotation `json:"annotations,omitempty"`
-	Metadata    *askUserQuestionMetadata             `json:"metadata,omitempty"`
-}
-
-type askUserQuestionOutput struct {
-	Questions   []askUserQuestion                    `json:"questions"`
-	Answers     map[string]string                    `json:"answers"`
-	Annotations map[string]askUserQuestionAnnotation `json:"annotations,omitempty"`
-}
-
 type readInput struct {
 	FilePath string `json:"file_path"`
 	Offset   *int   `json:"offset,omitempty"`

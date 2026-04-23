@@ -57,7 +57,6 @@ func TestNewToolSet_DefaultTools(t *testing.T) {
 	require.NotContains(t, names, "ExitWorktree")
 	require.NotContains(t, names, "WebBrowser")
 	require.NotContains(t, names, "browser")
-	require.NotContains(t, names, toolAskUser)
 	require.NotContains(t, names, "LSP")
 }
 
@@ -95,6 +94,19 @@ func TestNewToolSet_ReadOnlyOmitsWriteAndEdit(t *testing.T) {
 	require.NotContains(t, names, toolWrite)
 	require.NotContains(t, names, toolEdit)
 	require.NotContains(t, names, toolNotebookEdit)
+}
+
+func TestNewToolSet_BlankNameFallsBackAndInvalidWebSearchFails(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ts, err := NewToolSet(WithBaseDir(dir), WithName(" \t "))
+	require.NoError(t, err)
+	require.Equal(t, defaultToolSetName, ts.Name())
+	require.NoError(t, ts.Close())
+	_, err = NewToolSet(WithBaseDir(dir), WithWebSearchOptions(WebSearchOptions{
+		Provider: "bing",
+	}))
+	require.EqualError(t, err, "unsupported web search provider: bing")
 }
 
 func TestToolSet_BashToolRunsCommand(t *testing.T) {
@@ -246,6 +258,31 @@ func TestToolSet_TaskOutputCoversPollingBranches(t *testing.T) {
 	require.EqualError(t, err, "no task found with ID: missing")
 }
 
+func TestReadTaskSnapshotHandlesMissingOutputAndCopiesExitCode(t *testing.T) {
+	t.Parallel()
+	runtime := newToolRuntime(t.TempDir(), maxEditableFileSize)
+	exitCode := 7
+	runtime.taskState.tasks["done"] = &backgroundTask{
+		ID:         "done",
+		Command:    "echo done",
+		Type:       toolBash,
+		OutputPath: filepath.Join(t.TempDir(), "missing.log"),
+		Status:     "completed",
+		ExitCode:   &exitCode,
+	}
+	snapshot, err := snapshotBackgroundTask(runtime, "done")
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.ExitCode)
+	require.Equal(t, 7, *snapshot.ExitCode)
+	exitCode = 9
+	require.Equal(t, 7, *snapshot.ExitCode)
+	out, err := readTaskSnapshot(runtime, "done")
+	require.NoError(t, err)
+	require.Equal(t, "", out.Output)
+	require.NotNil(t, out.ExitCode)
+	require.Equal(t, 9, *out.ExitCode)
+}
+
 func TestToolSet_ReadWriteEditFlow(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -342,6 +379,28 @@ func TestToolSet_WriteRequiresFullReadAndRejectsStaleFile(t *testing.T) {
 		Content:  "rewrite again\n",
 	})
 	require.ErrorContains(t, err, "File has been modified since read")
+}
+
+func TestToolSet_WriteRejectsPathsOutsideBaseDirAndDirectories(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ts, err := NewToolSet(WithBaseDir(dir))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, ts.Close())
+	})
+	writeTool := mustCallableTool(t, ts.Tools(context.Background()), toolWrite)
+	_, err = callToolRaw(writeTool, writeInput{
+		FilePath: "../outside.txt",
+		Content:  "blocked",
+	})
+	require.ErrorContains(t, err, "path is outside base_dir")
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "nested"), 0o755))
+	_, err = callToolRaw(writeTool, writeInput{
+		FilePath: filepath.Join(dir, "nested"),
+		Content:  "blocked",
+	})
+	require.ErrorContains(t, err, "is a directory")
 }
 
 func TestToolSet_EditRejectsNotebookAndPreservesCurlyQuotes(t *testing.T) {
@@ -700,142 +759,6 @@ func TestToolSet_GrepRipgrepAdvancedOptions(t *testing.T) {
 	})
 	require.Contains(t, out.Content, "main.go:4:\tprintln(\"alpha\")")
 	require.Contains(t, out.Content, "main.go:5:\tprintln(\"beta\")")
-}
-
-func TestToolSet_AskUserQuestionPassesThroughValidatedPayload(t *testing.T) {
-	t.Parallel()
-	askTool, err := newAskUserQuestionTool()
-	require.NoError(t, err)
-	callable, ok := askTool.(tool.CallableTool)
-	require.True(t, ok)
-	out := callToolAs[askUserQuestionOutput](t, callable, askUserQuestionInput{
-		Questions: []askUserQuestion{{
-			Question: "Which path should we take?",
-			Header:   "Path",
-			Options: []askUserQuestionOption{
-				{Label: "Fast", Description: "Ship with the minimum change."},
-				{Label: "Safe", Description: "Do the more conservative refactor."},
-			},
-		}},
-		Answers: map[string]string{
-			"Which path should we take?": "Safe",
-		},
-		Annotations: map[string]askUserQuestionAnnotation{
-			"Which path should we take?": {
-				Notes: "Prefer lower migration risk.",
-			},
-		},
-		Metadata: &askUserQuestionMetadata{Source: "test"},
-	})
-	require.Len(t, out.Questions, 1)
-	require.Equal(t, "Safe", out.Answers["Which path should we take?"])
-	require.Equal(t, "Prefer lower migration risk.", out.Annotations["Which path should we take?"].Notes)
-}
-
-func TestToolSet_AskUserQuestionRejectsDuplicateQuestionText(t *testing.T) {
-	t.Parallel()
-	askTool, err := newAskUserQuestionTool()
-	require.NoError(t, err)
-	callable, ok := askTool.(tool.CallableTool)
-	require.True(t, ok)
-	_, err = callToolRaw(callable, askUserQuestionInput{
-		Questions: []askUserQuestion{
-			{
-				Question: "Which path should we take?",
-				Header:   "One",
-				Options: []askUserQuestionOption{
-					{Label: "A", Description: "A."},
-					{Label: "B", Description: "B."},
-				},
-			},
-			{
-				Question: "Which path should we take?",
-				Header:   "Two",
-				Options: []askUserQuestionOption{
-					{Label: "C", Description: "C."},
-					{Label: "D", Description: "D."},
-				},
-			},
-		},
-	})
-	require.ErrorContains(t, err, "question texts must be unique")
-}
-
-func TestToolSet_AskUserQuestionCoversValidationBranches(t *testing.T) {
-	t.Parallel()
-	askTool, err := newAskUserQuestionTool()
-	require.NoError(t, err)
-	callable, ok := askTool.(tool.CallableTool)
-	require.True(t, ok)
-	_, err = callToolRaw(callable, askUserQuestionInput{})
-	require.EqualError(t, err, "at least one question is required")
-	_, err = callToolRaw(callable, askUserQuestionInput{
-		Questions: []askUserQuestion{
-			{Question: "Q1", Options: []askUserQuestionOption{{Label: "A"}, {Label: "B"}}},
-			{Question: "Q2", Options: []askUserQuestionOption{{Label: "A"}, {Label: "B"}}},
-			{Question: "Q3", Options: []askUserQuestionOption{{Label: "A"}, {Label: "B"}}},
-			{Question: "Q4", Options: []askUserQuestionOption{{Label: "A"}, {Label: "B"}}},
-			{Question: "Q5", Options: []askUserQuestionOption{{Label: "A"}, {Label: "B"}}},
-		},
-	})
-	require.EqualError(t, err, "at most 4 questions are allowed")
-	_, err = callToolRaw(callable, askUserQuestionInput{
-		Questions: []askUserQuestion{{
-			Question: " ",
-			Options:  []askUserQuestionOption{{Label: "A"}, {Label: "B"}},
-		}},
-	})
-	require.EqualError(t, err, "question text is required")
-	_, err = callToolRaw(callable, askUserQuestionInput{
-		Questions: []askUserQuestion{{
-			Question: "Only one option",
-			Options:  []askUserQuestionOption{{Label: "A"}},
-		}},
-	})
-	require.EqualError(t, err, `question "Only one option" must have 2-4 options`)
-	_, err = callToolRaw(callable, askUserQuestionInput{
-		Questions: []askUserQuestion{{
-			Question: "Too many options",
-			Options: []askUserQuestionOption{
-				{Label: "A"},
-				{Label: "B"},
-				{Label: "C"},
-				{Label: "D"},
-				{Label: "E"},
-			},
-		}},
-	})
-	require.EqualError(t, err, `question "Too many options" must have 2-4 options`)
-	_, err = callToolRaw(callable, askUserQuestionInput{
-		Questions: []askUserQuestion{{
-			Question: "Empty option",
-			Options: []askUserQuestionOption{
-				{Label: "A"},
-				{Label: " "},
-			},
-		}},
-	})
-	require.EqualError(t, err, `question "Empty option" has an option with empty label`)
-	_, err = callToolRaw(callable, askUserQuestionInput{
-		Questions: []askUserQuestion{{
-			Question: "Duplicate option",
-			Options: []askUserQuestionOption{
-				{Label: "A"},
-				{Label: "A"},
-			},
-		}},
-	})
-	require.EqualError(t, err, `option labels must be unique within question "Duplicate option"`)
-	out := callToolAs[askUserQuestionOutput](t, callable, askUserQuestionInput{
-		Questions: []askUserQuestion{{
-			Question: "Choose one",
-			Options: []askUserQuestionOption{
-				{Label: "A"},
-				{Label: "B"},
-			},
-		}},
-	})
-	require.Empty(t, out.Answers)
 }
 
 func TestToolSet_WebFetchTool(t *testing.T) {
@@ -2018,6 +1941,34 @@ func TestProcessPipeHelpersAndTaskStopErrors(t *testing.T) {
 	_, err = callToolRaw(callable, taskStopInput{TaskID: "running"})
 	require.EqualError(t, err, "Task running has no running process")
 	require.Equal(t, "running", runtime.taskState.tasks["running"].Status)
+}
+
+func TestTaskStopAcceptsShellIDAndPropagatesKillErrors(t *testing.T) {
+	t.Parallel()
+	runtime := newToolRuntime(t.TempDir(), maxEditableFileSize)
+	stopTool, err := newTaskStopTool(runtime)
+	require.NoError(t, err)
+	callable, ok := stopTool.(tool.CallableTool)
+	require.True(t, ok)
+	_, err = callToolRaw(callable, taskStopInput{ShellID: "missing"})
+	require.EqualError(t, err, "No task found with ID: missing")
+	proc, err := os.StartProcess("/bin/true", []string{"true"}, &os.ProcAttr{
+		Env:   processEnv(nil),
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	})
+	require.NoError(t, err)
+	_, err = proc.Wait()
+	require.NoError(t, err)
+	runtime.taskState.tasks["finished"] = &backgroundTask{
+		ID:      "finished",
+		Command: "true",
+		Type:    toolBash,
+		Status:  "running",
+		Process: proc,
+	}
+	_, err = callToolRaw(callable, taskStopInput{ShellID: "finished"})
+	require.Error(t, err)
+	require.Equal(t, "running", runtime.taskState.tasks["finished"].Status)
 }
 
 func TestPDFAndNotebookHelpersCoverFallbackBranches(t *testing.T) {
