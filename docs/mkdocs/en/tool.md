@@ -543,9 +543,26 @@ searchTool := duckduckgo.NewTool(
 
 ### Claude Code ToolSet
 
-`tool/claudecode` provides a code-oriented ToolSet that exposes a Claude Code-style tool surface inside the framework. It is designed for common coding workflows such as file editing, repository search, command execution, and web retrieval, and can be attached directly to `LLMAgent` or other runtimes. If your goal is to invoke the local Claude Code CLI and consume its execution trace and tool events, see the [Claude Code Agent guide](claudecode.md).
+`tool/claudecode` provides a code-oriented ToolSet that exposes a Claude Code-style tool surface inside the framework. It covers file editing, repository search, command execution, and web retrieval, and can be attached directly to `LLMAgent` or other runtimes. If your goal is to invoke the local Claude Code CLI and consume its execution trace and tool events, see the [Claude Code Agent guide](claudecode.md).
 
-By default, `claudecode` exposes a core set of workflow tools: `Bash`, `TaskStop`, `TaskOutput`, `Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, and `ToolSearch`. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`. In practice, `Bash` is suited for builds, tests, Git operations, and project scripts, while `Read`, `Glob`, and `Grep` cover file inspection and repository search. `Edit` and `Write` are intended for targeted edits and full rewrites respectively.
+By default, `claudecode` exposes a core set of workflow tools: `Bash`, `TaskStop`, `TaskOutput`, `Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, and `ToolSearch`. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`.
+
+The following table lists the tools currently exposed by `claudecode`:
+
+| Tool | Description |
+| --- | --- |
+| `Bash` | Executes local shell commands. |
+| `TaskStop` | Stops a background task started by `Bash`. |
+| `TaskOutput` | Reads the current or final output of a background task. |
+| `Read` | Reads file contents. |
+| `Glob` | Finds files by path pattern. |
+| `Grep` | Searches repository content. |
+| `WebFetch` | Fetches the content of a specific URL. |
+| `WebSearch` | Performs an open web search. |
+| `ToolSearch` | Searches the current toolset for matching tools. |
+| `Write` | Creates a file or overwrites a file with complete contents. Only exposed when read-only mode is disabled. |
+| `Edit` | Performs targeted replacement in an existing text file. Only exposed when read-only mode is disabled. |
+| `NotebookEdit` | Edits `.ipynb` files at the cell level. Only exposed when read-only mode is disabled. |
 
 #### Basic Usage
 
@@ -572,7 +589,7 @@ agent := llmagent.New(
 )
 ```
 
-In most cases, `llmagent.WithToolSets(...)` is the preferred integration point over flattening `Tools()` into `WithTools(...)`. That keeps lifecycle management at the ToolSet level and matches the framework's organization model for grouped tools.
+`llmagent.WithToolSets(...)` attaches these tools as a ToolSet. Calling `Tools()` returns the flattened list of individual tools.
 
 #### Common Options
 
@@ -587,9 +604,7 @@ The main `tool/claudecode` options focus on working directory, read-only mode, a
 | `WithWebFetchOptions(opts)` | Configures domain policy, timeout, and content handling for `WebFetch`. |
 | `WithWebSearchOptions(opts)` | Configures backend, paging, and request options for `WebSearch`. |
 
-`WithBaseDir` is usually the first option to make explicit. It defines the working scope for `Read`, `Write`, `Edit`, `Glob`, and `Grep`, and it also determines the default working directory for `Bash`. If the agent is meant to operate inside a single repository, setting `baseDir` explicitly is recommended.
-
-When integrating `tool/claudecode`, it is usually best to decide up front whether the agent should be read-only. For inspection-heavy workflows, read-only mode keeps the tool surface narrower and easier to control. When the agent is expected to modify files directly, keep `Write`, `Edit`, and `NotebookEdit` enabled. In prompts, it is also useful to make the intended tool boundaries explicit, such as using `Read` for context gathering, `Glob` and `Grep` for repository search, and `Bash` plus `TaskOutput` / `TaskStop` for long-running commands.
+`WithBaseDir` defines the working scope for `Read`, `Write`, `Edit`, `Glob`, and `Grep`, and also determines the default working directory for `Bash`. When read-only mode is enabled, the toolset keeps only read, search, command, and web capabilities. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`.
 
 ## MCP Tools
 

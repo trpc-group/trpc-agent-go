@@ -537,9 +537,26 @@ searchTool := duckduckgo.NewTool(
 
 ### Claude Code ToolSet
 
-`tool/claudecode` 提供了一组面向代码工作的 ToolSet，用于在框架内部暴露与 Claude Code 接近的工具接口。它适合用于文件读写、代码检索、命令执行和网页获取这类高频场景，便于直接挂接到 `LLMAgent` 或其他运行时。如果你的目标是调用本地 Claude Code CLI，并消费 CLI 的执行轨迹与工具事件，请参考 [Claude Code Agent 使用指南](claudecode.md)。
+`tool/claudecode` 提供了一组面向代码工作的 ToolSet，用于在框架内部暴露与 Claude Code 接近的工具接口。它覆盖文件读写、代码检索、命令执行和网页获取等能力，可以直接挂接到 `LLMAgent` 或其他运行时。如果你的目标是调用本地 Claude Code CLI，并消费 CLI 的执行轨迹与工具事件，请参考 [Claude Code Agent 使用指南](claudecode.md)。
 
-从能力组成上看，`claudecode` 默认会提供一组代码工作流工具，包括 `Bash`、`TaskStop`、`TaskOutput`、`Read`、`Glob`、`Grep`、`WebFetch`、`WebSearch` 和 `ToolSearch`。在非只读模式下，还会额外提供 `Write`、`Edit` 和 `NotebookEdit`。其中，`Bash` 适合构建、测试、Git 操作和项目脚本，`Read`、`Glob`、`Grep` 更适合仓库内的文件读取与内容检索，`Edit` 与 `Write` 则分别面向局部修改和整体重写。
+从能力组成上看，`claudecode` 默认会提供一组代码工作流工具，包括 `Bash`、`TaskStop`、`TaskOutput`、`Read`、`Glob`、`Grep`、`WebFetch`、`WebSearch` 和 `ToolSearch`。在非只读模式下，还会额外提供 `Write`、`Edit` 和 `NotebookEdit`。
+
+下表列出了当前 `claudecode` 工具集中的主要工具及其用途：
+
+| 工具名 | 说明 |
+| --- | --- |
+| `Bash` | 执行本地 Shell 命令。 |
+| `TaskStop` | 停止由 `Bash` 以后台模式启动的任务。 |
+| `TaskOutput` | 读取后台任务的当前输出或最终输出。 |
+| `Read` | 读取文件内容。 |
+| `Glob` | 按路径模式查找文件。 |
+| `Grep` | 按内容搜索仓库。 |
+| `WebFetch` | 抓取指定 URL 的页面内容。 |
+| `WebSearch` | 进行开放式网页搜索。 |
+| `ToolSearch` | 在当前工具集中查找合适的工具，帮助模型选择正确的调用入口。 |
+| `Write` | 创建文件或用完整内容覆盖文件，仅在非只读模式下暴露。 |
+| `Edit` | 对已有文本文件做局部替换，仅在非只读模式下暴露。 |
+| `NotebookEdit` | 按 cell 粒度编辑 `.ipynb` 文件，仅在非只读模式下暴露。 |
 
 #### 基本用法
 
@@ -565,7 +582,7 @@ agent := llmagent.New(
 )
 ```
 
-通常建议通过 `llmagent.WithToolSets(...)` 直接挂载 ToolSet，而不是把 `Tools()` 展开后逐个传给 `WithTools(...)`。这样可以保留 ToolSet 的统一生命周期，也更符合框架对工具集的组织方式。
+`llmagent.WithToolSets(...)` 会以 ToolSet 形式接入这组工具；如果调用 `Tools()`，则会得到展开后的单个工具列表。
 
 #### 常用配置
 
@@ -580,9 +597,7 @@ agent := llmagent.New(
 | `WithWebFetchOptions(opts)` | 配置 `WebFetch` 的域名策略、超时与内容处理方式。 |
 | `WithWebSearchOptions(opts)` | 配置 `WebSearch` 的后端、分页参数与请求选项。 |
 
-其中，`WithBaseDir` 最值得优先明确。它决定了 `Read`、`Write`、`Edit`、`Glob`、`Grep` 等文件相关工具的工作范围，也决定了 `Bash` 执行命令时的默认目录。如果 Agent 只面向单个仓库工作，建议始终显式设置 `baseDir`。
-
-在接入 `tool/claudecode` 时，建议先根据 Agent 的任务边界决定是否启用只读模式：如果主要用于代码阅读与分析，可以开启只读模式，只暴露 `Read`、`Glob`、`Grep`、`Bash`、`WebFetch`、`WebSearch` 等非修改类工具；如果需要在仓库内直接修改文件，再保留 `Write`、`Edit` 与 `NotebookEdit`。在提示词设计上，通常也应明确这组工具的分工，例如优先通过 `Read` 获取上下文，优先使用 `Glob` 和 `Grep` 做路径与内容检索；当需要执行耗时命令时，再通过 `Bash` 发起后台任务，并结合 `TaskOutput` 与 `TaskStop` 管理执行过程。
+`WithBaseDir` 定义了 `Read`、`Write`、`Edit`、`Glob`、`Grep` 等文件相关工具的工作范围，也决定了 `Bash` 的默认执行目录。启用只读模式后，工具集只保留读取、检索、命令执行和 Web 相关能力；关闭只读模式后，会额外暴露 `Write`、`Edit` 与 `NotebookEdit`。
 
 ## MCP Tools 协议工具
 
