@@ -150,6 +150,7 @@ func buildProcessor(
 		errorHandler:         options.errorHandler,
 		debugLogging:         options.debugLogging,
 		adkCompatibility:     options.adkCompatibility,
+		responseRewriter:     options.responseRewriter,
 		streamingEventType:   options.streamingEventType,
 		structuredTaskErrors: options.structuredTaskErrors,
 		agentName:            serverIdentity,
@@ -272,6 +273,7 @@ type messageProcessor struct {
 	errorHandler         ErrorHandler
 	debugLogging         bool
 	adkCompatibility     bool
+	responseRewriter     ResponseRewriter
 	streamingEventType   StreamingEventType
 	structuredTaskErrors bool
 	agentName            string
@@ -453,11 +455,19 @@ func (m *messageProcessor) handleError(
 	}
 
 	if streaming {
-		subscriber := newSingleMsgSubscriber(errMsg)
+		rewritten := m.rewriteStreamingResult(errMsg)
+		if rewritten == nil {
+			return droppedStreamingMessageProcessingResult(), nil
+		}
+		subscriber := newSingleResultSubscriber(rewritten)
 		return &taskmanager.MessageProcessingResult{StreamingEvents: subscriber}, nil
 	}
 
-	return &taskmanager.MessageProcessingResult{Result: errMsg}, nil
+	rewritten := m.rewriteUnaryResult(errMsg)
+	if rewritten == nil {
+		return droppedUnaryMessageProcessingResult(), nil
+	}
+	return &taskmanager.MessageProcessingResult{Result: rewritten}, nil
 
 }
 
@@ -483,8 +493,13 @@ func (m *messageProcessor) handleStreamingProcessingError(
 		log.WarnfContext(ctx, "handle streaming processing error: %v", err)
 		return err
 	}
+	rewritten := m.rewriteStreamingResult(errMsg)
 
-	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: errMsg}); err != nil {
+	if rewritten == nil {
+		return nil
+	}
+
+	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: rewritten}); err != nil {
 		log.ErrorfContext(ctx, "failed to send error message: %v", err)
 		return fmt.Errorf("failed to send error message: %w", err)
 	}
@@ -766,14 +781,16 @@ func (m *messageProcessor) processAgentStreamingEvents(
 	)
 	// Add ADK-compatible metadata if enabled
 	m.addTaskMetadata(&taskSubmitted, userID, sessionID)
-	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &taskSubmitted}); err != nil {
-		log.ErrorfContext(
-			ctx,
-			"failed to send task submitted message: %v",
-			err,
-		)
-		if abortStreaming(err) {
-			return
+	if rewritten := m.rewriteStreamingResult(&taskSubmitted); rewritten != nil {
+		if err := subscriber.Send(protocol.StreamingMessageEvent{Result: rewritten}); err != nil {
+			log.ErrorfContext(
+				ctx,
+				"failed to send task submitted message: %v",
+				err,
+			)
+			if abortStreaming(err) {
+				return
+			}
 		}
 	}
 
@@ -797,16 +814,18 @@ func (m *messageProcessor) processAgentStreamingEvents(
 			true,
 		)
 		finalArtifact.Metadata = cloneStreamingMetadata(finalStreamingMetadata)
-		if err := subscriber.Send(protocol.StreamingMessageEvent{
-			Result: &finalArtifact,
-		}); err != nil {
-			log.ErrorfContext(
-				ctx,
-				"failed to send final artifact message: %v",
-				err,
-			)
-			if abortStreaming(err) {
-				return
+		if rewritten := m.rewriteStreamingResult(&finalArtifact); rewritten != nil {
+			if err := subscriber.Send(protocol.StreamingMessageEvent{
+				Result: rewritten,
+			}); err != nil {
+				log.ErrorfContext(
+					ctx,
+					"failed to send final artifact message: %v",
+					err,
+				)
+				if abortStreaming(err) {
+					return
+				}
 			}
 		}
 	}
@@ -822,14 +841,16 @@ func (m *messageProcessor) processAgentStreamingEvents(
 	if m.streamingEventType == StreamingEventTypeMessage {
 		taskCompleted.Metadata = cloneStreamingMetadata(finalStreamingMetadata)
 	}
-	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &taskCompleted}); err != nil {
-		log.ErrorfContext(
-			ctx,
-			"failed to send task completed message: %v",
-			err,
-		)
-		if abortStreaming(err) {
-			return
+	if rewritten := m.rewriteStreamingResult(&taskCompleted); rewritten != nil {
+		if err := subscriber.Send(protocol.StreamingMessageEvent{Result: rewritten}); err != nil {
+			log.ErrorfContext(
+				ctx,
+				"failed to send task completed message: %v",
+				err,
+			)
+			if abortStreaming(err) {
+				return
+			}
 		}
 	}
 }
@@ -904,8 +925,15 @@ func (m *messageProcessor) processBatchStreamingEvents(
 				true,
 			)
 			statusEvent.Metadata = task.Metadata
+			rewritten := m.rewriteStreamingResult(&statusEvent)
+			if rewritten == nil {
+				if terminalTaskError != nil {
+					*terminalTaskError = true
+				}
+				return false, nil
+			}
 			if err := subscriber.Send(protocol.StreamingMessageEvent{
-				Result: &statusEvent,
+				Result: rewritten,
 			}); err != nil {
 				return false, fmt.Errorf(
 					"failed to send task failure status: %w",
@@ -938,6 +966,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 		if err != nil {
 			return false, fmt.Errorf("failed to convert event to A2A message: %w", err)
 		}
+		convertedResult = m.rewriteStreamingResult(convertedResult)
 
 		if m.debugLogging {
 			a2aMsgJson, _ := json.Marshal(convertedResult)
@@ -1009,14 +1038,16 @@ func (m *messageProcessor) processMessage(
 				a2aMsg.MessageID,
 				time.Now().UnixNano(),
 			)
-			return &taskmanager.MessageProcessingResult{
-				Result: buildStructuredFailureTask(
-					taskID,
-					ctxID,
-					messages,
-					agentEvent,
-				),
-			}, nil
+			rewritten := m.rewriteUnaryResult(buildStructuredFailureTask(
+				taskID,
+				ctxID,
+				messages,
+				agentEvent,
+			))
+			if rewritten == nil {
+				return droppedUnaryMessageProcessingResult(), nil
+			}
+			return &taskmanager.MessageProcessingResult{Result: rewritten}, nil
 		}
 		if err := m.processUnaryEvent(
 			ctx,
@@ -1054,8 +1085,15 @@ func (m *messageProcessor) processMessage(
 			),
 		)
 	}
-
-	return buildMessageProcessingResult(a2aMsg, ctxID, messages), nil
+	result := buildMessageProcessingResult(a2aMsg, ctxID, messages)
+	if result != nil && result.Result != nil {
+		rewritten := m.rewriteUnaryResult(result.Result)
+		if rewritten == nil {
+			return droppedUnaryMessageProcessingResult(), nil
+		}
+		result.Result = rewritten
+	}
+	return result, nil
 }
 
 func (m *messageProcessor) processUnaryEvent(
@@ -1095,7 +1133,10 @@ func (m *messageProcessor) processUnaryEvent(
 		return nil
 	}
 
-	if shouldSkipRunnerCompletionEvent(agentEvent, *messages) {
+	if shouldSkipRunnerCompletionEvent(
+		agentEvent,
+		*messages,
+	) {
 		return nil
 	}
 
@@ -1256,4 +1297,165 @@ func (m *messageProcessor) addTaskMetadata(event *protocol.TaskStatusUpdateEvent
 	event.Metadata[ia2a.GetADKMetadataKey("app_name")] = m.agentName
 	event.Metadata[ia2a.GetADKMetadataKey("user_id")] = userID
 	event.Metadata[ia2a.GetADKMetadataKey("session_id")] = sessionID
+}
+
+func (m *messageProcessor) rewriteStreamingResult(
+	result protocol.StreamingMessageResult,
+) protocol.StreamingMessageResult {
+	if result == nil {
+		return nil
+	}
+	if m.responseRewriter != nil {
+		result = m.responseRewriter.RewriteStreaming(result)
+	}
+	if result == nil {
+		return nil
+	}
+	return normalizeStreamingResult(result)
+}
+
+func (m *messageProcessor) rewriteUnaryResult(
+	result protocol.UnaryMessageResult,
+) protocol.UnaryMessageResult {
+	if result == nil {
+		return nil
+	}
+	if m.responseRewriter != nil {
+		result = m.responseRewriter.RewriteUnary(result)
+	}
+	if result == nil {
+		return nil
+	}
+	return normalizeUnaryResult(result)
+}
+
+func normalizeStreamingResult(
+	result protocol.StreamingMessageResult,
+) protocol.StreamingMessageResult {
+	switch v := result.(type) {
+	case *protocol.Message:
+		return normalizeProtocolMessage(v)
+	case *protocol.TaskArtifactUpdateEvent:
+		return normalizeTaskArtifactUpdateEvent(v)
+	case *protocol.TaskStatusUpdateEvent:
+		return normalizeTaskStatusUpdateEvent(v)
+	default:
+		return result
+	}
+}
+
+func normalizeUnaryResult(
+	result protocol.UnaryMessageResult,
+) protocol.UnaryMessageResult {
+	switch v := result.(type) {
+	case *protocol.Message:
+		return normalizeProtocolMessage(v)
+	case *protocol.Task:
+		return normalizeTask(v)
+	default:
+		return result
+	}
+}
+
+func normalizeProtocolMessage(msg *protocol.Message) *protocol.Message {
+	if msg == nil {
+		return nil
+	}
+	msg.Metadata = normalizeMetadataMap(msg.Metadata)
+	if len(msg.Parts) == 0 && !hasContentfulMetadata(msg.Metadata) {
+		return nil
+	}
+	return msg
+}
+
+func normalizeTask(task *protocol.Task) *protocol.Task {
+	if task == nil {
+		return nil
+	}
+	if task.Status.Message != nil {
+		task.Status.Message = normalizeProtocolMessage(task.Status.Message)
+	}
+	task.Metadata = normalizeMetadataMap(task.Metadata)
+	if len(task.History) > 0 {
+		history := make([]protocol.Message, 0, len(task.History))
+		for i := range task.History {
+			msg := task.History[i]
+			if normalized := normalizeProtocolMessage(&msg); normalized != nil {
+				history = append(history, *normalized)
+			}
+		}
+		task.History = history
+	}
+	if len(task.Artifacts) > 0 {
+		artifacts := make([]protocol.Artifact, 0, len(task.Artifacts))
+		for i := range task.Artifacts {
+			artifact := task.Artifacts[i]
+			if normalized := normalizeArtifact(&artifact); normalized != nil {
+				artifacts = append(artifacts, *normalized)
+			}
+		}
+		task.Artifacts = artifacts
+	}
+	return task
+}
+
+func normalizeTaskArtifactUpdateEvent(
+	event *protocol.TaskArtifactUpdateEvent,
+) *protocol.TaskArtifactUpdateEvent {
+	if event == nil {
+		return nil
+	}
+	event.Metadata = normalizeMetadataMap(event.Metadata)
+	if normalized := normalizeArtifact(&event.Artifact); normalized != nil {
+		event.Artifact = *normalized
+		return event
+	}
+	if event.LastChunk != nil && *event.LastChunk {
+		return event
+	}
+	if hasContentfulMetadata(event.Metadata) {
+		return event
+	}
+	return nil
+}
+
+func normalizeTaskStatusUpdateEvent(
+	event *protocol.TaskStatusUpdateEvent,
+) *protocol.TaskStatusUpdateEvent {
+	if event == nil {
+		return nil
+	}
+	event.Metadata = normalizeMetadataMap(event.Metadata)
+	if event.Status.Message != nil {
+		event.Status.Message = normalizeProtocolMessage(event.Status.Message)
+	}
+	return event
+}
+
+func normalizeArtifact(artifact *protocol.Artifact) *protocol.Artifact {
+	if artifact == nil {
+		return nil
+	}
+	artifact.Metadata = normalizeMetadataMap(artifact.Metadata)
+	if len(artifact.Parts) == 0 && !hasStructuredMetadata(artifact.Metadata) {
+		return nil
+	}
+	return artifact
+}
+
+func normalizeMetadataMap(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
+}
+
+func droppedUnaryMessageProcessingResult() *taskmanager.MessageProcessingResult {
+	return &taskmanager.MessageProcessingResult{}
+}
+
+func droppedStreamingMessageProcessingResult() *taskmanager.MessageProcessingResult {
+	return &taskmanager.MessageProcessingResult{
+		StreamingEvents: newSingleResultSubscriber(nil),
+	}
 }
