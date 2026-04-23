@@ -23,8 +23,10 @@ import (
 func TestMarkAwaitingUserReply_AttachesToFinalEvent(t *testing.T) {
 	inv := &Invocation{
 		AgentName:    "clarifier",
+		Branch:       "runtime-root/clarifier",
 		InvocationID: "inv-1",
 	}
+	SetAwaitUserReplyRootLookupName(inv, "coordinator")
 	require.NoError(t, MarkAwaitingUserReply(inv))
 
 	ch := make(chan *event.Event, 1)
@@ -59,6 +61,7 @@ func TestMarkAwaitingUserReply_AttachesToFinalEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "clarifier", route.AgentName)
+	require.Equal(t, "coordinator/clarifier", route.LookupPath)
 
 	ext, ok, err := event.GetExtension[AwaitUserReplyRoute](
 		evt,
@@ -67,11 +70,26 @@ func TestMarkAwaitingUserReply_AttachesToFinalEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "clarifier", ext.AgentName)
+	require.Equal(t, "coordinator/clarifier", ext.LookupPath)
 }
 
 func TestMarkAwaitingUserReply_EmptyAgentName(t *testing.T) {
 	err := MarkAwaitingUserReply(&Invocation{})
 	require.Error(t, err)
+}
+
+func TestMarkAwaitingUserReply_UsesBranchPath(t *testing.T) {
+	inv := &Invocation{
+		AgentName: "clarifier",
+		Branch:    "parent/clarifier",
+	}
+
+	require.NoError(t, MarkAwaitingUserReply(inv))
+
+	route, ok := CurrentAwaitUserReplyRoute(inv)
+	require.True(t, ok)
+	require.Equal(t, "clarifier", route.AgentName)
+	require.Equal(t, "parent/clarifier", route.LookupPath)
 }
 
 func TestPendingAwaitUserReplyRoute_InvalidState(t *testing.T) {

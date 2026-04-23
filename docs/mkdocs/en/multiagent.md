@@ -696,10 +696,9 @@ Important behavior:
 
 - The route is consumed once. After the next user turn starts, it is cleared.
 - Explicit `agent.WithAgent(...)` or `agent.WithAgentByName(...)` still wins.
-- If the target Agent was removed, or the name is no longer uniquely
-  resolvable, `Runner` falls back to its default entry Agent and clears the
-  stale route.
-- `Runner` can resolve uniquely named nested SubAgents automatically, so you do
+- If the target Agent path is no longer valid, `Runner` falls back to its
+  default entry Agent and clears the stale route.
+- `Runner` restores nested SubAgents by their full agent-chain path, so you do
   not need to register every SubAgent separately in the common
   coordinator-plus-SubAgents setup.
 

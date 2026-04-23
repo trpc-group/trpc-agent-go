@@ -459,7 +459,7 @@ func (r *runner) Run(
 		return nil, err
 	}
 
-	ro, err = r.applyAwaitUserReplyRoute(
+	ro, awaitUserReplyRootName, err := r.applyAwaitUserReplyRoute(
 		execCtx,
 		sessionKey,
 		sess,
@@ -495,6 +495,15 @@ func (r *runner) Run(
 		agent.WithInvocationEventFilterKey(eventFilterKey),
 		agent.WithInvocationPlugins(r.pluginManager),
 	)
+	if rootLookupName := r.selectedRootLookupName(
+		ro,
+		awaitUserReplyRootName,
+	); rootLookupName != "" {
+		agent.SetAwaitUserReplyRootLookupName(
+			invocation,
+			rootLookupName,
+		)
+	}
 
 	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
@@ -793,12 +802,30 @@ func (r *runner) selectAgent(
 		agentName = ro.AgentByName
 	}
 
-	if selected, ok, err := r.lookupNamedAgent(ctx, agentName, ro); err != nil {
+	if ag, ok, err := r.loadRegisteredAgent(ctx, agentName, ro); err != nil {
 		return nil, err
 	} else if ok {
+		selected := r.wrapSelectedAgent(ag)
+		appid.RegisterRunner(r.appName, selected.Info().Name)
 		return selected, nil
 	}
 	return nil, fmt.Errorf("runner: agent %q not found", agentName)
+}
+
+func (r *runner) selectedRootLookupName(
+	ro agent.RunOptions,
+	awaitUserReplyRootName string,
+) string {
+	if awaitUserReplyRootName != "" {
+		return awaitUserReplyRootName
+	}
+	if ro.Agent != nil {
+		return ""
+	}
+	if ro.AgentByName != "" {
+		return ro.AgentByName
+	}
+	return r.defaultAgentName
 }
 
 func (r *runner) wrapSelectedAgent(ag agent.Agent) agent.Agent {

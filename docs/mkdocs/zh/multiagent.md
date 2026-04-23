@@ -691,11 +691,10 @@ _, _ = r.Run(
 - 这条路由只消费一次；下一条用户消息开始时就会被清掉
 - 显式指定的 `agent.WithAgent(...)` 或 `agent.WithAgentByName(...)`
   仍然优先
-- 如果目标 Agent 已被移除，或者这个名字已经无法唯一解析，
-  `Runner` 会回退到默认入口 Agent，并清理掉脏路由
+- 如果目标 Agent 路径已经失效，`Runner` 会回退到默认入口 Agent，
+  并清理掉脏路由
 - 对最常见的 “coordinator + WithSubAgents” 结构，`Runner`
-  可以自动解析唯一命名的嵌套 SubAgent，不需要你把每个 SubAgent
-  再额外注册一遍
+  会按完整的 Agent 链路径恢复，不需要你把每个 SubAgent 再额外注册一遍
 
 如果你不是用 `LLMAgent`，而是自己实现 `agent.Agent`，请看 `runner`
 文档里的底层 API：`agent.MarkAwaitingUserReply(...)`。

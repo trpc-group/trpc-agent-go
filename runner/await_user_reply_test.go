@@ -26,6 +26,7 @@ import (
 type awaitReplyTrackingAgent struct {
 	name      string
 	subAgents []agent.Agent
+	markAwait bool
 	calls     int
 }
 
@@ -58,6 +59,9 @@ func (a *awaitReplyTrackingAgent) Run(
 	ch := make(chan *event.Event, 1)
 	go func() {
 		defer close(ch)
+		if a.markAwait {
+			_ = agent.MarkAwaitingUserReply(inv)
+		}
 		_ = agent.EmitEvent(
 			ctx,
 			inv,
@@ -173,6 +177,7 @@ func TestRunner_Run_AwaitUserReplyRoutingExplicitAgentWins(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "child", route.AgentName)
+	require.Equal(t, "child", route.LookupPath)
 }
 
 func TestRunner_Run_AwaitUserReplyRoutingFallsBackWhenMissing(t *testing.T) {
@@ -218,7 +223,7 @@ func TestRunner_Run_AwaitUserReplyRoutingFallsBackWhenMissing(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestRunner_Run_AwaitUserReplyRoutingResolvesNestedSubAgent(t *testing.T) {
+func TestRunner_Run_AwaitUserReplyRoutingResolvesNestedPath(t *testing.T) {
 	ctx := context.Background()
 	svc := sessioninmemory.NewSessionService()
 	key := session.Key{
@@ -227,21 +232,24 @@ func TestRunner_Run_AwaitUserReplyRoutingResolvesNestedSubAgent(t *testing.T) {
 		SessionID: "sess-nested",
 	}
 	state, err := (agent.AwaitUserReplyRoute{
-		AgentName: "child",
+		AgentName:  "child",
+		LookupPath: "parent/child",
 	}).State()
 	require.NoError(t, err)
 	_, err = svc.CreateSession(ctx, key, state)
 	require.NoError(t, err)
 
-	child := &awaitReplyTrackingAgent{name: "child"}
+	nestedChild := &awaitReplyTrackingAgent{name: "child"}
 	parent := &awaitReplyTrackingAgent{
 		name:      "parent",
-		subAgents: []agent.Agent{child},
+		subAgents: []agent.Agent{nestedChild},
 	}
+	topLevelChild := &awaitReplyTrackingAgent{name: "child"}
 	r := NewRunner(
 		"app",
 		parent,
 		WithSessionService(svc),
+		WithAgent("child", topLevelChild),
 		WithAwaitUserReplyRouting(true),
 	)
 
@@ -257,5 +265,103 @@ func TestRunner_Run_AwaitUserReplyRoutingResolvesNestedSubAgent(t *testing.T) {
 	}
 
 	require.Equal(t, 0, parent.calls)
+	require.Equal(t, 1, nestedChild.calls)
+	require.Equal(t, 0, topLevelChild.calls)
+}
+
+func TestRunner_Run_AwaitUserReplyRoutingPersistsFactoryLookupPath(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunnerWithAgentFactory(
+		"app",
+		"coordinator",
+		func(
+			_ context.Context,
+			_ agent.RunOptions,
+		) (agent.Agent, error) {
+			return &awaitReplyTrackingAgent{
+				name:      "runtime-root",
+				markAwait: true,
+			}, nil
+		},
+		WithSessionService(svc),
+		WithAwaitUserReplyRouting(true),
+	)
+
+	eventCh, err := r.Run(
+		ctx,
+		"user",
+		"sess-factory-root",
+		model.NewUserMessage("first turn"),
+		agent.WithRequestID("req-await-factory-root"),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	sess, err := svc.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess-factory-root",
+	})
+	require.NoError(t, err)
+	route, ok, err := agent.PendingAwaitUserReplyRoute(sess)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "runtime-root", route.AgentName)
+	require.Equal(t, "coordinator", route.LookupPath)
+}
+
+func TestRunner_Run_AwaitUserReplyRoutingResolvesFactorySubAgentPath(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	svc := sessioninmemory.NewSessionService()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess-factory-nested",
+	}
+	state, err := (agent.AwaitUserReplyRoute{
+		AgentName:  "child",
+		LookupPath: "coordinator/child",
+	}).State()
+	require.NoError(t, err)
+	_, err = svc.CreateSession(ctx, key, state)
+	require.NoError(t, err)
+
+	child := &awaitReplyTrackingAgent{name: "child"}
+	factoryCalls := 0
+	r := NewRunnerWithAgentFactory(
+		"app",
+		"coordinator",
+		func(
+			_ context.Context,
+			_ agent.RunOptions,
+		) (agent.Agent, error) {
+			factoryCalls++
+			return &awaitReplyTrackingAgent{
+				name:      "runtime-root",
+				subAgents: []agent.Agent{child},
+			}, nil
+		},
+		WithSessionService(svc),
+		WithAwaitUserReplyRouting(true),
+	)
+
+	eventCh, err := r.Run(
+		ctx,
+		key.UserID,
+		key.SessionID,
+		model.NewUserMessage("follow up"),
+		agent.WithRequestID("req-await-factory-nested"),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	require.Equal(t, 1, factoryCalls)
 	require.Equal(t, 1, child.calls)
 }

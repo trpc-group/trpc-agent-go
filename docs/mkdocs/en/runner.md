@@ -319,16 +319,26 @@ func (a *clarifierAgent) Run(
 
 Behavior summary:
 
-- The route is stored in session state, not by mutating message roles.
+- The route is stored in session state as a stable agent path, not by
+  mutating message roles.
 - It is consumed once, right before the next user turn starts.
 - `agent.WithAgent(...)` and `agent.WithAgentByName(...)` still take
   precedence.
-- If the recorded Agent no longer exists, or its name is no longer uniquely
-  resolvable, Runner clears the stale route and falls back to the default
-  entry Agent.
-- Runner can resolve uniquely named nested SubAgents automatically, so the
-  common `coordinator + WithSubAgents(...)` setup works without extra manual
-  registration.
+- If the recorded Agent path no longer exists, Runner clears the stale route
+  and falls back to the default entry Agent.
+- Nested SubAgents are resumed by their full invocation path, so the common
+  `coordinator + WithSubAgents(...)` setup works without manually registering
+  every child Agent.
+
+Advanced note:
+
+- The built-in `Runner` records the stable root lookup key automatically,
+  including `AgentFactory` cases where the runtime `Info().Name` differs from
+  the registered factory name.
+- If you build and run invocations manually outside `Runner`, and the stable
+  root lookup key is different from `inv.AgentName`, call
+  `agent.SetAwaitUserReplyRootLookupName(inv, rootLookupName)` before the
+  Agent emits its final clarifying reply.
 
 ### 🔌 Plugins
 

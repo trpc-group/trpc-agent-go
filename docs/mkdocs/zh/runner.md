@@ -311,13 +311,22 @@ func (a *clarifierAgent) Run(
 
 这套能力的行为总结：
 
-- 路由存放在 session state 中，而不是去修改 message role
+- 路由会以稳定的 Agent 路径形式存放在 session state 中，而不是去修改
+  message role
 - 它只消费一次，在下一条用户消息开始前就会被清掉
 - `agent.WithAgent(...)` 和 `agent.WithAgentByName(...)` 仍然优先
-- 如果记录的 Agent 已不存在，或者名字已无法唯一解析，Runner 会清理掉
-  脏路由，并回退到默认入口 Agent
-- 对常见的 `coordinator + WithSubAgents(...)` 结构，Runner 可以自动解析
-  唯一命名的嵌套 SubAgent，不需要额外手工注册
+- 如果记录的 Agent 路径已经失效，Runner 会清理掉脏路由，并回退到
+  默认入口 Agent
+- 对常见的 `coordinator + WithSubAgents(...)` 结构，Runner 会按完整的
+  Agent 链路径恢复，不需要额外手工注册每个子 Agent
+
+进阶说明：
+
+- 内建 `Runner` 会自动记录稳定的根 Agent lookup key，包括
+  `AgentFactory` 返回的运行时 `Info().Name` 与注册名不一致的场景。
+- 如果你是在 `Runner` 之外手工构造并运行 Invocation，而且稳定的根
+  lookup key 和 `inv.AgentName` 不一致，请在 Agent 发出最终追问前先调
+  一次 `agent.SetAwaitUserReplyRootLookupName(inv, rootLookupName)`。
 
 ### 🔌 插件
 
