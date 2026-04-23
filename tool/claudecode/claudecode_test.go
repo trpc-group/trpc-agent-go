@@ -914,7 +914,7 @@ func TestToolSet_WebFetchPropagatesFetchAndPromptProcessorErrors(t *testing.T) {
 	}))
 	defer server.Close()
 	ts, err := NewToolSet(WithWebFetchOptions(WebFetchOptions{
-		Timeout: time.Millisecond,
+		Timeout: time.Second,
 		PromptProcessor: func(context.Context, WebFetchPromptInput) (string, error) {
 			return "", fs.ErrInvalid
 		},
