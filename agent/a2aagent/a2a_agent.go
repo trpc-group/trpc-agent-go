@@ -189,7 +189,7 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	}
 	var (
 		eventChan <-chan *event.Event
-		err      error
+		err       error
 	)
 	if useStreaming {
 		eventChan, err = r.runStreaming(ctx, invocation)

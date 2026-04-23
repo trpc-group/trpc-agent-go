@@ -756,9 +756,9 @@ func TestEmitEvent(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:      "successful emit",
-			inv:       NewInvocation(WithInvocationID("test-id")),
-			ch:        make(chan *event.Event, 1),
+			name: "successful emit",
+			inv:  NewInvocation(WithInvocationID("test-id")),
+			ch:   make(chan *event.Event, 1),
 			event: event.NewResponseEvent(
 				"test-id",
 				"tester",

@@ -2675,4 +2675,3 @@ func hasAttr(attrs []attribute.KeyValue, target attribute.KeyValue) bool {
 	}
 	return false
 }
-

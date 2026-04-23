@@ -38,9 +38,9 @@ var (
 
 	InvokeAgentMeter metric.Meter = MeterProvider.Meter(metricsemconv.MeterNameInvokeAgent)
 
-	InvokeAgentMetricGenAIRequestCnt           metric.Int64Counter
-	InvokeAgentMetricGenAIClientTokenUsage     *histogram.DynamicInt64Histogram
-	InvokeAgentMetricGenAIClientTimeToFirstToken *histogram.DynamicFloat64Histogram
+	InvokeAgentMetricGenAIRequestCnt              metric.Int64Counter
+	InvokeAgentMetricGenAIClientTokenUsage        *histogram.DynamicInt64Histogram
+	InvokeAgentMetricGenAIClientTimeToFirstToken  *histogram.DynamicFloat64Histogram
 	InvokeAgentMetricGenAIClientOperationDuration *histogram.DynamicFloat64Histogram
 )
 
