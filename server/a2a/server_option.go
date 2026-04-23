@@ -21,6 +21,7 @@ import (
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -62,6 +63,12 @@ type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.Mess
 // TaskManagerBuilder returns a task manager for the given agent.
 type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager.TaskManager
 
+// EventToA2APartMapper converts an agent event into additional A2A parts.
+//
+// Returning nil or empty parts means this mapper contributes nothing and the
+// default converter continues with its normal behavior.
+type EventToA2APartMapper func(ctx context.Context, event *event.Event) ([]protocol.Part, error)
+
 type defaultAuthProvider struct {
 	userIDHeader string
 }
@@ -98,6 +105,7 @@ type options struct {
 	runOptions                []agent.RunOption
 	a2aToAgentConverter       A2AMessageToAgentMessage
 	eventToA2AConverter       EventToA2AMessage
+	eventPartMappers          []EventToA2APartMapper
 	host                      string
 	extraOptions              []a2a.Option
 	errorHandler              ErrorHandler
@@ -284,6 +292,24 @@ func WithA2AToAgentConverter(converter A2AMessageToAgentMessage) Option {
 func WithEventToA2AConverter(converter EventToA2AMessage) Option {
 	return func(opts *options) {
 		opts.eventToA2AConverter = converter
+	}
+}
+
+// WithEventToA2APartMapper registers a lightweight event-to-part mapper on the
+// default event converter.
+//
+// Built-in tool-call and code-execution handling still takes precedence. For
+// regular text events, mapper-generated parts are appended after reasoning and
+// content TextParts so natural-language output is preserved.
+//
+// The mapper is ignored when WithEventToA2AConverter is used to replace the
+// converter entirely.
+func WithEventToA2APartMapper(mapper EventToA2APartMapper) Option {
+	return func(opts *options) {
+		if mapper == nil {
+			return
+		}
+		opts.eventPartMappers = append(opts.eventPartMappers, mapper)
 	}
 }
 
