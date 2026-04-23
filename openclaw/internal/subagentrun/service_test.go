@@ -12,6 +12,7 @@ package subagentrun
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -606,4 +607,111 @@ func TestServiceNotifyCompletionToleratesSenderError(t *testing.T) {
 			Status: publicsubagent.StatusCompleted,
 		},
 	})
+}
+
+func TestServiceErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	var nilSvc *Service
+	_, err := nilSvc.Spawn(context.Background(), SpawnRequest{})
+	require.ErrorContains(t, err, "nil service")
+	require.Nil(t, nilSvc.ListForUser("user-a", publicsubagent.ListFilter{}))
+
+	svc := &Service{
+		path:    t.TempDir(),
+		clock:   time.Now,
+		runs:    make(map[string]*runRecord),
+		running: make(map[string]*runningRun),
+	}
+
+	_, _, _, err = svc.markRunning(nil, "missing", 0)
+	require.ErrorIs(t, err, publicsubagent.ErrRunNotFound)
+
+	svc.runs["run-canceled"] = &runRecord{
+		Run: publicsubagent.Run{
+			ID:     "run-canceled",
+			Status: publicsubagent.StatusCanceled,
+		},
+	}
+	_, _, _, err = svc.markRunning(nil, "run-canceled", 0)
+	require.ErrorContains(t, err, "run canceled before start")
+
+	badPath := filepath.Join(t.TempDir(), "runs-dir")
+	require.NoError(t, os.MkdirAll(badPath, 0o700))
+	svc.path = badPath
+	svc.runs["run-persist"] = &runRecord{
+		Run: publicsubagent.Run{
+			ID:        "run-persist",
+			Status:    publicsubagent.StatusQueued,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+		OwnerUserID: "user-a",
+	}
+	_, _, _, err = svc.markRunning(nil, "run-persist", 0)
+	require.Error(t, err)
+	run, getErr := svc.GetForUser("user-a", "run-persist")
+	require.NoError(t, getErr)
+	require.Equal(t, publicsubagent.StatusFailed, run.Status)
+
+	require.ErrorContains(
+		t,
+		svc.runChild(context.Background(), nil, runningRun{}, &replyAccumulator{}),
+		"nil run record",
+	)
+
+	svc.finishRun("missing", "", nil)
+
+	canceled := false
+	svc.running = map[string]*runningRun{
+		"nil-entry": nil,
+		"active": {
+			cancel: func() {
+				canceled = true
+			},
+		},
+	}
+	svc.stopAllRunning()
+	require.True(t, canceled)
+	require.NotNil(t, svc.running["active"])
+	require.True(t, svc.running["active"].cancelRequested)
+}
+
+func TestReplyAccumulatorNoOpBranches(t *testing.T) {
+	t.Parallel()
+
+	var acc replyAccumulator
+	acc.consume(nil)
+	acc.consume(&event.Event{
+		Response: &model.Response{},
+	})
+	acc.consume(&event.Event{
+		Response: &model.Response{
+			Error: &model.ResponseError{Message: "event failed"},
+		},
+	})
+	require.ErrorContains(t, acc.err, "event failed")
+
+	acc = replyAccumulator{}
+	acc.consumeFull(nil)
+	acc.consumeFull(&model.Response{})
+	acc.consumeFull(&model.Response{
+		Choices: []model.Choice{{}},
+	})
+	require.Empty(t, acc.text)
+
+	acc.consumeDelta(nil)
+	acc.seenFull = true
+	acc.consumeDelta(&model.Response{
+		Choices: []model.Choice{{
+			Delta: model.Message{Content: "ignored"},
+		}},
+	})
+	require.Empty(t, acc.text)
+
+	acc = replyAccumulator{}
+	acc.consumeDelta(&model.Response{
+		Choices: []model.Choice{{}},
+	})
+	require.Empty(t, acc.text)
 }

@@ -655,6 +655,13 @@ func TestNewRuntime_ExposesSubagentService(t *testing.T) {
 	require.NotNil(t, rt.SubagentService())
 }
 
+func TestRuntimeSubagentServiceNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var rt *Runtime
+	require.Nil(t, rt.SubagentService())
+}
+
 func TestNewRuntimeStores_CreatesAllStores(t *testing.T) {
 	t.Parallel()
 

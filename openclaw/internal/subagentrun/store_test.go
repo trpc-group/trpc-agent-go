@@ -84,3 +84,51 @@ func TestStoreAndTypeHelpers(t *testing.T) {
 	require.Equal(t, "ab", truncateRunes("abcd", 2))
 	require.Equal(t, "abc", truncateRunes("abc", 8))
 }
+
+func TestStoreErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	_, err := loadRuns(dir)
+	require.Error(t, err)
+
+	badJSONPath := filepath.Join(t.TempDir(), subagentRunsFileName)
+	require.NoError(t, os.WriteFile(badJSONPath, []byte("{"), 0o600))
+	_, err = loadRuns(badJSONPath)
+	require.Error(t, err)
+
+	skippedPath := filepath.Join(t.TempDir(), subagentRunsFileName)
+	require.NoError(t, os.WriteFile(
+		skippedPath,
+		[]byte(`{"runs":[{"id":""},{"id":"run-3","status":"queued"}]}`),
+		0o600,
+	))
+	loaded, err := loadRuns(skippedPath)
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+
+	blockedParent := filepath.Join(t.TempDir(), "blocked")
+	require.NoError(t, os.WriteFile(blockedParent, []byte("x"), 0o600))
+	err = saveRuns(filepath.Join(blockedParent, subagentRunsFileName), nil)
+	require.Error(t, err)
+
+	err = saveRuns(filepath.Join(t.TempDir(), subagentRunsFileName), map[string]*runRecord{
+		"nil": nil,
+		"empty": {
+			Run: publicsubagent.Run{},
+		},
+	})
+	require.NoError(t, err)
+
+	now := time.Now()
+	changed := normalizeLoadedRuns(map[string]*runRecord{
+		"nil": nil,
+		"done": {
+			Run: publicsubagent.Run{
+				ID:     "done",
+				Status: publicsubagent.StatusCompleted,
+			},
+		},
+	}, now)
+	require.False(t, changed)
+}

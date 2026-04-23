@@ -213,6 +213,7 @@ func TestToolAdditionalErrorPaths(t *testing.T) {
 
 	var nilTools *Tools
 	require.Nil(t, nilTools.All())
+	nilTools.SetService(nil)
 
 	var nilSpawn *spawnTool
 	var nilList *listTool
@@ -245,6 +246,21 @@ func TestToolAdditionalErrorPaths(t *testing.T) {
 
 	_, err = tools.cancel.Call(ctx, []byte(`{invalid`))
 	require.Error(t, err)
+
+	_, err = tools.spawn.Call(ctx, []byte(`{invalid`))
+	require.Error(t, err)
+
+	_, err = tools.spawn.Call(context.Background(), []byte(`{"task":"demo"}`))
+	require.ErrorContains(t, err, "current session context is unavailable")
+
+	_, err = tools.list.Call(context.Background(), nil)
+	require.ErrorContains(t, err, "current session context is unavailable")
+
+	_, err = tools.get.Call(context.Background(), []byte(`{"id":"run-1"}`))
+	require.ErrorContains(t, err, "current session context is unavailable")
+
+	_, err = tools.cancel.Call(ctx, []byte(`{"id":"missing"}`))
+	require.ErrorIs(t, err, publicsubagent.ErrRunNotFound)
 }
 
 func newInvocationContext(
