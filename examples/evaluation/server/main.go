@@ -65,6 +65,7 @@ func main() {
 		sevaluation.WithBasePath(*basePath),
 		sevaluation.WithAgentEvaluator(agentEvaluator),
 		sevaluation.WithEvalSetManager(evalSetManager),
+		sevaluation.WithMetricManager(metricManager),
 		sevaluation.WithEvalResultManager(evalResultManager),
 	)
 	if err != nil {
