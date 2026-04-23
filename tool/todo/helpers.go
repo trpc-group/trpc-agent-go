@@ -50,6 +50,11 @@ func GetTodos(sess *session.Session, branch string) ([]Item, error) {
 // GetTodosWithPrefix is the advanced form of GetTodos that honours a
 // custom state key prefix (see WithStateKeyPrefix). Return semantics
 // match GetTodos.
+//
+// An empty prefix is treated as a request for the default layout and
+// falls back to DefaultStateKeyPrefix — it is never read as a literal
+// empty-prefix state key. Pass a concrete value if you need a custom
+// layout, or use GetTodos if you do not.
 func GetTodosWithPrefix(sess *session.Session, prefix, branch string) ([]Item, error) {
 	if sess == nil {
 		return nil, nil
