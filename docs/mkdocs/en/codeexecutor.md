@@ -60,16 +60,28 @@ More complete examples:
 - [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go)
 - [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md)
 
-### Default Behavior of `WithCodeExecutor`
+### `WithCodeExecutor` vs fenced-code auto-execution
 
-`llmagent.WithCodeExecutor(...)` does more than provide a runtime.
+`llmagent.WithCodeExecutor(...)` and the response-side fenced-code
+auto-execution processor are **two independent switches**. It is worth
+internalising this distinction up front, because a lot of confusion
+comes from treating them as a single knob.
 
-By default, it also enables the response-side code execution processor. If the
-assistant reply is exactly one runnable fenced code block, the framework will
-extract and execute that block automatically.
+- `WithCodeExecutor(...)` supplies a *runtime* that execution-backed
+  tools — most notably `workspace_exec` — use to run commands. It does
+  not, by itself, cause anything to be executed from the assistant's
+  reply.
+- `EnableCodeExecutionResponseProcessor` (default: `true`, toggled via
+  `WithEnableCodeExecutionResponseProcessor(enable bool)`) controls
+  whether the framework scans the assistant reply and, if it is exactly
+  one runnable fenced code block, runs that block automatically.
 
-If you only want workspace support, `workspace_exec`, or other executor-backed
-tools, and do not want model output code blocks to auto-run, disable it:
+Auto-execution of fenced code actually fires only when *both* are true:
+an executor is available **and** the response processor is enabled.
+
+If you only want the executor to power `workspace_exec` or other
+tool-backed execution paths, and do not want assistant replies to be
+auto-executed, opt out of the response-side processor explicitly:
 
 ```go
 agent := llmagent.New(
@@ -80,11 +92,20 @@ agent := llmagent.New(
 )
 ```
 
-Common cases for disabling auto-execution:
+Common cases for disabling fenced-code auto-execution:
 
 - using `workspace_exec` only
 - providing a runtime for other tools
 - requiring code execution to happen only through explicit tool calls
+
+Interaction with `WithSkills(repo)` auto-fallback: when the skills
+layer implicitly injects a local `CodeExecutor` on your behalf (see the
+Agent Skills guide), that implicit executor is treated as "only here to
+power `workspace_exec`". In that case the framework automatically sets
+`EnableCodeExecutionResponseProcessor=false` unless you explicitly
+called `WithEnableCodeExecutionResponseProcessor(...)` yourself. Using
+`WithCodeExecutor(...)` explicitly, by contrast, leaves the switch at
+its framework default so your existing behavior is preserved.
 
 ## Choosing a Backend
 
@@ -271,6 +292,140 @@ flow is:
 
 This keeps the contract simple: tools and models rely on stable paths instead
 of dealing with staging internals.
+
+## Workspace Bootstrap: Preparing the Workspace Before User Commands
+
+Some workspaces need predictable setup before `workspace_exec` runs any
+user-authored command: a preloaded config file, a pinned Python virtualenv, a
+one-shot `pip install`, etc. Rather than teaching the model to perform this
+setup itself (which is error-prone and burns prompt tokens), the framework
+lets you declare it once on the agent.
+
+Use `codeexecutor.WorkspaceBootstrapSpec` to list the required files and
+commands, and wire it in via `llmagent.WithWorkspaceBootstrap(...)`. The first
+`workspace_exec` call in each workspace will converge the workspace to that
+spec; later calls find everything already in place and skip the work.
+
+```go
+package main
+
+import (
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+)
+
+func newAgent() *llmagent.LLMAgent {
+    bootstrap := codeexecutor.WorkspaceBootstrapSpec{
+        Files: []codeexecutor.WorkspaceFile{
+            {
+                Target:  "work/config.json",
+                Content: []byte(`{"threshold": 0.8}`),
+            },
+            {
+                Target: "work/requirements.txt",
+                Content: []byte(
+                    "numpy==1.26.4\npandas==2.2.2\n",
+                ),
+            },
+        },
+        Commands: []codeexecutor.WorkspaceCommand{
+            {
+                Cmd: "bash",
+                Args: []string{
+                    "-lc",
+                    "python3 -m venv .venv && " +
+                        ".venv/bin/pip install -q -r work/requirements.txt",
+                },
+                MarkerPath: ".venv/bin/pip",
+                // FingerprintInputs folds requirements.txt content
+                // into the command fingerprint, so the install
+                // reruns when the pinned versions change. Without
+                // this the marker would short-circuit the command
+                // after the first successful install.
+                FingerprintInputs: []string{"work/requirements.txt"},
+                Timeout:           2 * time.Minute,
+            },
+        },
+    }
+
+    return llmagent.New(
+        "analyst",
+        llmagent.WithCodeExecutor(local.New()),
+        llmagent.WithWorkspaceBootstrap(bootstrap),
+    )
+}
+```
+
+### Field reference
+
+`WorkspaceFile`:
+
+- `Target`: workspace-relative destination path (required). Parent
+  directories are created automatically.
+- `Content`: inline bytes to write.
+- `Input`: alternatively, a `codeexecutor.InputSpec` that resolves
+  `artifact://`, `host://`, `workspace://`, or `skill://` URIs. Exactly
+  one of `Content` and `Input` must be set.
+- `Mode`: optional file mode (octal); defaults to `0o644`.
+- `Key`: optional stable identifier used for idempotency; if omitted it is
+  derived from `Target`.
+- `Optional`: if true, provider errors are logged as warnings instead of
+  aborting workspace preparation.
+
+`WorkspaceCommand`:
+
+- `Cmd` / `Args` / `Env` / `Cwd`: standard exec wiring. `Cwd` is
+  workspace-relative and defaults to the workspace root.
+- `Timeout`: bounds a single invocation.
+- `MarkerPath`: workspace-relative file whose *existence* signals the
+  command has already run; this is the cheapest way to make a command
+  self-healing after the marker gets deleted. When absent, the reconciler
+  falls back to fingerprint-only skip.
+- `ObservedPaths`: alternative to `MarkerPath` when success is defined by a
+  set of files rather than a single marker.
+- `FingerprintInputs` / `FingerprintSalt`: fold external inputs into the
+  command fingerprint so the command reruns when they change. **The
+  fingerprint does not automatically hash files referenced on the command
+  line**, so a command like `pip install -r work/requirements.txt` must
+  list `work/requirements.txt` here explicitly — otherwise the marker
+  will short-circuit the install after the first successful run even if
+  `requirements.txt` is later edited.
+- `Key`: stable identifier used for idempotency; derived from `Cmd`/`Args`
+  when omitted.
+- `Optional`: same semantics as for files.
+
+### Ordering and idempotency
+
+- Files are staged first, then commands run, both in declaration order.
+- Each entry is fingerprinted (content for files, command line + optional
+  inputs for commands). On subsequent invocations, the reconciler checks
+  the fingerprint *and* the on-disk sentinel before skipping, so a user
+  `rm -rf` inside `workspace_exec` does not silently leave the workspace
+  half-broken: the next call re-applies the missing piece.
+- Reconciliation is serialized per workspace (in-process), so two
+  parallel `workspace_exec` calls on the same session cannot step on each
+  other during preparation.
+- Entries without `Optional` set (the default required behavior) abort
+  the `workspace_exec` call before the user command runs on failure;
+  `Optional: true` entries downgrade to a logged warning.
+
+### Opting out
+
+If you want to keep the legacy "stage conversation files only" behavior
+— for example, because an existing regression test depends on it —
+pass `llmagent.WithWorkspacePreparersDisabled(true)` on the agent. In
+normal use this switch should not be necessary.
+
+### Interaction with `skill_load`
+
+Skills loaded via `skill_load` are materialized into
+`skills/<name>` through the same reconcile path. You do not need to
+add anything to `WorkspaceBootstrapSpec` for skills — they are picked
+up automatically from session state whenever `workspace_exec` runs.
+The bootstrap spec is for static, session-independent setup.
 
 ## What Persists Across Turns
 

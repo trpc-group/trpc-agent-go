@@ -15,19 +15,15 @@ Background references:
 
 ### 🎯 What You Get
 
-- 🧭 Built-in tool profiles: `full` (default) or `knowledge_only`
 - 🔎 Overview injection (name + description) to guide selection
 - 📥 `skill_load` to pull `SKILL.md` body and selected docs on demand
 - 📚 `skill_select_docs` to add/replace/clear docs
 - 🧾 `skill_list_docs` to list available docs
-- 🏃 `skill_run` to execute commands in the `full` profile, returning stdout/stderr and
-  output files
-- ⌨️ `skill_exec` plus session tools for interactive stdin/TTY flows in the
-  `full` profile
+- 🧪 Execution: `skill_load` materializes a writable skill working copy
+  under `/skills/<name>/`, and scripts are executed via `workspace_exec`
+  (available whenever a code executor is configured)
 - 🗂️ Output file collection via glob patterns with MIME detection
 - 🧩 Pluggable local or container workspace executors (local by default)
-- 🧱 Declarative `inputs`/`outputs`: map inputs and collect/inline/
-  save outputs via a manifest
 
 ### Three‑Layer Information Model
 
@@ -288,19 +284,8 @@ startup, call `repo.Refresh()` after the filesystem update is committed.
 `Refresh()` is meant for repository structure changes, not for every
 request.
 
-Knowledge-only mode:
-
-```go
-agent := llmagent.New(
-    "skills-assistant",
-    llmagent.WithSkills(repo),
-    llmagent.WithSkillToolProfile(
-        llmagent.SkillToolProfileKnowledgeOnly,
-    ),
-)
-```
-
-Fine-grained allowlist:
+Fine-grained allowlist (only expose knowledge-injection tools, suitable
+for read-only agents):
 
 ```go
 agent := llmagent.New(
@@ -316,31 +301,47 @@ Key points:
 - Request processor injects overview and on‑demand content:
   [internal/flow/processor/skills.go]
   (https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/skills.go)
-- `WithSkills` auto-registers built-in skill tools; no manual wiring is
-  required.
-  - Default `full` profile: `skill_load`, `skill_select_docs`,
-    `skill_list_docs`, `skill_run`, and — when the executor supports
-    interactive sessions — `skill_exec`, `skill_write_stdin`,
-    `skill_poll_session`, `skill_kill_session`.  If the executor does
-    not implement `InteractiveProgramRunner` (and no local fallback
-    applies), these session tools are omitted and the corresponding
-    prompt guidance is suppressed.
-  - `knowledge_only` profile: only `skill_load`, `skill_select_docs`,
-    and `skill_list_docs`.
-  - `WithAllowedSkillTools(...)` overrides the profile with an explicit
-    allowlist, for example `SkillToolLoad` only.
-  - If the allowlist includes `skill_run` / `skill_exec`, the default
-    `WithSkillRunRequireSkillLoaded(true)` still requires `skill_load`
-    to be enabled as well. To omit `skill_load`, explicitly set
-    `llmagent.WithSkillRunRequireSkillLoaded(false)`.
-  - Executor requirement follows the final registered tool set:
-    any configuration without `skill_run` / `skill_exec` does not need
-    `llmagent.WithCodeExecutor(...)` or `agent.WithCodeExecutor(...)`.
-- Note: when `llmagent.WithCodeExecutor(...)` is set, or when
-  `agent.WithCodeExecutor(...)` is passed to `runner.Run(...)`, LLMAgent will
-  (by default) try to execute Markdown fenced code blocks in model responses.
-  If you only need the executor for `skill_run`, disable this behavior with
-  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`.
+- `WithSkills` auto-registers the built-in skill tools (`skill_load`,
+  `skill_select_docs`, `skill_list_docs`); no manual wiring is required.
+  These are knowledge-injection tools and do not execute scripts
+  themselves.
+- `WithAllowedSkillTools(...)` can narrow that set further with an
+  explicit allowlist, for example `SkillToolLoad` only.
+- **Executor auto-fallback**: when `WithSkills(repo)` is configured
+  without an explicit `WithCodeExecutor(...)`, the framework auto-wires
+  a local code executor so that `workspace_exec` is available out of
+  the box. The model then calls `workspace_exec` inside the writable
+  working copy under `/skills/<name>/` and follows the steps described
+  in `SKILL.md`. The fallback is intentionally skipped in three cases:
+  (1) you passed `WithCodeExecutor(...)` (your executor is used as-is);
+  (2) you passed `WithAllowedSkillTools(...)` (fine-grained mode, no
+  magic); or (3) you explicitly passed
+  `WithSkillToolProfile(SkillToolProfileKnowledgeOnly)` (opt-out for
+  "no convenience execution wiring"). For production, prefer wiring an
+  explicit container-backed executor rather than relying on the local
+  fallback — the local fallback is a development convenience, not a
+  deployment target.
+- **`CodeExecutor` vs fenced-code auto-execution (two separate
+  switches)**. Configuring a `CodeExecutor` only makes
+  execution *tools* available (for example, `workspace_exec`). It does
+  not by itself cause the framework to scan assistant replies for
+  Markdown fenced code blocks and run them. That behavior is controlled
+  independently by `EnableCodeExecutionResponseProcessor` (default:
+  `true`). Two consequences to be aware of:
+  - When you explicitly configure `WithCodeExecutor(...)`, the
+    fenced-code auto-execution switch keeps its framework default
+    unless you set it yourself; if you want the executor *only* for
+    `workspace_exec`, pass
+    `llmagent.WithEnableCodeExecutionResponseProcessor(false)`.
+  - When the skills fallback injects a local executor on your behalf
+    (the case above, `WithSkills(repo)` alone), that implicit executor
+    is scoped strictly to powering `workspace_exec`: the fallback path
+    automatically sets `EnableCodeExecutionResponseProcessor=false`
+    unless you explicitly called
+    `WithEnableCodeExecutionResponseProcessor(...)` yourself. This
+    prevents `WithSkills(repo)` upgrades from quietly enabling fenced
+    code auto-execution that was not part of your original
+    configuration.
 - By default, the framework appends a small `Tooling and workspace guidance:`
   block after the `Available skills:` list in the system message.
   - Disable it (to save prompt tokens): `llmagent.WithSkillsToolingGuidance("")`.
@@ -348,27 +349,12 @@ Key points:
   - Guidance follows the final registered skill tools, including
     `WithAllowedSkillTools(...)`.
   - If you disable it, make sure your instruction tells the model which
-    skill tools are available in your chosen profile or allowlist.
+    skill tools are available under your allowlist.
   - Loader: [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
-  - Runner: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
 ### 3) Run the Example
 
-Interactive demo:
-[examples/skillrun/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
-
-This demo and the related skill-focused examples ( `skill`, `skilldynamicschema` and
-`structuredoutputskills`) explicitly set
-`llmagent.WithEnableCodeExecutionResponseProcessor(false)` so fenced code
-blocks in assistant text do not auto-execute while `skill_run` is enabled.
-
-```bash
-cd examples/skillrun
-export OPENAI_API_KEY="your-api-key"
-go run . -executor local     # or: -executor container
-```
-
-GAIA benchmark demo (skills + file tools):
+GAIA benchmark demo (skills + file tools + `workspace_exec`):
 [examples/skill/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skill/README.md)
 
 It includes a dataset downloader script and notes on Python dependencies
@@ -380,14 +366,10 @@ Real discovery/install demo (real model + real web/GitHub):
 It starts with a built-in `skill-find` skill, searches the public web for
 candidate skills, installs a public skill from GitHub into a user-private
 directory, refreshes the repository, and uses the new skill in the same
-conversation. Local execution stays disabled by default and is only
-enabled when you opt in.
+conversation.
 
 SkillLoadMode demo (no API key required):
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
-
-SkillToolProfile demo (no API key required):
-[examples/skilltoolprofile/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skilltoolprofile/README.md)
 
 Sub-agent skill isolation demo (AgentTool + Skills):
 [examples/skillisolation/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillisolation/README.md)
@@ -405,17 +387,12 @@ To also download referenced attachment files:
 python3 examples/skill/scripts/download_gaia_2023_level1_validation.py --with-files
 ```
 
-Sample skill (excerpt):
-[examples/skillrun/skills/python_math/SKILL.md]
-(https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
-
 Natural prompts:
 - Say what you want to accomplish; the model will decide if a skill is
   needed based on the overview.
-- When needed, the model calls `skill_load` for body/docs, then
-  `skill_run` to execute and return output files.
-- In `knowledge_only`, the model can still load skill instructions/docs,
-  but it must use them as guidance rather than execute skill scripts.
+- When needed, the model calls `skill_load` for body/docs, then follows
+  the steps in `SKILL.md` by running `workspace_exec` inside
+  `/skills/<name>/` to execute scripts and collect output files.
 
 ## SKILL.md Anatomy
 
@@ -984,291 +961,27 @@ Output:
 Note: These keys are managed by the framework; you rarely need to touch
 them directly when driving the conversation naturally.
 
-### `skill_run`
+### Skill Workspace and Runtime Environment
 
-Declaration: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
+When the model executes skill scripts through `workspace_exec`, the
+framework materializes a writable skill working copy per session and
+injects a set of conveniences so scripts can be written against stable
+relative paths:
 
-Input:
-- `skill` (required)
-- `command` (required; by default runs via `bash -c`)
-- `cwd`, `env` (optional)
-- `stdin` (optional): one-shot stdin text passed to the command
-- `editor_text` (optional): text used for CLIs that launch `$EDITOR`
-- `output_files` (optional, legacy collection): glob patterns (e.g.,
-  `out/*.txt`). Patterns are workspace‑relative; env‑style prefixes
-  like `$OUTPUT_DIR/*.txt` are also accepted and normalized to
-  `out/*.txt`.
-- `inputs` (optional, declarative inputs): map external sources into
-  the workspace. Each item supports:
-  - `from` with schemes:
-    - `artifact://name[@version]` to load from the Artifact service
-    - `host:///abs/path` to copy/link from a host absolute path
-    - `workspace://rel/path` to copy/link from current workspace
-    - `skill://<name>/rel/path` to copy/link from a staged skill
-  - `to` workspace‑relative destination; defaults to
-    `WORK_DIR/inputs/<basename>`. For convenience, `skill_run` treats
-    `to` values starting with `inputs/` as `work/inputs/` (because
-    `inputs/` is a symlink under the skill root).
-  - `mode`: `copy` (default) or `link` when feasible
-  - `pin`: for `artifact://name` without `@version`, reuse the first
-    resolved version for the same `to` path (best effort)
-
-- Conversation file inputs (automatic staging):
-  - If the current session contains user messages with file inputs
-    (`content_parts` items of type `file`), `skill_run` automatically
-    stages them into `work/inputs/` (and thus `inputs/`) before the
-    command runs.
-  - Filenames are sanitized to a safe basename and de-duplicated with a
-    numeric suffix when needed.
-  - If a file input has no filename and `file_id` is an `artifact://...`
-    reference, the framework infers the basename from the artifact name.
-    Otherwise, it falls back to `upload_N`.
-  - If a file input includes raw bytes (`data`), those bytes are written
-    directly into the workspace.
-  - If a file input is referenced only by `file_id`:
-    - When `file_id` starts with `artifact://`, `skill_run` loads it
-      from the Artifact service (useful when user uploads are stored as
-      artifacts and only referenced in messages).
-    - Otherwise, the framework downloads the content via the configured
-      model when supported.
-
-- `outputs` (optional, declarative outputs): a manifest to collect
-  results with limits and persistence:
-  - `globs` workspace‑relative patterns (supports `**` and env‑style
-    prefixes like `$OUTPUT_DIR/**` mapping to `out/**`)
-  - `inline` to inline file contents into the result
-  - `save` to persist via the Artifact service
-  - `name_template` prefix for artifact names (e.g., `pref/`)
-  - Limits: `max_files` (default 100), `max_file_bytes` (default
-    4 MiB/file), `max_total_bytes` (default 64 MiB)
-  - Note: `outputs` accepts both snake_case keys (recommended) and
-    legacy Go-style keys like `MaxFiles`
-
-- `timeout` (optional seconds)
-- `save_as_artifacts` (optional, legacy path): persist files collected
-  via `output_files` and return `artifact_files` in the result
-- `omit_inline_content` (optional): omit `output_files[*].content` and
-  `primary_output.content` (metadata only). Non-text outputs never
-  inline content. Use `output_files[*].ref` with `read_file` when you
-  need text content later.
-- `artifact_prefix` (optional): prefix for the legacy artifact path
-  - If the Artifact service is not configured, `skill_run` keeps
-    returning `output_files` and reports a `warnings` entry.
-
-Guidance:
-- Prefer using `skill_run` only for commands explicitly required by the
-  selected skill docs (for example, `SKILL.md`).
-- Avoid using `skill_run` for generic shell exploration.
-- Prefer using `skill_list_docs` and `skill_select_docs` to inspect
-  skill docs, then use file tools to read the selected content.
-
-Optional safety restriction (allowlist):
-- Env var `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`:
-  - Comma/space-separated command names (for example, `python3,ffmpeg`)
-  - When set, `skill_run` rejects shell syntax (pipes/redirections/
-    separators) and only allows a single allowlisted command
-  - Because the command is no longer parsed by a shell, patterns like
-    `> out/x.txt`, heredocs, and `$OUTPUT_DIR` expansion will not work;
-    prefer running scripts or using `outputs` to collect files
-- You can also configure this in code via
-  `llmagent.WithSkillRunAllowedCommands(...)`.
-
-Optional safety restriction (denylist):
-- Env var `TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS`:
-  - Comma/space-separated command names
-  - When set, `skill_run` also rejects shell syntax (single command only)
-    and blocks denylisted command names
-- You can also configure this in code via
-  `llmagent.WithSkillRunDeniedCommands(...)`.
-
-Optional behavior (force artifact persistence):
-- In code, you can force `skill_run` to persist collected outputs as
-  artifacts (best effort) even if the model omits `save_as_artifacts`
-  / `outputs.save`:
-  - `llmagent.WithSkillRunForceSaveArtifacts(true)`
-
-Optional behavior (inline output limits):
-- In code, you can customize how much inline text `skill_run` returns:
-  - `llmagent.WithSkillRunOutputLimits(toolskill.RunOutputLimits{StdoutStderrBytes: 128 * 1024, PrimaryOutputBytes: 128 * 1024})`
-- This changes only `stdout`, `stderr`, and `primary_output`.
-  `output_files` / `outputs` still use the workspace collector limits
-  (default 4 MiB/file).
-
-Output:
-- `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
-  - `stdout` / `stderr` are for logs and short status text. They may be
-    truncated at the configured inline limit (default 16 KiB each).
-    For large or structured text that the model must read, prefer
-    `output_files` or `outputs`.
-- `staged_inputs` (optional): files staged from the conversation into
-  `work/inputs/` for this run
-- `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`,
-  `size_bytes`, `truncated`
-  - Convenience pointer to the "best" small text output file (when one
-    exists). Prefer this when there is a single main output.
-  - Only text files within the configured size limit (default 32 KiB)
-    are considered for `primary_output`.
-- `output_files` with `name`, `ref`, `content`, `mime_type`, `size_bytes`,
-  `truncated`
-  - `ref` is a stable `workspace://<name>` reference that can be passed
-    to other tools
-  - For non-text files, `content` is omitted.
-  - Prefer this path for large or structured text outputs; file
-    collection uses workspace collector limits instead of the smaller
-    stdout/stderr inline budget.
-  - When `omit_inline_content=true`, `content` is omitted for all files.
-    Use `ref` with `read_file` to fetch text content on demand.
-  - `size_bytes` is the file size on disk; `truncated=true` means the
-    collected content hit internal caps (for example, 4 MiB/file).
-  - If the command fails or times out, zero-byte collected files are
-    omitted to avoid misleading shell-redirection artifacts.
-- `warnings` (optional): non-fatal notes (for example, when artifact
-  saving is skipped)
-- `artifact_files` with `name`, `version` appears in two cases:
-  - Legacy path: when `save_as_artifacts` is set
-  - Manifest path: when `outputs.save=true` (executor persists files)
-
-Typical flow:
-1) Call `skill_load` to inject body/docs
-   - When using `llmagent.LLMAgent`, this step is required by default:
-     `skill_run` rejects calls unless `skill_load` has been called for
-     that skill. Disable with:
-     `llmagent.WithSkillRunRequireSkillLoaded(false)`.
-2) Call `skill_run` and collect outputs:
-   - Legacy: use `output_files` globs
-   - Declarative: use `outputs` to drive collect/inline/save
-   - Use `inputs` to stage upstream files when needed
-
-### Interactive skill sessions
-
-Declaration:
-- [tool/skill/exec.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/exec.go)
-
-Tools:
-- `skill_exec`: start a session-oriented command in the skill workspace
-- `skill_write_stdin`: write incremental stdin to a running session
-- `skill_poll_session`: fetch more terminal output or the final result
-- `skill_kill_session`: terminate and remove a session
-
-Guidance:
-- Prefer `skill_run` for one-shot commands.
-- Prefer `skill_exec` when the command may prompt for input, present a
-  numbered selection, or keep running between turns.
-- Prefer `editor_text` on `skill_run` or `skill_exec` for `$EDITOR`
-  workflows instead of trying to drive a full-screen editor via stdin.
-
-`skill_exec` reuses the same workspace, `inputs`, `outputs`,
-`save_as_artifacts`, `omit_inline_content`, `artifact_prefix`, `stdin`,
-and `editor_text` behavior as `skill_run`, but returns session state:
-- `status`: `running` or `exited`
-- `session_id`: stable id for follow-up calls
-- `output`: most recent terminal output seen during that call
-- `interaction`: best-effort hint when the process appears to be waiting
-  for more input
-- `result`: when the session exits, the final `skill_run`-style output
-
-Typical interactive flow:
-1) Call `skill_exec`
-2) Inspect `output` / `interaction`
-3) Use `skill_write_stdin` or `skill_poll_session` until `status`
-   becomes `exited`
-4) Read `result` and collected outputs, or call `skill_kill_session`
-   to stop the session
-
-Examples:
-
-Stage an external input file and collect a small text output:
-
-```json
-{
-  "skill": "demo",
-  "inputs": [
-    {
-      "from": "host:///tmp/notes.txt",
-      "to": "work/inputs/notes.txt",
-      "mode": "copy"
-    }
-  ],
-  "command": "mkdir -p out; wc -l work/inputs/notes.txt > out/lines.txt",
-  "outputs": {
-    "globs": ["$OUTPUT_DIR/lines.txt"],
-    "inline": true,
-    "save": false,
-    "max_files": 1
-  }
-}
-```
-
-Metadata-only outputs (avoid filling context):
-
-```json
-{
-  "skill": "demo",
-  "command": "mkdir -p out; echo hi > out/a.txt",
-  "output_files": ["out/*.txt"],
-  "omit_inline_content": true
-}
-```
-
-The tool returns `output_files[*].ref` like `workspace://out/a.txt`
-with `content` omitted, plus `size_bytes` and `truncated`.
-
-To read the content later:
-
-```json
-{
-  "file_name": "workspace://out/a.txt",
-  "start_line": 1,
-  "num_lines": 20
-}
-```
-
-Persist large outputs as artifacts (no inline content):
-
-```json
-{
-  "skill": "demo",
-  "command": "mkdir -p out; echo report > out/report.txt",
-  "outputs": {
-    "globs": ["$OUTPUT_DIR/report.txt"],
-    "inline": false,
-    "save": true,
-    "max_files": 5
-  }
-}
-```
-
-When saved, `skill_run` returns `artifact_files` with `name` and
-`version`. You can reference an artifact as `artifact://<name>[@<version>]`
-in tools like `read_file`.
-
-Legacy artifact save path (when you use `output_files`):
-
-```json
-{
-  "skill": "demo",
-  "command": "mkdir -p out; echo report > out/report.txt",
-  "output_files": ["out/report.txt"],
-  "omit_inline_content": true,
-  "save_as_artifacts": true,
-  "artifact_prefix": "pref/"
-}
-```
-
-Environment and CWD:
-- When `cwd` is omitted, runs at the skill root: `/skills/<name>`
-- A relative `cwd` is resolved under the skill root
-- `cwd` may start with `$WORK_DIR`, `$OUTPUT_DIR`, `$SKILLS_DIR`,
-  `$WORKSPACE_DIR`, `$RUN_DIR` (or `${...}`) and will be normalized to
-  workspace‑relative directories
-- Runtime injects env vars: `WORKSPACE_DIR`, `SKILLS_DIR`, `WORK_DIR`,
-  `OUTPUT_DIR`, `RUN_DIR`; the tool injects `SKILL_NAME`
+- The skill root `/skills/<name>` is a **session-scoped writable working
+  copy**: scripts may create caches, `__pycache__`, `.venv/`, or other
+  files next to the source. The upstream skill repository remains the
+  source of truth; when the source digest changes, the next reconcile
+  replaces the workspace copy.
 - Convenience symlinks are created under the skill root: `out/`,
-  `work/`, and `inputs/` point to workspace‑level dirs
-- `.venv/` is a writable directory under the skill root for per-skill
-  dependencies (for example, `python -m venv .venv` + `pip install ...`)
+  `work/`, and `inputs/` point to workspace‑level dirs so the same
+  relative paths from `SKILL.md` work inside the sandbox.
+- Injected env vars: `WORKSPACE_DIR`, `SKILLS_DIR`, `WORK_DIR`,
+  `OUTPUT_DIR`, `RUN_DIR` (set by the executor).
+- `.venv/` under the skill root is the recommended place for per-skill
+  dependencies (for example, `python -m venv .venv` + `pip install ...`).
 - File tools accept `inputs/<path>` as an alias to `<path>` when the
-  configured base directory does not contain a real `inputs/` folder
+  configured base directory does not contain a real `inputs/` folder.
 
 ## Executor
 
@@ -1287,7 +1000,8 @@ Container notes:
 
 Security & limits:
 - Reads/writes confined to the workspace
-- Timeouts and read‑only skill trees reduce risk
+- The skill working copy under `/skills/<name>` is writable by
+  default; the canonical skill repository remains the source of truth
 - `stdout`/`stderr` may be truncated (see `warnings`)
 - Output file read size is capped to prevent oversized payloads
 
@@ -1341,8 +1055,8 @@ agent := llmagent.New(
 
 Behavior:
 
-- Covers all paths through `Engine.Runner()`: `skill_run`,
-  `workspace_exec`, and interactive sessions.
+- Covers all paths that go through `Engine.Runner()` (for example,
+  `workspace_exec`).
 - Provider-returned keys **never override** keys already set in
   the tool's `env` argument.
 - Evaluated on each `RunProgram` call; no state shared between calls.
@@ -1359,11 +1073,15 @@ transparently — the LLM never sees the credentials.
 
 - Unknown skill: verify name and repository path; ensure the overview
   lists the skill before calling `skill_load`
-- Nil executor: configure `WithCodeExecutor` or rely on the local
-  default
-- Timeouts/non‑zero exit codes: inspect command/deps/`timeout`; in
+- No executor wired: by default the framework auto-falls back to a
+  local executor when `WithSkills(repo)` is set. If you explicitly
+  opted out (`WithSkillToolProfile(SkillToolProfileKnowledgeOnly)`
+  or `WithAllowedSkillTools(...)`) and still want `workspace_exec`,
+  pass `llmagent.WithCodeExecutor(...)` (local or container).
+- Timeouts/non‑zero exit codes: inspect command/deps/timeout; in
   container mode, network is disabled by default
-- Missing output files: check your glob patterns and output locations
+- Missing output files: check the glob patterns passed to
+  `workspace_exec` and confirm they point to real workspace paths
 
 ## References and Examples
 
@@ -1379,9 +1097,9 @@ transparently — the LLM never sees the credentials.
     `SKILL.md` on demand:
     https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs
 - This repo:
-  - Interactive demo: [examples/skillrun/main.go]
-    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
+  - GAIA benchmark demo: [examples/skill/README.md]
+    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skill/README.md)
   - Real discovery/install demo: [examples/skillfind/README.md]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillfind/README.md)
-  - Sample skill: [examples/skillrun/skills/python_math/SKILL.md]
-    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
+  - Sub-agent skill isolation demo: [examples/skillisolation/README.md]
+    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillisolation/README.md)

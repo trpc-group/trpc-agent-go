@@ -17,7 +17,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"mime"
@@ -40,7 +39,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var (
@@ -71,12 +69,6 @@ var (
 		"",
 		"trusted-local workspace root (default: ./skill_workspace)",
 	)
-	flagArtifacts = flag.Bool("artifacts", true,
-		"save output files via artifact service")
-	flagOmitInline = flag.Bool("omit-inline", false,
-		"omit inline file contents when saving artifacts")
-	flagArtifactPref = flag.String("artifact-prefix", "",
-		"artifact filename prefix (e.g., user:)")
 	flagInputsHost = flag.String(
 		"inputs-host", "",
 		"host dir to bind as /opt/trpc-agent/inputs "+
@@ -98,21 +90,23 @@ const instructionText = `
 Be a concise, helpful assistant that can use Agent Skills.
 
 When a task may need tools, first ask to list skills or suggest one.
-Load a skill only when needed, then run commands from its docs exactly.
-Prefer safe defaults; ask clarifying questions if anything is ambiguous.
-When running, include output_files patterns if files are expected.
-Summarize results, note saved files, and propose next steps briefly.
+Load a skill with skill_load, then run the commands from its docs by
+calling workspace_exec inside the loaded skill working copy
+(cwd: skills/<name>). Prefer safe defaults; ask clarifying questions
+if anything is ambiguous. Summarize results, note saved files, and
+propose next steps briefly.
 
-Inside a skill workspace, treat inputs/ and work/inputs/ as read-only
+Inside the workspace, treat inputs/ and work/inputs/ as read-only
 views of host files unless skill docs say they are writable. Do not
 create, move, or modify files under inputs/ or work/inputs/.
-User-uploaded file inputs from the conversation are also staged under
-work/inputs/ when skill_run executes.
+User-uploaded file inputs from the conversation are staged under
+work/inputs/ before scripts run.
 
 When chaining multiple skills, read previous results directly from
-out/ (or $OUTPUT_DIR) and write new files back to out/. Prefer using
-skill_run inputs/outputs fields to map files instead of shell commands
-like cp or mv where possible.`
+out/ (or $OUTPUT_DIR) and write new files back to out/. If you need
+a stable reference to an output file (for example to hand it to
+another tool or to surface it back to the user), call
+workspace_save_artifact on the workspace path.`
 
 func main() {
 	flag.Parse()
@@ -236,7 +230,11 @@ func (c *skillChat) setup(_ context.Context) error {
 	}
 	c.executor = execUsed
 
-	// Agent with skills enabled; skill_load + skill_run get registered.
+	// Agent with skills enabled. The default knowledge_only skill tool
+	// profile registers skill_load / skill_list_docs / skill_select_docs;
+	// the explicit code executor wires workspace_exec (and
+	// workspace_save_artifact when an artifact service is present) on
+	// top of it, which is the recommended execution surface.
 	gen := model.GenerationConfig{
 		MaxTokens: intPtr(2000),
 		Stream:    c.stream,
@@ -289,7 +287,7 @@ func (c *skillChat) setup(_ context.Context) error {
 		" - Ask to run a command exactly as in the docs.",
 	)
 	fmt.Println(
-		" - Prefer writing files to $OUTPUT_DIR (collector reads out/).",
+		" - Prefer writing files to $OUTPUT_DIR (i.e. out/).",
 	)
 	fmt.Println(
 		" - Use $WORK_DIR/inputs for inputs and $OUTPUT_DIR for outputs.",
@@ -298,7 +296,8 @@ func (c *skillChat) setup(_ context.Context) error {
 		" - Reference skill files via $SKILLS_DIR/<name>/...",
 	)
 	fmt.Println(
-		" - Optional: add inputs/outputs fields to skill_run.",
+		" - Ask the assistant to call workspace_save_artifact when " +
+			"you want a stable artifact reference for an output file.",
 	)
 	fmt.Println(" - /artifacts lists saved artifact keys.")
 	fmt.Println(" - /pull <name> [version] downloads an artifact.")
@@ -329,8 +328,10 @@ func buildAgentOptions(
 		llmagent.WithGenerationConfig(gen),
 		llmagent.WithSkills(repo),
 		llmagent.WithCodeExecutor(exec),
+		// Disable fenced-code auto-execution so the model has to go
+		// through workspace_exec instead of having ```sh blocks
+		// scraped out of its prose.
 		llmagent.WithEnableCodeExecutionResponseProcessor(false),
-		llmagent.WithToolCallbacks(buildToolCallbacks()),
 	}
 	if !*flagSkillsGuidance {
 		opts = append(
@@ -339,45 +340,6 @@ func buildAgentOptions(
 		)
 	}
 	return opts
-}
-
-// buildToolCallbacks injects default artifact parameters into
-// skill_run calls based on CLI flags, without overriding explicit
-// arguments the model already provided.
-func buildToolCallbacks() *tool.Callbacks {
-	cbs := tool.NewCallbacks()
-	cbs.RegisterBeforeTool(func(
-		_ context.Context, name string, _ *tool.Declaration, args *[]byte,
-	) (any, error) {
-		if name != "skill_run" || args == nil {
-			return nil, nil
-		}
-		if !*flagArtifacts && !*flagOmitInline && *flagArtifactPref == "" {
-			return nil, nil
-		}
-		// Parse JSON args to a small map and merge defaults.
-		var m map[string]any
-		if err := json.Unmarshal(*args, &m); err != nil {
-			return nil, nil
-		}
-		if *flagArtifacts {
-			m["save_as_artifacts"] = true
-			if *flagOmitInline {
-				m["omit_inline_content"] = true
-			}
-			if *flagArtifactPref != "" {
-				if _, ok := m["artifact_prefix"]; !ok {
-					m["artifact_prefix"] = *flagArtifactPref
-				}
-			}
-		}
-		b, err := json.Marshal(m)
-		if err == nil {
-			*args = b
-		}
-		return nil, nil
-	})
-	return cbs
 }
 
 func (c *skillChat) startChat(ctx context.Context) error {
@@ -713,20 +675,6 @@ func (c *skillChat) handleToolResponses(ev *event.Event) bool {
 				fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
 					ch.Message.ToolID,
 					strings.TrimSpace(ch.Message.Content))
-				// Try to surface artifact refs if present.
-				var v struct {
-					ArtifactFiles []struct {
-						Name    string `json:"name"`
-						Version int    `json:"version"`
-					} `json:"artifact_files"`
-				}
-				if json.Unmarshal([]byte(ch.Message.Content), &v) == nil &&
-					len(v.ArtifactFiles) > 0 {
-					fmt.Printf("   Saved artifacts:\n")
-					for _, a := range v.ArtifactFiles {
-						fmt.Printf("   - %s (v%d)\n", a.Name, a.Version)
-					}
-				}
 				has = true
 			}
 		}

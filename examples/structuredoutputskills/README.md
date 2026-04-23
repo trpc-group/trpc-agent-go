@@ -1,11 +1,16 @@
 # Structured Output + Skills (Typed JSON)
 
+> This demo is built on top of an older skill execution surface. For
+> the recommended way to wire Agent Skills in new code, see
+> [docs/mkdocs/en/skill.md](../../docs/mkdocs/en/skill.md). The
+> structured-output pattern shown here is orthogonal and also works on
+> top of the recommended setup.
+
 This example demonstrates:
 
-- Using Agent Skills (`skill_load` / `skill_run`)
-- Setting `llmagent.WithEnableCodeExecutionResponseProcessor(false)` so
-  fenced code blocks in assistant text do not auto-execute while
-  `skill_run` is enabled
+- Using Agent Skills to load knowledge and run scripts
+- Disabling automatic execution of fenced code blocks in assistant text
+  (`llmagent.WithEnableCodeExecutionResponseProcessor(false)`)
 - Returning a **typed** final answer via `WithStructuredOutputJSON`
 
 The key idea is:

@@ -24,7 +24,13 @@ import (
 
 // Well-known subdirectories in a workspace.
 const (
-	// DirSkills contains read-only staged skill trees.
+	// DirSkills contains session-scoped skill working copies. Skills
+	// staged here are writable by default so third-party scripts can
+	// emit cache files, temporary outputs, and Python bytecode next to
+	// their source. Callers that need a stable, canonical skill tree
+	// should treat the upstream skill repository as the source of
+	// truth; the copy under this directory is a working copy tied to
+	// the current session.
 	DirSkills = "skills"
 	// DirWork contains writable shared intermediates.
 	DirWork = "work"
@@ -54,6 +60,24 @@ type WorkspaceMetadata struct {
 	Skills     map[string]SkillMeta `json:"skills"`
 	Inputs     []InputRecord        `json:"inputs,omitempty"`
 	Outputs    []OutputRecord       `json:"outputs,omitempty"`
+	// Prepared records the last-known converged state for each
+	// workspace requirement keyed by Requirement.Key(). It is used by
+	// the workspaceprep reconciler to skip work whose fingerprint is
+	// unchanged and whose sentinel (for example the target file) is
+	// still present. The map is a local per-workspace cache; session
+	// state remains the authoritative source of "what should exist".
+	Prepared map[string]PreparedRecord `json:"prepared,omitempty"`
+}
+
+// PreparedRecord captures a single successfully-applied workspace
+// requirement. It is written by the reconciler after a successful
+// apply and read on subsequent reconciles to decide whether to skip.
+type PreparedRecord struct {
+	Key         string    `json:"key"`
+	Kind        string    `json:"kind"`
+	Fingerprint string    `json:"fingerprint"`
+	Target      string    `json:"target,omitempty"`
+	PreparedAt  time.Time `json:"prepared_at"`
 }
 
 // SkillMeta records a staged skill snapshot.
