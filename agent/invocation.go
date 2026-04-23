@@ -338,6 +338,31 @@ func WithInjectedContextMessages(messages []model.Message) RunOption {
 	}
 }
 
+// UserMessageRewriteArgs contains stable metadata for one user message rewrite.
+type UserMessageRewriteArgs struct {
+	AppName         string
+	UserID          string
+	SessionID       string
+	RequestID       string
+	OriginalMessage model.Message
+}
+
+// UserMessageRewriter rewrites one current-turn user input into an ordered
+// message sequence. The returned order is the persistence order for the turn,
+// and the last message becomes invocation.Message.
+type UserMessageRewriter func(
+	ctx context.Context,
+	args *UserMessageRewriteArgs,
+) ([]model.Message, error)
+
+// WithUserMessageRewriter rewrites the current-turn input into an ordered
+// message sequence before runner persists it into the session transcript.
+func WithUserMessageRewriter(rewriter UserMessageRewriter) RunOption {
+	return func(opts *RunOptions) {
+		opts.UserMessageRewriter = rewriter
+	}
+}
+
 // WithResume enables or disables resume mode for this run.
 // When enabled, flows like llmflow may inspect the existing Session history
 // and resume unfinished work (for example, executing pending tool calls)
@@ -851,6 +876,10 @@ type RunOptions struct {
 	// into the model request for this run. These messages are not persisted into
 	// session events and therefore must be provided on every run if needed.
 	InjectedContextMessages []model.Message
+
+	// UserMessageRewriter rewrites the current-turn input into an ordered
+	// message sequence before runner persists it into the session transcript.
+	UserMessageRewriter UserMessageRewriter
 
 	// Resume indicates whether this run should attempt to resume from existing
 	// session context before making a new model call. When true, flows may

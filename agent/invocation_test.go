@@ -1082,3 +1082,28 @@ func TestWithInjectedContextMessages(t *testing.T) {
 		{Role: model.RoleAssistant, Content: "Hello"},
 	}, opts.InjectedContextMessages)
 }
+
+func TestWithUserMessageRewriter(t *testing.T) {
+	opts := &RunOptions{}
+	rewriter := func(
+		ctx context.Context,
+		args *UserMessageRewriteArgs,
+	) ([]model.Message, error) {
+		require.Equal(t, "raw", args.OriginalMessage.Content)
+		return []model.Message{
+			model.NewUserMessage("ctx"),
+			model.NewUserMessage("rewritten"),
+		}, nil
+	}
+	WithUserMessageRewriter(rewriter)(opts)
+	require.NotNil(t, opts.UserMessageRewriter)
+	msgs, err := opts.UserMessageRewriter(
+		context.Background(),
+		&UserMessageRewriteArgs{OriginalMessage: model.NewUserMessage("raw")},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []model.Message{
+		model.NewUserMessage("ctx"),
+		model.NewUserMessage("rewritten"),
+	}, msgs)
+}
