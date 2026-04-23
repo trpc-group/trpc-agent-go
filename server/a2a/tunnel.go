@@ -58,11 +58,6 @@ func newEventTunnel(
 	}
 }
 
-type producedEvent struct {
-	event *event.Event
-	ok    bool
-}
-
 // Run runs the event tunnel.
 func (t *eventTunnel) Run(ctx context.Context) error {
 	t.ctx, t.cancel = context.WithCancel(ctx)
@@ -71,21 +66,7 @@ func (t *eventTunnel) Run(ctx context.Context) error {
 	ticker := time.NewTicker(t.flushInterval)
 	defer ticker.Stop()
 
-	producedEventCh := make(chan producedEvent)
-	go func() {
-		defer close(producedEventCh)
-		for {
-			event, ok := t.produce(t.ctx)
-			select {
-			case <-t.ctx.Done():
-				return
-			case producedEventCh <- producedEvent{event: event, ok: ok}:
-			}
-			if !ok {
-				return
-			}
-		}
-	}()
+	producedEventCh := t.startProducing()
 
 	for {
 		select {
@@ -97,53 +78,83 @@ func (t *eventTunnel) Run(ctx context.Context) error {
 
 		case produced, ok := <-producedEventCh:
 			if !ok {
-				if len(t.batch) > 0 {
-					_, err := t.flushBatch()
-					if err != nil {
-						return fmt.Errorf("tunnel error during final flush: %v", err)
-					}
-				}
-				if err := t.ctx.Err(); err != nil {
-					return err
-				}
-				return nil
+				return t.finalizeRun()
 			}
 
-			if !produced.ok {
-				if len(t.batch) > 0 {
-					_, err := t.flushBatch()
-					if err != nil {
-						return fmt.Errorf("tunnel error during final flush: %v", err)
-					}
-				}
-				return nil
+			done, err := t.handleProducedEvent(produced)
+			if err != nil {
+				return err
 			}
-
-			if produced.event != nil {
-				t.batch = append(t.batch, produced.event)
-				if len(t.batch) >= t.batchSize {
-					ok, err := t.flushBatch()
-					if err != nil {
-						return fmt.Errorf("tunnel error during batch flush: %v", err)
-					}
-					if !ok {
-						return nil
-					}
-				}
+			if done {
+				return nil
 			}
 
 		case <-ticker.C:
-			if len(t.batch) > 0 {
-				ok, err := t.flushBatch()
-				if err != nil {
-					return fmt.Errorf("tunnel error during timer flush: %v", err)
-				}
-				if !ok {
-					return nil
-				}
+			done, err := t.flushPendingBatch("timer")
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
 			}
 		}
 	}
+}
+
+func (t *eventTunnel) startProducing() <-chan *event.Event {
+	producedEventCh := make(chan *event.Event)
+	go func() {
+		defer close(producedEventCh)
+		for {
+			event, ok := t.produce(t.ctx)
+			if !ok {
+				return
+			}
+
+			select {
+			case <-t.ctx.Done():
+				return
+			case producedEventCh <- event:
+			}
+		}
+	}()
+	return producedEventCh
+}
+
+func (t *eventTunnel) handleProducedEvent(produced *event.Event) (bool, error) {
+	if produced == nil {
+		return false, nil
+	}
+
+	t.batch = append(t.batch, produced)
+	if len(t.batch) < t.batchSize {
+		return false, nil
+	}
+
+	return t.flushPendingBatch("batch")
+}
+
+func (t *eventTunnel) flushPendingBatch(reason string) (bool, error) {
+	if len(t.batch) == 0 {
+		return false, nil
+	}
+
+	ok, err := t.flushBatch()
+	if err != nil {
+		return false, fmt.Errorf("tunnel error during %s flush: %v", reason, err)
+	}
+	return !ok, nil
+}
+
+func (t *eventTunnel) finalizeRun() error {
+	_, err := t.flushPendingBatch("final")
+	if err != nil {
+		return err
+	}
+	if err := t.ctx.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (t *eventTunnel) flushBatch() (bool, error) {

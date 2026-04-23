@@ -257,6 +257,46 @@ func TestEventTunnel_Run_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestEventTunnel_Run_ContextAwareProduceCancellation(t *testing.T) {
+	produceStarted := make(chan struct{})
+
+	produce := func(ctx context.Context) (*event.Event, bool) {
+		select {
+		case <-produceStarted:
+		default:
+			close(produceStarted)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(time.Second):
+			t.Fatal("produce should have been cancelled before timeout")
+			return nil, false
+		}
+	}
+
+	consume := func(batch []*event.Event) (bool, error) {
+		return true, nil
+	}
+
+	tunnel := newEventTunnel(5, 20*time.Millisecond, produce, consume)
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- tunnel.Run(ctx)
+	}()
+
+	select {
+	case <-produceStarted:
+	case <-time.After(time.Second):
+		t.Fatal("produce did not start")
+	}
+
+	cancel()
+	assert.ErrorIs(t, <-runDone, context.Canceled)
+}
+
 func TestEventTunnel_Run_ConsumeError(t *testing.T) {
 	expectedError := errors.New("consume error")
 
