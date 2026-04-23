@@ -3377,7 +3377,7 @@
 </span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18"></a><span class="w">    </span><span class="c1">// 2. 创建 Agent</span>
 </span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19"></a><span class="w">    </span><span class="nx">a</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
 </span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">llmModel</span><span class="p">),</span>
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;你是一个有帮助的AI助手&quot;</span><span class="p">),</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;你是一个有帮助的 AI 助手&quot;</span><span class="p">),</span>
 </span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span><span class="nx">Stream</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}),</span><span class="w"> </span><span class="c1">// 启用流式输出</span>
 </span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23"></a><span class="w">    </span><span class="p">)</span>
 </span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24"></a>
@@ -3457,14 +3457,14 @@
 <span class="normal"><a href="#__codelineno-3-5">5</a></span>
 <span class="normal"><a href="#__codelineno-3-6">6</a></span>
 <span class="normal"><a href="#__codelineno-3-7">7</a></span>
-<span class="normal"><a href="#__codelineno-3-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a>🔧 工具调用:
+<span class="normal"><a href="#__codelineno-3-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a>🔧 工具调用：
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>   • calculator (ID: call_abc123)
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>     参数: {&quot;operation&quot;:&quot;multiply&quot;,&quot;a&quot;:25,&quot;b&quot;:4}
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>     参数：{&quot;operation&quot;:&quot;multiply&quot;,&quot;a&quot;:25,&quot;b&quot;:4}
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a>
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>🔄 执行中...
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>✅ 工具响应 (ID: call_abc123): {&quot;operation&quot;:&quot;multiply&quot;,&quot;a&quot;:25,&quot;b&quot;:4,&quot;result&quot;:100}
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>🤖 助手: 我为您计算了 25 × 4 = 100。
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>🤖 助手：我为您计算了 25 × 4 = 100。
 </span></code></pre></div></td></tr></table></div>
 <h2 id="api">🔧 核心 API</h2>
 <h3 id="runner_1">Runner 创建</h3>
@@ -3486,7 +3486,7 @@
 <p>默认情况下，<code>runner.NewRunner(...)</code> 需要你先把 <code>agent.Agent</code> 完整构建好，然后
 Runner 会在每次请求里复用同一个 Agent 实例。</p>
 <p>如果你的 Agent 配置需要 <strong>跟当前请求绑定</strong>（例如：提示词、模型、沙箱实例、工具集），
-可以用 “Agent Factory” 在每次 <code>Runner.Run(...)</code> 时动态创建一个新的 Agent。</p>
+可以用“Agent Factory”在每次 <code>Runner.Run(...)</code> 时动态创建一个新的 Agent。</p>
 <h4 id="a-agent">方式 A：默认 Agent 按需创建</h4>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
@@ -3908,7 +3908,7 @@ session 服务会返回 <code>session.ErrAppNameRequired</code>。</p>
 则 <code>WithResume(true)</code> 不会做任何额外处理，行为等同于普通的 <code>Run</code> 调用。</p>
 <h4 id="tool-call">Tool Call 参数自动修复</h4>
 <p>部分模型在生成 <code>tool_calls</code> 时，可能产出非严格 JSON 的参数（例如对象 key 未加引号、尾逗号等），从而导致工具执行或外部解析失败。</p>
-<p>在 <code>runner.Run</code> 中启用 <code>agent.WithToolCallArgumentsJSONRepairEnabled(true)</code> 后，框架会对 <code>toolCall.Function.Arguments</code> 做一次尽力修复，详细使用方法可参照 <a href="./#tool-call">ToolCall参数自动修复</a>。</p>
+<p>在 <code>runner.Run</code> 中启用 <code>agent.WithToolCallArgumentsJSONRepairEnabled(true)</code> 后，框架会对 <code>toolCall.Function.Arguments</code> 做一次尽力修复，详细使用方法可参照 <a href="./#tool-call">ToolCall 参数自动修复</a>。</p>
 <h4 id="auto-seed-session">传入对话历史（auto-seed + 复用 Session）</h4>
 <p>如果上游服务已经维护了会话历史，并希望让 Agent 看见这些上下文，可以直接传入整段
 <code>[]model.Message</code>。Runner 会在 Session 为空时自动将其写入 Session，并在随后的轮次将
@@ -3988,8 +3988,8 @@ Session。内容处理器不会读取这个选项，它只会从 Session 事件�
 <li>该选项仅对当前这一次 <code>runner.Run(...)</code> 调用生效，不会修改 Agent 的默认配置。</li>
 <li>该选项仅对会读取 <code>RunOptions.CodeExecutor</code> 的 Agent 生效；如果使用自定义 Agent，请确认其实现会处理该运行参数。</li>
 <li>如果创建 Agent 时已经设置 <code>llmagent.WithCodeExecutor(...)</code>，则此处传入的执行器会在本次运行中临时覆盖默认值。</li>
-<li>本次运行中所有依赖代码执行器的能力，均会使用此处传入的执行器，例如 <code>workspace_exec</code>、<code>skill_run</code> 和交互式 skill 会话工具。</li>
-<li>如果仅需为 <code>skill_run</code> 提供运行环境，而不希望模型自动执行回复中的 Markdown 围栏代码，可在创建 Agent 时设置 <code>llmagent.WithEnableCodeExecutionResponseProcessor(false)</code>。更多说明见 <a href="../skill/">Skill 文档</a>。</li>
+<li>本次运行中会从 <code>RunOptions.CodeExecutor</code> 解析执行器的能力（例如 <code>workspace_exec</code>）会使用此处传入的执行器。</li>
+<li>如果你不希望模型自动执行回复中的 Markdown 围栏代码，可在创建 Agent 时设置 <code>llmagent.WithEnableCodeExecutionResponseProcessor(false)</code>。更多说明见 <a href="../skill/">Skill 文档</a>。</li>
 </ul>
 <h2 id="_12">✅ 图式流程的“优雅结束”与最终结果读取</h2>
 <p>很多同学在使用 GraphAgent（图式智能体）时，会误把 <code>Response.IsFinalResponse()</code> 当作“流程完成”的信号。请注意：<code>IsFinalResponse()</code> 只是“大模型本轮回复已结束”，但图上后续节点（例如 <code>output</code> 汇总节点）仍可能在继续执行。</p>
@@ -4317,7 +4317,7 @@ RunOption：</p>
 </ul>
 </li>
 </ul>
-<p>建议：在 GraphAgent 场景里，请始终以 Runner “完成事件”的 <code>StateDelta</code> 作为最终输出的
+<p>建议：在 GraphAgent 场景里，请始终以 Runner“完成事件”的 <code>StateDelta</code> 作为最终输出的
 唯一来源（例如 <code>graph.StateKeyLastResponse</code>）。当开启该选项时，请把“完成事件”里的
 <code>Response.Choices</code> 当作可选字段，不要作为唯一依赖。</p>
 <h4 id="terminal-graph">开关：只保留 terminal Graph 消息事件</h4>
@@ -4443,7 +4443,7 @@ RunOption：</p>
 <span class="normal"><a href="#__codelineno-31-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1"></a><span class="c1">// 创建基础 Agent（详细配置参见 agent.md）</span>
 </span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
 </span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
-</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;你是一个有帮助的AI助手&quot;</span><span class="p">))</span>
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;你是一个有帮助的 AI 助手&quot;</span><span class="p">))</span>
 </span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5"></a>
 </span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6"></a><span class="c1">// 使用 Runner 执行 Agent</span>
 </span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
@@ -4697,12 +4697,12 @@ RunOption：</p>
 </span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-37-10"><a id="__codelineno-37-10" name="__codelineno-37-10"></a><span class="w">        </span><span class="c1">// 处理错误</span>
 </span><span id="__span-37-11"><a id="__codelineno-37-11" name="__codelineno-37-11"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-37-12"><a id="__codelineno-37-12" name="__codelineno-37-12"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;事件错误: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">)</span>
+</span><span id="__span-37-12"><a id="__codelineno-37-12" name="__codelineno-37-12"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;事件错误：%w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">)</span>
 </span><span id="__span-37-13"><a id="__codelineno-37-13" name="__codelineno-37-13"></a><span class="w">        </span><span class="p">}</span>
 </span><span id="__span-37-14"><a id="__codelineno-37-14" name="__codelineno-37-14"></a>
 </span><span id="__span-37-15"><a id="__codelineno-37-15" name="__codelineno-37-15"></a><span class="w">        </span><span class="c1">// 处理工具调用</span>
 </span><span id="__span-37-16"><a id="__codelineno-37-16" name="__codelineno-37-16"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-37-17"><a id="__codelineno-37-17" name="__codelineno-37-17"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="s">&quot;🔧 工具调用:&quot;</span><span class="p">)</span>
+</span><span id="__span-37-17"><a id="__codelineno-37-17" name="__codelineno-37-17"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="s">&quot;🔧 工具调用：&quot;</span><span class="p">)</span>
 </span><span id="__span-37-18"><a id="__codelineno-37-18" name="__codelineno-37-18"></a><span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-37-19"><a id="__codelineno-37-19" name="__codelineno-37-19"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;  • %s (ID: %s)\n&quot;</span><span class="p">,</span>
 </span><span id="__span-37-20"><a id="__codelineno-37-20" name="__codelineno-37-20"></a><span class="w">                    </span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">ID</span><span class="p">)</span>
@@ -5208,7 +5208,7 @@ runner 的消费循环也会正常结束，避免写端阻塞。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月13日 03:13:22 UTC">2026-04-13 03:13:22</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月23日 02:11:27 UTC">2026-04-23 02:11:27</span>
   </span>
 
     

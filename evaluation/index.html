@@ -8960,7 +8960,7 @@
 <p>If you want to record live traffic as trace-mode actuals instead of default expecteds, enable <code>WithTraceModeEnabled(true)</code>. In that mode, recorder creates <code>EvalModeTrace</code> cases and appends turns to <code>ActualConversation</code> rather than <code>Conversation</code>. Because <code>Conversation</code> and <code>ActualConversation</code> have different evaluation semantics, appending to an existing EvalCase requires the mode to match.</p>
 <p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/evalsetrecorder">examples/evaluation/evalsetrecorder</a> for the full example.</p>
 <h3 id="skills-evaluation">Skills Evaluation</h3>
-<p>Agent Skills are exposed as built-in tools: <code>skill_load</code> and <code>skill_run</code>, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, <code>skill_run</code> results contain volatile fields such as <code>stdout</code>, <code>stderr</code>, <code>duration_ms</code>, and inline <code>output_files</code> content. Prefer using <code>onlyTree</code> in a per-tool strategy to assert only stable fields such as <code>skill</code>, requested <code>output_files</code>, and <code>exit_code</code> and <code>timed_out</code>, letting other volatile keys be ignored.</p>
+<p>Agent Skills inject knowledge through <code>skill_load</code> and execute scripts through <code>workspace_exec</code>, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, <code>workspace_exec</code> results contain volatile fields such as <code>stdout</code>, <code>stderr</code>, <code>duration_ms</code>, and inline file content. Prefer using <code>onlyTree</code> in a per-tool strategy to assert only stable fields (for example <code>command</code>, <code>exit_code</code>, <code>timed_out</code>), letting other volatile keys be ignored.</p>
 <p>A minimal example is shown below.</p>
 <p>EvalSet <code>tools</code> snippet:</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-87-1"> 1</a></span>
@@ -8989,10 +8989,7 @@
 <span class="normal"><a href="#__codelineno-87-24">24</a></span>
 <span class="normal"><a href="#__codelineno-87-25">25</a></span>
 <span class="normal"><a href="#__codelineno-87-26">26</a></span>
-<span class="normal"><a href="#__codelineno-87-27">27</a></span>
-<span class="normal"><a href="#__codelineno-87-28">28</a></span>
-<span class="normal"><a href="#__codelineno-87-29">29</a></span>
-<span class="normal"><a href="#__codelineno-87-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-87-1"><a id="__codelineno-87-1" name="__codelineno-87-1"></a><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-87-27">27</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-87-1"><a id="__codelineno-87-1" name="__codelineno-87-1"></a><span class="p">{</span>
 </span><span id="__span-87-2"><a id="__codelineno-87-2" name="__codelineno-87-2"></a><span class="w">  </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;write_ok-1&quot;</span><span class="p">,</span>
 </span><span id="__span-87-3"><a id="__codelineno-87-3" name="__codelineno-87-3"></a><span class="w">  </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-87-4"><a id="__codelineno-87-4" name="__codelineno-87-4"></a><span class="w">    </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
@@ -9008,20 +9005,17 @@
 </span><span id="__span-87-14"><a id="__codelineno-87-14" name="__codelineno-87-14"></a><span class="w">    </span><span class="p">},</span>
 </span><span id="__span-87-15"><a id="__codelineno-87-15" name="__codelineno-87-15"></a><span class="w">    </span><span class="p">{</span>
 </span><span id="__span-87-16"><a id="__codelineno-87-16" name="__codelineno-87-16"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_2&quot;</span><span class="p">,</span>
-</span><span id="__span-87-17"><a id="__codelineno-87-17" name="__codelineno-87-17"></a><span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_run&quot;</span><span class="p">,</span>
+</span><span id="__span-87-17"><a id="__codelineno-87-17" name="__codelineno-87-17"></a><span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;workspace_exec&quot;</span><span class="p">,</span>
 </span><span id="__span-87-18"><a id="__codelineno-87-18" name="__codelineno-87-18"></a><span class="w">      </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-87-19"><a id="__codelineno-87-19" name="__codelineno-87-19"></a><span class="w">        </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;write-ok&quot;</span><span class="p">,</span>
-</span><span id="__span-87-20"><a id="__codelineno-87-20" name="__codelineno-87-20"></a><span class="w">        </span><span class="nt">&quot;output_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-87-21"><a id="__codelineno-87-21" name="__codelineno-87-21"></a><span class="w">          </span><span class="s2">&quot;out/ok.txt&quot;</span>
-</span><span id="__span-87-22"><a id="__codelineno-87-22" name="__codelineno-87-22"></a><span class="w">        </span><span class="p">]</span>
-</span><span id="__span-87-23"><a id="__codelineno-87-23" name="__codelineno-87-23"></a><span class="w">      </span><span class="p">},</span>
-</span><span id="__span-87-24"><a id="__codelineno-87-24" name="__codelineno-87-24"></a><span class="w">      </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-87-25"><a id="__codelineno-87-25" name="__codelineno-87-25"></a><span class="w">        </span><span class="nt">&quot;exit_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-87-26"><a id="__codelineno-87-26" name="__codelineno-87-26"></a><span class="w">        </span><span class="nt">&quot;timed_out&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
-</span><span id="__span-87-27"><a id="__codelineno-87-27" name="__codelineno-87-27"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-87-28"><a id="__codelineno-87-28" name="__codelineno-87-28"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-87-29"><a id="__codelineno-87-29" name="__codelineno-87-29"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-87-30"><a id="__codelineno-87-30" name="__codelineno-87-30"></a><span class="p">}</span>
+</span><span id="__span-87-19"><a id="__codelineno-87-19" name="__codelineno-87-19"></a><span class="w">        </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bash skills/write-ok/scripts/run.sh&quot;</span>
+</span><span id="__span-87-20"><a id="__codelineno-87-20" name="__codelineno-87-20"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-87-21"><a id="__codelineno-87-21" name="__codelineno-87-21"></a><span class="w">      </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-87-22"><a id="__codelineno-87-22" name="__codelineno-87-22"></a><span class="w">        </span><span class="nt">&quot;exit_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-87-23"><a id="__codelineno-87-23" name="__codelineno-87-23"></a><span class="w">        </span><span class="nt">&quot;timed_out&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-87-24"><a id="__codelineno-87-24" name="__codelineno-87-24"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-87-25"><a id="__codelineno-87-25" name="__codelineno-87-25"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-87-26"><a id="__codelineno-87-26" name="__codelineno-87-26"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-87-27"><a id="__codelineno-87-27" name="__codelineno-87-27"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Metric <code>toolTrajectory</code> snippet:</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-88-1"> 1</a></span>
@@ -9063,8 +9057,7 @@
 <span class="normal"><a href="#__codelineno-88-37">37</a></span>
 <span class="normal"><a href="#__codelineno-88-38">38</a></span>
 <span class="normal"><a href="#__codelineno-88-39">39</a></span>
-<span class="normal"><a href="#__codelineno-88-40">40</a></span>
-<span class="normal"><a href="#__codelineno-88-41">41</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-88-1"><a id="__codelineno-88-1" name="__codelineno-88-1"></a><span class="p">[</span>
+<span class="normal"><a href="#__codelineno-88-40">40</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-88-1"><a id="__codelineno-88-1" name="__codelineno-88-1"></a><span class="p">[</span>
 </span><span id="__span-88-2"><a id="__codelineno-88-2" name="__codelineno-88-2"></a><span class="w">  </span><span class="p">{</span>
 </span><span id="__span-88-3"><a id="__codelineno-88-3" name="__codelineno-88-3"></a><span class="w">    </span><span class="nt">&quot;metricName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_trajectory_avg_score&quot;</span><span class="p">,</span>
 </span><span id="__span-88-4"><a id="__codelineno-88-4" name="__codelineno-88-4"></a><span class="w">    </span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
@@ -9084,27 +9077,26 @@
 </span><span id="__span-88-18"><a id="__codelineno-88-18" name="__codelineno-88-18"></a><span class="w">              </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
 </span><span id="__span-88-19"><a id="__codelineno-88-19" name="__codelineno-88-19"></a><span class="w">            </span><span class="p">}</span>
 </span><span id="__span-88-20"><a id="__codelineno-88-20" name="__codelineno-88-20"></a><span class="w">          </span><span class="p">},</span>
-</span><span id="__span-88-21"><a id="__codelineno-88-21" name="__codelineno-88-21"></a><span class="w">          </span><span class="nt">&quot;skill_run&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-88-21"><a id="__codelineno-88-21" name="__codelineno-88-21"></a><span class="w">          </span><span class="nt">&quot;workspace_exec&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-88-22"><a id="__codelineno-88-22" name="__codelineno-88-22"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-88-23"><a id="__codelineno-88-23" name="__codelineno-88-23"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-88-24"><a id="__codelineno-88-24" name="__codelineno-88-24"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-88-25"><a id="__codelineno-88-25" name="__codelineno-88-25"></a><span class="w">                </span><span class="nt">&quot;output_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-88-26"><a id="__codelineno-88-26" name="__codelineno-88-26"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-88-27"><a id="__codelineno-88-27" name="__codelineno-88-27"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-88-28"><a id="__codelineno-88-28" name="__codelineno-88-28"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-88-29"><a id="__codelineno-88-29" name="__codelineno-88-29"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-88-30"><a id="__codelineno-88-30" name="__codelineno-88-30"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-88-31"><a id="__codelineno-88-31" name="__codelineno-88-31"></a><span class="w">                </span><span class="nt">&quot;exit_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-88-32"><a id="__codelineno-88-32" name="__codelineno-88-32"></a><span class="w">                </span><span class="nt">&quot;timed_out&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-88-33"><a id="__codelineno-88-33" name="__codelineno-88-33"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-88-34"><a id="__codelineno-88-34" name="__codelineno-88-34"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-88-35"><a id="__codelineno-88-35" name="__codelineno-88-35"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-88-36"><a id="__codelineno-88-36" name="__codelineno-88-36"></a><span class="w">          </span><span class="p">}</span>
-</span><span id="__span-88-37"><a id="__codelineno-88-37" name="__codelineno-88-37"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-88-38"><a id="__codelineno-88-38" name="__codelineno-88-38"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-88-39"><a id="__codelineno-88-39" name="__codelineno-88-39"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-88-40"><a id="__codelineno-88-40" name="__codelineno-88-40"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-88-41"><a id="__codelineno-88-41" name="__codelineno-88-41"></a><span class="p">]</span>
+</span><span id="__span-88-24"><a id="__codelineno-88-24" name="__codelineno-88-24"></a><span class="w">                </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-88-25"><a id="__codelineno-88-25" name="__codelineno-88-25"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-88-26"><a id="__codelineno-88-26" name="__codelineno-88-26"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-88-27"><a id="__codelineno-88-27" name="__codelineno-88-27"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-88-28"><a id="__codelineno-88-28" name="__codelineno-88-28"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-88-29"><a id="__codelineno-88-29" name="__codelineno-88-29"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-88-30"><a id="__codelineno-88-30" name="__codelineno-88-30"></a><span class="w">                </span><span class="nt">&quot;exit_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-88-31"><a id="__codelineno-88-31" name="__codelineno-88-31"></a><span class="w">                </span><span class="nt">&quot;timed_out&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-88-32"><a id="__codelineno-88-32" name="__codelineno-88-32"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-88-33"><a id="__codelineno-88-33" name="__codelineno-88-33"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-88-34"><a id="__codelineno-88-34" name="__codelineno-88-34"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-88-35"><a id="__codelineno-88-35" name="__codelineno-88-35"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-88-36"><a id="__codelineno-88-36" name="__codelineno-88-36"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-88-37"><a id="__codelineno-88-37" name="__codelineno-88-37"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-88-38"><a id="__codelineno-88-38" name="__codelineno-88-38"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-88-39"><a id="__codelineno-88-39" name="__codelineno-88-39"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-88-40"><a id="__codelineno-88-40" name="__codelineno-88-40"></a><span class="p">]</span>
 </span></code></pre></div></td></tr></table></div>
 <p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill">examples/evaluation/skill</a> for a runnable example.</p>
 <h3 id="claude-code-evaluation">Claude Code Evaluation</h3>
@@ -10010,7 +10002,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 20, 2026 02:19:11 UTC">2026-04-20 02:19:11</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 23, 2026 02:11:27 UTC">2026-04-23 02:11:27</span>
   </span>
 
     
