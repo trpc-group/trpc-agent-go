@@ -545,7 +545,7 @@ searchTool := duckduckgo.NewTool(
 
 `tool/claudecode` provides a code-oriented ToolSet that exposes a Claude Code-style tool surface inside the framework. It covers file editing, repository search, command execution, and web retrieval, and can be attached directly to `LLMAgent` or other runtimes. If your goal is to invoke the local Claude Code CLI and consume its execution trace and tool events, see the [Claude Code Agent guide](claudecode.md).
 
-By default, `claudecode` exposes a core set of workflow tools: `Bash`, `TaskStop`, `TaskOutput`, `Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, and `ToolSearch`. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`.
+By default, `claudecode` exposes a core set of workflow tools: `Bash`, `TaskStop`, `TaskOutput`, `Read`, `Glob`, `Grep`, `WebFetch`, and `WebSearch`. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`.
 
 The following table lists the tools currently exposed by `claudecode`:
 
@@ -559,7 +559,6 @@ The following table lists the tools currently exposed by `claudecode`:
 | `Grep` | Searches repository content. |
 | `WebFetch` | Fetches the content of a specific URL. |
 | `WebSearch` | Performs an open web search. |
-| `ToolSearch` | Searches the current toolset for matching tools. |
 | `Write` | Creates a file or overwrites a file with complete contents. Only exposed when read-only mode is disabled. |
 | `Edit` | Performs targeted replacement in an existing text file. Only exposed when read-only mode is disabled. |
 | `NotebookEdit` | Edits `.ipynb` files at the cell level. Only exposed when read-only mode is disabled. |

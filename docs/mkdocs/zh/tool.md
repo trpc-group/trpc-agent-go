@@ -539,7 +539,7 @@ searchTool := duckduckgo.NewTool(
 
 `tool/claudecode` 提供了一组面向代码工作的 ToolSet，用于在框架内部暴露与 Claude Code 接近的工具接口。它覆盖文件读写、代码检索、命令执行和网页获取等能力，可以直接挂接到 `LLMAgent` 或其他运行时。如果你的目标是调用本地 Claude Code CLI，并消费 CLI 的执行轨迹与工具事件，请参考 [Claude Code Agent 使用指南](claudecode.md)。
 
-从能力组成上看，`claudecode` 默认会提供一组代码工作流工具，包括 `Bash`、`TaskStop`、`TaskOutput`、`Read`、`Glob`、`Grep`、`WebFetch`、`WebSearch` 和 `ToolSearch`。在非只读模式下，还会额外提供 `Write`、`Edit` 和 `NotebookEdit`。
+从能力组成上看，`claudecode` 默认会提供一组代码工作流工具，包括 `Bash`、`TaskStop`、`TaskOutput`、`Read`、`Glob`、`Grep`、`WebFetch` 和 `WebSearch`。在非只读模式下，还会额外提供 `Write`、`Edit` 和 `NotebookEdit`。
 
 下表列出了当前 `claudecode` 工具集中的主要工具及其用途：
 
@@ -553,7 +553,6 @@ searchTool := duckduckgo.NewTool(
 | `Grep` | 按内容搜索仓库。 |
 | `WebFetch` | 抓取指定 URL 的页面内容。 |
 | `WebSearch` | 进行开放式网页搜索。 |
-| `ToolSearch` | 在当前工具集中查找合适的工具，帮助模型选择正确的调用入口。 |
 | `Write` | 创建文件或用完整内容覆盖文件，仅在非只读模式下暴露。 |
 | `Edit` | 对已有文本文件做局部替换，仅在非只读模式下暴露。 |
 | `NotebookEdit` | 按 cell 粒度编辑 `.ipynb` 文件，仅在非只读模式下暴露。 |

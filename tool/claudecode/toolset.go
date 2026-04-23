@@ -48,9 +48,6 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	if err := appendWebTools(cc, options); err != nil {
 		return nil, err
 	}
-	if err := appendToolSearch(cc); err != nil {
-		return nil, err
-	}
 	return cc, nil
 }
 
@@ -112,16 +109,5 @@ func appendWebTools(cc *compositeToolSet, options toolSetOptions) error {
 		return err
 	}
 	cc.tools = append(cc.tools, webFetchTool, webSearchTool)
-	return nil
-}
-
-func appendToolSearch(cc *compositeToolSet) error {
-	toolSearchTool, err := newToolSearchTool(func() []tool.Tool {
-		return cc.Tools(nil)
-	})
-	if err != nil {
-		return err
-	}
-	cc.tools = append(cc.tools, toolSearchTool)
 	return nil
 }

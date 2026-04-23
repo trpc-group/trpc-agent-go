@@ -27,7 +27,6 @@ const (
 	toolWebSearch  = "WebSearch"
 	toolTaskStop   = "TaskStop"
 	toolTaskOutput = "TaskOutput"
-	toolToolSearch = "ToolSearch"
 	toolAskUser    = "AskUserQuestion"
 
 	defaultToolSetName     = "claudecode"

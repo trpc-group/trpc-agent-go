@@ -302,17 +302,6 @@ type webSearchOutput struct {
 	DurationSeconds float64           `json:"durationSeconds"`
 }
 
-type toolSearchInput struct {
-	Query      string `json:"query"`
-	MaxResults *int   `json:"max_results,omitempty"`
-}
-
-type toolSearchOutput struct {
-	Matches            []string `json:"matches"`
-	Query              string   `json:"query"`
-	TotalDeferredTools int      `json:"total_deferred_tools"`
-}
-
 func (s *compositeToolSet) Tools(ctx context.Context) []tool.Tool {
 	out := make([]tool.Tool, 0, len(s.tools))
 	out = append(out, s.tools...)

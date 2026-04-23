@@ -51,7 +51,6 @@ func TestNewToolSet_DefaultTools(t *testing.T) {
 	require.Contains(t, names, toolGrep)
 	require.Contains(t, names, toolTaskStop)
 	require.Contains(t, names, toolTaskOutput)
-	require.Contains(t, names, toolToolSearch)
 	require.Contains(t, names, toolWebFetch)
 	require.Contains(t, names, toolWebSearch)
 	require.NotContains(t, names, "EnterWorktree")
@@ -701,61 +700,6 @@ func TestToolSet_GrepRipgrepAdvancedOptions(t *testing.T) {
 	})
 	require.Contains(t, out.Content, "main.go:4:\tprintln(\"alpha\")")
 	require.Contains(t, out.Content, "main.go:5:\tprintln(\"beta\")")
-}
-
-func TestToolSet_ToolSearchFindsCurrentTools(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	ts, err := NewToolSet(WithBaseDir(dir))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, ts.Close())
-	})
-	searchTool := mustCallableTool(t, ts.Tools(context.Background()), toolToolSearch)
-	selectOut := callToolAs[toolSearchOutput](t, searchTool, toolSearchInput{
-		Query: "select:Read,Grep",
-	})
-	require.Equal(t, []string{toolRead, toolGrep}, selectOut.Matches)
-	require.Zero(t, selectOut.TotalDeferredTools)
-	keywordOut := callToolAs[toolSearchOutput](t, searchTool, toolSearchInput{
-		Query: "read file",
-	})
-	require.Contains(t, keywordOut.Matches, toolRead)
-	require.Zero(t, keywordOut.TotalDeferredTools)
-	prefixOut := callToolAs[toolSearchOutput](t, searchTool, toolSearchInput{
-		Query: strings.ToLower(toolRead),
-	})
-	require.Equal(t, []string{toolRead}, prefixOut.Matches)
-	requiredOut := callToolAs[toolSearchOutput](t, searchTool, toolSearchInput{
-		Query: "+read file",
-	})
-	require.Contains(t, requiredOut.Matches, toolRead)
-}
-
-func TestSplitToolSearchTermsTreatsSingleCharacterRequiredTermsAsRequired(t *testing.T) {
-	t.Parallel()
-	required, optional := splitToolSearchTerms("+x read")
-	require.Equal(t, []string{"x"}, required)
-	require.Equal(t, []string{"read"}, optional)
-}
-
-func TestToolSearchCoversProviderAndEmptyResultBranches(t *testing.T) {
-	t.Parallel()
-	_, err := newToolSearchTool(nil)
-	require.EqualError(t, err, "tool list provider is required")
-	searchTool, err := newToolSearchTool(func() []tool.Tool { return nil })
-	require.NoError(t, err)
-	callable, ok := searchTool.(tool.CallableTool)
-	require.True(t, ok)
-	_, err = callToolRaw(callable, toolSearchInput{})
-	require.EqualError(t, err, "query is required")
-	out := callToolAs[toolSearchOutput](t, callable, toolSearchInput{
-		Query:      "read",
-		MaxResults: intPtr(0),
-	})
-	require.Empty(t, out.Matches)
-	require.Equal(t, "read", out.Query)
-	require.Zero(t, out.TotalDeferredTools)
 }
 
 func TestToolSet_AskUserQuestionPassesThroughValidatedPayload(t *testing.T) {
@@ -1674,41 +1618,6 @@ func TestCommonHelpersCoverRemainingErrorBranches(t *testing.T) {
 	require.Empty(t, sliced)
 	require.Equal(t, 10, startLine)
 	require.Equal(t, 2, totalLines)
-}
-
-func TestToolSearchHelpersCoverRemainingBranches(t *testing.T) {
-	t.Parallel()
-	allTools := []tool.Tool{
-		nil,
-		stubTool{},
-		stubTool{decl: &tool.Declaration{Name: ""}},
-		stubTool{decl: &tool.Declaration{Name: toolToolSearch}},
-		stubTool{decl: &tool.Declaration{Name: "Read", Description: "Read file content"}},
-		stubTool{decl: &tool.Declaration{Name: "Read", Description: "Duplicate read tool"}},
-		stubTool{decl: &tool.Declaration{Name: "WebFetch", Description: "Fetch current web pages"}},
-		stubTool{decl: &tool.Declaration{Name: "TaskOutput", Description: "Inspect task output"}},
-	}
-	filtered := searchableTools(allTools)
-	require.Equal(t, []string{"Read", "WebFetch", "TaskOutput"}, toolNames(filtered))
-	require.Equal(t, []string{"Read", "WebFetch"}, selectToolNames("Read, WebFetch, Unknown, Read", filtered))
-	require.Equal(t, "Read", exactToolMatch("read", filtered))
-	require.Empty(t, keywordSearchTools(" ", filtered, 5))
-	requiredTerms, optionalTerms := splitToolSearchTerms("+read tool +x")
-	require.Equal(t, []string{"read", "x"}, requiredTerms)
-	require.Equal(t, []string{"tool"}, optionalTerms)
-	info := parseToolName("TaskOutputTool")
-	require.Equal(t, []string{"task", "output", "tool"}, info.Parts)
-	require.Equal(t, "task output tool", info.Full)
-	require.True(t, containsAnyPart(info.Parts, "put"))
-	require.False(t, containsAnyPart(info.Parts, "zip"))
-	require.True(t, containsWholeWord("read task output", "task"))
-	require.False(t, containsWholeWord("reader output", "read"))
-	require.True(t, toolMatchesRequiredTerms(info, "inspect task output", []string{"task"}))
-	require.False(t, toolMatchesRequiredTerms(info, "inspect task output", []string{"fetch"}))
-	require.Equal(t, []string{"WebFetch"}, keywordSearchTools("fetch", filtered, 5))
-	require.Equal(t, []string{"TaskOutput"}, keywordSearchTools("+task output", filtered, 1))
-	require.Equal(t, []string{"Read"}, scoreKeywordToolMatches([]string{"read"}, []string{"read"}, filtered, 5))
-	require.Equal(t, "Read", filtered[0].Declaration().Name)
 }
 
 func TestGrepTypePatternsExposeKnownAliases(t *testing.T) {
