@@ -71,7 +71,8 @@ func validateRunEvaluationRequest(req *RunEvaluationRequest) error {
 	if req == nil {
 		return errors.New("request must not be nil")
 	}
-	if strings.TrimSpace(req.SetID) == "" {
+	req.SetID = strings.TrimSpace(req.SetID)
+	if req.SetID == "" {
 		return errors.New("setId must not be empty")
 	}
 	if req.NumRuns != nil && *req.NumRuns <= 0 {

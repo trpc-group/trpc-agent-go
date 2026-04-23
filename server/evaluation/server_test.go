@@ -651,6 +651,21 @@ func TestHandleCreateRunTimeoutReturnsGatewayTimeout(t *testing.T) {
 	assert.JSONEq(t, `{"error":"evaluation timed out"}`, recorder.Body.String())
 }
 
+func TestHandleCreateRunTrimsSetIDBeforeEvaluate(t *testing.T) {
+	var gotSetID string
+	srv := newTestServer(t, WithAgentEvaluator(&fakeAgentEvaluator{
+		evaluate: func(ctx context.Context, evalSetID string, opt ...coreevaluation.Option) (*coreevaluation.EvaluationResult, error) {
+			gotSetID = evalSetID
+			return newTestEvaluationResult(evalSetID, "result-default", 1, time.Second), nil
+		},
+	}))
+	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewBufferString(`{"setId":" math-basic "}`))
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusCreated, recorder.Code)
+	assert.Equal(t, "math-basic", gotSetID)
+}
+
 func TestHandleRunsRejectsReadRequests(t *testing.T) {
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, srv.RunsPath(), nil)
@@ -1485,7 +1500,9 @@ func TestValidateRunEvaluationRequest(t *testing.T) {
 	require.EqualError(t, validateRunEvaluationRequest(nil), "request must not be nil")
 	require.EqualError(t, validateRunEvaluationRequest(&RunEvaluationRequest{SetID: "   "}), "setId must not be empty")
 	require.EqualError(t, validateRunEvaluationRequest(&RunEvaluationRequest{SetID: "math-basic", NumRuns: intPtr(-1)}), "numRuns must be greater than 0 when provided")
-	assert.NoError(t, validateRunEvaluationRequest(&RunEvaluationRequest{SetID: "math-basic"}))
+	req := &RunEvaluationRequest{SetID: " math-basic "}
+	require.NoError(t, validateRunEvaluationRequest(req))
+	assert.Equal(t, "math-basic", req.SetID)
 }
 
 func TestValidateCreateMetricRequest(t *testing.T) {
