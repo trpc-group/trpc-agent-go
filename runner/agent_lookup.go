@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/appid"
 )
 
 func (r *runner) loadRegisteredAgent(
@@ -70,9 +69,7 @@ func (r *runner) resolveAwaitUserReplyRoute(
 		}
 	}
 
-	selected := r.wrapSelectedAgent(current)
-	appid.RegisterRunner(r.appName, selected.Info().Name)
-	return selected, rootName, true, nil
+	return current, rootName, true, nil
 }
 
 func splitAgentPath(path string) []string {

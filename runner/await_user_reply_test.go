@@ -409,3 +409,28 @@ func TestRunner_Run_AwaitUserReplyRoutingResolvesFactorySubAgentPath(
 	require.Equal(t, 1, factoryCalls)
 	require.Equal(t, 1, child.calls)
 }
+
+func TestRunner_ResolveAwaitUserReplyRoute_ReturnsRawAgent(t *testing.T) {
+	child := &awaitReplyTrackingAgent{name: "child"}
+	parent := &awaitReplyTrackingAgent{
+		name:      "parent",
+		subAgents: []agent.Agent{child},
+	}
+	r := &runner{
+		agents:         map[string]agent.Agent{"parent": parent},
+		agentFactories: map[string]AgentFactory{},
+	}
+
+	got, rootName, ok, err := r.resolveAwaitUserReplyRoute(
+		context.Background(),
+		agent.AwaitUserReplyRoute{
+			AgentName:  "child",
+			LookupPath: "parent/child",
+		},
+		agent.RunOptions{},
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "parent", rootName)
+	require.Same(t, child, got)
+}
