@@ -1316,7 +1316,7 @@ apply to all agents
 
 - 🎯 **Per-Run Control**: Independent configuration per invocation, no Agent modification needed
 - 💰 **Cost Optimization**: Reduce tool descriptions sent to LLM, lowering token costs
-- 🛡️ **Smart Protection**: Framework tools (`transfer_to_agent`, `knowledge_search`) automatically preserved, never filtered
+- 🛡️ **Smart Protection**: Framework tools (`transfer_to_agent`, `knowledge_search`, optional `await_user_reply`) automatically preserved, never filtered
 - 🔧 **Flexible Customization**: Support for built-in filters and custom FilterFunc
 
 #### Tool Search (Automatic Tool Selection)
@@ -1566,7 +1566,7 @@ The framework automatically distinguishes **user tools** from **framework tools*
 | Tool Category       | Includes                                                                                                                      | Filtered?                         |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | **User Tools**      | Tools registered via `WithTools`<br>Tools registered via `WithToolSets`                                                       | ✅ Subject to filtering           |
-| **Framework Tools** | `transfer_to_agent` (multi-Agent coordination)<br>`knowledge_search` (knowledge base retrieval)<br>`agentic_knowledge_search` | ❌ Never filtered, auto-preserved |
+| **Framework Tools** | `transfer_to_agent` (multi-Agent coordination)<br>`knowledge_search` (knowledge base retrieval)<br>`agentic_knowledge_search`<br>`await_user_reply` (one-shot follow-up routing, when enabled) | ❌ Never filtered, auto-preserved |
 
 **Example:**
 
@@ -1579,6 +1579,7 @@ agent := llmagent.New("assistant",
     }),
     llmagent.WithSubAgents([]agent.Agent{subAgent1, subAgent2}), // Auto-adds transfer_to_agent
     llmagent.WithKnowledge(kb),                                   // Auto-adds knowledge_search
+    llmagent.WithAwaitUserReplyTool(true),                        // Auto-adds await_user_reply
 )
 
 // Runtime filtering: only allow calculator
@@ -1592,7 +1593,36 @@ runner.Run(ctx, userID, sessionID, message,
 // ❌ textTool          - User tool, filtered out
 // ✅ transfer_to_agent - Framework tool, auto-preserved
 // ✅ knowledge_search  - Framework tool, auto-preserved
+// ✅ await_user_reply  - Framework tool, auto-preserved
 ```
+
+#### `await_user_reply` for Follow-Up Turns
+
+`await_user_reply` is an optional framework tool. Enable it with
+`llmagent.WithAwaitUserReplyTool(true)` when an Agent may ask the user for
+missing information and you want the next user message to resume at that same
+Agent.
+
+Use it together with `runner.WithAwaitUserReplyRouting(true)`:
+
+```go
+profileAgent := llmagent.New("profile-agent",
+    llmagent.WithAwaitUserReplyTool(true),
+    llmagent.WithInstruction(`
+If you must ask the user for a missing field, call await_user_reply
+immediately before your question.
+`),
+)
+
+r := runner.NewRunner(
+    "crm-app",
+    profileAgent,
+    runner.WithAwaitUserReplyRouting(true),
+)
+```
+
+The route is one-shot: Runner consumes it on the next user turn and then clears
+it automatically.
 
 #### Important Notes
 
@@ -1747,7 +1777,9 @@ if !removed {
 Runtime ToolSet updates integrate seamlessly with the **tool filtering** logic described earlier:
 
 - Tools coming from `WithTools` or any ToolSet (including dynamically added ones) are treated as **user tools** and are subject to `WithToolFilter` and per‑run filters.
-- Framework tools such as `transfer_to_agent`, `knowledge_search`, and `agentic_knowledge_search` remain **never filtered** and are always available.
+- Framework tools such as `transfer_to_agent`, `knowledge_search`,
+  `agentic_knowledge_search`, and optional `await_user_reply` remain
+  **never filtered** and are always available.
 
 #### Tool Call Arguments Auto Repair
 

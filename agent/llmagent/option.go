@@ -241,6 +241,10 @@ type Options struct {
 	Planner planner.Planner
 	// SubAgents is the list of sub-agents available to the agent.
 	SubAgents []agent.Agent
+	// EnableAwaitUserReplyTool adds the await_user_reply framework tool.
+	// When enabled, the model can explicitly mark that the next user turn
+	// should resume at this agent.
+	EnableAwaitUserReplyTool bool
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
 	// ModelCallbacks contains callbacks for model operations.
@@ -1357,6 +1361,14 @@ func WithEventMessageProjector(
 ) Option {
 	return func(opts *Options) {
 		opts.EventMessageProjector = projector
+	}
+}
+
+// WithAwaitUserReplyTool controls whether the await_user_reply framework tool
+// is exposed to the model.
+func WithAwaitUserReplyTool(enabled bool) Option {
+	return func(opts *Options) {
+		opts.EnableAwaitUserReplyTool = enabled
 	}
 }
 

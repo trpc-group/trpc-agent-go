@@ -20,6 +20,7 @@ The Multi-Agent System is built on the SubAgent concept, implementing various co
 
 - **Agent Tool (AgentTool)** - Wraps Agents as tools for other Agents to call
 - **Agent Transfer** - Implements task delegation between Agents through the `transfer_to_agent` tool
+- **Await User Reply Routing** - Lets an Agent explicitly claim the next user turn when it needs follow-up information
 - **Team** - A high-level wrapper for coordinator teams and swarm-style handoffs (`team` package)
 
 ## SubAgent Basics
@@ -607,6 +608,110 @@ Compound Interest Calculation Result:
 - Term: 8 years
 - Result: $7,969.24 (interest approximately $2,969.24)
 ```
+
+#### Follow-Up Questions Across Turns
+
+`transfer_to_agent` solves **who handles the current run**. It does not, by
+itself, tell `Runner` who should handle the **next user message**.
+
+That becomes visible when a SubAgent asks a clarifying question:
+
+1. The coordinator transfers to a SubAgent.
+2. The SubAgent asks the user for missing information.
+3. The user replies in a later request.
+4. By default, `Runner` starts from its normal entry Agent again.
+
+The clean solution is to make this routing **explicit** and **one-shot**:
+
+- Enable `runner.WithAwaitUserReplyRouting(true)` on the Runner.
+- Enable `llmagent.WithAwaitUserReplyTool(true)` on any Agent that may ask the
+  user for follow-up data.
+- In that Agent's instruction, tell the model to call `await_user_reply`
+  immediately before it asks the user for missing information.
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+profileAgent := llmagent.New(
+    "profile-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithDescription(
+        "Collects and updates customer profile information.",
+    ),
+    llmagent.WithInstruction(`
+You update customer profiles.
+
+If any required field is missing:
+1. call await_user_reply
+2. ask one clear question to the user
+3. stop and wait for the next user message
+
+When all required fields are present, call update_profile.
+`),
+    llmagent.WithAwaitUserReplyTool(true),
+    llmagent.WithTools([]tool.Tool{updateProfileTool}),
+)
+
+coordinatorAgent := llmagent.New(
+    "coordinator-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction(`
+Delegate profile-update requests to profile-agent.
+Do not collect profile fields yourself.
+`),
+    llmagent.WithSubAgents([]agent.Agent{profileAgent}),
+)
+
+r := runner.NewRunner(
+    "crm-app",
+    coordinatorAgent,
+    runner.WithAwaitUserReplyRouting(true),
+)
+
+// Turn 1:
+// user: "Update my profile."
+// coordinator-agent -> transfer_to_agent(profile-agent)
+// profile-agent -> await_user_reply + "What phone number should I save?"
+
+// Turn 2 (same session):
+// user: "+1-555-0101"
+// Runner resumes directly at profile-agent for this turn.
+events, err := r.Run(
+    context.Background(),
+    "user-1",
+    "session-1",
+    model.NewUserMessage("+1-555-0101"),
+)
+if err != nil {
+    // handle error
+}
+for evt := range events {
+    if evt.IsRunnerCompletion() {
+        break
+    }
+}
+```
+
+Important behavior:
+
+- The route is consumed once. After the next user turn starts, it is cleared.
+- Explicit `agent.WithAgent(...)` or `agent.WithAgentByName(...)` still wins.
+- If the target Agent path is no longer valid, `Runner` falls back to its
+  default entry Agent and clears the stale route.
+- `Runner` restores nested SubAgents by their full agent-chain path, so you do
+  not need to register every SubAgent separately in the common
+  coordinator-plus-SubAgents setup.
+
+For custom Agents that do not use `LLMAgent`, see the `runner` guide for the
+low-level `agent.MarkAwaitingUserReply(...)` API.
 
 ## Environment Variable Configuration
 

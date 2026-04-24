@@ -40,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolawaitreply "trpc.group/trpc-go/trpc-agent-go/tool/awaitreply"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
@@ -79,6 +80,10 @@ type LLMAgent struct {
 	option               Options
 }
 
+const invalidOutputSchemaAwaitUserReply = "" +
+	"Invalid LLMAgent configuration: if output_schema is set, " +
+	"await_user_reply must be disabled"
+
 // New creates a new LLMAgent with the given options.
 func New(name string, opts ...Option) *LLMAgent {
 	options := defaultOptions
@@ -92,6 +97,9 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Validate output_schema configuration before registering tools.
 	if options.OutputSchema != nil {
+		if options.EnableAwaitUserReplyTool {
+			panic(invalidOutputSchemaAwaitUserReply)
+		}
 		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
 		}
@@ -1514,6 +1522,10 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 		}
 	}
 
+	if a.option.EnableAwaitUserReplyTool {
+		base = append(base, toolawaitreply.New())
+	}
+
 	if len(a.subAgents) == 0 {
 		return base
 	}
@@ -1576,6 +1588,7 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 //   - knowledge_search / agentic_knowledge_search (auto-added when
 //     WithKnowledge is set)
 //   - transfer_to_agent (auto-added when WithSubAgents is set)
+//   - await_user_reply (auto-added when WithAwaitUserReplyTool(true))
 //
 // This method is used by the tool filtering logic to distinguish user
 // tools from framework tools.
@@ -1598,7 +1611,8 @@ func (a *LLMAgent) UserTools() []tool.Tool {
 	// When ToolSets are refreshed on each run, user tools include:
 	//   - Tools from WithTools (tracked in userToolNames)
 	//   - Tools coming from ToolSets (wrapped as NamedTool).
-	// Framework tools (knowledge_search, transfer_to_agent, etc.)
+	// Framework tools (knowledge_search, transfer_to_agent,
+	// await_user_reply, etc.)
 	// remain excluded.
 	allTools := a.getAllToolsLocked()
 	userTools := make([]tool.Tool, 0, len(allTools))
