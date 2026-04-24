@@ -760,6 +760,172 @@ func TestMessageProcessor_HandleError(t *testing.T) {
 	}
 }
 
+func TestMessageProcessor_HandleError_ResponseRewriter(t *testing.T) {
+	proc := &messageProcessor{
+		responseRewriter: ResponseRewriterFuncs{
+			Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+				msg, ok := result.(*protocol.Message)
+				if !ok {
+					return result
+				}
+				delete(msg.Metadata, "debug_trace")
+				return msg
+			},
+		},
+		errorHandler: func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+			result := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("err")})
+			result.Metadata = map[string]any{
+				"debug_trace":   "drop-me",
+				"business_code": "keep-me",
+			}
+			return &result, nil
+		},
+	}
+
+	result, err := proc.handleError(context.Background(), &protocol.Message{MessageID: "err"}, false, errors.New("boom"))
+	assert.NoError(t, err)
+	msg, ok := result.Result.(*protocol.Message)
+	if !assert.True(t, ok, "expected *protocol.Message, got %T", result.Result) {
+		return
+	}
+	assert.Equal(t, "keep-me", msg.Metadata["business_code"])
+	assert.NotContains(t, msg.Metadata, "debug_trace")
+}
+
+func TestMessageProcessor_HandleError_ResponseRewriter_DropUnaryResult(t *testing.T) {
+	proc := &messageProcessor{
+		responseRewriter: ResponseRewriterFuncs{
+			Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+				return nil
+			},
+		},
+		errorHandler: func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+			result := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("err")})
+			return &result, nil
+		},
+	}
+
+	result, err := proc.handleError(context.Background(), &protocol.Message{MessageID: "err"}, false, errors.New("boom"))
+	assert.NoError(t, err)
+	if assert.NotNil(t, result) {
+		assert.Nil(t, result.Result)
+		assert.Nil(t, result.StreamingEvents)
+	}
+}
+
+func TestMessageProcessor_HandleStreamingProcessingError_ResponseRewriter(t *testing.T) {
+	proc := &messageProcessor{
+		responseRewriter: ResponseRewriterFuncs{
+			Streaming: func(result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+				msg, ok := result.(*protocol.Message)
+				if !ok {
+					return result
+				}
+				delete(msg.Metadata, "debug_trace")
+				return msg
+			},
+		},
+		errorHandler: func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+			result := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("err")})
+			result.Metadata = map[string]any{
+				"debug_trace":   "drop-me",
+				"business_code": "keep-me",
+			}
+			return &result, nil
+		},
+	}
+	subscriber := &mockTaskSubscriber{channel: make(chan protocol.StreamingMessageEvent, 1)}
+
+	err := proc.handleStreamingProcessingError(context.Background(), &protocol.Message{MessageID: "err-stream"}, subscriber, errors.New("boom"))
+	assert.NoError(t, err)
+
+	select {
+	case event := <-subscriber.channel:
+		msg, ok := event.Result.(*protocol.Message)
+		if !assert.True(t, ok, "expected *protocol.Message, got %T", event.Result) {
+			return
+		}
+		assert.Equal(t, "keep-me", msg.Metadata["business_code"])
+		assert.NotContains(t, msg.Metadata, "debug_trace")
+	default:
+		t.Fatal("expected streaming error message event")
+	}
+}
+
+func TestMessageProcessor_HandleStreamingProcessingError_ResponseRewriter_DropResult(
+	t *testing.T,
+) {
+	proc := &messageProcessor{
+		responseRewriter: ResponseRewriterFuncs{
+			Streaming: func(
+				result protocol.StreamingMessageResult,
+			) protocol.StreamingMessageResult {
+				return nil
+			},
+		},
+		errorHandler: func(
+			ctx context.Context,
+			msg *protocol.Message,
+			err error,
+		) (*protocol.Message, error) {
+			result := protocol.NewMessage(
+				protocol.MessageRoleAgent,
+				[]protocol.Part{protocol.NewTextPart("err")},
+			)
+			return &result, nil
+		},
+	}
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 1),
+	}
+
+	err := proc.handleStreamingProcessingError(
+		context.Background(),
+		&protocol.Message{MessageID: "err-stream-drop"},
+		subscriber,
+		errors.New("boom"),
+	)
+	assert.NoError(t, err)
+
+	select {
+	case event := <-subscriber.channel:
+		t.Fatalf("unexpected streaming error event: %#v", event)
+	default:
+	}
+}
+
+func TestMessageProcessor_HandleError_ResponseRewriter_DropStreamingResult(t *testing.T) {
+	proc := &messageProcessor{
+		responseRewriter: ResponseRewriterFuncs{
+			Streaming: func(result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+				return nil
+			},
+		},
+		errorHandler: func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+			result := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("err")})
+			return &result, nil
+		},
+	}
+
+	result, err := proc.handleError(context.Background(), &protocol.Message{MessageID: "err"}, true, errors.New("boom"))
+	assert.NoError(t, err)
+	if !assert.NotNil(t, result) {
+		return
+	}
+	if !assert.NotNil(t, result.StreamingEvents) {
+		return
+	}
+	select {
+	case event, ok := <-result.StreamingEvents.Channel():
+		if ok {
+			assert.Nil(t, event.Result)
+			t.Fatal("expected dropped streaming result to emit no events")
+		}
+	default:
+		t.Fatal("expected dropped streaming result subscriber to close immediately")
+	}
+}
+
 func TestMessageProcessor_HandleError_HandlerFailure(t *testing.T) {
 	proc := &messageProcessor{
 		errorHandler: func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
@@ -3703,6 +3869,7 @@ func TestBuildTaskErrorMetadata(t *testing.T) {
 			)
 		}
 	})
+
 }
 
 func TestBuildTaskErrorMessage(t *testing.T) {
@@ -3888,6 +4055,68 @@ func TestMessageProcessor_ProcessMessage_StructuredTaskError(
 	assert.Len(t, task.Status.Message.Parts, 1)
 }
 
+func TestMessageProcessor_ProcessMessage_StructuredTaskError_ResponseRewriterDrop(
+	t *testing.T,
+) {
+	ctxID := "ctx"
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "structured-error-drop-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+
+	processor := &messageProcessor{
+		structuredTaskErrors: true,
+		responseRewriter: ResponseRewriterFuncs{
+			Unary: func(
+				result protocol.UnaryMessageResult,
+			) protocol.UnaryMessageResult {
+				return nil
+			},
+		},
+		runner: &mockRunner{
+			runFunc: func(
+				ctx context.Context,
+				userID string,
+				sessionID string,
+				message model.Message,
+				opts ...agent.RunOption,
+			) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Done: true,
+						Error: &model.ResponseError{
+							Type:    model.ErrorTypeFlowError,
+							Message: "task failed",
+						},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{},
+		errorHandler:        defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(
+		context.Background(),
+		"user",
+		ctxID,
+		&msg,
+		&model.Message{Content: "input"},
+		nil,
+	)
+	assert.NoError(t, err)
+	if assert.NotNil(t, result) {
+		assert.Nil(t, result.Result)
+		assert.Nil(t, result.StreamingEvents)
+	}
+}
+
 func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadata(
 	t *testing.T,
 ) {
@@ -4042,6 +4271,112 @@ func TestMessageProcessor_ProcessBatchStreamingEvents_StructuredTaskError(
 		}
 	default:
 		t.Fatal("expected task failure status event")
+	}
+}
+
+func TestMessageProcessor_ProcessBatchStreamingEvents_DropStructuredTaskError(
+	t *testing.T,
+) {
+	processor := &messageProcessor{
+		structuredTaskErrors: true,
+		responseRewriter: ResponseRewriterFuncs{
+			Streaming: func(
+				result protocol.StreamingMessageResult,
+			) protocol.StreamingMessageResult {
+				return nil
+			},
+		},
+	}
+	ctxID := "ctx"
+	msg := &protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "streaming-error-drop-test",
+	}
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 1),
+	}
+	terminalTaskError := false
+
+	cont, err := processor.processBatchStreamingEvents(
+		context.Background(),
+		"task-1",
+		msg,
+		[]*event.Event{{
+			Response: &model.Response{
+				Done: true,
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "task failed",
+				},
+			},
+		}},
+		subscriber,
+		&terminalTaskError,
+		nil,
+	)
+	assert.NoError(t, err)
+	assert.False(t, cont)
+	assert.True(t, terminalTaskError)
+
+	select {
+	case streamEvent := <-subscriber.channel:
+		t.Fatalf("unexpected streaming result: %#v", streamEvent)
+	default:
+	}
+}
+
+func TestProcessAgentStreamingEvents_ResponseRewriterDropsCompletionEvents(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event)
+	close(events)
+
+	proc := createTestMessageProcessor()
+	proc.responseRewriter = ResponseRewriterFuncs{
+		Streaming: func(
+			result protocol.StreamingMessageResult,
+		) protocol.StreamingMessageResult {
+			switch v := result.(type) {
+			case *protocol.TaskArtifactUpdateEvent:
+				return nil
+			case *protocol.TaskStatusUpdateEvent:
+				if v.Status.State == protocol.TaskStateCompleted {
+					return nil
+				}
+			}
+			return result
+		},
+	}
+
+	var results []protocol.StreamingMessageResult
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			if evt.Result != nil {
+				results = append(results, evt.Result)
+			}
+			return nil
+		},
+	}
+
+	proc.processAgentStreamingEvents(
+		ctx,
+		"task",
+		"user1",
+		"session1",
+		msg,
+		events,
+		sub,
+		&mockTaskHandler{},
+	)
+
+	if assert.Len(t, results, 1) {
+		status, ok := results[0].(*protocol.TaskStatusUpdateEvent)
+		if assert.True(t, ok) {
+			assert.Equal(t, protocol.TaskStateSubmitted, status.Status.State)
+		}
 	}
 }
 
@@ -4540,6 +4875,7 @@ func TestBuildFinalStreamingMetadata(t *testing.T) {
 		decoded := ia2a.DecodeStateDeltaMetadata(rawSD)
 		assert.Equal(t, []byte(`"val"`), decoded["custom_key"])
 	})
+
 }
 
 func TestFinalStreamingResponseID(t *testing.T) {
@@ -4642,6 +4978,7 @@ func TestMergeRunnerCompletionStateDeltaIntoLastMessage(t *testing.T) {
 		)
 		assert.True(t, ok)
 	})
+
 }
 
 func TestCloneStateDeltaBytes(t *testing.T) {
@@ -4652,6 +4989,92 @@ func TestCloneStateDeltaBytes(t *testing.T) {
 	assert.Equal(t, original, cloned)
 	cloned[0] = 'H'
 	assert.NotEqual(t, original, cloned, "clone must not share backing array")
+}
+
+func TestNormalizeResponseResults(t *testing.T) {
+	t.Run("nil inputs", func(t *testing.T) {
+		proc := &messageProcessor{}
+		assert.Nil(t, proc.rewriteUnaryResult(nil))
+		assert.Nil(t, proc.rewriteStreamingResult(nil))
+		assert.Nil(t, normalizeProtocolMessage(nil))
+		assert.Nil(t, normalizeTask(nil))
+		assert.Nil(t, normalizeTaskArtifactUpdateEvent(nil))
+		assert.Nil(t, normalizeTaskStatusUpdateEvent(nil))
+		assert.Nil(t, normalizeArtifact(nil))
+	})
+
+	t.Run("empty message with only response id is dropped", func(t *testing.T) {
+		msg := &protocol.Message{
+			Metadata: map[string]any{
+				ia2a.MessageMetadataResponseIDKey: "resp-1",
+			},
+		}
+		assert.Nil(t, normalizeProtocolMessage(msg))
+	})
+
+	t.Run("task normalizes nested empty messages and artifacts", func(t *testing.T) {
+		task := &protocol.Task{
+			Metadata: map[string]any{},
+			Status: protocol.TaskStatus{
+				Message: &protocol.Message{
+					Metadata: map[string]any{
+						ia2a.MessageMetadataResponseIDKey: "resp-1",
+					},
+				},
+			},
+			History: []protocol.Message{
+				{
+					Metadata: map[string]any{
+						ia2a.MessageMetadataResponseIDKey: "resp-history",
+					},
+				},
+				{
+					Parts: []protocol.Part{protocol.NewTextPart("keep")},
+				},
+			},
+			Artifacts: []protocol.Artifact{
+				{},
+				{
+					Metadata: map[string]any{"business": "keep"},
+				},
+			},
+		}
+
+		normalized := normalizeTask(task)
+		assert.Nil(t, normalized.Metadata)
+		assert.Nil(t, normalized.Status.Message)
+		if assert.Len(t, normalized.History, 1) {
+			assert.Equal(t, "keep", normalized.History[0].Parts[0].(protocol.TextPart).Text)
+		}
+		if assert.Len(t, normalized.Artifacts, 1) {
+			assert.Equal(t, "keep", normalized.Artifacts[0].Metadata["business"])
+		}
+	})
+
+	t.Run("artifact update keeps final or contentful metadata", func(t *testing.T) {
+		lastChunk := true
+		assert.NotNil(t, normalizeTaskArtifactUpdateEvent(
+			&protocol.TaskArtifactUpdateEvent{LastChunk: &lastChunk},
+		))
+		assert.NotNil(t, normalizeTaskArtifactUpdateEvent(
+			&protocol.TaskArtifactUpdateEvent{
+				Metadata: map[string]any{"business": "keep"},
+			},
+		))
+		assert.Nil(t, normalizeTaskArtifactUpdateEvent(
+			&protocol.TaskArtifactUpdateEvent{
+				Metadata: map[string]any{
+					ia2a.MessageMetadataResponseIDKey: "resp-1",
+				},
+			},
+		))
+	})
+
+	t.Run("streaming task falls through unchanged", func(t *testing.T) {
+		task := &protocol.Task{ID: "task-1"}
+		result := normalizeStreamingResult(task)
+		assert.Same(t, task, result)
+	})
 }
 
 // TestMessageProcessor_ProcessMessage_NoPartsCollected tests handling when no parts are collected
@@ -4695,6 +5118,64 @@ func TestMessageProcessor_ProcessMessage_NoPartsCollected(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.NotNil(t, result.Result)
+}
+
+func TestMessageProcessor_ProcessMessage_ResponseRewriterDropFinalResult(
+	t *testing.T,
+) {
+	ctxID := "ctx"
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "drop-final-result-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+	processor := &messageProcessor{
+		responseRewriter: ResponseRewriterFuncs{
+			Unary: func(
+				result protocol.UnaryMessageResult,
+			) protocol.UnaryMessageResult {
+				return nil
+			},
+		},
+		runner: &mockRunner{
+			runFunc: func(
+				ctx context.Context,
+				userID string,
+				sessionID string,
+				message model.Message,
+				opts ...agent.RunOption,
+			) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{Content: "answer"},
+						}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{},
+		errorHandler:        defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(
+		context.Background(),
+		"user",
+		"session",
+		&msg,
+		&model.Message{Content: "input"},
+		nil,
+	)
+	assert.NoError(t, err)
+	if assert.NotNil(t, result) {
+		assert.Nil(t, result.Result)
+		assert.Nil(t, result.StreamingEvents)
+	}
 }
 
 // TestMessageProcessor_ProcessMessage_SkipsRunnerCompletion tests that runner.completion events
@@ -4952,6 +5433,186 @@ func TestMessageProcessor_ProcessMessage_SkipsRunnerCompletion(t *testing.T) {
 				assert.Equal(t, []byte(`"completed"`), decoded["graph_state"])
 			}
 		}
+	})
+
+	t.Run("runner_completion_with_blocked_state_delta_stays_hidden", func(t *testing.T) {
+		var convertCallCount int
+		processor := &messageProcessor{
+			debugLogging: false,
+			responseRewriter: ResponseRewriterFuncs{
+				Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+					msg, ok := result.(*protocol.Message)
+					if !ok {
+						return result
+					}
+					delete(msg.Metadata, ia2a.MessageMetadataStateDeltaKey)
+					return msg
+				},
+			},
+			runner: &mockRunner{
+				runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+					ch := make(chan *event.Event, 2)
+					ch <- &event.Event{
+						Response: &model.Response{
+							Object:  "chat.completion",
+							Done:    true,
+							Choices: []model.Choice{{Message: model.Message{Content: "answer"}}},
+						},
+					}
+					ch <- &event.Event{
+						Response: &model.Response{
+							Object: model.ObjectTypeRunnerCompletion,
+							Done:   true,
+						},
+						StateDelta: map[string][]byte{
+							"graph_state": []byte(`"completed"`),
+						},
+					}
+					close(ch)
+					return ch, nil
+				},
+			},
+			a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+			eventToA2AConverter: &mockEventToA2AConverter{
+				convertToA2AMessageFunc: func(ctx context.Context, evt *event.Event, options EventToA2AUnaryOptions) (protocol.UnaryMessageResult, error) {
+					convertCallCount++
+					return &protocol.Message{
+						Role:  protocol.MessageRoleAgent,
+						Parts: []protocol.Part{protocol.NewTextPart(evt.Response.Choices[0].Message.Content)},
+					}, nil
+				},
+			},
+			errorHandler: defaultErrorHandler,
+		}
+
+		result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotNil(t, result.Result)
+
+		assert.Equal(t, 1, convertCallCount, "rewritten state_delta should not re-expose runner.completion")
+
+		resultMsg, ok := result.Result.(*protocol.Message)
+		if assert.True(t, ok, "Expected *protocol.Message, got %T", result.Result) {
+			assert.NotEmpty(t, resultMsg.Parts)
+			assert.Equal(t, "answer", resultMsg.Parts[0].(protocol.TextPart).Text)
+			assert.Nil(t, resultMsg.Metadata)
+		}
+	})
+
+	t.Run("default_converter_response_rewriter_runs_once", func(t *testing.T) {
+		rewriteCallCount := 0
+		processor := &messageProcessor{
+			debugLogging: false,
+			responseRewriter: ResponseRewriterFuncs{
+				Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+					rewriteCallCount++
+					msg, ok := result.(*protocol.Message)
+					if !ok {
+						return result
+					}
+					msg.Metadata["rewrite_call_count"] = rewriteCallCount
+					return msg
+				},
+			},
+			runner: &mockRunner{
+				runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+					ch := make(chan *event.Event, 1)
+					ch <- &event.Event{
+						Response: &model.Response{
+							ID:      "resp-filter-once",
+							Object:  "graph.execution",
+							Choices: []model.Choice{{Message: model.Message{}}},
+						},
+						StateDelta: map[string][]byte{
+							"business_result": []byte(`"ok"`),
+						},
+					}
+					close(ch)
+					return ch, nil
+				},
+			},
+			a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+			eventToA2AConverter: &defaultEventToA2AMessage{
+				graphEventObjectAllowlist: []string{"graph.*"},
+			},
+			errorHandler: defaultErrorHandler,
+		}
+
+		result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+		assert.NoError(t, err)
+		resultMsg, ok := result.Result.(*protocol.Message)
+		if !assert.True(t, ok, "Expected *protocol.Message, got %T", result.Result) {
+			return
+		}
+		assert.Equal(t, 1, rewriteCallCount)
+		assert.Equal(t, 1, resultMsg.Metadata["rewrite_call_count"])
+	})
+
+	t.Run("custom_converter_output_uses_response_rewriter", func(t *testing.T) {
+		processor := &messageProcessor{
+			debugLogging: false,
+			responseRewriter: ResponseRewriterFuncs{
+				Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+					msg, ok := result.(*protocol.Message)
+					if !ok {
+						return result
+					}
+					raw, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]
+					if !ok {
+						return msg
+					}
+					stateDelta := DecodeStateDeltaMetadata(raw)
+					delete(stateDelta, "debug_trace")
+					msg.Metadata[ia2a.MessageMetadataStateDeltaKey] = EncodeStateDeltaMetadata(stateDelta)
+					return msg
+				},
+			},
+			runner: &mockRunner{
+				runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+					ch := make(chan *event.Event, 1)
+					ch <- &event.Event{
+						Response: &model.Response{
+							Object:  "chat.completion",
+							Done:    true,
+							Choices: []model.Choice{{Message: model.Message{Content: "answer"}}},
+						},
+					}
+					close(ch)
+					return ch, nil
+				},
+			},
+			a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+			eventToA2AConverter: &mockEventToA2AConverter{
+				convertToA2AMessageFunc: func(ctx context.Context, evt *event.Event, options EventToA2AUnaryOptions) (protocol.UnaryMessageResult, error) {
+					return &protocol.Message{
+						Role:  protocol.MessageRoleAgent,
+						Parts: []protocol.Part{protocol.NewTextPart("answer")},
+						Metadata: map[string]any{
+							ia2a.MessageMetadataStateDeltaKey: EncodeStateDeltaMetadata(map[string][]byte{
+								"business_result": []byte(`"ok"`),
+								"debug_trace":     []byte(`"drop-me"`),
+							}),
+						},
+					}, nil
+				},
+			},
+			errorHandler: defaultErrorHandler,
+		}
+
+		result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+		assert.NoError(t, err)
+		resultMsg, ok := result.Result.(*protocol.Message)
+		if !assert.True(t, ok, "Expected *protocol.Message, got %T", result.Result) {
+			return
+		}
+		rawStateDelta, ok := resultMsg.Metadata[ia2a.MessageMetadataStateDeltaKey]
+		if !assert.True(t, ok, "expected state_delta metadata on result message") {
+			return
+		}
+		decoded := DecodeStateDeltaMetadata(rawStateDelta)
+		assert.Contains(t, decoded, "business_result")
+		assert.NotContains(t, decoded, "debug_trace")
 	})
 }
 
