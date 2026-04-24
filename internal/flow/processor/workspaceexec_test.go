@@ -55,7 +55,7 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_NoSkillsRepo(
 	sys := req.Messages[0].Content
 	require.Contains(t, sys, workspaceExecGuidanceHeader)
 	require.Contains(t, sys, "default general shell runner")
-	require.Contains(t, sys, "workspace is its scope, not its capability limit")
+	require.Contains(t, sys, "workspace is their scope, not their capability limit")
 	require.Contains(t, sys, "Prefer work/, out/, and runs/")
 	require.Contains(t, sys, "staged automatically under work/inputs")
 	require.Contains(t, sys, "Network access depends on the current executor environment")
@@ -97,7 +97,7 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_InteractiveWithSkillsRepo(
 	require.Contains(t, sys, "base")
 	require.Contains(t, sys, workspaceExecGuidanceHeader)
 	require.Contains(t, sys, "default general shell runner")
-	require.Contains(t, sys, "workspace is its scope, not its capability limit")
+	require.Contains(t, sys, "workspace is their scope, not their capability limit")
 	require.Contains(t, sys, "staged automatically under work/inputs")
 	require.Contains(t, sys, "Network access depends on the current executor environment")
 	require.Contains(t, sys, "verify first before claiming the limitation")
@@ -176,6 +176,99 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_DisabledByResolver(
 			func(*agent.Invocation) bool {
 				return false
 			},
+		),
+	)
+	req := &model.Request{}
+
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{AgentName: "tester"},
+		req,
+		nil,
+	)
+
+	require.Empty(t, req.Messages)
+}
+
+func TestWorkspaceExecRequestProcessor_FileToolsOnly_EmitsFileToolGuidance(
+	t *testing.T,
+) {
+	// File-tools-only mode: exec disabled, filetools enabled. The
+	// processor must still emit a guidance block that names the
+	// workspace file tools so the model knows they exist. Without
+	// this, the filetools surface ships silently and the model
+	// falls back to shell-style reasoning it does not actually have.
+	p := NewWorkspaceExecRequestProcessor(
+		WithWorkspaceExecEnabledResolver(
+			func(*agent.Invocation) bool { return false },
+		),
+		WithWorkspaceFileToolsEnabledResolver(
+			func(*agent.Invocation) bool { return true },
+		),
+	)
+	req := &model.Request{}
+
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{AgentName: "tester"},
+		req,
+		nil,
+	)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, workspaceExecGuidanceHeader)
+	require.Contains(t, sys, "workspace_read_file")
+	require.Contains(t, sys, "workspace_list_dir")
+	require.Contains(t, sys, "workspace_search_file")
+	require.Contains(t, sys, "workspace_search_content")
+	require.Contains(t, sys, "workspace_write_file")
+	require.Contains(t, sys, "workspace_replace_content")
+	require.Contains(t, sys, "work/inputs/**")
+	require.Contains(t, sys, "files_partial")
+	// No exec-only phrases should leak in.
+	require.NotContains(t, sys, "default general shell runner")
+	require.NotContains(t, sys, "Network access depends on the current executor environment")
+	require.NotContains(t, sys, "workspace_save_artifact")
+}
+
+func TestWorkspaceExecRequestProcessor_ExecAndFileToolsCombined(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor(
+		WithWorkspaceFileToolsEnabledResolver(
+			func(*agent.Invocation) bool { return true },
+		),
+	)
+	req := &model.Request{}
+
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{AgentName: "tester"},
+		req,
+		nil,
+	)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, "default general shell runner")
+	require.Contains(t, sys, "Prefer the dedicated workspace file tools")
+	require.Contains(t, sys, "workspace_read_file")
+	require.Contains(t, sys, "workspace_replace_content")
+}
+
+func TestWorkspaceExecRequestProcessor_ProcessRequest_DisabledWhenAllOff(
+	t *testing.T,
+) {
+	// Both resolvers report false: the processor should stay silent
+	// instead of emitting workspace guidance for a surface the model
+	// cannot actually use.
+	p := NewWorkspaceExecRequestProcessor(
+		WithWorkspaceExecEnabledResolver(
+			func(*agent.Invocation) bool { return false },
+		),
+		WithWorkspaceFileToolsEnabledResolver(
+			func(*agent.Invocation) bool { return false },
 		),
 	)
 	req := &model.Request{}

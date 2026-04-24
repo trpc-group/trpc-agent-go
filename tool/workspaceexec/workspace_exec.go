@@ -54,6 +54,12 @@ type ExecTool struct {
 	reconciler             workspaceprep.Reconciler
 	conversationFilesWired bool
 
+	// bootstrapFileTargets lists the workspace-relative Target paths
+	// declared by every WithWorkspaceBootstrap call. File tools read
+	// this set to reject writes that would collide with declarative
+	// bootstrap outputs managed by the reconciler.
+	bootstrapFileTargets []string
+
 	mu       sync.Mutex
 	sessions map[string]*execSession
 	ttl      time.Duration
@@ -202,6 +208,7 @@ func WithWorkspaceBootstrap(
 	}
 	return func(t *ExecTool) {
 		t.addPreparer(provider)
+		t.registerBootstrapFileTargets(spec)
 	}
 }
 

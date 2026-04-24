@@ -293,6 +293,25 @@ func TestWithWorkspaceExecSurfaceEnabled(t *testing.T) {
 	require.False(t, *b.option.workspaceExecSurfaceEnabled)
 }
 
+func TestWithWorkspaceFileToolsEnabled(t *testing.T) {
+	// Default is opt-out: no file tools unless the caller asks.
+	a := New("test-agent")
+	require.Nil(t, a.option.workspaceFileToolsEnabled)
+	require.False(t, workspaceFileToolsEnabled(&a.option))
+
+	// Explicit true stores *bool(true).
+	b := New("test-agent", WithWorkspaceFileToolsEnabled(true))
+	require.NotNil(t, b.option.workspaceFileToolsEnabled)
+	require.True(t, *b.option.workspaceFileToolsEnabled)
+	require.True(t, workspaceFileToolsEnabled(&b.option))
+
+	// Explicit false stores *bool(false); the helper must respect it.
+	c := New("test-agent", WithWorkspaceFileToolsEnabled(false))
+	require.NotNil(t, c.option.workspaceFileToolsEnabled)
+	require.False(t, *c.option.workspaceFileToolsEnabled)
+	require.False(t, workspaceFileToolsEnabled(&c.option))
+}
+
 func TestWithSkillsCapabilityGuidance(t *testing.T) {
 	a := New("test-agent")
 	require.Nil(t, a.option.skillsCapabilityGuidance)

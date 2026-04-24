@@ -332,6 +332,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithWorkspaceExecSessionsResolver(
 			a.supportsWorkspaceExecSessionsForInvocation,
 		),
+		processor.WithWorkspaceFileToolsEnabledResolver(
+			a.supportsWorkspaceFileToolsForInvocation,
+		),
 		processor.WithWorkspaceExecSkillsRepositoryResolver(
 			a.skillRepositoryForInvocation,
 		),
@@ -613,7 +616,8 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 			workspaceRegistry = buildWorkspaceRegistry()
 		}
 		runTool = buildSkillRunTool(options, workspaceRegistry)
-	} else if executorSupportsWorkspaceExec(options) {
+	} else if executorSupportsWorkspaceExec(options) ||
+		executorSupportsWorkspaceFileTools(options) {
 		workspaceRegistry = buildWorkspaceRegistry()
 	}
 	allTools = appendWorkspaceExecTool(
@@ -862,6 +866,7 @@ func appendWorkspaceExecTool(
 		exec,
 		executorSupportsWorkspaceExec(options),
 		executorSupportsWorkspaceExecSessions(options),
+		executorSupportsWorkspaceFileTools(options),
 		reg,
 		inv,
 		options,
@@ -884,12 +889,13 @@ func appendWorkspaceExecToolWithExecutor(
 	exec codeexecutor.CodeExecutor,
 	enabled bool,
 	sessional bool,
+	fileToolsEnabled bool,
 	reg *codeexecutor.WorkspaceRegistry,
 	inv *agent.Invocation,
 	options *Options,
 	loadedSkillsRepo skill.Repository,
 ) []tool.Tool {
-	if !enabled {
+	if !enabled && !fileToolsEnabled {
 		return allTools
 	}
 	toolOpts := []func(*toolworkspaceexec.ExecTool){
@@ -900,21 +906,29 @@ func appendWorkspaceExecToolWithExecutor(
 		workspacePrepOptions(options, loadedSkillsRepo)...,
 	)
 	execTool := toolworkspaceexec.NewExecTool(exec, toolOpts...)
-	allTools = append(
-		allTools,
-		execTool,
-	)
-	if toolworkspaceexec.SupportsArtifactSave(inv) {
-		allTools = append(
-			allTools,
-			toolworkspaceexec.NewSaveArtifactTool(execTool),
-		)
+	if enabled {
+		allTools = append(allTools, execTool)
+		if toolworkspaceexec.SupportsArtifactSave(inv) {
+			allTools = append(
+				allTools,
+				toolworkspaceexec.NewSaveArtifactTool(execTool),
+			)
+		}
+		if sessional {
+			allTools = append(
+				allTools,
+				toolworkspaceexec.NewWriteStdinTool(execTool),
+				toolworkspaceexec.NewKillSessionTool(execTool),
+			)
+		}
 	}
-	if sessional {
+	if fileToolsEnabled {
 		allTools = append(
 			allTools,
-			toolworkspaceexec.NewWriteStdinTool(execTool),
-			toolworkspaceexec.NewKillSessionTool(execTool),
+			toolworkspaceexec.NewFileTools(
+				execTool,
+				toolworkspaceexec.FileToolsOptions{},
+			)...,
 		)
 	}
 	return allTools
@@ -1109,6 +1123,29 @@ func workspaceExecSurfaceEnabled(options *Options) bool {
 		return true
 	}
 	return *options.workspaceExecSurfaceEnabled
+}
+
+// workspaceFileToolsEnabled reports whether the caller has opted in
+// to the workspace file-tool surface. Unlike workspaceExecSurface
+// Enabled, the default is false: file tools must be explicitly
+// requested so the model surface does not change for existing
+// callers when they pick up this package.
+func workspaceFileToolsEnabled(options *Options) bool {
+	if options == nil || options.workspaceFileToolsEnabled == nil {
+		return false
+	}
+	return *options.workspaceFileToolsEnabled
+}
+
+// executorSupportsWorkspaceFileTools mirrors
+// executorSupportsWorkspaceExec for the file-tool surface: the tools
+// require the same live-engine-backed executor, plus the explicit
+// opt-in described on WithWorkspaceFileToolsEnabled.
+func executorSupportsWorkspaceFileTools(options *Options) bool {
+	if !workspaceFileToolsEnabled(options) {
+		return false
+	}
+	return codeExecutorSupportsWorkspaceExec(options.codeExecutor)
 }
 
 func codeExecutorSupportsWorkspaceExecSessions(
