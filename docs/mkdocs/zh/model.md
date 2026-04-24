@@ -205,7 +205,11 @@ type GenerationConfig struct {
     // 存在惩罚
     PresencePenalty *float64 `json:"presence_penalty,omitempty"`
 
-    // 推理努力程度 ("low", "medium", "high")
+    // 推理努力程度。可选值取决于服务方：
+    //   - OpenAI o-series："low"、"medium"、"high"
+    //   - DeepSeek v4（deepseek-v4-pro / deepseek-v4-flash）："high"、"max"
+    //     （服务端为兼容旧配置，会把 "low"/"medium" 映射为 "high"，
+    //     "xhigh" 映射为 "max"）
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
     // 是否启用思考模式
