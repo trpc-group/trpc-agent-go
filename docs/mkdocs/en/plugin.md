@@ -204,23 +204,24 @@ Some “after” hooks can override:
 - **AfterModel** can return a custom response to replace the model response.
 - **AfterTool** can return a custom result to replace the tool result.
 
-!!! note "Caveats for multi-agent (ChainAgent, ParallelAgent, CycleAgent, Graph agent-nodes)"
-    `BeforeAgent` / `AfterAgent` fire **once per sub-agent invocation**, not
-    just once for the root Runner run. A hook that assumes "one call per
-    turn" must look at `args.Invocation.Agent` (or `AgentName`) to
-    disambiguate.
-
-    `BeforeAgent.CustomResponse` **short-circuits the sub-agent entirely**:
-    the sub-agent's `Run` is not called, and sub-agent-emitted terminal
-    state (e.g. a graph `GraphCompletionEvent` used to populate
-    `SubgraphResult.FinalState` in an agent-node) is NOT emitted. Custom
-    `outputMapper` implementations must tolerate a nil `FinalState` when
-    short-circuit is possible.
-
-    `AfterAgent.CustomResponse` **appends** a final response event. In a
-    graph agent-node, the appended response becomes the new
-    `StateKeyLastResponse` seen by downstream nodes. Use intentionally when
-    you want runner-scoped plugins to override sub-agent output.
+> **Caveats for multi-agent (ChainAgent, ParallelAgent, CycleAgent, Graph agent-nodes)**
+>
+> `BeforeAgent` / `AfterAgent` fire **once per sub-agent invocation**, not
+> just once for the root Runner run. A hook that assumes "one call per
+> turn" must look at `args.Invocation.Agent` (or `AgentName`) to
+> disambiguate.
+>
+> `BeforeAgent.CustomResponse` **short-circuits the sub-agent entirely**:
+> the sub-agent's `Run` is not called, and sub-agent-emitted terminal
+> state (e.g. a graph `GraphCompletionEvent` used to populate
+> `SubgraphResult.FinalState` in an agent-node) is NOT emitted. Custom
+> `outputMapper` implementations must tolerate a nil `FinalState` when
+> short-circuit is possible.
+>
+> `AfterAgent.CustomResponse` **appends** a final response event. In a
+> graph agent-node, the appended response becomes the new
+> `StateKeyLastResponse` seen by downstream nodes. Use intentionally when
+> you want runner-scoped plugins to override sub-agent output.
 
 ### Error handling
 

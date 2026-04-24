@@ -590,20 +590,21 @@ defer sessionService.Close()
 
 - **`WithEnableTracing(enable bool)`**：启用 OpenTelemetry 链路追踪。默认值为 `false`。启用后，`CreateSession`、`GetSession`、`AppendEvent`、`DeleteSession`、`AppendTrackEvent`、`CreateSessionSummary`、`GetSessionSummaryText` 等操作会自动创建 span。
 
-!!! note "关于 Root Span"
-    Session 的操作由 Runner 执行，发生在 Agent 的 `Run()` 调用前后。而 Agent 的 root span 是在 `agent.Run()` 内部创建的，Session span 不会自动挂载到 Agent span 下。因此，如果需要在 Langfuse 等可观测平台中看到完整的 Session span 链路，需要在调用 `runner.Run()` 之前手动创建一个 root span：
-
-    ```go
-    import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
-
-    // Create a root span before runner.Run(), so that session spans
-    // (create_session, get_session, append_event, etc.) become children
-    // of this root span via context propagation.
-    ctx, span := atrace.Tracer.Start(ctx, "my_request")
-    defer span.End()
-
-    eventChan, err := r.Run(ctx, userID, sessionID, message)
-    ```
+> **关于 Root Span**
+>
+> Session 的操作由 Runner 执行，发生在 Agent 的 `Run()` 调用前后。而 Agent 的 root span 是在 `agent.Run()` 内部创建的，Session span 不会自动挂载到 Agent span 下。因此，如果需要在 Langfuse 等可观测平台中看到完整的 Session span 链路，需要在调用 `runner.Run()` 之前手动创建一个 root span：
+>
+> ```go
+> import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+>
+> // Create a root span before runner.Run(), so that session spans
+> // (create_session, get_session, append_event, etc.) become children
+> // of this root span via context propagation.
+> ctx, span := atrace.Tracer.Start(ctx, "my_request")
+> defer span.End()
+>
+> eventChan, err := r.Run(ctx, userID, sessionID, message)
+> ```
 
 **Hook 配置：**
 
@@ -697,8 +698,9 @@ sessionService, err := redis.NewService(
 - 异步写入超时时间为 2 秒（`defaultAsyncPersistTimeout`）。
 - 调用 `Close()` 时会关闭所有 channel 并等待 worker 完成剩余任务。
 
-!!! warning "注意"
-异步持久化模式下，如果服务进程异常退出，channel 中尚未消费的事件可能会丢失。请根据业务对数据一致性的要求评估是否启用。
+> **注意**
+>
+> 异步持久化模式下，如果服务进程异常退出，channel 中尚未消费的事件可能会丢失。请根据业务对数据一致性的要求评估是否启用。
 
 ### 存储方式与版本迁移
 
@@ -710,11 +712,12 @@ Redis Session 存储有两种数据存储引擎，内部通过 `ServiceMeta` 中
 | **ZSet**    | 旧版（legacy）   | `{appName}` | 所有用户数据集中在同一 Cluster slot，大规模下有热点风险。数据结构简单，Event 直接存储完整 JSON 在 SortedSet 中。                                |
 | **HashIdx** | **新版（默认）** | `{userID}`  | 按用户散列，消除热点；数据与索引分离（Hash 存数据 + ZSet 存索引），ZSet 中只存 eventID 避免内存膨胀；Session 元数据独立存储，支持更灵活的查询。 |
 
-* !!! info "如何区分新旧模式"
-    - **HashIdx 是新模式**：Session 相关 key 以 `hashidx:` 为前缀，使用 `{userID}` 作为 hash tag，按用户维度散列到不同的 Redis Cluster slot。
-    - **ZSet 是旧模式**：Session 相关 key 使用 `{appName}` 作为 hash tag，同一应用的所有用户数据集中在同一个 slot。
-    - **AppState 是例外**：`appstate:{appName}` 在两种模式下格式完全一致（没有 `hashidx:` 前缀），因此 AppState 不受存储版本迁移影响，零迁移成本。
-    - 新创建的 session 在 `CompatModeLegacy`（默认）和 `CompatModeNone` 模式下使用 HashIdx 存储。
+> **如何区分新旧模式**
+>
+> - **HashIdx 是新模式**：Session 相关 key 以 `hashidx:` 为前缀，使用 `{userID}` 作为 hash tag，按用户维度散列到不同的 Redis Cluster slot。
+> - **ZSet 是旧模式**：Session 相关 key 使用 `{appName}` 作为 hash tag，同一应用的所有用户数据集中在同一个 slot。
+> - **AppState 是例外**：`appstate:{appName}` 在两种模式下格式完全一致（没有 `hashidx:` 前缀），因此 AppState 不受存储版本迁移影响，零迁移成本。
+> - 新创建的 session 在 `CompatModeLegacy`（默认）和 `CompatModeNone` 模式下使用 HashIdx 存储。
 
 新版本通过 **CompatMode**（兼容模式）实现从旧存储方式到新存储方式的平滑迁移，无需停服。
 
@@ -750,8 +753,9 @@ sessionService, err := redis.NewService(
 )
 ```
 
-!!! tip "何时需要阶段 1"
-    只有在**灰度发布或新旧版本混合部署**场景下才需要使用 `CompatModeTransition`。如果能够一次性将所有实例升级到新版本（例如全量发布），可以跳过阶段 1，直接使用默认的 `CompatModeLegacy` 即可。
+> **何时需要阶段 1**
+>
+> 只有在**灰度发布或新旧版本混合部署**场景下才需要使用 `CompatModeTransition`。如果能够一次性将所有实例升级到新版本（例如全量发布），可以跳过阶段 1，直接使用默认的 `CompatModeLegacy` 即可。
 
 **UserState 注意事项：** 新旧存储方式的 UserState 使用了**不同的 Redis Key**（旧：`userstate:{appName}:{userID}`，新：`hashidx:userstate:appName:{userID}`）。升级到新版本后，通过 HashIdx 创建的新 session 在合并 UserState 时**只会读取新 key**，无法读到旧 key 中的数据。
 
@@ -771,8 +775,9 @@ sessionService, err := redis.NewService(
 )
 ```
 
-!!! warning "注意"
-    此处的兼容问题仅发生在**多节点部署且同一用户的请求可能被分发到新旧版本 Session Service 实例**的场景下。如果是单节点部署，或者能通过路由策略保证同一用户始终命中同一版本实例，则无需关注此限制。
+> **注意**
+>
+> 此处的兼容问题仅发生在**多节点部署且同一用户的请求可能被分发到新旧版本 Session Service 实例**的场景下。如果是单节点部署，或者能通过路由策略保证同一用户始终命中同一版本实例，则无需关注此限制。
 
 **阶段 3：清理完成**
 
@@ -1964,25 +1969,26 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - **`WithTokenThreshold(tokenCount int)`**：当自上次摘要后的 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在自上次摘要后新增 4000 个 token 后触发。
 - **`WithTimeThreshold(interval time.Duration)`**：在执行摘要检查时进行判断；它包装的是 `CheckTimeThreshold`，语义上比较“被检查 session 的最后一个事件”是否已超过该间隔。在默认增量摘要路径里，这通常等价于最近一个待摘要事件。它不是后台定时器。示例：`WithTimeThreshold(5*time.Minute)` 的含义是：“到下一次摘要检查时，如果被检查 session 的最后一个事件已经超过 5 分钟，就立即生成摘要。”
 
-!!! note "Context Window 注册"
-    `WithContextThreshold` 和 Token Tailoring 都依赖框架内置的模型 context window 注册表。注册表已包含大量常见模型（OpenAI、Anthropic、Google、DeepSeek、Qwen 等），但不一定覆盖所有模型——特别是私有部署、微调变体或较新发布的模型。如果你的模型未被识别（context window 解析为 0 或回退到默认值），请在启动时手动注册：
-
-    ```go
-    import "trpc.group/trpc-go/trpc-agent-go/model"
-
-    func init() {
-        // 注册单个模型
-        model.RegisterModelContextWindow("my-custom-model", 32768)
-
-        // 或批量注册多个模型
-        model.RegisterModelContextWindows(map[string]int{
-            "my-custom-model-32k":  32768,
-            "my-custom-model-128k": 131072,
-        })
-    }
-    ```
-
-    模型名匹配不区分大小写，注册表也支持前缀匹配（例如注册 `"my-model"` 会匹配 `"my-model-v2"`）。
+> **Context Window 注册**
+>
+> `WithContextThreshold` 和 Token Tailoring 都依赖框架内置的模型 context window 注册表。注册表已包含大量常见模型（OpenAI、Anthropic、Google、DeepSeek、Qwen 等），但不一定覆盖所有模型——特别是私有部署、微调变体或较新发布的模型。如果你的模型未被识别（context window 解析为 0 或回退到默认值），请在启动时手动注册：
+>
+> ```go
+> import "trpc.group/trpc-go/trpc-agent-go/model"
+>
+> func init() {
+>     // 注册单个模型
+>     model.RegisterModelContextWindow("my-custom-model", 32768)
+>
+>     // 或批量注册多个模型
+>     model.RegisterModelContextWindows(map[string]int{
+>         "my-custom-model-32k":  32768,
+>         "my-custom-model-128k": 131072,
+>     })
+> }
+> ```
+>
+> 模型名匹配不区分大小写，注册表也支持前缀匹配（例如注册 `"my-model"` 会匹配 `"my-model-v2"`）。
 
 **组合条件：**
 
