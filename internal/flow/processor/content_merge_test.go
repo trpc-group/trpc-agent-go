@@ -150,8 +150,8 @@ func Test_rearrangeLatestFuncResp_MergesBetweenCallAndLatest(t *testing.T) {
 	assert.Len(t, out, 2)
 	assert.True(t, out[0].IsToolCallResponse(), "first should remain the tool call")
 	assert.True(t, out[1].IsToolResultResponse(), "second should be merged tool result")
-	assert.ElementsMatch(t, []string{"b"}, out[1].GetToolResultIDs())
-	assert.Len(t, out[1].Response.Choices, 1, "merged choices should contain latest event results only")
+	assert.ElementsMatch(t, []string{"a", "b"}, out[1].GetToolResultIDs())
+	assert.Len(t, out[1].Response.Choices, 2, "merged choices should contain all matched results from the tool-call round")
 }
 
 func Test_rearrangeLatestFuncResp_NoMatchingCall_ReturnsOriginal(t *testing.T) {
