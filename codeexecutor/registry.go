@@ -11,66 +11,88 @@ package codeexecutor
 
 import (
 	"context"
-	"fmt"
 	"sync"
-
-	"golang.org/x/sync/singleflight"
 )
 
 // WorkspaceRegistry keeps a process-level mapping of logical IDs to
 // created workspaces for reuse within a session.
 type WorkspaceRegistry struct {
-	mu   sync.Mutex
-	byID map[string]Workspace
-	sf   singleflight.Group
+	mu       sync.Mutex
+	byID     map[string]Workspace
+	inflight map[string]*workspaceCreateCall
+}
+
+type workspaceCreateCall struct {
+	done chan struct{}
+	ws   Workspace
+	err  error
 }
 
 // NewWorkspaceRegistry creates a new in-memory registry.
 func NewWorkspaceRegistry() *WorkspaceRegistry {
-	return &WorkspaceRegistry{byID: map[string]Workspace{}}
+	return &WorkspaceRegistry{
+		byID:     map[string]Workspace{},
+		inflight: map[string]*workspaceCreateCall{},
+	}
 }
 
 // Acquire creates or returns an existing workspace with the given id.
 // Concurrent first-time acquires for the same id coalesce to a single
-// CreateWorkspace via singleflight so init hooks and workspace creation run
-// at most once per id.
+// CreateWorkspace so init hooks and workspace creation run at most once per id.
 func (r *WorkspaceRegistry) Acquire(
 	ctx context.Context, m WorkspaceManager, id string,
 ) (Workspace, error) {
-	createCtx := context.WithoutCancel(ctx)
-	ch := r.sf.DoChan(id, func() (interface{}, error) {
-		r.mu.Lock()
-		if ws, ok := r.byID[id]; ok {
-			r.mu.Unlock()
-			return ws, nil
-		}
-		r.mu.Unlock()
-
-		ws, err := m.CreateWorkspace(createCtx, id, WorkspacePolicy{})
-		if err != nil {
-			return nil, err
-		}
-
-		r.mu.Lock()
-		r.byID[id] = ws
+	r.mu.Lock()
+	if ws, ok := r.byID[id]; ok {
 		r.mu.Unlock()
 		return ws, nil
-	})
+	}
+	if call, ok := r.inflight[id]; ok {
+		r.mu.Unlock()
+		return waitWorkspaceCreate(ctx, call)
+	}
+	if r.inflight == nil {
+		r.inflight = map[string]*workspaceCreateCall{}
+	}
+	call := &workspaceCreateCall{done: make(chan struct{})}
+	r.inflight[id] = call
+	createCtx := context.WithoutCancel(ctx)
+	r.mu.Unlock()
 
+	go r.createWorkspace(createCtx, m, id, call)
+	return waitWorkspaceCreate(ctx, call)
+}
+
+func (r *WorkspaceRegistry) createWorkspace(
+	ctx context.Context,
+	m WorkspaceManager,
+	id string,
+	call *workspaceCreateCall,
+) {
+	ws, err := m.CreateWorkspace(ctx, id, WorkspacePolicy{})
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err == nil {
+		if r.byID == nil {
+			r.byID = map[string]Workspace{}
+		}
+		r.byID[id] = ws
+	}
+	call.ws = ws
+	call.err = err
+	delete(r.inflight, id)
+	close(call.done)
+}
+
+func waitWorkspaceCreate(ctx context.Context, call *workspaceCreateCall) (Workspace, error) {
 	select {
 	case <-ctx.Done():
 		return Workspace{}, ctx.Err()
-	case res := <-ch:
-		if res.Err != nil {
-			return Workspace{}, res.Err
+	case <-call.done:
+		if call.err != nil {
+			return Workspace{}, call.err
 		}
-		ws, ok := res.Val.(Workspace)
-		if !ok {
-			return Workspace{}, fmt.Errorf(
-				"workspace registry: unexpected Acquire result type %T",
-				res.Val,
-			)
-		}
-		return ws, nil
+		return call.ws, nil
 	}
 }
