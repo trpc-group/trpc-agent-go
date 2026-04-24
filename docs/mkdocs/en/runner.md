@@ -555,6 +555,85 @@ single `invocation.Message` if the session has no events). `RunWithMessages`
 still sets `invocation.Message` to the latest user turn so graph/flow agents
 that inspect it continue to work.
 
+### User Message Rewriting
+
+`agent.WithUserMessageRewriter(...)` rewrites the current-turn user message
+before the run starts. The rewritten result is written into the session as the
+effective input for the current turn and continues to participate in subsequent
+turns. This is useful for adding business context, normalizing user wording, or
+splitting one input into multiple messages that are easier for the model to
+process.
+
+The signature of `UserMessageRewriter` is:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+type UserMessageRewriter func(
+    ctx context.Context,
+    args *UserMessageRewriteArgs,
+) ([]model.Message, error)
+
+type UserMessageRewriteArgs struct {
+    AppName         string
+    UserID          string
+    SessionID       string
+    RequestID       string
+    OriginalMessage model.Message
+}
+```
+
+`OriginalMessage` is the raw user input for the current turn. The other fields
+provide stable identifiers for the current run.
+
+The returned messages are processed in order. The last message becomes
+`invocation.Message`, and any preceding messages are persisted as leading
+messages for the same turn. This allows the interface to support both `1 -> 1`
+rewrites and `1 -> N` expansions. If the same call also passes historical
+messages via `agent.WithMessages(...)`, the rewritten result is written
+together with that history. The rewriter must not return an empty slice; if it
+does, the runner returns an error immediately.
+
+Example:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+func rewriteUserMessage(
+    ctx context.Context,
+    args *agent.UserMessageRewriteArgs,
+) ([]model.Message, error) {
+    raw := strings.TrimSpace(args.OriginalMessage.Content)
+    if raw == "" {
+        return []model.Message{args.OriginalMessage}, nil
+    }
+    if needsContext(raw) {
+        return []model.Message{
+            model.NewUserMessage("Please interpret the following request with the business context below."),
+            model.NewUserMessage(raw),
+        }, nil
+    }
+    return []model.Message{
+        model.NewUserMessage("Please rewrite the following request into a clearer and more complete user message: " + raw),
+    }, nil
+}
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithUserMessageRewriter(rewriteUserMessage),
+)
+```
+
+A complete example is available at [examples/usermessagerewriter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/usermessagerewriter).
+
 ### Override Runtime Surfaces for a Specific Node by `nodeID`
 
 If you need to change one specific node in a `runner.Run(...)` call instead of
@@ -599,8 +678,8 @@ Notes:
 - This option applies only to the current `runner.Run(...)` call and does not change the agent's default configuration.
 - This option only applies to agents that read `RunOptions.CodeExecutor`. If you use a custom agent, make sure its implementation handles this run option.
 - If the agent was created with `llmagent.WithCodeExecutor(...)`, the executor passed here temporarily overrides that default for this run.
-- All capabilities that depend on a code executor use the executor passed here for this run, including `workspace_exec`, `skill_run`, and interactive skill session tools.
-- If you only need to provide an execution environment for `skill_run` and do not want Markdown fenced code blocks in model replies to auto-execute, set `llmagent.WithEnableCodeExecutionResponseProcessor(false)` when creating the agent. See [Skill](./skill.md) for more details.
+- Capabilities that resolve their executor from `RunOptions.CodeExecutor` (for example `workspace_exec`) use the executor passed here for this run.
+- If you do not want Markdown fenced code blocks in model replies to auto-execute, set `llmagent.WithEnableCodeExecutionResponseProcessor(false)` when creating the agent. See [Skill](./skill.md) for more details.
 
 ### ✅ Detecting End-of-Run and Reading Final Output (Graph-friendly)
 

@@ -6,7 +6,7 @@ As conversations grow, maintaining complete event history can consume significan
 
 ## Key Features
 
-- **Auto-trigger**: Automatically generates summaries based on event count, token count, or time thresholds
+- **Auto-trigger**: During summary checks, automatically generates summaries based on event count, token count, or time thresholds
 - **Incremental processing**: Only processes new events since the last summary, avoiding redundant computation
 - **LLM-driven**: Uses any configured LLM model to generate high-quality, context-aware summaries
 - **Non-destructive**: Original events are fully preserved; summaries are stored separately
@@ -34,7 +34,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(
         summary.CheckEventThreshold(20),
         summary.CheckTokenThreshold(4000),
-        summary.CheckTimeThreshold(5*time.Minute),
+        summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
     ),
     summary.WithMaxSummaryWords(200),
 )
@@ -185,7 +185,7 @@ context before calling the session APIs and read the value inside your
 | --- | --- |
 | `WithEventThreshold(eventCount int)` | Trigger when event count since last summary exceeds threshold |
 | `WithTokenThreshold(tokenCount int)` | Trigger when token count since last summary exceeds threshold |
-| `WithTimeThreshold(interval time.Duration)` | Trigger when time since last event exceeds interval |
+| `WithTimeThreshold(interval time.Duration)` | Evaluated during summary checks; wraps `CheckTimeThreshold` and triggers when the checked session's last event is older than the interval |
 
 ### Combined Conditions
 
@@ -323,7 +323,7 @@ type Checker func(sess *session.Session) bool
 | Checker | Description |
 | --- | --- |
 | `CheckEventThreshold(eventCount int)` | Returns true when the number of delta events since the last summary exceeds the threshold |
-| `CheckTimeThreshold(interval time.Duration)` | Returns true when time since last event exceeds interval |
+| `CheckTimeThreshold(interval time.Duration)` | Returns true when the checked session's last event is older than the interval |
 | `CheckTokenThreshold(tokenCount int)` | Returns true when the estimated token count of delta events since the last summary exceeds the threshold (estimated via `TokenCounter` from extracted conversation text, not `event.Response.Usage.TotalTokens`) |
 | `ChecksAll(checks []Checker)` | Combines multiple Checkers; returns true only when all return true (AND) |
 | `ChecksAny(checks []Checker)` | Combines multiple Checkers; returns true when any returns true (OR) |
@@ -541,8 +541,10 @@ The Runner automatically checks trigger conditions after each conversation compl
 
 - Event count exceeds threshold (`WithEventThreshold`)
 - Token count exceeds threshold (`WithTokenThreshold`)
-- Time since last event exceeds interval (`WithTimeThreshold`)
+- On a summary check, the checked session's last event is older than the interval (`WithTimeThreshold`)
 - Custom combined conditions met (`WithChecksAny` / `WithChecksAll`)
+
+`WithTimeThreshold` is not a standalone background timer. The condition is only evaluated when a summary check runs, typically after a conversation turn completes or when you call summary APIs manually. It checks the last event of the session being evaluated; in the Runner's normal delta-summary flow, that session contains only pending events, so this effectively means the latest unsummarized event. For example, `5*time.Minute` means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."
 
 ### Manual Trigger
 
@@ -708,7 +710,7 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 - The current request and the latest `ContextCompactionKeepRecentRequests` completed requests are never affected
 - This cleans up accumulated long tool outputs from earlier conversation turns
 
-**Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, default 8192 tokens):
+**Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, **default 0 / disabled**):
 
 - Applies to **all** tool results including the current request
 - Tool results exceeding this threshold are truncated using head+tail preservation: the beginning and end of the content are kept, with a `[...N characters truncated...]` marker in the middle
@@ -716,9 +718,7 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 
 The two passes have different roles: Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases but protects the current request too.
 
-Additionally:
-
-Pass 2 fires regardless of `EnableContextCompaction`; it only requires `ContextCompactionOversizedToolResultMaxTokens > 0`.
+Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableContextCompaction(true)` is set and (2) `ContextCompactionOversizedToolResultMaxTokens > 0` (recommended opt-in value: `8192`, exposed as the constant `processor.DefaultContextCompactionOversizedToolResultMaxTokens`). This guarantees that `EnableContextCompaction=false` always means "the framework will not modify any tool result".
 
 Additionally:
 
@@ -773,7 +773,7 @@ llmagent.WithMaxHistoryRuns(10)
 - No summary message added
 - Only includes the most recent `MaxHistoryRuns` conversation turns
 - `MaxHistoryRuns=0` means no limit, includes all history
-- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted during request projection; additionally, extremely large tool results in any request (including the current one) will be head+tail truncated whenever `ContextCompactionOversizedToolResultMaxTokens > 0` (this fires even without `EnableContextCompaction`)
+- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted during request projection (Pass 1). If you also explicitly set `WithContextCompactionOversizedToolResultMaxTokens(8192)` (or another positive value), extremely large tool results in any request (including the current one) will be head+tail truncated (Pass 2). Both passes require the `EnableContextCompaction=true` master switch.
 - The pre-LLM synchronous summary retry is disabled in this mode
 
 **Context structure**:
@@ -800,7 +800,7 @@ llmagent.WithMaxHistoryRuns(10)
 
 If your long sessions frequently contain large tool outputs such as search results, logs, or code scan output, enable `EnableContextCompaction=true`. Pair it with `AddSessionSummary=true` when you also want the pre-LLM synchronous summary retry.
 
-> **Tip**: If your agent uses tools like `web_fetch` that can return extremely large results in a single call, `ContextCompactionOversizedToolResultMaxTokens` is particularly valuable — it prevents a single tool result from consuming the entire context window, even when that result belongs to the current (protected) request. It fires independently of `EnableContextCompaction`.
+> **Tip**: If your agent uses tools like `web_fetch` that can return extremely large results in a single call, `ContextCompactionOversizedToolResultMaxTokens` is particularly valuable — it prevents a single tool result from consuming the entire context window, even when that result belongs to the current (protected) request. It is **disabled by default**; opt in by enabling `WithEnableContextCompaction(true)` and passing a positive threshold (recommended: `8192`).
 
 ## Summary Format Customization
 
@@ -969,7 +969,7 @@ func main() {
         summary.WithChecksAny(
             summary.CheckEventThreshold(20),
             summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute),
+            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
         ),
     )
 

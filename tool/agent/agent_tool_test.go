@@ -3433,9 +3433,13 @@ func TestTool_Call_WithParentInvocation_RunError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to run agent")
 
+	// Block until the flush goroutine signals completion. The send happens
+	// after close(req.ACK), which is what unblocks at.Call; under CI load
+	// the goroutine can be descheduled between those two steps, so a
+	// non-blocking check here is racy. The ctx deadline bounds the wait.
 	select {
 	case <-flushed:
-	default:
+	case <-time.After(time.Second):
 		t.Fatalf("expected flush to be triggered")
 	}
 }
@@ -3472,9 +3476,12 @@ func TestTool_Call_WithParentInvocation_FlushesAndCompletes(t *testing.T) {
 	require.True(t, strings.HasPrefix(resStr, "parent-agent/"+a.name+"-"))
 	require.Equal(t, a.seen, resStr)
 
+	// See TestTool_Call_WithParentInvocation_RunError: the non-blocking
+	// select was racy because the helper goroutine may still be between
+	// close(req.ACK) and the send on flushed when at.Call returns.
 	select {
 	case <-flushed:
-	default:
+	case <-time.After(time.Second):
 		t.Fatalf("expected flush to be triggered")
 	}
 }

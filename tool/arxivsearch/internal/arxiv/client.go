@@ -22,7 +22,8 @@ import (
 )
 
 var (
-	baseURL = "https://export.arxiv.org/api/query"
+	baseURL        = "https://export.arxiv.org/api/query"
+	defaultTimeout = 30 * time.Second
 )
 
 // Client arXiv API client
@@ -44,12 +45,38 @@ func NewClient(config ClientConfig) *Client {
 	if config.NumRetries <= 0 {
 		config.NumRetries = 3
 	}
+	base := config.BaseURL
+	if base == "" {
+		base = baseURL
+	}
 
 	return &Client{
-		BaseURL:    baseURL,
+		BaseURL:    base,
 		config:     config,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: resolveHTTPClient(config),
 	}
+}
+
+// HTTPClient returns the underlying *http.Client used for arXiv API requests.
+// Intended for tests/diagnostics; callers must not mutate the returned client.
+func (c *Client) HTTPClient() *http.Client {
+	return c.httpClient
+}
+
+// resolveHTTPClient builds the final *http.Client from config, applying
+// nil fallback and timeout override via shallow copy - the caller's
+// original client is never mutated.
+func resolveHTTPClient(cfg ClientConfig) *http.Client {
+	httpClient := cfg.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: defaultTimeout}
+	}
+	if cfg.Timeout != nil {
+		cloned := *httpClient
+		cloned.Timeout = *cfg.Timeout
+		httpClient = &cloned
+	}
+	return httpClient
 }
 
 // Search arXiv for papers matching the given search criteria

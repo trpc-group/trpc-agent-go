@@ -119,6 +119,9 @@ func run() error {
 		llmagent.WithInstruction(instructionText),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithSkills(repo),
+		// This demo drives skill_run, which lives in the full skill
+		// tool profile. The default knowledge_only profile omits it.
+		llmagent.WithSkillToolProfile(llmagent.SkillToolProfileFull),
 		llmagent.WithCodeExecutor(exec),
 		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithTools([]tool.Tool{&setOutputSchemaTool{}}),

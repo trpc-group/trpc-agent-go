@@ -1,23 +1,31 @@
-# Agent Skills: Interactive skill_run Example
+# Agent Skills Chat Demo
 
-This example demonstrates an end-to-end interactive chat using `Runner`
-and `LLMAgent` with Agent Skills. The assistant streams content, shows
-tool calls and tool responses, and executes skill scripts via the
-`skill_run` tool without inlining script bodies.
+> The folder name `skillrun` is a historical artifact. This example
+> now uses the recommended Agent Skills execution path
+> (`skill_load` + `workspace_exec`, plus `workspace_save_artifact` for
+> persisting outputs). For the full reference of how Agent Skills are
+> wired, see [docs/mkdocs/en/skill.md](../../docs/mkdocs/en/skill.md).
+
+An interactive chat built on `runner.Runner` + `llmagent.LLMAgent`
+that:
+
+- Lists / loads skills from a configurable skills root
+- Streams assistant tokens and renders tool calls / tool responses
+- Executes commands inside a per-session, isolated skill workspace
+- Stages user-uploaded files into `work/inputs/` for skill scripts to
+  read
+- Stores output files via the in-memory artifact service when the
+  model calls `workspace_save_artifact`
 
 ## Features
 
 - Interactive chat with streaming or non-streaming modes
 - Agent Skills repository injection and overview
-- `skill_load` to load SKILL.md/doc content on demand
+- On-demand loading of `SKILL.md` / doc content with `skill_load`
+- Script execution in an isolated workspace via `workspace_exec`
+  (writable skill working copy materialized under `skills/<name>/`)
+- Persisting workspace files as artifacts via `workspace_save_artifact`
 - Automatic staging of user-uploaded file inputs into `work/inputs/`
-  when `skill_run` executes
-- `skill_run` to execute commands safely in a workspace, returning
-  stdout/stderr and output files
-  (and optionally saving files as artifacts)
-- This demo sets `llmagent.WithEnableCodeExecutionResponseProcessor(false)`
-  so fenced code blocks in assistant text do not auto-execute; command
-  execution should go through `skill_run`
 - Clear visualization of tool calls and tool responses
 - Example `user-file-ops` skill to summarize user-provided text files
 
@@ -36,17 +44,17 @@ tool calls and tool responses, and executes skill scripts via the
 
 ## Command Line Arguments
 
-| Argument        | Description                        | Default          |
-| --------------- | ---------------------------------- | ---------------- |
-| `-model`        | Name of the model to use           | `deepseek-chat`  |
-| `-stream`       | Stream responses                   | `true`           |
-| `-skills-root`  | Skills repository root directory   | `env or ./skills` |
-| `-skills-guidance` | Include built-in skills tooling/workspace guidance in the system message | `true` |
-| `-executor`     | Workspace executor: local|container | `local`          |
-| `-inputs-host`  | Host dir exposed as `inputs/` inside skill workspaces (local or container) | `` |
-| `-artifacts`    | Save files via artifact service     | `false`          |
-| `-omit-inline`  | Omit inline file contents           | `false`          |
-| `-artifact-prefix` | Artifact filename prefix (e.g., `user:`) | ``     |
+| Argument             | Description                                                                | Default            |
+| -------------------- | -------------------------------------------------------------------------- | ------------------ |
+| `-model`             | Name of the model to use                                                   | `deepseek-chat`    |
+| `-stream`            | Stream responses                                                           | `true`             |
+| `-skills-root`       | Skills repository root directory                                           | `env or ./skills`  |
+| `-skills-guidance`   | Include built-in skills tooling/workspace guidance in the system message   | `true`             |
+| `-send-file-inputs`  | Forward user file content parts to the model provider                      | `false`            |
+| `-executor`          | Workspace executor: `local` or `container`                                 | `local`            |
+| `-trusted-local`     | Local executor: reuse a fixed workspace root (unsafe, opt-in)              | `false`            |
+| `-trusted-root`      | Trusted-local workspace root                                               | `./skill_workspace` |
+| `-inputs-host`       | Host dir exposed as `inputs/` inside skill workspaces                      | ``                 |
 
 ## Usage
 
@@ -64,56 +72,17 @@ won't run commands), disable the built-in guidance:
 go run . -skills-guidance=false
 ```
 
-Workspace paths and env vars:
-- `$SKILLS_DIR/<name>`: read-only staged skill
+Workspace paths and env vars available inside scripts:
+
+- `$SKILLS_DIR/<name>`: writable skill working copy (session-scoped)
 - `$WORK_DIR`: writable shared workspace (use `$WORK_DIR/inputs` for inputs)
 - `$RUN_DIR`: per-run working directory
-- `$OUTPUT_DIR`: unified outputs (collector/artifact saves read from here)
-
-Optional inputs/outputs spec with `skill_run`:
-- Inputs example (map external files into workspace; prefer explicit
-  `@version` for reproducibility):
-
-  ```json
-  {
-    "inputs": [
-      {
-        "from": "artifact://datasets/raw.csv@3",
-        "to": "work/inputs/raw.csv",
-        "mode": "copy"
-      }
-    ]
-  }
-  ```
-
-- Outputs example (collect and save artifacts):
-
-  ```json
-  {
-    "outputs": {
-      "globs": ["$OUTPUT_DIR/**/*.csv"],
-      "inline": false,
-      "save": true,
-      "name_template": "user:",
-      "max_files": 100
-    }
-  }
-  ```
-
-- Legacy path (persist `output_files` via Artifact service):
-
-  ```json
-  {
-    "output_files": ["$OUTPUT_DIR/**"],
-    "omit_inline_content": true,
-    "save_as_artifacts": true,
-    "artifact_prefix": "user:"
-  }
-  ```
+- `$OUTPUT_DIR`: unified outputs directory
 
 Container zero-copy hint:
-- Bind a host folder as the inputs base so `host://` inputs under that
-  folder become symlinks inside the container (no copy):
+
+- Bind a host folder as the inputs base so files under that folder
+  become symlinks inside the container (no copy):
   `-executor container -inputs-host /path/to/datasets`
 - When `-inputs-host` is set (local or container), the host folder is
   also available inside each skill workspace under `work/inputs`
@@ -128,7 +97,7 @@ You can test against the public Anthropics skills repository.
 git clone https://github.com/anthropics/skills \
   "$HOME/src/anthropics-skills"
 
-# 2) Point skillrun at that repo
+# 2) Point the demo at that repo
 export SKILLS_ROOT="$HOME/src/anthropics-skills"
 
 # 3) Run the example (local workspace executor)
@@ -139,24 +108,20 @@ go run . -executor container
 ```
 
 In chat:
+
 - You can ask to "list skills" and pick one (optional).
 - Use natural language to run a command from the skill docs.
 - Example: "Use demo-skill to run the sample build command."
-- If you expect files, mention patterns to collect (for example,
-  `output_files: ["out/**"]` or `output_files: ["$OUTPUT_DIR/**"]`).
-- For production, prefer `save_as_artifacts: true` and
-  `omit_inline_content: true` to store files via the artifact
-  service and reduce payload size.
-- This example wires an in-memory artifact service by default,
-  so `save_as_artifacts` works out of the box.
-- You can also use CLI flags to enable artifact saving without
-  hand-crafting JSON arguments in chat:
-  `-artifacts -omit-inline -artifact-prefix user:`
+- If you want a stable reference to an output file (for hand-off to
+  other tools or to surface back to the user), ask the assistant to
+  call `workspace_save_artifact` on the workspace path.
+- This example wires an in-memory artifact service by default, so
+  `workspace_save_artifact` works out of the box.
 
 ### Use with OpenClaw skills
 
-This repo vendors the upstream OpenClaw skill pack under `openclaw/skills/`.
-You can point this example at it:
+This repo vendors the upstream OpenClaw skill pack under
+`openclaw/skills/`. You can point this example at it:
 
 ```bash
 cd examples/skillrun
@@ -164,17 +129,16 @@ export SKILLS_ROOT="../../openclaw/skills"
 go run .
 ```
 
-List and download saved artifacts:
+## Session Commands
 
 - `/artifacts` lists all artifact keys saved in this session.
-- `/pull <artifact_files.name> [version]` downloads a file to the
-  `downloads/` directory.
+- `/pull <name> [version]` downloads an artifact to `downloads/`.
 - `/upload <path>` attaches a local file as inline bytes.
 - `/upload_id <path>` uploads a file and attaches it by `file_id`.
 - `/upload_artifact <path>` uploads a file to the artifact service and
   attaches it by `artifact://...` `file_id`.
-- By default, this example omits file content parts from requests sent to
-  the model provider (for compatibility). Use `-send-file-inputs` to pass
+- By default, file content parts are omitted from requests sent to the
+  model provider (for compatibility). Use `-send-file-inputs` to pass
   them through if your provider supports file inputs.
 
 ### Examples
@@ -224,8 +188,8 @@ you upload into the conversation, using the `user-file-ops` skill.
    👤 You: /upload /tmp/skillrun-notes.txt
    ```
 
-   If your model provider supports file uploads and you want to attach by
-   provider `file_id`, use:
+   If your model provider supports file uploads and you want to attach
+   by provider `file_id`, use:
 
    ```text
    👤 You: /upload_id /tmp/skillrun-notes.txt
@@ -250,16 +214,16 @@ you upload into the conversation, using the `user-file-ops` skill.
        out/user-notes-summary.txt
      ```
 
+     by calling `workspace_exec` with `cwd: skills/user-file-ops`.
+
    The skill script computes simple statistics (lines, words, bytes)
    and includes the first few non-empty lines of the file in the
    summary.
 
-4. If artifacts are enabled (for example with `-artifacts`), the
-   summary file can be saved as an artifact and then:
-
-   - `/artifacts` will list files such as `out/user-notes-summary.txt`
-   - `/pull out/user-notes-summary.txt` will download it into the
-     local `downloads/` directory.
+5. To pull the summary out of the workspace, ask the assistant to
+   call `workspace_save_artifact` on `out/user-notes-summary.txt`.
+   Then `/artifacts` will list it and `/pull out/user-notes-summary.txt`
+   will download it into the local `downloads/` directory.
 
 ## Tips
 
@@ -267,7 +231,7 @@ you upload into the conversation, using the `user-file-ops` skill.
 - No need to type "load"; the assistant loads skills when needed.
 - Ask to run a command exactly as shown in the skill docs.
 
-## What You’ll See
+## What You'll See
 
 ```
 🚀 Skill Run Chat
@@ -293,15 +257,11 @@ Tips:
 
 👤 You: run the demo-skill build example
 🔧 CallableTool calls initiated:
-   • skill_run (ID: call_def456)
-     Args: {"skill":"demo-skill","command":"bash scripts/build.sh"}
+   • workspace_exec (ID: call_def456)
+     Args: {"command":"bash scripts/build.sh","cwd":"skills/demo-skill"}
 
 🔄 Executing tools...
-✅ CallableTool response (ID: call_def456): {"stdout":"...","output_files":[...]}
-
-# If artifacts were saved, you'll also see:
-   Saved artifacts:
-   - out/report.pptx (v0)
+✅ CallableTool response (ID: call_def456): {"status":"ok","output":"...","exit_code":0}
 
 🤖 Assistant: Build completed. Output: ...
 ```

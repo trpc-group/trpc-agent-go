@@ -234,8 +234,24 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 
 某些 After* 回调支持“覆盖”输出：
 
+- **AfterAgent**：可以返回自定义响应，作为一条额外的“终态”响应事件**追加**到
+  Agent 事件流末尾（不替换之前的事件）。
 - **AfterModel**：可以返回自定义响应，替换模型响应。
 - **AfterTool**：可以返回自定义结果，替换工具结果。
+
+!!! note "多 Agent 场景下的注意事项（ChainAgent、ParallelAgent、CycleAgent、Graph Agent 节点）"
+    `BeforeAgent` / `AfterAgent` 会**为每一个子 Agent invocation 各触发一次**，
+    而不是每个 Runner 执行只触发一次。如果你的 Hook 假设“一次 turn 只调用一次”，
+    请通过 `args.Invocation.Agent`（或 `AgentName`）来区分当前是哪一层。
+
+    `BeforeAgent.CustomResponse` 会**完全短路**子 Agent：`Run` 不会被调用，
+    子 Agent 自己发出的终态事件（例如 Graph Agent 节点依赖的
+    `GraphCompletionEvent`，它负责填充 `SubgraphResult.FinalState`）也**不会**
+    被发出。自定义的 `outputMapper` 需要在 `FinalState` 为 `nil` 时也能正常处理。
+
+    `AfterAgent.CustomResponse` 会**追加**一条终态响应事件。在 Graph Agent 节点
+    里，这条追加的响应会成为下游节点看到的 `StateKeyLastResponse`。如果你就是
+    想让 Runner 作用域插件覆盖子 Agent 输出，请有意识地使用它。
 
 ### 错误处理
 
@@ -793,7 +809,61 @@ defer runnerInstance.Close()
 
 完整示例见 [examples/plugin/messagemerger](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/messagemerger)。
 
-说明：目前仓库内置了 Logging、GlobalInstruction、ToolCallID、MessageMerger、Guardrail 五类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
+### ErrorMessage（错误消息改写）
+
+`plugin/errormessage` 下的 `errormessage.New(opts...)` 会在 Runner 把错误事件写入 session 之前，改写这条错误事件里对用户可见的 `Choices[].Message.Content`。
+
+当一个 event 带有 `Response.Error` 但还没有 `Choices[].Message.Content` 时（例如 `llmflow` 把 `agent.StopError` 转成的 `stop_agent_error` 事件、或者任何直接 `event.NewErrorEvent(...)` 产出的事件），Runner 会用一句固定的英文兜底文案 `"An error occurred during execution. Please contact the service provider."` 补齐。这个插件在 `OnEvent` 中先一步把 content 填好，方便业务侧展示更友好、本地化或按租户定制的提示信息。结构化的 `Response.Error` 不会被修改，调试和下游消费方仍能看到原始原因。
+
+插件只会改写尚未带有有效 content 的错误事件，所以失败前已经产出的流式助手消息不会被覆盖。
+
+静态文案：
+
+```go
+rewriter := errormessage.New(
+    errormessage.WithContent("本次执行已停止，请稍后再试。"),
+)
+runnerInstance := runner.NewRunner(
+    "my-app",
+    agentInstance,
+    runner.WithPlugins(rewriter),
+)
+defer runnerInstance.Close()
+```
+
+动态 resolver（例如对 `stop_agent_error` 使用更友好的话术）：
+
+```go
+rewriter := errormessage.New(
+    errormessage.WithResolver(func(
+        _ context.Context,
+        _ *agent.Invocation,
+        e *event.Event,
+    ) (string, bool) {
+        if e == nil || e.Response == nil || e.Response.Error == nil {
+            return "", false
+        }
+        if e.Response.Error.Type == agent.ErrorTypeStopAgentError {
+            return "本次执行已按策略停止，请稍后再试。", true
+        }
+        return "执行失败，请稍后重试。", true
+    }),
+)
+```
+
+resolver 返回 `ok=false` 或空字符串时，事件保持不变，Runner 内置的兜底文案仍然生效。
+
+FinishReason：
+
+插件默认会把合成 choice 的 `FinishReason` 设为 `"error"`。如果下游协议期望别的取值，可以通过 `errormessage.WithFinishReason("stop")` 等方式覆盖。如果原始 choice 已经带有 `FinishReason`，插件会原样保留，不会强制覆盖下游的预期。
+
+适用范围：
+
+插件通过 `runner.WithPlugins(...)` 注册，会在 Runner 处理每一条事件时触发，因此能覆盖 agent 从事件通道发出的错误事件（比如 `llmflow` 针对 `agent.StopError` 产出的 `stop_agent_error` 事件，以及任何 `event.NewErrorEvent(...)` 产出的事件）。但对于 `agent.Run` 同步返回 error（尚未建立事件通道）这一路径，Runner 会直接用内置兜底文案写入 session，此时本插件无法改写持久化内容。
+
+完整示例见 [examples/plugin/errormessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage)。
+
+说明：目前仓库内置了 Logging、GlobalInstruction、ToolCallID、MessageMerger、ErrorMessage、Guardrail 六类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
 
 ## 如何扩展：写一个自己的插件
 

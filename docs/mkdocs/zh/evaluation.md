@@ -3187,7 +3187,7 @@ run := runner.NewRunner(appName, agent, runner.WithPlugins(rec))
 
 ### Skills 评估
 
-Agent Skills 以工具 `skill_load` 与 `skill_run` 形式暴露，因此也可以复用工具轨迹评估器来评估 Agent 是否按预期使用 Skills。实践中 `skill_run` 的结果通常包含波动字段，例如 `stdout`、`stderr`、`duration_ms`，以及收集到的 `output_files` 内联内容。建议在按工具覆盖策略中使用 `onlyTree` 只对比稳定字段，例如 `skill`、请求的 `output_files`，以及 `exit_code` 与 `timed_out`，未被选中的字段将被忽略。
+Agent Skills 通过 `skill_load` 注入知识，并通过 `workspace_exec` 执行脚本，因此同一套工具轨迹评估器就可以评估 Agent 是否按预期使用 Skills。实践中 `workspace_exec` 的结果通常包含波动字段，例如 `stdout`、`stderr`、`duration_ms`，以及收集到的文件内联内容。建议在按工具覆盖策略中使用 `onlyTree` 只对比稳定字段（例如 `command`、`exit_code`、`timed_out`），未被选中的字段将被忽略。
 
 下面给出一个最小示例，展示如何在 EvalSet 中声明预期的工具轨迹，并在 Metric 中通过 `onlyTree` 仅校验稳定字段。
 
@@ -3210,12 +3210,9 @@ EvalSet 中的 `tools` 片段示例如下：
     },
     {
       "id": "tool_use_2",
-      "name": "skill_run",
+      "name": "workspace_exec",
       "arguments": {
-        "skill": "write-ok",
-        "output_files": [
-          "out/ok.txt"
-        ]
+        "command": "bash skills/write-ok/scripts/run.sh"
       },
       "result": {
         "exit_code": 0,
@@ -3249,11 +3246,10 @@ Metric 的 `toolTrajectory` 配置示例如下：
               "ignore": true
             }
           },
-          "skill_run": {
+          "workspace_exec": {
             "arguments": {
               "onlyTree": {
-                "skill": true,
-                "output_files": true
+                "command": true
               },
               "matchStrategy": "exact"
             },
