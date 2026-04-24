@@ -297,6 +297,50 @@ func TestEventTunnel_Run_ContextAwareProduceCancellation(t *testing.T) {
 	assert.ErrorIs(t, <-runDone, context.Canceled)
 }
 
+func TestEventTunnel_Run_ContextCancellationReturnsFlushError(t *testing.T) {
+	flushErr := errors.New("cancel flush failed")
+	secondProduceStarted := make(chan struct{})
+	call := 0
+
+	produce := func(ctx context.Context) (*event.Event, bool) {
+		call++
+		switch call {
+		case 1:
+			return createTestEvent("pending", false), true
+		case 2:
+			close(secondProduceStarted)
+			<-ctx.Done()
+			return nil, false
+		default:
+			return nil, false
+		}
+	}
+
+	consume := func(batch []*event.Event) (bool, error) {
+		assert.Len(t, batch, 1)
+		return false, flushErr
+	}
+
+	tunnel := newEventTunnel(10, time.Hour, produce, consume)
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- tunnel.Run(ctx)
+	}()
+
+	select {
+	case <-secondProduceStarted:
+	case <-time.After(time.Second):
+		t.Fatal("produce did not reach the cancellation wait")
+	}
+
+	cancel()
+	err := <-runDone
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, err, flushErr)
+	assert.Contains(t, err.Error(), "tunnel error during cancel flush")
+}
+
 func TestEventTunnel_Run_ConsumeError(t *testing.T) {
 	expectedError := errors.New("consume error")
 
@@ -657,7 +701,7 @@ func TestEventTunnel_Run_NilEvents(t *testing.T) {
 		return
 	}
 
-	// Should have 2 events (nil event should be included in batch)
+	// Should have 2 events (nil event should be dropped from the batch)
 	if len(receivedBatches[0]) != 2 {
 		t.Errorf("Run() first batch has %d events, want 2", len(receivedBatches[0]))
 	}

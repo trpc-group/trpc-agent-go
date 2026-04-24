@@ -11,6 +11,7 @@ package a2a
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -28,7 +29,9 @@ type eventTunnel struct {
 	batchSize     int
 	flushInterval time.Duration
 
-	batch   []*event.Event
+	batch []*event.Event
+	// produce runs in a dedicated goroutine and must observe ctx cancellation
+	// around blocking work so the producer can stop when Run returns.
 	produce func(context.Context) (*event.Event, bool)
 	consume func([]*event.Event) (bool, error)
 
@@ -37,6 +40,8 @@ type eventTunnel struct {
 }
 
 // newEventTunnel creates a new event tunnel.
+// The produce callback is invoked from a dedicated goroutine. It must return
+// promptly when the provided context is done to avoid leaking that goroutine.
 func newEventTunnel(
 	batchSize int,
 	flushInterval time.Duration,
@@ -72,7 +77,12 @@ func (t *eventTunnel) Run(ctx context.Context) error {
 		select {
 		case <-t.ctx.Done():
 			if len(t.batch) > 0 {
-				t.flushBatch()
+				if _, err := t.flushBatch(); err != nil {
+					return errors.Join(
+						t.ctx.Err(),
+						fmt.Errorf("tunnel error during cancel flush: %w", err),
+					)
+				}
 			}
 			return t.ctx.Err()
 
@@ -141,20 +151,23 @@ func (t *eventTunnel) flushPendingBatch(reason string) (bool, error) {
 
 	ok, err := t.flushBatch()
 	if err != nil {
-		return false, fmt.Errorf("tunnel error during %s flush: %v", reason, err)
+		return false, fmt.Errorf("tunnel error during %s flush: %w", reason, err)
 	}
 	return !ok, nil
 }
 
 func (t *eventTunnel) finalizeRun() error {
-	_, err := t.flushPendingBatch("final")
+	ctxErr := t.ctx.Err()
+	reason := "final"
+	if ctxErr != nil {
+		reason = "cancel"
+	}
+
+	_, err := t.flushPendingBatch(reason)
 	if err != nil {
-		return err
+		return errors.Join(ctxErr, err)
 	}
-	if err := t.ctx.Err(); err != nil {
-		return err
-	}
-	return nil
+	return ctxErr
 }
 
 func (t *eventTunnel) flushBatch() (bool, error) {
