@@ -1686,6 +1686,124 @@ func TestRunner_AppendsDifferentUserAfterSeed(t *testing.T) {
 	}
 }
 
+func TestRunner_AppendsSameUserWhenSeedEndsWithAssistant(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "seed-user3"
+	sessionID := "seed-session3"
+	seedHistory := []model.Message{
+		model.NewUserMessage("hello"),
+		model.NewAssistantMessage("prev reply"),
+	}
+
+	eventCh, err := runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		model.NewUserMessage("hello"),
+		agent.WithMessages(seedHistory),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+		// drain channel
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 4)
+	require.Equal(t, authorUser, sess.Events[0].Author)
+	require.Equal(t, "test-agent", sess.Events[1].Author)
+	require.Equal(t, authorUser, sess.Events[2].Author)
+	require.Equal(t, "hello", sess.Events[2].Response.Choices[0].Message.Content)
+}
+
+func TestRunner_AppendsSameUserWhenSessionAlreadyExists(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "existing-user"
+	sessionID := "existing-session"
+	message := model.NewUserMessage("hello")
+
+	eventCh, err := runner.Run(ctx, userID, sessionID, message)
+	require.NoError(t, err)
+	for range eventCh {
+		// drain channel
+	}
+
+	eventCh, err = runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		message,
+		agent.WithMessages([]model.Message{model.NewUserMessage("hello")}),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+		// drain channel
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 4)
+
+	userCount := 0
+	for _, e := range sess.Events {
+		if e.Author == authorUser {
+			userCount++
+		}
+	}
+	require.Equal(t, 2, userCount)
+	require.Equal(t, authorUser, sess.Events[2].Author)
+	require.Equal(t, "hello", sess.Events[2].Response.Choices[0].Message.Content)
+}
+
+func TestShouldAppendUserMessage_Cases(t *testing.T) {
+	require.True(t, shouldAppendUserMessage(
+		model.NewAssistantMessage("a"),
+		[]model.Message{model.NewUserMessage("u")},
+	))
+	require.True(t, shouldAppendUserMessage(
+		model.NewUserMessage("u"),
+		[]model.Message{model.NewSystemMessage("s"), model.NewAssistantMessage("a")},
+	))
+	require.False(t, shouldAppendUserMessage(
+		model.NewUserMessage("u"),
+		[]model.Message{model.NewUserMessage("u")},
+	))
+	require.True(t, shouldAppendUserMessage(
+		model.NewUserMessage("u"),
+		[]model.Message{
+			model.NewUserMessage("u"),
+			model.NewAssistantMessage("a"),
+		},
+	))
+	require.True(t, shouldAppendUserMessage(
+		model.NewUserMessage("u"),
+		[]model.Message{
+			model.NewUserMessage("u"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "lookup",
+						Arguments: []byte(`{"q":"u"}`),
+					},
+				}},
+			},
+		},
+	))
+}
+
 func TestRunner_Run_EmptyIncomingMessagePreservesSeedHistory(t *testing.T) {
 	sessionService := sessioninmemory.NewSessionService()
 	mockAgent := &mockAgent{name: "test-agent"}
