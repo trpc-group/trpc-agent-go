@@ -1610,6 +1610,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#await_user_reply" class="md-nav__link">
+    <span class="md-ellipsis">
+      用 await_user_reply 处理跨轮追问
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_32" class="md-nav__link">
     <span class="md-ellipsis">
       注意事项
@@ -3450,6 +3459,15 @@
   <a href="#_31" class="md-nav__link">
     <span class="md-ellipsis">
       智能过滤机制
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#await_user_reply" class="md-nav__link">
+    <span class="md-ellipsis">
+      用 await_user_reply 处理跨轮追问
     </span>
   </a>
   
@@ -5366,7 +5384,7 @@ description 的价值越大。</p>
 <ul>
 <li>🎯 <strong>Per-Run 控制</strong>：每次调用独立配置，不影响 Agent 定义</li>
 <li>💰 <strong>成本优化</strong>：减少发送给 LLM 的工具描述，降低 token 消耗</li>
-<li>🛡️ <strong>智能保护</strong>：框架工具（<code>transfer_to_agent</code>、<code>knowledge_search</code>）自动保留，永不被过滤</li>
+<li>🛡️ <strong>智能保护</strong>：框架工具（<code>transfer_to_agent</code>、<code>knowledge_search</code>、<code>agentic_knowledge_search</code>、可选的 <code>await_user_reply</code>）自动保留，永不被过滤</li>
 <li>🔧 <strong>灵活定制</strong>：支持内置过滤器和自定义 FilterFunc</li>
 </ul>
 <h4 id="tool-search">Tool Search（自动工具筛选）</h4>
@@ -5748,7 +5766,7 @@ callback 使用。</p>
 </tr>
 <tr>
 <td><strong>框架工具</strong></td>
-<td><code>transfer_to_agent</code>（多 Agent 协调）<br><code>knowledge_search</code>（知识库检索）<br><code>agentic_knowledge_search</code></td>
+<td><code>transfer_to_agent</code>（多 Agent 协调）<br><code>knowledge_search</code>（知识库检索）<br><code>agentic_knowledge_search</code><br><code>await_user_reply</code>（开启后的一次性追问路由）</td>
 <td>❌ 永不过滤，自动保留</td>
 </tr>
 </tbody>
@@ -5774,7 +5792,9 @@ callback 使用。</p>
 <span class="normal"><a href="#__codelineno-38-18">18</a></span>
 <span class="normal"><a href="#__codelineno-38-19">19</a></span>
 <span class="normal"><a href="#__codelineno-38-20">20</a></span>
-<span class="normal"><a href="#__codelineno-38-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1"></a><span class="c1">// Agent 注册了多个工具</span>
+<span class="normal"><a href="#__codelineno-38-21">21</a></span>
+<span class="normal"><a href="#__codelineno-38-22">22</a></span>
+<span class="normal"><a href="#__codelineno-38-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1"></a><span class="c1">// Agent 注册了多个工具</span>
 </span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
 </span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span>
 </span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4"></a><span class="w">        </span><span class="nx">calculatorTool</span><span class="p">,</span><span class="w">  </span><span class="c1">// 用户工具</span>
@@ -5782,20 +5802,54 @@ callback 使用。</p>
 </span><span id="__span-38-6"><a id="__codelineno-38-6" name="__codelineno-38-6"></a><span class="w">    </span><span class="p">}),</span>
 </span><span id="__span-38-7"><a id="__codelineno-38-7" name="__codelineno-38-7"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSubAgents</span><span class="p">([]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">{</span><span class="nx">subAgent1</span><span class="p">,</span><span class="w"> </span><span class="nx">subAgent2</span><span class="p">}),</span><span class="w"> </span><span class="c1">// 自动添加 transfer_to_agent</span>
 </span><span id="__span-38-8"><a id="__codelineno-38-8" name="__codelineno-38-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithKnowledge</span><span class="p">(</span><span class="nx">kb</span><span class="p">),</span><span class="w">                                   </span><span class="c1">// 自动添加 knowledge_search</span>
-</span><span id="__span-38-9"><a id="__codelineno-38-9" name="__codelineno-38-9"></a><span class="p">)</span>
-</span><span id="__span-38-10"><a id="__codelineno-38-10" name="__codelineno-38-10"></a>
-</span><span id="__span-38-11"><a id="__codelineno-38-11" name="__codelineno-38-11"></a><span class="c1">// 运行时过滤：只允许 calculator</span>
-</span><span id="__span-38-12"><a id="__codelineno-38-12" name="__codelineno-38-12"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tool</span><span class="p">.</span><span class="nx">NewIncludeToolNamesFilter</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">)</span>
-</span><span id="__span-38-13"><a id="__codelineno-38-13" name="__codelineno-38-13"></a><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">,</span>
-</span><span id="__span-38-14"><a id="__codelineno-38-14" name="__codelineno-38-14"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolFilter</span><span class="p">(</span><span class="nx">filter</span><span class="p">),</span>
-</span><span id="__span-38-15"><a id="__codelineno-38-15" name="__codelineno-38-15"></a><span class="p">)</span>
-</span><span id="__span-38-16"><a id="__codelineno-38-16" name="__codelineno-38-16"></a>
-</span><span id="__span-38-17"><a id="__codelineno-38-17" name="__codelineno-38-17"></a><span class="c1">// 实际发送给 LLM 的工具：</span>
-</span><span id="__span-38-18"><a id="__codelineno-38-18" name="__codelineno-38-18"></a><span class="c1">// ✅ calculator        - 用户工具，在允许列表中</span>
-</span><span id="__span-38-19"><a id="__codelineno-38-19" name="__codelineno-38-19"></a><span class="c1">// ❌ textTool          - 用户工具，被过滤</span>
-</span><span id="__span-38-20"><a id="__codelineno-38-20" name="__codelineno-38-20"></a><span class="c1">// ✅ transfer_to_agent - 框架工具，自动保留</span>
-</span><span id="__span-38-21"><a id="__codelineno-38-21" name="__codelineno-38-21"></a><span class="c1">// ✅ knowledge_search  - 框架工具，自动保留</span>
+</span><span id="__span-38-9"><a id="__codelineno-38-9" name="__codelineno-38-9"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAwaitUserReplyTool</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">                        </span><span class="c1">// 自动添加 await_user_reply</span>
+</span><span id="__span-38-10"><a id="__codelineno-38-10" name="__codelineno-38-10"></a><span class="p">)</span>
+</span><span id="__span-38-11"><a id="__codelineno-38-11" name="__codelineno-38-11"></a>
+</span><span id="__span-38-12"><a id="__codelineno-38-12" name="__codelineno-38-12"></a><span class="c1">// 运行时过滤：只允许 calculator</span>
+</span><span id="__span-38-13"><a id="__codelineno-38-13" name="__codelineno-38-13"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tool</span><span class="p">.</span><span class="nx">NewIncludeToolNamesFilter</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">)</span>
+</span><span id="__span-38-14"><a id="__codelineno-38-14" name="__codelineno-38-14"></a><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">,</span>
+</span><span id="__span-38-15"><a id="__codelineno-38-15" name="__codelineno-38-15"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolFilter</span><span class="p">(</span><span class="nx">filter</span><span class="p">),</span>
+</span><span id="__span-38-16"><a id="__codelineno-38-16" name="__codelineno-38-16"></a><span class="p">)</span>
+</span><span id="__span-38-17"><a id="__codelineno-38-17" name="__codelineno-38-17"></a>
+</span><span id="__span-38-18"><a id="__codelineno-38-18" name="__codelineno-38-18"></a><span class="c1">// 实际发送给 LLM 的工具：</span>
+</span><span id="__span-38-19"><a id="__codelineno-38-19" name="__codelineno-38-19"></a><span class="c1">// ✅ calculator        - 用户工具，在允许列表中</span>
+</span><span id="__span-38-20"><a id="__codelineno-38-20" name="__codelineno-38-20"></a><span class="c1">// ❌ textTool          - 用户工具，被过滤</span>
+</span><span id="__span-38-21"><a id="__codelineno-38-21" name="__codelineno-38-21"></a><span class="c1">// ✅ transfer_to_agent - 框架工具，自动保留</span>
+</span><span id="__span-38-22"><a id="__codelineno-38-22" name="__codelineno-38-22"></a><span class="c1">// ✅ knowledge_search  - 框架工具，自动保留</span>
+</span><span id="__span-38-23"><a id="__codelineno-38-23" name="__codelineno-38-23"></a><span class="c1">// ✅ await_user_reply  - 框架工具，自动保留</span>
 </span></code></pre></div></td></tr></table></div>
+<h4 id="await_user_reply">用 <code>await_user_reply</code> 处理跨轮追问</h4>
+<p><code>await_user_reply</code> 是一个可选框架工具。当某个 Agent 可能向用户补问信息，并且
+你希望下一条用户消息继续回到这个 Agent 时，可以开启
+<code>llmagent.WithAwaitUserReplyTool(true)</code>。</p>
+<p>它需要和 <code>runner.WithAwaitUserReplyRouting(true)</code> 搭配使用：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-39-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-39-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-39-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-39-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-39-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-39-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-39-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-39-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-39-10">10</a></span>
+<span class="normal"><a href="#__codelineno-39-11">11</a></span>
+<span class="normal"><a href="#__codelineno-39-12">12</a></span>
+<span class="normal"><a href="#__codelineno-39-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="nx">profileAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;profile-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAwaitUserReplyTool</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">`</span>
+</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a><span class="s">如果你必须向用户补一个缺失字段，先调用 await_user_reply，</span>
+</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5"></a><span class="s">再提出问题。</span>
+</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6"></a><span class="s">`</span><span class="p">),</span>
+</span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7"></a><span class="p">)</span>
+</span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8"></a>
+</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-39-10"><a id="__codelineno-39-10" name="__codelineno-39-10"></a><span class="w">    </span><span class="s">&quot;crm-app&quot;</span><span class="p">,</span>
+</span><span id="__span-39-11"><a id="__codelineno-39-11" name="__codelineno-39-11"></a><span class="w">    </span><span class="nx">profileAgent</span><span class="p">,</span>
+</span><span id="__span-39-12"><a id="__codelineno-39-12" name="__codelineno-39-12"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithAwaitUserReplyRouting</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-39-13"><a id="__codelineno-39-13" name="__codelineno-39-13"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>这条路由是一次性的：Runner 会在下一条用户消息到来时消费它，然后自动清掉。</p>
 <h4 id="_32">注意事项</h4>
 <p>⚠️ <strong>安全提示：</strong> 运行时工具过滤是"软约束"，主要用于优化和用户体验。工具内部仍需实现自己的鉴权逻辑：</p>
 <h3 id="tool_calls">手动执行工具（中断 tool_calls）</h3>
@@ -5815,98 +5869,98 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
 <li>调用方在外部执行工具</li>
 <li>通过 <code>role=tool</code> 的消息把结果回填，模型继续输出最终答案</li>
 </ol>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-39-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-39-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-39-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-39-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-39-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-39-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-39-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-39-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-39-10">10</a></span>
-<span class="normal"><a href="#__codelineno-39-11">11</a></span>
-<span class="normal"><a href="#__codelineno-39-12">12</a></span>
-<span class="normal"><a href="#__codelineno-39-13">13</a></span>
-<span class="normal"><a href="#__codelineno-39-14">14</a></span>
-<span class="normal"><a href="#__codelineno-39-15">15</a></span>
-<span class="normal"><a href="#__codelineno-39-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="nx">execFilter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tool</span><span class="p">.</span><span class="nx">NewExcludeToolNamesFilter</span><span class="p">(</span><span class="s">&quot;external_search&quot;</span><span class="p">)</span>
-</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a>
-</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a><span class="c1">// 第一步：模型会返回 tool_calls，但工具不会被框架执行。</span>
-</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;search ...&quot;</span><span class="p">),</span>
-</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolExecutionFilter</span><span class="p">(</span><span class="nx">execFilter</span><span class="p">),</span>
-</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6"></a><span class="p">)</span>
-</span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7"></a>
-</span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8"></a><span class="c1">// 第二步：从事件里提取 tool_call_id + arguments（此处省略）。</span>
-</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9"></a><span class="nx">toolCallID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;call_123&quot;</span>
-</span><span id="__span-39-10"><a id="__codelineno-39-10" name="__codelineno-39-10"></a><span class="nx">toolResultJSON</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`{&quot;status&quot;:&quot;ok&quot;,&quot;data&quot;:&quot;...&quot;}`</span>
-</span><span id="__span-39-11"><a id="__codelineno-39-11" name="__codelineno-39-11"></a>
-</span><span id="__span-39-12"><a id="__codelineno-39-12" name="__codelineno-39-12"></a><span class="c1">// 第三/四步：用 role=tool 回填工具结果，模型继续输出。</span>
-</span><span id="__span-39-13"><a id="__codelineno-39-13" name="__codelineno-39-13"></a><span class="nx">toolMsg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewToolMessage</span><span class="p">(</span><span class="nx">toolCallID</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;external_search&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">toolResultJSON</span><span class="p">)</span>
-</span><span id="__span-39-14"><a id="__codelineno-39-14" name="__codelineno-39-14"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">toolMsg</span><span class="p">,</span>
-</span><span id="__span-39-15"><a id="__codelineno-39-15" name="__codelineno-39-15"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolExecutionFilter</span><span class="p">(</span><span class="nx">execFilter</span><span class="p">),</span>
-</span><span id="__span-39-16"><a id="__codelineno-39-16" name="__codelineno-39-16"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-40-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-40-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-40-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-40-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-40-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-40-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-40-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-40-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-40-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-40-10">10</a></span>
+<span class="normal"><a href="#__codelineno-40-11">11</a></span>
+<span class="normal"><a href="#__codelineno-40-12">12</a></span>
+<span class="normal"><a href="#__codelineno-40-13">13</a></span>
+<span class="normal"><a href="#__codelineno-40-14">14</a></span>
+<span class="normal"><a href="#__codelineno-40-15">15</a></span>
+<span class="normal"><a href="#__codelineno-40-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1"></a><span class="nx">execFilter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tool</span><span class="p">.</span><span class="nx">NewExcludeToolNamesFilter</span><span class="p">(</span><span class="s">&quot;external_search&quot;</span><span class="p">)</span>
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2"></a>
+</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3"></a><span class="c1">// 第一步：模型会返回 tool_calls，但工具不会被框架执行。</span>
+</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;search ...&quot;</span><span class="p">),</span>
+</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolExecutionFilter</span><span class="p">(</span><span class="nx">execFilter</span><span class="p">),</span>
+</span><span id="__span-40-6"><a id="__codelineno-40-6" name="__codelineno-40-6"></a><span class="p">)</span>
+</span><span id="__span-40-7"><a id="__codelineno-40-7" name="__codelineno-40-7"></a>
+</span><span id="__span-40-8"><a id="__codelineno-40-8" name="__codelineno-40-8"></a><span class="c1">// 第二步：从事件里提取 tool_call_id + arguments（此处省略）。</span>
+</span><span id="__span-40-9"><a id="__codelineno-40-9" name="__codelineno-40-9"></a><span class="nx">toolCallID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;call_123&quot;</span>
+</span><span id="__span-40-10"><a id="__codelineno-40-10" name="__codelineno-40-10"></a><span class="nx">toolResultJSON</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`{&quot;status&quot;:&quot;ok&quot;,&quot;data&quot;:&quot;...&quot;}`</span>
+</span><span id="__span-40-11"><a id="__codelineno-40-11" name="__codelineno-40-11"></a>
+</span><span id="__span-40-12"><a id="__codelineno-40-12" name="__codelineno-40-12"></a><span class="c1">// 第三/四步：用 role=tool 回填工具结果，模型继续输出。</span>
+</span><span id="__span-40-13"><a id="__codelineno-40-13" name="__codelineno-40-13"></a><span class="nx">toolMsg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewToolMessage</span><span class="p">(</span><span class="nx">toolCallID</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;external_search&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">toolResultJSON</span><span class="p">)</span>
+</span><span id="__span-40-14"><a id="__codelineno-40-14" name="__codelineno-40-14"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">toolMsg</span><span class="p">,</span>
+</span><span id="__span-40-15"><a id="__codelineno-40-15" name="__codelineno-40-15"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolExecutionFilter</span><span class="p">(</span><span class="nx">execFilter</span><span class="p">),</span>
+</span><span id="__span-40-16"><a id="__codelineno-40-16" name="__codelineno-40-16"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>完整示例：</strong> <code>examples/toolinterrupt/</code></p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-40-1">1</a></span>
-<span class="normal"><a href="#__codelineno-40-2">2</a></span>
-<span class="normal"><a href="#__codelineno-40-3">3</a></span>
-<span class="normal"><a href="#__codelineno-40-4">4</a></span>
-<span class="normal"><a href="#__codelineno-40-5">5</a></span>
-<span class="normal"><a href="#__codelineno-40-6">6</a></span>
-<span class="normal"><a href="#__codelineno-40-7">7</a></span>
-<span class="normal"><a href="#__codelineno-40-8">8</a></span>
-<span class="normal"><a href="#__codelineno-40-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">sensitiveOperation</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Result</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2"></a><span class="w">    </span><span class="c1">// ✅ 必须：工具内部鉴权</span>
-</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">hasPermission</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">UserID</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;sensitive_operation&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;permission denied&quot;</span><span class="p">)</span>
-</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-40-6"><a id="__codelineno-40-6" name="__codelineno-40-6"></a>
-</span><span id="__span-40-7"><a id="__codelineno-40-7" name="__codelineno-40-7"></a><span class="w">    </span><span class="c1">// 执行操作</span>
-</span><span id="__span-40-8"><a id="__codelineno-40-8" name="__codelineno-40-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">performOperation</span><span class="p">(</span><span class="nx">req</span><span class="p">)</span>
-</span><span id="__span-40-9"><a id="__codelineno-40-9" name="__codelineno-40-9"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p><strong>原因：</strong> LLM 可能从上下文或记忆中知道工具的存在和用法，并尝试调用。工具过滤减少了这种可能性，但不能完全防止。</p>
-<h3 id="_34">并行工具执行</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-41-1">1</a></span>
 <span class="normal"><a href="#__codelineno-41-2">2</a></span>
 <span class="normal"><a href="#__codelineno-41-3">3</a></span>
 <span class="normal"><a href="#__codelineno-41-4">4</a></span>
 <span class="normal"><a href="#__codelineno-41-5">5</a></span>
 <span class="normal"><a href="#__codelineno-41-6">6</a></span>
-<span class="normal"><a href="#__codelineno-41-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="c1">// 启用并行工具执行（可选，用于性能优化）</span>
-</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;ai-assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
-</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">tools</span><span class="p">),</span>
-</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolSets</span><span class="p">(</span><span class="nx">toolSets</span><span class="p">),</span>
-</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithEnableParallelTools</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// 启用并行执行</span>
-</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-41-7">7</a></span>
+<span class="normal"><a href="#__codelineno-41-8">8</a></span>
+<span class="normal"><a href="#__codelineno-41-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">sensitiveOperation</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Result</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a><span class="w">    </span><span class="c1">// ✅ 必须：工具内部鉴权</span>
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">hasPermission</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">UserID</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;sensitive_operation&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;permission denied&quot;</span><span class="p">)</span>
+</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a>
+</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a><span class="w">    </span><span class="c1">// 执行操作</span>
+</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">performOperation</span><span class="p">(</span><span class="nx">req</span><span class="p">)</span>
+</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>原因：</strong> LLM 可能从上下文或记忆中知道工具的存在和用法，并尝试调用。工具过滤减少了这种可能性，但不能完全防止。</p>
+<h3 id="_34">并行工具执行</h3>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-42-1">1</a></span>
+<span class="normal"><a href="#__codelineno-42-2">2</a></span>
+<span class="normal"><a href="#__codelineno-42-3">3</a></span>
+<span class="normal"><a href="#__codelineno-42-4">4</a></span>
+<span class="normal"><a href="#__codelineno-42-5">5</a></span>
+<span class="normal"><a href="#__codelineno-42-6">6</a></span>
+<span class="normal"><a href="#__codelineno-42-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1"></a><span class="c1">// 启用并行工具执行（可选，用于性能优化）</span>
+</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;ai-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
+</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">tools</span><span class="p">),</span>
+</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolSets</span><span class="p">(</span><span class="nx">toolSets</span><span class="p">),</span>
+</span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithEnableParallelTools</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// 启用并行执行</span>
+</span><span id="__span-42-7"><a id="__codelineno-42-7" name="__codelineno-42-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Graph 工作流下也可以在工具节点开启并行：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-42-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1"></a><span class="nx">stateGraph</span><span class="p">.</span><span class="nx">AddToolsNode</span><span class="p">(</span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">,</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithEnableParallelTools</span><span class="p">(</span><span class="kc">true</span><span class="p">))</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-43-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1"></a><span class="nx">stateGraph</span><span class="p">.</span><span class="nx">AddToolsNode</span><span class="p">(</span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">,</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithEnableParallelTools</span><span class="p">(</span><span class="kc">true</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>并行执行效果：</strong></p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-43-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-43-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-43-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-43-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-43-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-43-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-43-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-43-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-43-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-43-10">10</a></span>
-<span class="normal"><a href="#__codelineno-43-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1"></a><span class="c1"># 并行执行（启用时）</span>
-</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2"></a>Tool<span class="w"> </span><span class="m">1</span>:<span class="w"> </span>get_weather<span class="w">     </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3"></a>Tool<span class="w"> </span><span class="m">2</span>:<span class="w"> </span>get_population<span class="w">  </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-43-4"><a id="__codelineno-43-4" name="__codelineno-43-4"></a>Tool<span class="w"> </span><span class="m">3</span>:<span class="w"> </span>get_time<span class="w">       </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5"></a>总时间:<span class="w"> </span>~50ms（同时执行）
-</span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6"></a>
-</span><span id="__span-43-7"><a id="__codelineno-43-7" name="__codelineno-43-7"></a><span class="c1"># 串行执行（默认）</span>
-</span><span id="__span-43-8"><a id="__codelineno-43-8" name="__codelineno-43-8"></a>Tool<span class="w"> </span><span class="m">1</span>:<span class="w"> </span>get_weather<span class="w">     </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-43-9"><a id="__codelineno-43-9" name="__codelineno-43-9"></a>Tool<span class="w"> </span><span class="m">2</span>:<span class="w"> </span>get_population<span class="w">       </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-43-10"><a id="__codelineno-43-10" name="__codelineno-43-10"></a>Tool<span class="w"> </span><span class="m">3</span>:<span class="w"> </span>get_time<span class="w">                  </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-43-11"><a id="__codelineno-43-11" name="__codelineno-43-11"></a>总时间:<span class="w"> </span>~150ms（依次执行）
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-44-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-44-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-44-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-44-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-44-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-44-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-44-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-44-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-44-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-44-10">10</a></span>
+<span class="normal"><a href="#__codelineno-44-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1"></a><span class="c1"># 并行执行（启用时）</span>
+</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2"></a>Tool<span class="w"> </span><span class="m">1</span>:<span class="w"> </span>get_weather<span class="w">     </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a>Tool<span class="w"> </span><span class="m">2</span>:<span class="w"> </span>get_population<span class="w">  </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4"></a>Tool<span class="w"> </span><span class="m">3</span>:<span class="w"> </span>get_time<span class="w">       </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5"></a>总时间:<span class="w"> </span>~50ms（同时执行）
+</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6"></a>
+</span><span id="__span-44-7"><a id="__codelineno-44-7" name="__codelineno-44-7"></a><span class="c1"># 串行执行（默认）</span>
+</span><span id="__span-44-8"><a id="__codelineno-44-8" name="__codelineno-44-8"></a>Tool<span class="w"> </span><span class="m">1</span>:<span class="w"> </span>get_weather<span class="w">     </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-44-9"><a id="__codelineno-44-9" name="__codelineno-44-9"></a>Tool<span class="w"> </span><span class="m">2</span>:<span class="w"> </span>get_population<span class="w">       </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-44-10"><a id="__codelineno-44-10" name="__codelineno-44-10"></a>Tool<span class="w"> </span><span class="m">3</span>:<span class="w"> </span>get_time<span class="w">                  </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-44-11"><a id="__codelineno-44-11" name="__codelineno-44-11"></a>总时间:<span class="w"> </span>~150ms（依次执行）
 </span></code></pre></div></td></tr></table></div>
 <h3 id="toolset_2">运行时 ToolSet 动态管理</h3>
 <p><code>WithToolSets</code> 是一种<strong>静态配置方式</strong>：在创建 Agent 时一次性注入 ToolSet。很多实际场景下，你希望在<strong>运行时动态增删 ToolSet</strong>，而不必重建 Agent。</p>
@@ -5929,236 +5983,75 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
 </ul>
 <p>如果这些 ToolSet 是由你创建的，你仍然需要在合适的时机显式回收它们。</p>
 <p><strong>典型使用方式：</strong></p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-44-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-44-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-44-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-44-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-44-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-44-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-44-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-44-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-44-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-44-10">10</a></span>
-<span class="normal"><a href="#__codelineno-44-11">11</a></span>
-<span class="normal"><a href="#__codelineno-44-12">12</a></span>
-<span class="normal"><a href="#__codelineno-44-13">13</a></span>
-<span class="normal"><a href="#__codelineno-44-14">14</a></span>
-<span class="normal"><a href="#__codelineno-44-15">15</a></span>
-<span class="normal"><a href="#__codelineno-44-16">16</a></span>
-<span class="normal"><a href="#__codelineno-44-17">17</a></span>
-<span class="normal"><a href="#__codelineno-44-18">18</a></span>
-<span class="normal"><a href="#__codelineno-44-19">19</a></span>
-<span class="normal"><a href="#__codelineno-44-20">20</a></span>
-<span class="normal"><a href="#__codelineno-44-21">21</a></span>
-<span class="normal"><a href="#__codelineno-44-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1"></a><span class="c1">// 1. 初始只挂基础工具</span>
-</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;dynamic-assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
-</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}),</span>
-</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5"></a><span class="p">)</span>
-</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6"></a>
-</span><span id="__span-44-7"><a id="__codelineno-44-7" name="__codelineno-44-7"></a><span class="c1">// 2. 运行时挂载一个 MCP ToolSet</span>
-</span><span id="__span-44-8"><a id="__codelineno-44-8" name="__codelineno-44-8"></a><span class="nx">mcpToolSet</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mcp</span><span class="p">.</span><span class="nx">NewMCPToolSet</span><span class="p">(</span><span class="nx">connectionConfig</span><span class="p">)</span>
-</span><span id="__span-44-9"><a id="__codelineno-44-9" name="__codelineno-44-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-10"><a id="__codelineno-44-10" name="__codelineno-44-10"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;初始化 MCP ToolSet 失败: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-44-11"><a id="__codelineno-44-11" name="__codelineno-44-11"></a><span class="p">}</span>
-</span><span id="__span-44-12"><a id="__codelineno-44-12" name="__codelineno-44-12"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">AddToolSet</span><span class="p">(</span><span class="nx">mcpToolSet</span><span class="p">)</span>
-</span><span id="__span-44-13"><a id="__codelineno-44-13" name="__codelineno-44-13"></a>
-</span><span id="__span-44-14"><a id="__codelineno-44-14" name="__codelineno-44-14"></a><span class="c1">// 3. 从配置中心下发一整套 ToolSet（声明式控制）</span>
-</span><span id="__span-44-15"><a id="__codelineno-44-15" name="__codelineno-44-15"></a><span class="nx">toolSetsFromConfig</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span><span class="nx">mcpToolSet</span><span class="p">,</span><span class="w"> </span><span class="nx">fileToolSet</span><span class="p">}</span>
-</span><span id="__span-44-16"><a id="__codelineno-44-16" name="__codelineno-44-16"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">SetToolSets</span><span class="p">(</span><span class="nx">toolSetsFromConfig</span><span class="p">)</span>
-</span><span id="__span-44-17"><a id="__codelineno-44-17" name="__codelineno-44-17"></a>
-</span><span id="__span-44-18"><a id="__codelineno-44-18" name="__codelineno-44-18"></a><span class="c1">// 4. 按名称下线某个 ToolSet（例如回滚某个集成）</span>
-</span><span id="__span-44-19"><a id="__codelineno-44-19" name="__codelineno-44-19"></a><span class="nx">removed</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">RemoveToolSet</span><span class="p">(</span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Name</span><span class="p">())</span>
-</span><span id="__span-44-20"><a id="__codelineno-44-20" name="__codelineno-44-20"></a><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">removed</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-21"><a id="__codelineno-44-21" name="__codelineno-44-21"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;未找到 ToolSet %q&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Name</span><span class="p">())</span>
-</span><span id="__span-44-22"><a id="__codelineno-44-22" name="__codelineno-44-22"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-45-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-45-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-45-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-45-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-45-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-45-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-45-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-45-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-45-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-45-10">10</a></span>
+<span class="normal"><a href="#__codelineno-45-11">11</a></span>
+<span class="normal"><a href="#__codelineno-45-12">12</a></span>
+<span class="normal"><a href="#__codelineno-45-13">13</a></span>
+<span class="normal"><a href="#__codelineno-45-14">14</a></span>
+<span class="normal"><a href="#__codelineno-45-15">15</a></span>
+<span class="normal"><a href="#__codelineno-45-16">16</a></span>
+<span class="normal"><a href="#__codelineno-45-17">17</a></span>
+<span class="normal"><a href="#__codelineno-45-18">18</a></span>
+<span class="normal"><a href="#__codelineno-45-19">19</a></span>
+<span class="normal"><a href="#__codelineno-45-20">20</a></span>
+<span class="normal"><a href="#__codelineno-45-21">21</a></span>
+<span class="normal"><a href="#__codelineno-45-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="c1">// 1. 初始只挂基础工具</span>
+</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;dynamic-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
+</span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}),</span>
+</span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5"></a><span class="p">)</span>
+</span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6"></a>
+</span><span id="__span-45-7"><a id="__codelineno-45-7" name="__codelineno-45-7"></a><span class="c1">// 2. 运行时挂载一个 MCP ToolSet</span>
+</span><span id="__span-45-8"><a id="__codelineno-45-8" name="__codelineno-45-8"></a><span class="nx">mcpToolSet</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mcp</span><span class="p">.</span><span class="nx">NewMCPToolSet</span><span class="p">(</span><span class="nx">connectionConfig</span><span class="p">)</span>
+</span><span id="__span-45-9"><a id="__codelineno-45-9" name="__codelineno-45-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-10"><a id="__codelineno-45-10" name="__codelineno-45-10"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;初始化 MCP ToolSet 失败: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-45-11"><a id="__codelineno-45-11" name="__codelineno-45-11"></a><span class="p">}</span>
+</span><span id="__span-45-12"><a id="__codelineno-45-12" name="__codelineno-45-12"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">AddToolSet</span><span class="p">(</span><span class="nx">mcpToolSet</span><span class="p">)</span>
+</span><span id="__span-45-13"><a id="__codelineno-45-13" name="__codelineno-45-13"></a>
+</span><span id="__span-45-14"><a id="__codelineno-45-14" name="__codelineno-45-14"></a><span class="c1">// 3. 从配置中心下发一整套 ToolSet（声明式控制）</span>
+</span><span id="__span-45-15"><a id="__codelineno-45-15" name="__codelineno-45-15"></a><span class="nx">toolSetsFromConfig</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span><span class="nx">mcpToolSet</span><span class="p">,</span><span class="w"> </span><span class="nx">fileToolSet</span><span class="p">}</span>
+</span><span id="__span-45-16"><a id="__codelineno-45-16" name="__codelineno-45-16"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">SetToolSets</span><span class="p">(</span><span class="nx">toolSetsFromConfig</span><span class="p">)</span>
+</span><span id="__span-45-17"><a id="__codelineno-45-17" name="__codelineno-45-17"></a>
+</span><span id="__span-45-18"><a id="__codelineno-45-18" name="__codelineno-45-18"></a><span class="c1">// 4. 按名称下线某个 ToolSet（例如回滚某个集成）</span>
+</span><span id="__span-45-19"><a id="__codelineno-45-19" name="__codelineno-45-19"></a><span class="nx">removed</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">RemoveToolSet</span><span class="p">(</span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Name</span><span class="p">())</span>
+</span><span id="__span-45-20"><a id="__codelineno-45-20" name="__codelineno-45-20"></a><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">removed</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-21"><a id="__codelineno-45-21" name="__codelineno-45-21"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;未找到 ToolSet %q&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Name</span><span class="p">())</span>
+</span><span id="__span-45-22"><a id="__codelineno-45-22" name="__codelineno-45-22"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>运行时 ToolSet 更新会自动与前文的<strong>工具过滤机制</strong>协同工作：</p>
 <ul>
 <li>通过 <code>WithTools</code> 和所有 ToolSet（包括动态添加的 ToolSet）注册的工具都视为<strong>用户工具</strong>，会受到 <code>WithToolFilter</code> 以及每次调用的运行时过滤控制。</li>
-<li>框架工具（<code>transfer_to_agent</code>、<code>knowledge_search</code>、<code>agentic_knowledge_search</code>）仍然<strong>永远不被过滤</strong>，始终对 Agent 可用。</li>
+<li>框架工具（<code>transfer_to_agent</code>、<code>knowledge_search</code>、
+  <code>agentic_knowledge_search</code>、可选的 <code>await_user_reply</code>）仍然
+  <strong>永远不被过滤</strong>，始终对 Agent 可用。</li>
 </ul>
 <h4 id="tool-call">Tool Call 参数自动修复</h4>
 <p>部分模型在生成 <code>tool_calls</code> 时，可能产出非严格 JSON 的参数（例如对象 key 未加引号、尾逗号等），从而导致工具执行或外部解析失败。</p>
 <p>Tool Call 参数自动修复功能适用于调用方需要在框架外部解析 <code>toolCall.Function.Arguments</code>，或工具严格要求入参为合法 JSON 的场景。</p>
 <p>在 <code>runner.Run</code> 中启用 <code>agent.WithToolCallArgumentsJSONRepairEnabled(true)</code> 后，框架会尽力修复 <code>toolCall.Function.Arguments</code>。</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-45-1">1</a></span>
-<span class="normal"><a href="#__codelineno-45-2">2</a></span>
-<span class="normal"><a href="#__codelineno-45-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;...&quot;</span><span class="p">),</span>
-</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolCallArgumentsJSONRepairEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-46-1">1</a></span>
+<span class="normal"><a href="#__codelineno-46-2">2</a></span>
+<span class="normal"><a href="#__codelineno-46-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;...&quot;</span><span class="p">),</span>
+</span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolCallArgumentsJSONRepairEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-46-3"><a id="__codelineno-46-3" name="__codelineno-46-3"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="_35">快速开始</h2>
 <h3 id="_36">环境准备</h3>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-46-1">1</a></span>
-<span class="normal"><a href="#__codelineno-46-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1"></a><span class="c1"># 设置 API 密钥</span>
-</span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1">1</a></span>
+<span class="normal"><a href="#__codelineno-47-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="c1"># 设置 API 密钥</span>
+</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="_37">简单示例</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-47-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-47-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-47-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-47-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-47-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-47-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-47-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-47-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-47-10">10</a></span>
-<span class="normal"><a href="#__codelineno-47-11">11</a></span>
-<span class="normal"><a href="#__codelineno-47-12">12</a></span>
-<span class="normal"><a href="#__codelineno-47-13">13</a></span>
-<span class="normal"><a href="#__codelineno-47-14">14</a></span>
-<span class="normal"><a href="#__codelineno-47-15">15</a></span>
-<span class="normal"><a href="#__codelineno-47-16">16</a></span>
-<span class="normal"><a href="#__codelineno-47-17">17</a></span>
-<span class="normal"><a href="#__codelineno-47-18">18</a></span>
-<span class="normal"><a href="#__codelineno-47-19">19</a></span>
-<span class="normal"><a href="#__codelineno-47-20">20</a></span>
-<span class="normal"><a href="#__codelineno-47-21">21</a></span>
-<span class="normal"><a href="#__codelineno-47-22">22</a></span>
-<span class="normal"><a href="#__codelineno-47-23">23</a></span>
-<span class="normal"><a href="#__codelineno-47-24">24</a></span>
-<span class="normal"><a href="#__codelineno-47-25">25</a></span>
-<span class="normal"><a href="#__codelineno-47-26">26</a></span>
-<span class="normal"><a href="#__codelineno-47-27">27</a></span>
-<span class="normal"><a href="#__codelineno-47-28">28</a></span>
-<span class="normal"><a href="#__codelineno-47-29">29</a></span>
-<span class="normal"><a href="#__codelineno-47-30">30</a></span>
-<span class="normal"><a href="#__codelineno-47-31">31</a></span>
-<span class="normal"><a href="#__codelineno-47-32">32</a></span>
-<span class="normal"><a href="#__codelineno-47-33">33</a></span>
-<span class="normal"><a href="#__codelineno-47-34">34</a></span>
-<span class="normal"><a href="#__codelineno-47-35">35</a></span>
-<span class="normal"><a href="#__codelineno-47-36">36</a></span>
-<span class="normal"><a href="#__codelineno-47-37">37</a></span>
-<span class="normal"><a href="#__codelineno-47-38">38</a></span>
-<span class="normal"><a href="#__codelineno-47-39">39</a></span>
-<span class="normal"><a href="#__codelineno-47-40">40</a></span>
-<span class="normal"><a href="#__codelineno-47-41">41</a></span>
-<span class="normal"><a href="#__codelineno-47-42">42</a></span>
-<span class="normal"><a href="#__codelineno-47-43">43</a></span>
-<span class="normal"><a href="#__codelineno-47-44">44</a></span>
-<span class="normal"><a href="#__codelineno-47-45">45</a></span>
-<span class="normal"><a href="#__codelineno-47-46">46</a></span>
-<span class="normal"><a href="#__codelineno-47-47">47</a></span>
-<span class="normal"><a href="#__codelineno-47-48">48</a></span>
-<span class="normal"><a href="#__codelineno-47-49">49</a></span>
-<span class="normal"><a href="#__codelineno-47-50">50</a></span>
-<span class="normal"><a href="#__codelineno-47-51">51</a></span>
-<span class="normal"><a href="#__codelineno-47-52">52</a></span>
-<span class="normal"><a href="#__codelineno-47-53">53</a></span>
-<span class="normal"><a href="#__codelineno-47-54">54</a></span>
-<span class="normal"><a href="#__codelineno-47-55">55</a></span>
-<span class="normal"><a href="#__codelineno-47-56">56</a></span>
-<span class="normal"><a href="#__codelineno-47-57">57</a></span>
-<span class="normal"><a href="#__codelineno-47-58">58</a></span>
-<span class="normal"><a href="#__codelineno-47-59">59</a></span>
-<span class="normal"><a href="#__codelineno-47-60">60</a></span>
-<span class="normal"><a href="#__codelineno-47-61">61</a></span>
-<span class="normal"><a href="#__codelineno-47-62">62</a></span>
-<span class="normal"><a href="#__codelineno-47-63">63</a></span>
-<span class="normal"><a href="#__codelineno-47-64">64</a></span>
-<span class="normal"><a href="#__codelineno-47-65">65</a></span>
-<span class="normal"><a href="#__codelineno-47-66">66</a></span>
-<span class="normal"><a href="#__codelineno-47-67">67</a></span>
-<span class="normal"><a href="#__codelineno-47-68">68</a></span>
-<span class="normal"><a href="#__codelineno-47-69">69</a></span>
-<span class="normal"><a href="#__codelineno-47-70">70</a></span>
-<span class="normal"><a href="#__codelineno-47-71">71</a></span>
-<span class="normal"><a href="#__codelineno-47-72">72</a></span>
-<span class="normal"><a href="#__codelineno-47-73">73</a></span>
-<span class="normal"><a href="#__codelineno-47-74">74</a></span>
-<span class="normal"><a href="#__codelineno-47-75">75</a></span>
-<span class="normal"><a href="#__codelineno-47-76">76</a></span>
-<span class="normal"><a href="#__codelineno-47-77">77</a></span>
-<span class="normal"><a href="#__codelineno-47-78">78</a></span>
-<span class="normal"><a href="#__codelineno-47-79">79</a></span>
-<span class="normal"><a href="#__codelineno-47-80">80</a></span>
-<span class="normal"><a href="#__codelineno-47-81">81</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
-</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2"></a>
-</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6"></a>
-</span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
-</span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
-</span><span id="__span-47-12"><a id="__codelineno-47-12" name="__codelineno-47-12"></a><span class="p">)</span>
-</span><span id="__span-47-13"><a id="__codelineno-47-13" name="__codelineno-47-13"></a>
-</span><span id="__span-47-14"><a id="__codelineno-47-14" name="__codelineno-47-14"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-15"><a id="__codelineno-47-15" name="__codelineno-47-15"></a><span class="w">    </span><span class="c1">// 1. 创建简单工具</span>
-</span><span id="__span-47-16"><a id="__codelineno-47-16" name="__codelineno-47-16"></a><span class="w">    </span><span class="nx">calculatorTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
-</span><span id="__span-47-17"><a id="__codelineno-47-17" name="__codelineno-47-17"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-18"><a id="__codelineno-47-18" name="__codelineno-47-18"></a><span class="w">            </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot; jsonschema:&quot;description=运算类型，例如 add/multiply&quot;`</span>
-</span><span id="__span-47-19"><a id="__codelineno-47-19" name="__codelineno-47-19"></a><span class="w">            </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot; jsonschema:&quot;description=第一个操作数&quot;`</span>
-</span><span id="__span-47-20"><a id="__codelineno-47-20" name="__codelineno-47-20"></a><span class="w">            </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot; jsonschema:&quot;description=第二个操作数&quot;`</span>
-</span><span id="__span-47-21"><a id="__codelineno-47-21" name="__codelineno-47-21"></a><span class="w">        </span><span class="p">})</span><span class="w"> </span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{},</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-22"><a id="__codelineno-47-22" name="__codelineno-47-22"></a><span class="w">            </span><span class="kd">var</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="kt">float64</span>
-</span><span id="__span-47-23"><a id="__codelineno-47-23" name="__codelineno-47-23"></a><span class="w">            </span><span class="k">switch</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Operation</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-24"><a id="__codelineno-47-24" name="__codelineno-47-24"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;add&quot;</span><span class="p">:</span>
-</span><span id="__span-47-25"><a id="__codelineno-47-25" name="__codelineno-47-25"></a><span class="w">                </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">B</span>
-</span><span id="__span-47-26"><a id="__codelineno-47-26" name="__codelineno-47-26"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;multiply&quot;</span><span class="p">:</span>
-</span><span id="__span-47-27"><a id="__codelineno-47-27" name="__codelineno-47-27"></a><span class="w">                </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">B</span>
-</span><span id="__span-47-28"><a id="__codelineno-47-28" name="__codelineno-47-28"></a><span class="w">            </span><span class="k">default</span><span class="p">:</span>
-</span><span id="__span-47-29"><a id="__codelineno-47-29" name="__codelineno-47-29"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;unsupported operation&quot;</span><span class="p">)</span>
-</span><span id="__span-47-30"><a id="__codelineno-47-30" name="__codelineno-47-30"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-47-31"><a id="__codelineno-47-31" name="__codelineno-47-31"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{}{</span><span class="s">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">result</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-47-32"><a id="__codelineno-47-32" name="__codelineno-47-32"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-47-33"><a id="__codelineno-47-33" name="__codelineno-47-33"></a><span class="w">        </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">),</span>
-</span><span id="__span-47-34"><a id="__codelineno-47-34" name="__codelineno-47-34"></a><span class="w">        </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;简单计算器&quot;</span><span class="p">),</span>
-</span><span id="__span-47-35"><a id="__codelineno-47-35" name="__codelineno-47-35"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-47-36"><a id="__codelineno-47-36" name="__codelineno-47-36"></a>
-</span><span id="__span-47-37"><a id="__codelineno-47-37" name="__codelineno-47-37"></a><span class="w">    </span><span class="c1">// 2. 创建模型和 Agent</span>
-</span><span id="__span-47-38"><a id="__codelineno-47-38" name="__codelineno-47-38"></a><span class="w">    </span><span class="nx">llmModel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;DeepSeek-V3-Online-64K&quot;</span><span class="p">)</span>
-</span><span id="__span-47-39"><a id="__codelineno-47-39" name="__codelineno-47-39"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;calculator-assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-47-40"><a id="__codelineno-47-40" name="__codelineno-47-40"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">llmModel</span><span class="p">),</span>
-</span><span id="__span-47-41"><a id="__codelineno-47-41" name="__codelineno-47-41"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;你是一个数学助手&quot;</span><span class="p">),</span>
-</span><span id="__span-47-42"><a id="__codelineno-47-42" name="__codelineno-47-42"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}),</span>
-</span><span id="__span-47-43"><a id="__codelineno-47-43" name="__codelineno-47-43"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span><span class="nx">Stream</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}),</span><span class="w"> </span><span class="c1">// 启用流式输出</span>
-</span><span id="__span-47-44"><a id="__codelineno-47-44" name="__codelineno-47-44"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-47-45"><a id="__codelineno-47-45" name="__codelineno-47-45"></a>
-</span><span id="__span-47-46"><a id="__codelineno-47-46" name="__codelineno-47-46"></a><span class="w">    </span><span class="c1">// 3. 创建 Runner 并执行</span>
-</span><span id="__span-47-47"><a id="__codelineno-47-47" name="__codelineno-47-47"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;math-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
-</span><span id="__span-47-48"><a id="__codelineno-47-48" name="__codelineno-47-48"></a>
-</span><span id="__span-47-49"><a id="__codelineno-47-49" name="__codelineno-47-49"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
-</span><span id="__span-47-50"><a id="__codelineno-47-50" name="__codelineno-47-50"></a><span class="w">    </span><span class="nx">userMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;请计算 25 乘以 4&quot;</span><span class="p">)</span>
-</span><span id="__span-47-51"><a id="__codelineno-47-51" name="__codelineno-47-51"></a>
-</span><span id="__span-47-52"><a id="__codelineno-47-52" name="__codelineno-47-52"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;user1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">)</span>
-</span><span id="__span-47-53"><a id="__codelineno-47-53" name="__codelineno-47-53"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-54"><a id="__codelineno-47-54" name="__codelineno-47-54"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-47-55"><a id="__codelineno-47-55" name="__codelineno-47-55"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-47-56"><a id="__codelineno-47-56" name="__codelineno-47-56"></a>
-</span><span id="__span-47-57"><a id="__codelineno-47-57" name="__codelineno-47-57"></a><span class="w">    </span><span class="c1">// 4. 处理响应</span>
-</span><span id="__span-47-58"><a id="__codelineno-47-58" name="__codelineno-47-58"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-59"><a id="__codelineno-47-59" name="__codelineno-47-59"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-60"><a id="__codelineno-47-60" name="__codelineno-47-60"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;错误: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-47-61"><a id="__codelineno-47-61" name="__codelineno-47-61"></a><span class="w">            </span><span class="k">continue</span>
-</span><span id="__span-47-62"><a id="__codelineno-47-62" name="__codelineno-47-62"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-47-63"><a id="__codelineno-47-63" name="__codelineno-47-63"></a>
-</span><span id="__span-47-64"><a id="__codelineno-47-64" name="__codelineno-47-64"></a><span class="w">        </span><span class="c1">// 显示工具调用</span>
-</span><span id="__span-47-65"><a id="__codelineno-47-65" name="__codelineno-47-65"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-66"><a id="__codelineno-47-66" name="__codelineno-47-66"></a><span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-67"><a id="__codelineno-47-67" name="__codelineno-47-67"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;🔧 调用工具: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="p">)</span>
-</span><span id="__span-47-68"><a id="__codelineno-47-68" name="__codelineno-47-68"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;   参数: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Arguments</span><span class="p">))</span>
-</span><span id="__span-47-69"><a id="__codelineno-47-69" name="__codelineno-47-69"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-47-70"><a id="__codelineno-47-70" name="__codelineno-47-70"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-47-71"><a id="__codelineno-47-71" name="__codelineno-47-71"></a>
-</span><span id="__span-47-72"><a id="__codelineno-47-72" name="__codelineno-47-72"></a><span class="w">        </span><span class="c1">// 显示流式内容</span>
-</span><span id="__span-47-73"><a id="__codelineno-47-73" name="__codelineno-47-73"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-74"><a id="__codelineno-47-74" name="__codelineno-47-74"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
-</span><span id="__span-47-75"><a id="__codelineno-47-75" name="__codelineno-47-75"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-47-76"><a id="__codelineno-47-76" name="__codelineno-47-76"></a>
-</span><span id="__span-47-77"><a id="__codelineno-47-77" name="__codelineno-47-77"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-78"><a id="__codelineno-47-78" name="__codelineno-47-78"></a><span class="w">            </span><span class="k">break</span>
-</span><span id="__span-47-79"><a id="__codelineno-47-79" name="__codelineno-47-79"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-47-80"><a id="__codelineno-47-80" name="__codelineno-47-80"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-47-81"><a id="__codelineno-47-81" name="__codelineno-47-81"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<h3 id="_38">运行示例</h3>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1"> 1</a></span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-48-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-48-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-48-4"> 4</a></span>
@@ -6169,18 +6062,181 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
 <span class="normal"><a href="#__codelineno-48-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-48-10">10</a></span>
 <span class="normal"><a href="#__codelineno-48-11">11</a></span>
-<span class="normal"><a href="#__codelineno-48-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="c1"># 进入工具示例目录</span>
-</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a><span class="nb">cd</span><span class="w"> </span>examples/tool
-</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a>go<span class="w"> </span>run<span class="w"> </span>.
-</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a>
-</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="c1"># 进入 MCP 工具示例目录</span>
-</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a><span class="nb">cd</span><span class="w"> </span>examples/mcp_tool
-</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a>
-</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a><span class="c1"># 启动外部服务器</span>
-</span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9"></a><span class="nb">cd</span><span class="w"> </span>streamalbe_server<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span><span class="p">&amp;</span>
-</span><span id="__span-48-10"><a id="__codelineno-48-10" name="__codelineno-48-10"></a>
-</span><span id="__span-48-11"><a id="__codelineno-48-11" name="__codelineno-48-11"></a><span class="c1"># 运行主程序</span>
-</span><span id="__span-48-12"><a id="__codelineno-48-12" name="__codelineno-48-12"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>-model<span class="o">=</span><span class="s2">&quot;deepseek-chat&quot;</span>
+<span class="normal"><a href="#__codelineno-48-12">12</a></span>
+<span class="normal"><a href="#__codelineno-48-13">13</a></span>
+<span class="normal"><a href="#__codelineno-48-14">14</a></span>
+<span class="normal"><a href="#__codelineno-48-15">15</a></span>
+<span class="normal"><a href="#__codelineno-48-16">16</a></span>
+<span class="normal"><a href="#__codelineno-48-17">17</a></span>
+<span class="normal"><a href="#__codelineno-48-18">18</a></span>
+<span class="normal"><a href="#__codelineno-48-19">19</a></span>
+<span class="normal"><a href="#__codelineno-48-20">20</a></span>
+<span class="normal"><a href="#__codelineno-48-21">21</a></span>
+<span class="normal"><a href="#__codelineno-48-22">22</a></span>
+<span class="normal"><a href="#__codelineno-48-23">23</a></span>
+<span class="normal"><a href="#__codelineno-48-24">24</a></span>
+<span class="normal"><a href="#__codelineno-48-25">25</a></span>
+<span class="normal"><a href="#__codelineno-48-26">26</a></span>
+<span class="normal"><a href="#__codelineno-48-27">27</a></span>
+<span class="normal"><a href="#__codelineno-48-28">28</a></span>
+<span class="normal"><a href="#__codelineno-48-29">29</a></span>
+<span class="normal"><a href="#__codelineno-48-30">30</a></span>
+<span class="normal"><a href="#__codelineno-48-31">31</a></span>
+<span class="normal"><a href="#__codelineno-48-32">32</a></span>
+<span class="normal"><a href="#__codelineno-48-33">33</a></span>
+<span class="normal"><a href="#__codelineno-48-34">34</a></span>
+<span class="normal"><a href="#__codelineno-48-35">35</a></span>
+<span class="normal"><a href="#__codelineno-48-36">36</a></span>
+<span class="normal"><a href="#__codelineno-48-37">37</a></span>
+<span class="normal"><a href="#__codelineno-48-38">38</a></span>
+<span class="normal"><a href="#__codelineno-48-39">39</a></span>
+<span class="normal"><a href="#__codelineno-48-40">40</a></span>
+<span class="normal"><a href="#__codelineno-48-41">41</a></span>
+<span class="normal"><a href="#__codelineno-48-42">42</a></span>
+<span class="normal"><a href="#__codelineno-48-43">43</a></span>
+<span class="normal"><a href="#__codelineno-48-44">44</a></span>
+<span class="normal"><a href="#__codelineno-48-45">45</a></span>
+<span class="normal"><a href="#__codelineno-48-46">46</a></span>
+<span class="normal"><a href="#__codelineno-48-47">47</a></span>
+<span class="normal"><a href="#__codelineno-48-48">48</a></span>
+<span class="normal"><a href="#__codelineno-48-49">49</a></span>
+<span class="normal"><a href="#__codelineno-48-50">50</a></span>
+<span class="normal"><a href="#__codelineno-48-51">51</a></span>
+<span class="normal"><a href="#__codelineno-48-52">52</a></span>
+<span class="normal"><a href="#__codelineno-48-53">53</a></span>
+<span class="normal"><a href="#__codelineno-48-54">54</a></span>
+<span class="normal"><a href="#__codelineno-48-55">55</a></span>
+<span class="normal"><a href="#__codelineno-48-56">56</a></span>
+<span class="normal"><a href="#__codelineno-48-57">57</a></span>
+<span class="normal"><a href="#__codelineno-48-58">58</a></span>
+<span class="normal"><a href="#__codelineno-48-59">59</a></span>
+<span class="normal"><a href="#__codelineno-48-60">60</a></span>
+<span class="normal"><a href="#__codelineno-48-61">61</a></span>
+<span class="normal"><a href="#__codelineno-48-62">62</a></span>
+<span class="normal"><a href="#__codelineno-48-63">63</a></span>
+<span class="normal"><a href="#__codelineno-48-64">64</a></span>
+<span class="normal"><a href="#__codelineno-48-65">65</a></span>
+<span class="normal"><a href="#__codelineno-48-66">66</a></span>
+<span class="normal"><a href="#__codelineno-48-67">67</a></span>
+<span class="normal"><a href="#__codelineno-48-68">68</a></span>
+<span class="normal"><a href="#__codelineno-48-69">69</a></span>
+<span class="normal"><a href="#__codelineno-48-70">70</a></span>
+<span class="normal"><a href="#__codelineno-48-71">71</a></span>
+<span class="normal"><a href="#__codelineno-48-72">72</a></span>
+<span class="normal"><a href="#__codelineno-48-73">73</a></span>
+<span class="normal"><a href="#__codelineno-48-74">74</a></span>
+<span class="normal"><a href="#__codelineno-48-75">75</a></span>
+<span class="normal"><a href="#__codelineno-48-76">76</a></span>
+<span class="normal"><a href="#__codelineno-48-77">77</a></span>
+<span class="normal"><a href="#__codelineno-48-78">78</a></span>
+<span class="normal"><a href="#__codelineno-48-79">79</a></span>
+<span class="normal"><a href="#__codelineno-48-80">80</a></span>
+<span class="normal"><a href="#__codelineno-48-81">81</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a>
+</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a>
+</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-48-10"><a id="__codelineno-48-10" name="__codelineno-48-10"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-48-11"><a id="__codelineno-48-11" name="__codelineno-48-11"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
+</span><span id="__span-48-12"><a id="__codelineno-48-12" name="__codelineno-48-12"></a><span class="p">)</span>
+</span><span id="__span-48-13"><a id="__codelineno-48-13" name="__codelineno-48-13"></a>
+</span><span id="__span-48-14"><a id="__codelineno-48-14" name="__codelineno-48-14"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-15"><a id="__codelineno-48-15" name="__codelineno-48-15"></a><span class="w">    </span><span class="c1">// 1. 创建简单工具</span>
+</span><span id="__span-48-16"><a id="__codelineno-48-16" name="__codelineno-48-16"></a><span class="w">    </span><span class="nx">calculatorTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
+</span><span id="__span-48-17"><a id="__codelineno-48-17" name="__codelineno-48-17"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-18"><a id="__codelineno-48-18" name="__codelineno-48-18"></a><span class="w">            </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot; jsonschema:&quot;description=运算类型，例如 add/multiply&quot;`</span>
+</span><span id="__span-48-19"><a id="__codelineno-48-19" name="__codelineno-48-19"></a><span class="w">            </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot; jsonschema:&quot;description=第一个操作数&quot;`</span>
+</span><span id="__span-48-20"><a id="__codelineno-48-20" name="__codelineno-48-20"></a><span class="w">            </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot; jsonschema:&quot;description=第二个操作数&quot;`</span>
+</span><span id="__span-48-21"><a id="__codelineno-48-21" name="__codelineno-48-21"></a><span class="w">        </span><span class="p">})</span><span class="w"> </span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{},</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-22"><a id="__codelineno-48-22" name="__codelineno-48-22"></a><span class="w">            </span><span class="kd">var</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="kt">float64</span>
+</span><span id="__span-48-23"><a id="__codelineno-48-23" name="__codelineno-48-23"></a><span class="w">            </span><span class="k">switch</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Operation</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-24"><a id="__codelineno-48-24" name="__codelineno-48-24"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;add&quot;</span><span class="p">:</span>
+</span><span id="__span-48-25"><a id="__codelineno-48-25" name="__codelineno-48-25"></a><span class="w">                </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">B</span>
+</span><span id="__span-48-26"><a id="__codelineno-48-26" name="__codelineno-48-26"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;multiply&quot;</span><span class="p">:</span>
+</span><span id="__span-48-27"><a id="__codelineno-48-27" name="__codelineno-48-27"></a><span class="w">                </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">B</span>
+</span><span id="__span-48-28"><a id="__codelineno-48-28" name="__codelineno-48-28"></a><span class="w">            </span><span class="k">default</span><span class="p">:</span>
+</span><span id="__span-48-29"><a id="__codelineno-48-29" name="__codelineno-48-29"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;unsupported operation&quot;</span><span class="p">)</span>
+</span><span id="__span-48-30"><a id="__codelineno-48-30" name="__codelineno-48-30"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-48-31"><a id="__codelineno-48-31" name="__codelineno-48-31"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{}{</span><span class="s">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">result</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-48-32"><a id="__codelineno-48-32" name="__codelineno-48-32"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-48-33"><a id="__codelineno-48-33" name="__codelineno-48-33"></a><span class="w">        </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">),</span>
+</span><span id="__span-48-34"><a id="__codelineno-48-34" name="__codelineno-48-34"></a><span class="w">        </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;简单计算器&quot;</span><span class="p">),</span>
+</span><span id="__span-48-35"><a id="__codelineno-48-35" name="__codelineno-48-35"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-48-36"><a id="__codelineno-48-36" name="__codelineno-48-36"></a>
+</span><span id="__span-48-37"><a id="__codelineno-48-37" name="__codelineno-48-37"></a><span class="w">    </span><span class="c1">// 2. 创建模型和 Agent</span>
+</span><span id="__span-48-38"><a id="__codelineno-48-38" name="__codelineno-48-38"></a><span class="w">    </span><span class="nx">llmModel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;DeepSeek-V3-Online-64K&quot;</span><span class="p">)</span>
+</span><span id="__span-48-39"><a id="__codelineno-48-39" name="__codelineno-48-39"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;calculator-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-48-40"><a id="__codelineno-48-40" name="__codelineno-48-40"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">llmModel</span><span class="p">),</span>
+</span><span id="__span-48-41"><a id="__codelineno-48-41" name="__codelineno-48-41"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;你是一个数学助手&quot;</span><span class="p">),</span>
+</span><span id="__span-48-42"><a id="__codelineno-48-42" name="__codelineno-48-42"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}),</span>
+</span><span id="__span-48-43"><a id="__codelineno-48-43" name="__codelineno-48-43"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span><span class="nx">Stream</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}),</span><span class="w"> </span><span class="c1">// 启用流式输出</span>
+</span><span id="__span-48-44"><a id="__codelineno-48-44" name="__codelineno-48-44"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-48-45"><a id="__codelineno-48-45" name="__codelineno-48-45"></a>
+</span><span id="__span-48-46"><a id="__codelineno-48-46" name="__codelineno-48-46"></a><span class="w">    </span><span class="c1">// 3. 创建 Runner 并执行</span>
+</span><span id="__span-48-47"><a id="__codelineno-48-47" name="__codelineno-48-47"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;math-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-48-48"><a id="__codelineno-48-48" name="__codelineno-48-48"></a>
+</span><span id="__span-48-49"><a id="__codelineno-48-49" name="__codelineno-48-49"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
+</span><span id="__span-48-50"><a id="__codelineno-48-50" name="__codelineno-48-50"></a><span class="w">    </span><span class="nx">userMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;请计算 25 乘以 4&quot;</span><span class="p">)</span>
+</span><span id="__span-48-51"><a id="__codelineno-48-51" name="__codelineno-48-51"></a>
+</span><span id="__span-48-52"><a id="__codelineno-48-52" name="__codelineno-48-52"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;user1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">)</span>
+</span><span id="__span-48-53"><a id="__codelineno-48-53" name="__codelineno-48-53"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-54"><a id="__codelineno-48-54" name="__codelineno-48-54"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-48-55"><a id="__codelineno-48-55" name="__codelineno-48-55"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-48-56"><a id="__codelineno-48-56" name="__codelineno-48-56"></a>
+</span><span id="__span-48-57"><a id="__codelineno-48-57" name="__codelineno-48-57"></a><span class="w">    </span><span class="c1">// 4. 处理响应</span>
+</span><span id="__span-48-58"><a id="__codelineno-48-58" name="__codelineno-48-58"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-59"><a id="__codelineno-48-59" name="__codelineno-48-59"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-60"><a id="__codelineno-48-60" name="__codelineno-48-60"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;错误: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-48-61"><a id="__codelineno-48-61" name="__codelineno-48-61"></a><span class="w">            </span><span class="k">continue</span>
+</span><span id="__span-48-62"><a id="__codelineno-48-62" name="__codelineno-48-62"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-48-63"><a id="__codelineno-48-63" name="__codelineno-48-63"></a>
+</span><span id="__span-48-64"><a id="__codelineno-48-64" name="__codelineno-48-64"></a><span class="w">        </span><span class="c1">// 显示工具调用</span>
+</span><span id="__span-48-65"><a id="__codelineno-48-65" name="__codelineno-48-65"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-66"><a id="__codelineno-48-66" name="__codelineno-48-66"></a><span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-67"><a id="__codelineno-48-67" name="__codelineno-48-67"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;🔧 调用工具: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="p">)</span>
+</span><span id="__span-48-68"><a id="__codelineno-48-68" name="__codelineno-48-68"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;   参数: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Arguments</span><span class="p">))</span>
+</span><span id="__span-48-69"><a id="__codelineno-48-69" name="__codelineno-48-69"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-48-70"><a id="__codelineno-48-70" name="__codelineno-48-70"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-48-71"><a id="__codelineno-48-71" name="__codelineno-48-71"></a>
+</span><span id="__span-48-72"><a id="__codelineno-48-72" name="__codelineno-48-72"></a><span class="w">        </span><span class="c1">// 显示流式内容</span>
+</span><span id="__span-48-73"><a id="__codelineno-48-73" name="__codelineno-48-73"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-74"><a id="__codelineno-48-74" name="__codelineno-48-74"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
+</span><span id="__span-48-75"><a id="__codelineno-48-75" name="__codelineno-48-75"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-48-76"><a id="__codelineno-48-76" name="__codelineno-48-76"></a>
+</span><span id="__span-48-77"><a id="__codelineno-48-77" name="__codelineno-48-77"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-78"><a id="__codelineno-48-78" name="__codelineno-48-78"></a><span class="w">            </span><span class="k">break</span>
+</span><span id="__span-48-79"><a id="__codelineno-48-79" name="__codelineno-48-79"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-48-80"><a id="__codelineno-48-80" name="__codelineno-48-80"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-48-81"><a id="__codelineno-48-81" name="__codelineno-48-81"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="_38">运行示例</h3>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-49-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-49-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-49-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-49-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-49-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-49-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-49-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-49-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-49-10">10</a></span>
+<span class="normal"><a href="#__codelineno-49-11">11</a></span>
+<span class="normal"><a href="#__codelineno-49-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a><span class="c1"># 进入工具示例目录</span>
+</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a><span class="nb">cd</span><span class="w"> </span>examples/tool
+</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a>go<span class="w"> </span>run<span class="w"> </span>.
+</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a>
+</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5"></a><span class="c1"># 进入 MCP 工具示例目录</span>
+</span><span id="__span-49-6"><a id="__codelineno-49-6" name="__codelineno-49-6"></a><span class="nb">cd</span><span class="w"> </span>examples/mcp_tool
+</span><span id="__span-49-7"><a id="__codelineno-49-7" name="__codelineno-49-7"></a>
+</span><span id="__span-49-8"><a id="__codelineno-49-8" name="__codelineno-49-8"></a><span class="c1"># 启动外部服务器</span>
+</span><span id="__span-49-9"><a id="__codelineno-49-9" name="__codelineno-49-9"></a><span class="nb">cd</span><span class="w"> </span>streamalbe_server<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span><span class="p">&amp;</span>
+</span><span id="__span-49-10"><a id="__codelineno-49-10" name="__codelineno-49-10"></a>
+</span><span id="__span-49-11"><a id="__codelineno-49-11" name="__codelineno-49-11"></a><span class="c1"># 运行主程序</span>
+</span><span id="__span-49-12"><a id="__codelineno-49-12" name="__codelineno-49-12"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>-model<span class="o">=</span><span class="s2">&quot;deepseek-chat&quot;</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="_39">总结</h2>
 <p>Tool 工具系统为 tRPC-Agent-Go 提供了丰富的扩展能力，支持函数工具、DuckDuckGo 搜索工具和 MCP 协议工具。</p>
@@ -6206,7 +6262,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月24日 02:48:53 UTC">2026-04-24 02:48:53</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月24日 08:39:28 UTC">2026-04-24 08:39:28</span>
   </span>
 
     
