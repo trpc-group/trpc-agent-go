@@ -358,6 +358,24 @@ func TestSingleResultSubscriber_NilResult(t *testing.T) {
 	}
 }
 
+func TestResponseRewriterFuncs_Defaults(t *testing.T) {
+	rewriter := ResponseRewriterFuncs{}
+	unary := &protocol.Message{
+		Role:  protocol.MessageRoleAgent,
+		Parts: []protocol.Part{protocol.NewTextPart("unary")},
+	}
+	streaming := &protocol.TaskStatusUpdateEvent{
+		TaskID:    "task",
+		ContextID: "ctx",
+		Status: protocol.TaskStatus{
+			State: protocol.TaskStateCompleted,
+		},
+	}
+
+	assert.Same(t, unary, rewriter.RewriteUnary(unary))
+	assert.Same(t, streaming, rewriter.RewriteStreaming(streaming))
+}
+
 func TestWithOptions(t *testing.T) {
 	expectedRunner := runner.Runner(&mockRunner{})
 
