@@ -358,6 +358,41 @@ server, _ := a2aserver.New(
 
 建议仅在调试场景开启，生产环境默认关闭可以减少噪音与带宽开销。
 
+#### 改写出站 A2A 响应
+
+`WithResponseRewriter` 允许服务端在 A2A 结果返回给调用方、或发送给流式订阅者之前做最后一次改写。
+典型用途包括隐藏内部 metadata、删除调试字段，或丢弃不希望暴露到公开 A2A 协议面的服务端事件。
+
+对于 unary 响应，rewriter 看到的是服务端聚合后的最终结果。对于 streaming 响应，rewriter 会看到每一个即将发送的出站结果，包括转换后的 agent 事件、task 状态更新、final artifact、结构化 task error，以及 `ErrorHandler` 返回的消息。
+
+rewriter 返回 `nil` 表示丢弃该出站结果。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-a2a-go/protocol"
+	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+)
+
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithResponseRewriter(a2aserver.ResponseRewriterFuncs{
+		Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+			if msg, ok := result.(*protocol.Message); ok {
+				delete(msg.Metadata, "debug_trace")
+			}
+			return result
+		},
+		Streaming: func(result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+			if msg, ok := result.(*protocol.Message); ok {
+				delete(msg.Metadata, "debug_trace")
+			}
+			return result
+		},
+	}),
+)
+```
+
 ### 在一个端口上暴露多个 A2A Agent（base path）
 
 有时你希望 **一个服务（一个端口）** 同时对外提供多个 A2A Agent。
@@ -883,6 +918,7 @@ subAgent, _ := a2aagent.New(
 | `WithProcessorBuilder(builder)` | 完全自定义消息处理器 |
 | `WithTaskManagerBuilder(builder)` | 自定义任务管理器 |
 | `WithGraphEventObjectAllowlist(types...)` | 限制 Event 转换器允许输出的 graph object 类型 |
+| `WithResponseRewriter(rewriter)` | 改写或丢弃出站 A2A unary/streaming 结果 |
 | `WithRunOptions(opts...)` | 为每次调用追加 RunOption |
 | `WithStreamingEventType(type)` | 流式输出事件类型（Artifact/Message） |
 | `WithUserIDHeader(header)` | 自定义 UserID HTTP Header |

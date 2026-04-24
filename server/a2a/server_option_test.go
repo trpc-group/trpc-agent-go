@@ -293,58 +293,94 @@ func TestDefaultErrorHandler(t *testing.T) {
 	}
 }
 
-func TestSingleMsgSubscriber(t *testing.T) {
+func TestSingleResultSubscriber(t *testing.T) {
 	testMsg := &protocol.Message{
 		Role:  protocol.MessageRoleAgent,
 		Parts: []protocol.Part{protocol.NewTextPart("test message")},
 	}
 
-	subscriber := newSingleMsgSubscriber(testMsg)
+	subscriber := newSingleResultSubscriber(testMsg)
 
 	// Test initial state - singleMsgSubscriber is always closed
 	if !subscriber.Closed() {
-		t.Error("newSingleMsgSubscriber() should be closed (always returns true)")
+		t.Error("newSingleResultSubscriber() should be closed (always returns true)")
 	}
 
 	// Test channel
 	ch := subscriber.Channel()
 	if ch == nil {
-		t.Error("newSingleMsgSubscriber() channel should not be nil")
+		t.Error("newSingleResultSubscriber() channel should not be nil")
 	}
 
 	// Test receiving the message
 	select {
 	case event := <-ch:
 		if event.Result != testMsg {
-			t.Errorf("newSingleMsgSubscriber() received message = %v, want %v", event.Result, testMsg)
+			t.Errorf("newSingleResultSubscriber() received message = %v, want %v", event.Result, testMsg)
 		}
 	default:
-		t.Error("newSingleMsgSubscriber() should have message available immediately")
+		t.Error("newSingleResultSubscriber() should have message available immediately")
 	}
 
 	// Test that channel is closed after receiving message
 	select {
 	case _, ok := <-ch:
 		if ok {
-			t.Error("newSingleMsgSubscriber() channel should be closed after message")
+			t.Error("newSingleResultSubscriber() channel should be closed after message")
 		}
 	default:
-		t.Error("newSingleMsgSubscriber() channel should be closed")
+		t.Error("newSingleResultSubscriber() channel should be closed")
 	}
 
 	// Test Send method (should return error for single message subscriber)
 	err := subscriber.Send(protocol.StreamingMessageEvent{Result: testMsg})
 	if err == nil {
-		t.Error("newSingleMsgSubscriber() Send() should return error")
+		t.Error("newSingleResultSubscriber() Send() should return error")
 	}
 	expectedErrMsg := "send msg is not allowed for singleMsgSubscriber"
 	if err.Error() != expectedErrMsg {
-		t.Errorf("newSingleMsgSubscriber() Send() error = %v, want %v", err.Error(), expectedErrMsg)
+		t.Errorf("newSingleResultSubscriber() Send() error = %v, want %v", err.Error(), expectedErrMsg)
 	}
 
 	// Test Close method (should be safe to call multiple times)
 	subscriber.Close()
 	subscriber.Close() // Should not panic
+}
+
+func TestSingleResultSubscriber_NilResult(t *testing.T) {
+	subscriber := newSingleResultSubscriber(nil)
+
+	ch := subscriber.Channel()
+	if ch == nil {
+		t.Fatal("newSingleResultSubscriber(nil) channel should not be nil")
+	}
+
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Fatal("newSingleResultSubscriber(nil) channel should be closed without events")
+		}
+	default:
+		t.Fatal("newSingleResultSubscriber(nil) should close channel immediately")
+	}
+}
+
+func TestResponseRewriterFuncs_Defaults(t *testing.T) {
+	rewriter := ResponseRewriterFuncs{}
+	unary := &protocol.Message{
+		Role:  protocol.MessageRoleAgent,
+		Parts: []protocol.Part{protocol.NewTextPart("unary")},
+	}
+	streaming := &protocol.TaskStatusUpdateEvent{
+		TaskID:    "task",
+		ContextID: "ctx",
+		Status: protocol.TaskStatus{
+			State: protocol.TaskStateCompleted,
+		},
+	}
+
+	assert.Same(t, unary, rewriter.RewriteUnary(unary))
+	assert.Same(t, streaming, rewriter.RewriteStreaming(streaming))
 }
 
 func TestWithOptions(t *testing.T) {
@@ -523,6 +559,17 @@ func TestWithOptions(t *testing.T) {
 							"graphEventObjectAllowlist",
 					)
 				}
+			},
+		},
+		{
+			name:   "WithResponseRewriter",
+			option: WithResponseRewriter(ResponseRewriterFuncs{}),
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
+				assert.NotNil(t, opts.responseRewriter)
 			},
 		},
 		{
