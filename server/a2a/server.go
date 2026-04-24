@@ -732,7 +732,7 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		}
 		return true
 	}
-	produce := func() (*event.Event, bool) {
+	produce := func(ctx context.Context) (*event.Event, bool) {
 		select {
 		case <-ctx.Done():
 			return nil, false
