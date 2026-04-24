@@ -1788,8 +1788,8 @@ The framework provides two distinct modes for managing conversation context sent
 When `WithEnableContextCompaction(true)` is enabled, the framework adds a lightweight Phase 1 compaction pass before the LLM call:
 
 - **Pass 1** — Historical tool results from older requests that exceed `ContextCompactionToolResultMaxTokens` (default 1024 tokens) are replaced with a placeholder while keeping `ToolID` and `ToolName`.
-- **Pass 2** — Any single tool result (including the current request) exceeding `ContextCompactionOversizedToolResultMaxTokens` (default 8192 tokens) is truncated using head+tail preservation with a `[...N characters truncated...]` marker. Pass 2 fires independently of `EnableContextCompaction`.
-- The latest `ContextCompactionKeepRecentRequests` completed requests are exempt from Pass 1 (but not Pass 2).
+- **Pass 2** — Any single tool result (including the current request) exceeding `ContextCompactionOversizedToolResultMaxTokens` is truncated using head+tail preservation with a `[...N characters truncated...]` marker. **Disabled by default (value `0`)** — you must explicitly call `WithContextCompactionOversizedToolResultMaxTokens(...)` and keep `WithEnableContextCompaction(true)` for Pass 2 to fire (recommended opt-in value: 8192 tokens).
+- The latest `ContextCompactionKeepRecentRequests` completed requests are exempt from Pass 1 (but if Pass 2 is opted into, they remain subject to Pass 2 truncation).
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model.
 - Model-layer token tailoring remains the final fallback.
 
@@ -1811,7 +1811,7 @@ llmAgent := llmagent.New(
 - No summary is prepended.
 - Only the **most recent `MaxHistoryRuns` conversation turns** are included.
 - When `MaxHistoryRuns=0` (default), no limit is applied and all history is included.
-- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted (Pass 1) and extremely large tool results in any request can be head+tail truncated (Pass 2) during request projection.
+- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted (Pass 1). If you additionally call `WithContextCompactionOversizedToolResultMaxTokens(8192)` (or another positive value), extremely large tool results in any request will be head+tail truncated (Pass 2). Both passes require the `EnableContextCompaction=true` master switch.
 - The pre-LLM synchronous summary retry is disabled in this mode.
 - Use this mode for short sessions or when you want direct control over context window size.
 

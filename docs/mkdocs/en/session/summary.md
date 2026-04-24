@@ -710,7 +710,7 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 - The current request and the latest `ContextCompactionKeepRecentRequests` completed requests are never affected
 - This cleans up accumulated long tool outputs from earlier conversation turns
 
-**Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, default 8192 tokens):
+**Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, **default 0 / disabled**):
 
 - Applies to **all** tool results including the current request
 - Tool results exceeding this threshold are truncated using head+tail preservation: the beginning and end of the content are kept, with a `[...N characters truncated...]` marker in the middle
@@ -718,9 +718,7 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 
 The two passes have different roles: Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases but protects the current request too.
 
-Additionally:
-
-Pass 2 fires regardless of `EnableContextCompaction`; it only requires `ContextCompactionOversizedToolResultMaxTokens > 0`.
+Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableContextCompaction(true)` is set and (2) `ContextCompactionOversizedToolResultMaxTokens > 0` (recommended opt-in value: `8192`, exposed as the constant `processor.DefaultContextCompactionOversizedToolResultMaxTokens`). This guarantees that `EnableContextCompaction=false` always means "the framework will not modify any tool result".
 
 Additionally:
 
@@ -775,7 +773,7 @@ llmagent.WithMaxHistoryRuns(10)
 - No summary message added
 - Only includes the most recent `MaxHistoryRuns` conversation turns
 - `MaxHistoryRuns=0` means no limit, includes all history
-- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted during request projection; additionally, extremely large tool results in any request (including the current one) will be head+tail truncated whenever `ContextCompactionOversizedToolResultMaxTokens > 0` (this fires even without `EnableContextCompaction`)
+- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted during request projection (Pass 1). If you also explicitly set `WithContextCompactionOversizedToolResultMaxTokens(8192)` (or another positive value), extremely large tool results in any request (including the current one) will be head+tail truncated (Pass 2). Both passes require the `EnableContextCompaction=true` master switch.
 - The pre-LLM synchronous summary retry is disabled in this mode
 
 **Context structure**:
@@ -802,7 +800,7 @@ llmagent.WithMaxHistoryRuns(10)
 
 If your long sessions frequently contain large tool outputs such as search results, logs, or code scan output, enable `EnableContextCompaction=true`. Pair it with `AddSessionSummary=true` when you also want the pre-LLM synchronous summary retry.
 
-> **Tip**: If your agent uses tools like `web_fetch` that can return extremely large results in a single call, `ContextCompactionOversizedToolResultMaxTokens` is particularly valuable — it prevents a single tool result from consuming the entire context window, even when that result belongs to the current (protected) request. It fires independently of `EnableContextCompaction`.
+> **Tip**: If your agent uses tools like `web_fetch` that can return extremely large results in a single call, `ContextCompactionOversizedToolResultMaxTokens` is particularly valuable — it prevents a single tool result from consuming the entire context window, even when that result belongs to the current (protected) request. It is **disabled by default**; opt in by enabling `WithEnableContextCompaction(true)` and passing a positive threshold (recommended: `8192`).
 
 ## Summary Format Customization
 
