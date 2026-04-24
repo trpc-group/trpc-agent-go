@@ -26,11 +26,16 @@ const (
 	// placeholder.
 	DefaultContextCompactionToolResultMaxTokens = 1024
 
-	// DefaultContextCompactionOversizedToolResultMaxTokens is the token
-	// threshold above which ANY tool result (including current request) is
-	// truncated to head+tail. This is the safety net for tool results so
-	// large they alone could overflow the context window (e.g. web_fetch
-	// returning 800K+ chars).
+	// DefaultContextCompactionOversizedToolResultMaxTokens is the recommended
+	// token threshold above which ANY tool result (including current request)
+	// is truncated to head+tail when Pass 2 is opted into.
+	//
+	// NOTE: this constant is only the suggested value to pass to
+	// WithContextCompactionOversizedToolResultMaxTokens; it is NOT applied
+	// automatically. Pass 2 only runs when both EnableContextCompaction is
+	// true and the threshold is greater than 0. The default for the option
+	// itself is 0 (disabled) so that EnableContextCompaction=false truly
+	// means "framework will not modify tool results".
 	DefaultContextCompactionOversizedToolResultMaxTokens = 8192
 
 	historicalToolResultPlaceholder = "Historical tool result omitted to save context."
@@ -44,8 +49,9 @@ type ContextCompactionConfig struct {
 	ToolResultMaxTokens int
 	// OversizedToolResultMaxTokens is the token threshold above which any tool
 	// result (including current-request results) is truncated using head+tail
-	// preservation. This safety net fires regardless of the Enabled flag.
-	// 0 disables it.
+	// preservation. Like Pass 1, this also requires Enabled=true; it will not
+	// fire when context compaction is turned off, even if a positive threshold
+	// is configured. 0 disables it regardless of Enabled.
 	OversizedToolResultMaxTokens int
 }
 
@@ -84,7 +90,7 @@ func compactIncrementEvents(
 	}
 
 	pass1Active := cfg.Enabled && cfg.ToolResultMaxTokens > 0
-	pass2Active := cfg.OversizedToolResultMaxTokens > 0
+	pass2Active := cfg.Enabled && cfg.OversizedToolResultMaxTokens > 0
 	if !pass1Active && !pass2Active {
 		return events, ContextCompactionStats{}
 	}
@@ -112,7 +118,9 @@ func compactIncrementEvents(
 	}
 
 	// Pass 2: oversized tool results (including current request) → head+tail
-	// truncation. This safety net fires independently of EnableContextCompaction.
+	// truncation. Gated on EnableContextCompaction together with Pass 1, so
+	// the framework never silently rewrites tool results when context
+	// compaction is disabled.
 	if pass2Active {
 		passEvents, passStats := applyOversizedToolResultPass(
 			ctx,

@@ -24,7 +24,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
@@ -378,8 +377,10 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.IntVar(
 		&opts.ContextCompactionOversizedToolResultMaxTokens,
 		flagContextCompactionOversizedToolResultMaxTokens,
-		processor.DefaultContextCompactionOversizedToolResultMaxTokens,
-		"Truncate oversized tool results with head+tail preservation (0=disable)",
+		0,
+		"Truncate oversized tool results with head+tail preservation when "+
+			"context compaction is enabled (0=disable; recommended opt-in "+
+			"value is 8192). Requires --enable-context-compaction.",
 	)
 	fs.IntVar(
 		&opts.MaxHistoryRuns,

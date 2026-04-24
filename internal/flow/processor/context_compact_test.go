@@ -332,6 +332,42 @@ func TestCompactIncrementEvents_Pass2WorksWithoutPass1Context(t *testing.T) {
 	require.Greater(t, stats.EstimatedTokensSaved, 0)
 }
 
+// TestCompactIncrementEvents_Pass2RequiresEnabled documents that Pass 2 is
+// gated on the EnableContextCompaction master switch. When Enabled=false the
+// framework must not modify tool results, even when a positive
+// OversizedToolResultMaxTokens is configured.
+func TestCompactIncrementEvents_Pass2RequiresEnabled(t *testing.T) {
+	content := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	evt := event.Event{
+		RequestID:    "req-current",
+		InvocationID: "inv-current",
+		FilterKey:    "test-agent",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage("tool-call-current", "worker", content),
+			}},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{evt},
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled:                      false,
+			OversizedToolResultMaxTokens: 32,
+		},
+	)
+
+	require.Len(t, compacted, 1)
+	require.Equal(t, content, compacted[0].Response.Choices[0].Message.Content,
+		"Pass 2 must not modify tool results when EnableContextCompaction is off")
+	require.Zero(t, stats.ToolResultsCompacted)
+	require.Zero(t, stats.EstimatedTokensSaved)
+}
+
 func TestTruncateOversizedToolResultMessage_PreservesContentParts(t *testing.T) {
 	partText := "structured payload"
 	msg := model.Message{
