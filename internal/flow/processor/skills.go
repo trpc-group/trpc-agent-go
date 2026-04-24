@@ -777,11 +777,12 @@ func (p *SkillsRequestProcessor) injectOverview(
 	if len(sums) == 0 {
 		return
 	}
-	sums = prioritizeSummariesForRequest(sums, req.Messages)
+	var topRecommendation string
+	sums, topRecommendation = prioritizeSummariesForRequest(sums, req.Messages)
 	rendered, truncated := p.applyOverviewCap(sums)
 	flags := p.toolFlagsForInvocation(inv)
 	protocol := p.protocolGuidanceText(flags)
-	overview := p.buildOverviewText(ctx, repo, sums, rendered, truncated, flags, protocol)
+	overview := p.buildOverviewText(ctx, repo, sums, rendered, truncated, flags, protocol, topRecommendation)
 	mergeOverviewIntoRequest(req, overview, protocol != "")
 }
 
@@ -794,6 +795,7 @@ func (p *SkillsRequestProcessor) buildOverviewText(
 	sums, rendered, truncated []skill.Summary,
 	flags skillprofile.Flags,
 	protocol string,
+	topRecommendation string,
 ) string {
 	var b strings.Builder
 	if protocol != "" {
@@ -804,6 +806,9 @@ func (p *SkillsRequestProcessor) buildOverviewText(
 	if protocol == "" && flags.Load && !flags.Run {
 		b.WriteString("The short lines below are routing summaries only. ")
 		b.WriteString("If one looks relevant, call skill_load before relying on it or repeating domain-specific tool work.\n")
+	}
+	if topRecommendation != "" && flags.Load {
+		fmt.Fprintf(&b, "Top recommended skill for this request: `%s`. If this skill matches the task family, call skill_load on it as your first tool call before any domain tool.\n", topRecommendation)
 	}
 	if p.directoryHints || p.filePathHints {
 		if rootsText := buildSkillRootsText(repo); rootsText != "" {
@@ -897,13 +902,13 @@ func (p *SkillsRequestProcessor) applyOverviewCap(
 func prioritizeSummariesForRequest(
 	sums []skill.Summary,
 	messages []model.Message,
-) []skill.Summary {
+) (sorted []skill.Summary, topRecommendation string) {
 	if len(sums) < 2 {
-		return sums
+		return sums, ""
 	}
 	queryWeights := overviewQueryWeights(messages)
 	if len(queryWeights) == 0 {
-		return sums
+		return sums, ""
 	}
 	type scoredSummary struct {
 		summary skill.Summary
@@ -919,7 +924,7 @@ func prioritizeSummariesForRequest(
 		scored[i] = scoredSummary{summary: s, score: score}
 	}
 	if maxScore == 0 {
-		return sums
+		return sums, ""
 	}
 	sort.SliceStable(scored, func(i, j int) bool {
 		return scored[i].score > scored[j].score
@@ -928,7 +933,17 @@ func prioritizeSummariesForRequest(
 	for i, item := range scored {
 		out[i] = item.summary
 	}
-	return out
+	// A skill is considered a clear top recommendation only when its
+	// score is materially higher than the runner-up. We use a 2x
+	// threshold with a small absolute floor so tiny-score ties do not
+	// fire the hint.
+	top := ""
+	if len(scored) >= 1 && scored[0].score >= 4 {
+		if len(scored) == 1 || scored[0].score >= 2*scored[1].score {
+			top = scored[0].summary.Name
+		}
+	}
+	return out, top
 }
 
 func overviewQueryWeights(messages []model.Message) map[string]int {
