@@ -88,6 +88,10 @@ var CodeEntityTypes = []any{
 	"Service",
 	"RPC",
 	"Message",
+	"enum",
+	"service",
+	"rpc",
+	"message",
 }
 
 // CodeScopeTypes contains all available search scope types.
@@ -360,7 +364,7 @@ Do not blindly add many fields. Choose filters based on the user's intent:
 1. To narrow the search space:
 - metadata.trpc_ast_repo_name: repository name
 - metadata.trpc_ast_scope: code, example
-- metadata.trpc_ast_type: Function, Method, Struct, Interface, Class, Variable, Alias, Package, Namespace, Template, Enum, Service, RPC, Message
+- metadata.trpc_ast_type: Function, Method, Struct, Interface, Class, Variable, Alias, Package, Namespace, Template, Enum, Service, RPC, Message, enum, service, rpc, message
 
 2. To find an exact symbol or declaration:
 - metadata.trpc_ast_full_name: exact fully-qualified symbol name

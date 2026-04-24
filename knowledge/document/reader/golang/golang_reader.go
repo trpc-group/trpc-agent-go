@@ -188,8 +188,9 @@ func (r *Reader) processContent(content, name string, baseMetadata map[string]an
 
 func (r *Reader) nodesToDocuments(result *codeast.Result, baseMetadata map[string]any) []*document.Document {
 	payloads := codeast.NodesToDocumentPayloads(result, codeast.NodeDocumentPayloadOptions{
-		BaseMetadata: baseMetadata,
-		FileInfo:     result.File,
+		BaseMetadata:  baseMetadata,
+		ScopeBasePath: repoRootFromMetadata(baseMetadata),
+		FileInfo:      result.File,
 		FormatType: func(entityType codeast.EntityType) string {
 			return string(entityType)
 		},
@@ -291,23 +292,22 @@ func (r *Reader) SupportedExtensions() []string {
 }
 
 // resolveScope returns the AST scope ("code" or "example") for a file-level
-// document. It is shared by the chunked AST path and the no-chunk fallback so
-// that both paths agree on how "example" content is classified. When the
-// baseMetadata provides a repository root (under source.MetaRepoPath), the
-// "example" detection is anchored at that root so that directories such as
-// "examples" are matched relative to the repo rather than the absolute file
-// path.
+// document. When baseMetadata provides a repository root under
+// source.MetaRepoPath, detection is anchored at that root.
 func resolveScope(filePath string, baseMetadata map[string]any) string {
-	basePath := ""
-	if baseMetadata != nil {
-		if v, ok := baseMetadata[source.MetaRepoPath]; ok {
-			if s, ok := v.(string); ok {
-				basePath = s
-			}
-		}
-	}
-	if codeast.IsExamplePath(filePath, basePath) {
+	if codeast.IsExamplePath(filePath, repoRootFromMetadata(baseMetadata)) {
 		return string(codeast.ScopeExample)
 	}
 	return string(codeast.ScopeCode)
+}
+
+func repoRootFromMetadata(baseMetadata map[string]any) string {
+	if baseMetadata != nil {
+		if v, ok := baseMetadata[source.MetaRepoPath]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
 }

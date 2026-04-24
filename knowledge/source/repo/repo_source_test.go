@@ -250,8 +250,7 @@ package demo;
 message SkipProto { string name = 1; }
 `)
 
-	src := New(
-		WithRepository(Repository{Dir: repoRoot}),
+	src := New(WithRepository(Repository{Dir: repoRoot}),
 		WithSkipSuffixes([]string{".pb.go", ".pb.proto", ".trpc.go", "_mock.go"}),
 	)
 	docs, err := src.ReadDocuments(context.Background())
@@ -358,8 +357,7 @@ func (s *Service) Do() error { return nil }
 }
 
 func TestReadDocumentsRejectsMultipleRepositoriesPerSource(t *testing.T) {
-	src := New(
-		WithRepository(Repository{Dir: t.TempDir()}),
+	src := New(WithRepository(Repository{Dir: t.TempDir()}),
 		WithRepository(Repository{URL: "https://example.com/demo.git"}),
 	)
 
@@ -427,8 +425,7 @@ func TestWithFileExtensionsCopiesCallerSlice(t *testing.T) {
 }
 
 func TestOptionSettersBasicCoverage(t *testing.T) {
-	src := New(
-		WithName("repo-src"),
+	src := New(WithName("repo-src"),
 		WithMetadata(map[string]any{"k": "v"}),
 		WithMetadataValue("k2", "v2"),
 		WithRepository(Repository{Dir: "/tmp/repo", Tag: "v1.0.0", Commit: "commit-sha"}),
@@ -446,8 +443,7 @@ func TestOptionSettersBasicCoverage(t *testing.T) {
 }
 
 func TestSourceMetadataAndHelpers(t *testing.T) {
-	src := New(
-		WithName("repo-src"),
+	src := New(WithName("repo-src"),
 		WithMetadata(map[string]any{"k": "v"}),
 	)
 
@@ -569,8 +565,7 @@ func TestGetFilePathsHonorsSkipAndExtensions(t *testing.T) {
 	writeRepoFile(t, filepath.Join(repoRoot, "vendor", "x.go"), "package vendor\n")
 	writeRepoFile(t, filepath.Join(repoRoot, ".git", "HEAD"), "ref: refs/heads/main\n")
 
-	src := New(
-		WithFileExtensions([]string{".go"}),
+	src := New(WithFileExtensions([]string{".go"}),
 		WithSkipDirs([]string{".git", "vendor"}),
 		WithSkipSuffixes([]string{".pb.go"}),
 	)

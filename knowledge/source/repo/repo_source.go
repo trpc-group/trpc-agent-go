@@ -354,11 +354,8 @@ func cloneRemoteRepository(ctx context.Context, repository Repository, tmpDir st
 			return "", fmt.Errorf("failed to clone repo at %s %q: %w", kind, target, err)
 		}
 	case checkoutTargetCommit:
-		if err := runGit(ctx, "", "clone", "--depth", "1", repository.URL, tmpDir); err != nil {
+		if err := runGit(ctx, "", "clone", repository.URL, tmpDir); err != nil {
 			return "", fmt.Errorf("failed to clone repo before checking out commit %q: %w", target, err)
-		}
-		if err := runGit(ctx, tmpDir, "fetch", "--depth", "1", "origin", target); err != nil {
-			return "", fmt.Errorf("failed to fetch commit %q: %w", target, err)
 		}
 		if err := runGit(ctx, tmpDir, "checkout", target); err != nil {
 			return "", fmt.Errorf("failed to checkout commit %q: %w", target, err)

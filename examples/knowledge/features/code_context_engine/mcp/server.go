@@ -39,14 +39,15 @@ import (
 const (
 	serverName                = "trpc-agent-code-search-mcp"
 	serverVersion             = "0.1.0"
-	defaultServerAddr         = ":3001"
+	defaultServerAddr         = "127.0.0.1:3001"
 	defaultServerPath         = "/mcp"
 	repoURL                   = "https://github.com/trpc-group/trpc-agent-go"
 	repoName                  = "trpc-agent-go"
 	repoBranch                = "main"
 	maxResults                = 5
 	embeddingModelNameEnvKey  = "EMBEDDING_MODEL_NAME"
-	defaultEmbeddingModelName = "server:277357"
+	defaultEmbeddingModelName = "text-embedding-3-small"
+	vectorStoreTypeEnvKey     = "VECTOR_STORE_TYPE"
 	filterSchemaDepth         = 2
 )
 
@@ -62,7 +63,8 @@ var (
 	flagAddr        = flag.String("addr", defaultServerAddr, "HTTP listen address for the MCP server")
 	flagPath        = flag.String("path", defaultServerPath, "HTTP path prefix for the MCP endpoint")
 	flagSkipLoad    = flag.Bool("skip-load", false, "Skip repository ingestion and reuse the existing vector-store data as-is")
-	flagTruncateOld = flag.Bool("truncate-old", true, "Recreate the vector store before ingestion (deletes all existing documents); implies -skip-load=false")
+	flagTruncateOld = flag.Bool("truncate-old", false, "Recreate the vector store before ingestion (deletes all existing documents); implies -skip-load=false")
+	flagStoreType   = flag.String("store", util.GetEnvOrDefault(vectorStoreTypeEnvKey, string(util.VectorStoreInMemory)), "Vector store type (inmemory|pgvector|sqlitevec|tcvector|elasticsearch|milvus)")
 )
 
 func main() {
@@ -77,7 +79,7 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	storeType := util.VectorStoreType(util.VectorStorePGVector)
+	storeType := util.VectorStoreType(*flagStoreType)
 	embeddingModelName := util.GetEnvOrDefault(
 		embeddingModelNameEnvKey,
 		defaultEmbeddingModelName,

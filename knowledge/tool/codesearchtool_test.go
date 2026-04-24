@@ -69,7 +69,7 @@ func (s *stubRepoDescriptorSource) GetMetadata() map[string]any {
 	return nil
 }
 
-func (s *stubRepoDescriptorSource) RepositoryDescriptor() (string, description string, ok bool) {
+func (s *stubRepoDescriptorSource) RepositoryDescriptor() (name, description string, ok bool) {
 	return s.name, s.description, s.ok
 }
 

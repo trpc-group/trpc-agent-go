@@ -142,6 +142,8 @@ func New(opts ...Option) *BuiltinKnowledge {
 // used by tool-layer helpers that need source-level context such as repository
 // descriptions, without relying on per-chunk metadata.
 func (dk *BuiltinKnowledge) Sources() []source.Source {
+	dk.dataOperationMu.RLock()
+	defer dk.dataOperationMu.RUnlock()
 	return slices.Clone(dk.sources)
 }
 

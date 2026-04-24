@@ -17,7 +17,12 @@ import (
 // Option represents a functional option for configuring repository sources.
 type Option func(*Source)
 
-// WithRepository sets the single repository handled by this source.
+// WithRepository sets the single repository handled by this Source.
+//
+// Calling WithRepository more than once keeps the first repository value in
+// Source.repository, leaves Source.hasRepository set, and records the duplicate
+// configuration in Source.multiRepoError. The deferred error is surfaced by
+// Source.ReadDocuments rather than by the option itself.
 func WithRepository(repository Repository) Option {
 	return func(s *Source) {
 		if s.hasRepository {

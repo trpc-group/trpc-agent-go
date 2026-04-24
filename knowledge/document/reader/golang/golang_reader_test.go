@@ -379,6 +379,25 @@ func TestCreateFileDocumentFromInfoUsesRepoRootForExampleScope(t *testing.T) {
 	assertMetadataEquals(t, doc.Metadata, "trpc_ast_scope", "example")
 }
 
+func TestChunkedReaderUsesRepoRootForScope(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "examples")
+	repoRoot := filepath.Join(workspace, "repo")
+	filePath := filepath.Join(repoRoot, "pkg", "service.go")
+
+	r := New().(*Reader)
+	docs, err := r.processContent(
+		"package demo\n\nfunc Serve() {}\n",
+		filePath,
+		map[string]any{source.MetaRepoPath: repoRoot},
+	)
+	if err != nil {
+		t.Fatalf("processContent() error = %v", err)
+	}
+
+	doc := findDocByFullName(t, docs, "demo.Serve")
+	assertMetadataEquals(t, doc.Metadata, "trpc_ast_scope", "code")
+}
+
 func TestResolveScopeUsesRepoRootMetadata(t *testing.T) {
 	repoRoot := t.TempDir()
 

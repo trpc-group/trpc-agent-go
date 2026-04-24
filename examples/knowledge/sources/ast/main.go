@@ -60,9 +60,7 @@ func main() {
 
 func demonstrateRepoSource(ctx context.Context, goRepoURL string, protoRepo string) {
 	src := repo.New(
-		repo.WithRepository(
-			repo.Repository{URL: goRepoURL, Branch: "main"},
-		),
+		repo.WithRepository(repo.Repository{URL: goRepoURL, Branch: "main"}),
 		repo.WithName("AST Repository"),
 		repo.WithFileExtensions([]string{".go", ".md"}),
 	)

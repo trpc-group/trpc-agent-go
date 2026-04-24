@@ -138,6 +138,36 @@ func TestNodeToDocumentPayloadOptionalBranches(t *testing.T) {
 	}
 }
 
+func TestNodeToDocumentPayloadRecomputesScopeWithBasePath(t *testing.T) {
+	repoRoot := filepath.Join("workspace", "repo")
+	node := &Node{
+		Name:     "Run",
+		Type:     EntityFunction,
+		Scope:    ScopeExample,
+		Language: LanguageGo,
+		Code:     "func Run() {}",
+		FilePath: filepath.Join("workspace", "examples", "repo", "pkg", "run.go"),
+	}
+
+	payload := NodeToDocumentPayload(node, NodeDocumentPayloadOptions{
+		ScopeBasePath: filepath.Join("workspace", "examples", "repo"),
+	})
+	if payload == nil {
+		t.Fatal("expected payload")
+	}
+	if got := payload.Metadata[TrpcAstMetaPrefix+"scope"]; got != string(ScopeCode) {
+		t.Fatalf("unexpected scope metadata: %v", got)
+	}
+
+	node.FilePath = filepath.Join(repoRoot, "examples", "demo", "main.go")
+	payload = NodeToDocumentPayload(node, NodeDocumentPayloadOptions{
+		ScopeBasePath: repoRoot,
+	})
+	if got := payload.Metadata[TrpcAstMetaPrefix+"scope"]; got != string(ScopeExample) {
+		t.Fatalf("unexpected example scope metadata: %v", got)
+	}
+}
+
 func TestIsExamplePath(t *testing.T) {
 	repoRoot := filepath.Join("workspace", "repo")
 

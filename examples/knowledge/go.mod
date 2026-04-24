@@ -19,6 +19,7 @@ replace (
 )
 
 require (
+	github.com/getkin/kin-openapi v0.124.0
 	trpc.group/trpc-go/trpc-agent-go v1.8.2-0.20260415014524-d83a248b0ea1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
@@ -57,7 +58,6 @@ require (
 	github.com/elastic/go-elasticsearch/v9 v9.1.0 // indirect
 	github.com/form3tech-oss/jwt-go v3.2.3+incompatible // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
-	github.com/getkin/kin-openapi v0.124.0 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/go-ego/gse v1.0.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
