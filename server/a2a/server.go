@@ -723,27 +723,6 @@ func (m *messageProcessor) processAgentStreamingEvents(
 			)
 		}
 	}()
-	abortStreaming := func(err error) bool {
-		if err == nil {
-			return false
-		}
-		if errors.Is(err, context.Canceled) {
-			log.DebugfContext(ctx, "streaming stopped before completion: %v", err)
-			return true
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			log.WarnfContext(ctx, "streaming stopped before completion: %v", err)
-			return true
-		}
-		if handleErr := m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err); handleErr != nil {
-			log.ErrorfContext(
-				ctx,
-				"failed to handle streaming error: %v",
-				handleErr,
-			)
-		}
-		return true
-	}
 	produce := func() (*event.Event, bool) {
 		select {
 		case <-ctx.Done():
@@ -771,6 +750,83 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		)
 	}
 
+	if m.abortStreamingOnError(ctx, a2aMsg, subscriber, m.sendTaskSubmittedEvent(
+		ctx,
+		taskID,
+		userID,
+		sessionID,
+		a2aMsg,
+		subscriber,
+	)) {
+		return
+	}
+
+	// run event tunnel
+	tunnel := newEventTunnel(defaultBatchSize, defaultFlushInterval, produce, consume)
+	if err := tunnel.Run(ctx); err != nil {
+		log.WarnfContext(ctx, "Event transfer error: %v", err)
+		if m.abortStreamingOnError(ctx, a2aMsg, subscriber, err) {
+			return
+		}
+	}
+	if terminalTaskError {
+		return
+	}
+
+	if m.abortStreamingOnError(ctx, a2aMsg, subscriber, m.sendFinalArtifactEvent(
+		ctx,
+		taskID,
+		*a2aMsg.ContextID,
+		finalStreamingMetadata,
+		subscriber,
+	)) {
+		return
+	}
+
+	m.abortStreamingOnError(ctx, a2aMsg, subscriber, m.sendTaskCompletedEvent(
+		ctx,
+		taskID,
+		*a2aMsg.ContextID,
+		finalStreamingMetadata,
+		subscriber,
+	))
+}
+
+func (m *messageProcessor) abortStreamingOnError(
+	ctx context.Context,
+	a2aMsg *protocol.Message,
+	subscriber taskmanager.TaskSubscriber,
+	err error,
+) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		log.DebugfContext(ctx, "streaming stopped before completion: %v", err)
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		log.WarnfContext(ctx, "streaming stopped before completion: %v", err)
+		return true
+	}
+	if handleErr := m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err); handleErr != nil {
+		log.ErrorfContext(
+			ctx,
+			"failed to handle streaming error: %v",
+			handleErr,
+		)
+	}
+	return true
+}
+
+func (m *messageProcessor) sendTaskSubmittedEvent(
+	ctx context.Context,
+	taskID string,
+	userID string,
+	sessionID string,
+	a2aMsg *protocol.Message,
+	subscriber taskmanager.TaskSubscriber,
+) error {
 	taskSubmitted := protocol.NewTaskStatusUpdateEvent(
 		taskID, *a2aMsg.ContextID,
 		protocol.TaskStatus{
@@ -779,59 +835,50 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		},
 		false,
 	)
-	// Add ADK-compatible metadata if enabled
+	// Add ADK-compatible metadata if enabled.
 	m.addTaskMetadata(&taskSubmitted, userID, sessionID)
-	if rewritten := m.rewriteStreamingResult(&taskSubmitted); rewritten != nil {
-		if err := subscriber.Send(protocol.StreamingMessageEvent{Result: rewritten}); err != nil {
-			log.ErrorfContext(
-				ctx,
-				"failed to send task submitted message: %v",
-				err,
-			)
-			if abortStreaming(err) {
-				return
-			}
-		}
-	}
+	return m.sendStreamingResult(
+		ctx,
+		subscriber,
+		&taskSubmitted,
+		"failed to send task submitted message",
+	)
+}
 
-	// run event tunnel
-	tunnel := newEventTunnel(defaultBatchSize, defaultFlushInterval, produce, consume)
-	if err := tunnel.Run(ctx); err != nil {
-		log.WarnfContext(ctx, "Event transfer error: %v", err)
-		if abortStreaming(err) {
-			return
-		}
+func (m *messageProcessor) sendFinalArtifactEvent(
+	ctx context.Context,
+	taskID string,
+	ctxID string,
+	finalStreamingMetadata map[string]any,
+	subscriber taskmanager.TaskSubscriber,
+) error {
+	if m.streamingEventType == StreamingEventTypeMessage {
+		return nil
 	}
-	if terminalTaskError {
-		return
-	}
+	finalArtifact := protocol.NewTaskArtifactUpdateEvent(
+		taskID,
+		ctxID,
+		protocol.Artifact{Parts: []protocol.Part{}},
+		true,
+	)
+	finalArtifact.Metadata = cloneStreamingMetadata(finalStreamingMetadata)
+	return m.sendStreamingResult(
+		ctx,
+		subscriber,
+		&finalArtifact,
+		"failed to send final artifact message",
+	)
+}
 
-	if m.streamingEventType != StreamingEventTypeMessage {
-		finalArtifact := protocol.NewTaskArtifactUpdateEvent(
-			taskID,
-			*a2aMsg.ContextID,
-			protocol.Artifact{Parts: []protocol.Part{}},
-			true,
-		)
-		finalArtifact.Metadata = cloneStreamingMetadata(finalStreamingMetadata)
-		if rewritten := m.rewriteStreamingResult(&finalArtifact); rewritten != nil {
-			if err := subscriber.Send(protocol.StreamingMessageEvent{
-				Result: rewritten,
-			}); err != nil {
-				log.ErrorfContext(
-					ctx,
-					"failed to send final artifact message: %v",
-					err,
-				)
-				if abortStreaming(err) {
-					return
-				}
-			}
-		}
-	}
-
+func (m *messageProcessor) sendTaskCompletedEvent(
+	ctx context.Context,
+	taskID string,
+	ctxID string,
+	finalStreamingMetadata map[string]any,
+	subscriber taskmanager.TaskSubscriber,
+) error {
 	taskCompleted := protocol.NewTaskStatusUpdateEvent(
-		taskID, *a2aMsg.ContextID,
+		taskID, ctxID,
 		protocol.TaskStatus{
 			State:     protocol.TaskStateCompleted,
 			Timestamp: time.Now().Format(time.RFC3339),
@@ -841,18 +888,29 @@ func (m *messageProcessor) processAgentStreamingEvents(
 	if m.streamingEventType == StreamingEventTypeMessage {
 		taskCompleted.Metadata = cloneStreamingMetadata(finalStreamingMetadata)
 	}
-	if rewritten := m.rewriteStreamingResult(&taskCompleted); rewritten != nil {
-		if err := subscriber.Send(protocol.StreamingMessageEvent{Result: rewritten}); err != nil {
-			log.ErrorfContext(
-				ctx,
-				"failed to send task completed message: %v",
-				err,
-			)
-			if abortStreaming(err) {
-				return
-			}
-		}
+	return m.sendStreamingResult(
+		ctx,
+		subscriber,
+		&taskCompleted,
+		"failed to send task completed message",
+	)
+}
+
+func (m *messageProcessor) sendStreamingResult(
+	ctx context.Context,
+	subscriber taskmanager.TaskSubscriber,
+	result protocol.StreamingMessageResult,
+	errorMessage string,
+) error {
+	rewritten := m.rewriteStreamingResult(result)
+	if rewritten == nil {
+		return nil
 	}
+	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: rewritten}); err != nil {
+		log.ErrorfContext(ctx, "%s: %v", errorMessage, err)
+		return err
+	}
+	return nil
 }
 
 // processBatchStreamingEvents processes a batch of streaming events and sends them through msgChan.
