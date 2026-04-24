@@ -57,8 +57,11 @@ type Planner struct {
 	//     backward compatibility).
 	reasoningEffort *string
 
-	// thinkingEnabled enables thinking mode for models that support it.
-	// Only effective for Claude and Gemini models via OpenAI API.
+	// thinkingEnabled toggles thinking mode for models that support it.
+	// Effective for DeepSeek v4 models, and for Claude / Gemini models via
+	// the OpenAI API. When left nil, trpc-agent-go does not emit the
+	// "thinking" field at all; the provider then applies its own default
+	// (DeepSeek v4's server-side default is "enabled").
 	thinkingEnabled *bool
 
 	// thinkingTokens controls the length of thinking.
@@ -84,12 +87,16 @@ type Options struct {
 	//     backward compatibility).
 	ReasoningEffort *string
 
-	// ThinkingEnabled enables thinking mode for Claude and Gemini models via OpenAI API.
-	// Set to true to enable thinking capabilities.
+	// ThinkingEnabled enables thinking mode for models that support it.
+	// Effective for DeepSeek v4 models, and for Claude / Gemini models via
+	// the OpenAI API. When left nil, trpc-agent-go does not emit the
+	// "thinking" field at all; the provider then applies its own default
+	// (DeepSeek v4's server-side default is "enabled").
 	ThinkingEnabled *bool
 
 	// ThinkingTokens controls the length of thinking for Claude and Gemini models via OpenAI API.
 	// Higher values allow for more detailed internal reasoning.
+	// Not applicable to DeepSeek v4 (which uses ReasoningEffort instead).
 	ThinkingTokens *int
 }
 
