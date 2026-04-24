@@ -362,6 +362,12 @@ tm, err := team.NewSwarm(
 下一条用户输入将从该成员开始（直到再次发生 `transfer_to_agent`）。该能力通过
 Session State 实现，因此需要复用同一个 session。
 
+它和 `await_user_reply + runner.WithAwaitUserReplyRouting(true)` 的语义不同：
+
+- `WithCrossRequestTransfer(true)` 是 Swarm 专属的 owner 语义。只要没有新的
+  transfer，后续用户消息都会继续落到当前 active member。
+- `await_user_reply` 是一次性路由。它只消费下一条用户消息，消费后会自动清掉。
+
 ### 动态成员（运行时增删）
 
 在长时间运行的服务中，Swarm 的成员列表可能会变化（例如远程 Agent

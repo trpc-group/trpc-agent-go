@@ -1273,7 +1273,7 @@ toolSet := mcp.NewMCPToolSet(
 
 - 🎯 **Per-Run 控制**：每次调用独立配置，不影响 Agent 定义
 - 💰 **成本优化**：减少发送给 LLM 的工具描述，降低 token 消耗
-- 🛡️ **智能保护**：框架工具（`transfer_to_agent`、`knowledge_search`）自动保留，永不被过滤
+- 🛡️ **智能保护**：框架工具（`transfer_to_agent`、`knowledge_search`、`agentic_knowledge_search`、可选的 `await_user_reply`）自动保留，永不被过滤
 - 🔧 **灵活定制**：支持内置过滤器和自定义 FilterFunc
 
 #### Tool Search（自动工具筛选）
@@ -1529,7 +1529,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 | 工具分类     | 包含的工具                                                                                             | 是否被过滤            |
 | ------------ | ------------------------------------------------------------------------------------------------------ | --------------------- |
 | **用户工具** | 通过 `WithTools` 注册的工具<br>通过 `WithToolSets` 注册的工具                                          | ✅ 受过滤控制         |
-| **框架工具** | `transfer_to_agent`（多 Agent 协调）<br>`knowledge_search`（知识库检索）<br>`agentic_knowledge_search` | ❌ 永不过滤，自动保留 |
+| **框架工具** | `transfer_to_agent`（多 Agent 协调）<br>`knowledge_search`（知识库检索）<br>`agentic_knowledge_search`<br>`await_user_reply`（开启后的一次性追问路由） | ❌ 永不过滤，自动保留 |
 
 **示例：**
 
@@ -1542,6 +1542,7 @@ agent := llmagent.New("assistant",
     }),
     llmagent.WithSubAgents([]agent.Agent{subAgent1, subAgent2}), // 自动添加 transfer_to_agent
     llmagent.WithKnowledge(kb),                                   // 自动添加 knowledge_search
+    llmagent.WithAwaitUserReplyTool(true),                        // 自动添加 await_user_reply
 )
 
 // 运行时过滤：只允许 calculator
@@ -1555,7 +1556,34 @@ runner.Run(ctx, userID, sessionID, message,
 // ❌ textTool          - 用户工具，被过滤
 // ✅ transfer_to_agent - 框架工具，自动保留
 // ✅ knowledge_search  - 框架工具，自动保留
+// ✅ await_user_reply  - 框架工具，自动保留
 ```
+
+#### 用 `await_user_reply` 处理跨轮追问
+
+`await_user_reply` 是一个可选框架工具。当某个 Agent 可能向用户补问信息，并且
+你希望下一条用户消息继续回到这个 Agent 时，可以开启
+`llmagent.WithAwaitUserReplyTool(true)`。
+
+它需要和 `runner.WithAwaitUserReplyRouting(true)` 搭配使用：
+
+```go
+profileAgent := llmagent.New("profile-agent",
+    llmagent.WithAwaitUserReplyTool(true),
+    llmagent.WithInstruction(`
+如果你必须向用户补一个缺失字段，先调用 await_user_reply，
+再提出问题。
+`),
+)
+
+r := runner.NewRunner(
+    "crm-app",
+    profileAgent,
+    runner.WithAwaitUserReplyRouting(true),
+)
+```
+
+这条路由是一次性的：Runner 会在下一条用户消息到来时消费它，然后自动清掉。
 
 #### 注意事项
 
@@ -1703,7 +1731,9 @@ if !removed {
 运行时 ToolSet 更新会自动与前文的**工具过滤机制**协同工作：
 
 - 通过 `WithTools` 和所有 ToolSet（包括动态添加的 ToolSet）注册的工具都视为**用户工具**，会受到 `WithToolFilter` 以及每次调用的运行时过滤控制。
-- 框架工具（`transfer_to_agent`、`knowledge_search`、`agentic_knowledge_search`）仍然**永远不被过滤**，始终对 Agent 可用。
+- 框架工具（`transfer_to_agent`、`knowledge_search`、
+  `agentic_knowledge_search`、可选的 `await_user_reply`）仍然
+  **永远不被过滤**，始终对 Agent 可用。
 
 #### Tool Call 参数自动修复
 

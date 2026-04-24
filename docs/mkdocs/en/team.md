@@ -390,6 +390,14 @@ Agent that produced the last reply (until another `transfer_to_agent` happens).
 This feature is implemented via session state, so you must reuse the same
 session across requests.
 
+This is different from `await_user_reply` plus
+`runner.WithAwaitUserReplyRouting(true)`:
+
+- `WithCrossRequestTransfer(true)` is a Swarm-specific owner model. The active
+  member keeps owning future user turns until another transfer happens.
+- `await_user_reply` is a one-shot route. It is consumed by exactly one future
+  user turn and then cleared automatically.
+
 ### Dynamic members (runtime)
 
 In long-running services, the set of available Swarm members may change over

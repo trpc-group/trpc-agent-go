@@ -35,6 +35,7 @@ const (
 	testSubAgentName          = "sub-agent"
 	testToolNameWithCtx       = "tool_with_ctx"
 	testToolNameWithoutCtx    = "tool_without_ctx"
+	testAwaitReplyToolName    = "await_user_reply"
 )
 
 // minimalKnowledge implements knowledge.Knowledge with no-op behaviors for unit tests.
@@ -113,6 +114,43 @@ func TestLLMAgent_Tools_IncludesTransferWhenSubAgents(t *testing.T) {
 	}
 }
 
+func TestLLMAgent_Tools_IncludesAwaitUserReplyWhenEnabled(t *testing.T) {
+	agt := New("main", WithAwaitUserReplyTool(true))
+
+	ts := agt.Tools()
+	found := false
+	for _, tl := range ts {
+		if tl.Declaration().Name == testAwaitReplyToolName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected await_user_reply tool when enabled")
+	}
+}
+
+func TestLLMAgent_FilterTools_PreservesAwaitUserReply(t *testing.T) {
+	agt := New(
+		"main",
+		WithAwaitUserReplyTool(true),
+		WithToolFilter(func(context.Context, tool.Tool) bool {
+			return false
+		}),
+	)
+
+	filtered := agt.FilterTools(context.Background())
+	for _, tl := range filtered {
+		if tl.Declaration().Name == testAwaitReplyToolName {
+			return
+		}
+	}
+
+	t.Fatalf(
+		"expected await_user_reply to be preserved by runtime filtering",
+	)
+}
+
 func TestLLMAgent_UserTools(t *testing.T) {
 	// Create agent with user tools, toolsets, knowledge, and subagents
 	userTool1 := dummyTool{
@@ -130,6 +168,7 @@ func TestLLMAgent_UserTools(t *testing.T) {
 		WithToolSets([]tool.ToolSet{toolSet}),
 		WithKnowledge(kb),
 		WithSubAgents([]agent.Agent{subAgent}),
+		WithAwaitUserReplyTool(true),
 	)
 
 	// Get all tools
@@ -170,7 +209,9 @@ func TestLLMAgent_UserTools(t *testing.T) {
 	// Verify that framework tools are NOT in user tools
 	for _, tool := range userTools {
 		name := tool.Declaration().Name
-		if name == testKnowledgeToolName || name == testTransferToolName {
+		if name == testKnowledgeToolName ||
+			name == testTransferToolName ||
+			name == testAwaitReplyToolName {
 			t.Errorf("framework tool %s should not be in user tools", name)
 		}
 	}
@@ -184,6 +225,7 @@ func TestLLMAgent_UserTools_EmptyCase(t *testing.T) {
 	agent := New("test-agent",
 		WithKnowledge(kb),
 		WithSubAgents([]agent.Agent{subAgent}),
+		WithAwaitUserReplyTool(true),
 	)
 
 	// Get user tools - should be empty
@@ -198,17 +240,21 @@ func TestLLMAgent_UserTools_EmptyCase(t *testing.T) {
 
 	foundKnowledge := false
 	foundTransfer := false
+	foundAwaitReply := false
 	for _, tool := range allTools {
 		switch tool.Declaration().Name {
 		case testKnowledgeToolName:
 			foundKnowledge = true
 		case testTransferToolName:
 			foundTransfer = true
+		case testAwaitReplyToolName:
+			foundAwaitReply = true
 		}
 	}
 
-	if !foundKnowledge || !foundTransfer {
-		t.Errorf("framework tools should be in all tools even when no user tools")
+	if !foundKnowledge || !foundTransfer || !foundAwaitReply {
+		t.Errorf("framework tools should be in all tools even when " +
+			"no user tools")
 	}
 }
 
@@ -271,6 +317,7 @@ func TestLLMAgent_RefreshToolSetsOnRun(t *testing.T) {
 		WithTools([]tool.Tool{staticTool}),
 		WithToolSets([]tool.ToolSet{dyn}),
 		WithRefreshToolSetsOnRun(true),
+		WithAwaitUserReplyTool(true),
 	)
 
 	toolsV1 := agent.Tools()
@@ -322,7 +369,9 @@ func TestLLMAgent_RefreshToolSetsOnRun(t *testing.T) {
 	userTools := agent.UserTools()
 	for _, tl := range userTools {
 		name := tl.Declaration().Name
-		if name == "knowledge_search" || name == "transfer_to_agent" {
+		if name == "knowledge_search" ||
+			name == "transfer_to_agent" ||
+			name == testAwaitReplyToolName {
 			t.Fatalf(
 				"framework tool %s should not appear in user tools",
 				name,

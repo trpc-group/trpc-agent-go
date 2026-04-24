@@ -979,6 +979,18 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 			},
 		)
 	})
+
+	t.Run("with await_user_reply", func(t *testing.T) {
+		require.PanicsWithValue(t,
+			invalidOutputSchemaAwaitUserReply,
+			func() {
+				_ = New("test",
+					WithOutputSchema(schema),
+					WithAwaitUserReplyTool(true),
+				)
+			},
+		)
+	})
 }
 
 func TestLLMAgent_New_WithStructuredOutputJSONSchema_AllowsTools(t *testing.T) {

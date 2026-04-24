@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolawaitreply "trpc.group/trpc-go/trpc-agent-go/tool/awaitreply"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -234,6 +235,9 @@ func (a *LLMAgent) InvocationToolSurface(
 			effectiveExec,
 		),
 	)
+	if options.EnableAwaitUserReplyTool {
+		allTools = append(allTools, toolawaitreply.New())
+	}
 	if len(subAgents) == 0 {
 		return allTools, userToolNames
 	}
