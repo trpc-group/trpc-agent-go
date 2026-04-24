@@ -612,6 +612,68 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 	)
 }
 
+func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_spawn"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_list"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_get"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_cancel"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_spawn"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_list"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_get"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_cancel"),
+	)
+}
+
+func TestNewRuntime_ExposesSubagentService(t *testing.T) {
+	t.Parallel()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-enable-openclaw-tools",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+
+	require.NotNil(t, rt.SubagentService())
+}
+
+func TestRuntimeSubagentServiceNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var rt *Runtime
+	require.Nil(t, rt.SubagentService())
+}
+
 func TestNewRuntimeStores_CreatesAllStores(t *testing.T) {
 	t.Parallel()
 

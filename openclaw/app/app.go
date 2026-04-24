@@ -45,6 +45,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
+	publicsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -64,6 +65,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/subagentrun"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
@@ -175,7 +177,12 @@ const (
 		"OPENCLAW_LAST_UPLOAD_MIME, and " +
 		"OPENCLAW_MEMORY_FILE, " +
 		"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing " +
-		"attachment paths. When a user follows up about a " +
+		"attachment paths. For long-running work, independent " +
+		"verification, or background work that can continue after " +
+		"this turn, use subagents_spawn. Do not use background " +
+		"subagents for small, tightly-coupled steps, and do not " +
+		"spawn nested subagents. " +
+		"When a user follows up about a " +
 		"recent upload in the current chat, assume they mean " +
 		"that existing upload unless the reference is " +
 		"genuinely ambiguous. Match by media kind first: " +
@@ -185,8 +192,8 @@ const (
 		"one of those kinds. Telegram voice notes count as audio, " +
 		"video notes count as video, and documents with image/audio/" +
 		"video MIME types still count as that media kind. If the " +
-		"user replies " +
-		"to an earlier media message, treat that replied media as " +
+		"user replies to an earlier media message, treat that " +
+		"replied media as " +
 		"the default target unless they clearly ask for something " +
 		"else. Do not ask the user to re-upload a file or provide " +
 		"a local path when the recent upload context already lists " +
@@ -532,12 +539,14 @@ type Runtime struct {
 	adminCfg *admin.Config
 	appName  string
 	session  session.Service
+	subagent publicsubagent.Service
 
 	runner            runner.Runner
 	cronRunner        closeFunc
 	sessionSvc        closeFunc
 	memorySvc         closeFunc
 	cronSvc           closeFunc
+	subagentSvc       closeFunc
 	skillsWatch       closeFunc
 	toolSets          []tool.ToolSet
 	telemetryShutdown func(context.Context) error
@@ -611,6 +620,13 @@ func (r *Runtime) SessionService() session.Service {
 		return nil
 	}
 	return r.session
+}
+
+func (r *Runtime) SubagentService() publicsubagent.Service {
+	if r == nil {
+		return nil
+	}
+	return r.subagent
 }
 
 func (r *Runtime) ConfigureAdmin(
@@ -1071,8 +1087,9 @@ func NewRuntime(
 	}
 
 	var (
-		cronSvc    *cron.Service
-		cronRunner runner.Runner
+		cronSvc     *cron.Service
+		cronRunner  runner.Runner
+		subagentSvc *subagentrun.Service
 	)
 	if openClawTools.router != nil {
 		for _, ch := range rt.Channels {
@@ -1103,6 +1120,22 @@ func NewRuntime(
 		cronSvc.Start(ctx)
 		rt.cronSvc = cronSvc
 		rt.cronRunner = cronRunner
+
+		subagentSvc, err = subagentrun.NewService(
+			resolvedStateDir,
+			r,
+			openClawTools.router,
+		)
+		if err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create subagent service failed: %w", err),
+			}
+		}
+		openClawTools.subagentTools.SetService(subagentSvc)
+		subagentSvc.Start(ctx)
+		rt.subagent = subagentSvc
+		rt.subagentSvc = subagentSvc
 	}
 
 	if opts.AdminEnabled {
@@ -1152,6 +1185,9 @@ func (r *Runtime) Close() error {
 	}
 	if r.cronRunner != nil {
 		_ = r.cronRunner.Close()
+	}
+	if r.subagentSvc != nil {
+		_ = r.subagentSvc.Close()
 	}
 	if r.skillsWatch != nil {
 		if err := r.skillsWatch.Close(); err != nil {
@@ -1552,9 +1588,16 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	var (
-		cronSvc    *cron.Service
-		cronRunner runner.Runner
+		cronSvc     *cron.Service
+		cronRunner  runner.Runner
+		subagentSvc *subagentrun.Service
 	)
+	var cleanupSubagent func()
+	defer func() {
+		if cleanupSubagent != nil {
+			cleanupSubagent()
+		}
+	}()
 	if openClawTools.router != nil {
 		for _, ch := range channels {
 			openClawTools.router.Register(ch)
@@ -1582,6 +1625,33 @@ func run(ctx context.Context, args []string) error {
 		openClawTools.cronTool.SetService(cronSvc)
 		gw.SetCronService(cronSvc)
 		cronSvc.Start(runCtx)
+
+		subagentSvc, err = subagentrun.NewService(
+			resolvedStateDir,
+			r,
+			openClawTools.router,
+		)
+		if err != nil {
+			if cronSvc != nil {
+				_ = cronSvc.Close()
+			}
+			if cronRunner != nil {
+				_ = cronRunner.Close()
+			}
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create subagent service failed: %w", err),
+			}
+		}
+		openClawTools.subagentTools.SetService(subagentSvc)
+		subagentSvc.Start(runCtx)
+		cleanupSubagent = func() {
+			openClawTools.subagentTools.SetService(nil)
+			if subagentSvc != nil {
+				_ = subagentSvc.Close()
+				subagentSvc = nil
+			}
+		}
 	}
 
 	if opts.AdminEnabled {
@@ -1690,6 +1760,12 @@ func run(ctx context.Context, args []string) error {
 	}
 	if cronSvc != nil {
 		_ = cronSvc.Close()
+	}
+	if subagentSvc != nil {
+		openClawTools.subagentTools.SetService(nil)
+		cleanupSubagent = nil
+		_ = subagentSvc.Close()
+		subagentSvc = nil
 	}
 	if cronRunner != nil {
 		_ = cronRunner.Close()
@@ -2494,11 +2570,12 @@ type agentConfig struct {
 }
 
 type openClawToolsBundle struct {
-	tools    []tool.Tool
-	execMgr  *octool.Manager
-	router   *outbound.Router
-	cronTool *cron.Tool
-	deps     *deps.Report
+	tools         []tool.Tool
+	execMgr       *octool.Manager
+	router        *outbound.Router
+	cronTool      *cron.Tool
+	subagentTools subagentrun.Tools
+	deps          *deps.Report
 }
 
 type runtimeStores struct {
@@ -2568,6 +2645,7 @@ func buildOpenClawTools(
 	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
+	subagentTools := subagentrun.NewTools(nil)
 	var depsReport *deps.Report
 	if sources, err := deps.SourcesForProfiles(deps.DefaultProfiles()); err ==
 		nil {
@@ -2595,12 +2673,14 @@ func buildOpenClawTools(
 		outbound.NewTool(router),
 		cronTool,
 	}
+	tools = append(tools, subagentTools.All()...)
 	return openClawToolsBundle{
-		tools:    tools,
-		execMgr:  mgr,
-		router:   router,
-		cronTool: cronTool,
-		deps:     depsReport,
+		tools:         tools,
+		execMgr:       mgr,
+		router:        router,
+		cronTool:      cronTool,
+		subagentTools: subagentTools,
+		deps:          depsReport,
 	}
 }
 
