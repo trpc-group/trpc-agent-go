@@ -575,11 +575,14 @@ func (r *runner) seedSessionHistory(
 	invocation *agent.Invocation,
 	ag agent.Agent,
 	ro agent.RunOptions,
-) error {
+) (bool, error) {
 	if len(ro.Messages) == 0 || sess.GetEventCount() != 0 {
-		return nil
+		return false, nil
 	}
-	return r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, ro.Messages)
+	if err := r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, ro.Messages); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // appendSessionMessages persists messages into the session transcript in the
@@ -631,8 +634,12 @@ func (r *runner) appendIncomingMessage(
 	invocation *agent.Invocation,
 	message model.Message,
 	ro agent.RunOptions,
+	historySeeded bool,
 ) error {
-	if !model.HasPayload(message) || !shouldAppendUserMessage(message, ro.Messages) {
+	if !model.HasPayload(message) {
+		return nil
+	}
+	if historySeeded && !shouldAppendUserMessage(message, ro.Messages) {
 		return nil
 	}
 	evt := event.NewResponseEvent(
@@ -2083,10 +2090,11 @@ func (r *runner) persistCurrentTurnMessages(
 	ro agent.RunOptions,
 ) error {
 	if ro.UserMessageRewriter == nil {
-		if err := r.seedSessionHistory(ctx, sess, invocation, ag, ro); err != nil {
+		historySeeded, err := r.seedSessionHistory(ctx, sess, invocation, ag, ro)
+		if err != nil {
 			return err
 		}
-		return r.appendIncomingMessage(ctx, sess, invocation, message, ro)
+		return r.appendIncomingMessage(ctx, sess, invocation, message, ro, historySeeded)
 	}
 	if sess.GetEventCount() == 0 {
 		initialMessages := mergeCurrentTurnMessagesIntoSeed(
@@ -2108,9 +2116,13 @@ func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
 	if message.Role != model.RoleUser {
 		return true
 	}
+	// Only a trailing seeded user turn can cover the incoming user message.
 	for i := len(seed) - 1; i >= 0; i-- {
-		if seed[i].Role != model.RoleUser {
+		if (!model.HasPayload(seed[i]) && len(seed[i].ToolCalls) == 0) || seed[i].Role == model.RoleSystem {
 			continue
+		}
+		if seed[i].Role != model.RoleUser {
+			return true
 		}
 		return !model.MessagesEqual(seed[i], message)
 	}
