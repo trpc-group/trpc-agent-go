@@ -16,9 +16,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -138,11 +140,12 @@ func run() error {
 		return fmt.Errorf("code_search tool has nil declaration")
 	}
 
+	httpServer := &http.Server{Addr: *flagAddr}
 	server := mcp.NewServer(
 		serverName,
 		serverVersion,
-		mcp.WithServerAddress(*flagAddr),
 		mcp.WithServerPath(*flagPath),
+		mcp.WithCustomServer(httpServer),
 		mcp.WithServerLogger(mcp.GetDefaultLogger()),
 	)
 
@@ -164,9 +167,17 @@ func run() error {
 	select {
 	case sig := <-stop:
 		log.Printf("received signal %s, shutting down", sig)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown MCP server: %w", err)
+		}
+		if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("MCP server exited after shutdown: %w", err)
+		}
 		return nil
 	case err := <-serverErr:
-		if err != nil {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("MCP server exited: %w", err)
 		}
 		return nil

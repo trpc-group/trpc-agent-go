@@ -88,7 +88,7 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 	}
 	repository, ok := s.resolvedRepository()
 	if !ok {
-		return nil, nil
+		return nil, fmt.Errorf("repo source %q has no repository configured; use WithRepository(...)", s.name)
 	}
 	repoRoot, repoInfo, cleanup, err := s.resolveRepository(ctx, repository)
 	if err != nil {
@@ -249,6 +249,9 @@ func (s *Source) RepositoryDescriptor() (name, description string, ok bool) {
 	rawInput := repository.URL
 	if rawInput == "" {
 		rawInput = repository.Dir
+	}
+	if rawInput == "" && repository.RepoName == "" {
+		return "", "", false
 	}
 	return chooseRepoName(repository.RepoName, rawInput, rawInput), repository.Description, true
 }

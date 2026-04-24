@@ -288,6 +288,9 @@ func resolveNodeScope(node *Node, basePath string) Scope {
 	if basePath == "" || node.FilePath == "" {
 		return node.Scope
 	}
+	if node.Scope != "" && node.Scope != ScopeCode && node.Scope != ScopeExample {
+		return node.Scope
+	}
 	if IsExamplePath(node.FilePath, basePath) {
 		return ScopeExample
 	}

@@ -393,6 +393,9 @@ func TestResolvedRepositoryAndDescriptorEdgeCases(t *testing.T) {
 		if _, _, ok := src.RepositoryDescriptor(); ok {
 			t.Fatal("expected no repository descriptor")
 		}
+		if _, err := src.ReadDocuments(context.Background()); err == nil {
+			t.Fatal("expected missing repository error")
+		}
 	})
 
 	t.Run("descriptor uses configured dir and description", func(t *testing.T) {
@@ -408,6 +411,13 @@ func TestResolvedRepositoryAndDescriptorEdgeCases(t *testing.T) {
 		}
 		assertEqual(t, name, "demo-repo")
 		assertEqual(t, description, "demo repository")
+	})
+
+	t.Run("descriptor rejects empty repository", func(t *testing.T) {
+		src := New(WithRepository(Repository{}))
+		if _, _, ok := src.RepositoryDescriptor(); ok {
+			t.Fatal("expected no repository descriptor")
+		}
 	})
 }
 
