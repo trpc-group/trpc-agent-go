@@ -541,6 +541,70 @@ searchTool := duckduckgo.NewTool(
 )
 ```
 
+### Claude Code ToolSet
+
+`tool/claudecode` provides a code-oriented ToolSet that exposes a Claude Code-style tool surface inside the framework. It covers file editing, repository search, command execution, and web retrieval, and can be attached directly to `LLMAgent` or other runtimes. If your goal is to invoke the local Claude Code CLI and consume its execution trace and tool events, see the [Claude Code Agent guide](claudecode.md).
+
+By default, `claudecode` exposes a core set of workflow tools: `Bash`, `TaskStop`, `TaskOutput`, `Read`, `Glob`, `Grep`, `WebFetch`, and `WebSearch`. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`.
+
+The following table lists the tools currently exposed by `claudecode`:
+
+| Tool | Description |
+| --- | --- |
+| `Bash` | Executes local shell commands. |
+| `TaskStop` | Stops a background task started by `Bash`. |
+| `TaskOutput` | Reads the current or final output of a background task. |
+| `Read` | Reads file contents. |
+| `Glob` | Finds files by path pattern. |
+| `Grep` | Searches repository content. |
+| `WebFetch` | Fetches the content of a specific URL. |
+| `WebSearch` | Performs an open web search. |
+| `Write` | Creates a file or overwrites a file with complete contents. Only exposed when read-only mode is disabled. |
+| `Edit` | Performs targeted replacement in an existing text file. Only exposed when read-only mode is disabled. |
+| `NotebookEdit` | Edits `.ipynb` files at the cell level. Only exposed when read-only mode is disabled. |
+
+#### Basic Usage
+
+```go
+import (
+	"log"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/claudecode"
+)
+
+toolSet, err := claudecode.NewToolSet(
+	claudecode.WithBaseDir("."),
+)
+if err != nil {
+	log.Fatal(err)
+}
+defer toolSet.Close()
+
+agent := llmagent.New(
+	"claude-style-agent",
+	llmagent.WithToolSets([]tool.ToolSet{toolSet}),
+)
+```
+
+`llmagent.WithToolSets(...)` attaches these tools as a ToolSet. Calling `Tools()` returns the flattened list of individual tools.
+
+#### Common Options
+
+The main `tool/claudecode` options focus on working directory, read-only mode, and web behavior:
+
+| Option | Description |
+| --- | --- |
+| `WithName(name)` | Overrides the ToolSet name. The default name is `claudecode`. |
+| `WithBaseDir(dir)` | Sets the base directory used by file, search, and command execution tools. |
+| `WithReadOnly(readOnly)` | Removes `Write`, `Edit`, and `NotebookEdit` when enabled. |
+| `WithMaxFileSize(size)` | Limits the maximum readable file size. |
+| `WithWebFetchOptions(opts)` | Configures domain policy, timeout, and content handling for `WebFetch`. |
+| `WithWebSearchOptions(opts)` | Configures backend, paging, and request options for `WebSearch`. |
+
+`WithBaseDir` defines the working scope for `Read`, `Write`, `Edit`, `Glob`, and `Grep`, and also determines the default working directory for `Bash`. When read-only mode is enabled, the toolset keeps only read, search, command, and web capabilities. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`.
+
 ## MCP Tools
 
 MCP (Model Context Protocol) is an open protocol that standardizes how applications provide context to LLMs. MCP tools are based on JSON-RPC 2.0 and provide standardized integration with external services for Agents.
