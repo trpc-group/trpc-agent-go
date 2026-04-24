@@ -1794,13 +1794,16 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 
 	// Look for corresponding function call event.
 	functionCallEventIdx := -1
+	var functionCallIDs []string
 	for i := len(events) - 2; i >= 0; i-- {
 		evt := &events[i]
 		if evt.IsToolCallResponse() {
-			functionCallIDs := toMap(evt.GetToolCallIDs())
+			callIDs := evt.GetToolCallIDs()
+			functionCallIDSet := toMap(callIDs)
 			for _, responseID := range functionResponseIDs {
-				if functionCallIDs[responseID] {
+				if functionCallIDSet[responseID] {
 					functionCallEventIdx = i
+					functionCallIDs = callIDs
 					break
 				}
 			}
@@ -1820,8 +1823,8 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 		evt := &events[i]
 		if evt.IsToolResultResponse() {
 			responseIDs := toMap(evt.GetToolResultIDs())
-			for _, responseID := range functionResponseIDs {
-				if responseIDs[responseID] {
+			for _, callID := range functionCallIDs {
+				if responseIDs[callID] {
 					functionResponseEvents = append(functionResponseEvents, *evt)
 					break
 				}
