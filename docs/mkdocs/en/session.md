@@ -586,20 +586,21 @@ Suitable for production environments and distributed applications, provides high
 
 - **`WithEnableTracing(enable bool)`**: Enable OpenTelemetry tracing for Redis session operations. Default is `false`. When enabled, operations like `CreateSession`, `GetSession`, `AppendEvent`, `DeleteSession`, `AppendTrackEvent`, `CreateSessionSummary`, and `GetSessionSummaryText` automatically create spans.
 
-!!! note "About Root Span"
-    Session operations are executed by the Runner, occurring before and after the Agent's `Run()` call. The Agent's root span is created inside `agent.Run()`, so Session spans are not automatically attached as children of the Agent span. To see a complete Session span hierarchy in observability platforms like Langfuse, you need to manually create a root span before calling `runner.Run()`:
-
-    ```go
-    import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
-
-    // Create a root span before runner.Run(), so that session spans
-    // (create_session, get_session, append_event, etc.) become children
-    // of this root span via context propagation.
-    ctx, span := atrace.Tracer.Start(ctx, "my_request")
-    defer span.End()
-
-    eventChan, err := r.Run(ctx, userID, sessionID, message)
-    ```
+> **About Root Span**
+>
+> Session operations are executed by the Runner, occurring before and after the Agent's `Run()` call. The Agent's root span is created inside `agent.Run()`, so Session spans are not automatically attached as children of the Agent span. To see a complete Session span hierarchy in observability platforms like Langfuse, you need to manually create a root span before calling `runner.Run()`:
+>
+> ```go
+> import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+>
+> // Create a root span before runner.Run(), so that session spans
+> // (create_session, get_session, append_event, etc.) become children
+> // of this root span via context propagation.
+> ctx, span := atrace.Tracer.Start(ctx, "my_request")
+> defer span.End()
+>
+> eventChan, err := r.Run(ctx, userID, sessionID, message)
+> ```
 
 **Hook Configuration:**
 
@@ -693,8 +694,9 @@ How it works:
 - Async write timeout is 2 seconds (`defaultAsyncPersistTimeout`).
 - Calling `Close()` closes all channels and waits for workers to finish remaining tasks.
 
-!!! warning "Caution"
-    In async persistence mode, events still in the channel may be lost if the service process crashes unexpectedly. Evaluate whether to enable this based on your data consistency requirements.
+> **Caution**
+>
+> In async persistence mode, events still in the channel may be lost if the service process crashes unexpectedly. Evaluate whether to enable this based on your data consistency requirements.
 
 ### Storage Format & Version Migration
 
@@ -705,11 +707,12 @@ Redis Session storage has two data storage engines. Each session's storage versi
 | **ZSet** | Legacy | `{appName}` | All user data concentrated in one Cluster slot; hot spot risk at scale. Simple data structure with full Event JSON stored directly in SortedSet members. |
 | **HashIdx** | **New (default)** | `{userID}` | Per-user distribution eliminates hot spots; separated data and index (Hash for data + ZSet for index); ZSet stores only eventIDs to avoid memory bloat; independent session metadata supports flexible queries. |
 
-!!! info "How to distinguish new vs. legacy mode"
-    - **HashIdx is the new mode**: Session-related keys are prefixed with `hashidx:`, using `{userID}` as the hash tag to distribute data across different Redis Cluster slots by user.
-    - **ZSet is the legacy mode**: Session-related keys use `{appName}` as the hash tag, concentrating all user data for the same app in a single slot.
-    - **AppState is the exception**: `appstate:{appName}` has an identical format in both modes (no `hashidx:` prefix), so AppState is unaffected by storage version migration — zero migration cost.
-    - Newly created sessions use HashIdx storage in `CompatModeLegacy` (default) and `CompatModeNone` modes.
+> **How to distinguish new vs. legacy mode**
+>
+> - **HashIdx is the new mode**: Session-related keys are prefixed with `hashidx:`, using `{userID}` as the hash tag to distribute data across different Redis Cluster slots by user.
+> - **ZSet is the legacy mode**: Session-related keys use `{appName}` as the hash tag, concentrating all user data for the same app in a single slot.
+> - **AppState is the exception**: `appstate:{appName}` has an identical format in both modes (no `hashidx:` prefix), so AppState is unaffected by storage version migration — zero migration cost.
+> - Newly created sessions use HashIdx storage in `CompatModeLegacy` (default) and `CompatModeNone` modes.
 
 The new version uses **CompatMode** (compatibility mode) to enable smooth migration from the legacy storage format to the new one without downtime.
 
@@ -744,8 +747,9 @@ sessionService, err := redis.NewService(
 )
 ```
 
-!!! tip "When is Phase 1 needed?"
-    `CompatModeTransition` is only required for **canary/gray releases or mixed-version deployments**. If you can upgrade all instances at once (e.g., full release), you can skip Phase 1 and directly use the default `CompatModeLegacy`.
+> **When is Phase 1 needed?**
+>
+> `CompatModeTransition` is only required for **canary/gray releases or mixed-version deployments**. If you can upgrade all instances at once (e.g., full release), you can skip Phase 1 and directly use the default `CompatModeLegacy`.
 
 **UserState Considerations:** The old and new storage formats use **different Redis keys** for UserState (old: `userstate:{appName}:{userID}`, new: `hashidx:userstate:appName:{userID}`). After upgrading, new sessions created via HashIdx will **only read the new key** when merging UserState, and cannot access data in the old key.
 
@@ -765,8 +769,9 @@ sessionService, err := redis.NewService(
 )
 ```
 
-!!! warning "Important"
-    This compatibility concern only applies to **multi-node deployments where requests from the same user may be routed to both old and new version Session Service instances**. If you are running a single node, or your routing strategy ensures the same user always hits the same version instance, this limitation does not apply.
+> **Important**
+>
+> This compatibility concern only applies to **multi-node deployments where requests from the same user may be routed to both old and new version Session Service instances**. If you are running a single node, or your routing strategy ensures the same user always hits the same version instance, this limitation does not apply.
 
 **Phase 3: Cleanup Complete**
 
@@ -1862,25 +1867,26 @@ Configure the summarizer behavior with the following options:
 - **`WithTokenThreshold(tokenCount int)`**: Trigger summarization when the new token count since last summary exceeds the threshold. Example: `WithTokenThreshold(4000)` triggers when 4000+ new tokens have been added since last summary.
 - **`WithTimeThreshold(interval time.Duration)`**: Evaluate the condition when a summary check runs; it wraps `CheckTimeThreshold` and triggers when the last event in the checked session is older than the interval. In the normal delta-summary path, that checked session contains only unsummarized events, so this effectively means the latest unsummarized event. This is not a standalone background timer. Example: `WithTimeThreshold(5*time.Minute)` means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."
 
-!!! note "Context Window Registration"
-    `WithContextThreshold` and Token Tailoring both rely on the framework's built-in model context window registry. The registry includes many popular models (OpenAI, Anthropic, Google, DeepSeek, Qwen, etc.), but may not cover every model — especially private deployments, fine-tuned variants, or newer releases. If your model is not recognized (context window resolves to 0 or falls back to the default), register it manually at startup:
-
-    ```go
-    import "trpc.group/trpc-go/trpc-agent-go/model"
-
-    func init() {
-        // Register a single model.
-        model.RegisterModelContextWindow("my-custom-model", 32768)
-
-        // Or register multiple models at once.
-        model.RegisterModelContextWindows(map[string]int{
-            "my-custom-model-32k": 32768,
-            "my-custom-model-128k": 131072,
-        })
-    }
-    ```
-
-    Model names are matched case-insensitively, and the registry also supports prefix matching (e.g., registering `"my-model"` will match `"my-model-v2"`).
+> **Context Window Registration**
+>
+> `WithContextThreshold` and Token Tailoring both rely on the framework's built-in model context window registry. The registry includes many popular models (OpenAI, Anthropic, Google, DeepSeek, Qwen, etc.), but may not cover every model — especially private deployments, fine-tuned variants, or newer releases. If your model is not recognized (context window resolves to 0 or falls back to the default), register it manually at startup:
+>
+> ```go
+> import "trpc.group/trpc-go/trpc-agent-go/model"
+>
+> func init() {
+>     // Register a single model.
+>     model.RegisterModelContextWindow("my-custom-model", 32768)
+>
+>     // Or register multiple models at once.
+>     model.RegisterModelContextWindows(map[string]int{
+>         "my-custom-model-32k": 32768,
+>         "my-custom-model-128k": 131072,
+>     })
+> }
+> ```
+>
+> Model names are matched case-insensitively, and the registry also supports prefix matching (e.g., registering `"my-model"` will match `"my-model-v2"`).
 
 **Composite Conditions:**
 
