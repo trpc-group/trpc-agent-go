@@ -2118,7 +2118,7 @@ func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
 	}
 	// Only a trailing seeded user turn can cover the incoming user message.
 	for i := len(seed) - 1; i >= 0; i-- {
-		if !model.HasPayload(seed[i]) || seed[i].Role == model.RoleSystem {
+		if (!model.HasPayload(seed[i]) && len(seed[i].ToolCalls) == 0) || seed[i].Role == model.RoleSystem {
 			continue
 		}
 		if seed[i].Role != model.RoleUser {

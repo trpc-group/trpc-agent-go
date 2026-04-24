@@ -1785,6 +1785,23 @@ func TestShouldAppendUserMessage_Cases(t *testing.T) {
 			model.NewAssistantMessage("a"),
 		},
 	))
+	require.True(t, shouldAppendUserMessage(
+		model.NewUserMessage("u"),
+		[]model.Message{
+			model.NewUserMessage("u"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "lookup",
+						Arguments: []byte(`{"q":"u"}`),
+					},
+				}},
+			},
+		},
+	))
 }
 
 func TestRunner_Run_EmptyIncomingMessagePreservesSeedHistory(t *testing.T) {
