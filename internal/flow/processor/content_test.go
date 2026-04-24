@@ -1628,9 +1628,10 @@ func TestNewContentRequestProcessor(t *testing.T) {
 		PreloadMemory:                  0, // Default to disable preloading.
 		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
 		ContextCompactionConfig: ContextCompactionConfig{
-			KeepRecentRequests:           DefaultContextCompactionKeepRecentRequests,
-			ToolResultMaxTokens:          DefaultContextCompactionToolResultMaxTokens,
-			OversizedToolResultMaxTokens: DefaultContextCompactionOversizedToolResultMaxTokens,
+			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
+			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
+			// Pass 2 is opt-in; see WithContextCompactionOversizedToolResultMaxTokens.
+			OversizedToolResultMaxTokens: 0,
 		},
 	}
 
@@ -2540,6 +2541,79 @@ func TestContentRequestProcessor_IncludeContentsNoneTruncatesOversizedToolResult
 	require.Contains(t, req.Messages[2].Content, "[... ")
 	require.True(t, strings.HasPrefix(req.Messages[2].Content, "HEAD-"))
 	require.True(t, strings.HasSuffix(req.Messages[2].Content, "-TAIL"))
+}
+
+// TestContentRequestProcessor_IncludeContentsNoneRequiresEnabledForOversizedTruncation
+// asserts that the include_contents=none path leaves oversized tool results
+// untouched when EnableContextCompaction is false, even if a positive
+// OversizedToolResultMaxTokens threshold is configured.
+func TestContentRequestProcessor_IncludeContentsNoneRequiresEnabledForOversizedTruncation(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithContextCompactionOversizedToolResultMaxTokens(32),
+	)
+
+	original := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			{
+				Author:       "assistant",
+				RequestID:    "req-1",
+				InvocationID: "inv-1",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role: model.RoleAssistant,
+								ToolCalls: []model.ToolCall{
+									{
+										ID: "call-1",
+										Function: model.FunctionDefinitionParam{
+											Name:      "fetch",
+											Arguments: []byte(`{}`),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:       "tool",
+				RequestID:    "req-1",
+				InvocationID: "inv-1",
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+					Choices: []model.Choice{
+						{
+							Message: model.NewToolMessage("call-1", "fetch", original),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv-1"),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-1",
+			RuntimeState: map[string]any{
+				"include_contents": "none",
+			},
+		}),
+	)
+
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 3)
+	require.Equal(t, model.RoleTool, req.Messages[2].Role)
+	require.Equal(t, original, req.Messages[2].Content)
+	require.NotContains(t, req.Messages[2].Content, "[... ")
 }
 
 func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
