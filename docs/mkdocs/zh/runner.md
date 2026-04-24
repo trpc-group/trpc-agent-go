@@ -540,9 +540,10 @@ evB, _ := r.Run(ctx, userID, sessionID, msg,
 Runner 级别的其他注册（可观测性 `appid`、agent 注册表）仍然绑定到构造时的原始
 `appName`。
 
-!!! note
-    `appName` 不能为空。如果构造函数和 `WithAppName` 都没有提供非空值，
-    session 服务会返回 `session.ErrAppNameRequired`。
+> **说明**
+>
+> `appName` 不能为空。如果构造函数和 `WithAppName` 都没有提供非空值，
+> session 服务会返回 `session.ErrAppNameRequired`。
 
 #### DetachedCancel（忽略父 ctx cancel）
 

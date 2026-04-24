@@ -559,10 +559,11 @@ falls back to the constructor-supplied default app name. The override affects:
 Other runner-level registrations (observability `appid`, agent registry) remain
 bound to the original constructor `appName`.
 
-!!! note
-    `appName` must not be empty. If neither the constructor nor `WithAppName`
-    provides a non-empty value, the session service returns
-    `session.ErrAppNameRequired`.
+> **Note**
+>
+> `appName` must not be empty. If neither the constructor nor `WithAppName`
+> provides a non-empty value, the session service returns
+> `session.ErrAppNameRequired`.
 
 #### Detached Cancellation (background execution)
 
