@@ -2240,10 +2240,10 @@
 
 
 <h1 id="a2a-protocol-interaction-specification">A2A Protocol Interaction Specification</h1>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
+<blockquote>
+<p><strong>Note</strong></p>
 <p>This document defines the extended implementation specification for the A2A protocol within the trpc-agent-go framework. Regular users do not need to read this document when using A2A Client/Server — the framework automatically handles all protocol conversion details. You only need to refer to this specification when developing a non-trpc-agent-go A2A Client/Server that interoperates with this framework.</p>
-</div>
+</blockquote>
 <h2 id="background">Background</h2>
 <p>The <a href="https://a2a-protocol.org/latest/specification/">A2A (Agent-to-Agent) protocol</a> defines the basic data models (Message, Task, Part, etc.) and operation interfaces (SendMessage, StreamMessage, etc.) for inter-Agent communication. The A2A specification states its design goals at the very beginning:</p>
 <blockquote>
@@ -2260,11 +2260,9 @@
 <p>As shown above, A2A envisions agents collaborating as "black boxes" — discovering capabilities, negotiating interaction modalities, and managing collaborative tasks, but without needing access to each other's Tools, Memory, or Internal State. Based on this design philosophy, trace data from an Agent's execution process — such as tool call chains (Function Call / Response), code execution steps, and model reasoning steps (Reasoning) — falls outside the scope of the A2A protocol, which does not define how such data should be transmitted.</p>
 <p>However, in real-world multi-Agent orchestration scenarios, some users want to see the execution path of a remote Agent for debugging, auditing, or finer-grained coordination. To address this need, trpc-agent-go leverages the extension mechanisms reserved by the A2A protocol (<code>DataPart</code>, <code>Message.metadata</code>, etc.) to support the transmission of such data without violating the protocol specification.</p>
 <p>This document defines the <strong>interaction specification</strong> of trpc-agent-go on top of the A2A protocol, serving as the standard reference for Client and Server implementations. This document will be updated as the A2A protocol evolves.</p>
-<div class="admonition info">
-<p class="admonition-title">Future Plans</p>
-<p>To better align with the A2A specification's design philosophy, the cross-Agent transmission of execution process data such as tool calls will be designed as an independent <strong>extension</strong>, allowing users to decide whether to enable it through configuration. If you prefer to strictly follow A2A's black-box collaboration model without exposing internal execution details, simply disable it — only final results will be transmitted.</p>
-</div>
 <blockquote>
+<p><strong>Future Plans</strong></p>
+<p>To better align with the A2A specification's design philosophy, the cross-Agent transmission of execution process data such as tool calls will be designed as an independent <strong>extension</strong>, allowing users to decide whether to enable it through configuration. If you prefer to strictly follow A2A's black-box collaboration model without exposing internal execution details, simply disable it — only final results will be transmitted.</p>
 <p>For the complete A2A protocol specification, see: https://a2a-protocol.org/latest/specification/</p>
 <p>For the framework usage guide, see: <a href="../a2a/">A2A Integration Guide</a></p>
 </blockquote>
@@ -3058,7 +3056,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 31, 2026 06:23:14 UTC">2026-03-31 06:23:14</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 24, 2026 08:40:45 UTC">2026-04-24 08:40:45</span>
   </span>
 
     

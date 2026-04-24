@@ -2512,8 +2512,8 @@
 </tr>
 </tbody>
 </table>
-<div class="admonition note">
-<p class="admonition-title">About Root Span</p>
+<blockquote>
+<p><strong>About Root Span</strong></p>
 <p>Session operations are executed by the Runner before and after the Agent's <code>Run()</code> call. The Agent's root span is created inside <code>agent.Run()</code>, so Session spans are not automatically attached under it. To see the full Session span chain in observability platforms like Langfuse, manually create a root span before calling <code>runner.Run()</code>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
 <span class="normal"><a href="#__codelineno-0-2">2</a></span>
@@ -2533,7 +2533,7 @@
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-</div>
+</blockquote>
 <p><strong>Hooks:</strong></p>
 <table>
 <thead>
@@ -2681,24 +2681,24 @@
 <li>Async write timeout is 2 seconds (<code>defaultAsyncPersistTimeout</code>).</li>
 <li>Calling <code>Close()</code> closes all channels and waits for workers to drain remaining tasks.</li>
 </ul>
-<div class="admonition warning">
-<p class="admonition-title">Caution</p>
+<blockquote>
+<p><strong>Caution</strong></p>
 <p>In async persistence mode, events still in the channel may be lost if the process crashes unexpectedly. Evaluate whether to enable this based on your data consistency requirements.</p>
-</div>
+</blockquote>
 <h2 id="user-session-index">User Session Index</h2>
 <p><code>WithEnableUserSessionIndex(true)</code> is an optional capability for HashIdx storage only. It maintains a user-scoped index that maps <code>userID</code> to the session IDs created by that user.</p>
 <p>The main purpose of this index is to avoid the SCAN operation currently used by <code>ListSessions</code>.</p>
 <p>This option is intended for fresh HashIdx writes. If you enable it on an environment that already contains historical HashIdx sessions created before the index was introduced, those older sessions will not automatically appear in the index unless you migrate or rebuild the index separately.</p>
 <h2 id="storage-compatibility-mode-compatmode">Storage Compatibility Mode (CompatMode)</h2>
 <p>The new version of Redis Session uses a new storage engine (HashIdx) that distributes data across different Redis Cluster slots by user, eliminating the hotspot issue where all data was concentrated in a single slot in the old version. If you have legacy data to migrate, use <code>WithCompatMode</code> to configure compatibility mode for a smooth transition.</p>
-<div class="admonition tip">
-<p class="admonition-title">In most cases, you don't need to worry about compatibility mode</p>
+<blockquote>
+<p><strong>In most cases, you don't need to worry about compatibility mode</strong></p>
 <p>The default <code>CompatModeLegacy</code> mode automatically handles read/write compatibility between old and new data — <strong>just upgrade and it works</strong>. You only need to pay attention to compatibility mode configuration in these two cases:</p>
 <ol>
 <li><strong>Heavy use of UserState</strong>: The old and new engines use different Redis keys for UserState. <code>CreateSession</code>/<code>GetSession</code> only read the new key when merging UserState internally, so legacy UserState data won't automatically carry over to new sessions. If your application relies heavily on UserState, choose the appropriate compatibility mode as described below.</li>
 <li><strong>Large-scale canary deployment</strong>: When old and new instances run simultaneously, use <code>CompatModeTransition</code> to ensure mixed-deployment compatibility.</li>
 </ol>
-</div>
+</blockquote>
 <h3 id="new-deployments-no-legacy-data">New Deployments (No Legacy Data)</h3>
 <p><strong>Use <code>CompatModeNone</code> directly</strong> to skip all compatibility logic and get the best performance:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
@@ -2848,7 +2848,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 24, 2026 02:59:53 UTC">2026-03-24 02:59:53</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 24, 2026 08:40:45 UTC">2026-04-24 08:40:45</span>
   </span>
 
     
