@@ -63,6 +63,45 @@ type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.Mess
 // TaskManagerBuilder returns a task manager for the given agent.
 type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager.TaskManager
 
+// ResponseRewriter rewrites outbound A2A responses before they are returned or
+// sent to the remote peer.
+//
+// RewriteUnary receives the final unary result after server-side aggregation of
+// converted events. It rewrites what the caller will actually receive, rather
+// than every intermediate converter output.
+//
+// Returning nil drops the outbound result.
+type ResponseRewriter interface {
+	RewriteUnary(result protocol.UnaryMessageResult) protocol.UnaryMessageResult
+	RewriteStreaming(result protocol.StreamingMessageResult) protocol.StreamingMessageResult
+}
+
+// ResponseRewriterFuncs adapts plain functions into a ResponseRewriter.
+type ResponseRewriterFuncs struct {
+	Unary     func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult
+	Streaming func(result protocol.StreamingMessageResult) protocol.StreamingMessageResult
+}
+
+// RewriteUnary implements ResponseRewriter.
+func (f ResponseRewriterFuncs) RewriteUnary(
+	result protocol.UnaryMessageResult,
+) protocol.UnaryMessageResult {
+	if f.Unary == nil {
+		return result
+	}
+	return f.Unary(result)
+}
+
+// RewriteStreaming implements ResponseRewriter.
+func (f ResponseRewriterFuncs) RewriteStreaming(
+	result protocol.StreamingMessageResult,
+) protocol.StreamingMessageResult {
+	if f.Streaming == nil {
+		return result
+	}
+	return f.Streaming(result)
+}
+
 // EventToA2APartMapper converts an agent event into additional A2A parts.
 //
 // Returning nil or empty parts means this mapper contributes nothing and the
@@ -97,6 +136,7 @@ type options struct {
 	runner                    runner.Runner
 	enableStreaming           bool
 	graphEventObjectAllowlist []string
+	responseRewriter          ResponseRewriter
 	streamingEventType        StreamingEventType
 	agentCard                 *a2a.AgentCard
 	processorBuilder          ProcessorBuilder
@@ -159,38 +199,23 @@ func WithRunner(r runner.Runner) Option {
 	}
 }
 
-// WithGraphEventObjectAllowlist configures which graph object types (evt.Response.Object)
-// are forwarded through A2A.
-//
-// Matching applies only when object type starts with "graph.".
-//   - default (option not set): only graph.execution is forwarded.
-//   - exact rule: "graph.node.start"
-//   - prefix rule: "graph.node.*" or "graph.node*" (trailing '*' means prefix match)
-//   - suffix rule: "*step" or "*.step" (leading '*' means suffix match)
-//   - wildcard rule: "*" (allow all graph.* object types)
-func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
-	return func(opts *options) {
-		opts.graphEventObjectAllowlist = normalizeGraphObjectTypes(objectTypes)
-	}
-}
-
-func normalizeGraphObjectTypes(objectTypes []string) []string {
-	if len(objectTypes) == 0 {
+func normalizeMetadataKeys(keys []string) []string {
+	if len(keys) == 0 {
 		return []string{}
 	}
 
-	normalized := make([]string, 0, len(objectTypes))
-	dedup := make(map[string]struct{}, len(objectTypes))
-	for _, objectType := range objectTypes {
-		objectType = strings.TrimSpace(objectType)
-		if objectType == "" {
+	normalized := make([]string, 0, len(keys))
+	dedup := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
 			continue
 		}
-		if _, ok := dedup[objectType]; ok {
+		if _, ok := dedup[key]; ok {
 			continue
 		}
-		dedup[objectType] = struct{}{}
-		normalized = append(normalized, objectType)
+		dedup[key] = struct{}{}
+		normalized = append(normalized, key)
 	}
 	return normalized
 }
@@ -288,10 +313,87 @@ func WithA2AToAgentConverter(converter A2AMessageToAgentMessage) Option {
 	}
 }
 
+// Converter-related options.
+//
+// The options in this section control how A2A requests/responses are converted.
+// Unless otherwise noted, options marked as "default event converter only"
+// affect only the built-in EventToA2AMessage implementation created by
+// buildProcessor.
+
 // WithEventToA2AConverter sets the event to A2A message converter to use.
+//
+// Providing a custom converter bypasses the built-in event conversion behavior.
+// The default-event-converter options below do not rewrite custom converter
+// output unless their comments explicitly say they also affect server-generated
+// metadata.
 func WithEventToA2AConverter(converter EventToA2AMessage) Option {
 	return func(opts *options) {
 		opts.eventToA2AConverter = converter
+	}
+}
+
+// WithGraphEventObjectAllowlist configures which graph object types
+// (`evt.Response.Object`) are forwarded through A2A.
+//
+// Default event converter only.
+// Matching applies only when object type starts with `graph.`.
+//   - default (option not set): only graph.execution is forwarded.
+//   - exact rule: "graph.node.start"
+//   - prefix rule: "graph.node.*" or "graph.node*" (trailing '*' means prefix match)
+//   - suffix rule: "*step" or "*.step" (leading '*' means suffix match)
+//   - wildcard rule: "*" (allow all graph.* object types)
+func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
+	return func(opts *options) {
+		opts.graphEventObjectAllowlist = normalizeMetadataKeys(objectTypes)
+	}
+}
+
+// WithResponseRewriter rewrites outbound A2A results before they are returned
+// or sent to the remote peer.
+//
+// This option affects:
+//   - unary Message / Task results returned to the caller
+//   - streaming Message / TaskArtifactUpdateEvent / TaskStatusUpdateEvent results
+//   - server-generated final streaming completion events
+//   - server-generated structured task error results
+//   - messages returned by ErrorHandler
+//
+// For unary responses, the rewriter sees the final result returned by the A2A
+// server after it aggregates converted events. For streaming responses, it sees
+// each outbound streaming event immediately before send.
+//
+// Returning nil drops the outbound result.
+func WithResponseRewriter(rewriter ResponseRewriter) Option {
+	return func(opts *options) {
+		opts.responseRewriter = rewriter
+	}
+}
+
+// WithADKCompatibility enables ADK compatibility mode.
+//
+// This option affects the default event converter and server-generated task
+// metadata/status updates. It does not rewrite metadata produced by a custom
+// EventToA2AConverter.
+//
+// When enabled, metadata keys in A2A messages will use the "adk_" prefix
+// (e.g., "adk_app_name", "adk_user_id", "adk_session_id") to be compatible
+// with ADK (Agent Development Kit) Python implementation.
+func WithADKCompatibility(enabled bool) Option {
+	return func(opts *options) {
+		opts.adkCompatibility = enabled
+	}
+}
+
+// WithStreamingEventType configures which A2A protocol type is used to emit
+// agent output in streaming mode.
+//
+// Default event converter only.
+// This option affects streaming output events converted from agent events
+// (assistant text/tool calls/code execution). Task status updates
+// (submitted/completed) are still emitted as TaskStatusUpdateEvent.
+func WithStreamingEventType(eventType StreamingEventType) Option {
+	return func(opts *options) {
+		opts.streamingEventType = eventType
 	}
 }
 
@@ -327,29 +429,6 @@ func WithErrorHandler(handler ErrorHandler) Option {
 	}
 }
 
-// WithADKCompatibility enables ADK compatibility mode.
-// When enabled, metadata keys in A2A messages will use the "adk_" prefix
-// (e.g., "adk_app_name", "adk_user_id", "adk_session_id") to be compatible
-// with ADK (Agent Development Kit) Python implementation.
-// This allows trpc-agent-go servers to interoperate with ADK clients.
-func WithADKCompatibility(enabled bool) Option {
-	return func(opts *options) {
-		opts.adkCompatibility = enabled
-	}
-}
-
-// WithStreamingEventType configures which A2A protocol type is used to emit
-// agent output in streaming mode.
-//
-// This option only affects streaming output events converted from agent
-// events (assistant text/tool calls/code execution). Task status updates
-// (submitted/completed) are still emitted as TaskStatusUpdateEvent.
-func WithStreamingEventType(eventType StreamingEventType) Option {
-	return func(opts *options) {
-		opts.streamingEventType = eventType
-	}
-}
-
 // WithStructuredTaskErrors enables structured propagation of agent
 // Response.Error values through A2A task status metadata.
 func WithStructuredTaskErrors(enable bool) Option {
@@ -376,10 +455,12 @@ type singleMsgSubscriber struct {
 	ch chan protocol.StreamingMessageEvent
 }
 
-func newSingleMsgSubscriber(msg *protocol.Message) *singleMsgSubscriber {
+func newSingleResultSubscriber(result protocol.StreamingMessageResult) *singleMsgSubscriber {
 	ch := make(chan protocol.StreamingMessageEvent, 1)
-	ch <- protocol.StreamingMessageEvent{
-		Result: msg,
+	if result != nil {
+		ch <- protocol.StreamingMessageEvent{
+			Result: result,
+		}
 	}
 	close(ch)
 	return &singleMsgSubscriber{

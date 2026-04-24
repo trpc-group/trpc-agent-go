@@ -365,6 +365,46 @@ Notes:
 Use this in debug/diagnostic scenarios. Keeping it off by default reduces noise
 and transport overhead in production.
 
+#### Rewrite outbound A2A responses
+
+`WithResponseRewriter` lets the server rewrite outbound A2A results immediately
+before they are returned to the caller or sent to the streaming subscriber. It is
+useful when you want to hide internal metadata, redact debug fields, or drop
+server-generated events that are not part of your public A2A contract.
+
+The rewriter sees the final unary result after server-side aggregation. In
+streaming mode, it sees every outbound streaming result, including converted
+agent events, task status updates, final artifact updates, structured task
+errors, and messages returned by the error handler.
+
+Returning `nil` from the rewriter drops that outbound result.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-a2a-go/protocol"
+	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+)
+
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithResponseRewriter(a2aserver.ResponseRewriterFuncs{
+		Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+			if msg, ok := result.(*protocol.Message); ok {
+				delete(msg.Metadata, "debug_trace")
+			}
+			return result
+		},
+		Streaming: func(result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+			if msg, ok := result.(*protocol.Message); ok {
+				delete(msg.Metadata, "debug_trace")
+			}
+			return result
+		},
+	}),
+)
+```
+
 ### Hosting multiple A2A agents on one HTTP port (base paths)
 
 Sometimes you want **one service (one port)** to expose multiple A2A Agents.
@@ -904,6 +944,7 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 | `WithProcessorBuilder(builder)` | Fully custom message processor |
 | `WithTaskManagerBuilder(builder)` | Custom task manager |
 | `WithGraphEventObjectAllowlist(types...)` | Limit graph object types emitted by Event converters |
+| `WithResponseRewriter(rewriter)` | Rewrite or drop outbound A2A unary/streaming results |
 | `WithRunOptions(opts...)` | Append RunOptions to every invocation |
 | `WithStreamingEventType(type)` | Streaming output event type (Artifact/Message) |
 | `WithUserIDHeader(header)` | Custom UserID HTTP Header |
