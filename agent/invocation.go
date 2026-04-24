@@ -1323,6 +1323,7 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 	if ch == nil || e == nil {
 		return nil
 	}
+	attachAwaitUserReplyRoute(inv, e)
 	InjectIntoEvent(inv, e)
 	var agentName, requestID string
 	if inv != nil {

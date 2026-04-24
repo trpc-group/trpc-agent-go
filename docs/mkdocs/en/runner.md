@@ -231,6 +231,115 @@ Recommended patterns:
 This boundary is especially important when using MCP ToolSets. See the
 ToolSet lifecycle notes in the `tool` documentation for more details.
 
+### Resume the Next User Turn at a Specific Agent
+
+In a multi-Agent conversation, a transferred SubAgent may ask the user for
+missing information. The next request is a brand-new `Runner.Run(...)` call, so
+`Runner` needs an explicit signal if that next user message should resume at
+the same Agent instead of the normal entry Agent.
+
+Enable the one-shot route consumer on Runner:
+
+```go
+r := runner.NewRunner(
+    "crm-app",
+    coordinatorAgent,
+    runner.WithAwaitUserReplyRouting(true),
+)
+```
+
+There are two ways to produce that route:
+
+1. `LLMAgent`: enable `llmagent.WithAwaitUserReplyTool(true)` and instruct the
+   model to call `await_user_reply` immediately before it asks the user for
+   missing information.
+2. Custom Agent implementations: call `agent.MarkAwaitingUserReply(invocation)`
+   before you emit the final clarifying question event.
+
+#### Low-Level Example for a Custom Agent
+
+```go
+type clarifierAgent struct{}
+
+func (a *clarifierAgent) Run(
+    ctx context.Context,
+    inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+    ch := make(chan *event.Event, 1)
+    go func() {
+        defer close(ch)
+
+        if missingPhoneNumber(inv.Message) {
+            _ = agent.MarkAwaitingUserReply(inv)
+            _ = agent.EmitEvent(
+                ctx,
+                inv,
+                ch,
+                event.NewResponseEvent(
+                    inv.InvocationID,
+                    inv.AgentName,
+                    &model.Response{
+                        Done: true,
+                        Choices: []model.Choice{{
+                            Index: 0,
+                            Message: model.Message{
+                                Role:    model.RoleAssistant,
+                                Content: "What phone number should I save?",
+                            },
+                        }},
+                    },
+                ),
+            )
+            return
+        }
+
+        _ = agent.EmitEvent(
+            ctx,
+            inv,
+            ch,
+            event.NewResponseEvent(
+                inv.InvocationID,
+                inv.AgentName,
+                &model.Response{
+                    Done: true,
+                    Choices: []model.Choice{{
+                        Index: 0,
+                        Message: model.Message{
+                            Role:    model.RoleAssistant,
+                            Content: "Profile updated.",
+                        },
+                    }},
+                },
+            ),
+        )
+    }()
+    return ch, nil
+}
+```
+
+Behavior summary:
+
+- The route is stored in session state as a stable agent path, not by
+  mutating message roles.
+- It is consumed once, right before the next user turn starts.
+- `agent.WithAgent(...)` and `agent.WithAgentByName(...)` still take
+  precedence.
+- If the recorded Agent path no longer exists, Runner clears the stale route
+  and falls back to the default entry Agent.
+- Nested SubAgents are resumed by their full invocation path, so the common
+  `coordinator + WithSubAgents(...)` setup works without manually registering
+  every child Agent.
+
+Advanced note:
+
+- The built-in `Runner` records the stable root lookup key automatically,
+  including `AgentFactory` cases where the runtime `Info().Name` differs from
+  the registered factory name.
+- If you build and run invocations manually outside `Runner`, and the stable
+  root lookup key is different from `inv.AgentName`, call
+  `agent.SetAwaitUserReplyRootLookupName(inv, rootLookupName)` before the
+  Agent emits its final clarifying reply.
+
 ### 🔌 Plugins
 
 Runner plugins are global, runner-scoped hooks. Register plugins once and they
