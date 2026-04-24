@@ -4065,15 +4065,14 @@ conversation payload:</p>
 <li>The current request and the latest <code>ContextCompactionKeepRecentRequests</code> completed requests are never affected</li>
 <li>This cleans up accumulated long tool outputs from earlier conversation turns</li>
 </ul>
-<p><strong>Pass 2 — Oversized tool result truncation</strong> (<code>ContextCompactionOversizedToolResultMaxTokens</code>, default 8192 tokens):</p>
+<p><strong>Pass 2 — Oversized tool result truncation</strong> (<code>ContextCompactionOversizedToolResultMaxTokens</code>, <strong>default 0 / disabled</strong>):</p>
 <ul>
 <li>Applies to <strong>all</strong> tool results including the current request</li>
 <li>Tool results exceeding this threshold are truncated using head+tail preservation: the beginning and end of the content are kept, with a <code>[...N characters truncated...]</code> marker in the middle</li>
 <li>This is the safety net for single tool results large enough to overflow the context window on their own (e.g. <code>web_fetch</code> returning 800K+ chars of HTML)</li>
 </ul>
 <p>The two passes have different roles: Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases but protects the current request too.</p>
-<p>Additionally:</p>
-<p>Pass 2 fires regardless of <code>EnableContextCompaction</code>; it only requires <code>ContextCompactionOversizedToolResultMaxTokens &gt; 0</code>.</p>
+<p>Pass 2 is disabled by default (<code>0</code>). It only fires when both (1) <code>WithEnableContextCompaction(true)</code> is set and (2) <code>ContextCompactionOversizedToolResultMaxTokens &gt; 0</code> (recommended opt-in value: <code>8192</code>, exposed as the constant <code>processor.DefaultContextCompactionOversizedToolResultMaxTokens</code>). This guarantees that <code>EnableContextCompaction=false</code> always means "the framework will not modify any tool result".</p>
 <p>Additionally:</p>
 <ul>
 <li>If <code>WithAddSessionSummary(true)</code> is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous <code>CreateSessionSummary(...)</code> retry before calling the model</li>
@@ -4137,7 +4136,7 @@ conversation payload:</p>
 <li>No summary message added</li>
 <li>Only includes the most recent <code>MaxHistoryRuns</code> conversation turns</li>
 <li><code>MaxHistoryRuns=0</code> means no limit, includes all history</li>
-<li>If <code>WithEnableContextCompaction(true)</code> is enabled, oversized tool results in older retained requests can still be compacted during request projection; additionally, extremely large tool results in any request (including the current one) will be head+tail truncated whenever <code>ContextCompactionOversizedToolResultMaxTokens &gt; 0</code> (this fires even without <code>EnableContextCompaction</code>)</li>
+<li>If <code>WithEnableContextCompaction(true)</code> is enabled, oversized tool results in older retained requests can still be compacted during request projection (Pass 1). If you also explicitly set <code>WithContextCompactionOversizedToolResultMaxTokens(8192)</code> (or another positive value), extremely large tool results in any request (including the current one) will be head+tail truncated (Pass 2). Both passes require the <code>EnableContextCompaction=true</code> master switch.</li>
 <li>The pre-LLM synchronous summary retry is disabled in this mode</li>
 </ul>
 <p><strong>Context structure</strong>:</p>
@@ -4191,7 +4190,7 @@ conversation payload:</p>
 </table>
 <p>If your long sessions frequently contain large tool outputs such as search results, logs, or code scan output, enable <code>EnableContextCompaction=true</code>. Pair it with <code>AddSessionSummary=true</code> when you also want the pre-LLM synchronous summary retry.</p>
 <blockquote>
-<p><strong>Tip</strong>: If your agent uses tools like <code>web_fetch</code> that can return extremely large results in a single call, <code>ContextCompactionOversizedToolResultMaxTokens</code> is particularly valuable — it prevents a single tool result from consuming the entire context window, even when that result belongs to the current (protected) request. It fires independently of <code>EnableContextCompaction</code>.</p>
+<p><strong>Tip</strong>: If your agent uses tools like <code>web_fetch</code> that can return extremely large results in a single call, <code>ContextCompactionOversizedToolResultMaxTokens</code> is particularly valuable — it prevents a single tool result from consuming the entire context window, even when that result belongs to the current (protected) request. It is <strong>disabled by default</strong>; opt in by enabling <code>WithEnableContextCompaction(true)</code> and passing a positive threshold (recommended: <code>8192</code>).</p>
 </blockquote>
 <h2 id="summary-format-customization">Summary Format Customization</h2>
 <p>By default, session summaries are formatted with context tags and a note about prioritizing current conversation information:</p>
@@ -4504,7 +4503,7 @@ conversation payload:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 22, 2026 07:50:35 UTC">2026-04-22 07:50:35</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 24, 2026 06:13:34 UTC">2026-04-24 06:13:34</span>
   </span>
 
     
