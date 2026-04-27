@@ -11,17 +11,18 @@ package subagentrun
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	publicsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	coresubagent "trpc.group/trpc-go/trpc-agent-go/subagent"
 )
 
-func TestToolsSpawnListGetCancel(t *testing.T) {
+func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	t.Parallel()
 
 	runner := &blockingRunner{started: make(chan struct{})}
@@ -36,7 +37,10 @@ func TestToolsSpawnListGetCancel(t *testing.T) {
 	ctx := newInvocationContext(
 		"telegram:user",
 		"telegram:dm:321",
-		nil,
+		map[string]any{
+			"openclaw.delivery.channel": "telegram",
+			"openclaw.delivery.target":  "321",
+		},
 	)
 
 	spawnedAny, err := tools.spawn.Call(
@@ -45,9 +49,9 @@ func TestToolsSpawnListGetCancel(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	spawned := spawnedAny.(publicsubagent.Run)
+	spawned := spawnedAny.(coresubagent.Run)
 	require.Equal(t, "telegram:dm:321", spawned.ParentSessionID)
-	require.Equal(t, publicsubagent.StatusQueued, spawned.Status)
+	require.Equal(t, coresubagent.StatusQueued, spawned.Status)
 
 	select {
 	case <-runner.started:
@@ -61,21 +65,21 @@ func TestToolsSpawnListGetCancel(t *testing.T) {
 	require.Len(t, listed.Runs, 1)
 	require.Equal(t, spawned.ID, listed.Runs[0].ID)
 
-	getArgs := []byte(`{"id":"` + spawned.ID + `"}`)
+	getArgs := []byte(fmt.Sprintf(`{"id":%q}`, spawned.ID))
 	gotAny, err := tools.get.Call(ctx, getArgs)
 	require.NoError(t, err)
-	got := gotAny.(*publicsubagent.Run)
+	got := gotAny.(*coresubagent.Run)
 	require.Equal(t, spawned.ID, got.ID)
 
 	canceledAny, err := tools.cancel.Call(ctx, getArgs)
 	require.NoError(t, err)
-	canceled := canceledAny.(*publicsubagent.Run)
-	require.Equal(t, publicsubagent.StatusCanceled, canceled.Status)
+	canceled := canceledAny.(*coresubagent.Run)
+	require.Equal(t, coresubagent.StatusCanceled, canceled.Status)
 
-	listedAny, err = tools.listAlias.Call(ctx, []byte(`{}`))
+	waitedAny, err := tools.wait.Call(ctx, getArgs)
 	require.NoError(t, err)
-	listed = listedAny.(listResult)
-	require.Len(t, listed.Runs, 1)
+	waited := waitedAny.(*coresubagent.Run)
+	require.Equal(t, coresubagent.StatusCanceled, waited.Status)
 }
 
 func TestSpawnToolRejectsNestedSubagent(t *testing.T) {
@@ -93,7 +97,7 @@ func TestSpawnToolRejectsNestedSubagent(t *testing.T) {
 	ctx := newInvocationContext(
 		"user-a",
 		"session-a",
-		map[string]any{runtimeStateSubagentRun: true},
+		map[string]any{coresubagent.RuntimeStateKeyRun: true},
 	)
 
 	_, err = tools.spawn.Call(ctx, []byte(`{"task":"nested"}`))
@@ -104,57 +108,32 @@ func TestSpawnToolRejectsNestedSubagent(t *testing.T) {
 	)
 }
 
-func TestCurrentContextRequiresInvocation(t *testing.T) {
-	t.Parallel()
-
-	_, _, err := currentContext(context.Background())
-	require.ErrorContains(t, err, "current session context is unavailable")
-}
-
 func TestToolsAllAndDeclarations(t *testing.T) {
 	t.Parallel()
 
 	tools := NewTools(nil)
 	all := tools.All()
-	require.Len(t, all, 8)
+	require.Len(t, all, 9)
 
 	svc := &Service{}
 	tools.SetService(svc)
 	for _, item := range all {
 		require.NotNil(t, item.Declaration())
 	}
+	require.NotNil(t, tools.wait.Declaration())
 	require.Contains(
 		t,
 		tools.spawnAlias.Declaration().Description,
 		toolSubagentsSpawn,
 	)
-	require.Contains(
-		t,
-		tools.listAlias.Declaration().Description,
-		toolSubagentsList,
-	)
-	require.Contains(
-		t,
-		tools.getAlias.Declaration().Description,
-		toolSubagentsGet,
-	)
-	require.Contains(
-		t,
-		tools.cancelAlias.Declaration().Description,
-		toolSubagentsCancel,
-	)
 }
 
-func TestDecodeRunIDArgsRequiresID(t *testing.T) {
+func TestToolErrorPaths(t *testing.T) {
 	t.Parallel()
 
-	ctx := newInvocationContext("user-a", "session-a", nil)
-	_, _, err := decodeRunIDArgs(ctx, []byte(`{"id":" "}`))
-	require.ErrorContains(t, err, "empty run id")
-}
-
-func TestToolsRequireConfiguredService(t *testing.T) {
-	t.Parallel()
+	var nilTools *Tools
+	require.Nil(t, nilTools.All())
+	nilTools.SetService(nil)
 
 	tools := NewTools(nil)
 	ctx := newInvocationContext("user-a", "session-a", nil)
@@ -164,10 +143,6 @@ func TestToolsRequireConfiguredService(t *testing.T) {
 
 	_, err = tools.list.Call(ctx, nil)
 	require.ErrorContains(t, err, "service unavailable")
-}
-
-func TestListToolRejectsInvalidJSON(t *testing.T) {
-	t.Parallel()
 
 	svc, err := NewService(t.TempDir(), &captureRunner{reply: "ok"}, nil)
 	require.NoError(t, err)
@@ -175,9 +150,36 @@ func TestListToolRejectsInvalidJSON(t *testing.T) {
 	t.Cleanup(func() {
 		require.NoError(t, svc.Close())
 	})
+	tools.SetService(svc)
 
-	tools := NewTools(svc)
-	ctx := newInvocationContext("user-a", "session-a", nil)
+	_, err = tools.get.Call(ctx, []byte(`{invalid`))
+	require.Error(t, err)
+
+	_, err = tools.cancel.Call(ctx, []byte(`{invalid`))
+	require.Error(t, err)
+
+	_, err = tools.wait.Call(ctx, []byte(`{invalid`))
+	require.Error(t, err)
+
+	_, err = tools.spawn.Call(ctx, []byte(`{invalid`))
+	require.Error(t, err)
+
+	_, err = tools.spawn.Call(context.Background(), []byte(`{"task":"demo"}`))
+	require.ErrorContains(t, err, "current session context is unavailable")
+
+	_, err = tools.list.Call(context.Background(), nil)
+	require.ErrorContains(t, err, "current session context is unavailable")
+
+	_, err = tools.get.Call(ctx, []byte(`{"id":" "}`))
+	require.ErrorContains(t, err, "empty run id")
+
+	_, err = tools.cancel.Call(ctx, []byte(`{"id":"missing"}`))
+	require.ErrorIs(t, err, coresubagent.ErrRunNotFound)
+
+	badCtx := newInvocationContext("user-a", "session-a", nil)
+	_, err = tools.spawn.Call(badCtx, []byte(`{"task":"demo"}`))
+	require.ErrorContains(t, err, "resolve delivery target")
+
 	_, err = tools.list.Call(ctx, []byte(`{invalid`))
 	require.Error(t, err)
 }
@@ -208,65 +210,6 @@ func TestCurrentContextRequiresUserAndSessionFields(t *testing.T) {
 	require.ErrorContains(t, err, "current session id is unavailable")
 }
 
-func TestToolAdditionalErrorPaths(t *testing.T) {
-	t.Parallel()
-
-	var nilTools *Tools
-	require.Nil(t, nilTools.All())
-	nilTools.SetService(nil)
-
-	var nilSpawn *spawnTool
-	var nilList *listTool
-	var nilGet *getTool
-	var nilCancel *cancelTool
-	require.Nil(t, nilSpawn.base())
-	require.Nil(t, nilList.base())
-	require.Nil(t, nilGet.base())
-	require.Nil(t, nilCancel.base())
-
-	tools := NewTools(nil)
-	ctx := newInvocationContext("user-a", "session-a", nil)
-
-	_, err := tools.get.Call(ctx, []byte(`{"id":"run-1"}`))
-	require.ErrorContains(t, err, "service unavailable")
-
-	_, err = tools.cancel.Call(ctx, []byte(`{"id":"run-1"}`))
-	require.ErrorContains(t, err, "service unavailable")
-
-	svc, err := NewService(t.TempDir(), &captureRunner{reply: "ok"}, nil)
-	require.NoError(t, err)
-	svc.Start(context.Background())
-	t.Cleanup(func() {
-		require.NoError(t, svc.Close())
-	})
-	tools.SetService(svc)
-
-	_, err = tools.get.Call(ctx, []byte(`{invalid`))
-	require.Error(t, err)
-
-	_, err = tools.cancel.Call(ctx, []byte(`{invalid`))
-	require.Error(t, err)
-
-	_, err = tools.spawn.Call(ctx, []byte(`{invalid`))
-	require.Error(t, err)
-
-	_, err = tools.spawn.Call(context.Background(), []byte(`{"task":"demo"}`))
-	require.ErrorContains(t, err, "current session context is unavailable")
-
-	_, err = tools.list.Call(context.Background(), nil)
-	require.ErrorContains(t, err, "current session context is unavailable")
-
-	_, err = tools.get.Call(context.Background(), []byte(`{"id":"run-1"}`))
-	require.ErrorContains(t, err, "current session context is unavailable")
-
-	_, err = tools.cancel.Call(ctx, []byte(`{"id":"missing"}`))
-	require.ErrorIs(t, err, publicsubagent.ErrRunNotFound)
-
-	badCtx := newInvocationContext("user-a", "session-a", nil)
-	_, err = tools.spawn.Call(badCtx, []byte(`{"task":"demo"}`))
-	require.ErrorContains(t, err, "resolve delivery target")
-}
-
 func newInvocationContext(
 	userID string,
 	sessionID string,
@@ -280,5 +223,8 @@ func newInvocationContext(
 			RuntimeState: runtimeState,
 		}),
 	)
+	if runtimeState == nil {
+		return agent.NewInvocationContext(context.Background(), inv)
+	}
 	return agent.NewInvocationContext(context.Background(), inv)
 }

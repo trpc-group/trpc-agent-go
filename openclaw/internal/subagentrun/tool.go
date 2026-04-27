@@ -14,11 +14,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
-	publicsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	coresubagent "trpc.group/trpc-go/trpc-agent-go/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -27,14 +28,15 @@ const (
 	toolSubagentsList   = "subagents_list"
 	toolSubagentsGet    = "subagents_get"
 	toolSubagentsCancel = "subagents_cancel"
+	toolSubagentsWait   = "subagents_wait"
 
 	toolSessionsSpawn  = "sessions_spawn"
 	toolSessionsList   = "sessions_list"
 	toolSessionsGet    = "sessions_get"
 	toolSessionsCancel = "sessions_cancel"
 
-	argTask           = "task"
 	argID             = "id"
+	argTask           = "task"
 	argTimeoutSeconds = "timeout_seconds"
 
 	schemaTypeInteger = "integer"
@@ -43,10 +45,12 @@ const (
 )
 
 type Tools struct {
-	spawn       *spawnTool
-	list        *listTool
-	get         *getTool
-	cancel      *cancelTool
+	spawn  *spawnTool
+	list   *listTool
+	get    *getTool
+	cancel *cancelTool
+	wait   *waitTool
+
 	spawnAlias  *spawnTool
 	listAlias   *listTool
 	getAlias    *getTool
@@ -55,14 +59,15 @@ type Tools struct {
 
 func NewTools(svc *Service) Tools {
 	return Tools{
-		spawn:       newSpawnTool(toolSubagentsSpawn, false, svc),
-		list:        newListTool(toolSubagentsList, false, svc),
-		get:         newGetTool(toolSubagentsGet, false, svc),
-		cancel:      newCancelTool(toolSubagentsCancel, false, svc),
-		spawnAlias:  newSpawnTool(toolSessionsSpawn, true, svc),
-		listAlias:   newListTool(toolSessionsList, true, svc),
-		getAlias:    newGetTool(toolSessionsGet, true, svc),
-		cancelAlias: newCancelTool(toolSessionsCancel, true, svc),
+		spawn:       &spawnTool{name: toolSubagentsSpawn, svc: svc},
+		list:        &listTool{name: toolSubagentsList, svc: svc},
+		get:         &getTool{name: toolSubagentsGet, svc: svc},
+		cancel:      &cancelTool{name: toolSubagentsCancel, svc: svc},
+		wait:        &waitTool{name: toolSubagentsWait, svc: svc},
+		spawnAlias:  &spawnTool{name: toolSessionsSpawn, alias: true, svc: svc},
+		listAlias:   &listTool{name: toolSessionsList, alias: true, svc: svc},
+		getAlias:    &getTool{name: toolSessionsGet, alias: true, svc: svc},
+		cancelAlias: &cancelTool{name: toolSessionsCancel, alias: true, svc: svc},
 	}
 }
 
@@ -70,20 +75,20 @@ func (t *Tools) SetService(svc *Service) {
 	if t == nil {
 		return
 	}
-	for _, item := range []*ServiceAwareTool{
-		t.spawn.base(),
-		t.list.base(),
-		t.get.base(),
-		t.cancel.base(),
-		t.spawnAlias.base(),
-		t.listAlias.base(),
-		t.getAlias.base(),
-		t.cancelAlias.base(),
+	for _, item := range []serviceAwareTool{
+		t.spawn,
+		t.list,
+		t.get,
+		t.cancel,
+		t.wait,
+		t.spawnAlias,
+		t.listAlias,
+		t.getAlias,
+		t.cancelAlias,
 	} {
-		if item == nil {
-			continue
+		if item != nil {
+			item.setService(svc)
 		}
-		item.svc = svc
 	}
 }
 
@@ -96,6 +101,7 @@ func (t *Tools) All() []tool.Tool {
 		t.list,
 		t.get,
 		t.cancel,
+		t.wait,
 		t.spawnAlias,
 		t.listAlias,
 		t.getAlias,
@@ -103,26 +109,37 @@ func (t *Tools) All() []tool.Tool {
 	}
 }
 
-type ServiceAwareTool struct {
-	name        string
-	compatAlias bool
-	svc         *Service
+type serviceAwareTool interface {
+	setService(svc *Service)
 }
 
 type spawnTool struct {
-	ServiceAwareTool
+	name  string
+	alias bool
+	svc   *Service
 }
 
 type listTool struct {
-	ServiceAwareTool
+	name  string
+	alias bool
+	svc   *Service
 }
 
 type getTool struct {
-	ServiceAwareTool
+	name  string
+	alias bool
+	svc   *Service
 }
 
 type cancelTool struct {
-	ServiceAwareTool
+	name  string
+	alias bool
+	svc   *Service
+}
+
+type waitTool struct {
+	name string
+	svc  *Service
 }
 
 type spawnInput struct {
@@ -131,103 +148,40 @@ type spawnInput struct {
 }
 
 type runIDInput struct {
-	ID string `json:"id"`
+	ID             string `json:"id"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
 type listResult struct {
-	Runs []publicsubagent.Run `json:"runs,omitempty"`
+	Runs []coresubagent.Run `json:"runs,omitempty"`
 }
 
-func newSpawnTool(
-	name string,
-	compatAlias bool,
-	svc *Service,
-) *spawnTool {
-	return &spawnTool{
-		ServiceAwareTool: ServiceAwareTool{
-			name:        name,
-			compatAlias: compatAlias,
-			svc:         svc,
-		},
-	}
+func (t *spawnTool) setService(svc *Service) {
+	t.svc = svc
 }
 
-func newListTool(
-	name string,
-	compatAlias bool,
-	svc *Service,
-) *listTool {
-	return &listTool{
-		ServiceAwareTool: ServiceAwareTool{
-			name:        name,
-			compatAlias: compatAlias,
-			svc:         svc,
-		},
-	}
+func (t *listTool) setService(svc *Service) {
+	t.svc = svc
 }
 
-func newGetTool(
-	name string,
-	compatAlias bool,
-	svc *Service,
-) *getTool {
-	return &getTool{
-		ServiceAwareTool: ServiceAwareTool{
-			name:        name,
-			compatAlias: compatAlias,
-			svc:         svc,
-		},
-	}
+func (t *getTool) setService(svc *Service) {
+	t.svc = svc
 }
 
-func newCancelTool(
-	name string,
-	compatAlias bool,
-	svc *Service,
-) *cancelTool {
-	return &cancelTool{
-		ServiceAwareTool: ServiceAwareTool{
-			name:        name,
-			compatAlias: compatAlias,
-			svc:         svc,
-		},
-	}
+func (t *cancelTool) setService(svc *Service) {
+	t.svc = svc
 }
 
-func (t *spawnTool) base() *ServiceAwareTool {
-	if t == nil {
-		return nil
-	}
-	return &t.ServiceAwareTool
-}
-
-func (t *listTool) base() *ServiceAwareTool {
-	if t == nil {
-		return nil
-	}
-	return &t.ServiceAwareTool
-}
-
-func (t *getTool) base() *ServiceAwareTool {
-	if t == nil {
-		return nil
-	}
-	return &t.ServiceAwareTool
-}
-
-func (t *cancelTool) base() *ServiceAwareTool {
-	if t == nil {
-		return nil
-	}
-	return &t.ServiceAwareTool
+func (t *waitTool) setService(svc *Service) {
+	t.svc = svc
 }
 
 func (t *spawnTool) Declaration() *tool.Declaration {
-	description := "Spawn one background subagent for the current " +
-		"session. Use this for long-running work, parallelizable " +
-		"work, or independent verification. It returns " +
-		"immediately with a run id."
-	if t.compatAlias {
+	description := "Spawn one OpenClaw background subagent for " +
+		"the current session. Use this for long-running work, " +
+		"parallelizable work, or independent verification. It " +
+		"returns immediately with a run id."
+	if t.alias {
 		description = "Compatibility alias for " +
 			toolSubagentsSpawn + ". " + description
 	}
@@ -270,7 +224,6 @@ func (t *spawnTool) Call(
 	if err := json.Unmarshal(args, &in); err != nil {
 		return nil, err
 	}
-
 	userID, sess, err := currentContext(ctx)
 	if err != nil {
 		return nil, err
@@ -286,7 +239,7 @@ func (t *spawnTool) Call(
 		)
 	}
 
-	run, err := t.svc.Spawn(ctx, SpawnRequest{
+	return t.svc.Spawn(ctx, SpawnRequest{
 		OwnerUserID:     userID,
 		ParentSessionID: sess.ID,
 		Task:            in.Task,
@@ -296,16 +249,12 @@ func (t *spawnTool) Call(
 			Target:  delivery.Target,
 		},
 	})
-	if err != nil {
-		return nil, err
-	}
-	return run, nil
 }
 
 func (t *listTool) Declaration() *tool.Declaration {
-	description := "List background subagents created from the " +
-		"current session."
-	if t.compatAlias {
+	description := "List OpenClaw background subagents created " +
+		"from the current session."
+	if t.alias {
 		description = "Compatibility alias for " +
 			toolSubagentsList + ". " + description
 	}
@@ -325,14 +274,9 @@ func (t *listTool) Call(
 	if t == nil || t.svc == nil {
 		return nil, fmt.Errorf("subagent: service unavailable")
 	}
-	if len(args) > 0 && strings.TrimSpace(string(args)) != "" &&
-		strings.TrimSpace(string(args)) != "{}" {
-		var ignored map[string]any
-		if err := json.Unmarshal(args, &ignored); err != nil {
-			return nil, err
-		}
+	if err := validateEmptyArgs(args); err != nil {
+		return nil, err
 	}
-
 	userID, sess, err := currentContext(ctx)
 	if err != nil {
 		return nil, err
@@ -340,7 +284,7 @@ func (t *listTool) Call(
 	return listResult{
 		Runs: t.svc.ListForUser(
 			userID,
-			publicsubagent.ListFilter{
+			coresubagent.ListFilter{
 				ParentSessionID: sess.ID,
 			},
 		),
@@ -349,25 +293,15 @@ func (t *listTool) Call(
 
 func (t *getTool) Declaration() *tool.Declaration {
 	description := "Get the latest status and result for one " +
-		"background subagent run."
-	if t.compatAlias {
+		"OpenClaw background subagent run."
+	if t.alias {
 		description = "Compatibility alias for " +
 			toolSubagentsGet + ". " + description
 	}
 	return &tool.Declaration{
 		Name:        t.name,
 		Description: description,
-		InputSchema: &tool.Schema{
-			Type:     schemaTypeObject,
-			Required: []string{argID},
-			Properties: map[string]*tool.Schema{
-				argID: {
-					Type: schemaTypeString,
-					Description: "Subagent run id returned by " +
-						"spawn.",
-				},
-			},
-		},
+		InputSchema: runIDSchema(),
 	}
 }
 
@@ -386,26 +320,16 @@ func (t *getTool) Call(
 }
 
 func (t *cancelTool) Declaration() *tool.Declaration {
-	description := "Cancel one background subagent run. This is " +
-		"best-effort."
-	if t.compatAlias {
+	description := "Cancel one OpenClaw background subagent run. " +
+		"This is best-effort."
+	if t.alias {
 		description = "Compatibility alias for " +
 			toolSubagentsCancel + ". " + description
 	}
 	return &tool.Declaration{
 		Name:        t.name,
 		Description: description,
-		InputSchema: &tool.Schema{
-			Type:     schemaTypeObject,
-			Required: []string{argID},
-			Properties: map[string]*tool.Schema{
-				argID: {
-					Type: schemaTypeString,
-					Description: "Subagent run id returned by " +
-						"spawn.",
-				},
-			},
-		},
+		InputSchema: runIDSchema(),
 	}
 }
 
@@ -427,6 +351,69 @@ func (t *cancelTool) Call(
 	return run, nil
 }
 
+func (t *waitTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name: t.name,
+		Description: "Wait until one OpenClaw background subagent " +
+			"run reaches a terminal status.",
+		InputSchema: waitSchema(),
+	}
+}
+
+func (t *waitTool) Call(
+	ctx context.Context,
+	args []byte,
+) (any, error) {
+	if t == nil || t.svc == nil {
+		return nil, fmt.Errorf("subagent: service unavailable")
+	}
+	in, userID, err := decodeWaitArgs(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	waitCtx := ctx
+	var cancel context.CancelFunc
+	if in.TimeoutSeconds > 0 {
+		waitCtx, cancel = context.WithTimeout(
+			ctx,
+			time.Duration(in.TimeoutSeconds)*time.Second,
+		)
+		defer cancel()
+	}
+	return t.svc.WaitForUser(waitCtx, userID, in.ID)
+}
+
+func runIDSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:     schemaTypeObject,
+		Required: []string{argID},
+		Properties: map[string]*tool.Schema{
+			argID: {
+				Type:        schemaTypeString,
+				Description: "Subagent run id returned by spawn.",
+			},
+		},
+	}
+}
+
+func waitSchema() *tool.Schema {
+	schema := runIDSchema()
+	schema.Properties[argTimeoutSeconds] = &tool.Schema{
+		Type:        schemaTypeInteger,
+		Description: "Optional wait timeout in seconds.",
+	}
+	return schema
+}
+
+func validateEmptyArgs(args []byte) error {
+	trimmed := strings.TrimSpace(string(args))
+	if trimmed == "" || trimmed == "{}" {
+		return nil
+	}
+	var ignored map[string]any
+	return json.Unmarshal(args, &ignored)
+}
+
 func decodeRunIDArgs(
 	ctx context.Context,
 	args []byte,
@@ -439,11 +426,30 @@ func decodeRunIDArgs(
 	if err != nil {
 		return "", "", err
 	}
-	runID := strings.TrimSpace(in.ID)
-	if runID == "" {
+	in.ID = strings.TrimSpace(in.ID)
+	if in.ID == "" {
 		return "", "", fmt.Errorf("subagent: empty run id")
 	}
-	return runID, userID, nil
+	return in.ID, userID, nil
+}
+
+func decodeWaitArgs(
+	ctx context.Context,
+	args []byte,
+) (runIDInput, string, error) {
+	var in runIDInput
+	if err := json.Unmarshal(args, &in); err != nil {
+		return runIDInput{}, "", err
+	}
+	userID, _, err := currentContext(ctx)
+	if err != nil {
+		return runIDInput{}, "", err
+	}
+	in.ID = strings.TrimSpace(in.ID)
+	if in.ID == "" {
+		return runIDInput{}, "", fmt.Errorf("subagent: empty run id")
+	}
+	return in, userID, nil
 }
 
 func currentContext(
@@ -472,7 +478,7 @@ func currentContext(
 func isNestedSubagent(ctx context.Context) bool {
 	nested, ok := agent.GetRuntimeStateValueFromContext[bool](
 		ctx,
-		runtimeStateSubagentRun,
+		coresubagent.RuntimeStateKeyRun,
 	)
 	return ok && nested
 }

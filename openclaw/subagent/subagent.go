@@ -7,60 +7,29 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package subagent exposes the public control-plane view for OpenClaw
-// background subagents.
+// Package subagent exposes the OpenClaw subagent control-plane view.
 package subagent
 
-import (
-	"errors"
-	"time"
-)
+import coresubagent "trpc.group/trpc-go/trpc-agent-go/subagent"
 
-var ErrRunNotFound = errors.New("subagent: run not found")
+var ErrRunNotFound = coresubagent.ErrRunNotFound
 
-type Status string
+type Status = coresubagent.Status
 
 const (
-	StatusQueued    Status = "queued"
-	StatusRunning   Status = "running"
-	StatusCompleted Status = "completed"
-	StatusFailed    Status = "failed"
-	StatusCanceled  Status = "canceled"
+	StatusQueued    = coresubagent.StatusQueued
+	StatusRunning   = coresubagent.StatusRunning
+	StatusCompleted = coresubagent.StatusCompleted
+	StatusFailed    = coresubagent.StatusFailed
+	StatusCanceled  = coresubagent.StatusCanceled
 )
 
-type Run struct {
-	ID              string     `json:"id,omitempty"`
-	ParentSessionID string     `json:"parent_session_id,omitempty"`
-	ChildSessionID  string     `json:"child_session_id,omitempty"`
-	Task            string     `json:"task,omitempty"`
-	Status          Status     `json:"status,omitempty"`
-	Summary         string     `json:"summary,omitempty"`
-	Result          string     `json:"result,omitempty"`
-	Error           string     `json:"error,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	StartedAt       *time.Time `json:"started_at,omitempty"`
-	FinishedAt      *time.Time `json:"finished_at,omitempty"`
-}
+type Run = coresubagent.Run
 
-type ListFilter struct {
-	ParentSessionID string
-}
+type ListFilter = coresubagent.ListFilter
 
 type Service interface {
 	ListForUser(userID string, filter ListFilter) []Run
 	GetForUser(userID string, runID string) (*Run, error)
-	CancelForUser(
-		userID string,
-		runID string,
-	) (*Run, bool, error)
-}
-
-func (s Status) IsTerminal() bool {
-	switch s {
-	case StatusCompleted, StatusFailed, StatusCanceled:
-		return true
-	default:
-		return false
-	}
+	CancelForUser(userID string, runID string) (*Run, bool, error)
 }

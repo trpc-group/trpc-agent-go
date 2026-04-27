@@ -1,0 +1,697 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package subagent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+const (
+	childSessionPrefix = "subagent:"
+	requestIDPrefix    = "subagent:"
+)
+
+// Option configures a Service.
+type Option func(*Options)
+
+// Options contains Service configuration.
+type Options struct {
+	Store    Store
+	Observer Observer
+	Clock    func() time.Time
+}
+
+// WithStore configures persistent storage for runs.
+func WithStore(store Store) Option {
+	return func(opts *Options) {
+		opts.Store = store
+	}
+}
+
+// WithObserver configures lifecycle update observation.
+func WithObserver(observer Observer) Option {
+	return func(opts *Options) {
+		opts.Observer = observer
+	}
+}
+
+// WithClock configures the clock used by the service.
+func WithClock(clock func() time.Time) Option {
+	return func(opts *Options) {
+		opts.Clock = clock
+	}
+}
+
+// Service manages dynamic background agent runs.
+type Service struct {
+	runner   runner.Runner
+	store    Store
+	observer Observer
+	clock    func() time.Time
+
+	mu      sync.Mutex
+	runs    map[string]*Run
+	running map[string]*runningRun
+	waiters map[string][]chan struct{}
+
+	persistMu sync.Mutex
+
+	startOnce sync.Once
+	baseCtx   context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+}
+
+type runningRun struct {
+	cancel          context.CancelFunc
+	cancelRequested bool
+}
+
+// NewService creates a subagent service.
+func NewService(r runner.Runner, opts ...Option) (*Service, error) {
+	if r == nil {
+		return nil, fmt.Errorf("subagent: nil runner")
+	}
+	options := Options{
+		Store: NewMemoryStore(),
+		Clock: time.Now,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	if options.Store == nil {
+		options.Store = NewMemoryStore()
+	}
+	if options.Clock == nil {
+		options.Clock = time.Now
+	}
+
+	loaded, err := options.Store.Load(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	s := &Service{
+		runner:   r,
+		store:    options.Store,
+		observer: options.Observer,
+		clock:    options.Clock,
+		runs:     make(map[string]*Run, len(loaded)),
+		running:  make(map[string]*runningRun),
+		waiters:  make(map[string][]chan struct{}),
+	}
+	for _, run := range loaded {
+		copied := run.clone()
+		if copied.ID == "" {
+			continue
+		}
+		s.runs[copied.ID] = &copied
+	}
+	if normalizeLoadedRuns(s.runs, s.clock()) {
+		if err := s.persist(context.Background()); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+// Start starts the service lifecycle.
+func (s *Service) Start(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	s.startOnce.Do(func() {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		s.baseCtx, s.cancel = context.WithCancel(ctx)
+	})
+}
+
+// Close cancels active runs and persists the latest state.
+func (s *Service) Close() error {
+	if s == nil {
+		return nil
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.stopAllRunning()
+	s.wg.Wait()
+	return s.persist(context.Background())
+}
+
+// Spawn implements Controller.
+func (s *Service) Spawn(
+	ctx context.Context,
+	req SpawnRequest,
+) (Run, error) {
+	if s == nil {
+		return Run{}, fmt.Errorf("subagent: nil service")
+	}
+	if s.baseCtx == nil {
+		return Run{}, fmt.Errorf("subagent: not started")
+	}
+	if err := validateSpawnRequest(req); err != nil {
+		return Run{}, err
+	}
+
+	now := s.clock()
+	run := Run{
+		ID:              uuid.NewString(),
+		OwnerUserID:     strings.TrimSpace(req.OwnerUserID),
+		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
+		AgentName:       strings.TrimSpace(req.AgentName),
+		Task:            strings.TrimSpace(req.Task),
+		Status:          StatusQueued,
+		Metadata:        cloneMetadata(req.Metadata),
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	s.mu.Lock()
+	s.runs[run.ID] = runPtr(run)
+	s.mu.Unlock()
+	if err := s.persist(ctx); err != nil {
+		s.mu.Lock()
+		delete(s.runs, run.ID)
+		s.mu.Unlock()
+		return Run{}, err
+	}
+
+	view := run.clone()
+	s.notify(ctx, view)
+	spawn := cloneSpawnRequest(req)
+	s.wg.Add(1)
+	go func(parent context.Context, runID string, spawn SpawnRequest) {
+		defer s.wg.Done()
+		s.execute(parent, runID, spawn)
+	}(s.baseCtx, view.ID, spawn)
+	return view, nil
+}
+
+// List implements Controller.
+func (s *Service) List(
+	ctx context.Context,
+	filter ListFilter,
+) ([]Run, error) {
+	if err := ctxErr(ctx); err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	runs := make([]Run, 0, len(s.runs))
+	for _, item := range s.runs {
+		if item == nil || !matchesFilter(*item, filter) {
+			continue
+		}
+		runs = append(runs, item.clone())
+	}
+	sort.Slice(runs, func(i int, j int) bool {
+		return runs[i].UpdatedAt.After(runs[j].UpdatedAt)
+	})
+	return runs, nil
+}
+
+// Get implements Controller.
+func (s *Service) Get(ctx context.Context, runID string) (*Run, error) {
+	if err := ctxErr(ctx); err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, ErrRunNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	run := s.runs[strings.TrimSpace(runID)]
+	if run == nil {
+		return nil, ErrRunNotFound
+	}
+	view := run.clone()
+	return &view, nil
+}
+
+// Cancel implements Controller.
+func (s *Service) Cancel(
+	ctx context.Context,
+	runID string,
+) (*Run, bool, error) {
+	if err := ctxErr(ctx); err != nil {
+		return nil, false, err
+	}
+	if s == nil {
+		return nil, false, ErrRunNotFound
+	}
+
+	run, changed, err := s.markCanceled(strings.TrimSpace(runID))
+	if err != nil || !changed {
+		return run, changed, err
+	}
+	if err := s.persist(ctx); err != nil {
+		return nil, false, err
+	}
+	s.notify(ctx, *run)
+	s.wake(run.ID)
+	return run, true, nil
+}
+
+// Wait implements Controller.
+func (s *Service) Wait(ctx context.Context, runID string) (*Run, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil {
+		return nil, ErrRunNotFound
+	}
+	runID = strings.TrimSpace(runID)
+	for {
+		s.mu.Lock()
+		run := s.runs[runID]
+		if run == nil {
+			s.mu.Unlock()
+			return nil, ErrRunNotFound
+		}
+		if run.Status.IsTerminal() {
+			view := run.clone()
+			s.mu.Unlock()
+			return &view, nil
+		}
+		ch := make(chan struct{})
+		s.waiters[runID] = append(s.waiters[runID], ch)
+		s.mu.Unlock()
+
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			s.removeWaiter(runID, ch)
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func validateSpawnRequest(req SpawnRequest) error {
+	if strings.TrimSpace(req.OwnerUserID) == "" {
+		return fmt.Errorf("subagent: empty owner")
+	}
+	if strings.TrimSpace(req.ParentSessionID) == "" {
+		return fmt.Errorf("subagent: empty parent session id")
+	}
+	if strings.TrimSpace(req.Task) == "" {
+		return fmt.Errorf("subagent: empty task")
+	}
+	return nil
+}
+
+func (s *Service) execute(
+	parent context.Context,
+	runID string,
+	req SpawnRequest,
+) {
+	run, runCtx, cancel, err := s.markRunning(parent, runID, req)
+	if err != nil {
+		return
+	}
+	defer cancel()
+
+	result := replyAccumulator{}
+	runErr := s.runChild(runCtx, run, req, &result)
+	output := trimResult(result.text)
+	s.finishRun(runID, output, runErr)
+}
+
+func (s *Service) markRunning(
+	parent context.Context,
+	runID string,
+	req SpawnRequest,
+) (*Run, context.Context, context.CancelFunc, error) {
+	s.mu.Lock()
+	run := s.runs[strings.TrimSpace(runID)]
+	if run == nil {
+		s.mu.Unlock()
+		return nil, nil, nil, ErrRunNotFound
+	}
+	if run.Status == StatusCanceled {
+		s.mu.Unlock()
+		return nil, nil, nil, fmt.Errorf(
+			"subagent: run canceled before start",
+		)
+	}
+
+	now := s.clock()
+	childSessionID := strings.TrimSpace(req.ChildSessionID)
+	if childSessionID == "" {
+		childSessionID = newChildSessionID(run.ID, now)
+	}
+	requestID := strings.TrimSpace(req.RequestID)
+	if requestID == "" {
+		requestID = newRequestID(run.ID, now)
+	}
+
+	runCtx := parent
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
+	var cancel context.CancelFunc
+	if req.Timeout > 0 {
+		runCtx, cancel = context.WithTimeout(runCtx, req.Timeout)
+	} else {
+		runCtx, cancel = context.WithCancel(runCtx)
+	}
+
+	run.Status = StatusRunning
+	run.ChildSessionID = childSessionID
+	run.RequestID = requestID
+	run.UpdatedAt = now
+	run.StartedAt = cloneTime(now)
+	run.FinishedAt = nil
+	run.Error = ""
+	run.Summary = ""
+	run.Result = ""
+	s.running[run.ID] = &runningRun{cancel: cancel}
+	view := run.clone()
+	s.mu.Unlock()
+
+	if err := s.persist(context.Background()); err != nil {
+		cancel()
+		s.failPersistedRun(runID, err, now)
+		return nil, nil, nil, err
+	}
+	s.notify(context.Background(), view)
+	return &view, runCtx, cancel, nil
+}
+
+func (s *Service) runChild(
+	ctx context.Context,
+	run *Run,
+	req SpawnRequest,
+	result *replyAccumulator,
+) error {
+	if run == nil {
+		return fmt.Errorf("subagent: nil run")
+	}
+	runOpts := []agent.RunOption{
+		agent.WithRequestID(run.RequestID),
+		agent.WithRuntimeState(runtimeStateForRun(run, req.RuntimeState)),
+	}
+	if len(req.InjectedContextMessages) > 0 {
+		runOpts = append(
+			runOpts,
+			agent.WithInjectedContextMessages(req.InjectedContextMessages),
+		)
+	}
+	if run.AgentName != "" {
+		runOpts = append(runOpts, agent.WithAgentByName(run.AgentName))
+	}
+
+	events, err := s.runner.Run(
+		ctx,
+		run.OwnerUserID,
+		run.ChildSessionID,
+		model.NewUserMessage(run.Task),
+		runOpts...,
+	)
+	if err != nil {
+		return err
+	}
+	for evt := range events {
+		result.consume(evt)
+	}
+	return result.err
+}
+
+func runtimeStateForRun(run *Run, extra map[string]any) map[string]any {
+	state := make(map[string]any, len(extra)+3)
+	for key, value := range extra {
+		state[key] = value
+	}
+	if run == nil {
+		return state
+	}
+	state[RuntimeStateKeyRun] = true
+	state[RuntimeStateKeyRunID] = run.ID
+	state[RuntimeStateKeyParentSessionID] = run.ParentSessionID
+	return state
+}
+
+func (s *Service) finishRun(
+	runID string,
+	output string,
+	runErr error,
+) {
+	s.mu.Lock()
+	run := s.runs[runID]
+	if run == nil {
+		delete(s.running, runID)
+		s.mu.Unlock()
+		return
+	}
+	running := s.running[runID]
+	delete(s.running, runID)
+
+	now := s.clock()
+	run.Result = output
+	run.UpdatedAt = now
+	run.FinishedAt = cloneTime(now)
+	switch {
+	case running != nil && running.cancelRequested:
+		run.Status = StatusCanceled
+		run.Error = ""
+		run.Summary = summarizeText(statusCanceledSummary, 0)
+	case errors.Is(runErr, context.Canceled):
+		run.Status = StatusCanceled
+		run.Error = ""
+		run.Summary = summarizeText(statusCanceledSummary, 0)
+	case runErr != nil:
+		run.Status = StatusFailed
+		run.Error = runErr.Error()
+		run.Summary = summarizeText(run.Error, defaultStoredSummaryRunes)
+	default:
+		run.Status = StatusCompleted
+		run.Error = ""
+		run.Summary = summarizeText(output, defaultStoredSummaryRunes)
+	}
+	view := run.clone()
+	s.mu.Unlock()
+
+	if err := s.persist(context.Background()); err != nil {
+		log.Warnf("subagent: persist run %s failed: %v", runID, err)
+	}
+	s.notify(context.Background(), view)
+	s.wake(runID)
+}
+
+func (s *Service) markCanceled(runID string) (*Run, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	run := s.runs[runID]
+	if run == nil {
+		return nil, false, ErrRunNotFound
+	}
+	if run.Status.IsTerminal() {
+		view := run.clone()
+		return &view, false, nil
+	}
+
+	now := s.clock()
+	run.Status = StatusCanceled
+	run.Error = ""
+	run.Summary = summarizeText(statusCanceledSummary, 0)
+	run.UpdatedAt = now
+	run.FinishedAt = cloneTime(now)
+	if running := s.running[run.ID]; running != nil {
+		running.cancelRequested = true
+		if running.cancel != nil {
+			running.cancel()
+		}
+	}
+	view := run.clone()
+	return &view, true, nil
+}
+
+func (s *Service) failPersistedRun(
+	runID string,
+	err error,
+	now time.Time,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.running, runID)
+	if run := s.runs[runID]; run != nil {
+		run.Status = StatusFailed
+		run.Error = err.Error()
+		run.Summary = summarizeText(run.Error, defaultStoredSummaryRunes)
+		run.UpdatedAt = now
+		run.FinishedAt = cloneTime(now)
+	}
+}
+
+func (s *Service) stopAllRunning() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, running := range s.running {
+		if running == nil {
+			delete(s.running, id)
+			continue
+		}
+		running.cancelRequested = true
+		if running.cancel != nil {
+			running.cancel()
+		}
+	}
+}
+
+func (s *Service) persist(ctx context.Context) error {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
+	s.mu.Lock()
+	runs := make([]Run, 0, len(s.runs))
+	for _, item := range s.runs {
+		if item == nil || item.ID == "" {
+			continue
+		}
+		runs = append(runs, item.clone())
+	}
+	s.mu.Unlock()
+	return s.store.Save(ctx, runs)
+}
+
+func (s *Service) notify(ctx context.Context, run Run) {
+	if s == nil || s.observer == nil {
+		return
+	}
+	s.observer.OnRunUpdate(ctx, run)
+}
+
+func (s *Service) wake(runID string) {
+	s.mu.Lock()
+	waiters := s.waiters[runID]
+	delete(s.waiters, runID)
+	s.mu.Unlock()
+	for _, waiter := range waiters {
+		close(waiter)
+	}
+}
+
+func (s *Service) removeWaiter(runID string, ch chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	waiters := s.waiters[runID]
+	for i, waiter := range waiters {
+		if waiter != ch {
+			continue
+		}
+		waiters = append(waiters[:i], waiters[i+1:]...)
+		break
+	}
+	if len(waiters) == 0 {
+		delete(s.waiters, runID)
+		return
+	}
+	s.waiters[runID] = waiters
+}
+
+func matchesFilter(run Run, filter ListFilter) bool {
+	if filter.OwnerUserID != "" &&
+		run.OwnerUserID != strings.TrimSpace(filter.OwnerUserID) {
+		return false
+	}
+	if filter.ParentSessionID != "" &&
+		run.ParentSessionID != strings.TrimSpace(filter.ParentSessionID) {
+		return false
+	}
+	if filter.Status != "" && run.Status != filter.Status {
+		return false
+	}
+	return true
+}
+
+func cloneMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneSpawnRequest(req SpawnRequest) SpawnRequest {
+	out := req
+	out.RuntimeState = cloneRuntimeState(req.RuntimeState)
+	if req.InjectedContextMessages != nil {
+		out.InjectedContextMessages = append(
+			[]model.Message(nil),
+			req.InjectedContextMessages...,
+		)
+	}
+	out.Metadata = cloneMetadata(req.Metadata)
+	return out
+}
+
+func cloneRuntimeState(state map[string]any) map[string]any {
+	if len(state) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(state))
+	for key, value := range state {
+		out[key] = value
+	}
+	return out
+}
+
+func runPtr(run Run) *Run {
+	copied := run
+	return &copied
+}
+
+func newChildSessionID(runID string, now time.Time) string {
+	return fmt.Sprintf(
+		"%s%s:%d",
+		childSessionPrefix,
+		strings.TrimSpace(runID),
+		now.UnixNano(),
+	)
+}
+
+func newRequestID(runID string, now time.Time) string {
+	return fmt.Sprintf(
+		"%s%s:%d",
+		requestIDPrefix,
+		strings.TrimSpace(runID),
+		now.UnixNano(),
+	)
+}

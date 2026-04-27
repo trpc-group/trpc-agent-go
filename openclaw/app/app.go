@@ -45,10 +45,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
-	publicsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	coresubagent "trpc.group/trpc-go/trpc-agent-go/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
@@ -539,7 +539,7 @@ type Runtime struct {
 	adminCfg *admin.Config
 	appName  string
 	session  session.Service
-	subagent publicsubagent.Service
+	subagent SubagentService
 
 	runner            runner.Runner
 	cronRunner        closeFunc
@@ -622,7 +622,18 @@ func (r *Runtime) SessionService() session.Service {
 	return r.session
 }
 
-func (r *Runtime) SubagentService() publicsubagent.Service {
+// SubagentService is the OpenClaw subagent control-plane service exposed by
+// Runtime.
+type SubagentService interface {
+	ListForUser(userID string, filter coresubagent.ListFilter) []coresubagent.Run
+	GetForUser(userID string, runID string) (*coresubagent.Run, error)
+	CancelForUser(
+		userID string,
+		runID string,
+	) (*coresubagent.Run, bool, error)
+}
+
+func (r *Runtime) SubagentService() SubagentService {
 	if r == nil {
 		return nil
 	}
