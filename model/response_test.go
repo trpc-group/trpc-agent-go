@@ -187,6 +187,15 @@ func TestPromptTokensDetails_Structure(t *testing.T) {
 	}
 }
 
+func TestCompletionTokensDetails_Structure(t *testing.T) {
+	details := CompletionTokensDetails{
+		ReasoningTokens: 100,
+	}
+	if details.ReasoningTokens < 0 {
+		t.Errorf("ReasoningTokens should not be negative: %v", details.ReasoningTokens)
+	}
+}
+
 func TestUsage_WithPromptTokensDetails(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -4088,11 +4088,17 @@ func TestInverseOPENAISKDAddChunkUsage(t *testing.T) {
 			PromptTokens:     100,
 			CompletionTokens: 50,
 			TotalTokens:      150,
+			CompletionTokensDetails: model.CompletionTokensDetails{
+				ReasoningTokens: 12,
+			},
 		}
 		delta := model.Usage{
 			PromptTokens:     10,
 			CompletionTokens: 5,
 			TotalTokens:      15,
+			CompletionTokensDetails: model.CompletionTokensDetails{
+				ReasoningTokens: 2,
+			},
 		}
 
 		result := inverseOpenAISDKAddChunkUsage(currentUsage, delta)
@@ -4100,6 +4106,7 @@ func TestInverseOPENAISKDAddChunkUsage(t *testing.T) {
 		assert.Equal(t, 90, result.PromptTokens, "expected prompt tokens to be 90 (100 - 10)")
 		assert.Equal(t, 45, result.CompletionTokens, "expected completion tokens to be 45 (50 - 5)")
 		assert.Equal(t, 135, result.TotalTokens, "expected total tokens to be 135 (150 - 15)")
+		assert.Equal(t, 10, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 10 (12 - 2)")
 	})
 
 	t.Run("handles zero delta", func(t *testing.T) {
@@ -4151,6 +4158,9 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 			PromptTokensDetails: model.PromptTokensDetails{
 				CachedTokens: 20,
 			},
+			CompletionTokensDetails: model.CompletionTokensDetails{
+				ReasoningTokens: 15,
+			},
 		}
 
 		result := modelUsageToCompletionUsage(modelUsage)
@@ -4159,6 +4169,7 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 		assert.Equal(t, int64(50), result.CompletionTokens, "expected completion tokens to be 50")
 		assert.Equal(t, int64(150), result.TotalTokens, "expected total tokens to be 150")
 		assert.Equal(t, int64(20), result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 20")
+		assert.Equal(t, int64(15), result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 15")
 	})
 
 	t.Run("converts zero values", func(t *testing.T) {
@@ -4169,6 +4180,9 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 			PromptTokensDetails: model.PromptTokensDetails{
 				CachedTokens: 0,
 			},
+			CompletionTokensDetails: model.CompletionTokensDetails{
+				ReasoningTokens: 0,
+			},
 		}
 
 		result := modelUsageToCompletionUsage(modelUsage)
@@ -4177,6 +4191,7 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 		assert.Equal(t, int64(0), result.CompletionTokens, "expected completion tokens to be 0")
 		assert.Equal(t, int64(0), result.TotalTokens, "expected total tokens to be 0")
 		assert.Equal(t, int64(0), result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
+		assert.Equal(t, int64(0), result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 0")
 	})
 
 	t.Run("roundtrip conversion", func(t *testing.T) {
@@ -4186,6 +4201,9 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 			TotalTokens:      579,
 			PromptTokensDetails: model.PromptTokensDetails{
 				CachedTokens: 78,
+			},
+			CompletionTokensDetails: model.CompletionTokensDetails{
+				ReasoningTokens: 90,
 			},
 		}
 
@@ -4197,6 +4215,7 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 		assert.Equal(t, originalUsage.CompletionTokens, backToModel.CompletionTokens, "expected completion tokens to match after roundtrip")
 		assert.Equal(t, originalUsage.TotalTokens, backToModel.TotalTokens, "expected total tokens to match after roundtrip")
 		assert.Equal(t, originalUsage.PromptTokensDetails.CachedTokens, backToModel.PromptTokensDetails.CachedTokens, "expected cached tokens to match after roundtrip")
+		assert.Equal(t, originalUsage.CompletionTokensDetails.ReasoningTokens, backToModel.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to match after roundtrip")
 	})
 }
 
@@ -4210,6 +4229,9 @@ func TestCompletionUsageToModelUsage(t *testing.T) {
 			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
 				CachedTokens: int64(30),
 			},
+			CompletionTokensDetails: openai.CompletionUsageCompletionTokensDetails{
+				ReasoningTokens: int64(25),
+			},
 		}
 
 		result := completionUsageToModelUsage(openaiUsage)
@@ -4218,6 +4240,7 @@ func TestCompletionUsageToModelUsage(t *testing.T) {
 		assert.Equal(t, 75, result.CompletionTokens, "expected completion tokens to be 75")
 		assert.Equal(t, 275, result.TotalTokens, "expected total tokens to be 275")
 		assert.Equal(t, 30, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 30")
+		assert.Equal(t, 25, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 25")
 	})
 
 	t.Run("converts zero values", func(t *testing.T) {
@@ -4228,6 +4251,9 @@ func TestCompletionUsageToModelUsage(t *testing.T) {
 			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
 				CachedTokens: int64(0),
 			},
+			CompletionTokensDetails: openai.CompletionUsageCompletionTokensDetails{
+				ReasoningTokens: int64(0),
+			},
 		}
 
 		result := completionUsageToModelUsage(openaiUsage)
@@ -4236,6 +4262,7 @@ func TestCompletionUsageToModelUsage(t *testing.T) {
 		assert.Equal(t, 0, result.CompletionTokens, "expected completion tokens to be 0")
 		assert.Equal(t, 0, result.TotalTokens, "expected total tokens to be 0")
 		assert.Equal(t, 0, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
+		assert.Equal(t, 0, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 0")
 	})
 }
 
