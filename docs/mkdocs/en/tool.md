@@ -724,33 +724,41 @@ mcpToolSet := mcp.NewMCPToolSet(
 )
 ```
 
-#### Dynamic HTTP Headers
+#### Per-Request HTTP Headers
 
-For SSE and Streamable HTTP transports, `WithDynamicHeaders` can inject headers
-for each outgoing MCP request from the current call context. This is useful when
-one long-lived MCP ToolSet serves multiple logged-in users and each tool call
-needs a user-specific token or signature:
+For SSE and Streamable HTTP transports, `mcp.WithHTTPBeforeRequest` from the
+upstream MCP client can inject headers for each outgoing MCP request from the
+current call context. This is useful when one long-lived MCP ToolSet serves
+multiple logged-in users and each tool call needs a user-specific token or
+signature. Pass the hook through `WithMCPOptions`:
 
 ```go
-mcpToolSet := mcp.NewMCPToolSet(
-    mcp.ConnectionConfig{
+import (
+    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+mcpToolSet := toolmcp.NewMCPToolSet(
+    toolmcp.ConnectionConfig{
         Transport: "streamable_http",
         ServerURL: "http://localhost:3000/mcp",
     },
-    mcp.WithDynamicHeaders(func(ctx context.Context) (map[string]string, error) {
-        token, ok := tokenFromContext(ctx)
-        if !ok {
-            return nil, nil
-        }
-        return map[string]string{
-            "Authorization": "Bearer " + token,
-        }, nil
-    }),
+    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+        func(ctx context.Context, req *http.Request) error {
+            token, ok := tokenFromContext(ctx)
+            if !ok {
+                return nil
+            }
+            req.Header.Set("Authorization", "Bearer "+token)
+            return nil
+        },
+    )),
 )
 ```
 
-Dynamic headers are merged after static `ConnectionConfig.Headers`, so they can
-override static values for the same header name.
+Static headers configured through `ConnectionConfig.Headers` are applied
+first; the before-request hook runs on every HTTP request and can override
+those values for the same header name.
 
 If you mount that ToolSet through `llmagent.WithToolSets(...)` and need
 `initialize` / `tools/list` to also observe request-scoped headers, pair it

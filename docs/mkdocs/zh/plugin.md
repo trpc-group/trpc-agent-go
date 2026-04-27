@@ -201,10 +201,12 @@ defer runnerInstance.Close()
 ```go
 import (
 	"context"
+	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+	tmcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
 provider := identity.ProviderFunc(func(
@@ -228,7 +230,18 @@ mcpTools := toolmcp.NewMCPToolSet(
 		Transport: "streamable",
 		ServerURL: "https://mcp.example.com",
 	},
-	toolmcp.WithDynamicHeaders(identity.HeadersFromContext),
+	toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+		func(ctx context.Context, req *http.Request) error {
+			headers, err := identity.HeadersFromContext(ctx)
+			if err != nil {
+				return err
+			}
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			return nil
+		},
+	)),
 )
 
 runnerInstance := runner.NewRunner(
@@ -239,12 +252,14 @@ runnerInstance := runner.NewRunner(
 ```
 
 插件会在 Agent 运行前解析身份并写入 Invocation 状态；每次工具调用前，它会把身份放进
-工具调用的 context。MCP HTTP 传输可以通过 `WithDynamicHeaders` 从同一个 context
-读取 `Identity.Headers`，按请求动态注入 header。命令执行类工具则应当在真正执行时从
-context 读取 `Identity.EnvVars`，这样密钥不会进入模型可见的工具参数。对于
-`workspace_exec` 和 `skill_run`，可以用
+工具调用的 context。MCP HTTP 传输可以通过 `WithMCPOptions` 传入一个
+`mcp.WithHTTPBeforeRequest` hook，在 hook 中从 context 读取
+`Identity.Headers` 并写到请求头，这样每次外发的 HTTP 请求都会带上当前用户
+的 header。命令执行类工具则应当在真正执行时从 context 读取
+`Identity.EnvVars`，这样密钥不会进入模型可见的工具参数。对于 `workspace_exec`
+和 `skill_run`，可以用
 `codeexecutor.NewEnvInjectingCodeExecutor(exec, identity.EnvVarsFromContext)`
-包装执行器；OpenClaw 的 `exec_command` 也会直接读取同一份 context。
+包装执行器。
 
 如果你是通过 `llmagent.WithToolSets(...)` 挂载这个 MCP ToolSet，并且希望
 `initialize` / `tools/list` 也拿到请求级身份 header，记得同时开启

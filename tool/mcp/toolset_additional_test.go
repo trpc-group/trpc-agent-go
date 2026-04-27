@@ -51,7 +51,7 @@ func TestSessionManager_IsConnected(t *testing.T) {
 		Command:   "echo",
 		Args:      []string{"hello"},
 	}
-	manager := newMCPSessionManager(config, nil, nil, nil)
+	manager := newMCPSessionManager(config, nil, nil)
 
 	// Initially not connected
 	if manager.isConnected() {
@@ -85,7 +85,7 @@ func TestSessionManager_CallTool_ClientNil(t *testing.T) {
 		Command:   "echo",
 		Args:      []string{"hello"},
 	}
-	manager := newMCPSessionManager(config, nil, nil, nil)
+	manager := newMCPSessionManager(config, nil, nil)
 
 	manager.mu.Lock()
 	manager.client = nil
@@ -102,7 +102,7 @@ func TestSessionManager_CallTool_ClientNil(t *testing.T) {
 
 func TestSessionManager_CallTool_UsesStructuredContentWhenContentEmpty(t *testing.T) {
 	structured := map[string]any{"count": 1, "foo": "bar"}
-	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil, nil)
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
 	manager.client = &stubConnector{
 		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			require.NotNil(t, ctx)
@@ -130,7 +130,7 @@ func TestSessionManager_CallTool_UsesStructuredContentWhenContentEmpty(t *testin
 func TestSessionManager_CallTool_UsesStructuredContentWhenContentEmpty_PreservesMeta(t *testing.T) {
 	structured := map[string]any{"count": 1, "foo": "bar"}
 	expectedMeta := map[string]any{"trace_id": "abc123", "source": "structured-only"}
-	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil, nil)
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
 	manager.client = &stubConnector{
 		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			require.NotNil(t, ctx)
@@ -161,7 +161,7 @@ func TestSessionManager_CallTool_UsesStructuredContentWhenContentEmpty_Preserves
 }
 
 func TestSessionManager_CallTool_IgnoresStructuredContentWhenContentPresent(t *testing.T) {
-	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil, nil)
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
 	manager.client = &stubConnector{
 		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			require.NotNil(t, ctx)
@@ -185,7 +185,7 @@ func TestSessionManager_CallTool_IgnoresStructuredContentWhenContentPresent(t *t
 }
 
 func TestSessionManager_CallTool_NoContentNoStructured(t *testing.T) {
-	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil, nil)
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
 	manager.client = &stubConnector{
 		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			require.NotNil(t, ctx)
@@ -203,7 +203,7 @@ func TestSessionManager_CallTool_NoContentNoStructured(t *testing.T) {
 
 func TestSessionManager_CallTool_StructuredContentMarshalError(t *testing.T) {
 	badStructured := map[string]any{"ch": make(chan int)}
-	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil, nil)
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
 	manager.client = &stubConnector{
 		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return &mcp.CallToolResult{
@@ -227,7 +227,7 @@ func TestSessionManager_CallTool_Error(t *testing.T) {
 		Command:   "echo",
 		Args:      []string{"hello"},
 	}
-	manager := newMCPSessionManager(config, nil, nil, nil)
+	manager := newMCPSessionManager(config, nil, nil)
 
 	manager.mu.Lock()
 	manager.client = &stubConnector{
@@ -352,7 +352,7 @@ func TestSessionManager_CloseWhenNotConnected(t *testing.T) {
 		Command:   "echo",
 		Args:      []string{"hello"},
 	}
-	manager := newMCPSessionManager(config, nil, nil, nil)
+	manager := newMCPSessionManager(config, nil, nil)
 
 	err := manager.close()
 	if err != nil {
@@ -419,7 +419,7 @@ func TestSessionManager_ShouldAttemptSessionReconnect_EdgeCases(t *testing.T) {
 				Command:   "echo",
 				Args:      []string{"hello"},
 			}
-			manager := newMCPSessionManager(config, nil, tt.config, nil)
+			manager := newMCPSessionManager(config, nil, tt.config)
 
 			result := manager.shouldAttemptSessionReconnect(tt.err)
 			if result != tt.shouldReconnect {
@@ -441,7 +441,7 @@ func TestSessionManager_ExecuteWithSessionReconnect_MaxAttempts(t *testing.T) {
 		EnableAutoReconnect:  true,
 		MaxReconnectAttempts: 2,
 	}
-	manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+	manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 	callCount := 0
 	operation := func() error {
@@ -527,7 +527,7 @@ func TestSessionManager_CreateTimeoutContext_EdgeCases(t *testing.T) {
 			Args:      []string{"hello"},
 			// No Timeout specified
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		ctx := context.Background()
 		timeoutCtx, cancel := manager.createTimeoutContext(ctx, "test")
@@ -556,7 +556,7 @@ func TestSessionManager_ExecuteWithSessionReconnect_OperationSucceedsAfterReconn
 		EnableAutoReconnect:  true,
 		MaxReconnectAttempts: 3,
 	}
-	manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+	manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 	callCount := 0
 	operation := func() error {
@@ -584,7 +584,7 @@ func TestSessionManager_ExecuteWithSessionReconnect_DifferentErrorAfterReconnect
 		EnableAutoReconnect:  true,
 		MaxReconnectAttempts: 3,
 	}
-	manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+	manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 	callCount := 0
 	operation := func() error {
@@ -673,7 +673,7 @@ func TestSessionManager_CallTool_WithReconnect(t *testing.T) {
 		EnableAutoReconnect:  true,
 		MaxReconnectAttempts: 2,
 	}
-	manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+	manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 	// Client is nil, should trigger reconnect logic
 	manager.mu.Lock()
@@ -697,7 +697,7 @@ func TestSessionManager_CreateClient_InvalidTransport(t *testing.T) {
 		Command:   "echo",
 		Args:      []string{"hello"},
 	}
-	manager := newMCPSessionManager(config, nil, nil, nil)
+	manager := newMCPSessionManager(config, nil, nil)
 
 	_, err := manager.createClient()
 	if err == nil {
@@ -716,7 +716,7 @@ func TestSessionManager_CreateClient_DefaultClientInfo(t *testing.T) {
 		Args:      []string{"hello"},
 		// ClientInfo not set
 	}
-	manager := newMCPSessionManager(config, nil, nil, nil)
+	manager := newMCPSessionManager(config, nil, nil)
 
 	// This will fail because we can't create a real client, but it exercises the code path
 	_, err := manager.createClient()
@@ -734,7 +734,7 @@ func TestSessionManager_CreateClient_SSETransport(t *testing.T) {
 			"Authorization": "Bearer token",
 		},
 	}
-	manager := newMCPSessionManager(config, nil, nil, nil)
+	manager := newMCPSessionManager(config, nil, nil)
 
 	// This will fail because there's no real server, but it exercises the code path
 	_, err := manager.createClient()
@@ -751,7 +751,7 @@ func TestSessionManager_CreateClient_StreamableTransport(t *testing.T) {
 			"X-Custom-Header": "value",
 		},
 	}
-	manager := newMCPSessionManager(config, nil, nil, nil)
+	manager := newMCPSessionManager(config, nil, nil)
 
 	// This will fail because there's no real server, but it exercises the code path
 	_, err := manager.createClient()
@@ -767,7 +767,7 @@ func TestSessionManager_CreateClient_WithMCPOptions(t *testing.T) {
 	}
 	// Create a dummy MCP option
 	dummyOption := func(c *mcp.Client) {}
-	manager := newMCPSessionManager(config, []mcp.ClientOption{dummyOption}, nil, nil)
+	manager := newMCPSessionManager(config, []mcp.ClientOption{dummyOption}, nil)
 
 	// This will fail because there's no real server, but it exercises the code path
 	_, err := manager.createClient()
@@ -787,7 +787,7 @@ func TestSessionManager_ExecuteWithSessionReconnect(t *testing.T) {
 			EnableAutoReconnect:  true,
 			MaxReconnectAttempts: 3,
 		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 		callCount := 0
 		operation := func() error {
@@ -814,7 +814,7 @@ func TestSessionManager_ExecuteWithSessionReconnect(t *testing.T) {
 			EnableAutoReconnect:  true,
 			MaxReconnectAttempts: 3,
 		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 		expectedErr := fmt.Errorf("invalid argument")
 		callCount := 0
@@ -838,7 +838,7 @@ func TestSessionManager_ExecuteWithSessionReconnect(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil) // No reconnect config
+		manager := newMCPSessionManager(config, nil, nil) // No reconnect config
 
 		expectedErr := fmt.Errorf("session_expired: test")
 		callCount := 0
@@ -866,7 +866,7 @@ func TestSessionManager_ExecuteWithSessionReconnect(t *testing.T) {
 			EnableAutoReconnect:  true,
 			MaxReconnectAttempts: 3,
 		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 		// Create a cancelled context
 		ctx, cancel := context.WithCancel(context.Background())
@@ -1142,7 +1142,7 @@ func TestSessionManager_Connect(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 		manager.mu.Lock()
 		manager.connected = true
 		manager.mu.Unlock()
@@ -1161,7 +1161,7 @@ func TestSessionManager_Connect(t *testing.T) {
 			Args:      []string{"hello"},
 			Timeout:   time.Second,
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Mock client that succeeds - set it before calling connect
 		// We need to bypass createClient by setting client directly
@@ -1188,7 +1188,7 @@ func TestSessionManager_Connect(t *testing.T) {
 			Args:      []string{"hello"},
 			Timeout:   time.Second,
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Set up a client that will succeed
 		manager.mu.Lock()
@@ -1224,7 +1224,7 @@ func TestSessionManager_Connect(t *testing.T) {
 			Args:      []string{"hello"},
 			Timeout:   time.Second,
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Set client before connect to simulate createClient success
 		manager.mu.Lock()
@@ -1259,7 +1259,7 @@ func TestSessionManager_Connect(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Mock client that fails on Initialize
 		manager.client = &stubConnector{
@@ -1286,7 +1286,7 @@ func TestSessionManager_Connect(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Mock client that fails on Initialize and Close
 		manager.client = &stubConnector{
@@ -1316,7 +1316,7 @@ func TestSessionManager_Connect(t *testing.T) {
 			Args:      []string{"hello"},
 			Timeout:   time.Second,
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Set up client before connect to simulate createClient success
 		manager.mu.Lock()
@@ -1342,7 +1342,7 @@ func TestSessionManager_Connect(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		ctx := context.Background()
 		err := manager.connect(ctx)
@@ -1363,7 +1363,7 @@ func TestCreateClient_TransportTypes(t *testing.T) {
 				"X-Custom":      "value",
 			},
 		}
-		manager := newMCPSessionManager(config, []mcp.ClientOption{mcp.WithHTTPHeaders(http.Header{})}, nil, nil)
+		manager := newMCPSessionManager(config, []mcp.ClientOption{mcp.WithHTTPHeaders(http.Header{})}, nil)
 
 		client, err := manager.createClient()
 		// Will fail because we can't create a real SSE client, but exercises the path
@@ -1379,7 +1379,7 @@ func TestCreateClient_TransportTypes(t *testing.T) {
 				"Authorization": "Bearer token",
 			},
 		}
-		manager := newMCPSessionManager(config, []mcp.ClientOption{mcp.WithHTTPHeaders(http.Header{})}, nil, nil)
+		manager := newMCPSessionManager(config, []mcp.ClientOption{mcp.WithHTTPHeaders(http.Header{})}, nil)
 
 		client, err := manager.createClient()
 		// Will fail because we can't create a real client, but exercises the path
@@ -1392,7 +1392,7 @@ func TestCreateClient_TransportTypes(t *testing.T) {
 			Transport: "sse",
 			ServerURL: "http://localhost:8080",
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		client, err := manager.createClient()
 		// Will fail because we can't create a real SSE client, but exercises the path
@@ -1405,7 +1405,7 @@ func TestCreateClient_TransportTypes(t *testing.T) {
 			Transport: "streamable",
 			ServerURL: "http://localhost:8080",
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		client, err := manager.createClient()
 		// Will fail because we can't create a real client, but exercises the path
@@ -1422,7 +1422,7 @@ func TestSessionManager_Initialize(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 		manager.mu.Lock()
 		manager.initialized = true
 		manager.mu.Unlock()
@@ -1440,7 +1440,7 @@ func TestSessionManager_Initialize(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 		manager.client = &stubConnector{
 			initializeError: fmt.Errorf("client init failed"),
 		}
@@ -1464,7 +1464,7 @@ func TestSessionManager_ListTools(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 		manager.mu.Lock()
 		manager.client = nil
 		manager.mu.Unlock()
@@ -1485,7 +1485,7 @@ func TestSessionManager_ListTools(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 		manager.client = &stubConnector{}
 		manager.mu.Lock()
 		manager.connected = true
@@ -1508,7 +1508,7 @@ func TestSessionManager_ListTools(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 		manager.client = &stubConnector{
 			listToolsError: fmt.Errorf("list tools failed"),
 		}
@@ -1533,7 +1533,7 @@ func TestSessionManager_Close_Error(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 		manager.client = &stubConnector{
 			closeError: fmt.Errorf("close failed"),
 		}
@@ -1559,7 +1559,7 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 		manager.mu.Lock()
 		manager.client = &stubConnector{}
 		manager.connected = true
@@ -1579,7 +1579,7 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 		manager.mu.Lock()
 		manager.client = &stubConnector{}
 		manager.connected = true
@@ -1598,7 +1598,7 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 			Command:   "echo",
 			Args:      []string{"hello"},
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 		manager.mu.Lock()
 		manager.client = &stubConnector{
 			closeError: fmt.Errorf("close failed"),
@@ -1620,7 +1620,7 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 			Args:      []string{"hello"},
 			Timeout:   time.Second,
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Create a client that will fail on initialize
 		manager.mu.Lock()
@@ -1649,7 +1649,7 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 			Args:      []string{"hello"},
 			Timeout:   time.Second,
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Set up initial client
 		manager.mu.Lock()
@@ -1685,7 +1685,7 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 			Args:      []string{"hello"},
 			Timeout:   time.Second,
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Set up initial client that fails to close
 		manager.mu.Lock()
@@ -1720,7 +1720,7 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 			Args:      []string{"hello"},
 			Timeout:   time.Second,
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Set up initial client
 		manager.mu.Lock()
@@ -1758,7 +1758,7 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 			Args:      []string{"hello"},
 			Timeout:   time.Second,
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Set up client that fails to close but new client succeeds
 		manager.mu.Lock()
@@ -1791,7 +1791,7 @@ func TestSessionManager_DoRecreateSession(t *testing.T) {
 			Args:      []string{"hello"},
 			Timeout:   time.Second,
 		}
-		manager := newMCPSessionManager(config, nil, nil, nil)
+		manager := newMCPSessionManager(config, nil, nil)
 
 		// Set up initial client
 		manager.mu.Lock()
@@ -1835,7 +1835,7 @@ func TestExecuteWithSessionReconnect(t *testing.T) {
 			EnableAutoReconnect:  true,
 			MaxReconnectAttempts: 3,
 		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 		callCount := 0
 		manager.mu.Lock()
@@ -1877,7 +1877,7 @@ func TestExecuteWithSessionReconnect(t *testing.T) {
 			EnableAutoReconnect:  true,
 			MaxReconnectAttempts: 3,
 		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 		operationCallCount := 0
 		manager.mu.Lock()
@@ -1926,7 +1926,7 @@ func TestExecuteWithSessionReconnect(t *testing.T) {
 			EnableAutoReconnect:  true,
 			MaxReconnectAttempts: 2,
 		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 		manager.mu.Lock()
 		manager.client = &stubConnector{
@@ -1969,7 +1969,7 @@ func TestExecuteWithSessionReconnect(t *testing.T) {
 			EnableAutoReconnect:  true,
 			MaxReconnectAttempts: 3,
 		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 		operationCallCount := 0
 		manager.mu.Lock()
@@ -2012,7 +2012,7 @@ func TestExecuteWithSessionReconnect(t *testing.T) {
 			EnableAutoReconnect:  true,
 			MaxReconnectAttempts: 3,
 		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 		manager.mu.Lock()
 		manager.client = &stubConnector{
@@ -2056,7 +2056,7 @@ func TestCallTool_StructuredContentMarshalError(t *testing.T) {
 		Args:      []string{"hello"},
 		Timeout:   time.Second,
 	}
-	manager := newMCPSessionManager(config, nil, nil, nil)
+	manager := newMCPSessionManager(config, nil, nil)
 
 	// Create a structured content that cannot be marshaled (circular reference)
 	type Circular struct {
@@ -2129,7 +2129,7 @@ func TestExecuteWithSessionReconnect_SuccessfulReconnect(t *testing.T) {
 			EnableAutoReconnect:  true,
 			MaxReconnectAttempts: 3,
 		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 		manager.mu.Lock()
 		manager.connected = true
@@ -2164,7 +2164,7 @@ func TestExecuteWithSessionReconnect_SuccessfulReconnect(t *testing.T) {
 			EnableAutoReconnect:  true,
 			MaxReconnectAttempts: 2,
 		}
-		manager := newMCPSessionManager(config, nil, reconnectConfig, nil)
+		manager := newMCPSessionManager(config, nil, reconnectConfig)
 
 		manager.mu.Lock()
 		manager.connected = true

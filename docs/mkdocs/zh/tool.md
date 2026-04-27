@@ -722,32 +722,41 @@ if err := mcpToolSet.Init(ctx); err != nil {
 }
 ```
 
-#### 动态 HTTP Header
+#### 按请求 HTTP Header
 
-对 SSE 和 Streamable HTTP 传输，`WithDynamicHeaders` 可以在每一次 MCP HTTP
-请求发出前，从当前调用的 context 动态注入 header。一个长生命周期 MCP ToolSet
-服务多个已登录用户时，可以用它按用户注入 token、JWT 或业务签名：
+对 SSE 和 Streamable HTTP 传输，可以使用上游 MCP 客户端提供的
+`mcp.WithHTTPBeforeRequest`，在每一次 MCP HTTP 请求发出前，从当前调用
+的 context 动态注入 header。一个长生命周期 MCP ToolSet 服务多个已登录
+用户时，可以用它按用户注入 token、JWT 或业务签名。把 hook 通过
+`WithMCPOptions` 传入即可：
 
 ```go
-mcpToolSet := mcp.NewMCPToolSet(
-    mcp.ConnectionConfig{
+import (
+    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+mcpToolSet := toolmcp.NewMCPToolSet(
+    toolmcp.ConnectionConfig{
         Transport: "streamable_http",
         ServerURL: "http://localhost:3000/mcp",
     },
-    mcp.WithDynamicHeaders(func(ctx context.Context) (map[string]string, error) {
-        token, ok := tokenFromContext(ctx)
-        if !ok {
-            return nil, nil
-        }
-        return map[string]string{
-            "Authorization": "Bearer " + token,
-        }, nil
-    }),
+    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+        func(ctx context.Context, req *http.Request) error {
+            token, ok := tokenFromContext(ctx)
+            if !ok {
+                return nil
+            }
+            req.Header.Set("Authorization", "Bearer "+token)
+            return nil
+        },
+    )),
 )
 ```
 
-动态 header 会在静态 `ConnectionConfig.Headers` 之后合并，因此同名 header
-以动态值为准。
+`ConnectionConfig.Headers` 提供的静态 header 会先生效；之后每次 HTTP
+请求都会走一遍 before-request hook，hook 内对同名 header 的 `Set` 会
+覆盖静态值。
 
 如果你是通过 `llmagent.WithToolSets(...)` 挂载这个 ToolSet，并且希望
 `initialize` / `tools/list` 也能拿到请求级 header，建议同时配合

@@ -10,7 +10,6 @@
 package mcp
 
 import (
-	"context"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -77,28 +76,6 @@ func TestWithMCPOptions(t *testing.T) {
 
 	if len(cfg.mcpOptions) != 2 {
 		t.Errorf("expected 2 options, got %d", len(cfg.mcpOptions))
-	}
-}
-
-func TestWithDynamicHeaders(t *testing.T) {
-	cfg := &toolSetConfig{}
-	fn := func(ctx context.Context) (map[string]string, error) {
-		return map[string]string{"Authorization": "Bearer token"}, nil
-	}
-
-	opt := WithDynamicHeaders(fn)
-	opt(cfg)
-
-	if cfg.dynamicHeaderFunc == nil {
-		t.Fatal("expected dynamicHeaderFunc to be set")
-	}
-
-	headers, err := cfg.dynamicHeaderFunc(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if headers["Authorization"] != "Bearer token" {
-		t.Fatalf("unexpected headers: %+v", headers)
 	}
 }
 

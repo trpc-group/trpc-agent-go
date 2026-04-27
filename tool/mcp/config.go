@@ -10,7 +10,6 @@
 package mcp
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -91,16 +90,6 @@ type SessionReconnectConfig struct {
 	MaxReconnectAttempts int `json:"max_reconnect_attempts"`
 }
 
-// DynamicHeaderFunc is called before each MCP HTTP request (tool call, list tools, etc.)
-// to obtain additional headers that should be merged into the outgoing request.
-// This enables per-request header injection based on the current execution context,
-// such as injecting user-specific Authorization tokens resolved at runtime.
-//
-// The returned headers are merged on top of the static ConnectionConfig.Headers
-// (dynamic headers take precedence on key conflicts).
-// Returning (nil, nil) is safe and means no extra headers are needed.
-type DynamicHeaderFunc func(ctx context.Context) (map[string]string, error)
-
 // toolSetConfig holds internal configuration for ToolSet.
 type toolSetConfig struct {
 	connectionConfig       ConnectionConfig
@@ -108,7 +97,6 @@ type toolSetConfig struct {
 	mcpOptions             []mcp.ClientOption      // MCP client options.
 	sessionReconnectConfig *SessionReconnectConfig // Session reconnection configuration.
 	name                   string                  // ToolSet name for identification and conflict resolution.
-	dynamicHeaderFunc      DynamicHeaderFunc       // Optional dynamic header injection function.
 }
 
 // ToolSetOption is a function type for configuring ToolSet.
@@ -185,47 +173,31 @@ func WithName(name string) ToolSetOption {
 	}
 }
 
-// WithDynamicHeaders sets a function that is called before each MCP HTTP request
-// to obtain additional headers. This enables per-request identity injection
-// (e.g., user-specific Authorization tokens) without requiring the MCP client
-// to be re-created for each user.
+// Per-request dynamic HTTP headers (e.g. user-specific Authorization tokens)
+// are supported directly through the upstream MCP client. Pass an
+// mcp.WithHTTPBeforeRequest hook to WithMCPOptions and read whatever
+// request-scoped values you need from the context:
+//
+//	import (
+//	    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+//	    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+//	)
+//
+//	ts := toolmcp.NewMCPToolSet(cfg,
+//	    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+//	        func(ctx context.Context, req *http.Request) error {
+//	            for k, v := range headersFromContext(ctx) {
+//	                req.Header.Set(k, v)
+//	            }
+//	            return nil
+//	        },
+//	    )),
+//	)
 //
 // When this ToolSet is wired into llmagent via WithToolSets, enable
 // llmagent.WithRefreshToolSetsOnRun(true) if initialize/listTools must also
 // observe request-scoped headers. Otherwise only tools/call is guaranteed to
 // use the current run context.
-//
-// Interaction with WithMCPOptions(mcp.WithHTTPBeforeRequest(...)):
-// the underlying MCP client keeps only the most recently registered
-// before-request hook, so WithDynamicHeaders shadows any WithHTTPBeforeRequest
-// installed via WithMCPOptions. If you need both behaviours, compose them
-// yourself inside a single WithHTTPBeforeRequest and drop WithDynamicHeaders,
-// for example:
-//
-//	mcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
-//	    func(ctx context.Context, req *http.Request) error {
-//	        // custom pre-processing
-//	        req.Header.Set("X-Trace-ID", traceID(ctx))
-//	        // dynamic identity headers
-//	        for k, v := range identity.HeadersFromContext(ctx) {
-//	            req.Header.Set(k, v)
-//	        }
-//	        return nil
-//	    },
-//	))
-//
-// Basic usage with the identity plugin:
-//
-//	mcp.WithDynamicHeaders(func(ctx context.Context) (map[string]string, error) {
-//	    id, ok := identity.FromContext(ctx)
-//	    if !ok { return nil, nil }
-//	    return id.Headers, nil
-//	})
-func WithDynamicHeaders(fn DynamicHeaderFunc) ToolSetOption {
-	return func(c *toolSetConfig) {
-		c.dynamicHeaderFunc = fn
-	}
-}
 
 // validateTransport validates the transport string and returns the internal transport type.
 func validateTransport(t string) (transport, error) {

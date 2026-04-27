@@ -161,10 +161,12 @@ current user, `plugin/identity` provides a reusable identity propagation plugin:
 ```go
 import (
 	"context"
+	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+	tmcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
 provider := identity.ProviderFunc(func(
@@ -188,7 +190,18 @@ mcpTools := toolmcp.NewMCPToolSet(
 		Transport: "streamable",
 		ServerURL: "https://mcp.example.com",
 	},
-	toolmcp.WithDynamicHeaders(identity.HeadersFromContext),
+	toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+		func(ctx context.Context, req *http.Request) error {
+			headers, err := identity.HeadersFromContext(ctx)
+			if err != nil {
+				return err
+			}
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			return nil
+		},
+	)),
 )
 
 runnerInstance := runner.NewRunner(
@@ -200,13 +213,13 @@ runnerInstance := runner.NewRunner(
 
 The plugin stores the resolved identity in invocation state before the agent
 runs. Before each tool call it attaches that identity to the tool context.
-MCP HTTP transports can read `Identity.Headers` from the same context via
-`WithDynamicHeaders` and inject per-request headers. Command-execution tools
+MCP HTTP transports can read `Identity.Headers` from that context via an
+`mcp.WithHTTPBeforeRequest` hook installed through `WithMCPOptions`, so every
+outgoing request picks up the current user's headers. Command-execution tools
 should read `Identity.EnvVars` from context at execution time so secrets never
 enter model-visible tool arguments. For `workspace_exec` and `skill_run`, wrap
 the executor with `codeexecutor.NewEnvInjectingCodeExecutor(exec,
-identity.EnvVarsFromContext)`. OpenClaw `exec_command` reads the same context
-directly.
+identity.EnvVarsFromContext)`.
 
 When you register that MCP ToolSet through `llmagent.WithToolSets(...)`, enable
 `llmagent.WithRefreshToolSetsOnRun(true)` if `initialize` / `tools/list` must

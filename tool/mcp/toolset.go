@@ -72,7 +72,7 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	}
 
 	// Create session manager
-	sessionManager := newMCPSessionManager(cfg.connectionConfig, cfg.mcpOptions, cfg.sessionReconnectConfig, cfg.dynamicHeaderFunc)
+	sessionManager := newMCPSessionManager(cfg.connectionConfig, cfg.mcpOptions, cfg.sessionReconnectConfig)
 
 	toolSet := &ToolSet{
 		config:         cfg,
@@ -181,7 +181,6 @@ type mcpSessionManager struct {
 	config                 ConnectionConfig
 	mcpOptions             []mcp.ClientOption      // MCP client options
 	sessionReconnectConfig *SessionReconnectConfig // Session reconnection configuration
-	dynamicHeaderFunc      DynamicHeaderFunc       // Optional per-request header injection
 	client                 mcp.Connector
 	mu                     sync.RWMutex
 	connected              bool
@@ -190,12 +189,11 @@ type mcpSessionManager struct {
 }
 
 // newMCPSessionManager creates a new MCP session manager.
-func newMCPSessionManager(config ConnectionConfig, mcpOptions []mcp.ClientOption, sessionReconnectConfig *SessionReconnectConfig, dynamicHeaderFunc DynamicHeaderFunc) *mcpSessionManager {
+func newMCPSessionManager(config ConnectionConfig, mcpOptions []mcp.ClientOption, sessionReconnectConfig *SessionReconnectConfig) *mcpSessionManager {
 	manager := &mcpSessionManager{
 		config:                 config,
 		mcpOptions:             mcpOptions,
 		sessionReconnectConfig: sessionReconnectConfig,
-		dynamicHeaderFunc:      dynamicHeaderFunc,
 	}
 
 	return manager
@@ -273,18 +271,12 @@ func (m *mcpSessionManager) createClient() (mcp.Connector, error) {
 
 // buildHTTPOptions builds MCP client options for HTTP-based transports (SSE, Streamable).
 //
-// Option ordering mirrors the MCP client's "last write wins" contract:
-//
-//  1. static headers from ConnectionConfig.Headers (via WithHTTPHeaders);
-//  2. user-provided options from WithMCPOptions, in registration order;
-//  3. the dynamic-headers hook installed by WithDynamicHeaders, appended last.
-//
-// Because mcp.WithHTTPBeforeRequest replaces (rather than chains) any previous
-// hook, users who set their own WithHTTPBeforeRequest via WithMCPOptions and
-// also use WithDynamicHeaders will have their custom hook shadowed by the
-// dynamic one. Callers that need to combine both behaviours should merge the
-// logic manually inside a single WithHTTPBeforeRequest function. See the
-// WithDynamicHeaders doc comment for a worked example.
+// Static headers from ConnectionConfig.Headers are applied first via
+// WithHTTPHeaders, followed by any user-provided options from WithMCPOptions
+// in registration order. For per-request dynamic headers (e.g. user-specific
+// auth tokens), pass mcp.WithHTTPBeforeRequest to WithMCPOptions and read the
+// required values from context inside the hook. See the package-level
+// documentation for an example.
 func (m *mcpSessionManager) buildHTTPOptions() []mcp.ClientOption {
 	var options []mcp.ClientOption
 
@@ -298,22 +290,6 @@ func (m *mcpSessionManager) buildHTTPOptions() []mcp.ClientOption {
 
 	if len(m.mcpOptions) > 0 {
 		options = append(options, m.mcpOptions...)
-	}
-
-	if m.dynamicHeaderFunc != nil {
-		fn := m.dynamicHeaderFunc
-		options = append(options, mcp.WithHTTPBeforeRequest(
-			func(ctx context.Context, req *http.Request) error {
-				dynamicHeaders, err := fn(ctx)
-				if err != nil {
-					return fmt.Errorf("dynamic header injection: %w", err)
-				}
-				for k, v := range dynamicHeaders {
-					req.Header.Set(k, v)
-				}
-				return nil
-			},
-		))
 	}
 
 	return options

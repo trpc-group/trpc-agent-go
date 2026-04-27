@@ -7,7 +7,6 @@
 //
 //
 
-// Package identity propagates trusted user identity through agent tool calls.
 package identity
 
 import (
@@ -98,9 +97,27 @@ func FromContext(ctx context.Context) (*Identity, bool) {
 
 // HeadersFromContext returns a copy of identity headers stored in ctx.
 //
-// It intentionally matches tool/mcp.DynamicHeaderFunc, so callers can pass it
-// directly to mcp.WithDynamicHeaders without adding an import dependency from
-// this package to tool/mcp.
+// Typical usage is inside an mcp.WithHTTPBeforeRequest hook passed through
+// tool/mcp.WithMCPOptions, so every outgoing MCP HTTP request picks up the
+// current user's headers:
+//
+//	toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+//	    func(ctx context.Context, req *http.Request) error {
+//	        headers, err := identity.HeadersFromContext(ctx)
+//	        if err != nil {
+//	            return err
+//	        }
+//	        for k, v := range headers {
+//	            req.Header.Set(k, v)
+//	        }
+//	        return nil
+//	    },
+//	))
+//
+// The two-return-value signature (headers, error) intentionally mirrors a
+// hook that may fail when resolving identity; in practice HeadersFromContext
+// itself never returns a non-nil error today, so callers can ignore it if
+// preferred.
 func HeadersFromContext(ctx context.Context) (map[string]string, error) {
 	id, ok := FromContext(ctx)
 	if !ok || id == nil || len(id.Headers) == 0 {

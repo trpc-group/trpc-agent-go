@@ -44,9 +44,10 @@ const (
 //
 // Consumer contract:
 //
-//   - HTTP-based tools (MCP SSE/Streamable, webhooks): install a dynamic
-//     header hook that reads from context, e.g.
-//     mcp.WithDynamicHeaders(identity.HeadersFromContext).
+//   - HTTP-based tools (MCP SSE/Streamable, webhooks): install a per-request
+//     hook that reads identity headers from context and writes them onto the
+//     outgoing request. For MCP toolsets that means passing
+//     mcp.WithHTTPBeforeRequest to tool/mcp.WithMCPOptions (see Usage below).
 //   - Command-executing tools (skill_run, workspace_exec, interactive
 //     sessions): wrap the executor with
 //     codeexecutor.NewEnvInjectingCodeExecutor(exec, identity.EnvVarsFromContext).
@@ -58,6 +59,12 @@ const (
 //     identity.FromContext(ctx) inside the tool's Call implementation.
 //
 // Usage:
+//
+//	import (
+//	    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+//	    "trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+//	    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+//	)
 //
 //	provider := identity.ProviderFunc(func(ctx context.Context, uid, sid string) (*identity.Identity, error) {
 //	    return &identity.Identity{
@@ -75,8 +82,22 @@ const (
 //	)
 //	// 2. Wrap the executor so skill_run / workspace_exec receive EnvVars.
 //	exec = codeexecutor.NewEnvInjectingCodeExecutor(exec, identity.EnvVarsFromContext)
-//	// 3. Wrap MCP toolsets so HTTP calls receive Identity.Headers.
-//	ts := mcp.NewMCPToolSet(cfg, mcp.WithDynamicHeaders(identity.HeadersFromContext))
+//	// 3. For MCP HTTP transports, install a per-request hook that pulls
+//	// identity headers from context and sets them on every outgoing request.
+//	ts := toolmcp.NewMCPToolSet(cfg,
+//	    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+//	        func(ctx context.Context, req *http.Request) error {
+//	            headers, err := identity.HeadersFromContext(ctx)
+//	            if err != nil {
+//	                return err
+//	            }
+//	            for k, v := range headers {
+//	                req.Header.Set(k, v)
+//	            }
+//	            return nil
+//	        },
+//	    )),
+//	)
 type Plugin struct {
 	name     string
 	provider Provider
