@@ -761,10 +761,161 @@ func Test_buildChatRequest_ThinkingIgnoredWhenTokensNil(t *testing.T) {
 	}
 	chatReq, err := m.buildChatRequest(req)
 	assert.NoError(t, err)
-	// When tokens are nil, thinking should not be set.
-	// The SDK union has both enabled/disabled variants omitted by default.
-	// We assert nothing and only ensure no error and a valid request.
-	_ = chatReq
+	assert.Nil(t, chatReq.Thinking.OfAdaptive)
+	assert.Nil(t, chatReq.Thinking.OfEnabled)
+	assert.Nil(t, chatReq.Thinking.OfDisabled)
+}
+
+func Test_buildChatRequest_AdaptiveThinkingModels(t *testing.T) {
+	thinking := true
+	thinkingTokens := 1024
+	effort := "medium"
+	for _, modelName := range []string{
+		claudeMythosPreview,
+		claudeOpus47,
+		claudeOpus46,
+		claudeOpus46Alias,
+		claudeSonnet46,
+		claudeSonnet46Alias,
+		claudeOpus46 + "-20260427",
+	} {
+		t.Run(modelName, func(t *testing.T) {
+			m := New(modelName)
+			req := &model.Request{
+				Messages: []model.Message{model.NewUserMessage("u")},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &thinking,
+					ThinkingTokens:  &thinkingTokens,
+					ReasoningEffort: &effort,
+				},
+			}
+			chatReq, err := m.buildChatRequest(req)
+			require.NoError(t, err)
+			require.NotNil(t, chatReq.Thinking.OfAdaptive)
+			assert.Nil(t, chatReq.Thinking.OfEnabled)
+			assert.Nil(t, chatReq.Thinking.OfDisabled)
+			assert.Equal(t, defaultThinkingDisplay, chatReq.Thinking.OfAdaptive.Display)
+			assert.Equal(t, anthropic.OutputConfigEffort(effort), chatReq.OutputConfig.Effort)
+			payload := marshalChatRequestMap(t, chatReq)
+			thinkingPayload, ok := payload["thinking"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "adaptive", thinkingPayload["type"])
+			assert.Equal(t, "summarized", thinkingPayload["display"])
+			assert.NotContains(t, thinkingPayload, "budget_tokens")
+			outputConfigPayload, ok := payload["output_config"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, effort, outputConfigPayload["effort"])
+		})
+	}
+}
+
+func Test_buildChatRequest_DisabledThinking(t *testing.T) {
+	thinking := false
+	for _, modelName := range []string{claudeOpus47, claudeOpus46, claudeSonnet46} {
+		t.Run(modelName, func(t *testing.T) {
+			m := New(modelName)
+			req := &model.Request{
+				Messages: []model.Message{model.NewUserMessage("u")},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &thinking,
+				},
+			}
+			chatReq, err := m.buildChatRequest(req)
+			require.NoError(t, err)
+			require.NotNil(t, chatReq.Thinking.OfDisabled)
+			assert.Nil(t, chatReq.Thinking.OfAdaptive)
+			assert.Nil(t, chatReq.Thinking.OfEnabled)
+			payload := marshalChatRequestMap(t, chatReq)
+			thinkingPayload, ok := payload["thinking"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "disabled", thinkingPayload["type"])
+		})
+	}
+}
+
+func Test_buildChatRequest_LegacyDisabledThinkingLeavesThinkingUnset(t *testing.T) {
+	thinking := false
+	m := New("claude-3-haiku-20240307")
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("u")},
+		GenerationConfig: model.GenerationConfig{
+			ThinkingEnabled: &thinking,
+		},
+	}
+	chatReq, err := m.buildChatRequest(req)
+	require.NoError(t, err)
+	assert.Nil(t, chatReq.Thinking.OfAdaptive)
+	assert.Nil(t, chatReq.Thinking.OfEnabled)
+	assert.Nil(t, chatReq.Thinking.OfDisabled)
+	payload := marshalChatRequestMap(t, chatReq)
+	assert.NotContains(t, payload, "thinking")
+}
+
+func Test_buildChatRequest_MythosDisabledThinkingReturnsError(t *testing.T) {
+	thinking := false
+	m := New(claudeMythosPreview)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("u")},
+		GenerationConfig: model.GenerationConfig{
+			ThinkingEnabled: &thinking,
+		},
+	}
+	chatReq, err := m.buildChatRequest(req)
+	require.Error(t, err)
+	assert.Nil(t, chatReq)
+	assert.Contains(t, err.Error(), "thinking cannot be disabled")
+}
+
+func Test_buildChatRequest_NilThinkingEnabledLeavesThinkingUnset(t *testing.T) {
+	for _, modelName := range []string{claudeMythosPreview, claudeOpus47, "claude-test"} {
+		t.Run(modelName, func(t *testing.T) {
+			m := New(modelName)
+			req := &model.Request{
+				Messages: []model.Message{model.NewUserMessage("u")},
+			}
+			chatReq, err := m.buildChatRequest(req)
+			require.NoError(t, err)
+			assert.Nil(t, chatReq.Thinking.OfAdaptive)
+			assert.Nil(t, chatReq.Thinking.OfEnabled)
+			assert.Nil(t, chatReq.Thinking.OfDisabled)
+			payload := marshalChatRequestMap(t, chatReq)
+			assert.NotContains(t, payload, "thinking")
+		})
+	}
+}
+
+func Test_buildChatRequest_LegacyThinkingUsesBudgetTokens(t *testing.T) {
+	thinking := true
+	thinkingTokens := 1024
+	m := New("claude-test")
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("u")},
+		GenerationConfig: model.GenerationConfig{
+			ThinkingEnabled: &thinking,
+			ThinkingTokens:  &thinkingTokens,
+		},
+	}
+	chatReq, err := m.buildChatRequest(req)
+	require.NoError(t, err)
+	require.NotNil(t, chatReq.Thinking.OfEnabled)
+	assert.Nil(t, chatReq.Thinking.OfAdaptive)
+	assert.Nil(t, chatReq.Thinking.OfDisabled)
+	assert.Equal(t, int64(thinkingTokens), chatReq.Thinking.OfEnabled.BudgetTokens)
+	payload := marshalChatRequestMap(t, chatReq)
+	thinkingPayload, ok := payload["thinking"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "enabled", thinkingPayload["type"])
+	assert.Equal(t, float64(thinkingTokens), thinkingPayload["budget_tokens"])
+	assert.NotContains(t, thinkingPayload, "display")
+}
+
+func marshalChatRequestMap(t *testing.T, chatReq *anthropic.MessageNewParams) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(chatReq)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(raw, &payload))
+	return payload
 }
 
 func Test_convertTools_Multiple(t *testing.T) {
