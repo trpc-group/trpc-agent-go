@@ -109,9 +109,10 @@ func runWithPlugin() error {
 		}
 	}
 	// The invocation must be present on the context so BeforeTool can find
-	// the resolved Identity in state. Runner does this automatically; here
-	// we unwrap the InvocationContext to a plain context.Context.
-	toolCtx := agent.NewInvocationContext(ctx, inv).Context
+	// the resolved Identity in state. Runner does this automatically.
+	// *InvocationContext embeds context.Context and therefore satisfies the
+	// context.Context interface directly; no field access is required.
+	var toolCtx context.Context = agent.NewInvocationContext(ctx, inv)
 
 	// 2. BeforeTool attaches the Identity to each per-tool context.
 	toolCtx = applyBeforeTool(toolCtx, mgr, "http_tool",

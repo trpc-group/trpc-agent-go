@@ -59,6 +59,13 @@ func TestIdentity_ContextRoundTrip(t *testing.T) {
 	var nilFromCtx context.Context
 	_, ok = FromContext(nilFromCtx)
 	assert.False(t, ok)
+
+	// NewContext with a nil identity must be normalized on read to
+	// (nil, false) rather than leaking a typed-nil pointer with ok==true.
+	ctxNilID := NewContext(context.Background(), nil)
+	gotNil, okNil := FromContext(ctxNilID)
+	assert.Nil(t, gotNil)
+	assert.False(t, okNil)
 }
 
 func TestIdentity_HeadersAndEnvFromContext(t *testing.T) {

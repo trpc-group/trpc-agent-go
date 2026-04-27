@@ -87,12 +87,19 @@ func NewContext(ctx context.Context, id *Identity) context.Context {
 
 // FromContext extracts the Identity stored in ctx by NewContext.
 // Returns nil and false if no identity is present.
+//
+// A typed-nil value stored via NewContext(ctx, nil) is normalized here to
+// (nil, false), so callers branching on ok always see a consistent notion of
+// "identity absent".
 func FromContext(ctx context.Context) (*Identity, bool) {
 	if ctx == nil {
 		return nil, false
 	}
 	id, ok := ctx.Value(identityCtxKey{}).(*Identity)
-	return id, ok
+	if !ok || id == nil {
+		return nil, false
+	}
+	return id, true
 }
 
 // HeadersFromContext returns a copy of identity headers stored in ctx.
