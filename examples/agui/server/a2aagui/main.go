@@ -27,7 +27,7 @@
 //
 // Usage:
 //
-//	go run ./examples/agui/a2aagui -model deepseek-chat
+//	go run ./examples/agui/a2aagui -model deepseek-v4-flash
 //
 // Then connect any AG-UI frontend (e.g. CopilotKit) to http://localhost:8080/agui
 package main
@@ -57,7 +57,7 @@ import (
 )
 
 var (
-	modelName    = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-chat"), "LLM model name")
+	modelName    = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-v4-flash"), "LLM model name")
 	a2aAddr      = flag.String("a2a-addr", "0.0.0.0:8888", "A2A server listen address")
 	aguiAddr     = flag.String("agui-addr", "0.0.0.0:8080", "AG-UI server listen address")
 	aguiPath     = flag.String("agui-path", "/agui", "AG-UI endpoint path")

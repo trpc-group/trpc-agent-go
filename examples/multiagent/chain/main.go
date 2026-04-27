@@ -40,7 +40,7 @@ const (
 
 func main() {
 	// Parse command line flags.
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	disablePrefix := flag.Bool("no-prefix", false, "Disable 'For context:' prefix when passing data between agents")
 	flag.Parse()
 

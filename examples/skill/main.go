@@ -92,7 +92,7 @@ const (
 	defaultDatasetPath = "../data/gaia_2023_level1_validation.json"
 	defaultDataDir     = "../data"
 	defaultOutputPath  = "../results/trpc-agent-go.json"
-	defaultModelName   = "deepseek-chat"
+	defaultModelName   = "deepseek-v4-flash"
 
 	maxDocChars = 100000
 )

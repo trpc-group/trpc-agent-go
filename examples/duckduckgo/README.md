@@ -21,7 +21,7 @@ The example supports the following environment variables:
 
 | Argument | Description | Default Value |
 |----------|-------------|---------------|
-| `-model` | Name of the model to use | `deepseek-chat` |
+| `-model` | Name of the model to use | `deepseek-v4-flash` |
 
 ## Features
 
@@ -88,14 +88,14 @@ go run main.go -model gpt-4o-mini
 ```bash
 export OPENAI_API_KEY="your-api-key-here"
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 ## Example Session
 
 ```
 🚀 DuckDuckGo Search Chat Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Type 'exit' to end the conversation
 Available tools: duckduckgo_search
 ==================================================

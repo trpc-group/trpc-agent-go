@@ -37,7 +37,7 @@ This example needs the same model configuration as [`a2aagent`](../README.md).
 # Example: DeepSeek
 export OPENAI_API_KEY="your-deepseek-api-key"
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
-export MODEL_NAME="deepseek-chat"
+export MODEL_NAME="deepseek-v4-flash"
 ```
 
 ## Run
@@ -46,7 +46,7 @@ From the repository root:
 
 ```bash
 cd examples && go run ./a2aagent/customdatapart \
-  -model "${MODEL_NAME:-deepseek-chat}" \
+  -model "${MODEL_NAME:-deepseek-v4-flash}" \
   -streaming=true
 ```
 

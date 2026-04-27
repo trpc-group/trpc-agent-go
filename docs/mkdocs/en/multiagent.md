@@ -402,7 +402,7 @@ Chat Assistant (Main Agent)
 
 ```
 🚀 Agent Tool Example
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Available tools: current_time, math-specialist
 ==================================================
 
@@ -733,7 +733,7 @@ All example code is located at [examples](https://github.com/trpc-group/trpc-age
 ```bash
 cd examples/multiagent/chain
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Parallel Agent Example
@@ -741,7 +741,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/multiagent/parallel
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Cycle Agent Example
@@ -749,7 +749,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/multiagent/cycle
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat -max-iterations 5
+go run main.go -model deepseek-v4-flash -max-iterations 5
 ```
 
 ### Auxiliary Function Examples
@@ -759,7 +759,7 @@ go run main.go -model deepseek-chat -max-iterations 5
 ```bash
 cd examples/agenttool
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Agent Transfer Example
@@ -767,7 +767,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/transfer
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 ## Customization and Extension

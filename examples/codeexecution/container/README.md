@@ -36,7 +36,7 @@ This example demonstrates how to use the `ContainerCodeExecutor` to run model-ge
 
 | Argument | Description              | Default Value   |
 | -------- | ------------------------ | --------------- |
-| `-model` | Name of the model to use | `deepseek-chat` |
+| `-model` | Name of the model to use | `deepseek-v4-flash` |
 
 ## Configuration Options
 
@@ -119,7 +119,7 @@ executor, err := container.New(
 When you run the example, you might see output like:
 
     Creating LLMAgent with Container code executor:
-    - Model Name: deepseek-chat
+    - Model Name: deepseek-v4-flash
     - Code Executor: Docker container
     - OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment
 

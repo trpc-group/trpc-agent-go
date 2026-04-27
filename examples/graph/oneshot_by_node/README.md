@@ -20,7 +20,7 @@ accidentally overwrite (or later clear) another branch’s one-shot input.
 
 ```bash
 cd trpc-agent-go/examples/graph/oneshot_by_node
-go run . -model deepseek-chat
+go run . -model deepseek-v4-flash
 ```
 
 Optional flags:

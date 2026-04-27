@@ -36,14 +36,14 @@ export OPENAI_API_KEY="your-api-key"  # Optional: for real API calls
 **Simple mode (recommended)**: automatic token management
 
 ```bash
-go run . -model deepseek-chat -enable-token-tailoring
+go run . -model deepseek-v4-flash -enable-token-tailoring
 ```
 
 **Advanced mode**: custom parameters
 
 ```bash
 go run . \
-  -model deepseek-chat \
+  -model deepseek-v4-flash \
   -enable-token-tailoring \
   -max-input-tokens 10000 \
   -strategy middle \
@@ -53,12 +53,12 @@ go run . \
 **Testing without API**: see tailoring statistics without making real API calls
 
 ```bash
-go run . -model deepseek-chat -enable-token-tailoring -streaming=false
+go run . -model deepseek-v4-flash -enable-token-tailoring -streaming=false
 ```
 
 Command-line flags:
 
-- `-model`: Model name to use for chat. Default: `deepseek-chat`.
+- `-model`: Model name to use for chat. Default: `deepseek-v4-flash`.
 - `-enable-token-tailoring`: Enable automatic token tailoring. Default: `false`.
 - `-max-input-tokens`: Max input tokens (0=auto from context window). Default: `0`.
 - `-counter`: Token counter type: `simple` or `tiktoken`. Default: `simple`.
@@ -77,7 +77,7 @@ Example output:
 
 ```
 ✂️  Token Tailoring Demo
-🧩 model: deepseek-chat
+🧩 model: deepseek-v4-flash
 🔧 enable-token-tailoring: true
 🔢 max-input-tokens: auto (from context window)
 🧮 counter: simple
@@ -143,7 +143,7 @@ The output shows:
 Enable token tailoring without specifying max-input-tokens:
 
 ```bash
-go run . -model deepseek-chat -enable-token-tailoring
+go run . -model deepseek-v4-flash -enable-token-tailoring
 ```
 
 Behavior:
@@ -152,7 +152,7 @@ Behavior:
 - Calculates optimal `maxInputTokens` by subtracting protocol overhead and output reserve.
 - Uses default `SimpleTokenCounter` and `MiddleOutStrategy`.
 
-For `deepseek-chat`:
+For `deepseek-v4-flash`:
 
 - Context window: 128,000 tokens
 - Max input tokens: 126,848 tokens (128,000 - 128 - 1,024)
@@ -163,7 +163,7 @@ For `deepseek-chat`:
 Specify custom `max-input-tokens` for precise control:
 
 ```bash
-go run . -model deepseek-chat -enable-token-tailoring -max-input-tokens 10000
+go run . -model deepseek-v4-flash -enable-token-tailoring -max-input-tokens 10000
 ```
 
 Behavior:
@@ -327,7 +327,7 @@ Interactive commands available during the session:
 Minimal setup requires only the enable flag:
 
 ```go
-m := openai.New("deepseek-chat",
+m := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true), // Required: enable token tailoring
 )
 ```
@@ -341,7 +341,7 @@ This enables automatic mode with:
 Optionally override components:
 
 ```go
-m := openai.New("deepseek-chat",
+m := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true),             // Required: enable token tailoring
     openai.WithMaxInputTokens(10000),                  // Custom limit
     openai.WithTokenCounter(customCounter),            // Custom counter
@@ -362,7 +362,7 @@ import (
 // Simple mode with provider
 m, err := provider.Model(
     "openai",
-    "deepseek-chat",
+    "deepseek-v4-flash",
     provider.WithEnableTokenTailoring(true),
 )
 
@@ -374,7 +374,7 @@ config := &model.TokenTailoringConfig{
 }
 m, err := provider.Model(
     "openai",
-    "deepseek-chat",
+    "deepseek-v4-flash",
     provider.WithEnableTokenTailoring(true),
     provider.WithTokenTailoringConfig(config),
 )
@@ -390,7 +390,7 @@ Based on testing with different models:
 
 | Model         | Context Window | Max Input Tokens | Threshold (synthetic msgs) |
 | ------------- | -------------- | ---------------- | -------------------------- |
-| deepseek-chat | 128,000        | 126,848          | ~1,030                     |
+| deepseek-v4-flash | 128,000        | 126,848          | ~1,030                     |
 | gpt-4o-mini   | 128,000        | 126,848          | ~1,030                     |
 | gpt-4         | 8,192          | 7,040            | ~57                        |
 

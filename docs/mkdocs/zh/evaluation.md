@@ -125,7 +125,7 @@ import (
 
 const (
 	appName   = "math-eval-app"
-	modelName = "deepseek-chat"
+	modelName = "deepseek-v4-flash"
 	streaming = true
 	evalSetID = "math-basic"
 	dataDir   = "./data"
@@ -1976,7 +1976,7 @@ LLM 最终响应评估指标配置示例如下：
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2013,7 +2013,7 @@ LLM 幻觉评估器对应的指标名称为 `llm_hallucinations`，属于 LLM Ju
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2052,7 +2052,7 @@ LLM 细则批判评估指标配置示例如下：
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2105,7 +2105,7 @@ LLM 参考答案细则批判评估指标配置示例如下：
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2158,7 +2158,7 @@ LLM 细则响应评估指标配置示例如下：
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2213,7 +2213,7 @@ LLM 细则知识库召回评估指标配置示例如下：
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,

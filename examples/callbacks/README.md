@@ -34,9 +34,9 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 **Example output:**
 
 ```
-🔵 BeforeModelCallback: model=deepseek-chat, lastUserMsg="Hello"
+🔵 BeforeModelCallback: model=deepseek-v4-flash, lastUserMsg="Hello"
 🔵 BeforeModelCallback: ✅ Invocation present in ctx (agent=..., id=...)
-🟣 AfterModelCallback: model=deepseek-chat has finished
+🟣 AfterModelCallback: model=deepseek-v4-flash has finished
 🟣 AfterModelCallback: detected 'original request' in user message: "show me original request"
 🟣 AfterModelCallback: this demonstrates access to the original request in after callback.
 ```
@@ -278,7 +278,7 @@ go run . -streaming=false
 
 ## Command Line Options
 
-- `-model`: Model name to use (default: "deepseek-chat")
+- `-model`: Model name to use (default: "deepseek-v4-flash")
 - `-streaming`: Enable streaming mode for responses (default: true)
 
 ---
