@@ -375,12 +375,15 @@ server-generated events that are not part of your public A2A contract.
 The rewriter sees the final unary result after server-side aggregation. In
 streaming mode, it sees every outbound streaming result, including converted
 agent events, task status updates, final artifact updates, structured task
-errors, and messages returned by the error handler.
+errors, and messages returned by the error handler. The request context is
+passed to each rewrite call so you can use request-scoped values in logs.
 
 Returning `nil` from the rewriter drops that outbound result.
 
 ```go
 import (
+	"context"
+
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
 )
@@ -389,13 +392,13 @@ server, _ := a2aserver.New(
 	a2aserver.WithHost("localhost:8080"),
 	a2aserver.WithAgent(agent, true),
 	a2aserver.WithResponseRewriter(a2aserver.ResponseRewriterFuncs{
-		Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+		Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
 			if msg, ok := result.(*protocol.Message); ok {
 				delete(msg.Metadata, "debug_trace")
 			}
 			return result
 		},
-		Streaming: func(result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+		Streaming: func(ctx context.Context, result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
 			if msg, ok := result.(*protocol.Message); ok {
 				delete(msg.Metadata, "debug_trace")
 			}
