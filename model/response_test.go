@@ -172,7 +172,10 @@ func TestCompletionTokensDetails_Structure(t *testing.T) {
 	details := CompletionTokensDetails{
 		ReasoningTokens: 100,
 	}
-	assert.GreaterOrEqual(t, details.ReasoningTokens, 0)
+	assert.Equal(t, 100, details.ReasoningTokens)
+
+	zero := CompletionTokensDetails{}
+	assert.Equal(t, 0, zero.ReasoningTokens)
 }
 
 func TestUsage_WithPromptTokensDetails(t *testing.T) {

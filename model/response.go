@@ -114,6 +114,9 @@ type PromptTokensDetails struct {
 }
 
 // CompletionTokensDetails is the details of the completion tokens.
+// It intentionally exposes reasoning tokens first; other OpenAI SDK completion
+// detail fields such as audio tokens and prediction token counters are deferred
+// until the model package has provider-agnostic semantics for them.
 type CompletionTokensDetails struct {
 	// ReasoningTokens is the number of tokens generated for reasoning.
 	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
