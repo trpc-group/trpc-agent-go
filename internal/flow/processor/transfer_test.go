@@ -21,7 +21,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/team"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -37,6 +36,8 @@ type mockAgent struct {
 	gotEndInvocation bool
 	gotTraceNodeID   string
 	gotSurfaceRoot   string
+	gotMessage       model.Message
+	gotSessionID     string
 }
 
 func (m *mockAgent) Info() agent.Info                { return agent.Info{Name: m.name} }
@@ -51,6 +52,10 @@ func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 		m.gotEndInvocation = inv.EndInvocation
 		m.gotTraceNodeID = agent.InvocationTraceNodeID(inv)
 		m.gotSurfaceRoot = agent.InvocationSurfaceRootNodeID(inv)
+		m.gotMessage = inv.Message
+		if inv.Session != nil {
+			m.gotSessionID = inv.Session.ID
+		}
 		if m.emit {
 			ch <- event.New(inv.InvocationID, m.name)
 		}
@@ -102,6 +107,30 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 	require.Len(t, evts, 3)
 	require.Equal(t, model.ObjectTypeTransfer, evts[0].Object)
 	require.Equal(t, "child", evts[1].Author)
+}
+
+func TestTransferResponseProc_EmptyMessageDoesNotEchoInheritedInput(t *testing.T) {
+	target := &mockAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-empty-message",
+		Message:      model.NewUserMessage("original user input"),
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-empty-message", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	var evts []*event.Event
+	for e := range out {
+		evts = append(evts, e)
+	}
+	require.Len(t, evts, 1)
+	require.Equal(t, model.ObjectTypeTransfer, evts[0].Object)
+	require.Equal(t, model.RoleUser, target.gotMessage.Role)
+	require.Equal(t, "original user input", target.gotMessage.Content)
 }
 
 func TestTransferResponseProc_Target404(t *testing.T) {
@@ -164,21 +193,17 @@ func TestTransferResponseProc_ControllerRejects(t *testing.T) {
 	require.Nil(t, inv.TransferInfo)
 }
 
-func TestTransferResponseProc_UsesSwarmRootTraceNodeIDForSiblingTransfer(t *testing.T) {
+func TestTransferResponseProc_UsesTeamMemberTraceRootForSiblingTransfer(t *testing.T) {
 	target := &mockAgent{name: "beta", emit: true}
 	parent := &parentAgent{child: target}
 	inv := &agent.Invocation{
 		Agent:        parent,
 		AgentName:    "alpha",
 		InvocationID: "inv-swarm",
-		Session: &session.Session{
-			State: session.StateMap{
-				swarmTeamNameKey: []byte("swarm"),
-			},
-		},
 		TransferInfo: &agent.TransferInfo{TargetAgentName: "beta", Message: "hi"},
 	}
 	agent.WithInvocationTraceNodeID("swarm/alpha")(inv)
+	agent.SetInvocationTeamMemberTraceRoot(inv, "swarm")
 	rsp := &model.Response{ID: "r-swarm"}
 	out := make(chan *event.Event, 10)
 	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
@@ -188,22 +213,17 @@ func TestTransferResponseProc_UsesSwarmRootTraceNodeIDForSiblingTransfer(t *test
 	require.Equal(t, "swarm/beta", target.gotTraceNodeID)
 }
 
-func TestTransferResponseProc_UsesMountedSwarmTraceRootForSiblingTransfer(t *testing.T) {
+func TestTransferResponseProc_UsesMountedTeamTraceRootForSiblingTransfer(t *testing.T) {
 	target := &mockAgent{name: "beta", emit: true}
 	parent := &parentAgent{child: target}
 	inv := &agent.Invocation{
 		Agent:        parent,
 		AgentName:    "alpha",
 		InvocationID: "inv-nested-swarm",
-		Session: &session.Session{
-			State: session.StateMap{
-				swarmTeamNameKey:    []byte("swarm"),
-				swarmTraceNodeIDKey: []byte("workflow/swarm"),
-			},
-		},
 		TransferInfo: &agent.TransferInfo{TargetAgentName: "beta", Message: "hi"},
 	}
 	agent.WithInvocationTraceNodeID("workflow/swarm/alpha")(inv)
+	agent.SetInvocationTeamMemberTraceRoot(inv, "workflow/swarm")
 	rsp := &model.Response{ID: "r-nested-swarm"}
 	out := make(chan *event.Event, 10)
 	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
@@ -220,15 +240,10 @@ func TestTransferResponseProc_ReplacesMountedSurfaceRootForSiblingTransfer(t *te
 		Agent:        parent,
 		AgentName:    "alpha",
 		InvocationID: "inv-surface-swarm",
-		Session: &session.Session{
-			State: session.StateMap{
-				swarmTeamNameKey:    []byte("swarm"),
-				swarmTraceNodeIDKey: []byte("workflow/swarm"),
-			},
-		},
 		TransferInfo: &agent.TransferInfo{TargetAgentName: "beta", Message: "hi"},
 	}
 	agent.WithInvocationTraceNodeID("workflow/swarm/alpha")(inv)
+	agent.SetInvocationTeamMemberTraceRoot(inv, "workflow/swarm")
 	agent.SetInvocationSurfaceRootNodeID(inv, "workflow/team/alpha")
 	rsp := &model.Response{ID: "r-surface-swarm"}
 	out := make(chan *event.Event, 10)
@@ -240,22 +255,42 @@ func TestTransferResponseProc_ReplacesMountedSurfaceRootForSiblingTransfer(t *te
 	require.Equal(t, "workflow/team/beta", target.gotSurfaceRoot)
 }
 
-func TestTransferResponseProc_FallsBackToMountedSwarmTraceRootWhenSessionLacksStoredTraceRoot(t *testing.T) {
+func TestTransferResponseProc_FallsBackToCurrentTraceWhenNoTeamRoot(t *testing.T) {
 	target := &mockAgent{name: "beta", emit: true}
 	parent := &parentAgent{child: target}
 	inv := &agent.Invocation{
 		Agent:        parent,
 		AgentName:    "alpha",
 		InvocationID: "inv-old-nested-swarm",
-		Session: &session.Session{
-			State: session.StateMap{
-				swarmTeamNameKey: []byte("swarm"),
-			},
-		},
 		TransferInfo: &agent.TransferInfo{TargetAgentName: "beta", Message: "hi"},
 	}
 	agent.WithInvocationTraceNodeID("workflow/swarm/alpha")(inv)
 	rsp := &model.Response{ID: "r-old-nested-swarm"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, "workflow/swarm/alpha/beta", target.gotTraceNodeID)
+}
+
+func TestTransferResponseProc_UsesLegacySwarmSessionTraceRootForCompatibility(t *testing.T) {
+	target := &mockAgent{name: "beta", emit: true}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "alpha",
+		InvocationID: "inv-legacy-swarm",
+		Session: &session.Session{
+			State: session.StateMap{
+				swarmTeamNameKey:    []byte("swarm"),
+				swarmTraceNodeIDKey: []byte("workflow/swarm"),
+			},
+		},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "beta", Message: "hi"},
+	}
+	agent.WithInvocationTraceNodeID("other/root/alpha")(inv)
+	rsp := &model.Response{ID: "r-legacy-swarm"}
 	out := make(chan *event.Event, 10)
 	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
 	close(out)
@@ -311,6 +346,33 @@ func (t timeoutTransferController) OnTransfer(
 	string,
 ) (time.Duration, error) {
 	return t.timeout, nil
+}
+
+type customizeTransferController struct {
+	session *session.Session
+	message model.Message
+	err     error
+}
+
+func (c customizeTransferController) OnTransfer(
+	context.Context,
+	string,
+	string,
+) (time.Duration, error) {
+	return 0, nil
+}
+
+func (c customizeTransferController) CustomizeTransferInvocation(
+	_ context.Context,
+	_ *agent.Invocation,
+	target *agent.Invocation,
+) error {
+	if c.err != nil {
+		return c.err
+	}
+	target.Session = c.session
+	target.Message = c.message
+	return nil
 }
 
 type structuredOutputCaptureModel struct {
@@ -392,6 +454,83 @@ func TestTransferResponseProc_ControllerNodeTimeout(t *testing.T) {
 	for range out {
 	}
 	require.True(t, target.gotDeadline)
+}
+
+func TestTransferResponseProc_CustomizesTargetInvocation(t *testing.T) {
+	target := &mockAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	childSess := session.NewSession("app", "user", "child-session")
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-customize",
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{
+				agent.RuntimeStateKeyTransferController: customizeTransferController{
+					session: childSess,
+					message: model.NewUserMessage("custom child input"),
+				},
+			},
+		},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", Message: "parent transfer"},
+	}
+	rsp := &model.Response{ID: "r-customize"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, "child-session", target.gotSessionID)
+	require.Equal(t, model.RoleUser, target.gotMessage.Role)
+	require.Equal(t, "custom child input", target.gotMessage.Content)
+}
+
+func TestTransferResponseProc_CustomizerRejects(t *testing.T) {
+	target := &mockAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-customize-reject",
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{
+				agent.RuntimeStateKeyTransferController: customizeTransferController{
+					err: errors.New("custom rejected"),
+				},
+			},
+		},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", Message: "parent transfer"},
+	}
+	rsp := &model.Response{ID: "r-customize-reject"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	var errorEvent *event.Event
+	var transferEvents int
+	for evt := range out {
+		if evt != nil && evt.Tag == event.TransferTag {
+			transferEvents++
+		}
+		if evt != nil && evt.Error != nil {
+			errorEvent = evt
+		}
+	}
+	require.NotNil(t, errorEvent)
+	require.Contains(t, errorEvent.Error.Message, "custom rejected")
+	require.Zero(t, transferEvents)
+	require.Nil(t, inv.TransferInfo)
 }
 
 func TestTransferResponseProc_PreservesRunStructuredOutput(t *testing.T) {
@@ -513,22 +652,129 @@ func (d *doneResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-cha
 	return ch, nil
 }
 
-func TestTransferResponseProc_CrossRequestTransfer_SetsStateDelta(t *testing.T) {
+type forwardedDoneResponseAgent struct {
+	name string
+}
+
+func (d *forwardedDoneResponseAgent) Info() agent.Info { return agent.Info{Name: d.name} }
+func (d *forwardedDoneResponseAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (d *forwardedDoneResponseAgent) FindSubAgent(string) agent.Agent { return nil }
+func (d *forwardedDoneResponseAgent) Tools() []tool.Tool              { return nil }
+func (d *forwardedDoneResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		ch <- event.NewResponseEvent(
+			inv.InvocationID,
+			d.name,
+			&model.Response{Done: true},
+		)
+		descendant := event.NewResponseEvent(
+			"descendant-invocation",
+			"descendant",
+			&model.Response{Done: true},
+		)
+		descendant.ParentInvocationID = inv.InvocationID
+		ch <- descendant
+	}()
+	return ch, nil
+}
+
+type descendantOnlyDoneResponseAgent struct {
+	name string
+}
+
+func (d *descendantOnlyDoneResponseAgent) Info() agent.Info { return agent.Info{Name: d.name} }
+func (d *descendantOnlyDoneResponseAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (d *descendantOnlyDoneResponseAgent) FindSubAgent(string) agent.Agent { return nil }
+func (d *descendantOnlyDoneResponseAgent) Tools() []tool.Tool              { return nil }
+func (d *descendantOnlyDoneResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		descendant := event.NewResponseEvent(
+			"descendant-invocation",
+			"descendant",
+			&model.Response{Done: true},
+		)
+		descendant.ParentInvocationID = inv.InvocationID
+		ch <- descendant
+	}()
+	return ch, nil
+}
+
+type nestedDelegationResponseAgent struct {
+	name string
+}
+
+func (d *nestedDelegationResponseAgent) Info() agent.Info { return agent.Info{Name: d.name} }
+func (d *nestedDelegationResponseAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (d *nestedDelegationResponseAgent) FindSubAgent(string) agent.Agent { return nil }
+func (d *nestedDelegationResponseAgent) Tools() []tool.Tool              { return nil }
+func (d *nestedDelegationResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		ch <- event.New(
+			inv.InvocationID,
+			d.name,
+			event.WithObject(model.ObjectTypeTransfer),
+			event.WithTag(event.TransferTag),
+		)
+		descendant := event.NewResponseEvent(
+			"descendant-invocation",
+			"descendant",
+			&model.Response{Done: true},
+		)
+		descendant.ParentInvocationID = inv.InvocationID
+		ch <- descendant
+	}()
+	return ch, nil
+}
+
+type recordingTransferCompletionObserver struct {
+	sourceAgent string
+	targetAgent string
+	count       int
+	done        bool
+}
+
+func (h *recordingTransferCompletionObserver) OnTransferComplete(
+	_ context.Context,
+	source *agent.Invocation,
+	target *agent.Invocation,
+	targetEvent *event.Event,
+) {
+	if source != nil {
+		h.sourceAgent = source.AgentName
+	}
+	if target != nil {
+		h.targetAgent = target.AgentName
+	}
+	h.count++
+	h.done = targetEvent != nil && targetEvent.Response != nil && targetEvent.Response.Done
+}
+
+func TestTransferResponseProc_CompletionHandlerFromController(t *testing.T) {
 	target := &doneResponseAgent{name: "child"}
 	parent := &parentAgent{child: target}
-
-	sess := session.NewSession("app", "user", "sess")
-	sess.SetState(team.SwarmTeamNameKey, []byte("team"))
-
+	handler := &completionInvocationCustomizer{}
 	inv := &agent.Invocation{
 		Agent:        parent,
 		AgentName:    "parent",
-		InvocationID: "inv-xrt",
-		Session:      sess,
+		InvocationID: "inv-completion",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
 		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
 	}
 	rsp := &model.Response{ID: "r1"}
-
 	out := make(chan *event.Event, 10)
 	NewTransferResponseProcessor(true).ProcessResponse(
 		context.Background(),
@@ -538,32 +784,28 @@ func TestTransferResponseProc_CrossRequestTransfer_SetsStateDelta(t *testing.T) 
 		out,
 	)
 	close(out)
-
-	var doneEvt *event.Event
-	for evt := range out {
-		if evt != nil && evt.Author == "child" && evt.Response != nil && evt.Response.Done {
-			doneEvt = evt
-		}
+	for range out {
 	}
-	require.NotNil(t, doneEvt)
-	require.Equal(t, []byte("child"), doneEvt.StateDelta[team.SwarmActiveAgentKeyPrefix+"team"])
+	require.Equal(t, "parent", handler.sourceAgent)
+	require.Equal(t, "child", handler.targetAgent)
+	require.Equal(t, 1, handler.count)
+	require.True(t, handler.done)
 }
 
-func TestTransferResponseProc_CrossRequestTransfer_SkipsStateDeltaWithoutMarker(t *testing.T) {
-	target := &doneResponseAgent{name: "child"}
+func TestTransferResponseProc_CompletionHandlerIgnoresForwardedDescendantDone(t *testing.T) {
+	target := &forwardedDoneResponseAgent{name: "child"}
 	parent := &parentAgent{child: target}
-
-	sess := session.NewSession("app", "user", "sess")
-
+	handler := &completionInvocationCustomizer{}
 	inv := &agent.Invocation{
 		Agent:        parent,
 		AgentName:    "parent",
-		InvocationID: "inv-xrt-skip",
-		Session:      sess,
+		InvocationID: "inv-completion-forwarded",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
 		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
 	}
-	rsp := &model.Response{ID: "r1"}
-
+	rsp := &model.Response{ID: "r-forwarded"}
 	out := make(chan *event.Event, 10)
 	NewTransferResponseProcessor(true).ProcessResponse(
 		context.Background(),
@@ -573,43 +815,129 @@ func TestTransferResponseProc_CrossRequestTransfer_SkipsStateDeltaWithoutMarker(
 		out,
 	)
 	close(out)
-
-	for evt := range out {
-		if evt == nil || evt.Author != "child" || evt.Response == nil || !evt.Response.Done {
-			continue
-		}
-		_, ok := evt.StateDelta[team.SwarmActiveAgentKeyPrefix+"team"]
-		require.False(t, ok)
-		return
+	for range out {
 	}
-	t.Fatal("missing done response event from child")
+	require.Equal(t, "parent", handler.sourceAgent)
+	require.Equal(t, "child", handler.targetAgent)
+	require.Equal(t, 1, handler.count)
+	require.True(t, handler.done)
 }
 
-func TestTransferResponseProc_SaveActiveAgent_EarlyReturns(t *testing.T) {
-	proc := NewTransferResponseProcessor(true)
+func TestTransferResponseProc_CompletionHandlerFallsBackWhenTargetForwardsOnlyDescendantDone(t *testing.T) {
+	target := &descendantOnlyDoneResponseAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	handler := &completionInvocationCustomizer{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-completion-descendant-only",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-descendant-only"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, "parent", handler.sourceAgent)
+	require.Equal(t, "child", handler.targetAgent)
+	require.Equal(t, 1, handler.count)
+	require.True(t, handler.done)
+}
+
+func TestTransferResponseProc_CompletionHandlerDoesNotFallbackAfterNestedDelegation(t *testing.T) {
+	target := &nestedDelegationResponseAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	handler := &completionInvocationCustomizer{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-completion-nested-delegation",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-nested-delegation"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	require.Zero(t, handler.count)
+}
+
+type controllerCompletionObserver struct {
+	recordingTransferCompletionObserver
+}
+
+func (h *controllerCompletionObserver) OnTransfer(
+	context.Context,
+	string,
+	string,
+) (time.Duration, error) {
+	return 0, nil
+}
+
+type completionInvocationCustomizer struct {
+	recordingTransferCompletionObserver
+}
+
+func (h *completionInvocationCustomizer) OnTransfer(
+	context.Context,
+	string,
+	string,
+) (time.Duration, error) {
+	return 0, nil
+}
+
+func (h *completionInvocationCustomizer) CustomizeTransferInvocation(
+	context.Context,
+	*agent.Invocation,
+	*agent.Invocation,
+) error {
+	return nil
+}
+
+func TestTransferResponseProc_ControllerCompletionMethodIsObserved(t *testing.T) {
 	target := &doneResponseAgent{name: "child"}
-	ctx := context.Background()
-
-	require.NotPanics(t, func() {
-		proc.saveActiveAgent(ctx, nil, target, &event.Event{})
-	})
-
-	require.NotPanics(t, func() {
-		proc.saveActiveAgent(ctx, &agent.Invocation{}, target, &event.Event{})
-	})
-
-	sess := session.NewSession("app", "user", "sess")
-	inv := &agent.Invocation{Session: sess}
-
-	require.NotPanics(t, func() {
-		proc.saveActiveAgent(ctx, inv, target, nil)
-	})
-
-	evt := &event.Event{}
-	proc.saveActiveAgent(ctx, inv, target, evt)
-	require.Nil(t, evt.StateDelta)
-}
-
-func TestSwarmActiveAgentKey_EmptyTeamName(t *testing.T) {
-	require.Equal(t, swarmActiveAgentKeyPrefix, swarmActiveAgentKey(""))
+	parent := &parentAgent{child: target}
+	handler := &controllerCompletionObserver{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-completion-controller",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-controller"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, 1, handler.count)
 }

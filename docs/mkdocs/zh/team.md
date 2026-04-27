@@ -368,6 +368,121 @@ Session State 实现，因此需要复用同一个 session。
   transfer，后续用户消息都会继续落到当前 active member。
 - `await_user_reply` 是一次性路由。它只消费下一条用户消息，消费后会自动清掉。
 
+### 独立 Agent 模式（可选）
+
+默认 Swarm 更适合“多个成员共享同一段会话历史”的协作方式。也就是说，成员之间
+handoff 后，后续成员通常能看到同一个 session 里的上下文。
+
+如果你的业务希望每个成员保持私有历史，可以开启独立 Agent 模式：
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmIndependentAgents(),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+开启后：
+
+- entry 成员继续使用 root session。
+- 非 entry 成员使用各自独立的 member session。
+- 每次新的用户输入默认仍从 entry 成员开始。
+- 子成员内部对话和最终回复不会写入 root session 的 transcript。
+- root session 仍会记录 runner completion 等框架事件，但不会携带子成员的
+  transcript 或最终回复 choices。
+- member session 的事件持久化会触发对应的 summary job；`runner.WithMemoryService`
+  和 `runner.WithSessionIngestor` 这类 turn-end lifecycle 仍按一次 `Runner.Run`
+  的 root session 触发，不会自动为每个 member session 再触发一次。
+- 子成员再 transfer 给其他成员时，只传 `transfer_to_agent` 的 message，不携带自己的私有历史。
+- 调用方仍然会收到实际运行输出；隔离的是 session 持久化历史，而不是事件流可见性。
+
+这类模式常见于“主 Agent 负责识别意图，专业 Agent 独立完成多轮处理”的场景。例如：
+主 Agent 判断用户要退款后，把控制权交给退款 Agent；退款 Agent 的处理历史保存在
+自己的私有 session 中，不污染主 Agent 的 root session。
+
+如果还希望“最近一次 transfer 的目标成员”接管后续用户输入，需要同时开启
+`WithCrossRequestTransfer(true)`：
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmIndependentAgents(),
+    team.WithCrossRequestTransfer(true),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+这样用户后续确认退款方式时，消息会继续进入退款 Agent 的私有 session；当用户话题
+切回非退款场景时，退款 Agent 可以再 `transfer_to_agent` 回主 Agent。
+
+#### 改写 handoff 输入
+
+独立 Agent 模式下，业务通常不希望子 Agent 直接继承父 Agent 的完整对话，而是希望
+自己构造子 Agent 的首轮输入，例如“原始用户输入 + 业务模板渲染”。可以使用
+`team.WithSwarmHandoffInputBuilder`：
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmIndependentAgents(),
+    team.WithCrossRequestTransfer(true),
+    team.WithSwarmHandoffInputBuilder(func(
+        ctx context.Context,
+        args team.SwarmHandoffInputArgs,
+    ) (model.Message, error) {
+        _ = ctx
+        if args.ToAgentName == "refund_agent" {
+            return model.NewUserMessage(
+                "退款处理请求：\n" + args.RootInput.Content,
+            ), nil
+        }
+        return model.NewUserMessage(args.TransferMessage), nil
+    }),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+`SwarmHandoffInputArgs` 提供以下字段：
+
+- `FromAgentName`：发起 handoff 的成员名。
+- `ToAgentName`：接收 handoff 的成员名。
+- `RootInput`：本轮用户最初输入。
+- `ParentInput`：发起 handoff 的当前成员输入。
+- `TransferMessage`：`transfer_to_agent` 工具调用里携带的 message。
+
+如果没有配置 `WithSwarmHandoffInputBuilder`，目标成员默认收到
+`transfer_to_agent` 的 `message` 字段。
+
+`WithSwarmHandoffInputBuilder` 也可以单独使用，不强制依赖
+`WithSwarmIndependentAgents()`。但在共享 session 模式下，它只会改写 handoff
+目标成员本轮收到的输入，不会隔离历史；目标成员仍然可以看到 root session 中的
+共享会话记录。
+
+#### 与跨请求 transfer 的区别
+
+`WithSwarmIndependentAgents()` 只控制成员历史是否隔离；
+`WithCrossRequestTransfer(true)` 控制最近的 transfer 目标是否接管后续用户输入。
+
+| 选项 | 后续用户输入 | 成员历史 |
+| --- | --- | --- |
+| 默认 Swarm | 每次从 entry 成员开始 | 共享 root session |
+| `WithCrossRequestTransfer(true)` | 最近 transfer 目标接管 | 共享 root session |
+| `WithSwarmIndependentAgents()` | 每次从 entry 成员开始 | 成员 session 隔离 |
+| 两者同时开启 | 最近 transfer 目标接管 | 成员 session 隔离 |
+
 ### 动态成员（运行时增删）
 
 在长时间运行的服务中，Swarm 的成员列表可能会变化（例如远程 Agent
@@ -452,6 +567,17 @@ transfer。它是一种比较粗略但高效的判断：只看最近 N 次的“
 
 可以直接参考 `examples/team/coord`（协调者团队）和 `examples/team/swarm`
 （Swarm），它们分别提供可运行示例。
+
+如果需要观察 Swarm handoff 后每个成员实际发送给模型的输入，可以运行调试示例：
+
+```bash
+cd examples/team/swarm_input_debug
+go run . -mock -child-isolated -rewrite-child-input
+```
+
+该示例会打印 parent/child 的 `BeforeModel` 输入。开启 `-child-isolated` 和
+`-rewrite-child-input` 后，child 首次模型输入应只包含 child system instruction
+和改写后的 user message，不会包含 parent 的完整对话历史。
 
 ## 设计说明
 

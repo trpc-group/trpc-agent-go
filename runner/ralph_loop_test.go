@@ -410,6 +410,11 @@ type infoAgent struct {
 	runContent string
 }
 
+type currentTurnInfoAgent struct {
+	*infoAgent
+	currentTurnSession *session.Session
+}
+
 func (a *infoAgent) Info() agent.Info { return a.info }
 
 func (a *infoAgent) Tools() []tool.Tool { return a.tools }
@@ -453,6 +458,13 @@ func (a *infoAgent) Run(
 	return ch, nil
 }
 
+func (a *currentTurnInfoAgent) ResolveCurrentTurnSession(
+	context.Context,
+	*agent.Invocation,
+) (*session.Session, error) {
+	return a.currentTurnSession, nil
+}
+
 func TestWrapAgentWithRalphLoop_NilAndAlreadyWrapped(t *testing.T) {
 	cfg := RalphLoopConfig{CompletionPromise: "DONE"}
 	require.Nil(t, wrapAgentWithRalphLoop(nil, cfg))
@@ -464,6 +476,20 @@ func TestWrapAgentWithRalphLoop_NilAndAlreadyWrapped(t *testing.T) {
 
 	wrappedAgain := wrapAgentWithRalphLoop(wrapped, cfg)
 	require.Same(t, wrapped, wrappedAgain)
+}
+
+func TestWrapAgentWithRalphLoop_ForwardsCurrentTurnResolver(t *testing.T) {
+	want := session.NewSession("app", "user", "member")
+	ag := &currentTurnInfoAgent{
+		infoAgent:          &infoAgent{info: agent.Info{Name: "a"}},
+		currentTurnSession: want,
+	}
+	wrapped := wrapAgentWithRalphLoop(ag, RalphLoopConfig{CompletionPromise: "DONE"})
+	resolver, ok := wrapped.(currentTurnSessionResolver)
+	require.True(t, ok)
+	got, err := resolver.ResolveCurrentTurnSession(context.Background(), agent.NewInvocation())
+	require.NoError(t, err)
+	require.Same(t, want, got)
 }
 
 func TestRalphLoopAgent_InfoAndDelegation(t *testing.T) {

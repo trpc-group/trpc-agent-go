@@ -1458,6 +1458,66 @@ func TestRunner_applyEventPlugins_ReplacesEventAndCopiesFields(t *testing.T) {
 	require.Equal(t, filter, out.FilterKey)
 }
 
+func TestRunner_applyEventPlugins_PreservesReplacementFields(t *testing.T) {
+	const (
+		origReqID    = "req"
+		origInvID    = "inv"
+		origParentID = "parent"
+		origBranch   = "branch"
+		origFilter   = "filter"
+		newReqID     = "new-req"
+		newInvID     = "new-inv"
+		newParentID  = "new-parent"
+		newBranch    = "new-branch"
+		newFilter    = "new-filter"
+		tag          = "tag"
+	)
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				updated := &event.Event{
+					Tag:                tag,
+					Author:             "plugin",
+					RequestID:          newReqID,
+					InvocationID:       newInvID,
+					ParentInvocationID: newParentID,
+					Branch:             newBranch,
+					FilterKey:          newFilter,
+				}
+				return updated, nil
+			})
+		},
+	}
+
+	ag := &mockAgent{name: "test-agent"}
+	run := NewRunner("test-app", ag, WithPlugins(p)).(*runner)
+
+	inv := &agent.Invocation{Plugins: plugin.MustNewManager(p)}
+	orig := &event.Event{
+		Response:           &model.Response{Done: true},
+		RequestID:          origReqID,
+		InvocationID:       origInvID,
+		ParentInvocationID: origParentID,
+		Branch:             origBranch,
+		FilterKey:          origFilter,
+		Author:             "a",
+	}
+
+	out := run.applyEventPlugins(context.Background(), inv, orig)
+	require.NotNil(t, out)
+	require.Equal(t, tag, out.Tag)
+	require.Equal(t, newReqID, out.RequestID)
+	require.Equal(t, newInvID, out.InvocationID)
+	require.Equal(t, newParentID, out.ParentInvocationID)
+	require.Equal(t, newBranch, out.Branch)
+	require.Equal(t, newFilter, out.FilterKey)
+}
+
 func TestRunner_applyEventPlugins_ErrorKeepsOriginal(t *testing.T) {
 	p := &testPlugin{
 		name: "p",

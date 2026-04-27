@@ -18,8 +18,10 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/eventcontrol"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
@@ -42,9 +44,10 @@ type Team struct {
 	members      []agent.Agent
 	memberByName map[string]agent.Agent
 
-	memberToolSet        tool.ToolSet
-	swarm                SwarmConfig
-	crossRequestTransfer bool
+	memberToolSet     tool.ToolSet
+	swarm             SwarmConfig
+	swarmHandoff      swarmHandoffPolicy
+	swarmHandoffInput SwarmHandoffInputBuilder
 }
 
 // Mode controls how a Team runs.
@@ -165,16 +168,18 @@ func NewSwarm(
 		return nil, err
 	}
 
-	return &Team{
-		name:                 name,
-		description:          cfg.description,
-		mode:                 ModeSwarm,
-		entryName:            entryName,
-		members:              members,
-		memberByName:         memberByName,
-		swarm:                cfg.swarm,
-		crossRequestTransfer: cfg.crossRequestTransfer,
-	}, nil
+	tm := &Team{
+		name:              name,
+		description:       cfg.description,
+		mode:              ModeSwarm,
+		entryName:         entryName,
+		members:           members,
+		memberByName:      memberByName,
+		swarm:             cfg.swarm,
+		swarmHandoff:      cfg.swarmHandoff,
+		swarmHandoffInput: cfg.swarmHandoffInput,
+	}
+	return tm, nil
 }
 
 // Run implements agent.Agent.
@@ -190,6 +195,33 @@ func (t *Team) Run(
 	default:
 		return nil, fmt.Errorf("unknown team mode: %d", t.mode)
 	}
+}
+
+// ResolveCurrentTurnSession returns the session that should receive the
+// current user turn before this Team runs. It is a framework hook used by
+// runner.Run and is not intended for application code; callers should
+// configure this behavior with WithCrossRequestTransfer instead of calling
+// this method directly.
+func (t *Team) ResolveCurrentTurnSession(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (*session.Session, error) {
+	if t.mode != ModeSwarm || !t.swarmHandoff.targetTakesOver() {
+		return nil, nil
+	}
+	if invocation == nil || invocation.Session == nil {
+		return nil, nil
+	}
+	t.markSwarmRootSession(invocation, "")
+	startAgent := t.getActiveAgent(invocation)
+	if startAgent == nil {
+		return invocation.Session, nil
+	}
+	return t.memberSessionForAgent(
+		ctx,
+		invocation,
+		startAgent.Info().Name,
+	)
 }
 
 func (t *Team) runCoordinator(
@@ -221,8 +253,12 @@ func wrapCoordinatorInvocationState(
 	invocation *agent.Invocation,
 	src <-chan *event.Event,
 ) <-chan *event.Event {
-	if invocation == nil || src == nil {
+	if invocation == nil {
 		return src
+	}
+	if src == nil {
+		teamtrace.ClearMemberTraceRootForInvocation(invocation)
+		return nil
 	}
 	out := make(chan *event.Event)
 	go func() {
@@ -242,20 +278,14 @@ func (t *Team) runSwarm(
 ) (<-chan *event.Event, error) {
 	traceRootNodeID := teamtrace.TraceRootNodeID(invocation, t.name)
 	surfaceRootNodeID := teamtrace.RootNodeID(invocation, t.name)
-	// Mark this session as belonging to a Swarm team for transfer processor to detect.
-	// Only do this if cross-request transfer is enabled.
-	if t.crossRequestTransfer && invocation.Session != nil {
-		invocation.Session.SetState(SwarmTeamNameKey, []byte(t.name))
-		if invocation.RunOptions.ExecutionTraceEnabled {
-			if traceRootNodeID != "" {
-				invocation.Session.SetState(swarmTraceNodeIDKey, []byte(traceRootNodeID))
-			}
-		}
+	if t.swarmHandoff.needsRootState() && invocation.Session != nil {
+		teamtrace.SetMemberTraceRootForInvocation(invocation, traceRootNodeID)
+		t.markSwarmRootSession(invocation, traceRootNodeID)
 	}
 
 	var startAgent agent.Agent
 
-	if t.crossRequestTransfer {
+	if t.swarmHandoff.targetTakesOver() {
 		// Try to get the active agent from session state (for cross-request transfer).
 		startAgent = t.getActiveAgent(invocation)
 	}
@@ -267,11 +297,35 @@ func (t *Team) runSwarm(
 		startAgent = t.memberByName[t.entryName]
 		t.mu.RUnlock()
 		if startAgent == nil {
+			teamtrace.ClearMemberTraceRootForInvocation(invocation)
 			return nil, fmt.Errorf("entry member %q not found", t.entryName)
 		}
 	}
 
-	ensureSwarmRuntime(invocation, t.swarm)
+	swarmRun := ensureSwarmRuntime(
+		invocation,
+		t.name,
+		t.entryName,
+		t.swarm,
+		t.swarmHandoff,
+		t.swarmHandoffInput,
+	)
+	if swarmRun != nil {
+		eventcontrol.AttachPersistenceHandler(invocation, swarmRun)
+	}
+	startSession := invocation.Session
+	if t.swarmHandoff.usesIsolatedSession() {
+		var err error
+		startSession, err = t.memberSessionForAgent(
+			ctx,
+			invocation,
+			startAgent.Info().Name,
+		)
+		if err != nil {
+			teamtrace.ClearMemberTraceRootForInvocation(invocation)
+			return nil, err
+		}
+	}
 	memberPathAllocator := istructure.NewPathAllocator(traceRootNodeID)
 	var memberNodeID string
 	startAgentName := startAgent.Info().Name
@@ -295,13 +349,83 @@ func (t *Team) runSwarm(
 		agent.WithInvocationAgent(startAgent),
 		agent.WithInvocationTraceNodeID(memberNodeID),
 		agent.WithInvocationEntryPredecessorStepIDs(agent.NextExecutionTracePredecessors(invocation)),
+		agent.WithInvocationSession(startSession),
 		func(inv *agent.Invocation) {
 			agent.SetInvocationSurfaceRootNodeID(inv, memberSurfaceRootNodeID)
 		},
 	)
+	if swarmRun != nil {
+		swarmRun.registerInvocationSession(
+			child.InvocationID,
+			child.Branch,
+			startSession,
+		)
+	}
 	childCtx := agent.NewInvocationContext(ctx, child)
 
-	return startAgent.Run(childCtx, child)
+	memberEventCh, err := startAgent.Run(childCtx, child)
+	if err != nil {
+		teamtrace.ClearMemberTraceRootForInvocation(invocation)
+		return nil, err
+	}
+	return wrapSwarmInvocationState(invocation, memberEventCh), nil
+}
+
+func wrapSwarmInvocationState(
+	invocation *agent.Invocation,
+	src <-chan *event.Event,
+) <-chan *event.Event {
+	if invocation == nil {
+		return src
+	}
+	if src == nil {
+		teamtrace.ClearMemberTraceRootForInvocation(invocation)
+		return nil
+	}
+	out := make(chan *event.Event)
+	go func() {
+		defer close(out)
+		defer teamtrace.ClearMemberTraceRootForInvocation(invocation)
+		for evt := range src {
+			out <- evt
+		}
+	}()
+	return out
+}
+
+func (t *Team) markSwarmRootSession(
+	invocation *agent.Invocation,
+	traceRootNodeID string,
+) {
+	if invocation == nil || invocation.Session == nil {
+		return
+	}
+	invocation.Session.SetState(SwarmTeamNameKey, []byte(t.name))
+	if invocation.RunOptions.ExecutionTraceEnabled && traceRootNodeID != "" {
+		invocation.Session.SetState(swarmTraceNodeIDKey, []byte(traceRootNodeID))
+	}
+}
+
+func (t *Team) memberSessionForAgent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toAgent string,
+) (*session.Session, error) {
+	if invocation == nil || invocation.Session == nil {
+		return nil, errors.New("root session is nil")
+	}
+	rt := &swarmRuntime{
+		teamName:  t.name,
+		entryName: t.entryName,
+		cfg:       t.swarm,
+		handoff:   t.swarmHandoff,
+	}
+	return rt.sessionForAgentStart(
+		ctx,
+		invocation.SessionService,
+		invocation.Session,
+		toAgent,
+	)
 }
 
 // getActiveAgent retrieves the active agent from session state for cross-request transfer.

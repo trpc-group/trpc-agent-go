@@ -21,17 +21,21 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 	transfertool "trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -85,6 +89,19 @@ func (t testAgent) Run(
 	return ch, nil
 }
 
+type teamTestPlugin struct {
+	name string
+	reg  func(*plugin.Registry)
+}
+
+func (p teamTestPlugin) Name() string { return p.name }
+
+func (p teamTestPlugin) Register(r *plugin.Registry) {
+	if p.reg != nil {
+		p.reg(r)
+	}
+}
+
 type testCoordinator struct {
 	name string
 
@@ -134,6 +151,7 @@ type testSwarmMember struct {
 	gotRuntime           bool
 	gotTraceNodeID       string
 	gotSurfaceRootNodeID string
+	gotMemberTraceRoot   string
 	subAgents            []agent.Agent
 	tools                []tool.Tool
 }
@@ -148,6 +166,7 @@ func (t *testSwarmMember) Run(
 ) (<-chan *event.Event, error) {
 	t.gotTraceNodeID = agent.InvocationTraceNodeID(inv)
 	t.gotSurfaceRootNodeID = agent.InvocationSurfaceRootNodeID(inv)
+	t.gotMemberTraceRoot = teamtrace.MemberTraceRootForInvocation(inv)
 	if inv != nil && inv.RunOptions.RuntimeState != nil {
 		val := inv.RunOptions.RuntimeState[agent.RuntimeStateKeyTransferController]
 		_, t.gotRuntime = val.(agent.TransferController)
@@ -174,6 +193,148 @@ func (t *testSwarmMember) FindSubAgent(name string) agent.Agent {
 			return sub
 		}
 	}
+	return nil
+}
+
+type agentToolCallingSwarmMember struct {
+	name      string
+	child     agent.Agent
+	subAgents []agent.Agent
+}
+
+func (m *agentToolCallingSwarmMember) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *agentToolCallingSwarmMember) SetSubAgents(subAgents []agent.Agent) {
+	m.subAgents = subAgents
+}
+
+func (m *agentToolCallingSwarmMember) SubAgents() []agent.Agent { return m.subAgents }
+
+func (m *agentToolCallingSwarmMember) FindSubAgent(name string) agent.Agent {
+	for _, sub := range m.subAgents {
+		if sub != nil && sub.Info().Name == name {
+			return sub
+		}
+	}
+	return nil
+}
+
+func (m *agentToolCallingSwarmMember) Tools() []tool.Tool { return nil }
+
+func (m *agentToolCallingSwarmMember) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	result, err := agenttool.NewTool(m.child).Call(
+		agent.NewInvocationContext(ctx, inv),
+		[]byte(`{"request":"agent-tool-private-input"}`),
+	)
+	if err != nil {
+		return nil, err
+	}
+	text, _ := result.(string)
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		ch <- event.NewResponseEvent(inv.InvocationID, m.name, &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("worker final: " + text),
+			}},
+		})
+	}()
+	return ch, nil
+}
+
+type assistantTextAgent struct {
+	name    string
+	content string
+}
+
+func (a *assistantTextAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *assistantTextAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *assistantTextAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func (a *assistantTextAgent) Tools() []tool.Tool { return nil }
+
+func (a *assistantTextAgent) Run(
+	_ context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		ch <- event.NewResponseEvent(inv.InvocationID, a.name, &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage(a.content),
+			}},
+		})
+	}()
+	return ch, nil
+}
+
+type teamRecordingMemoryService struct {
+	sessions []*session.Session
+}
+
+func (m *teamRecordingMemoryService) AddMemory(context.Context, memory.UserKey, string, []string, ...memory.AddOption) error {
+	return nil
+}
+
+func (m *teamRecordingMemoryService) UpdateMemory(context.Context, memory.Key, string, []string, ...memory.UpdateOption) error {
+	return nil
+}
+
+func (m *teamRecordingMemoryService) DeleteMemory(context.Context, memory.Key) error {
+	return nil
+}
+
+func (m *teamRecordingMemoryService) ClearMemories(context.Context, memory.UserKey) error {
+	return nil
+}
+
+func (m *teamRecordingMemoryService) ReadMemories(context.Context, memory.UserKey, int) ([]*memory.Entry, error) {
+	return nil, nil
+}
+
+func (m *teamRecordingMemoryService) SearchMemories(context.Context, memory.UserKey, string, ...memory.SearchOption) ([]*memory.Entry, error) {
+	return nil, nil
+}
+
+func (m *teamRecordingMemoryService) Tools() []tool.Tool { return nil }
+
+func (m *teamRecordingMemoryService) EnqueueAutoMemoryJob(_ context.Context, sess *session.Session) error {
+	m.sessions = append(m.sessions, sess)
+	return nil
+}
+
+func (m *teamRecordingMemoryService) Close() error { return nil }
+
+type teamRecordingIngestor struct {
+	sessions []*session.Session
+	options  []session.IngestOptions
+}
+
+func (i *teamRecordingIngestor) IngestSession(
+	_ context.Context,
+	sess *session.Session,
+	opts ...session.IngestOption,
+) error {
+	var got session.IngestOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&got)
+		}
+	}
+	i.sessions = append(i.sessions, sess)
+	i.options = append(i.options, got)
 	return nil
 }
 
@@ -1027,6 +1188,7 @@ func TestTeam_RunSwarm_MountsMemberTraceNodeID(t *testing.T) {
 	}
 	require.Equal(t, "workflow/swarm/member_one", a.gotTraceNodeID)
 	require.Equal(t, "workflow/swarm/member_one", a.gotSurfaceRootNodeID)
+	require.Empty(t, a.gotMemberTraceRoot)
 	require.Empty(t, b.gotTraceNodeID)
 }
 
@@ -1061,6 +1223,7 @@ func TestTeam_RunSwarm_PreservesTraceNodeIDWhenSurfaceRootIsMounted(t *testing.T
 	}
 	require.Equal(t, "workflow/parent/delegate/member_one", a.gotTraceNodeID)
 	require.Equal(t, "workflow/parent/delegate/team/member_one", a.gotSurfaceRootNodeID)
+	require.Equal(t, "workflow/parent/delegate", a.gotMemberTraceRoot)
 	traceNodeIDBytes, ok := sess.GetState(swarmTraceNodeIDKey)
 	require.True(t, ok)
 	require.Equal(t, []byte("workflow/parent/delegate"), traceNodeIDBytes)
@@ -1188,6 +1351,468 @@ func TestTeam_RunSwarm_CrossRequestTransfer_MissingActiveAgentFallsBackToEntry(t
 		gotAuthor = e.Author
 	}
 	require.Equal(t, testEntryName, gotAuthor)
+}
+
+func TestTeam_ResolveSwarmCurrentTurnSession_IsolationUsesActiveMemberSession(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	rootKey := session.Key{
+		AppName:   testAppName,
+		UserID:    testUserID,
+		SessionID: testSessionID,
+	}
+	root, err := service.CreateSession(ctx, rootKey, session.StateMap{
+		SwarmActiveAgentKeyPrefix + testTeamName: []byte(testMemberNameTwo),
+	})
+	require.NoError(t, err)
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+		WithSwarmIndependentAgents(),
+		WithCrossRequestTransfer(true),
+	)
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(root),
+		agent.WithInvocationSessionService(service),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	got, err := tm.ResolveCurrentTurnSession(ctx, inv)
+	require.NoError(t, err)
+	expectedSessionID := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: testSessionID,
+		TeamName:        testTeamName,
+		EntryAgentName:  testEntryName,
+		ToAgentName:     testMemberNameTwo,
+	})
+	require.Equal(t, expectedSessionID, got.ID)
+	rootAfter, err := service.GetSession(ctx, rootKey)
+	require.NoError(t, err)
+	value, ok := rootAfter.GetState(swarmMemberSessionKey(testTeamName, testMemberNameTwo))
+	require.True(t, ok)
+	require.Equal(t, []byte(expectedSessionID), value)
+}
+
+func TestTeam_ResolveSwarmCurrentTurnSession_DefaultDoesNotTakeOver(t *testing.T) {
+	service := sessioninmemory.NewSessionService()
+	root, err := service.CreateSession(context.Background(), session.Key{
+		AppName:   testAppName,
+		UserID:    testUserID,
+		SessionID: testSessionID,
+	}, session.StateMap{
+		SwarmActiveAgentKeyPrefix + testTeamName: []byte(testMemberNameTwo),
+	})
+	require.NoError(t, err)
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+	)
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(root),
+		agent.WithInvocationSessionService(service),
+	)
+	got, err := tm.ResolveCurrentTurnSession(context.Background(), inv)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+func TestRunnerRun_SwarmSessionIsolation_KeepsMemberHistoryPrivate(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	mainModel := &teamScriptedSurfaceModel{
+		name: "main-model",
+		responses: []model.Message{
+			teamToolCallAssistantMessage(
+				transfertool.TransferToolName,
+				`{"agent_name":"refund","message":"I bought a monthly plan and need a refund."}`,
+			),
+			model.NewAssistantMessage("Try Blossoms."),
+		},
+	}
+	refundModel := &teamScriptedSurfaceModel{
+		name: "refund-model",
+		responses: []model.Message{
+			model.NewAssistantMessage("Please confirm the refund destination."),
+			model.NewAssistantMessage("Refund submitted to wallet."),
+			teamToolCallAssistantMessage(
+				transfertool.TransferToolName,
+				`{"agent_name":"main","message":"Recommend a TV show."}`,
+			),
+		},
+	}
+	mainAgent := llmagent.New("main", llmagent.WithModel(mainModel))
+	refundAgent := llmagent.New("refund", llmagent.WithModel(refundModel))
+	swarm, err := NewSwarm(
+		"support",
+		"main",
+		[]agent.Agent{mainAgent, refundAgent},
+		WithSwarmIndependentAgents(),
+		WithCrossRequestTransfer(true),
+		WithSwarmHandoffInputBuilder(func(_ context.Context, args SwarmHandoffInputArgs) (model.Message, error) {
+			if args.ToAgentName == "refund" {
+				return model.NewUserMessage("REFUND_CASE: " + args.TransferMessage), nil
+			}
+			return model.NewUserMessage(args.TransferMessage), nil
+		}),
+	)
+	require.NoError(t, err)
+	run := runner.NewRunner("app", swarm, runner.WithSessionService(service))
+	t.Cleanup(func() { require.NoError(t, run.Close()) })
+	teamDrainRun(
+		t,
+		run,
+		"user-isolated",
+		"root-session",
+		"I bought a monthly plan and need a refund.",
+	)
+	require.Equal(t, 1, mainModel.RequestCount())
+	require.Equal(t, 1, refundModel.RequestCount())
+	require.True(t, teamMessagesContainContent(
+		refundModel.LatestRequest().messages,
+		"REFUND_CASE: I bought a monthly plan and need a refund.",
+	))
+	rootKey := session.Key{AppName: "app", UserID: "user-isolated", SessionID: "root-session"}
+	refundSessionID := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "root-session",
+		TeamName:        "support",
+		EntryAgentName:  "main",
+		ToAgentName:     "refund",
+	})
+	refundKey := session.Key{AppName: "app", UserID: "user-isolated", SessionID: refundSessionID}
+	rootAfterFirst, err := service.GetSession(ctx, rootKey)
+	require.NoError(t, err)
+	require.False(t, teamSessionContainsContent(rootAfterFirst, "Please confirm the refund destination."))
+	refundAfterFirst, err := service.GetSession(ctx, refundKey)
+	require.NoError(t, err)
+	require.True(t, teamSessionContainsContent(refundAfterFirst, "Please confirm the refund destination."))
+	teamDrainRun(t, run, "user-isolated", "root-session", "Refund it to my wallet.")
+	require.Equal(t, 1, mainModel.RequestCount())
+	require.Equal(t, 2, refundModel.RequestCount())
+	require.True(t, teamMessagesContainContent(refundModel.LatestRequest().messages, "Refund it to my wallet."))
+	rootAfterSecond, err := service.GetSession(ctx, rootKey)
+	require.NoError(t, err)
+	require.False(t, teamSessionContainsContent(rootAfterSecond, "Refund submitted to wallet."))
+	teamDrainRun(t, run, "user-isolated", "root-session", "Recommend a TV show.")
+	require.Equal(t, 2, mainModel.RequestCount())
+	require.Equal(t, 3, refundModel.RequestCount())
+	mainLatest := mainModel.LatestRequest().messages
+	require.True(t, teamMessagesContainContent(mainLatest, "Recommend a TV show."))
+	require.False(t, teamMessagesContainContent(mainLatest, "Refund submitted to wallet."))
+	require.False(t, teamMessagesContainContent(mainLatest, "Refund it to my wallet."))
+}
+
+func TestRunnerRun_SwarmSessionIsolation_PersistsPostPluginChildEvent(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	mainModel := &teamScriptedSurfaceModel{
+		name: "main-model",
+		responses: []model.Message{
+			teamToolCallAssistantMessage(
+				transfertool.TransferToolName,
+				`{"agent_name":"refund","message":"refund request"}`,
+			),
+		},
+	}
+	refundModel := &teamScriptedSurfaceModel{
+		name: "refund-model",
+		responses: []model.Message{
+			model.NewAssistantMessage("sensitive refund answer"),
+		},
+	}
+	mainAgent := llmagent.New("main", llmagent.WithModel(mainModel))
+	refundAgent := llmagent.New("refund", llmagent.WithModel(refundModel))
+	swarm, err := NewSwarm(
+		"support",
+		"main",
+		[]agent.Agent{mainAgent, refundAgent},
+		WithSwarmIndependentAgents(),
+		WithCrossRequestTransfer(true),
+	)
+	require.NoError(t, err)
+	redactPlugin := teamTestPlugin{
+		name: "redact-child",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				_ context.Context,
+				_ *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				if e == nil || e.Author != "refund" || e.Response == nil {
+					return e, nil
+				}
+				if !teamEventContainsContent(e, "sensitive refund answer") {
+					return e, nil
+				}
+				redacted := event.NewResponseEvent(
+					"wrong-invocation",
+					"refund",
+					&model.Response{
+						ID:   "redacted-refund",
+						Done: true,
+						Choices: []model.Choice{{
+							Message: model.NewAssistantMessage("redacted refund answer"),
+						}},
+					},
+				)
+				redacted.RequestID = "wrong-request"
+				redacted.ParentInvocationID = "wrong-parent"
+				redacted.Branch = "wrong/branch"
+				redacted.FilterKey = "wrong-filter"
+				return redacted, nil
+			})
+		},
+	}
+	run := runner.NewRunner(
+		"app",
+		swarm,
+		runner.WithSessionService(service),
+		runner.WithPlugins(redactPlugin),
+	)
+	t.Cleanup(func() { require.NoError(t, run.Close()) })
+	events := teamDrainRun(t, run, "user-redacted", "root-session", "I need a refund.")
+	require.True(t, teamEventsContainContent(events, "redacted refund answer"))
+	rootKey := session.Key{AppName: "app", UserID: "user-redacted", SessionID: "root-session"}
+	refundSessionID := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "root-session",
+		TeamName:        "support",
+		EntryAgentName:  "main",
+		ToAgentName:     "refund",
+	})
+	refundKey := session.Key{AppName: "app", UserID: "user-redacted", SessionID: refundSessionID}
+	rootAfter, err := service.GetSession(ctx, rootKey)
+	require.NoError(t, err)
+	require.False(t, teamSessionContainsContent(rootAfter, "sensitive refund answer"))
+	require.False(t, teamSessionContainsContent(rootAfter, "redacted refund answer"))
+	refundAfter, err := service.GetSession(ctx, refundKey)
+	require.NoError(t, err)
+	require.False(t, teamSessionContainsContent(refundAfter, "sensitive refund answer"))
+	require.True(t, teamSessionContainsContent(refundAfter, "redacted refund answer"))
+}
+
+func TestRunnerRun_SwarmSessionIsolation_RoutesAgentToolAppenderEvents(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	mainModel := &teamScriptedSurfaceModel{
+		name: "main-model",
+		responses: []model.Message{
+			teamToolCallAssistantMessage(
+				transfertool.TransferToolName,
+				`{"agent_name":"worker","message":"handoff to worker"}`,
+			),
+		},
+	}
+	mainAgent := llmagent.New("main", llmagent.WithModel(mainModel))
+	helperAgent := &assistantTextAgent{
+		name:    "helper",
+		content: "helper private answer",
+	}
+	workerAgent := &agentToolCallingSwarmMember{
+		name:  "worker",
+		child: helperAgent,
+	}
+	swarm, err := NewSwarm(
+		"support",
+		"main",
+		[]agent.Agent{mainAgent, workerAgent},
+		WithSwarmIndependentAgents(),
+	)
+	require.NoError(t, err)
+	run := runner.NewRunner("app", swarm, runner.WithSessionService(service))
+	t.Cleanup(func() { require.NoError(t, run.Close()) })
+	events := teamDrainRun(
+		t,
+		run,
+		"user-agent-tool",
+		"root-session",
+		"start worker",
+	)
+	require.True(t, teamEventsContainContent(events, "worker final: helper private answer"))
+	rootKey := session.Key{AppName: "app", UserID: "user-agent-tool", SessionID: "root-session"}
+	workerSessionID := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "root-session",
+		TeamName:        "support",
+		EntryAgentName:  "main",
+		ToAgentName:     "worker",
+	})
+	workerKey := session.Key{AppName: "app", UserID: "user-agent-tool", SessionID: workerSessionID}
+	rootAfter, err := service.GetSession(ctx, rootKey)
+	require.NoError(t, err)
+	require.False(t, teamSessionContainsContent(rootAfter, "agent-tool-private-input"))
+	require.False(t, teamSessionContainsContent(rootAfter, "helper private answer"))
+	workerAfter, err := service.GetSession(ctx, workerKey)
+	require.NoError(t, err)
+	require.True(t, teamSessionContainsContent(workerAfter, "agent-tool-private-input"))
+	require.True(t, teamSessionContainsContent(workerAfter, "helper private answer"))
+}
+
+func TestRunnerRun_SwarmSessionIsolation_RoutesThroughChainAncestor(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	mainModel := &teamScriptedSurfaceModel{
+		name: "main-model",
+		responses: []model.Message{
+			teamToolCallAssistantMessage(
+				transfertool.TransferToolName,
+				`{"agent_name":"worker","message":"handoff to worker"}`,
+			),
+		},
+	}
+	workerModel := &teamScriptedSurfaceModel{
+		name:      "worker-model",
+		responses: []model.Message{model.NewAssistantMessage("worker private answer")},
+	}
+	mainAgent := llmagent.New("main", llmagent.WithModel(mainModel))
+	workerAgent := llmagent.New("worker", llmagent.WithModel(workerModel))
+	swarm, err := NewSwarm(
+		"support",
+		"main",
+		[]agent.Agent{mainAgent, workerAgent},
+		WithSwarmIndependentAgents(),
+	)
+	require.NoError(t, err)
+	chain := chainagent.New("chain", chainagent.WithSubAgents([]agent.Agent{swarm}))
+	run := runner.NewRunner("app", chain, runner.WithSessionService(service))
+	t.Cleanup(func() { require.NoError(t, run.Close()) })
+	events := teamDrainRun(t, run, "user-chain", "root-session", "start worker")
+	require.True(t, teamEventsContainContent(events, "worker private answer"))
+	rootKey := session.Key{AppName: "app", UserID: "user-chain", SessionID: "root-session"}
+	workerSessionID := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "root-session",
+		TeamName:        "support",
+		EntryAgentName:  "main",
+		ToAgentName:     "worker",
+	})
+	workerKey := session.Key{AppName: "app", UserID: "user-chain", SessionID: workerSessionID}
+	rootAfter, err := service.GetSession(ctx, rootKey)
+	require.NoError(t, err)
+	require.False(t, teamSessionContainsContent(rootAfter, "worker private answer"))
+	workerAfter, err := service.GetSession(ctx, workerKey)
+	require.NoError(t, err)
+	require.True(t, teamSessionContainsContent(workerAfter, "worker private answer"))
+}
+
+func TestRunnerRun_SwarmSessionIsolation_LifecycleUsesRootSessionOnly(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	memoryService := &teamRecordingMemoryService{}
+	ingestor := &teamRecordingIngestor{}
+	mainModel := &teamScriptedSurfaceModel{
+		name: "main-model",
+		responses: []model.Message{
+			teamToolCallAssistantMessage(
+				transfertool.TransferToolName,
+				`{"agent_name":"worker","message":"handoff to worker"}`,
+			),
+		},
+	}
+	workerModel := &teamScriptedSurfaceModel{
+		name:      "worker-model",
+		responses: []model.Message{model.NewAssistantMessage("worker private lifecycle answer")},
+	}
+	mainAgent := llmagent.New("main", llmagent.WithModel(mainModel))
+	workerAgent := llmagent.New("worker", llmagent.WithModel(workerModel))
+	swarm, err := NewSwarm(
+		"support",
+		"main",
+		[]agent.Agent{mainAgent, workerAgent},
+		WithSwarmIndependentAgents(),
+	)
+	require.NoError(t, err)
+	run := runner.NewRunner(
+		"app",
+		swarm,
+		runner.WithSessionService(service),
+		runner.WithMemoryService(memoryService),
+		runner.WithSessionIngestor(ingestor),
+	)
+	t.Cleanup(func() { require.NoError(t, run.Close()) })
+	teamDrainRun(t, run, "user-lifecycle", "root-session", "start worker")
+	rootKey := session.Key{AppName: "app", UserID: "user-lifecycle", SessionID: "root-session"}
+	workerSessionID := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "root-session",
+		TeamName:        "support",
+		EntryAgentName:  "main",
+		ToAgentName:     "worker",
+	})
+	workerKey := session.Key{AppName: "app", UserID: "user-lifecycle", SessionID: workerSessionID}
+	rootAfter, err := service.GetSession(ctx, rootKey)
+	require.NoError(t, err)
+	require.False(t, teamSessionContainsContent(rootAfter, "worker private lifecycle answer"))
+	workerAfter, err := service.GetSession(ctx, workerKey)
+	require.NoError(t, err)
+	require.True(t, teamSessionContainsContent(workerAfter, "worker private lifecycle answer"))
+	require.Len(t, memoryService.sessions, 1)
+	require.Equal(t, "root-session", memoryService.sessions[0].ID)
+	require.Len(t, ingestor.sessions, 1)
+	require.Equal(t, "root-session", ingestor.sessions[0].ID)
+	require.Equal(t, "root-session", ingestor.options[0].RunID)
+}
+
+func TestRunnerRun_SwarmIndependentAgents_MultiHopTransferKeepsFinalTargetActive(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	mainModel := &teamScriptedSurfaceModel{
+		name: "main-model",
+		responses: []model.Message{
+			teamToolCallAssistantMessage(
+				transfertool.TransferToolName,
+				`{"agent_name":"middle","message":"send to middle"}`,
+			),
+		},
+	}
+	middleModel := &teamScriptedSurfaceModel{
+		name: "middle-model",
+		responses: []model.Message{
+			teamToolCallAssistantMessage(
+				transfertool.TransferToolName,
+				`{"agent_name":"final","message":"send to final"}`,
+			),
+		},
+	}
+	finalModel := &teamScriptedSurfaceModel{
+		name: "final-model",
+		responses: []model.Message{
+			model.NewAssistantMessage("final agent answer"),
+		},
+	}
+	mainAgent := llmagent.New("main", llmagent.WithModel(mainModel))
+	middleAgent := llmagent.New("middle", llmagent.WithModel(middleModel))
+	finalAgent := llmagent.New("final", llmagent.WithModel(finalModel))
+	swarm, err := NewSwarm(
+		"support",
+		"main",
+		[]agent.Agent{mainAgent, middleAgent, finalAgent},
+		WithSwarmIndependentAgents(),
+		WithCrossRequestTransfer(true),
+	)
+	require.NoError(t, err)
+	run := runner.NewRunner("app", swarm, runner.WithSessionService(service))
+	t.Cleanup(func() { require.NoError(t, run.Close()) })
+	teamDrainRun(
+		t,
+		run,
+		"user-multihop",
+		"root-session",
+		"start multi-hop",
+	)
+	root, err := service.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user-multihop",
+		SessionID: "root-session",
+	})
+	require.NoError(t, err)
+	activeAgent, ok := root.GetState(swarmActiveAgentKey("support"))
+	require.True(t, ok)
+	require.Equal(t, []byte("final"), activeAgent)
 }
 
 func TestTeam_RunSwarm_EntryMissing(t *testing.T) {
@@ -1834,4 +2459,90 @@ func collectTeamRunnerCompletionEvent(
 	}
 	require.NotNil(t, completion)
 	return completion
+}
+
+func teamDrainRun(
+	t *testing.T,
+	run runner.Runner,
+	userID string,
+	sessionID string,
+	content string,
+) []*event.Event {
+	t.Helper()
+	eventCh, err := run.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage(content),
+	)
+	require.NoError(t, err)
+	var events []*event.Event
+	for evt := range eventCh {
+		events = append(events, evt)
+	}
+	return events
+}
+
+func teamMessagesContainContent(messages []model.Message, content string) bool {
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, content) {
+			return true
+		}
+		for _, call := range msg.ToolCalls {
+			if strings.Contains(string(call.Function.Arguments), content) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func teamEventsContainContent(events []*event.Event, content string) bool {
+	for _, evt := range events {
+		if teamEventContainsContent(evt, content) {
+			return true
+		}
+	}
+	return false
+}
+
+func teamEventContainsContent(evt *event.Event, content string) bool {
+	if evt == nil || evt.Response == nil {
+		return false
+	}
+	for _, choice := range evt.Response.Choices {
+		if strings.Contains(choice.Message.Content, content) {
+			return true
+		}
+		for _, call := range choice.Message.ToolCalls {
+			if strings.Contains(string(call.Function.Arguments), content) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func teamSessionContainsContent(sess *session.Session, content string) bool {
+	if sess == nil {
+		return false
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	for _, evt := range sess.Events {
+		if evt.Response == nil {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			if strings.Contains(choice.Message.Content, content) {
+				return true
+			}
+			for _, call := range choice.Message.ToolCalls {
+				if strings.Contains(string(call.Function.Arguments), content) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

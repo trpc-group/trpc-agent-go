@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/eventcontrol"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
@@ -81,6 +82,13 @@ type AgentFactory func(
 	ctx context.Context,
 	ro agent.RunOptions,
 ) (agent.Agent, error)
+
+type currentTurnSessionResolver interface {
+	ResolveCurrentTurnSession(
+		ctx context.Context,
+		invocation *agent.Invocation,
+	) (*session.Session, error)
+}
 
 // WithMemoryService sets the memory service to use.
 func WithMemoryService(service memory.Service) Option {
@@ -516,6 +524,11 @@ func (r *runner) Run(
 			rootLookupName,
 		)
 	}
+	currentTurnSession, err := r.resolveCurrentTurnSession(execCtx, ag, invocation, sess)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
 
 	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
@@ -539,7 +552,7 @@ func (r *runner) Run(
 
 	if err := r.persistCurrentTurnMessages(
 		execCtx,
-		sess,
+		currentTurnSession,
 		invocation,
 		ag,
 		message,
@@ -563,6 +576,9 @@ func (r *runner) Run(
 	flush.Attach(execCtx, invocation, flushChan)
 	appender.Attach(invocation, func(ctx context.Context, e *event.Event) error {
 		if e == nil {
+			return nil
+		}
+		if eventcontrol.HandlePersistence(ctx, invocation, e, e) {
 			return nil
 		}
 		return r.sessionService.AppendEvent(ctx, sess, e)
@@ -868,6 +884,26 @@ func (r *runner) selectedRootLookupName(
 	return r.defaultAgentName
 }
 
+func (r *runner) resolveCurrentTurnSession(
+	ctx context.Context,
+	ag agent.Agent,
+	invocation *agent.Invocation,
+	fallback *session.Session,
+) (*session.Session, error) {
+	resolver, ok := ag.(currentTurnSessionResolver)
+	if !ok {
+		return fallback, nil
+	}
+	resolved, err := resolver.ResolveCurrentTurnSession(ctx, invocation)
+	if err != nil {
+		return nil, fmt.Errorf("resolve current turn session: %w", err)
+	}
+	if resolved == nil {
+		return fallback, nil
+	}
+	return resolved, nil
+}
+
 func (r *runner) wrapSelectedAgent(ag agent.Agent) agent.Agent {
 	if ag == nil {
 		return nil
@@ -907,6 +943,7 @@ type eventLoopContext struct {
 	fallbackChoices                    []model.Choice
 	fallbackResponseID                 string
 	fallbackStateDelta                 map[string][]byte
+	outputOnlyCompletionChoices        []model.Choice
 	finalError                         *model.ResponseError
 	graphCompletionSeen                bool
 	freshAssistantContentProduced      bool
@@ -1012,17 +1049,23 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 
+	routeEvent := copyEventRoutingIdentity(agentEvent)
 	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
 	if agentEvent == nil {
 		return nil
 	}
-
-	// Capture graph-level completion snapshot for final event.
-	if isGraphCompletionSnapshotEvent(agentEvent) {
-		loop.graphCompletionSeen = true
-		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
+	eventcontrol.HandlePersistence(ctx, loop.invocation, routeEvent, agentEvent)
+	outputOnlyEvent := shouldSkipEventPersistence(loop.invocation, agentEvent)
+	if outputOnlyEvent {
+		r.captureOutputOnlyCompletionFallback(loop, agentEvent)
+	} else {
+		// Capture graph-level completion snapshot for final event.
+		if isGraphCompletionSnapshotEvent(agentEvent) {
+			loop.graphCompletionSeen = true
+			loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
+		}
+		r.captureCompletionFallback(loop, agentEvent)
 	}
-	r.captureCompletionFallback(loop, agentEvent)
 	r.markCompletionSnapshotOnly(loop, agentEvent)
 	if shouldSuppressGraphCompletionEvent(loop, agentEvent) {
 		return nil
@@ -1055,8 +1098,10 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 
-	r.recordEmittedAssistantResponseID(loop, agentEvent)
-	r.recordVisibleCompletionEmission(loop, agentEvent)
+	if !outputOnlyEvent {
+		r.recordEmittedAssistantResponseID(loop, agentEvent)
+		r.recordVisibleCompletionEmission(loop, agentEvent)
+	}
 
 	// Emit event to output channel.
 	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
@@ -1188,6 +1233,20 @@ func copyEventInvocationFields(dst *event.Event, src *event.Event) {
 	}
 }
 
+func copyEventRoutingIdentity(src *event.Event) *event.Event {
+	if src == nil {
+		return nil
+	}
+	// Eventcontrol uses the original route identity while plugins may replace event content.
+	return &event.Event{
+		RequestID:          src.RequestID,
+		InvocationID:       src.InvocationID,
+		ParentInvocationID: src.ParentInvocationID,
+		Branch:             src.Branch,
+		FilterKey:          src.FilterKey,
+	}
+}
+
 func (r *runner) markCompletionSnapshotOnly(
 	loop *eventLoopContext,
 	agentEvent *event.Event,
@@ -1298,6 +1357,10 @@ func (r *runner) handleEventPersistence(
 	// Ensure error events have content so they are valid for persistence.
 	ensureErrorEventContent(agentEvent)
 
+	if shouldSkipEventPersistence(invocation, agentEvent) {
+		return false
+	}
+
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
 		return false
@@ -1311,11 +1374,7 @@ func (r *runner) handleEventPersistence(
 		persistEvent = &eventCopy
 	}
 
-	if err := r.sessionService.AppendEvent(
-		ctx,
-		sess,
-		persistEvent,
-	); err != nil {
+	if err := r.sessionService.AppendEvent(ctx, sess, persistEvent); err != nil {
 		log.Errorf("Failed to append event to session: %v", err)
 		return false
 	}
@@ -1371,6 +1430,10 @@ func (r *runner) handleEventPersistence(
 func (r *runner) shouldPersistEvent(agentEvent *event.Event) bool {
 	return len(agentEvent.StateDelta) > 0 ||
 		(agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent())
+}
+
+func shouldSkipEventPersistence(invocation *agent.Invocation, agentEvent *event.Event) bool {
+	return eventcontrol.SkipPersistence(invocation, agentEvent)
 }
 
 func isGraphCompletionEvent(agentEvent *event.Event) bool {
@@ -1454,9 +1517,28 @@ func (r *runner) captureCompletionFallback(
 		eventHasAssistantMessageContent(agentEvent) {
 		loop.fallbackChoices = cloneChoices(agentEvent.Response.Choices)
 		loop.fallbackResponseID = agentEvent.Response.ID
+		loop.outputOnlyCompletionChoices = nil
 	}
 	// The last non-partial response wins so the completion event reflects
 	// the terminal outcome seen by the runner.
+	loop.finalError = cloneResponseError(agentEvent.Response.Error)
+	loop.sawTerminalError = agentEvent.IsTerminalError()
+}
+
+func (r *runner) captureOutputOnlyCompletionFallback(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) {
+	if loop == nil || agentEvent == nil {
+		return
+	}
+	if agentEvent.Response == nil || agentEvent.IsPartial {
+		return
+	}
+	if len(agentEvent.Response.Choices) > 0 &&
+		eventHasAssistantMessageContent(agentEvent) {
+		loop.outputOnlyCompletionChoices = cloneChoices(agentEvent.Response.Choices)
+	}
 	loop.finalError = cloneResponseError(agentEvent.Response.Error)
 	loop.sawTerminalError = agentEvent.IsTerminalError()
 }
@@ -1594,6 +1676,11 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		finalStateDelta = loop.fallbackStateDelta
 	}
 	finalChoices := r.completionChoicesForRunner(loop, finalStateDelta)
+	outputOnlyChoices := outputOnlyCompletionChoicesForRunner(
+		loop,
+		finalChoices,
+		finalStateDelta,
+	)
 
 	// Propagate graph-level completion data if available.
 	if len(finalStateDelta) > 0 {
@@ -1608,6 +1695,11 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			finalChoices,
 			echoFinalChoices,
 		)
+	}
+	if len(outputOnlyChoices) > 0 &&
+		runnerCompletionEvent.Response != nil &&
+		len(runnerCompletionEvent.Response.Choices) == 0 {
+		runnerCompletionEvent.Response.Choices = cloneChoices(outputOnlyChoices)
 	}
 	if shouldMarkCompletionSnapshotOnly(
 		loop,
@@ -1630,7 +1722,7 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		loop,
 		finalChoices,
 		finalStateDelta,
-	) {
+	) || len(outputOnlyChoices) > 0 {
 		persistRunnerCompletionEvent = runnerCompletionEvent.Clone()
 		if persistRunnerCompletionEvent.Response != nil {
 			persistRunnerCompletionEvent.Response.Choices = nil
@@ -1647,9 +1739,17 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	// Send the runner completion event to output channel.
 	agent.EmitEvent(ctx, loop.invocation, loop.processedEventCh, runnerCompletionEvent)
 
-	// Enqueue auto memory extraction job if memory service is configured.
+	r.enqueueCompletionSessionLifecycle(ctx, loop)
+}
+
+func (r *runner) enqueueCompletionSessionLifecycle(
+	ctx context.Context,
+	loop *eventLoopContext,
+) {
+	if loop == nil {
+		return
+	}
 	r.enqueueAutoMemoryJob(ctx, loop.sess)
-	// Enqueue external session ingestion if configured.
 	r.enqueueSessionIngest(ctx, loop.sess, loop.invocation)
 }
 
@@ -1756,6 +1856,23 @@ func (r *runner) completionChoicesForRunner(
 		return nil
 	}
 	return loop.fallbackChoices
+}
+
+func outputOnlyCompletionChoicesForRunner(
+	loop *eventLoopContext,
+	finalChoices []model.Choice,
+	finalStateDelta map[string][]byte,
+) []model.Choice {
+	if loop == nil {
+		return nil
+	}
+	if len(finalChoices) > 0 || len(finalStateDelta) > 0 {
+		return nil
+	}
+	if len(loop.fallbackChoices) > 0 {
+		return nil
+	}
+	return loop.outputOnlyCompletionChoices
 }
 
 // shouldEchoFinalChoicesInCompletion decides whether Runner should copy the
@@ -2315,10 +2432,19 @@ func (r *runner) enqueueSessionIngest(
 	sess *session.Session,
 	inv *agent.Invocation,
 ) {
+	r.enqueueSessionIngestWithAgentName(ctx, sess, inv, "")
+}
+
+func (r *runner) enqueueSessionIngestWithAgentName(
+	ctx context.Context,
+	sess *session.Session,
+	inv *agent.Invocation,
+	agentName string,
+) {
 	if r.ingestor == nil || sess == nil {
 		return
 	}
-	opts := r.defaultIngestOptions(sess, inv)
+	opts := r.defaultIngestOptionsWithAgentName(sess, inv, agentName)
 	if err := r.ingestor.IngestSession(ctx, sess, opts...); err != nil {
 		log.DebugfContext(ctx, "Session ingest skipped or failed: %v", err)
 	}
@@ -2333,12 +2459,19 @@ func (r *runner) defaultIngestOptions(
 	sess *session.Session,
 	inv *agent.Invocation,
 ) []session.IngestOption {
+	return r.defaultIngestOptionsWithAgentName(sess, inv, "")
+}
+
+func (r *runner) defaultIngestOptionsWithAgentName(
+	sess *session.Session,
+	inv *agent.Invocation,
+	agentName string,
+) []session.IngestOption {
 	var opts []session.IngestOption
 	if sess != nil && sess.ID != "" {
 		opts = append(opts, session.WithIngestRunID(sess.ID))
 	}
-	agentName := ""
-	if inv != nil {
+	if agentName == "" && inv != nil {
 		agentName = inv.AgentName
 	}
 	if agentName == "" {

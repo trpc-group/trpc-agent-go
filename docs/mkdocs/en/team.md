@@ -398,6 +398,119 @@ This is different from `await_user_reply` plus
 - `await_user_reply` is a one-shot route. It is consumed by exactly one future
   user turn and then cleared automatically.
 
+### Independent Agents (optional)
+
+By default, Swarm is designed for collaboration where members share the same
+conversation history in the root session. After a handoff, the next member can
+usually see the same session context.
+
+If your application needs each member to keep private history, enable
+independent Agent mode:
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmIndependentAgents(),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+With this enabled:
+
+- The entry member continues to use the root session.
+- Non-entry members use stable member sessions.
+- Each new user input still starts from the entry member by default.
+- Internal member dialog and final replies are not persisted into the root
+  session transcript.
+- The root session may still record framework events such as runner completion,
+  but those events do not carry member transcript or final reply choices.
+- Member event persistence triggers the corresponding summary job.
+  `runner.WithMemoryService` and `runner.WithSessionIngestor` still run once
+  per `Runner.Run` for the root session only; they do not automatically run for
+  every member session.
+- When one member transfers to another member, only the `transfer_to_agent`
+  message is passed. The sender's private history is not passed.
+- Callers still receive the actual runtime output. Isolation applies to
+  persisted session history, not to output event visibility.
+
+If you also want the latest transfer target to receive future user input,
+combine independent Agent mode with `WithCrossRequestTransfer(true)`:
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmIndependentAgents(),
+    team.WithCrossRequestTransfer(true),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+With both options enabled, follow-up user messages continue in the target
+member's private session until another transfer changes the active member.
+
+#### Rewrite handoff input
+
+In independent Agent mode, applications often want to construct the first
+target input themselves, for example "original user input plus rendered
+business template", instead of passing the parent Agent's full context. Use
+`team.WithSwarmHandoffInputBuilder`:
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmIndependentAgents(),
+    team.WithCrossRequestTransfer(true),
+    team.WithSwarmHandoffInputBuilder(func(
+        ctx context.Context,
+        args team.SwarmHandoffInputArgs,
+    ) (model.Message, error) {
+        _ = ctx
+        if args.ToAgentName == "refund_agent" {
+            return model.NewUserMessage(
+                "Refund request:\n" + args.RootInput.Content,
+            ), nil
+        }
+        return model.NewUserMessage(args.TransferMessage), nil
+    }),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+`SwarmHandoffInputArgs` provides:
+
+- `FromAgentName`: the member that initiated the handoff.
+- `ToAgentName`: the member that receives the handoff.
+- `RootInput`: the original user input for the current run.
+- `ParentInput`: the current input of the member that initiated the handoff.
+- `TransferMessage`: the `message` field from the `transfer_to_agent` call.
+
+Without `WithSwarmHandoffInputBuilder`, the target member receives the
+`transfer_to_agent` `message` field as a user message.
+
+`WithSwarmHandoffInputBuilder` can also be used without
+`WithSwarmIndependentAgents()`. In shared-session mode, it only rewrites the
+target member's input for the current handoff; it does not isolate history, so
+the target member can still see shared root session records.
+
+| Option | Future user input | Member history |
+| --- | --- | --- |
+| Default Swarm | Starts from entry member each time | Shared root session |
+| `WithCrossRequestTransfer(true)` | Latest transfer target takes over | Shared root session |
+| `WithSwarmIndependentAgents()` | Starts from entry member each time | Isolated member sessions |
+| Both options | Latest transfer target takes over | Isolated member sessions |
+
 ### Dynamic members (runtime)
 
 In long-running services, the set of available Swarm members may change over

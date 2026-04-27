@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -162,10 +163,11 @@ func wrapAgentWithRalphLoop(
 	if _, ok := ag.(*ralphLoopAgent); ok {
 		return ag
 	}
-	return &ralphLoopAgent{
+	wrapped := &ralphLoopAgent{
 		inner: ag,
 		cfg:   normalizeRalphLoopConfig(cfg),
 	}
+	return wrapped
 }
 
 type ralphLoopAgent struct {
@@ -205,6 +207,21 @@ func (a *ralphLoopAgent) FindSubAgent(name string) agent.Agent {
 		return nil
 	}
 	return a.inner.FindSubAgent(name)
+}
+
+// ResolveCurrentTurnSession forwards current-turn routing to the wrapped agent.
+func (a *ralphLoopAgent) ResolveCurrentTurnSession(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (*session.Session, error) {
+	if a == nil || a.inner == nil {
+		return nil, nil
+	}
+	resolver, ok := a.inner.(currentTurnSessionResolver)
+	if !ok {
+		return nil, nil
+	}
+	return resolver.ResolveCurrentTurnSession(ctx, invocation)
 }
 
 func (a *ralphLoopAgent) Run(
