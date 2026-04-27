@@ -26,7 +26,19 @@ type serviceOpts struct {
 	existingSkillBodyMaxChars int
 	reviewerOptions           []LLMReviewerOption
 	customReviewer            Reviewer
-	hasReviewerOptions        bool
+
+	// Approval gate (Phase A/B) fields. All optional; when any of
+	// candidateStore / activePointer / specGate / safetyGate is set,
+	// the worker routes writes through the revision pipeline. Leaving
+	// them all nil preserves pre-Phase-A behavior exactly.
+	candidateStore     CandidateStore
+	activePointer      ActivePointer
+	specGate           SpecGate
+	safetyGate         SafetyGate
+	effectivenessGate  EffectivenessGate
+	approvalGateShadow bool
+
+	hasReviewerOptions bool
 }
 
 // WithManagedSkillsDir sets the root directory where managed skill files are
@@ -90,4 +102,57 @@ func WithReviewerOptions(opts ...LLMReviewerOption) Option {
 // implementation. When set, WithReviewerOptions is ignored.
 func WithReviewer(r Reviewer) Option {
 	return func(o *serviceOpts) { o.customReviewer = r }
+}
+
+// WithCandidateStore enables the Phase A revision store. When set, the
+// worker writes each accepted revision as an immutable snapshot
+// (SKILL.md + meta.json) under a separate candidate directory,
+// independently of the live Publisher. Passing nil is equivalent to
+// not calling this option.
+func WithCandidateStore(s CandidateStore) Option {
+	return func(o *serviceOpts) { o.candidateStore = s }
+}
+
+// WithActivePointer enables the Phase A active-pointer store. It is
+// typically paired with WithCandidateStore; together they give the
+// worker "materialize the active revision, not the latest reviewer
+// output" semantics. Passing nil is equivalent to not calling this
+// option.
+func WithActivePointer(p ActivePointer) Option {
+	return func(o *serviceOpts) { o.activePointer = p }
+}
+
+// WithSpecGate installs a SpecGate. When set, the worker runs the
+// gate on every candidate revision and rejects the revision if the
+// gate returns a non-passing report. Rejected revisions are still
+// written to the candidate store for audit purposes but are never
+// promoted to active.
+func WithSpecGate(g SpecGate) Option {
+	return func(o *serviceOpts) { o.specGate = g }
+}
+
+// WithSafetyGate installs a SafetyGate. Same semantics as WithSpecGate
+// but targets the security-focused rule set.
+func WithSafetyGate(g SafetyGate) Option {
+	return func(o *serviceOpts) { o.safetyGate = g }
+}
+
+// WithEffectivenessGate installs a Phase C EffectivenessGate. When
+// set, the worker checks whether the session that triggered the
+// review was "good enough" for the resulting revision to be
+// auto-promoted. Revisions that fail the effectiveness check are
+// written to the candidate store with status PendingEval and are
+// never promoted to Active.
+func WithEffectivenessGate(g EffectivenessGate) Option {
+	return func(o *serviceOpts) { o.effectivenessGate = g }
+}
+
+// WithApprovalGateShadow runs the approval gate in shadow mode: gates
+// are evaluated and revisions are written to the candidate store, but
+// the live Publisher is still updated with the raw reviewer output
+// and rejected revisions are only logged, not enforced. Useful when
+// rolling out Phase A/B to an existing adopter without blocking any
+// historical reviewer behavior.
+func WithApprovalGateShadow(enable bool) Option {
+	return func(o *serviceOpts) { o.approvalGateShadow = enable }
 }

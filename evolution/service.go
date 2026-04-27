@@ -51,6 +51,12 @@ func NewService(reviewModel model.Model, opts ...Option) Service {
 		WorkerNum:                 o.workerNum,
 		QueueSize:                 o.queueSize,
 		ExistingSkillBodyMaxChars: o.existingSkillBodyMaxChars,
+		CandidateStore:            o.candidateStore,
+		ActivePointer:             o.activePointer,
+		SpecGate:                  o.specGate,
+		SafetyGate:                o.safetyGate,
+		EffectivenessGate:         o.effectivenessGate,
+		ApprovalGateShadow:        o.approvalGateShadow,
 	})
 	w.Start()
 
@@ -67,4 +73,20 @@ func (s *service) EnqueueLearningJob(ctx context.Context, job LearningJob) error
 func (s *service) Close() error {
 	s.worker.Stop()
 	return nil
+}
+
+// Worker returns the underlying async worker. Exported so adopters
+// can read approval-gate metrics (and nothing else) after Close
+// without racing the worker goroutine. Callers MUST NOT mutate the
+// returned worker's config; treat it as read-only.
+func (s *service) Worker() *Worker { return s.worker }
+
+// ServiceWithWorker is an optional extension interface that exposes
+// the underlying Worker for read-only introspection. The default
+// service implementation satisfies it; alternative Service
+// implementations MAY satisfy it if they want to expose gate metrics
+// too.
+type ServiceWithWorker interface {
+	Service
+	Worker() *Worker
 }

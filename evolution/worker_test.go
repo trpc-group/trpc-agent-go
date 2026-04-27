@@ -848,3 +848,202 @@ func (c *capturingReviewer) snapshot() *ReviewInput {
 type alwaysPolicy struct{}
 
 func (alwaysPolicy) ShouldReview(_ *ReviewContext) bool { return true }
+
+func TestWorker_ApprovalGate_PromotesCleanCandidate(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Skills: []*SkillSpec{{
+			Name:        "Clean Skill",
+			Description: "desc",
+			WhenToUse:   "use",
+			Steps:       []string{"a", "b"},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		SpecGate:       NewDefaultSpecGate(),
+		SafetyGate:     NewDefaultSafetyGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "work"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	require.Len(t, pub.skills, 1, "publisher should receive the skill")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.CandidatesSeen)
+	assert.Equal(t, 1, metrics.RevisionsWritten)
+	assert.Equal(t, 1, metrics.RevisionsPromoted)
+	assert.Equal(t, 1, metrics.CreatesApplied)
+	assert.Equal(t, 0, metrics.SpecGateRejected)
+	assert.Equal(t, 0, metrics.SafetyGateRejected)
+
+	got, err := ptr.Get(context.Background(), SkillIDFromName("Clean Skill"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, got, "active pointer should be set")
+}
+
+func TestWorker_ApprovalGate_SpecGateRejects(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Skills: []*SkillSpec{{
+			Name:        "Bad", // missing description, when_to_use, enough steps
+			Description: "",
+			Steps:       []string{},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		SpecGate:       NewDefaultSpecGate(),
+		SafetyGate:     NewDefaultSafetyGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "work"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.skills, "publisher should NOT receive a gate-rejected skill")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.CandidatesSeen)
+	assert.Equal(t, 1, metrics.RevisionsWritten)
+	assert.Equal(t, 0, metrics.RevisionsPromoted)
+	assert.Equal(t, 1, metrics.SpecGateRejected)
+}
+
+func TestWorker_ApprovalGate_ShadowModePublishesAnyway(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	// A reviewer decision where the reconciler cannot rewrite to an
+	// existing skill (no matching parent). SpecGate will still reject
+	// because description / when_to_use / steps are missing.
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Skills: []*SkillSpec{{
+			Name:        "Rough Draft Skill",
+			Description: "",
+			WhenToUse:   "",
+			Steps:       []string{},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:           rev,
+		Publisher:          pub,
+		Policy:             alwaysPolicy{},
+		SkillRepo:          repo,
+		CandidateStore:     store,
+		ActivePointer:      ptr,
+		SpecGate:           NewDefaultSpecGate(),
+		SafetyGate:         NewDefaultSafetyGate(),
+		ApprovalGateShadow: true,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "work"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	assert.Len(t, pub.skills, 1, "shadow mode should still publish")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.SpecGateRejected)
+	assert.Equal(t, 1, metrics.ShadowModeBypassed)
+}
+
+func TestWorker_ApprovalGate_EffectivenessGateHoldsOnFail(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Skills: []*SkillSpec{{
+			Name:        "Learn From Disaster",
+			Description: "d",
+			WhenToUse:   "u",
+			Steps:       []string{"a", "b"},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:          rev,
+		Publisher:         pub,
+		Policy:            alwaysPolicy{},
+		SkillRepo:         repo,
+		CandidateStore:    store,
+		ActivePointer:     ptr,
+		SpecGate:          NewDefaultSpecGate(),
+		SafetyGate:        NewDefaultSafetyGate(),
+		EffectivenessGate: NewOutcomeBasedEffectivenessGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "work"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	// Attach a failure outcome
+	w.processJob(&pendingJob{
+		ctx: context.Background(),
+		job: LearningJob{
+			Session: sess,
+			Outcome: &Outcome{Status: OutcomeFail, Notes: "weather_report.json not found"},
+		},
+	})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.skills, "publisher should NOT receive a revision held by effectiveness gate")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.CandidatesSeen)
+	assert.Equal(t, 1, metrics.RevisionsWritten)
+	assert.Equal(t, 0, metrics.RevisionsPromoted)
+	assert.Equal(t, 0, metrics.SpecGateRejected)
+	assert.Equal(t, 0, metrics.SafetyGateRejected)
+	assert.Equal(t, 1, metrics.EffectivenessGateRejected)
+
+	// Revision should be in PendingEval status on disk
+	list, _ := store.ListRevisions(context.Background(), SkillIDFromName("Learn From Disaster"))
+	require.Len(t, list, 1)
+	stored, _ := store.ReadRevision(context.Background(), SkillIDFromName("Learn From Disaster"), list[0])
+	assert.Equal(t, RevisionPendingEval, stored.Status)
+}
