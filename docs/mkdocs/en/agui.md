@@ -277,6 +277,20 @@ type PostRunFinalizingTranslator interface {
 
 ## Advanced Usage
 
+### SSE heartbeat keepalive
+
+In some deployment environments, a gateway, load balancer, or browser may close an SSE connection when no data is written for a long time. If your Agent run can spend long periods without emitting events, enable transport-level heartbeats with `agui.WithHeartbeatInterval(d)`:
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithPath("/agui"),
+    agui.WithHeartbeatInterval(15*time.Second),
+)
+```
+
+The server writes SSE comment frames (`:\n\n`) at the configured interval to keep the connection active. Heartbeats are disabled by default, and non-positive intervals keep them disabled.
+
 ### Custom transport
 
 The AG-UI specification does not enforce a transport. The framework uses SSE by default, but you can implement the `service.Service` interface to switch to WebSocket or any other transport:
