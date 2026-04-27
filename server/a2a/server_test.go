@@ -763,7 +763,7 @@ func TestMessageProcessor_HandleError(t *testing.T) {
 func TestMessageProcessor_HandleError_ResponseRewriter(t *testing.T) {
 	proc := &messageProcessor{
 		responseRewriter: ResponseRewriterFuncs{
-			Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+			Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
 				msg, ok := result.(*protocol.Message)
 				if !ok {
 					return result
@@ -795,7 +795,7 @@ func TestMessageProcessor_HandleError_ResponseRewriter(t *testing.T) {
 func TestMessageProcessor_HandleError_ResponseRewriter_DropUnaryResult(t *testing.T) {
 	proc := &messageProcessor{
 		responseRewriter: ResponseRewriterFuncs{
-			Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+			Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
 				return nil
 			},
 		},
@@ -816,7 +816,7 @@ func TestMessageProcessor_HandleError_ResponseRewriter_DropUnaryResult(t *testin
 func TestMessageProcessor_HandleStreamingProcessingError_ResponseRewriter(t *testing.T) {
 	proc := &messageProcessor{
 		responseRewriter: ResponseRewriterFuncs{
-			Streaming: func(result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+			Streaming: func(ctx context.Context, result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
 				msg, ok := result.(*protocol.Message)
 				if !ok {
 					return result
@@ -858,6 +858,7 @@ func TestMessageProcessor_HandleStreamingProcessingError_ResponseRewriter_DropRe
 	proc := &messageProcessor{
 		responseRewriter: ResponseRewriterFuncs{
 			Streaming: func(
+				ctx context.Context,
 				result protocol.StreamingMessageResult,
 			) protocol.StreamingMessageResult {
 				return nil
@@ -897,7 +898,7 @@ func TestMessageProcessor_HandleStreamingProcessingError_ResponseRewriter_DropRe
 func TestMessageProcessor_HandleError_ResponseRewriter_DropStreamingResult(t *testing.T) {
 	proc := &messageProcessor{
 		responseRewriter: ResponseRewriterFuncs{
-			Streaming: func(result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+			Streaming: func(ctx context.Context, result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
 				return nil
 			},
 		},
@@ -4070,6 +4071,7 @@ func TestMessageProcessor_ProcessMessage_StructuredTaskError_ResponseRewriterDro
 		structuredTaskErrors: true,
 		responseRewriter: ResponseRewriterFuncs{
 			Unary: func(
+				ctx context.Context,
 				result protocol.UnaryMessageResult,
 			) protocol.UnaryMessageResult {
 				return nil
@@ -4281,6 +4283,7 @@ func TestMessageProcessor_ProcessBatchStreamingEvents_DropStructuredTaskError(
 		structuredTaskErrors: true,
 		responseRewriter: ResponseRewriterFuncs{
 			Streaming: func(
+				ctx context.Context,
 				result protocol.StreamingMessageResult,
 			) protocol.StreamingMessageResult {
 				return nil
@@ -4337,6 +4340,7 @@ func TestProcessAgentStreamingEvents_ResponseRewriterDropsCompletionEvents(
 	proc := createTestMessageProcessor()
 	proc.responseRewriter = ResponseRewriterFuncs{
 		Streaming: func(
+			ctx context.Context,
 			result protocol.StreamingMessageResult,
 		) protocol.StreamingMessageResult {
 			switch v := result.(type) {
@@ -4994,8 +4998,8 @@ func TestCloneStateDeltaBytes(t *testing.T) {
 func TestNormalizeResponseResults(t *testing.T) {
 	t.Run("nil inputs", func(t *testing.T) {
 		proc := &messageProcessor{}
-		assert.Nil(t, proc.rewriteUnaryResult(nil))
-		assert.Nil(t, proc.rewriteStreamingResult(nil))
+		assert.Nil(t, proc.rewriteUnaryResult(context.Background(), nil))
+		assert.Nil(t, proc.rewriteStreamingResult(context.Background(), nil))
 		assert.Nil(t, normalizeProtocolMessage(nil))
 		assert.Nil(t, normalizeTask(nil))
 		assert.Nil(t, normalizeTaskArtifactUpdateEvent(nil))
@@ -5077,6 +5081,37 @@ func TestNormalizeResponseResults(t *testing.T) {
 	})
 }
 
+func TestMessageProcessor_ResponseRewriterReceivesContext(t *testing.T) {
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "trace-1")
+	unary := &protocol.Message{
+		Role:  protocol.MessageRoleAgent,
+		Parts: []protocol.Part{protocol.NewTextPart("unary")},
+	}
+	streaming := &protocol.TaskStatusUpdateEvent{
+		TaskID:    "task",
+		ContextID: "ctx",
+		Status: protocol.TaskStatus{
+			State: protocol.TaskStateCompleted,
+		},
+	}
+	proc := &messageProcessor{
+		responseRewriter: ResponseRewriterFuncs{
+			Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+				assert.Equal(t, "trace-1", ctx.Value(contextKey{}))
+				return result
+			},
+			Streaming: func(ctx context.Context, result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+				assert.Equal(t, "trace-1", ctx.Value(contextKey{}))
+				return result
+			},
+		},
+	}
+
+	assert.Same(t, unary, proc.rewriteUnaryResult(ctx, unary))
+	assert.Same(t, streaming, proc.rewriteStreamingResult(ctx, streaming))
+}
+
 // TestMessageProcessor_ProcessMessage_NoPartsCollected tests handling when no parts are collected
 func TestMessageProcessor_ProcessMessage_NoPartsCollected(t *testing.T) {
 	ctxID := "ctx"
@@ -5133,6 +5168,7 @@ func TestMessageProcessor_ProcessMessage_ResponseRewriterDropFinalResult(
 	processor := &messageProcessor{
 		responseRewriter: ResponseRewriterFuncs{
 			Unary: func(
+				ctx context.Context,
 				result protocol.UnaryMessageResult,
 			) protocol.UnaryMessageResult {
 				return nil
@@ -5440,7 +5476,7 @@ func TestMessageProcessor_ProcessMessage_SkipsRunnerCompletion(t *testing.T) {
 		processor := &messageProcessor{
 			debugLogging: false,
 			responseRewriter: ResponseRewriterFuncs{
-				Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+				Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
 					msg, ok := result.(*protocol.Message)
 					if !ok {
 						return result
@@ -5505,7 +5541,7 @@ func TestMessageProcessor_ProcessMessage_SkipsRunnerCompletion(t *testing.T) {
 		processor := &messageProcessor{
 			debugLogging: false,
 			responseRewriter: ResponseRewriterFuncs{
-				Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+				Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
 					rewriteCallCount++
 					msg, ok := result.(*protocol.Message)
 					if !ok {
@@ -5553,7 +5589,7 @@ func TestMessageProcessor_ProcessMessage_SkipsRunnerCompletion(t *testing.T) {
 		processor := &messageProcessor{
 			debugLogging: false,
 			responseRewriter: ResponseRewriterFuncs{
-				Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+				Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
 					msg, ok := result.(*protocol.Message)
 					if !ok {
 						return result

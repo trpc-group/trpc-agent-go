@@ -458,7 +458,7 @@ func (m *messageProcessor) handleError(
 	}
 
 	if streaming {
-		rewritten := m.rewriteStreamingResult(errMsg)
+		rewritten := m.rewriteStreamingResult(ctx, errMsg)
 		if rewritten == nil {
 			return droppedStreamingMessageProcessingResult(), nil
 		}
@@ -466,7 +466,7 @@ func (m *messageProcessor) handleError(
 		return &taskmanager.MessageProcessingResult{StreamingEvents: subscriber}, nil
 	}
 
-	rewritten := m.rewriteUnaryResult(errMsg)
+	rewritten := m.rewriteUnaryResult(ctx, errMsg)
 	if rewritten == nil {
 		return droppedUnaryMessageProcessingResult(), nil
 	}
@@ -496,7 +496,7 @@ func (m *messageProcessor) handleStreamingProcessingError(
 		log.WarnfContext(ctx, "handle streaming processing error: %v", err)
 		return err
 	}
-	rewritten := m.rewriteStreamingResult(errMsg)
+	rewritten := m.rewriteStreamingResult(ctx, errMsg)
 
 	if rewritten == nil {
 		return nil
@@ -905,7 +905,7 @@ func (m *messageProcessor) sendStreamingResult(
 	result protocol.StreamingMessageResult,
 	errorMessage string,
 ) error {
-	rewritten := m.rewriteStreamingResult(result)
+	rewritten := m.rewriteStreamingResult(ctx, result)
 	if rewritten == nil {
 		return nil
 	}
@@ -986,7 +986,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 				true,
 			)
 			statusEvent.Metadata = task.Metadata
-			rewritten := m.rewriteStreamingResult(&statusEvent)
+			rewritten := m.rewriteStreamingResult(ctx, &statusEvent)
 			if rewritten == nil {
 				if terminalTaskError != nil {
 					*terminalTaskError = true
@@ -1027,7 +1027,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 		if err != nil {
 			return false, fmt.Errorf("failed to convert event to A2A message: %w", err)
 		}
-		convertedResult = m.rewriteStreamingResult(convertedResult)
+		convertedResult = m.rewriteStreamingResult(ctx, convertedResult)
 
 		if m.debugLogging {
 			a2aMsgJson, _ := json.Marshal(convertedResult)
@@ -1099,7 +1099,7 @@ func (m *messageProcessor) processMessage(
 				a2aMsg.MessageID,
 				time.Now().UnixNano(),
 			)
-			rewritten := m.rewriteUnaryResult(buildStructuredFailureTask(
+			rewritten := m.rewriteUnaryResult(ctx, buildStructuredFailureTask(
 				taskID,
 				ctxID,
 				messages,
@@ -1148,7 +1148,7 @@ func (m *messageProcessor) processMessage(
 	}
 	result := buildMessageProcessingResult(a2aMsg, ctxID, messages)
 	if result != nil && result.Result != nil {
-		rewritten := m.rewriteUnaryResult(result.Result)
+		rewritten := m.rewriteUnaryResult(ctx, result.Result)
 		if rewritten == nil {
 			return droppedUnaryMessageProcessingResult(), nil
 		}
@@ -1361,13 +1361,14 @@ func (m *messageProcessor) addTaskMetadata(event *protocol.TaskStatusUpdateEvent
 }
 
 func (m *messageProcessor) rewriteStreamingResult(
+	ctx context.Context,
 	result protocol.StreamingMessageResult,
 ) protocol.StreamingMessageResult {
 	if result == nil {
 		return nil
 	}
 	if m.responseRewriter != nil {
-		result = m.responseRewriter.RewriteStreaming(result)
+		result = m.responseRewriter.RewriteStreaming(ctx, result)
 	}
 	if result == nil {
 		return nil
@@ -1376,13 +1377,14 @@ func (m *messageProcessor) rewriteStreamingResult(
 }
 
 func (m *messageProcessor) rewriteUnaryResult(
+	ctx context.Context,
 	result protocol.UnaryMessageResult,
 ) protocol.UnaryMessageResult {
 	if result == nil {
 		return nil
 	}
 	if m.responseRewriter != nil {
-		result = m.responseRewriter.RewriteUnary(result)
+		result = m.responseRewriter.RewriteUnary(ctx, result)
 	}
 	if result == nil {
 		return nil

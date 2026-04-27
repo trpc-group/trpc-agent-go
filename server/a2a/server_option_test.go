@@ -379,8 +379,38 @@ func TestResponseRewriterFuncs_Defaults(t *testing.T) {
 		},
 	}
 
-	assert.Same(t, unary, rewriter.RewriteUnary(unary))
-	assert.Same(t, streaming, rewriter.RewriteStreaming(streaming))
+	assert.Same(t, unary, rewriter.RewriteUnary(context.Background(), unary))
+	assert.Same(t, streaming, rewriter.RewriteStreaming(context.Background(), streaming))
+}
+
+func TestResponseRewriterFuncs_Context(t *testing.T) {
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "trace-1")
+	unary := &protocol.Message{
+		Role:  protocol.MessageRoleAgent,
+		Parts: []protocol.Part{protocol.NewTextPart("unary")},
+	}
+	streaming := &protocol.TaskStatusUpdateEvent{
+		TaskID:    "task",
+		ContextID: "ctx",
+		Status: protocol.TaskStatus{
+			State: protocol.TaskStateCompleted,
+		},
+	}
+
+	rewriter := ResponseRewriterFuncs{
+		Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+			assert.Equal(t, "trace-1", ctx.Value(contextKey{}))
+			return result
+		},
+		Streaming: func(ctx context.Context, result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+			assert.Equal(t, "trace-1", ctx.Value(contextKey{}))
+			return result
+		},
+	}
+
+	assert.Same(t, unary, rewriter.RewriteUnary(ctx, unary))
+	assert.Same(t, streaming, rewriter.RewriteStreaming(ctx, streaming))
 }
 
 func TestWithOptions(t *testing.T) {

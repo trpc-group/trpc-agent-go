@@ -363,12 +363,14 @@ server, _ := a2aserver.New(
 `WithResponseRewriter` 允许服务端在 A2A 结果返回给调用方、或发送给流式订阅者之前做最后一次改写。
 典型用途包括隐藏内部 metadata、删除调试字段，或丢弃不希望暴露到公开 A2A 协议面的服务端事件。
 
-对于 unary 响应，rewriter 看到的是服务端聚合后的最终结果。对于 streaming 响应，rewriter 会看到每一个即将发送的出站结果，包括转换后的 agent 事件、task 状态更新、final artifact、结构化 task error，以及 `ErrorHandler` 返回的消息。
+对于 unary 响应，rewriter 看到的是服务端聚合后的最终结果。对于 streaming 响应，rewriter 会看到每一个即将发送的出站结果，包括转换后的 agent 事件、task 状态更新、final artifact、结构化 task error，以及 `ErrorHandler` 返回的消息。每次 rewrite 都会收到本次请求的 context，方便读取请求级日志字段。
 
 rewriter 返回 `nil` 表示丢弃该出站结果。
 
 ```go
 import (
+	"context"
+
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
 )
@@ -377,13 +379,13 @@ server, _ := a2aserver.New(
 	a2aserver.WithHost("localhost:8080"),
 	a2aserver.WithAgent(agent, true),
 	a2aserver.WithResponseRewriter(a2aserver.ResponseRewriterFuncs{
-		Unary: func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+		Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
 			if msg, ok := result.(*protocol.Message); ok {
 				delete(msg.Metadata, "debug_trace")
 			}
 			return result
 		},
-		Streaming: func(result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+		Streaming: func(ctx context.Context, result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
 			if msg, ok := result.(*protocol.Message); ok {
 				delete(msg.Metadata, "debug_trace")
 			}
