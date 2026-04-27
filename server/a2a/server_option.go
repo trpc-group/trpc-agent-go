@@ -66,40 +66,42 @@ type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager
 // ResponseRewriter rewrites outbound A2A responses before they are returned or
 // sent to the remote peer.
 //
-// RewriteUnary receives the final unary result after server-side aggregation of
-// converted events. It rewrites what the caller will actually receive, rather
-// than every intermediate converter output.
+// RewriteUnary receives the request context and final unary result after
+// server-side aggregation of converted events. It rewrites what the caller will
+// actually receive, rather than every intermediate converter output.
 //
 // Returning nil drops the outbound result.
 type ResponseRewriter interface {
-	RewriteUnary(result protocol.UnaryMessageResult) protocol.UnaryMessageResult
-	RewriteStreaming(result protocol.StreamingMessageResult) protocol.StreamingMessageResult
+	RewriteUnary(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult
+	RewriteStreaming(ctx context.Context, result protocol.StreamingMessageResult) protocol.StreamingMessageResult
 }
 
 // ResponseRewriterFuncs adapts plain functions into a ResponseRewriter.
 type ResponseRewriterFuncs struct {
-	Unary     func(result protocol.UnaryMessageResult) protocol.UnaryMessageResult
-	Streaming func(result protocol.StreamingMessageResult) protocol.StreamingMessageResult
+	Unary     func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult
+	Streaming func(ctx context.Context, result protocol.StreamingMessageResult) protocol.StreamingMessageResult
 }
 
 // RewriteUnary implements ResponseRewriter.
 func (f ResponseRewriterFuncs) RewriteUnary(
+	ctx context.Context,
 	result protocol.UnaryMessageResult,
 ) protocol.UnaryMessageResult {
 	if f.Unary == nil {
 		return result
 	}
-	return f.Unary(result)
+	return f.Unary(ctx, result)
 }
 
 // RewriteStreaming implements ResponseRewriter.
 func (f ResponseRewriterFuncs) RewriteStreaming(
+	ctx context.Context,
 	result protocol.StreamingMessageResult,
 ) protocol.StreamingMessageResult {
 	if f.Streaming == nil {
 		return result
 	}
-	return f.Streaming(result)
+	return f.Streaming(ctx, result)
 }
 
 // EventToA2APartMapper converts an agent event into additional A2A parts.
@@ -360,7 +362,8 @@ func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
 //
 // For unary responses, the rewriter sees the final result returned by the A2A
 // server after it aggregates converted events. For streaming responses, it sees
-// each outbound streaming event immediately before send.
+// each outbound streaming event immediately before send. The request context is
+// passed through so rewriters can use request-scoped values for logging.
 //
 // Returning nil drops the outbound result.
 func WithResponseRewriter(rewriter ResponseRewriter) Option {
