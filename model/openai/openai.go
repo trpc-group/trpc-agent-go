@@ -1315,8 +1315,9 @@ func (m *Model) handleStreamingResponseWithEmitter(
 		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
 
-		// Accumulate chunk for correctness (tool call deltas are assembled later),
-		// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
+		// Accumulate chunk for correctness. When a chunk mixes reasoning with
+		// content or tool-call deltas, strip only the reasoning metadata before
+		// passing it to the SDK accumulator.
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
 		// Suppress chunks that carry no meaningful visible delta (including
@@ -1380,6 +1381,65 @@ func sanitizeChunkForAccumulator(chunk openai.ChatCompletionChunk) openai.ChatCo
 	sanitized.Choices[0].Delta.JSON.ToolCalls = respjson.Field{}
 
 	return sanitized
+}
+
+// stripReasoningFromChunkForAccumulator returns a defensive copy of the chunk
+// with reasoning-only ExtraFields removed from the first choice delta. This
+// lets the upstream accumulator keep non-reasoning payloads from mixed chunks
+// without mutating the original chunk.
+func stripReasoningFromChunkForAccumulator(
+	chunk openai.ChatCompletionChunk,
+) (openai.ChatCompletionChunk, bool) {
+	if len(chunk.Choices) == 0 {
+		return chunk, false
+	}
+
+	extraFields := chunk.Choices[0].Delta.JSON.ExtraFields
+	if extractReasoningContent(extraFields) == "" {
+		return chunk, false
+	}
+
+	stripped := chunk
+	stripped.Choices = make([]openai.ChatCompletionChunkChoice, len(chunk.Choices))
+	copy(stripped.Choices, chunk.Choices)
+	stripped.Choices[0].Delta.JSON.ExtraFields =
+		cloneRespJSONFieldMap(extraFields)
+	delete(
+		stripped.Choices[0].Delta.JSON.ExtraFields,
+		model.ReasoningContentKey,
+	)
+	delete(
+		stripped.Choices[0].Delta.JSON.ExtraFields,
+		model.ReasoningContentKeyAlt,
+	)
+	return stripped, true
+}
+
+// hasAccumulatorPayloadBeyondReasoning reports whether the stripped chunk still
+// contains payload the SDK accumulator must keep, such as content, refusal,
+// tool calls, finish reasons, or usage. Pure reasoning-only chunks
+// intentionally keep the old behavior and stay out of the accumulator.
+func hasAccumulatorPayloadBeyondReasoning(
+	chunk openai.ChatCompletionChunk,
+) bool {
+	if len(chunk.Choices) > 0 {
+		choice := chunk.Choices[0]
+		if choice.FinishReason != "" {
+			return true
+		}
+
+		delta := choice.Delta
+		if delta.JSON.Content.Valid() || delta.JSON.Refusal.Valid() {
+			return true
+		}
+		if len(delta.ToolCalls) > 0 {
+			return true
+		}
+	}
+
+	return chunk.Usage.CompletionTokens > 0 ||
+		chunk.Usage.PromptTokens > 0 ||
+		chunk.Usage.TotalTokens > 0
 }
 
 type toolCallIndexState struct {
@@ -1589,19 +1649,28 @@ func applyOpenAISDKTokenDetailsAccumulationFix(
 	acc.Usage.PromptTokensDetails.CachedTokens += chunk.Usage.PromptTokensDetails.CachedTokens
 }
 
-// accumulateChunk accumulates the chunk into the accumulator and reasoning buffer.
+// accumulateChunk accumulates non-reasoning deltas into the SDK accumulator and
+// always appends reasoning deltas to the reasoning buffer.
 func (m *Model) accumulateChunk(
 	chunk openai.ChatCompletionChunk,
 	acc *openai.ChatCompletionAccumulator,
 	reasoningBuf *bytes.Buffer,
 ) {
-	// Always accumulate for correctness (tool call deltas are assembled later),
-	// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
-	if !m.hasReasoningContent(chunk.Choices) {
+	chunkForAccumulator := chunk
+	shouldAccumulate := true
+	if strippedChunk, stripped := stripReasoningFromChunkForAccumulator(chunk); stripped {
+		if hasAccumulatorPayloadBeyondReasoning(strippedChunk) {
+			chunkForAccumulator = strippedChunk
+		} else {
+			shouldAccumulate = false
+		}
+	}
+
+	if shouldAccumulate {
 		// Sanitize chunks before feeding them into the upstream accumulator to
 		// avoid known panics when JSON.ToolCalls is marked present but the
 		// typed ToolCalls slice is empty, especially on finish_reason chunks.
-		sanitizedChunk := sanitizeChunkForAccumulator(chunk)
+		sanitizedChunk := sanitizeChunkForAccumulator(chunkForAccumulator)
 		if acc.AddChunk(sanitizedChunk) {
 			applyOpenAISDKTokenDetailsAccumulationFix(acc, chunk)
 		}
