@@ -300,13 +300,13 @@ func mergeToolResultRewriteMessages(
 		merged = append(merged, msg)
 	}
 	for _, msg := range toolResults {
-		if rewritten, ok := rewrittenToolResults[msg.ToolID]; ok {
-			rewritten.Role = model.RoleTool
-			rewritten.ToolID = msg.ToolID
+		if rewrittenMsg, ok := rewrittenToolResults[msg.ToolID]; ok {
+			rewrittenMsg.Role = model.RoleTool
+			rewrittenMsg.ToolID = msg.ToolID
 			if msg.ToolName != "" {
-				rewritten.ToolName = msg.ToolName
+				rewrittenMsg.ToolName = msg.ToolName
 			}
-			merged = append(merged, rewritten)
+			merged = append(merged, rewrittenMsg)
 			continue
 		}
 		merged = append(merged, msg)

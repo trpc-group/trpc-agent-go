@@ -720,6 +720,7 @@ server, err := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTransl
 
 ```go
 import (
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -741,12 +742,21 @@ hook := func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAge
 	if !ok {
 		return input, nil
 	}
-
-	content, ok := input.Messages[len(input.Messages)-1].ContentString()
+	userMessageIndex := -1
+	for i := len(input.Messages) - 1; i >= 0; i-- {
+		if input.Messages[i].Role == types.RoleUser {
+			userMessageIndex = i
+			break
+		}
+	}
+	if userMessageIndex < 0 {
+		return input, nil
+	}
+	content, ok := input.Messages[userMessageIndex].ContentString()
 	if !ok {
 		return input, nil
 	}
-	input.Messages[len(input.Messages)-1].Content = content + otherContent
+	input.Messages[userMessageIndex].Content = content + otherContent
 	return input, nil
 }
 
