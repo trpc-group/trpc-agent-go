@@ -307,6 +307,41 @@ func TestTransformInvokeAgent(t *testing.T) {
 	}
 }
 
+func TestTransformInvokeAgent_PreservesToolCallToolResponseAndReasoning(t *testing.T) {
+	inputMessages := `[{"role":"assistant","parts":[{"type":"text","content":"need tool"},{"type":"reasoning","content":"thinking before call"},{"type":"tool_call","id":"call-123","name":"harness_lookup","arguments":{"key":"otel"}}]},{"role":"tool","name":"harness_lookup","parts":[{"type":"tool_call_response","id":"call-123","response":{"token":"otel-tool-token-7f3b9c1d"}}]}]`
+	outputChoices := `[{"role":"assistant","parts":[{"type":"text","content":"otel-tool-token-7f3b9c1d"},{"type":"reasoning","content":"used tool output"}],"finish_reason":"stop"}]`
+	span := &tracepb.Span{
+		Name: "agent-span",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: semconvtrace.KeyGenAIInputMessages,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: inputMessages},
+				},
+			},
+			{
+				Key: semconvtrace.KeyGenAIOutputMessages,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: outputChoices},
+				},
+			},
+		},
+	}
+
+	transformInvokeAgent(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		if attr.Value != nil {
+			attrMap[attr.Key] = attr.Value.GetStringValue()
+		}
+	}
+
+	assert.Equal(t, observationTypeAgent, attrMap[observationType])
+	assert.JSONEq(t, inputMessages, attrMap[observationInput])
+	assert.JSONEq(t, outputChoices, attrMap[observationOutput])
+}
+
 func TestTransformCallLLM(t *testing.T) {
 	tests := []struct {
 		name     string

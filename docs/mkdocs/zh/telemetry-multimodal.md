@@ -6,8 +6,7 @@ tRPC-Agent-Go 现在使用与 OpenTelemetry 对齐的消息 schema 来上报
 `gen_ai.input.messages` 和 `gen_ai.output.messages`，不再继续使用旧的
 `content/content_parts/tool_call_id` telemetry envelope。
 
-本文档说明 tracing 协议约束、框架到 OTel 的映射规则、provider 能力边界，
-以及 telemetry 数据和 provider HTTP 请求体之间的 replay 边界。
+本文档说明 tracing 协议约束、框架到 OTel 的映射规则，以及 provider 能力边界。
 
 ## OTel 参考
 
@@ -22,8 +21,6 @@ tRPC-Agent-Go 现在使用与 OpenTelemetry 对齐的消息 schema 来上报
 - `gen_ai.output.messages` 是 OTel 语义层输出，不保证与 provider SDK 的返回结构完全一致。
 - `llm.request` 和 `llm.response` 仍然是更偏 provider 的快照，因此可能与
   OTel message telemetry 不同。
-- replay 是单独的转换步骤。trace 数据用于观测，provider payload 是从 trace
-  派生出来的调试产物。
 
 ## OTel 消息结构
 
@@ -128,37 +125,6 @@ tRPC-Agent-Go 现在使用与 OpenTelemetry 对齐的消息 schema 来上报
 - `model/hunyuan` 支持 text、image、audio，但 file 还没有接入转换。
 - `model/huggingface` 当前 converter 支持 text 和 image，audio/file 会直接报不支持。
 
-## Replay 边界
-
-新的 replay helper 位于 `telemetry/replay`：
-
-- `replay.ExportOpenAIChatCompletions`
-- `replay.ExportOpenAIResponses`
-
-这些 helper 会把 OTel `gen_ai.input.messages` 转成：
-
-- 目标 URL
-- 适合 curl 示例的 HTTP headers
-- JSON body
-- 对不支持或有损转换的显式 warning
-
-之所以单独做这一层，是为了保持边界清晰：
-
-- telemetry 字段保持 vendor-neutral 且对齐 OTel
-- provider payload 保持 provider-specific
-- replay 可以分别为 Chat Completions、Responses 或其他 provider 独立演进
-
-## OpenAI Replay 说明
-
-- Chat Completions replay 支持 text、image、audio blob、file ID、inline file blob、
-  assistant tool call，以及 tool call response。
-- Responses replay 支持 text、image、file ID、inline file blob、自定义 function tool
-  定义、function call item，以及 function call output item。
-- Responses replay 会对 audio 输入给出 warning，因为 OpenAI 当前对 Responses 的
-  audio 输入能力仍未完全稳定。
-- 两个 exporter 都会对 video 给出 warning。Telemetry 可以表达 video，但当前的
-  OpenAI replay exporter 不会默默把 video 当成“已支持”。
-
 ## Video 策略
 
 video 的处理按层拆开：
@@ -170,9 +136,6 @@ video 的处理按层拆开：
 - 模型抽象层：
   - 当前还没有一等 `ContentTypeVideo`
   - 短期策略是把 video 先作为 file-like telemetry 表达
-- Provider 转换层：
-  - 只有 provider 有明确文档和稳定请求结构时才真正转换
-  - 否则输出 warning，而不是伪装成无损 replay
 
 当共享模型抽象未来增加 `ContentTypeVideo` 时，需要同步更新本文档中的字段映射和
 provider 能力边界。

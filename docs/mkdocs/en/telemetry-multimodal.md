@@ -6,9 +6,8 @@ tRPC-Agent-Go now emits `gen_ai.input.messages` and `gen_ai.output.messages`
 using an OpenTelemetry-aligned message schema instead of the framework's older
 `content/content_parts/tool_call_id` telemetry envelope.
 
-This page defines the tracing contract, the framework-to-OTel mapping, provider
-capabilities, and the replay boundary between telemetry data and provider HTTP
-requests.
+This page defines the tracing contract, the framework-to-OTel mapping, and
+provider capabilities.
 
 ## OTel References
 
@@ -25,8 +24,6 @@ requests.
   not guaranteed to match a provider SDK response shape.
 - `llm.request` and `llm.response` remain provider-oriented snapshots and can
   still differ from OTel message telemetry.
-- Replay is a separate conversion step. Trace data is the source of truth for
-  observability, while provider payloads are derived artifacts.
 
 ## OTel Message Shape
 
@@ -135,39 +132,6 @@ support still depends on each model adapter.
 - Hugging Face in `model/huggingface` supports text and image in its converter.
   Audio and file inputs are rejected.
 
-## Replay Boundary
-
-The new replay helpers live in `telemetry/replay`:
-
-- `replay.ExportOpenAIChatCompletions`
-- `replay.ExportOpenAIResponses`
-
-These helpers convert OTel `gen_ai.input.messages` into:
-
-- a target URL
-- HTTP headers suitable for curl examples
-- a JSON body
-- explicit warnings for unsupported or lossy conversions
-
-This separation is intentional:
-
-- telemetry fields stay vendor-neutral and OTel-aligned
-- provider payloads stay provider-specific
-- replay can evolve independently for Chat Completions, Responses, or other
-  providers
-
-## OpenAI Replay Notes
-
-- Chat Completions replay supports text, images, audio blobs, file IDs, inline
-  file blobs, assistant tool calls, and tool call responses.
-- Responses replay supports text, images, file IDs, inline file blobs, custom
-  function tool definitions, function call items, and function call output
-  items.
-- Responses replay emits warnings for audio input because OpenAI documents audio
-  input in Responses as not fully available yet.
-- Both exporters emit warnings for video. Telemetry can represent video, but the
-  current OpenAI replay exporters intentionally do not convert video silently.
-
 ## Video Strategy
 
 Video handling is split by layer:
@@ -180,9 +144,6 @@ Video handling is split by layer:
   - there is no first-class `ContentTypeVideo` yet
   - current short-term strategy is to stage video through file-like telemetry
     representations
-- Provider conversion layer:
-  - only convert video when a provider has an explicit, documented request shape
-  - otherwise emit warnings and avoid pretending replay is lossless
 
 When the shared model abstraction gains `ContentTypeVideo`, this page should be
 updated with the exact field mapping and provider matrix changes.

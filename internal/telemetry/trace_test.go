@@ -1382,6 +1382,55 @@ func TestMarshalTelemetryChoices_OTelOutputMessages(t *testing.T) {
 	require.JSONEq(t, `{"city":"paris"}`, string(messages[0].Parts[2].Arguments))
 }
 
+func TestMarshalTelemetryMessages_OTelToolCallResponseAndReasoningParts(t *testing.T) {
+	messagesIn := []model.Message{
+		{
+			Role:             model.RoleAssistant,
+			Content:          "need tool",
+			ReasoningContent: "thinking before call",
+			ToolCalls: []model.ToolCall{{
+				ID:   "call-42",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "harness_lookup",
+					Arguments: []byte(`{"key":"otel"}`),
+				},
+			}},
+		},
+		{
+			Role:     model.RoleTool,
+			ToolID:   "call-42",
+			ToolName: "harness_lookup",
+			Content:  `{"token":"otel-tool-token-7f3b9c1d"}`,
+		},
+	}
+
+	bts, err := marshalTelemetryMessages(messagesIn)
+	require.NoError(t, err)
+
+	var messages []OTelInputMessage
+	require.NoError(t, json.Unmarshal(bts, &messages))
+	require.Len(t, messages, 2)
+
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
+	require.Len(t, messages[0].Parts, 3)
+	require.Equal(t, otelPartTypeText, messages[0].Parts[0].Type)
+	require.Equal(t, "need tool", messages[0].Parts[0].Content)
+	require.Equal(t, otelPartTypeReasoning, messages[0].Parts[1].Type)
+	require.Equal(t, "thinking before call", messages[0].Parts[1].Content)
+	require.Equal(t, otelPartTypeToolCall, messages[0].Parts[2].Type)
+	require.Equal(t, "call-42", messages[0].Parts[2].ID)
+	require.Equal(t, "harness_lookup", messages[0].Parts[2].Name)
+	require.JSONEq(t, `{"key":"otel"}`, string(messages[0].Parts[2].Arguments))
+
+	require.Equal(t, model.RoleTool, messages[1].Role)
+	require.Equal(t, "harness_lookup", messages[1].Name)
+	require.Len(t, messages[1].Parts, 1)
+	require.Equal(t, otelPartTypeToolCallResponse, messages[1].Parts[0].Type)
+	require.Equal(t, "call-42", messages[1].Parts[0].ID)
+	require.JSONEq(t, `{"token":"otel-tool-token-7f3b9c1d"}`, string(messages[1].Parts[0].Response))
+}
+
 func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
 	// Test with valid request
 	req := &model.Request{
