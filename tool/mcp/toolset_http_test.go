@@ -12,7 +12,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -76,7 +75,12 @@ func TestToolSet_DynamicHeadersAppliedPerRequest(t *testing.T) {
 	require.Equal(t, "dynamic-call-token", callHeaders.Get("X-Static"))
 }
 
-func TestToolSet_DynamicHeadersComposeWithUserBeforeRequest(t *testing.T) {
+func TestToolSet_DynamicHeadersSupersedeUserBeforeRequest(t *testing.T) {
+	// When both WithMCPOptions(tmcp.WithHTTPBeforeRequest(...)) and
+	// WithDynamicHeaders are set, the MCP client keeps only the last
+	// registered before-request hook. Dynamic headers are appended last, so
+	// they shadow the user-provided hook. Callers that need both should
+	// compose the logic themselves inside a single WithHTTPBeforeRequest.
 	handler := &recordingMCPHTTPHandler{}
 	toolSet := NewMCPToolSet(
 		ConnectionConfig{
@@ -88,7 +92,6 @@ func TestToolSet_DynamicHeadersComposeWithUserBeforeRequest(t *testing.T) {
 			tmcp.WithHTTPReqHandler(handler),
 			tmcp.WithHTTPBeforeRequest(
 				func(ctx context.Context, req *http.Request) error {
-					req.Header.Set("Authorization", "Bearer stale")
 					req.Header.Set("X-User-Hook", "set")
 					return nil
 				},
@@ -107,18 +110,12 @@ func TestToolSet_DynamicHeadersComposeWithUserBeforeRequest(t *testing.T) {
 	)
 	defer func() { _ = toolSet.Close() }()
 
-	initCtx := context.WithValue(
-		context.Background(),
-		dynamicHeaderContextKey{},
-		"init-token",
-	)
-	require.NoError(t, toolSet.sessionManager.connect(initCtx))
-
 	callCtx := context.WithValue(
 		context.Background(),
 		dynamicHeaderContextKey{},
 		"call-token",
 	)
+	require.NoError(t, toolSet.sessionManager.connect(callCtx))
 	_, err := toolSet.sessionManager.callTool(
 		callCtx,
 		"echo",
@@ -126,137 +123,57 @@ func TestToolSet_DynamicHeadersComposeWithUserBeforeRequest(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	initHeaders := handler.headersForMethod(t, "initialize")
-	require.Equal(t, "set", initHeaders.Get("X-User-Hook"))
-	require.Equal(t, "Bearer init-token", initHeaders.Get("Authorization"))
-	require.Equal(t, "init-token", initHeaders.Get("X-Dynamic"))
+	callHeaders := handler.headersForMethod(t, "tools/call")
+	// Dynamic headers are applied.
+	require.Equal(t, "Bearer call-token", callHeaders.Get("Authorization"))
+	require.Equal(t, "call-token", callHeaders.Get("X-Dynamic"))
+	// The user-provided WithHTTPBeforeRequest is shadowed by the dynamic one.
+	require.Empty(t, callHeaders.Get("X-User-Hook"))
+}
+
+func TestToolSet_UserComposedBeforeRequestKeepsBothBehaviours(t *testing.T) {
+	// Recommended pattern when both custom logic and identity-driven headers
+	// are needed: compose everything inside a single WithHTTPBeforeRequest and
+	// do not use WithDynamicHeaders.
+	handler := &recordingMCPHTTPHandler{}
+	toolSet := NewMCPToolSet(
+		ConnectionConfig{
+			Transport: "streamable",
+			ServerURL: "http://mcp.test",
+		},
+		WithMCPOptions(
+			tmcp.WithClientGetSSEEnabled(false),
+			tmcp.WithHTTPReqHandler(handler),
+			tmcp.WithHTTPBeforeRequest(
+				func(ctx context.Context, req *http.Request) error {
+					req.Header.Set("X-User-Hook", "set")
+					token, _ := ctx.Value(dynamicHeaderContextKey{}).(string)
+					if token != "" {
+						req.Header.Set("Authorization", "Bearer "+token)
+					}
+					return nil
+				},
+			),
+		),
+	)
+	defer func() { _ = toolSet.Close() }()
+
+	callCtx := context.WithValue(
+		context.Background(),
+		dynamicHeaderContextKey{},
+		"call-token",
+	)
+	require.NoError(t, toolSet.sessionManager.connect(callCtx))
+	_, err := toolSet.sessionManager.callTool(
+		callCtx,
+		"echo",
+		map[string]any{"q": "hello"},
+	)
+	require.NoError(t, err)
 
 	callHeaders := handler.headersForMethod(t, "tools/call")
 	require.Equal(t, "set", callHeaders.Get("X-User-Hook"))
 	require.Equal(t, "Bearer call-token", callHeaders.Get("Authorization"))
-	require.Equal(t, "call-token", callHeaders.Get("X-Dynamic"))
-}
-
-func TestToolSet_SplitHTTPBeforeRequestOptions(t *testing.T) {
-	called := false
-	filtered, beforeRequest := splitHTTPBeforeRequestOptions([]tmcp.ClientOption{
-		tmcp.WithHTTPBeforeRequest(func(ctx context.Context, req *http.Request) error {
-			called = true
-			req.Header.Set("X-Hook", "set")
-			return nil
-		}),
-		tmcp.WithHTTPHeaders(http.Header{"X-Static": []string{"value"}}),
-	})
-
-	require.Len(t, filtered, 1)
-	require.NotNil(t, beforeRequest)
-
-	req, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	require.NoError(t, err)
-	require.NoError(t, beforeRequest(context.Background(), req))
-	require.True(t, called)
-	require.Equal(t, "set", req.Header.Get("X-Hook"))
-}
-
-func TestToolSet_SplitHTTPBeforeRequestOptionsSkipsNonHookOptions(t *testing.T) {
-	filtered, beforeRequest := splitHTTPBeforeRequestOptions([]tmcp.ClientOption{
-		tmcp.WithHTTPHeaders(http.Header{"X-Static": []string{"value"}}),
-	})
-
-	require.Len(t, filtered, 1)
-	require.Nil(t, beforeRequest)
-}
-
-func TestToolSet_ComposeHTTPBeforeRequestFuncs(t *testing.T) {
-	req, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	require.NoError(t, err)
-
-	composed := composeHTTPBeforeRequestFuncs(
-		func(ctx context.Context, req *http.Request) error {
-			req.Header.Set("X-Step-1", "one")
-			req.Header.Set("Authorization", "Bearer stale")
-			return nil
-		},
-		func(ctx context.Context, req *http.Request) error {
-			req.Header.Set("X-Step-2", "two")
-			req.Header.Set("Authorization", "Bearer fresh")
-			return nil
-		},
-	)
-	require.NotNil(t, composed)
-	require.NoError(t, composed(context.Background(), req))
-	require.Equal(t, "one", req.Header.Get("X-Step-1"))
-	require.Equal(t, "two", req.Header.Get("X-Step-2"))
-	require.Equal(t, "Bearer fresh", req.Header.Get("Authorization"))
-}
-
-func TestToolSet_ComposeHTTPBeforeRequestFuncsStopsOnError(t *testing.T) {
-	req, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	require.NoError(t, err)
-
-	boom := errors.New("boom")
-	composed := composeHTTPBeforeRequestFuncs(
-		func(ctx context.Context, req *http.Request) error {
-			req.Header.Set("X-Step-1", "one")
-			return boom
-		},
-		func(ctx context.Context, req *http.Request) error {
-			req.Header.Set("X-Step-2", "two")
-			return nil
-		},
-	)
-	require.ErrorIs(t, composed(context.Background(), req), boom)
-	require.Equal(t, "one", req.Header.Get("X-Step-1"))
-	require.Empty(t, req.Header.Get("X-Step-2"))
-}
-
-func TestToolSet_DynamicHTTPBeforeRequestFunc(t *testing.T) {
-	req, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	require.NoError(t, err)
-
-	beforeRequest := dynamicHTTPBeforeRequestFunc(func(ctx context.Context) (map[string]string, error) {
-		return map[string]string{
-			"Authorization": "Bearer token",
-			"X-Dynamic":     "yes",
-		}, nil
-	})
-	require.NotNil(t, beforeRequest)
-	require.NoError(t, beforeRequest(context.Background(), req))
-	require.Equal(t, "Bearer token", req.Header.Get("Authorization"))
-	require.Equal(t, "yes", req.Header.Get("X-Dynamic"))
-}
-
-func TestToolSet_DynamicHTTPBeforeRequestFuncPropagatesError(t *testing.T) {
-	boom := errors.New("boom")
-	beforeRequest := dynamicHTTPBeforeRequestFunc(func(ctx context.Context) (map[string]string, error) {
-		return nil, boom
-	})
-	require.NotNil(t, beforeRequest)
-
-	req, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	require.NoError(t, err)
-	err = beforeRequest(context.Background(), req)
-	require.ErrorContains(t, err, "dynamic header injection")
-	require.ErrorIs(t, err, boom)
-}
-
-func TestToolSet_ExtractHTTPBeforeRequestOption(t *testing.T) {
-	called := false
-	beforeRequest, ok := extractHTTPBeforeRequestOption(
-		tmcp.WithHTTPBeforeRequest(func(ctx context.Context, req *http.Request) error {
-			called = true
-			req.Header.Set("X-Hook", "set")
-			return nil
-		}),
-	)
-	require.True(t, ok)
-	require.NotNil(t, beforeRequest)
-
-	req, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	require.NoError(t, err)
-	require.NoError(t, beforeRequest(context.Background(), req))
-	require.True(t, called)
-	require.Equal(t, "set", req.Header.Get("X-Hook"))
 }
 
 type recordingMCPHTTPHandler struct {

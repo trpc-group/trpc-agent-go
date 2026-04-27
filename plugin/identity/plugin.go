@@ -26,8 +26,11 @@ const (
 	// PluginName is the name used when registering the plugin with a Runner.
 	PluginName = "identity"
 
-	// StateKey is the invocation-state key where the resolved Identity is stored.
-	StateKey = "identity:current"
+	// stateKey is the invocation-state key where the resolved Identity is
+	// stored. It is intentionally unexported: external callers should read
+	// identity via FromContext (available inside tool callbacks and tool
+	// implementations), not by peeking at invocation state directly.
+	stateKey = "identity:current"
 )
 
 // Plugin is a Runner plugin that transparently resolves and injects user
@@ -39,6 +42,21 @@ const (
 // command executors can consume them at request or execution time without
 // copying secrets into model-visible tool arguments.
 //
+// Consumer contract:
+//
+//   - HTTP-based tools (MCP SSE/Streamable, webhooks): install a dynamic
+//     header hook that reads from context, e.g.
+//     mcp.WithDynamicHeaders(identity.HeadersFromContext).
+//   - Command-executing tools (skill_run, workspace_exec, interactive
+//     sessions): wrap the executor with
+//     codeexecutor.NewEnvInjectingCodeExecutor(exec, identity.EnvVarsFromContext).
+//     Without this wrapper, Identity.EnvVars is resolved into context but
+//     never reaches exec.Cmd.Env, so the env-injection half of the plugin is
+//     a no-op. identity.EnvVarsFromContext has the same signature as
+//     codeexecutor.RunEnvProvider, so no adapter is required.
+//   - Custom tools implemented by the user: read identity via
+//     identity.FromContext(ctx) inside the tool's Call implementation.
+//
 // Usage:
 //
 //	provider := identity.ProviderFunc(func(ctx context.Context, uid, sid string) (*identity.Identity, error) {
@@ -46,10 +64,19 @@ const (
 //	        UserID: uid,
 //	        Token:  generateToken(uid),
 //	        Headers: map[string]string{"Authorization": "Bearer " + generateToken(uid)},
-//	        EnvVars: map[string]string{"BIZ_TOKEN": generateToken(uid)},
+//	        EnvVars: map[string]string{"USER_ACCESS_TOKEN": generateToken(uid)},
 //	    }, nil
 //	})
-//	runner := runner.NewRunner("app", myAgent, runner.WithPlugins(identity.NewPlugin(provider)))
+//	// 1. Register the plugin so identity is resolved once per invocation.
+//	runner := runner.NewRunner(
+//	    "app",
+//	    myAgent,
+//	    runner.WithPlugins(identity.NewPlugin(provider)),
+//	)
+//	// 2. Wrap the executor so skill_run / workspace_exec receive EnvVars.
+//	exec = codeexecutor.NewEnvInjectingCodeExecutor(exec, identity.EnvVarsFromContext)
+//	// 3. Wrap MCP toolsets so HTTP calls receive Identity.Headers.
+//	ts := mcp.NewMCPToolSet(cfg, mcp.WithDynamicHeaders(identity.HeadersFromContext))
 type Plugin struct {
 	name     string
 	provider Provider
@@ -100,6 +127,9 @@ func (p *Plugin) Name() string { return p.name }
 
 // Register implements plugin.Plugin.
 func (p *Plugin) Register(r *plugin.Registry) {
+	if p == nil || r == nil {
+		return
+	}
 	r.BeforeAgent(p.beforeAgent)
 	r.BeforeTool(p.beforeTool)
 }
@@ -114,7 +144,7 @@ func (p *Plugin) beforeAgent(
 	}
 
 	inv := args.Invocation
-	if existing, ok := inv.GetState(StateKey); ok {
+	if existing, ok := inv.GetState(stateKey); ok {
 		if _, ok := existing.(*Identity); ok {
 			return nil, nil
 		}
@@ -131,7 +161,7 @@ func (p *Plugin) beforeAgent(
 		return nil, fmt.Errorf("%s: resolve identity: %w", p.name, err)
 	}
 	if id != nil {
-		inv.SetState(StateKey, id)
+		inv.SetState(stateKey, id)
 		log.Debugf("[%s] identity resolved for user=%s", p.name, id.UserID)
 	}
 	return nil, nil
@@ -152,7 +182,7 @@ func (p *Plugin) beforeTool(
 		return nil, nil
 	}
 
-	val, ok := inv.GetState(StateKey)
+	val, ok := inv.GetState(stateKey)
 	if !ok {
 		return nil, nil
 	}

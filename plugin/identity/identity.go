@@ -12,6 +12,7 @@ package identity
 
 import (
 	"context"
+	"maps"
 )
 
 // Identity represents a resolved user identity with credentials and metadata
@@ -20,10 +21,11 @@ import (
 // Identity values are treated as immutable after Provider.Resolve returns.
 // Plugin.beforeAgent stores the returned *Identity in invocation state and
 // beforeTool may read Headers and EnvVars concurrently during parallel tool
-// calls. Providers should not mutate the returned Identity or any of its maps
+// calls. Providers must not mutate the returned Identity or any of its maps
 // (Headers, EnvVars, Extra) after returning. Helpers such as HeadersFromContext
-// and EnvVarsFromContext clone on read, but they do not make ingress writes
-// race-safe.
+// and EnvVarsFromContext clone the top-level map on read, but they do not
+// deep-copy values, so any reference-typed entry placed in Extra must itself
+// be immutable (or the caller is responsible for its concurrency safety).
 type Identity struct {
 	// UserID is the authenticated user identifier.
 	UserID string
@@ -43,6 +45,12 @@ type Identity struct {
 	EnvVars map[string]string
 
 	// Extra holds arbitrary extension data that business code may need.
+	//
+	// Reference-typed values (slice, map, pointer) stored here are NOT
+	// deep-cloned by EnvVarsFromContext / HeadersFromContext. If any value
+	// may be mutated after Provider.Resolve returns, callers must either
+	// store an immutable copy or guard the value with their own
+	// synchronization.
 	Extra map[string]any
 }
 
@@ -98,26 +106,26 @@ func HeadersFromContext(ctx context.Context) (map[string]string, error) {
 	if !ok || id == nil || len(id.Headers) == 0 {
 		return nil, nil
 	}
-	return cloneStringMap(id.Headers), nil
+	return maps.Clone(id.Headers), nil
 }
 
 // EnvVarsFromContext returns a copy of identity environment variables stored
 // in ctx. It returns nil when no identity env is available.
+//
+// This function intentionally matches the codeexecutor.RunEnvProvider
+// signature (func(context.Context) map[string]string), so a command-executing
+// code executor can be wired directly without an adapter:
+//
+//	exec = codeexecutor.NewEnvInjectingCodeExecutor(exec, identity.EnvVarsFromContext)
+//
+// After that wrapping, any tool that routes through the executor (skill_run,
+// workspace_exec, interactive sessions, ...) automatically receives the
+// current user's EnvVars in exec.Cmd.Env. Without the wrap, Identity.EnvVars
+// is set on context by the Plugin but no one consumes it.
 func EnvVarsFromContext(ctx context.Context) map[string]string {
 	id, ok := FromContext(ctx)
 	if !ok || id == nil || len(id.EnvVars) == 0 {
 		return nil
 	}
-	return cloneStringMap(id.EnvVars)
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(id.EnvVars)
 }

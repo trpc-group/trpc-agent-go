@@ -195,11 +195,26 @@ func WithName(name string) ToolSetOption {
 // observe request-scoped headers. Otherwise only tools/call is guaranteed to
 // use the current run context.
 //
-// When combined with WithMCPOptions(mcp.WithHTTPBeforeRequest(...)), user
-// callbacks run first and dynamic headers are applied last so request-scoped
-// identity can override earlier header values.
+// Interaction with WithMCPOptions(mcp.WithHTTPBeforeRequest(...)):
+// the underlying MCP client keeps only the most recently registered
+// before-request hook, so WithDynamicHeaders shadows any WithHTTPBeforeRequest
+// installed via WithMCPOptions. If you need both behaviours, compose them
+// yourself inside a single WithHTTPBeforeRequest and drop WithDynamicHeaders,
+// for example:
 //
-// Example:
+//	mcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+//	    func(ctx context.Context, req *http.Request) error {
+//	        // custom pre-processing
+//	        req.Header.Set("X-Trace-ID", traceID(ctx))
+//	        // dynamic identity headers
+//	        for k, v := range identity.HeadersFromContext(ctx) {
+//	            req.Header.Set(k, v)
+//	        }
+//	        return nil
+//	    },
+//	))
+//
+// Basic usage with the identity plugin:
 //
 //	mcp.WithDynamicHeaders(func(ctx context.Context) (map[string]string, error) {
 //	    id, ok := identity.FromContext(ctx)

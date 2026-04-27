@@ -15,10 +15,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"reflect"
 	"strings"
 	"sync"
-	"unsafe"
 
 	"golang.org/x/sync/singleflight"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -274,7 +272,19 @@ func (m *mcpSessionManager) createClient() (mcp.Connector, error) {
 }
 
 // buildHTTPOptions builds MCP client options for HTTP-based transports (SSE, Streamable).
-// It merges static headers, dynamic header injection, and user-provided MCP options.
+//
+// Option ordering mirrors the MCP client's "last write wins" contract:
+//
+//  1. static headers from ConnectionConfig.Headers (via WithHTTPHeaders);
+//  2. user-provided options from WithMCPOptions, in registration order;
+//  3. the dynamic-headers hook installed by WithDynamicHeaders, appended last.
+//
+// Because mcp.WithHTTPBeforeRequest replaces (rather than chains) any previous
+// hook, users who set their own WithHTTPBeforeRequest via WithMCPOptions and
+// also use WithDynamicHeaders will have their custom hook shadowed by the
+// dynamic one. Callers that need to combine both behaviours should merge the
+// logic manually inside a single WithHTTPBeforeRequest function. See the
+// WithDynamicHeaders doc comment for a worked example.
 func (m *mcpSessionManager) buildHTTPOptions() []mcp.ClientOption {
 	var options []mcp.ClientOption
 
@@ -286,120 +296,27 @@ func (m *mcpSessionManager) buildHTTPOptions() []mcp.ClientOption {
 		options = append(options, mcp.WithHTTPHeaders(headers))
 	}
 
-	// Add MCP options if configured.
-	userOptions, userBeforeRequest := splitHTTPBeforeRequestOptions(m.mcpOptions)
-	if len(userOptions) > 0 {
-		options = append(options, userOptions...)
+	if len(m.mcpOptions) > 0 {
+		options = append(options, m.mcpOptions...)
 	}
 
-	// Run user-provided before-request hooks first, then apply dynamic headers
-	// last so request-scoped identity headers can override earlier values.
-	beforeRequest := composeHTTPBeforeRequestFuncs(
-		userBeforeRequest,
-		dynamicHTTPBeforeRequestFunc(m.dynamicHeaderFunc),
-	)
-	if beforeRequest != nil {
-		options = append(options, mcp.WithHTTPBeforeRequest(beforeRequest))
+	if m.dynamicHeaderFunc != nil {
+		fn := m.dynamicHeaderFunc
+		options = append(options, mcp.WithHTTPBeforeRequest(
+			func(ctx context.Context, req *http.Request) error {
+				dynamicHeaders, err := fn(ctx)
+				if err != nil {
+					return fmt.Errorf("dynamic header injection: %w", err)
+				}
+				for k, v := range dynamicHeaders {
+					req.Header.Set(k, v)
+				}
+				return nil
+			},
+		))
 	}
 
 	return options
-}
-
-func composeHTTPBeforeRequestFuncs(
-	funcs ...mcp.HTTPBeforeRequestFunc,
-) mcp.HTTPBeforeRequestFunc {
-	filtered := make([]mcp.HTTPBeforeRequestFunc, 0, len(funcs))
-	for _, fn := range funcs {
-		if fn != nil {
-			filtered = append(filtered, fn)
-		}
-	}
-	switch len(filtered) {
-	case 0:
-		return nil
-	case 1:
-		return filtered[0]
-	default:
-		return func(ctx context.Context, req *http.Request) error {
-			for _, fn := range filtered {
-				if err := fn(ctx, req); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-	}
-}
-
-func dynamicHTTPBeforeRequestFunc(
-	fn DynamicHeaderFunc,
-) mcp.HTTPBeforeRequestFunc {
-	if fn == nil {
-		return nil
-	}
-	return func(ctx context.Context, req *http.Request) error {
-		dynamicHeaders, err := fn(ctx)
-		if err != nil {
-			return fmt.Errorf("dynamic header injection: %w", err)
-		}
-		for k, v := range dynamicHeaders {
-			req.Header.Set(k, v)
-		}
-		return nil
-	}
-}
-
-func splitHTTPBeforeRequestOptions(
-	options []mcp.ClientOption,
-) ([]mcp.ClientOption, mcp.HTTPBeforeRequestFunc) {
-	if len(options) == 0 {
-		return nil, nil
-	}
-
-	filtered := make([]mcp.ClientOption, 0, len(options))
-	var beforeRequest mcp.HTTPBeforeRequestFunc
-	for _, option := range options {
-		fn, ok := extractHTTPBeforeRequestOption(option)
-		if !ok {
-			filtered = append(filtered, option)
-			continue
-		}
-		beforeRequest = composeHTTPBeforeRequestFuncs(beforeRequest, fn)
-	}
-	if len(filtered) == 0 {
-		filtered = nil
-	}
-	return filtered, beforeRequest
-}
-
-// mcp.ClientOption is opaque, so we detect WithHTTPBeforeRequest by applying
-// each option to a temporary client and checking whether it populated the
-// internal before-request hook. This lets us chain user hooks with
-// WithDynamicHeaders instead of letting the last option win.
-func extractHTTPBeforeRequestOption(
-	option mcp.ClientOption,
-) (mcp.HTTPBeforeRequestFunc, bool) {
-	if option == nil {
-		return nil, false
-	}
-
-	client, err := mcp.NewClient("http://mcp.invalid", defaultClientInfo)
-	if err != nil {
-		return nil, false
-	}
-	option(client)
-
-	field := reflect.ValueOf(client).Elem().FieldByName("httpBeforeRequestFunc")
-	if !field.IsValid() || field.IsNil() {
-		return nil, false
-	}
-
-	field = reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
-	fn, ok := field.Interface().(mcp.HTTPBeforeRequestFunc)
-	if !ok || fn == nil {
-		return nil, false
-	}
-	return fn, true
 }
 
 // createTimeoutContext creates a context with timeout if configured and no existing deadline.

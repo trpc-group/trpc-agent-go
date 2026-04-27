@@ -115,7 +115,7 @@ func TestPlugin_BeforeAgent_ResolvesIdentity(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	val, ok := inv.GetState(StateKey)
+	val, ok := inv.GetState(stateKey)
 	require.True(t, ok)
 	got := val.(*Identity)
 	assert.Equal(t, "alice", got.UserID)
@@ -132,7 +132,7 @@ func TestPlugin_BeforeAgent_ReusesExistingIdentity(t *testing.T) {
 	inv := &agent.Invocation{
 		Session: &session.Session{UserID: "alice", ID: "sess-1"},
 	}
-	inv.SetState(StateKey, &Identity{UserID: "already-set"})
+	inv.SetState(stateKey, &Identity{UserID: "already-set"})
 
 	_, err := p.beforeAgent(
 		context.Background(),
@@ -141,7 +141,7 @@ func TestPlugin_BeforeAgent_ReusesExistingIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, called)
 
-	val, ok := inv.GetState(StateKey)
+	val, ok := inv.GetState(stateKey)
 	require.True(t, ok)
 	require.Equal(t, "already-set", val.(*Identity).UserID)
 }
