@@ -13,14 +13,15 @@ package model
 import (
 	"net/http"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDefaultNewHTTPClient(t *testing.T) {
 	client := DefaultNewHTTPClient()
 
-	if client == nil {
-		t.Error("Expected non-nil HTTP client, got nil")
-	}
+	require.NotNil(t, client)
 }
 
 func TestDefaultNewHTTPClient_WithOptions(t *testing.T) {
@@ -31,30 +32,20 @@ func TestDefaultNewHTTPClient_WithOptions(t *testing.T) {
 		WithHTTPClientTransport(customTransport),
 	)
 
-	if client == nil {
-		t.Error("Expected non-nil HTTP client, got nil")
-	}
+	require.NotNil(t, client)
 
-	if httpClient, ok := client.(*http.Client); ok {
-		if httpClient.Transport != customTransport {
-			t.Error("Custom transport was not set correctly")
-		}
-	} else {
-		t.Error("Returned client is not of type *http.Client")
-	}
+	httpClient, ok := client.(*http.Client)
+	require.True(t, ok)
+	assert.Same(t, customTransport, httpClient.Transport)
 }
 
 func TestDefaultNewHTTPClient_NoOptions(t *testing.T) {
 	client := DefaultNewHTTPClient()
 
-	if client == nil {
-		t.Error("Expected non-nil HTTP client, got nil")
-	}
+	require.NotNil(t, client)
 
 	if httpClient, ok := client.(*http.Client); ok {
-		if httpClient.Transport != nil {
-			t.Error("Expected nil transport for default client")
-		}
+		assert.Nil(t, httpClient.Transport)
 	}
 }
 
@@ -63,9 +54,7 @@ func TestWithHTTPClientName(t *testing.T) {
 
 	WithHTTPClientName("test-name")(options)
 
-	if options.Name != "test-name" {
-		t.Errorf("Expected name 'test-name', got '%s'", options.Name)
-	}
+	assert.Equal(t, "test-name", options.Name)
 }
 
 func TestWithHTTPClientTransport(t *testing.T) {
@@ -74,9 +63,7 @@ func TestWithHTTPClientTransport(t *testing.T) {
 
 	WithHTTPClientTransport(customTransport)(options)
 
-	if options.Transport != customTransport {
-		t.Error("Custom transport was not set correctly in options")
-	}
+	assert.Same(t, customTransport, options.Transport)
 }
 
 func TestHTTPClientOptions_Merge(t *testing.T) {
@@ -86,13 +73,8 @@ func TestHTTPClientOptions_Merge(t *testing.T) {
 	WithHTTPClientName("merged-client")(options)
 	WithHTTPClientTransport(customTransport)(options)
 
-	if options.Name != "merged-client" {
-		t.Errorf("Expected name 'merged-client', got '%s'", options.Name)
-	}
-
-	if options.Transport != customTransport {
-		t.Error("Custom transport was not set correctly after merge")
-	}
+	assert.Equal(t, "merged-client", options.Name)
+	assert.Same(t, customTransport, options.Transport)
 }
 
 func TestHTTPClientInterface(t *testing.T) {
@@ -105,9 +87,7 @@ func TestHTTPClientNewFunc(t *testing.T) {
 	}
 
 	client := newFunc()
-	if client == nil {
-		t.Error("HTTPClientNewFunc should return a non-nil client")
-	}
+	require.NotNil(t, client)
 }
 
 func TestDefaultImplementationCompleteness(t *testing.T) {
@@ -122,32 +102,21 @@ func TestDefaultImplementationCompleteness(t *testing.T) {
 		opt(options)
 	}
 
-	if options.Name != "complete-test" {
-		t.Errorf("Expected name 'complete-test', got '%s'", options.Name)
-	}
-
-	if options.Transport != http.DefaultTransport {
-		t.Error("Expected default transport to be set")
-	}
+	assert.Equal(t, "complete-test", options.Name)
+	assert.Same(t, http.DefaultTransport, options.Transport)
 }
 
 func TestEdgeCases(t *testing.T) {
 	options := &HTTPClientOptions{}
 	WithHTTPClientName("")(options)
-	if options.Name != "" {
-		t.Error("Expected empty name to be set")
-	}
+	assert.Empty(t, options.Name)
 
 	options = &HTTPClientOptions{}
 	WithHTTPClientTransport(nil)(options)
-	if options.Transport != nil {
-		t.Error("Expected nil transport to be set")
-	}
+	assert.Nil(t, options.Transport)
 
 	client := DefaultNewHTTPClient()
-	if client == nil {
-		t.Error("Client should be created even with no options")
-	}
+	require.NotNil(t, client)
 }
 
 func TestMultipleOptionApplications(t *testing.T) {
@@ -157,7 +126,5 @@ func TestMultipleOptionApplications(t *testing.T) {
 	WithHTTPClientName("second")(options)
 	WithHTTPClientName("third")(options)
 
-	if options.Name != "third" {
-		t.Errorf("Expected last applied name 'third', got '%s'", options.Name)
-	}
+	assert.Equal(t, "third", options.Name)
 }
