@@ -8,7 +8,8 @@ This directory shows AG-UI servers that can talk to the AG-UI client examples.
 - [`skill_artifacts/`](skill_artifacts/) – Demonstrates `skill_run` output artifacts surfaced as `CustomEvent("tool.artifacts")`.
 - [`event_emitter/`](event_emitter/) – Demonstrates Node EventEmitter for emitting custom events, progress updates, and streaming text from NodeFunc.
 - [`finishresult/`](finishresult/) – Demonstrates populating `RUN_FINISHED.result` by wrapping the default translator.
-- [`externaltool/`](externaltool/) – Demonstrates a two-call external tool workflow (`role=user` then `role=tool`) backed by `GraphAgent` interrupts.
+- [`externaltool/llmagent/`](externaltool/llmagent/) – Demonstrates `llmagent + agui + WithToolExecutionFilter` with two internal tools and two external tools in the same conversation.
+- [`externaltool/graphagent/`](externaltool/graphagent/) – Demonstrates a `GraphAgent` interrupt workflow with two internal tools and two external tools in the same turn.
 - [`streamtool/`](streamtool/) – Demonstrates a minimal `StreamableTool` that uses `agui.WithStreamingToolResultActivityEnabled(true)` to stream tool progress as `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` while preserving a final `TOOL_CALL_RESULT`.
 - [`graph/`](graph/) – Demonstrates graph node start activity events via `ACTIVITY_DELTA`.
 - [`react/`](react/) – The server showcases how React planner tags are streamed as custom AG-UI events.
