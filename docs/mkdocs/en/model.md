@@ -205,7 +205,11 @@ type GenerationConfig struct {
     // Presence penalty.
     PresencePenalty *float64 `json:"presence_penalty,omitempty"`
 
-    // Reasoning effort level ("low", "medium", "high").
+    // Reasoning effort level. Accepted values depend on the provider:
+    //   - OpenAI o-series: "low", "medium", "high".
+    //   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): "high", "max"
+    //     (server maps "low"/"medium" -> "high" and "xhigh" -> "max" for
+    //     backward compatibility).
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
     // Whether to enable thinking mode.
