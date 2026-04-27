@@ -222,10 +222,18 @@ var ModelContextWindows = map[string]int{
 	"qwq-32b-preview":            8192,
 
 	// DeepSeek
-	// ref: https://api-docs.deepseek.com/
-	// ref: https://api-docs.deepseek.com/guides/reasoning_model
+	// ref: https://api-docs.deepseek.com/quick_start/pricing
+	// ref: https://api-docs.deepseek.com/guides/thinking_mode
+	// Note: per the official pricing page, "deepseek-chat" and
+	// "deepseek-reasoner" are deprecated aliases that will be routed to
+	// "deepseek-v4-flash" (non-thinking and thinking mode respectively).
+	// During the compatibility period they may still be served by older
+	// instances, so we keep their previously documented 131072 window
+	// here as a conservative default.
 	"deepseek-chat":     131072,
 	"deepseek-reasoner": 131072,
+	"deepseek-v4-pro":   1000000,
+	"deepseek-v4-flash": 1000000,
 
 	// Amazon
 	"nova-pro-v1":        300000,

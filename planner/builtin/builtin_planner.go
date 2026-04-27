@@ -16,6 +16,11 @@
 //
 // Supported models:
 //   - OpenAI o-series models (uses reasoning_effort parameter)
+//   - DeepSeek v4 models, e.g. deepseek-v4-pro / deepseek-v4-flash
+//     (uses reasoning_effort; thinking can be toggled via thinking_enabled.
+//     When ThinkingEnabled is left unset, trpc-agent-go does not emit the
+//     "thinking" field, and the DeepSeek service applies its server-side
+//     default, which is "enabled".)
 //   - Claude models via OpenAI API (uses thinking_enabled and thinking_tokens)
 //   - Gemini models via OpenAI API (uses thinking_enabled and thinking_tokens)
 //
@@ -45,12 +50,18 @@ var _ planner.Planner = (*Planner)(nil)
 // the thinking-capable models.
 type Planner struct {
 	// reasoningEffort limits the reasoning effort for reasoning models.
-	// Supported values: "low", "medium", "high".
-	// Only effective for OpenAI o-series models.
+	// The accepted values depend on the provider:
+	//   - OpenAI o-series: "low", "medium", "high".
+	//   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): "high", "max"
+	//     (server maps "low"/"medium" -> "high" and "xhigh" -> "max" for
+	//     backward compatibility).
 	reasoningEffort *string
 
-	// thinkingEnabled enables thinking mode for models that support it.
-	// Only effective for Claude and Gemini models via OpenAI API.
+	// thinkingEnabled toggles thinking mode for models that support it.
+	// Effective for DeepSeek v4 models, and for Claude / Gemini models via
+	// the OpenAI API. When left nil, trpc-agent-go does not emit the
+	// "thinking" field at all; the provider then applies its own default
+	// (DeepSeek v4's server-side default is "enabled").
 	thinkingEnabled *bool
 
 	// thinkingTokens controls the length of thinking.
@@ -62,19 +73,30 @@ type Planner struct {
 //
 // Configure these options based on your model type:
 //   - For OpenAI o-series: set ReasoningEffort
+//   - For DeepSeek v4: set ReasoningEffort, and optionally ThinkingEnabled to
+//     explicitly toggle thinking mode. Leaving ThinkingEnabled unset means
+//     trpc-agent-go will not emit the "thinking" field; the DeepSeek service
+//     then applies its server-side default ("enabled").
 //   - For Claude/Gemini via OpenAI API: set ThinkingEnabled and/or ThinkingTokens
 type Options struct {
 	// ReasoningEffort limits the reasoning effort for reasoning models.
-	// Supported values: "low", "medium", "high".
-	// Use this for OpenAI o-series models.
+	// The accepted values depend on the provider:
+	//   - OpenAI o-series: "low", "medium", "high".
+	//   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): "high", "max"
+	//     (server maps "low"/"medium" -> "high" and "xhigh" -> "max" for
+	//     backward compatibility).
 	ReasoningEffort *string
 
-	// ThinkingEnabled enables thinking mode for Claude and Gemini models via OpenAI API.
-	// Set to true to enable thinking capabilities.
+	// ThinkingEnabled enables thinking mode for models that support it.
+	// Effective for DeepSeek v4 models, and for Claude / Gemini models via
+	// the OpenAI API. When left nil, trpc-agent-go does not emit the
+	// "thinking" field at all; the provider then applies its own default
+	// (DeepSeek v4's server-side default is "enabled").
 	ThinkingEnabled *bool
 
 	// ThinkingTokens controls the length of thinking for Claude and Gemini models via OpenAI API.
 	// Higher values allow for more detailed internal reasoning.
+	// Not applicable to DeepSeek v4 (which uses ReasoningEffort instead).
 	ThinkingTokens *int
 }
 

@@ -76,7 +76,9 @@ var defaultThinkingValueConvertor = func(enabled bool) any {
 	return enabled
 }
 
-// deepSeekThinkingValueConvertor converts to DeepSeek 3.2 format: {"type": "enabled"/"disabled"}.
+// deepSeekThinkingValueConvertor converts to the DeepSeek thinking-toggle
+// format introduced in v3.2 and reused by v4 (e.g. deepseek-v4-pro /
+// deepseek-v4-flash): {"type": "enabled"/"disabled"}.
 var deepSeekThinkingValueConvertor = func(enabled bool) any {
 	const (
 		thinkingTypeEnabled  = "enabled"
@@ -148,7 +150,8 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                deepSeekAPIKeyName,
 		defaultBaseURL:            defaultDeepSeekBaseURL,
-		// DeepSeek 3.2 uses {"thinking": {"type": "enabled"}} format.
+		// DeepSeek v3.2+ (incl. v4-pro / v4-flash) uses
+		// {"thinking": {"type": "enabled"/"disabled"}} format.
 		thinkingEnabledKey:     "thinking",
 		thinkingValueConvertor: deepSeekThinkingValueConvertor,
 	},
@@ -634,6 +637,12 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 }
 
 // buildThinkingOption converts our Request to OpenAI request RequestOption.
+//
+// Note on default behavior: when request.ThinkingEnabled is nil, this function
+// does not emit any thinking-toggle field in the outgoing request. The
+// upstream provider then applies its server-side default (e.g. DeepSeek v4
+// defaults to thinking "enabled"). Callers that want a deterministic on/off
+// behavior must set ThinkingEnabled explicitly.
 func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestOption {
 	var opts []openaiopt.RequestOption
 	if request.ThinkingTokens != nil {
