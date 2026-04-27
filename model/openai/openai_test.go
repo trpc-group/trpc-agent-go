@@ -3889,6 +3889,38 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		}
 		assert.False(t, chatReq.ParallelToolCalls.Value)
 	})
+
+	t.Run("DeepSeek structured output uses json object response format", func(t *testing.T) {
+		deepSeekModel := New(
+			"deepseek-v4-flash",
+			WithAPIKey("test-key"),
+			WithVariant(VariantDeepSeek),
+		)
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("Return JSON with an ok field."),
+			},
+			StructuredOutput: &model.StructuredOutput{
+				Type: model.StructuredOutputJSONSchema,
+				JSONSchema: &model.JSONSchemaConfig{
+					Name: "output",
+					Schema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"ok": map[string]any{"type": "boolean"},
+						},
+						"required": []string{"ok"},
+					},
+					Strict: true,
+				},
+			},
+		}
+
+		chatReq, _ := deepSeekModel.buildChatRequest(req)
+		assert.NotNil(t, chatReq.ResponseFormat.OfJSONObject)
+		assert.Nil(t, chatReq.ResponseFormat.OfJSONSchema)
+		assert.Equal(t, "json_object", *chatReq.ResponseFormat.GetType())
+	})
 }
 
 // TestConvertUserMessageContent_WithImage tests image content conversion.
