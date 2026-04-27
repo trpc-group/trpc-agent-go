@@ -3917,9 +3917,11 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		}
 
 		chatReq, _ := deepSeekModel.buildChatRequest(req)
-		assert.NotNil(t, chatReq.ResponseFormat.OfJSONObject)
-		assert.Nil(t, chatReq.ResponseFormat.OfJSONSchema)
-		assert.Equal(t, "json_object", *chatReq.ResponseFormat.GetType())
+		require.NotNil(t, chatReq.ResponseFormat.OfJSONObject)
+		require.Nil(t, chatReq.ResponseFormat.OfJSONSchema)
+		typePtr := chatReq.ResponseFormat.GetType()
+		require.NotNil(t, typePtr)
+		assert.Equal(t, "json_object", *typePtr)
 	})
 }
 
