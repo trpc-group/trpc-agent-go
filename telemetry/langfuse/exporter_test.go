@@ -1467,6 +1467,7 @@ func TestTruncateObservationLLMInput_Branches(t *testing.T) {
 	withObservationMaxBytes(t, 64)
 
 	messages := `[{"role":"user","content":"` + strings.Repeat("中", 200) + `"}]`
+	otelMessages := `[{"role":"user","parts":[{"type":"text","content":"` + strings.Repeat("中", 200) + `"},{"type":"tool_call","id":"call-123","name":"search","arguments":{"q":"` + strings.Repeat("q", 200) + `"}}]}]`
 	tools := `[{"name":"` + strings.Repeat("tool", 40) + `"}]`
 
 	t.Run("prompt with tools and messages", func(t *testing.T) {
@@ -1488,6 +1489,34 @@ func TestTruncateObservationLLMInput_Branches(t *testing.T) {
 		require.Contains(t, out, "truncated")
 		var v []map[string]any
 		require.NoError(t, json.Unmarshal([]byte(out), &v))
+	})
+
+	t.Run("plain otel messages array preserves parts", func(t *testing.T) {
+		out := truncateObservationLLMInput(otelMessages)
+		require.True(t, utf8.ValidString(out))
+		require.Less(t, len([]byte(out)), len([]byte(otelMessages)))
+		require.Contains(t, out, "truncated")
+
+		var v []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &v))
+		require.Len(t, v, 1)
+		parts, ok := v[0]["parts"].([]any)
+		require.True(t, ok)
+		require.Len(t, parts, 2)
+
+		textPart, ok := parts[0].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "text", textPart["type"])
+
+		toolCallPart, ok := parts[1].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "tool_call", toolCallPart["type"])
+		require.Equal(t, "call-123", toolCallPart["id"])
+		require.Equal(t, "search", toolCallPart["name"])
+
+		arguments, ok := toolCallPart["arguments"].(map[string]any)
+		require.True(t, ok)
+		require.Contains(t, arguments["q"], "truncated")
 	})
 
 	t.Run("fallback json leaf truncation", func(t *testing.T) {

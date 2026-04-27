@@ -361,6 +361,12 @@ func truncateObservationLLMInput(raw string) string {
 		}
 	}
 
+	// Handle OTel role+parts payloads before the legacy model.Message branch so
+	// truncation preserves multimodal parts instead of dropping them.
+	if msgs, err := itelemetry.ParseOTelInputMessagesJSON(raw); err == nil && msgs != nil {
+		return truncateObservationInputMessages(raw)
+	}
+
 	var msgs []model.Message
 	if err := json.Unmarshal([]byte(raw), &msgs); err == nil {
 		plan := truncateMessagesPlan{textLimit: maxLeafBytes, binaryLimit: maxLeafBytes}
