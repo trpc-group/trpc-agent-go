@@ -668,6 +668,43 @@ func TestTool_Call_DisableGraphCompletionEvent_PrefersAfterCallbackCustomRespons
 	require.Equal(t, "after callback", resultText)
 }
 
+func TestTool_Call_DisableGraphCompletionEvent_FinalOnlyPrefersAfterCallback(
+	t *testing.T,
+) {
+	const afterCallbackText = "after callback"
+
+	ga := newGraphAgentWithAfterCallback(
+		t,
+		graph.State{graph.StateKeyLastResponse: "child-final"},
+		&model.Response{
+			Object: "after.custom",
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage(afterCallbackText),
+			}},
+		},
+	)
+	at := NewTool(
+		ga,
+		WithHistoryScope(HistoryScopeParentBranch),
+		WithResponseMode(ResponseModeFinalOnly),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("app", "user", "session"),
+		),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, afterCallbackText, resultText)
+}
+
 func TestTool_Call_DisableGraphCompletionEvent_PreservesFinalTextInSharedSession(t *testing.T) {
 	sg := graph.NewStateGraph(graph.MessagesStateSchema())
 	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
@@ -810,6 +847,135 @@ func TestTool_Call_VisibleCompletionSnapshot_PreservesLegacyConcatenation(t *tes
 	require.Equal(t, "draftchild-finalchild-final", resultText)
 }
 
+func TestTool_Call_FinalOnlyResponseMode_ReturnsLastMessage(t *testing.T) {
+	at := NewTool(
+		&assistantThenVisibleCompletionAgent{name: "visible-agent"},
+		WithResponseMode(ResponseModeFinalOnly),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("app", "user", "session"),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, "child-final", resultText)
+}
+
+func TestTool_Call_FinalOnlyResponseMode_PropagatesAgentError(
+	t *testing.T,
+) {
+	at := NewTool(
+		&visibleCompletionThenErrorAgent{
+			name: "visible-completion-then-error-agent",
+		},
+		WithResponseMode(ResponseModeFinalOnly),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("app", "user", "session"),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	_, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.ErrorContains(t, err, "agent error:")
+}
+
+func TestCollectFinalResponse_SkipsNilEvents(t *testing.T) {
+	const finalContent = "final"
+
+	t.Run("skips nil events", func(t *testing.T) {
+		ch := make(chan *event.Event, 2)
+		ch <- nil
+		ch <- event.NewResponseEvent(
+			"invocation",
+			"author",
+			&model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(finalContent),
+				}},
+			},
+		)
+		close(ch)
+
+		result, err := collectFinalResponse(ch)
+		require.NoError(t, err)
+		require.Equal(t, finalContent, result)
+	})
+
+	t.Run("skips guarded events and returns last complete", func(t *testing.T) {
+		const (
+			firstContent   = "first"
+			partialContent = "partial"
+			toolContent    = "tool"
+			lastContent    = "last"
+		)
+
+		ch := make(chan *event.Event, 5)
+		ch <- &event.Event{
+			Response: &model.Response{
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(partialContent),
+				}},
+			},
+		}
+		ch <- event.NewResponseEvent(
+			"invocation",
+			"author",
+			&model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						Content: toolContent,
+					},
+				}},
+			},
+		)
+		ch <- event.NewResponseEvent(
+			"invocation",
+			"author",
+			&model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(""),
+				}},
+			},
+		)
+		ch <- event.NewResponseEvent(
+			"invocation",
+			"author",
+			&model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(firstContent),
+				}},
+			},
+		)
+		ch <- event.NewResponseEvent(
+			"invocation",
+			"author",
+			&model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(lastContent),
+				}},
+			},
+		)
+		close(ch)
+
+		result, err := collectFinalResponse(ch)
+		require.NoError(t, err)
+		require.Equal(t, lastContent, result)
+	})
+}
+
 func TestTool_DefaultSkipSummarization(t *testing.T) {
 	mockAgent := &mockAgent{
 		name:        "test-agent",
@@ -834,6 +1000,25 @@ func TestTool_WithSkipSummarization(t *testing.T) {
 	if !agentTool.skipSummarization {
 		t.Error("Expected skip summarization to be true")
 	}
+}
+
+func TestTool_WithResponseMode(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent for testing",
+	}
+
+	defaultTool := NewTool(mockAgent)
+	require.Equal(t, ResponseModeDefault, defaultTool.responseMode)
+
+	finalOnlyTool := NewTool(
+		mockAgent,
+		WithResponseMode(ResponseModeFinalOnly),
+	)
+	require.Equal(t, ResponseModeFinalOnly, finalOnlyTool.responseMode)
+
+	invalidTool := NewTool(mockAgent, WithResponseMode(ResponseMode(99)))
+	require.Equal(t, ResponseModeDefault, invalidTool.responseMode)
 }
 
 // streamingMockAgent streams a few delta events then a final full message.
@@ -2506,6 +2691,73 @@ func TestTool_StreamableCall_DisableGraphCompletionEvent_WithFinalResultChunks_K
 		require.Equal(t, []byte(`"child-final"`), finalChunk.StateDelta[graph.StateKeyLastResponse])
 	}
 	require.Equal(t, "child-final", finalResult)
+}
+
+func TestTool_StreamableCall_FinalOnlyResponseMode_ReturnsLastMessage(
+	t *testing.T,
+) {
+	at := NewTool(
+		&assistantThenVisibleCompletionAgent{name: "visible-agent"},
+		WithStreamInner(true),
+		WithResponseMode(ResponseModeFinalOnly),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("app", "user", "session"),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctx),
+		[]byte(`{"request":"ignored"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var finalResult any
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if _, ok := chunk.Content.(*event.Event); ok {
+			continue
+		}
+		finalResult = requireFinalChunkView(t, chunk.Content).Result
+	}
+	require.Equal(t, "child-final", finalResult)
+}
+
+func TestTool_EmitFinalOnlyResultChunk_PreservesStateDelta(t *testing.T) {
+	const finalResult = "final-only"
+
+	at := NewTool(&mockAgent{name: "test-agent", description: "test"})
+	stream := tool.NewStream(1)
+	state := &streamCompletionState{
+		finalOnlyResult: finalResult,
+		pendingCompletionChunk: &pendingFinalResultChunk{
+			StateDelta: map[string][]byte{
+				graphStateKey: []byte(graphStateValue),
+			},
+		},
+	}
+
+	at.emitFinalOnlyResultChunk(state, stream.Writer)
+	stream.Writer.Close()
+
+	chunk, err := stream.Reader.Recv()
+	require.NoError(t, err)
+	finalChunk := requireFinalChunkView(t, chunk.Content)
+	require.Equal(t, finalResult, finalChunk.Result)
+	require.Equal(
+		t,
+		[]byte(graphStateValue),
+		finalChunk.StateDelta[graphStateKey],
+	)
+
+	_, err = stream.Reader.Recv()
+	require.ErrorIs(t, err, io.EOF)
 }
 
 func TestTool_StreamableCall_DisableGraphCompletionEvent_DefaultsToVisibleCompletionEvents(t *testing.T) {
