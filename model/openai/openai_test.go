@@ -5062,6 +5062,80 @@ func TestEmptyChunkHandling(t *testing.T) {
 		assert.Equal(t, "{\"content\":\"partial\"}",
 			string(tc.Function.Arguments))
 	})
+
+	t.Run("createPartialResponse preserves tool call index zero", func(t *testing.T) {
+		mWithToolDelta := &Model{
+			showToolCallDelta: true,
+		}
+		chunk := parseChunkWithExtraFields(t, `{
+			"id": "chunk-tool-zero",
+			"model": "test-model",
+			"choices": [{
+				"delta": {
+					"tool_calls": [{
+						"index": 0,
+						"id": "call-zero",
+						"type": "function",
+						"function": {
+							"name": "generate_document",
+							"arguments": "{\"content\":\"partial\"}"
+						}
+					}]
+				}
+			}]
+		}`)
+
+		response := mWithToolDelta.createPartialResponse(chunk)
+		require.NotNil(t, response)
+		require.Len(t, response.Choices, 1)
+		deltaMsg := response.Choices[0].Delta
+		require.Len(t, deltaMsg.ToolCalls, 1)
+		tc := deltaMsg.ToolCalls[0]
+		require.NotNil(t, tc.Index)
+		assert.Equal(t, 0, *tc.Index)
+		assert.Equal(t, "call-zero", tc.ID)
+		assert.Equal(t, "generate_document", tc.Function.Name)
+		assert.Equal(t, "{\"content\":\"partial\"}",
+			string(tc.Function.Arguments))
+	})
+
+	t.Run("createPartialResponse keeps omitted tool call index nil", func(t *testing.T) {
+		mWithToolDelta := &Model{
+			showToolCallDelta: true,
+		}
+		chunk := openai.ChatCompletionChunk{
+			ID:    "chunk-tool-no-index",
+			Model: "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								ID:   "call-no-index",
+								Type: "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "generate_document",
+									Arguments: "{\"content\":\"partial\"}",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		response := mWithToolDelta.createPartialResponse(chunk)
+		require.NotNil(t, response)
+		require.Len(t, response.Choices, 1)
+		deltaMsg := response.Choices[0].Delta
+		require.Len(t, deltaMsg.ToolCalls, 1)
+		tc := deltaMsg.ToolCalls[0]
+		assert.Nil(t, tc.Index)
+		assert.Equal(t, "call-no-index", tc.ID)
+		assert.Equal(t, "generate_document", tc.Function.Name)
+		assert.Equal(t, "{\"content\":\"partial\"}",
+			string(tc.Function.Arguments))
+	})
 }
 
 // TestCreateFinalResponseFinishReason verifies that finish reasons from the
