@@ -258,6 +258,26 @@ func TestRuntimeContextFromContext_UsesConversationAnnotation(t *testing.T) {
 	require.Equal(t, "chat-storage", runtime.StorageUserID)
 }
 
+func TestRuntimeContextFromContext_UsesFallbackAppName(t *testing.T) {
+	t.Parallel()
+
+	inv := &agent.Invocation{
+		Session: &session.Session{
+			ID:     testSessionID,
+			UserID: testUserID,
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	runtime, err := RuntimeContextFromContext(ctx, testAppName)
+	require.NoError(t, err)
+	require.Equal(t, testAppName, runtime.AppName)
+	require.Equal(t, testSessionID, runtime.SessionID)
+	require.Equal(t, testUserID, runtime.UserID)
+	require.Empty(t, runtime.StorageUserID)
+	require.Empty(t, runtime.ChatID)
+}
+
 func TestFileStore_DeleteRemovesEntryAndSecret(t *testing.T) {
 	t.Parallel()
 
@@ -324,6 +344,162 @@ func TestFileStore_ExactChatEntryOverridesStorageFallback(t *testing.T) {
 		"https://chat.example.com/mcp",
 		servers["chat:docs"].ServerURL)
 	require.NotContains(t, servers["chat:docs"].ServerURL, "fallback")
+}
+
+func TestFileStore_DefaultDirUsesStateDir(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, filepath.Join("/state", "mcp"), DefaultDir("/state"))
+	require.Equal(t, filepath.Join("mcp"), DefaultDir(" "))
+}
+
+func TestFileStore_ListReturnsVisibleScopedViews(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(t.TempDir())
+	runtime := testRuntimeContext()
+	runtime.WorkspaceID = "workspace-1"
+
+	for _, item := range []struct {
+		name  string
+		scope Scope
+		url   string
+	}{
+		{
+			name:  "session-docs",
+			scope: ScopeSession,
+			url:   "https://session.example.com/mcp",
+		},
+		{
+			name:  "user-docs",
+			scope: ScopeUser,
+			url:   "https://user.example.com/mcp",
+		},
+		{
+			name:  "workspace-docs",
+			scope: ScopeWorkspace,
+			url:   "https://workspace.example.com/mcp",
+		},
+		{
+			name:  "global-docs",
+			scope: ScopeGlobal,
+			url:   "https://global.example.com/mcp",
+		},
+	} {
+		_, err := store.Upsert(context.Background(), UpsertRequest{
+			Context: runtime,
+			Name:    item.name,
+			Scope:   item.scope,
+			Connection: mcp.ConnectionConfig{
+				ServerURL: item.url,
+			},
+		})
+		require.NoError(t, err)
+	}
+
+	views, err := store.List(context.Background(), runtime)
+	require.NoError(t, err)
+	require.Len(t, views, 4)
+	require.Equal(t, ScopeSession, views[0].Scope)
+	require.Equal(t, ScopeGlobal, views[3].Scope)
+
+	otherRuntime := runtime
+	otherRuntime.SessionID = "session-2"
+	otherRuntime.UserID = "user-2"
+	otherRuntime.ChatID = "chat-2"
+	otherRuntime.StorageUserID = "chat-storage-2"
+
+	views, err = store.List(context.Background(), otherRuntime)
+	require.NoError(t, err)
+	require.Len(t, views, 2)
+	require.Equal(t, ScopeWorkspace, views[0].Scope)
+	require.Equal(t, ScopeGlobal, views[1].Scope)
+}
+
+func TestFileStore_ValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(t.TempDir())
+	runtime := testRuntimeContext()
+
+	_, err := store.Upsert(context.Background(), UpsertRequest{
+		Context: RuntimeContext{},
+		Name:    "docs",
+		Scope:   ScopeSession,
+		Connection: mcp.ConnectionConfig{
+			ServerURL: "https://example.com/mcp",
+		},
+	})
+	require.ErrorIs(t, err, errRegistryContextUnavailable)
+
+	_, err = store.Upsert(context.Background(), UpsertRequest{
+		Context: runtime,
+		Name:    "docs",
+		Scope:   Scope("bad"),
+		Connection: mcp.ConnectionConfig{
+			ServerURL: "https://example.com/mcp",
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported mcp registry scope")
+
+	_, err = store.Upsert(context.Background(), UpsertRequest{
+		Context: runtime,
+		Name:    "docs",
+		Scope:   ScopeWorkspace,
+		Connection: mcp.ConnectionConfig{
+			ServerURL: "https://example.com/mcp",
+		},
+	})
+	require.ErrorIs(t, err, errRegistryContextUnavailable)
+
+	_, err = store.Upsert(context.Background(), UpsertRequest{
+		Context: runtime,
+		Name:    "docs",
+		Connection: mcp.ConnectionConfig{
+			Transport: transportStdio,
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stdio MCP requires command")
+
+	_, err = store.Upsert(context.Background(), UpsertRequest{
+		Context: runtime,
+		Name:    "docs",
+		Connection: mcp.ConnectionConfig{
+			Transport: transportStreamable,
+			ServerURL: "file:///tmp/mcp",
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "http or https")
+
+	_, err = store.Upsert(context.Background(), UpsertRequest{
+		Context: runtime,
+		Name:    "docs",
+		Connection: mcp.ConnectionConfig{
+			Transport: transportStreamable,
+			ServerURL: "https://example.com/mcp",
+			Command:   "mcporter",
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "HTTP MCP cannot use command")
+}
+
+func TestFileStore_ReadJSONFileHandlesEmptyAndInvalidFiles(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	require.NoError(t, os.WriteFile(path, []byte(" \n"), 0o600))
+
+	state, err := readJSONFile[registryState](path)
+	require.NoError(t, err)
+	require.Empty(t, state.Entries)
+
+	require.NoError(t, os.WriteFile(path, []byte("{"), 0o600))
+	_, err = readJSONFile[registryState](path)
+	require.Error(t, err)
 }
 
 func testRuntimeContext() RuntimeContext {

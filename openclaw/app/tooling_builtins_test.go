@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,11 +22,17 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/mcpregistry"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
+
+const appMCPListServersTool = "mcp_list_servers"
 
 func TestNewHTTPWebFetchTools_RequiresAllowlist(t *testing.T) {
 	t.Parallel()
@@ -136,6 +143,55 @@ allow_adhoc_http: true
 	require.True(t, names["mcp_registry_list"])
 	require.True(t, names["mcp_list_servers"])
 	require.True(t, names["mcp_call"])
+}
+
+func TestNewMCPRegistryTools_InvalidConfigFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := newMCPRegistryTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{
+			Config: yamlNode(t, "unknown_field: true\n"),
+		},
+	)
+	require.Error(t, err)
+}
+
+func TestNewMCPRegistryTools_CallsRegistryAndBroker(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := yamlNode(
+		t,
+		"dir: \""+dir+"\"\nallow_adhoc_http: true\n",
+	)
+	tools, err := newMCPRegistryTools(
+		registry.ToolProviderDeps{
+			AppName:  "app",
+			StateDir: t.TempDir(),
+		},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.NoError(t, err)
+
+	ctx := mcpRegistryInvocationContext("app")
+	addTool := callableToolByName(t, tools, mcpregistry.ToolAdd)
+	addOut, err := addTool.Call(ctx, []byte(
+		`{"name":"docs","scope":"chat",`+
+			`"server_url":"https://example.com/mcp?token=secret"}`,
+	))
+	require.NoError(t, err)
+	addJSON, err := json.Marshal(addOut)
+	require.NoError(t, err)
+	require.Contains(t, string(addJSON), "docs")
+	require.NotContains(t, string(addJSON), "secret")
+
+	listTool := callableToolByName(t, tools, appMCPListServersTool)
+	listOut, err := listTool.Call(ctx, []byte(`{}`))
+	require.NoError(t, err)
+	listJSON, err := json.Marshal(listOut)
+	require.NoError(t, err)
+	require.Contains(t, string(listJSON), "docs")
 }
 
 func TestNewBrowserTools_ErrorPaths(t *testing.T) {
@@ -661,6 +717,44 @@ func toolNames(tools []tool.Tool) map[string]struct{} {
 		out[t.Declaration().Name] = struct{}{}
 	}
 	return out
+}
+
+func callableToolByName(
+	t *testing.T,
+	tools []tool.Tool,
+	name string,
+) tool.CallableTool {
+	t.Helper()
+
+	for _, tl := range tools {
+		if tl.Declaration().Name != name {
+			continue
+		}
+		callable, ok := tl.(tool.CallableTool)
+		require.True(t, ok)
+		return callable
+	}
+	t.Fatalf("tool %q not found", name)
+	return nil
+}
+
+func mcpRegistryInvocationContext(appName string) context.Context {
+	inv := &agent.Invocation{
+		Session: &session.Session{
+			AppName: appName,
+			ID:      "session-1",
+			UserID:  "user-1",
+		},
+		RunOptions: agent.RunOptions{
+			RuntimeState: conversation.RuntimeState(
+				conversation.Annotation{
+					StorageUserID: "chat-storage-1",
+					ChatID:        "chat-1",
+				},
+			),
+		},
+	}
+	return agent.NewInvocationContext(context.Background(), inv)
 }
 
 func indentYAML(body string, spaces int) string {

@@ -262,6 +262,43 @@ func TestListServers_UsesContextServerResolver(t *testing.T) {
 	require.Equal(t, "https://example.com/mcp", target.Config.ServerURL)
 }
 
+func TestResolveNamedServers_ServerResolverErrors(t *testing.T) {
+	broker := New(
+		WithServerResolver(func(
+			context.Context,
+		) (map[string]legacymcp.ConnectionConfig, error) {
+			return nil, fmt.Errorf("resolver failed")
+		}),
+	)
+
+	_, _, err := broker.resolveNamedServersWithContext(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "resolver failed")
+}
+
+func TestResolveNamedServers_ServerResolverRejectsDuplicates(t *testing.T) {
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"dup": {
+				Command: "go",
+			},
+		}),
+		WithServerResolver(func(
+			context.Context,
+		) (map[string]legacymcp.ConnectionConfig, error) {
+			return map[string]legacymcp.ConnectionConfig{
+				" dup ": {
+					Command: "go",
+				},
+			}, nil
+		}),
+	)
+
+	_, _, err := broker.resolveNamedServersWithContext(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate MCP server name")
+}
+
 func TestListServers_ReturnsDescription(t *testing.T) {
 	broker := New(
 		WithServers(map[string]legacymcp.ConnectionConfig{
