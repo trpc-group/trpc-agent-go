@@ -94,40 +94,42 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		cancelOnContextDoneEnabled:             opts.CancelOnContextDoneEnabled,
 		messagesSnapshotFollowEnabled:          opts.MessagesSnapshotFollowEnabled,
 		messagesSnapshotFollowMaxDuration:      opts.MessagesSnapshotFollowMaxDuration,
-		toolResultInputTranslationEnabled:      opts.ToolResultInputTranslationEnabled,
-		streamingToolResultActivityEnabled:     opts.StreamingToolResultActivityEnabled,
+		messagesSnapshotRunLifecycleEventsEnabled: opts.MessagesSnapshotRunLifecycleEventsEnabled,
+		toolResultInputTranslationEnabled:         opts.ToolResultInputTranslationEnabled,
+		streamingToolResultActivityEnabled:        opts.StreamingToolResultActivityEnabled,
 	}
 	return run
 }
 
 // runner is the default implementation of the Runner.
 type runner struct {
-	appName                                string
-	appNameResolver                        AppNameResolver
-	runner                                 trunner.Runner
-	translatorFactory                      TranslatorFactory
-	graphNodeLifecycleActivityEnabled      bool
-	graphNodeInterruptActivityEnabled      bool
-	graphNodeInterruptActivityTopLevelOnly bool
-	reasoningContentEnabled                bool
-	eventSourceMetadataEnabled             bool
-	userIDResolver                         UserIDResolver
-	translateCallbacks                     *translator.Callbacks
-	runAgentInputHook                      RunAgentInputHook
-	stateResolver                          StateResolver
-	runOptionResolver                      RunOptionResolver
-	tracker                                track.Tracker
-	runningMu                              sync.Mutex
-	running                                map[session.Key]*sessionContext
-	startSpan                              StartSpan
-	flushInterval                          time.Duration
-	postRunFinalizationTimeout             time.Duration
-	timeout                                time.Duration
-	cancelOnContextDoneEnabled             bool
-	messagesSnapshotFollowEnabled          bool
-	messagesSnapshotFollowMaxDuration      time.Duration
-	toolResultInputTranslationEnabled      bool
-	streamingToolResultActivityEnabled     bool
+	appName                                   string
+	appNameResolver                           AppNameResolver
+	runner                                    trunner.Runner
+	translatorFactory                         TranslatorFactory
+	graphNodeLifecycleActivityEnabled         bool
+	graphNodeInterruptActivityEnabled         bool
+	graphNodeInterruptActivityTopLevelOnly    bool
+	reasoningContentEnabled                   bool
+	eventSourceMetadataEnabled                bool
+	userIDResolver                            UserIDResolver
+	translateCallbacks                        *translator.Callbacks
+	runAgentInputHook                         RunAgentInputHook
+	stateResolver                             StateResolver
+	runOptionResolver                         RunOptionResolver
+	tracker                                   track.Tracker
+	runningMu                                 sync.Mutex
+	running                                   map[session.Key]*sessionContext
+	startSpan                                 StartSpan
+	flushInterval                             time.Duration
+	postRunFinalizationTimeout                time.Duration
+	timeout                                   time.Duration
+	cancelOnContextDoneEnabled                bool
+	messagesSnapshotFollowEnabled             bool
+	messagesSnapshotFollowMaxDuration         time.Duration
+	messagesSnapshotRunLifecycleEventsEnabled bool
+	toolResultInputTranslationEnabled         bool
+	streamingToolResultActivityEnabled        bool
 }
 
 type sessionContext struct {

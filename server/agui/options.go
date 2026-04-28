@@ -226,6 +226,14 @@ func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
 	}
 }
 
+// WithMessagesSnapshotRunLifecycleEventsEnabled controls whether persisted RUN_* events
+// are included as activity messages in MESSAGES_SNAPSHOT.
+func WithMessagesSnapshotRunLifecycleEventsEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotRunLifecycleEventsEnabled(enabled))
+	}
+}
+
 // WithAppName sets the app name.
 func WithAppName(n string) Option {
 	return func(o *options) {

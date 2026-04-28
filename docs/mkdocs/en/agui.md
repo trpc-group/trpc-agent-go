@@ -851,6 +851,65 @@ server, err := agui.New(
 
 If more complex aggregation strategies are required, you can implement `aggregator.Aggregator` and inject it through a custom factory. Note that although an aggregator is created separately for each session, avoiding cross-session state management and concurrency handling, the aggregation methods themselves may still be called concurrently, so concurrency must still be handled properly.
 
+### Run Lifecycle Events in Message Snapshots
+
+Top-level events returned by the message snapshot route describe the lifecycle of the current snapshot request. On success, the sequence is:
+
+`RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED`
+
+By default, `MESSAGES_SNAPSHOT.messages` contains conversation messages and displayable activity messages reconstructed from the historical AG-UI track. It does not include persisted historical `RUN_STARTED`, `RUN_FINISHED`, or `RUN_ERROR` events.
+
+To preserve historical run lifecycle state in message snapshots, enable `agui.WithMessagesSnapshotRunLifecycleEventsEnabled(true)`:
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotRunLifecycleEventsEnabled(true),
+)
+```
+
+When enabled, historical `RUN_STARTED`, `RUN_FINISHED`, and `RUN_ERROR` events are included in `MESSAGES_SNAPSHOT.messages` as messages whose `role` is `activity`. Event semantics are determined by their layer:
+
+- messages inside `MESSAGES_SNAPSHOT.messages` whose `role` is `activity` and whose `activityType` is `RUN_*` represent persisted run lifecycle events from the historical conversation;
+- top-level `RUN_STARTED`, `RUN_FINISHED`, or `RUN_ERROR` emitted by the message snapshot route represents the current snapshot request lifecycle or load failure.
+
+With this option enabled, historical `RUN_*` messages inside `MESSAGES_SNAPSHOT` have the following shape:
+
+```json
+{
+  "type": "MESSAGES_SNAPSHOT",
+  "messages": [
+    {
+      "id": "event-id-1",
+      "role": "activity",
+      "activityType": "RUN_STARTED",
+      "content": {
+        "threadId": "thread-1",
+        "runId": "run-1"
+      }
+    },
+    {
+      "id": "event-id-2",
+      "role": "assistant",
+      "content": "hello"
+    },
+    {
+      "id": "event-id-3",
+      "role": "activity",
+      "activityType": "RUN_ERROR",
+      "content": {
+        "runId": "run-1",
+        "message": "model call failed",
+        "code": "MODEL_ERROR"
+      }
+    }
+  ]
+}
+```
+
 ### Message Snapshot Continuation
 
 By default, `/history` (the message snapshot route) returns a one-shot snapshot and closes the connection immediately. When a user refreshes or reconnects in the middle of a real-time conversation (run), or opens the page in a new tab, the snapshot alone may not cover the events that continue to be produced after the snapshot boundary. If you want to keep streaming subsequent AG-UI events after the snapshot, enable message snapshot continuation.
