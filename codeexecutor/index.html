@@ -872,41 +872,14 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#workspace-bootstrap-preparing-the-workspace-before-user-commands" class="md-nav__link">
+  <a href="#workspace-init-hooks" class="md-nav__link">
     <span class="md-ellipsis">
-      Workspace Bootstrap: Preparing the Workspace Before User Commands
+      Workspace init hooks
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Workspace Bootstrap: Preparing the Workspace Before User Commands">
+    <nav class="md-nav" aria-label="Workspace init hooks">
       <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#field-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      Field reference
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#ordering-and-idempotency" class="md-nav__link">
-    <span class="md-ellipsis">
-      Ordering and idempotency
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#opting-out" class="md-nav__link">
-    <span class="md-ellipsis">
-      Opting out
-    </span>
-  </a>
-  
-</li>
         
           <li class="md-nav__item">
   <a href="#interaction-with-skill_load" class="md-nav__link">
@@ -2359,41 +2332,14 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#workspace-bootstrap-preparing-the-workspace-before-user-commands" class="md-nav__link">
+  <a href="#workspace-init-hooks" class="md-nav__link">
     <span class="md-ellipsis">
-      Workspace Bootstrap: Preparing the Workspace Before User Commands
+      Workspace init hooks
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Workspace Bootstrap: Preparing the Workspace Before User Commands">
+    <nav class="md-nav" aria-label="Workspace init hooks">
       <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#field-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      Field reference
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#ordering-and-idempotency" class="md-nav__link">
-    <span class="md-ellipsis">
-      Ordering and idempotency
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#opting-out" class="md-nav__link">
-    <span class="md-ellipsis">
-      Opting out
-    </span>
-  </a>
-  
-</li>
         
           <li class="md-nav__item">
   <a href="#interaction-with-skill_load" class="md-nav__link">
@@ -2613,9 +2559,9 @@ file handling, this layer is usually unnecessary.</p>
 </ul>
 <h3 id="withcodeexecutor-vs-fenced-code-auto-execution"><code>WithCodeExecutor</code> vs fenced-code auto-execution</h3>
 <p><code>llmagent.WithCodeExecutor(...)</code> and the response-side fenced-code
-auto-execution processor are <strong>two independent switches</strong>. It is worth
-internalising this distinction up front, because a lot of confusion
-comes from treating them as a single knob.</p>
+auto-execution processor are <strong>two independent switches</strong>. Understanding
+this distinction early avoids a common point of confusion: treating them
+as a single switch.</p>
 <ul>
 <li><code>WithCodeExecutor(...)</code> supplies a <em>runtime</em> that execution-backed
   tools — most notably <code>workspace_exec</code> — use to run commands. It does
@@ -2904,16 +2850,14 @@ flow is:</p>
 </ol>
 <p>This keeps the contract simple: tools and models rely on stable paths instead
 of dealing with staging internals.</p>
-<h2 id="workspace-bootstrap-preparing-the-workspace-before-user-commands">Workspace Bootstrap: Preparing the Workspace Before User Commands</h2>
-<p>Some workspaces need predictable setup before <code>workspace_exec</code> runs any
-user-authored command: a preloaded config file, a pinned Python virtualenv, a
-one-shot <code>pip install</code>, etc. Rather than teaching the model to perform this
-setup itself (which is error-prone and burns prompt tokens), the framework
-lets you declare it once on the agent.</p>
-<p>Use <code>codeexecutor.WorkspaceBootstrapSpec</code> to list the required files and
-commands, and wire it in via <code>llmagent.WithWorkspaceBootstrap(...)</code>. The first
-<code>workspace_exec</code> call in each workspace will converge the workspace to that
-spec; later calls find everything already in place and skip the work.</p>
+<h2 id="workspace-init-hooks">Workspace init hooks</h2>
+<p>Hooks run <strong>after</strong> <code>WorkspaceManager.CreateWorkspace</code> succeeds and <strong>before</strong> that <code>Workspace</code> is returned to callers. When the app uses a <code>WorkspaceRegistry</code> (the default for session-scoped tools), creation runs <strong>once per logical workspace id</strong>—usually once per agent session workspace. Trusted-local modes may reuse one physical directory across sessions; hooks may still run whenever a distinct workspace acquisition happens. Do not assume hooks run at most once per on-disk path: re-acquisition can run them again.</p>
+<p>Use init hooks to stage fixed inputs (<code>InputSpec</code>: <code>artifact://</code>, <code>host://</code>, etc.) and run deterministic setup commands (for example <code>pip install</code> inside a shell one-liner).</p>
+<p>Artifact-backed inputs require the artifact service and (when applicable)
+session fields on <code>context</code> when <code>CreateWorkspace</code> runs—the same requirements as
+<code>WorkspaceFS.StageInputs</code>. Standard llmagent workspace tools inject this from the
+current <code>agent.Invocation</code> when resolving the session workspace, so the example
+below works without manual context wiring.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
@@ -2955,128 +2899,56 @@ spec; later calls find everything already in place and skip the work.</p>
 <span class="normal"><a href="#__codelineno-6-39">39</a></span>
 <span class="normal"><a href="#__codelineno-6-40">40</a></span>
 <span class="normal"><a href="#__codelineno-6-41">41</a></span>
-<span class="normal"><a href="#__codelineno-6-42">42</a></span>
-<span class="normal"><a href="#__codelineno-6-43">43</a></span>
-<span class="normal"><a href="#__codelineno-6-44">44</a></span>
-<span class="normal"><a href="#__codelineno-6-45">45</a></span>
-<span class="normal"><a href="#__codelineno-6-46">46</a></span>
-<span class="normal"><a href="#__codelineno-6-47">47</a></span>
-<span class="normal"><a href="#__codelineno-6-48">48</a></span>
-<span class="normal"><a href="#__codelineno-6-49">49</a></span>
-<span class="normal"><a href="#__codelineno-6-50">50</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">    </span><span class="s">&quot;time&quot;</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/codeexecutor&quot;</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/codeexecutor/local&quot;</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="p">)</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="kd">func</span><span class="w"> </span><span class="nx">newAgent</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">LLMAgent</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="nx">bootstrap</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codeexecutor</span><span class="p">.</span><span class="nx">WorkspaceBootstrapSpec</span><span class="p">{</span>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">        </span><span class="nx">Files</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">codeexecutor</span><span class="p">.</span><span class="nx">WorkspaceFile</span><span class="p">{</span>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="w">            </span><span class="p">{</span>
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a><span class="w">                </span><span class="nx">Target</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;work/config.json&quot;</span><span class="p">,</span>
-</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a><span class="w">                </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">`{&quot;threshold&quot;: 0.8}`</span><span class="p">),</span>
-</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18"></a><span class="w">            </span><span class="p">{</span>
-</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19"></a><span class="w">                </span><span class="nx">Target</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;work/requirements.txt&quot;</span><span class="p">,</span>
-</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20"></a><span class="w">                </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span>
-</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21"></a><span class="w">                    </span><span class="s">&quot;numpy==1.26.4\npandas==2.2.2\n&quot;</span><span class="p">,</span>
-</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22"></a><span class="w">                </span><span class="p">),</span>
-</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25"></a><span class="w">        </span><span class="nx">Commands</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">codeexecutor</span><span class="p">.</span><span class="nx">WorkspaceCommand</span><span class="p">{</span>
-</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26"></a><span class="w">            </span><span class="p">{</span>
-</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27"></a><span class="w">                </span><span class="nx">Cmd</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;bash&quot;</span><span class="p">,</span>
-</span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28"></a><span class="w">                </span><span class="nx">Args</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-6-29"><a id="__codelineno-6-29" name="__codelineno-6-29"></a><span class="w">                    </span><span class="s">&quot;-lc&quot;</span><span class="p">,</span>
-</span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30"></a><span class="w">                    </span><span class="s">&quot;python3 -m venv .venv &amp;&amp; &quot;</span><span class="w"> </span><span class="o">+</span>
-</span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31"></a><span class="w">                        </span><span class="s">&quot;.venv/bin/pip install -q -r work/requirements.txt&quot;</span><span class="p">,</span>
-</span><span id="__span-6-32"><a id="__codelineno-6-32" name="__codelineno-6-32"></a><span class="w">                </span><span class="p">},</span>
-</span><span id="__span-6-33"><a id="__codelineno-6-33" name="__codelineno-6-33"></a><span class="w">                </span><span class="nx">MarkerPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;.venv/bin/pip&quot;</span><span class="p">,</span>
-</span><span id="__span-6-34"><a id="__codelineno-6-34" name="__codelineno-6-34"></a><span class="w">                </span><span class="c1">// FingerprintInputs folds requirements.txt content</span>
-</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35"></a><span class="w">                </span><span class="c1">// into the command fingerprint, so the install</span>
-</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36"></a><span class="w">                </span><span class="c1">// reruns when the pinned versions change. Without</span>
-</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37"></a><span class="w">                </span><span class="c1">// this the marker would short-circuit the command</span>
-</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38"></a><span class="w">                </span><span class="c1">// after the first successful install.</span>
-</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39"></a><span class="w">                </span><span class="nx">FingerprintInputs</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;work/requirements.txt&quot;</span><span class="p">},</span>
-</span><span id="__span-6-40"><a id="__codelineno-6-40" name="__codelineno-6-40"></a><span class="w">                </span><span class="nx">Timeout</span><span class="p">:</span><span class="w">           </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">,</span>
-</span><span id="__span-6-41"><a id="__codelineno-6-41" name="__codelineno-6-41"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-6-42"><a id="__codelineno-6-42" name="__codelineno-6-42"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-6-43"><a id="__codelineno-6-43" name="__codelineno-6-43"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-6-44"><a id="__codelineno-6-44" name="__codelineno-6-44"></a>
-</span><span id="__span-6-45"><a id="__codelineno-6-45" name="__codelineno-6-45"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-6-46"><a id="__codelineno-6-46" name="__codelineno-6-46"></a><span class="w">        </span><span class="s">&quot;analyst&quot;</span><span class="p">,</span>
-</span><span id="__span-6-47"><a id="__codelineno-6-47" name="__codelineno-6-47"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">local</span><span class="p">.</span><span class="nx">New</span><span class="p">()),</span>
-</span><span id="__span-6-48"><a id="__codelineno-6-48" name="__codelineno-6-48"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithWorkspaceBootstrap</span><span class="p">(</span><span class="nx">bootstrap</span><span class="p">),</span>
-</span><span id="__span-6-49"><a id="__codelineno-6-49" name="__codelineno-6-49"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-6-50"><a id="__codelineno-6-50" name="__codelineno-6-50"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-6-42">42</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="w">    </span><span class="s">&quot;time&quot;</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/codeexecutor&quot;</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/codeexecutor/local&quot;</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="p">)</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">newAnalystAgent</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">LLMAgent</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">    </span><span class="nx">exec</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codeexecutor</span><span class="p">.</span><span class="nx">NewWorkspaceInitExecutor</span><span class="p">(</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">        </span><span class="nx">local</span><span class="p">.</span><span class="nx">New</span><span class="p">(),</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">        </span><span class="nx">codeexecutor</span><span class="p">.</span><span class="nx">NewWorkspaceInitHook</span><span class="p">(</span><span class="nx">codeexecutor</span><span class="p">.</span><span class="nx">WorkspaceInitSpec</span><span class="p">{</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="w">            </span><span class="nx">Inputs</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">codeexecutor</span><span class="p">.</span><span class="nx">InputSpec</span><span class="p">{</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a><span class="w">                </span><span class="p">{</span>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a><span class="w">                    </span><span class="nx">From</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;artifact://app/requirements.txt@3&quot;</span><span class="p">,</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a><span class="w">                    </span><span class="nx">To</span><span class="p">:</span><span class="w">   </span><span class="s">&quot;work/requirements.txt&quot;</span><span class="p">,</span>
+</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18"></a><span class="w">                    </span><span class="nx">Mode</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;copy&quot;</span><span class="p">,</span>
+</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19"></a><span class="w">                </span><span class="p">},</span>
+</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21"></a><span class="w">            </span><span class="nx">Commands</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">codeexecutor</span><span class="p">.</span><span class="nx">WorkspaceInitCommand</span><span class="p">{</span>
+</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22"></a><span class="w">                </span><span class="p">{</span>
+</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23"></a><span class="w">                    </span><span class="nx">Name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;install-deps&quot;</span><span class="p">,</span>
+</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24"></a><span class="w">                    </span><span class="nx">Cmd</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;bash&quot;</span><span class="p">,</span>
+</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25"></a><span class="w">                    </span><span class="nx">Args</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26"></a><span class="w">                        </span><span class="s">&quot;-lc&quot;</span><span class="p">,</span>
+</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27"></a><span class="w">                        </span><span class="s">&quot;python3 -m venv .venv &amp;&amp; &quot;</span><span class="w"> </span><span class="o">+</span>
+</span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28"></a><span class="w">                            </span><span class="s">&quot;.venv/bin/pip install -q -r work/requirements.txt&quot;</span><span class="p">,</span>
+</span><span id="__span-6-29"><a id="__codelineno-6-29" name="__codelineno-6-29"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30"></a><span class="w">                    </span><span class="nx">Timeout</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">,</span>
+</span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31"></a><span class="w">                </span><span class="p">},</span>
+</span><span id="__span-6-32"><a id="__codelineno-6-32" name="__codelineno-6-32"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-6-33"><a id="__codelineno-6-33" name="__codelineno-6-33"></a><span class="w">        </span><span class="p">}),</span>
+</span><span id="__span-6-34"><a id="__codelineno-6-34" name="__codelineno-6-34"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;workspace init executor: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39"></a><span class="w">        </span><span class="s">&quot;analyst&quot;</span><span class="p">,</span>
+</span><span id="__span-6-40"><a id="__codelineno-6-40" name="__codelineno-6-40"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">exec</span><span class="p">),</span>
+</span><span id="__span-6-41"><a id="__codelineno-6-41" name="__codelineno-6-41"></a><span class="w">    </span><span class="p">),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-6-42"><a id="__codelineno-6-42" name="__codelineno-6-42"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="field-reference">Field reference</h3>
-<p><code>WorkspaceFile</code>:</p>
-<ul>
-<li><code>Target</code>: workspace-relative destination path (required). Parent
-  directories are created automatically.</li>
-<li><code>Content</code>: inline bytes to write.</li>
-<li><code>Input</code>: alternatively, a <code>codeexecutor.InputSpec</code> that resolves
-  <code>artifact://</code>, <code>host://</code>, <code>workspace://</code>, or <code>skill://</code> URIs. Exactly
-  one of <code>Content</code> and <code>Input</code> must be set.</li>
-<li><code>Mode</code>: optional file mode (octal); defaults to <code>0o644</code>.</li>
-<li><code>Key</code>: optional stable identifier used for idempotency; if omitted it is
-  derived from <code>Target</code>.</li>
-<li><code>Optional</code>: if true, provider errors are logged as warnings instead of
-  aborting workspace preparation.</li>
-</ul>
-<p><code>WorkspaceCommand</code>:</p>
-<ul>
-<li><code>Cmd</code> / <code>Args</code> / <code>Env</code> / <code>Cwd</code>: standard exec wiring. <code>Cwd</code> is
-  workspace-relative and defaults to the workspace root.</li>
-<li><code>Timeout</code>: bounds a single invocation.</li>
-<li><code>MarkerPath</code>: workspace-relative file whose <em>existence</em> signals the
-  command has already run; this is the cheapest way to make a command
-  self-healing after the marker gets deleted. When absent, the reconciler
-  falls back to fingerprint-only skip.</li>
-<li><code>ObservedPaths</code>: alternative to <code>MarkerPath</code> when success is defined by a
-  set of files rather than a single marker.</li>
-<li><code>FingerprintInputs</code> / <code>FingerprintSalt</code>: fold external inputs into the
-  command fingerprint so the command reruns when they change. <strong>The
-  fingerprint does not automatically hash files referenced on the command
-  line</strong>, so a command like <code>pip install -r work/requirements.txt</code> must
-  list <code>work/requirements.txt</code> here explicitly — otherwise the marker
-  will short-circuit the install after the first successful run even if
-  <code>requirements.txt</code> is later edited.</li>
-<li><code>Key</code>: stable identifier used for idempotency; derived from <code>Cmd</code>/<code>Args</code>
-  when omitted.</li>
-<li><code>Optional</code>: same semantics as for files.</li>
-</ul>
-<h3 id="ordering-and-idempotency">Ordering and idempotency</h3>
-<ul>
-<li>Files are staged first, then commands run, both in declaration order.</li>
-<li>Each entry is fingerprinted (content for files, command line + optional
-  inputs for commands). On subsequent invocations, the reconciler checks
-  the fingerprint <em>and</em> the on-disk sentinel before skipping, so a user
-  <code>rm -rf</code> inside <code>workspace_exec</code> does not silently leave the workspace
-  half-broken: the next call re-applies the missing piece.</li>
-<li>Reconciliation is serialized per workspace (in-process), so two
-  parallel <code>workspace_exec</code> calls on the same session cannot step on each
-  other during preparation.</li>
-<li>Entries without <code>Optional</code> set (the default required behavior) abort
-  the <code>workspace_exec</code> call before the user command runs on failure;
-  <code>Optional: true</code> entries downgrade to a logged warning.</li>
-</ul>
-<h3 id="opting-out">Opting out</h3>
-<p>If you want to keep the legacy "stage conversation files only" behavior
-— for example, because an existing regression test depends on it —
-pass <code>llmagent.WithWorkspacePreparersDisabled(true)</code> on the agent. In
-normal use this switch should not be necessary.</p>
+<p>If init inputs change later, use a <strong>new</strong> logical workspace (for example a new session id) or run setup again yourself; hooks do not watch files for you.</p>
 <h3 id="interaction-with-skill_load">Interaction with <code>skill_load</code></h3>
-<p>Skills loaded via <code>skill_load</code> are materialized into
-<code>skills/&lt;name&gt;</code> through the same reconcile path. You do not need to
-add anything to <code>WorkspaceBootstrapSpec</code> for skills — they are picked
-up automatically from session state whenever <code>workspace_exec</code> runs.
-The bootstrap spec is for static, session-independent setup.</p>
+<p>Skills loaded via <code>skill_load</code> are materialized into <code>skills/&lt;name&gt;</code> when
+<code>workspace_exec</code> runs, using the current session’s loaded skills. You do not
+need to duplicate skill sources in init hook <code>Inputs</code>; init hooks cover
+session-independent files and setup commands you want present before any tool
+run.</p>
 <h2 id="what-persists-across-turns">What Persists Across Turns</h2>
 <p>There are two important cases:</p>
 <ul>
@@ -3177,7 +3049,7 @@ exposes it depends on the higher-level Agent and tool wiring.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 23, 2026 02:12:24 UTC">2026-04-23 02:12:24</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 28, 2026 10:04:00 UTC">2026-04-28 10:04:00</span>
   </span>
 
     
