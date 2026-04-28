@@ -311,7 +311,7 @@ func floatPtr(f float64) *float64 {
 
 func main() {
 	// Parse command-line flags.
-	modelName := flag.String("model", "deepseek-chat", "Model to use for the agents")
+	modelName := flag.String("model", "deepseek-v4-flash", "Model to use for the agents")
 	flag.Parse()
 
 	fmt.Printf("⚡ Parallel Multi-Agent Demo\n")

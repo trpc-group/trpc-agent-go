@@ -1853,7 +1853,7 @@ func main() {
     )
 
     // 2. 创建模型和 Agent
-    llmModel := openai.New("DeepSeek-V3-Online-64K")
+    llmModel := openai.New("deepseek-v4-flash")
     agent := llmagent.New("calculator-assistant",
         llmagent.WithModel(llmModel),
         llmagent.WithInstruction("你是一个数学助手"),
@@ -1913,7 +1913,7 @@ cd examples/mcp_tool
 cd streamalbe_server && go run main.go &
 
 # 运行主程序
-go run main.go -model="deepseek-chat"
+go run main.go -model="deepseek-v4-flash"
 ```
 
 ## 总结

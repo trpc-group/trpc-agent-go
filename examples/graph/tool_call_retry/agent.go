@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 	toolName         = "get_weather"
 	nodeAssistant    = "assistant"
 	nodeTools        = "tools"

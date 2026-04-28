@@ -34,7 +34,7 @@ The `LLMAgent` is a concrete implementation of the `agent.Agent` interface that 
 
 | Argument     | Description              | Default Value   |
 | ------------ | ------------------------ | --------------- |
-| `-model`     | Name of the model to use | `deepseek-chat` |
+| `-model`     | Name of the model to use | `deepseek-v4-flash` |
 | `-streaming` | Enable streaming mode    | `true`          |
 
 ## Usage
@@ -72,7 +72,7 @@ The interface is simple and intuitive:
 
 ```
 🚀 Interactive Chat with LLMAgent
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Streaming: true
 ==================================================
 ✅ Chat ready!

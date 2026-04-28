@@ -34,7 +34,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Model name for LLM summarization")
+	modelName = flag.String("model", "deepseek-v4-flash", "Model name for LLM summarization")
 	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	maxWords  = flag.Int("max-words", 0, "Max summary words (0=unlimited)")
 	debug     = flag.Bool("debug", false, "Enable debug mode to print request messages")

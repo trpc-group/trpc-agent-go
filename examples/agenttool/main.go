@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	defaultModelName     = "deepseek-chat"
+	defaultModelName     = "deepseek-v4-flash"
 	defaultInnerTextMode = string(agenttool.InnerTextModeInclude)
 	responseModeDefault  = "default"
 	responseModeFinal    = "final-only"

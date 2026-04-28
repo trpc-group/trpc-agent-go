@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	modelName      = flag.String("model", "deepseek-chat", "Model name to use for LLM summarization and chat")
+	modelName      = flag.String("model", "deepseek-v4-flash", "Model name to use for LLM summarization and chat")
 	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	flagEvents     = flag.Int("events", 1, "Event count threshold to trigger summarization")
 	flagTokens     = flag.Int("tokens", 0, "Token-count threshold to trigger summarization (0=disabled)")
