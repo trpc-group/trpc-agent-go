@@ -358,6 +358,30 @@ func TestTrackerAggregatesTextContent(t *testing.T) {
 	require.Equal(t, "helloworld", content.Delta)
 }
 
+func TestTrackerAggregatesToolCallArgs(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc)
+	require.NoError(t, err)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallStartEvent("call-1", "create_document",
+		aguievents.WithParentMessageID("msg"))))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallArgsEvent("call-1", `{"content":"12`)))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallArgsEvent("call-1", `34"}`)))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallEndEvent("call-1")))
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 3)
+	parsed, err := aguievents.EventFromJSON(trackEvents.Events[1].Payload)
+	require.NoError(t, err)
+	args, ok := parsed.(*aguievents.ToolCallArgsEvent)
+	require.True(t, ok)
+	require.Equal(t, "call-1", args.ToolCallID)
+	require.Equal(t, `{"content":"1234"}`, args.Delta)
+}
+
 func TestTrackerAggregationDisabled(t *testing.T) {
 	ctx := context.Background()
 	svc := inmemory.NewSessionService()

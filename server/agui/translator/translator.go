@@ -69,11 +69,14 @@ func New(ctx context.Context, threadID, runID string, opts ...Option) (Translato
 		receivingMessage:                       false,
 		seenResponseIDs:                        make(map[string]struct{}),
 		seenToolCallIDs:                        make(map[string]struct{}),
+		toolCallDeltas:                         make(map[toolCallDeltaKey]*toolCallDeltaState),
+		toolCallDeltasByID:                     make(map[string]*toolCallDeltaState),
 		graphNodeLifecycleActivityEnabled:      options.graphNodeLifecycleActivityEnabled,
 		graphNodeInterruptActivityEnabled:      options.graphNodeInterruptActivityEnabled,
 		graphNodeInterruptActivityTopLevelOnly: options.graphNodeInterruptActivityTopLevelOnly,
 		reasoningContentEnabled:                options.reasoningContentEnabled,
 		eventSourceMetadataEnabled:             options.eventSourceMetadataEnabled,
+		toolCallDeltaStreamingEnabled:          options.toolCallDeltaStreamingEnabled,
 		streamingToolResultActivityEnabled:     options.streamingToolResultActivityEnabled,
 		streamingToolResultContent:             make(map[string]string),
 	}, nil
@@ -89,11 +92,14 @@ type translator struct {
 	receivingReasoning                     bool
 	seenResponseIDs                        map[string]struct{}
 	seenToolCallIDs                        map[string]struct{}
+	toolCallDeltas                         map[toolCallDeltaKey]*toolCallDeltaState
+	toolCallDeltasByID                     map[string]*toolCallDeltaState
 	graphNodeLifecycleActivityEnabled      bool
 	graphNodeInterruptActivityEnabled      bool
 	graphNodeInterruptActivityTopLevelOnly bool
 	reasoningContentEnabled                bool
 	eventSourceMetadataEnabled             bool
+	toolCallDeltaStreamingEnabled          bool
 	streamingToolResultActivityEnabled     bool
 	streamingToolResultContent             map[string]string
 }
@@ -136,6 +142,11 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 	}
 	if rsp.Error != nil {
 		log.Errorf("agui: threadID: %s, runID: %s, error in response: %v", t.threadID, t.runID, rsp.Error)
+		finalizationEvents, err := t.PostRunFinalizationEvents(ctx)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, finalizationEvents...)
 		events = append(events, aguievents.NewRunErrorEvent(rsp.Error.Message, aguievents.WithRunID(t.runID)))
 		return t.finalizeEvents(event, events), nil
 	}
@@ -207,6 +218,9 @@ func (t *translator) PostRunFinalizationEvents(context.Context) ([]aguievents.Ev
 	if t.receivingMessage {
 		events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
 		t.receivingMessage = false
+	}
+	if t.toolCallDeltaStreamingEnabled {
+		events = append(events, t.closeOpenToolCallDeltas()...)
 	}
 	return events, nil
 }
@@ -554,7 +568,7 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 		if rsp.Choices[0].Delta.Content != "" {
 			events = append(events, aguievents.NewTextMessageContentEvent(rsp.ID, rsp.Choices[0].Delta.Content))
 		}
-		if rsp.Choices[0].FinishReason != nil && *rsp.Choices[0].FinishReason != "" {
+		if t.receivingMessage && rsp.Choices[0].FinishReason != nil && *rsp.Choices[0].FinishReason != "" {
 			t.receivingMessage = false
 			events = append(events, aguievents.NewTextMessageEndEvent(rsp.ID))
 		}
@@ -578,19 +592,9 @@ func (t *translator) toolCallEvent(rsp *model.Response) ([]aguievents.Event, err
 	}
 	events := make([]aguievents.Event, 0, len(rsp.Choices))
 	for _, choice := range rsp.Choices {
-		for _, toolCall := range choice.Message.ToolCalls {
-			t.recordToolCallID(toolCall.ID)
-			// Tool Call Start Event.
-			startOpt := []aguievents.ToolCallStartOption{aguievents.WithParentMessageID(rsp.ID)}
-			toolCallStartEvent := aguievents.NewToolCallStartEvent(toolCall.ID, toolCall.Function.Name, startOpt...)
-			events = append(events, toolCallStartEvent)
-			// Tool Call Arguments Event.
-			toolCallArguments := formatToolCallArguments(toolCall.Function.Arguments)
-			if toolCallArguments != "" {
-				events = append(events, aguievents.NewToolCallArgsEvent(toolCall.ID, toolCallArguments))
-			}
-			// Tool call end should precede result to align with AG-UI protocol.
-			events = append(events, aguievents.NewToolCallEndEvent(toolCall.ID))
+		events = append(events, t.messageToolCallEvents(rsp.ID, choice)...)
+		if t.toolCallDeltaStreamingEnabled {
+			events = append(events, t.deltaToolCallEvents(rsp.ID, choice)...)
 		}
 	}
 	t.lastMessageID = rsp.ID
@@ -605,10 +609,12 @@ func (t *translator) toolResultEvent(rsp *model.Response, messageID string) ([]a
 	events := make([]aguievents.Event, 0, len(rsp.Choices))
 	for _, choice := range rsp.Choices {
 		if choice.Message.Content != "" {
+			events = append(events, t.closeDeltaToolCallForResult(choice.Message.ToolID)...)
 			events = append(events, aguievents.NewToolCallResultEvent(messageID,
 				choice.Message.ToolID, choice.Message.Content))
 		}
 		if choice.Delta.Content != "" {
+			events = append(events, t.closeDeltaToolCallForResult(choice.Delta.ToolID)...)
 			events = append(events, aguievents.NewToolCallResultEvent(messageID,
 				choice.Delta.ToolID, choice.Delta.Content))
 		}
@@ -624,9 +630,11 @@ func (t *translator) toolResultActivityEvents(rsp *model.Response) ([]aguievents
 	events := make([]aguievents.Event, 0, len(rsp.Choices))
 	for _, choice := range rsp.Choices {
 		if event, ok := t.toolResultActivityEvent(choice.Message.ToolID, choice.Message.Content); ok {
+			events = append(events, t.closeDeltaToolCallForResult(choice.Message.ToolID)...)
 			events = append(events, event)
 		}
 		if event, ok := t.toolResultActivityEvent(choice.Delta.ToolID, choice.Delta.Content); ok {
+			events = append(events, t.closeDeltaToolCallForResult(choice.Delta.ToolID)...)
 			events = append(events, event)
 		}
 	}

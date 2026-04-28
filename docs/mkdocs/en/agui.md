@@ -815,7 +815,7 @@ In streaming response scenarios, a single reply usually consists of multiple inc
 
 To address this, the framework first aggregates events and then writes them into the session. In addition, it performs a periodic flush once per second by default, and each flush writes the current aggregation result into the session. Regardless of whether a run finishes normally or is cancelled, the framework also runs one final end-of-run flush step before exit. That final step emits closing events for any protocol streams that are still open and tries to persist any remaining aggregated data. This is separate from the regular periodic flush.
 
-* `aggregator.WithEnabled(true)` is used to control whether event aggregation is enabled. It is enabled by default. When enabled, it aggregates consecutive `TEXT_MESSAGE_CONTENT` and `REASONING_MESSAGE_CONTENT` events that share the same `messageId`. When disabled, no aggregation is performed on AG-UI events.
+* `aggregator.WithEnabled(true)` is used to control whether event aggregation is enabled. It is enabled by default. When enabled, it aggregates consecutive `TEXT_MESSAGE_CONTENT` and `REASONING_MESSAGE_CONTENT` events that share the same `messageId`, as well as consecutive `TOOL_CALL_ARGS` events that share the same `toolCallId`. When disabled, no aggregation is performed on AG-UI events.
 * `aguirunner.WithFlushInterval(time.Second)` is used to control the periodic flush interval of aggregated results. The default is 1 second. Setting it to 0 disables the periodic flush mechanism.
 * `agui.WithPostRunFinalizationTimeout(5*time.Second)` limits how long the end-of-run finalization step is allowed to take. This covers both protocol closing events and persisting any buffered aggregated data. The default is `5s`. Setting it to `0` means no additional timeout is applied.
 
@@ -1131,6 +1131,63 @@ When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_D
 ```
 
 For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph). For a client implementation, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
+
+### Streaming Tool Call Arguments
+
+By default, the AG-UI server emits the complete `TOOL_CALL_START → TOOL_CALL_ARGS → TOOL_CALL_END` sequence after the model finishes producing a tool call. In other words, the frontend usually sees the tool arguments only after all arguments have been generated.
+
+If tool arguments take noticeable time to generate, or if the frontend needs to show argument-generation progress before the tool starts running, enable streaming tool-call arguments. When enabled, the AG-UI server converts tool argument chunks produced by the model into multiple `TOOL_CALL_ARGS` events. The frontend can accumulate those chunks by `toolCallId` and render them incrementally.
+
+This capability requires the underlying model adapter to support and enable tool call delta output. For the OpenAI adapter, enable both the model-layer and AG-UI-layer switches:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+llm := openai.New(
+	"gpt-5.5",
+	openai.WithShowToolCallDelta(true), // Forward tool_calls chunks.
+)
+
+server, err := agui.New(
+	runner,
+	agui.WithToolCallDeltaStreamingEnabled(true),
+)
+```
+
+For a complete example, see [examples/agui/server/toolcall_delta](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/toolcall_delta).
+
+Both switches are required:
+
+- `openai.WithShowToolCallDelta(true)`: the OpenAI adapter stops filtering raw streaming `tool_calls` chunks and converts them into the framework's internal tool-call deltas.
+- `agui.WithToolCallDeltaStreamingEnabled(true)`: the AG-UI server converts those chunks into realtime `TOOL_CALL_ARGS` events.
+
+Other model adapters are handled the same way if they also support the framework's internal tool-call deltas.
+
+When enabled, the realtime event stream for a single tool call usually looks like this:
+
+```text
+RUN_STARTED
+→ TOOL_CALL_START
+→ TOOL_CALL_ARGS
+→ TOOL_CALL_ARGS
+→ ...
+→ TOOL_CALL_END
+→ TOOL_CALL_RESULT
+→ TEXT_MESSAGE_*
+→ RUN_FINISHED
+```
+
+Frontend handling only needs to follow two rules:
+
+- `TOOL_CALL_ARGS.delta` is the newly produced argument string fragment, not necessarily valid complete JSON. Accumulate it by `toolCallId` before parsing.
+- `TOOL_CALL_ARGS` events for the same tool call are not guaranteed to be contiguous in the event stream. Maintain frontend state by `toolCallId`, not by adjacent events.
+
+When the tool call ends, the AG-UI server emits `TOOL_CALL_END`. If the run is cancelled or ends with an error, the server also tries to close any still-open protocol events so the frontend does not remain in an unfinished state.
+
+The realtime route sends each `TOOL_CALL_ARGS` chunk to the frontend. If `SessionService` is configured, adjacent `TOOL_CALL_ARGS` events with the same `toolCallId` are aggregated before they are written into the session. The message snapshot route restores the accumulated tool arguments; it does not preserve the number or boundaries of realtime chunks.
 
 ### External Tools
 
