@@ -96,6 +96,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		messagesSnapshotFollowMaxDuration:      opts.MessagesSnapshotFollowMaxDuration,
 		messagesSnapshotRunLifecycleEventsEnabled: opts.MessagesSnapshotRunLifecycleEventsEnabled,
 		toolResultInputTranslationEnabled:         opts.ToolResultInputTranslationEnabled,
+		toolCallDeltaStreamingEnabled:             opts.ToolCallDeltaStreamingEnabled,
 		streamingToolResultActivityEnabled:        opts.StreamingToolResultActivityEnabled,
 	}
 	return run
@@ -129,6 +130,7 @@ type runner struct {
 	messagesSnapshotFollowMaxDuration         time.Duration
 	messagesSnapshotRunLifecycleEventsEnabled bool
 	toolResultInputTranslationEnabled         bool
+	toolCallDeltaStreamingEnabled             bool
 	streamingToolResultActivityEnabled        bool
 }
 
@@ -368,6 +370,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		translator.WithGraphNodeInterruptActivityTopLevelOnly(r.graphNodeInterruptActivityTopLevelOnly),
 		translator.WithReasoningContentEnabled(r.reasoningContentEnabled),
 		translator.WithEventSourceMetadataEnabled(r.eventSourceMetadataEnabled),
+		translator.WithToolCallDeltaStreamingEnabled(r.toolCallDeltaStreamingEnabled),
 		translator.WithStreamingToolResultActivityEnabled(r.streamingToolResultActivityEnabled),
 	)
 	if err != nil {
