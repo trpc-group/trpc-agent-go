@@ -113,6 +113,31 @@ profiles:
 	require.Equal(t, "browser", tools[0].Declaration().Name)
 }
 
+func TestNewMCPRegistryTools_Succeeds(t *testing.T) {
+	t.Parallel()
+
+	cfg := yamlNode(t, `
+allow_adhoc_http: true
+`)
+	tools, err := newMCPRegistryTools(
+		registry.ToolProviderDeps{
+			AppName:  "app",
+			StateDir: t.TempDir(),
+		},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.NoError(t, err)
+
+	names := make(map[string]bool, len(tools))
+	for _, tl := range tools {
+		names[tl.Declaration().Name] = true
+	}
+	require.True(t, names["mcp_registry_add"])
+	require.True(t, names["mcp_registry_list"])
+	require.True(t, names["mcp_list_servers"])
+	require.True(t, names["mcp_call"])
+}
+
 func TestNewBrowserTools_ErrorPaths(t *testing.T) {
 	t.Parallel()
 

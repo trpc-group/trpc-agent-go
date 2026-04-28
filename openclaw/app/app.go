@@ -337,6 +337,15 @@ const (
 		"at that exact path. Prefer already installed local tools " +
 		"for OCR, PDF, audio, image, and video work before " +
 		"trying package installs or long downloads. " +
+		"When the user asks whether an MCP server exists, " +
+		"lists MCP capability, or configures an MCP endpoint, " +
+		"use mcp_registry_list or mcp_registry_add when those " +
+		"tools are available before saying no MCP is configured. " +
+		"After adding an MCP registry entry, inspect it with " +
+		"mcp_list_tools before using mcp_call. Do not hand-write " +
+		"mcporter config files when registry tools are available, " +
+		"and never expose MCP tokens, API keys, cookies, or " +
+		"authorization headers in replies. " +
 		"When creating a cron job from chat, omit channel and " +
 		"target to send results back to the current chat by " +
 		"default. When adding cron jobs, write the stored task " +

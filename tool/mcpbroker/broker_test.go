@@ -228,6 +228,40 @@ func TestListServers_ReturnsConfiguredServers(t *testing.T) {
 	require.Empty(t, output.Servers[0].Description)
 }
 
+func TestListServers_UsesContextServerResolver(t *testing.T) {
+	type ctxKey struct{}
+
+	broker := New(
+		WithServerResolver(func(
+			ctx context.Context,
+		) (map[string]legacymcp.ConnectionConfig, error) {
+			baseURL, _ := ctx.Value(ctxKey{}).(string)
+			return map[string]legacymcp.ConnectionConfig{
+				"from_context": {
+					ServerURL: baseURL,
+				},
+			}, nil
+		}),
+	)
+
+	ctx := context.WithValue(
+		context.Background(),
+		ctxKey{},
+		"https://example.com/mcp",
+	)
+	output, err := broker.listServers(ctx, listServersInput{})
+	require.NoError(t, err)
+	require.Len(t, output.Servers, 1)
+	require.Equal(t, "from_context", output.Servers[0].Name)
+
+	target, err := broker.resolveTargetWithContext(
+		ctx,
+		targetInput{ServerName: "from_context"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "https://example.com/mcp", target.Config.ServerURL)
+}
+
 func TestListServers_ReturnsDescription(t *testing.T) {
 	broker := New(
 		WithServers(map[string]legacymcp.ConnectionConfig{

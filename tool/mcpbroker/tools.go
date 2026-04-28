@@ -119,7 +119,12 @@ func newBrokerTools(b *Broker) []tool.Tool {
 }
 
 func (b *Broker) listTools(ctx context.Context, input listToolsInput) (listToolsOutput, error) {
-	target, selectorPrefix, err := b.resolveListSelector(input.Selector, input.Transport, input.Headers)
+	target, selectorPrefix, err := b.resolveListSelector(
+		ctx,
+		input.Selector,
+		input.Transport,
+		input.Headers,
+	)
 	if err != nil {
 		return listToolsOutput{}, err
 	}
@@ -175,7 +180,12 @@ func (b *Broker) inspectTools(ctx context.Context, input inspectToolsInput) (ins
 		return inspectToolsOutput{}, fmt.Errorf("tools is required and must contain at least one tool name")
 	}
 
-	target, selectorPrefix, err := b.resolveListSelector(input.Selector, input.Transport, input.Headers)
+	target, selectorPrefix, err := b.resolveListSelector(
+		ctx,
+		input.Selector,
+		input.Transport,
+		input.Headers,
+	)
 	if err != nil {
 		return inspectToolsOutput{}, err
 	}
@@ -236,7 +246,12 @@ func (b *Broker) callTool(ctx context.Context, input callToolInput) (callToolOut
 		return callToolOutput{}, fmt.Errorf("arguments is required; pass {} when the MCP tool takes no parameters")
 	}
 
-	target, _, toolName, err := b.resolveCallSelector(input.Selector, input.Transport, input.Headers)
+	target, _, toolName, err := b.resolveCallSelector(
+		ctx,
+		input.Selector,
+		input.Transport,
+		input.Headers,
+	)
 	if err != nil {
 		return callToolOutput{}, err
 	}

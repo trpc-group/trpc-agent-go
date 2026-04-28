@@ -20,6 +20,7 @@ import (
 type Annotation struct {
 	HistoryMode   string            `json:"history_mode,omitempty"`
 	StorageUserID string            `json:"storage_user_id,omitempty"`
+	ChatID        string            `json:"chat_id,omitempty"`
 	ActorID       string            `json:"actor_id,omitempty"`
 	ActorLabel    string            `json:"actor_label,omitempty"`
 	ActorLabels   map[string]string `json:"actor_labels,omitempty"`
@@ -153,6 +154,7 @@ func decodeAnnotation(
 func isZeroRuntimeAnnotation(annotation Annotation) bool {
 	return strings.TrimSpace(annotation.HistoryMode) == "" &&
 		strings.TrimSpace(annotation.StorageUserID) == "" &&
+		strings.TrimSpace(annotation.ChatID) == "" &&
 		strings.TrimSpace(annotation.ActorID) == "" &&
 		strings.TrimSpace(annotation.ActorLabel) == "" &&
 		len(annotation.ActorLabels) == 0 &&
@@ -166,6 +168,7 @@ func normalizeAnnotation(annotation Annotation) Annotation {
 	annotation.StorageUserID = strings.TrimSpace(
 		annotation.StorageUserID,
 	)
+	annotation.ChatID = strings.TrimSpace(annotation.ChatID)
 	annotation.ActorID = strings.TrimSpace(annotation.ActorID)
 	annotation.ActorLabel = strings.TrimSpace(
 		annotation.ActorLabel,

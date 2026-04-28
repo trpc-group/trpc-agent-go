@@ -29,7 +29,8 @@ const (
 )
 
 const (
-	originCode = "code"
+	originCode     = "code"
+	originResolver = "resolver"
 )
 
 const (
@@ -55,11 +56,17 @@ type Option func(*brokerOptions)
 
 type brokerOptions struct {
 	servers                     map[string]mcpcfg.ConnectionConfig
+	serverResolver              ServerResolver
 	allowAdHocHTTP              bool
 	adhocSensitiveHeaderDenyset map[string]struct{}
 	httpHeaderInjector          HTTPHeaderInjector
 	errorInterceptor            ErrorInterceptor
 }
+
+// ServerResolver resolves named MCP servers for the current tool call.
+type ServerResolver func(
+	context.Context,
+) (map[string]mcpcfg.ConnectionConfig, error)
 
 // HTTPHeaderInjector resolves per-run HTTP headers for MCP requests.
 type HTTPHeaderInjector func(context.Context, *HeaderInjectRequest) (map[string]string, error)
@@ -129,6 +136,15 @@ func WithServers(servers map[string]mcpcfg.ConnectionConfig) Option {
 	}
 }
 
+// WithServerResolver adds named MCP server configurations resolved at
+// tool-call time. This is useful when the visible MCP servers depend on the
+// current user, chat, session, or workspace.
+func WithServerResolver(resolver ServerResolver) Option {
+	return func(opts *brokerOptions) {
+		opts.serverResolver = resolver
+	}
+}
+
 // WithAllowAdHocHTTP controls whether ad-hoc HTTP MCP targets are allowed.
 func WithAllowAdHocHTTP(enabled bool) Option {
 	return func(opts *brokerOptions) {
@@ -182,7 +198,17 @@ type namedServer struct {
 	Config     mcpcfg.ConnectionConfig
 }
 
-func (b *Broker) resolveNamedServers() ([]namedServer, map[string]namedServer, error) {
+func (b *Broker) resolveNamedServers() (
+	[]namedServer,
+	map[string]namedServer,
+	error,
+) {
+	return b.resolveNamedServersWithContext(context.Background())
+}
+
+func (b *Broker) resolveNamedServersWithContext(
+	ctx context.Context,
+) ([]namedServer, map[string]namedServer, error) {
 	merged := make(map[string]namedServer, len(b.options.servers))
 	for name, cfg := range b.options.servers {
 		server, serverErr := normalizeNamedServer(name, cfg, originCode)
@@ -190,9 +216,35 @@ func (b *Broker) resolveNamedServers() ([]namedServer, map[string]namedServer, e
 			return nil, nil, serverErr
 		}
 		if _, exists := merged[server.Name]; exists {
-			return nil, nil, fmt.Errorf("duplicate MCP server name after normalization: %s", server.Name)
+			return nil, nil, fmt.Errorf(
+				"duplicate MCP server name after normalization: %s",
+				server.Name,
+			)
 		}
 		merged[server.Name] = server
+	}
+	if b.options.serverResolver != nil {
+		servers, err := b.options.serverResolver(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		for name, cfg := range servers {
+			server, serverErr := normalizeNamedServer(
+				name,
+				cfg,
+				originResolver,
+			)
+			if serverErr != nil {
+				return nil, nil, serverErr
+			}
+			if _, exists := merged[server.Name]; exists {
+				return nil, nil, fmt.Errorf(
+					"duplicate MCP server name after normalization: %s",
+					server.Name,
+				)
+			}
+			merged[server.Name] = server
+		}
 	}
 
 	list := make([]namedServer, 0, len(merged))
@@ -207,6 +259,13 @@ func (b *Broker) resolveNamedServers() ([]namedServer, map[string]namedServer, e
 }
 
 func (b *Broker) resolveTarget(input targetInput) (resolvedTarget, error) {
+	return b.resolveTargetWithContext(context.Background(), input)
+}
+
+func (b *Broker) resolveTargetWithContext(
+	ctx context.Context,
+	input targetInput,
+) (resolvedTarget, error) {
 	serverName := strings.TrimSpace(input.ServerName)
 	urlValue := strings.TrimSpace(input.URL)
 
@@ -215,7 +274,7 @@ func (b *Broker) resolveTarget(input targetInput) (resolvedTarget, error) {
 	}
 
 	if serverName != "" {
-		_, merged, err := b.resolveNamedServers()
+		_, merged, err := b.resolveNamedServersWithContext(ctx)
 		if err != nil {
 			return resolvedTarget{}, err
 		}
@@ -247,7 +306,7 @@ func (b *Broker) resolveTarget(input targetInput) (resolvedTarget, error) {
 }
 
 func (b *Broker) listServers(ctx context.Context, _ listServersInput) (listServersOutput, error) {
-	servers, _, err := b.resolveNamedServers()
+	servers, _, err := b.resolveNamedServersWithContext(ctx)
 	if err != nil {
 		return listServersOutput{}, err
 	}
@@ -264,6 +323,7 @@ func (b *Broker) listServers(ctx context.Context, _ listServersInput) (listServe
 }
 
 func (b *Broker) resolveListSelector(
+	ctx context.Context,
 	selector string,
 	transport string,
 	headers map[string]string,
@@ -274,7 +334,7 @@ func (b *Broker) resolveListSelector(
 	}
 
 	if looksLikeHTTPSelector(selector) {
-		target, err := b.resolveTarget(targetInput{
+		target, err := b.resolveTargetWithContext(ctx, targetInput{
 			URL:       selector,
 			Transport: transport,
 			Headers:   headers,
@@ -285,7 +345,7 @@ func (b *Broker) resolveListSelector(
 		return target, selector, nil
 	}
 
-	target, err := b.resolveTarget(targetInput{
+	target, err := b.resolveTargetWithContext(ctx, targetInput{
 		ServerName: selector,
 		Transport:  transport,
 		Headers:    headers,
@@ -297,6 +357,7 @@ func (b *Broker) resolveListSelector(
 }
 
 func (b *Broker) resolveCallSelector(
+	ctx context.Context,
 	selector string,
 	transport string,
 	headers map[string]string,
@@ -311,7 +372,7 @@ func (b *Broker) resolveCallSelector(
 		if err != nil {
 			return resolvedTarget{}, "", "", err
 		}
-		target, targetErr := b.resolveTarget(targetInput{
+		target, targetErr := b.resolveTargetWithContext(ctx, targetInput{
 			URL:       baseURL,
 			Transport: transport,
 			Headers:   headers,
@@ -322,11 +383,14 @@ func (b *Broker) resolveCallSelector(
 		return target, baseURL, toolName, nil
 	}
 
-	serverName, toolName, err := b.splitNamedToolSelector(selector)
+	serverName, toolName, err := b.splitNamedToolSelectorWithContext(
+		ctx,
+		selector,
+	)
 	if err != nil {
 		return resolvedTarget{}, "", "", err
 	}
-	target, targetErr := b.resolveTarget(targetInput{
+	target, targetErr := b.resolveTargetWithContext(ctx, targetInput{
 		ServerName: serverName,
 		Transport:  transport,
 		Headers:    headers,
@@ -338,12 +402,19 @@ func (b *Broker) resolveCallSelector(
 }
 
 func (b *Broker) splitNamedToolSelector(selector string) (string, string, error) {
+	return b.splitNamedToolSelectorWithContext(context.Background(), selector)
+}
+
+func (b *Broker) splitNamedToolSelectorWithContext(
+	ctx context.Context,
+	selector string,
+) (string, string, error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
 		return "", "", fmt.Errorf("selector is required")
 	}
 
-	_, merged, err := b.resolveNamedServers()
+	_, merged, err := b.resolveNamedServersWithContext(ctx)
 	if err != nil {
 		return "", "", err
 	}

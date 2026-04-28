@@ -26,6 +26,13 @@ metadata:
 
 Use `mcporter` to work with MCP servers directly.
 
+In OpenClaw, if `mcp_registry_add`, `mcp_registry_list`,
+`mcp_list_tools`, and `mcp_call` are available, prefer those runtime tools
+for user-configured MCP servers. Use `mcporter` as a fallback when the
+runtime registry tools are unavailable or when the user explicitly asks for
+mcporter CLI/config work. Never echo MCP tokens, API keys, cookies, or auth
+headers back to the user.
+
 Quick start
 
 - `mcporter list`
