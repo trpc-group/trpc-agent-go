@@ -74,14 +74,14 @@ Perfect for decision-making scenarios:
 
 ```bash
 cd examples/multiagent/parallel
-go run . -model deepseek-chat
+go run . -model deepseek-v4-flash
 ```
 
 ### Example Session
 
 ```
 ⚡ Parallel Multi-Agent Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Type 'exit' to end the conversation
 Agents: Market 📊 | Technical ⚙️ | Risk ⚠️ | Opportunity 🚀
 ==================================================

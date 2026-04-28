@@ -4,7 +4,7 @@ This example shows how to populate the `result` field on the `RUN_FINISHED` AG-U
 
 ## Prerequisites
 
-- An API key for the configured model provider (e.g., `OPENAI_API_KEY` when using `deepseek-chat` via the OpenAI-compatible endpoint).
+- An API key for the configured model provider (e.g., `OPENAI_API_KEY` when using `deepseek-v4-flash` via the OpenAI-compatible endpoint).
 - `curl` to hit the SSE and history endpoints (see commands below); any AG-UI client will also work once the server is running.
 
 ## Run
@@ -14,7 +14,7 @@ From the `examples/agui` module:
 ```bash
 # Start the server at http://127.0.0.1:8080/agui with history at /history
 go run ./server/finishresult \
-  -model deepseek-chat \
+  -model deepseek-v4-flash \
   -stream=true \
   -address 127.0.0.1:8080 \
   -path /agui \

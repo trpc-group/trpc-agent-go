@@ -29,7 +29,7 @@ This example demonstrates a clean chat interface that surfaces the model's inter
 
 | Argument            | Description                                  | Default Value        |
 | ------------------- | -------------------------------------------- | -------------------- |
-| `-model`            | Name of the model to use                     | `deepseek-reasoner`  |
+| `-model`            | Name of the model to use                     | `deepseek-v4-pro`  |
 | `-variant`          | Model variant: `openai`, `deepseek`, `qwen`, `hunyuan` | `openai`     |
 | `-streaming`        | Enable streaming mode for responses          | `true`               |
 | `-thinking`         | Enable reasoning/thinking (if provider supports) | `true`            |
@@ -52,7 +52,7 @@ This example demonstrates a clean chat interface that surfaces the model's inter
 ```bash
 cd examples/thinking
 export DEEPSEEK_API_KEY="your-api-key"
-go run . -model deepseek-chat -variant deepseek
+go run . -model deepseek-v4-flash -variant deepseek
 ```
 
 ### OpenAI Compatible
@@ -74,23 +74,23 @@ go run . -model qwq-32b -variant qwen
 If you need to keep all `reasoning_content` in history for debugging purposes:
 
 ```bash
-go run . -model deepseek-chat -variant deepseek -reasoning-mode=keep_all
+go run . -model deepseek-v4-flash -variant deepseek -reasoning-mode=keep_all
 ```
 
 ### Disable Debug Output
 
 ```bash
-go run . -model deepseek-chat -variant deepseek -debug=false
+go run . -model deepseek-v4-flash -variant deepseek -debug=false
 ```
 
 ### Response Modes
 
 ```bash
 # Default: streaming mode (real-time deltas)
-go run . -model deepseek-chat -variant deepseek
+go run . -model deepseek-v4-flash -variant deepseek
 
 # Non-streaming: complete response at once
-go run . -model deepseek-chat -variant deepseek -streaming=false
+go run . -model deepseek-v4-flash -variant deepseek -streaming=false
 ```
 
 When to use each mode:
@@ -111,7 +111,7 @@ Usage of ./thinking:
   -debug
         Print messages sent to model API for debugging (default true)
   -model string
-        Name of the model to use (default "deepseek-reasoner")
+        Name of the model to use (default "deepseek-v4-pro")
   -reasoning-mode string
         How to handle reasoning_content in history: keep_all, discard_previous, discard_all (default "discard_previous")
   -streaming
@@ -130,7 +130,7 @@ You will see a simple interface similar to the Runner demo:
 
 ```
 🧠 Thinking Demo (Reasoning)
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Streaming: true
 Thinking: true (tokens=2048)
 Reasoning Mode: discard_previous

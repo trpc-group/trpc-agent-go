@@ -34,7 +34,7 @@ import (
 
 func main() {
 	// Parse command line arguments
-	modelName := flag.String("model", "deepseek-chat", "Model name to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Model name to use")
 	executorKind := flag.String("executor", "local", "Code executor backend: local or jupyter")
 	flag.Parse()
 

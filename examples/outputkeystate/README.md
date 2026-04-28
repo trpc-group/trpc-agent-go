@@ -69,7 +69,7 @@ go build -o outputkeystate main.go
 ./outputkeystate
 
 # Run with specific model
-./outputkeystate -model deepseek-chat
+./outputkeystate -model deepseek-v4-flash
 ```
 
 ### Example Queries

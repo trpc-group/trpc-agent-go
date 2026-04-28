@@ -26,7 +26,7 @@ go build -o graph-invocation-placeholder main.go
 ```
 ./graph-invocation-placeholder
 # or select a model
-./graph-invocation-placeholder -model deepseek-chat
+./graph-invocation-placeholder -model deepseek-v4-flash
 ```
 
 ## Commands

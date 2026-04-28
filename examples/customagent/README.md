@@ -45,7 +45,7 @@ cd examples/customagent
 # Build
 go build -o customagent .
 
-# Start interactive chat (default model: deepseek-chat)
+# Start interactive chat (default model: deepseek-v4-flash)
 ./customagent
 
 # Use a specific model

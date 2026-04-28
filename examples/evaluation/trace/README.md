@@ -26,7 +26,7 @@ The sample trace includes tool calls under `tools`, including the tool call ID, 
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `-model` | Model identifier used by the agent (inference is skipped in trace mode) | `deepseek-chat` |
+| `-model` | Model identifier used by the agent (inference is skipped in trace mode) | `deepseek-v4-flash` |
 | `-streaming` | Enable streaming responses from the agent (inference is skipped in trace mode) | `false` |
 | `-data-dir` | Directory containing `.evalset.json` and `.metrics.json` | `./data` |
 | `-output-dir` | Directory where evaluation results are written | `./output` |
@@ -39,7 +39,7 @@ The sample trace includes tool calls under `tools`, including the tool call ID, 
 cd examples/evaluation/trace
 JUDGE_MODEL_API_KEY=sk-... \
 go run . \
-  -model "deepseek-chat" \
+  -model "deepseek-v4-flash" \
   -data-dir "./data" \
   -output-dir "./output" \
   -eval-set "trace-basic"

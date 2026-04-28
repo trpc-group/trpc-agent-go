@@ -55,7 +55,7 @@ preprocess → analyze → tools → route_to_parallel
 
 ### Prerequisites
 - Go 1.21 or later
-- Access to an LLM model (default: deepseek-chat)
+- Access to an LLM model (default: deepseek-v4-flash)
 
 ### Running the Example
 
@@ -67,7 +67,7 @@ cd trpc-agent-go/examples/graph/parallel
 go run main.go
 
 # Run with specific model
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 ### Interactive Mode
@@ -97,7 +97,7 @@ The workflow will:
 
 ```
 🚀 Parallel Execution Workflow Example
-Model: deepseek-chat
+Model: deepseek-v4-flash
 ==================================================
 ✅ Parallel workflow ready! Session: parallel-session-1234567890
 
@@ -116,11 +116,11 @@ Model: deepseek-chat
 ✅ Completed node: preprocess (function)
 
 🚀 Entering node: analyze (llm)
-   🤖 Using model: deepseek-chat
+   🤖 Using model: deepseek-v4-flash
    📝 Model Input: Sample text for testing
-🤖 [MODEL] Starting: deepseek-chat (Node: analyze)
+🤖 [MODEL] Starting: deepseek-v4-flash (Node: analyze)
    📝 Input: You are a text analysis expert...
-✅ [MODEL] Completed: deepseek-chat (Node: analyze) in 2.5s
+✅ [MODEL] Completed: deepseek-v4-flash (Node: analyze) in 2.5s
 ✅ Completed node: analyze (llm)
 
 🚀 Entering node: route_to_parallel (function)
@@ -131,15 +131,15 @@ Model: deepseek-chat
 🚀 Entering node: summarize (llm)
 🚀 Entering node: enhance (llm)  
 🚀 Entering node: classify (llm)
-   🤖 Using model: deepseek-chat
-   🤖 Using model: deepseek-chat
-   🤖 Using model: deepseek-chat
-🤖 [MODEL] Starting: deepseek-chat (Node: summarize)
-🤖 [MODEL] Starting: deepseek-chat (Node: enhance)
-🤖 [MODEL] Starting: deepseek-chat (Node: classify)
-✅ [MODEL] Completed: deepseek-chat (Node: summarize) in 1.8s
-✅ [MODEL] Completed: deepseek-chat (Node: enhance) in 2.1s
-✅ [MODEL] Completed: deepseek-chat (Node: classify) in 1.9s
+   🤖 Using model: deepseek-v4-flash
+   🤖 Using model: deepseek-v4-flash
+   🤖 Using model: deepseek-v4-flash
+🤖 [MODEL] Starting: deepseek-v4-flash (Node: summarize)
+🤖 [MODEL] Starting: deepseek-v4-flash (Node: enhance)
+🤖 [MODEL] Starting: deepseek-v4-flash (Node: classify)
+✅ [MODEL] Completed: deepseek-v4-flash (Node: summarize) in 1.8s
+✅ [MODEL] Completed: deepseek-v4-flash (Node: enhance) in 2.1s
+✅ [MODEL] Completed: deepseek-v4-flash (Node: classify) in 1.9s
 ✅ Completed node: summarize (llm)
 ✅ Completed node: enhance (llm)
 ✅ Completed node: classify (llm)
@@ -239,14 +239,14 @@ This example is designed to test:
 
 ```bash
 # Run with verbose logging
-go run main.go -model deepseek-chat -verbose
+go run main.go -model deepseek-v4-flash -verbose
 
 # Fake streaming is enabled by default.
 # Disable fake streaming
-go run main.go -model deepseek-chat -stream=false
+go run main.go -model deepseek-v4-flash -stream=false
 
 # Customize streaming feel (chunk size and delay)
-go run main.go -model deepseek-chat -stream -stream-chunk 12 -stream-delay 40ms
+go run main.go -model deepseek-v4-flash -stream -stream-chunk 12 -stream-delay 40ms
 
 # Check for compilation errors
 go build main.go

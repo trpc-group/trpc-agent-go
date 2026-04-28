@@ -48,7 +48,7 @@ var (
 )
 
 const (
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 
 	appName   = "tool-interrupt-demo"
 	agentName = "tool-interrupt-agent"

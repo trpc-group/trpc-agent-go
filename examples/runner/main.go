@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	modelName      = flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName      = flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	enableParallel = flag.Bool("enable-parallel", false, "Enable parallel tool execution (default: false, serial execution)")
 	variant        = flag.String("variant", "openai", "Name of the variant to use when calling the OpenAI provider")

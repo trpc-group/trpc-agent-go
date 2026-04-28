@@ -14,7 +14,7 @@ implements the OpenAI Chat Completions API standard.
 # From repository root
 cd examples/openaiserver
 
-# Start the server with default settings (model: deepseek-chat, addr: :8080)
+# Start the server with default settings (model: deepseek-v4-flash, addr: :8080)
 go run .
 
 # Start the server on custom port
@@ -29,7 +29,7 @@ go run . -model gpt-4 -addr :9090
 
 ### Command Line Options
 
-- `-model`: Name of the model to use (default: "deepseek-chat")
+- `-model`: Name of the model to use (default: "deepseek-v4-flash")
 - `-addr`: Listen address (default: ":8080")
 
 ## Testing with curl
@@ -40,7 +40,7 @@ go run . -model gpt-4 -addr :9090
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "deepseek-chat",
+    "model": "deepseek-v4-flash",
     "messages": [
       {"role": "user", "content": "What is 2 + 2?"}
     ],
@@ -54,7 +54,7 @@ curl http://localhost:8080/v1/chat/completions \
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "deepseek-chat",
+    "model": "deepseek-v4-flash",
     "messages": [
       {"role": "user", "content": "What is 2 + 2?"}
     ],
@@ -68,7 +68,7 @@ curl http://localhost:8080/v1/chat/completions \
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "deepseek-chat",
+    "model": "deepseek-v4-flash",
     "messages": [
       {"role": "user", "content": "Calculate 15 * 23"}
     ],
@@ -91,7 +91,7 @@ client = OpenAI(
 
 # Non-streaming
 response = client.chat.completions.create(
-    model="deepseek-chat",
+    model="deepseek-v4-flash",
     messages=[
         {"role": "user", "content": "What is 2 + 2?"}
     ]
@@ -100,7 +100,7 @@ print(response.choices[0].message.content)
 
 # Streaming
 stream = client.chat.completions.create(
-    model="deepseek-chat",
+    model="deepseek-v4-flash",
     messages=[
         {"role": "user", "content": "Tell me a story"}
     ],

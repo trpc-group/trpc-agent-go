@@ -43,7 +43,7 @@ export OPENAI_MODEL="gpt-4o-mini"                   # Optional, default value
 # Or use other compatible API services
 export OPENAI_API_KEY="your-api-key"
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
-export OPENAI_MODEL="deepseek-chat"
+export OPENAI_MODEL="deepseek-v4-flash"
 ```
 
 ### 2. One-Click Service and Client Startup
@@ -193,8 +193,8 @@ Would you like me to help you analyze specific Go code against these standards o
 
 ```bash
 # Start agents on custom ports
-./calculate_agent -host 0.0.0.0:8087 -model deepseek-chat
-./codecc_agent -host 0.0.0.0:8088 -model deepseek-chat
+./calculate_agent -host 0.0.0.0:8087 -model deepseek-v4-flash
+./codecc_agent -host 0.0.0.0:8088 -model deepseek-v4-flash
 ```
 
 ### Model Configuration
@@ -202,7 +202,7 @@ Would you like me to help you analyze specific Go code against these standards o
 ```bash
 # Use different models
 export OPENAI_MODEL="gpt-4"
-export OPENAI_MODEL="deepseek-chat"
+export OPENAI_MODEL="deepseek-v4-flash"
 ```
 
 ### Client Configuration

@@ -20,7 +20,7 @@ const (
 	appName               = "hedge-chat-demo"
 	agentName             = "hedge-chat-agent"
 	defaultPrimaryModel   = "gpt-4o-mini"
-	defaultBackupModel    = "deepseek-chat"
+	defaultBackupModel    = "deepseek-v4-flash"
 	defaultPrimaryBaseURL = "https://api.openai.com/v1"
 	defaultBackupBaseURL  = "https://api.deepseek.com/v1"
 	defaultHedgeDelay     = 100 * time.Millisecond

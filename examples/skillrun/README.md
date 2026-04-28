@@ -46,7 +46,7 @@ that:
 
 | Argument             | Description                                                                | Default            |
 | -------------------- | -------------------------------------------------------------------------- | ------------------ |
-| `-model`             | Name of the model to use                                                   | `deepseek-chat`    |
+| `-model`             | Name of the model to use                                                   | `deepseek-v4-flash`    |
 | `-stream`            | Stream responses                                                           | `true`             |
 | `-skills-root`       | Skills repository root directory                                           | `env or ./skills`  |
 | `-skills-guidance`   | Include built-in skills tooling/workspace guidance in the system message   | `true`             |
@@ -235,7 +235,7 @@ you upload into the conversation, using the `user-file-ops` skill.
 
 ```
 🚀 Skill Run Chat
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Stream: true
 Skills root: ./skills
 Executor: local

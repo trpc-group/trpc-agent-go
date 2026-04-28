@@ -14,7 +14,7 @@ It mirrors the “from document chunking to final synthesis” pattern seen in m
 ```bash
 cd examples/graph/mapreduce
 # Use the provided sample.txt, or pass your own via -file
-go run . -model deepseek-chat -file ./sample.txt -top-k 4 -chunk-size 800 -overlap 100
+go run . -model deepseek-v4-flash -file ./sample.txt -top-k 4 -chunk-size 800 -overlap 100
 ```
 
 Then when prompted, type your question (the “query” for retrieval), for example:
@@ -38,5 +38,5 @@ What are the main concurrency patterns and caveats in Go?
 
 ## Notes
 
-- The model name defaults to `deepseek-chat` for consistency with other examples. Provide your own model via `-model`.
+- The model name defaults to `deepseek-v4-flash` for consistency with other examples. Provide your own model via `-model`.
 - The example uses only built‑in retrieval (string matching). Replace retrieval with embeddings or your own store if desired.

@@ -32,13 +32,13 @@ go run main.go
 
 Command-line flags:
 
-- `-model`: Model name. Default: `deepseek-chat`.
+- `-model`: Model name. Default: `deepseek-v4-flash`.
 
 ## Example Output
 
 ```text
 🧪 Summary Injection Mode Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 ======================================================================
 == Phase 1: Build conversation history (session: injection-base-...) ==
 

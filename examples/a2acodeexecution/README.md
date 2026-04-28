@@ -58,14 +58,14 @@ cd server
 go run main.go
 
 # With custom options
-go run main.go -model deepseek-chat -host 0.0.0.0:8888 -streaming=true
+go run main.go -model deepseek-v4-flash -host 0.0.0.0:8888 -streaming=true
 ```
 
 #### Server Command Line Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-model` | `deepseek-chat` | Model name to use |
+| `-model` | `deepseek-v4-flash` | Model name to use |
 | `-host` | `0.0.0.0:8888` | A2A server host address |
 | `-streaming` | `true` | Enable streaming mode |
 
@@ -96,7 +96,7 @@ go run main.go -url http://localhost:8888
 ========================================
 A2A Code Execution Server
 ========================================
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Host: 0.0.0.0:8888
 Streaming: true
 ========================================

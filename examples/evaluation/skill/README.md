@@ -25,7 +25,7 @@ It uses the **tool trajectory** evaluator (`tool_trajectory_avg_score`) to verif
 ```bash
 cd trpc-agent-go/examples/evaluation/skill
 go run . \
-  -model "deepseek-chat" \
+  -model "deepseek-v4-flash" \
   -skills-dir "./skills" \
   -data-dir "./data" \
   -output-dir "./output" \

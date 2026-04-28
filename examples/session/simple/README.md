@@ -380,7 +380,7 @@ The `*` indicates the currently active session.
 
 ```
 🚀 Session Management Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Streaming: true
 Session Backend: PostgreSQL (localhost:5432/trpc-agent-go)
 ==================================================

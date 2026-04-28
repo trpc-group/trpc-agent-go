@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
+	modelName = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-v4-flash"), "Model to use")
 	host      = flag.String("host", "0.0.0.0:8888", "A2A server host address")
 	streaming = flag.Bool("streaming", true, "Enable streaming mode")
 )

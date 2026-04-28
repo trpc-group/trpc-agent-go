@@ -17,7 +17,7 @@ The example supports the following environment variables:
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-model` | Model identifier used by the calculator agent | `deepseek-chat` |
+| `-model` | Model identifier used by the calculator agent | `deepseek-v4-flash` |
 | `-streaming` | Enable streaming responses from the LLM | `false` |
 | `-data-dir` | Directory containing `.evalset.json` and `.metrics.json` files | `./data` |
 | `-output-dir` | Directory where evaluation results are written | `./output` |
@@ -29,7 +29,7 @@ The example supports the following environment variables:
 ```bash
 cd trpc-agent-go/examples/evaluation/callbacks
 go run . \
-  -model "deepseek-chat" \
+  -model "deepseek-v4-flash" \
   -data-dir "./data" \
   -output-dir "./output" \
   -eval-set "math-basic" \

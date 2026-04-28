@@ -354,7 +354,7 @@ func DefaultRunnerConfig() RunnerConfig {
 	return RunnerConfig{
 		AppName:     "session-demo",
 		AgentName:   "demo-assistant",
-		ModelName:   GetEnvOrDefault("MODEL_NAME", "deepseek-chat"),
+		ModelName:   GetEnvOrDefault("MODEL_NAME", "deepseek-v4-flash"),
 		Instruction: "You are a helpful assistant.",
 		MaxTokens:   0,
 		Temperature: nil,

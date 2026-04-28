@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Model to use")
+	modelName = flag.String("model", "deepseek-v4-flash", "Model to use")
 )
 
 var agentURLS = []string{

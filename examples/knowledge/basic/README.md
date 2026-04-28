@@ -17,7 +17,7 @@ Set your OpenAI API key:
 ```bash
 export OPENAI_API_KEY=your-api-key
 export OPENAI_BASE_URL=https://api.openai.com/v1  # Optional
-export MODEL_NAME=deepseek-chat                    # Optional, defaults to deepseek-chat
+export MODEL_NAME=deepseek-v4-flash                    # Optional, defaults to deepseek-v4-flash
 ```
 
 ## Run

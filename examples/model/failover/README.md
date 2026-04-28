@@ -44,7 +44,7 @@ export DEEPSEEK_API_KEY="your-deepseek-key"
 cd examples/model/failover
 go run . \
   -primary-model gpt-4o-mini \
-  -backup-model deepseek-chat \
+  -backup-model deepseek-v4-flash \
   -streaming=true
 ```
 
@@ -53,7 +53,7 @@ go run . \
 | Flag | Description | Default |
 | --- | --- | --- |
 | `-primary-model` | Primary model name. | `gpt-4o-mini` |
-| `-backup-model` | Backup model name. | `deepseek-chat` |
+| `-backup-model` | Backup model name. | `deepseek-v4-flash` |
 | `-primary-base-url` | Primary model base URL. | `https://api.openai.com/v1` |
 | `-backup-base-url` | Backup model base URL. | `https://api.deepseek.com/v1` |
 | `-streaming` | Enables streaming responses. | `true` |
@@ -71,7 +71,7 @@ primary := openai.New(
     openai.WithBaseURL("https://api.openai.com/v1"),
 )
 backup := openai.New(
-    "deepseek-chat",
+    "deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
 )
 

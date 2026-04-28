@@ -58,7 +58,7 @@ go run .
 
 ### Command-Line Flags
 
-- `-model` (string): Model to use (default: "deepseek-chat")
+- `-model` (string): Model to use (default: "deepseek-v4-flash")
 - `-storage` (string): Storage type: "memory" or "sqlite" (default: "memory")
 - `-db` (string): SQLite database path (default: "interrupt-checkpoints.db")
 - `-verbose` (bool): Enable verbose logging (default: false)

@@ -125,7 +125,7 @@ import (
 
 const (
 	appName   = "math-eval-app"
-	modelName = "deepseek-chat"
+	modelName = "deepseek-v4-flash"
 	streaming = true
 	evalSetID = "math-basic"
 	dataDir   = "./data"
@@ -2092,7 +2092,7 @@ Example metric configuration for LLM final response:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2129,7 +2129,7 @@ Example metric configuration using `judgeModel`:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2249,7 +2249,7 @@ Example metric configuration for LLM rubric critic:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2302,7 +2302,7 @@ Example metric configuration for LLM rubric reference critic:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2355,7 +2355,7 @@ Example metric configuration for LLM rubric response:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2410,7 +2410,7 @@ Example metric configuration for LLM rubric knowledge recall:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,

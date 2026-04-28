@@ -37,7 +37,7 @@ export OPENAI_BASE_URL="your-base-url"
 Then run:
 
 ```bash
-go run ./examples/tool/hostexec -model deepseek-chat -base-dir .
+go run ./examples/tool/hostexec -model deepseek-v4-flash -base-dir .
 ```
 
 ## Example Session

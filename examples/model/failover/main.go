@@ -19,7 +19,7 @@ const (
 	appName               = "failover-chat-demo"
 	agentName             = "failover-chat-agent"
 	defaultPrimaryModel   = "gpt-4o-mini"
-	defaultBackupModel    = "deepseek-chat"
+	defaultBackupModel    = "deepseek-v4-flash"
 	defaultPrimaryBaseURL = "https://api.openai.com/v1"
 	defaultBackupBaseURL  = "https://api.deepseek.com/v1"
 )

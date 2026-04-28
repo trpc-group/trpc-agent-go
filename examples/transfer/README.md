@@ -64,7 +64,7 @@ The transfer system enables intelligent task delegation across multiple speciali
 cd examples/transfer
 go build -o transfer-demo .
 
-# Run with default model (deepseek-chat)
+# Run with default model (deepseek-v4-flash)
 ./transfer-demo
 
 # Run with a specific model

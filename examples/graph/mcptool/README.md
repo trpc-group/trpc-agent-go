@@ -76,13 +76,13 @@ Set your OpenAI‑compatible model endpoint (for example, DeepSeek):
 ```bash
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 export OPENAI_API_KEY="sk-..."
-export MODEL_NAME="deepseek-chat"
+export MODEL_NAME="deepseek-v4-flash"
 ```
 
 Then run the graph:
 
 ```bash
-go run . -model "${MODEL_NAME:-deepseek-chat}"
+go run . -model "${MODEL_NAME:-deepseek-v4-flash}"
 ```
 
 What happens on startup:

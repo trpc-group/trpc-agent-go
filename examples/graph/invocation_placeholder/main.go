@@ -38,7 +38,7 @@ import (
 
 const (
 	appName          = "graph-invocation-placeholder-demo"
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 	defaultUserID    = "user"
 
 	agentName = "invocation-placeholder-agent"

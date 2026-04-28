@@ -75,7 +75,7 @@ import (
 
 func main() {
 	// 创建模型
-	modelInstance := openai.New("deepseek-chat")
+	modelInstance := openai.New("deepseek-v4-flash")
 
 	// 创建工具
 	calculatorTool := function.NewFunctionTool(

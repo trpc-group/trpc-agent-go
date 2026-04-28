@@ -15,7 +15,7 @@ This example demonstrates `tool_trajectory_avg_score` with multiple tools (weath
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `-model` | Model used by the travel agent | `deepseek-chat` |
+| `-model` | Model used by the travel agent | `deepseek-v4-flash` |
 | `-streaming` | Enable streaming responses from the agent | `false` |
 | `-data-dir` | Directory containing EvalSet and metric files | `./data` |
 | `-output-dir` | Directory where EvalResult files are written | `./output` |

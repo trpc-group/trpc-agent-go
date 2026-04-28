@@ -19,7 +19,7 @@ go run main.go
 
 ### Command Line Arguments
 
-- `-model`: Specify the model name to use (default: deepseek-chat)
+- `-model`: Specify the model name to use (default: deepseek-v4-flash)
 - `-streaming`: Enable streaming output (default: true)
 
 ```bash
@@ -42,7 +42,7 @@ During the conversation, you can use the following special commands:
 
 ```
 🚀 Token Usage Tracker Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Streaming: true
 Type 'exit' to end the conversation
 Special commands: /stats, /new, /exit

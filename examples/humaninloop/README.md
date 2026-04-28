@@ -146,7 +146,7 @@ User Query: Please reimburse $200 for conference travel
 
 ### Command Line Options
 
-- `-model`: Model name to use (default: "deepseek-chat").
+- `-model`: Model name to use (default: "deepseek-v4-flash").
 - `-streaming`: Enable streaming mode for responses (default: true).
 
 ## Notes

@@ -37,7 +37,7 @@ state[graph.StateKeyOneShotMessages] = []model.Message{
 ### Run the executable example
 
 ```bash
-go run . -model deepseek-chat -sys "You are a creative storyteller." -input "Tell me a story about a robot learning to paint."
+go run . -model deepseek-v4-flash -sys "You are a creative storyteller." -input "Tell me a story about a robot learning to paint."
 ```
 
 You can omit `-input` to type the prompt interactively.

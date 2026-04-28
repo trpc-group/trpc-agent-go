@@ -87,7 +87,7 @@ go build -o outputschema main.go
 
 ### Flags
 
-- `-model`: Name of the model to use (default: "deepseek-chat")
+- `-model`: Name of the model to use (default: "deepseek-v4-flash")
 
 ### Interactive Commands
 

@@ -42,7 +42,7 @@ import (
 )
 
 const (
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 	userID           = "demo-user"
 	sessionID        = "demo-session"
 

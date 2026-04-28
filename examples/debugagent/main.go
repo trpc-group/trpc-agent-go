@@ -32,7 +32,7 @@ import (
 
 func main() {
 	// Parse command line flags.
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	baseDir := flag.String("base-dir", ".", "Base directory for file operations")
 	flag.Parse()
 

@@ -51,7 +51,7 @@ CLI commands:
 
 ```
 🔌 External Tools (Client‑Executed)
-Model: deepseek-chat
+Model: deepseek-v4-flash
 ==================================================
 Type a question to start the workflow.
 Commands:
@@ -79,7 +79,7 @@ You>
 
 ```
 🔌 External Tools (Client‑Executed)
-Model: deepseek-chat
+Model: deepseek-v4-flash
 ==================================================
 Type a question to start the workflow.
 Commands:

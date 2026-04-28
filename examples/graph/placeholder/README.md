@@ -32,7 +32,7 @@ go build -o graph-placeholder main.go
 ```
 ./graph-placeholder
 # or select a model
-./graph-placeholder -model deepseek-chat
+./graph-placeholder -model deepseek-v4-flash
 ```
 
 ## Commands
@@ -62,7 +62,7 @@ go build -o graph-placeholder main.go
 
 ```
 🔗 Graph Placeholder Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Type 'exit' to end the session
 Commands: /set-user-topics <topics>, /set-app-banner <text>, /show-state
 ============================================================

@@ -17,7 +17,7 @@ The example supports the following environment variables:
 |------|-------------|---------|
 | `-addr` | Listen address for the evaluation server | `:8080` |
 | `-base-path` | Base path exposed by the evaluation server | `/evaluation` |
-| `-model` | Model identifier used by the calculator agent | `deepseek-chat` |
+| `-model` | Model identifier used by the calculator agent | `deepseek-v4-flash` |
 | `-streaming` | Enable streaming responses from the agent | `false` |
 | `-data-dir` | Directory containing `.evalset.json` and `.metrics.json` files | `./data` |
 | `-output-dir` | Directory where evaluation results are written | `./output` |
@@ -45,7 +45,7 @@ cd trpc-agent-go/examples/evaluation/server
 go run . \
   -addr ":8080" \
   -base-path "/evaluation" \
-  -model "deepseek-chat" \
+  -model "deepseek-v4-flash" \
   -data-dir "./data" \
   -output-dir "./output"
 ```

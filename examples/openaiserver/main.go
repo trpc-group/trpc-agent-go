@@ -27,7 +27,7 @@
 //	go run main.go
 //	go run main.go -model gpt-4 -addr :8080
 //
-// The server will listen on :8080 by default and use deepseek-chat model.
+// The server will listen on :8080 by default and use deepseek-v4-flash model.
 //
 // Author: Tencent, 2025
 //
@@ -54,7 +54,7 @@ const defaultListenAddr = ":8080"
 // and starts an HTTP server for OpenAI API compatibility.
 func main() {
 	// Parse command-line flags for server address and model.
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	addr := flag.String("addr", defaultListenAddr, "Listen address")
 	flag.Parse()
 

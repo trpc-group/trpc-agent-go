@@ -37,7 +37,7 @@ Agent tools provide a way to wrap any agent as a tool that can be called by othe
 
 | Argument         | Description                                           | Default Value   |
 | ---------------- | ----------------------------------------------------- | --------------- |
-| `-model`         | Name of the model to use                              | `deepseek-chat` |
+| `-model`         | Name of the model to use                              | `deepseek-v4-flash` |
 | `-show-inner`    | Show inner agent deltas streamed by AgentTool         | `true`          |
 | `-inner-text`    | Inner text mode: `include` or `exclude`               | `include`       |
 | `-response-mode` | Tool result mode: `default` or `final-only`           | `default`       |

@@ -25,7 +25,7 @@ export OPENAI_API_KEY="your-api-key"
 export OPENAI_BASE_URL="https://your-openai-compatible-base-url" # Optional.
 
 go run ./server/streamtool \
-  -model deepseek-chat \
+  -model deepseek-v4-flash \
   -address 127.0.0.1:8080 \
   -path /agui
 ```

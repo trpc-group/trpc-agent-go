@@ -81,7 +81,7 @@ After the program starts, you can:
 
 ```
 🚀 Multi-Tool Intelligent Assistant Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Enter 'exit' to end the conversation
 Available tools: calculator, time_tool, text_tool, file_tool, duckduckgo_search
 ============================================================

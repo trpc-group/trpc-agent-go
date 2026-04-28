@@ -36,7 +36,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", os.Getenv("MODEL_NAME"), "OpenAI‑compatible model name (e.g., deepseek-chat)")
+	modelName = flag.String("model", os.Getenv("MODEL_NAME"), "OpenAI‑compatible model name (e.g., deepseek-v4-flash)")
 	baseURL   = flag.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI‑compatible base URL")
 	apiKey    = flag.String("api-key", os.Getenv("OPENAI_API_KEY"), "API key")
 	verbose   = flag.Bool("v", false, "Verbose: print model/tool metadata")
@@ -45,7 +45,7 @@ var (
 func main() {
 	flag.Parse()
 	if *modelName == "" {
-		*modelName = "deepseek-chat"
+		*modelName = "deepseek-v4-flash"
 	}
 	fmt.Printf("🧩 IO Conventions — Tools Node\nModel: %s\n", *modelName)
 	fmt.Println(strings.Repeat("=", 56))

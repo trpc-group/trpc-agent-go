@@ -37,7 +37,7 @@ go run .
 A different model can be selected:
 
 ```bash
-go run . -model deepseek-chat
+go run . -model deepseek-v4-flash
 ```
 
 ## Core integration

@@ -10,7 +10,7 @@ This example demonstrates a minimal, real-world usage of structured output with 
 ```bash
 cd trpc-agent-go/examples/structuredoutput
 go build -o structuredoutput main.go
-./structuredoutput -model deepseek-chat
+./structuredoutput -model deepseek-v4-flash
 ```
 
 Then try:

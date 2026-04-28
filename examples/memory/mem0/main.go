@@ -29,7 +29,7 @@ import (
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
-const defaultModelName = "deepseek-chat"
+const defaultModelName = "deepseek-v4-flash"
 
 var (
 	modelName  = flag.String("model", defaultModelName, "Chat model name")

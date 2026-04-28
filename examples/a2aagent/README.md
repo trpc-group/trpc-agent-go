@@ -58,7 +58,7 @@ The A2A system enables distributed agent communication across network boundaries
 cd examples/a2aagent
 go build -o a2a-demo .
 
-# Run with default settings (deepseek-chat model, port 8888)
+# Run with default settings (deepseek-v4-flash model, port 8888)
 ./a2a-demo
 
 # Run with custom model and port
@@ -199,7 +199,7 @@ Because he didn't get arrays! (a raise) 😄
 ## Configuration Options
 
 ### Command Line Flags
-- `-model`: Model name (default: "deepseek-chat")
+- `-model`: Model name (default: "deepseek-v4-flash")
 - `-host`: Server host and port (default: "0.0.0.0:8888")
 - `-streaming`: Enable streaming mode (default: true)
 - `-server-mode`: Server build mode, `agent` or `runner-card` (default: "agent")

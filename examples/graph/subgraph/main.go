@@ -42,7 +42,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", os.Getenv("MODEL_NAME"), "OpenAI‑compatible model name (e.g., deepseek-chat)")
+	modelName = flag.String("model", os.Getenv("MODEL_NAME"), "OpenAI‑compatible model name (e.g., deepseek-v4-flash)")
 	baseURL   = flag.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI‑compatible base URL")
 	apiKey    = flag.String("api-key", os.Getenv("OPENAI_API_KEY"), "API key")
 	verbose   = flag.Bool("v", false, "Verbose: print model/tool metadata")
@@ -56,7 +56,7 @@ var (
 
 // Deduplicate raw string literals for ids, keys, names, and modes
 const (
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 
 	appName    = "subgraph-app"
 	parentName = "parent"

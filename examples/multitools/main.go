@@ -37,7 +37,7 @@ import (
 
 func main() {
 	// Parse command line arguments
-	modelName := flag.String("model", "deepseek-chat", "Model name to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Model name to use")
 	flag.Parse()
 
 	fmt.Printf("🚀 Multi-Tool Intelligent Assistant Demo\n")

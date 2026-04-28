@@ -36,7 +36,7 @@ import (
 )
 
 const (
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 
 	// Schema keys
 	keyDocText          = "doc_text"

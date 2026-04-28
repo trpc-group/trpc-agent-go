@@ -17,7 +17,7 @@ The metric configuration in `data/` references the judge settings via `${JUDGE_M
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `-model` | Model identifier used by the agent | `deepseek-chat` |
+| `-model` | Model identifier used by the agent | `deepseek-v4-flash` |
 | `-streaming` | Enable streaming responses from the agent | `false` |
 | `-data-dir` | Directory containing `.evalset.json` and `.metrics.json` | `./data` |
 | `-output-dir` | Directory where evaluation results are written | `./output` |
@@ -30,7 +30,7 @@ cd examples/evaluation/llm/rubricresponse
 OPENAI_API_KEY=sk-... \
 JUDGE_MODEL_API_KEY=sk-... \
 go run . \
-  -model "deepseek-chat" \
+  -model "deepseek-v4-flash" \
   -data-dir "./data" \
   -output-dir "./output" \
   -eval-set "rubric-response-basic"

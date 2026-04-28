@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 	defaultDemoMode  = "both"
 	defaultUserText  = "Say one short sentence about graphs."
 	defaultEngine    = "bsp"

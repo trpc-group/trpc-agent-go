@@ -33,7 +33,7 @@ import (
 
 const (
 	appName          = "graph-retrieval-placeholder"
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 )
 
 func main() {

@@ -44,11 +44,11 @@ llm_decider ↔ tools  (LLM decides when to call tools, then summarizes)
 
 ```bash
 cd examples/graph/subgraph
-# Model defaults to deepseek-chat if unset
+# Model defaults to deepseek-v4-flash if unset
 # Provide OpenAI‑compatible endpoint and key as needed
 
 go run . \
-  -model ${MODEL_NAME:-deepseek-chat} \
+  -model ${MODEL_NAME:-deepseek-v4-flash} \
   -base-url "$OPENAI_BASE_URL" \
   -api-key  "$OPENAI_API_KEY"
 ```
@@ -78,7 +78,7 @@ Then type messages interactively. Built‑in commands:
 
 ```
 🧩 Subgraph Demo (Parent calls Child GraphAgent)
-Model: deepseek-chat
+Model: deepseek-v4-flash
 ================================================
 ✅ Ready. Session: sess-...
 Try:
@@ -93,7 +93,7 @@ Try:
 
 ## Flags
 
-- `-model` — OpenAI‑compatible model name (default: `deepseek-chat`)
+- `-model` — OpenAI‑compatible model name (default: `deepseek-v4-flash`)
 - `-base-url` — OpenAI‑compatible base URL
 - `-api-key` — API key
 - `-v` — verbose: print model/tool metadata and filter segments
