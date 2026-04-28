@@ -79,6 +79,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.False(t, opts.ReasoningContentEnabled)
 	assert.False(t, opts.EventSourceMetadataEnabled)
 	assert.False(t, opts.ToolResultInputTranslationEnabled)
+	assert.False(t, opts.ToolCallDeltaStreamingEnabled)
 	assert.False(t, opts.StreamingToolResultActivityEnabled)
 	assert.False(t, opts.MessagesSnapshotRunLifecycleEventsEnabled)
 }
@@ -148,6 +149,11 @@ func TestWithEventSourceMetadataEnabled(t *testing.T) {
 func TestWithToolResultInputTranslationEnabled(t *testing.T) {
 	opts := NewOptions(WithToolResultInputTranslationEnabled(true))
 	assert.True(t, opts.ToolResultInputTranslationEnabled)
+}
+
+func TestWithToolCallDeltaStreamingEnabled(t *testing.T) {
+	opts := NewOptions(WithToolCallDeltaStreamingEnabled(true))
+	assert.True(t, opts.ToolCallDeltaStreamingEnabled)
 }
 
 func TestWithStreamingToolResultActivityEnabled(t *testing.T) {

@@ -56,6 +56,7 @@ func TestNew(t *testing.T) {
 	assert.IsType(t, expected, trans)
 	assert.NotNil(t, runner.runOptionResolver)
 	assert.False(t, runner.toolResultInputTranslationEnabled)
+	assert.False(t, runner.toolCallDeltaStreamingEnabled)
 	assert.False(t, runner.streamingToolResultActivityEnabled)
 	assert.False(t, runner.eventSourceMetadataEnabled)
 	userID, err := runner.userIDResolver(context.Background(),
