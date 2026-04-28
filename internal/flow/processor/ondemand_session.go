@@ -15,8 +15,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrecall "trpc.group/trpc-go/trpc-agent-go/internal/session/tool/sessionrecall"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/tool/sessionrecall"
 )
 
 const onDemandSessionOverview = "Progressive disclosure for session history is available.\n" +

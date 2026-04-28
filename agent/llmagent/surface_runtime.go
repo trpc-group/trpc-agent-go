@@ -15,6 +15,7 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
+	toolsessionrecall "trpc.group/trpc-go/trpc-agent-go/internal/session/tool/sessionrecall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -22,7 +23,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolawaitreply "trpc.group/trpc-go/trpc-agent-go/tool/awaitreply"
-	toolsessionrecall "trpc.group/trpc-go/trpc-agent-go/tool/sessionrecall"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
