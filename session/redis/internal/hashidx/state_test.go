@@ -57,6 +57,39 @@ func TestClient_UpdateSessionState(t *testing.T) {
 	})
 }
 
+func TestClient_UpdateSessionState_PreservesExistingTTLWithoutRefresh(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createCfg.SessionTTL = 10 * time.Second
+	createClient := NewClient(rdb, createCfg)
+
+	updateCfg := createCfg
+	updateCfg.SessionTTL = 0
+	updateClient := NewClient(rdb, updateCfg)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "uss-ttl"}
+
+	_, err := createClient.CreateSession(ctx, key, session.StateMap{"existing": []byte("v1")})
+	require.NoError(t, err)
+
+	metaKey := createClient.keys.SessionMetaKey(key)
+	assert.Equal(t, 10*time.Second, mr.TTL(metaKey))
+
+	mr.FastForward(4 * time.Second)
+
+	err = updateClient.UpdateSessionState(ctx, key, session.StateMap{"new": []byte("v2")})
+	require.NoError(t, err)
+
+	assert.Equal(t, 6*time.Second, mr.TTL(metaKey))
+
+	sess, err := createClient.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, []byte("v1"), sess.State["existing"])
+	assert.Equal(t, []byte("v2"), sess.State["new"])
+}
+
 func TestClient_UpdateAppState(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())

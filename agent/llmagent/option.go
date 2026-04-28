@@ -150,11 +150,16 @@ var (
 
 		SkipSkillsFallbackOnSessionSummary: true,
 
-		EnableContextCompaction:                       false,
-		ContextCompactionThresholdRatio:               0.7,
-		ContextCompactionToolResultMaxTokens:          processor.DefaultContextCompactionToolResultMaxTokens,
-		ContextCompactionKeepRecentRequests:           processor.DefaultContextCompactionKeepRecentRequests,
-		ContextCompactionOversizedToolResultMaxTokens: processor.DefaultContextCompactionOversizedToolResultMaxTokens,
+		EnableContextCompaction:              false,
+		ContextCompactionThresholdRatio:      0.7,
+		ContextCompactionToolResultMaxTokens: processor.DefaultContextCompactionToolResultMaxTokens,
+		ContextCompactionKeepRecentRequests:  processor.DefaultContextCompactionKeepRecentRequests,
+		// Pass 2 is opt-in. Defaulting to 0 keeps EnableContextCompaction=false
+		// truly equivalent to "framework does not modify tool results". Users
+		// who want the head+tail truncation safety net should explicitly call
+		// WithContextCompactionOversizedToolResultMaxTokens (the recommended
+		// value is processor.DefaultContextCompactionOversizedToolResultMaxTokens).
+		ContextCompactionOversizedToolResultMaxTokens: 0,
 
 		skillRunRequireSkillLoaded: true,
 	}
@@ -236,6 +241,10 @@ type Options struct {
 	Planner planner.Planner
 	// SubAgents is the list of sub-agents available to the agent.
 	SubAgents []agent.Agent
+	// EnableAwaitUserReplyTool adds the await_user_reply framework tool.
+	// When enabled, the model can explicitly mark that the next user turn
+	// should resume at this agent.
+	EnableAwaitUserReplyTool bool
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
 	// ModelCallbacks contains callbacks for model operations.
@@ -316,8 +325,12 @@ type Options struct {
 	ContextCompactionKeepRecentRequests int
 	// ContextCompactionOversizedToolResultMaxTokens sets the token threshold
 	// above which any tool result (including from the current request) is
-	// truncated using head+tail preservation. This fires regardless of
-	// EnableContextCompaction. 0 disables it.
+	// truncated using head+tail preservation. Like Pass 1, this also requires
+	// EnableContextCompaction=true to take effect; it will not fire when
+	// context compaction is disabled, even if a positive threshold is
+	// configured. 0 disables it regardless of EnableContextCompaction.
+	// Default is 0; the recommended value to pass when opting in is
+	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
@@ -1338,8 +1351,13 @@ func WithContextCompactionKeepRecentRequests(n int) Option {
 
 // WithContextCompactionOversizedToolResultMaxTokens sets the token threshold
 // above which any tool result (including from the current request) is truncated
-// using head+tail preservation. This fires regardless of
-// EnableContextCompaction. 0 disables it.
+// using head+tail preservation. Like Pass 1, this requires
+// WithEnableContextCompaction(true) to take effect; the framework will not
+// modify tool results when context compaction is disabled, even if a positive
+// threshold is configured here. 0 disables it regardless of
+// EnableContextCompaction. The default is 0; the recommended value to pass
+// when opting in is processor.DefaultContextCompactionOversizedToolResultMaxTokens
+// (8192).
 func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 	return func(opts *Options) {
 		if tokens >= 0 {
@@ -1374,6 +1392,14 @@ func WithEventMessageProjector(
 ) Option {
 	return func(opts *Options) {
 		opts.EventMessageProjector = projector
+	}
+}
+
+// WithAwaitUserReplyTool controls whether the await_user_reply framework tool
+// is exposed to the model.
+func WithAwaitUserReplyTool(enabled bool) Option {
+	return func(opts *Options) {
+		opts.EnableAwaitUserReplyTool = enabled
 	}
 }
 

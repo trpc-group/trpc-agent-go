@@ -130,6 +130,7 @@ type defaultEventToA2AMessage struct {
 	adkCompatibility          bool
 	graphEventObjectAllowlist []string
 	streamingEventType        StreamingEventType
+	eventPartMappers          []EventToA2APartMapper
 }
 
 const graphObjectPrefix = "graph."
@@ -270,6 +271,15 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 
 	// Additional safety check for choices array bounds.
 	if len(event.Response.Choices) == 0 {
+		mapperParts, err := c.runEventPartMappers(ctx, event)
+		if err != nil {
+			return nil, err
+		}
+		if len(mapperParts) > 0 {
+			msg := protocol.NewMessage(protocol.MessageRoleAgent, mapperParts)
+			msg.Metadata = c.buildMessageMetadata(event)
+			return &msg, nil
+		}
 		if result := c.convertMetadataOnlyToA2AMessageResult(event); result != nil {
 			return result, nil
 		}
@@ -336,26 +346,39 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
 
 // convertContentToA2AMessage converts message content to A2A message.
 // It creates a message with text parts containing the content.
-func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
-	ctx context.Context,
-	event *event.Event,
-) (protocol.UnaryMessageResult, error) {
-	choice := event.Response.Choices[0]
-
+func (c *defaultEventToA2AMessage) buildTextParts(msg model.Message) []protocol.Part {
 	var parts []protocol.Part
 
 	// Add reasoning content as a separate TextPart with thought metadata
 	// Following ADK pattern: thought content is stored in TextPart metadata
-	if choice.Message.ReasoningContent != "" {
-		reasoningPart := protocol.NewTextPart(choice.Message.ReasoningContent)
+	if msg.ReasoningContent != "" {
+		reasoningPart := protocol.NewTextPart(msg.ReasoningContent)
 		c.setThoughtMetadata(&reasoningPart)
 		parts = append(parts, reasoningPart)
 	}
 
 	// Add main content
-	if choice.Message.Content != "" {
-		parts = append(parts, protocol.NewTextPart(choice.Message.Content))
+	if msg.Content != "" {
+		parts = append(parts, protocol.NewTextPart(msg.Content))
 	}
+
+	return parts
+}
+
+// convertContentToA2AMessage converts message content to A2A message.
+// It creates a message with text parts containing the content.
+func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
+	ctx context.Context,
+	event *event.Event,
+) (protocol.UnaryMessageResult, error) {
+	choice := event.Response.Choices[0]
+	parts := c.buildTextParts(choice.Message)
+
+	mapperParts, err := c.runEventPartMappers(ctx, event)
+	if err != nil {
+		return nil, err
+	}
+	parts = append(parts, mapperParts...)
 
 	metadata := c.buildMessageMetadata(event)
 	if len(parts) > 0 || hasStructuredMetadata(metadata) {
@@ -401,6 +424,13 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 
 	// Additional safety check for choices array bounds
 	if len(evt.Response.Choices) == 0 {
+		mapperParts, err := c.runEventPartMappers(ctx, evt)
+		if err != nil {
+			return nil, err
+		}
+		if len(mapperParts) > 0 {
+			return c.convertPartsToA2AStreamingResult(evt, options, mapperParts), nil
+		}
 		if result, ok := c.convertMetadataOnlyToA2AStreamingMessage(evt, options); ok {
 			return result, nil
 		}
@@ -422,6 +452,27 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	}
 
 	return c.convertDeltaContentToA2AStreamingMessage(ctx, evt, options)
+}
+
+func (c *defaultEventToA2AMessage) runEventPartMappers(
+	ctx context.Context,
+	evt *event.Event,
+) ([]protocol.Part, error) {
+	var parts []protocol.Part
+	for _, mapper := range c.eventPartMappers {
+		if mapper == nil {
+			continue
+		}
+		mappedParts, err := mapper(ctx, evt)
+		if err != nil {
+			return nil, err
+		}
+		if len(mappedParts) == 0 {
+			continue
+		}
+		parts = append(parts, mappedParts...)
+	}
+	return parts, nil
 }
 
 func (c *defaultEventToA2AMessage) convertMetadataOnlyToA2AMessageResult(
@@ -513,20 +564,13 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
 	choice := event.Response.Choices[0]
+	parts := c.buildTextParts(choice.Delta)
 
-	var parts []protocol.Part
-
-	// Add reasoning content as a separate TextPart with thought metadata
-	if choice.Delta.ReasoningContent != "" {
-		reasoningPart := protocol.NewTextPart(choice.Delta.ReasoningContent)
-		c.setThoughtMetadata(&reasoningPart)
-		parts = append(parts, reasoningPart)
+	mapperParts, err := c.runEventPartMappers(ctx, event)
+	if err != nil {
+		return nil, err
 	}
-
-	// Add main delta content
-	if choice.Delta.Content != "" {
-		parts = append(parts, protocol.NewTextPart(choice.Delta.Content))
-	}
+	parts = append(parts, mapperParts...)
 
 	if len(parts) > 0 {
 		return c.convertPartsToA2AStreamingResult(event, options, parts), nil
@@ -536,11 +580,7 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 		return result, nil
 	}
 
-	log.DebugfContext(
-		ctx,
-		"delta content is empty, event: %v",
-		event,
-	)
+	log.DebugfContext(ctx, "delta content is empty, event: %v", event)
 	return nil, nil
 }
 

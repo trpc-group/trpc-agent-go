@@ -225,6 +225,109 @@ _ = err
 这类边界在使用 MCP ToolSet 时尤其常见，详细说明可继续参考
 `tool` 文档中的 ToolSet 生命周期章节。
 
+### 让下一条用户消息继续回到某个 Agent
+
+在多 Agent 对话里，transfer 过去的 SubAgent 可能会向用户补问信息。下一次
+请求本质上是一次全新的 `Runner.Run(...)`，因此如果你希望下一条用户消息
+继续回到刚才那个 Agent，就必须给 Runner 一个显式信号。
+
+先在 Runner 上开启一次性路由消费能力：
+
+```go
+r := runner.NewRunner(
+    "crm-app",
+    coordinatorAgent,
+    runner.WithAwaitUserReplyRouting(true),
+)
+```
+
+然后有两种方式可以产出这条路由：
+
+1. `LLMAgent`：开启 `llmagent.WithAwaitUserReplyTool(true)`，并在
+   instruction 里要求模型在追问用户前先调用 `await_user_reply`
+2. 自定义 Agent：在发出最终追问事件前，手动调用
+   `agent.MarkAwaitingUserReply(invocation)`
+
+#### 自定义 Agent 的底层示例
+
+```go
+type clarifierAgent struct{}
+
+func (a *clarifierAgent) Run(
+    ctx context.Context,
+    inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+    ch := make(chan *event.Event, 1)
+    go func() {
+        defer close(ch)
+
+        if missingPhoneNumber(inv.Message) {
+            _ = agent.MarkAwaitingUserReply(inv)
+            _ = agent.EmitEvent(
+                ctx,
+                inv,
+                ch,
+                event.NewResponseEvent(
+                    inv.InvocationID,
+                    inv.AgentName,
+                    &model.Response{
+                        Done: true,
+                        Choices: []model.Choice{{
+                            Index: 0,
+                            Message: model.Message{
+                                Role:    model.RoleAssistant,
+                                Content: "请问要保存的手机号是多少？",
+                            },
+                        }},
+                    },
+                ),
+            )
+            return
+        }
+
+        _ = agent.EmitEvent(
+            ctx,
+            inv,
+            ch,
+            event.NewResponseEvent(
+                inv.InvocationID,
+                inv.AgentName,
+                &model.Response{
+                    Done: true,
+                    Choices: []model.Choice{{
+                        Index: 0,
+                        Message: model.Message{
+                            Role:    model.RoleAssistant,
+                            Content: "资料已更新。",
+                        },
+                    }},
+                },
+            ),
+        )
+    }()
+    return ch, nil
+}
+```
+
+这套能力的行为总结：
+
+- 路由会以稳定的 Agent 路径形式存放在 session state 中，而不是去修改
+  message role
+- 它只消费一次，在下一条用户消息开始前就会被清掉
+- `agent.WithAgent(...)` 和 `agent.WithAgentByName(...)` 仍然优先
+- 如果记录的 Agent 路径已经失效，Runner 会清理掉脏路由，并回退到
+  默认入口 Agent
+- 对常见的 `coordinator + WithSubAgents(...)` 结构，Runner 会按完整的
+  Agent 链路径恢复，不需要额外手工注册每个子 Agent
+
+进阶说明：
+
+- 内建 `Runner` 会自动记录稳定的根 Agent lookup key，包括
+  `AgentFactory` 返回的运行时 `Info().Name` 与注册名不一致的场景。
+- 如果你是在 `Runner` 之外手工构造并运行 Invocation，而且稳定的根
+  lookup key 和 `inv.AgentName` 不一致，请在 Agent 发出最终追问前先调
+  一次 `agent.SetAwaitUserReplyRootLookupName(inv, rootLookupName)`。
+
 ### 🔌 插件
 
 Runner 插件是一类全局、Runner 作用域的 Hook（钩子）。只需要在创建 Runner 时
@@ -437,9 +540,10 @@ evB, _ := r.Run(ctx, userID, sessionID, msg,
 Runner 级别的其他注册（可观测性 `appid`、agent 注册表）仍然绑定到构造时的原始
 `appName`。
 
-!!! note
-    `appName` 不能为空。如果构造函数和 `WithAppName` 都没有提供非空值，
-    session 服务会返回 `session.ErrAppNameRequired`。
+> **说明**
+>
+> `appName` 不能为空。如果构造函数和 `WithAppName` 都没有提供非空值，
+> session 服务会返回 `session.ErrAppNameRequired`。
 
 #### DetachedCancel（忽略父 ctx cancel）
 
@@ -537,6 +641,73 @@ ch, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithMessages(msg
 Session。内容处理器不会读取这个选项，它只会从 Session 事件中派生消息（或在 Session
 没有事件时回退到单条 `invocation.Message`）。`RunWithMessages` 仍会把最新的用户消息写入
 `invocation.Message`。
+
+#### 用户消息改写
+
+`agent.WithUserMessageRewriter(...)` 用于在当前轮运行开始前改写用户消息。改写结果会直接作为本轮实际生效的输入写入 Session，并在后续轮次继续参与会话构建。该能力适用于补充业务上下文、整理用户表达，或将一条输入拆成多条更适合模型处理的消息。
+
+`UserMessageRewriter` 的签名如下：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+type UserMessageRewriter func(
+    ctx context.Context,
+    args *UserMessageRewriteArgs,
+) ([]model.Message, error)
+
+type UserMessageRewriteArgs struct {
+    AppName         string
+    UserID          string
+    SessionID       string
+    RequestID       string
+    OriginalMessage model.Message
+}
+```
+
+其中 `OriginalMessage` 表示本轮原始用户输入，其他字段则提供本次运行的稳定标识。
+
+返回结果会按原顺序处理，最后一条会成为本轮的 `invocation.Message`，前面的消息会作为同一轮的前置消息写入 Session。因此，这个接口既可以用于 `1 -> 1` 的轻量改写，也可以用于 `1 -> N` 的消息展开。本次调用如果同时通过 `agent.WithMessages(...)` 传入了一段历史消息，改写结果也会一并写入这段历史。rewriter 不能返回空切片；返回空结果时，Runner 会直接返回错误。
+
+示例：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+func rewriteUserMessage(
+    ctx context.Context,
+    args *agent.UserMessageRewriteArgs,
+) ([]model.Message, error) {
+    raw := strings.TrimSpace(args.OriginalMessage.Content)
+    if raw == "" {
+        return []model.Message{args.OriginalMessage}, nil
+    }
+    if needsContext(raw) {
+        return []model.Message{
+            model.NewUserMessage("请先结合以下业务上下文理解用户问题。"),
+            model.NewUserMessage(raw),
+        }, nil
+    }
+    return []model.Message{
+        model.NewUserMessage("请将下面的问题整理成一条更清晰、完整的用户请求：" + raw),
+    }, nil
+}
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithUserMessageRewriter(rewriteUserMessage),
+)
+```
+
+完整示例可参考 [examples/usermessagerewriter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/usermessagerewriter)。
 
 #### 按 `nodeID` 覆盖指定节点的运行时 surface
 

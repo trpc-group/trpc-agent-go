@@ -380,8 +380,9 @@ func WithContextCompactionToolResultMaxTokens(tokens int) ContentOption {
 
 // WithContextCompactionOversizedToolResultMaxTokens sets the token threshold
 // above which any tool result (including from the current request) is truncated
-// using head+tail preservation. This safety net fires regardless of whether
-// EnableContextCompaction is set.
+// using head+tail preservation. Like Pass 1, this requires
+// EnableContextCompaction=true to take effect, so EnableContextCompaction=false
+// guarantees the framework will not modify tool results.
 func WithContextCompactionOversizedToolResultMaxTokens(tokens int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ContextCompactionConfig.OversizedToolResultMaxTokens = tokens
@@ -436,9 +437,12 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 		PreloadSessionRecall:           0,
 		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
 		ContextCompactionConfig: ContextCompactionConfig{
-			KeepRecentRequests:           DefaultContextCompactionKeepRecentRequests,
-			ToolResultMaxTokens:          DefaultContextCompactionToolResultMaxTokens,
-			OversizedToolResultMaxTokens: DefaultContextCompactionOversizedToolResultMaxTokens,
+			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
+			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
+			// Pass 2 is opt-in: callers must explicitly set a positive value
+			// AND enable context compaction. Defaulting to 0 keeps the
+			// processor from silently rewriting tool results.
+			OversizedToolResultMaxTokens: 0,
 		},
 	}
 
@@ -1396,7 +1400,8 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 	messages []model.Message,
 ) []model.Message {
-	if p.ContextCompactionConfig.OversizedToolResultMaxTokens <= 0 {
+	if !p.ContextCompactionConfig.Enabled ||
+		p.ContextCompactionConfig.OversizedToolResultMaxTokens <= 0 {
 		return messages
 	}
 
@@ -1794,13 +1799,16 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 
 	// Look for corresponding function call event.
 	functionCallEventIdx := -1
+	var functionCallIDs []string
 	for i := len(events) - 2; i >= 0; i-- {
 		evt := &events[i]
 		if evt.IsToolCallResponse() {
-			functionCallIDs := toMap(evt.GetToolCallIDs())
+			callIDs := evt.GetToolCallIDs()
+			functionCallIDSet := toMap(callIDs)
 			for _, responseID := range functionResponseIDs {
-				if functionCallIDs[responseID] {
+				if functionCallIDSet[responseID] {
 					functionCallEventIdx = i
+					functionCallIDs = callIDs
 					break
 				}
 			}
@@ -1820,8 +1828,8 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 		evt := &events[i]
 		if evt.IsToolResultResponse() {
 			responseIDs := toMap(evt.GetToolResultIDs())
-			for _, responseID := range functionResponseIDs {
-				if responseIDs[responseID] {
+			for _, callID := range functionCallIDs {
+				if responseIDs[callID] {
 					functionResponseEvents = append(functionResponseEvents, *evt)
 					break
 				}

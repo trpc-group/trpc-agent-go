@@ -535,6 +535,69 @@ searchTool := duckduckgo.NewTool(
 )
 ```
 
+### Claude Code ToolSet
+
+`tool/claudecode` 提供了一组面向代码工作的 ToolSet，用于在框架内部暴露与 Claude Code 接近的工具接口。它覆盖文件读写、代码检索、命令执行和网页获取等能力，可以直接挂接到 `LLMAgent` 或其他运行时。如果你的目标是调用本地 Claude Code CLI，并消费 CLI 的执行轨迹与工具事件，请参考 [Claude Code Agent 使用指南](claudecode.md)。
+
+从能力组成上看，`claudecode` 默认会提供一组代码工作流工具，包括 `Bash`、`TaskStop`、`TaskOutput`、`Read`、`Glob`、`Grep`、`WebFetch` 和 `WebSearch`。在非只读模式下，还会额外提供 `Write`、`Edit` 和 `NotebookEdit`。
+
+下表列出了当前 `claudecode` 工具集中的主要工具及其用途：
+
+| 工具名 | 说明 |
+| --- | --- |
+| `Bash` | 执行本地 Shell 命令。 |
+| `TaskStop` | 停止由 `Bash` 以后台模式启动的任务。 |
+| `TaskOutput` | 读取后台任务的当前输出或最终输出。 |
+| `Read` | 读取文件内容。 |
+| `Glob` | 按路径模式查找文件。 |
+| `Grep` | 按内容搜索仓库。 |
+| `WebFetch` | 抓取指定 URL 的页面内容。 |
+| `WebSearch` | 进行开放式网页搜索。 |
+| `Write` | 创建文件或用完整内容覆盖文件，仅在非只读模式下暴露。 |
+| `Edit` | 对已有文本文件做局部替换，仅在非只读模式下暴露。 |
+| `NotebookEdit` | 按 cell 粒度编辑 `.ipynb` 文件，仅在非只读模式下暴露。 |
+
+#### 基本用法
+
+```go
+import (
+	"log"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/claudecode"
+)
+
+toolSet, err := claudecode.NewToolSet(
+	claudecode.WithBaseDir("."),
+)
+if err != nil {
+	log.Fatal(err)
+}
+defer toolSet.Close()
+
+agent := llmagent.New(
+	"claude-style-agent",
+	llmagent.WithToolSets([]tool.ToolSet{toolSet}),
+)
+```
+
+`llmagent.WithToolSets(...)` 会以 ToolSet 形式接入这组工具；如果调用 `Tools()`，则会得到展开后的单个工具列表。
+
+#### 常用配置
+
+`tool/claudecode` 的配置重点围绕工作目录、只读模式和 Web 能力展开：
+
+| Option | 说明 |
+| --- | --- |
+| `WithName(name)` | 覆盖 ToolSet 名称，默认值为 `claudecode`。 |
+| `WithBaseDir(dir)` | 指定工具集的基础目录。文件、检索和命令执行都会以此为基准。 |
+| `WithReadOnly(readOnly)` | 启用只读模式后，不再暴露 `Write`、`Edit`、`NotebookEdit`。 |
+| `WithMaxFileSize(size)` | 限制单个文件可读取的最大尺寸。 |
+| `WithWebFetchOptions(opts)` | 配置 `WebFetch` 的域名策略、超时与内容处理方式。 |
+| `WithWebSearchOptions(opts)` | 配置 `WebSearch` 的后端、分页参数与请求选项。 |
+
+`WithBaseDir` 定义了 `Read`、`Write`、`Edit`、`Glob`、`Grep` 等文件相关工具的工作范围，也决定了 `Bash` 的默认执行目录。启用只读模式后，工具集只保留读取、检索、命令执行和 Web 相关能力；关闭只读模式后，会额外暴露 `Write`、`Edit` 与 `NotebookEdit`。
+
 ## MCP Tools 协议工具
 
 MCP（Model Context Protocol）是一个开放协议，标准化了应用程序向 LLM 提供上下文的方式。MCP 工具基于 JSON-RPC 2.0 协议，为 Agent 提供了与外部服务的标准化集成能力。
@@ -1210,7 +1273,7 @@ toolSet := mcp.NewMCPToolSet(
 
 - 🎯 **Per-Run 控制**：每次调用独立配置，不影响 Agent 定义
 - 💰 **成本优化**：减少发送给 LLM 的工具描述，降低 token 消耗
-- 🛡️ **智能保护**：框架工具（`transfer_to_agent`、`knowledge_search`）自动保留，永不被过滤
+- 🛡️ **智能保护**：框架工具（`transfer_to_agent`、`knowledge_search`、`agentic_knowledge_search`、可选的 `await_user_reply`）自动保留，永不被过滤
 - 🔧 **灵活定制**：支持内置过滤器和自定义 FilterFunc
 
 #### Tool Search（自动工具筛选）
@@ -1466,7 +1529,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 | 工具分类     | 包含的工具                                                                                             | 是否被过滤            |
 | ------------ | ------------------------------------------------------------------------------------------------------ | --------------------- |
 | **用户工具** | 通过 `WithTools` 注册的工具<br>通过 `WithToolSets` 注册的工具                                          | ✅ 受过滤控制         |
-| **框架工具** | `transfer_to_agent`（多 Agent 协调）<br>`knowledge_search`（知识库检索）<br>`agentic_knowledge_search` | ❌ 永不过滤，自动保留 |
+| **框架工具** | `transfer_to_agent`（多 Agent 协调）<br>`knowledge_search`（知识库检索）<br>`agentic_knowledge_search`<br>`await_user_reply`（开启后的一次性追问路由） | ❌ 永不过滤，自动保留 |
 
 **示例：**
 
@@ -1479,6 +1542,7 @@ agent := llmagent.New("assistant",
     }),
     llmagent.WithSubAgents([]agent.Agent{subAgent1, subAgent2}), // 自动添加 transfer_to_agent
     llmagent.WithKnowledge(kb),                                   // 自动添加 knowledge_search
+    llmagent.WithAwaitUserReplyTool(true),                        // 自动添加 await_user_reply
 )
 
 // 运行时过滤：只允许 calculator
@@ -1492,7 +1556,34 @@ runner.Run(ctx, userID, sessionID, message,
 // ❌ textTool          - 用户工具，被过滤
 // ✅ transfer_to_agent - 框架工具，自动保留
 // ✅ knowledge_search  - 框架工具，自动保留
+// ✅ await_user_reply  - 框架工具，自动保留
 ```
+
+#### 用 `await_user_reply` 处理跨轮追问
+
+`await_user_reply` 是一个可选框架工具。当某个 Agent 可能向用户补问信息，并且
+你希望下一条用户消息继续回到这个 Agent 时，可以开启
+`llmagent.WithAwaitUserReplyTool(true)`。
+
+它需要和 `runner.WithAwaitUserReplyRouting(true)` 搭配使用：
+
+```go
+profileAgent := llmagent.New("profile-agent",
+    llmagent.WithAwaitUserReplyTool(true),
+    llmagent.WithInstruction(`
+如果你必须向用户补一个缺失字段，先调用 await_user_reply，
+再提出问题。
+`),
+)
+
+r := runner.NewRunner(
+    "crm-app",
+    profileAgent,
+    runner.WithAwaitUserReplyRouting(true),
+)
+```
+
+这条路由是一次性的：Runner 会在下一条用户消息到来时消费它，然后自动清掉。
 
 #### 注意事项
 
@@ -1640,7 +1731,9 @@ if !removed {
 运行时 ToolSet 更新会自动与前文的**工具过滤机制**协同工作：
 
 - 通过 `WithTools` 和所有 ToolSet（包括动态添加的 ToolSet）注册的工具都视为**用户工具**，会受到 `WithToolFilter` 以及每次调用的运行时过滤控制。
-- 框架工具（`transfer_to_agent`、`knowledge_search`、`agentic_knowledge_search`）仍然**永远不被过滤**，始终对 Agent 可用。
+- 框架工具（`transfer_to_agent`、`knowledge_search`、
+  `agentic_knowledge_search`、可选的 `await_user_reply`）仍然
+  **永远不被过滤**，始终对 Agent 可用。
 
 #### Tool Call 参数自动修复
 
