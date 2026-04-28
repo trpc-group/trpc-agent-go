@@ -184,12 +184,8 @@ func TestCallbacksChainRegistration(t *testing.T) {
 		})
 
 	// Verify that both callbacks were registered.
-	if len(callbacks.BeforeModel) != 1 {
-		t.Errorf("Expected 1 before model callback, got %d", len(callbacks.BeforeModel))
-	}
-	if len(callbacks.AfterModel) != 1 {
-		t.Errorf("Expected 1 after model callback, got %d", len(callbacks.AfterModel))
-	}
+	require.Len(t, callbacks.BeforeModel, 1)
+	require.Len(t, callbacks.AfterModel, 1)
 }
 
 // TestCallbacks_BeforeModel_WithError tests error handling in before model callbacks.
