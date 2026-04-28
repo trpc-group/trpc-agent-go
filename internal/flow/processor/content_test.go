@@ -4507,14 +4507,84 @@ func TestContentRequestProcessor_getCurrentInvocationMessages_ReasoningContentDi
 	assert.Equal(t, "think2", messages[1].ReasoningContent, "current turn reasoning should be preserved")
 }
 
+func TestContentRequestProcessor_getCurrentInvocationMessages_ReasoningContentKeepsToolCallTurns(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	createEvent := func(requestID string, ts time.Time, msg model.Message, object string) event.Event {
+		return event.Event{
+			Author:       "agent1",
+			RequestID:    requestID,
+			InvocationID: "inv1",
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Object:  object,
+				Choices: []model.Choice{{Index: 0, Message: msg}},
+			},
+		}
+	}
+
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			createEvent("req1", baseTime, model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "I need to call a tool",
+				ReasoningContent: "think before tool",
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "call_weather",
+						Function: model.FunctionDefinitionParam{
+							Name:      "get_weather",
+							Arguments: []byte(`{"city":"Hangzhou"}`),
+						},
+					},
+				},
+			}, ""),
+			createEvent("req1", baseTime.Add(time.Second), model.Message{
+				Role:    model.RoleTool,
+				ToolID:  "call_weather",
+				Content: `{"condition":"cloudy"}`,
+			}, model.ObjectTypeToolResponse),
+			createEvent("req1", baseTime.Add(2*time.Second), model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "It is cloudy.",
+				ReasoningContent: "think after tool",
+			}, ""),
+			createEvent("req2", baseTime.Add(3*time.Second), model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "new turn",
+				ReasoningContent: "current think",
+			}, ""),
+		},
+	}
+
+	p := NewContentRequestProcessor()
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "agent1",
+		Session:      sess,
+		RunOptions: agent.RunOptions{
+			RequestID: "req2",
+		},
+	}
+
+	messages := p.getCurrentInvocationMessages(inv)
+	require.Len(t, messages, 4)
+	assert.Equal(t, "think before tool", messages[0].ReasoningContent)
+	assert.Equal(t, "think after tool", messages[2].ReasoningContent)
+	assert.Equal(t, "current think", messages[3].ReasoningContent)
+}
+
 func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 	tests := []struct {
-		name             string
-		mode             string
-		msg              model.Message
-		messageRequestID string
-		currentRequestID string
-		wantReasoning    string
+		name                string
+		mode                string
+		msg                 model.Message
+		messageRequestID    string
+		currentRequestID    string
+		requestHasToolCalls bool
+		wantReasoning       string
 	}{
 		{
 			name: "keep_all mode preserves reasoning content",
@@ -4539,6 +4609,19 @@ func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 			messageRequestID: "req-1",
 			currentRequestID: "req-2",
 			wantReasoning:    "", // Previous request's reasoning is discarded.
+		},
+		{
+			name: "default mode (empty) keeps previous request reasoning when request has tool calls",
+			mode: "",
+			msg: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "final answer",
+				ReasoningContent: "thinking process",
+			},
+			messageRequestID:    "req-1",
+			currentRequestID:    "req-2",
+			requestHasToolCalls: true,
+			wantReasoning:       "thinking process",
 		},
 		{
 			name: "default mode (empty) keeps current request reasoning",
@@ -4619,7 +4702,12 @@ func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 			p := &ContentRequestProcessor{
 				ReasoningContentMode: tt.mode,
 			}
-			result := p.processReasoningContent(tt.msg, tt.messageRequestID, tt.currentRequestID)
+			result := p.processReasoningContent(
+				tt.msg,
+				tt.messageRequestID,
+				tt.currentRequestID,
+				tt.requestHasToolCalls,
+			)
 			assert.Equal(t, tt.wantReasoning, result.ReasoningContent,
 				"processReasoningContent() reasoning = %v, want %v",
 				result.ReasoningContent, tt.wantReasoning)

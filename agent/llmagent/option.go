@@ -60,9 +60,9 @@ const (
 	// Use this for debugging or when you need to retain thinking chains.
 	ReasoningContentModeKeepAll = processor.ReasoningContentModeKeepAll
 	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from
-	// messages that belong to previous request turns. Messages within the current
-	// request retain their reasoning_content (for tool call scenarios).
-	// This is the default mode, recommended for DeepSeek models.
+	// ordinary previous request turns. Messages within the current request and
+	// previous requests that performed tool calls retain their reasoning_content.
+	// This is the default mode, recommended for DeepSeek thinking mode.
 	ReasoningContentModeDiscardPreviousTurns = processor.ReasoningContentModeDiscardPreviousTurns
 	// ReasoningContentModeDiscardAll discards all reasoning_content from history.
 	// Use this for maximum bandwidth savings when reasoning history is not needed.
@@ -478,7 +478,8 @@ type Options struct {
 
 	// ReasoningContentMode controls how reasoning_content is handled in
 	// multi-turn conversations. This is particularly important for DeepSeek
-	// models where reasoning_content should be discarded from previous turns.
+	// models where ordinary previous-turn reasoning can be discarded, but
+	// tool-call reasoning must be replayed.
 	ReasoningContentMode string
 
 	toolFilter tool.FilterFunc
@@ -1423,11 +1424,13 @@ func WithMessageBranchFilterMode(mode string) Option {
 
 // WithReasoningContentMode controls how reasoning_content is handled in
 // multi-turn conversations. This is particularly important for DeepSeek models
-// where reasoning_content should be discarded from previous request turns.
+// where ordinary previous-turn reasoning_content may be omitted, but tool-call
+// reasoning_content must be replayed in later turns.
 //
 // Available modes:
 //   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from
-//     previous requests, keep for current request (default, recommended).
+//     ordinary previous requests, keep for the current request and previous
+//     requests that performed tool calls (default, recommended).
 //   - ReasoningContentModeKeepAll: Keep all reasoning_content (for debugging).
 //   - ReasoningContentModeDiscardAll: Discard all reasoning_content from history.
 func WithReasoningContentMode(mode string) Option {
