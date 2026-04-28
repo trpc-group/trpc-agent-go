@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	modelName    = flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName    = flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	modelBaseURL = flag.String("base_url", "", "Base URL for the model API")
 	modelToken   = flag.String("api_token", "", "Authentication token for the model API")
 	openAPISpec  = flag.String("openapi_spec", "./petstore3.yaml", "Path to the OpenAPI specification file")

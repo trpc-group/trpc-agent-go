@@ -24,10 +24,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	templatemessages "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/template"
+	llmtemplateevaluator "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/template"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/callback"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/internal/inference"
@@ -431,11 +435,18 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		reasons := make([]string, 0, len(result.PerInvocationResults))
 		rubricScores := make([]*evalresult.RubricScore, 0, len(result.PerInvocationResults))
 		for i, invocationResult := range result.PerInvocationResults {
+			resultCriterion, err := materializeResultCriterion(
+				ctx, evalMetric, inputs.actuals[:i+1], inputs.expecteds[:i+1],
+			)
+			if err != nil {
+				return nil, fmt.Errorf("materialize criterion for metric %s invocation %d: %w",
+					evalMetric.MetricName, i, err)
+			}
 			// Record the metric outcome for the corresponding invocation.
 			evalMetricResult := &evalresult.EvalMetricResult{
 				MetricName: evalMetric.MetricName,
 				Threshold:  evalMetric.Threshold,
-				Criterion:  evalMetric.Criterion,
+				Criterion:  resultCriterion,
 				Score:      invocationResult.Score,
 				EvalStatus: invocationResult.Status,
 			}
@@ -450,10 +461,15 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 			}
 			perInvocation[i].EvalMetricResults = append(perInvocation[i].EvalMetricResults, evalMetricResult)
 		}
+		overallCriterion, err := materializeOverallCriterion(ctx, evalMetric, inputs.actuals, inputs.expecteds)
+		if err != nil {
+			return nil, fmt.Errorf("materialize overall criterion for metric %s: %w",
+				evalMetric.MetricName, err)
+		}
 		overallMetricResults = append(overallMetricResults, &evalresult.EvalMetricResult{
 			MetricName: evalMetric.MetricName,
 			Threshold:  evalMetric.Threshold,
-			Criterion:  evalMetric.Criterion,
+			Criterion:  overallCriterion,
 			Score:      result.OverallScore,
 			EvalStatus: result.OverallStatus,
 			Details: &evalresult.EvalMetricResultDetails{
@@ -481,9 +497,13 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 
 // evaluateMetric locates the evaluator registered for the metric and runs the evaluation.
 func (s *local) evaluateMetric(ctx context.Context, reg registry.Registry, evalMetric *metric.EvalMetric, actuals, expecteds []*evalset.Invocation) (*evaluator.EvaluateResult, error) {
-	metricEvaluator, err := reg.Get(evalMetric.MetricName)
+	evaluatorName := evalMetric.MetricName
+	if evalMetric.EvaluatorName != "" {
+		evaluatorName = evalMetric.EvaluatorName
+	}
+	metricEvaluator, err := reg.Get(evaluatorName)
 	if err != nil {
-		return nil, fmt.Errorf("get evaluator for metric %s: %w", evalMetric.MetricName, err)
+		return nil, fmt.Errorf("get evaluator for metric %s: %w", evaluatorName, err)
 	}
 	// Run the evaluation on the actual and expected invocations and return the evaluation result.
 	return metricEvaluator.Evaluate(ctx, actuals, expecteds, evalMetric)
@@ -622,6 +642,59 @@ func buildExpectedsForEval(evalCase *evalset.EvalCase) ([]*evalset.Invocation, e
 		return nil, errors.New("invalid eval case")
 	}
 	return evalCase.Conversation, nil
+}
+
+func materializeResultCriterion(ctx context.Context, evalMetric *metric.EvalMetric,
+	actuals, expecteds []*evalset.Invocation) (*criterion.Criterion, error) {
+	clonedMetric, err := clone.CloneEvalMetric(evalMetric)
+	if err != nil {
+		return nil, fmt.Errorf("clone eval metric: %w", err)
+	}
+	if clonedMetric.Criterion == nil || clonedMetric.Criterion.LLMJudge == nil || clonedMetric.Criterion.LLMJudge.Template == nil {
+		return clonedMetric.Criterion, nil
+	}
+	if resolveEvaluatorName(evalMetric) != llmtemplateevaluator.EvaluatorName {
+		return clonedMetric.Criterion, nil
+	}
+	messages, err := templatemessages.New().ConstructMessages(ctx, actuals, expecteds, evalMetric)
+	if err != nil {
+		return nil, fmt.Errorf("construct template messages: %w", err)
+	}
+	clonedMetric.Criterion.LLMJudge.Template.Prompt = materializedPrompt(messages)
+	return clonedMetric.Criterion, nil
+}
+
+func materializeOverallCriterion(ctx context.Context, evalMetric *metric.EvalMetric,
+	actuals, expecteds []*evalset.Invocation) (*criterion.Criterion, error) {
+	clonedMetric, err := clone.CloneEvalMetric(evalMetric)
+	if err != nil {
+		return nil, fmt.Errorf("clone eval metric: %w", err)
+	}
+	return clonedMetric.Criterion, nil
+}
+
+func materializedPrompt(messages []model.Message) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	if len(messages) == 1 {
+		return messages[0].Content
+	}
+	parts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		parts = append(parts, fmt.Sprintf("[%s]\n%s", message.Role, message.Content))
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func resolveEvaluatorName(evalMetric *metric.EvalMetric) string {
+	if evalMetric == nil {
+		return ""
+	}
+	if evalMetric.EvaluatorName != "" {
+		return evalMetric.EvaluatorName
+	}
+	return evalMetric.MetricName
 }
 
 // userInputOnlyInvocationsForEval builds placeholder invocations that only preserve user inputs.

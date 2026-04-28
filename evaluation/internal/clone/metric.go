@@ -166,7 +166,40 @@ func cloneLLMCriterion(src *criterionllm.LLMCriterion) (*criterionllm.LLMCriteri
 	}
 	copied.JudgeModel = judgeModel
 	copied.JudgeRunnerOptions = nil
+	copied.Template = cloneJudgeTemplateOptions(src.Template)
 	return &copied, nil
+}
+
+func cloneJudgeTemplateOptions(src *criterionllm.JudgeTemplateOptions) *criterionllm.JudgeTemplateOptions {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	copied.VariableBindings = cloneTemplateVariableBindings(src.VariableBindings)
+	return &copied
+}
+
+func cloneTemplateVariableBindings(src []*criterionllm.TemplateVariableBinding) []*criterionllm.TemplateVariableBinding {
+	if src == nil {
+		return nil
+	}
+	copied := make([]*criterionllm.TemplateVariableBinding, len(src))
+	for i := range src {
+		copied[i] = cloneTemplateVariableBinding(src[i])
+	}
+	return copied
+}
+
+func cloneTemplateVariableBinding(src *criterionllm.TemplateVariableBinding) *criterionllm.TemplateVariableBinding {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	if src.Source != nil {
+		source := *src.Source
+		copied.Source = &source
+	}
+	return &copied
 }
 
 func cloneRubrics(src []*criterionllm.Rubric) []*criterionllm.Rubric {

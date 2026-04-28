@@ -373,6 +373,9 @@ func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage
 		PromptTokensDetails: model.PromptTokensDetails{
 			CachedTokens: int(u.PromptTokensDetails.CachedTokens - delta.PromptTokensDetails.CachedTokens),
 		},
+		CompletionTokensDetails: model.CompletionTokensDetails{
+			ReasoningTokens: int(u.CompletionTokensDetails.ReasoningTokens - delta.CompletionTokensDetails.ReasoningTokens),
+		},
 	}
 }
 
@@ -385,6 +388,9 @@ func completionUsageToModelUsage(usage openai.CompletionUsage) model.Usage {
 		PromptTokensDetails: model.PromptTokensDetails{
 			CachedTokens: int(usage.PromptTokensDetails.CachedTokens),
 		},
+		CompletionTokensDetails: model.CompletionTokensDetails{
+			ReasoningTokens: int(usage.CompletionTokensDetails.ReasoningTokens),
+		},
 	}
 }
 
@@ -396,6 +402,9 @@ func modelUsageToCompletionUsage(usage model.Usage) openai.CompletionUsage {
 		TotalTokens:      int64(usage.TotalTokens),
 		PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
 			CachedTokens: int64(usage.PromptTokensDetails.CachedTokens),
+		},
+		CompletionTokensDetails: openai.CompletionUsageCompletionTokensDetails{
+			ReasoningTokens: int64(usage.CompletionTokensDetails.ReasoningTokens),
 		},
 	}
 }

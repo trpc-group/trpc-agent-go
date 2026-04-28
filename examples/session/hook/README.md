@@ -15,7 +15,7 @@ This example shows how to use session hooks for:
 - LLM endpoint/key (OpenAI-compatible). Set:
   - `OPENAI_API_KEY`
   - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
-- Optional: `MODEL_NAME` (default `deepseek-chat`)
+- Optional: `MODEL_NAME` (default `deepseek-v4-flash`)
 - Optional (SQLite backend): `SQLITE_SESSION_DSN` (default: `file:sessions.db?_busy_timeout=5000`)
 
 ## Quick start
@@ -25,7 +25,7 @@ export OPENAI_API_KEY="your-key"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 
 # Basic content filtering.
-go run . -model="${MODEL_NAME:-deepseek-chat}"
+go run . -model="${MODEL_NAME:-deepseek-v4-flash}"
 
 # Use SQLite backend (persists to a local file).
 export SQLITE_SESSION_DSN="file:sessions.db?_busy_timeout=5000"

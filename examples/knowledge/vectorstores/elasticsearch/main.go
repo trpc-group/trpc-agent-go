@@ -12,7 +12,7 @@
 // Required environment variables:
 //   - OPENAI_API_KEY: Your OpenAI API key for LLM and embeddings
 //   - OPENAI_BASE_URL: (Optional) Custom OpenAI API endpoint, defaults to https://api.openai.com/v1
-//   - MODEL_NAME: (Optional) Model name to use, defaults to deepseek-chat
+//   - MODEL_NAME: (Optional) Model name to use, defaults to deepseek-v4-flash
 //   - ELASTICSEARCH_HOSTS: (Optional) Elasticsearch hosts, defaults to http://localhost:9200
 //   - ELASTICSEARCH_USERNAME: (Optional) Elasticsearch username
 //   - ELASTICSEARCH_PASSWORD: (Optional) Elasticsearch password
@@ -24,7 +24,7 @@
 //
 //	export OPENAI_API_KEY=sk-xxxx
 //	export OPENAI_BASE_URL=https://api.openai.com/v1
-//	export MODEL_NAME=deepseek-chat
+//	export MODEL_NAME=deepseek-v4-flash
 //	export ELASTICSEARCH_HOSTS=http://localhost:9200
 //	export ELASTICSEARCH_USERNAME=elastic
 //	export ELASTICSEARCH_PASSWORD=your-password
@@ -55,7 +55,7 @@ import (
 )
 
 var (
-	modelName = util.GetEnvOrDefault("MODEL_NAME", "deepseek-chat")
+	modelName = util.GetEnvOrDefault("MODEL_NAME", "deepseek-v4-flash")
 	hosts     = util.GetEnvOrDefault("ELASTICSEARCH_HOSTS", "http://localhost:9200")
 	username  = util.GetEnvOrDefault("ELASTICSEARCH_USERNAME", "")
 	password  = util.GetEnvOrDefault("ELASTICSEARCH_PASSWORD", "")

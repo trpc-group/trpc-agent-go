@@ -136,7 +136,7 @@ Provide an OpenAI-compatible model configuration:
 ```bash
 export OPENAI_API_KEY=...
 export OPENAI_BASE_URL=...
-export MODEL_NAME=deepseek-chat
+export MODEL_NAME=deepseek-v4-flash
 ```
 
 Or pass flags directly.
@@ -158,7 +158,7 @@ Or override model settings:
 
 ```bash
 go run ./a2a_agent \
-  -model deepseek-chat \
+  -model deepseek-v4-flash \
   -base-url "$OPENAI_BASE_URL" \
   -api-key "$OPENAI_API_KEY"
 ```

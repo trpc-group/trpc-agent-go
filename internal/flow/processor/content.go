@@ -93,10 +93,10 @@ const (
 	ReasoningContentModeKeepAll = "keep_all"
 
 	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from
-	// messages that belong to previous request turns. Messages within the current
-	// request retain their reasoning_content (for tool call scenarios where the
-	// model needs to reference its previous reasoning). This is the default mode
-	// and recommended for DeepSeek models according to their API documentation.
+	// ordinary previous request turns. Messages within the current request retain
+	// their reasoning_content, and previous requests that performed tool calls
+	// also retain it because DeepSeek thinking mode requires tool-call reasoning
+	// to be replayed in later turns.
 	// Reference: https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
 	ReasoningContentModeDiscardPreviousTurns = "discard_previous_turns"
 
@@ -135,8 +135,9 @@ type ContentRequestProcessor struct {
 	// TimelineFilterMode controls whether to append history messages to the request.
 	TimelineFilterMode string
 	// ReasoningContentMode controls how reasoning_content is handled in multi-turn
-	// conversations. Default is ReasoningContentModeDiscardPreviousTurns, which is
-	// recommended for DeepSeek thinking mode.
+	// conversations. Default is ReasoningContentModeDiscardPreviousTurns, which
+	// keeps reasoning needed for tool-call replay while dropping ordinary older
+	// reasoning history.
 	ReasoningContentMode string
 	// PreloadMemory controls framework-side memory preload.
 	// When > 0, it acts as an adaptive preload budget:
@@ -273,11 +274,13 @@ func WithPreserveForeignMessages(preserve bool) ContentOption {
 
 // WithReasoningContentMode sets how reasoning_content is handled in multi-turn
 // conversations. This is particularly important for DeepSeek models where
-// reasoning_content should be discarded from previous request turns.
+// ordinary previous-turn reasoning_content may be omitted, but tool-call
+// reasoning_content must be replayed in later turns.
 //
 // Available modes:
 //   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from
-//     previous requests, keep for current request (default, recommended).
+//     ordinary previous requests, keep for the current request and previous
+//     requests that performed tool calls (default, recommended).
 //   - ReasoningContentModeKeepAll: Keep all reasoning_content.
 //   - ReasoningContentModeDiscardAll: Discard all reasoning_content from history.
 func WithReasoningContentMode(mode string) ContentOption {
@@ -900,6 +903,8 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	// Get current request ID for reasoning content filtering.
 	currentRequestID := inv.RunOptions.RequestID
 
+	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
+
 	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
 	for _, evt := range resultEvents {
@@ -912,7 +917,12 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 			for _, choice := range ev.Choices {
 				msg := choice.Message
 				// Apply reasoning content stripping based on mode.
-				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				msg = p.processReasoningContent(
+					msg,
+					evt.RequestID,
+					currentRequestID,
+					requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
+				)
 				msg = p.projectEventMessage(inv, evt, msg)
 				if isEmptyAssistantMessage(msg) {
 					continue
@@ -1233,6 +1243,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	msg model.Message,
 	messageRequestID string,
 	currentRequestID string,
+	requestHasToolCalls bool,
 ) model.Message {
 	// Only process assistant messages with reasoning content.
 	if msg.Role != model.RoleAssistant || msg.ReasoningContent == "" {
@@ -1247,9 +1258,10 @@ func (p *ContentRequestProcessor) processReasoningContent(
 		// Keep all reasoning_content: do nothing.
 	default:
 		// ReasoningContentModeDiscardPreviousTurns or empty (default):
-		// Discard reasoning_content from previous requests only.
-		// Current request messages retain their reasoning_content.
-		if messageRequestID != currentRequestID {
+		// Discard reasoning_content from ordinary previous requests.
+		// Current request messages and requests with tool calls retain their
+		// reasoning_content for provider replay requirements.
+		if messageRequestID != currentRequestID && !requestHasToolCalls {
 			msg.ReasoningContent = ""
 		}
 	}
@@ -1361,11 +1373,17 @@ func (p *ContentRequestProcessor) projectCurrentInvocationMessages(
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
 	currentRequestID := inv.RunOptions.RequestID
+	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
 	var messages []model.Message
 	for _, evt := range resultEvents {
 		messages = append(
 			messages,
-			p.projectMessagesForEvent(inv, evt, currentRequestID)...,
+			p.projectMessagesForEvent(
+				inv,
+				evt,
+				currentRequestID,
+				toolCallRequestIDs,
+			)...,
 		)
 	}
 	return messages
@@ -1375,6 +1393,7 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 	inv *agent.Invocation,
 	evt event.Event,
 	currentRequestID string,
+	toolCallRequestIDs map[string]struct{},
 ) []model.Message {
 	ev := evt
 	if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
@@ -1387,7 +1406,12 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 	var messages []model.Message
 	for _, choice := range ev.Choices {
 		msg := choice.Message
-		msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+		msg = p.processReasoningContent(
+			msg,
+			evt.RequestID,
+			currentRequestID,
+			requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
+		)
 		msg = p.projectEventMessage(inv, evt, msg)
 		if isEmptyAssistantMessage(msg) {
 			continue
@@ -1395,6 +1419,28 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 		messages = append(messages, msg)
 	}
 	return messages
+}
+
+func requestIDsWithToolCalls(events []event.Event) map[string]struct{} {
+	requestIDs := make(map[string]struct{})
+	for _, evt := range events {
+		if evt.RequestID == "" || len(evt.Choices) == 0 {
+			continue
+		}
+		for _, choice := range evt.Choices {
+			if len(choice.Message.ToolCalls) == 0 {
+				continue
+			}
+			requestIDs[evt.RequestID] = struct{}{}
+			break
+		}
+	}
+	return requestIDs
+}
+
+func requestHasToolCalls(requestIDs map[string]struct{}, requestID string) bool {
+	_, ok := requestIDs[requestID]
+	return ok
 }
 
 func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(

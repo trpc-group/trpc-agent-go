@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 )
 
 var (
@@ -53,7 +53,7 @@ func main() {
 	fmt.Println()
 	fmt.Println("💡 Hint:")
 	fmt.Println("   1) cd examples/graph/mcptool")
-	fmt.Println("   2) go run . -model deepseek-chat")
+	fmt.Println("   2) go run . -model deepseek-v4-flash")
 	fmt.Println("      (the graph will spawn the STDIO MCP server automatically)")
 	fmt.Println()
 

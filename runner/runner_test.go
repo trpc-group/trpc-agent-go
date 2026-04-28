@@ -2282,6 +2282,81 @@ func TestRunner_GraphCompletionPropagation(t *testing.T) {
 		"Final message content should match")
 }
 
+func TestRunner_GraphCompletionSessionStateFiltersSnapshotKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		sessionID         string
+		visibleCompletion bool
+	}{
+		{name: "raw graph completion", sessionID: "test-session-raw"},
+		{name: "visible graph completion", sessionID: "test-session-visible", visibleCompletion: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lastResponse := []byte(`"Graph execution completed"`)
+			graphAgent := &graphCompletionMockAgent{
+				name:              "graph-agent",
+				visibleCompletion: tc.visibleCompletion,
+				stateDelta: map[string][]byte{
+					"business_key":                 []byte(`"keep"`),
+					graph.StateKeyMessages:         []byte(`[{"role":"user","content":"hi"}]`),
+					graph.StateKeyUserInput:        []byte(`"hi"`),
+					graph.StateKeyLastResponse:     lastResponse,
+					graph.StateKeyLastToolResponse: []byte(`"tool"`),
+					graph.StateKeyLastResponseID:   []byte(`"resp-1"`),
+					graph.StateKeyNodeResponses:    []byte(`{"node":"answer"}`),
+					graph.MetadataKeyCompletion:    []byte(`{"totalSteps":1}`),
+				},
+			}
+			sessionService := sessioninmemory.NewSessionService()
+			r := NewRunner("test-app", graphAgent, WithSessionService(sessionService))
+
+			eventCh, err := r.Run(
+				context.Background(),
+				"test-user",
+				tc.sessionID,
+				model.NewUserMessage("Execute graph"),
+			)
+			require.NoError(t, err)
+
+			var runnerCompletionEvent *event.Event
+			for ev := range eventCh {
+				if ev != nil && ev.Object == model.ObjectTypeRunnerCompletion {
+					runnerCompletionEvent = ev
+				}
+			}
+			require.NotNil(t, runnerCompletionEvent)
+			require.Equal(t, lastResponse, runnerCompletionEvent.StateDelta[graph.StateKeyLastResponse])
+			require.Contains(t, runnerCompletionEvent.StateDelta, graph.StateKeyMessages)
+
+			sess, err := sessionService.GetSession(context.Background(), session.Key{
+				AppName:   "test-app",
+				UserID:    "test-user",
+				SessionID: tc.sessionID,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+
+			stateValue, ok := sess.GetState("business_key")
+			require.True(t, ok)
+			require.Equal(t, []byte(`"keep"`), stateValue)
+			responseID, ok := sess.GetState(graph.StateKeyLastResponseID)
+			require.True(t, ok)
+			require.Equal(t, []byte(`"resp-1"`), responseID)
+			for _, key := range []string{
+				graph.StateKeyMessages,
+				graph.StateKeyUserInput,
+				graph.StateKeyLastResponse,
+				graph.StateKeyLastToolResponse,
+				graph.StateKeyNodeResponses,
+				graph.MetadataKeyCompletion,
+			} {
+				_, ok = sess.GetState(key)
+				require.False(t, ok, "session state should not persist graph completion key %q", key)
+			}
+		})
+	}
+}
+
 func TestRunner_DisableGraphCompletionEvent_KeepsRunnerCompletion(t *testing.T) {
 	schema := graph.MessagesStateSchema()
 	sg := graph.NewStateGraph(schema)
@@ -3384,7 +3459,9 @@ func (m *streamModeMockAgent) Run(
 // graphCompletionMockAgent emits a graph completion event with state delta
 // and choices.
 type graphCompletionMockAgent struct {
-	name string
+	name              string
+	stateDelta        map[string][]byte
+	visibleCompletion bool
 }
 
 func (m *graphCompletionMockAgent) Info() agent.Info {
@@ -3409,6 +3486,12 @@ func (m *graphCompletionMockAgent) Run(
 	eventCh := make(chan *event.Event, 2)
 
 	// Emit a graph completion event with state delta and choices.
+	stateDelta := m.stateDelta
+	if stateDelta == nil {
+		stateDelta = map[string][]byte{
+			"final_key": []byte("final_value"),
+		}
+	}
 	graphCompletionEvent := &event.Event{
 		Response: &model.Response{
 			ID:     "graph-completion",
@@ -3424,13 +3507,20 @@ func (m *graphCompletionMockAgent) Run(
 				},
 			},
 		},
-		StateDelta: map[string][]byte{
-			"final_key": []byte("final_value"),
-		},
+		StateDelta:   stateDelta,
 		InvocationID: invocation.InvocationID,
 		Author:       m.name,
 		ID:           "graph-event-id",
 		Timestamp:    time.Now(),
+	}
+	if m.visibleCompletion {
+		visible, ok := graph.VisibleGraphCompletionEventForAuthor(
+			graphCompletionEvent,
+			m.name,
+		)
+		if ok {
+			graphCompletionEvent = visible
+		}
 	}
 
 	eventCh <- graphCompletionEvent

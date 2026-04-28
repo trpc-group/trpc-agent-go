@@ -39,7 +39,7 @@ This implementation showcases the essential features for building conversational
 
 | Argument           | Description                                         | Default Value    |
 | ------------------ | --------------------------------------------------- | ---------------- |
-| `-model`           | Name of the model to use                            | `deepseek-chat`  |
+| `-model`           | Name of the model to use                            | `deepseek-v4-flash`  |
 | `-variant`         | Variant to use when calling the OpenAI provider     | `openai`         |
 | `-streaming`       | Enable streaming mode for responses                 | `true`           |
 | `-enable-parallel` | Enable parallel tool execution (faster performance) | `false`          |
@@ -123,7 +123,7 @@ Usage of ./runner:
   -enable-parallel
         Enable parallel tool execution (default: false, serial execution)
   -model string
-        Name of the model to use (default "deepseek-chat")
+        Name of the model to use (default "deepseek-v4-flash")
   -variant string
         Name of the variant to use when calling the OpenAI provider (default "openai")
   -streaming
@@ -169,7 +169,7 @@ The interface is simple and intuitive:
 
 ```
 🚀 Runner quickstart: multi-turn chat with tools
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Streaming: true
 Parallel tools: false
 Session backend: in-memory (simple demo)

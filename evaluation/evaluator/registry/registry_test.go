@@ -57,6 +57,7 @@ func TestRegistryDefaults(t *testing.T) {
 	assert.Contains(t, reg.List(), "llm_rubric_critic")
 	assert.Contains(t, reg.List(), "llm_rubric_reference_critic")
 	assert.Contains(t, reg.List(), "llm_hallucinations")
+	assert.Contains(t, reg.List(), "llm_judge_template")
 }
 
 func TestRegistryRegisterAndGet(t *testing.T) {

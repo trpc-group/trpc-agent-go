@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 	appName          = "userinputonce"
 )
 

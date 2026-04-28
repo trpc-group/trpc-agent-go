@@ -20,7 +20,7 @@ import (
 )
 
 // Test that when a node returns State{messages: MessageOp}, execution still
-// succeeds and the terminal completion snapshot omits bulky messages state.
+// succeeds and the terminal completion snapshot carries the graph final state.
 func TestMessagesReducerAppliesMessageOps(t *testing.T) {
 	schema := MessagesStateSchema()
 	sg := NewStateGraph(schema)
@@ -56,7 +56,7 @@ func TestMessagesReducerAppliesMessageOps(t *testing.T) {
 		}
 	}
 	require.Equal(t, "a", lastResponse)
-	require.False(t, sawMessages)
+	require.True(t, sawMessages)
 }
 
 // Test that AddToolsConditionalEdges routes to the tools node when tool-calls

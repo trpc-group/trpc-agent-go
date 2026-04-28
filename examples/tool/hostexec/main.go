@@ -33,7 +33,7 @@ import (
 const appName = "hostexec-demo"
 
 func main() {
-	modelName := flag.String("model", "deepseek-chat", "Model name to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Model name to use")
 	baseDir := flag.String("base-dir", ".", "Base directory for commands")
 	flag.Parse()
 
