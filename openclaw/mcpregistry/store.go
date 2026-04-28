@@ -267,17 +267,17 @@ func (s *FileStore) Upsert(
 func (s *FileStore) Delete(
 	ctx context.Context,
 	req DeleteRequest,
-) (bool, error) {
+) (bool, Scope, error) {
 	if s == nil {
-		return false, errors.New("mcp registry store is nil")
+		return false, "", errors.New("mcp registry store is nil")
 	}
 	name, err := normalizeName(req.Name)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	scope, scopeKey, err := resolveScope(req.Scope, req.Context)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	s.mu.Lock()
@@ -285,19 +285,19 @@ func (s *FileStore) Delete(
 
 	state, secrets, err := s.loadLocked(ctx)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	id := entryID(scope, scopeKey, name)
 	index := findEntryIndex(state.Entries, id)
 	if index < 0 {
-		return false, nil
+		return false, scope, nil
 	}
 	state.Entries = append(state.Entries[:index], state.Entries[index+1:]...)
 	if secrets.Connections != nil {
 		delete(secrets.Connections, id)
 	}
-	return true, s.saveLocked(ctx, state, secrets)
+	return true, scope, s.saveLocked(ctx, state, secrets)
 }
 
 // List returns the MCP registrations visible to the current context.
@@ -370,6 +370,7 @@ func (s *FileStore) accessibleEntries(
 			entries = append(entries, entry)
 		}
 	}
+	entries = preferExactChatEntries(entries, runtime)
 	sortEntries(entries)
 	return entries, secrets, nil
 }
@@ -403,13 +404,16 @@ func (s *FileStore) saveLocked(
 		return err
 	}
 	sortEntries(state.Entries)
-	if err := writeJSONFile(s.registryPath, state, 0o600); err != nil {
-		return err
-	}
 	if len(secrets.Connections) == 0 {
+		if err := writeJSONFile(s.registryPath, state, 0o600); err != nil {
+			return err
+		}
 		return removeIfExists(s.secretsPath)
 	}
-	return writeJSONFile(s.secretsPath, secrets, 0o600)
+	if err := writeJSONFile(s.secretsPath, secrets, 0o600); err != nil {
+		return err
+	}
+	return writeJSONFile(s.registryPath, state, 0o600)
 }
 
 func readJSONFile[T any](path string) (T, error) {
@@ -431,15 +435,42 @@ func readJSONFile[T any](path string) (T, error) {
 }
 
 func writeJSONFile(path string, value any, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, perm)
+	return writeFileAtomically(path, data, perm)
+}
+
+func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := file.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = file.Close()
+		}
+		_ = os.Remove(tempPath)
+	}()
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Chmod(perm); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	closed = true
+	return os.Rename(tempPath, path)
 }
 
 func removeIfExists(path string) error {
@@ -780,6 +811,38 @@ func isEntryVisible(entry Entry, runtime RuntimeContext) bool {
 	default:
 		return false
 	}
+}
+
+func preferExactChatEntries(
+	entries []Entry,
+	runtime RuntimeContext,
+) []Entry {
+	chatID := strings.TrimSpace(runtime.ChatID)
+	storageUserID := strings.TrimSpace(runtime.StorageUserID)
+	if chatID == "" || storageUserID == "" || chatID == storageUserID {
+		return entries
+	}
+
+	exactNames := make(map[string]struct{})
+	for _, entry := range entries {
+		if entry.Scope == ScopeChat && entry.ScopeKey == chatID {
+			exactNames[entry.Name] = struct{}{}
+		}
+	}
+	if len(exactNames) == 0 {
+		return entries
+	}
+
+	out := entries[:0]
+	for _, entry := range entries {
+		if entry.Scope == ScopeChat && entry.ScopeKey == storageUserID {
+			if _, ok := exactNames[entry.Name]; ok {
+				continue
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func aliasMap(entries []Entry) map[string]string {

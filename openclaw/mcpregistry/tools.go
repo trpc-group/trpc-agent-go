@@ -162,7 +162,7 @@ func (t registryTools) remove(
 	if err != nil {
 		return removeOutput{}, err
 	}
-	removed, err := t.store.Delete(ctx, DeleteRequest{
+	removed, scope, err := t.store.Delete(ctx, DeleteRequest{
 		Context: runtime,
 		Name:    input.Name,
 		Scope:   Scope(input.Scope),
@@ -173,7 +173,7 @@ func (t registryTools) remove(
 	return removeOutput{
 		Removed: removed,
 		Name:    strings.TrimSpace(input.Name),
-		Scope:   strings.TrimSpace(input.Scope),
+		Scope:   string(scope),
 	}, nil
 }
 

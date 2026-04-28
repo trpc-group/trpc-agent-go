@@ -232,13 +232,14 @@ func TestFileStore_DeleteRemovesEntryAndSecret(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	removed, err := store.Delete(context.Background(), DeleteRequest{
+	removed, scope, err := store.Delete(context.Background(), DeleteRequest{
 		Context: runtime,
 		Name:    "docs",
 		Scope:   ScopeSession,
 	})
 	require.NoError(t, err)
 	require.True(t, removed)
+	require.Equal(t, ScopeSession, scope)
 
 	servers, err := store.ServerConfigs(context.Background(), runtime)
 	require.NoError(t, err)
@@ -246,6 +247,41 @@ func TestFileStore_DeleteRemovesEntryAndSecret(t *testing.T) {
 
 	_, err = os.Stat(filepath.Join(dir, defaultSecretsFileName))
 	require.True(t, os.IsNotExist(err))
+}
+
+func TestFileStore_ExactChatEntryOverridesStorageFallback(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(t.TempDir())
+	runtime := testRuntimeContext()
+	fallbackRuntime := runtime
+	fallbackRuntime.ChatID = ""
+	_, err := store.Upsert(context.Background(), UpsertRequest{
+		Context: fallbackRuntime,
+		Name:    "docs",
+		Scope:   ScopeChat,
+		Connection: mcp.ConnectionConfig{
+			ServerURL: "https://fallback.example.com/mcp",
+		},
+	})
+	require.NoError(t, err)
+	_, err = store.Upsert(context.Background(), UpsertRequest{
+		Context: runtime,
+		Name:    "docs",
+		Scope:   ScopeChat,
+		Connection: mcp.ConnectionConfig{
+			ServerURL: "https://chat.example.com/mcp",
+		},
+	})
+	require.NoError(t, err)
+
+	servers, err := store.ServerConfigs(context.Background(), runtime)
+	require.NoError(t, err)
+	require.Equal(t, "https://chat.example.com/mcp", servers["docs"].ServerURL)
+	require.Equal(t,
+		"https://chat.example.com/mcp",
+		servers["chat:docs"].ServerURL)
+	require.NotContains(t, servers["chat:docs"].ServerURL, "fallback")
 }
 
 func testRuntimeContext() RuntimeContext {
