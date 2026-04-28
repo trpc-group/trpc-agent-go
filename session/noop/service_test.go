@@ -176,3 +176,93 @@ func TestValidation(t *testing.T) {
 	require.ErrorIs(t, svc.CreateSessionSummary(ctx, nil, "", false), session.ErrNilSession)
 	require.ErrorIs(t, svc.EnqueueSummaryJob(ctx, nil, "", false), session.ErrNilSession)
 }
+
+func TestNoopStateMethodsValidateKeys(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService()
+
+	require.NoError(t, svc.DeleteSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "session",
+	}))
+	require.ErrorIs(t,
+		svc.DeleteSession(ctx, session.Key{AppName: "app", UserID: "user"}),
+		session.ErrSessionIDRequired,
+	)
+
+	require.ErrorIs(t,
+		svc.UpdateAppState(ctx, "", session.StateMap{"k": []byte("v")}),
+		session.ErrAppNameRequired,
+	)
+	require.NoError(t, svc.DeleteAppState(ctx, "app", "k"))
+	require.ErrorIs(t,
+		svc.DeleteAppState(ctx, "", "k"),
+		session.ErrAppNameRequired,
+	)
+	_, err := svc.ListAppStates(ctx, "")
+	require.ErrorIs(t, err, session.ErrAppNameRequired)
+
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, svc.DeleteUserState(ctx, userKey, "k"))
+	require.ErrorIs(t,
+		svc.DeleteUserState(ctx, session.UserKey{AppName: "app"}, "k"),
+		session.ErrUserIDRequired,
+	)
+	require.ErrorIs(t,
+		svc.UpdateUserState(ctx, session.UserKey{UserID: "user"}, session.StateMap{}),
+		session.ErrAppNameRequired,
+	)
+	_, err = svc.ListUserStates(ctx, session.UserKey{AppName: "app"})
+	require.ErrorIs(t, err, session.ErrUserIDRequired)
+
+	require.ErrorIs(t,
+		svc.UpdateSessionState(ctx, session.Key{
+			AppName: "app",
+			UserID:  "user",
+		}, session.StateMap{}),
+		session.ErrSessionIDRequired,
+	)
+}
+
+func TestNoopEventAndSummaryMethodsValidateSessions(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService()
+
+	invalidSession := session.NewSession("", "user", "session")
+	require.ErrorIs(t,
+		svc.AppendEvent(ctx, invalidSession, nil),
+		session.ErrAppNameRequired,
+	)
+	require.ErrorIs(t,
+		svc.AppendTrackEvent(ctx, invalidSession, &session.TrackEvent{Track: "trace"}),
+		session.ErrAppNameRequired,
+	)
+	require.ErrorIs(t,
+		svc.CreateSessionSummary(ctx, invalidSession, "", false),
+		session.ErrAppNameRequired,
+	)
+	require.ErrorIs(t,
+		svc.EnqueueSummaryJob(ctx, invalidSession, "", false),
+		session.ErrAppNameRequired,
+	)
+
+	validSession := session.NewSession("app", "user", "session")
+	require.NoError(t, svc.CreateSessionSummary(ctx, validSession, "", false))
+	require.NoError(t, svc.EnqueueSummaryJob(ctx, validSession, "", false))
+
+	text, ok := svc.GetSessionSummaryText(ctx, validSession, session.WithSummaryFilterKey("filter"))
+	assert.Empty(t, text)
+	assert.False(t, ok)
+	require.NoError(t, svc.Close())
+}
+
+func TestAppendTrackEventPropagatesTransientSessionError(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService()
+	sess := session.NewSession("app", "user", "session")
+
+	err := svc.AppendTrackEvent(ctx, sess, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "track event is nil")
+}
