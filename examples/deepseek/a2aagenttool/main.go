@@ -73,6 +73,9 @@ func run(ctx context.Context) error {
 
 	remote, err := a2aagent.New(
 		a2aagent.WithAgentCardURL("http://"+*host),
+		// AgentCard does not carry JSON Schema, so set the local
+		// AgentTool input declaration explicitly.
+		a2aagent.WithInputSchema(remoteMathInputSchema()),
 		a2aagent.WithEnableStreaming(false),
 		a2aagent.WithTransferStateKey("tenant_id"),
 	)
@@ -96,6 +99,7 @@ func run(ctx context.Context) error {
 		llmagent.WithInstruction(
 			"You are a parent agent. For any calculation request, you must call the "+
 				"remote_math_agent tool exactly once, then summarize the tool result for the user. "+
+				"When calling remote_math_agent, pass the arithmetic expression in the request field. "+
 				"Do not calculate the answer yourself before calling the tool.",
 		),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
@@ -289,6 +293,20 @@ func buildRemoteMathAgent() agent.Agent {
 		}),
 		llmagent.WithTools([]tool.Tool{calculatorTool}),
 	)
+}
+
+func remoteMathInputSchema() map[string]any {
+	return map[string]any{
+		"type":        "object",
+		"description": "Local AgentTool input for the remote A2A math agent.",
+		"properties": map[string]any{
+			"request": map[string]any{
+				"type":        "string",
+				"description": "Arithmetic expression to calculate, for example 17*23+5.",
+			},
+		},
+		"required": []string{"request"},
+	}
 }
 
 type calculatorInput struct {

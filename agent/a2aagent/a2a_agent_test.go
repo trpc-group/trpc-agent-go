@@ -291,6 +291,7 @@ func TestA2AAgent_Info(t *testing.T) {
 			agent: &A2AAgent{
 				name:        "test-agent",
 				description: "Test description",
+				inputSchema: map[string]any{"type": "object"},
 			},
 			setupFunc: func(tc *testCase) {},
 			validateFunc: func(t *testing.T, info agent.Info) {
@@ -299,6 +300,9 @@ func TestA2AAgent_Info(t *testing.T) {
 				}
 				if info.Description != "Test description" {
 					t.Errorf("expected description 'Test description', got %s", info.Description)
+				}
+				if info.InputSchema["type"] != "object" {
+					t.Errorf("expected input schema object, got %#v", info.InputSchema)
 				}
 			},
 		},
