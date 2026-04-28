@@ -2,10 +2,6 @@
 
 ## 概述
 
-tRPC-Agent-Go 现在使用与 OpenTelemetry 对齐的消息 schema 来上报
-`gen_ai.input.messages` 和 `gen_ai.output.messages`，不再继续使用旧的
-`content/content_parts/tool_call_id` telemetry envelope。
-
 本文档说明 tracing 协议约束、框架到 OTel 的映射规则，以及 provider 能力边界。
 
 ## OTel 参考

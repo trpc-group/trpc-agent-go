@@ -2,10 +2,6 @@
 
 ## Overview
 
-tRPC-Agent-Go now emits `gen_ai.input.messages` and `gen_ai.output.messages`
-using an OpenTelemetry-aligned message schema instead of the framework's older
-`content/content_parts/tool_call_id` telemetry envelope.
-
 This page defines the tracing contract, the framework-to-OTel mapping, and
 provider capabilities.
 
