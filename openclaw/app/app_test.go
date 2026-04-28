@@ -224,6 +224,17 @@ func runAgentAndCapture(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
 		agent.WithInvocationSession(sess),
 	)
+	return runInvocationAndCapture(t, agt, mdl, inv)
+}
+
+func runInvocationAndCapture(
+	t *testing.T,
+	agt agent.Agent,
+	mdl *captureRequestModel,
+	inv *agent.Invocation,
+) *model.Request {
+	t.Helper()
+
 	ch, err := agt.Run(context.Background(), inv)
 	require.NoError(t, err)
 	for evt := range ch {
@@ -1596,6 +1607,124 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.NotContains(t, sys, "Skill tool availability:")
 	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
 	require.NotContains(t, sys, "Only describe a blocker")
+}
+
+func TestNewAgent_OpenClawPostToolPrompt_AppliedAfterToolResult(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const (
+		userRequest = "write meeting notes to iWiki"
+		toolCallID  = "call_write_iwiki"
+		toolName    = "write_iwiki"
+		toolResult  = `{"status":"created","url":"https://iwiki.example/doc"}`
+	)
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	userMsg := model.NewUserMessage(userRequest)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(userMsg))
+	sess := session.NewSession("demo", "user", "sess")
+	sess.Events = []event.Event{
+		*event.NewResponseEvent(
+			inv.InvocationID,
+			"user",
+			&model.Response{
+				Choices: []model.Choice{{
+					Message: userMsg,
+				}},
+			},
+		),
+		*event.NewResponseEvent(
+			inv.InvocationID,
+			defaultAgentName,
+			&model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							Type: "function",
+							ID:   toolCallID,
+							Function: model.FunctionDefinitionParam{
+								Name: toolName,
+								Arguments: []byte(
+									`{"title":"notes"}`,
+								),
+							},
+						}},
+					},
+				}},
+			},
+		),
+		*event.NewResponseEvent(
+			inv.InvocationID,
+			defaultAgentName,
+			&model.Response{
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						toolCallID,
+						toolName,
+						toolResult,
+					),
+				}},
+			},
+		),
+	}
+	inv.Session = sess
+
+	req := runInvocationAndCapture(t, agt, mdl, inv)
+	system := joinSystemMessages(req)
+	require.Contains(t, system, openClawPostToolPrompt)
+	require.Contains(t, system, "same assistant turn")
+	require.Contains(
+		t,
+		system,
+		"Do not answer only with what you will do next.",
+	)
+	require.Contains(t, system, "Do not claim that a document")
+	require.Contains(
+		t,
+		system,
+		"Only return a blocker when no safe next step remains.",
+	)
+	require.Contains(t, system, "return `MEDIA:` or `MEDIA_DIR:` lines")
+	require.NotContains(t, system, "WECOM_FILE")
+	require.NotContains(t, system, "WECOM_MEDIA")
+	require.Contains(t, system, "For docs and iWiki")
+	require.NotContains(t, system, "Final Answer Requirement:")
+}
+
+func TestNewAgent_OpenClawPostToolPrompt_NotAppliedWithoutToolResult(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		session.NewSession("demo", "user", "sess"),
+	)
+	system := joinSystemMessages(req)
+	require.NotContains(t, system, openClawPostToolPrompt)
 }
 
 func TestNewAgent_LocalExecKeepsExecCommandButOmitsWorkspaceExec(
