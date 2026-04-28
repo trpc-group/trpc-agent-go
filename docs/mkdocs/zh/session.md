@@ -1870,10 +1870,11 @@ err := sessionService.CreateSessionSummary(
 | Context compaction | Agent prompt assembly | 不调用 LLM、不删整轮消息，只改写 `tool result` 内容 | 清理搜索结果、日志、网页抓取等超长工具输出 |
 | Token tailoring | Model provider | 模型调用前按 token budget 删除或保留消息轮次 | 最后一层兜底，保证请求落入 context window |
 
-调用顺序上，agent 先组装 prompt、注入 summary、按需压缩 `tool result`；
-必要时再同步刷新一次 summary 并重建请求；最后由模型层 token tailoring
-裁剪消息列表。context compaction 缩小消息内部的工具输出，token tailoring
-删减消息轮次，summary 则用新的语义摘要替代一段历史。
+调用顺序上，agent 先组装 prompt；如果启用了 `WithAddSessionSummary(true)`，
+则注入 summary；随后按需压缩 `tool result`。如果开启了摘要注入且请求仍接近
+context window，必要时再同步刷新一次 summary 并重建请求；最后由模型层
+token tailoring 裁剪消息列表。context compaction 缩小消息内部的工具输出，
+token tailoring 删减消息轮次，summary 则用新的语义摘要替代一段历史。
 
 #### 模式 1：启用摘要注入（推荐）
 

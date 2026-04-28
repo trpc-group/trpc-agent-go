@@ -1789,12 +1789,13 @@ First, separate the three context-reduction mechanisms:
 | Context compaction | Agent prompt assembly | Does not call an LLM or drop whole turns; it only rewrites `tool result` content | Clean up large search results, logs, web fetches, and similar tool outputs |
 | Token tailoring | Model provider | Drops or keeps message rounds by token budget immediately before the provider call | Final fallback to keep the request within the context window |
 
-In call order, the agent assembles the prompt, injects summary when configured,
-and optionally compacts `tool result` content. If needed, the flow may refresh
-the summary once and rebuild the request. Finally, model-layer token tailoring
-trims the message list. Context compaction shrinks tool-output payloads inside
-messages, token tailoring drops message rounds, and summary creates a semantic
-replacement for historical context.
+In call order, the agent assembles the prompt, injects summary when
+`WithAddSessionSummary(true)` is enabled, and optionally compacts `tool result`
+content. If summary injection is enabled and the request still approaches the
+context window, the flow may refresh the summary once and rebuild the request.
+Finally, model-layer token tailoring trims the message list. Context compaction
+shrinks tool-output payloads inside messages, token tailoring drops message
+rounds, and summary creates a semantic replacement for historical context.
 
 **Mode 1: With Summary (`WithAddSessionSummary(true)`)**
 

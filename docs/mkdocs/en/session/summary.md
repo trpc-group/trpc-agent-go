@@ -623,7 +623,7 @@ Before choosing a mode, distinguish the three context-reduction mechanisms:
 | --- | --- | --- | --- |
 | Summary | Session Service + prompt assembly | Uses an LLM to create a persisted summary of historical events. With `WithAddSessionSummary(true)`, the request injects that summary and appends only incremental events after the summary point | Preserve semantic continuity in long sessions while avoiding repeated full-history prompts |
 | Context compaction | Agent prompt assembly | Does not call an LLM and does not drop whole turns. It only rewrites `tool result` content during request projection, such as replacing old results with placeholders or truncating oversized results with head+tail preservation | Keep the conversation structure and active tool chain while shrinking large tool outputs |
-| Token tailoring | Model provider | Drops or keeps message rounds according to a token budget right before the provider call. The default strategy preserves system messages and the latest turn | Final fallback to keep the request within the model context window |
+| Token tailoring | Model provider | Drops or keeps message rounds according to a token budget right before the provider call. The default strategy tries to preserve system messages and the latest turn, but preservation is still limited by the available budget | Final fallback to keep the request within the model context window |
 
 The normal call path is: the agent assembles the prompt, injects the summary when
 configured, and optionally compacts `tool result` content. If summary injection is
