@@ -33,7 +33,7 @@ import (
 
 func main() {
 	// Parse command line flags.
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	flag.Parse()
 
 	fmt.Printf("🚀 MCP tools usage (STDIO, Streamable HTTP, and SSE)\n")

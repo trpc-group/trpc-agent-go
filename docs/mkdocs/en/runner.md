@@ -59,7 +59,7 @@ import (
 
 func main() {
 	// 1. Create model.
-	llmModel := openai.New("DeepSeek-V3-Online-64K")
+	llmModel := openai.New("deepseek-v4-flash")
 
 	// 2. Create Agent.
 	a := llmagent.New("assistant",

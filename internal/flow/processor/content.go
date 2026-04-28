@@ -1001,10 +1001,11 @@ func compactedCurrentInvocationMessage(
 	switch {
 	case len(msg.ToolCalls) > 0:
 		return model.Message{
-			Role:         msg.Role,
-			Content:      msg.Content,
-			ContentParts: msg.ContentParts,
-			ToolCalls:    msg.ToolCalls,
+			Role:             msg.Role,
+			Content:          msg.Content,
+			ContentParts:     msg.ContentParts,
+			ReasoningContent: msg.ReasoningContent,
+			ToolCalls:        msg.ToolCalls,
 		}, true
 	case msg.Role == model.RoleTool && msg.ToolID != "":
 		return model.Message{

@@ -848,25 +848,13 @@ func (p *SkillsRequestProcessor) capabilityGuidanceText(
 	if p.toolingGuidance != nil && *p.toolingGuidance == "" {
 		return ""
 	}
-	if flags.Run {
+	if flags.Run || flags.Load {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(skillsCapabilityHeader)
 	b.WriteString("\n")
-	if flags.Load {
-		b.WriteString("- This configuration supports skill discovery and ")
-		b.WriteString("knowledge loading only.\n")
-		b.WriteString("- Built-in skill execution tools are unavailable in ")
-		b.WriteString("the current mode.\n")
-		b.WriteString("- If a loaded skill describes scripts, shell commands, ")
-		b.WriteString("workspace paths, generated files, or interactive ")
-		b.WriteString("flows, treat that content as reference only. Use ")
-		b.WriteString("other registered tools for real actions, or explain ")
-		b.WriteString("that execution is unavailable in the current mode.\n")
-		return b.String()
-	}
 	if flags.HasDocHelpers() {
 		b.WriteString("- This configuration supports skill discovery and ")
 		b.WriteString("skill doc inspection only.\n")
@@ -933,12 +921,11 @@ func defaultKnowledgeOnlyGuidance(flags skillprofile.Flags) string {
 	b.WriteString("- skill_load returns instructions and bundled ")
 	b.WriteString("resources but does not execute the skill by itself. ")
 	b.WriteString("If the loaded SKILL.md describes shell commands or ")
-	b.WriteString("scripts and a shell-execution tool is registered for ")
-	b.WriteString("this agent (see the executor workspace guidance ")
-	b.WriteString("below for what is available), invoke that tool to ")
-	b.WriteString("actually run the steps. If no execution tool is ")
-	b.WriteString("registered, treat the loaded content as reference ")
-	b.WriteString("and explain the limitation clearly.\n")
+	b.WriteString("scripts and a shell-execution tool such as ")
+	b.WriteString("workspace_exec is registered for this agent, invoke ")
+	b.WriteString("that tool to actually run the steps. If no execution ")
+	b.WriteString("tool is registered, treat the loaded content as ")
+	b.WriteString("reference and explain the limitation clearly.\n")
 	return b.String()
 }
 

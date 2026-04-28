@@ -1862,6 +1862,20 @@ err := sessionService.CreateSessionSummary(
 
 框架提供两种模式来管理发送给 LLM 的对话上下文：
 
+先区分三类上下文减载机制：
+
+| 机制 | 所在层 | 改动对象 | 典型用途 |
+| --- | --- | --- | --- |
+| Summary | Session Service + prompt assembly | 用 LLM 生成可持久化历史摘要；开启 `WithAddSessionSummary(true)` 后，请求中注入摘要，并只拼接摘要时间点之后的增量事件 | 长会话保留语义连续性 |
+| Context compaction | Agent prompt assembly | 不调用 LLM、不删整轮消息，只改写 `tool result` 内容 | 清理搜索结果、日志、网页抓取等超长工具输出 |
+| Token tailoring | Model provider | 模型调用前按 token budget 删除或保留消息轮次 | 最后一层兜底，保证请求落入 context window |
+
+调用顺序上，agent 先组装 prompt；如果启用了 `WithAddSessionSummary(true)`，
+则注入 summary；随后按需压缩 `tool result`。如果开启了摘要注入且请求仍接近
+context window，必要时再同步刷新一次 summary 并重建请求；最后由模型层
+token tailoring 裁剪消息列表。context compaction 缩小消息内部的工具输出，
+token tailoring 删减消息轮次，summary 则用新的语义摘要替代一段历史。
+
 #### 模式 1：启用摘要注入（推荐）
 
 ```go
@@ -1875,7 +1889,15 @@ llmagent.WithAddSessionSummary(true)
 - 保证完整上下文：浓缩历史 + 完整新对话
 - **`WithMaxHistoryRuns` 参数被忽略**
 
-**可选：Prompt 侧上下文压缩**
+**Context compaction 细节**
+
+Context compaction 不是 summary 的同义词，也不是 token tailoring。它只处理
+`tool result` 这种容易异常膨胀的内容，不会把普通 user/assistant 消息做
+LLM 摘要，也不会像 token tailoring 那样直接丢弃完整消息轮次。
+
+> **命名说明**：`WithEnableContextCompaction(true)` 中的 "compaction"
+> 指 prompt-side tool result compaction/pruning；如果需要语义摘要，仍然由
+> `WithAddSessionSummary(true)` 和会话摘要器负责。
 
 当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前执行 Pass 1 压缩；如果同时显式配置正数的 `ContextCompactionOversizedToolResultMaxTokens`，还会执行 Pass 2：
 
@@ -1890,7 +1912,7 @@ agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
     llmagent.WithAddSessionSummary(true),
-    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableContextCompaction(true), // 只压 tool result，不生成摘要
     llmagent.WithContextCompactionThresholdRatio(0.7),
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: 旧 tool result → 占位符
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: 任意超大 result → 首尾保留截断

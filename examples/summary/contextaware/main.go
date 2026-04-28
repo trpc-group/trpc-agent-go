@@ -31,7 +31,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Model name to use for both chat and summary generation")
+	modelName = flag.String("model", "deepseek-v4-flash", "Model name to use for both chat and summary generation")
 	waitSec   = flag.Int("wait-sec", 12, "Max wait time in seconds for async summary generation")
 
 	billingInput = flag.String(

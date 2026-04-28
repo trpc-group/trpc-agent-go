@@ -834,11 +834,13 @@ func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_WiresPrompt(
 		}
 	}
 	require.NotEmpty(t, sys)
-	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill discovery and knowledge loading only")
-	require.Contains(t, sys, "Built-in skill execution tools are unavailable")
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, "skill discovery and knowledge loading only")
+	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.NotContains(t, sys, "skill_run runs with CWD")
+	require.Contains(t, sys, "workspace_exec is registered")
+	require.Contains(t, sys, "If no execution tool is registered")
 }
 
 func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_GuidanceDisabled(
@@ -1083,8 +1085,8 @@ func TestLLMAgent_WithAllowedSkillTools_LoadOnly_WiresPrompt(
 		}
 	}
 	require.NotEmpty(t, sys)
-	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill discovery and knowledge loading only")
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, "skill discovery and knowledge loading only")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, "skill_load.docs or include_all_docs")
 	require.NotContains(t, sys, "skill_list_docs")
@@ -1835,8 +1837,9 @@ func TestLLMAgent_WorkspaceExecGuidanceWithoutSkillsRepo(t *testing.T) {
 
 	sys := findSystemMessageContaining(req, workspaceExecGuidanceHeader)
 	require.NotEmpty(t, sys)
-	require.Contains(t, sys, "default general shell runner")
-	require.Contains(t, sys, "workspace is its scope, not its capability limit")
+	require.Contains(t, sys, "general shell runner for the current executor workspace")
+	require.Contains(t, sys, "Command paths are resolved relative to cwd")
+	require.Contains(t, sys, "Choose one path base per command")
 	require.Contains(t, sys, "Prefer work/, out/, and runs/")
 	require.Contains(t, sys, "verify first before claiming the limitation")
 	require.NotContains(t, sys, "workspace_save_artifact")

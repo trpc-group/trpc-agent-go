@@ -380,6 +380,21 @@ func TestSessionSummarizer_GenerateSummary_ModelError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to generate summary")
 }
 
+func TestSessionSummarizer_GenerateSummary_NilResponseChannel(t *testing.T) {
+	s := NewSummarizer(&nilResponseChannelModel{})
+
+	sess := &session.Session{
+		ID: "test-nil-channel",
+		Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "test"}}}}, Timestamp: time.Now()},
+		},
+	}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model returned nil response channel")
+}
+
 func TestSessionSummarizer_GenerateSummary_ResponseError(t *testing.T) {
 	responseErrorModel := &responseErrorModel{}
 	s := NewSummarizer(responseErrorModel)
@@ -431,6 +446,27 @@ func TestSessionSummarizer_GenerateSummary_EmptyResponse(t *testing.T) {
 	_, err := s.Summarize(context.Background(), sess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "generated empty summary")
+}
+
+func TestSessionSummarizer_Summarize_ContextTimeoutWhileWaitingForResponse(t *testing.T) {
+	s := NewSummarizer(&blockingResponseModel{})
+	sess := &session.Session{
+		ID: "timeout",
+		Events: []event.Event{{
+			Author:    "user",
+			Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "test"}}}},
+			Timestamp: time.Now(),
+		}},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := s.Summarize(ctx, sess)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 500*time.Millisecond)
 }
 
 func TestSessionSummarizer_ShouldSummarize_EmptyEvents(t *testing.T) {
@@ -909,6 +945,26 @@ func (e *emptyResponseModel) GenerateContent(ctx context.Context, req *model.Req
 	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: ""}}}}
 	close(ch)
 	return ch, nil
+}
+
+// blockingResponseModel simulates a non-cooperative provider that neither
+// sends a response nor closes the response channel after ctx cancellation.
+type blockingResponseModel struct{}
+
+func (b *blockingResponseModel) Info() model.Info { return model.Info{Name: "blocking-response"} }
+func (b *blockingResponseModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	// The channel is intentionally never closed to exercise context timeout handling.
+	return make(chan *model.Response), nil
+}
+
+type nilResponseChannelModel struct{}
+
+func (n *nilResponseChannelModel) Info() model.Info {
+	return model.Info{Name: "nil-response-channel"}
+}
+
+func (n *nilResponseChannelModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	return nil, nil
 }
 
 func TestFormatResponseError(t *testing.T) {

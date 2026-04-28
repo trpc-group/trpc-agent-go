@@ -18,7 +18,7 @@ Run
    go run ./examples/graph/io_conventions \
      -api-key "$OPENAI_API_KEY" \
      -base-url "$OPENAI_BASE_URL" \
-     -model deepseek-chat
+     -model deepseek-v4-flash
 
 2) Or via env (flags optional):
 

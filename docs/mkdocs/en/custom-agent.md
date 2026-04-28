@@ -80,7 +80,7 @@ Example:
 
 ```go
 // Build model and agent
-m := openai.New("deepseek-chat")
+m := openai.New("deepseek-v4-flash")
 ag := NewSimpleIntentAgent("biz-agent", "intent branching", m)
 
 // Run with Runner
@@ -94,7 +94,7 @@ ch, err := r.Run(ctx, "user-001", "session-001", model.NewUserMessage("Hi there"
 ```bash
 cd examples/customagent
 export OPENAI_API_KEY="your_api_key"
-go run . -model deepseek-chat
+go run . -model deepseek-v4-flash
 
 # Inside the interactive session:
 # /history  - Ask to show conversation history

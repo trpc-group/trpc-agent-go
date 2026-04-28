@@ -78,7 +78,8 @@ func main() {
         llmagent.WithModel(llm),
         llmagent.WithInstruction("你是一个智能助手"),
         llmagent.WithAddSessionSummary(true), // 可选：启用摘要注入到上下文
-        llmagent.WithEnableContextCompaction(true), // 可选：压缩历史超长 tool result（Pass 1 + Pass 2 的总开关）
+        // 可选：只压缩 tool result 内容，不生成摘要；和 session summary / token tailoring 分层独立
+        llmagent.WithEnableContextCompaction(true), // Pass 1 + Pass 2 的总开关
         // 配合 WithAddSessionSummary(true) 时，还会在必要时多一次同步摘要重试
         llmagent.WithContextCompactionToolResultMaxTokens(1024),  // 旧 tool result → 占位符
         // Pass 2 默认关闭，需要显式设置一个正阈值才会生效（推荐 8192）

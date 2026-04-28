@@ -32,14 +32,14 @@ go run ./examples/summary/filterkey -model gpt-4o-mini
 go run ./examples/summary/filterkey -debug
 
 # With all options.
-go run ./examples/summary/filterkey -model deepseek-chat -max-words 100 -streaming=true -debug
+go run ./examples/summary/filterkey -model deepseek-v4-flash -max-words 100 -streaming=true -debug
 ```
 
 ### Command-line Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-model` | `deepseek-chat` | Model name for LLM |
+| `-model` | `deepseek-v4-flash` | Model name for LLM |
 | `-streaming` | `true` | Enable streaming mode |
 | `-max-words` | `0` | Max summary words (0=unlimited) |
 | `-debug` | `false` | Print request messages for debugging |
@@ -59,7 +59,7 @@ go run ./examples/summary/filterkey -model deepseek-chat -max-words 100 -streami
 
 ```
 📝 Filter-Key Summarization Demo
-Model: deepseek-chat | Streaming: true | MaxWords: 0 | Debug: false
+Model: deepseek-v4-flash | Streaming: true | MaxWords: 0 | Debug: false
 ============================================================
 Session: filterkey-session-1735638000
 

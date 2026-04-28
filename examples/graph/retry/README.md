@@ -22,11 +22,11 @@ go run .
 Environment:
 
 - If your LLM provider requires credentials (e.g. `OPENAI_API_KEY`), export it before running.
-- Default model is `deepseek-chat` (adjust via `--model`).
+- Default model is `deepseek-v4-flash` (adjust via `--model`).
 
 ## Flags
 
-- `--model string` model name to use (default: `deepseek-chat`)
+- `--model string` model name to use (default: `deepseek-v4-flash`)
 - `--fail int` number of initial failures for the unstable node (default: 2)
 - `--latency duration` simulated latency per attempt (default: `200ms`)
 - `--verbose` print detailed node/tool/model and retry info
