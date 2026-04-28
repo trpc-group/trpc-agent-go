@@ -35,6 +35,49 @@ func TestParseOTelMessagesJSON_EmptyAndInvalid(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParseOTelMessagesJSON_RejectsLegacyOrIncompleteShapes(t *testing.T) {
+	inputMessages, err := ParseOTelInputMessagesJSON(`[{"role":"user","content":"hi"}]`)
+	require.NoError(t, err)
+	require.Nil(t, inputMessages)
+
+	inputMessages, err = ParseOTelInputMessagesJSON(`[{"role":"user","parts":[]}]`)
+	require.NoError(t, err)
+	require.Nil(t, inputMessages)
+
+	inputMessages, err = ParseOTelInputMessagesJSON(`[{"role":"user","parts":[{"type":"tool_call"}]}]`)
+	require.NoError(t, err)
+	require.Nil(t, inputMessages)
+
+	outputMessages, err := ParseOTelOutputMessagesJSON(`[{"role":"assistant","content":"hi","finish_reason":"stop"}]`)
+	require.NoError(t, err)
+	require.Nil(t, outputMessages)
+
+	outputMessages, err = ParseOTelOutputMessagesJSON(`[{"role":"assistant","parts":[],"finish_reason":"stop"}]`)
+	require.NoError(t, err)
+	require.Nil(t, outputMessages)
+
+	outputMessages, err = ParseOTelOutputMessagesJSON(`[{"role":"assistant","parts":[{"type":"tool_call_response"}],"finish_reason":"stop"}]`)
+	require.NoError(t, err)
+	require.Nil(t, outputMessages)
+}
+
+func TestParseOTelMessagesJSON_AcceptsValidOTelShapes(t *testing.T) {
+	inputMessages, err := ParseOTelInputMessagesJSON(`[{"role":"user","parts":[{"type":"text","content":"hi"}]},{"role":"assistant","parts":[{"type":"tool_call","name":"lookup","arguments":{"key":"otel"}}]}]`)
+	require.NoError(t, err)
+	require.Len(t, inputMessages, 2)
+	require.Equal(t, model.RoleUser, inputMessages[0].Role)
+	require.Equal(t, otelPartTypeText, inputMessages[0].Parts[0].Type)
+	require.Equal(t, otelPartTypeToolCall, inputMessages[1].Parts[0].Type)
+
+	outputMessages, err := ParseOTelOutputMessagesJSON(`[{"role":"assistant","parts":[{"type":"reasoning","content":"thinking"},{"type":"text","content":"done"}],"finish_reason":"stop"},{"role":"tool","parts":[{"type":"tool_call_response","id":"call-1","response":{"ok":true}}]}]`)
+	require.NoError(t, err)
+	require.Len(t, outputMessages, 2)
+	require.Equal(t, model.RoleAssistant, outputMessages[0].Role)
+	require.Equal(t, otelPartTypeReasoning, outputMessages[0].Parts[0].Type)
+	require.Equal(t, model.RoleTool, outputMessages[1].Role)
+	require.Equal(t, otelPartTypeToolCallResponse, outputMessages[1].Parts[0].Type)
+}
+
 func TestTelemetryOutputMessageFromChoice_UsesDeltaFallback(t *testing.T) {
 	msg := telemetryOutputMessageFromChoice(model.Choice{
 		Delta: model.Message{

@@ -103,6 +103,9 @@ func ParseOTelInputMessagesJSON(raw string) ([]OTelInputMessage, error) {
 	if err := json.Unmarshal([]byte(raw), &messages); err != nil {
 		return nil, err
 	}
+	if !isValidOTelInputMessages(messages) {
+		return nil, nil
+	}
 	return messages, nil
 }
 
@@ -116,7 +119,63 @@ func ParseOTelOutputMessagesJSON(raw string) ([]OTelOutputMessage, error) {
 	if err := json.Unmarshal([]byte(raw), &messages); err != nil {
 		return nil, err
 	}
+	if !isValidOTelOutputMessages(messages) {
+		return nil, nil
+	}
 	return messages, nil
+}
+
+func isValidOTelInputMessages(messages []OTelInputMessage) bool {
+	if messages == nil {
+		return false
+	}
+	for _, msg := range messages {
+		if !msg.Role.IsValid() || !isValidOTelParts(msg.Parts) {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidOTelOutputMessages(messages []OTelOutputMessage) bool {
+	if messages == nil {
+		return false
+	}
+	for _, msg := range messages {
+		if !msg.Role.IsValid() || !isValidOTelParts(msg.Parts) {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidOTelParts(parts []OTelMessagePart) bool {
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if !isValidOTelPart(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidOTelPart(part OTelMessagePart) bool {
+	switch part.Type {
+	case otelPartTypeText, otelPartTypeReasoning, otelPartTypeBlob:
+		return part.Content != ""
+	case otelPartTypeURI:
+		return part.URI != ""
+	case otelPartTypeFile:
+		return strings.TrimSpace(part.FileID) != ""
+	case otelPartTypeToolCall:
+		return strings.TrimSpace(part.Name) != ""
+	case otelPartTypeToolCallResponse:
+		return strings.TrimSpace(part.ID) != "" || len(part.Response) > 0
+	default:
+		return false
+	}
 }
 
 func telemetryOutputMessageFromChoice(choice model.Choice) OTelOutputMessage {
