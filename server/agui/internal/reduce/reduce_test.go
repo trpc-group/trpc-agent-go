@@ -186,7 +186,7 @@ func TestHandleUserMessageCustomEventErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := new(testAppName, testUserID)
+			r := new(testAppName, testUserID, options{})
 			err := r.reduceEvent(tt.event)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
@@ -540,7 +540,7 @@ func TestHandleTextChunkSuccess(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := new(testAppName, testUserID)
+			r := new(testAppName, testUserID, options{})
 			require.NoError(t, r.handleTextChunk(tt.chunk))
 			require.Len(t, r.messages, 1)
 			msg := r.messages[0]
@@ -568,14 +568,14 @@ func stringPtr(s string) *string {
 func TestHandleTextChunkErrors(t *testing.T) {
 	t.Run("missing id", func(t *testing.T) {
 		chunk := aguievents.NewTextMessageChunkEvent(stringPtr(""), stringPtr("assistant"), stringPtr(""))
-		r := new(testAppName, testUserID)
+		r := new(testAppName, testUserID, options{})
 		err := r.handleTextChunk(chunk)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "text message chunk missing id")
 	})
 	t.Run("duplicate id", func(t *testing.T) {
 		chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr(""))
-		r := new(testAppName, testUserID)
+		r := new(testAppName, testUserID, options{})
 		require.NoError(t, r.handleTextChunk(chunk))
 		err := r.handleTextChunk(chunk)
 		require.Error(t, err)
@@ -583,7 +583,7 @@ func TestHandleTextChunkErrors(t *testing.T) {
 	})
 	t.Run("unsupported role", func(t *testing.T) {
 		chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-3"), stringPtr("tool"), stringPtr(""))
-		r := new(testAppName, testUserID)
+		r := new(testAppName, testUserID, options{})
 		err := r.handleTextChunk(chunk)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported role: tool")
@@ -592,7 +592,7 @@ func TestHandleTextChunkErrors(t *testing.T) {
 		chunk := aguievents.NewTextMessageChunkEvent(stringPtr(""), stringPtr("assistant"), stringPtr(""))
 		empty := ""
 		chunk.MessageID = &empty
-		r := new(testAppName, testUserID)
+		r := new(testAppName, testUserID, options{})
 		err := r.handleTextChunk(chunk)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "text message chunk missing id")
@@ -600,7 +600,7 @@ func TestHandleTextChunkErrors(t *testing.T) {
 }
 
 func TestReduceEventDispatchesChunk(t *testing.T) {
-	r := new(testAppName, testUserID)
+	r := new(testAppName, testUserID, options{})
 	chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr("hi"))
 	require.NoError(t, r.reduceEvent(chunk))
 	require.Len(t, r.messages, 1)
@@ -1009,11 +1009,52 @@ func TestReduceInvalidPayload(t *testing.T) {
 	assertReduceError(t, []session.TrackEvent{event}, "unmarshal track event payload")
 }
 
-func TestReduceIgnoresUnknownEvents(t *testing.T) {
+func TestReduceOmitsRunEventsByDefault(t *testing.T) {
 	events := trackEventsFrom(aguievents.NewRunStartedEvent("thread", "run"))
 	msgs, err := Reduce(testAppName, testUserID, events)
 	require.NoError(t, err)
 	assert.Empty(t, msgs)
+}
+
+func TestReduceIncludesRunEventsWhenEnabled(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewRunStartedEvent("thread-1", "run-1"),
+		aguievents.NewRunFinishedEventWithOptions(
+			"thread-1",
+			"run-1",
+			aguievents.WithResult("ok"),
+		),
+		aguievents.NewRunErrorEvent(
+			"boom",
+			aguievents.WithRunID("run-2"),
+			aguievents.WithErrorCode("E_RUN"),
+		),
+	)
+
+	msgs, err := Reduce(testAppName, testUserID, events, WithRunLifecycleEvents(true))
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+
+	started := msgs[0]
+	assert.Equal(t, types.RoleActivity, started.Role)
+	assert.Equal(t, string(aguievents.EventTypeRunStarted), started.ActivityType)
+	startedContent, ok := started.ContentActivity()
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"threadId": "thread-1", "runId": "run-1"}, startedContent)
+
+	finished := msgs[1]
+	assert.Equal(t, types.RoleActivity, finished.Role)
+	assert.Equal(t, string(aguievents.EventTypeRunFinished), finished.ActivityType)
+	finishedContent, ok := finished.ContentActivity()
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"threadId": "thread-1", "runId": "run-1", "result": "ok"}, finishedContent)
+
+	runErr := msgs[2]
+	assert.Equal(t, types.RoleActivity, runErr.Role)
+	assert.Equal(t, string(aguievents.EventTypeRunError), runErr.ActivityType)
+	errContent, ok := runErr.ContentActivity()
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"message": "boom", "runId": "run-2", "code": "E_RUN"}, errContent)
 }
 
 func TestHandleActivityAllCases(t *testing.T) {
@@ -1139,7 +1180,7 @@ func TestHandleActivityAllCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := new(testAppName, testUserID)
+			r := new(testAppName, testUserID, options{})
 			require.NoError(t, r.handleActivity(tt.event))
 			require.Len(t, r.messages, tt.wantCount)
 			if tt.wantCount == 0 {
@@ -1158,7 +1199,7 @@ func TestHandleActivityAllCases(t *testing.T) {
 }
 
 func TestHandleToolEndMissingParent(t *testing.T) {
-	r := new(testAppName, testUserID)
+	r := new(testAppName, testUserID, options{})
 	r.toolCalls["tool-call-1"] = &toolCallState{
 		messageID: "ghost-parent",
 		phase:     toolAwaitingArgs,
