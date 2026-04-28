@@ -142,34 +142,44 @@ func (e *memoryExtractor) Extract(
 			return nil, fmt.Errorf("model call failed: %w", err)
 		}
 	}
+	if rspChan == nil {
+		return nil, errors.New("model returned nil response channel")
+	}
 
 	// Parse tool calls into operations.
 	var ops []*Operation
-	for rsp := range rspChan {
-		ctx, rsp, err = e.runAfterModelCallbacks(ctx, req, rsp)
-		if err != nil {
-			return nil, err
-		}
-		if rsp == nil {
-			continue
-		}
-		if rsp.Error != nil {
-			return nil, fmt.Errorf("model error: %s", rsp.Error.Message)
-		}
-		if len(rsp.Choices) == 0 {
-			continue
-		}
-		// Choices are alternative candidates rather than cumulative
-		// tool-call batches, so only the selected primary choice
-		// should be converted into operations.
-		for _, call := range rsp.Choices[0].Message.ToolCalls {
-			op := e.parseToolCall(ctx, call)
-			if op != nil {
-				ops = append(ops, op)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("memory extraction canceled: %w", ctx.Err())
+		case rsp, ok := <-rspChan:
+			if !ok {
+				return ops, nil
+			}
+			ctx, rsp, err = e.runAfterModelCallbacks(ctx, req, rsp)
+			if err != nil {
+				return nil, err
+			}
+			if rsp == nil {
+				continue
+			}
+			if rsp.Error != nil {
+				return nil, fmt.Errorf("model error: %s", rsp.Error.Message)
+			}
+			if len(rsp.Choices) == 0 {
+				continue
+			}
+			// Choices are alternative candidates rather than cumulative
+			// tool-call batches, so only the selected primary choice
+			// should be converted into operations.
+			for _, call := range rsp.Choices[0].Message.ToolCalls {
+				op := e.parseToolCall(ctx, call)
+				if op != nil {
+					ops = append(ops, op)
+				}
 			}
 		}
 	}
-	return ops, nil
 }
 
 // SetPrompt updates the extractor's prompt dynamically.
