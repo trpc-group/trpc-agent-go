@@ -192,6 +192,8 @@ func TestNewMCPRegistryTools_CallsRegistryAndBroker(t *testing.T) {
 	listJSON, err := json.Marshal(listOut)
 	require.NoError(t, err)
 	require.Contains(t, string(listJSON), "docs")
+	require.NotContains(t, string(listJSON), "secret")
+	require.NotContains(t, string(listJSON), "token=")
 }
 
 func TestNewBrowserTools_ErrorPaths(t *testing.T) {

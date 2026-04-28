@@ -84,16 +84,15 @@ func TestRegistryTools_ManageVisibleEntries(t *testing.T) {
 	require.False(t, notInUserScope.Accessible)
 
 	updated, err := tools.update(ctx, upsertInput{
-		Name:             testDocsName,
-		Scope:            string(ScopeChat),
-		Description:      testUpdatedDocsDesc,
-		Transport:        transportStdio,
-		Command:          testRegistryCommand,
-		Args:             []string{"serve"},
-		TimeoutMS:        1000,
-		ClearServerURL:   true,
-		ClearHeaders:     true,
-		ClearDescription: true,
+		Name:           testDocsName,
+		Scope:          string(ScopeChat),
+		Description:    testUpdatedDocsDesc,
+		Transport:      transportStdio,
+		Command:        testRegistryCommand,
+		Args:           []string{"serve"},
+		TimeoutMS:      1000,
+		ClearServerURL: true,
+		ClearHeaders:   true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, testRegistryCommand, updated.Command)
