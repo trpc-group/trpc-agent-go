@@ -1,0 +1,167 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package telemetry
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+func TestParseOTelMessagesJSON_EmptyAndInvalid(t *testing.T) {
+	inputMessages, err := ParseOTelInputMessagesJSON("")
+	require.NoError(t, err)
+	require.Nil(t, inputMessages)
+
+	outputMessages, err := ParseOTelOutputMessagesJSON("")
+	require.NoError(t, err)
+	require.Nil(t, outputMessages)
+
+	_, err = ParseOTelInputMessagesJSON("{")
+	require.Error(t, err)
+
+	_, err = ParseOTelOutputMessagesJSON("{")
+	require.Error(t, err)
+}
+
+func TestTelemetryOutputMessageFromChoice_UsesDeltaFallback(t *testing.T) {
+	msg := telemetryOutputMessageFromChoice(model.Choice{
+		Delta: model.Message{
+			Content: "streamed",
+		},
+	})
+
+	require.Equal(t, model.RoleAssistant, msg.Role)
+	require.Empty(t, msg.FinishReason)
+	require.Len(t, msg.Parts, 1)
+	require.Equal(t, otelPartTypeText, msg.Parts[0].Type)
+	require.Equal(t, "streamed", msg.Parts[0].Content)
+}
+
+func TestTelemetryPartsFromContentParts_SkipsInvalidParts(t *testing.T) {
+	parts := telemetryPartsFromContentParts([]model.ContentPart{
+		{Type: model.ContentTypeText},
+		{Type: model.ContentTypeImage},
+		{Type: model.ContentTypeImage, Image: &model.Image{}},
+		{Type: model.ContentTypeAudio},
+		{Type: model.ContentTypeAudio, Audio: &model.Audio{}},
+		{Type: model.ContentTypeFile},
+		{Type: model.ContentTypeFile, File: &model.File{}},
+		{Type: model.ContentType("unknown")},
+	})
+
+	require.Empty(t, parts)
+
+	part, ok := telemetryPartFromImage(nil)
+	require.False(t, ok)
+	require.Empty(t, part)
+
+	part, ok = telemetryPartFromFile(nil)
+	require.False(t, ok)
+	require.Empty(t, part)
+}
+
+func TestToolResponseRawMessage_CompositePayload(t *testing.T) {
+	text := "part text"
+	raw := toolResponseRawMessage(model.Message{
+		Content:          `{"status":"ok"}`,
+		ReasoningContent: "because",
+		ContentParts: []model.ContentPart{{
+			Type: model.ContentTypeText,
+			Text: &text,
+		}},
+		ToolCalls: []model.ToolCall{{
+			ID: " call-1 ",
+			Function: model.FunctionDefinitionParam{
+				Name:      " lookup ",
+				Arguments: []byte("not json"),
+			},
+		}},
+	})
+
+	require.JSONEq(t, `{
+		"content": {"status":"ok"},
+		"parts": [{"type":"text","content":"part text"}],
+		"reasoning": "because",
+		"tool_calls": [{
+			"type":"tool_call",
+			"id":"call-1",
+			"name":"lookup",
+			"arguments":"not json"
+		}]
+	}`, string(raw))
+
+	raw = toolResponseRawMessage(model.Message{
+		Content:          "plain",
+		ReasoningContent: "because",
+	})
+	require.JSONEq(t, `{"content":"plain","reasoning":"because"}`, string(raw))
+}
+
+func TestRawJSONOrJSONStringAndJSONValueOrString(t *testing.T) {
+	require.Nil(t, rawJSONOrJSONString([]byte("  ")))
+	require.JSONEq(t, `{"ok":true}`, string(rawJSONOrJSONString([]byte(` {"ok":true} `))))
+
+	raw := rawJSONOrJSONString([]byte("not json"))
+	var got string
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.Equal(t, "not json", got)
+
+	require.Equal(t, "", jsonValueOrString([]byte(" ")))
+	require.Equal(t, float64(1), jsonValueOrString([]byte("1")))
+	require.Equal(t, "not json", jsonValueOrString([]byte("not json")))
+}
+
+func TestTelemetryMIMEAndModalityHelpers(t *testing.T) {
+	require.Equal(t, otelModalityFile, modalityFromMIMEType(""))
+	require.Equal(t, otelModalityImage, modalityFromMIMEType("image/png"))
+	require.Equal(t, otelModalityAudio, modalityFromMIMEType("audio/wav"))
+	require.Equal(t, otelModalityVideo, modalityFromMIMEType("video/mp4"))
+
+	require.Equal(t, "", imageMIMEType(nil))
+	require.Equal(t, "image/jpeg", imageMIMEType(&model.Image{Format: ".JPG"}))
+	require.Equal(t, "image/png", imageMIMEType(&model.Image{URL: "https://example.com/a/picture.png?x=1"}))
+	require.Equal(t, "", mimeTypeFromURL(" "))
+
+	require.Equal(t, "image/gif", normalizeFormatAsMIME("gif", "image"))
+	require.Equal(t, "image/webp", normalizeFormatAsMIME("webp", "image"))
+	require.Equal(t, "image/bmp", normalizeFormatAsMIME("bmp", "image"))
+	require.Equal(t, "image/tiff", normalizeFormatAsMIME("tif", "image"))
+	require.Equal(t, "image/svg", normalizeFormatAsMIME("svg", "image"))
+	require.Equal(t, "audio/wav", normalizeFormatAsMIME("wav", "audio"))
+	require.Equal(t, "audio/mp4", normalizeFormatAsMIME("m4a", "audio"))
+	require.Equal(t, "audio/ogg", normalizeFormatAsMIME("ogg", "audio"))
+	require.Equal(t, "", normalizeFormatAsMIME("png", "file"))
+
+	require.Equal(t, "application/json", mimeTypeFromName("data.json"))
+	require.Equal(t, "", mimeTypeFromName("no-extension"))
+
+	modality, mimeType := fileMetadata(nil)
+	require.Equal(t, otelModalityFile, modality)
+	require.Empty(t, mimeType)
+}
+
+func TestTelemetryPartFromFile_InfersMetadataFromName(t *testing.T) {
+	part, ok := telemetryPartFromFile(&model.File{
+		Name: "photo.jpeg",
+		Data: []byte("image"),
+	})
+
+	require.True(t, ok)
+	require.Equal(t, otelPartTypeBlob, part.Type)
+	require.Equal(t, otelModalityImage, part.Modality)
+	require.Equal(t, "image/jpeg", part.MIMEType)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("image")), part.Content)
+	require.Equal(t, "photo.jpeg", part.Filename)
+}
