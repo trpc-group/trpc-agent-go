@@ -118,6 +118,7 @@ func TestInvocation_Clone(t *testing.T) {
 		WithInvocationID("test-invocation"),
 		WithInvocationMessage(model.Message{Role: model.RoleUser, Content: "Hello"}),
 	)
+	inv.InvokeAgentInstructions = "root instructions"
 
 	subAgent := &mockAgent{name: "test-agent"}
 	subInv := inv.Clone(WithInvocationAgent(subAgent))
@@ -127,6 +128,11 @@ func TestInvocation_Clone(t *testing.T) {
 	require.Equal(t, "Hello", subInv.Message.Content)
 	require.Equal(t, inv.noticeChannels, subInv.noticeChannels)
 	require.Equal(t, inv.noticeMu, subInv.noticeMu)
+	require.Empty(
+		t,
+		subInv.InvokeAgentInstructions,
+		"Clone should start with fresh invoke_agent instruction metadata",
+	)
 }
 
 func TestInvocation_View_PreservesIdentityWithoutMutatingSource(t *testing.T) {
@@ -141,6 +147,7 @@ func TestInvocation_View_PreservesIdentityWithoutMutatingSource(t *testing.T) {
 		WithInvocationTraceNodeID("root/node"),
 		WithInvocationMessage(model.Message{Role: model.RoleUser, Content: "Hello"}),
 	)
+	inv.InvokeAgentInstructions = "source instructions"
 	viewConfigs := map[string]any{"view": "config"}
 	view := inv.View(
 		WithInvocationAgent(&mockAgent{name: "view-agent"}),
@@ -160,6 +167,7 @@ func TestInvocation_View_PreservesIdentityWithoutMutatingSource(t *testing.T) {
 	require.Equal(t, sourceConfigs, inv.RunOptions.CustomAgentConfigs)
 	require.Equal(t, "root/node", InvocationTraceNodeID(view))
 	require.Equal(t, "root/node", InvocationTraceNodeID(inv))
+	require.Equal(t, "source instructions", view.InvokeAgentInstructions)
 }
 
 func TestInvocation_SyncView_CopiesExecutionVisibleState(t *testing.T) {
@@ -196,6 +204,7 @@ func TestInvocation_SyncView_CopiesExecutionVisibleState(t *testing.T) {
 	view.traceNodeID = "view/node"
 	view.MaxLLMCalls = 3
 	view.MaxToolIterations = 4
+	view.InvokeAgentInstructions = "view instructions"
 	view.timingInfo = &model.TimingInfo{FirstTokenDuration: time.Second}
 	view.llmCallCount = 1
 	view.toolIterationCount = 2
@@ -219,6 +228,7 @@ func TestInvocation_SyncView_CopiesExecutionVisibleState(t *testing.T) {
 	require.Equal(t, "view/node", InvocationTraceNodeID(source))
 	require.Equal(t, 3, source.MaxLLMCalls)
 	require.Equal(t, 4, source.MaxToolIterations)
+	require.Equal(t, "view instructions", source.InvokeAgentInstructions)
 	require.Equal(t, time.Second, source.timingInfo.FirstTokenDuration)
 	require.Equal(t, 1, source.llmCallCount)
 	require.Equal(t, 2, source.toolIterationCount)
@@ -736,10 +746,18 @@ func TestEmitEvent(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:      "successful emit",
-			inv:       NewInvocation(WithInvocationID("test-id")),
-			ch:        make(chan *event.Event, 1),
-			event:     &event.Event{ID: "event-1"},
+			name: "successful emit",
+			inv:  NewInvocation(WithInvocationID("test-id")),
+			ch:   make(chan *event.Event, 1),
+			event: event.NewResponseEvent(
+				"test-id",
+				"tester",
+				&model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("ok"),
+					}},
+				},
+			),
 			expectErr: false,
 		},
 		{
@@ -759,6 +777,13 @@ func TestEmitEvent(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
+			}
+			if tt.name == "successful emit" {
+				require.Equal(
+					t,
+					tt.event.ID,
+					LastPersistableEmittedEventID(tt.inv),
+				)
 			}
 		})
 	}

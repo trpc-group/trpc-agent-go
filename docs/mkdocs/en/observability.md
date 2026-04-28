@@ -220,16 +220,21 @@ func processAgentRequest(ctx context.Context, meter metric.Meter) error {
 
 ### Agent Execution Tracing
 
-The framework automatically instruments key components of Agents:
+Framework-managed agent invocations are instrumented automatically. When you run
+agents through `runner.Run`, `agent.RunWithPlugins`, `AgentTool`, or built-in
+containers such as Chain, Parallel, Cycle, and Graph agent nodes, the framework
+emits consistent `invoke_agent` spans and metrics for every agent invocation,
+including nested calls.
 
-```go
-// Agent execution will automatically generate the following observability data:
-// 
-// Traces:
-// - agent.execution: Overall Agent execution process.
-// - tool.invocation: Tool invocation process.  
-// - model.api_call: Model API call process.
-```
+In most applications you do not need to add `invoke_agent` telemetry manually
+inside custom agents unless you intentionally bypass these framework entry
+points.
+
+Common telemetry emitted automatically:
+
+- `invoke_agent <agent-name>`: one span per agent invocation, including nested agents.
+- `execute_tool <tool-name>`: tool execution spans.
+- `chat <model-name>` / `generate_content <model-name>`: model request spans.
 
 ## Telemetry Data Analysis
 

@@ -164,7 +164,7 @@ func TestInvocationToolSurface_WorkspaceExecUsesPatchedSkillRepo(t *testing.T) {
 			agent.WithSurfacePatchForNode("test-agent", patch),
 		)),
 	)
-	agt.setupInvocation(inv)
+	agt.PrepareInvocation(inv)
 
 	tools, _ := agt.InvocationToolSurface(context.Background(), inv)
 	var wsExec tool.Tool

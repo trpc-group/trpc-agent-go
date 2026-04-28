@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/google/uuid"
@@ -232,8 +233,10 @@ func (at *Tool) callWithParentInvocation(
 	if parentInv.Session == nil {
 		return at.callWithIsolatedRunner(ctx, message)
 	}
-	// Flush all events emitted before this tool call so that the snapshot sees all events.
-	if err := flush.Invoke(ctx, parentInv); err != nil {
+	// Flush all events emitted before this tool call so that the snapshot sees
+	// all parent history, including events that are still crossing the
+	// RunWithPlugins forwarding hop into the runner event loop.
+	if err := flushParentInvocationSession(ctx, parentInv); err != nil {
 		return "", fmt.Errorf("flush parent invocation session: %w", err)
 	}
 	// Build child filter key based on history scope.
@@ -843,7 +846,7 @@ func (at *Tool) streamFromParentInvocation(
 	message model.Message,
 	writer *tool.StreamWriter,
 ) {
-	if err := flush.Invoke(ctx, parentInv); err != nil {
+	if err := flushParentInvocationSession(ctx, parentInv); err != nil {
 		sendStreamableCallError(
 			ctx,
 			writer,
@@ -932,6 +935,39 @@ func (at *Tool) forwardSubInvocationStream(
 		return
 	}
 	at.emitPendingVisibleCompletionEvent(&state, writer)
+}
+
+func flushParentInvocationSession(
+	ctx context.Context,
+	parentInv *agent.Invocation,
+) error {
+	if parentInv == nil {
+		return nil
+	}
+	targetEventID := agent.LastPersistableEmittedEventID(parentInv)
+	if err := flush.Invoke(ctx, parentInv); err != nil {
+		return err
+	}
+	if targetEventID == "" ||
+		!appender.IsAttached(parentInv) ||
+		sessionHasEventID(parentInv, targetEventID) {
+		return nil
+	}
+	// Runner-managed parent invocations reach the session through
+	// RunWithPlugins' forwarding goroutine and then the runner event loop. If a
+	// tool call happens immediately after EmitEvent, one flush can ACK before the
+	// latest persistable event crosses that extra hop. Wait specifically for that
+	// event ID to appear in the shared session snapshot.
+	for i := 0; i < 8; i++ {
+		runtime.Gosched()
+		if err := flush.Invoke(ctx, parentInv); err != nil {
+			return err
+		}
+		if sessionHasEventID(parentInv, targetEventID) {
+			return nil
+		}
+	}
+	return nil
 }
 
 func (at *Tool) capturePendingVisibleCompletion(

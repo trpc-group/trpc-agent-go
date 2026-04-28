@@ -18,16 +18,16 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	invokeagenttelemetry "trpc.group/trpc-go/trpc-agent-go/internal/invokeagenttelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -128,14 +128,11 @@ func (m *mockErrorEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<
 func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 	recorder := tracetest.NewSpanRecorder()
 	provider := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(recorder))
-	originalProvider := trace.TracerProvider
-	originalTracer := trace.Tracer
-	trace.TracerProvider = provider
-	trace.Tracer = provider.Tracer("chain-agent-disable-tracing-test")
+	originalProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
 	t.Cleanup(func() {
 		_ = provider.Shutdown(context.Background())
-		trace.TracerProvider = originalProvider
-		trace.Tracer = originalTracer
+		otel.SetTracerProvider(originalProvider)
 	})
 	return recorder
 }
@@ -582,7 +579,7 @@ func TestChainAgent_Run_DisableTracingSkipsSpanCreation(t *testing.T) {
 			DisableTracing: true,
 		},
 	}
-	events, err := chain.Run(context.Background(), invocation)
+	events, err := agent.RunWithPlugins(context.Background(), invocation, chain)
 	require.NoError(t, err)
 	for range events {
 	}
@@ -1025,17 +1022,14 @@ func TestChainAgent_DisableGraphCompletionEvent_AddsVisibleCompletionMetadataFor
 }
 
 func TestChainAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
-	originalTracer := trace.Tracer
-	defer func() {
-		trace.Tracer = originalTracer
-	}()
-
 	spanRecorder := tracetest.NewSpanRecorder()
 	tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
 	defer func() {
 		_ = tp.Shutdown(context.Background())
 	}()
-	trace.Tracer = tp.Tracer("test")
+	originalProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(originalProvider)
 
 	chainAgent := New(
 		"test-chain",
@@ -1057,7 +1051,7 @@ func TestChainAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 		},
 	}
 
-	events, err := chainAgent.Run(context.Background(), invocation)
+	events, err := agent.RunWithPlugins(context.Background(), invocation, chainAgent)
 	require.NoError(t, err)
 	for range events {
 	}
@@ -1065,7 +1059,7 @@ func TestChainAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 	spans := spanRecorder.Ended()
 	require.NotEmpty(t, spans)
 
-	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, chainAgent.Info().Name)
+	expectedSpanName := fmt.Sprintf("%s %s", invokeagenttelemetry.OperationInvokeAgent, chainAgent.Info().Name)
 	agentSpan := findEndedSpanByName(spans, expectedSpanName)
 	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
 
@@ -1092,17 +1086,14 @@ func TestChainAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 }
 
 func TestChainAgent_Run_PreservesFinalResponseWhenAfterCallbackReturnsNil(t *testing.T) {
-	originalTracer := trace.Tracer
-	defer func() {
-		trace.Tracer = originalTracer
-	}()
-
 	spanRecorder := tracetest.NewSpanRecorder()
 	tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
 	defer func() {
 		_ = tp.Shutdown(context.Background())
 	}()
-	trace.Tracer = tp.Tracer("test")
+	originalProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(originalProvider)
 
 	callbacks := agent.NewCallbacks()
 	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
@@ -1126,7 +1117,7 @@ func TestChainAgent_Run_PreservesFinalResponseWhenAfterCallbackReturnsNil(t *tes
 		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
 	}
 
-	events, err := chainAgent.Run(context.Background(), invocation)
+	events, err := agent.RunWithPlugins(context.Background(), invocation, chainAgent)
 	require.NoError(t, err)
 
 	var received []*event.Event
@@ -1138,7 +1129,7 @@ func TestChainAgent_Run_PreservesFinalResponseWhenAfterCallbackReturnsNil(t *tes
 	spans := spanRecorder.Ended()
 	require.NotEmpty(t, spans)
 
-	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, chainAgent.Info().Name)
+	expectedSpanName := fmt.Sprintf("%s %s", invokeagenttelemetry.OperationInvokeAgent, chainAgent.Info().Name)
 	agentSpan := findEndedSpanByName(spans, expectedSpanName)
 	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
 

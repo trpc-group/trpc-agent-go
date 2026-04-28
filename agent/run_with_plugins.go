@@ -14,7 +14,11 @@ import (
 	"errors"
 	"fmt"
 
+	"go.opentelemetry.io/otel"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	nooptrace "go.opentelemetry.io/otel/trace/noop"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	invokeagenttelemetry "trpc.group/trpc-go/trpc-agent-go/internal/invokeagenttelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -26,6 +30,9 @@ func pluginAgentCallbacks(inv *Invocation) *Callbacks {
 }
 
 // RunWithPlugins runs an agent with Runner-provided plugins applied.
+// It is also the centralized framework hook for invoke_agent tracing and
+// metrics, so any agent invocation that flows through Runner, AgentTool, or the
+// built-in multi-agent containers gets consistent invoke_agent telemetry.
 //
 // This wrapper is used by the Runner and by internal multi-agent helpers
 // (e.g., chain, parallel, cycle, transfer, graph agent-nodes) so plugins
@@ -71,31 +78,62 @@ func RunWithPlugins(
 	if ag == nil {
 		return nil, errors.New("agent is nil")
 	}
-	callbacks := pluginAgentCallbacks(invocation)
-	if callbacks == nil {
-		return ag.Run(ctx, invocation)
-	}
-
-	result, err := callbacks.RunBeforeAgent(
+	prepareInvocationForRunWithPlugins(invocation, ag)
+	ctx, span, startedSpan := startInvokeAgentSpan(
 		ctx,
-		&BeforeAgentArgs{Invocation: invocation},
+		invocation,
+		invokeagenttelemetry.InvokeAgentSpanName(invokeAgentInvocationView(invocation)),
 	)
-	if err != nil {
-		return nil, err
-	}
-	if result != nil && result.Context != nil {
-		ctx = result.Context
-	}
-	if result != nil && result.CustomResponse != nil {
-		return singleResponseEventChan(ctx, invocation, result.CustomResponse),
-			nil
+	rec := invokeagenttelemetry.StartInvokeAgent(
+		ctx,
+		invokeAgentInvocationView(invocation),
+		span,
+		startedSpan,
+		invokeAgentOptions(invocation),
+	)
+	callbacks := pluginAgentCallbacks(invocation)
+	if callbacks != nil {
+		result, err := callbacks.RunBeforeAgent(
+			ctx,
+			&BeforeAgentArgs{Invocation: invocation},
+		)
+		if err != nil {
+			rec.SetResponseErrorType(
+				invokeagenttelemetry.ToErrorType(err, model.ErrorTypeRunError),
+			)
+			rec.Finish()
+			return nil, err
+		}
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
+		if result != nil && result.CustomResponse != nil {
+			rec.Observe(event.NewResponseEvent(
+				invocationID(invocation),
+				agentName(invocation),
+				result.CustomResponse,
+			))
+			rec.Finish()
+			return singleResponseEventChan(ctx, invocation, result.CustomResponse),
+				nil
+		}
 	}
 
 	original, err := ag.Run(ctx, invocation)
 	if err != nil {
+		rec.SetResponseErrorType(
+			invokeagenttelemetry.ToErrorType(err, model.ErrorTypeRunError),
+		)
+		rec.Finish()
 		return nil, err
 	}
-	return wrapAfterAgentCallbacks(ctx, invocation, callbacks, original), nil
+	return wrapRunWithPluginsStream(
+		ctx,
+		invocation,
+		callbacks,
+		original,
+		rec,
+	), nil
 }
 
 func singleResponseEventChan(
@@ -132,25 +170,35 @@ func agentName(inv *Invocation) string {
 	return inv.AgentName
 }
 
-func wrapAfterAgentCallbacks(
+func wrapRunWithPluginsStream(
 	ctx context.Context,
 	invocation *Invocation,
 	callbacks *Callbacks,
 	src <-chan *event.Event,
+	rec *invokeagenttelemetry.InvokeAgentRecorder,
 ) <-chan *event.Event {
 	out := make(chan *event.Event, cap(src))
 	runCtx := CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(out)
+		defer rec.Finish()
 
 		var fullRespEvent *event.Event
 		for evt := range src {
+			rec.Observe(evt)
 			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
 				fullRespEvent = evt
 			}
 			if err := event.EmitEvent(ctx, out, evt); err != nil {
+				rec.SetResponseErrorType(
+					invokeagenttelemetry.ToErrorType(err, model.ErrorTypeRunError),
+				)
 				return
 			}
+		}
+
+		if callbacks == nil {
+			return
 		}
 
 		agentErr := agentErrorFromEvent(fullRespEvent)
@@ -167,9 +215,102 @@ func wrapAfterAgentCallbacks(
 		if evt == nil {
 			return
 		}
+		rec.Observe(evt)
 		_ = EmitEvent(ctx, invocation, out, evt)
 	}(runCtx)
 	return out
+}
+
+func prepareInvocationForRunWithPlugins(invocation *Invocation, ag Agent) {
+	if invocation == nil || ag == nil {
+		return
+	}
+	if preparer, ok := ag.(InvocationPreparer); ok {
+		preparer.PrepareInvocation(invocation)
+	}
+	if invocation.Agent == nil {
+		invocation.Agent = ag
+	}
+	if invocation.AgentName == "" {
+		invocation.AgentName = ag.Info().Name
+	}
+}
+
+func invokeAgentOptions(invocation *Invocation) invokeagenttelemetry.InvokeAgentOptions {
+	if invocation == nil {
+		return invokeagenttelemetry.InvokeAgentOptions{}
+	}
+	return invokeagenttelemetry.InvokeAgentOptions{
+		Description:  invokeAgentDescription(invocation),
+		Instructions: invocation.InvokeAgentInstructions,
+		Stream:       resolveInvokeAgentStream(invocation),
+	}
+}
+
+// invokeAgentDescription resolves the gen_ai.agent.description telemetry value
+// from the bound Agent, falling back to an empty string when the agent is not
+// available.
+func invokeAgentDescription(invocation *Invocation) string {
+	if invocation == nil || invocation.Agent == nil {
+		return ""
+	}
+	return invocation.Agent.Info().Description
+}
+
+func resolveInvokeAgentStream(invocation *Invocation) bool {
+	if invocation != nil && invocation.RunOptions.Stream != nil {
+		return *invocation.RunOptions.Stream
+	}
+	return false
+}
+
+func invokeAgentInvocationView(invocation *Invocation) *invokeagenttelemetry.InvocationView {
+	if invocation == nil {
+		return nil
+	}
+	var traceStartedCallbacks []func(oteltrace.SpanContext)
+	if len(invocation.RunOptions.TraceStartedCallbacks) > 0 {
+		traceStartedCallbacks = make(
+			[]func(oteltrace.SpanContext),
+			0,
+			len(invocation.RunOptions.TraceStartedCallbacks),
+		)
+		for _, callback := range invocation.RunOptions.TraceStartedCallbacks {
+			if callback == nil {
+				traceStartedCallbacks = append(traceStartedCallbacks, nil)
+				continue
+			}
+			cb := callback
+			traceStartedCallbacks = append(
+				traceStartedCallbacks,
+				func(spanContext oteltrace.SpanContext) {
+					cb(spanContext)
+				},
+			)
+		}
+	}
+	return &invokeagenttelemetry.InvocationView{
+		AgentName:             invocation.AgentName,
+		InvocationID:          invocation.InvocationID,
+		Message:               invocation.Message,
+		Session:               invocation.Session,
+		Model:                 invocation.Model,
+		SpanAttributes:        invocation.RunOptions.SpanAttributes,
+		TraceStartedCallbacks: traceStartedCallbacks,
+		HasParent:             invocation.GetParentInvocation() != nil,
+	}
+}
+
+func startInvokeAgentSpan(
+	ctx context.Context,
+	invocation *Invocation,
+	spanName string,
+) (context.Context, oteltrace.Span, bool) {
+	if invocation != nil && invocation.RunOptions.DisableTracing {
+		return ctx, nooptrace.Span{}, false
+	}
+	ctx, span := otel.Tracer("trpc.agent.go").Start(ctx, spanName)
+	return ctx, span, true
 }
 
 func agentErrorFromEvent(fullRespEvent *event.Event) error {

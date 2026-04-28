@@ -82,6 +82,24 @@ type Agent interface {
 	FindSubAgent(name string) Agent
 }
 
+// InvocationPreparer is implemented by agents that need to populate
+// invocation-scoped execution metadata before RunWithPlugins starts
+// centralized invoke_agent telemetry.
+//
+// Typical uses include:
+//   - Binding the current invocation to the concrete agent instance/name.
+//   - Resolving per-run model overrides onto invocation.Model.
+//   - Populating invoke_agent telemetry metadata such as agent description
+//     or system instructions.
+//
+// PrepareInvocation should be safe to call more than once for the same
+// invocation. Implementations typically treat it as a best-effort
+// normalization step and may overwrite any stale agent-specific metadata
+// already present on the invocation.
+type InvocationPreparer interface {
+	PrepareInvocation(invocation *Invocation)
+}
+
 // SubAgentSetter is implemented by agents that support updating
 // their sub-agent list at runtime.
 //

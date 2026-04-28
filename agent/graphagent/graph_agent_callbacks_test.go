@@ -73,7 +73,7 @@ func TestGraphAgent_BeforeCallback_CustomResponseUsesInvocationBufferSize(t *tes
 			agent.WithEventChannelBufferSize(7),
 		),
 	}
-	ga.setupInvocation(inv)
+	ga.PrepareInvocation(inv)
 	ch, err := ga.runWithCallbacks(context.Background(), inv)
 	require.NoError(t, err)
 	require.Equal(t, 7, cap(ch))
@@ -90,7 +90,7 @@ func TestGraphAgent_BeforeCallback_CustomResponseKeepsSingleBuffer(t *testing.T)
 	ga, err := New("ga", g, WithAgentCallbacks(callbacks), WithChannelBufferSize(0))
 	require.NoError(t, err)
 	inv := &agent.Invocation{Message: model.NewUserMessage("hi")}
-	ga.setupInvocation(inv)
+	ga.PrepareInvocation(inv)
 
 	type result struct {
 		ch  <-chan *event.Event
@@ -175,7 +175,7 @@ func TestGraphAgent_AfterCallbackWrapUsesInvocationBufferSize(t *testing.T) {
 			agent.WithEventChannelBufferSize(7),
 		),
 	}
-	ga.setupInvocation(inv)
+	ga.PrepareInvocation(inv)
 	ch, err := ga.runWithCallbacks(context.Background(), inv)
 	require.NoError(t, err)
 	require.Equal(t, 7, cap(ch))

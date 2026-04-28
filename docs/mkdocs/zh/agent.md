@@ -609,7 +609,7 @@ type Invocation struct {
     state   map[string]any
     stateMu sync.RWMutex
 
-    // 可选的调用级安全限制（通常由 LLMAgent 在 setupInvocation 中设置）。
+    // 可选的调用级安全限制（通常由 LLMAgent 在 PrepareInvocation 中设置）。
     MaxLLMCalls      int
     MaxToolIterations int
 

@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
+	invokeagenttelemetry "trpc.group/trpc-go/trpc-agent-go/internal/invokeagenttelemetry"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
@@ -363,9 +364,9 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 	origChatTimePerToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
 	origChatTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
 	origExecOpDur := itelemetry.ExecuteToolMetricGenAIClientOperationDuration
-	origInvokeTTFT := itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken
-	origInvokeTokenUsage := itelemetry.InvokeAgentMetricGenAIClientTokenUsage
-	origInvokeOpDur := itelemetry.InvokeAgentMetricGenAIClientOperationDuration
+	origInvokeTTFT := invokeagenttelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken
+	origInvokeTokenUsage := invokeagenttelemetry.InvokeAgentMetricGenAIClientTokenUsage
+	origInvokeOpDur := invokeagenttelemetry.InvokeAgentMetricGenAIClientOperationDuration
 	defer func() {
 		itelemetry.MeterProvider = originalMP
 		itelemetry.ChatMetricGenAIClientOperationDuration = origChatOpDur
@@ -375,9 +376,9 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = origChatTimePerToken
 		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = origChatTokenPerTime
 		itelemetry.ExecuteToolMetricGenAIClientOperationDuration = origExecOpDur
-		itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = origInvokeTTFT
-		itelemetry.InvokeAgentMetricGenAIClientTokenUsage = origInvokeTokenUsage
-		itelemetry.InvokeAgentMetricGenAIClientOperationDuration = origInvokeOpDur
+		invokeagenttelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = origInvokeTTFT
+		invokeagenttelemetry.InvokeAgentMetricGenAIClientTokenUsage = origInvokeTokenUsage
+		invokeagenttelemetry.InvokeAgentMetricGenAIClientOperationDuration = origInvokeOpDur
 	}()
 
 	reset := func(t *testing.T) {
@@ -422,11 +423,11 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			t.Helper()
 			switch metricName {
 			case metrics.MetricTRPCAgentGoClientTimeToFirstToken:
-				itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = nil
+				invokeagenttelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = nil
 			case metrics.MetricGenAIClientTokenUsage:
-				itelemetry.InvokeAgentMetricGenAIClientTokenUsage = nil
+				invokeagenttelemetry.InvokeAgentMetricGenAIClientTokenUsage = nil
 			case metrics.MetricGenAIClientOperationDuration:
-				itelemetry.InvokeAgentMetricGenAIClientOperationDuration = nil
+				invokeagenttelemetry.InvokeAgentMetricGenAIClientOperationDuration = nil
 			}
 		}
 	}
