@@ -462,10 +462,10 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 		WithCompletionEventTotalSteps(2),
 		WithCompletionEventTotalDuration(1*time.Millisecond),
 	)
-	// Should include keep1 and keep2, exclude internal keys and unserializable key.
+	// Should include serializable final state, exclude internal keys and unserializable key.
 	require.Contains(t, e.StateDelta, "keep1")
 	require.Contains(t, e.StateDelta, "keep2")
-	require.NotContains(t, e.StateDelta, StateKeyMessages)
+	require.Contains(t, e.StateDelta, StateKeyMessages)
 	require.NotContains(t, e.StateDelta, MetadataKeyNode)
 	require.NotContains(t, e.StateDelta, MetadataKeyPregel)
 	require.NotContains(t, e.StateDelta, MetadataKeyChannel)
@@ -482,7 +482,7 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 
 	var cm CompletionMetadata
 	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyCompletion], &cm))
-	require.Equal(t, 3, cm.FinalStateKeys) // StateKeyLastResponse + keep1 + keep2
+	require.Equal(t, 4, cm.FinalStateKeys) // StateKeyLastResponse + keep1 + keep2 + messages
 }
 
 func TestNewGraphCompletionEvent_NilFinalState(t *testing.T) {

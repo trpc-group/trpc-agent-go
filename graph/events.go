@@ -1655,7 +1655,9 @@ func serializeFinalState(e *event.Event, state State) int {
 	}
 	count := 0
 	for key, value := range state {
-		if !shouldSerializeFinalStateKey(key) {
+		// Skip internal/ephemeral keys that are not JSON-serializable or can race
+		// due to concurrent updates (e.g., execution context and callbacks).
+		if isInternalStateKey(key) {
 			continue
 		}
 
@@ -1678,21 +1680,6 @@ func serializeFinalState(e *event.Event, state State) int {
 		}
 	}
 	return count
-}
-
-func shouldSerializeFinalStateKey(key string) bool {
-	// Skip internal/ephemeral keys that are not JSON-serializable or can race
-	// due to concurrent updates (e.g., execution context and callbacks).
-	if isInternalStateKey(key) {
-		return false
-	}
-	// Message history is already available from event/track history and can grow
-	// very large for multimodal/file-heavy turns, so omit it from completion
-	// snapshots to avoid duplicating bulky session state.
-	if key == StateKeyMessages {
-		return false
-	}
-	return true
 }
 
 // extractStateKeys extracts all keys from a state map.
