@@ -379,6 +379,8 @@ agentTool := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     // Enable inner forwarding: stream child Agent events inline to the parent
     agenttool.WithStreamInner(true),
+    // Return only the child Agent's final assistant message as the tool result.
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
 )
 
 // Use Agent tool in main Agent.
@@ -465,6 +467,15 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
   assistant text when inner streaming is enabled
 - `WithInnerTextMode(agenttool.InnerTextModeExclude)`: keep inner
   progress events, but suppress forwarded child assistant text
+- `WithResponseMode(agenttool.ResponseModeDefault)`: default compatibility mode;
+  concatenate child assistant messages into the tool result
+- `WithResponseMode(agenttool.ResponseModeFinalOnly)`: return only the last
+  complete child assistant message as the tool result
+
+Use `ResponseModeFinalOnly` when the child Agent is a context-isolated worker
+and the parent Agent should only consume its final answer. Use
+`InnerTextModeExclude` separately when you also want to hide child assistant
+text from the streamed UI.
 
 ### Agent Transfer
 
