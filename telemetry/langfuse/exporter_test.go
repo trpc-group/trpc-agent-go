@@ -1277,12 +1277,11 @@ func TestTransformInvokeAgent_TruncateUsesOTelMessages(t *testing.T) {
 
 	var gotOut []itelemetry.OTelOutputMessage
 	require.NoError(t, json.Unmarshal([]byte(out), &gotOut))
-	if len(gotOut) > 0 {
-		require.Equal(t, model.RoleAssistant, gotOut[0].Role)
-		require.Len(t, gotOut[0].Parts, 1)
-		require.Equal(t, "text", gotOut[0].Parts[0].Type)
-		require.LessOrEqual(t, len([]byte(gotOut[0].Parts[0].Content)), maxBytes)
-	}
+	require.Len(t, gotOut, 1)
+	require.Equal(t, model.RoleAssistant, gotOut[0].Role)
+	require.Len(t, gotOut[0].Parts, 1)
+	require.Equal(t, "text", gotOut[0].Parts[0].Type)
+	require.LessOrEqual(t, len([]byte(gotOut[0].Parts[0].Content)), maxBytes)
 }
 
 func TestTransformCallLLM_TruncatesObservationInputOutput(t *testing.T) {

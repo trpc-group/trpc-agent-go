@@ -66,7 +66,7 @@ type OTelOutputMessage struct {
 	Role         model.Role        `json:"role"`
 	Parts        []OTelMessagePart `json:"parts"`
 	Name         string            `json:"name,omitempty"`
-	FinishReason string            `json:"finish_reason"`
+	FinishReason string            `json:"finish_reason,omitempty"`
 }
 
 func telemetryMessageFromModel(msg model.Message) OTelInputMessage {
