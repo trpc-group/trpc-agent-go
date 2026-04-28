@@ -64,7 +64,10 @@ func newService(runner runner.Runner, opts *options) (service.Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agui: url join chat path: %w", err)
 	}
-	serviceOpts := []service.Option{service.WithPath(chatPath)}
+	serviceOpts := []service.Option{
+		service.WithPath(chatPath),
+		service.WithHeartbeatInterval(opts.heartbeatInterval),
+	}
 	if opts.cancelEnabled {
 		cancelPath, err := joinURLPath(opts.basePath, opts.cancelPath)
 		if err != nil {

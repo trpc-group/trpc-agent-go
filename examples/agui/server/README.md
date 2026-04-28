@@ -11,6 +11,7 @@ This directory shows AG-UI servers that can talk to the AG-UI client examples.
 - [`externaltool/llmagent/`](externaltool/llmagent/) – Demonstrates `llmagent + agui + WithToolExecutionFilter` with two internal tools and two external tools in the same conversation.
 - [`externaltool/graphagent/`](externaltool/graphagent/) – Demonstrates a `GraphAgent` interrupt workflow with two internal tools and two external tools in the same turn.
 - [`streamtool/`](streamtool/) – Demonstrates a minimal `StreamableTool` that uses `agui.WithStreamingToolResultActivityEnabled(true)` to stream tool progress as `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` while preserving a final `TOOL_CALL_RESULT`.
+- [`heartbeat/`](heartbeat/) – Demonstrates SSE heartbeat keepalive frames with `agui.WithHeartbeatInterval`.
 - [`graph/`](graph/) – Demonstrates graph node start activity events via `ACTIVITY_DELTA`.
 - [`react/`](react/) – The server showcases how React planner tags are streamed as custom AG-UI events.
 - [`langfuse/`](langfuse/) – This example shows how AG-UI Server customizes reporting through TranslateCallback and connects to the langfuse observability platform.
