@@ -17,7 +17,7 @@ import (
 var (
 	dataDir                    = flag.String("data-dir", "./data", "Directory containing evaluation set and metric files")
 	outputDir                  = flag.String("output-dir", "./output", "Directory where evaluation results will be stored")
-	modelName                  = flag.String("model", "deepseek-chat", "Model identifier used by the candidate agent")
+	modelName                  = flag.String("model", "deepseek-v4-flash", "Model identifier used by the candidate agent")
 	candidateInstruction       = flag.String("candidate-instruction", defaultCandidateInstruction, "Instruction used by the candidate agent")
 	judgeModelName             = flag.String("judge-model", "gpt-5.4", "Model identifier used by the judge agent")
 	workerModelName            = flag.String("worker-model", "gpt-5.4", "Model identifier used by the PromptIter backwarder, aggregator, and optimizer agents")

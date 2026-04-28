@@ -40,7 +40,7 @@ import (
 )
 
 var (
-	flagModel      = flag.String("model", "deepseek-chat", "model name (OpenAI-compatible)")
+	flagModel      = flag.String("model", "deepseek-v4-flash", "model name (OpenAI-compatible)")
 	flagStreaming  = flag.Bool("streaming", false, "stream responses")
 	flagTraceTools = flag.Bool("trace_tools", true, "print tool call/response trace")
 )

@@ -32,7 +32,7 @@
 //
 // Environment variables:
 //
-//	MODEL_NAME: model name (default: deepseek-chat)
+//	MODEL_NAME: model name (default: deepseek-v4-flash)
 //	sqlite:     SQLITE_SESSION_DSN (default:
 //	  file:sessions.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
@@ -71,7 +71,7 @@ var (
 		"model",
 		os.Getenv("MODEL_NAME"),
 		"Name of the model to use (default: MODEL_NAME env "+
-			"var or deepseek-chat)",
+			"var or deepseek-v4-flash)",
 	)
 	sessionType = flag.String(
 		"session",
@@ -91,7 +91,7 @@ func getModelName() string {
 	if *modelName != "" {
 		return *modelName
 	}
-	return "deepseek-chat"
+	return "deepseek-v4-flash"
 }
 
 func main() {

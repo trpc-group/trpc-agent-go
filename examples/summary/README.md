@@ -43,7 +43,7 @@ go run main.go -events 0 -tokens 0 -time-sec 0
 
 Command-line flags:
 
-- `-model`: Model name to use for both chat and summarization. Default: `deepseek-chat`.
+- `-model`: Model name to use for both chat and summarization. Default: `deepseek-v4-flash`.
 - `-streaming`: Enable streaming mode for responses. Default: `true`.
 - `-events`: Event count threshold to trigger summarization. Default: `1`.
 - `-tokens`: Token-count threshold to trigger summarization (0=disabled). Default: `0`.
@@ -65,7 +65,7 @@ Example output:
 
 ```
 📝 Session Summarization Chat
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Service: inmemory
 EventThreshold: 1
 TokenThreshold: 0

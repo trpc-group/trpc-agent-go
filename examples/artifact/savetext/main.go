@@ -20,7 +20,7 @@ import (
 
 func main() {
 	// Parse command line arguments
-	modelName := flag.String("model", "deepseek-chat", "Model name to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Model name to use")
 	flag.Parse()
 	a := newLogQueryAgent("log_app", "log_agent", *modelName)
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)

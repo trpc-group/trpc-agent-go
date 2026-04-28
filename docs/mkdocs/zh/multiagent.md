@@ -405,7 +405,7 @@ mainAgent := llmagent.New(
 
 ```
 🚀 Agent 工具示例
-模型：deepseek-chat
+模型：deepseek-v4-flash
 可用工具：current_time, math-specialist
 ==================================================
 
@@ -735,7 +735,7 @@ for evt := range events {
 ```bash
 cd examples/multiagent/chain
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### 并行 Agent 示例
@@ -743,7 +743,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/multiagent/parallel
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### 循环 Agent 示例
@@ -751,7 +751,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/multiagent/cycle
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat -max-iterations 5
+go run main.go -model deepseek-v4-flash -max-iterations 5
 ```
 
 ### 辅助功能示例
@@ -761,7 +761,7 @@ go run main.go -model deepseek-chat -max-iterations 5
 ```bash
 cd examples/agenttool
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Agent 委托示例
@@ -769,7 +769,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/transfer
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 ## 自定义和扩展

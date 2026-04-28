@@ -42,7 +42,7 @@ Auto memory is enabled by configuring an extractor on the memory service:
 
 ```go
 // Create memory extractor (uses LLM to analyze conversations).
-extractorModel := openai.New("deepseek-chat")
+extractorModel := openai.New("deepseek-v4-flash")
 memExtractor := extractor.NewExtractor(extractorModel)
 
 // Create memory service with auto extraction enabled.
@@ -227,7 +227,7 @@ memoryService := memoryinmemory.NewMemoryService(
 
 | Argument     | Description                                                               | Default Value    |
 | ------------ | ------------------------------------------------------------------------- | ---------------- |
-| `-model`     | Name of the model for chat responses                                      | `deepseek-chat`  |
+| `-model`     | Name of the model for chat responses                                      | `deepseek-v4-flash`  |
 | `-ext-model` | Name of the model for memory extraction                                   | Same as `-model` |
 | `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql` | `inmemory` |
 | `-streaming` | Enable streaming mode for responses                                       | `true`           |
@@ -318,7 +318,7 @@ Usage of ./auto:
   -memory string
         Memory service type: inmemory, sqlite, sqlitevec, redis, postgres, pgvector, mysql (default "inmemory")
   -model string
-        Model for chat responses (default "deepseek-chat")
+        Model for chat responses (default "deepseek-v4-flash")
   -streaming
         Enable streaming mode for responses (default true)
 ```
@@ -329,8 +329,8 @@ The interface is simple and intuitive:
 
 ```
 🧠 Auto Memory Demo
-Chat Model: deepseek-chat
-Extractor Model: deepseek-chat
+Chat Model: deepseek-v4-flash
+Extractor Model: deepseek-v4-flash
 Streaming: true
 ==================================================
 

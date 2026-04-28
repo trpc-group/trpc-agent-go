@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	modelName  = flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName  = flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	streaming  = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	addTime    = flag.Bool("add-time", true, "Add current time to the system prompt")
 	timezone   = flag.String("timezone", "UTC", "Timezone for time display (e.g., UTC, EST, PST)")

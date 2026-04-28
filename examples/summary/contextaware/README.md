@@ -40,7 +40,7 @@ Environment variables:
 ```bash
 cd examples/summary/contextaware
 export OPENAI_API_KEY="your-api-key"
-go run . -model deepseek-chat
+go run . -model deepseek-v4-flash
 ```
 
 Optional flags:

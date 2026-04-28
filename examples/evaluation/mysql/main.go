@@ -28,7 +28,7 @@ var (
 	mysqlDSN    = flag.String("dsn", "user:password@tcp(localhost:3306)/db?parseTime=true&charset=utf8mb4", "MySQL DSN used by evaluation managers")
 	tablePrefix = flag.String("table-prefix", "evaluation_example", "Table prefix applied to evaluation tables")
 	skipDBInit  = flag.Bool("skip-db-init", false, "Skip table creation during manager initialization")
-	modelName   = flag.String("model", "deepseek-chat", "Model to use for evaluation runs")
+	modelName   = flag.String("model", "deepseek-v4-flash", "Model to use for evaluation runs")
 	streaming   = flag.Bool("streaming", false, "Enable streaming responses from the agent")
 	numRuns     = flag.Int("runs", 1, "Number of times to repeat the evaluation loop per case")
 	evalSetID   = flag.String("eval-set", "math-basic", "Evaluation set identifier to execute")

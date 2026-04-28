@@ -31,7 +31,7 @@ go run .
 The example accepts several flags so you can point at a different model, address, or SSE path.
 
 ```bash
-go run . -model deepseek-chat -address 0.0.0.0:8080 -path /agui -stream=true
+go run . -model deepseek-v4-flash -address 0.0.0.0:8080 -path /agui -stream=true
 ```
 
 On startup you should see a log entry similar to the one below.

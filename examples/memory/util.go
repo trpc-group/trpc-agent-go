@@ -78,7 +78,7 @@ func DefaultRunnerConfig() RunnerConfig {
 	return RunnerConfig{
 		AppName:     "memory-chat",
 		AgentName:   "memory-assistant",
-		ModelName:   GetEnvOrDefault("MODEL_NAME", "deepseek-chat"),
+		ModelName:   GetEnvOrDefault("MODEL_NAME", "deepseek-v4-flash"),
 		Instruction: "You are a helpful AI assistant with memory capabilities.",
 		MaxTokens:   2000,
 		Temperature: 0.7,

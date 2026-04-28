@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	modelName       = flag.String("model", "deepseek-reasoner", "Name of the model to use")
+	modelName       = flag.String("model", "deepseek-v4-pro", "Name of the model to use")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	thinkingEnabled = flag.Bool("thinking", true, "Enable reasoning/thinking mode if provider supports it")
 	thinkingTokens  = flag.Int("thinking-tokens", 2048, "Max reasoning tokens if provider supports it")

@@ -33,7 +33,7 @@ The React (Reasoning and Acting) planner guides the language model through a str
 cd examples/react
 go build -o react-demo .
 
-# Run with default model (deepseek-chat)
+# Run with default model (deepseek-v4-flash)
 ./react-demo
 
 # Run with a specific model

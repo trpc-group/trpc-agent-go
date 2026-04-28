@@ -138,7 +138,7 @@ func main() {
     memoryService := memoryinmemory.NewMemoryService()
 
     // 步骤 2：创建 Agent 并注册记忆工具
-    modelInstance := openai.New("deepseek-chat")
+    modelInstance := openai.New("deepseek-v4-flash")
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(modelInstance),
@@ -208,7 +208,7 @@ func main() {
     ctx := context.Background()
 
     // 步骤 1：创建记忆服务（配置 Extractor 启用自动提取模式）
-    extractorModel := openai.New("deepseek-chat")
+    extractorModel := openai.New("deepseek-v4-flash")
     memExtractor := extractor.NewExtractor(extractorModel)
     memoryService := memoryinmemory.NewMemoryService(
         memoryinmemory.WithExtractor(memExtractor), // 关键：配置提取器
@@ -221,7 +221,7 @@ func main() {
 
     // 步骤 2：创建 Agent 并注册记忆工具
     // 注意：配置了 Extractor 后，默认只暴露 search 工具，load 可显式开启。
-    chatModel := openai.New("deepseek-chat")
+    chatModel := openai.New("deepseek-v4-flash")
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(chatModel),
@@ -656,7 +656,7 @@ go run main.go -streaming=false
 ```bash
 $ go run main.go
 🧠 Simple Memory Chat
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Memory Service: inmemory
 In-memory
 Streaming: true
@@ -743,7 +743,7 @@ func main() {
         memType    = flag.String("memory", "inmemory", "记忆服务类型")
         streaming  = flag.Bool("streaming", true, "是否启用流式输出")
         softDelete = flag.Bool("soft-delete", false, "启用软删除")
-        modelName  = flag.String("model", "deepseek-chat", "模型名称")
+        modelName  = flag.String("model", "deepseek-v4-flash", "模型名称")
     )
     flag.Parse()
 
@@ -1700,7 +1700,7 @@ defer mem0Svc.Close()
 sessionSvc := sessioninmemory.NewSessionService()
 agent := llmagent.New(
     "assistant",
-    llmagent.WithModel(openai.New("deepseek-chat")),
+    llmagent.WithModel(openai.New("deepseek-v4-flash")),
     llmagent.WithTools(mem0Svc.Tools()),
 )
 

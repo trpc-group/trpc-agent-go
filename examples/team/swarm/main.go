@@ -46,7 +46,7 @@ const (
 
 	entryAgentName = agentOptimist
 
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 	defaultVariant   = "openai"
 
 	defaultTimeout = 5 * time.Minute

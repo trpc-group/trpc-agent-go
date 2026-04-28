@@ -27,7 +27,7 @@ import (
 
 func main() {
     // 1. Create model instance.
-    modelInstance := openai.New("deepseek-chat",
+    modelInstance := openai.New("deepseek-v4-flash",
         openai.WithExtraFields(map[string]interface{}{
             "tool_choice": "auto", // Automatically select tools.
         }),
@@ -77,7 +77,7 @@ The Model module supports multiple usage methods and platform integration. The f
 cd examples/runner
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Platform Integration Configuration
@@ -118,7 +118,7 @@ go run main.go -model gpt-4o-mini
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 export OPENAI_API_KEY="your-api-key"
 cd examples/runner
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 **Code Configuration Method**
@@ -126,7 +126,7 @@ go run main.go -model deepseek-chat
 Configuration method when directly using Model in your own code:
 
 ```go
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
 )
@@ -275,7 +275,10 @@ Since the framework supports different models compatible with the OpenAI API, yo
 **2. DeepSeek**
 
 - Base URL: `https://api.deepseek.com`
-- Model Names: `deepseek-chat`, `deepseek-reasoner`
+- Model Names: `deepseek-v4-flash`, `deepseek-v4-pro`
+
+`deepseek-chat` and `deepseek-reasoner` are deprecated compatibility aliases;
+prefer the explicit DeepSeek v4 model names for new code.
 
 **3. Tencent Hunyuan**
 
@@ -322,7 +325,7 @@ import (
 
 func main() {
     // Create model instance.
-    llm := openai.New("deepseek-chat")
+    llm := openai.New("deepseek-v4-flash")
 
     // Build request.
     temperature := 0.7
@@ -466,7 +469,7 @@ request := &model.Request{
 
 ```go
 // Set pre-request callback function.
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithChatRequestCallback(func(ctx context.Context, req *openai.ChatCompletionNewParams) {
         // Called before request is sent.
         log.Printf("Sending request: model=%s, message count=%d", req.Model, len(req.Messages))
@@ -520,7 +523,7 @@ import (
     oaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-model := oaimodel.New("deepseek-chat",
+model := oaimodel.New("deepseek-v4-flash",
     oaimodel.WithChatRequestCallback(func(ctx context.Context, req *openai.ChatCompletionNewParams) {
         // Dynamically set extra fields based on runtime context.
         userID, _ := ctx.Value("user_id").(string)
@@ -601,7 +604,7 @@ import (
 // Create multiple model instances.
 gpt4 := openai.New("gpt-4o")
 gpt4mini := openai.New("gpt-4o-mini")
-deepseek := openai.New("deepseek-chat")
+deepseek := openai.New("deepseek-v4-flash")
 
 // Register all models when creating the Agent.
 agent := llmagent.New("my-agent",
@@ -680,7 +683,7 @@ agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
         "smart": openai.New("gpt-4o"),
         "fast":  openai.New("gpt-4o-mini"),
-        "cheap": openai.New("deepseek-chat"),
+        "cheap": openai.New("deepseek-v4-flash"),
     }),
     llmagent.WithModel(openai.New("gpt-4o-mini")), // Default model.
 )
@@ -709,7 +712,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message, opts...)
 
 // Use specialized reasoning model for reasoning tasks.
 eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
-    agent.WithModelName("deepseek-reasoner"),
+    agent.WithModelName("deepseek-v4-pro"),
 )
 ```
 
@@ -1140,7 +1143,7 @@ All methods affect streaming too because the same client is used for
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/model/openai"
 
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     openai.WithHeaders(map[string]string{
         "X-Custom-Header": "custom-value",
         "X-Request-ID":    "req-123",
@@ -1160,7 +1163,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     // If your provider needs extra headers
     openai.WithOpenAIOptions(
         openaiopt.WithHeader("X-Custom-Header", "custom-value"),
@@ -1175,7 +1178,7 @@ For complex logic, middleware lets you modify headers conditionally
 (for example, by URL path or context values):
 
 ```go
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     openai.WithOpenAIOptions(
         openaiopt.WithMiddleware(
             func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
@@ -1230,7 +1233,7 @@ import (
 
 const streamContentType = "text/event-stream"
 
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     openai.WithOpenAIOptions(
         openaiopt.WithMiddleware(
             func(
@@ -1300,7 +1303,7 @@ func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
     return rt.base.RoundTrip(req)
 }
 
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     openai.WithHTTPClientOptions(
         openai.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
     ),
@@ -1436,7 +1439,7 @@ func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model
 }
 
 // Use custom counter when creating a model
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     openai.WithTokenCounter(&MyCustomCounter{}),
 )
 ```
@@ -1478,7 +1481,7 @@ import (
 )
 
 // Enable token tailoring with automatic configuration
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true),
 )
 ```
@@ -1487,7 +1490,7 @@ model := openai.New("deepseek-chat",
 
 ```go
 // Custom token limit and strategy
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true),               // Required: enable token tailoring
     openai.WithMaxInputTokens(10000),                    // Custom token limit
     openai.WithTokenCounter(customCounter),              // Optional: custom counter
@@ -1557,7 +1560,7 @@ func (s *CustomStrategy) Tailor(
     return messages, nil
 }
 
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true),
     openai.WithTailoringStrategy(&CustomStrategy{}),
 )
@@ -1568,7 +1571,7 @@ model := openai.New("deepseek-chat",
 If the default token allocation strategy does not meet your needs, you can customize the budget parameters using `WithTokenTailoringConfig`. **Note: It is recommended to keep the default values unless you have specific requirements.**
 
 ```go
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true),
     openai.WithTokenTailoringConfig(&model.TokenTailoringConfig{
         ProtocolOverheadTokens: 1024,   // Custom protocol overhead
@@ -1644,7 +1647,7 @@ model := openai.New("hunyuan-model",
 )
 
 // Use the DeepSeek platform
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
     openai.WithVariant(openai.VariantDeepSeek), // Specify the DeepSeek variant
@@ -1686,7 +1689,7 @@ export DEEPSEEK_API_KEY="your-api-key"
 import "trpc.group/trpc-go/trpc-agent-go/model"
 
 // DeepSeek
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithVariant(openai.VariantDeepSeek), // Automatically reads DEEPSEEK_API_KEY
 )
 ```
@@ -2319,7 +2322,7 @@ import (
 )
 
 providerName := "openai"        // provider supports openai and anthropic.
-modelName := "deepseek-chat"
+modelName := "deepseek-v4-flash"
 
 modelInstance, err := provider.Model(
     providerName,
@@ -2353,7 +2356,7 @@ config := &model.TokenTailoringConfig{
 
 modelInstance, err := provider.Model(
     "openai",
-    "deepseek-chat",
+    "deepseek-v4-flash",
     provider.WithAPIKey(c.apiKey),
     provider.WithEnableTokenTailoring(true),
     provider.WithTokenTailoringConfig(config),
@@ -2395,7 +2398,7 @@ primary := openai.New(
     openai.WithBaseURL("https://api.openai.com/v1"),
 )
 backup := openai.New(
-    "deepseek-chat",
+    "deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
 )
 
@@ -2433,7 +2436,7 @@ primary := openai.New(
     openai.WithBaseURL("https://api.openai.com/v1"),
 )
 backup := openai.New(
-    "deepseek-chat",
+    "deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
 )
 

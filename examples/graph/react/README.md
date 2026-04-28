@@ -42,7 +42,7 @@ go run ./examples/graph/react -question "123+456"
 
 Flags:
 
-- `-model`: Override the default `deepseek-chat` OpenAI-compatible model.
+- `-model`: Override the default `deepseek-v4-flash` OpenAI-compatible model.
 - `-question`: Provide a non-interactive question; otherwise an interactive prompt is shown.
 
 ## Sample Output

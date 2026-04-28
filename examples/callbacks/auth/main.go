@@ -33,7 +33,7 @@ import (
 var (
 	userID    = flag.String("user-id", "alice", "User ID for authentication")
 	role      = flag.String("role", "user", "User role (admin, user, guest)")
-	modelName = flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName = flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 )
 
 func main() {

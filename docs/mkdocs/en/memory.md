@@ -144,7 +144,7 @@ func main() {
     memoryService := memoryinmemory.NewMemoryService()
 
     // Step 2: Create Agent and register memory tools.
-    modelInstance := openai.New("deepseek-chat")
+    modelInstance := openai.New("deepseek-v4-flash")
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(modelInstance),
@@ -219,7 +219,7 @@ func main() {
     ctx := context.Background()
 
     // Step 1: Create memory service (configure Extractor to enable auto mode).
-    extractorModel := openai.New("deepseek-chat")
+    extractorModel := openai.New("deepseek-v4-flash")
     memExtractor := extractor.NewExtractor(extractorModel)
     memoryService := memoryinmemory.NewMemoryService(
         memoryinmemory.WithExtractor(memExtractor), // Key: configure extractor.
@@ -233,7 +233,7 @@ func main() {
     // Step 2: Create Agent and register memory tools.
     // Note: With Extractor configured, Tools() exposes Search by default.
     // Load can be enabled explicitly.
-    chatModel := openai.New("deepseek-chat")
+    chatModel := openai.New("deepseek-v4-flash")
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(chatModel),
@@ -571,7 +571,7 @@ go run main.go -streaming=false
 ```bash
 $ go run main.go
 🧠 Simple Memory Chat
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Memory Service: inmemory
 In-memory
 Streaming: true
@@ -654,7 +654,7 @@ func main() {
         memType    = flag.String("memory", "inmemory", "Memory service type")
         streaming  = flag.Bool("streaming", true, "Enable streaming")
         softDelete = flag.Bool("soft-delete", false, "Enable soft delete")
-        modelName  = flag.String("model", "deepseek-chat", "Model name")
+        modelName  = flag.String("model", "deepseek-v4-flash", "Model name")
     )
     flag.Parse()
 
@@ -1666,7 +1666,7 @@ defer mem0Svc.Close()
 sessionSvc := sessioninmemory.NewSessionService()
 agent := llmagent.New(
     "assistant",
-    llmagent.WithModel(openai.New("deepseek-chat")),
+    llmagent.WithModel(openai.New("deepseek-v4-flash")),
     llmagent.WithTools(mem0Svc.Tools()),
 )
 

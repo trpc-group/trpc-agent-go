@@ -47,7 +47,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-chat"), "LLM model name")
+	modelName = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-v4-flash"), "LLM model name")
 	question  = flag.String("question", "", "User question; leave empty for interactive mode")
 	isolate   = flag.Bool("isolate", true, "Enable WithSubgraphIsolatedMessages for session isolation")
 	maxIter   = flag.Int("max-iter", 3, "Max tool iterations to prevent infinite loop")

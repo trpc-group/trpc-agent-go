@@ -28,7 +28,7 @@ Run:
   go run ./examples/graph/subagent_runtime_state \
     -api-key "$OPENAI_API_KEY" \
     -base-url "$OPENAI_BASE_URL" \
-    -model deepseek-chat
+    -model deepseek-v4-flash
 
 - Or env vars (flags optional):
 

@@ -121,7 +121,7 @@ separate embedding endpoint / API key:
 
 | Argument       | Description                                                             | Default Value   |
 | -------------- | ----------------------------------------------------------------------- | --------------- |
-| `-model`       | Name of the model to use                                                | `deepseek-chat` |
+| `-model`       | Name of the model to use                                                | `deepseek-v4-flash` |
 | `-memory`      | Memory service: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `mysql`, `postgres`, or `pgvector` | `inmemory` |
 | `-soft-delete` | Enable soft delete for SQLite/SQLiteVec/MySQL/PostgreSQL/pgvector memory service  | `false`         |
 | `-streaming`   | Enable streaming mode for responses                                     | `true`          |

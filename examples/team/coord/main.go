@@ -48,7 +48,7 @@ const (
 	memberInnerTextInclude = string(team.InnerTextModeInclude)
 	memberInnerTextExclude = string(team.InnerTextModeExclude)
 
-	defaultModelName           = "deepseek-chat"
+	defaultModelName           = "deepseek-v4-flash"
 	defaultVariant             = "openai"
 	defaultMemberInnerTextMode = memberInnerTextInclude
 

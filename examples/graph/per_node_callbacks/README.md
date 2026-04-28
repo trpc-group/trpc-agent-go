@@ -102,12 +102,12 @@ This example demonstrates:
 
 ### Default Mode
 ```bash
-go run . --model deepseek-chat
+go run . --model deepseek-v4-flash
 ```
 
 ### Interactive Mode
 ```bash
-go run . --model deepseek-chat --interactive
+go run . --model deepseek-v4-flash --interactive
 ```
 
 ### Example Inputs
@@ -121,7 +121,7 @@ go run . --model deepseek-chat --interactive
 
 ```
 🚀 Per-Node Callbacks Example
-Model: deepseek-chat
+Model: deepseek-v4-flash
 ==================================================
 📋 Running 4 examples...
 

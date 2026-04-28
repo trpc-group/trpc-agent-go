@@ -38,12 +38,12 @@ Then run:
 
 ```bash
 cd examples
-go run ./llmagent_tool_call_retry -model deepseek-chat
+go run ./llmagent_tool_call_retry -model deepseek-v4-flash
 ```
 
 ## Flags
 
-- `-model string` model name to use (default: `deepseek-chat`)
+- `-model string` model name to use (default: `deepseek-v4-flash`)
 - `-base-url string` OpenAI-compatible base URL
 - `-api-key string` API key for the model service
 - `-location string` location passed to the tool (default: `Shenzhen`)
@@ -53,7 +53,7 @@ go run ./llmagent_tool_call_retry -model deepseek-chat
 Example:
 
 ```bash
-go run ./llmagent_tool_call_retry -model deepseek-chat -location Shanghai -fail 2 -backoff 300ms
+go run ./llmagent_tool_call_retry -model deepseek-v4-flash -location Shanghai -fail 2 -backoff 300ms
 ```
 
 ## Expected output

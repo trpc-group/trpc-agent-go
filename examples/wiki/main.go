@@ -31,7 +31,7 @@ import (
 )
 
 var (
-	modelName  = flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName  = flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	language   = flag.String("lang", "en", "Wikipedia language (en, zh, es, etc.)")
 	maxResults = flag.Int("maxresults", 3, "Maximum number of search results")
 )

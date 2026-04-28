@@ -31,7 +31,7 @@ import (
 
 const (
 	appName          = "oneshot-by-node"
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 
 	nodeStart = "start"
 	nodePrepA = "prep_a"

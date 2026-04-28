@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName = flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	failCount = flag.Int("fail", 2, "Number of initial failures for the unstable node")
 	latency   = flag.Duration("latency", 200*time.Millisecond, "Simulated latency per attempt")
 	verbose   = flag.Bool("verbose", false, "Enable verbose event logging")

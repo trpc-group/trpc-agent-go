@@ -23,7 +23,7 @@ This ensures the ReAct loop works properly: after the agent calls a tool, it can
 # Set environment variables
 export OPENAI_BASE_URL="your-api-base-url"
 export OPENAI_API_KEY="your-api-key"
-export MODEL_NAME="your-model-name"  # Optional, defaults to deepseek-chat
+export MODEL_NAME="your-model-name"  # Optional, defaults to deepseek-v4-flash
 
 # Run the example
 go run . -question "What is 12 + 7?"
@@ -39,7 +39,7 @@ go run .
 | `-question` | (interactive) | User question |
 | `-isolate` | `true` | Enable WithSubgraphIsolatedMessages |
 | `-max-iter` | `3` | Maximum tool iterations |
-| `-model` | `deepseek-chat` | LLM model name |
+| `-model` | `deepseek-v4-flash` | LLM model name |
 | `-react` | `false` | Use ReActPlanner (default uses builtin) |
 | `-v` | `false` | Verbose output |
 
@@ -49,7 +49,7 @@ go run .
 ================================================================
 Isolated Subagent Demo - WithSubgraphIsolatedMessages Example
 ================================================================
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Isolate messages: true (WithSubgraphIsolatedMessages)
 ...
 

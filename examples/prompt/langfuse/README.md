@@ -68,7 +68,7 @@ go run ./examples/prompt/langfuse
 
 ## Useful Flags
 
-- `-model`: model name to use. Default: `deepseek-chat`
+- `-model`: model name to use. Default: `deepseek-v4-flash`
 - `-stream`: enable streaming output. Default: `true`
 - `-prompt-name`: Langfuse prompt name. Default: `movie-critic`
 - `-prompt-label`: Langfuse prompt label. Default: `production`

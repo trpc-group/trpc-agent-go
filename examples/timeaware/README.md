@@ -121,7 +121,7 @@ The application uses command-line flags for configuration. All settings can be c
 
 ### Default Settings
 
-- **Model**: `deepseek-chat`
+- **Model**: `deepseek-v4-flash`
 - **Streaming**: `true`
 - **Add Current Time**: `true`
 - **Timezone**: `UTC`
@@ -131,7 +131,7 @@ The application uses command-line flags for configuration. All settings can be c
 
 ```
 🚀 Multi-turn Chat with Time Aware
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Streaming: true
 Add Current Time: true
 Timezone: UTC

@@ -504,7 +504,7 @@ echo "Calculate 5+3" | go run main.go
 **Expected output:**
 ```
 🚀 Multi-Agent Tool Filtering Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 ...
 👤 User: 🤖 Assistant: 📋 Tools in OpenAI request: [transfer_to_agent]
 I'll transfer this to the math specialist agent.
@@ -533,7 +533,7 @@ echo "Calculate 5+3" | go run main.go -filter=exclude-demo
 **Expected output:**
 ```
 🚀 Multi-Agent Tool Filtering Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Filter Mode: exclude-demo
 ...
    Tool filtering is active:
@@ -569,7 +569,7 @@ echo "What time is it?" | go run main.go -filter=include-demo
 **Expected output:**
 ```
 🚀 Multi-Agent Tool Filtering Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Filter Mode: include-demo
 ...
    Tool filtering is active:
@@ -605,7 +605,7 @@ echo "Calculate 5+3" | go run main.go -filter=per-agent
 **Expected output:**
 ```
 🚀 Multi-Agent Tool Filtering Demo
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Filter Mode: per-agent
 ...
    Tool filtering is active:

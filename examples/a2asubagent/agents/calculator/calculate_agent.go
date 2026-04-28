@@ -28,7 +28,7 @@ import (
 
 var (
 	host      = flag.String("host", "0.0.0.0:8087", "Host to listen on")
-	modelName = flag.String("model", "deepseek-chat", "Model to use")
+	modelName = flag.String("model", "deepseek-v4-flash", "Model to use")
 )
 
 func main() {

@@ -15,13 +15,13 @@ It uses the same GraphAgent + Runner architecture and CLI style as the
 ## Run
 
 ```bash
-go run . -model deepseek-chat -input "Hello, world!"
+go run . -model deepseek-v4-flash -input "Hello, world!"
 ```
 
 Or interactively provide the input once:
 
 ```bash
-go run . -model deepseek-chat
+go run . -model deepseek-v4-flash
 ```
 
 Then type your prompt when asked.

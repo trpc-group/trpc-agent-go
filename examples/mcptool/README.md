@@ -38,7 +38,7 @@ The trpc-agent-go framework provides built-in support for MCP tools with these k
 
 | Argument | Description              | Default Value   |
 | -------- | ------------------------ | --------------- |
-| `-model` | Name of the model to use | `deepseek-chat` |
+| `-model` | Name of the model to use | `deepseek-v4-flash` |
 
 ## Usage
 

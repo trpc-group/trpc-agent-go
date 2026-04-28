@@ -12,7 +12,7 @@ This example shows how to wire the provider abstraction into `llmagent` so you c
 ## Features
 
 - **Provider swap**: `-provider openai` (default) or `-provider anthropic`, `-provider ollama` with matching model names.
-- **Model selection**: `-model deepseek-chat` by default; pass any provider-supported model ID.
+- **Model selection**: `-model deepseek-v4-flash` by default; pass any provider-supported model ID.
 - **Streaming toggle**: `-stream=true|false` directly maps to `GenerationConfig.Stream`.
 - **Provider options**: Override API key, base URL, channel buffer size, and token tailoring knobs via CLI flags which feed directly into `provider.Options`.
 - **Calculator tool**: Function tool capable of add, subtract, multiply, divide (with zero checks), and power operations.
@@ -79,7 +79,7 @@ export OLLAMA_HOST="http://localhost:11434"  # Optional, default is http://local
 ```
 🧠 Provider Agent Demo
 Provider: anthropic
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Stream: true
 Type 'exit' to end the conversation
 Available tools: calculator

@@ -35,13 +35,13 @@ Async summary (default):
 ```bash
 cd examples/summary/toolcalls
 export OPENAI_API_KEY="your-api-key"
-go run . -model deepseek-chat -steps 5
+go run . -model deepseek-v4-flash -steps 5
 ```
 
 Sync intra-run summary:
 
 ```bash
-go run . -model deepseek-chat -steps 5 -sync-summary-intra-run
+go run . -model deepseek-v4-flash -steps 5 -sync-summary-intra-run
 ```
 
 Optional flags:

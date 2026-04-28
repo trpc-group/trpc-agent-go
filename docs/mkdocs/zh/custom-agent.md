@@ -80,7 +80,7 @@ func (a *SimpleIntentAgent) replyChitChat(ctx context.Context, inv *agent.Invoca
 
 ```go
 // 构造模型与自定义 Agent
-m := openai.New("deepseek-chat")
+m := openai.New("deepseek-v4-flash")
 ag := NewSimpleIntentAgent("biz-agent", "intent branching", m)
 
 // 用 Runner 执行
@@ -94,7 +94,7 @@ ch, err := r.Run(ctx, "user-001", "session-001", model.NewUserMessage("你好，
 ```bash
 cd examples/customagent
 export OPENAI_API_KEY="your_api_key"
-go run . -model deepseek-chat
+go run . -model deepseek-v4-flash
 
 # 进入交互后可使用命令：
 # /history  显示对话历史（通过提示）

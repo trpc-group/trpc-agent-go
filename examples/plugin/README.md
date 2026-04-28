@@ -46,7 +46,7 @@ Typical use cases:
 
 | Argument      | Description                     | Default Value   |
 | ------------- | ------------------------------- | --------------- |
-| `-model`      | Name of the model to use        | `deepseek-chat` |
+| `-model`      | Name of the model to use        | `deepseek-v4-flash` |
 | `-variant`    | Provider variant for OpenAI     | `openai`        |
 | `-streaming`  | Enable streaming responses       | `false`         |
 | `-debug`      | Print extra plugin/tool details | `false`         |

@@ -12,7 +12,7 @@
 // Required environment variables:
 //   - OPENAI_API_KEY: Your OpenAI API key for LLM and embeddings
 //   - OPENAI_BASE_URL: (Optional) Custom OpenAI API endpoint, defaults to https://api.openai.com/v1
-//   - MODEL_NAME: (Optional) Model name to use, defaults to deepseek-chat
+//   - MODEL_NAME: (Optional) Model name to use, defaults to deepseek-v4-flash
 //   - PGVECTOR_HOST: (Optional) PostgreSQL host, defaults to 127.0.0.1
 //   - PGVECTOR_PORT: (Optional) PostgreSQL port, defaults to 5432
 //   - PGVECTOR_USER: (Optional) PostgreSQL user, defaults to postgres
@@ -23,7 +23,7 @@
 //
 //	export OPENAI_API_KEY=sk-xxxx
 //	export OPENAI_BASE_URL=https://api.openai.com/v1
-//	export MODEL_NAME=deepseek-chat
+//	export MODEL_NAME=deepseek-v4-flash
 //	export PGVECTOR_HOST=127.0.0.1
 //	export PGVECTOR_PORT=5432
 //	export PGVECTOR_USER=postgres
@@ -55,7 +55,7 @@ import (
 )
 
 var (
-	modelName = util.GetEnvOrDefault("MODEL_NAME", "deepseek-chat")
+	modelName = util.GetEnvOrDefault("MODEL_NAME", "deepseek-v4-flash")
 	host      = util.GetEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
 	portStr   = util.GetEnvOrDefault("PGVECTOR_PORT", "5432")
 	user      = util.GetEnvOrDefault("PGVECTOR_USER", "root")

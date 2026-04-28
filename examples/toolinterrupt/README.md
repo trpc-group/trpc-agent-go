@@ -39,7 +39,7 @@ This matches the common protocol order:
 ```bash
 cd examples/toolinterrupt
 export OPENAI_API_KEY="your-api-key-here"
-go run . -model deepseek-chat
+go run . -model deepseek-v4-flash
 ```
 
 Try asking anything. The agent is instructed to always call the external tool

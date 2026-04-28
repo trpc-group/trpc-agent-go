@@ -36,7 +36,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
+	modelName = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-v4-flash"), "Model to use")
 	streaming = flag.Bool("streaming", true, "Enable streaming output")
 )
 

@@ -25,9 +25,8 @@
 //
 // Example usage:
 //
-//	/switch deepseek-reasoner  → All future requests use reasoner.
-//	/model deepseek-chat       → Next request uses chat, then back to
-//	                              reasoner.
+//	/switch deepseek-v4-pro    → All future requests use Pro.
+//	/model deepseek-v4-flash   → Next request uses Flash, then back to Pro.
 package main
 
 import (
@@ -49,7 +48,7 @@ import (
 
 func main() {
 	// Flags.
-	defaultModel := flag.String("model", "deepseek-chat", "Default model name")
+	defaultModel := flag.String("model", "deepseek-v4-flash", "Default model name")
 	flag.Parse()
 
 	app := &chatApp{
@@ -104,12 +103,12 @@ func (a *chatApp) setup(_ context.Context) error {
 	// Prepare model map with pre-registered models.
 	// Pre-registration is required for name-based model switching.
 	models := map[string]model.Model{
-		"deepseek-chat": openai.New(
-			"deepseek-chat",
+		"deepseek-v4-flash": openai.New(
+			"deepseek-v4-flash",
 			openai.WithVariant(openai.VariantDeepSeek),
 		),
-		"deepseek-reasoner": openai.New(
-			"deepseek-reasoner",
+		"deepseek-v4-pro": openai.New(
+			"deepseek-v4-pro",
 			openai.WithVariant(openai.VariantDeepSeek),
 		),
 	}
@@ -343,14 +342,14 @@ func (a *chatApp) handleSwitch(name string) error {
 	// This changes the agent's default model for all subsequent requests.
 	if err := a.agent.SetModelByName(name); err != nil {
 		// List available models on error.
-		fmt.Printf("Available models: deepseek-chat, deepseek-reasoner\n")
+		fmt.Printf("Available models: deepseek-v4-flash, deepseek-v4-pro\n")
 		return fmt.Errorf("failed to switch model: %w", err)
 	}
 
 	// Alternative: use SetModel to switch by model instance.
 	// This is useful when you need to create a new model with specific
 	// configuration:
-	//   model := openai.New("deepseek-reasoner")
+	//   model := openai.New("deepseek-v4-pro")
 	//   a.agent.SetModel(model)
 	fmt.Printf("✅ Agent-level switch: all requests will now use %s\n", name)
 	return nil
@@ -380,7 +379,7 @@ func (a *chatApp) handleModelCommand(name string) error {
 	// This prevents runtime errors when the request is executed.
 	if _, ok := a.models[name]; !ok {
 		// List available models on error.
-		fmt.Printf("Available models: deepseek-chat, deepseek-reasoner\n")
+		fmt.Printf("Available models: deepseek-v4-flash, deepseek-v4-pro\n")
 		return fmt.Errorf("model %q not found in registered models", name)
 	}
 

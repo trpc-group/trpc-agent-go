@@ -24,7 +24,7 @@ This example runs the evaluation pipeline with MySQL-backed managers for EvalSet
 | `-skip-db-init` | Skip table creation during manager initialization | `false` |
 | `-eval-set` | Evaluation set ID to execute | `math-basic` |
 | `-runs` | Number of repetitions per evaluation case | `1` |
-| `-model` | Model identifier used by the calculator agent | `deepseek-chat` |
+| `-model` | Model identifier used by the calculator agent | `deepseek-v4-flash` |
 | `-streaming` | Enable streaming responses from the LLM | `false` |
 
 ## Database Setup

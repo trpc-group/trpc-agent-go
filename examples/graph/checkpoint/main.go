@@ -44,7 +44,7 @@ import (
 
 const (
 	// Default configuration values.
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 	defaultUserID    = "demo-user"
 	defaultAppName   = "checkpoint-workflow"
 	defaultDBPath    = "checkpoints.db"

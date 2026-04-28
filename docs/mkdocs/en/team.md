@@ -80,7 +80,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/team"
 )
 
-modelInstance := openai.New("deepseek-chat")
+modelInstance := openai.New("deepseek-v4-flash")
 
 coder := llmagent.New(
     "coder",
@@ -156,7 +156,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/team"
 )
 
-modelInstance := openai.New("deepseek-chat")
+modelInstance := openai.New("deepseek-v4-flash")
 
 backendDev := llmagent.New(
     "backend_dev",

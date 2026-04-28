@@ -27,7 +27,7 @@ cd examples/ralphloop
 export OPENAI_API_KEY="your-api-key"
 
 # DeepSeek
-go run . -model deepseek-chat -variant deepseek
+go run . -model deepseek-v4-flash -variant deepseek
 
 # OpenAI
 go run . -model gpt-4o -variant openai

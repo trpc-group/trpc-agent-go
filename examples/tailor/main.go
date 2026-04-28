@@ -112,7 +112,7 @@ func getDefaultModel(provider string) string {
 	case "ollama":
 		return "llama3.2:latest"
 	default:
-		return "deepseek-chat"
+		return "deepseek-v4-flash"
 	}
 }
 

@@ -35,7 +35,7 @@ import (
 
 func main() {
 	// Parse command line arguments
-	modelName := flag.String("model", "deepseek-chat", "Model name to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Model name to use")
 	filterMode := flag.String("filter", "", "Filter mode: exclude-demo, include-demo, per-agent, or empty for no filter")
 	flag.Parse()
 

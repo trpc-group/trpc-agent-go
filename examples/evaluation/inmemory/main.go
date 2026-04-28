@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Model to use for evaluation runs")
+	modelName = flag.String("model", "deepseek-v4-flash", "Model to use for evaluation runs")
 	streaming = flag.Bool("streaming", false, "Enable streaming responses from the agent")
 	numRuns   = flag.Int("runs", 1, "Number of times to repeat the evaluation loop per case")
 )

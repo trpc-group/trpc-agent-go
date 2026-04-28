@@ -75,7 +75,7 @@ go build -o placeholder-demo main.go
 ./placeholder-demo
 
 # Run with specific model
-./placeholder-demo -model deepseek-chat
+./placeholder-demo -model deepseek-v4-flash
 ```
 
 ### Interactive Commands
@@ -125,7 +125,7 @@ Ends the interactive session.
 
 ```
 🔑 Placeholder Demo - Session State Integration
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Type 'exit' to end the session
 Features: Unprefixed readonly and prefixed placeholders
 Commands:

@@ -46,7 +46,7 @@ check_env() {
         echo "Or use other compatible services:"
         echo "export OPENAI_API_KEY=\"your-key\""
         echo "export OPENAI_BASE_URL=\"https://api.deepseek.com/v1\""
-        echo "export OPENAI_MODEL=\"deepseek-chat\""
+        echo "export OPENAI_MODEL=\"deepseek-v4-flash\""
         exit 1
     fi
     
@@ -111,7 +111,7 @@ start_agents() {
     mkdir -p logs
     
     # Get model name
-    MODEL_NAME=${OPENAI_MODEL:-deepseek-chat}
+    MODEL_NAME=${OPENAI_MODEL:-deepseek-v4-flash}
     
     # Start code check agent (first)
     print_info "Starting code check agent (port 8088)..."
