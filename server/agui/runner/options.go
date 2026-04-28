@@ -29,7 +29,9 @@ const (
 	defaultGraphNodeInterruptActivityEnabled      = false
 	defaultGraphNodeInterruptActivityTopLevelOnly = false
 	defaultReasoningContentEnabled                = false
+	defaultEventSourceMetadataEnabled             = false
 	defaultToolResultInputTranslationEnabled      = false
+	defaultStreamingToolResultActivityEnabled     = false
 )
 
 // Options holds the options for the runner.
@@ -56,7 +58,9 @@ type Options struct {
 	GraphNodeInterruptActivityEnabled      bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
 	GraphNodeInterruptActivityTopLevelOnly bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 	ReasoningContentEnabled                bool                  // ReasoningContentEnabled controls whether reasoning content events are emitted.
+	EventSourceMetadataEnabled             bool                  // EventSourceMetadataEnabled attaches original trpc-agent-go source metadata to translated AG-UI events.
 	ToolResultInputTranslationEnabled      bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
+	StreamingToolResultActivityEnabled     bool                  // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
 }
 
 // NewOptions creates a new options instance.
@@ -77,7 +81,9 @@ func NewOptions(opt ...Option) *Options {
 		GraphNodeInterruptActivityEnabled:      defaultGraphNodeInterruptActivityEnabled,
 		GraphNodeInterruptActivityTopLevelOnly: defaultGraphNodeInterruptActivityTopLevelOnly,
 		ReasoningContentEnabled:                defaultReasoningContentEnabled,
+		EventSourceMetadataEnabled:             defaultEventSourceMetadataEnabled,
 		ToolResultInputTranslationEnabled:      defaultToolResultInputTranslationEnabled,
+		StreamingToolResultActivityEnabled:     defaultStreamingToolResultActivityEnabled,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -262,10 +268,27 @@ func WithReasoningContentEnabled(enabled bool) Option {
 	}
 }
 
+// WithEventSourceMetadataEnabled controls whether translated AG-UI events
+// carry source metadata from the original trpc-agent-go event in rawEvent.
+func WithEventSourceMetadataEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.EventSourceMetadataEnabled = enabled
+	}
+}
+
 // WithToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
 func WithToolResultInputTranslationEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.ToolResultInputTranslationEnabled = enabled
+	}
+}
+
+// WithStreamingToolResultActivityEnabled controls whether partial tool-result
+// chunks are emitted as activity events while only the final tool result
+// remains on the tool-result path.
+func WithStreamingToolResultActivityEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.StreamingToolResultActivityEnabled = enabled
 	}
 }
 

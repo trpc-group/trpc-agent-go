@@ -163,10 +163,30 @@ func WithReasoningContentEnabled(enabled bool) Option {
 	}
 }
 
+// WithEventSourceMetadataEnabled controls whether translated AG-UI events
+// include source metadata from the original trpc-agent-go event in rawEvent.
+func WithEventSourceMetadataEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(
+			o.aguiRunnerOptions,
+			aguirunner.WithEventSourceMetadataEnabled(enabled),
+		)
+	}
+}
+
 // WithToolResultInputTranslationEnabled controls whether echoed tool-result inputs pass through the AG-UI translator.
 func WithToolResultInputTranslationEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithToolResultInputTranslationEnabled(enabled))
+	}
+}
+
+// WithStreamingToolResultActivityEnabled controls whether partial tool-result
+// chunks are emitted as activity events while only the final tool result is
+// retained on the tool-result path and in message snapshots.
+func WithStreamingToolResultActivityEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithStreamingToolResultActivityEnabled(enabled))
 	}
 }
 

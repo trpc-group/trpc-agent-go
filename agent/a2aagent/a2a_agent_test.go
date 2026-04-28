@@ -216,6 +216,67 @@ func TestNew(t *testing.T) {
 	}
 }
 
+type stubA2AEventConverter struct{}
+
+func (s *stubA2AEventConverter) ConvertToEvents(
+	result protocol.MessageResult,
+	agentName string,
+	invocation *agent.Invocation,
+) ([]*event.Event, error) {
+	return nil, nil
+}
+
+func (s *stubA2AEventConverter) ConvertStreamingToEvents(
+	result protocol.StreamingMessageEvent,
+	agentName string,
+	invocation *agent.Invocation,
+) ([]*event.Event, error) {
+	return nil, nil
+}
+
+func TestNew_DefaultEventConverterUsesDataPartMappers(t *testing.T) {
+	mapper := func(part *protocol.DataPart, result *A2ADataPartMappingResult) (bool, error) {
+		return false, nil
+	}
+
+	a2aAgent, err := New(
+		WithAgentCard(&server.AgentCard{
+			Name:        "mapper-agent",
+			Description: "mapper-aware agent",
+			URL:         "http://example.com",
+		}),
+		func(a *A2AAgent) {
+			a.dataPartMappers = append(a.dataPartMappers, nil, mapper)
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, a2aAgent)
+
+	converter, ok := a2aAgent.eventConverter.(*defaultA2AEventConverter)
+	require.True(t, ok)
+	require.Len(t, converter.dataPartMappers, 1)
+	require.NotNil(t, converter.dataPartMappers[0])
+}
+
+func TestNew_CustomEventConverterIgnoresDataPartMappers(t *testing.T) {
+	customConverter := &stubA2AEventConverter{}
+
+	a2aAgent, err := New(
+		WithAgentCard(&server.AgentCard{
+			Name:        "custom-agent",
+			Description: "custom converter",
+			URL:         "http://example.com",
+		}),
+		WithCustomEventConverter(customConverter),
+		WithA2ADataPartMapper(func(part *protocol.DataPart, result *A2ADataPartMappingResult) (bool, error) {
+			return true, nil
+		}),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, a2aAgent)
+	require.Same(t, customConverter, a2aAgent.eventConverter)
+}
+
 func TestA2AAgent_Info(t *testing.T) {
 	type testCase struct {
 		name         string
@@ -2438,7 +2499,7 @@ func TestA2AAgentRunStreaming_PersistsBufferedTextBeforeToolEvents(
 				Artifact: protocol.Artifact{
 					ArtifactID: "resp-1",
 					Parts: []protocol.Part{
-						&protocol.TextPart{Kind: protocol.KindText, Text: "我要调用xxx"},
+						&protocol.TextPart{Kind: protocol.KindText, Text: "preface before tool-1"},
 					},
 				},
 			},
@@ -2480,7 +2541,7 @@ func TestA2AAgentRunStreaming_PersistsBufferedTextBeforeToolEvents(
 				Artifact: protocol.Artifact{
 					ArtifactID: "resp-1",
 					Parts: []protocol.Part{
-						&protocol.TextPart{Kind: protocol.KindText, Text: "我要继续调用xxxx"},
+						&protocol.TextPart{Kind: protocol.KindText, Text: "preface before tool-2"},
 					},
 				},
 			},
@@ -2589,13 +2650,33 @@ func TestA2AAgentRunStreaming_PersistsBufferedTextBeforeToolEvents(
 	events := sess.GetEvents()
 	require.Len(t, events, 8)
 	require.Equal(t, model.RoleUser, events[0].Response.Choices[0].Message.Role)
-	require.Equal(t, "我要调用xxx", events[1].Response.Choices[0].Message.Content)
+	require.Equal(t, "preface before tool-1", events[1].Response.Choices[0].Message.Content)
 	require.Len(t, events[2].Response.Choices[0].Message.ToolCalls, 1)
 	require.Equal(t, "call-1", events[2].Response.Choices[0].Message.ToolCalls[0].ID)
+	require.True(
+		t,
+		events[1].Timestamp.Before(events[2].Timestamp),
+		"flushed buffered text event timestamp should be earlier than following tool call event",
+	)
+	require.True(
+		t,
+		events[1].Response.Timestamp.Before(events[2].Response.Timestamp),
+		"flushed buffered text response timestamp should be earlier than following tool call response timestamp",
+	)
 	require.Equal(t, "result-1", events[3].Response.Choices[0].Message.Content)
-	require.Equal(t, "我要继续调用xxxx", events[4].Response.Choices[0].Message.Content)
+	require.Equal(t, "preface before tool-2", events[4].Response.Choices[0].Message.Content)
 	require.Len(t, events[5].Response.Choices[0].Message.ToolCalls, 1)
 	require.Equal(t, "call-2", events[5].Response.Choices[0].Message.ToolCalls[0].ID)
+	require.True(
+		t,
+		events[4].Timestamp.Before(events[5].Timestamp),
+		"second flushed buffered text event timestamp should be earlier than following tool call event",
+	)
+	require.True(
+		t,
+		events[4].Response.Timestamp.Before(events[5].Response.Timestamp),
+		"second flushed buffered text response timestamp should be earlier than following tool call response timestamp",
+	)
 	require.Equal(t, "result-2", events[6].Response.Choices[0].Message.Content)
 	require.Equal(t, "final answer", events[7].Response.Choices[0].Message.Content)
 }

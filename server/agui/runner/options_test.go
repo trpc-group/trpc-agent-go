@@ -77,7 +77,9 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.False(t, opts.GraphNodeInterruptActivityEnabled)
 	assert.False(t, opts.GraphNodeInterruptActivityTopLevelOnly)
 	assert.False(t, opts.ReasoningContentEnabled)
+	assert.False(t, opts.EventSourceMetadataEnabled)
 	assert.False(t, opts.ToolResultInputTranslationEnabled)
+	assert.False(t, opts.StreamingToolResultActivityEnabled)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -137,9 +139,19 @@ func TestWithReasoningContentEnabled(t *testing.T) {
 	assert.True(t, opts.ReasoningContentEnabled)
 }
 
+func TestWithEventSourceMetadataEnabled(t *testing.T) {
+	opts := NewOptions(WithEventSourceMetadataEnabled(true))
+	assert.True(t, opts.EventSourceMetadataEnabled)
+}
+
 func TestWithToolResultInputTranslationEnabled(t *testing.T) {
 	opts := NewOptions(WithToolResultInputTranslationEnabled(true))
 	assert.True(t, opts.ToolResultInputTranslationEnabled)
+}
+
+func TestWithStreamingToolResultActivityEnabled(t *testing.T) {
+	opts := NewOptions(WithStreamingToolResultActivityEnabled(true))
+	assert.True(t, opts.StreamingToolResultActivityEnabled)
 }
 
 func TestWithPostRunFinalizationTimeout(t *testing.T) {

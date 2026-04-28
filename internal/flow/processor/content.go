@@ -127,6 +127,11 @@ type ContentRequestProcessor struct {
 	// allows graph executions to retain authentic assistant/tool transcripts
 	// while still enabling cross-agent contextualization when branches differ.
 	PreserveSameBranch bool
+	// PreserveForeignMessages keeps events authored by other agents in their
+	// original roles and order instead of converting them into user-context
+	// messages. This is opt-in because some handoff flows rely on the default
+	// foreign-event contextualization behavior.
+	PreserveForeignMessages bool
 	// TimelineFilterMode controls whether to append history messages to the request.
 	TimelineFilterMode string
 	// ReasoningContentMode controls how reasoning_content is handled in multi-turn
@@ -258,6 +263,14 @@ func WithPreserveSameBranch(preserve bool) ContentOption {
 	}
 }
 
+// WithPreserveForeignMessages toggles preserving original roles/order for
+// events emitted by other agents instead of rewriting them into user context.
+func WithPreserveForeignMessages(preserve bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.PreserveForeignMessages = preserve
+	}
+}
+
 // WithReasoningContentMode sets how reasoning_content is handled in multi-turn
 // conversations. This is particularly important for DeepSeek models where
 // reasoning_content should be discarded from previous request turns.
@@ -367,8 +380,9 @@ func WithContextCompactionToolResultMaxTokens(tokens int) ContentOption {
 
 // WithContextCompactionOversizedToolResultMaxTokens sets the token threshold
 // above which any tool result (including from the current request) is truncated
-// using head+tail preservation. This safety net fires regardless of whether
-// EnableContextCompaction is set.
+// using head+tail preservation. Like Pass 1, this requires
+// EnableContextCompaction=true to take effect, so EnableContextCompaction=false
+// guarantees the framework will not modify tool results.
 func WithContextCompactionOversizedToolResultMaxTokens(tokens int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ContextCompactionConfig.OversizedToolResultMaxTokens = tokens
@@ -423,9 +437,12 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 		PreloadSessionRecall:           0,
 		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
 		ContextCompactionConfig: ContextCompactionConfig{
-			KeepRecentRequests:           DefaultContextCompactionKeepRecentRequests,
-			ToolResultMaxTokens:          DefaultContextCompactionToolResultMaxTokens,
-			OversizedToolResultMaxTokens: DefaultContextCompactionOversizedToolResultMaxTokens,
+			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
+			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
+			// Pass 2 is opt-in: callers must explicitly set a positive value
+			// AND enable context compaction. Defaulting to 0 keeps the
+			// processor from silently rewriting tool results.
+			OversizedToolResultMaxTokens: 0,
 		},
 	}
 
@@ -1383,7 +1400,8 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 	messages []model.Message,
 ) []model.Message {
-	if p.ContextCompactionConfig.OversizedToolResultMaxTokens <= 0 {
+	if !p.ContextCompactionConfig.Enabled ||
+		p.ContextCompactionConfig.OversizedToolResultMaxTokens <= 0 {
 		return messages
 	}
 
@@ -1658,6 +1676,9 @@ func (p *ContentRequestProcessor) isOtherAgentReply(
 	if evt.Author == "" || evt.Author == "user" || evt.Author == currentAgentName {
 		return false
 	}
+	if p.PreserveForeignMessages {
+		return false
+	}
 	if p.PreserveSameBranch && currentBranch != "" && evt.Branch != "" {
 		// Treat events within the same branch lineage as non-foreign to
 		// preserve original roles. This includes both descendants and
@@ -1778,13 +1799,16 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 
 	// Look for corresponding function call event.
 	functionCallEventIdx := -1
+	var functionCallIDs []string
 	for i := len(events) - 2; i >= 0; i-- {
 		evt := &events[i]
 		if evt.IsToolCallResponse() {
-			functionCallIDs := toMap(evt.GetToolCallIDs())
+			callIDs := evt.GetToolCallIDs()
+			functionCallIDSet := toMap(callIDs)
 			for _, responseID := range functionResponseIDs {
-				if functionCallIDs[responseID] {
+				if functionCallIDSet[responseID] {
 					functionCallEventIdx = i
+					functionCallIDs = callIDs
 					break
 				}
 			}
@@ -1804,8 +1828,8 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 		evt := &events[i]
 		if evt.IsToolResultResponse() {
 			responseIDs := toMap(evt.GetToolResultIDs())
-			for _, responseID := range functionResponseIDs {
-				if responseIDs[responseID] {
+			for _, callID := range functionCallIDs {
+				if responseIDs[callID] {
 					functionResponseEvents = append(functionResponseEvents, *evt)
 					break
 				}

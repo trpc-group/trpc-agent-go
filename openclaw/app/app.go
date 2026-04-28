@@ -45,6 +45,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
+	publicsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -64,6 +65,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/subagentrun"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
@@ -89,12 +91,73 @@ const (
 	defaultAgentName        = "assistant"
 	defaultAgentInstruction = "You are a helpful assistant. " +
 		"Keep replies concise."
-
-	openClawToolingGuidance = "For general local shell work, use " +
-		"read_document or read_spreadsheet first for common PDF, " +
-		"DOCX, text, CSV, and spreadsheet uploads already in the " +
-		"chat. Only fall back to " +
-		"exec_command when those tools cannot satisfy the task. " +
+	openClawSkillsGuidance = "Treat the skill overview below as the " +
+		"skills available in this session. Each entry " +
+		"includes a path to that skill's SKILL.md on disk. " +
+		"This is a blocking requirement for matching " +
+		"skills. " +
+		"If the user names a skill, names a slash command, " +
+		"or the task clearly matches a skill description, " +
+		"you must use that skill in the same turn. Start " +
+		"with one brief user-visible preamble about the " +
+		"immediate next step, then call `skill_load` for " +
+		"that skill right away in the same turn. That " +
+		"brief preamble is part of acting immediately, " +
+		"not a pause to ask what to do next. That preamble may " +
+		"announce the immediate task, but do not use it " +
+		"for substantive guidance, capability " +
+		"disclaimers, or explanations about which " +
+		"subsystem loads versus runs the skill. Never mention " +
+		"reading, loading, or using a matching skill " +
+		"unless you already called `skill_load` for it in " +
+		"this turn. Never say that you could read or load " +
+		"a matching skill later without actually doing it " +
+		"first. Do not answer a matching skill task from " +
+		"the short summary, prior knowledge, or partial " +
+		"memory. Even if you think you already know the " +
+		"answer, load `SKILL.md` first. Load `SKILL.md` " +
+		"before giving substantive guidance or acting on " +
+		"the workflow. When " +
+		"`SKILL.md` references " +
+		"relative paths, resolve them from the skill " +
+		"directory first. Read only the supporting docs, " +
+		"scripts, assets, examples, or templates you still " +
+		"need. Do not respond with capability disclaimers " +
+		"such as `I can read the skill` when you can load " +
+		"it now. Announce the next step briefly and do it. " +
+		"Reuse bundled scripts, templates, and assets " +
+		"when they already fit. If multiple skills match, " +
+		"use the smallest set that covers the task. Keep " +
+		"context small and avoid bulk-loading docs. Do not " +
+		"invent commands, flags, auth steps, file layouts, " +
+		"or workflows from a short summary or partial " +
+		"memory. Keep exploring nearby runtime facts, " +
+		"retries, and recovery paths yourself before asking " +
+		"for more input. If a matching skill is missing, " +
+		"unreadable, or still lacks a required external " +
+		"input after reasonable local exploration, state " +
+		"the issue briefly and continue with the best " +
+		"fallback."
+	openClawSkillLoadToolDescription = "Load a skill body and optional " +
+		"docs. This is a blocking requirement when the user " +
+		"names a listed skill, names a slash command, or the " +
+		"task clearly matches a listed skill description. " +
+		"Before the first matching load, start with one " +
+		"brief user-visible preamble that says which skill " +
+		"or skill docs you are reading next, then call this " +
+		"tool right away in the same turn. Do not pause " +
+		"after that preamble to ask what to do next. Do " +
+		"not use that preamble for " +
+		"capability disclaimers, implementation-split " +
+		"explanations, or substantive guidance about the " +
+		"task. Do not answer from a short skill summary, " +
+		"prior knowledge, or partial memory when a matching " +
+		"skill exists. Load `SKILL.md` first, then load " +
+		"only the extra docs you still need."
+	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
+		"and spreadsheet uploads already in the chat, prefer " +
+		"read_document or read_spreadsheet before falling back " +
+		"to exec_command. " +
 		"For questions about the active chat history, recent " +
 		"turns, or who said something in the current session, use " +
 		"conversation_history before searching long-term memory. " +
@@ -102,9 +165,9 @@ const (
 		"available in the current session. " +
 		"Do not call exec_command just to print OPENCLAW_* upload " +
 		"vars or inspect recent upload metadata when a matching " +
-		"chat file is already available. For general local shell " +
-		"work, use " +
-		"exec_command. For interactive follow-up input, use " +
+		"chat file is already available. For other general local " +
+		"shell work, use exec_command. For interactive follow-up " +
+		"input, use " +
 		"write_stdin and kill_session when needed. Use message " +
 		"to send to the current chat or an explicit target. " +
 		"Chat uploads are saved to stable host paths. For host " +
@@ -114,33 +177,37 @@ const (
 		"OPENCLAW_LAST_UPLOAD_MIME, and " +
 		"OPENCLAW_MEMORY_FILE, " +
 		"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing " +
-		"attachment paths. When a user follows " +
-		"up about 'the PDF/audio/video I just sent', assume they " +
-		"mean the recent upload already present in this chat unless " +
-		"the reference is genuinely ambiguous. Match by media kind " +
-		"first: prefer OPENCLAW_LAST_PDF_PATH, " +
+		"attachment paths. For long-running work, independent " +
+		"verification, or background work that can continue after " +
+		"this turn, use subagents_spawn. Do not use background " +
+		"subagents for small, tightly-coupled steps, and do not " +
+		"spawn nested subagents. " +
+		"When a user follows up about a " +
+		"recent upload in the current chat, assume they mean " +
+		"that existing upload unless the reference is " +
+		"genuinely ambiguous. Match by media kind first: " +
+		"prefer OPENCLAW_LAST_PDF_PATH, " +
 		"OPENCLAW_LAST_AUDIO_PATH, OPENCLAW_LAST_VIDEO_PATH, or " +
 		"OPENCLAW_LAST_IMAGE_PATH when the request clearly targets " +
 		"one of those kinds. Telegram voice notes count as audio, " +
 		"video notes count as video, and documents with image/audio/" +
 		"video MIME types still count as that media kind. If the " +
-		"user replies " +
-		"to an earlier media message, treat that replied media as " +
+		"user replies to an earlier media message, treat that " +
+		"replied media as " +
 		"the default target unless they clearly ask for something " +
 		"else. Do not ask the user to re-upload a file or provide " +
 		"a local path when the recent upload context already lists " +
-		"a matching upload for this chat. If the user asks you to " +
-		"'send it back', '发给我', " +
-		"'回传', or similar, send the derived files directly in " +
-		"the current chat with message instead of asking which " +
-		"channel or delivery method to use. For exec_command, do " +
+		"a matching upload for this chat. If the user wants a " +
+		"derived file sent back in the current chat, send it with " +
+		"message instead of asking which channel or delivery " +
+		"method to use. For exec_command, do " +
 		"not assume skill workspace paths like work/inputs. Do not " +
 		"expose local host paths to the user; when acknowledging a " +
 		"new upload, refer to it only by filename and media kind, " +
-		"not by OPENCLAW_* vars or a machine path. If Telegram gives " +
-		"you an opaque placeholder filename like file_11.oga, avoid " +
-		"surfacing that raw placeholder to the user unless they " +
-		"explicitly ask for the exact filename. Refer to uploads " +
+		"not by OPENCLAW_* vars or a machine path. If the channel " +
+		"gives you an opaque placeholder filename, avoid surfacing " +
+		"that raw placeholder to the user unless they explicitly " +
+		"ask for the exact filename. Refer to uploads " +
 		"and generated files by user-facing filenames, and use " +
 		"OPENCLAW_LAST_*_NAME instead of basename(" +
 		"OPENCLAW_LAST_*_PATH) when deriving output filenames, " +
@@ -202,8 +269,7 @@ const (
 		"scheduling request. Prefer concise, outcome-oriented " +
 		"tasks over brittle shell transcripts unless exact " +
 		"commands are truly required. Use cron for future or " +
-		"recurring work. " +
-		"Use skill_run only for skill workspace workflows."
+		"recurring work."
 
 	browserToolingGuidance = "For real browser automation, use " +
 		"browser. Prefer browser snapshot plus act for page " +
@@ -473,12 +539,14 @@ type Runtime struct {
 	adminCfg *admin.Config
 	appName  string
 	session  session.Service
+	subagent publicsubagent.Service
 
 	runner            runner.Runner
 	cronRunner        closeFunc
 	sessionSvc        closeFunc
 	memorySvc         closeFunc
 	cronSvc           closeFunc
+	subagentSvc       closeFunc
 	skillsWatch       closeFunc
 	toolSets          []tool.ToolSet
 	telemetryShutdown func(context.Context) error
@@ -554,6 +622,13 @@ func (r *Runtime) SessionService() session.Service {
 	return r.session
 }
 
+func (r *Runtime) SubagentService() publicsubagent.Service {
+	if r == nil {
+		return nil
+	}
+	return r.subagent
+}
+
 func (r *Runtime) ConfigureAdmin(
 	configure func(*admin.Config),
 ) {
@@ -565,12 +640,37 @@ func (r *Runtime) ConfigureAdmin(
 	r.applyAdminConfig(cfg)
 }
 
+// AddAdminOptions appends runtime-scoped admin options without changing
+// Runtime's exported struct layout.
+func (r *Runtime) AddAdminOptions(opts ...admin.Option) {
+	if r == nil || len(opts) == 0 {
+		return
+	}
+
+	filtered := make([]admin.Option, 0, len(opts))
+	filtered = append(filtered, runtimeAdminOptions(r)...)
+	for _, opt := range opts {
+		if opt != nil {
+			filtered = append(filtered, opt)
+		}
+	}
+	if len(filtered) == 0 {
+		return
+	}
+
+	setRuntimeAdminOptions(r, filtered)
+	if r.adminCfg == nil {
+		return
+	}
+	r.applyAdminConfig(*r.adminCfg)
+}
+
 func (r *Runtime) applyAdminConfig(cfg admin.Config) {
 	if r == nil {
 		return
 	}
 	r.adminCfg = &cfg
-	r.Admin.Handler = admin.New(cfg).Handler()
+	r.Admin.Handler = admin.New(cfg, runtimeAdminOptions(r)...).Handler()
 	r.Admin.Addr = strings.TrimSpace(cfg.AdminAddr)
 	r.Admin.URL = strings.TrimSpace(cfg.AdminURL)
 }
@@ -816,6 +916,7 @@ func NewRuntime(
 			SkillsWatch:         opts.SkillsWatch,
 			SkillsWatchBundled:  opts.SkillsWatchBundled,
 			SkillsWatchDebounce: opts.SkillsWatchDebounce,
+			SkillsToolProfile:   opts.SkillsToolProfile,
 			SkillsLoadMode:      opts.SkillsLoadMode,
 			SkillsMaxLoaded:     opts.SkillsMaxLoaded,
 			SkillsToolResults:   opts.SkillsToolResults,
@@ -825,9 +926,10 @@ func NewRuntime(
 			StateDir:            resolvedStateDir,
 			MemoryFileStore:     fileMemoryStore,
 
-			EnableLocalExec:     opts.EnableLocalExec,
-			EnableOpenClawTools: opts.EnableOpenClawTools,
-			EnableParallelTools: opts.EnableParallelTools,
+			EnableLocalExec:      opts.EnableLocalExec,
+			EnableOpenClawTools:  opts.EnableOpenClawTools,
+			OpenClawToolingGuide: opts.OpenClawToolingGuide,
+			EnableParallelTools:  opts.EnableParallelTools,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -985,8 +1087,9 @@ func NewRuntime(
 	}
 
 	var (
-		cronSvc    *cron.Service
-		cronRunner runner.Runner
+		cronSvc     *cron.Service
+		cronRunner  runner.Runner
+		subagentSvc *subagentrun.Service
 	)
 	if openClawTools.router != nil {
 		for _, ch := range rt.Channels {
@@ -1017,6 +1120,22 @@ func NewRuntime(
 		cronSvc.Start(ctx)
 		rt.cronSvc = cronSvc
 		rt.cronRunner = cronRunner
+
+		subagentSvc, err = subagentrun.NewService(
+			resolvedStateDir,
+			r,
+			openClawTools.router,
+		)
+		if err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create subagent service failed: %w", err),
+			}
+		}
+		openClawTools.subagentTools.SetService(subagentSvc)
+		subagentSvc.Start(ctx)
+		rt.subagent = subagentSvc
+		rt.subagentSvc = subagentSvc
 	}
 
 	if opts.AdminEnabled {
@@ -1047,6 +1166,7 @@ func NewRuntime(
 			fileMemoryStore,
 			rt.SessionService(),
 		)
+		setRuntimeAdminOptions(rt, buildAdminOptions(opts))
 		rt.applyAdminConfig(adminCfg)
 	}
 
@@ -1066,6 +1186,9 @@ func (r *Runtime) Close() error {
 	if r.cronRunner != nil {
 		_ = r.cronRunner.Close()
 	}
+	if r.subagentSvc != nil {
+		_ = r.subagentSvc.Close()
+	}
 	if r.skillsWatch != nil {
 		if err := r.skillsWatch.Close(); err != nil {
 			errs = append(errs, err)
@@ -1083,6 +1206,7 @@ func (r *Runtime) Close() error {
 	if err := shutdownTelemetry(r.telemetryShutdown); err != nil {
 		errs = append(errs, err)
 	}
+	clearRuntimeAdminOptions(r)
 	return errors.Join(errs...)
 }
 
@@ -1285,6 +1409,7 @@ func run(ctx context.Context, args []string) error {
 			SkillsWatch:         opts.SkillsWatch,
 			SkillsWatchBundled:  opts.SkillsWatchBundled,
 			SkillsWatchDebounce: opts.SkillsWatchDebounce,
+			SkillsToolProfile:   opts.SkillsToolProfile,
 			SkillsLoadMode:      opts.SkillsLoadMode,
 			SkillsMaxLoaded:     opts.SkillsMaxLoaded,
 			SkillsToolResults:   opts.SkillsToolResults,
@@ -1463,9 +1588,16 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	var (
-		cronSvc    *cron.Service
-		cronRunner runner.Runner
+		cronSvc     *cron.Service
+		cronRunner  runner.Runner
+		subagentSvc *subagentrun.Service
 	)
+	var cleanupSubagent func()
+	defer func() {
+		if cleanupSubagent != nil {
+			cleanupSubagent()
+		}
+	}()
 	if openClawTools.router != nil {
 		for _, ch := range channels {
 			openClawTools.router.Register(ch)
@@ -1493,6 +1625,33 @@ func run(ctx context.Context, args []string) error {
 		openClawTools.cronTool.SetService(cronSvc)
 		gw.SetCronService(cronSvc)
 		cronSvc.Start(runCtx)
+
+		subagentSvc, err = subagentrun.NewService(
+			resolvedStateDir,
+			r,
+			openClawTools.router,
+		)
+		if err != nil {
+			if cronSvc != nil {
+				_ = cronSvc.Close()
+			}
+			if cronRunner != nil {
+				_ = cronRunner.Close()
+			}
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create subagent service failed: %w", err),
+			}
+		}
+		openClawTools.subagentTools.SetService(subagentSvc)
+		subagentSvc.Start(runCtx)
+		cleanupSubagent = func() {
+			openClawTools.subagentTools.SetService(nil)
+			if subagentSvc != nil {
+				_ = subagentSvc.Close()
+				subagentSvc = nil
+			}
+		}
 	}
 
 	if opts.AdminEnabled {
@@ -1506,32 +1665,35 @@ func run(ctx context.Context, args []string) error {
 				Err:  err,
 			}
 		}
-		adminSvc := admin.New(buildAdminConfig(
-			opts,
-			agentType,
-			instanceID,
-			langfuseStatus,
-			resolvedStateDir,
-			debugDir,
-			startedAt,
-			channels,
-			admin.Routes{
-				HealthPath:   gwSrv.HealthPath(),
-				MessagesPath: gwSrv.MessagesPath(),
-				StatusPath:   gwSrv.StatusPath(),
-				CancelPath:   gwSrv.CancelPath(),
-			},
-			cronSvc,
-			openClawTools.execMgr,
-			promptController,
-			browserServerSup,
-			adminBinding.addr,
-			adminBinding.url,
-			skillsRepo,
-			skillsWatch,
-			fileMemoryStore,
-			bridgedSessionSvc,
-		))
+		adminSvc := admin.New(
+			buildAdminConfig(
+				opts,
+				agentType,
+				instanceID,
+				langfuseStatus,
+				resolvedStateDir,
+				debugDir,
+				startedAt,
+				channels,
+				admin.Routes{
+					HealthPath:   gwSrv.HealthPath(),
+					MessagesPath: gwSrv.MessagesPath(),
+					StatusPath:   gwSrv.StatusPath(),
+					CancelPath:   gwSrv.CancelPath(),
+				},
+				cronSvc,
+				openClawTools.execMgr,
+				promptController,
+				browserServerSup,
+				adminBinding.addr,
+				adminBinding.url,
+				skillsRepo,
+				skillsWatch,
+				fileMemoryStore,
+				bridgedSessionSvc,
+			),
+			buildAdminOptions(opts)...,
+		)
 		adminSrv = &http.Server{
 			Handler:           adminSvc.Handler(),
 			ReadHeaderTimeout: 5 * time.Second,
@@ -1598,6 +1760,12 @@ func run(ctx context.Context, args []string) error {
 	}
 	if cronSvc != nil {
 		_ = cronSvc.Close()
+	}
+	if subagentSvc != nil {
+		openClawTools.subagentTools.SetService(nil)
+		cleanupSubagent = nil
+		_ = subagentSvc.Close()
+		subagentSvc = nil
 	}
 	if cronRunner != nil {
 		_ = cronRunner.Close()
@@ -2053,9 +2221,11 @@ func newAgent(
 		instruction = defaultAgentInstruction
 	}
 	if cfg.EnableOpenClawTools {
-		instruction = strings.TrimSpace(
-			instruction + "\n\n" + openClawToolingGuidance,
-		)
+		if guidance := buildOpenClawToolingGuidance(cfg); strings.TrimSpace(guidance) != "" {
+			instruction = strings.TrimSpace(
+				instruction + "\n\n" + guidance,
+			)
+		}
 	}
 	knowledgeTools, err := buildKnowledgeTools(cfg.KnowledgesConfig)
 	if err != nil {
@@ -2122,26 +2292,30 @@ func newAgent(
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
 		opts,
+		llmagent.WithSkillToolProfile(
+			llmagent.SkillToolProfile(cfg.SkillsToolProfile),
+		),
+		llmagent.WithSkillsFilePathHints(true),
+		llmagent.WithSkillsDirectoryHints(true),
 		llmagent.WithSkillLoadMode(cfg.SkillsLoadMode),
 		llmagent.WithSkillsLoadedContentInToolResults(
 			cfg.SkillsToolResults,
 		),
+		llmagent.WithSkillLoadToolDescription(
+			openClawSkillLoadToolDescription,
+		),
+		llmagent.WithWorkspaceExecSurfaceEnabled(false),
 		llmagent.WithSkipSkillsFallbackOnSessionSummary(
 			cfg.SkillsSkipFallback,
+		),
+		llmagent.WithSkillsProtocolGuidance(
+			buildOpenClawSkillsGuidance(cfg),
 		),
 	)
 	if cfg.SkillsMaxLoaded > 0 {
 		opts = append(
 			opts,
 			llmagent.WithMaxLoadedSkills(cfg.SkillsMaxLoaded),
-		)
-	}
-	if cfg.SkillsToolingGuide != nil {
-		opts = append(
-			opts,
-			llmagent.WithSkillsToolingGuidance(
-				*cfg.SkillsToolingGuide,
-			),
 		)
 	}
 	if len(tools) > 0 {
@@ -2168,6 +2342,20 @@ func newAgent(
 	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
 	return llmagent.New(defaultAgentName, opts...), repo, nil
+}
+
+func buildOpenClawToolingGuidance(cfg agentConfig) string {
+	if cfg.OpenClawToolingGuide != nil {
+		return strings.TrimSpace(*cfg.OpenClawToolingGuide)
+	}
+	return strings.TrimSpace(openClawToolingGuidance)
+}
+
+func buildOpenClawSkillsGuidance(cfg agentConfig) string {
+	if cfg.SkillsToolingGuide != nil {
+		return strings.TrimSpace(*cfg.SkillsToolingGuide)
+	}
+	return strings.TrimSpace(openClawSkillsGuidance)
 }
 
 func hasToolNamed(tools []tool.Tool, name string) bool {
@@ -2356,6 +2544,7 @@ type agentConfig struct {
 	SkillsWatch         bool
 	SkillsWatchBundled  bool
 	SkillsWatchDebounce time.Duration
+	SkillsToolProfile   string
 	SkillsLoadMode      string
 	SkillsMaxLoaded     int
 	SkillsToolResults   bool
@@ -2369,8 +2558,9 @@ type agentConfig struct {
 
 	EnableLocalExec bool
 
-	EnableOpenClawTools bool
-	EnableParallelTools bool
+	EnableOpenClawTools  bool
+	OpenClawToolingGuide *string
+	EnableParallelTools  bool
 
 	ToolProviders []pluginSpec
 
@@ -2380,11 +2570,12 @@ type agentConfig struct {
 }
 
 type openClawToolsBundle struct {
-	tools    []tool.Tool
-	execMgr  *octool.Manager
-	router   *outbound.Router
-	cronTool *cron.Tool
-	deps     *deps.Report
+	tools         []tool.Tool
+	execMgr       *octool.Manager
+	router        *outbound.Router
+	cronTool      *cron.Tool
+	subagentTools subagentrun.Tools
+	deps          *deps.Report
 }
 
 type runtimeStores struct {
@@ -2454,6 +2645,7 @@ func buildOpenClawTools(
 	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
+	subagentTools := subagentrun.NewTools(nil)
 	var depsReport *deps.Report
 	if sources, err := deps.SourcesForProfiles(deps.DefaultProfiles()); err ==
 		nil {
@@ -2481,12 +2673,14 @@ func buildOpenClawTools(
 		outbound.NewTool(router),
 		cronTool,
 	}
+	tools = append(tools, subagentTools.All()...)
 	return openClawToolsBundle{
-		tools:    tools,
-		execMgr:  mgr,
-		router:   router,
-		cronTool: cronTool,
-		deps:     depsReport,
+		tools:         tools,
+		execMgr:       mgr,
+		router:        router,
+		cronTool:      cronTool,
+		subagentTools: subagentTools,
+		deps:          depsReport,
 	}
 }
 

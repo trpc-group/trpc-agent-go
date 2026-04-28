@@ -314,11 +314,11 @@ func stringValueOrNA(v *commonpb.AnyValue) string {
 
 func truncateObservationInputMessages(raw string) string {
 	maxLeafBytes := getObservationMaxBytes()
-	if maxLeafBytes < 0 {
-		return raw
-	}
 	if maxLeafBytes == 0 {
 		return ""
+	}
+	if maxLeafBytes < 0 || len([]byte(raw)) <= maxLeafBytes {
+		return raw
 	}
 
 	var msgs []model.Message
@@ -326,8 +326,10 @@ func truncateObservationInputMessages(raw string) string {
 		return truncateObservationValue(raw)
 	}
 
-	plan := truncateMessagesPlan{textLimit: maxLeafBytes, binaryLimit: maxLeafBytes}
-	sanitizeMessagesForObservation(msgs, plan)
+	if maxLeafBytes > 0 {
+		plan := truncateMessagesPlan{textLimit: maxLeafBytes, binaryLimit: maxLeafBytes}
+		sanitizeMessagesForObservation(msgs, plan)
+	}
 	if b, err := json.Marshal(msgs); err == nil {
 		return string(b)
 	}
@@ -336,13 +338,10 @@ func truncateObservationInputMessages(raw string) string {
 
 func truncateObservationOutputChoices(raw string) string {
 	maxLeafBytes := getObservationMaxBytes()
-	if maxLeafBytes < 0 {
-		return raw
-	}
 	if maxLeafBytes == 0 {
 		return ""
 	}
-	if len(raw) <= maxLeafBytes {
+	if maxLeafBytes < 0 || len([]byte(raw)) <= maxLeafBytes {
 		return raw
 	}
 
@@ -351,14 +350,16 @@ func truncateObservationOutputChoices(raw string) string {
 		return truncateObservationValue(raw)
 	}
 
-	plan := truncateMessagesPlan{textLimit: maxLeafBytes, binaryLimit: maxLeafBytes}
-	for i := range choices {
-		msg := choices[i].Message
-		delta := choices[i].Delta
-		sanitizeSingleMessageForObservation(&msg, plan)
-		sanitizeSingleMessageForObservation(&delta, plan)
-		choices[i].Message = msg
-		choices[i].Delta = delta
+	if maxLeafBytes > 0 {
+		plan := truncateMessagesPlan{textLimit: maxLeafBytes, binaryLimit: maxLeafBytes}
+		for i := range choices {
+			msg := choices[i].Message
+			delta := choices[i].Delta
+			sanitizeSingleMessageForObservation(&msg, plan)
+			sanitizeSingleMessageForObservation(&delta, plan)
+			choices[i].Message = msg
+			choices[i].Delta = delta
+		}
 	}
 	if b, err := json.Marshal(choices); err == nil {
 		return string(b)

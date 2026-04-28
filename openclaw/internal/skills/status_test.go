@@ -59,6 +59,9 @@ metadata:
 	require.Equal(t, []string{"channels.telegram.token"}, entry.Missing.Config)
 	require.Equal(t, "OPENAI_API_KEY", entry.PrimaryEnv)
 	require.Equal(t, "https://example.com/weather", entry.Homepage)
+	require.Len(t, entry.Install, 2)
+	require.Equal(t, statusInstallIDRestartPath, entry.Install[0].ID)
+	require.Equal(t, statusInstallIDMovePath, entry.Install[1].ID)
 }
 
 func TestBuildStatus_HonorsDisabledConfigAndPrimaryAPIKey(t *testing.T) {
@@ -225,6 +228,47 @@ func TestStatusHelpers_MissingRequirementsAndInstallers(t *testing.T) {
 	)
 	require.Equal(t, []string{"tool"}, options[5].Bins)
 	require.Nil(t, normalizeStatusInstall([]openClawInstallEntry{{Kind: ""}}))
+
+	pathHints := appendRuntimePathInstallHints(
+		StatusRequirements{
+			Bins: []string{"missing-bin"},
+		},
+		nil,
+	)
+	require.Equal(
+		t,
+		[]StatusInstallOption{
+			{
+				ID:    statusInstallIDRestartPath,
+				Kind:  statusInstallKindPathHint,
+				Label: statusInstallLabelRestartPath,
+			},
+			{
+				ID:    statusInstallIDMovePath,
+				Kind:  statusInstallKindPathHint,
+				Label: statusInstallLabelMovePath,
+			},
+		},
+		pathHints,
+	)
+
+	existingHints := appendRuntimePathInstallHints(
+		StatusRequirements{
+			AnyBins: []string{"missing-bin"},
+		},
+		[]StatusInstallOption{
+			{
+				ID:   statusInstallIDRestartPath,
+				Kind: statusInstallKindPathHint,
+			},
+			{
+				ID:   statusInstallIDMovePath,
+				Kind: statusInstallKindPathHint,
+			},
+		},
+	)
+	require.Len(t, existingHints, 2)
+	require.False(t, statusInstallOptionExists(existingHints, ""))
 }
 
 func TestStatusHelpers_SourceAndConfigResolution(t *testing.T) {

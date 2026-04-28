@@ -344,14 +344,34 @@ type GenerationConfig struct {
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
 
 	// ReasoningEffort limits the reasoning effort for reasoning models.
-	// Supported values: "low", "medium", "high".
-	// Only effective for OpenAI o-series models.
+	// The accepted values depend on the provider:
+	//   - OpenAI o-series: "low", "medium", "high".
+	//   - Anthropic adaptive thinking: "low", "medium", "high", "max", and
+	//     "xhigh" on models that support it.
+	//   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): "high", "max".
+	//     For backward compatibility, the DeepSeek service maps "low" and
+	//     "medium" to "high", and "xhigh" to "max", so older configurations
+	//     still work without errors.
+	// See:
+	//   - https://platform.openai.com/docs/api-reference/chat/create
+	//   - https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
+	//   - https://api-docs.deepseek.com/api/create-chat-completion
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
-	// ThinkingEnabled enables thinking mode for Claude and Gemini models via OpenAI API.
+	// ThinkingEnabled toggles thinking/reasoning mode for providers that
+	// expose it (e.g. DeepSeek v4 via the "thinking" object, Claude / Gemini
+	// via the OpenAI-compatible API).
+	//
+	// When left nil, trpc-agent-go does NOT emit any thinking-toggle field
+	// in the outgoing request, so the provider's server-side default takes
+	// effect (DeepSeek v4 defaults to "enabled"). Set to *true / *false to
+	// force a specific behavior. Anthropic adaptive-thinking models map *true
+	// to thinking.type=adaptive, while older Anthropic models map *true to
+	// thinking.type=enabled with ThinkingTokens.
 	ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
 
-	// ThinkingTokens controls the length of thinking for Claude and Gemini models via OpenAI API.
+	// ThinkingTokens controls the fixed thinking token budget for providers that support it.
+	// Anthropic adaptive-thinking models ignore this field and use ReasoningEffort instead.
 	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 

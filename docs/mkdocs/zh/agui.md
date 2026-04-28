@@ -385,6 +385,92 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslat
 
 完整的代码示例可以参考 [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react)。
 
+### 暴露 source 元数据供前端分组
+
+开启子 Agent 的流式透传后，前端经常需要知道某条 AG-UI 事件到底来自
+哪个 sub-agent，才能把 tool call、tool result 和文本输出按同一个成员
+归到一起展示。
+
+可以通过 `agui.WithEventSourceMetadataEnabled(true)`，把原始
+`trpc-agent-go` 事件里的精简 source 信息挂到翻译后的 AG-UI 事件
+`rawEvent` 字段中：
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithEventSourceMetadataEnabled(true),
+)
+```
+
+如果你不是直接用 `agui.New`，而是手动组装各层，也可以在更底层开启：
+
+- `aguirunner.WithEventSourceMetadataEnabled(true)`
+- `translator.WithEventSourceMetadataEnabled(true)`
+
+开启后，像 `TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`、
+`TOOL_CALL_RESULT`、文本事件以及 activity 事件，都会携带类似下面的
+`rawEvent`：
+
+```json
+{
+  "rawEvent": {
+    "eventId": "evt-tool-call",
+    "author": "member-a",
+    "invocationId": "inv-1",
+    "parentInvocationId": "parent-1",
+    "branch": "root.member-a"
+  }
+}
+```
+
+`rawEvent` 是可选字段。它只会出现在 AG-UI translator 或消息快照构建
+器生成的 AG-UI 事件上；如果当前事件没有可暴露的非空 source 元数据，
+就不会携带这个字段。
+
+在 `/history` 路由上，`MESSAGES_SNAPSHOT` 的 `rawEvent` 不是单条事件
+source，而是一份 source 索引：
+
+```json
+{
+  "rawEvent": {
+    "messages": {
+      "assistant-1": {
+        "eventId": "evt-assistant",
+        "author": "member-a",
+        "invocationId": "inv-1",
+        "branch": "root.member-a"
+      }
+    },
+    "toolCalls": {
+      "tool-call-1": {
+        "eventId": "evt-tool-call",
+        "author": "member-a",
+        "invocationId": "inv-1",
+        "branch": "root.member-a"
+      }
+    }
+  }
+}
+```
+
+前端推荐这样使用：
+
+- 想按“这是哪个 Agent 发的”分组时，用 `rawEvent.author`。
+- 想按“这一次具体的 sub-agent 执行块”分组时，用 `rawEvent.branch`。
+  这样即使同名 Agent 在一次 run 中被调用多次，也不会混在一起。
+- 如果你需要唯一执行键，但不想直接把 branch 暴露到 UI 状态里，可以
+  使用 `rawEvent.invocationId`。
+- 如果你是在恢复 `MESSAGES_SNAPSHOT` 历史消息，可以读取
+  `rawEvent.toolCalls[toolCallId]` 或 `rawEvent.messages[messageId]`，
+  用同一套规则还原前端分组状态。
+
+兼容性说明：
+
+- 该能力默认关闭。
+- 开启后只是增量增加 `rawEvent`，不会改动原有事件顺序、messageId、
+  toolCallId，也不会改变现有字段语义。
+- 现有前端如果忽略 `rawEvent`，行为保持不变。
+
 ### 思考内容
 
 AG-UI 通过`REASONING_*` 事件承载模型思考内容，便于前端在正文回复之前展示思考过程，详细可参考 [AG-UI Reasoning](https://docs.ag-ui.com/concepts/reasoning)。典型事件序列如下：
@@ -969,6 +1055,108 @@ server, err := agui.New(
 
 完整示例可参考 [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph)，前端渲染与审批交互可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
+### 流式工具执行结果
+
+`StreamableTool` 在底层 runner 事件流里，通常会先产生若干条 partial `tool.response`，工具结束时再补一条非 partial 的最终 `tool.response`。如果工具流中显式返回了 `tool.FinalResultChunk` 或 `tool.FinalResultStateChunk`，runner 会直接使用它作为最终结果；如果没有显式 final result，则会继续按现有 merge 规则把之前的 chunk 聚合成最终结果。开启下面这个选项后，前端在工具执行过程中看到的是 activity 事件，工具结束时再收到一条最终的 `TOOL_CALL_RESULT`：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(
+    runner,
+    agui.WithStreamingToolResultActivityEnabled(true),
+)
+```
+
+该选项默认关闭。未开启时，同一次 tool call 的实时事件流通常会表现为：
+
+```text
+RUN_STARTED
+→ TOOL_CALL_START
+→ TOOL_CALL_ARGS
+→ TOOL_CALL_END
+→ TOOL_CALL_RESULT
+→ TOOL_CALL_RESULT
+→ TOOL_CALL_RESULT
+→ ...
+→ TEXT_MESSAGE_*
+→ RUN_FINISHED
+```
+
+也就是说，工具执行过程中的 partial `tool.response` 与工具结束时的最终 `tool.response` 都会继续按现有 `TOOL_CALL_RESULT` 翻译逻辑发送给前端。
+
+启用后，同一次 tool call 的实时事件流通常会表现为：
+
+```text
+RUN_STARTED
+→ TOOL_CALL_START
+→ TOOL_CALL_ARGS
+→ TOOL_CALL_END
+→ ACTIVITY_SNAPSHOT
+→ ACTIVITY_DELTA
+→ ACTIVITY_DELTA
+→ ...
+→ TOOL_CALL_RESULT
+→ TEXT_MESSAGE_*
+→ RUN_FINISHED
+```
+
+- 第一段非空 partial tool result chunk 会被翻译为 `ACTIVITY_SNAPSHOT`。
+- 后续非空 partial chunk 会被翻译为 `ACTIVITY_DELTA`。
+- 这些 activity 的 `activityType` 固定为 `tool.result.stream`。
+- 同一次 tool call 的 activity 会复用同一个合成 `messageId`，前端可以把它当作同一条 activity 流来更新。
+- 工具真正结束时，仍然只会发送一条正式的 `TOOL_CALL_RESULT`。
+
+内置 `tool.result.stream` activity 的状态结构固定为：
+
+```json
+{
+  "toolCallId": "call_xxx",
+  "content": "Counted 1 of 3.\n"
+}
+```
+
+对应的事件通常会表现为：
+
+```json
+{
+  "type": "ACTIVITY_SNAPSHOT",
+  "messageId": "tool-result-activity-call_xxx",
+  "activityType": "tool.result.stream",
+  "content": {
+    "toolCallId": "call_xxx",
+    "content": "Counted 1 of 3.\n"
+  }
+}
+```
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "messageId": "tool-result-activity-call_xxx",
+  "activityType": "tool.result.stream",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/content",
+      "value": "Counted 1 of 3.\nCounted 2 of 3.\n"
+    }
+  ]
+}
+```
+
+其中 `ACTIVITY_DELTA` 的 `patch.path` 对内置 `tool.result.stream` activity 固定为 `/content`，表示更新这份 activity state 里的 `content` 字段。
+
+activity 中的 `content` 不是单次 chunk，而是服务端按收到的非空 partial `Content` 顺序累计后的完整过程内容，因此前端可以直接按最新 activity 状态覆盖展示，而不需要自己拼接字符串。最终 `TOOL_CALL_RESULT` 的内容仍遵循 runner 的原始语义：
+- 如果工具流中没有显式 final result chunk，则最终 `TOOL_CALL_RESULT` 使用之前 chunk 按框架现有 merge 规则聚合后的结果。
+- 如果工具流中显式返回了 `tool.FinalResultChunk` 或 `tool.FinalResultStateChunk`，则最终 `TOOL_CALL_RESULT` 直接使用该显式 final result。
+- 在显式 final result 场景下，之前过程中的 chunk 不会自动并入最终 `TOOL_CALL_RESULT`。
+
+消息快照路由中，由 partial tool result 改写出来的 activity 不会写入 `SessionService` track，因此：
+- 通过消息快照路由返回的 `MESSAGES_SNAPSHOT` 中不会包含这些过程 activity。
+- 每次 tool call 在快照消息列表里只保留一条最终 `tool` 消息。
+- 这条最终 `tool` 消息的内容与实时对话路由里的最终 `TOOL_CALL_RESULT` 一致。
+
 ### 外部工具
 
 当工具必须在客户端或业务侧执行时，可以采用外部工具模式。后端只生成工具调用并在工具节点触发中断，前端执行工具并回传结果，后端从中断点恢复继续运行。该模式要求工具结果进入 LLM 上下文，并写入会话历史，便于后续通过消息快照回放完整对话。
@@ -1102,28 +1290,3 @@ server, err := agui.New(
 实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
 ![report](../assets/gif/agui/report.gif)
-
-### 流式工具执行结果
-
-当工具在服务端执行，且前端需要持续展示执行中的状态时，可以将事件流分成三层来组织。`TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END` 用于描述工具调用本身，`ACTIVITY_SNAPSHOT`、`ACTIVITY_DELTA` 用于承载执行过程中的进度、阶段或日志，`TOOL_CALL_RESULT` 则保留给最终工具结果。这样前端可以分别渲染执行中的状态和最终结果，消息快照回放时也能继续依赖标准的工具结果语义。
-
-推荐的事件流大致如下：
-
-```text
-RUN_STARTED
-→ TOOL_CALL_START
-→ TOOL_CALL_ARGS
-→ TOOL_CALL_END
-→ ACTIVITY_SNAPSHOT
-→ ACTIVITY_DELTA
-→ ACTIVITY_DELTA
-→ ...
-→ ACTIVITY_DELTA   # completed
-→ TOOL_CALL_RESULT
-→ TEXT_MESSAGE_*
-→ RUN_FINISHED
-```
-
-在实现上，通常可以通过自定义 Translator 包装默认 Translator。默认 Translator 继续负责标准 `TOOL_CALL_*` 与最终 `TOOL_CALL_RESULT` 的翻译，自定义部分只处理工具执行过程中的中间结果。比较稳妥的写法是遍历默认 Translator 返回的 `innerEvents`，逐个判断事件类型，并仅对目标 `ToolCallResultEvent` 做改写。partial 结果可以改写为 `ACTIVITY_SNAPSHOT` 或 `ACTIVITY_DELTA`，final 结果则在原始 `TOOL_CALL_RESULT` 之前插入一条 completed 的 `ACTIVITY_DELTA`。其余事件保持原样透传，这样可以保留文本、Graph 活动和其他工具事件的既有行为。
-
-完整示例可参考 [examples/agui/server/streamtool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/streamtool)。该示例使用一个最小 `StreamableTool` 持续输出递增数字，并通过自定义 Translator 将 partial `tool.response` 转为 `tool.execution` 活动事件，同时保留标准 `TOOL_CALL_RESULT` 作为最终结果。

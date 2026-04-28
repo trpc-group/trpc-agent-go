@@ -49,6 +49,7 @@ const (
 	routeSkillsRefresh     = "/api/skills/refresh"
 	routeSkillToggle       = "/api/skills/toggle"
 	routeMemoryFilesJSON   = "/api/memory/files"
+	routeMemoryFileAPI     = "/api/memory/file"
 	routeMemoryFile        = "/memory/file"
 	routeJobsJSON          = "/api/cron/jobs"
 	routeJobRun            = "/api/cron/jobs/run"
@@ -165,15 +166,16 @@ type Config struct {
 	StateDir string
 	DebugDir string
 
-	Channels      []string
-	GatewayRoutes Routes
-	Skills        SkillsStatusProvider
-	Prompts       PromptsProvider
-	Identity      IdentityProvider
-	Personas      PersonasProvider
-	Chats         ChatsProvider
-	MemoryFiles   MemoryFileStore
-	Browser       BrowserConfig
+	Channels         []string
+	GatewayRoutes    Routes
+	Skills           SkillsStatusProvider
+	Prompts          PromptsProvider
+	Identity         IdentityProvider
+	Personas         PersonasProvider
+	Chats            ChatsProvider
+	MemoryFiles      MemoryFileStore
+	MemoryUserLabels MemoryUserLabelResolver
+	Browser          BrowserConfig
 
 	Cron *cron.Service
 	Exec *octool.Manager
@@ -242,6 +244,8 @@ type BrowserManagedService struct {
 
 type Service struct {
 	cfg               Config
+	runtimeConfig     RuntimeConfigProvider
+	runtimeLifecycle  RuntimeLifecycleProvider
 	now               func() time.Time
 	browserHTTPClient *http.Client
 }
@@ -260,6 +264,24 @@ func WithBrowserHTTPClient(client *http.Client) Option {
 	return func(s *Service) {
 		if s != nil && client != nil {
 			s.browserHTTPClient = client
+		}
+	}
+}
+
+func WithRuntimeConfigProvider(provider RuntimeConfigProvider) Option {
+	return func(s *Service) {
+		if s != nil {
+			s.runtimeConfig = provider
+		}
+	}
+}
+
+func WithRuntimeLifecycleProvider(
+	provider RuntimeLifecycleProvider,
+) Option {
+	return func(s *Service) {
+		if s != nil {
+			s.runtimeLifecycle = provider
 		}
 	}
 }
@@ -293,6 +315,14 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(
 		routeSkillsPage,
 		wrapRelativeLinksFunc(s.handleSkillsPage),
+	)
+	mux.HandleFunc(
+		routeConfigPage,
+		wrapRelativeLinksFunc(s.handleConfigPage),
+	)
+	mux.HandleFunc(
+		routeRuntimeControlPage,
+		wrapRelativeLinksFunc(s.handleRuntimeControlPage),
 	)
 	mux.HandleFunc(
 		routePrompts,
@@ -333,13 +363,30 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
 	mux.HandleFunc(routePageStateJSON, s.handlePageStateJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
+	mux.HandleFunc(routeConfigJSON, s.handleConfigJSON)
 	mux.HandleFunc(routePromptsJSON, s.handlePromptsJSON)
 	mux.HandleFunc(routeIdentityJSON, s.handleIdentityJSON)
 	mux.HandleFunc(routePersonasJSON, s.handlePersonasJSON)
 	mux.HandleFunc(routeChatsJSON, s.handleChatsJSON)
 	mux.HandleFunc(routeChatHistoryJSON, s.handleChatHistoryJSON)
 	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
+	mux.HandleFunc(
+		routeMemoryFileAPI,
+		wrapRelativeLinksFunc(s.handleMemoryFileAPI),
+	)
 	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
+	mux.HandleFunc(
+		routeConfigSave,
+		wrapRelativeLinksFunc(s.handleSaveRuntimeConfig),
+	)
+	mux.HandleFunc(
+		routeConfigReset,
+		wrapRelativeLinksFunc(s.handleResetRuntimeConfig),
+	)
+	mux.HandleFunc(
+		routeRuntimeControlAction,
+		wrapRelativeLinksFunc(s.handleRuntimeControlAction),
+	)
 	mux.HandleFunc(
 		routePromptInlineSave,
 		wrapRelativeLinksFunc(s.handleSavePromptInline),
@@ -584,6 +631,10 @@ type skillInstallView struct {
 
 type pageData struct {
 	Snapshot          snapshot
+	Config            RuntimeConfigStatus
+	ConfigPending     int
+	ConfigCanRestart  bool
+	RuntimeControl    RuntimeLifecyclePageStatus
 	Prompts           PromptsStatus
 	Identity          IdentityStatus
 	Personas          PersonasStatus
@@ -616,6 +667,8 @@ type pageStateStatus struct {
 
 type pageRefreshInput struct {
 	Snapshot          snapshot
+	Config            RuntimeConfigStatus
+	RuntimeControl    RuntimeLifecyclePageStatus
 	Prompts           PromptsStatus
 	Identity          IdentityStatus
 	Personas          PersonasStatus
@@ -691,6 +744,7 @@ func (s *Service) snapshotForView(view adminView) snapshot {
 	switch view {
 	case viewSkills:
 		out.Skills = s.skillsStatus()
+	case viewConfig:
 	case viewMemory:
 		out.Memory = s.memoryStatus()
 	case viewAutomation:
@@ -1093,23 +1147,37 @@ func (s *Service) renderPage(
 	}
 
 	snapshot := s.snapshotForView(view)
+	configStatus := s.runtimeConfigStatus()
+	runtimeControl := s.runtimeLifecycleStatus(r)
+	refreshRuntimeControl := runtimeControl
+	if view == viewRuntimeControl {
+		refreshRuntimeControl = s.runtimeLifecycleRefreshStatus(r)
+	}
 	prompts := s.promptsStatus()
 	identity := s.identityStatus()
 	personas := s.personasStatus()
 	chats := s.chatsStatus()
 	data := pageData{
-		Snapshot:        snapshot,
-		Prompts:         prompts,
-		Identity:        identity,
-		Personas:        personas,
-		Chats:           chats,
-		ChatHistoryPath: routeChatHistoryJSON,
-		Notice:          strings.TrimSpace(r.URL.Query().Get(queryNotice)),
-		Error:           strings.TrimSpace(r.URL.Query().Get(queryError)),
-		View:            view,
-		PageTitle:       pageTitle(view),
-		PageSummary:     pageSummary(view),
-		NavSections:     adminNavSections(view),
+		Snapshot:         snapshot,
+		Config:           configStatus,
+		ConfigPending:    pendingRestartFields(configStatus),
+		ConfigCanRestart: s.hasRuntimeLifecycleProvider(),
+		RuntimeControl:   runtimeControl,
+		Prompts:          prompts,
+		Identity:         identity,
+		Personas:         personas,
+		Chats:            chats,
+		ChatHistoryPath:  routeChatHistoryJSON,
+		Notice:           strings.TrimSpace(r.URL.Query().Get(queryNotice)),
+		Error:            strings.TrimSpace(r.URL.Query().Get(queryError)),
+		View:             view,
+		PageTitle:        pageTitle(view),
+		PageSummary:      pageSummary(view),
+		NavSections: adminNavSections(
+			view,
+			s.hasRuntimeConfigProvider(),
+			s.hasRuntimeLifecycleProvider(),
+		),
 	}
 	if view == viewChats {
 		data.SelectedChat, data.SelectedChatError = resolveSelectedChat(
@@ -1123,6 +1191,8 @@ func (s *Service) renderPage(
 		view,
 		pageRefreshInput{
 			Snapshot:          snapshot,
+			Config:            configStatus,
+			RuntimeControl:    refreshRuntimeControl,
 			Prompts:           prompts,
 			Identity:          identity,
 			Personas:          personas,
@@ -1140,6 +1210,18 @@ func (s *Service) renderPage(
 			http.StatusInternalServerError,
 		)
 	}
+}
+
+func pendingRestartFields(status RuntimeConfigStatus) int {
+	count := 0
+	for _, section := range status.Sections {
+		for _, field := range section.Fields {
+			if field.PendingRestart {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func resolveSelectedChat(
@@ -1262,28 +1344,38 @@ func mergeChatView(
 	return merged
 }
 
-func adminNavSections(active adminView) []adminNavSection {
+func adminNavSections(
+	active adminView,
+	showConfig bool,
+	showRuntimeControl bool,
+) []adminNavSection {
+	controlItems := []adminNavItem{
+		{Label: "Overview", Path: routeOverview},
+	}
+	if showConfig {
+		controlItems = append(
+			controlItems,
+			adminNavItem{Label: "Config", Path: routeConfigPage},
+		)
+	}
+	controlItems = append(
+		controlItems,
+		adminNavItem{Label: "Skills", Path: routeSkillsPage},
+		adminNavItem{Label: "Prompts", Path: routePrompts},
+		adminNavItem{Label: "Identity", Path: routeIdentity},
+		adminNavItem{Label: "Personas", Path: routePersonas},
+		adminNavItem{Label: "Chats", Path: routeChats},
+		adminNavItem{Label: "Memory", Path: routeMemory},
+		adminNavItem{Label: "Automation", Path: routeAutomation},
+	)
 	sections := []adminNavSection{
 		{
 			Label: "Control",
-			Items: []adminNavItem{
-				{Label: "Overview", Path: routeOverview},
-				{Label: "Skills", Path: routeSkillsPage},
-				{Label: "Prompts", Path: routePrompts},
-				{Label: "Identity", Path: routeIdentity},
-				{Label: "Personas", Path: routePersonas},
-				{Label: "Chats", Path: routeChats},
-				{Label: "Memory", Path: routeMemory},
-				{Label: "Automation", Path: routeAutomation},
-			},
+			Items: controlItems,
 		},
 		{
 			Label: "Diagnostics",
-			Items: []adminNavItem{
-				{Label: "Runtime Sessions", Path: routeSessions},
-				{Label: "Debug", Path: routeDebug},
-				{Label: "Browser", Path: routeBrowser},
-			},
+			Items: runtimeDiagnosticsNavItems(showRuntimeControl),
 		},
 	}
 	for i := range sections {
@@ -1295,8 +1387,34 @@ func adminNavSections(active adminView) []adminNavSection {
 	return sections
 }
 
+func runtimeDiagnosticsNavItems(
+	showRuntimeControl bool,
+) []adminNavItem {
+	items := []adminNavItem{}
+	if showRuntimeControl {
+		items = append(
+			items,
+			adminNavItem{
+				Label: "Runtime Control",
+				Path:  routeRuntimeControlPage,
+			},
+		)
+	}
+	items = append(
+		items,
+		adminNavItem{Label: "Runtime Sessions", Path: routeSessions},
+		adminNavItem{Label: "Debug", Path: routeDebug},
+		adminNavItem{Label: "Browser", Path: routeBrowser},
+	)
+	return items
+}
+
 func pageTitle(view adminView) string {
 	switch view {
+	case viewConfig:
+		return "Config"
+	case viewRuntimeControl:
+		return "Runtime Control"
 	case viewSkills:
 		return "Skills"
 	case viewPrompts:
@@ -1324,6 +1442,10 @@ func pageTitle(view adminView) string {
 
 func pageSummary(view adminView) string {
 	switch view {
+	case viewConfig:
+		return pageSummaryConfig
+	case viewRuntimeControl:
+		return pageSummaryRuntimeControl
 	case viewSkills:
 		return "Discover installed skills, refresh folders from disk, and manage config-backed enablement."
 	case viewPrompts:
@@ -1335,7 +1457,8 @@ func pageSummary(view adminView) string {
 	case viewChats:
 		return pageSummaryChats
 	case viewMemory:
-		return "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory."
+		return "Inspect durable memory storage, expand file-backed " +
+			"MEMORY.md scopes, and edit full files in place."
 	case viewAutomation:
 		return "Inspect scheduled jobs, trigger one-off runs, and clear automation state."
 	case viewSessions:
@@ -1352,6 +1475,8 @@ func pageSummary(view adminView) string {
 func pageRefreshWatch(view adminView) bool {
 	switch view {
 	case viewOverview,
+		viewConfig,
+		viewRuntimeControl,
 		viewSkills,
 		viewChats,
 		viewMemory,
@@ -1408,6 +1533,14 @@ func pageRefreshStatePath(
 			values.Set(queryChatID, chatID)
 		}
 	}
+	if view == viewRuntimeControl && r != nil && r.URL != nil {
+		version := strings.TrimSpace(
+			r.URL.Query().Get(queryRuntimeVersion),
+		)
+		if version != "" {
+			values.Set(queryRuntimeVersion, version)
+		}
+	}
 	return routePageStateJSON + "?" + values.Encode()
 }
 
@@ -1416,6 +1549,10 @@ func pageRefreshToken(
 	input pageRefreshInput,
 ) string {
 	switch view {
+	case viewConfig:
+		return refreshTokenForValue(input.Config)
+	case viewRuntimeControl:
+		return refreshTokenForValue(input.RuntimeControl)
 	case viewPrompts:
 		return refreshTokenForValue(input.Prompts)
 	case viewIdentity:
@@ -1464,10 +1601,16 @@ func (s *Service) pageRefreshInput(
 ) pageRefreshInput {
 	input := pageRefreshInput{
 		Snapshot: s.snapshotForView(view),
+		Config:   s.runtimeConfigStatus(),
 		Prompts:  s.promptsStatus(),
 		Identity: s.identityStatus(),
 		Personas: s.personasStatus(),
 		Chats:    s.chatsStatus(),
+	}
+	if view == viewRuntimeControl {
+		input.RuntimeControl = s.runtimeLifecycleRefreshStatus(r)
+	} else {
+		input.RuntimeControl = s.runtimeLifecycleStatus(r)
 	}
 	if view == viewChats {
 		input.SelectedChat, input.SelectedChatError = resolveSelectedChat(
@@ -1529,6 +1672,98 @@ func (s *Service) handleMemoryFilesJSON(
 		return
 	}
 	writeJSON(w, http.StatusOK, s.memoryStatus())
+}
+
+func (s *Service) handleMemoryFileAPI(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleMemoryFileJSON(w, r)
+	case http.MethodPost:
+		s.handleSaveMemoryFile(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Service) handleMemoryFileJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	root, configured, err := configuredMemoryRoot(s.cfg.MemoryFiles)
+	if err != nil || !configured {
+		http.Error(
+			w,
+			"memory file store is not configured",
+			http.StatusNotFound,
+		)
+		return
+	}
+	detail, err := readMemoryFileDetailWithResolver(
+		root,
+		strings.TrimSpace(r.URL.Query().Get(queryPath)),
+		s.cfg.MemoryUserLabels,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Service) handleSaveMemoryFile(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	_, configured, err := configuredMemoryRoot(s.cfg.MemoryFiles)
+	if err != nil || !configured {
+		http.Error(
+			w,
+			"memory file store is not configured",
+			http.StatusNotFound,
+		)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	returnTo := strings.TrimSpace(r.FormValue(formReturnTo))
+	path := strings.TrimSpace(r.FormValue(queryPath))
+	if path == "" {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			"path is required",
+			returnTo,
+		)
+		return
+	}
+	if err := saveMemoryFile(
+		r.Context(),
+		s.cfg.MemoryFiles,
+		path,
+		r.FormValue(formPromptContent),
+	); err != nil {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			err.Error(),
+			returnTo,
+		)
+		return
+	}
+	s.redirectWithMessageAt(
+		w,
+		r,
+		queryNotice,
+		"Saved memory file.",
+		returnTo,
+	)
 }
 
 func (s *Service) handleMemoryFile(
@@ -1677,6 +1912,10 @@ func navPath(raw string) string {
 	switch strings.TrimSpace(raw) {
 	case routeIndex, routeOverview:
 		return routeOverview
+	case routeConfigPage:
+		return routeConfigPage
+	case routeRuntimeControlPage:
+		return routeRuntimeControlPage
 	case routeSkillsPage:
 		return routeSkillsPage
 	case routePrompts:
@@ -1706,6 +1945,10 @@ func navViewForPath(path string) adminView {
 	switch strings.TrimSpace(path) {
 	case routeIndex, routeOverview:
 		return viewOverview
+	case routeConfigPage:
+		return viewConfig
+	case routeRuntimeControlPage:
+		return viewRuntimeControl
 	case routeSkillsPage:
 		return viewSkills
 	case routePrompts:
@@ -2876,6 +3119,197 @@ const adminPageHTML = `<!doctype html>
       padding: 7px 12px;
       font-size: 14px;
     }
+    .config-sections {
+      display: grid;
+      gap: 18px;
+      margin-top: 16px;
+    }
+    .config-section-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(255, 253, 248, 0.8);
+      box-shadow: 0 10px 24px rgba(35, 29, 22, 0.04);
+    }
+    .config-field-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .config-field {
+      border: 1px solid rgba(215, 207, 194, 0.9);
+      border-radius: 16px;
+      background: rgba(255, 252, 247, 0.94);
+      overflow: hidden;
+      transition: box-shadow 140ms ease, border-color 140ms ease;
+    }
+    .config-field[open] {
+      border-color: rgba(15, 111, 97, 0.28);
+      box-shadow: 0 14px 28px rgba(35, 29, 22, 0.08);
+    }
+    .config-field summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 16px;
+    }
+    .config-field summary::-webkit-details-marker {
+      display: none;
+    }
+    .config-field-detail {
+      padding: 0 16px 16px;
+      border-top: 1px solid rgba(215, 207, 194, 0.65);
+    }
+    .config-field-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .config-field-title {
+      margin: 0;
+      font-size: 18px;
+    }
+    .config-badges {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .config-badge {
+      border-radius: 999px;
+      border: 1px solid rgba(15, 111, 97, 0.18);
+      background: rgba(15, 111, 97, 0.08);
+      color: var(--accent);
+      padding: 4px 10px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .config-badge.warn {
+      border-color: rgba(154, 47, 47, 0.18);
+      background: rgba(154, 47, 47, 0.08);
+      color: var(--warn);
+    }
+    .config-meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px 16px;
+      margin-top: 12px;
+    }
+    .config-meta-block {
+      border-radius: 14px;
+      background: rgba(243, 238, 231, 0.62);
+      padding: 10px 12px;
+    }
+    .config-meta-label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .config-meta-value {
+      margin-top: 6px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .config-form {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .config-form-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .config-form input,
+    .config-form select {
+      min-width: min(100%, 320px);
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--ink);
+      font: inherit;
+    }
+    .config-form .subtle {
+      margin: 0;
+    }
+    .runtime-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px 16px;
+      margin-top: 12px;
+    }
+    .runtime-meta-card {
+      border-radius: 14px;
+      background: rgba(243, 238, 231, 0.62);
+      padding: 10px 12px;
+    }
+    .runtime-meta-label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .runtime-meta-value {
+      margin-top: 6px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .runtime-pending {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(215, 207, 194, 0.65);
+    }
+    .runtime-pending h3,
+    .runtime-version-card h3,
+    .runtime-changelog-card h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+    .runtime-summary-list {
+      margin: 12px 0 0;
+      padding-left: 20px;
+    }
+    .runtime-summary-list li {
+      color: var(--muted);
+    }
+    .runtime-version-form,
+    .runtime-version-view-form {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .runtime-version-form select,
+    .runtime-version-view-form select {
+      min-width: min(100%, 320px);
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--ink);
+      font: inherit;
+    }
+    .runtime-version-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .runtime-changelog {
+      margin-top: 12px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(215, 207, 194, 0.85);
+      background: rgba(255, 253, 248, 0.9);
+      white-space: pre-wrap;
+      font-family: "SFMono-Regular", "SFMono-Regular", monospace;
+      line-height: 1.45;
+      max-height: 420px;
+      overflow: auto;
+    }
     .skills-group {
       margin-top: 18px;
     }
@@ -3147,6 +3581,11 @@ const adminPageHTML = `<!doctype html>
       display: grid;
       gap: 4px;
     }
+    .memory-user-label {
+      color: var(--muted);
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
     .memory-controls {
       margin: 18px 0 12px;
     }
@@ -3191,6 +3630,57 @@ const adminPageHTML = `<!doctype html>
       color: var(--muted);
       font-weight: 700;
       white-space: nowrap;
+    }
+    .memory-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .memory-card-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+    }
+    .memory-card-meta {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .memory-path {
+      margin-top: 8px;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .memory-card-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px 14px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .memory-editor-form {
+      margin-top: 12px;
+    }
+    .memory-editor-form textarea {
+      width: 100%;
+      min-height: 240px;
+      margin-top: 8px;
+      font: inherit;
+      resize: vertical;
+    }
+    .memory-editor-status {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .memory-editor-status.error {
+      color: #b6544d;
     }
     .chat-list {
       display: grid;
@@ -3860,6 +4350,480 @@ const adminPageHTML = `<!doctype html>
     </section>
     {{end}}
 
+    {{if eq .View "config"}}
+    <section class="card" style="margin-top: 24px;" id="config-admin">
+      <div class="skills-header">
+        <div class="skills-header-copy">
+          <h2>Runtime Config</h2>
+          <p class="skills-lead">
+            This page writes directly to the main runtime config file and keeps
+            unset fields distinct from explicit values.
+          </p>
+        </div>
+      </div>
+      <div class="skills-ops-grid">
+        <div class="skills-op-card">
+          <div class="skills-op-label">Config file</div>
+          <div class="skills-op-value">
+            {{if .Config.ConfigPath}}
+              <code>{{.Config.ConfigPath}}</code>
+            {{else}}
+              Runtime config path is not available
+            {{end}}
+          </div>
+          <div class="skills-op-note">
+            Reset deletes the YAML key so the runtime falls back to inherited
+            behavior.
+          </div>
+        </div>
+        <div class="skills-op-card">
+          <div class="skills-op-label">Apply model</div>
+          <div class="skills-op-value">Restart required by default</div>
+          <div class="skills-op-note">
+            The current runtime stays unchanged until you restart, so this page
+            shows both the saved config and the live runtime side by side.
+          </div>
+        </div>
+        {{if .ConfigCanRestart}}
+        <div class="skills-op-card">
+          <div class="skills-op-label">Runtime control</div>
+          <div class="skills-op-value">Restart and version actions</div>
+          <div class="skills-op-note">
+            Use the runtime controls page for graceful restarts, forced
+            restarts, and target-version actions.
+          </div>
+          <div class="skills-op-actions">
+            <a class="page-refresh-link" href="/runtime-control">
+              Open Runtime Control
+            </a>
+          </div>
+        </div>
+        {{end}}
+      </div>
+      {{if gt .ConfigPending 0}}
+      <div class="skills-ops-grid">
+        <div class="skills-op-card">
+          <div class="skills-op-label">Pending restart</div>
+          <div class="skills-op-value">
+            {{.ConfigPending}} saved field{{if ne .ConfigPending 1}}s{{end}}
+            still need a restart before the running runtime will use them.
+          </div>
+          <div class="skills-op-note">
+            Saved config changes are already on disk. The live runtime stays on
+            the previous values until the next restart.
+          </div>
+          {{if .ConfigCanRestart}}
+          <div class="skills-op-actions">
+            <a class="page-refresh-link" href="/runtime-control">
+              Open Runtime Control
+            </a>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+      {{if .Config.Error}}
+      <div class="notice err" style="margin-top: 12px;">
+        {{.Config.Error}}
+      </div>
+      {{end}}
+      {{if .Config.Sections}}
+      <div class="config-sections">
+        {{range .Config.Sections}}
+        <section class="config-section-card" id="config-section-{{.Key}}">
+          <h3>{{.Title}}</h3>
+          {{if .Summary}}
+          <p class="subtle">{{.Summary}}</p>
+          {{end}}
+          <div class="config-field-list">
+            {{range .Fields}}
+            <details class="config-field" id="config-field-{{.Key}}">
+              {{$field := .}}
+              <summary class="config-field-summary">
+                <div class="config-field-top">
+                  <div>
+                    <h4 class="config-field-title">{{.Title}}</h4>
+                    {{if .Summary}}
+                    <p class="subtle">{{.Summary}}</p>
+                    {{end}}
+                  </div>
+                  <div class="config-badges">
+                    <span class="config-badge">
+                      {{if eq .ApplyMode "hot"}}Hot apply{{else if eq .ApplyMode "next_turn"}}Next turn{{else}}Restart{{end}}
+                    </span>
+                    {{if .PendingRestart}}
+                    <span class="config-badge warn">Pending restart</span>
+                    {{end}}
+                  </div>
+                </div>
+              </summary>
+              <div class="config-field-detail">
+                <div class="config-meta">
+                  <div class="config-meta-block">
+                    <div class="config-meta-label">Configured</div>
+                    <div class="config-meta-value">
+                      {{if eq .ConfiguredSource "explicit"}}
+                        {{if .ConfiguredValue}}<code>{{.ConfiguredValue}}</code>{{else}}<code>(empty)</code>{{end}}
+                      {{else}}
+                        <span class="subtle">Inherited</span>
+                      {{end}}
+                    </div>
+                    {{if .ConfiguredSourceLabel}}
+                    <div class="subtle">{{.ConfiguredSourceLabel}}</div>
+                    {{end}}
+                  </div>
+                  <div class="config-meta-block">
+                    <div class="config-meta-label">Current runtime</div>
+                    <div class="config-meta-value">
+                      {{if .RuntimeValue}}<code>{{.RuntimeValue}}</code>{{else}}<span class="subtle">-</span>{{end}}
+                    </div>
+                    {{if .RuntimeSourceLabel}}
+                    <div class="subtle">{{.RuntimeSourceLabel}}</div>
+                    {{end}}
+                  </div>
+                </div>
+                {{if eq .InputType "readonly"}}
+                <p class="subtle" style="margin-top: 12px;">
+                  Read-only runtime diagnostics.
+                </p>
+                {{else}}
+                <form method="post" action="/api/config/save" class="config-form">
+                  <input type="hidden" name="field_key" value="{{.Key}}">
+                  <input type="hidden" name="return_to" value="config-field-{{.Key}}">
+                  <input type="hidden" name="return_path" value="/config">
+                  {{if eq .InputType "select"}}
+                  <select name="value">
+                    {{range $field.Options}}
+                    <option value="{{.Value}}" {{if eq $field.EditorValue .Value}}selected{{end}}>
+                      {{.Label}}
+                    </option>
+                    {{end}}
+                  </select>
+                  {{else if eq .InputType "number"}}
+                  <input
+                    type="number"
+                    name="value"
+                    value="{{.EditorValue}}"
+                    {{if .Placeholder}}placeholder="{{.Placeholder}}"{{end}}
+                  >
+                  {{else}}
+                  <input
+                    type="text"
+                    name="value"
+                    value="{{.EditorValue}}"
+                    {{if .Placeholder}}placeholder="{{.Placeholder}}"{{end}}
+                  >
+                  {{end}}
+                  <div class="config-form-row">
+                    <button type="submit">Save</button>
+                    {{if .Resettable}}
+                    <button class="secondary" type="submit" formaction="/api/config/reset">
+                      Reset
+                    </button>
+                    {{end}}
+                  </div>
+                </form>
+                {{end}}
+              </div>
+            </details>
+            {{end}}
+          </div>
+        </section>
+        {{end}}
+      </div>
+      {{else if not .Config.Error}}
+      <p class="subtle" style="margin-top: 12px;">
+        Runtime config editing is not available for this runtime.
+      </p>
+      {{end}}
+    </section>
+    {{end}}
+
+    {{if eq .View "runtime_control"}}
+    {{if .RuntimeControl.Error}}
+    <div class="notice err" style="margin-top: 24px;">
+      {{.RuntimeControl.Error}}
+    </div>
+    {{end}}
+    {{if .RuntimeControl.Enabled}}
+    <section class="panels" style="margin-top: 24px;">
+      <article class="card" id="runtime-control-state">
+        <h2>Runtime State</h2>
+        <p class="subtle">
+          Review the current version, queue depth, and any lifecycle action
+          that is already in flight.
+        </p>
+        <div class="runtime-meta-grid">
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">Current Version</div>
+            <div class="runtime-meta-value">
+              {{if .RuntimeControl.Status.CurrentVersion}}
+                <code>{{.RuntimeControl.Status.CurrentVersion}}</code>
+              {{else}}
+                <span class="subtle">-</span>
+              {{end}}
+            </div>
+          </div>
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">Latest Version</div>
+            <div class="runtime-meta-value">
+              {{if .RuntimeControl.Index.LatestVersion}}
+                <code>{{.RuntimeControl.Index.LatestVersion}}</code>
+              {{else}}
+                <span class="subtle">Unavailable</span>
+              {{end}}
+            </div>
+          </div>
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">State</div>
+            <div class="runtime-meta-value">
+              {{if .RuntimeControl.Status.State}}
+                {{.RuntimeControl.Status.State}}
+              {{else}}
+                <span class="subtle">Unknown</span>
+              {{end}}
+            </div>
+          </div>
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">Exit Code</div>
+            <div class="runtime-meta-value">
+              {{.RuntimeControl.Status.ExitCode}}
+            </div>
+          </div>
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">Running Requests</div>
+            <div class="runtime-meta-value">
+              {{.RuntimeControl.Status.RunningRequests}}
+            </div>
+          </div>
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">Queued Requests</div>
+            <div class="runtime-meta-value">
+              {{.RuntimeControl.Status.QueuedRequests}}
+            </div>
+          </div>
+        </div>
+        {{if .RuntimeControl.Status.Pending}}
+        <div class="runtime-pending">
+          <h3>Pending Action</h3>
+          <dl class="meta">
+            <dt>Kind</dt>
+            <dd>{{.RuntimeControl.Status.Pending.Kind}}</dd>
+            <dt>Mode</dt>
+            <dd>{{.RuntimeControl.Status.Pending.Mode}}</dd>
+            {{if .RuntimeControl.Status.Pending.TargetVersion}}
+            <dt>Target Version</dt>
+            <dd>
+              <code>{{.RuntimeControl.Status.Pending.TargetVersion}}</code>
+            </dd>
+            {{end}}
+            {{if .RuntimeControl.Status.Pending.Actor}}
+            <dt>Actor</dt>
+            <dd>{{.RuntimeControl.Status.Pending.Actor}}</dd>
+            {{end}}
+            {{if .RuntimeControl.Status.Pending.Source}}
+            <dt>Source</dt>
+            <dd>{{.RuntimeControl.Status.Pending.Source}}</dd>
+            {{end}}
+            {{if hasTime .RuntimeControl.Status.Pending.RequestedAt}}
+            <dt>Requested</dt>
+            <dd>{{formatTime .RuntimeControl.Status.Pending.RequestedAt}}</dd>
+            {{end}}
+            {{if hasTime .RuntimeControl.Status.UpdatedAt}}
+            <dt>Updated</dt>
+            <dd>{{formatTime .RuntimeControl.Status.UpdatedAt}}</dd>
+            {{end}}
+          </dl>
+          {{if .RuntimeControl.Status.Pending.Summary}}
+          <ul class="runtime-summary-list">
+            {{range .RuntimeControl.Status.Pending.Summary}}
+            <li>{{.}}</li>
+            {{end}}
+          </ul>
+          {{end}}
+        </div>
+        {{else}}
+        <p class="subtle" style="margin-top: 14px;">
+          No restart or version switch is currently pending.
+        </p>
+        {{end}}
+      </article>
+
+      <article class="card" id="runtime-control-quick-actions">
+        <h2>Quick Actions</h2>
+        <p class="subtle">
+          These controls line up with the runtime lifecycle card behavior:
+          graceful actions wait for in-flight work, forced actions exit after
+          the forced-shutdown window.
+        </p>
+        <div class="skills-ops-grid">
+          <div class="skills-op-card">
+            <div class="skills-op-label">Restart</div>
+            <div class="skills-op-value">Graceful restart</div>
+            <div class="skills-op-note">
+              Stop admitting new work, drain active requests, and then restart.
+            </div>
+            <div class="skills-op-actions">
+              <form method="post" action="/api/runtime/control/action">
+                <input type="hidden" name="kind" value="restart">
+                <input type="hidden" name="mode" value="graceful">
+                <input type="hidden" name="return_path" value="/runtime-control">
+                <input type="hidden" name="return_to" value="runtime-control-quick-actions">
+                <button type="submit">Graceful Restart</button>
+              </form>
+            </div>
+          </div>
+          <div class="skills-op-card">
+            <div class="skills-op-label">Restart</div>
+            <div class="skills-op-value">Force restart</div>
+            <div class="skills-op-note">
+              Request a restart and exit once the forced shutdown timeout lands.
+            </div>
+            <div class="skills-op-actions">
+              <form method="post" action="/api/runtime/control/action">
+                <input type="hidden" name="kind" value="restart">
+                <input type="hidden" name="mode" value="force">
+                <input type="hidden" name="return_path" value="/runtime-control">
+                <input type="hidden" name="return_to" value="runtime-control-quick-actions">
+                <button class="warn" type="submit">Force Restart</button>
+              </form>
+            </div>
+          </div>
+          <div class="skills-op-card">
+            <div class="skills-op-label">Upgrade</div>
+            <div class="skills-op-value">Latest version</div>
+            <div class="skills-op-note">
+              Ask the runtime to switch to the latest published release.
+            </div>
+            <div class="skills-op-actions">
+              <form method="post" action="/api/runtime/control/action">
+                <input type="hidden" name="kind" value="upgrade">
+                <input type="hidden" name="mode" value="graceful">
+                <input type="hidden" name="return_path" value="/runtime-control">
+                <input type="hidden" name="return_to" value="runtime-control-quick-actions">
+                <button type="submit">Upgrade to Latest</button>
+              </form>
+            </div>
+          </div>
+          <div class="skills-op-card">
+            <div class="skills-op-label">Upgrade</div>
+            <div class="skills-op-value">Force latest upgrade</div>
+            <div class="skills-op-note">
+              Request the latest version and force the handoff after the drain
+              window ends.
+            </div>
+            <div class="skills-op-actions">
+              <form method="post" action="/api/runtime/control/action">
+                <input type="hidden" name="kind" value="upgrade">
+                <input type="hidden" name="mode" value="force">
+                <input type="hidden" name="return_path" value="/runtime-control">
+                <input type="hidden" name="return_to" value="runtime-control-quick-actions">
+                <button class="warn" type="submit">Force Upgrade to Latest</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panels" style="margin-top: 16px;">
+      <article class="card runtime-version-card" id="runtime-control-version">
+        <h2>Target Version</h2>
+        <p class="subtle">
+          Pick a release to inspect notes or request a direct switch to that
+          version.
+        </p>
+        {{if .RuntimeControl.Index.MinSupportedTarget}}
+        <p class="subtle">
+          Minimum supported target:
+          <code>{{.RuntimeControl.Index.MinSupportedTarget}}</code>
+        </p>
+        {{end}}
+        {{if .RuntimeControl.Index.Versions}}
+        <form method="get" action="/runtime-control" class="runtime-version-view-form">
+          <select name="version">
+            {{range .RuntimeControl.Index.Versions}}
+            <option value="{{.Version}}" {{if eq $.RuntimeControl.SelectedVersion .Version}}selected{{end}}>
+              {{.Version}}
+            </option>
+            {{end}}
+          </select>
+          <div class="runtime-version-actions">
+            <button class="secondary" type="submit">View Release Notes</button>
+          </div>
+        </form>
+        <form method="post" action="/api/runtime/control/action" class="runtime-version-form">
+          <input type="hidden" name="kind" value="upgrade">
+          <input type="hidden" name="return_path" value="/runtime-control">
+          <input type="hidden" name="return_to" value="runtime-control-version">
+          <select name="target_version">
+            {{range .RuntimeControl.Index.Versions}}
+            <option value="{{.Version}}" {{if eq $.RuntimeControl.SelectedVersion .Version}}selected{{end}}>
+              {{.Version}}
+            </option>
+            {{end}}
+          </select>
+          <div class="runtime-version-actions">
+            <button type="submit" name="mode" value="graceful">
+              Switch Gracefully
+            </button>
+            <button class="warn" type="submit" name="mode" value="force">
+              Switch Forcefully
+            </button>
+          </div>
+        </form>
+        {{else}}
+        <p class="subtle" style="margin-top: 14px;">
+          No published versions are available from the configured release
+          source.
+        </p>
+        {{end}}
+      </article>
+
+      <article class="card runtime-changelog-card" id="runtime-control-changelog">
+        <h2>Release Notes</h2>
+        {{if .RuntimeControl.Changelog.Version}}
+        <p class="subtle">
+          Notes for <code>{{.RuntimeControl.Changelog.Version}}</code>.
+        </p>
+        {{else if .RuntimeControl.SelectedVersion}}
+        <p class="subtle">
+          Notes for <code>{{.RuntimeControl.SelectedVersion}}</code> are not
+          available yet.
+        </p>
+        {{else}}
+        <p class="subtle">
+          Pick a version to inspect release notes.
+        </p>
+        {{end}}
+        {{if .RuntimeControl.Changelog.Summary}}
+        <ul class="runtime-summary-list">
+          {{range .RuntimeControl.Changelog.Summary}}
+          <li>{{.}}</li>
+          {{end}}
+        </ul>
+        {{end}}
+        {{if .RuntimeControl.Changelog.Changelog}}
+        <div class="runtime-changelog">
+          {{.RuntimeControl.Changelog.Changelog}}
+        </div>
+        {{else}}
+        <p class="subtle" style="margin-top: 14px;">
+          The selected version does not currently have release notes.
+        </p>
+        {{end}}
+      </article>
+    </section>
+    {{else if not .RuntimeControl.Error}}
+    <section class="card" style="margin-top: 24px;">
+      <h2>Runtime Control</h2>
+      <p class="subtle">
+        Runtime lifecycle controls are not available for this runtime.
+      </p>
+    </section>
+    {{end}}
+    {{end}}
+
     {{if eq .View "skills"}}
     <section class="card" style="margin-top: 24px;" id="skills-admin" data-skills-root>
       <div class="skills-header">
@@ -4263,56 +5227,110 @@ const adminPageHTML = `<!doctype html>
             <input
               id="memory-search"
               type="search"
-              placeholder="Search users or memory content"
+              placeholder="Search app, user, path, or preview"
               data-memory-search
             >
           </div>
         </div>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Scope</th>
-            <th>Preview</th>
-            <th>File</th>
-            <th>Size</th>
-            <th>Modified</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .Snapshot.Memory.Files}}
-          <tr
-            data-memory-row
-            data-memory-app="{{.AppName}}"
-            data-memory-user="{{.UserID}}"
-            data-memory-search="{{.UserID}} {{.Preview}}"
-          >
-            <td>
-              <div class="memory-scope">
-                <span>app <code>{{.AppName}}</code></span>
-                <span>user <code>{{.UserID}}</code></span>
+      <div class="memory-list">
+        {{range .Snapshot.Memory.Files}}
+        <details
+          class="card prompt-detail"
+          id="{{.CardID}}"
+          data-memory-card
+          data-memory-path="{{.RelativePath}}"
+          data-memory-load-url="{{.LoadURL}}"
+          data-memory-search="{{.SearchValue}}"
+        >
+          <summary>
+            <div class="memory-card-head">
+              <div>
+                <div class="memory-scope">
+                  <span>app <code>{{.AppName}}</code></span>
+                  <span>
+                    user <code>{{.UserID}}</code>
+                    {{if .UserLabel}}
+                    <span class="memory-user-label">{{.UserLabel}}</span>
+                    {{end}}
+                  </span>
+                </div>
+                <div class="memory-path">
+                  <code>{{.RelativePath}}</code>
+                </div>
+                <p class="subtle prompt-detail-hint">
+                  {{if .Preview}}
+                    {{.Preview}}
+                  {{else}}
+                    No visible memory content yet.
+                  {{end}}
+                </p>
               </div>
-            </td>
-            <td>
-              {{if .Preview}}
-              <div class="memory-preview">{{.Preview}}</div>
-              {{else}}
-              <span class="subtle">empty</span>
-              {{end}}
-            </td>
-            <td>
-              <a href="{{.OpenURL}}" target="_blank" rel="noopener noreferrer">
-                open
+              <div class="memory-card-meta">
+                <span>{{.SizeBytes}} bytes</span>
+                <span>{{formatTime .ModifiedAt}}</span>
+              </div>
+            </div>
+          </summary>
+          <div class="prompt-detail-body">
+            <div class="memory-card-toolbar">
+              <div class="subtle">
+                Edit the full <code>MEMORY.md</code> file for this scope.
+              </div>
+              <a
+                href="{{.OpenURL}}"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open Raw File
               </a>
-              <br>
-              <code>{{.RelativePath}}</code>
-            </td>
-            <td>{{.SizeBytes}}</td>
-            <td>{{formatTime .ModifiedAt}}</td>
-          </tr>
-          {{end}}
-        </tbody>
-      </table>
+            </div>
+            <form
+              class="memory-editor-form"
+              method="post"
+              action="/api/memory/file"
+              data-memory-form
+            >
+              <input type="hidden" name="path" value="{{.RelativePath}}">
+              <input type="hidden" name="return_path" value="/memory">
+              <input type="hidden" name="return_to" value="{{.CardID}}">
+              <label for="editor-{{.CardID}}">
+                Full file content
+              </label>
+              <textarea
+                id="editor-{{.CardID}}"
+                name="content"
+                data-memory-editor
+                placeholder="Open this scope to load MEMORY.md"
+                disabled
+              ></textarea>
+              <div class="memory-editor-status" data-memory-status>
+                Open this scope to load its full file.
+              </div>
+              <div
+                class="notice err"
+                style="margin-top: 12px;"
+                data-memory-error
+                hidden
+              ></div>
+              <div class="actions" style="margin-top: 12px;">
+                <button type="submit" data-memory-save disabled>
+                  Save File
+                </button>
+                <button
+                  class="secondary"
+                  type="button"
+                  data-memory-reset
+                  disabled
+                >
+                  Revert
+                </button>
+              </div>
+            </form>
+          </div>
+        </details>
+        {{end}}
+      </div>
       <p class="empty" data-memory-empty hidden>No matching memory files.</p>
       {{else if not .Snapshot.Memory.Error}}
       <p class="empty">
@@ -5197,6 +6215,28 @@ const adminPageHTML = `<!doctype html>
     })();
 
     (function () {
+      const revealHashDetails = () => {
+        if (!window.location.hash) {
+          return;
+        }
+        const target = document.querySelector(window.location.hash);
+        if (!target) {
+          return;
+        }
+        const disclosure = target.matches("details")
+          ? target
+          : target.closest("details");
+        if (!disclosure) {
+          return;
+        }
+        disclosure.open = true;
+      };
+
+      window.addEventListener("hashchange", revealHashDetails);
+      revealHashDetails();
+    })();
+
+    (function () {
       const roots = Array.from(
         document.querySelectorAll("[data-chat-history-root]")
       );
@@ -5551,26 +6591,185 @@ const adminPageHTML = `<!doctype html>
       const search = root.querySelector("[data-memory-search]");
       const shown = root.querySelector("[data-memory-shown]");
       const empty = document.querySelector("[data-memory-empty]");
-      const rows = Array.from(document.querySelectorAll("[data-memory-row]"));
+      const cards = Array.from(
+        document.querySelectorAll("[data-memory-card]")
+      );
 
-      const matches = (row) => {
-        const needle = (search && search.value ? search.value : "").trim().toLowerCase();
+      const readControls = (card) => ({
+        editor: card.querySelector("[data-memory-editor]"),
+        save: card.querySelector("[data-memory-save]"),
+        reset: card.querySelector("[data-memory-reset]"),
+        error: card.querySelector("[data-memory-error]"),
+        status: card.querySelector("[data-memory-status]"),
+      });
+
+      const setStatus = (card, message, isError) => {
+        const status = readControls(card).status;
+        if (!status) return;
+        status.textContent = message;
+        status.classList.toggle("error", Boolean(isError));
+      };
+
+      const clearError = (card) => {
+        const error = readControls(card).error;
+        if (!error) return;
+        error.hidden = true;
+        error.textContent = "";
+      };
+
+      const showError = (card, message) => {
+        const error = readControls(card).error;
+        if (!error) return;
+        error.hidden = false;
+        error.textContent = message;
+        setStatus(card, message, true);
+      };
+
+      const updateDirtyState = (card) => {
+        const controls = readControls(card);
+        const editor = controls.editor;
+        if (!editor) return;
+        const original = editor.dataset.original || "";
+        const loaded = card.dataset.memoryLoaded === "true";
+        const dirty = !editor.disabled && editor.value !== original;
+        if (controls.save) {
+          controls.save.disabled = editor.disabled || !dirty;
+        }
+        if (controls.reset) {
+          controls.reset.disabled = editor.disabled || !dirty;
+        }
+        if (editor.disabled) {
+          setStatus(
+            card,
+            "Open this scope to load its full file.",
+            false
+          );
+          return;
+        }
+        if (dirty) {
+          setStatus(card, "Unsaved changes.", false);
+          return;
+        }
+        if (loaded) {
+          setStatus(
+            card,
+            "Loaded from disk. Edit the file to enable save.",
+            false
+          );
+        }
+      };
+
+      const loadCard = async (card) => {
+        if (
+          card.dataset.memoryLoaded === "true" ||
+          card.dataset.memoryLoading === "true"
+        ) {
+          updateDirtyState(card);
+          return;
+        }
+        const controls = readControls(card);
+        const editor = controls.editor;
+        card.dataset.memoryLoading = "true";
+        clearError(card);
+        setStatus(card, "Loading full file...", false);
+        if (editor) {
+          editor.disabled = true;
+        }
+        if (controls.save) {
+          controls.save.disabled = true;
+        }
+        if (controls.reset) {
+          controls.reset.disabled = true;
+        }
+        try {
+          const url = resolveRequestURL(
+            card.getAttribute("data-memory-load-url") || ""
+          );
+          if (!url) {
+            throw new Error("memory file endpoint is unavailable");
+          }
+          const response = await fetch(url.toString(), {
+            headers: { Accept: "application/json" },
+          });
+          if (!response.ok) {
+            const text = (await response.text()).trim();
+            throw new Error(text || "failed to load memory file");
+          }
+          const payload = await response.json();
+          const content =
+            typeof payload.content === "string" ? payload.content : "";
+          if (editor) {
+            editor.value = content;
+            editor.dataset.original = content;
+            editor.disabled = false;
+          }
+          card.dataset.memoryLoaded = "true";
+          updateDirtyState(card);
+        } catch (err) {
+          showError(
+            card,
+            err && typeof err.message === "string"
+              ? err.message
+              : "failed to load memory file"
+          );
+        } finally {
+          delete card.dataset.memoryLoading;
+        }
+      };
+
+      const matches = (card) => {
+        const needle =
+          (search && search.value ? search.value : "")
+            .trim()
+            .toLowerCase();
         if (!needle) return true;
-        const haystack = (row.getAttribute("data-memory-search") || "").toLowerCase();
+        const haystack = (
+          card.getAttribute("data-memory-search") || ""
+        ).toLowerCase();
         if (haystack.indexOf(needle) === -1) return false;
         return true;
       };
 
       const refresh = () => {
         let visibleCount = 0;
-        rows.forEach((row) => {
-          const visible = matches(row);
-          row.hidden = !visible;
+        cards.forEach((card) => {
+          const visible = matches(card);
+          card.hidden = !visible;
           if (visible) visibleCount += 1;
         });
         if (shown) shown.textContent = String(visibleCount);
         if (empty) empty.hidden = visibleCount !== 0;
       };
+
+      cards.forEach((card) => {
+        const disclosure = card.matches("details")
+          ? card
+          : card.closest("details");
+        const controls = readControls(card);
+        if (controls.editor) {
+          controls.editor.addEventListener("input", () => {
+            updateDirtyState(card);
+          });
+        }
+        if (controls.reset) {
+          controls.reset.addEventListener("click", () => {
+            if (!controls.editor) return;
+            controls.editor.value =
+              controls.editor.dataset.original || "";
+            updateDirtyState(card);
+          });
+        }
+        if (disclosure) {
+          disclosure.addEventListener("toggle", () => {
+            if (disclosure.open) {
+              loadCard(card);
+            }
+          });
+          if (disclosure.open) {
+            loadCard(card);
+          }
+        }
+      });
 
       if (search) {
         search.addEventListener("input", refresh);

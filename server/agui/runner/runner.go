@@ -30,6 +30,7 @@ import (
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
+	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -78,6 +79,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		graphNodeInterruptActivityEnabled:      opts.GraphNodeInterruptActivityEnabled,
 		graphNodeInterruptActivityTopLevelOnly: opts.GraphNodeInterruptActivityTopLevelOnly,
 		reasoningContentEnabled:                opts.ReasoningContentEnabled,
+		eventSourceMetadataEnabled:             opts.EventSourceMetadataEnabled,
 		userIDResolver:                         opts.UserIDResolver,
 		translateCallbacks:                     opts.TranslateCallbacks,
 		runAgentInputHook:                      opts.RunAgentInputHook,
@@ -93,6 +95,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		messagesSnapshotFollowEnabled:          opts.MessagesSnapshotFollowEnabled,
 		messagesSnapshotFollowMaxDuration:      opts.MessagesSnapshotFollowMaxDuration,
 		toolResultInputTranslationEnabled:      opts.ToolResultInputTranslationEnabled,
+		streamingToolResultActivityEnabled:     opts.StreamingToolResultActivityEnabled,
 	}
 	return run
 }
@@ -107,6 +110,7 @@ type runner struct {
 	graphNodeInterruptActivityEnabled      bool
 	graphNodeInterruptActivityTopLevelOnly bool
 	reasoningContentEnabled                bool
+	eventSourceMetadataEnabled             bool
 	userIDResolver                         UserIDResolver
 	translateCallbacks                     *translator.Callbacks
 	runAgentInputHook                      RunAgentInputHook
@@ -123,6 +127,7 @@ type runner struct {
 	messagesSnapshotFollowEnabled          bool
 	messagesSnapshotFollowMaxDuration      time.Duration
 	toolResultInputTranslationEnabled      bool
+	streamingToolResultActivityEnabled     bool
 }
 
 type sessionContext struct {
@@ -247,6 +252,8 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		translator.WithGraphNodeInterruptActivityEnabled(r.graphNodeInterruptActivityEnabled),
 		translator.WithGraphNodeInterruptActivityTopLevelOnly(r.graphNodeInterruptActivityTopLevelOnly),
 		translator.WithReasoningContentEnabled(r.reasoningContentEnabled),
+		translator.WithEventSourceMetadataEnabled(r.eventSourceMetadataEnabled),
+		translator.WithStreamingToolResultActivityEnabled(r.streamingToolResultActivityEnabled),
 	)
 	if err != nil {
 		span.End()
@@ -551,7 +558,9 @@ func (r *runner) emitToolResultEvent(ctx context.Context, events chan<- aguieven
 		messageID = msg.ToolID
 	}
 	if r.toolResultInputTranslationEnabled {
-		return r.handleAgentEvent(ctx, events, input, newToolResultInputEvent(messageID, msg))
+		event := newToolResultInputEvent(messageID, msg)
+		r.attachToolResultInputSourceMetadata(ctx, input.key, event, msg.ToolID)
+		return r.handleAgentEvent(ctx, events, input, event)
 	}
 	toolResultEvent := aguievents.NewToolCallResultEvent(messageID, msg.ToolID, msg.Content)
 	return r.emitEvent(ctx, events, toolResultEvent, input)
@@ -702,14 +711,14 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 		return false
 	}
 	isTerminal, _ := terminalRunSignal(event)
-	log.DebugfContext(
+	log.TracefContext(
 		ctx,
 		"agui emit event: emitted event: %v, threadID: %s, runID: %s",
 		event,
 		input.threadID,
 		input.runID,
 	)
-	if input.enableTrack {
+	if input.enableTrack && r.shouldTrackEvent(event) {
 		if err := r.recordTrackEvent(ctx, input.key, event); err != nil {
 			log.WarnfContext(
 				ctx,
@@ -732,6 +741,13 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 			input.threadID, input.runID, ctx.Err())
 		return false
 	}
+}
+
+func (r *runner) shouldTrackEvent(event aguievents.Event) bool {
+	if !r.streamingToolResultActivityEnabled {
+		return true
+	}
+	return !aguitool.IsStreamingToolResultActivityEvent(event)
 }
 
 func (r *runner) recordUserMessage(ctx context.Context, key session.Key, message *types.Message) error {

@@ -24,11 +24,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+	memorymysqlvec "trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec"
 	memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 	memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	memorysqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
-	memorysqlitevec "trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -47,6 +47,7 @@ const (
 	MemoryPostgres  MemoryType = "postgres"
 	MemoryPGVector  MemoryType = "pgvector"
 	MemoryMySQL     MemoryType = "mysql"
+	MemoryMySQLVec  MemoryType = "mysqlvec"
 )
 
 // MemoryServiceConfig holds configuration for creating a memory service.
@@ -93,7 +94,7 @@ func DefaultRunnerConfig() RunnerConfig {
 //
 // Parameters:
 //   - memoryType: one of inmemory, sqlite, sqlitevec, redis, postgres,
-//     pgvector, mysql
+//     pgvector, mysql, mysqlvec
 //   - cfg: memory service configuration
 //   - SoftDelete: enable soft delete for SQL backends
 //   - Extractor: memory extractor for auto mode (nil = manual mode)
@@ -109,6 +110,7 @@ func DefaultRunnerConfig() RunnerConfig {
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
 //	pgvector:   PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER, PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_EMBEDDER_MODEL
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
+//	mysqlvec:   MYSQLVEC_HOST, MYSQLVEC_PORT, MYSQLVEC_USER, MYSQLVEC_PASSWORD, MYSQLVEC_DATABASE, MYSQLVEC_EMBEDDER_MODEL
 func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (memory.Service, error) {
 	switch memoryType {
 	case MemorySQLite:
@@ -123,6 +125,8 @@ func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (mem
 		return newPGVectorMemoryService(cfg)
 	case MemoryMySQL:
 		return newMySQLMemoryService(cfg)
+	case MemoryMySQLVec:
+		return newMySQLVecMemoryService(cfg)
 	case MemoryInMemory:
 		fallthrough
 	default:
@@ -219,60 +223,6 @@ func newOpenAIEmbedder(defaultModel string) *openaiembedder.Embedder {
 	}
 
 	return openaiembedder.New(opts...)
-}
-
-func newSQLiteVecMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
-	dsn := GetEnvOrDefault(
-		sqliteVecMemoryDSNEnvKey,
-		defaultSQLiteVecMemoryDBDSN,
-	)
-	db, err := sql.Open(sqliteDriverName, dsn)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(defaultSQLiteMaxOpenConns)
-	db.SetMaxIdleConns(defaultSQLiteMaxIdleConns)
-
-	embedderModel := GetEnvOrDefault(
-		sqliteVecEmbedderModelEnvKey,
-		openaiembedder.DefaultModel,
-	)
-	emb := newOpenAIEmbedder(embedderModel)
-
-	opts := []memorysqlitevec.ServiceOpt{
-		memorysqlitevec.WithEmbedder(emb),
-		memorysqlitevec.WithSoftDelete(cfg.SoftDelete),
-	}
-
-	if cfg.Extractor != nil {
-		opts = append(opts, memorysqlitevec.WithExtractor(cfg.Extractor))
-		if cfg.AsyncMemoryNum > 0 {
-			opts = append(
-				opts,
-				memorysqlitevec.WithAsyncMemoryNum(cfg.AsyncMemoryNum),
-			)
-		}
-		if cfg.MemoryQueueSize > 0 {
-			opts = append(
-				opts,
-				memorysqlitevec.WithMemoryQueueSize(cfg.MemoryQueueSize),
-			)
-		}
-		if cfg.MemoryJobTimeout > 0 {
-			opts = append(
-				opts,
-				memorysqlitevec.WithMemoryJobTimeout(cfg.MemoryJobTimeout),
-			)
-		}
-	}
-
-	svc, err := memorysqlitevec.NewService(db, opts...)
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-
-	return svc, nil
 }
 
 // newInMemoryMemoryService creates an in-memory memory service.
@@ -466,6 +416,51 @@ func newMySQLMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	return memorymysql.NewService(opts...)
 }
 
+// newMySQLVecMemoryService creates a MySQL vector memory service.
+// Supports both manual mode (cfg.Extractor == nil) and auto mode (cfg.Extractor != nil).
+// Environment variables:
+//   - MYSQLVEC_HOST: MySQL host (default: localhost)
+//   - MYSQLVEC_PORT: MySQL port (default: 3306)
+//   - MYSQLVEC_USER: MySQL user (default: root)
+//   - MYSQLVEC_PASSWORD: MySQL password (default: empty)
+//   - MYSQLVEC_DATABASE: MySQL database (default: trpc_agent_go)
+//   - MYSQLVEC_EMBEDDER_MODEL: Embedder model name (default: text-embedding-3-small)
+func newMySQLVecMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
+	host := GetEnvOrDefault("MYSQLVEC_HOST", "localhost")
+	port := GetEnvOrDefault("MYSQLVEC_PORT", "3306")
+	user := GetEnvOrDefault("MYSQLVEC_USER", "root")
+	password := GetEnvOrDefault("MYSQLVEC_PASSWORD", "")
+	database := GetEnvOrDefault("MYSQLVEC_DATABASE", "trpc_agent_go")
+	embedderModel := GetEnvOrDefault("MYSQLVEC_EMBEDDER_MODEL", "text-embedding-3-small")
+
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4",
+		user, password, host, port, database)
+
+	embedder := newOpenAIEmbedder(embedderModel)
+
+	opts := []memorymysqlvec.ServiceOpt{
+		memorymysqlvec.WithMySQLClientDSN(dsn),
+		memorymysqlvec.WithEmbedder(embedder),
+		memorymysqlvec.WithSoftDelete(cfg.SoftDelete),
+	}
+
+	// Configure extractor for auto memory mode if provided.
+	if cfg.Extractor != nil {
+		opts = append(opts, memorymysqlvec.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(opts, memorymysqlvec.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(opts, memorymysqlvec.WithMemoryQueueSize(cfg.MemoryQueueSize))
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(opts, memorymysqlvec.WithMemoryJobTimeout(cfg.MemoryJobTimeout))
+		}
+	}
+
+	return memorymysqlvec.NewService(opts...)
+}
+
 // NewRunner creates a runner with the given memory service and configuration.
 func NewRunner(memoryService memory.Service, cfg RunnerConfig) runner.Runner {
 	modelInstance := openai.New(cfg.ModelName)
@@ -555,6 +550,17 @@ func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 		port := GetEnvOrDefault("MYSQL_PORT", "3306")
 		database := GetEnvOrDefault("MYSQL_DATABASE", "trpc_agent_go")
 		fmt.Printf("MySQL: %s:%s/%s\n", host, port, database)
+		fmt.Printf("Soft delete: %t\n", softDelete)
+	case MemoryMySQLVec:
+		host := GetEnvOrDefault("MYSQLVEC_HOST", "localhost")
+		port := GetEnvOrDefault("MYSQLVEC_PORT", "3306")
+		database := GetEnvOrDefault("MYSQLVEC_DATABASE", "trpc_agent_go")
+		embedderModel := GetEnvOrDefault(
+			"MYSQLVEC_EMBEDDER_MODEL",
+			"text-embedding-3-small",
+		)
+		fmt.Printf("MySQL Vector: %s:%s/%s\n", host, port, database)
+		fmt.Printf("Embedder model: %s\n", getEmbeddingModel(embedderModel))
 		fmt.Printf("Soft delete: %t\n", softDelete)
 	default:
 		fmt.Printf("In-memory\n")

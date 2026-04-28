@@ -37,6 +37,7 @@ type options struct {
 	agentEvaluator    coreevaluation.AgentEvaluator
 	evalSetManager    evalset.Manager
 	evalResultManager evalresult.Manager
+	routeRegistrars   []RouteRegistrar
 }
 
 func newOptions(opt ...Option) *options {
@@ -112,5 +113,12 @@ func WithEvalSetManager(manager evalset.Manager) Option {
 func WithEvalResultManager(manager evalresult.Manager) Option {
 	return func(opts *options) {
 		opts.evalResultManager = manager
+	}
+}
+
+// WithRouteRegistrar appends a custom route registrar to the evaluation server.
+func WithRouteRegistrar(registrar RouteRegistrar) Option {
+	return func(opts *options) {
+		opts.routeRegistrars = append(opts.routeRegistrars, registrar)
 	}
 }

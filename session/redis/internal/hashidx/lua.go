@@ -54,6 +54,14 @@ local ttl = tonumber(ARGV[4])
 -- Use a simple placeholder string, then replace its quoted JSON form with null after encoding.
 local nilSentinel = "__TRPC_AGENT_GO_NULL__"
 
+local function setPreserveTTL(key, value)
+    local ttlMs = redis.call('PTTL', key)
+    redis.call('SET', key, value)
+    if ttlMs > 0 then
+        redis.call('PEXPIRE', key, ttlMs)
+    end
+end
+
 local metaJSON = redis.call('GET', sessionMetaKey)
 if not metaJSON then
     return 0
@@ -86,7 +94,7 @@ encodedMeta = string.gsub(encodedMeta, '"' .. nilSentinel .. '"', 'null')
 if ttl > 0 then
     redis.call('SET', sessionMetaKey, encodedMeta, 'EX', ttl)
 else
-    redis.call('SET', sessionMetaKey, encodedMeta, 'KEEPTTL')
+    setPreserveTTL(sessionMetaKey, encodedMeta)
 end
 
 return 1
@@ -106,6 +114,14 @@ local eventJSON = ARGV[2]
 local timestamp = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
 local shouldStoreEvent = tonumber(ARGV[5]) == 1
+
+local function setPreserveTTL(key, value)
+    local ttlMs = redis.call('PTTL', key)
+    redis.call('SET', key, value)
+    if ttlMs > 0 then
+        redis.call('PEXPIRE', key, ttlMs)
+    end
+end
 
 -- 1. Check session meta exists first to avoid orphan events
 local metaJSON = redis.call('GET', sessionMetaKey)
@@ -130,7 +146,11 @@ if stateDelta and next(stateDelta) ~= nil then
     for k, v in pairs(stateDelta) do
         meta.state[k] = v
     end
-    redis.call('SET', sessionMetaKey, cjson.encode(meta), 'KEEPTTL')
+    if ttl > 0 then
+        redis.call('SET', sessionMetaKey, cjson.encode(meta))
+    else
+        setPreserveTTL(sessionMetaKey, cjson.encode(meta))
+    end
 end
 
 -- 4. Refresh TTL on event data keys
@@ -187,6 +207,14 @@ local fk = ARGV[1]
 local newSum = cjson.decode(ARGV[2])
 local ttl = tonumber(ARGV[3])
 
+local function setPreserveTTL(key, value)
+    local ttlMs = redis.call('PTTL', key)
+    redis.call('SET', key, value)
+    if ttlMs > 0 then
+        redis.call('PEXPIRE', key, ttlMs)
+    end
+end
+
 local cur = redis.call('GET', sumKey)
 if not cur or cur == '' then
     local m = {}
@@ -207,7 +235,7 @@ local new_ts = newSum and newSum['updated_at'] or nil
 
 if not old or (old_ts and new_ts and old_ts <= new_ts) then
     map[fk] = newSum
-    redis.call('SET', sumKey, cjson.encode(map), 'KEEPTTL')
+    setPreserveTTL(sumKey, cjson.encode(map))
     return 1
 end
 return 0
@@ -391,6 +419,14 @@ local ts = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
 local tracksVal = ARGV[4]
 
+local function setPreserveTTL(key, value)
+    local ttlMs = redis.call('PTTL', key)
+    redis.call('SET', key, value)
+    if ttlMs > 0 then
+        redis.call('PEXPIRE', key, ttlMs)
+    end
+end
+
 -- Check session exists and read meta
 local metaJSON = redis.call('GET', metaKey)
 if not metaJSON then
@@ -410,7 +446,7 @@ if not meta.state or type(meta.state) ~= 'table' then
     meta.state = {}
 end
 meta.state['tracks'] = tracksVal
-redis.call('SET', metaKey, cjson.encode(meta), 'KEEPTTL')
+setPreserveTTL(metaKey, cjson.encode(meta))
 
 -- Refresh TTL for track data keys
 if ttl > 0 then

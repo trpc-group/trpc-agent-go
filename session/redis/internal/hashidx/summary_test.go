@@ -83,3 +83,35 @@ func TestClient_GetSummary(t *testing.T) {
 		assert.Nil(t, result)
 	})
 }
+
+func TestClient_CreateSummary_PreservesExistingTTLOnUpdate(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	cfg := defaultConfig()
+	cfg.SessionTTL = 10 * time.Second
+	c := NewClient(rdb, cfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "sum-ttl"}
+
+	first := time.Now().UTC()
+	require.NoError(t, c.CreateSummary(ctx, key, "all", &session.Summary{
+		Summary:   "first",
+		UpdatedAt: first,
+	}, cfg.SessionTTL))
+
+	sumKey := c.keys.SummaryKey(key)
+	assert.Equal(t, 10*time.Second, mr.TTL(sumKey))
+
+	mr.FastForward(4 * time.Second)
+
+	require.NoError(t, c.CreateSummary(ctx, key, "all", &session.Summary{
+		Summary:   "second",
+		UpdatedAt: first.Add(time.Second),
+	}, cfg.SessionTTL))
+
+	assert.Equal(t, 6*time.Second, mr.TTL(sumKey))
+
+	result, err := c.GetSummary(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "second", result["all"].Summary)
+}

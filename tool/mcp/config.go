@@ -70,6 +70,11 @@ type ConnectionConfig struct {
 	// Common configuration.
 	Timeout time.Duration `json:"timeout,omitempty"`
 
+	// Description provides a capability summary of this MCP server.
+	// When set, mcpbroker exposes it in mcp_list_servers so the model can
+	// decide which server to explore without listing every tool first.
+	Description string `json:"description,omitempty"`
+
 	// Advanced configuration.
 	ClientInfo mcp.Implementation `json:"client_info,omitempty"`
 }

@@ -76,7 +76,9 @@ var defaultThinkingValueConvertor = func(enabled bool) any {
 	return enabled
 }
 
-// deepSeekThinkingValueConvertor converts to DeepSeek 3.2 format: {"type": "enabled"/"disabled"}.
+// deepSeekThinkingValueConvertor converts to the DeepSeek thinking-toggle
+// format introduced in v3.2 and reused by v4 (e.g. deepseek-v4-pro /
+// deepseek-v4-flash): {"type": "enabled"/"disabled"}.
 var deepSeekThinkingValueConvertor = func(enabled bool) any {
 	const (
 		thinkingTypeEnabled  = "enabled"
@@ -148,7 +150,8 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                deepSeekAPIKeyName,
 		defaultBaseURL:            defaultDeepSeekBaseURL,
-		// DeepSeek 3.2 uses {"thinking": {"type": "enabled"}} format.
+		// DeepSeek v3.2+ (incl. v4-pro / v4-flash) uses
+		// {"thinking": {"type": "enabled"/"disabled"}} format.
 		thinkingEnabledKey:     "thinking",
 		thinkingValueConvertor: deepSeekThinkingValueConvertor,
 	},
@@ -231,6 +234,7 @@ type Model struct {
 	extraFields                map[string]any
 	variant                    Variant
 	variantConfig              variantConfig
+	reasoningContentBackfill   bool
 	batchCompletionWindow      openai.BatchNewParamsCompletionWindow
 	batchMetadata              map[string]string
 	batchBaseURL               string
@@ -310,6 +314,7 @@ func New(name string, opts ...Option) *Model {
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
 		variantConfig:              variantConfigs[o.Variant],
+		reasoningContentBackfill:   o.ReasoningContentBackfill,
 		batchCompletionWindow:      o.BatchCompletionWindow,
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
@@ -632,6 +637,12 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 }
 
 // buildThinkingOption converts our Request to OpenAI request RequestOption.
+//
+// Note on default behavior: when request.ThinkingEnabled is nil, this function
+// does not emit any thinking-toggle field in the outgoing request. The
+// upstream provider then applies its server-side default (e.g. DeepSeek v4
+// defaults to thinking "enabled"). Callers that want a deterministic on/off
+// behavior must set ThinkingEnabled explicitly.
 func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestOption {
 	var opts []openaiopt.RequestOption
 	if request.ThinkingTokens != nil {
@@ -652,6 +663,18 @@ func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestO
 	}
 	opts = append(opts, openaiopt.WithJSONSet(key, convertor(*request.ThinkingEnabled)))
 	return opts
+}
+
+// shouldBackfillReasoningContent reports whether replay should emit
+// model.ReasoningContentKey as an empty string for assistant tool-call
+// messages. Some providers require the key to be present during tool-call
+// replay even when no reasoning text was returned.
+func (m *Model) shouldBackfillReasoningContent(
+	msg model.Message,
+) bool {
+	return m.reasoningContentBackfill &&
+		msg.ReasoningContent == "" &&
+		len(msg.ToolCalls) > 0
 }
 
 // convertMessages converts our Message format to OpenAI's format.
@@ -685,7 +708,8 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 			}
 			// Pass reasoning_content to API if present (required by DeepSeek for
 			// tool call scenarios within the same request turn).
-			if msg.ReasoningContent != "" {
+			if msg.ReasoningContent != "" ||
+				m.shouldBackfillReasoningContent(msg) {
 				assistantMsg.SetExtraFields(map[string]any{
 					model.ReasoningContentKey: msg.ReasoningContent,
 				})
@@ -1300,8 +1324,9 @@ func (m *Model) handleStreamingResponseWithEmitter(
 		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
 
-		// Accumulate chunk for correctness (tool call deltas are assembled later),
-		// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
+		// Accumulate chunk for correctness. When a chunk mixes reasoning with
+		// content or tool-call deltas, strip only the reasoning metadata before
+		// passing it to the SDK accumulator.
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
 		// Suppress chunks that carry no meaningful visible delta (including
@@ -1365,6 +1390,65 @@ func sanitizeChunkForAccumulator(chunk openai.ChatCompletionChunk) openai.ChatCo
 	sanitized.Choices[0].Delta.JSON.ToolCalls = respjson.Field{}
 
 	return sanitized
+}
+
+// stripReasoningFromChunkForAccumulator returns a defensive copy of the chunk
+// with reasoning-only ExtraFields removed from the first choice delta. This
+// lets the upstream accumulator keep non-reasoning payloads from mixed chunks
+// without mutating the original chunk.
+func stripReasoningFromChunkForAccumulator(
+	chunk openai.ChatCompletionChunk,
+) (openai.ChatCompletionChunk, bool) {
+	if len(chunk.Choices) == 0 {
+		return chunk, false
+	}
+
+	extraFields := chunk.Choices[0].Delta.JSON.ExtraFields
+	if extractReasoningContent(extraFields) == "" {
+		return chunk, false
+	}
+
+	stripped := chunk
+	stripped.Choices = make([]openai.ChatCompletionChunkChoice, len(chunk.Choices))
+	copy(stripped.Choices, chunk.Choices)
+	stripped.Choices[0].Delta.JSON.ExtraFields =
+		cloneRespJSONFieldMap(extraFields)
+	delete(
+		stripped.Choices[0].Delta.JSON.ExtraFields,
+		model.ReasoningContentKey,
+	)
+	delete(
+		stripped.Choices[0].Delta.JSON.ExtraFields,
+		model.ReasoningContentKeyAlt,
+	)
+	return stripped, true
+}
+
+// hasAccumulatorPayloadBeyondReasoning reports whether the stripped chunk still
+// contains payload the SDK accumulator must keep, such as content, refusal,
+// tool calls, finish reasons, or usage. Pure reasoning-only chunks
+// intentionally keep the old behavior and stay out of the accumulator.
+func hasAccumulatorPayloadBeyondReasoning(
+	chunk openai.ChatCompletionChunk,
+) bool {
+	if len(chunk.Choices) > 0 {
+		choice := chunk.Choices[0]
+		if choice.FinishReason != "" {
+			return true
+		}
+
+		delta := choice.Delta
+		if delta.JSON.Content.Valid() || delta.JSON.Refusal.Valid() {
+			return true
+		}
+		if len(delta.ToolCalls) > 0 {
+			return true
+		}
+	}
+
+	return chunk.Usage.CompletionTokens > 0 ||
+		chunk.Usage.PromptTokens > 0 ||
+		chunk.Usage.TotalTokens > 0
 }
 
 type toolCallIndexState struct {
@@ -1574,19 +1658,28 @@ func applyOpenAISDKTokenDetailsAccumulationFix(
 	acc.Usage.PromptTokensDetails.CachedTokens += chunk.Usage.PromptTokensDetails.CachedTokens
 }
 
-// accumulateChunk accumulates the chunk into the accumulator and reasoning buffer.
+// accumulateChunk accumulates non-reasoning deltas into the SDK accumulator and
+// always appends reasoning deltas to the reasoning buffer.
 func (m *Model) accumulateChunk(
 	chunk openai.ChatCompletionChunk,
 	acc *openai.ChatCompletionAccumulator,
 	reasoningBuf *bytes.Buffer,
 ) {
-	// Always accumulate for correctness (tool call deltas are assembled later),
-	// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
-	if !m.hasReasoningContent(chunk.Choices) {
+	chunkForAccumulator := chunk
+	shouldAccumulate := true
+	if strippedChunk, stripped := stripReasoningFromChunkForAccumulator(chunk); stripped {
+		if hasAccumulatorPayloadBeyondReasoning(strippedChunk) {
+			chunkForAccumulator = strippedChunk
+		} else {
+			shouldAccumulate = false
+		}
+	}
+
+	if shouldAccumulate {
 		// Sanitize chunks before feeding them into the upstream accumulator to
 		// avoid known panics when JSON.ToolCalls is marked present but the
 		// typed ToolCalls slice is empty, especially on finish_reason chunks.
-		sanitizedChunk := sanitizeChunkForAccumulator(chunk)
+		sanitizedChunk := sanitizeChunkForAccumulator(chunkForAccumulator)
 		if acc.AddChunk(sanitizedChunk) {
 			applyOpenAISDKTokenDetailsAccumulationFix(acc, chunk)
 		}
@@ -2228,6 +2321,17 @@ func (m *Model) handleNonStreamingResponseWithEmitter(
 		})
 		return
 	}
+	// Some OpenAI-compatible providers return HTTP 200 with an error body
+	// instead of a proper 4xx/5xx status code. The SDK does not treat these
+	// as errors because it only inspects the HTTP status. However the error
+	// payload is still preserved in ChatCompletion.JSON.ExtraFields["error"].
+	// Detect this case and convert it into an explicit error response so that
+	// downstream consumers see a clear failure instead of an empty completion
+	// that can cause silent infinite loops in the agent flow.
+	if resp := extractEmbeddedErrorResponse(chatCompletion); resp != nil {
+		emit(resp)
+		return
+	}
 	// Call response callback on successful completion.
 	m.runChatResponseCallback(ctx, &chatRequest, chatCompletion)
 	emit(m.createResponseFromCompletion(chatCompletion))
@@ -2612,4 +2716,106 @@ func (m *Model) DownloadFile(
 		mime = "application/octet-stream"
 	}
 	return data, mime, nil
+}
+
+// extractEmbeddedErrorResponse detects an error payload hidden inside an
+// otherwise "successful" ChatCompletion. Some OpenAI-compatible providers
+// return HTTP 200 with a JSON body like:
+//
+//	{"error": {"message": "...", "type": "...", "code": "..."}}
+//
+// The OpenAI SDK only checks HTTP status codes for errors, so it silently
+// parses this into an empty ChatCompletion. The error object ends up in
+// ChatCompletion.JSON.ExtraFields["error"] because "error" is not a
+// recognized field in the ChatCompletion schema.
+//
+// This function checks for that specific condition and, when found, returns
+// a model.Response with the original error information restored.
+// Returns nil when no embedded error is detected.
+func extractEmbeddedErrorResponse(cc *openai.ChatCompletion) *model.Response {
+	if cc == nil {
+		return nil
+	}
+	// Only inspect ExtraFields when the completion is empty (no choices).
+	// A completion with valid choices is never treated as an error, even if
+	// the provider happens to include extra fields named "error".
+	if len(cc.Choices) > 0 {
+		return nil
+	}
+	errField, ok := cc.JSON.ExtraFields["error"]
+	if !ok {
+		return nil
+	}
+	// Parse the raw error JSON to extract message and type.
+	// Use Raw() instead of Valid() because the SDK may mark non-schema
+	// object fields as "invalid" status even though the content is present.
+	raw := errField.Raw()
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	var errBody struct {
+		Message string          `json:"message"`
+		Type    string          `json:"type"`
+		Code    json.RawMessage `json:"code"`
+		Param   json.RawMessage `json:"param"`
+	}
+	if err := json.Unmarshal([]byte(raw), &errBody); err != nil {
+		// ExtraFields["error"] exists but is not a recognizable error object;
+		// leave it for the normal completion path.
+		return nil
+	}
+	if errBody.Message == "" && errBody.Type == "" {
+		return nil
+	}
+	errMsg := errBody.Message
+	if errMsg == "" {
+		errMsg = "OpenAI-compatible API returned an embedded error in HTTP 200 response"
+	}
+	log.Debugf("OpenAI-compatible API returned HTTP 200 with embedded error (type=%s)", errBody.Type)
+	respErr := &model.ResponseError{
+		Message: errMsg,
+		Type:    model.ErrorTypeAPIError,
+	}
+	if code := normalizeEmbeddedErrorCode(errBody.Code); code != "" {
+		respErr.Code = &code
+	}
+	if p := normalizeEmbeddedErrorString(errBody.Param); p != "" {
+		respErr.Param = &p
+	}
+	return &model.Response{
+		Error:     respErr,
+		Timestamp: time.Now(),
+		Done:      true,
+	}
+}
+
+// normalizeEmbeddedErrorString extracts a JSON string value.
+// Returns "" for absent, null, or non-string values.
+func normalizeEmbeddedErrorString(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return ""
+}
+
+// normalizeEmbeddedErrorCode converts a JSON code value (string, number, or
+// null) into a string suitable for model.ResponseError.Code.
+// Returns "" when the value is absent, null, or unparsable.
+func normalizeEmbeddedErrorCode(raw json.RawMessage) string {
+	if s := normalizeEmbeddedErrorString(raw); s != "" {
+		return s
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	// Try number (some providers return numeric codes).
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n.String()
+	}
+	return ""
 }

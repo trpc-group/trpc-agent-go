@@ -118,10 +118,22 @@ func TestWithReasoningContentEnabled(t *testing.T) {
 	assert.True(t, ro.ReasoningContentEnabled)
 }
 
+func TestWithEventSourceMetadataEnabled(t *testing.T) {
+	opts := newOptions(WithEventSourceMetadataEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.EventSourceMetadataEnabled)
+}
+
 func TestWithToolResultInputTranslationEnabled(t *testing.T) {
 	opts := newOptions(WithToolResultInputTranslationEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
 	assert.True(t, ro.ToolResultInputTranslationEnabled)
+}
+
+func TestWithStreamingToolResultActivityEnabled(t *testing.T) {
+	opts := newOptions(WithStreamingToolResultActivityEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.StreamingToolResultActivityEnabled)
 }
 
 func TestWithMessagesSnapshotFollowEnabled(t *testing.T) {

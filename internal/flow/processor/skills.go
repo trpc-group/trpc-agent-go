@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -32,6 +33,10 @@ const (
 
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
 
+	skillRootsHeader = "Skill roots:"
+	skillDirLabel    = "Skill dir: "
+	skillFileLabel   = "Skill file: "
+
 	// SkillLoadModeOnce injects loaded skill content for the next model
 	// request, then offloads it from session state.
 	SkillLoadModeOnce = "once"
@@ -47,16 +52,20 @@ const (
 )
 
 type skillsRequestProcessorOptions struct {
-	toolingGuidance   *string
-	loadMode          string
-	toolResultMode    bool
-	maxLoadedSkills   int
-	toolProfile       string
-	toolFlags         skillprofile.Flags
-	toolFlagsResolver func(*agent.Invocation) skillprofile.Flags
-	hasToolFlags      bool
-	execToolsDisabled bool
-	repoResolver      func(*agent.Invocation) skill.Repository
+	capabilityGuidance *string
+	protocolGuidance   *string
+	toolingGuidance    *string
+	loadMode           string
+	toolResultMode     bool
+	maxLoadedSkills    int
+	toolProfile        string
+	toolFlags          skillprofile.Flags
+	toolFlagsResolver  func(*agent.Invocation) skillprofile.Flags
+	hasToolFlags       bool
+	execToolsDisabled  bool
+	repoResolver       func(*agent.Invocation) skill.Repository
+	directoryHints     bool
+	filePathHints      bool
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
@@ -89,6 +98,39 @@ func WithSkillsToolingGuidance(
 	return func(o *skillsRequestProcessorOptions) {
 		text := guidance
 		o.toolingGuidance = &text
+	}
+}
+
+// WithSkillsCapabilityGuidance overrides the capability disclosure block
+// appended to the skills overview.
+//
+// Behavior:
+//   - Not configured: use the built-in default disclosure.
+//   - Configured with empty string: omit the capability block.
+//   - Configured with non-empty string: append the provided text.
+func WithSkillsCapabilityGuidance(
+	guidance string,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		text := guidance
+		o.capabilityGuidance = &text
+	}
+}
+
+// WithSkillsProtocolGuidance overrides the full skill protocol block
+// appended after the skills overview.
+//
+// Behavior:
+//   - Not configured: use the built-in capability/tooling guidance flow.
+//   - Configured with empty string: omit all built-in skill guidance.
+//   - Configured with non-empty string: append the provided text and skip
+//     the built-in capability/tooling guidance blocks.
+func WithSkillsProtocolGuidance(
+	guidance string,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		text := guidance
+		o.protocolGuidance = &text
 	}
 }
 
@@ -167,6 +209,26 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 	}
 }
 
+// WithSkillsDirectoryHints exposes skill directory locators in the skills
+// overview and in loaded skill materialization.
+func WithSkillsDirectoryHints(
+	enable bool,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.directoryHints = enable
+	}
+}
+
+// WithSkillsFilePathHints exposes SKILL.md file locators in the skills
+// overview and in loaded skill materialization.
+func WithSkillsFilePathHints(
+	enable bool,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.filePathHints = enable
+	}
+}
+
 // SkillsRequestProcessor injects skill overviews and loaded contents.
 //
 // Behavior:
@@ -179,14 +241,18 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //   - skill.DocsKey(agentName, skillName) ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
-	repo              skill.Repository
-	repoResolver      func(*agent.Invocation) skill.Repository
-	toolingGuidance   *string
-	loadMode          string
-	toolResultMode    bool
-	maxLoadedSkills   int
-	toolFlags         skillprofile.Flags
-	toolFlagsResolver func(*agent.Invocation) skillprofile.Flags
+	repo               skill.Repository
+	repoResolver       func(*agent.Invocation) skill.Repository
+	capabilityGuidance *string
+	protocolGuidance   *string
+	toolingGuidance    *string
+	loadMode           string
+	toolResultMode     bool
+	maxLoadedSkills    int
+	toolFlags          skillprofile.Flags
+	toolFlagsResolver  func(*agent.Invocation) skillprofile.Flags
+	directoryHints     bool
+	filePathHints      bool
 }
 
 const (
@@ -218,14 +284,18 @@ func NewSkillsRequestProcessor(
 		flags = flags.WithoutInteractiveExecution()
 	}
 	return &SkillsRequestProcessor{
-		repo:              repo,
-		repoResolver:      options.repoResolver,
-		toolingGuidance:   options.toolingGuidance,
-		loadMode:          normalizeSkillLoadMode(options.loadMode),
-		toolResultMode:    options.toolResultMode,
-		maxLoadedSkills:   options.maxLoadedSkills,
-		toolFlags:         flags,
-		toolFlagsResolver: options.toolFlagsResolver,
+		repo:               repo,
+		repoResolver:       options.repoResolver,
+		capabilityGuidance: options.capabilityGuidance,
+		protocolGuidance:   options.protocolGuidance,
+		toolingGuidance:    options.toolingGuidance,
+		loadMode:           normalizeSkillLoadMode(options.loadMode),
+		toolResultMode:     options.toolResultMode,
+		maxLoadedSkills:    options.maxLoadedSkills,
+		toolFlags:          flags,
+		toolFlagsResolver:  options.toolFlagsResolver,
+		directoryHints:     options.directoryHints,
+		filePathHints:      options.filePathHints,
 	}
 }
 
@@ -292,7 +362,9 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 		if sk.Body != "" {
 			lb.WriteString("\n[Loaded] ")
 			lb.WriteString(name)
-			lb.WriteString("\n\n")
+			lb.WriteString("\n")
+			p.appendSkillPathHints(&lb, ctx, repo, name)
+			lb.WriteString("\n")
 			lb.WriteString(sk.Body)
 			lb.WriteString("\n")
 		}
@@ -670,18 +742,49 @@ func (p *SkillsRequestProcessor) injectOverview(
 		return
 	}
 	var b strings.Builder
-	b.WriteString(skillsOverviewHeader)
-	b.WriteString("\n")
-	for _, s := range sums {
-		line := fmt.Sprintf("- %s: %s\n", s.Name, s.Description)
-		b.WriteString(line)
-	}
 	flags := p.toolFlagsForInvocation(inv)
-	if capability := p.capabilityGuidanceText(flags); capability != "" {
-		b.WriteString(capability)
-	}
-	if guidance := p.toolingGuidanceText(flags); guidance != "" {
-		b.WriteString(guidance)
+	if protocol := p.protocolGuidanceText(flags); protocol != "" {
+		b.WriteString(protocol)
+		b.WriteString("\n")
+		b.WriteString(skillsOverviewHeader)
+		b.WriteString("\n")
+		if p.directoryHints || p.filePathHints {
+			if rootsText := buildSkillRootsText(repo); rootsText != "" {
+				b.WriteString(rootsText)
+			}
+		}
+		for _, s := range sums {
+			line := fmt.Sprintf(
+				"- %s: %s%s\n",
+				s.Name,
+				s.Description,
+				p.skillOverviewSuffix(ctx, repo, s.Name),
+			)
+			b.WriteString(line)
+		}
+	} else {
+		b.WriteString(skillsOverviewHeader)
+		b.WriteString("\n")
+		if p.directoryHints || p.filePathHints {
+			if rootsText := buildSkillRootsText(repo); rootsText != "" {
+				b.WriteString(rootsText)
+			}
+		}
+		for _, s := range sums {
+			line := fmt.Sprintf(
+				"- %s: %s%s\n",
+				s.Name,
+				s.Description,
+				p.skillOverviewSuffix(ctx, repo, s.Name),
+			)
+			b.WriteString(line)
+		}
+		if capability := p.capabilityGuidanceText(flags); capability != "" {
+			b.WriteString(capability)
+		}
+		if guidance := p.toolingGuidanceText(flags); guidance != "" {
+			b.WriteString(guidance)
+		}
 	}
 	overview := b.String()
 
@@ -689,7 +792,13 @@ func (p *SkillsRequestProcessor) injectOverview(
 	if idx >= 0 {
 		sys := &req.Messages[idx]
 		if !strings.Contains(sys.Content, skillsOverviewHeader) {
-			if sys.Content != "" {
+			if p.protocolGuidanceText(flags) != "" {
+				if sys.Content != "" {
+					sys.Content = overview + "\n\n" + sys.Content
+				} else {
+					sys.Content = overview
+				}
+			} else if sys.Content != "" {
 				sys.Content += "\n\n" + overview
 			} else {
 				sys.Content = overview
@@ -711,6 +820,16 @@ func (p *SkillsRequestProcessor) toolFlagsForInvocation(
 	return p.toolFlags
 }
 
+func (p *SkillsRequestProcessor) protocolGuidanceText(
+	flags skillprofile.Flags,
+) string {
+	if p.protocolGuidance == nil {
+		return ""
+	}
+	_ = flags
+	return normalizeGuidance(*p.protocolGuidance)
+}
+
 func (p *SkillsRequestProcessor) toolingGuidanceText(
 	flags skillprofile.Flags,
 ) string {
@@ -723,6 +842,9 @@ func (p *SkillsRequestProcessor) toolingGuidanceText(
 func (p *SkillsRequestProcessor) capabilityGuidanceText(
 	flags skillprofile.Flags,
 ) string {
+	if p.capabilityGuidance != nil {
+		return normalizeGuidance(*p.capabilityGuidance)
+	}
 	if p.toolingGuidance != nil && *p.toolingGuidance == "" {
 		return ""
 	}
@@ -799,15 +921,24 @@ func defaultKnowledgeOnlyGuidance(flags skillprofile.Flags) string {
 	b.WriteString(skillsToolingGuidanceHeader)
 	b.WriteString("\n")
 	b.WriteString("- Use skills for progressive disclosure only: load ")
-	b.WriteString("SKILL.md first, then inspect only the documentation ")
-	b.WriteString("needed for the current task.\n")
+	b.WriteString("SKILL.md first with skill_load, then inspect only the ")
+	b.WriteString("documentation needed for the current task. The ")
+	b.WriteString("catalog overview elsewhere in this prompt is a ")
+	b.WriteString("routing summary; do not infer commands, script ")
+	b.WriteString("entrypoints, or resource layouts from it.\n")
+	b.WriteString("- Before doing anything attributed to a skill, call ")
+	b.WriteString("skill_load for that skill so the full SKILL.md is in ")
+	b.WriteString("context.\n")
 	appendKnowledgeGuidance(&b, flags)
-	b.WriteString("- Treat loaded skill content as domain guidance. Do ")
-	b.WriteString("not claim you executed scripts, shell commands, or ")
-	b.WriteString("interactive flows described by the skill.\n")
-	b.WriteString("- If a skill depends on execution to complete the ")
-	b.WriteString("task, switch to other registered tools (for example, ")
-	b.WriteString("MCP tools) or explain the limitation clearly.\n")
+	b.WriteString("- skill_load returns instructions and bundled ")
+	b.WriteString("resources but does not execute the skill by itself. ")
+	b.WriteString("If the loaded SKILL.md describes shell commands or ")
+	b.WriteString("scripts and a shell-execution tool is registered for ")
+	b.WriteString("this agent (see the executor workspace guidance ")
+	b.WriteString("below for what is available), invoke that tool to ")
+	b.WriteString("actually run the steps. If no execution tool is ")
+	b.WriteString("registered, treat the loaded content as reference ")
+	b.WriteString("and explain the limitation clearly.\n")
 	return b.String()
 }
 
@@ -959,6 +1090,194 @@ func defaultFullToolingAndWorkspaceGuidance(flags skillprofile.Flags) string {
 	return b.String()
 }
 
+type skillRootAlias struct {
+	alias string
+	root  string
+}
+
+func buildSkillRootsText(repo skill.Repository) string {
+	aliases := skillRootAliases(repo)
+	if len(aliases) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(skillRootsHeader)
+	b.WriteString("\n")
+	for _, item := range aliases {
+		b.WriteString("- [")
+		b.WriteString(item.alias)
+		b.WriteString("]=")
+		b.WriteString(item.root)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func skillRootAliases(repo skill.Repository) []skillRootAlias {
+	rooted, ok := repo.(skill.RootedRepository)
+	if !ok || rooted == nil {
+		return nil
+	}
+	roots := rooted.Roots()
+	if len(roots) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(roots))
+	aliases := make([]skillRootAlias, 0, len(roots))
+	for _, root := range roots {
+		root = filepath.Clean(strings.TrimSpace(root))
+		if root == "" {
+			continue
+		}
+		if _, ok := seen[root]; ok {
+			continue
+		}
+		seen[root] = struct{}{}
+		aliases = append(aliases, skillRootAlias{
+			alias: fmt.Sprintf("s%d", len(aliases)+1),
+			root:  root,
+		})
+	}
+	return aliases
+}
+
+func (p *SkillsRequestProcessor) skillOverviewSuffix(
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) string {
+	if p.filePathHints {
+		locator := skillFileLocator(ctx, repo, name)
+		if locator != "" {
+			return " (file: " + locator + ")"
+		}
+	}
+	if p.directoryHints {
+		locator := skillDirectoryLocator(ctx, repo, name)
+		if locator != "" {
+			return " (dir: " + locator + ")"
+		}
+	}
+	return ""
+}
+
+func skillDirectoryLocator(
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) string {
+	dir := skillDirectoryText(ctx, repo, name)
+	if dir == "" {
+		return ""
+	}
+	for _, item := range skillRootAliases(repo) {
+		rel, ok := relativeSkillPath(item.root, dir)
+		if !ok {
+			continue
+		}
+		if rel == "" {
+			return "[" + item.alias + "]"
+		}
+		return "[" + item.alias + "]/" + rel
+	}
+	return dir
+}
+
+func skillFileLocator(
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) string {
+	path := skillFileText(ctx, repo, name)
+	if path == "" {
+		return ""
+	}
+	for _, item := range skillRootAliases(repo) {
+		rel, ok := relativeSkillPath(item.root, path)
+		if !ok {
+			continue
+		}
+		if rel == "" {
+			return "[" + item.alias + "]"
+		}
+		return "[" + item.alias + "]/" + rel
+	}
+	return path
+}
+
+func skillDirectoryText(
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) string {
+	dir, err := skill.PathForContext(ctx, repo, name)
+	if err != nil {
+		return ""
+	}
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if dir == "" {
+		return ""
+	}
+	return filepath.ToSlash(dir)
+}
+
+func skillFileText(
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) string {
+	dir := skillDirectoryText(ctx, repo, name)
+	if dir == "" {
+		return ""
+	}
+	path := filepath.Join(dir, skill.SkillFile)
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "" {
+		return ""
+	}
+	return filepath.ToSlash(path)
+}
+
+func relativeSkillPath(root string, path string) (string, bool) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", false
+	}
+	rel = filepath.Clean(rel)
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	if rel == "." {
+		return "", true
+	}
+	return filepath.ToSlash(rel), true
+}
+
+func (p *SkillsRequestProcessor) appendSkillPathHints(
+	b *strings.Builder,
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) {
+	if b == nil {
+		return
+	}
+	if p.directoryHints {
+		if dir := skillDirectoryText(ctx, repo, name); dir != "" {
+			b.WriteString(skillDirLabel)
+			b.WriteString(dir)
+			b.WriteString("\n")
+		}
+	}
+	if p.filePathHints {
+		if path := skillFileText(ctx, repo, name); path != "" {
+			b.WriteString(skillFileLabel)
+			b.WriteString(path)
+			b.WriteString("\n")
+		}
+	}
+}
+
 func appendKnowledgeGuidance(
 	b *strings.Builder,
 	flags skillprofile.Flags,
@@ -966,16 +1285,27 @@ func appendKnowledgeGuidance(
 	if !flags.Load {
 		return
 	}
+	b.WriteString("- Beyond SKILL.md itself, extra docs are loaded only ")
+	b.WriteString("on demand. SKILL.md is the entry point and usually ")
+	b.WriteString("references any auxiliary docs that exist, so do not ")
+	b.WriteString("probe for docs before reading SKILL.md and do not ")
+	b.WriteString("treat an empty doc list as a reason to skip ")
+	b.WriteString("skill_load.\n")
 	switch {
 	case flags.ListDocs && flags.SelectDocs:
 		b.WriteString("- Use the available doc listing and selection helpers ")
-		b.WriteString("to keep documentation loads targeted.\n")
+		b.WriteString("only after skill_load, and only when SKILL.md hints ")
+		b.WriteString("at auxiliary docs you still need; if SKILL.md alone ")
+		b.WriteString("is enough, do not call them.\n")
 	case flags.ListDocs:
 		b.WriteString("- Use the available doc listing helper to discover ")
-		b.WriteString("doc names, then load only the docs you need.\n")
+		b.WriteString("doc names only after skill_load, and only when ")
+		b.WriteString("SKILL.md hints at auxiliary docs you still need; if ")
+		b.WriteString("SKILL.md alone is enough, do not call it.\n")
 	case flags.SelectDocs:
 		b.WriteString("- If doc names are already known, use the available ")
-		b.WriteString("doc selection helper to keep loaded docs targeted.\n")
+		b.WriteString("doc selection helper to keep loaded docs targeted; ")
+		b.WriteString("do not call it before SKILL.md is loaded.\n")
 	default:
 		b.WriteString("- If you need docs, request them directly with ")
 		b.WriteString("skill_load.docs or include_all_docs.\n")

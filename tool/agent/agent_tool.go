@@ -37,6 +37,7 @@ type Tool struct {
 	agent                  agent.Agent
 	skipSummarization      bool
 	streamInner            bool
+	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
 	name                   string
@@ -52,10 +53,27 @@ type Option func(*agentToolOptions)
 type agentToolOptions struct {
 	skipSummarization      bool
 	streamInner            bool
+	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
 	description            *string
 }
+
+// InnerTextMode controls whether forwarded inner assistant text is visible
+// in the parent flow when StreamInner is enabled.
+type InnerTextMode = tool.InnerTextMode
+
+const (
+	// InnerTextModeDefault preserves the default behavior.
+	InnerTextModeDefault = tool.InnerTextModeDefault
+
+	// InnerTextModeInclude forwards inner assistant text to the parent flow.
+	InnerTextModeInclude = tool.InnerTextModeInclude
+
+	// InnerTextModeExclude suppresses forwarded inner assistant text while
+	// still aggregating that text into the final tool response.
+	InnerTextModeExclude = tool.InnerTextModeExclude
+)
 
 // WithSkipSummarization sets whether to skip summarization of the agent output.
 func WithSkipSummarization(skip bool) Option {
@@ -70,6 +88,14 @@ func WithSkipSummarization(skip bool) Option {
 func WithStreamInner(enabled bool) Option {
 	return func(opts *agentToolOptions) {
 		opts.streamInner = enabled
+	}
+}
+
+// WithInnerTextMode controls whether forwarded inner assistant text is
+// visible in the parent flow when StreamInner is enabled.
+func WithInnerTextMode(mode InnerTextMode) Option {
+	return func(opts *agentToolOptions) {
+		opts.innerTextMode = tool.NormalizeInnerTextMode(mode)
 	}
 }
 
@@ -170,6 +196,7 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		agent:                  agent,
 		skipSummarization:      options.skipSummarization,
 		streamInner:            options.streamInner,
+		innerTextMode:          tool.NormalizeInnerTextMode(options.innerTextMode),
 		structuredStreamErrors: options.structuredStreamErrors,
 		historyScope:           options.historyScope,
 		name:                   info.Name,
@@ -719,17 +746,36 @@ func (at *Tool) collectResponse(inv *agent.Invocation, evCh <-chan *event.Event)
 	return response.String(), nil
 }
 
+// collectLegacyResponse preserves the pre-#1365 concatenation semantics for the
+// default callable path. It applies a narrow fix for issue #1640 by skipping a
+// trailing graph-completion snapshot event that re-emits the same non-partial
+// assistant content that was already collected. Divergent snapshot content is
+// still concatenated to keep default output bytes stable for existing callers;
+// broader alignment with the snapshot-aware collector is tracked as a separate
+// semantic-change request.
 func collectLegacyResponse(evCh <-chan *event.Event) (string, error) {
 	var response strings.Builder
+	var lastNonPartialAssistantContent string
 	for ev := range evCh {
 		if ev.Error != nil {
 			return "", fmt.Errorf("agent error: %s", ev.Error.Message)
 		}
-		if ev.Response != nil && len(ev.Response.Choices) > 0 {
-			choice := ev.Response.Choices[0]
-			if choice.Message.Role == model.RoleAssistant && choice.Message.Content != "" {
-				response.WriteString(choice.Message.Content)
-			}
+		if ev.Response == nil || len(ev.Response.Choices) == 0 {
+			continue
+		}
+		choice := ev.Response.Choices[0]
+		if choice.Message.Role != model.RoleAssistant || choice.Message.Content == "" {
+			continue
+		}
+		content := choice.Message.Content
+		if !ev.IsPartial &&
+			isGraphCompletionSnapshotEvent(ev) &&
+			content == lastNonPartialAssistantContent {
+			continue
+		}
+		response.WriteString(content)
+		if !ev.IsPartial {
+			lastNonPartialAssistantContent = content
 		}
 	}
 	return response.String(), nil
@@ -1180,6 +1226,15 @@ func (at *Tool) TRPCAgentGoStructuredStreamErrorsOptIn() bool {
 // StreamInner exposes whether this AgentTool prefers the flow to treat it as
 // streamable (forwarding inner deltas) versus callable-only.
 func (at *Tool) StreamInner() bool { return at.streamInner }
+
+// InnerTextMode exposes how forwarded inner assistant text should be handled
+// when StreamInner is enabled.
+func (at *Tool) InnerTextMode() InnerTextMode {
+	if at == nil {
+		return tool.InnerTextModeInclude
+	}
+	return tool.NormalizeInnerTextMode(at.innerTextMode)
+}
 
 // Declaration returns the tool's declaration information.
 //

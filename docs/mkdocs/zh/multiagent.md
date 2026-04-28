@@ -20,6 +20,7 @@
 
 - **Agent 工具 (AgentTool)** - 将 Agent 包装成工具，供其他 Agent 调用
 - **Agent 委托 (Agent Transfer)** - 通过 `transfer_to_agent` 工具实现 Agent 间的任务委托
+- **等待用户回复路由** - 让 Agent 在需要补充信息时显式接管下一条用户消息
 - **Team** - 更高层的团队编排封装，支持协调者团队与 Swarm（见 `team` 包）
 
 ## SubAgent 基础
@@ -431,6 +432,7 @@ mainAgent := llmagent.New(
 
 - 子 Agent 的事件会以流式形式转发到父流程（`event.Event`），可直接显示 `choice.Delta.Content`
 - 为避免重复打印，子 Agent 最终的整段文本默认不会作为转发事件再次输出；但会被聚合写入最终的 `tool.response`，用于满足模型“工具消息跟随”的要求
+- 如果你想保留内部进度、但隐藏子 Agent 的 assistant 正文，可以再加上 `WithInnerTextMode(agenttool.InnerTextModeExclude)`
 - 建议在 UI 层：
   - 展示子 Agent 转发的增量内容
   - 如非调试，不再额外打印最终聚合的工具响应内容
@@ -459,6 +461,8 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 - `WithSkipSummarization(true)`：工具返回后跳过外层模型的总结调用
 - `WithStreamInner(true)`：启用子 Agent 事件转发（父/子 Agent 建议都 `Stream: true`）
 - `WithStreamInner(false)`：按普通可调用工具处理，不转发内部流
+- `WithInnerTextMode(agenttool.InnerTextModeInclude)`：启用内部转发时，继续展示子 Agent 的 assistant 文本
+- `WithInnerTextMode(agenttool.InnerTextModeExclude)`：保留内部进度事件，但不再转发子 Agent 的 assistant 正文
 
 ### Agent 委托 (Agent Transfer)
 
@@ -600,6 +604,108 @@ func refreshSubAgents(ctx context.Context, ag agent.Agent) error {
 - 期限：8年
 - 结果：$7,969.24（利息约$2,969.24）
 ```
+
+#### 跨轮追问用户
+
+`transfer_to_agent` 解决的是 **当前这一轮由谁处理**。它本身并不会告诉
+`Runner`：**下一条用户消息** 应该继续交给谁。
+
+当 SubAgent 发起追问时，这个问题就会暴露出来：
+
+1. coordinator transfer 给某个 SubAgent
+2. SubAgent 向用户追问缺失信息
+3. 用户在下一次请求里补充信息
+4. 默认情况下，`Runner` 还是会从常规入口 Agent 开始
+
+更干净的做法是把这件事做成 **显式**、**一次性** 的路由：
+
+- 在 Runner 上开启 `runner.WithAwaitUserReplyRouting(true)`
+- 对可能追问用户的 Agent，开启
+  `llmagent.WithAwaitUserReplyTool(true)`
+- 在这些 Agent 的 instruction 里明确要求模型：如果要向用户补字段，
+  先调用 `await_user_reply`，再发出追问
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+profileAgent := llmagent.New(
+    "profile-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithDescription("负责采集并更新客户资料。"),
+    llmagent.WithInstruction(`
+你负责更新客户资料。
+
+如果缺少必要字段：
+1. 先调用 await_user_reply
+2. 再向用户提出一个明确的问题
+3. 然后等待下一条用户消息
+
+字段齐全后，再调用 update_profile。
+`),
+    llmagent.WithAwaitUserReplyTool(true),
+    llmagent.WithTools([]tool.Tool{updateProfileTool}),
+)
+
+coordinatorAgent := llmagent.New(
+    "coordinator-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction(`
+用户要更新资料时，直接 transfer 给 profile-agent。
+不要自己收集资料字段。
+`),
+    llmagent.WithSubAgents([]agent.Agent{profileAgent}),
+)
+
+r := runner.NewRunner(
+    "crm-app",
+    coordinatorAgent,
+    runner.WithAwaitUserReplyRouting(true),
+)
+
+// 第 1 轮：
+// user: "帮我更新资料"
+// coordinator-agent -> transfer_to_agent(profile-agent)
+// profile-agent -> await_user_reply + "请问要保存的手机号是多少？"
+
+// 第 2 轮（同一个 session）：
+// user: "+1-555-0101"
+// Runner 这一轮会直接从 profile-agent 开始。
+events, err := r.Run(
+    context.Background(),
+    "user-1",
+    "session-1",
+    model.NewUserMessage("+1-555-0101"),
+)
+if err != nil {
+    // handle error
+}
+for evt := range events {
+    if evt.IsRunnerCompletion() {
+        break
+    }
+}
+```
+
+这套能力的行为边界：
+
+- 这条路由只消费一次；下一条用户消息开始时就会被清掉
+- 显式指定的 `agent.WithAgent(...)` 或 `agent.WithAgentByName(...)`
+  仍然优先
+- 如果目标 Agent 路径已经失效，`Runner` 会回退到默认入口 Agent，
+  并清理掉脏路由
+- 对最常见的 “coordinator + WithSubAgents” 结构，`Runner`
+  会按完整的 Agent 链路径恢复，不需要你把每个 SubAgent 再额外注册一遍
+
+如果你不是用 `LLMAgent`，而是自己实现 `agent.Agent`，请看 `runner`
+文档里的底层 API：`agent.MarkAwaitingUserReply(...)`。
 
 ## 环境变量配置
 

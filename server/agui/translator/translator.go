@@ -26,6 +26,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -71,6 +73,9 @@ func New(ctx context.Context, threadID, runID string, opts ...Option) (Translato
 		graphNodeInterruptActivityEnabled:      options.graphNodeInterruptActivityEnabled,
 		graphNodeInterruptActivityTopLevelOnly: options.graphNodeInterruptActivityTopLevelOnly,
 		reasoningContentEnabled:                options.reasoningContentEnabled,
+		eventSourceMetadataEnabled:             options.eventSourceMetadataEnabled,
+		streamingToolResultActivityEnabled:     options.streamingToolResultActivityEnabled,
+		streamingToolResultContent:             make(map[string]string),
 	}, nil
 }
 
@@ -88,6 +93,9 @@ type translator struct {
 	graphNodeInterruptActivityEnabled      bool
 	graphNodeInterruptActivityTopLevelOnly bool
 	reasoningContentEnabled                bool
+	eventSourceMetadataEnabled             bool
+	streamingToolResultActivityEnabled     bool
+	streamingToolResultContent             map[string]string
 }
 
 const skillRunArtifactsStateKey = skill.StateKeyArtifacts
@@ -122,14 +130,14 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 	rsp := event.Response
 	if rsp == nil {
 		if len(events) > 0 || hasGraphDelta {
-			return events, nil
+			return t.finalizeEvents(event, events), nil
 		}
 		return nil, errors.New("event response is nil")
 	}
 	if rsp.Error != nil {
 		log.Errorf("agui: threadID: %s, runID: %s, error in response: %v", t.threadID, t.runID, rsp.Error)
 		events = append(events, aguievents.NewRunErrorEvent(rsp.Error.Message, aguievents.WithRunID(t.runID)))
-		return events, nil
+		return t.finalizeEvents(event, events), nil
 	}
 	if rsp.Object == model.ObjectTypeChatCompletionChunk || rsp.Object == model.ObjectTypeChatCompletion {
 		if t.reasoningContentEnabled {
@@ -153,11 +161,22 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		events = append(events, toolCallEvents...)
 	}
 	if rsp.IsToolResultResponse() {
-		toolResultEvents, err := t.toolResultEvent(rsp, event.ID)
-		if err != nil {
-			return nil, err
+		if t.streamingToolResultActivityEnabled && rsp.IsPartial {
+			toolResultActivityEvents, err := t.toolResultActivityEvents(rsp)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, toolResultActivityEvents...)
+		} else {
+			toolResultEvents, err := t.toolResultEvent(rsp, event.ID)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, toolResultEvents...)
+			if t.streamingToolResultActivityEnabled {
+				t.clearToolResultActivityState(rsp)
+			}
 		}
-		events = append(events, toolResultEvents...)
 	}
 	if event.IsRunnerCompletion() {
 		finalizationEvents, err := t.PostRunFinalizationEvents(ctx)
@@ -167,7 +186,7 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		events = append(events, finalizationEvents...)
 		events = append(events, aguievents.NewRunFinishedEvent(t.threadID, t.runID))
 	}
-	return events, nil
+	return t.finalizeEvents(event, events), nil
 }
 
 // PostRunFinalizationEvents closes any active reasoning or text streams after a run ends.
@@ -190,6 +209,33 @@ func (t *translator) PostRunFinalizationEvents(context.Context) ([]aguievents.Ev
 		t.receivingMessage = false
 	}
 	return events, nil
+}
+
+func (t *translator) finalizeEvents(
+	src *agentevent.Event,
+	events []aguievents.Event,
+) []aguievents.Event {
+	if t == nil ||
+		!t.eventSourceMetadataEnabled ||
+		len(events) == 0 {
+		return events
+	}
+	// A zero-value override intentionally suppresses rawEvent export.
+	metadata, ok := source.FromEvent(src)
+	if !ok {
+		return events
+	}
+	for _, evt := range events {
+		if evt == nil {
+			continue
+		}
+		base := evt.GetBaseEvent()
+		if base == nil || base.RawEvent != nil {
+			continue
+		}
+		base.RawEvent = metadata
+	}
+	return events
 }
 
 type artifactRef struct {
@@ -569,6 +615,62 @@ func (t *translator) toolResultEvent(rsp *model.Response, messageID string) ([]a
 	}
 	t.lastMessageID = messageID
 	return events, nil
+}
+
+func (t *translator) toolResultActivityEvents(rsp *model.Response) ([]aguievents.Event, error) {
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return nil, nil
+	}
+	events := make([]aguievents.Event, 0, len(rsp.Choices))
+	for _, choice := range rsp.Choices {
+		if event, ok := t.toolResultActivityEvent(choice.Message.ToolID, choice.Message.Content); ok {
+			events = append(events, event)
+		}
+		if event, ok := t.toolResultActivityEvent(choice.Delta.ToolID, choice.Delta.Content); ok {
+			events = append(events, event)
+		}
+	}
+	return events, nil
+}
+
+func (t *translator) toolResultActivityEvent(toolCallID, chunk string) (aguievents.Event, bool) {
+	if toolCallID == "" || chunk == "" {
+		return nil, false
+	}
+	content := t.streamingToolResultContent[toolCallID] + chunk
+	t.streamingToolResultContent[toolCallID] = content
+	messageID := aguitool.StreamingToolResultActivityMessageID(toolCallID)
+	if len(content) == len(chunk) {
+		return aguievents.NewActivitySnapshotEvent(
+			messageID,
+			aguitool.StreamingToolResultActivityType,
+			map[string]any{
+				"toolCallId": toolCallID,
+				"content":    content,
+			},
+		), true
+	}
+	return aguievents.NewActivityDeltaEvent(
+		messageID,
+		aguitool.StreamingToolResultActivityType,
+		[]aguievents.JSONPatchOperation{
+			{Op: "add", Path: "/content", Value: content},
+		},
+	), true
+}
+
+func (t *translator) clearToolResultActivityState(rsp *model.Response) {
+	if t == nil || rsp == nil {
+		return
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Message.ToolID != "" {
+			delete(t.streamingToolResultContent, choice.Message.ToolID)
+		}
+		if choice.Delta.ToolID != "" {
+			delete(t.streamingToolResultContent, choice.Delta.ToolID)
+		}
+	}
 }
 
 // formatToolCallArguments formats a tool call arguments event to a string.

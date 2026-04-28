@@ -343,7 +343,8 @@ appRunner := runner.NewRunner(
 ### Memory Service
 
 Configure the memory service in code. Five backends are supported: in-memory,
-Redis, MySQL, PostgreSQL, and pgvector.
+Redis, MySQL, PostgreSQL, and pgvector. Two vector search backends are also
+available: sqlitevec and mysqlvec.
 
 #### Configuration Example
 
@@ -545,6 +546,11 @@ go run main.go -memory redis
 export MYSQL_HOST=localhost
 export MYSQL_PASSWORD=password
 go run main.go -memory mysql -soft-delete
+
+# Use MySQL Vector storage
+export MYSQLVEC_HOST=localhost
+export MYSQLVEC_PASSWORD=password
+go run main.go -memory mysqlvec -soft-delete
 
 # Use PostgreSQL storage
 export PG_HOST=localhost
@@ -973,6 +979,73 @@ CREATE TABLE memories (
 defer mysqlService.Close()
 ```
 
+### MySQL Vector (mysqlvec) Storage
+
+**Use case**: Production, vector similarity search with MySQL + native VECTOR type
+
+MySQL Vector stores memories in MySQL with embedding vectors for semantic similarity
+search. It uses MySQL 9.0+ native `VECTOR` type when available, and automatically
+falls back to `BLOB` storage with Go-side cosine similarity for older versions (8.x).
+
+```go
+import memorymysqlvec "trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec"
+import openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+
+embedder := openaiembedder.New(openaiembedder.WithModel("text-embedding-3-small"))
+
+mysqlvecService, err := memorymysqlvec.NewService(
+    memorymysqlvec.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+    memorymysqlvec.WithEmbedder(embedder),
+    memorymysqlvec.WithSoftDelete(true),
+)
+```
+
+**Configuration options**:
+
+- `WithMySQLClientDSN(dsn)`: MySQL DSN connection string (recommended, requires `parseTime=true`)
+- `WithMySQLInstance(name)`: Use pre-registered MySQL instance
+- `WithEmbedder(embedder)`: Text embedder for vector generation (required)
+- `WithSoftDelete(enabled)`: Enable soft delete (default false)
+- `WithTableName(name)`: Custom table name (default "memories")
+- `WithIndexDimension(dim)`: Vector dimension (default 1536)
+- `WithMaxResults(limit)`: Max search results (default 15)
+- `WithMemoryLimit(limit)`: Memory limit per user
+- `WithCustomTool(toolName, creator)`: Register custom tool
+- `WithToolEnabled(toolName, enabled)`: Enable/disable tool
+- `WithExtraOptions(...options)`: Extra options passed to MySQL client
+- `WithSkipDBInit(skip)`: Skip table initialization (for users without DDL permissions)
+
+**Note**: Requires MySQL 5.7.8+ (for JSON column type). Uses native VECTOR on MySQL 9.0+; falls back to BLOB + Go-side cosine similarity on MySQL 5.7/8.x. No additional vector library required.
+
+**Table schema** (auto-created, MySQL 9.0+):
+
+```sql
+CREATE TABLE memories (
+    memory_id VARCHAR(64) PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    memory_content TEXT NOT NULL,
+    topics JSON,
+    embedding VECTOR(1536),
+    memory_kind VARCHAR(32) NOT NULL DEFAULT 'fact',
+    event_time TIMESTAMP(6) NULL,
+    participants JSON,
+    location VARCHAR(1024) NULL,
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+    INDEX idx_app_user (app_name, user_id),
+    INDEX idx_updated_at (updated_at DESC),
+    INDEX idx_deleted_at (deleted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+**Resource cleanup**: Call `Close()` method to release database connection:
+
+```go
+defer mysqlvecService.Close()
+```
+
 ### PostgreSQL Storage
 
 **Use case**: Production, advanced JSONB features
@@ -1102,17 +1175,17 @@ defer pgvectorService.Close()
 
 ### Backend Comparison
 
-| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MySQL      | PostgreSQL        | pgvector      |
-| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ----------------- | ------------- |
-| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅                | ✅            |
-| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅                | ✅            |
-| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID       |
-| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | SQL        | SQL               | SQL + Vector  |
-| **JSON**          | ❌        | Basic             | Basic            | Basic            | JSON       | JSONB             | JSONB         |
-| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High          | Med-High      |
-| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium            | Medium        |
-| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅                | ✅            |
-| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Enterprise | Advanced Features | Vector Search |
+| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MySQL      | MySQL Vec         | PostgreSQL        | pgvector      |
+| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ----------------- | ----------------- | ------------- |
+| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅                | ✅                | ✅            |
+| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅                | ✅                | ✅            |
+| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID           | ✅ ACID       |
+| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | SQL        | SQL + Vector      | SQL               | SQL + Vector  |
+| **JSON**          | ❌        | Basic             | Basic            | Basic            | JSON       | JSON              | JSONB             | JSONB         |
+| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High          | Med-High          | Med-High      |
+| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium            | Medium            | Medium        |
+| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅                | ✅                | ✅            |
+| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Enterprise | MySQL Vector Search | Advanced Features | Vector Search |
 
 **Selection guide**:
 
@@ -1123,6 +1196,7 @@ Local Vector Search → SQLiteVec (single-file DB + embeddings)
 High Concurrency → Redis (memory-level performance)
 ACID Requirements → MySQL/PostgreSQL (transaction guarantees)
 Complex JSON → PostgreSQL (JSONB indexing and queries)
+MySQL Vector Search → mysqlvec (similarity search on MySQL 9.0+)
 Vector Search → pgvector (similarity search with embeddings)
 Audit Trail → MySQL/PostgreSQL/pgvector (soft delete support)
 ```
@@ -1224,9 +1298,9 @@ memory.AddMemory(ctx, userKey, "User likes programming", []string{"hobby"})
 Search behavior depends on the backend:
 
 - For `inmemory` / `redis` / `mysql` / `postgres`: `SearchMemories` uses **token matching** (not semantic search).
-- For `pgvector`: `SearchMemories` uses **vector similarity search** and requires an embedder.
+- For `pgvector` / `mysqlvec` / `sqlitevec`: `SearchMemories` uses **vector similarity search** and requires an embedder.
 
-**Token matching details** (non-pgvector backends):
+**Token matching details** (non-vector backends):
 
 **English tokenization**: lowercase → filter stopwords (a, the, is, etc.) → split by spaces
 
@@ -1249,7 +1323,7 @@ Search: "编程" ✅ Match (word-level hit)
 Search: "写代码" ❌ No match (different words)
 ```
 
-**Limitations** (non-pgvector backends):
+**Limitations** (non-vector backends):
 
 - These backends perform filtering and sorting in **application layer** (\[O(n)\] complexity)
 - Performance affected by data volume
@@ -1260,7 +1334,7 @@ Search: "写代码" ❌ No match (different words)
 **Recommendations**:
 
 - Use explicit keywords and topic tags to improve hit rate
-- If you need semantic similarity search, use the pgvector backend
+- If you need semantic similarity search, use the pgvector, mysqlvec, or sqlitevec backend
 
 ### Soft Delete Considerations
 
@@ -1559,9 +1633,102 @@ llmAgent := llmagent.New(
 )
 ```
 
+## External Long-Term Memory Integration (`mem0`)
+
+`memory/mem0` integrates [mem0](https://mem0.ai), an externally hosted long-term memory platform. It is suitable when you want mem0 to handle memory extraction and storage, while the Agent continues to query memories through standard tools.
+
+Unlike the built-in backends above, `memory/mem0` is **not** a full `memory.Service` implementation. It uses an ingest-first pattern: Runner forwards session transcripts to mem0 after each turn, mem0 performs extraction on the service side, and the Agent uses read-oriented tools to query the results.
+
+**Use case**: Hosted long-term memory, background extraction after each turn, and no local CRUD write path.
+
+### Configuration Example
+
+```go
+import (
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+mem0Svc, err := memorymem0.NewService(
+    memorymem0.WithAPIKey(os.Getenv("MEM0_API_KEY")),
+    memorymem0.WithLoadToolEnabled(true),
+)
+if err != nil {
+    panic(err)
+}
+defer mem0Svc.Close()
+
+sessionSvc := sessioninmemory.NewSessionService()
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(openai.New("deepseek-chat")),
+    llmagent.WithTools(mem0Svc.Tools()),
+)
+
+r := runner.NewRunner(
+    "my-app",
+    agent,
+    runner.WithSessionService(sessionSvc),
+    runner.WithSessionIngestor(mem0Svc),
+)
+defer r.Close()
+```
+
+**Integration points**:
+
+- Register tools with `llmagent.WithTools(mem0Svc.Tools())`
+- Use `runner.WithSessionIngestor(mem0Svc)` to send session transcripts to mem0
+- Do **not** use `runner.WithMemoryService(...)` with this integration
+
+### Why `WithSessionIngestor(...)` Instead of `WithMemoryService(...)`
+
+`runner.WithMemoryService(...)` is designed for built-in memory backends that implement the full `memory.Service` contract. In addition to read APIs, that contract includes framework-owned write semantics such as `AddMemory`, `UpdateMemory`, `DeleteMemory`, `ClearMemories`, and `EnqueueAutoMemoryJob(...)`.
+
+`memory/mem0` has a different boundary. It does not expose the full CRUD lifecycle to the framework. Instead, it accepts a completed session transcript, forwards it to mem0 for hosted extraction, and then exposes read-oriented tools for retrieval.
+
+Using `runner.WithSessionIngestor(...)` makes that boundary explicit:
+
+- Runner sends the completed session transcript after each turn
+- mem0 performs extraction and storage on the service side
+- per-request ingest fields such as `metadata`, `agent_id`, and `run_id` can be passed through `session.IngestOption`
+- the integration is not mistaken for a built-in backend that supports full framework-side CRUD or preload behavior
+
+In short, `MemoryService` means "the framework manages memories directly", while `SessionIngestor` means "the framework hands the transcript to an external memory system". `mem0` matches the second model.
+
+### Configuration Options
+
+| Option | Purpose | Default |
+| ------ | ------- | ------- |
+| `WithAPIKey(key)` | mem0 API key. Required for all requests. | required |
+| `WithHost(url)` | Override the mem0 API host/base URL. | `https://api.mem0.ai` |
+| `WithOrgProject(orgID, projectID)` | Add mem0 `org_id` / `project_id` to ingest and retrieval requests. | empty |
+| `WithAsyncMode(bool)` | Controls mem0's `async_mode` flag on ingest requests. | `true` |
+| `WithVersion(v)` | Sets the mem0 ingestion API version field. | `v2` |
+| `WithTimeout(d)` | HTTP timeout used by the client. | `10s` |
+| `WithLoadToolEnabled(bool)` | Expose `memory_load` from `Tools()`. | `false` |
+| `WithAsyncMemoryNum(n)` | Number of background ingest workers. | `1` |
+| `WithMemoryQueueSize(n)` | Queue size per ingest worker. | `10` |
+| `WithMemoryJobTimeout(d)` | Timeout for queued jobs and synchronous fallback ingest. | `30s` |
+
+### Notes
+
+- `Tools()` exposes `memory_search` by default; `memory_load` can be enabled explicitly.
+- All reads remain scoped to the current `<appName, userID>`.
+- Runner automatically passes session context into ingest. Custom callers can also use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` when needed.
+- When mem0 metadata is available, search results can still carry structured fields such as `Topics`, `Kind`, `EventTime`, `Participants`, and `Location`.
+- Call `Close()` on the service so background workers shut down cleanly.
+- If you need full CRUD tools or framework-side preload, use one of the built-in memory backends instead.
+
 ## References
 
 - [Memory Module Source](https://github.com/trpc-group/trpc-agent-go/tree/main/memory)
 - [Agentic Mode Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)
 - [Auto Mode Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
+- [mem0 Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0)
+- [Ecosystem Guide](https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/ecosystem.md)
 - [API Documentation](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)

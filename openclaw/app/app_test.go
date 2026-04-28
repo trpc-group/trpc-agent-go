@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -69,6 +70,10 @@ type captureRequestModel struct {
 type stubRuntimeAgent struct{}
 
 type stubAdminPromptsProvider struct{}
+
+type stubAdminRuntimeLifecycleProvider struct {
+	status admin.RuntimeLifecycleStatus
+}
 
 func (stubRuntimeAgent) Run(
 	context.Context,
@@ -125,6 +130,35 @@ func (stubAdminPromptsProvider) DeletePromptFile(
 	string,
 ) error {
 	return nil
+}
+
+func (p stubAdminRuntimeLifecycleProvider) RuntimeLifecycleStatus() (
+	admin.RuntimeLifecycleStatus,
+	error,
+) {
+	return p.status, nil
+}
+
+func (stubAdminRuntimeLifecycleProvider) RuntimeLifecycleVersions() (
+	admin.RuntimeLifecycleVersionIndex,
+	error,
+) {
+	return admin.RuntimeLifecycleVersionIndex{}, nil
+}
+
+func (stubAdminRuntimeLifecycleProvider) RuntimeLifecycleChangelog(
+	string,
+) (admin.RuntimeLifecycleChangelog, error) {
+	return admin.RuntimeLifecycleChangelog{}, nil
+}
+
+func (p stubAdminRuntimeLifecycleProvider) RequestRuntimeLifecycleAction(
+	admin.RuntimeLifecycleActionRequest,
+) (admin.RuntimeLifecycleActionResult, error) {
+	return admin.RuntimeLifecycleActionResult{
+		Status:  p.status,
+		Started: true,
+	}, nil
 }
 
 func (stubRuntimeAgent) Info() agent.Info {
@@ -214,6 +248,20 @@ func joinSystemMessages(req *model.Request) string {
 	var parts []string
 	for _, msg := range req.Messages {
 		if msg.Role != model.RoleSystem {
+			continue
+		}
+		parts = append(parts, msg.Content)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func joinAllMessageContent(req *model.Request) string {
+	if req == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(req.Messages))
+	for _, msg := range req.Messages {
+		if msg.Role == model.RoleUser {
 			continue
 		}
 		parts = append(parts, msg.Content)
@@ -357,6 +405,71 @@ func TestRuntimeConfigureAdmin(t *testing.T) {
 	require.NotNil(t, rt.adminCfg.Prompts)
 }
 
+func TestRuntimeConfigureAdminPreservesRuntimeConfigProvider(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(t, "")
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	rt := &Runtime{
+		adminCfg: &admin.Config{
+			AdminAddr: "127.0.0.1:8081",
+			AdminURL:  "http://127.0.0.1:8081",
+		},
+	}
+	setRuntimeAdminOptions(rt, buildAdminOptions(opts))
+	t.Cleanup(func() {
+		clearRuntimeAdminOptions(rt)
+	})
+
+	rt.ConfigureAdmin(func(cfg *admin.Config) {
+		cfg.Prompts = stubAdminPromptsProvider{}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rr := httptest.NewRecorder()
+	rt.Admin.Handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), cfgPath)
+}
+
+func TestRuntimeAddAdminOptionsPreservesExistingProviders(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(t, "")
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	rt := &Runtime{
+		adminCfg: &admin.Config{
+			AdminAddr: "127.0.0.1:8081",
+			AdminURL:  "http://127.0.0.1:8081",
+		},
+	}
+	setRuntimeAdminOptions(rt, buildAdminOptions(opts))
+	t.Cleanup(func() {
+		clearRuntimeAdminOptions(rt)
+	})
+
+	rt.AddAdminOptions(admin.WithRuntimeLifecycleProvider(
+		stubAdminRuntimeLifecycleProvider{
+			status: admin.RuntimeLifecycleStatus{
+				CurrentVersion: "v0.0.70",
+			},
+		},
+	))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rr := httptest.NewRecorder()
+	rt.Admin.Handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), cfgPath)
+
+	req = httptest.NewRequest(http.MethodGet, "/runtime-control", nil)
+	rr = httptest.NewRecorder()
+	rt.Admin.Handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "Runtime Control")
+	require.Contains(t, rr.Body.String(), "v0.0.70")
+}
+
 func TestRuntimeConfigureAdminNoAdminConfig(t *testing.T) {
 	t.Parallel()
 
@@ -364,6 +477,7 @@ func TestRuntimeConfigureAdminNoAdminConfig(t *testing.T) {
 	rt.ConfigureAdmin(func(cfg *admin.Config) {
 		cfg.AppName = "ignored"
 	})
+	rt.AddAdminOptions(nil)
 	require.Nil(t, rt.adminCfg)
 	require.Empty(t, rt.Admin)
 
@@ -496,6 +610,68 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 		decl.Description,
 		"current conversation session",
 	)
+}
+
+func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_spawn"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_list"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_get"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_cancel"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_spawn"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_list"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_get"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_cancel"),
+	)
+}
+
+func TestNewRuntime_ExposesSubagentService(t *testing.T) {
+	t.Parallel()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-enable-openclaw-tools",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+
+	require.NotNil(t, rt.SubagentService())
+}
+
+func TestRuntimeSubagentServiceNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var rt *Runtime
+	require.Nil(t, rt.SubagentService())
 }
 
 func TestNewRuntimeStores_CreatesAllStores(t *testing.T) {
@@ -1302,8 +1478,129 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 	require.NotContains(
 		t,
 		sys,
-		"Tooling and workspace guidance:",
+		"Each entry includes a path to that skill's SKILL.md on disk.",
 	)
+	// With the bare WithSkills(repo) default profile now being
+	// knowledge_only (skill_load + doc helpers, no skill_run / skill_exec),
+	// suppressing the skill protocol guidance via an explicit empty
+	// SkillsToolingGuide no longer also hides the built-in capability
+	// disclosure block. The overview thus carries the
+	// "Skill tool availability:" header describing the knowledge-only
+	// surface.
+	require.Contains(t, sys, "Skill tool availability:")
+	require.Contains(
+		t,
+		sys,
+		"This configuration supports skill discovery and "+
+			"knowledge loading only.",
+	)
+}
+
+func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(t, sys, "Available skills:")
+	require.Contains(
+		t,
+		sys,
+		"Each entry includes a path to that skill's SKILL.md on disk.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"you must use that skill in the same turn.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"This is a blocking requirement for matching skills.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Start with one brief user-visible preamble "+
+			"about the immediate next step, then call "+
+			"`skill_load` for that skill right away",
+	)
+	require.Contains(
+		t,
+		sys,
+		"not a pause to ask what to do next",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Never say that you could read or load a matching skill later",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Never mention reading, loading, or using a matching "+
+			"skill unless you already called `skill_load` for "+
+			"it in this turn.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Do not answer a matching skill task from the short "+
+			"summary, prior knowledge, or partial memory.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Keep exploring nearby runtime facts, retries, "+
+			"and recovery paths",
+	)
+	require.Contains(
+		t,
+		sys,
+		"echoer/"+skill.SkillFile,
+	)
+	require.NotContains(t, sys, "Skill tool availability:")
+	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
+	require.NotContains(t, sys, "Only describe a blocker")
+}
+
+func TestNewAgent_LocalExecKeepsExecCommandButOmitsWorkspaceExec(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	agt, _, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:         "demo",
+		SkillsRoot:      root,
+		StateDir:        t.TempDir(),
+		EnableLocalExec: true,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	names := make(map[string]bool)
+	for _, tl := range agt.Tools() {
+		if decl := tl.Declaration(); decl != nil {
+			names[decl.Name] = true
+		}
+	}
+
+	require.False(t, names["workspace_exec"])
+	require.False(t, names["workspace_write_stdin"])
+	require.False(t, names["workspace_kill_session"])
 }
 
 func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
@@ -1381,6 +1678,69 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 		t,
 		sys,
 		"For real browser automation, use browser.",
+	)
+}
+
+func TestNewAgent_OpenClawToolingGuidance_OverrideApplied(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	guide := "Use internal runtime guidance only."
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:              "demo",
+		SkillsRoot:           root,
+		StateDir:             t.TempDir(),
+		EnableOpenClawTools:  true,
+		OpenClawToolingGuide: &guide,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.Contains(t, content, guide)
+	require.NotContains(
+		t,
+		content,
+		strings.TrimSpace(openClawToolingGuidance),
+	)
+}
+
+func TestNewAgent_OpenClawToolingGuidance_EmptyDisables(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	guide := ""
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:              "demo",
+		SkillsRoot:           root,
+		StateDir:             t.TempDir(),
+		EnableOpenClawTools:  true,
+		OpenClawToolingGuide: &guide,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.NotContains(
+		t,
+		content,
+		strings.TrimSpace(openClawToolingGuidance),
 	)
 }
 
@@ -1506,6 +1866,139 @@ func TestNewAgent_SkillsToolResults_ConfigApplied(t *testing.T) {
 	sys := joinSystemMessages(req)
 	require.Contains(t, sys, "Loaded skill context:")
 	require.Contains(t, sys, "[Loaded] echoer")
+}
+
+func TestNewAgent_KnowledgeOnlyProfileHidesSkillRun(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:           "demo",
+		SkillsRoot:        root,
+		StateDir:          t.TempDir(),
+		SkillsToolProfile: skillprofile.KnowledgeOnly,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	require.NotNil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolListDocs),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolSelectDocs),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolRun),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolExec),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolWriteStdin),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolPollSession),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolKillSession),
+	)
+	require.Contains(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad).
+			Description,
+		"Before the first matching load, start with one "+
+			"brief user-visible preamble",
+	)
+}
+
+func TestNewAgent_KnowledgeOnlyProfileUsesToolingGuidance(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:             "demo",
+		SkillsRoot:          root,
+		StateDir:            t.TempDir(),
+		SkillsToolProfile:   skillprofile.KnowledgeOnly,
+		EnableOpenClawTools: true,
+	}, nil, nil)
+	require.NoError(t, err)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolRun),
+	)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.Contains(
+		t,
+		content,
+		strings.TrimSpace(openClawToolingGuidance),
+	)
+}
+
+func TestNewAgent_FullProfileUsesToolingGuidance(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		profile string
+	}{
+		{
+			name:    "explicit full profile",
+			profile: skillprofile.Full,
+		},
+		{
+			name:    "zero-value profile defaults to knowledge-only",
+			profile: "",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := createAppTestSkill(t)
+			mdl := &captureRequestModel{}
+			agt, _, err := newAgent(mdl, agentConfig{
+				AppName:             "demo",
+				SkillsRoot:          root,
+				StateDir:            t.TempDir(),
+				SkillsToolProfile:   tc.profile,
+				EnableOpenClawTools: true,
+			}, nil, nil)
+			require.NoError(t, err)
+
+			req := runAgentAndCapture(
+				t,
+				agt,
+				mdl,
+				&session.Session{},
+			)
+			content := joinAllMessageContent(req)
+			require.Contains(
+				t,
+				content,
+				strings.TrimSpace(openClawToolingGuidance),
+			)
+		})
+	}
 }
 
 func TestRun_HTTPListenErrorPath(t *testing.T) {

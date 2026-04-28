@@ -131,6 +131,18 @@ func (r *filteredRepository) Path(name string) (string, error) {
 	return r.base.Path(name)
 }
 
+// Roots exposes the underlying repository roots when available.
+func (r *filteredRepository) Roots() []string {
+	if r == nil || r.base == nil {
+		return nil
+	}
+	rooted, ok := r.base.(RootedRepository)
+	if !ok || rooted == nil {
+		return nil
+	}
+	return rooted.Roots()
+}
+
 func (r *filteredRepository) SummariesForContext(
 	ctx context.Context,
 ) []Summary {

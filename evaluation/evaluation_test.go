@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -436,6 +437,7 @@ func TestNewAgentEvaluatorWithParallelOptionsBuildsLocalService(t *testing.T) {
 type optionProbeService struct {
 	lastInferenceOptions *service.Options
 	lastEvaluateOptions  *service.Options
+	lastInferenceRequest *service.InferenceRequest
 }
 
 func (s *optionProbeService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
@@ -448,7 +450,23 @@ func (s *optionProbeService) Inference(ctx context.Context, req *service.Inferen
 		o(options)
 	}
 	s.lastInferenceOptions = options
-	return []*service.InferenceResult{}, nil
+	if req != nil {
+		cloned := *req
+		cloned.EvalCaseIDs = append([]string(nil), req.EvalCaseIDs...)
+		s.lastInferenceRequest = &cloned
+	}
+	if req == nil {
+		return []*service.InferenceResult{}, nil
+	}
+	results := make([]*service.InferenceResult, 0, len(req.EvalCaseIDs))
+	for _, evalCaseID := range req.EvalCaseIDs {
+		results = append(results, &service.InferenceResult{
+			AppName:    req.AppName,
+			EvalSetID:  req.EvalSetID,
+			EvalCaseID: evalCaseID,
+		})
+	}
+	return results, nil
 }
 
 func (s *optionProbeService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
@@ -461,10 +479,23 @@ func (s *optionProbeService) Evaluate(ctx context.Context, req *service.Evaluate
 		o(options)
 	}
 	s.lastEvaluateOptions = options
+	caseResults := make([]*evalresult.EvalCaseResult, 0, len(req.InferenceResults))
+	for _, inferenceResult := range req.InferenceResults {
+		if inferenceResult == nil {
+			continue
+		}
+		caseResults = append(caseResults, &evalresult.EvalCaseResult{
+			EvalSetID:       req.EvalSetID,
+			EvalID:          inferenceResult.EvalCaseID,
+			FinalEvalStatus: status.EvalStatusPassed,
+			SessionID:       inferenceResult.SessionID,
+			UserID:          inferenceResult.UserID,
+		})
+	}
 	return &service.EvalSetRunResult{
 		AppName:         req.AppName,
 		EvalSetID:       req.EvalSetID,
-		EvalCaseResults: []*evalresult.EvalCaseResult{},
+		EvalCaseResults: caseResults,
 	}, nil
 }
 
@@ -515,6 +546,83 @@ func TestAgentEvaluatorEvaluateDoesNotOverrideServiceCallOptionsByDefault(t *tes
 	assert.Equal(t, -456, probeSvc.lastEvaluateOptions.EvalCaseParallelism)
 	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelInferenceEnabled)
 	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelEvaluationEnabled)
+}
+
+func TestAgentEvaluatorEvaluatePassesEvalCaseIDsToInference(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "case-1"}))
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "case-2"}))
+	probeSvc := &optionProbeService{}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(probeSvc),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+	result, err := ae.Evaluate(ctx, evalSetID, WithEvalCaseIDs("case-2"))
+	assert.NoError(t, err)
+	assert.NotNil(t, probeSvc.lastInferenceRequest)
+	if probeSvc.lastInferenceRequest == nil {
+		return
+	}
+	assert.Equal(t, []string{"case-2"}, probeSvc.lastInferenceRequest.EvalCaseIDs)
+	require.NotNil(t, result)
+	require.Len(t, result.EvalCases, 1)
+	assert.Equal(t, "case-2", result.EvalCases[0].EvalCaseID)
+}
+
+func TestAgentEvaluatorEvaluateUsesConstructorEvalCaseIDs(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "case-1"}))
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "case-2"}))
+	probeSvc := &optionProbeService{}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(probeSvc),
+		WithEvalCaseIDs("case-2"),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+	result, err := ae.Evaluate(ctx, evalSetID)
+	assert.NoError(t, err)
+	assert.NotNil(t, probeSvc.lastInferenceRequest)
+	if probeSvc.lastInferenceRequest == nil {
+		return
+	}
+	assert.Equal(t, []string{"case-2"}, probeSvc.lastInferenceRequest.EvalCaseIDs)
+	require.NotNil(t, result)
+	require.Len(t, result.EvalCases, 1)
+	assert.Equal(t, "case-2", result.EvalCases[0].EvalCaseID)
 }
 
 func TestAgentEvaluatorEvaluatePassesExpectedRunnerToInferenceAndEvaluate(t *testing.T) {

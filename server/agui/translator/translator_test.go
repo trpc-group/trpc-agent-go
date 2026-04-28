@@ -19,11 +19,14 @@ import (
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguitypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -142,6 +145,184 @@ func TestTranslateErrorResponse(t *testing.T) {
 	assert.Equal(t, "boom", runErr.Message)
 	assert.Equal(t, "run", runErr.RunID())
 }
+
+func TestTranslateEventSourceMetadataDisabledByDefault(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+	rsp := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "Hello",
+			},
+		}},
+	}
+	events, err := translator.Translate(
+		context.Background(),
+		&agentevent.Event{
+			ID:           "evt-1",
+			Author:       "member-a",
+			InvocationID: "inv-1",
+			Response:     rsp,
+		},
+	)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, events)
+	for _, evt := range events {
+		assert.Nil(t, evt.GetBaseEvent().RawEvent)
+	}
+}
+
+func TestTranslateAttachesEventSourceMetadataWhenEnabled(t *testing.T) {
+	translator := newTranslatorForTest(
+		t,
+		WithEventSourceMetadataEnabled(true),
+	)
+	if translator == nil {
+		return
+	}
+	rsp := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "search",
+						Arguments: []byte(`{"q":"agent"}`),
+					},
+				}},
+			},
+		}},
+	}
+	events, err := translator.Translate(
+		context.Background(),
+		&agentevent.Event{
+			ID:                 "evt-1",
+			Author:             "member-a",
+			InvocationID:       "inv-1",
+			ParentInvocationID: "parent-1",
+			Branch:             "root.member-a",
+			Response:           rsp,
+		},
+	)
+	assert.NoError(t, err)
+	assert.Len(t, events, 3)
+
+	want := source.Metadata{
+		EventID:            "evt-1",
+		Author:             "member-a",
+		InvocationID:       "inv-1",
+		ParentInvocationID: "parent-1",
+		Branch:             "root.member-a",
+	}
+	for _, evt := range events {
+		got, ok := evt.GetBaseEvent().RawEvent.(source.Metadata)
+		assert.True(t, ok)
+		assert.Equal(t, want, got)
+	}
+
+	payload, err := json.Marshal(events[0])
+	assert.NoError(t, err)
+	assert.Contains(t, string(payload), `"rawEvent":`)
+	assert.Contains(t, string(payload), `"author":"member-a"`)
+	assert.Contains(t, string(payload), `"invocationId":"inv-1"`)
+}
+
+func TestFinalizeEventsSkipsExistingRawEvent(t *testing.T) {
+	translator := &translator{eventSourceMetadataEnabled: true}
+	existing := map[string]any{"keep": true}
+	event := aguievents.NewRunStartedEvent("thread", "run")
+	event.GetBaseEvent().RawEvent = existing
+
+	events := translator.finalizeEvents(
+		&agentevent.Event{Author: "member-a"},
+		[]aguievents.Event{event},
+	)
+	require.Len(t, events, 1)
+	assert.Equal(t, existing, events[0].GetBaseEvent().RawEvent)
+}
+
+func TestFinalizeEventsSuppressesZeroOverride(t *testing.T) {
+	translator := &translator{eventSourceMetadataEnabled: true}
+	src := agentevent.NewResponseEvent("inv-1", "agui.runner", &model.Response{})
+	require.NoError(t, source.SetEventOverride(src, source.Metadata{}))
+
+	events := translator.finalizeEvents(
+		src,
+		[]aguievents.Event{
+			aguievents.NewRunStartedEvent("thread", "run"),
+		},
+	)
+	require.Len(t, events, 1)
+	assert.Nil(t, events[0].GetBaseEvent().RawEvent)
+}
+
+func TestFinalizeEventsHandlesNilInputs(t *testing.T) {
+	var nilTranslator *translator
+	assert.Nil(t, nilTranslator.finalizeEvents(nil, nil))
+
+	translator := &translator{}
+	assert.Nil(t, translator.finalizeEvents(nil, nil))
+
+	events := []aguievents.Event{nil}
+	result := translator.finalizeEvents(
+		&agentevent.Event{Author: "member-a"},
+		events,
+	)
+	assert.Equal(t, events, result)
+
+	translator.eventSourceMetadataEnabled = true
+	events = []aguievents.Event{
+		nil,
+		stubEventWithNilBase{},
+		aguievents.NewRunStartedEvent("thread", "run"),
+	}
+	result = translator.finalizeEvents(nil, events)
+	assert.Equal(t, events, result)
+	assert.Nil(t, events[2].GetBaseEvent().RawEvent)
+
+	src := &agentevent.Event{Author: "member-a"}
+	events = []aguievents.Event{
+		nil,
+		stubEventWithNilBase{},
+		aguievents.NewRunStartedEvent("thread", "run"),
+	}
+	result = translator.finalizeEvents(src, events)
+	assert.Equal(t, events, result)
+	assert.Nil(t, events[0])
+
+	got, ok := events[2].GetBaseEvent().RawEvent.(source.Metadata)
+	require.True(t, ok)
+	assert.Equal(t, source.Metadata{Author: "member-a"}, got)
+}
+
+type stubEventWithNilBase struct{}
+
+func (stubEventWithNilBase) Type() aguievents.EventType {
+	return aguievents.EventTypeRunStarted
+}
+
+func (stubEventWithNilBase) Timestamp() *int64 { return nil }
+
+func (stubEventWithNilBase) SetTimestamp(int64) {}
+
+func (stubEventWithNilBase) ThreadID() string { return "" }
+
+func (stubEventWithNilBase) RunID() string { return "" }
+
+func (stubEventWithNilBase) Validate() error { return nil }
+
+func (stubEventWithNilBase) ToJSON() ([]byte, error) { return nil, nil }
+
+func (stubEventWithNilBase) GetBaseEvent() *aguievents.BaseEvent { return nil }
 
 func TestTextMessageEventStreamingAndCompletion(t *testing.T) {
 	translator := newTranslatorImplForTest(t)
@@ -2503,6 +2684,147 @@ func TestStreamToolResultEvent(t *testing.T) {
 	assert.Equal(t, "tool-1", toolResultEvt.ToolCallID)
 	assert.Equal(t, "World", toolResultEvt.Content)
 	assert.Equal(t, "tool", *toolResultEvt.Role)
+}
+
+func TestStreamToolResultEventAsActivityWhenEnabled(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	chunkRsp1 := &model.Response{
+		ID:        "msg-1",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "Hello", ToolID: "tool-1"},
+		}},
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{ID: "evt-1", Response: chunkRsp1})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	snapshot, ok := events[0].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool.result.stream", snapshot.ActivityType)
+	content, ok := snapshot.Content.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "tool-1", content["toolCallId"])
+	assert.Equal(t, "Hello", content["content"])
+	assert.True(t, aguitool.IsStreamingToolResultActivityEvent(snapshot))
+	chunkRsp2 := &model.Response{
+		ID:        "msg-1",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: " World", ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-2", Response: chunkRsp2})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool.result.stream", delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/content", delta.Patch[0].Path)
+	assert.Equal(t, "Hello World", delta.Patch[0].Value)
+	assert.True(t, aguitool.IsStreamingToolResultActivityEvent(delta))
+	finalRsp := &model.Response{
+		ID:     "msg-1-final",
+		Object: string(model.ObjectTypeToolResponse),
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleTool, Content: `{"done":true}`, ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-final", Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	result, ok := events[0].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "evt-final", result.MessageID)
+	assert.Equal(t, "tool-1", result.ToolCallID)
+	assert.Equal(t, `{"done":true}`, result.Content)
+	chunkRsp3 := &model.Response{
+		ID:        "msg-2",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "Reset", ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-3", Response: chunkRsp3})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	snapshot, ok = events[0].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	content, ok = snapshot.Content.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "Reset", content["content"])
+}
+
+func TestToolResultActivityEventSkipsEmptyInputs(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	event, ok := tr.toolResultActivityEvent("", "hello")
+	assert.False(t, ok)
+	assert.Nil(t, event)
+	event, ok = tr.toolResultActivityEvent("tool-1", "")
+	assert.False(t, ok)
+	assert.Nil(t, event)
+	assert.Empty(t, tr.streamingToolResultContent)
+}
+
+func TestClearToolResultActivityState(t *testing.T) {
+	var nilTranslator *translator
+	nilTranslator.clearToolResultActivityState(nil)
+
+	tr := &translator{
+		streamingToolResultContent: map[string]string{
+			"tool-1": "hello",
+			"tool-2": "world",
+			"tool-3": "keep",
+		},
+	}
+	tr.clearToolResultActivityState(nil)
+	assert.Equal(t, "hello", tr.streamingToolResultContent["tool-1"])
+	assert.Equal(t, "world", tr.streamingToolResultContent["tool-2"])
+	assert.Equal(t, "keep", tr.streamingToolResultContent["tool-3"])
+	tr.clearToolResultActivityState(&model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{ToolID: "tool-1"}},
+			{Delta: model.Message{ToolID: "tool-2"}},
+		},
+	})
+	assert.NotContains(t, tr.streamingToolResultContent, "tool-1")
+	assert.NotContains(t, tr.streamingToolResultContent, "tool-2")
+	assert.Equal(t, "keep", tr.streamingToolResultContent["tool-3"])
+}
+
+func TestToolResultActivityEvents(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	events, err := tr.toolResultActivityEvents(nil)
+	assert.NoError(t, err)
+	assert.Nil(t, events)
+	events, err = tr.toolResultActivityEvents(&model.Response{})
+	assert.NoError(t, err)
+	assert.Nil(t, events)
+	events, err = tr.toolResultActivityEvents(&model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{ToolID: "tool-1", Content: "Hello"}},
+			{Delta: model.Message{ToolID: "tool-1", Content: " World"}},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	_, ok := events[0].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	_, ok = events[1].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
 }
 
 func TestTranslateStreamableToolCallAndResultEvents(t *testing.T) {

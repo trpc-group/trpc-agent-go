@@ -24,7 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
@@ -62,6 +62,7 @@ const (
 
 	defaultSessionSummaryEventThreshold = 20
 	defaultSkillsLoadMode               = "turn"
+	defaultSkillsToolProfile            = skillprofile.KnowledgeOnly
 	defaultSkillsWatchDebounce          = 250 * time.Millisecond
 
 	flagAddSessionSummary                             = "add-session-summary"
@@ -93,6 +94,7 @@ const (
 	flagSkillsWatch         = "skills-watch"
 	flagSkillsWatchBundled  = "skills-watch-bundled"
 	flagSkillsWatchDebounce = "skills-watch-debounce"
+	flagSkillsToolProfile   = "skills-tool-profile"
 	flagSkillsLoadMode      = "skills-load-mode"
 	flagSkillsMaxLoaded     = "skills-max-loaded"
 	flagSkillsToolResults   = "skills-loaded-content-in-tool-results"
@@ -185,6 +187,7 @@ type runOptions struct {
 	SkillsWatch         bool
 	SkillsWatchBundled  bool
 	SkillsWatchDebounce time.Duration
+	SkillsToolProfile   string
 	SkillsLoadMode      string
 	SkillsMaxLoaded     int
 	SkillsToolResults   bool
@@ -229,9 +232,10 @@ type runOptions struct {
 	SessionSummaryMaxWords            int
 	SessionSummaryApproxRunesPerToken float64
 
-	EnableLocalExec     bool
-	EnableOpenClawTools bool
-	EnableParallelTools bool
+	EnableLocalExec      bool
+	EnableOpenClawTools  bool
+	OpenClawToolingGuide *string
+	EnableParallelTools  bool
 
 	enableOpenClawToolsExplicit bool
 
@@ -261,6 +265,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		SkillsWatch:         true,
 		SkillsWatchDebounce: defaultSkillsWatchDebounce,
+		SkillsToolProfile:   defaultSkillsToolProfile,
 		SkillsLoadMode:      defaultSkillsLoadMode,
 		SkillsToolResults:   true,
 		SkillsSkipFallback:  true,
@@ -372,8 +377,10 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.IntVar(
 		&opts.ContextCompactionOversizedToolResultMaxTokens,
 		flagContextCompactionOversizedToolResultMaxTokens,
-		processor.DefaultContextCompactionOversizedToolResultMaxTokens,
-		"Truncate oversized tool results with head+tail preservation (0=disable)",
+		0,
+		"Truncate oversized tool results with head+tail preservation when "+
+			"context compaction is enabled (0=disable; recommended opt-in "+
+			"value is 8192). Requires --enable-context-compaction.",
 	)
 	fs.IntVar(
 		&opts.MaxHistoryRuns,
@@ -592,6 +599,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Also watch bundled skills roots for local changes",
 	)
 	fs.StringVar(
+		&opts.SkillsToolProfile,
+		flagSkillsToolProfile,
+		defaultSkillsToolProfile,
+		"Built-in skill tool profile: full|knowledge_only",
+	)
+	fs.StringVar(
 		&opts.SkillsLoadMode,
 		flagSkillsLoadMode,
 		defaultSkillsLoadMode,
@@ -754,7 +767,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.SessionSummaryIdleThreshold,
 		"session-summary-idle",
 		0,
-		"Summarize when time since last event exceeds duration (0 disables)",
+		"Summarize on summary checks when the checked session's last event is older than duration (0 disables)",
 	)
 	fs.IntVar(
 		&opts.SessionSummaryMaxWords,
@@ -845,7 +858,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 	if err := finalizeRunOptions(&opts); err != nil {
 		return runOptions{}, &exitError{
-			Code: loadModeExitCode(setFlags),
+			Code: skillsOptionExitCode(setFlags),
 			Err:  err,
 		}
 	}
@@ -1046,6 +1059,8 @@ type skillsConfig struct {
 	WatchBundledCamel  *bool    `yaml:"watchBundled,omitempty"`
 	WatchDebounceMS    *int     `yaml:"watch_debounce_ms,omitempty"`
 	WatchDebounceCamel *int     `yaml:"watchDebounceMs,omitempty"`
+	ToolProfile        *string  `yaml:"tool_profile,omitempty"`
+	ToolProfileCamel   *string  `yaml:"toolProfile,omitempty"`
 	LoadMode           *string  `yaml:"load_mode,omitempty"`
 	LoadModeCamel      *string  `yaml:"loadMode,omitempty"`
 	MaxLoadedSkills    *int     `yaml:"max_loaded_skills,omitempty"`
@@ -1069,10 +1084,12 @@ type skillEntryConfig struct {
 }
 
 type toolsConfig struct {
-	EnableLocalExec      *bool `yaml:"enable_local_exec,omitempty"`
-	EnableOpenClawTools  *bool `yaml:"enable_openclaw_tools,omitempty"`
-	EnableParallelTools  *bool `yaml:"enable_parallel_tools,omitempty"`
-	RefreshToolSetsOnRun *bool `yaml:"refresh_toolsets_on_run,omitempty"`
+	EnableLocalExec           *bool   `yaml:"enable_local_exec,omitempty"`
+	EnableOpenClawTools       *bool   `yaml:"enable_openclaw_tools,omitempty"`
+	OpenClawToolingGuide      *string `yaml:"openclaw_tooling_guidance,omitempty"`
+	OpenClawToolingGuideCamel *string `yaml:"openClawToolingGuidance,omitempty"`
+	EnableParallelTools       *bool   `yaml:"enable_parallel_tools,omitempty"`
+	RefreshToolSetsOnRun      *bool   `yaml:"refresh_toolsets_on_run,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -1539,6 +1556,14 @@ func (cfg *fileConfig) apply(
 				cfg.Skills.Entries,
 			)
 		}
+		toolProfile := firstStringPtr(
+			cfg.Skills.ToolProfile,
+			cfg.Skills.ToolProfileCamel,
+		)
+		if toolProfile != nil &&
+			!flagWasSet(set, flagSkillsToolProfile) {
+			opts.SkillsToolProfile = strings.TrimSpace(*toolProfile)
+		}
 		loadMode := firstStringPtr(
 			cfg.Skills.LoadMode,
 			cfg.Skills.LoadModeCamel,
@@ -1586,6 +1611,10 @@ func (cfg *fileConfig) apply(
 					*cfg.Tools.EnableOpenClawTools
 			}
 		}
+		opts.OpenClawToolingGuide = firstStringPtr(
+			cfg.Tools.OpenClawToolingGuide,
+			cfg.Tools.OpenClawToolingGuideCamel,
+		)
 		if cfg.Tools.EnableParallelTools != nil &&
 			!flagWasSet(set, flagEnableParallelTools) {
 			opts.EnableParallelTools = *cfg.Tools.EnableParallelTools
@@ -1992,8 +2021,9 @@ func flagWasSet(set map[string]struct{}, name string) bool {
 	return ok
 }
 
-func loadModeExitCode(set map[string]struct{}) int {
-	if flagWasSet(set, flagSkillsLoadMode) {
+func skillsOptionExitCode(set map[string]struct{}) int {
+	if flagWasSet(set, flagSkillsToolProfile) ||
+		flagWasSet(set, flagSkillsLoadMode) {
 		return 2
 	}
 	return 1
@@ -2003,6 +2033,11 @@ func finalizeRunOptions(opts *runOptions) error {
 	if opts == nil {
 		return nil
 	}
+	profile, err := normalizeSkillsToolProfile(opts.SkillsToolProfile)
+	if err != nil {
+		return err
+	}
+	opts.SkillsToolProfile = profile
 	mode, err := normalizeSkillsLoadMode(opts.SkillsLoadMode)
 	if err != nil {
 		return err
@@ -2052,6 +2087,23 @@ func normalizeA2AHost(raw string) string {
 		return ""
 	}
 	return ia2a.NormalizeURL(host)
+}
+
+func normalizeSkillsToolProfile(raw string) (string, error) {
+	profile := strings.ToLower(strings.TrimSpace(raw))
+	if profile == "" {
+		return defaultSkillsToolProfile, nil
+	}
+	switch profile {
+	case skillprofile.Full, skillprofile.KnowledgeOnly:
+		return profile, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid skills tool profile %q: "+
+				"want full|knowledge_only",
+			raw,
+		)
+	}
 }
 
 func normalizeSkillsLoadMode(raw string) (string, error) {

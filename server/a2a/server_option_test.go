@@ -20,6 +20,7 @@ import (
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -120,6 +121,12 @@ func TestNewContextWithUserID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWithEventToA2APartMapper_Nil(t *testing.T) {
+	opts := &options{}
+	WithEventToA2APartMapper(nil)(opts)
+	assert.Len(t, opts.eventPartMappers, 0)
 }
 
 func TestDefaultAuthProvider_Authenticate(t *testing.T) {
@@ -286,58 +293,124 @@ func TestDefaultErrorHandler(t *testing.T) {
 	}
 }
 
-func TestSingleMsgSubscriber(t *testing.T) {
+func TestSingleResultSubscriber(t *testing.T) {
 	testMsg := &protocol.Message{
 		Role:  protocol.MessageRoleAgent,
 		Parts: []protocol.Part{protocol.NewTextPart("test message")},
 	}
 
-	subscriber := newSingleMsgSubscriber(testMsg)
+	subscriber := newSingleResultSubscriber(testMsg)
 
 	// Test initial state - singleMsgSubscriber is always closed
 	if !subscriber.Closed() {
-		t.Error("newSingleMsgSubscriber() should be closed (always returns true)")
+		t.Error("newSingleResultSubscriber() should be closed (always returns true)")
 	}
 
 	// Test channel
 	ch := subscriber.Channel()
 	if ch == nil {
-		t.Error("newSingleMsgSubscriber() channel should not be nil")
+		t.Error("newSingleResultSubscriber() channel should not be nil")
 	}
 
 	// Test receiving the message
 	select {
 	case event := <-ch:
 		if event.Result != testMsg {
-			t.Errorf("newSingleMsgSubscriber() received message = %v, want %v", event.Result, testMsg)
+			t.Errorf("newSingleResultSubscriber() received message = %v, want %v", event.Result, testMsg)
 		}
 	default:
-		t.Error("newSingleMsgSubscriber() should have message available immediately")
+		t.Error("newSingleResultSubscriber() should have message available immediately")
 	}
 
 	// Test that channel is closed after receiving message
 	select {
 	case _, ok := <-ch:
 		if ok {
-			t.Error("newSingleMsgSubscriber() channel should be closed after message")
+			t.Error("newSingleResultSubscriber() channel should be closed after message")
 		}
 	default:
-		t.Error("newSingleMsgSubscriber() channel should be closed")
+		t.Error("newSingleResultSubscriber() channel should be closed")
 	}
 
 	// Test Send method (should return error for single message subscriber)
 	err := subscriber.Send(protocol.StreamingMessageEvent{Result: testMsg})
 	if err == nil {
-		t.Error("newSingleMsgSubscriber() Send() should return error")
+		t.Error("newSingleResultSubscriber() Send() should return error")
 	}
 	expectedErrMsg := "send msg is not allowed for singleMsgSubscriber"
 	if err.Error() != expectedErrMsg {
-		t.Errorf("newSingleMsgSubscriber() Send() error = %v, want %v", err.Error(), expectedErrMsg)
+		t.Errorf("newSingleResultSubscriber() Send() error = %v, want %v", err.Error(), expectedErrMsg)
 	}
 
 	// Test Close method (should be safe to call multiple times)
 	subscriber.Close()
 	subscriber.Close() // Should not panic
+}
+
+func TestSingleResultSubscriber_NilResult(t *testing.T) {
+	subscriber := newSingleResultSubscriber(nil)
+
+	ch := subscriber.Channel()
+	if ch == nil {
+		t.Fatal("newSingleResultSubscriber(nil) channel should not be nil")
+	}
+
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Fatal("newSingleResultSubscriber(nil) channel should be closed without events")
+		}
+	default:
+		t.Fatal("newSingleResultSubscriber(nil) should close channel immediately")
+	}
+}
+
+func TestResponseRewriterFuncs_Defaults(t *testing.T) {
+	rewriter := ResponseRewriterFuncs{}
+	unary := &protocol.Message{
+		Role:  protocol.MessageRoleAgent,
+		Parts: []protocol.Part{protocol.NewTextPart("unary")},
+	}
+	streaming := &protocol.TaskStatusUpdateEvent{
+		TaskID:    "task",
+		ContextID: "ctx",
+		Status: protocol.TaskStatus{
+			State: protocol.TaskStateCompleted,
+		},
+	}
+
+	assert.Same(t, unary, rewriter.RewriteUnary(context.Background(), unary))
+	assert.Same(t, streaming, rewriter.RewriteStreaming(context.Background(), streaming))
+}
+
+func TestResponseRewriterFuncs_Context(t *testing.T) {
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "trace-1")
+	unary := &protocol.Message{
+		Role:  protocol.MessageRoleAgent,
+		Parts: []protocol.Part{protocol.NewTextPart("unary")},
+	}
+	streaming := &protocol.TaskStatusUpdateEvent{
+		TaskID:    "task",
+		ContextID: "ctx",
+		Status: protocol.TaskStatus{
+			State: protocol.TaskStateCompleted,
+		},
+	}
+
+	rewriter := ResponseRewriterFuncs{
+		Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
+			assert.Equal(t, "trace-1", ctx.Value(contextKey{}))
+			return result
+		},
+		Streaming: func(ctx context.Context, result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
+			assert.Equal(t, "trace-1", ctx.Value(contextKey{}))
+			return result
+		},
+	}
+
+	assert.Same(t, unary, rewriter.RewriteUnary(ctx, unary))
+	assert.Same(t, streaming, rewriter.RewriteStreaming(ctx, streaming))
 }
 
 func TestWithOptions(t *testing.T) {
@@ -475,6 +548,21 @@ func TestWithOptions(t *testing.T) {
 			},
 		},
 		{
+			name: "WithEventToA2APartMapper",
+			option: WithEventToA2APartMapper(func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
+				return nil, nil
+			}),
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
+				if len(opts.eventPartMappers) != 1 {
+					t.Error("WithEventToA2APartMapper() should append eventPartMappers")
+				}
+			},
+		},
+		{
 			name:   "WithDebugLogging",
 			option: WithDebugLogging(true),
 			validate: func(
@@ -501,6 +589,17 @@ func TestWithOptions(t *testing.T) {
 							"graphEventObjectAllowlist",
 					)
 				}
+			},
+		},
+		{
+			name:   "WithResponseRewriter",
+			option: WithResponseRewriter(ResponseRewriterFuncs{}),
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
+				assert.NotNil(t, opts.responseRewriter)
 			},
 		},
 		{

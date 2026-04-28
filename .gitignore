@@ -14,6 +14,8 @@ coverage.html
 cover.html
 PR*.md
 pr*.md
+!docs/mkdocs/zh/promptiter.md
+!docs/mkdocs/en/promptiter.md
 claude3.7.sh
 dpskv3.sh
 .cursorignore

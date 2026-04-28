@@ -844,7 +844,7 @@ Provides a user-defined JSON schema for structured output while **allowing tool 
 
 **Notes:**
 - “Tools are allowed” means the agent can still make tool calls (including
-  Skills tools like `skill_load` / `skill_run`).
+  Skills tools like `skill_load` and `workspace_exec`).
 - When the model needs tools, it may emit tool call events first and only
   produce the final JSON later. Only the final answer must conform to the
   schema and must be a single JSON object.

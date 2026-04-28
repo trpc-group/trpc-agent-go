@@ -67,17 +67,17 @@ type Converter[T any] interface {
 type UniversalFilterCondition struct {
 	// Field is the metadata field to filter on.
 	// Required for comparison operators, not used for logical operators (and/or).
-	Field string `json:"field,omitempty" jsonschema:"description=The metadata field to filter on (required for comparison operators)"`
+	Field string `json:"field,omitempty" description:"The metadata field to filter on. Use it for comparison operators and ignore it for logical operators and or."`
 
 	// Operator is the comparison or logical operator.
 	// Comparison operators: eq, ne, gt, gte, lt, lte, in, not in, like, not like, between
 	// Logical operators: and, or
-	Operator string `json:"operator" jsonschema:"description=The operator to use,enum=eq,enum=ne,enum=gt,enum=gte,enum=lt,enum=lte,enum=in,enum=not in,enum=like,enum=not like,enum=between,enum=and,enum=or"`
+	Operator string `json:"operator,omitempty" description:"The operator to use. Valid values are eq ne gt gte lt lte in not in like not like between and or." jsonschema:"enum=eq,enum=ne,enum=gt,enum=gte,enum=lt,enum=lte,enum=in,enum=not in,enum=like,enum=not like,enum=between,enum=and,enum=or"`
 
 	// Value is the value to compare against or sub-conditions for logical operators.
 	// For comparison operators: single value, array for "in"/"not in"/"between"
 	// For logical operators (and/or): array of UniversalFilterCondition objects
-	Value any `json:"value,omitempty" jsonschema:"description=The value to compare against (for comparison operators) or array of sub-conditions (for logical operators and/or)"`
+	Value any `json:"value,omitempty" description:"Comparison value for eq ne gt gte lt lte. Use an array for in not in between. Use an array of nested filter conditions for and or."`
 }
 
 // UnmarshalJSON implements custom JSON unmarshaling for UniversalFilterCondition.

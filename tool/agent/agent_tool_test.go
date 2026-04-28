@@ -596,6 +596,29 @@ func TestTool_Call_DisableGraphCompletionEvent_KeepsFinalText(t *testing.T) {
 	require.Equal(t, "child-final", resultText)
 }
 
+func TestTool_Call_GraphEmitFinalModelResponses_DedupsGraphCompletionSnapshot(t *testing.T) {
+	const finalJSON = `{"doc_id":"doc-1","title":"demo"}`
+
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddLLMNode("llm", &fixedResponseModel{response: finalJSON}, "", nil)
+	compiled := sg.SetEntryPoint("llm").SetFinishPoint("llm").MustCompile()
+	ga, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	at := NewTool(ga, WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithGraphEmitFinalModelResponses(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, finalJSON, resultText)
+}
+
 func TestTool_Call_DisableGraphCompletionEvent_DedupsCapturedGraphCompletionAfterFinalModelResponse(t *testing.T) {
 	sg := graph.NewStateGraph(graph.MessagesStateSchema())
 	sg.AddLLMNode("llm", &fixedResponseModel{response: "child-final"}, "", nil)
@@ -1734,6 +1757,26 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 	if !strings.HasPrefix(sa.seenFilterKey, expectedPrefix) {
 		t.Fatalf("expected sub agent filter key to start with %q, got %q", expectedPrefix, sa.seenFilterKey)
 	}
+}
+
+func TestTool_InnerTextMode(t *testing.T) {
+	at := NewTool(&mockAgent{name: "child"})
+	require.Equal(t, InnerTextModeInclude, at.InnerTextMode())
+
+	excluded := NewTool(
+		&mockAgent{name: "child"},
+		WithInnerTextMode(InnerTextModeExclude),
+	)
+	require.Equal(t, InnerTextModeExclude, excluded.InnerTextMode())
+
+	invalid := NewTool(
+		&mockAgent{name: "child"},
+		WithInnerTextMode(InnerTextMode("unexpected")),
+	)
+	require.Equal(t, InnerTextModeInclude, invalid.InnerTextMode())
+
+	var nilTool *Tool
+	require.Equal(t, InnerTextModeInclude, nilTool.InnerTextMode())
 }
 
 func countToolResultEvents(
@@ -3390,9 +3433,13 @@ func TestTool_Call_WithParentInvocation_RunError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to run agent")
 
+	// Block until the flush goroutine signals completion. The send happens
+	// after close(req.ACK), which is what unblocks at.Call; under CI load
+	// the goroutine can be descheduled between those two steps, so a
+	// non-blocking check here is racy. The ctx deadline bounds the wait.
 	select {
 	case <-flushed:
-	default:
+	case <-time.After(time.Second):
 		t.Fatalf("expected flush to be triggered")
 	}
 }
@@ -3429,9 +3476,12 @@ func TestTool_Call_WithParentInvocation_FlushesAndCompletes(t *testing.T) {
 	require.True(t, strings.HasPrefix(resStr, "parent-agent/"+a.name+"-"))
 	require.Equal(t, a.seen, resStr)
 
+	// See TestTool_Call_WithParentInvocation_RunError: the non-blocking
+	// select was racy because the helper goroutine may still be between
+	// close(req.ACK) and the send on flushed when at.Call returns.
 	select {
 	case <-flushed:
-	default:
+	case <-time.After(time.Second):
 		t.Fatalf("expected flush to be triggered")
 	}
 }

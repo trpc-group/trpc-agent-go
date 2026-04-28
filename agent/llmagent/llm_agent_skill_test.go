@@ -40,6 +40,7 @@ const (
 	skillsOverviewHeader        = "Available skills:"
 	skillsCapabilityHeader      = "Skill tool availability:"
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
+	skillRootsHeader            = "Skill roots:"
 	workspaceExecGuidanceHeader = "Executor workspace guidance:"
 )
 
@@ -93,7 +94,11 @@ func TestLLMAgent_SkillRunToolRegistered(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
-	a := New("tester", WithSkills(repo))
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileFull),
+	)
 	names := make(map[string]bool)
 	for _, tl := range a.Tools() {
 		d := tl.Declaration()
@@ -102,12 +107,17 @@ func TestLLMAgent_SkillRunToolRegistered(t *testing.T) {
 		}
 	}
 	require.True(t, names["skill_load"]) // existed before
-	require.True(t, names["skill_run"])  // new runner tool
+	require.True(t, names["skill_run"])  // legacy runner tool
 	require.True(t, names["skill_exec"])
 	require.True(t, names["skill_write_stdin"])
 	require.True(t, names["skill_poll_session"])
 	require.True(t, names["skill_kill_session"])
-	require.False(t, names["workspace_exec"])
+	require.True(
+		t,
+		names["workspace_exec"],
+		"Full profile + WithSkills auto-falls back to a local executor, "+
+			"which registers workspace_exec alongside the legacy skill_run",
+	)
 }
 
 func TestLLMAgent_WorkspaceExecRegisteredForExplicitExecutor(t *testing.T) {
@@ -140,6 +150,26 @@ func TestLLMAgent_WorkspaceExecSessionToolsRegisteredForInteractiveExecutor(
 	require.False(t, names["workspace_save_artifact"])
 	require.True(t, names["workspace_write_stdin"])
 	require.True(t, names["workspace_kill_session"])
+}
+
+func TestLLMAgent_WorkspaceExecSurfaceDisabledForExplicitExecutor(
+	t *testing.T,
+) {
+	a := New(
+		"tester",
+		WithCodeExecutor(&interactiveStubExec{}),
+		WithWorkspaceExecSurfaceEnabled(false),
+	)
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+
+	require.False(t, names["workspace_exec"])
+	require.False(t, names["workspace_write_stdin"])
+	require.False(t, names["workspace_kill_session"])
 }
 
 func TestLLMAgent_WorkspaceExecDeclarationOmitsSessionFieldsForNonInteractiveExecutor(
@@ -199,7 +229,11 @@ func TestLLMAgent_InvocationToolSurface_UsesRunCodeExecutorForWorkspaceExec(
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
-	a := New("tester", WithSkills(repo))
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileFull),
+	)
 	inv := &agent.Invocation{
 		RunOptions: agent.NewRunOptions(
 			agent.WithCodeExecutor(&interactiveStubExec{}),
@@ -227,6 +261,7 @@ func TestLLMAgent_InvocationToolSurface_RunCodeExecutorOverridesStaticExecutor(
 		"tester",
 		WithSkills(repo),
 		WithCodeExecutor(&interactiveStubExec{}),
+		WithSkillToolProfile(SkillToolProfileFull),
 	)
 	inv := &agent.Invocation{
 		RunOptions: agent.NewRunOptions(
@@ -296,7 +331,11 @@ func TestLLMAgent_SkillRunUsesDefaultExecutorWhenNoExplicitExecutor(t *testing.T
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	a := New("tester", WithSkills(repo))
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileFull),
+	)
 	tl := findTool(a.Tools(), "skill_run")
 	require.NotNil(t, tl)
 
@@ -324,6 +363,7 @@ func TestLLMAgent_SkillExecSharesRunToolInstance(t *testing.T) {
 		"tester",
 		WithSkills(repo),
 		WithCodeExecutor(&interactiveStubExec{}),
+		WithSkillToolProfile(SkillToolProfileFull),
 	)
 	runTool, ok := findTool(a.Tools(), "skill_run").(*toolskill.RunTool)
 	require.True(t, ok)
@@ -420,7 +460,11 @@ func TestLLMAgent_SkillRunToolExecutes(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
-	a := New("tester", WithSkills(repo))
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileFull),
+	)
 	tl := findTool(a.Tools(), "skill_run")
 	require.NotNil(t, tl)
 	args := map[string]any{"skill": testSkillName, "command": "echo hello"}
@@ -445,6 +489,7 @@ func TestLLMAgent_SkillRun_OutputLimits_Configurable(t *testing.T) {
 	a := New(
 		"tester",
 		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileFull),
 		WithSkillRunOutputLimits(toolskill.RunOutputLimits{
 			StdoutStderrBytes:  4,
 			PrimaryOutputBytes: 4,
@@ -604,7 +649,12 @@ func TestLLMAgent_SkillRun_UsesInjectedExecutor(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 	se := &stubExec{}
-	a := New("tester", WithSkills(repo), WithCodeExecutor(se))
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithCodeExecutor(se),
+		WithSkillToolProfile(SkillToolProfileFull),
+	)
 	tl := findTool(a.Tools(), "skill_run")
 	require.NotNil(t, tl)
 	args := map[string]any{"skill": testSkillName, "command": "echo ok"}
@@ -625,6 +675,7 @@ func TestLLMAgent_SkillRun_UsesConfiguredStager(t *testing.T) {
 		"tester",
 		WithSkills(repo),
 		WithCodeExecutor(se),
+		WithSkillToolProfile(SkillToolProfileFull),
 		WithSkillRunStager(skillStageFunc(
 			func(
 				_ context.Context,
@@ -663,6 +714,7 @@ func TestLLMAgent_SkillRun_AllowedCommands_Enforced(t *testing.T) {
 	a := New(
 		"tester",
 		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileFull),
 		WithSkillRunAllowedCommands("echo"),
 	)
 	tl := findTool(a.Tools(), "skill_run")
@@ -709,6 +761,7 @@ func TestLLMAgent_WithSkillsToolingGuidance_Disabled(t *testing.T) {
 	{
 		opts := &Options{}
 		WithSkills(repo)(opts)
+		WithSkillToolProfile(SkillToolProfileFull)(opts)
 		req := makeReq(opts)
 		var sys string
 		for _, msg := range req.Messages {
@@ -728,6 +781,7 @@ func TestLLMAgent_WithSkillsToolingGuidance_Disabled(t *testing.T) {
 	{
 		opts := &Options{}
 		WithSkills(repo)(opts)
+		WithSkillToolProfile(SkillToolProfileFull)(opts)
 		WithSkillsToolingGuidance("")(opts)
 		req := makeReq(opts)
 		var sys string
@@ -822,6 +876,175 @@ func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_GuidanceDisabled(
 		}
 	}
 	require.NotEmpty(t, sys)
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, skillsToolingGuidanceHeader)
+}
+
+func TestLLMAgent_WithSkillsDirectoryHints_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillsDirectoryHints(true)(opts)
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+	WithSkillsCapabilityGuidance("")(opts)
+	WithSkillsToolingGuidance("")(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, skillRootsHeader)
+	require.Contains(t, sys, "(dir: [s1]/echoer)")
+}
+
+func TestLLMAgent_WithSkillsFilePathHints_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillsFilePathHints(true)(opts)
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+	WithSkillsCapabilityGuidance("")(opts)
+	WithSkillsToolingGuidance("")(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, skillRootsHeader)
+	require.Contains(t, sys, "(file: [s1]/echoer/"+skill.SkillFile+")")
+}
+
+func TestLLMAgent_WithSkillsCapabilityGuidance_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+	WithSkillsCapabilityGuidance("Use skills as directory bundles.")(opts)
+	WithSkillsToolingGuidance("")(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "Use skills as directory bundles.")
+	require.NotContains(
+		t,
+		sys,
+		"Built-in skill execution tools are unavailable",
+	)
+}
+
+func TestLLMAgent_WithSkillsProtocolGuidance_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+	WithSkillsProtocolGuidance(
+		"Use the matching skill before answering.",
+	)(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(
+		t,
+		sys,
+		"Use the matching skill before answering.",
+	)
+	require.Less(
+		t,
+		strings.Index(sys, "Use the matching skill before answering."),
+		strings.Index(sys, skillsOverviewHeader),
+	)
 	require.NotContains(t, sys, skillsCapabilityHeader)
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
 }
@@ -934,6 +1157,7 @@ func TestLLMAgent_SkillRun_DeniedCommands_Enforced(t *testing.T) {
 	a := New(
 		"tester",
 		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileFull),
 		WithSkillRunDeniedCommands("echo"),
 	)
 	tl := findTool(a.Tools(), "skill_run")
@@ -1078,6 +1302,27 @@ func TestLLMAgent_WithSkillFilter_WiresOption(t *testing.T) {
 	})(opts)
 
 	require.NotNil(t, opts.skillFilter)
+}
+
+func TestLLMAgent_WithSkillLoadToolDescription_WiresTool(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	const description = "Always load the matching skill first."
+
+	agt := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillLoadToolDescription(description),
+	)
+	tl := findTool(agt.Tools(), "skill_load")
+	require.NotNil(t, tl)
+	decl := tl.Declaration()
+	require.NotNil(t, decl)
+	require.Equal(t, description, decl.Description)
 }
 
 func TestLLMAgent_WithSkillsLoadedContentInToolResults_WiresProcessor(
@@ -1229,7 +1474,12 @@ func TestLLMAgent_ExecToolsOmittedForNonInteractiveExecutor(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	a := New("tester", WithSkills(repo), WithCodeExecutor(&stubExec{}))
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithCodeExecutor(&stubExec{}),
+		WithSkillToolProfile(SkillToolProfileFull),
+	)
 	names := make(map[string]bool)
 	for _, tl := range a.Tools() {
 		if d := tl.Declaration(); d != nil {
@@ -1250,7 +1500,12 @@ func TestLLMAgent_ExecToolsRegisteredForInteractiveExecutor(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	a := New("tester", WithSkills(repo), WithCodeExecutor(&interactiveStubExec{}))
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithCodeExecutor(&interactiveStubExec{}),
+		WithSkillToolProfile(SkillToolProfileFull),
+	)
 	names := make(map[string]bool)
 	for _, tl := range a.Tools() {
 		if d := tl.Declaration(); d != nil {
@@ -1271,7 +1526,12 @@ func TestLLMAgent_ExecToolsRegisteredForFallbackExecutor(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	a := New("tester", WithSkills(repo), WithCodeExecutor(&bareExec{}))
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithCodeExecutor(&bareExec{}),
+		WithSkillToolProfile(SkillToolProfileFull),
+	)
 	names := make(map[string]bool)
 	for _, tl := range a.Tools() {
 		if d := tl.Declaration(); d != nil {
@@ -1293,7 +1553,12 @@ func TestLLMAgent_ExecToolsRegisteredForNilEngineExecutor(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	a := New("tester", WithSkills(repo), WithCodeExecutor(&nilEngineExec{}))
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithCodeExecutor(&nilEngineExec{}),
+		WithSkillToolProfile(SkillToolProfileFull),
+	)
 	names := make(map[string]bool)
 	for _, tl := range a.Tools() {
 		if d := tl.Declaration(); d != nil {
@@ -1386,6 +1651,14 @@ func TestExecutorSupportsWorkspaceExec(t *testing.T) {
 	}
 }
 
+func TestExecutorSupportsWorkspaceExecDisabledByOption(t *testing.T) {
+	opts := &Options{
+		codeExecutor: &stubExec{},
+	}
+	WithWorkspaceExecSurfaceEnabled(false)(opts)
+	require.False(t, executorSupportsWorkspaceExec(opts))
+}
+
 func TestExecutorSupportsWorkspaceExecSessions(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1424,6 +1697,16 @@ func TestExecutorSupportsWorkspaceExecSessions(t *testing.T) {
 			require.Equal(t, tt.want, executorSupportsWorkspaceExecSessions(opts))
 		})
 	}
+}
+
+func TestExecutorSupportsWorkspaceExecSessionsDisabledByOption(
+	t *testing.T,
+) {
+	opts := &Options{
+		codeExecutor: &interactiveStubExec{},
+	}
+	WithWorkspaceExecSurfaceEnabled(false)(opts)
+	require.False(t, executorSupportsWorkspaceExecSessions(opts))
 }
 
 func TestLLMAgent_GuidanceOmitsExecForNonInteractiveExecutor(t *testing.T) {
@@ -1472,6 +1755,7 @@ func TestLLMAgent_GuidanceIncludesExecForInteractiveExecutor(t *testing.T) {
 	opts := &Options{}
 	WithSkills(repo)(opts)
 	WithCodeExecutor(&interactiveStubExec{})(opts)
+	WithSkillToolProfile(SkillToolProfileFull)(opts)
 
 	procs := buildRequestProcessors("tester", opts)
 	inv := &agent.Invocation{
@@ -1561,6 +1845,27 @@ func TestLLMAgent_WorkspaceExecGuidanceWithoutSkillsRepo(t *testing.T) {
 	require.NotContains(t, sys, skillsOverviewHeader)
 }
 
+func TestLLMAgent_WorkspaceExecGuidanceDisabledByOption(t *testing.T) {
+	opts := &Options{}
+	WithCodeExecutor(&interactiveStubExec{})(opts)
+	WithWorkspaceExecSurfaceEnabled(false)(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	sys := findSystemMessageContaining(req, workspaceExecGuidanceHeader)
+	require.Empty(t, sys)
+}
+
 func TestLLMAgent_WorkspaceExecGuidanceIncludesSaveArtifactWhenAvailable(
 	t *testing.T,
 ) {
@@ -1588,4 +1893,242 @@ func TestLLMAgent_WorkspaceExecGuidanceIncludesSaveArtifactWhenAvailable(
 	require.NotEmpty(t, sys)
 	require.Contains(t, sys, "workspace_save_artifact")
 	require.NotContains(t, sys, "download, open, or preview")
+}
+
+// The following four tests pin down the auto executor-fallback behavior
+// added to WithSkills:
+//
+//   - default profile (unset) + no executor  → fallback fires; workspace_exec
+//     is registered; skill_run is not;
+//   - explicit knowledge-only  + no executor → fallback skipped; no
+//     workspace_exec, no skill_run; the agent is knowledge-only as advertised;
+//   - explicit knowledge-only  + explicit executor → fallback skipped, but
+//     the explicit executor still drives workspace_exec (profile ⊥ executor);
+//   - explicit allowlist       + no executor → fallback skipped; no magical
+//     wiring while the caller is in fine-grained mode.
+func TestLLMAgent_SkillsExecutorFallback_DefaultProfileAddsLocalExecutor(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New("tester", WithSkills(repo))
+
+	require.NotNil(
+		t,
+		a.CodeExecutor(),
+		"default profile should auto-fallback to a local executor",
+	)
+
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+	require.True(t, names["skill_load"])
+	require.True(
+		t,
+		names["workspace_exec"],
+		"workspace_exec should be registered thanks to the fallback executor",
+	)
+	require.False(
+		t,
+		names["skill_run"],
+		"default profile must not register the legacy skill_run tool",
+	)
+	require.False(t, names["skill_exec"])
+}
+
+func TestLLMAgent_SkillsExecutorFallback_ExplicitKnowledgeOnlySkipsFallback(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileKnowledgeOnly),
+	)
+
+	require.Nil(
+		t,
+		a.CodeExecutor(),
+		"explicit knowledge-only should opt out of the local fallback",
+	)
+
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+	require.True(t, names["skill_load"])
+	require.False(t, names["workspace_exec"])
+	require.False(t, names["skill_run"])
+	require.False(t, names["skill_exec"])
+}
+
+func TestLLMAgent_SkillsExecutorFallback_ExplicitKnowledgeOnlyHonorsExplicitExecutor(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := &stubExec{}
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileKnowledgeOnly),
+		WithCodeExecutor(exec),
+	)
+
+	require.Same(
+		t,
+		codeexecutor.CodeExecutor(exec),
+		a.CodeExecutor(),
+		"profile is orthogonal to WithCodeExecutor; the explicit executor "+
+			"must be used as-is",
+	)
+
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+	require.True(t, names["skill_load"])
+	require.True(
+		t,
+		names["workspace_exec"],
+		"workspace_exec follows executor presence, not the skill tool profile",
+	)
+	require.False(t, names["skill_run"])
+	require.False(t, names["skill_exec"])
+}
+
+func TestLLMAgent_SkillsExecutorFallback_AllowedSkillToolsSkipsFallback(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithAllowedSkillTools(SkillToolLoad),
+	)
+
+	require.Nil(
+		t,
+		a.CodeExecutor(),
+		"fine-grained allowlist should not trigger convenience fallback",
+	)
+
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+	require.True(t, names["skill_load"])
+	require.False(t, names["workspace_exec"])
+	require.False(t, names["skill_run"])
+}
+
+// TestApplySkillsExecutorFallback_DisablesAutoExecWhenNotConfigured verifies
+// that the skills convenience fallback, when it injects a local code
+// executor for WithSkills(repo), also turns off the fenced-code
+// auto-execution response processor. The fallback is a compatibility path
+// meant to keep workspace_exec available; it must not silently expand the
+// agent's execution surface to also auto-execute fenced code blocks in
+// assistant replies.
+func TestApplySkillsExecutorFallback_DisablesAutoExecWhenNotConfigured(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := Options{
+		EnableCodeExecutionResponseProcessor: true, // matches defaultOptions.
+		skillsRepository:                     repo,
+	}
+	applySkillsExecutorFallback(&opts)
+
+	require.NotNil(
+		t,
+		opts.codeExecutor,
+		"fallback should inject a local executor for WithSkills alone",
+	)
+	require.False(
+		t,
+		opts.EnableCodeExecutionResponseProcessor,
+		"fallback must disable fenced-code auto-exec when the caller did "+
+			"not explicitly configure it",
+	)
+}
+
+// TestApplySkillsExecutorFallback_HonorsExplicitAutoExecTrue verifies that
+// callers who explicitly opt in to fenced-code auto-execution via
+// WithEnableCodeExecutionResponseProcessor(true) keep that behavior even
+// when the skills fallback injects the executor.
+func TestApplySkillsExecutorFallback_HonorsExplicitAutoExecTrue(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := Options{
+		EnableCodeExecutionResponseProcessor:   true,
+		codeExecutionResponseProcessorExplicit: true,
+		skillsRepository:                       repo,
+	}
+	applySkillsExecutorFallback(&opts)
+
+	require.NotNil(t, opts.codeExecutor)
+	require.True(
+		t,
+		opts.EnableCodeExecutionResponseProcessor,
+		"explicit WithEnableCodeExecutionResponseProcessor(true) must not "+
+			"be silently overridden by the skills fallback",
+	)
+}
+
+// TestApplySkillsExecutorFallback_DoesNotTouchAutoExecWhenExecutorExplicit
+// verifies that when the caller already supplies a CodeExecutor, the
+// skills fallback does not fire and therefore does not modify the
+// fenced-code auto-exec switch — regardless of whether that switch was
+// set explicitly.
+func TestApplySkillsExecutorFallback_DoesNotTouchAutoExecWhenExecutorExplicit(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	userExec := &stubExec{}
+	opts := Options{
+		EnableCodeExecutionResponseProcessor: true, // framework default.
+		codeExecutor:                         userExec,
+		skillsRepository:                     repo,
+	}
+	applySkillsExecutorFallback(&opts)
+
+	require.Same(
+		t,
+		codeexecutor.CodeExecutor(userExec),
+		opts.codeExecutor,
+		"user-supplied executor must be preserved",
+	)
+	require.True(
+		t,
+		opts.EnableCodeExecutionResponseProcessor,
+		"framework skills logic must not mutate EnableCodeExecutionResponse"+
+			"Processor when the user supplied an explicit CodeExecutor",
+	)
 }
