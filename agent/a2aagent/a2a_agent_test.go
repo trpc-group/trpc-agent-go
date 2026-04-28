@@ -2475,6 +2475,104 @@ func TestA2AAgentRunStreaming_SkipsSyntheticFinalOnTaskError(
 	require.True(t, events[0].Response.Done)
 }
 
+func TestA2AAgentRunStreaming_ContinuesAfterRecoverableStructuredError(t *testing.T) {
+	code := "tool_not_found"
+	sseBody := mustBuildSSEBody(t, []sseEvent{
+		{
+			eventType: protocol.EventMessage,
+			payload: protocol.Message{
+				Kind:      protocol.KindMessage,
+				MessageID: "msg-structured-error",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.TextPart{
+						Kind: protocol.KindText,
+						Text: "Tool 'upload_to_cos' not found",
+					},
+				},
+				Metadata: map[string]any{
+					ia2a.MessageMetadataErrorCodeKey: code,
+				},
+			},
+		},
+		{
+			eventType: protocol.EventArtifactUpdate,
+			payload: protocol.TaskArtifactUpdateEvent{
+				Kind:      protocol.KindTaskArtifactUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Artifact: protocol.Artifact{
+					ArtifactID: "resp-1",
+					Parts: []protocol.Part{
+						&protocol.TextPart{Kind: protocol.KindText, Text: "final answer"},
+					},
+				},
+			},
+		},
+		{
+			eventType: protocol.EventStatusUpdate,
+			payload: protocol.TaskStatusUpdateEvent{
+				Kind:      protocol.KindTaskStatusUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Final:     true,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateCompleted,
+				},
+			},
+		},
+	})
+
+	testClient := newTestStreamClient(t, sseBody)
+	a := &A2AAgent{
+		name:                "test-agent",
+		agentCard:           &server.AgentCard{URL: "http://stream.test/"},
+		eventConverter:      &defaultA2AEventConverter{},
+		a2aMessageConverter: stubInvocationConverter{},
+		streamingBufSize:    4,
+		a2aClient:           testClient,
+	}
+	invocation := &agent.Invocation{
+		InvocationID: "inv-test",
+		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	eventCh, err := a.runStreaming(ctx, invocation)
+	require.NoError(t, err)
+
+	var (
+		recoverableError *model.Response
+		finalResponse    *model.Response
+	)
+	for evt := range eventCh {
+		if evt.Response == nil {
+			continue
+		}
+		if evt.Response.Error != nil {
+			recoverableError = evt.Response
+		}
+		if evt.Response.Done {
+			finalResponse = evt.Response
+		}
+	}
+
+	require.NotNil(t, recoverableError)
+	require.NotNil(t, recoverableError.Error)
+	require.NotNil(t, recoverableError.Error.Code)
+	require.Equal(t, code, *recoverableError.Error.Code)
+	require.False(t, recoverableError.Done)
+	require.Equal(t, model.ObjectTypeChatCompletion, recoverableError.Object)
+
+	require.NotNil(t, finalResponse)
+	require.Nil(t, finalResponse.Error)
+	require.Equal(t, model.ObjectTypeChatCompletion, finalResponse.Object)
+	require.NotEmpty(t, finalResponse.Choices)
+	require.Equal(t, "final answer", finalResponse.Choices[0].Message.Content)
+}
+
 func TestA2AAgentRunStreaming_PersistsBufferedTextBeforeToolEvents(
 	t *testing.T,
 ) {
