@@ -1,0 +1,98 @@
+[
+  {
+    "metricName": "capital_reference_match_single_template",
+    "evaluatorName": "llm_judge_template",
+    "threshold": 1.0,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "gpt-5.2",
+          "baseURL": "${OPENAI_BASE_URL}",
+          "apiKey": "${OPENAI_API_KEY}",
+          "numSamples": 1,
+          "generationConfig": {
+            "max_tokens": 256,
+            "temperature": 0,
+            "stream": false
+          }
+        },
+        "template": {
+          "prompt": "You are grading whether the candidate answer correctly answers the user question and matches the reference answer.\\n\\nUser question:\\n{{question}}\\n\\nReference answer:\\n{{reference}}\\n\\nCandidate answer:\\n{{answer}}\\n\\nReturn JSON with:\\n- score: 1 if the candidate answer is factually equivalent to the reference answer and correctly answers the question.\\n- score: 0 otherwise.\\n- reason: one concise sentence.\\n\\nTreat minor wording differences and punctuation as equivalent.",
+          "responseScorerName": "single_score",
+          "variableBindings": [
+            {
+              "templateVariable": "question",
+              "source": {
+                "scope": "actual",
+                "field": "userContent"
+              }
+            },
+            {
+              "templateVariable": "answer",
+              "source": {
+                "scope": "actual",
+                "field": "finalResponse"
+              }
+            },
+            {
+              "templateVariable": "reference",
+              "source": {
+                "scope": "expected",
+                "field": "finalResponse"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "metricName": "capital_reference_match_rubric_template",
+    "evaluatorName": "llm_judge_template",
+    "threshold": 1.0,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "gpt-5.2",
+          "baseURL": "${OPENAI_BASE_URL}",
+          "apiKey": "${OPENAI_API_KEY}",
+          "numSamples": 1,
+          "generationConfig": {
+            "max_tokens": 256,
+            "temperature": 0,
+            "stream": false
+          }
+        },
+        "template": {
+          "prompt": "You are grading a candidate answer with two fixed rubric items.\\n\\nUser question:\\n{{question}}\\n\\nReference answer:\\n{{reference}}\\n\\nCandidate answer:\\n{{answer}}\\n\\nRubric items:\\n1. correctness: score 1 if the candidate answer is factually equivalent to the reference answer and answers the question correctly. Otherwise score 0.\\n2. format: score 1 if the candidate answer follows the user's instruction to answer with a single word. Otherwise score 0.\\n\\nReturn JSON with the exact shape:\\n{\\n  \"rubricScores\": [\\n    {\"id\": \"1\", \"score\": 0 or 1, \"reason\": \"...\"},\\n    {\"id\": \"2\", \"score\": 0 or 1, \"reason\": \"...\"}\\n  ]\\n}",
+          "responseScorerName": "rubric_scores",
+          "variableBindings": [
+            {
+              "templateVariable": "question",
+              "source": {
+                "scope": "actual",
+                "field": "userContent"
+              }
+            },
+            {
+              "templateVariable": "answer",
+              "source": {
+                "scope": "actual",
+                "field": "finalResponse"
+              }
+            },
+            {
+              "templateVariable": "reference",
+              "source": {
+                "scope": "expected",
+                "field": "finalResponse"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+]

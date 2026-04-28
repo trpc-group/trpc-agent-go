@@ -15,6 +15,7 @@ replace (
 )
 
 require (
+	github.com/stretchr/testify v1.11.1
 	github.com/yanyiwu/gojieba v1.4.7
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
 	trpc.group/trpc-go/trpc-agent-go/evaluation v1.6.0
@@ -35,6 +36,7 @@ require (
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/getkin/kin-openapi v0.124.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -60,6 +62,7 @@ require (
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

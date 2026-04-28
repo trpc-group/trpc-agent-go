@@ -20,9 +20,10 @@ import (
 
 // LLMCriterion configures an LLM judge for evaluation.
 type LLMCriterion struct {
-	Rubrics            []*Rubric           `json:"rubrics,omitempty"`
-	JudgeModel         *JudgeModelOptions  `json:"judgeModel,omitempty"` // JudgeModel holds configuration for the judge model.
-	JudgeRunnerOptions *JudgeRunnerOptions `json:"-"`                    // JudgeRunnerOptions holds runtime judge runner configuration.
+	Rubrics            []*Rubric             `json:"rubrics,omitempty"`
+	JudgeModel         *JudgeModelOptions    `json:"judgeModel,omitempty"` // JudgeModel holds configuration for the judge model.
+	JudgeRunnerOptions *JudgeRunnerOptions   `json:"-"`                    // JudgeRunnerOptions holds runtime judge runner configuration.
+	Template           *JudgeTemplateOptions `json:"template,omitempty"`   // Template holds template evaluator configuration.
 }
 
 // Rubric defines a single judging rubric item for LLM-based evaluation.
@@ -62,6 +63,47 @@ type JudgeModelOptions struct {
 	// Generation holds generation parameters for the judge.
 	Generation *model.GenerationConfig `json:"generationConfig,omitempty"`
 }
+
+// JudgeTemplateOptions configures the template-based LLM judge evaluator.
+type JudgeTemplateOptions struct {
+	Prompt                   string                     `json:"prompt,omitempty"`
+	ResponseScorerName       string                     `json:"responseScorerName,omitempty"`
+	VariableBindings         []*TemplateVariableBinding `json:"variableBindings,omitempty"`
+	SampleAggregatorName     string                     `json:"sampleAggregatorName,omitempty"`
+	InvocationAggregatorName string                     `json:"invocationAggregatorName,omitempty"`
+}
+
+// TemplateVariableBinding binds one template variable to one evaluation source.
+type TemplateVariableBinding struct {
+	TemplateVariable string                  `json:"templateVariable,omitempty"`
+	Source           *TemplateVariableSource `json:"source,omitempty"`
+}
+
+// TemplateVariableSource identifies which evaluation artifact feeds a template variable.
+type TemplateVariableSource struct {
+	Scope TemplateVariableScope `json:"scope,omitempty"`
+	Field TemplateVariableField `json:"field,omitempty"`
+}
+
+// TemplateVariableScope identifies the source object visible to template rendering.
+type TemplateVariableScope string
+
+const (
+	// TemplateVariableScopeActual binds against the current actual invocation.
+	TemplateVariableScopeActual TemplateVariableScope = "actual"
+	// TemplateVariableScopeExpected binds against the current expected invocation.
+	TemplateVariableScopeExpected TemplateVariableScope = "expected"
+)
+
+// TemplateVariableField identifies which field is extracted from the source object.
+type TemplateVariableField string
+
+const (
+	// TemplateVariableFieldUserContent extracts the current user content text.
+	TemplateVariableFieldUserContent TemplateVariableField = "userContent"
+	// TemplateVariableFieldFinalResponse extracts the current final response text.
+	TemplateVariableFieldFinalResponse TemplateVariableField = "finalResponse"
+)
 
 // MarshalJSON omits APIKey from JSON output while still allowing JSON input to populate it.
 func (j JudgeModelOptions) MarshalJSON() ([]byte, error) {

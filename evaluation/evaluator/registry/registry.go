@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricknowledgerecall"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricreferencecritic"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricresponse"
+	llmtemplate "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/template"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/tooltrajectory"
 )
 
@@ -65,6 +66,8 @@ func New() Registry {
 	r.Register(rubricKnowledgeRecall.Name(), rubricKnowledgeRecall)
 	hallucinationEvaluator := hallucination.New()
 	r.Register(hallucinationEvaluator.Name(), hallucinationEvaluator)
+	templateEvaluator := llmtemplate.New()
+	r.Register(templateEvaluator.Name(), templateEvaluator)
 	return r
 }
 

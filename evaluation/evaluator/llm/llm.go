@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/judger"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
@@ -36,6 +37,8 @@ type LLMEvaluator interface {
 	samplesaggregator.SamplesAggregator
 	invocationsaggregator.InvocationsAggregator
 }
+
+const templateEvaluatorName = "llm_judge_template"
 
 // LLMBaseEvaluator hosts shared orchestration logic for LLM evaluators.
 type LLMBaseEvaluator struct {
@@ -87,6 +90,10 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 		return nil, fmt.Errorf("actual invocations (%d) and expected invocations (%d) count mismatch",
 			len(actuals), len(expecteds))
 	}
+	structuredOutput, err := r.resolveStructuredOutput(ctx, evalMetric)
+	if err != nil {
+		return nil, fmt.Errorf("resolve structured output: %w", err)
+	}
 	results := make([]*evaluator.PerInvocationResult, 0, len(actuals))
 	for i := range actuals {
 		actual := actuals[i]
@@ -97,7 +104,7 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 		}
 		samples := make([]*evaluator.PerInvocationResult, 0, numSamples)
 		for range numSamples {
-			response, err := judger.Judge(ctx, messages, evalMetric)
+			response, err := judger.Judge(ctx, messages, evalMetric, judger.WithStructuredOutput(structuredOutput))
 			if err != nil {
 				return nil, fmt.Errorf("judge response: %w", err)
 			}
@@ -152,4 +159,29 @@ func (r *LLMBaseEvaluator) ScoreBasedOnResponse(ctx context.Context, resp *model
 func (r *LLMBaseEvaluator) ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
 	return r.LLMEvaluator.ConstructMessages(ctx, actuals, expecteds, evalMetric)
+}
+
+func (r *LLMBaseEvaluator) resolveStructuredOutput(ctx context.Context,
+	evalMetric *metric.EvalMetric) (*model.StructuredOutput, error) {
+	if ctx == nil || evalMetric == nil || evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
+		return nil, nil
+	}
+	if resolveEvaluatorName(evalMetric) != templateEvaluatorName {
+		return nil, nil
+	}
+	templateOptions := evalMetric.Criterion.LLMJudge.Template
+	if templateOptions == nil {
+		return nil, nil
+	}
+	return templateresolver.StructuredOutput(templateOptions.ResponseScorerName)
+}
+
+func resolveEvaluatorName(evalMetric *metric.EvalMetric) string {
+	if evalMetric == nil {
+		return ""
+	}
+	if evalMetric.EvaluatorName != "" {
+		return evalMetric.EvaluatorName
+	}
+	return evalMetric.MetricName
 }
