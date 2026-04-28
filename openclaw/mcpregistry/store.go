@@ -122,13 +122,19 @@ type EntryView struct {
 
 // UpsertRequest stores one MCP server registration.
 type UpsertRequest struct {
-	Context     RuntimeContext
-	Name        string
-	Scope       Scope
-	Description string
-	Connection  mcp.ConnectionConfig
-	UpdateOnly  bool
-	AllowUpdate bool
+	Context          RuntimeContext
+	Name             string
+	Scope            Scope
+	Description      string
+	Connection       mcp.ConnectionConfig
+	ClearServerURL   bool
+	ClearHeaders     bool
+	ClearCommand     bool
+	ClearArgs        bool
+	ClearTimeout     bool
+	ClearDescription bool
+	UpdateOnly       bool
+	AllowUpdate      bool
 }
 
 // DeleteRequest removes one MCP server registration from the current scope.
@@ -217,8 +223,9 @@ func (s *FileStore) Upsert(
 		conn = mergeConnection(
 			rawConnectionForEntry(existing, secrets),
 			conn,
+			req,
 		)
-		if description == "" {
+		if description == "" && !req.ClearDescription {
 			description = existing.Description
 		}
 	}
@@ -622,6 +629,7 @@ func rawConnectionForEntry(
 func mergeConnection(
 	base mcp.ConnectionConfig,
 	update mcp.ConnectionConfig,
+	req UpsertRequest,
 ) mcp.ConnectionConfig {
 	out := mcp.ConnectionConfig{
 		Transport:   base.Transport,
@@ -632,6 +640,24 @@ func mergeConnection(
 		Timeout:     base.Timeout,
 		Description: base.Description,
 		ClientInfo:  base.ClientInfo,
+	}
+	if req.ClearServerURL {
+		out.ServerURL = ""
+	}
+	if req.ClearHeaders {
+		out.Headers = nil
+	}
+	if req.ClearCommand {
+		out.Command = ""
+	}
+	if req.ClearArgs {
+		out.Args = nil
+	}
+	if req.ClearTimeout {
+		out.Timeout = 0
+	}
+	if req.ClearDescription {
+		out.Description = ""
 	}
 	if strings.TrimSpace(update.Transport) != "" {
 		out.Transport = update.Transport

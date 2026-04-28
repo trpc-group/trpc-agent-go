@@ -163,6 +163,48 @@ func TestFileStore_UpdateMergesExistingConnection(t *testing.T) {
 	require.Equal(t, "Bearer secret", servers["docs"].Headers["Authorization"])
 }
 
+func TestFileStore_UpdateCanClearFieldsForTransportChange(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(t.TempDir())
+	runtime := testRuntimeContext()
+	_, err := store.Upsert(context.Background(), UpsertRequest{
+		Context: runtime,
+		Name:    "docs",
+		Scope:   ScopeSession,
+		Connection: mcp.ConnectionConfig{
+			Transport: "streamable_http",
+			ServerURL: "https://example.com/mcp",
+			Headers: map[string]string{
+				"Authorization": "Bearer secret",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = store.Upsert(context.Background(), UpsertRequest{
+		Context:        runtime,
+		Name:           "docs",
+		Scope:          ScopeSession,
+		UpdateOnly:     true,
+		ClearServerURL: true,
+		ClearHeaders:   true,
+		Connection: mcp.ConnectionConfig{
+			Transport: "stdio",
+			Command:   "mcporter",
+			Args:      []string{"serve"},
+		},
+	})
+	require.NoError(t, err)
+
+	servers, err := store.ServerConfigs(context.Background(), runtime)
+	require.NoError(t, err)
+	require.Equal(t, "stdio", servers["docs"].Transport)
+	require.Equal(t, "mcporter", servers["docs"].Command)
+	require.Empty(t, servers["docs"].ServerURL)
+	require.Empty(t, servers["docs"].Headers)
+}
+
 func TestFileStore_ScopeVisibilityAndAliasPrecedence(t *testing.T) {
 	t.Parallel()
 

@@ -34,16 +34,22 @@ type registryTools struct {
 }
 
 type upsertInput struct {
-	Name        string            `json:"name"`
-	Scope       string            `json:"scope,omitempty"`
-	Description string            `json:"description,omitempty"`
-	Transport   string            `json:"transport,omitempty"`
-	ServerURL   string            `json:"server_url,omitempty"`
-	Headers     map[string]string `json:"headers,omitempty"`
-	Command     string            `json:"command,omitempty"`
-	Args        []string          `json:"args,omitempty"`
-	TimeoutMS   int64             `json:"timeout_ms,omitempty"`
-	AllowUpdate bool              `json:"allow_update,omitempty"`
+	Name             string            `json:"name"`
+	Scope            string            `json:"scope,omitempty"`
+	Description      string            `json:"description,omitempty"`
+	Transport        string            `json:"transport,omitempty"`
+	ServerURL        string            `json:"server_url,omitempty"`
+	Headers          map[string]string `json:"headers,omitempty"`
+	Command          string            `json:"command,omitempty"`
+	Args             []string          `json:"args,omitempty"`
+	TimeoutMS        int64             `json:"timeout_ms,omitempty"`
+	ClearServerURL   bool              `json:"clear_server_url,omitempty"`
+	ClearHeaders     bool              `json:"clear_headers,omitempty"`
+	ClearCommand     bool              `json:"clear_command,omitempty"`
+	ClearArgs        bool              `json:"clear_args,omitempty"`
+	ClearTimeout     bool              `json:"clear_timeout,omitempty"`
+	ClearDescription bool              `json:"clear_description,omitempty"`
+	AllowUpdate      bool              `json:"allow_update,omitempty"`
 }
 
 type removeInput struct {
@@ -144,13 +150,19 @@ func (t registryTools) upsert(
 		Description: input.Description,
 	}
 	return t.store.Upsert(ctx, UpsertRequest{
-		Context:     runtime,
-		Name:        input.Name,
-		Scope:       Scope(input.Scope),
-		Description: input.Description,
-		Connection:  conn,
-		UpdateOnly:  updateOnly,
-		AllowUpdate: input.AllowUpdate,
+		Context:          runtime,
+		Name:             input.Name,
+		Scope:            Scope(input.Scope),
+		Description:      input.Description,
+		Connection:       conn,
+		ClearServerURL:   input.ClearServerURL,
+		ClearHeaders:     input.ClearHeaders,
+		ClearCommand:     input.ClearCommand,
+		ClearArgs:        input.ClearArgs,
+		ClearTimeout:     input.ClearTimeout,
+		ClearDescription: input.ClearDescription,
+		UpdateOnly:       updateOnly,
+		AllowUpdate:      input.AllowUpdate,
 	})
 }
 
@@ -245,7 +257,9 @@ const addToolDescription = "" +
 const updateToolDescription = "" +
 	"Update an existing MCP registry entry in the selected scope. Use this " +
 	"when the user changes the URL, token, headers, command, or " +
-	"description of an already configured MCP server. Never echo secrets."
+	"description of an already configured MCP server. For transport changes, " +
+	"use clear_server_url/clear_headers/clear_command/clear_args to remove " +
+	"fields from the previous transport. Never echo secrets."
 
 const removeToolDescription = "" +
 	"Remove an MCP registry entry from the selected scope. Default scope is " +
