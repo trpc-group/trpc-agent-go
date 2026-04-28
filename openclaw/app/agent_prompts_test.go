@@ -24,6 +24,16 @@ func TestResolveAgentPrompts_DefaultInstruction(t *testing.T) {
 	prompts, err := resolveAgentPromptsForDir(runOptions{}, t.TempDir())
 	require.NoError(t, err)
 	require.Equal(t, defaultAgentInstruction, prompts.Instruction)
+	require.Contains(
+		t,
+		prompts.Instruction,
+		"A preamble-only response such as `I will ...`",
+	)
+	require.Contains(
+		t,
+		prompts.Instruction,
+		"produce the requested content in the same turn",
+	)
 	require.Empty(t, prompts.SystemPrompt)
 }
 
