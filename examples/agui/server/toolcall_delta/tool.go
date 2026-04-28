@@ -69,8 +69,12 @@ func (s *documentStore) createDocument(ctx context.Context, args createDocumentA
 	if strings.TrimSpace(content) == "" {
 		return createDocumentResult{}, fmt.Errorf("content is required")
 	}
-	createdAt := time.Now()
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return createDocumentResult{}, err
+	}
+	createdAt := time.Now()
 	s.nextID++
 	id := fmt.Sprintf("doc_%d", s.nextID)
 	s.documents[id] = savedDocument{
@@ -79,7 +83,6 @@ func (s *documentStore) createDocument(ctx context.Context, args createDocumentA
 		Content:   content,
 		CreatedAt: createdAt,
 	}
-	s.mu.Unlock()
 	return createDocumentResult{
 		DocumentID: id,
 		Title:      title,
