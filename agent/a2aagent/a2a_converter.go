@@ -144,13 +144,13 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 	case *protocol.Task:
 		responseMsg = convertTaskToMessage(v)
 	case *protocol.TaskStatusUpdateEvent:
-		if !isTaskFailureState(v.Status.State) {
-			// submitted/completed updates are control signals.
+		if !isTaskFailureState(v.Status.State) && !hasStructuredErrorMetadata(v.Metadata) {
+			// submitted/completed updates without structured errors are control signals.
 			return nil, nil
 		}
 		responseMsg = convertTaskStatusToMessage(v)
 	case *protocol.TaskArtifactUpdateEvent:
-		if v.IsFinal() {
+		if v.IsFinal() && !hasStructuredErrorMetadata(v.Metadata) {
 			// Final artifact chunk is either an aggregated result or a termination signal,
 			// not incremental content for the user.
 			return nil, nil
@@ -162,6 +162,7 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 	}
 
 	if evt := d.buildRespEvent(true, responseMsg, agentName, invocation); evt != nil {
+		markTerminalStructuredErrorEvent(evt, result.Result)
 		events = append(events, evt)
 	}
 	return events, nil
@@ -787,8 +788,11 @@ func markGraphCompletionEvent(evt *event.Event, result *parseResult) {
 // - Text content uses Delta for incremental updates
 func buildStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
-	if respErr := taskResponseError(result); respErr != nil {
+	if respErr := terminalStreamingResponseError(result); respErr != nil {
 		return buildErrorResponse(messageID, respErr, now)
+	}
+	if result != nil && result.responseError != nil {
+		return buildRecoverableErrorResponse(messageID, result, role, now)
 	}
 
 	// Tool call: use Message (tool calls are complete units, not streamed incrementally)
@@ -836,14 +840,8 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 	}
 
 	// Text content: use Delta for streaming incremental updates
-	content := result.textContent
-	if result.codeExecution != "" {
-		content = result.codeExecution
-	} else if result.codeExecutionResult != "" {
-		content = result.codeExecutionResult
-	}
-
-	objectType := extractObjectType(result)
+	content := streamingResponseContent(result)
+	objectType := streamingResponseObjectType(result)
 	if objectType == "" {
 		objectType = model.ObjectTypeChatCompletionChunk
 	}
@@ -865,6 +863,51 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 		IsPartial: true,
 		Done:      false,
 	}
+}
+
+func terminalStreamingResponseError(result *parseResult) *model.ResponseError {
+	if result == nil || !isTaskFailureState(result.taskState) {
+		return nil
+	}
+	if result.responseError != nil {
+		return result.responseError
+	}
+	message := result.textContent
+	if message == "" {
+		message = taskFailureMessage(result.taskState)
+	}
+	return &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: message,
+	}
+}
+
+func streamingResponseContent(result *parseResult) string {
+	if result == nil {
+		return ""
+	}
+	content := result.textContent
+	if result.codeExecution != "" {
+		content = result.codeExecution
+	} else if result.codeExecutionResult != "" {
+		content = result.codeExecutionResult
+	}
+	// Some A2A servers surface invocation errors as a regular message decorated
+	// with structured error metadata. Preserve that message as normal stream
+	// content so callers can drain the stream to EOF instead of short-circuiting.
+	if content == "" && result.responseError != nil && !isTaskFailureState(result.taskState) {
+		content = result.responseError.Message
+	}
+	return content
+}
+
+func streamingResponseObjectType(result *parseResult) string {
+	objectType := extractObjectType(result)
+	if objectType == model.ObjectTypeError && result != nil &&
+		result.responseError != nil && !isTaskFailureState(result.taskState) {
+		return ""
+	}
+	return objectType
 }
 
 // extractObjectType determines the response object type from parseResult.
@@ -928,13 +971,8 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 
 	// Text content: final assistant response
 	// Only add if no tool calls (tool calls already include text content)
-	if len(result.toolCalls) == 0 && (result.textContent != "" || result.reasoningContent != "" || result.codeExecution != "" || result.codeExecutionResult != "") {
-		content := result.textContent
-		if result.codeExecution != "" {
-			content = result.codeExecution
-		} else if result.codeExecutionResult != "" {
-			content = result.codeExecutionResult
-		}
+	content := nonStreamingResponseContent(result)
+	if len(result.toolCalls) == 0 && (content != "" || result.reasoningContent != "") {
 		internalRole := convertA2ARoleToModelRole(role)
 		choices = append(choices, model.Choice{
 			Message: model.Message{
@@ -955,7 +993,7 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 		}}
 	}
 
-	objectType := extractObjectType(result)
+	objectType := nonStreamingResponseObjectType(result)
 	if objectType == "" {
 		objectType = model.ObjectTypeChatCompletion
 	}
@@ -1007,6 +1045,79 @@ func taskResponseError(
 		Type:    model.ErrorTypeFlowError,
 		Message: message,
 	}
+}
+
+func buildRecoverableErrorResponse(messageID string, result *parseResult, role protocol.MessageRole, now time.Time) *model.Response {
+	content := streamingResponseContent(result)
+	objectType := streamingResponseObjectType(result)
+	if objectType == "" || objectType == model.ObjectTypeError {
+		objectType = model.ObjectTypeChatCompletion
+	}
+	return &model.Response{
+		ID: messageID,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:             convertA2ARoleToModelRole(role),
+				Content:          content,
+				ReasoningContent: result.reasoningContent,
+			},
+		}},
+		Object:    objectType,
+		Timestamp: now,
+		Created:   now.Unix(),
+		IsPartial: false,
+		Done:      false,
+		Error:     result.responseError,
+	}
+}
+
+func markTerminalStructuredErrorEvent(evt *event.Event, result protocol.StreamingMessageResult) {
+	if evt == nil || evt.Response == nil || evt.Response.Error == nil {
+		return
+	}
+	switch v := result.(type) {
+	case *protocol.TaskStatusUpdateEvent:
+		if isTaskFailureState(v.Status.State) || v.IsFinal() {
+			evt.Response.Done = true
+			evt.Response.IsPartial = false
+			evt.Response.Object = model.ObjectTypeError
+		}
+	case *protocol.TaskArtifactUpdateEvent:
+		if v.IsFinal() {
+			evt.Response.Done = true
+			evt.Response.IsPartial = false
+			evt.Response.Object = model.ObjectTypeError
+		}
+	}
+}
+
+func hasStructuredErrorMetadata(metadata map[string]any) bool {
+	return ia2a.ResponseErrorFromMetadata(metadata, "", "") != nil
+}
+
+func nonStreamingResponseContent(result *parseResult) string {
+	if result == nil {
+		return ""
+	}
+	content := result.textContent
+	if result.codeExecution != "" {
+		content = result.codeExecution
+	} else if result.codeExecutionResult != "" {
+		content = result.codeExecutionResult
+	}
+	if content == "" && result.responseError != nil && !isTaskFailureState(result.taskState) {
+		content = result.responseError.Message
+	}
+	return content
+}
+
+func nonStreamingResponseObjectType(result *parseResult) string {
+	objectType := extractObjectType(result)
+	if objectType == model.ObjectTypeError && result != nil &&
+		result.responseError != nil && !isTaskFailureState(result.taskState) {
+		return ""
+	}
+	return objectType
 }
 
 func taskFailureMessage(
