@@ -132,6 +132,42 @@ func TestHandleSuccess(t *testing.T) {
 	assert.Equal(t, 1, runner.calls)
 }
 
+func TestHandleEventsHeartbeatDisabledByDefault(t *testing.T) {
+	eventsCh := make(chan aguievents.Event)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		close(eventsCh)
+	}()
+	srv := &sse{writer: aguisse.NewSSEWriter()}
+	rr := httptest.NewRecorder()
+	err := srv.handleEvents(context.Background(), rr, eventsCh, false)
+	assert.NoError(t, err)
+	assert.Empty(t, rr.Body.String())
+}
+
+func TestHandleEventsHeartbeatWritesCommentFrame(t *testing.T) {
+	eventsCh := make(chan aguievents.Event)
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		close(eventsCh)
+	}()
+	srv := &sse{writer: aguisse.NewSSEWriter(), heartbeatInterval: 5 * time.Millisecond}
+	rr := httptest.NewRecorder()
+	err := srv.handleEvents(context.Background(), rr, eventsCh, false)
+	assert.NoError(t, err)
+	body := rr.Body.String()
+	assert.Contains(t, body, ":\n\n")
+	assert.NotContains(t, body, `"type"`)
+}
+
+func TestHandleEventsHeartbeatWriteError(t *testing.T) {
+	eventsCh := make(chan aguievents.Event)
+	srv := &sse{writer: aguisse.NewSSEWriter(), heartbeatInterval: 5 * time.Millisecond}
+	errWriter := newErrorResponseWriter(errors.New("write failure"))
+	err := srv.handleEvents(context.Background(), errWriter, eventsCh, false)
+	assert.ErrorContains(t, err, "write failure")
+}
+
 func TestHandleWriteEventError(t *testing.T) {
 	eventsCh := make(chan aguievents.Event, 1)
 	eventsCh <- aguievents.NewRunStartedEvent("thread", "run")

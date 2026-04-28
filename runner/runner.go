@@ -1304,10 +1304,13 @@ func (r *runner) handleEventPersistence(
 	}
 
 	persistEvent := agentEvent
-	if isGraphCompletionEvent(agentEvent) {
+	if isGraphCompletionSnapshotEvent(agentEvent) {
 		eventCopy := *agentEvent
-		eventCopy.Response = agentEvent.Response.Clone()
-		eventCopy.Response.Choices = nil
+		if isGraphCompletionEvent(agentEvent) {
+			eventCopy.Response = agentEvent.Response.Clone()
+			eventCopy.Response.Choices = nil
+		}
+		eventCopy.StateDelta = graphCompletionSessionStateDelta(agentEvent.StateDelta)
 		persistEvent = &eventCopy
 	}
 
@@ -1636,6 +1639,14 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			persistRunnerCompletionEvent.Response.Choices = nil
 		}
 	}
+	if len(loop.finalStateDelta) > 0 {
+		if persistRunnerCompletionEvent == runnerCompletionEvent {
+			persistRunnerCompletionEvent = runnerCompletionEvent.Clone()
+		}
+		persistRunnerCompletionEvent.StateDelta = graphCompletionSessionStateDelta(
+			persistRunnerCompletionEvent.StateDelta,
+		)
+	}
 	if err := r.sessionService.AppendEvent(
 		ctx,
 		loop.sess,
@@ -1651,6 +1662,43 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	r.enqueueAutoMemoryJob(ctx, loop.sess)
 	// Enqueue external session ingestion if configured.
 	r.enqueueSessionIngest(ctx, loop.sess, loop.invocation)
+}
+
+func graphCompletionSessionStateDelta(stateDelta map[string][]byte) map[string][]byte {
+	if len(stateDelta) == 0 {
+		return nil
+	}
+	filtered := make(map[string][]byte, len(stateDelta))
+	for key, value := range stateDelta {
+		if shouldDropGraphCompletionSessionStateKey(key) {
+			continue
+		}
+		if value == nil {
+			filtered[key] = nil
+			continue
+		}
+		vv := make([]byte, len(value))
+		copy(vv, value)
+		filtered[key] = vv
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
+
+func shouldDropGraphCompletionSessionStateKey(key string) bool {
+	switch key {
+	case graph.StateKeyMessages,
+		graph.StateKeyUserInput,
+		graph.StateKeyLastResponse,
+		graph.StateKeyLastToolResponse,
+		graph.StateKeyNodeResponses,
+		graph.MetadataKeyCompletion:
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveExecutionTraceStatus(loop *eventLoopContext, ctxErr error) trace.TraceStatus {
