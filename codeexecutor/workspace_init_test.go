@@ -287,15 +287,20 @@ func TestWorkspaceRegistry_Acquire_ConcurrentCreatesOnce(t *testing.T) {
 
 	const n = 32
 	var wg sync.WaitGroup
+	errs := make(chan error, n)
 	wg.Add(n)
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
 			_, err := reg.Acquire(ctx, wm, "same-id")
-			require.NoError(t, err)
+			errs <- err
 		}()
 	}
 	wg.Wait()
-	require.Equal(t, 1, wm.calls,
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, wm.callCount(),
 		"concurrent first acquires must coalesce to one CreateWorkspace")
 }
