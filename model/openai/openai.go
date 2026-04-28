@@ -2084,11 +2084,6 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 				[]model.ToolCall, 0,
 				len(chunk.Choices[0].Delta.ToolCalls))
 			for _, toolCall := range chunk.Choices[0].Delta.ToolCalls {
-				var indexPtr *int
-				if toolCall.Index != 0 {
-					index := int(toolCall.Index)
-					indexPtr = &index
-				}
 				toolCalls = append(toolCalls, model.ToolCall{
 					Type: string(toolCall.Type),
 					Function: model.FunctionDefinitionParam{
@@ -2096,7 +2091,7 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 						Arguments: []byte(toolCall.Function.Arguments),
 					},
 					ID:    toolCall.ID,
-					Index: indexPtr,
+					Index: toolCallDeltaIndexPointer(toolCall),
 				})
 			}
 		}
@@ -2116,6 +2111,14 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 	}
 
 	return response
+}
+
+func toolCallDeltaIndexPointer(toolCall openai.ChatCompletionChunkChoiceDeltaToolCall) *int {
+	if toolCall.Index == 0 && !toolCall.JSON.Index.Valid() {
+		return nil
+	}
+	index := int(toolCall.Index)
+	return &index
 }
 
 // emitStreamingFinalResponse emits the final response with accumulated data.
