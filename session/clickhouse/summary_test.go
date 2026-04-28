@@ -289,3 +289,50 @@ func TestService_EnqueueSummaryJob_CascadeDisabled(t *testing.T) {
 		}
 	}
 }
+
+func TestService_EnqueueSummaryJob_SyncFallbackCascadesFullSession(t *testing.T) {
+	mockCli := &mockClient{}
+	mockSum := &mockSummarizer{
+		summarizeFunc: func(ctx context.Context, session *session.Session) (string, error) {
+			return "summary", nil
+		},
+	}
+	s := &Service{
+		chClient: mockCli,
+		opts: ServiceOpts{
+			summarizer: mockSum,
+		},
+		tableSessionSummaries: "session_summaries",
+	}
+
+	persistedKeyCh := make(chan string, 2)
+	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		persistedKeyCh <- args[3].(string)
+		return nil
+	}
+
+	sess := &session.Session{
+		ID:        "sess1",
+		AppName:   "app1",
+		UserID:    "user1",
+		Summaries: make(map[string]*session.Summary),
+		Events: []event.Event{
+			{ID: "1", FilterKey: "tool-usage", Version: event.CurrentVersion},
+			{ID: "2", FilterKey: "other", Version: event.CurrentVersion},
+		},
+	}
+
+	err := s.EnqueueSummaryJob(context.Background(), sess, "tool-usage", true)
+	assert.NoError(t, err)
+
+	persistedKeys := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		select {
+		case key := <-persistedKeyCh:
+			persistedKeys = append(persistedKeys, key)
+		case <-time.After(2 * time.Second):
+			assert.FailNow(t, "timeout waiting for summary persistence")
+		}
+	}
+	assert.ElementsMatch(t, []string{"tool-usage", session.SummaryFilterKeyAllContents}, persistedKeys)
+}
