@@ -1781,6 +1781,22 @@ eventChan, err := runner.Run(ctx, userID, sessionID, userMessage)
 
 The framework provides two distinct modes for managing conversation context sent to the LLM:
 
+First, separate the three context-reduction mechanisms:
+
+| Mechanism | Layer | What changes | Typical use |
+| --- | --- | --- | --- |
+| Summary | Session Service + prompt assembly | Uses an LLM to create a persisted historical summary. With `WithAddSessionSummary(true)`, the request injects that summary and appends only incremental events after the summary point | Preserve semantic continuity in long sessions |
+| Context compaction | Agent prompt assembly | Does not call an LLM or drop whole turns; it only rewrites `tool result` content | Clean up large search results, logs, web fetches, and similar tool outputs |
+| Token tailoring | Model provider | Drops or keeps message rounds by token budget immediately before the provider call | Final fallback to keep the request within the context window |
+
+In call order, the agent assembles the prompt, injects summary when
+`WithAddSessionSummary(true)` is enabled, and optionally compacts `tool result`
+content. If summary injection is enabled and the request still approaches the
+context window, the flow may refresh the summary once and rebuild the request.
+Finally, model-layer token tailoring trims the message list. Context compaction
+shrinks tool-output payloads inside messages, token tailoring drops message
+rounds, and summary creates a semantic replacement for historical context.
+
 **Mode 1: With Summary (`WithAddSessionSummary(true)`)**
 
 - The session summary is merged into the existing system message when one is already present, or prepended as a new system message when none exists.
@@ -1788,9 +1804,20 @@ The framework provides two distinct modes for managing conversation context sent
 - This ensures complete context: condensed history (summary) + all new conversations since summarization.
 - `WithMaxHistoryRuns` is **ignored** in this mode.
 
-**Optional: Prompt-side context compaction**
+**Context compaction details**
 
-When `WithEnableContextCompaction(true)` is enabled, the framework adds a lightweight Phase 1 compaction pass before the LLM call:
+Context compaction is not another name for summary, and it is not token
+tailoring. It only targets `tool result` content, which is the part most likely
+to grow unexpectedly. It does not summarize ordinary user/assistant messages
+with an LLM, and it does not discard complete message rounds the way token
+tailoring may.
+
+> **Naming note**: "compaction" in `WithEnableContextCompaction(true)` means
+> prompt-side tool result compaction/pruning. Semantic summaries are still
+> controlled by `WithAddSessionSummary(true)` and the configured session
+> summarizer.
+
+When `WithEnableContextCompaction(true)` is enabled, the framework adds prompt-side compaction before the LLM call:
 
 - **Pass 1** — Historical tool results from older requests that exceed `ContextCompactionToolResultMaxTokens` (default 1024 tokens) are replaced with a placeholder while keeping `ToolID` and `ToolName`.
 - **Pass 2** — Any single tool result (including the current request) exceeding `ContextCompactionOversizedToolResultMaxTokens` is truncated using head+tail preservation with a `[...N characters truncated...]` marker. **Disabled by default (value `0`)** — you must explicitly call `WithContextCompactionOversizedToolResultMaxTokens(...)` and keep `WithEnableContextCompaction(true)` for Pass 2 to fire (recommended opt-in value: 8192 tokens).
@@ -1803,7 +1830,7 @@ llmAgent := llmagent.New(
     "my-agent",
     llmagent.WithModel(summaryModel),
     llmagent.WithAddSessionSummary(true),
-    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableContextCompaction(true), // only shrinks tool results; does not generate a summary
     llmagent.WithContextCompactionThresholdRatio(0.7),
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: old tool results → placeholder
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
