@@ -106,6 +106,39 @@ const (
 		"until you have performed the action and returned " +
 		"the resulting link, id, file marker, or exact " +
 		"blocker after recovery."
+	openClawPostToolPrompt = "[OpenClaw Tool Result Prompt] " +
+		"Treat tool results as mid-task state, not as " +
+		"permission to stop. Compare the latest tool result " +
+		"with the user's original/current request and keep " +
+		"working autonomously until the requested content, " +
+		"artifact, or external action is complete or blocked. " +
+		"If the request is complete, return the concrete " +
+		"user-facing result: link, id, file marker, sent " +
+		"status, created document title, scheduled job id, " +
+		"or the exact blocker. If work is still needed and " +
+		"an available tool can advance, verify, or recover " +
+		"the task, call that tool in the same assistant turn. " +
+		"Do not answer only with what you will do next. Do " +
+		"not stop at a plan, progress note, or tool-result " +
+		"summary when a next tool call is available. Do not " +
+		"ask for confirmation for an in-scope next step unless " +
+		"it is destructive, expensive, or genuinely ambiguous. " +
+		"Do not claim that a document, message, upload, " +
+		"schedule, file, wiki page, or external resource was " +
+		"created, sent, written, published, or updated unless " +
+		"the latest tool result proves it. If a tool failed " +
+		"or returned a partial result, recover with available " +
+		"tools when there is a clear path: corrected " +
+		"parameters, canonical ids, alternate lookup, retry, " +
+		"or verification. Only return a blocker when no safe " +
+		"next step remains. For files and media, return " +
+		"`MEDIA:` or `MEDIA_DIR:` lines only after the " +
+		"file or directory exists and is intended to be " +
+		"sent. For docs and iWiki, return the link, id, " +
+		"or title when available. " +
+		"Keep final answers concise and user-facing; avoid " +
+		"exposing tool/source/process details unless they are " +
+		"the exact result or blocker."
 	skillPreambleOnlyRule = "A preamble-only skill response is " +
 		"invalid. "
 	skillSameTurnToolRule = "If you say you will read, load, " +
@@ -2330,6 +2363,7 @@ func newAgent(
 			conversation.ProjectEventMessage,
 		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
+		llmagent.WithPostToolPrompt(openClawPostToolPrompt),
 	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
