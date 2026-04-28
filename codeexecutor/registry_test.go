@@ -70,11 +70,16 @@ type blockingWM struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+	mu      sync.Mutex
+	calls   int
 }
 
 func (b *blockingWM) CreateWorkspace(
 	ctx context.Context, id string, _ WorkspacePolicy,
 ) (Workspace, error) {
+	b.mu.Lock()
+	b.calls++
+	b.mu.Unlock()
 	b.once.Do(func() { close(b.entered) })
 	select {
 	case <-b.release:
@@ -86,6 +91,12 @@ func (b *blockingWM) CreateWorkspace(
 
 func (b *blockingWM) Cleanup(_ context.Context, _ Workspace) error {
 	return nil
+}
+
+func (b *blockingWM) callCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.calls
 }
 
 func TestWorkspaceRegistry_Acquire_CreateIgnoresLeaderCancel(t *testing.T) {
@@ -122,4 +133,16 @@ func TestWorkspaceRegistry_Acquire_CreateIgnoresLeaderCancel(t *testing.T) {
 
 	require.ErrorIs(t, <-leaderDone, context.Canceled)
 	require.NoError(t, <-followerDone)
+	require.Equal(t, 1, wm.callCount())
+}
+
+func TestWorkspaceRegistry_Acquire_CanceledMissDoesNotCreate(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &fakeWM{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := r.Acquire(ctx, wm, "canceled")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 0, wm.calls)
 }

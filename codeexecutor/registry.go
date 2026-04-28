@@ -47,6 +47,10 @@ func (r *WorkspaceRegistry) Acquire(
 		r.mu.Unlock()
 		return ws, nil
 	}
+	if err := ctx.Err(); err != nil {
+		r.mu.Unlock()
+		return Workspace{}, err
+	}
 	if call, ok := r.inflight[id]; ok {
 		r.mu.Unlock()
 		return waitWorkspaceCreate(ctx, call)

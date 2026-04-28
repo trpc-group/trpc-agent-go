@@ -33,7 +33,7 @@ func TestNewWorkspaceInitExecutor_NilExecutor(t *testing.T) {
 		}),
 	)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrWorkspaceInitNeedsEngineProvider))
+	require.Contains(t, err.Error(), "exec is nil")
 }
 
 func TestNewWorkspaceInitExecutor_NoHooksReturnsOriginal(t *testing.T) {

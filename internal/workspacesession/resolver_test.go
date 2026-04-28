@@ -193,7 +193,7 @@ func TestResolver_CreateWorkspace_InjectsArtifactContext(t *testing.T) {
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
 	}
-	_, err := svc.SaveArtifact(
+	v, err := svc.SaveArtifact(
 		context.Background(),
 		info,
 		"app/requirements.txt",
@@ -201,7 +201,6 @@ func TestResolver_CreateWorkspace_InjectsArtifactContext(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	v := 0
 	probe := &artifactProbeManager{t: t, version: &v}
 	eng := codeexecutor.NewEngine(
 		probe,

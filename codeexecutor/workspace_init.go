@@ -28,7 +28,10 @@ var ErrWorkspaceInitIncompleteEngine = errors.New(
 	"codeexecutor: Engine() or Engine.Manager() is nil",
 )
 
-const workspaceInitErrorOutputMax = 1024
+const (
+	workspaceInitErrorOutputMax = 1024
+	workspaceInitCleanupTimeout = 30 * time.Second
+)
 
 // WorkspaceInitHook is a callback run after [WorkspaceManager.CreateWorkspace]
 // succeeds and before that workspace is returned to callers. Use it for
@@ -146,10 +149,7 @@ func NewWorkspaceInitExecutor(
 ) (CodeExecutor, error) {
 	if exec == nil {
 		if len(hooks) > 0 {
-			return nil, fmt.Errorf(
-				"codeexecutor.NewWorkspaceInitExecutor: %w",
-				ErrWorkspaceInitNeedsEngineProvider,
-			)
+			return nil, fmt.Errorf("codeexecutor.NewWorkspaceInitExecutor: exec is nil")
 		}
 		return nil, nil
 	}
@@ -272,8 +272,13 @@ func (m *workspaceInitManager) CreateWorkspace(
 			hookErr := fmt.Errorf("workspace init hook %d: %w", i, err)
 			// Best-effort cleanup without inheriting deadline/cancel from ctx,
 			// which may already be expired when the hook failed for timeout.
-			cleanCtx := context.WithoutCancel(ctx)
-			if cerr := m.inner.Cleanup(cleanCtx, ws); cerr != nil {
+			cleanCtx, cancel := context.WithTimeout(
+				context.WithoutCancel(ctx),
+				workspaceInitCleanupTimeout,
+			)
+			cerr := m.inner.Cleanup(cleanCtx, ws)
+			cancel()
+			if cerr != nil {
 				return Workspace{}, fmt.Errorf("%w (cleanup failed: %v)", hookErr, cerr)
 			}
 			return Workspace{}, hookErr

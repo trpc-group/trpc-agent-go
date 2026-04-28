@@ -93,4 +93,7 @@ func TestNewWorkspaceInitExecutor_HookFailureTriggersCleanup(t *testing.T) {
 	require.Contains(t, err.Error(), "workspace init hook 0:")
 	require.Contains(t, err.Error(), `command "boom"`)
 	require.Contains(t, err.Error(), "exited 7")
+	entries, err := os.ReadDir(tmp)
+	require.NoError(t, err)
+	require.Empty(t, entries, "failed init workspace should be cleaned up")
 }
