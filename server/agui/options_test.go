@@ -135,6 +135,12 @@ func TestWithToolResultInputTranslationEnabled(t *testing.T) {
 	assert.True(t, ro.ToolResultInputTranslationEnabled)
 }
 
+func TestWithToolCallDeltaStreamingEnabled(t *testing.T) {
+	opts := newOptions(WithToolCallDeltaStreamingEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.ToolCallDeltaStreamingEnabled)
+}
+
 func TestWithStreamingToolResultActivityEnabled(t *testing.T) {
 	opts := newOptions(WithStreamingToolResultActivityEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)

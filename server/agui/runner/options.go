@@ -31,6 +31,7 @@ const (
 	defaultReasoningContentEnabled                = false
 	defaultEventSourceMetadataEnabled             = false
 	defaultToolResultInputTranslationEnabled      = false
+	defaultToolCallDeltaStreamingEnabled          = false
 	defaultStreamingToolResultActivityEnabled     = false
 )
 
@@ -61,6 +62,7 @@ type Options struct {
 	ReasoningContentEnabled                   bool                  // ReasoningContentEnabled controls whether reasoning content events are emitted.
 	EventSourceMetadataEnabled                bool                  // EventSourceMetadataEnabled attaches original trpc-agent-go source metadata to translated AG-UI events.
 	ToolResultInputTranslationEnabled         bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
+	ToolCallDeltaStreamingEnabled             bool                  // ToolCallDeltaStreamingEnabled streams partial tool-call arguments.
 	StreamingToolResultActivityEnabled        bool                  // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
 }
 
@@ -84,6 +86,7 @@ func NewOptions(opt ...Option) *Options {
 		ReasoningContentEnabled:                defaultReasoningContentEnabled,
 		EventSourceMetadataEnabled:             defaultEventSourceMetadataEnabled,
 		ToolResultInputTranslationEnabled:      defaultToolResultInputTranslationEnabled,
+		ToolCallDeltaStreamingEnabled:          defaultToolCallDeltaStreamingEnabled,
 		StreamingToolResultActivityEnabled:     defaultStreamingToolResultActivityEnabled,
 	}
 	for _, o := range opt {
@@ -289,6 +292,13 @@ func WithEventSourceMetadataEnabled(enabled bool) Option {
 func WithToolResultInputTranslationEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.ToolResultInputTranslationEnabled = enabled
+	}
+}
+
+// WithToolCallDeltaStreamingEnabled controls whether partial tool-call arguments are emitted.
+func WithToolCallDeltaStreamingEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.ToolCallDeltaStreamingEnabled = enabled
 	}
 }
 

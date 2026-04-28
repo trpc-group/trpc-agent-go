@@ -18,11 +18,14 @@ import (
 	"testing"
 	"time"
 
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -78,6 +81,74 @@ func TestEndToEndServerSendsSSEEvents(t *testing.T) {
 	assert.NotNil(t, agent.lastInvocation)
 	assert.Equal(t, "hi there", agent.lastInvocation.Message.Content)
 	assert.Equal(t, model.RoleUser, agent.lastInvocation.Message.Role)
+}
+
+func TestWithToolCallDeltaStreamingEnabledPropagatesToRunner(t *testing.T) {
+	agt := &mockAgent{info: agent.Info{Name: "demo"}}
+	agt.run = func(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+		ch := make(chan *event.Event, 2)
+		go func() {
+			defer close(ch)
+			toolIndex := 0
+			ch <- event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, &model.Response{
+				ID:        "msg-tool",
+				Object:    model.ObjectTypeChatCompletionChunk,
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{ToolCalls: []model.ToolCall{{
+						ID:    "call-1",
+						Type:  "function",
+						Index: &toolIndex,
+						Function: model.FunctionDefinitionParam{
+							Name:      "create_document",
+							Arguments: []byte(`{"content":"draft"}`),
+						},
+					}}},
+				}},
+			})
+			ch <- event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, &model.Response{
+				ID:     "msg-run-completion",
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
+			})
+		}()
+		return ch, nil
+	}
+	r := runner.NewRunner(agt.Info().Name, agt)
+	var captured aguirunner.Runner
+	customFactory := func(r aguirunner.Runner, _ ...service.Option) service.Service {
+		captured = r
+		return dummyAGUIService{}
+	}
+	srv, err := New(r, WithServiceFactory(customFactory), WithToolCallDeltaStreamingEnabled(true))
+	if !assert.NoError(t, err) || !assert.NotNil(t, srv) || !assert.NotNil(t, captured) {
+		return
+	}
+	eventsCh, err := captured.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread-1",
+		RunID:    "run-1",
+		Messages: []types.Message{{
+			Role:    types.RoleUser,
+			Content: "create a document",
+		}},
+	})
+	if !assert.NoError(t, err) {
+		return
+	}
+	var gotStart, gotArgs, gotEnd bool
+	for evt := range eventsCh {
+		switch e := evt.(type) {
+		case *aguievents.ToolCallStartEvent:
+			gotStart = e.ToolCallID == "call-1" && e.ToolCallName == "create_document"
+		case *aguievents.ToolCallArgsEvent:
+			gotArgs = e.ToolCallID == "call-1" && e.Delta == `{"content":"draft"}`
+		case *aguievents.ToolCallEndEvent:
+			gotEnd = e.ToolCallID == "call-1"
+		}
+	}
+	assert.True(t, gotStart)
+	assert.True(t, gotArgs)
+	assert.True(t, gotEnd)
 }
 
 func TestNewMessagesSnapshotRequiresAppName(t *testing.T) {
@@ -272,6 +343,7 @@ func TestInvalidChatPath(t *testing.T) {
 
 type mockAgent struct {
 	info           agent.Info
+	run            func(context.Context, *agent.Invocation) (<-chan *event.Event, error)
 	runCalls       int
 	lastInvocation *agent.Invocation
 }
@@ -279,6 +351,9 @@ type mockAgent struct {
 func (a *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	a.runCalls++
 	a.lastInvocation = invocation
+	if a.run != nil {
+		return a.run(ctx, invocation)
+	}
 	ch := make(chan *event.Event, 2)
 	go func() {
 		defer close(ch)

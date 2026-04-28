@@ -16,6 +16,7 @@ type options struct {
 	graphNodeInterruptActivityTopLevelOnly bool // graphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 	reasoningContentEnabled                bool // reasoningContentEnabled controls whether reasoning content events are emitted.
 	eventSourceMetadataEnabled             bool // eventSourceMetadataEnabled attaches trpc-agent-go source metadata to translated AG-UI events.
+	toolCallDeltaStreamingEnabled          bool // toolCallDeltaStreamingEnabled streams partial tool-call arguments.
 	streamingToolResultActivityEnabled     bool // streamingToolResultActivityEnabled rewrites partial tool results as activity events.
 }
 
@@ -68,6 +69,14 @@ func WithReasoningContentEnabled(enabled bool) Option {
 func WithEventSourceMetadataEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.eventSourceMetadataEnabled = enabled
+	}
+}
+
+// WithToolCallDeltaStreamingEnabled controls whether the translator emits
+// streamed tool call events from chat completion tool-call deltas.
+func WithToolCallDeltaStreamingEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.toolCallDeltaStreamingEnabled = enabled
 	}
 }
 

@@ -189,6 +189,14 @@ func WithToolResultInputTranslationEnabled(enabled bool) Option {
 	}
 }
 
+// WithToolCallDeltaStreamingEnabled controls whether partial tool-call
+// arguments are emitted before the final tool call response.
+func WithToolCallDeltaStreamingEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithToolCallDeltaStreamingEnabled(enabled))
+	}
+}
+
 // WithStreamingToolResultActivityEnabled controls whether partial tool-result
 // chunks are emitted as activity events while only the final tool result is
 // retained on the tool-result path and in message snapshots.

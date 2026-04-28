@@ -37,23 +37,25 @@ func New(ctx context.Context, opt ...Option) Aggregator {
 	}
 }
 
-// aggregator merges adjacent text and reasoning content events before persistence.
+// aggregator merges adjacent text, reasoning, and tool-call argument events before persistence.
 type aggregator struct {
-	mu            sync.Mutex
-	enabled       bool            // enabled indicates whether aggregation is active.
-	lastMessageID string          // lastMessageID tracks the message being buffered.
-	lastType      bufferType      // lastType tracks the event type being buffered.
-	buffer        strings.Builder // buffer stores concatenated deltas for the buffered message.
+	mu       sync.Mutex
+	enabled  bool            // enabled indicates whether aggregation is active.
+	lastID   string          // lastID tracks the buffered message or tool call.
+	lastType bufferType      // lastType tracks the event type being buffered.
+	buffer   strings.Builder // buffer stores concatenated deltas for the buffered entity.
 }
+
 type bufferType int
 
 const (
 	bufferTypeUnknown bufferType = iota
 	bufferTypeText
 	bufferTypeReasoning
+	bufferTypeToolArgs
 )
 
-// Append aggregates adjacent text and reasoning content events with the same message ID.
+// Append aggregates adjacent content events with the same message or tool call ID.
 func (a *aggregator) Append(_ context.Context, event aguievents.Event) ([]aguievents.Event, error) {
 	if !a.enabled {
 		return []aguievents.Event{event}, nil
@@ -65,6 +67,8 @@ func (a *aggregator) Append(_ context.Context, event aguievents.Event) ([]aguiev
 		return a.handleTextContent(e), nil
 	case *aguievents.ReasoningMessageContentEvent:
 		return a.handleReasoningContent(e), nil
+	case *aguievents.ToolCallArgsEvent:
+		return a.handleToolArgs(e), nil
 	default:
 		events := a.flush()
 		events = append(events, event)
@@ -84,12 +88,12 @@ func (a *aggregator) Flush(context.Context) ([]aguievents.Event, error) {
 
 // handleTextContent merges content when message ID matches the buffer; otherwise flushes first.
 func (a *aggregator) handleTextContent(event *aguievents.TextMessageContentEvent) []aguievents.Event {
-	if a.lastMessageID == event.MessageID && a.lastType == bufferTypeText {
+	if a.lastID == event.MessageID && a.lastType == bufferTypeText {
 		a.buffer.WriteString(event.Delta)
 		return nil
 	}
 	events := a.flush()
-	a.lastMessageID = event.MessageID
+	a.lastID = event.MessageID
 	a.lastType = bufferTypeText
 	a.buffer.Reset()
 	a.buffer.WriteString(event.Delta)
@@ -97,13 +101,26 @@ func (a *aggregator) handleTextContent(event *aguievents.TextMessageContentEvent
 }
 
 func (a *aggregator) handleReasoningContent(event *aguievents.ReasoningMessageContentEvent) []aguievents.Event {
-	if a.lastMessageID == event.MessageID && a.lastType == bufferTypeReasoning {
+	if a.lastID == event.MessageID && a.lastType == bufferTypeReasoning {
 		a.buffer.WriteString(event.Delta)
 		return nil
 	}
 	events := a.flush()
-	a.lastMessageID = event.MessageID
+	a.lastID = event.MessageID
 	a.lastType = bufferTypeReasoning
+	a.buffer.Reset()
+	a.buffer.WriteString(event.Delta)
+	return events
+}
+
+func (a *aggregator) handleToolArgs(event *aguievents.ToolCallArgsEvent) []aguievents.Event {
+	if a.lastID == event.ToolCallID && a.lastType == bufferTypeToolArgs {
+		a.buffer.WriteString(event.Delta)
+		return nil
+	}
+	events := a.flush()
+	a.lastID = event.ToolCallID
+	a.lastType = bufferTypeToolArgs
 	a.buffer.Reset()
 	a.buffer.WriteString(event.Delta)
 	return events
@@ -118,14 +135,17 @@ func (a *aggregator) flush() []aguievents.Event {
 	var event aguievents.Event
 	switch a.lastType {
 	case bufferTypeText:
-		event = aguievents.NewTextMessageContentEvent(a.lastMessageID, content)
+		event = aguievents.NewTextMessageContentEvent(a.lastID, content)
 	case bufferTypeReasoning:
-		event = aguievents.NewReasoningMessageContentEvent(a.lastMessageID, content)
+		event = aguievents.NewReasoningMessageContentEvent(a.lastID, content)
+	case bufferTypeToolArgs:
+		event = aguievents.NewToolCallArgsEvent(a.lastID, content)
 	default:
 		a.buffer.Reset()
 		return nil
 	}
 	a.buffer.Reset()
+	a.lastID = ""
 	a.lastType = bufferTypeUnknown
 	return []aguievents.Event{event}
 }
