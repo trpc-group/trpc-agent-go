@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -29,10 +30,12 @@ import (
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	llmtemplateevaluator "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/template"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	criteriontext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
@@ -3730,4 +3733,236 @@ func TestEvaluatePerCaseScenarioRunsConfiguredMetric(t *testing.T) {
 	assert.Equal(t, status.EvalStatusPassed, result.OverallEvalMetricResults[0].EvalStatus)
 	assert.Equal(t, inferenceResult.Inferences, fakeEval.receivedActuals)
 	assert.Len(t, fakeEval.receivedExpecteds, 1)
+}
+
+func TestLocalEvaluateMetricUsesEvaluatorNameWhenPresent(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: "llm_judge_template",
+		result: &evaluator.EvaluateResult{
+			OverallScore:         1,
+			OverallStatus:        status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 1, Status: status.EvalStatusPassed}},
+		},
+	}
+	assert.NoError(t, reg.Register(fakeEval.name, fakeEval))
+	svc := &local{}
+	actuals := []*evalset.Invocation{makeActualInvocation("actual-1", "prompt", "answer")}
+	expecteds := []*evalset.Invocation{makeActualInvocation("expected-1", "prompt", "reference")}
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: fakeEval.name,
+		Threshold:     0.5,
+	}
+
+	result, err := svc.evaluateMetric(ctx, reg, evalMetric, actuals, expecteds)
+	assert.NoError(t, err)
+	assert.Equal(t, fakeEval.result, result)
+	assert.Equal(t, actuals, fakeEval.receivedActuals)
+	assert.Equal(t, expecteds, fakeEval.receivedExpecteds)
+}
+
+func TestMaterializeResultCriterionInstantiatesTemplatePrompt(t *testing.T) {
+	ctx := context.Background()
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: llmtemplateevaluator.EvaluatorName,
+		Threshold:     1.0,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}\nAnswer: {{answer}}\nReference: {{reference}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						{
+							TemplateVariable: "question",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldUserContent,
+							},
+						},
+						{
+							TemplateVariable: "answer",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldFinalResponse,
+							},
+						},
+						{
+							TemplateVariable: "reference",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeExpected,
+								Field: criterionllm.TemplateVariableFieldFinalResponse,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	actuals := []*evalset.Invocation{{
+		UserContent:   &model.Message{Role: model.RoleUser, Content: "What is the capital of France?"},
+		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "Paris"},
+	}}
+	expecteds := []*evalset.Invocation{{
+		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "Paris"},
+	}}
+
+	got, err := materializeResultCriterion(ctx, evalMetric, actuals, expecteds)
+	assert.NoError(t, err)
+	if assert.NotNil(t, got) && assert.NotNil(t, got.LLMJudge) && assert.NotNil(t, got.LLMJudge.Template) {
+		assert.Equal(t,
+			"Question: What is the capital of France?\nAnswer: Paris\nReference: Paris",
+			got.LLMJudge.Template.Prompt,
+		)
+	}
+	assert.Equal(t,
+		"Question: {{question}}\nAnswer: {{answer}}\nReference: {{reference}}",
+		evalMetric.Criterion.LLMJudge.Template.Prompt,
+	)
+}
+
+func TestMaterializeOverallCriterionKeepsTemplatePrompt(t *testing.T) {
+	ctx := context.Background()
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: llmtemplateevaluator.EvaluatorName,
+		Threshold:     1.0,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}\nAnswer: {{answer}}\nReference: {{reference}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						{
+							TemplateVariable: "question",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldUserContent,
+							},
+						},
+						{
+							TemplateVariable: "answer",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldFinalResponse,
+							},
+						},
+						{
+							TemplateVariable: "reference",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeExpected,
+								Field: criterionllm.TemplateVariableFieldFinalResponse,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	actuals := []*evalset.Invocation{{
+		UserContent:   &model.Message{Role: model.RoleUser, Content: "What is the capital of France?"},
+		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "Paris"},
+	}}
+	expecteds := []*evalset.Invocation{{
+		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "Paris"},
+	}}
+
+	got, err := materializeOverallCriterion(ctx, evalMetric, actuals, expecteds)
+	assert.NoError(t, err)
+	if assert.NotNil(t, got) && assert.NotNil(t, got.LLMJudge) && assert.NotNil(t, got.LLMJudge.Template) {
+		assert.Equal(t,
+			"Question: {{question}}\nAnswer: {{answer}}\nReference: {{reference}}",
+			got.LLMJudge.Template.Prompt,
+		)
+	}
+}
+
+func TestMaterializeResultCriterionHandlesErrorsAndNonTemplateEvaluator(t *testing.T) {
+	ctx := context.Background()
+	got, err := materializeResultCriterion(ctx, nil, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "clone eval metric")
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: "llm_rubric_critic",
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}",
+					ResponseScorerName: "single_score",
+				},
+			},
+		},
+	}
+	got, err = materializeResultCriterion(ctx, evalMetric, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.LLMJudge)
+	require.NotNil(t, got.LLMJudge.Template)
+	assert.Equal(t, "Question: {{question}}", got.LLMJudge.Template.Prompt)
+}
+
+func TestMaterializeResultCriterionRejectsTemplateConstructionError(t *testing.T) {
+	ctx := context.Background()
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: llmtemplateevaluator.EvaluatorName,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						{
+							TemplateVariable: "question",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldUserContent,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	got, err := materializeResultCriterion(ctx, evalMetric, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "construct template messages")
+}
+
+func TestMaterializeOverallCriterionCloneError(t *testing.T) {
+	got, err := materializeOverallCriterion(context.Background(), nil, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "clone eval metric")
+}
+
+func TestMaterializedPrompt(t *testing.T) {
+	assert.Empty(t, materializedPrompt(nil))
+	assert.Equal(t, "single", materializedPrompt([]model.Message{{
+		Role:    model.RoleUser,
+		Content: "single",
+	}}))
+	assert.Equal(t,
+		"[user]\nquestion\n\n[assistant]\nanswer",
+		materializedPrompt([]model.Message{
+			{Role: model.RoleUser, Content: "question"},
+			{Role: model.RoleAssistant, Content: "answer"},
+		}),
+	)
+}
+
+func TestResolveEvaluatorName(t *testing.T) {
+	assert.Empty(t, resolveEvaluatorName(nil))
+	assert.Equal(t, "metric_only", resolveEvaluatorName(&metric.EvalMetric{
+		MetricName: "metric_only",
+	}))
+	assert.Equal(t, "llm_judge_template", resolveEvaluatorName(&metric.EvalMetric{
+		MetricName:    "metric_only",
+		EvaluatorName: "llm_judge_template",
+	}))
 }
