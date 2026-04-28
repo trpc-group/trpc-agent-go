@@ -3618,8 +3618,9 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCall1 := model.Message{
-		Role:    model.RoleAssistant,
-		Content: "Starting with step 1.",
+		Role:             model.RoleAssistant,
+		Content:          "Starting with step 1.",
+		ReasoningContent: "Need to execute step 1 before continuing.",
 		ToolCalls: []model.ToolCall{{
 			Type: "function",
 			ID:   "call_1",
@@ -3731,6 +3732,7 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 	if assert.Len(t, messages, 5) {
 		assert.True(t, model.MessagesEqual(userMsg, messages[0]))
 		assert.Equal(t, toolCall1.Content, messages[1].Content)
+		assert.Equal(t, toolCall1.ReasoningContent, messages[1].ReasoningContent)
 		assert.Equal(t, toolCall1.ToolCalls, messages[1].ToolCalls)
 		assert.Equal(t, model.RoleTool, messages[2].Role)
 		assert.Equal(t, toolResult1.ToolID, messages[2].ToolID)
