@@ -1121,6 +1121,8 @@ mathTool := agenttool.NewTool(
     agenttool.WithStreamInner(true),
     // hide child assistant prose while still forwarding inner tool progress.
     agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
+    // return only the child Agent's final assistant message as the tool result.
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
 )
 
 // 3) Use in parent Agent
@@ -1160,6 +1162,57 @@ if ev.Author != parentName && ev.Response != nil &&
 }
 ```
 
+### Tool Result Response Modes
+
+AgentTool always executes the child Agent as an event stream. The response mode
+only controls the value returned to the parent Agent as the tool result. It does
+not change child session storage, event filter keys, or inner streaming.
+
+By default, AgentTool preserves its legacy behavior: every non-empty assistant
+message emitted by the child Agent is appended into one tool-result string.
+This is useful for compatibility, but it can be surprising for long-running
+child Agents that emit progress, drafts, or intermediate assistant messages.
+Those intermediate assistant messages can become part of the parent Agent's
+`tool.response`.
+
+Use `WithResponseMode(agenttool.ResponseModeFinalOnly)` when the child Agent is
+used as an isolated worker and the parent Agent should only see the child's
+final answer:
+
+```go
+childTool := agenttool.NewTool(
+    childAgent,
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
+)
+```
+
+In final-only mode, AgentTool:
+
+- ignores partial assistant chunks
+- ignores non-assistant messages, empty assistant messages, and tool messages
+- returns the last complete child assistant message
+- returns an empty string when the child Agent completes without a complete
+  assistant message
+- still returns child Agent errors as `agent error: ...`
+
+This is different from `WithSkipSummarization(true)`. `WithSkipSummarization`
+controls whether the parent flow performs an extra outer summarization call
+after the tool response. `WithResponseMode` controls what the tool response
+contains in the first place.
+
+Example with both settings:
+
+```go
+childTool := agenttool.NewTool(
+    childAgent,
+    // Keep the child Agent's chain-of-work out of the tool result.
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
+    // End the parent turn after tool.response instead of asking the parent
+    // model to summarize the result again.
+    agenttool.WithSkipSummarization(true),
+)
+```
+
 ### Options
 
 - WithSkipSummarization(bool):
@@ -1180,6 +1233,13 @@ if ev.Author != parentName && ev.Response != nil &&
     keeping inner tool calls, tool completions, and the aggregated final tool
     response
 
+- WithResponseMode(ResponseMode):
+
+  - `ResponseModeDefault` (default): keep legacy concatenation of child
+    assistant messages into the tool result
+  - `ResponseModeFinalOnly`: return only the last complete child assistant
+    message as the tool result
+
 - WithHistoryScope(HistoryScope):
   - `HistoryScopeIsolated` (default): Keep the child Agent fully isolated; it only sees the current tool arguments (no inherited history).
   - `HistoryScopeParentBranch`: Inherit parent conversation history by using a hierarchical filter key `parent/child-uuid`. This allows the content processor to include parent events via prefix matching while keeping child events isolated under a sub-branch. Typical use cases: “edit/optimize/continue previous output”.
@@ -1192,6 +1252,7 @@ child := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     agenttool.WithStreamInner(true),
     agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
     agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
 )
 ```
@@ -1204,6 +1265,10 @@ child := agenttool.NewTool(
   `WithInnerTextMode(agenttool.InnerTextModeExclude)` when users should see
   inner progress without seeing duplicated child prose
 - Model compatibility: Some providers require a tool message after tool_calls; AgentTool automatically supplies the aggregated content
+- Child context isolation and tool-result shaping are separate concerns.
+  `WithHistoryScope(agenttool.HistoryScopeIsolated)` controls what the child
+  can read. `WithResponseMode(agenttool.ResponseModeFinalOnly)` controls what
+  the parent receives as the tool result.
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
 ## Tool Integration and Usage

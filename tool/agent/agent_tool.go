@@ -40,6 +40,7 @@ type Tool struct {
 	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
+	responseMode           ResponseMode
 	name                   string
 	description            string
 	inputSchema            *tool.Schema
@@ -56,6 +57,7 @@ type agentToolOptions struct {
 	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
+	responseMode           ResponseMode
 	description            *string
 }
 
@@ -74,6 +76,30 @@ const (
 	// still aggregating that text into the final tool response.
 	InnerTextModeExclude = tool.InnerTextModeExclude
 )
+
+// ResponseMode controls which child assistant text AgentTool returns as the tool
+// result. It does not change session event mirroring or inner streaming
+// behavior.
+type ResponseMode int
+
+const (
+	// ResponseModeDefault preserves the legacy assistant-content
+	// concatenation behavior.
+	ResponseModeDefault ResponseMode = iota
+
+	// ResponseModeFinalOnly returns only the last complete assistant message
+	// emitted by the child agent. If none is emitted, the tool result is
+	// an empty string.
+	ResponseModeFinalOnly
+)
+
+// WithResponseMode sets how AgentTool builds the tool result from child agent
+// events.
+func WithResponseMode(mode ResponseMode) Option {
+	return func(opts *agentToolOptions) {
+		opts.responseMode = mode
+	}
+}
 
 // WithSkipSummarization sets whether to skip summarization of the agent output.
 func WithSkipSummarization(skip bool) Option {
@@ -199,6 +225,7 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		innerTextMode:          tool.NormalizeInnerTextMode(options.innerTextMode),
 		structuredStreamErrors: options.structuredStreamErrors,
 		historyScope:           options.historyScope,
+		responseMode:           normalizeResponseMode(options.responseMode),
 		name:                   info.Name,
 		description:            description,
 		inputSchema:            inputSchema,
@@ -704,6 +731,9 @@ func (at *Tool) buildChildFilterKey(parentInv *agent.Invocation) string {
 // collectResponse collects and concatenates assistant messages from the event
 // channel, returning the complete response text.
 func (at *Tool) collectResponse(inv *agent.Invocation, evCh <-chan *event.Event) (string, error) {
+	if at.responseMode == ResponseModeFinalOnly {
+		return collectFinalResponse(evCh)
+	}
 	if !shouldRewriteCallableCompletion(inv) {
 		return collectLegacyResponse(evCh)
 	}
@@ -746,6 +776,27 @@ func (at *Tool) collectResponse(inv *agent.Invocation, evCh <-chan *event.Event)
 	return response.String(), nil
 }
 
+// collectFinalResponse returns the last complete child assistant message. If no
+// complete assistant message is emitted, it returns an empty string and nil
+// error.
+func collectFinalResponse(evCh <-chan *event.Event) (string, error) {
+	var finalResponse string
+	for ev := range evCh {
+		if ev == nil {
+			continue
+		}
+		if ev.Error != nil {
+			return "", fmt.Errorf("agent error: %s", ev.Error.Message)
+		}
+		content, ok := assistantMessageContent(ev)
+		if !ok || ev.IsPartial {
+			continue
+		}
+		finalResponse = content
+	}
+	return finalResponse, nil
+}
+
 // collectLegacyResponse preserves the pre-#1365 concatenation semantics for the
 // default callable path. It applies a narrow fix for issue #1640 by skipping a
 // trailing graph-completion snapshot event that re-emits the same non-partial
@@ -785,6 +836,18 @@ func shouldRewriteCallableCompletion(inv *agent.Invocation) bool {
 	return inv != nil && agent.IsGraphCompletionEventDisabled(inv)
 }
 
+func normalizeResponseMode(mode ResponseMode) ResponseMode {
+	switch mode {
+	case ResponseModeDefault:
+		return ResponseModeDefault
+	case ResponseModeFinalOnly:
+		return mode
+	default:
+		log.Debugf("AgentTool: unknown response mode %d, using default", mode)
+		return ResponseModeDefault
+	}
+}
+
 // StreamableCall executes the agent tool with streaming support and returns a stream reader.
 // It runs the wrapped agent and forwards its streaming text output as chunks.
 // The returned chunks' Content are plain strings representing incremental text.
@@ -803,6 +866,7 @@ type streamCompletionState struct {
 	sawGraphCompletionSnapshot bool
 	lastAssistantResponseID    string
 	lastAssistantContent       string
+	finalOnlyResult            string
 	overrideResult             string
 }
 
@@ -882,6 +946,7 @@ func (at *Tool) forwardSubInvocationStream(
 			at.completeSuppressedBarrierStreamEvent(ctx, subInv, ev, &state)
 			continue
 		}
+		at.updateFinalOnlyStreamResult(ev, &state)
 		if agent.IsGraphCompletionEventDisabled(subInv) &&
 			isGraphCompletionSnapshotEvent(ev) {
 			if emitFinalResultChunk {
@@ -928,10 +993,28 @@ func (at *Tool) forwardSubInvocationStream(
 		at.flushPendingVisibleCompletionForSession(ctx, subInv, &state)
 	}
 	if emitFinalResultChunk {
+		if at.responseMode == ResponseModeFinalOnly {
+			at.emitFinalOnlyResultChunk(&state, writer)
+			return
+		}
 		at.emitPendingCompletionChunk(&state, writer)
 		return
 	}
 	at.emitPendingVisibleCompletionEvent(&state, writer)
+}
+
+func (at *Tool) updateFinalOnlyStreamResult(
+	ev *event.Event,
+	state *streamCompletionState,
+) {
+	if state == nil {
+		return
+	}
+	content, ok := assistantMessageContent(ev)
+	if !ok || ev.IsPartial {
+		return
+	}
+	state.finalOnlyResult = content
 }
 
 func (at *Tool) capturePendingVisibleCompletion(
@@ -1126,6 +1209,28 @@ func (at *Tool) emitPendingCompletionChunk(
 	_ = writer.Send(tool.StreamChunk{
 		Content: content,
 	}, nil)
+}
+
+func (at *Tool) emitFinalOnlyResultChunk(
+	state *streamCompletionState,
+	writer *tool.StreamWriter,
+) {
+	result := ""
+	var stateDelta map[string][]byte
+	if state != nil {
+		result = state.finalOnlyResult
+		if state.pendingCompletionChunk != nil {
+			stateDelta = state.pendingCompletionChunk.StateDelta
+		}
+	}
+	var content any = tool.FinalResultChunk{Result: result}
+	if len(stateDelta) > 0 {
+		content = tool.FinalResultStateChunk{
+			Result:     result,
+			StateDelta: cloneStateDelta(stateDelta),
+		}
+	}
+	_ = writer.Send(tool.StreamChunk{Content: content}, nil)
 }
 
 func (at *Tool) streamFromFallbackRunner(
