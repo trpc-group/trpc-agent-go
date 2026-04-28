@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -845,43 +846,54 @@ func (s *sessionSummarizer) collectSummaryFromResponses(
 	trackResponse func(resp *model.Response),
 	ensureTimingInfo func(resp *model.Response),
 ) (context.Context, string, *model.Response, error) {
+	if responseChan == nil {
+		return ctx, "", nil, errors.New("model returned nil response channel")
+	}
+
 	var (
 		summary   strings.Builder
 		finalResp *model.Response
 	)
 
-	for response := range responseChan {
-		if trackResponse != nil {
-			trackResponse(response)
-		}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx, "", finalResp, fmt.Errorf("summary response collection canceled: %w", ctx.Err())
+		case response, ok := <-responseChan:
+			if !ok {
+				summaryText := strings.TrimSpace(summary.String())
+				return ctx, summaryText, finalResp, nil
+			}
+			if trackResponse != nil {
+				trackResponse(response)
+			}
 
-		var err error
-		ctx, response, err = s.runAfterModelCallbacks(ctx, request, response)
-		if err != nil {
-			return ctx, "", finalResp, err
-		}
-		if ensureTimingInfo != nil {
-			ensureTimingInfo(response)
-		}
-		if response == nil {
-			continue
-		}
-		finalResp = response
+			var err error
+			ctx, response, err = s.runAfterModelCallbacks(ctx, request, response)
+			if err != nil {
+				return ctx, "", finalResp, err
+			}
+			if ensureTimingInfo != nil {
+				ensureTimingInfo(response)
+			}
+			if response == nil {
+				continue
+			}
+			finalResp = response
 
-		if response.Error != nil {
-			return ctx, "", finalResp, formatResponseError(response.Error)
-		}
-		if len(response.Choices) > 0 {
-			content := response.Choices[0].Message.Content
-			if content != "" {
-				summary.WriteString(content)
+			if response.Error != nil {
+				return ctx, "", finalResp, formatResponseError(response.Error)
+			}
+			if len(response.Choices) > 0 {
+				content := response.Choices[0].Message.Content
+				if content != "" {
+					summary.WriteString(content)
+				}
+			}
+			if response.Done {
+				summaryText := strings.TrimSpace(summary.String())
+				return ctx, summaryText, finalResp, nil
 			}
 		}
-		if response.Done {
-			break
-		}
 	}
-
-	summaryText := strings.TrimSpace(summary.String())
-	return ctx, summaryText, finalResp, nil
 }

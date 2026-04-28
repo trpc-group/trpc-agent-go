@@ -193,6 +193,9 @@ func execToolDescription(hasMemoryFile bool) string {
 	parts := []string{
 		"Execute a host shell command. Use this for general local shell work.",
 		"Interactive commands can continue with write_stdin.",
+		"If you say you will run, inspect, create, write, or verify " +
+			"something with host shell work, the same assistant " +
+			"message must call exec_command or the required tool.",
 		"Protected shell and credential paths may be blocked by policy.",
 		"Sensitive env values may be redacted from returned output.",
 		"Do not use this just to inspect a PDF or spreadsheet already " +
