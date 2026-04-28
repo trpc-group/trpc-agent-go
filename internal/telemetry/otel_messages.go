@@ -121,9 +121,18 @@ func ParseOTelInputMessagesJSON(raw string) ([]OTelInputMessage, error) {
 // ParseOTelOutputMessagesJSON parses gen_ai.output.messages JSON encoded with the
 // OpenTelemetry-aligned schema used by this package.
 func ParseOTelOutputMessagesJSON(raw string) ([]OTelOutputMessage, error) {
-	if raw == "" {
+	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
+
+	var topLevel any
+	if err := json.Unmarshal([]byte(raw), &topLevel); err != nil {
+		return nil, err
+	}
+	if _, ok := topLevel.([]any); !ok {
+		return nil, nil
+	}
+
 	var messages []OTelOutputMessage
 	if err := json.Unmarshal([]byte(raw), &messages); err != nil {
 		return nil, err

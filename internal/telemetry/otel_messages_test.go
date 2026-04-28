@@ -36,6 +36,14 @@ func TestParseOTelMessagesJSON_EmptyAndInvalid(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, outputMessages)
 
+	outputMessages, err = ParseOTelOutputMessagesJSON("  \n\t  ")
+	require.NoError(t, err)
+	require.Nil(t, outputMessages)
+
+	outputMessages, err = ParseOTelOutputMessagesJSON(`{"role":"assistant","parts":[{"type":"text","content":"hi"}],"finish_reason":"stop"}`)
+	require.NoError(t, err)
+	require.Nil(t, outputMessages)
+
 	_, err = ParseOTelInputMessagesJSON("{")
 	require.Error(t, err)
 
