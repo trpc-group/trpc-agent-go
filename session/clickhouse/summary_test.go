@@ -230,25 +230,32 @@ func TestService_CreateSessionSummary_FilterAllowlistSkipsDisallowedKey(t *testi
 }
 
 func TestService_EnqueueSummaryJob_CascadeDisabled(t *testing.T) {
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockClient{}, nil
+	})
+
 	mockCli := &mockClient{}
 	mockSum := &mockSummarizer{
 		summarizeFunc: func(ctx context.Context, session *session.Session) (string, error) {
 			return "branch-summary", nil
 		},
 	}
-	s := &Service{
-		chClient: mockCli,
-		opts: ServiceOpts{
-			summarizer: mockSum,
-		},
-		tableSessionSummaries: "session_summaries",
-	}
-	disabled := false
-	s.opts.cascadeFullSessionSummary = &disabled
 
-	var persistedKeys []string
+	s, err := NewService(
+		WithSkipDBInit(true),
+		WithSummarizer(mockSum),
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSummaryJobTimeout(time.Second),
+		WithCascadeFullSessionSummary(false),
+		WithClickHouseDSN("clickhouse://localhost:9000"),
+	)
+	assert.NoError(t, err)
+	s.chClient = mockCli
+
+	persistedKeyCh := make(chan string, 2)
 	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
-		persistedKeys = append(persistedKeys, args[3].(string))
+		persistedKeyCh <- args[3].(string)
 		return nil
 	}
 
@@ -260,7 +267,25 @@ func TestService_EnqueueSummaryJob_CascadeDisabled(t *testing.T) {
 		Events:    []event.Event{{ID: "1"}},
 	}
 
-	err := s.EnqueueSummaryJob(context.Background(), sess, "tool-usage", true)
+	err = s.EnqueueSummaryJob(context.Background(), sess, "tool-usage", true)
 	assert.NoError(t, err)
-	assert.Equal(t, []string{"tool-usage"}, persistedKeys)
+
+	var persistedKeys []string
+	select {
+	case key := <-persistedKeyCh:
+		persistedKeys = append(persistedKeys, key)
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "timeout waiting for summary execution")
+	}
+
+	assert.NoError(t, s.Close())
+	for {
+		select {
+		case key := <-persistedKeyCh:
+			persistedKeys = append(persistedKeys, key)
+		default:
+			assert.Equal(t, []string{"tool-usage"}, persistedKeys)
+			return
+		}
+	}
 }
