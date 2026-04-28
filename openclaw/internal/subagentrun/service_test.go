@@ -228,6 +228,11 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 		subagentRunPrompt,
 		runner.runOpts.InjectedContextMessages[0].Content,
 	)
+	require.Contains(
+		t,
+		runner.runOpts.InjectedContextMessages[0].Content,
+		"Do not return only a statement of what you will do",
+	)
 	runner.mu.Unlock()
 
 	require.Eventually(t, func() bool {

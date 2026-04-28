@@ -88,9 +88,40 @@ const (
 
 	defaultDebugRecorderDir = "debug"
 
-	defaultAgentName        = "assistant"
+	defaultAgentName = "assistant"
+
+	preambleOnlyFinalAnswerRule = "A preamble-only response such as " +
+		"`I will ...`, `I'll ...`, `我先...`, or " +
+		"`接下来...` is not a valid final answer. If " +
+		"tool work is needed, the same assistant message " +
+		"must include the tool call; if no tool is needed, " +
+		"return the requested content or completed result " +
+		"instead of an announcement. "
+	substantiveSameTurnRule = "For writing, summarization, " +
+		"recommendation, explanation, or analysis tasks, " +
+		"produce the requested content in the same turn. "
+	artifactCompletionRule = "For requests to create, write, send, " +
+		"publish, upload, schedule, or update an artifact " +
+		"or external resource, the turn is not complete " +
+		"until you have performed the action and returned " +
+		"the resulting link, id, file marker, or exact " +
+		"blocker after recovery."
+	skillPreambleOnlyRule = "A preamble-only skill response is " +
+		"invalid. "
+	skillSameTurnToolRule = "If you say you will read, load, " +
+		"use, write, create, send, or publish through a " +
+		"skill, the same assistant message must include " +
+		"the required tool call. Do not stop after " +
+		"announcing the skill-backed next step. "
+
 	defaultAgentInstruction = "You are a helpful assistant. " +
-		"Keep replies concise."
+		"Keep replies concise, but make each reply " +
+		"substantive enough to complete the user's request. " +
+		"Act without asking for confirmation when the next " +
+		"step is clearly in scope, cheap, and reversible. " +
+		preambleOnlyFinalAnswerRule +
+		substantiveSameTurnRule +
+		artifactCompletionRule
 	openClawSkillsGuidance = "Treat the skill overview below as the " +
 		"skills available in this session. Each entry " +
 		"includes a path to that skill's SKILL.md on disk. " +
@@ -104,6 +135,10 @@ const (
 		"that skill right away in the same turn. That " +
 		"brief preamble is part of acting immediately, " +
 		"not a pause to ask what to do next. That preamble may " +
+		"not be the whole reply. " +
+		skillPreambleOnlyRule +
+		skillSameTurnToolRule +
+		"That preamble may " +
 		"announce the immediate task, but do not use it " +
 		"for substantive guidance, capability " +
 		"disclaimers, or explanations about which " +
@@ -146,8 +181,12 @@ const (
 		"brief user-visible preamble that says which skill " +
 		"or skill docs you are reading next, then call this " +
 		"tool right away in the same turn. Do not pause " +
-		"after that preamble to ask what to do next. Do " +
-		"not use that preamble for " +
+		"after that preamble to ask what to do next, and do " +
+		"not send the preamble as the whole reply. " +
+		skillPreambleOnlyRule +
+		skillSameTurnToolRule +
+		"Do not " +
+		"use that preamble for " +
 		"capability disclaimers, implementation-split " +
 		"explanations, or substantive guidance about the " +
 		"task. Do not answer from a short skill summary, " +
@@ -170,6 +209,9 @@ const (
 		"input, use " +
 		"write_stdin and kill_session when needed. Use message " +
 		"to send to the current chat or an explicit target. " +
+		artifactCompletionRule + " " +
+		"Use the available tool path to complete the request " +
+		"in this turn. " +
 		"Chat uploads are saved to stable host paths. For host " +
 		"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or " +
 		"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
