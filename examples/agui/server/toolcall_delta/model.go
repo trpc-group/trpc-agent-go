@@ -29,10 +29,12 @@ func newGenerationConfig(stream bool) model.GenerationConfig {
 
 func buildOpenAIOptions(baseURL string, apiKey string) []openai.Option {
 	opts := []openai.Option{openai.WithShowToolCallDelta(true)}
-	if strings.TrimSpace(baseURL) != "" {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))
 	}
-	if strings.TrimSpace(apiKey) != "" {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey != "" {
 		opts = append(opts, openai.WithAPIKey(apiKey))
 	}
 	return opts

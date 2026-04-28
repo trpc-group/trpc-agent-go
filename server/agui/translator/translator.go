@@ -630,9 +630,11 @@ func (t *translator) toolResultActivityEvents(rsp *model.Response) ([]aguievents
 	events := make([]aguievents.Event, 0, len(rsp.Choices))
 	for _, choice := range rsp.Choices {
 		if event, ok := t.toolResultActivityEvent(choice.Message.ToolID, choice.Message.Content); ok {
+			events = append(events, t.closeDeltaToolCallForResult(choice.Message.ToolID)...)
 			events = append(events, event)
 		}
 		if event, ok := t.toolResultActivityEvent(choice.Delta.ToolID, choice.Delta.Content); ok {
+			events = append(events, t.closeDeltaToolCallForResult(choice.Delta.ToolID)...)
 			events = append(events, event)
 		}
 	}

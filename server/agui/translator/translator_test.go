@@ -3681,6 +3681,56 @@ func TestStreamToolResultEventAsActivityWhenEnabled(t *testing.T) {
 	assert.Equal(t, "Reset", content["content"])
 }
 
+func TestStreamToolResultActivityClosesOpenToolCallDelta(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true), WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	toolIndex := 0
+	startRsp := &model.Response{
+		ID:        "msg-tool",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-1",
+				Type:  "function",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Name: "create_document",
+				},
+			}}},
+		}},
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{ID: "evt-start", Response: startRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	start, ok := events[0].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", start.ToolCallID)
+	partialRsp := &model.Response{
+		ID:        "msg-tool-result",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "partial", ToolID: "call-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-partial", Response: partialRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	end, ok := events[0].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+	snapshot, ok := events[1].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool.result.stream", snapshot.ActivityType)
+	content, ok := snapshot.Content.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", content["toolCallId"])
+	assert.Equal(t, "partial", content["content"])
+}
+
 func TestToolResultActivityEventSkipsEmptyInputs(t *testing.T) {
 	tr := newTranslatorImplForTest(t, WithStreamingToolResultActivityEnabled(true))
 	if tr == nil {

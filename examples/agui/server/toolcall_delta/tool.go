@@ -41,6 +41,7 @@ type savedDocument struct {
 
 type documentStore struct {
 	mu        sync.Mutex
+	nextID    int64
 	documents map[string]savedDocument
 }
 
@@ -68,13 +69,15 @@ func (s *documentStore) createDocument(ctx context.Context, args createDocumentA
 	if content == "" {
 		return createDocumentResult{}, fmt.Errorf("content is required")
 	}
-	id := fmt.Sprintf("doc_%d", time.Now().UnixNano())
+	createdAt := time.Now()
 	s.mu.Lock()
+	s.nextID++
+	id := fmt.Sprintf("doc_%d", s.nextID)
 	s.documents[id] = savedDocument{
 		ID:        id,
 		Title:     title,
 		Content:   content,
-		CreatedAt: time.Now(),
+		CreatedAt: createdAt,
 	}
 	s.mu.Unlock()
 	return createDocumentResult{
