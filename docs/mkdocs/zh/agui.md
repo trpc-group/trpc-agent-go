@@ -56,7 +56,7 @@ type RunAgentInput struct {
 	RunID          string          // 本次运行 ID，用于和事件流中的 `RUN_STARTED`、`RUN_FINISHED` 等事件关联。
 	ParentRunID    *string         // 父运行 ID，可选。
 	State          any             // 任意状态。
-	Messages       []Message       // 消息列表，框架要求最后一条消息为 `role=user` 并把其内容（字符串或多模态数组）作为输入。
+	Messages       []Message       // 消息列表。实时对话请求读取尾部消息：`role=user` 时使用其 content（字符串或多模态数组）作为输入；尾部连续 `role=tool` 时作为当前工具结果批次。
 	Tools          []Tool          // 工具定义列表，协议字段，可选。
 	Context        []Context       // 上下文列表，协议字段，可选。
 	ForwardedProps any             // 任意透传字段，通常用于携带业务自定义参数。
@@ -720,6 +720,7 @@ server, err := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTransl
 
 ```go
 import (
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -741,12 +742,21 @@ hook := func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAge
 	if !ok {
 		return input, nil
 	}
-
-	content, ok := input.Messages[len(input.Messages)-1].ContentString()
+	userMessageIndex := -1
+	for i := len(input.Messages) - 1; i >= 0; i-- {
+		if input.Messages[i].Role == types.RoleUser {
+			userMessageIndex = i
+			break
+		}
+	}
+	if userMessageIndex < 0 {
+		return input, nil
+	}
+	content, ok := input.Messages[userMessageIndex].ContentString()
 	if !ok {
 		return input, nil
 	}
-	input.Messages[len(input.Messages)-1].Content = content + otherContent
+	input.Messages[userMessageIndex].Content = content + otherContent
 	return input, nil
 }
 
@@ -1159,34 +1169,58 @@ activity 中的 `content` 不是单次 chunk，而是服务端按收到的非空
 
 ### 外部工具
 
-当工具必须在客户端或业务侧执行时，可以采用外部工具模式。后端只生成工具调用并在工具节点触发中断，前端执行工具并回传结果，后端从中断点恢复继续运行。该模式要求工具结果进入 LLM 上下文，并写入会话历史，便于后续通过消息快照回放完整对话。
+外部工具模式适用于 tool call 由客户端、上游服务或其他工具运行环境执行的场景。完整链路如下：
 
-建议在服务端开启 `agui.WithGraphNodeInterruptActivityEnabled(true)`，用于在 `graph.node.interrupt` 事件中携带 `lineageId` 与 `checkpointId`，以便前端定位恢复点并发起下一次请求。
+- agent 生成 tool call，AG-UI 事件流返回 `toolCallId` 与参数。
+- 调用方执行工具。
+- 调用方用后续请求回传工具结果，结果以 `role=tool` message 表示。
+- AG-UI 服务端发送 `TOOL_CALL_RESULT`，写入会话历史，并把工具结果交给 agent 继续运行。
 
-一次外部工具调用对应两次请求。第一次请求使用 `role=user`，当 LLM 触发工具调用时，事件流会输出 `TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`，随后在工具节点输出 `ACTIVITY_DELTA graph.node.interrupt` 并结束本次 SSE。前端在事件流中获取 `toolCallId` 与参数，并从中断事件获取 `lineageId`。
+当前支持两种服务端形态：普通 LLM 对话使用 LLMAgent Tool-Filter 模式；图编排流程使用 GraphAgent Interrupt 模式。
 
-第二次请求使用 `role=tool`，把工具执行结果回传给后端。`toolCallId` 必须与第一次请求一致，`content` 为工具输出字符串，同时在 `forwardedProps.lineage_id` 填入第一次中断事件返回的 `lineageId`。服务端会先把该 tool message 翻译为 `TOOL_CALL_RESULT` 并写入会话，再从对应 checkpoint 恢复继续生成最终回复。
+#### LLMAgent Tool-Filter 模式
 
-如果希望这条 `role=tool` 输入回显经过 Translator，可以开启 `agui.WithToolResultInputTranslationEnabled(true)`；开启后，AG-UI Runner 会先把 tool result 输入规范化为内部事件，再交给 Translator 处理，示例如下。
+当 AG-UI 服务端直接包装 `llmagent.Agent` 时，使用该模式。外部工具仍注册到 agent 中，使模型能够生成对应 tool call；`RunOptionResolver` 返回 `agent.WithToolExecutionFilter(...)`，声明由调用方执行的工具。
+
+第一次请求使用 `role=user`。当模型请求由调用方执行的 tool call 时，事件流输出 assistant tool-call 事件（`TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`），并在该 assistant tool-call 响应后结束本次 run。调用方从 tool call 事件中获取 `toolCallId` 和参数，执行工具后，再用 `role=tool` message 发起第二次请求。
+
+第二次请求保持同一 `threadId`，使用独立的 `runId`。`messages` 尾部可以包含一条或多条 `role=tool` message，每个 `toolCallId` 对应一条工具结果。多个外部工具结果按多条尾部 `role=tool` message 回传，AG-UI 服务端按尾部 tool message 的顺序生成当前 turn 的工具结果输入。
+
+代码示例片段如下：
 
 ```go
 import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguiadapter "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+func resolveRunOptions(
+    context.Context,
+    *aguiadapter.RunAgentInput,
+) ([]agent.RunOption, error) {
+    return []agent.RunOption{
+        agent.WithToolExecutionFilter(
+            tool.NewExcludeToolNamesFilter("external_note"),
+        ),
+    }, nil
+}
+
 server, err := agui.New(
-    runner,
-    agui.WithToolResultInputTranslationEnabled(true),
+    run,
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithRunOptionResolver(resolveRunOptions),
+    ),
 )
 ```
 
-如果第一次请求中 LLM 未触发任何工具调用，则不会出现中断事件，也不需要发起第二次请求。
+完整 LLMAgent 示例：服务端可参考 [examples/agui/server/externaltool/llmagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/llmagent)，前端客户端可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
-两次请求需要保持 `threadId` 一致，每次请求使用新的 `runId`。当前框架仅处理 `messages` 的最后一条消息，且只支持 `role=user` 或 `role=tool`，`content` 仅支持字符串。
+LLMAgent 请求示例：
 
-请求示例如下：
-
-第一次请求：
+第一次请求（`role=user`）：
 
 ```json
 {
@@ -1201,28 +1235,172 @@ server, err := agui.New(
 }
 ```
 
-第二次请求：
+第二次请求（`role=tool`）：
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-2",
+  "messages": [
+    {
+      "id": "tool-result-<toolCallIdA>",
+      "role": "tool",
+      "toolCallId": "<toolCallIdA>",
+      "name": "<externalToolNameA>",
+      "content": "first external tool output as string"
+    },
+    {
+      "id": "tool-result-<toolCallIdB>",
+      "role": "tool",
+      "toolCallId": "<toolCallIdB>",
+      "name": "<externalToolNameB>",
+      "content": "second external tool output as string"
+    }
+  ]
+}
+```
+
+LLMAgent 事件流示例：
+
+```text
+第一次请求 role=user
+  → RUN_STARTED
+  → TOOL_CALL_START
+  → TOOL_CALL_ARGS
+  → TOOL_CALL_END
+  → RUN_FINISHED
+
+第二次请求 role=tool
+  → RUN_STARTED
+  → TOOL_CALL_RESULT 由每条尾部 tool message 生成
+  → TEXT_MESSAGE_* 模型继续生成
+  → RUN_FINISHED
+```
+
+#### GraphAgent Interrupt 模式
+
+当外部执行属于某个 graph 节点，并且后端需要从 graph checkpoint 恢复时，使用该模式。对应 graph 节点调用 `graph.Interrupt` 表示等待调用方回传结果。服务端开启 `agui.WithGraphNodeInterruptActivityEnabled(true)` 后，`graph.node.interrupt` 事件会携带 `lineageId` 与 `checkpointId`，调用方据此定位下一次请求的恢复点。
+
+第一次请求使用 `role=user`。在该流程中，LLM 节点输出 `TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`；随后 graph 进入触发中断的工具节点，输出 `ACTIVITY_DELTA graph.node.interrupt`，并在 `RUN_FINISHED` 后结束本次 SSE。调用方在事件流中获取外部工具的 `toolCallId`、工具参数、`lineageId` 和 `checkpointId`。
+
+第二次请求使用 `role=tool`。请求中的 `toolCallId` 对应第一次请求中的工具调用，`content` 为工具输出字符串，`forwardedProps.lineage_id` 与 `forwardedProps.checkpoint_id` 分别来自第一次中断事件返回的 `lineageId` 与 `checkpointId`。`RunOptionResolver` 将工具结果转换为 graph resume 信息，通常以 `graph.Command{ResumeMap: ...}` 传给 GraphAgent。服务端发送 `TOOL_CALL_RESULT` 事件、写入会话历史，并从对应 checkpoint 恢复继续生成最终回复。
+
+GraphAgent 的恢复契约由 graph 定义。被中断节点和 `ResumeMap` key 负责消费回传结果；单个 pending tool call 对应一个工具结果。多个外部结果使用 graph 层显式建模的批量恢复契约。graph 同时混用服务端执行工具和调用方执行工具时，推荐拆成独立阶段：先运行内部工具调用 LLM 节点和内置 tools 节点，再运行外部工具调用 LLM 节点和中断节点。这样内部工具执行保留在常规 graph tools 路径上，中断节点只负责调用方回传结果。
+
+代码示例片段如下：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguiadapter "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+func externalToolNode(ctx context.Context, state graph.State) (any, error) {
+    msgs, _ := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+    pendingToolCall, ok := findPendingToolCall(msgs, "external_search")
+    if !ok {
+        return nil, nil
+    }
+    resumeValue, err := graph.Interrupt(ctx, state, pendingToolCall.ID, pendingToolCall.ID)
+    if err != nil {
+        return nil, err
+    }
+    content, ok := resumeValue.(string)
+    if !ok {
+        return nil, fmt.Errorf("resume value for %s must be a string", pendingToolCall.ID)
+    }
+    return graph.State{
+        graph.StateKeyMessages: graph.AppendMessages{
+            Items: []model.Message{
+                model.NewToolMessage(pendingToolCall.ID, "external_search", content),
+            },
+        },
+    }, nil
+}
+
+func resolveRunOptions(
+    _ context.Context,
+    input *aguiadapter.RunAgentInput,
+) ([]agent.RunOption, error) {
+    lineageID, checkpointID, resumeMap, err := graphResumeInput(input)
+    if err != nil {
+        return nil, err
+    }
+    return []agent.RunOption{
+        agent.WithRuntimeState(map[string]any{
+            graph.CfgKeyLineageID:    lineageID,
+            graph.CfgKeyCheckpointID: checkpointID,
+            graph.StateKeyCommand: &graph.Command{ResumeMap: resumeMap},
+        }),
+    }, nil
+}
+
+server, err := agui.New(
+    run,
+    agui.WithGraphNodeInterruptActivityEnabled(true),
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithRunOptionResolver(resolveRunOptions),
+    ),
+)
+```
+
+其中 `graphResumeInput` 负责读取 `forwardedProps.lineage_id` 与 `forwardedProps.checkpoint_id`，并把尾部连续的 `role=tool` message 转换为 `ResumeMap`。
+
+完整 GraphAgent 示例：服务端可参考 [examples/agui/server/externaltool/graphagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/graphagent)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
+
+GraphAgent 请求示例：
+
+第一次请求（`role=user`）：
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search and answer my question."
+    }
+  ]
+}
+```
+
+第二次请求（`role=tool`）：
 
 ```json
 {
   "threadId": "demo-thread",
   "runId": "demo-run-2",
   "forwardedProps": {
-    "lineage_id": "lineage-from-graph-node-interrupt"
+    "lineage_id": "lineage-from-graph-node-interrupt",
+    "checkpoint_id": "checkpoint-from-graph-node-interrupt"
   },
   "messages": [
     {
-      "id": "tool-result-<toolCallId>",
+      "id": "tool-result-<toolCallIdA>",
       "role": "tool",
-      "toolCallId": "<toolCallId>",
-      "name": "external_search",
-      "content": "external tool output as string"
+      "toolCallId": "<toolCallIdA>",
+      "name": "<externalToolNameA>",
+      "content": "first external tool output as string"
+    },
+    {
+      "id": "tool-result-<toolCallIdB>",
+      "role": "tool",
+      "toolCallId": "<toolCallIdB>",
+      "name": "<externalToolNameB>",
+      "content": "second external tool output as string"
     }
   ]
 }
 ```
 
-事件流示例如下：
+如果同一次中断暴露多条 pending external tool call，第二次请求应包含这些 tool call 的全部结果。
+
+GraphAgent 事件流示例：
 
 ```text
 第一次请求 role=user
@@ -1235,16 +1413,34 @@ server, err := agui.New(
 
 第二次请求 role=tool
   → RUN_STARTED
-  → TOOL_CALL_RESULT 由输入的 tool message 生成
+  → TOOL_CALL_RESULT 由每条尾部 tool message 生成
+  → ACTIVITY_DELTA graph.node.interrupt 恢复确认，开启时出现
   → TEXT_MESSAGE_* 恢复后继续生成
   → RUN_FINISHED
 ```
 
-完整示例可参考 [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
+#### AG-UI `role=tool` 输入处理
+
+`role=tool` 请求的 `content` 使用字符串。`id` 用作 `TOOL_CALL_RESULT` 的 message id；`toolCallId` 映射到内部 tool result 的 `ToolID`；`name` 表示工具名。AG-UI 服务端读取 `messages` 尾部连续的 `role=tool` message 作为当前工具结果输入批次。
+
+尾部包含多条 `role=tool` message 且 `RunOptionResolver` 同时返回 `agent.WithUserMessageRewriter` 时，AG-UI 会将用户 rewriter 与解析后的工具结果输入组合。用户 rewriter 先执行；它返回的 `role=user`、`role=assistant` 等 message 会保留在最终工具结果块之前。它返回的 `role=tool` message 的内部 `ToolID` 与某条 AG-UI `toolCallId` 一致时，该改写后的 tool message 为该 tool call 提供结果；其他 tool call 使用请求中的 `role=tool` message。AG-UI 始终按请求尾部 tool message 的顺序放置最终工具结果块，因此最后一条 current-turn message 仍然是最后一个工具结果。需要在工具结果解析前改写原始 AG-UI 请求时，使用 `WithRunAgentInputHook`。
+
+如果希望 `role=tool` 输入回显经过 Translator，可以开启 `agui.WithToolResultInputTranslationEnabled(true)`；开启后，AG-UI 服务端会先把每条 tool result 输入规范化为内部事件，再交给 Translator 处理，示例如下。
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithToolResultInputTranslationEnabled(true),
+)
+```
 
 ## 最佳实践
 
-默认优先使用服务端工具执行路径。只有当工具必须在客户端或业务侧执行时，才建议采用“外部工具”模式；这类场景更适合作为进阶用法来设计与评估。
+默认优先使用服务端工具执行路径。工具必须在客户端或业务侧执行时，采用“外部工具”模式；这类场景适合作为进阶用法来设计与评估。
 
 ### 生成文档
 

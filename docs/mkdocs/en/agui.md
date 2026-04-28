@@ -56,7 +56,7 @@ type RunAgentInput struct {
 	RunID          string // Run ID. Used to correlate `RUN_STARTED`, `RUN_FINISHED`, and other events.
 	ParentRunID    *string // Parent run ID. Optional.
 	State          any    // Arbitrary state.
-	Messages       []Message // Message list. The framework requires the last message to be `role=user` and uses its content (string or multimodal array) as input.
+	Messages       []Message // Message list. The chat route reads tail messages: `role=user` uses its content (string or multimodal array) as input; consecutive tail `role=tool` messages form the current tool-result batch.
 	Tools          []Tool    // Tool definitions. Protocol field. Optional.
 	Context        []Context // Context entries. Protocol field. Optional.
 	ForwardedProps any    // Arbitrary forwarded properties. Typically used to carry business custom parameters.
@@ -721,6 +721,7 @@ You can use `WithRunAgentInputHook` to mutate the AG-UI request before it reache
 
 ```go
 import (
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -742,12 +743,21 @@ hook := func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAge
 	if !ok {
 		return input, nil
 	}
-
-	content, ok := input.Messages[len(input.Messages)-1].ContentString()
+	userMessageIndex := -1
+	for i := len(input.Messages) - 1; i >= 0; i-- {
+		if input.Messages[i].Role == types.RoleUser {
+			userMessageIndex = i
+			break
+		}
+	}
+	if userMessageIndex < 0 {
+		return input, nil
+	}
+	content, ok := input.Messages[userMessageIndex].ContentString()
 	if !ok {
 		return input, nil
 	}
-	input.Messages[len(input.Messages)-1].Content = content + otherContent
+	input.Messages[userMessageIndex].Content = content + otherContent
 	return input, nil
 }
 
@@ -1051,32 +1061,58 @@ For a complete example, see [examples/agui/server/graph](https://github.com/trpc
 
 ### External Tools
 
-When a tool must be executed on the client side or within business services, you can use the external tool pattern. The backend only generates the tool call and interrupts execution at the tool node. The frontend runs the tool and sends the result back. The backend then resumes from the interrupt point and continues the run. This pattern requires the tool result to be included in the LLM context and persisted to session history so that a Message Snapshot can replay a complete conversation later.
+Use the external tool pattern when a tool call is executed by the client, an upstream service, or another tool runtime. The full flow is:
 
-It is recommended to enable `agui.WithGraphNodeInterruptActivityEnabled(true)` on the server. This allows `lineageId` and `checkpointId` to be carried in the `graph.node.interrupt` event so the client can locate the resume point and initiate the next request.
+- The agent produces a tool call, and the AG-UI event stream returns `toolCallId` and arguments.
+- The caller executes the tool.
+- The caller sends the tool result in a follow-up request as a `role=tool` message.
+- The AG-UI server emits `TOOL_CALL_RESULT`, persists the result to session history, and passes the tool result back to the agent.
 
-A single external tool invocation corresponds to two requests. The first request uses `role=user`. When the LLM triggers a tool call, the event stream emits `TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END`, then emits `ACTIVITY_DELTA graph.node.interrupt` at the tool node and closes the SSE stream. The client reads `toolCallId` and the tool arguments from the tool call events, and reads `lineageId` from the interrupt event.
+Two server-side patterns are supported: LLMAgent tool-filter mode for normal LLM conversations, and GraphAgent interrupt mode for graph-orchestrated flows.
 
-The second request uses `role=tool` to send the tool result back to the server. The `toolCallId` must match the first request, `content` is the tool output string, and `forwardedProps.lineage_id` must be set to the `lineageId` returned by the interrupt event. The server first translates this tool message into a `TOOL_CALL_RESULT` event and persists it to the session, then resumes from the corresponding checkpoint and continues generating the final answer.
+#### LLMAgent Tool-Filter Mode
 
-If you want this echoed `role=tool` input to pass through the Translator, enable `agui.WithToolResultInputTranslationEnabled(true)`. When enabled, the AG-UI Runner first normalizes the tool-result input into an internal event and then sends it through the Translator, as shown below.
+Use this mode when the AG-UI server wraps an `llmagent.Agent` directly. Register external tools with the agent so the model can produce the corresponding tool calls. Return `agent.WithToolExecutionFilter(...)` from `RunOptionResolver` to declare caller-executed tools.
+
+The first request uses `role=user`. When the model requests a caller-executed tool call, the stream emits the assistant tool-call events (`TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END`), and the run ends after that assistant tool-call response. The caller reads `toolCallId` and arguments from the tool call events, executes the tool, then sends a second request with `role=tool` messages.
+
+The second request keeps the same `threadId` and uses a distinct `runId`. The tail of `messages` can contain one or more `role=tool` messages, with one tool result per `toolCallId`. Return multiple external tool results as multiple tail `role=tool` messages. The AG-UI server builds the current-turn tool-result input in tail-message order.
+
+Code skeleton:
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguiadapter "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+func resolveRunOptions(
+    context.Context,
+    *aguiadapter.RunAgentInput,
+) ([]agent.RunOption, error) {
+    return []agent.RunOption{
+        agent.WithToolExecutionFilter(
+            tool.NewExcludeToolNamesFilter("external_note"),
+        ),
+    }, nil
+}
 
 server, err := agui.New(
-    runner,
-    agui.WithToolResultInputTranslationEnabled(true),
+    run,
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithRunOptionResolver(resolveRunOptions),
+    ),
 )
 ```
 
-If the LLM does not trigger any tool call in the first request, no interrupt event will be emitted and a second request is not required.
+For a complete LLMAgent example, see the server implementation in [examples/agui/server/externaltool/llmagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/llmagent) and the frontend client in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
-Both requests must use the same `threadId`, and each request should use a new `runId`. The framework only processes the last message in `messages`. Only `role=user` and `role=tool` are supported, and `content` must be a string.
+LLMAgent request example:
 
-Request examples:
-
-First request:
+First request (`role=user`):
 
 ```json
 {
@@ -1091,28 +1127,172 @@ First request:
 }
 ```
 
-Second request:
+Second request (`role=tool`):
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-2",
+  "messages": [
+    {
+      "id": "tool-result-<toolCallIdA>",
+      "role": "tool",
+      "toolCallId": "<toolCallIdA>",
+      "name": "<externalToolNameA>",
+      "content": "first external tool output as string"
+    },
+    {
+      "id": "tool-result-<toolCallIdB>",
+      "role": "tool",
+      "toolCallId": "<toolCallIdB>",
+      "name": "<externalToolNameB>",
+      "content": "second external tool output as string"
+    }
+  ]
+}
+```
+
+LLMAgent event stream:
+
+```text
+First request role=user
+  → RUN_STARTED
+  → TOOL_CALL_START
+  → TOOL_CALL_ARGS
+  → TOOL_CALL_END
+  → RUN_FINISHED
+
+Second request role=tool
+  → RUN_STARTED
+  → TOOL_CALL_RESULT generated from each tail tool message
+  → TEXT_MESSAGE_* generated after the model continues
+  → RUN_FINISHED
+```
+
+#### GraphAgent Interrupt Mode
+
+Use this mode when the external work belongs to a graph node and the backend resumes from a graph checkpoint. The graph node calls `graph.Interrupt` to wait for the caller-provided result. When the server enables `agui.WithGraphNodeInterruptActivityEnabled(true)`, the `graph.node.interrupt` event carries `lineageId` and `checkpointId`, which locate the resume point for the next request.
+
+The first request uses `role=user`. In this flow, the LLM node emits `TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END`; the graph then reaches the interrupting tool node, emits `ACTIVITY_DELTA graph.node.interrupt`, and closes the SSE stream after `RUN_FINISHED`. The caller reads the external tool `toolCallId`, tool arguments, `lineageId`, and `checkpointId` from the event stream.
+
+The second request uses `role=tool`. Its `toolCallId` corresponds to the first request's tool call, `content` is the tool output string, and `forwardedProps.lineage_id` plus `forwardedProps.checkpoint_id` come from the first interrupt event. `RunOptionResolver` converts the tool result into graph resume data, commonly by passing `graph.Command{ResumeMap: ...}` to GraphAgent. The server emits `TOOL_CALL_RESULT`, persists the result to session history, then resumes from the corresponding checkpoint and continues generating the final answer.
+
+GraphAgent defines the resume contract. The interrupted node and `ResumeMap` keys consume the returned results; one pending tool call corresponds to one tool result. Multiple external results use an explicit graph-level batch contract. When a graph mixes server-executed tools and caller-executed tools, split them into separate stages: run the internal tool-calling LLM node and built-in tools node first, then run the external tool-calling LLM node and interrupt node. This keeps internal tool execution on the normal graph tools path and keeps the interrupt node focused on caller-provided results.
+
+Code skeleton:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguiadapter "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+func externalToolNode(ctx context.Context, state graph.State) (any, error) {
+    msgs, _ := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+    pendingToolCall, ok := findPendingToolCall(msgs, "external_search")
+    if !ok {
+        return nil, nil
+    }
+    resumeValue, err := graph.Interrupt(ctx, state, pendingToolCall.ID, pendingToolCall.ID)
+    if err != nil {
+        return nil, err
+    }
+    content, ok := resumeValue.(string)
+    if !ok {
+        return nil, fmt.Errorf("resume value for %s must be a string", pendingToolCall.ID)
+    }
+    return graph.State{
+        graph.StateKeyMessages: graph.AppendMessages{
+            Items: []model.Message{
+                model.NewToolMessage(pendingToolCall.ID, "external_search", content),
+            },
+        },
+    }, nil
+}
+
+func resolveRunOptions(
+    _ context.Context,
+    input *aguiadapter.RunAgentInput,
+) ([]agent.RunOption, error) {
+    lineageID, checkpointID, resumeMap, err := graphResumeInput(input)
+    if err != nil {
+        return nil, err
+    }
+    return []agent.RunOption{
+        agent.WithRuntimeState(map[string]any{
+            graph.CfgKeyLineageID:    lineageID,
+            graph.CfgKeyCheckpointID: checkpointID,
+            graph.StateKeyCommand: &graph.Command{ResumeMap: resumeMap},
+        }),
+    }, nil
+}
+
+server, err := agui.New(
+    run,
+    agui.WithGraphNodeInterruptActivityEnabled(true),
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithRunOptionResolver(resolveRunOptions),
+    ),
+)
+```
+
+`graphResumeInput` reads `forwardedProps.lineage_id` and `forwardedProps.checkpoint_id`, then converts consecutive tail `role=tool` messages into `ResumeMap`.
+
+For a complete GraphAgent example, see the server implementation in [examples/agui/server/externaltool/graphagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/graphagent). Frontend implementations can refer to [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
+
+GraphAgent request example:
+
+First request (`role=user`):
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search and answer my question."
+    }
+  ]
+}
+```
+
+Second request (`role=tool`):
 
 ```json
 {
   "threadId": "demo-thread",
   "runId": "demo-run-2",
   "forwardedProps": {
-    "lineage_id": "lineage-from-graph-node-interrupt"
+    "lineage_id": "lineage-from-graph-node-interrupt",
+    "checkpoint_id": "checkpoint-from-graph-node-interrupt"
   },
   "messages": [
     {
-      "id": "tool-result-<toolCallId>",
+      "id": "tool-result-<toolCallIdA>",
       "role": "tool",
-      "toolCallId": "<toolCallId>",
-      "name": "external_search",
-      "content": "external tool output as string"
+      "toolCallId": "<toolCallIdA>",
+      "name": "<externalToolNameA>",
+      "content": "first external tool output as string"
+    },
+    {
+      "id": "tool-result-<toolCallIdB>",
+      "role": "tool",
+      "toolCallId": "<toolCallIdB>",
+      "name": "<externalToolNameB>",
+      "content": "second external tool output as string"
     }
   ]
 }
 ```
 
-Example event stream:
+If one interrupt exposes multiple pending external tool calls, include all of those tool results in this second request.
+
+GraphAgent event stream:
 
 ```text
 First request role=user
@@ -1125,16 +1305,32 @@ First request role=user
 
 Second request role=tool
   → RUN_STARTED
-  → TOOL_CALL_RESULT generated from the tool message input
+  → TOOL_CALL_RESULT generated from each tail tool message
+  → ACTIVITY_DELTA graph.node.interrupt resume acknowledgement, when enabled
   → TEXT_MESSAGE_* generated after resuming
   → RUN_FINISHED
 ```
 
-For a complete example, see [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool). For a frontend implementation, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
+#### AG-UI `role=tool` Input Handling
+
+`role=tool` request `content` is a string. `id` is used as the `TOOL_CALL_RESULT` message id; `toolCallId` maps to the internal tool result `ToolID`; `name` is the tool name. The AG-UI server reads consecutive tail `role=tool` messages as the current tool-result input batch.
+
+When the tail contains multiple `role=tool` messages and `RunOptionResolver` also returns `agent.WithUserMessageRewriter`, AG-UI composes the user rewriter with the parsed tool-result input. The user rewriter runs first. Messages such as `role=user` and `role=assistant` returned by the user rewriter are retained before the final tool-result block. If it returns a `role=tool` message whose internal `ToolID` matches an incoming AG-UI `toolCallId`, that rewritten tool message supplies the result for that tool call. Other tool calls use the incoming `role=tool` messages. AG-UI always keeps the final tool-result block ordered by the incoming tail messages, so the last current-turn message remains the last tool result. To change the raw AG-UI request before tool-result parsing, use `WithRunAgentInputHook`.
+
+If you want echoed `role=tool` inputs to pass through the Translator, enable `agui.WithToolResultInputTranslationEnabled(true)`. When enabled, the AG-UI server first normalizes each tool-result input into an internal event and then sends it through the Translator, as shown below.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(
+    runner,
+    agui.WithToolResultInputTranslationEnabled(true),
+)
+```
 
 ## Best Practices
 
-Prefer the server-side tool execution path by default. Only adopt the external tool pattern when a tool must run on the client side or within business services; that scenario is better treated as advanced usage than as a default recommendation.
+Prefer the server-side tool execution path by default. Adopt the external tool pattern when a tool must run on the client side or within business services; treat that scenario as advanced usage.
 
 ### Generating Documents
 
