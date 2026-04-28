@@ -24,6 +24,14 @@ func TestParseOTelMessagesJSON_EmptyAndInvalid(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, inputMessages)
 
+	inputMessages, err = ParseOTelInputMessagesJSON("  \n\t  ")
+	require.NoError(t, err)
+	require.Nil(t, inputMessages)
+
+	inputMessages, err = ParseOTelInputMessagesJSON(`{"role":"user","parts":[{"type":"text","content":"hi"}]}`)
+	require.NoError(t, err)
+	require.Nil(t, inputMessages)
+
 	outputMessages, err := ParseOTelOutputMessagesJSON("")
 	require.NoError(t, err)
 	require.Nil(t, outputMessages)
@@ -150,6 +158,53 @@ func TestToolResponseRawMessage_CompositePayload(t *testing.T) {
 		ReasoningContent: "because",
 	})
 	require.JSONEq(t, `{"content":"plain","reasoning":"because"}`, string(raw))
+}
+
+func TestTelemetryPartFromToolCallResponse_RejectsEmptyPayload(t *testing.T) {
+	part, ok := telemetryPartFromToolCallResponse(model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "   ",
+		ToolName: "lookup",
+	})
+	require.False(t, ok)
+	require.Equal(t, OTelMessagePart{}, part)
+	require.False(t, shouldUseToolCallResponsePart(model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "   ",
+		ToolName: "lookup",
+	}))
+
+	parts := telemetryPartsFromModelMessage(model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "   ",
+		ToolName: "lookup",
+	})
+	require.Empty(t, parts)
+}
+
+func TestTelemetryPartFromToolCallResponse_AcceptsIDOrResponse(t *testing.T) {
+	part, ok := telemetryPartFromToolCallResponse(model.Message{
+		Role:    model.RoleTool,
+		ToolID:  " call-1 ",
+		Content: "   ",
+	})
+	require.True(t, ok)
+	require.Equal(t, otelPartTypeToolCallResponse, part.Type)
+	require.Equal(t, "call-1", part.ID)
+	require.Nil(t, part.Response)
+	require.True(t, shouldUseToolCallResponsePart(model.Message{
+		Role:    model.RoleTool,
+		ToolID:  " call-1 ",
+		Content: "   ",
+	}))
+
+	part, ok = telemetryPartFromToolCallResponse(model.Message{
+		Role:    model.RoleTool,
+		Content: `{"status":"ok"}`,
+	})
+	require.True(t, ok)
+	require.Empty(t, part.ID)
+	require.JSONEq(t, `{"status":"ok"}`, string(part.Response))
 }
 
 func TestRawJSONOrJSONStringAndJSONValueOrString(t *testing.T) {

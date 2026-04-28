@@ -96,9 +96,18 @@ func marshalTelemetryChoices(choices []model.Choice) ([]byte, error) {
 // ParseOTelInputMessagesJSON parses gen_ai.input.messages JSON encoded with the
 // OpenTelemetry-aligned schema used by this package.
 func ParseOTelInputMessagesJSON(raw string) ([]OTelInputMessage, error) {
-	if raw == "" {
+	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
+
+	var topLevel any
+	if err := json.Unmarshal([]byte(raw), &topLevel); err != nil {
+		return nil, err
+	}
+	if _, ok := topLevel.([]any); !ok {
+		return nil, nil
+	}
+
 	var messages []OTelInputMessage
 	if err := json.Unmarshal([]byte(raw), &messages); err != nil {
 		return nil, err
@@ -195,12 +204,10 @@ func telemetryPartsFromModelMessage(msg model.Message) []OTelMessagePart {
 	parts := make([]OTelMessagePart, 0, 1+len(msg.ContentParts)+len(msg.ToolCalls))
 
 	if msg.Role == model.RoleTool && shouldUseToolCallResponsePart(msg) {
-		part := OTelMessagePart{
-			Type:     otelPartTypeToolCallResponse,
-			ID:       strings.TrimSpace(msg.ToolID),
-			Response: toolResponseRawMessage(msg),
+		part, ok := telemetryPartFromToolCallResponse(msg)
+		if ok {
+			parts = append(parts, part)
 		}
-		parts = append(parts, part)
 	} else {
 		if msg.Content != "" {
 			parts = append(parts, OTelMessagePart{
@@ -335,6 +342,22 @@ func telemetryPartFromToolCall(toolCall model.ToolCall) OTelMessagePart {
 	}
 }
 
+func telemetryPartFromToolCallResponse(msg model.Message) (OTelMessagePart, bool) {
+	if msg.Role != model.RoleTool {
+		return OTelMessagePart{}, false
+	}
+	id := strings.TrimSpace(msg.ToolID)
+	response := toolResponseRawMessage(msg)
+	if id == "" && len(response) == 0 {
+		return OTelMessagePart{}, false
+	}
+	return OTelMessagePart{
+		Type:     otelPartTypeToolCallResponse,
+		ID:       id,
+		Response: response,
+	}, true
+}
+
 func toolResponseRawMessage(msg model.Message) json.RawMessage {
 	if len(msg.ContentParts) == 0 && msg.ReasoningContent == "" && len(msg.ToolCalls) == 0 {
 		return rawJSONOrJSONString([]byte(msg.Content))
@@ -399,8 +422,8 @@ func telemetryMessageName(msg model.Message) string {
 }
 
 func shouldUseToolCallResponsePart(msg model.Message) bool {
-	return msg.Role == model.RoleTool &&
-		(msg.ToolID != "" || msg.ToolName != "" || msg.Content != "" || len(msg.ContentParts) > 0)
+	_, ok := telemetryPartFromToolCallResponse(msg)
+	return ok
 }
 
 func normalizedMessageRole(role model.Role, fallback model.Role) model.Role {
