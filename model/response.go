@@ -96,6 +96,9 @@ type Usage struct {
 	// PromptTokensDetails is the details of the prompt tokens.
 	PromptTokensDetails PromptTokensDetails `json:"prompt_tokens_details"`
 
+	// CompletionTokensDetails is the details of the completion tokens.
+	CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+
 	// TimingInfo contains detailed timing information for token generation.
 	TimingInfo *TimingInfo `json:"timing_info,omitempty"`
 }
@@ -108,6 +111,15 @@ type PromptTokensDetails struct {
 	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
 	// CacheReadTokens is the number of tokens read from cache (Anthropic).
 	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+}
+
+// CompletionTokensDetails is the details of the completion tokens.
+// It intentionally exposes reasoning tokens first; other OpenAI SDK completion
+// detail fields such as audio tokens and prediction token counters are deferred
+// until the model package has provider-agnostic semantics for them.
+type CompletionTokensDetails struct {
+	// ReasoningTokens is the number of tokens generated for reasoning.
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 }
 
 // Response is the response from the model.
@@ -175,10 +187,11 @@ func (rsp *Response) Clone() *Response {
 	copy(clone.Choices, rsp.Choices)
 	if rsp.Usage != nil {
 		clone.Usage = &Usage{
-			PromptTokens:        rsp.Usage.PromptTokens,
-			CompletionTokens:    rsp.Usage.CompletionTokens,
-			TotalTokens:         rsp.Usage.TotalTokens,
-			PromptTokensDetails: rsp.Usage.PromptTokensDetails,
+			PromptTokens:            rsp.Usage.PromptTokens,
+			CompletionTokens:        rsp.Usage.CompletionTokens,
+			TotalTokens:             rsp.Usage.TotalTokens,
+			PromptTokensDetails:     rsp.Usage.PromptTokensDetails,
+			CompletionTokensDetails: rsp.Usage.CompletionTokensDetails,
 		}
 		// Deep copy TimingInfo if present
 		if rsp.Usage.TimingInfo != nil {
