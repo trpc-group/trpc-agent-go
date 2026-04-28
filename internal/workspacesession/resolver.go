@@ -13,6 +13,7 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -74,6 +75,31 @@ func (r *Resolver) CreateWorkspace(
 		if inv.Session != nil && inv.Session.ID != "" {
 			sid = inv.Session.ID
 		}
+		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
 	return reg.Acquire(ctx, eng.Manager(), sid)
+}
+
+// withWorkspaceArtifactContext mirrors internal/workspaceinput.withArtifactContext:
+// inject artifact service when present, then session info when Session is set.
+// Workspace init hooks and StageInputs during CreateWorkspace then resolve
+// artifact:// references consistently with other artifact-backed staging paths.
+func withWorkspaceArtifactContext(
+	ctx context.Context,
+	inv *agent.Invocation,
+) context.Context {
+	if inv == nil {
+		return ctx
+	}
+	if inv.ArtifactService != nil {
+		ctx = codeexecutor.WithArtifactService(ctx, inv.ArtifactService)
+	}
+	if inv.Session == nil {
+		return ctx
+	}
+	return codeexecutor.WithArtifactSession(ctx, artifact.SessionInfo{
+		AppName:   inv.Session.AppName,
+		UserID:    inv.Session.UserID,
+		SessionID: inv.Session.ID,
+	})
 }
