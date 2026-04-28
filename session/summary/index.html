@@ -1344,6 +1344,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#context-compaction-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      Context Compaction Details
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2755,6 +2764,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#context-compaction-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      Context Compaction Details
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3942,6 +3960,46 @@ conversation payload:</p>
 </table>
 <h2 id="context-injection-mechanism">Context Injection Mechanism</h2>
 <p>The framework provides two modes for managing conversation context sent to the LLM:</p>
+<p>Before choosing a mode, distinguish the three context-reduction mechanisms:</p>
+<table>
+<thead>
+<tr>
+<th>Mechanism</th>
+<th>Layer</th>
+<th>What changes</th>
+<th>Typical use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Summary</td>
+<td>Session Service + prompt assembly</td>
+<td>Uses an LLM to create a persisted summary of historical events. With <code>WithAddSessionSummary(true)</code>, the request injects that summary and appends only incremental events after the summary point</td>
+<td>Preserve semantic continuity in long sessions while avoiding repeated full-history prompts</td>
+</tr>
+<tr>
+<td>Context compaction</td>
+<td>Agent prompt assembly</td>
+<td>Does not call an LLM and does not drop whole turns. It only rewrites <code>tool result</code> content during request projection, such as replacing old results with placeholders or truncating oversized results with head+tail preservation</td>
+<td>Keep the conversation structure and active tool chain while shrinking large tool outputs</td>
+</tr>
+<tr>
+<td>Token tailoring</td>
+<td>Model provider</td>
+<td>Drops or keeps message rounds according to a token budget right before the provider call. The default strategy tries to preserve system messages and the latest turn, but preservation is still limited by the available budget</td>
+<td>Final fallback to keep the request within the model context window</td>
+</tr>
+</tbody>
+</table>
+<p>The normal call path is: the agent assembles the prompt, injects the summary when
+configured, and optionally compacts <code>tool result</code> content. If summary injection is
+enabled and the compacted request still approaches the context window, the flow
+may synchronously refresh the summary once and rebuild the request before the LLM
+call. Finally, model-layer token tailoring trims the message list by budget. In
+short, context compaction and token tailoring can both reduce prompt size, but
+compaction shrinks tool-output payloads inside messages, while tailoring drops
+message rounds. Summary is different again: it creates a semantic replacement for
+historical context.</p>
 <h3 id="mode-1-enable-summary-injection-recommended">Mode 1: Enable Summary Injection (Recommended)</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAddSessionSummary</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
@@ -4057,7 +4115,18 @@ conversation payload:</p>
 <blockquote>
 <p><strong>Tip</strong>: For very long conversations (hundreds of turns) where you want old summaries to naturally age out (replaced by newer summaries), use <code>SessionSummaryInjectionUser</code> mode.</p>
 </blockquote>
-<p><strong>Optional: Prompt-side context compaction</strong></p>
+<h4 id="context-compaction-details">Context Compaction Details</h4>
+<p>Context compaction is not another name for summary, and it is not token
+tailoring. It only targets <code>tool result</code> content, which is the part most likely
+to grow unexpectedly. It does not summarize ordinary user/assistant messages
+with an LLM, and it does not discard complete message rounds the way token
+tailoring may.</p>
+<blockquote>
+<p><strong>Naming note</strong>: "compaction" in <code>WithEnableContextCompaction(true)</code> means
+prompt-side tool result compaction/pruning. Semantic summaries are still
+controlled by <code>WithAddSessionSummary(true)</code> and the configured session
+summarizer.</p>
+</blockquote>
 <p>When <code>WithEnableContextCompaction(true)</code> is enabled, the framework adds two compaction passes before the LLM call:</p>
 <p><strong>Pass 1 — Historical tool result placeholder</strong> (<code>ContextCompactionToolResultMaxTokens</code>, default 1024 tokens):</p>
 <ul>
@@ -4091,7 +4160,7 @@ conversation payload:</p>
 </span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2"></a><span class="w">    </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
 </span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAddSessionSummary</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithEnableContextCompaction</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithEnableContextCompaction</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// only shrinks tool results; does not generate a summary</span>
 </span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithContextCompactionThresholdRatio</span><span class="p">(</span><span class="mf">0.7</span><span class="p">),</span>
 </span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithContextCompactionToolResultMaxTokens</span><span class="p">(</span><span class="mi">1024</span><span class="p">),</span><span class="w">  </span><span class="c1">// Pass 1: old tool results → placeholder</span>
 </span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithContextCompactionOversizedToolResultMaxTokens</span><span class="p">(</span><span class="mi">8192</span><span class="p">),</span><span class="w">  </span><span class="c1">// Pass 2: any huge result → head+tail</span>
@@ -4503,7 +4572,7 @@ conversation payload:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 24, 2026 06:13:34 UTC">2026-04-24 06:13:34</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 28, 2026 08:47:19 UTC">2026-04-28 08:47:19</span>
   </span>
 
     
