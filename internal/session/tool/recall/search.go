@@ -174,6 +174,7 @@ func searchCurrentSession(
 		SessionIDs: []string{inv.Session.ID},
 		MaxResults: normalizeTopK(req.TopK),
 		MinScore:   req.MinScore,
+		FilterKey:  invocationFilterKey(inv),
 		Roles: []model.Role{
 			model.RoleUser,
 			model.RoleAssistant,
@@ -210,6 +211,7 @@ func searchCurrentHidden(
 		SessionIDs: []string{inv.Session.ID},
 		MaxResults: normalizeTopK(req.TopK),
 		MinScore:   req.MinScore,
+		FilterKey:  invocationFilterKey(inv),
 		Roles: []model.Role{
 			model.RoleUser,
 			model.RoleAssistant,
@@ -241,6 +243,7 @@ func searchOtherSessions(
 		UserKey:    userKey,
 		MaxResults: normalizeTopK(req.TopK),
 		MinScore:   req.MinScore,
+		FilterKey:  invocationFilterKey(inv),
 		Roles: []model.Role{
 			model.RoleUser,
 			model.RoleAssistant,
@@ -457,7 +460,14 @@ func searchCurrentSessionScan(
 	topK := normalizeTopK(req.TopK)
 	var merged []session.EventSearchResult
 	for _, query := range searchQueries(req.Query) {
-		matches := lexicalScanSessionEvents(sess, key, query, cutoff, topK)
+		matches := lexicalScanSessionEvents(
+			sess,
+			key,
+			query,
+			invocationFilterKey(inv),
+			cutoff,
+			topK,
+		)
 		merged = mergeSearchResults(merged, matches)
 		if len(merged) >= topK {
 			break
@@ -476,6 +486,7 @@ func lexicalScanSessionEvents(
 	sess *session.Session,
 	key session.Key,
 	query string,
+	filterKey string,
 	cutoff time.Time,
 	topK int,
 ) []session.EventSearchResult {
@@ -494,6 +505,9 @@ func lexicalScanSessionEvents(
 
 	results := make([]session.EventSearchResult, 0)
 	for _, evt := range sess.Events {
+		if filterKey != "" && !evt.Filter(filterKey) {
+			continue
+		}
 		createdAt := evt.Timestamp
 		if !cutoff.IsZero() && !createdAt.IsZero() && createdAt.After(cutoff) {
 			continue
@@ -531,6 +545,13 @@ func lexicalScanSessionEvents(
 		results = results[:topK]
 	}
 	return results
+}
+
+func invocationFilterKey(inv *agent.Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	return strings.TrimSpace(inv.GetEventFilterKey())
 }
 
 func lexicalEventScore(

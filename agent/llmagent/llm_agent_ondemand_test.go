@@ -95,6 +95,36 @@ func TestAppendOnDemandSessionProcessor(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestLLMAgent_OnDemandSessionSkippedWithOutputSchema(t *testing.T) {
+	opts := &Options{
+		OutputSchema: map[string]any{"type": "object"},
+	}
+	WithEnableOnDemandSession(true)(opts)
+
+	procs := appendOnDemandSessionProcessor(opts, nil)
+	require.Empty(t, procs)
+	require.Empty(t, appendOnDemandSessionTools(nil, opts, nil))
+
+	a := New(
+		"tester",
+		WithEnableOnDemandSession(true),
+		WithOutputSchema(map[string]any{"type": "object"}),
+	)
+	supportedInv := &agent.Invocation{
+		Session: session.NewSession("app", "user", "sess"),
+		SessionService: &onDemandSessionToolService{
+			Service: sessioninmemory.NewSessionService(),
+		},
+	}
+	tools, userToolNames := a.InvocationToolSurface(
+		context.Background(),
+		supportedInv,
+	)
+	require.Nil(t, findTool(tools, "session_search"))
+	require.Nil(t, findTool(tools, "session_load"))
+	require.NotNil(t, userToolNames)
+}
+
 func TestAppendOnDemandSessionTools_Gating(t *testing.T) {
 	baseTools := []tool.Tool{}
 

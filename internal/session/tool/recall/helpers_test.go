@@ -501,11 +501,58 @@ func TestLexicalScanSessionEvents_HonorsCutoffAndTopK(t *testing.T) {
 			SessionID: "sess",
 		},
 		"budget planning friday",
+		"",
 		base.Add(90*time.Second),
 		1,
 	)
 	require.Len(t, results, 1)
 	assert.Equal(t, "evt-1", results[0].Event.ID)
+}
+
+func TestLexicalScanSessionEvents_HonorsFilterKey(t *testing.T) {
+	base := time.Date(2025, 4, 7, 9, 0, 0, 0, time.UTC)
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{
+		{
+			ID:        "evt-branch-a",
+			Timestamp: base,
+			FilterKey: "branch/a",
+			Version:   event.CurrentVersion,
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "Budget planning moved to Friday.",
+					},
+				}},
+			},
+		},
+		{
+			ID:        "evt-branch-b",
+			Timestamp: base.Add(time.Minute),
+			FilterKey: "branch/b",
+			Version:   event.CurrentVersion,
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "Budget planning moved to Monday.",
+					},
+				}},
+			},
+		},
+	}
+
+	results := lexicalScanSessionEvents(
+		sess,
+		session.Key{AppName: "app", UserID: "user", SessionID: "sess"},
+		"budget planning",
+		"branch/a",
+		time.Time{},
+		5,
+	)
+	require.Len(t, results, 1)
+	assert.Equal(t, "evt-branch-a", results[0].Event.ID)
 }
 
 func TestSearchCurrentSession_UsesBackendResults(t *testing.T) {
@@ -525,6 +572,7 @@ func TestSearchCurrentSession_UsesBackendResults(t *testing.T) {
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
 		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationEventFilterKey("branch/a"),
 	)
 
 	results, err := searchCurrentSession(
@@ -540,6 +588,7 @@ func TestSearchCurrentSession_UsesBackendResults(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, session.SearchModeDense, svc.lastSearchReq.SearchMode)
+	assert.Equal(t, "branch/a", svc.lastSearchReq.FilterKey)
 }
 
 func TestSearchCurrentSession_FallsBackToScan(t *testing.T) {
@@ -786,8 +835,8 @@ func TestSearchHelpers_EdgeBranches(t *testing.T) {
 	assert.Empty(t, keywordSearchQuery("the and or"))
 	assert.Nil(t, keywordTokens("the and or"))
 
-	assert.Nil(t, lexicalScanSessionEvents(nil, session.Key{}, "alpha", time.Time{}, 1))
-	assert.Nil(t, lexicalScanSessionEvents(session.NewSession("app", "user", "sess"), session.Key{}, "", time.Time{}, 1))
+	assert.Nil(t, lexicalScanSessionEvents(nil, session.Key{}, "alpha", "", time.Time{}, 1))
+	assert.Nil(t, lexicalScanSessionEvents(session.NewSession("app", "user", "sess"), session.Key{}, "", "", time.Time{}, 1))
 
 	assert.Zero(
 		t,

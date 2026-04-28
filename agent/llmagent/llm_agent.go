@@ -445,7 +445,7 @@ func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestP
 }
 
 func appendOnDemandSessionProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
-	if !options.EnableOnDemandSession {
+	if !options.EnableOnDemandSession || options.OutputSchema != nil {
 		return requestProcessors
 	}
 	return append(
@@ -948,7 +948,8 @@ func appendOnDemandSessionTools(
 	options *Options,
 	inv *agent.Invocation,
 ) []tool.Tool {
-	if options == nil || !options.EnableOnDemandSession {
+	if options == nil || !options.EnableOnDemandSession ||
+		options.OutputSchema != nil {
 		return allTools
 	}
 	if inv != nil && !toolsessionrecall.SupportsOnDemandSession(inv) {
