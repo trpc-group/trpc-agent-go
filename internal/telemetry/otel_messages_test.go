@@ -113,14 +113,14 @@ func TestRawJSONOrJSONStringAndJSONValueOrString(t *testing.T) {
 	require.Nil(t, rawJSONOrJSONString([]byte("  ")))
 	require.JSONEq(t, `{"ok":true}`, string(rawJSONOrJSONString([]byte(` {"ok":true} `))))
 
-	raw := rawJSONOrJSONString([]byte("not json"))
+	raw := rawJSONOrJSONString([]byte("  not json\n"))
 	var got string
 	require.NoError(t, json.Unmarshal(raw, &got))
-	require.Equal(t, "not json", got)
+	require.Equal(t, "  not json\n", got)
 
 	require.Equal(t, "", jsonValueOrString([]byte(" ")))
 	require.Equal(t, float64(1), jsonValueOrString([]byte("1")))
-	require.Equal(t, "not json", jsonValueOrString([]byte("not json")))
+	require.Equal(t, "  not json\n", jsonValueOrString([]byte("  not json\n")))
 }
 
 func TestTelemetryMIMEAndModalityHelpers(t *testing.T) {
@@ -138,7 +138,7 @@ func TestTelemetryMIMEAndModalityHelpers(t *testing.T) {
 	require.Equal(t, "image/webp", normalizeFormatAsMIME("webp", "image"))
 	require.Equal(t, "image/bmp", normalizeFormatAsMIME("bmp", "image"))
 	require.Equal(t, "image/tiff", normalizeFormatAsMIME("tif", "image"))
-	require.Equal(t, "image/svg", normalizeFormatAsMIME("svg", "image"))
+	require.Equal(t, "image/svg+xml", normalizeFormatAsMIME("svg", "image"))
 	require.Equal(t, "audio/wav", normalizeFormatAsMIME("wav", "audio"))
 	require.Equal(t, "audio/mp4", normalizeFormatAsMIME("m4a", "audio"))
 	require.Equal(t, "audio/ogg", normalizeFormatAsMIME("ogg", "audio"))

@@ -316,7 +316,7 @@ func rawJSONOrJSONString(raw []byte) json.RawMessage {
 	if json.Valid(trimmed) {
 		return append(json.RawMessage(nil), trimmed...)
 	}
-	bts, err := json.Marshal(string(trimmed))
+	bts, err := json.Marshal(string(raw))
 	if err != nil {
 		return nil
 	}
@@ -332,7 +332,7 @@ func jsonValueOrString(raw []byte) any {
 	if err := json.Unmarshal(trimmed, &v); err == nil {
 		return v
 	}
-	return string(trimmed)
+	return string(raw)
 }
 
 func telemetryMessageName(msg model.Message) string {
@@ -422,6 +422,8 @@ func normalizeFormatAsMIME(format, category string) string {
 			return "image/bmp"
 		case "tiff", "tif":
 			return "image/tiff"
+		case "svg":
+			return "image/svg+xml"
 		default:
 			return "image/" + normalized
 		}
