@@ -17,7 +17,7 @@ The example supports the following environment variables:
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-model` | Model identifier used by the calculator agent | `deepseek-chat` |
+| `-model` | Model identifier used by the calculator agent | `deepseek-v4-flash` |
 | `-streaming` | Enable streaming responses from the LLM | `false` |
 | `-runs` | Number of repetitions per evaluation case | `1` |
 
@@ -26,7 +26,7 @@ The example supports the following environment variables:
 ```bash
 cd trpc-agent-go/examples/evaluation/inmemory
 go run . \
-  -model "deepseek-chat" \
+  -model "deepseek-v4-flash" \
   -runs 1
 ```
 

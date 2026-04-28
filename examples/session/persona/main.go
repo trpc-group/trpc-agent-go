@@ -43,7 +43,7 @@ const (
 	agentName            = "persona-assistant"
 	defaultUserID        = "user"
 	personaStateKey      = "assistant_persona"
-	defaultModelName     = "deepseek-chat"
+	defaultModelName     = "deepseek-v4-flash"
 	defaultSessionType   = "inmemory"
 	defaultEventLimit    = 1000
 	defaultBannerWidth   = 72
@@ -74,7 +74,7 @@ var (
 		"model",
 		os.Getenv("MODEL_NAME"),
 		"Name of the model to use (default: MODEL_NAME env var or "+
-			"deepseek-chat)",
+			"deepseek-v4-flash)",
 	)
 	sessionType = flag.String(
 		"session",

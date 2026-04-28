@@ -578,15 +578,22 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 		request.StructuredOutput.Type == model.StructuredOutputJSONSchema &&
 		request.StructuredOutput.JSONSchema != nil {
 		js := request.StructuredOutput.JSONSchema
-		chatRequest.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
-				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name:        js.Name,
-					Schema:      js.Schema,
-					Strict:      openai.Bool(js.Strict),
-					Description: openai.String(js.Description),
+		if m.variant == VariantDeepSeek {
+			jsonObject := shared.NewResponseFormatJSONObjectParam()
+			chatRequest.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONObject: &jsonObject,
+			}
+		} else {
+			chatRequest.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+						Name:        js.Name,
+						Schema:      js.Schema,
+						Strict:      openai.Bool(js.Strict),
+						Description: openai.String(js.Description),
+					},
 				},
-			},
+			}
 		}
 		if len(request.Tools) > 0 {
 			// Parallel tool calls can interfere with strict JSON schema
@@ -707,7 +714,7 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 				ToolCalls: m.convertToolCalls(msg.ToolCalls),
 			}
 			// Pass reasoning_content to API if present (required by DeepSeek for
-			// tool call scenarios within the same request turn).
+			// tool-call replay across current and later request turns).
 			if msg.ReasoningContent != "" ||
 				m.shouldBackfillReasoningContent(msg) {
 				assistantMsg.SetExtraFields(map[string]any{
@@ -2084,11 +2091,6 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 				[]model.ToolCall, 0,
 				len(chunk.Choices[0].Delta.ToolCalls))
 			for _, toolCall := range chunk.Choices[0].Delta.ToolCalls {
-				var indexPtr *int
-				if toolCall.Index != 0 {
-					index := int(toolCall.Index)
-					indexPtr = &index
-				}
 				toolCalls = append(toolCalls, model.ToolCall{
 					Type: string(toolCall.Type),
 					Function: model.FunctionDefinitionParam{
@@ -2096,7 +2098,7 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 						Arguments: []byte(toolCall.Function.Arguments),
 					},
 					ID:    toolCall.ID,
-					Index: indexPtr,
+					Index: toolCallDeltaIndexPointer(toolCall),
 				})
 			}
 		}
@@ -2116,6 +2118,14 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 	}
 
 	return response
+}
+
+func toolCallDeltaIndexPointer(toolCall openai.ChatCompletionChunkChoiceDeltaToolCall) *int {
+	if toolCall.Index == 0 && !toolCall.JSON.Index.Valid() {
+		return nil
+	}
+	index := int(toolCall.Index)
+	return &index
 }
 
 // emitStreamingFinalResponse emits the final response with accumulated data.

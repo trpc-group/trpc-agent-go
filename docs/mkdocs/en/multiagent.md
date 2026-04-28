@@ -379,6 +379,8 @@ agentTool := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     // Enable inner forwarding: stream child Agent events inline to the parent
     agenttool.WithStreamInner(true),
+    // Return only the child Agent's final assistant message as the tool result.
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
 )
 
 // Use Agent tool in main Agent.
@@ -402,7 +404,7 @@ Chat Assistant (Main Agent)
 
 ```
 🚀 Agent Tool Example
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Available tools: current_time, math-specialist
 ==================================================
 
@@ -465,6 +467,15 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
   assistant text when inner streaming is enabled
 - `WithInnerTextMode(agenttool.InnerTextModeExclude)`: keep inner
   progress events, but suppress forwarded child assistant text
+- `WithResponseMode(agenttool.ResponseModeDefault)`: default compatibility mode;
+  concatenate child assistant messages into the tool result
+- `WithResponseMode(agenttool.ResponseModeFinalOnly)`: return only the last
+  complete child assistant message as the tool result
+
+Use `ResponseModeFinalOnly` when the child Agent is a context-isolated worker
+and the parent Agent should only consume its final answer. Use
+`InnerTextModeExclude` separately when you also want to hide child assistant
+text from the streamed UI.
 
 ### Agent Transfer
 
@@ -733,7 +744,7 @@ All example code is located at [examples](https://github.com/trpc-group/trpc-age
 ```bash
 cd examples/multiagent/chain
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Parallel Agent Example
@@ -741,7 +752,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/multiagent/parallel
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Cycle Agent Example
@@ -749,7 +760,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/multiagent/cycle
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat -max-iterations 5
+go run main.go -model deepseek-v4-flash -max-iterations 5
 ```
 
 ### Auxiliary Function Examples
@@ -759,7 +770,7 @@ go run main.go -model deepseek-chat -max-iterations 5
 ```bash
 cd examples/agenttool
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Agent Transfer Example
@@ -767,7 +778,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/transfer
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 ## Customization and Extension

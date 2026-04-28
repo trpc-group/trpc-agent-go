@@ -65,7 +65,7 @@ ingest → mem0 extraction → memory retrieval.
 
 | Argument         | Description                                       | Default                    |
 | ---------------- | ------------------------------------------------- | -------------------------- |
-| `-model`         | Chat model name                                   | `deepseek-chat`            |
+| `-model`         | Chat model name                                   | `deepseek-v4-flash`            |
 | `-app`           | Application name used for mem0 ownership scoping  | `mem0-integration-demo`    |
 | `-user`          | User ID used for mem0 ownership scoping           | `demo-user`                |
 | `-session`       | Session ID (auto-generated if empty)              | `mem0-<unix-timestamp>`    |
@@ -99,7 +99,7 @@ go run .
 ### Expected Output
 
 ```
-Model: deepseek-chat
+Model: deepseek-v4-flash
 App: mem0-integration-demo
 User: demo-user
 Session: mem0-1713012345
@@ -135,7 +135,7 @@ defer mem0Svc.Close()
 // 2. Create the agent with read-only memory tools.
 agent := llmagent.New(
     "assistant",
-    llmagent.WithModel(openai.New("deepseek-chat")),
+    llmagent.WithModel(openai.New("deepseek-v4-flash")),
     llmagent.WithTools(mem0Svc.Tools()),
 )
 

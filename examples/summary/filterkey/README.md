@@ -39,14 +39,14 @@ go run ./examples/summary/filterkey -allowlist calc,time
 go run ./examples/summary/filterkey -cascade-full=false
 
 # With all options.
-go run ./examples/summary/filterkey -model deepseek-chat -max-words 100 -streaming=true -debug -allowlist calc,time -cascade-full=false
+go run ./examples/summary/filterkey -model deepseek-v4-flash -max-words 100 -streaming=true -debug -allowlist calc,time -cascade-full=false
 ```
 
 ### Command-line Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-model` | `deepseek-chat` | Model name for LLM |
+| `-model` | `deepseek-v4-flash` | Model name for LLM |
 | `-streaming` | `true` | Enable streaming mode |
 | `-max-words` | `0` | Max summary words (0=unlimited) |
 | `-debug` | `false` | Print request messages for debugging |
@@ -81,7 +81,7 @@ go run ./examples/summary/filterkey -model deepseek-chat -max-words 100 -streami
 
 ```
 📝 Filter-Key Summarization Demo
-Model: deepseek-chat | Streaming: true | MaxWords: 0 | Debug: false
+Model: deepseek-v4-flash | Streaming: true | MaxWords: 0 | Debug: false
 Summary Policy: allowlist=all branch filterKeys | cascade-full=true
 ============================================================
 Session: filterkey-session-1735638000

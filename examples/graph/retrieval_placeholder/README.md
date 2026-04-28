@@ -22,7 +22,7 @@ go build -o graph-retrieval-placeholder main.go
 ```
 ./graph-retrieval-placeholder
 # or choose a model
-./graph-retrieval-placeholder -model deepseek-chat
+./graph-retrieval-placeholder -model deepseek-v4-flash
 ```
 
 Type your question, for example:

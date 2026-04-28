@@ -42,7 +42,7 @@ import (
 )
 
 var (
-	flagModel          = flag.String("model", "deepseek-chat", "model name")
+	flagModel          = flag.String("model", "deepseek-v4-flash", "model name")
 	flagStream         = flag.Bool("stream", true, "stream responses")
 	flagSkills         = flag.String("skills-root", "", "skills root dir")
 	flagSkillsGuidance = flag.Bool(

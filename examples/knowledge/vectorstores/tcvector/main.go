@@ -12,7 +12,7 @@
 // Required environment variables:
 //   - OPENAI_API_KEY: Your OpenAI API key for LLM and embeddings
 //   - OPENAI_BASE_URL: (Optional) Custom OpenAI API endpoint
-//   - MODEL_NAME: (Optional) Model name to use, defaults to deepseek-chat
+//   - MODEL_NAME: (Optional) Model name to use, defaults to deepseek-v4-flash
 //   - TCVECTOR_URL: Tencent VectorDB URL
 //   - TCVECTOR_USERNAME: Tencent VectorDB username
 //   - TCVECTOR_PASSWORD: Tencent VectorDB password
@@ -49,7 +49,7 @@ import (
 )
 
 var (
-	modelName  = util.GetEnvOrDefault("MODEL_NAME", "deepseek-chat")
+	modelName  = util.GetEnvOrDefault("MODEL_NAME", "deepseek-v4-flash")
 	url        = util.GetEnvOrDefault("TCVECTOR_URL", "")
 	username   = util.GetEnvOrDefault("TCVECTOR_USERNAME", "")
 	password   = util.GetEnvOrDefault("TCVECTOR_PASSWORD", "")

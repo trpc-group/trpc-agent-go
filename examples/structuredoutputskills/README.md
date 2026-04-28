@@ -24,7 +24,7 @@ The key idea is:
 From this directory:
 
 ```bash
-go run . -model deepseek-chat
+go run . -model deepseek-v4-flash
 ```
 
 Then ask anything (for example: "run the hello skill").

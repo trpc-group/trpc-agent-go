@@ -38,6 +38,7 @@ type options struct {
 	messagesSnapshotEnabled bool
 	cancelPath              string
 	cancelEnabled           bool
+	heartbeatInterval       time.Duration
 	appName                 string
 	sessionService          session.Service
 }
@@ -132,6 +133,13 @@ func WithFlushInterval(d time.Duration) Option {
 func WithPostRunFinalizationTimeout(d time.Duration) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithPostRunFinalizationTimeout(d))
+	}
+}
+
+// WithHeartbeatInterval sets how often the SSE transport sends heartbeat frames.
+func WithHeartbeatInterval(d time.Duration) Option {
+	return func(o *options) {
+		o.heartbeatInterval = d
 	}
 }
 

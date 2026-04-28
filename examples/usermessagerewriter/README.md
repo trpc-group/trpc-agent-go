@@ -39,7 +39,7 @@ If you have already exported `OPENAI_API_KEY` and `OPENAI_BASE_URL`, you can run
 
 ```bash
 cd examples/usermessagerewriter
-go run . -model deepseek-chat -streaming=true
+go run . -model deepseek-v4-flash -streaming=true
 ```
 
 Interactive commands:
@@ -47,7 +47,7 @@ Interactive commands:
 - `/dump`: print the persisted session transcript
 - `/exit`: quit the demo
 
-If your OpenAI-compatible endpoint does not provide `deepseek-chat`, pass a
+If your OpenAI-compatible endpoint does not provide `deepseek-v4-flash`, pass a
 different model explicitly. The example was verified with:
 
 ```bash

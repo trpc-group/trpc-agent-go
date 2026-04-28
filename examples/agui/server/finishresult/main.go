@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	modelName            = flag.String("model", "deepseek-chat", "Model to use")
+	modelName            = flag.String("model", "deepseek-v4-flash", "Model to use")
 	isStream             = flag.Bool("stream", true, "Whether to stream the response")
 	address              = flag.String("address", "127.0.0.1:8080", "Listen address")
 	path                 = flag.String("path", "/agui", "HTTP path")

@@ -58,7 +58,7 @@ Use the conversation context to craft a helpful response in English.`
 )
 
 func main() {
-	modelName := flag.String("model", "deepseek-chat", "LLM model name")
+	modelName := flag.String("model", "deepseek-v4-flash", "LLM model name")
 	question := flag.String("question", "", "User question; leave empty to type interactively")
 	flag.Parse()
 

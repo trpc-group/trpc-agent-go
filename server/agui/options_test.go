@@ -94,6 +94,11 @@ func TestWithPostRunFinalizationTimeout(t *testing.T) {
 	assert.Equal(t, 2*time.Second, ro.PostRunFinalizationTimeout)
 }
 
+func TestWithHeartbeatInterval(t *testing.T) {
+	opts := newOptions(WithHeartbeatInterval(2 * time.Second))
+	assert.Equal(t, 2*time.Second, opts.heartbeatInterval)
+}
+
 func TestWithGraphNodeLifecycleActivityEnabled(t *testing.T) {
 	opts := newOptions(WithGraphNodeLifecycleActivityEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)

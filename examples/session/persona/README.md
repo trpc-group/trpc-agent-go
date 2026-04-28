@@ -51,7 +51,7 @@ go run . -session=clickhouse
 
 | Flag | Description | Default |
 | ---- | ----------- | ------- |
-| `-model` | Model name to use | `MODEL_NAME` or `deepseek-chat` |
+| `-model` | Model name to use | `MODEL_NAME` or `deepseek-v4-flash` |
 | `-session` | Session backend | `inmemory` |
 | `-event-limit` | Maximum stored events per session | `1000` |
 | `-session-ttl` | Session TTL | `24h` |

@@ -11,6 +11,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -51,4 +52,11 @@ func TestWithCancelEnabled(t *testing.T) {
 	opts := NewOptions(WithCancelEnabled(true))
 	assert.True(t, opts.CancelEnabled)
 	assert.Equal(t, "/cancel", opts.CancelPath)
+}
+
+func TestWithHeartbeatInterval(t *testing.T) {
+	opts := NewOptions()
+	assert.Zero(t, opts.HeartbeatInterval)
+	opts = NewOptions(WithHeartbeatInterval(2 * time.Second))
+	assert.Equal(t, 2*time.Second, opts.HeartbeatInterval)
 }

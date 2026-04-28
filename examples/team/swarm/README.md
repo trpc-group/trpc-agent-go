@@ -47,7 +47,7 @@ This example uses three discussion roles plus one summary role:
 
 | Argument | Description | Default Value |
 | --- | --- | --- |
-| `-model` | Name of the model to use | `deepseek-chat` |
+| `-model` | Name of the model to use | `deepseek-v4-flash` |
 | `-variant` | Variant passed to the OpenAI provider | `openai` |
 | `-streaming` | Enable streaming output | `true` |
 | `-timeout` | Request timeout | `5m` |
