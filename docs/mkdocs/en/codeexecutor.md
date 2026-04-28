@@ -64,9 +64,9 @@ More complete examples:
 ### `WithCodeExecutor` vs fenced-code auto-execution
 
 `llmagent.WithCodeExecutor(...)` and the response-side fenced-code
-auto-execution processor are **two independent switches**. It is worth
-internalising this distinction up front, because a lot of confusion
-comes from treating them as a single knob.
+auto-execution processor are **two independent switches**. Understanding
+this distinction early avoids a common point of confusion: treating them
+as a single switch.
 
 - `WithCodeExecutor(...)` supplies a *runtime* that execution-backed
   tools — most notably `workspace_exec` — use to run commands. It does
@@ -294,23 +294,21 @@ flow is:
 This keeps the contract simple: tools and models rely on stable paths instead
 of dealing with staging internals.
 
-## Workspace Bootstrap: Preparing the Workspace Before User Commands
+## Workspace init hooks
 
-Some workspaces need predictable setup before `workspace_exec` runs any
-user-authored command: a preloaded config file, a pinned Python virtualenv, a
-one-shot `pip install`, etc. Rather than teaching the model to perform this
-setup itself (which is error-prone and burns prompt tokens), the framework
-lets you declare it once on the agent.
+Hooks run **after** `WorkspaceManager.CreateWorkspace` succeeds and **before** that `Workspace` is returned to callers. When the app uses a `WorkspaceRegistry` (the default for session-scoped tools), creation runs **once per logical workspace id**—usually once per agent session workspace. Trusted-local modes may reuse one physical directory across sessions; hooks may still run whenever a distinct workspace acquisition happens. Do not assume hooks run at most once per on-disk path: re-acquisition can run them again.
 
-Use `codeexecutor.WorkspaceBootstrapSpec` to list the required files and
-commands, and wire it in via `llmagent.WithWorkspaceBootstrap(...)`. The first
-`workspace_exec` call in each workspace will converge the workspace to that
-spec; later calls find everything already in place and skip the work.
+Use init hooks to stage fixed inputs (`InputSpec`: `artifact://`, `host://`, etc.) and run deterministic setup commands (for example `pip install` inside a shell one-liner).
+
+Artifact-backed inputs require the artifact service and (when applicable)
+session fields on `context` when `CreateWorkspace` runs—the same requirements as
+`WorkspaceFS.StageInputs`. Standard llmagent workspace tools inject this from the
+current `agent.Invocation` when resolving the session workspace, so the example
+below works without manual context wiring.
 
 ```go
-package main
-
 import (
+    "fmt"
     "time"
 
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -318,115 +316,50 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 )
 
-func newAgent() *llmagent.LLMAgent {
-    bootstrap := codeexecutor.WorkspaceBootstrapSpec{
-        Files: []codeexecutor.WorkspaceFile{
-            {
-                Target:  "work/config.json",
-                Content: []byte(`{"threshold": 0.8}`),
-            },
-            {
-                Target: "work/requirements.txt",
-                Content: []byte(
-                    "numpy==1.26.4\npandas==2.2.2\n",
-                ),
-            },
-        },
-        Commands: []codeexecutor.WorkspaceCommand{
-            {
-                Cmd: "bash",
-                Args: []string{
-                    "-lc",
-                    "python3 -m venv .venv && " +
-                        ".venv/bin/pip install -q -r work/requirements.txt",
+func newAnalystAgent() (*llmagent.LLMAgent, error) {
+    exec, err := codeexecutor.NewWorkspaceInitExecutor(
+        local.New(),
+        codeexecutor.NewWorkspaceInitHook(codeexecutor.WorkspaceInitSpec{
+            Inputs: []codeexecutor.InputSpec{
+                {
+                    From: "artifact://app/requirements.txt@3",
+                    To:   "work/requirements.txt",
+                    Mode: "copy",
                 },
-                MarkerPath: ".venv/bin/pip",
-                // FingerprintInputs folds requirements.txt content
-                // into the command fingerprint, so the install
-                // reruns when the pinned versions change. Without
-                // this the marker would short-circuit the command
-                // after the first successful install.
-                FingerprintInputs: []string{"work/requirements.txt"},
-                Timeout:           2 * time.Minute,
             },
-        },
+            Commands: []codeexecutor.WorkspaceInitCommand{
+                {
+                    Name: "install-deps",
+                    Cmd:  "bash",
+                    Args: []string{
+                        "-lc",
+                        "python3 -m venv .venv && " +
+                            ".venv/bin/pip install -q -r work/requirements.txt",
+                    },
+                    Timeout: 2 * time.Minute,
+                },
+            },
+        }),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("workspace init executor: %w", err)
     }
-
     return llmagent.New(
         "analyst",
-        llmagent.WithCodeExecutor(local.New()),
-        llmagent.WithWorkspaceBootstrap(bootstrap),
-    )
+        llmagent.WithCodeExecutor(exec),
+    ), nil
 }
 ```
 
-### Field reference
-
-`WorkspaceFile`:
-
-- `Target`: workspace-relative destination path (required). Parent
-  directories are created automatically.
-- `Content`: inline bytes to write.
-- `Input`: alternatively, a `codeexecutor.InputSpec` that resolves
-  `artifact://`, `host://`, `workspace://`, or `skill://` URIs. Exactly
-  one of `Content` and `Input` must be set.
-- `Mode`: optional file mode (octal); defaults to `0o644`.
-- `Key`: optional stable identifier used for idempotency; if omitted it is
-  derived from `Target`.
-- `Optional`: if true, provider errors are logged as warnings instead of
-  aborting workspace preparation.
-
-`WorkspaceCommand`:
-
-- `Cmd` / `Args` / `Env` / `Cwd`: standard exec wiring. `Cwd` is
-  workspace-relative and defaults to the workspace root.
-- `Timeout`: bounds a single invocation.
-- `MarkerPath`: workspace-relative file whose *existence* signals the
-  command has already run; this is the cheapest way to make a command
-  self-healing after the marker gets deleted. When absent, the reconciler
-  falls back to fingerprint-only skip.
-- `ObservedPaths`: alternative to `MarkerPath` when success is defined by a
-  set of files rather than a single marker.
-- `FingerprintInputs` / `FingerprintSalt`: fold external inputs into the
-  command fingerprint so the command reruns when they change. **The
-  fingerprint does not automatically hash files referenced on the command
-  line**, so a command like `pip install -r work/requirements.txt` must
-  list `work/requirements.txt` here explicitly — otherwise the marker
-  will short-circuit the install after the first successful run even if
-  `requirements.txt` is later edited.
-- `Key`: stable identifier used for idempotency; derived from `Cmd`/`Args`
-  when omitted.
-- `Optional`: same semantics as for files.
-
-### Ordering and idempotency
-
-- Files are staged first, then commands run, both in declaration order.
-- Each entry is fingerprinted (content for files, command line + optional
-  inputs for commands). On subsequent invocations, the reconciler checks
-  the fingerprint *and* the on-disk sentinel before skipping, so a user
-  `rm -rf` inside `workspace_exec` does not silently leave the workspace
-  half-broken: the next call re-applies the missing piece.
-- Reconciliation is serialized per workspace (in-process), so two
-  parallel `workspace_exec` calls on the same session cannot step on each
-  other during preparation.
-- Entries without `Optional` set (the default required behavior) abort
-  the `workspace_exec` call before the user command runs on failure;
-  `Optional: true` entries downgrade to a logged warning.
-
-### Opting out
-
-If you want to keep the legacy "stage conversation files only" behavior
-— for example, because an existing regression test depends on it —
-pass `llmagent.WithWorkspacePreparersDisabled(true)` on the agent. In
-normal use this switch should not be necessary.
+If init inputs change later, use a **new** logical workspace (for example a new session id) or run setup again yourself; hooks do not watch files for you.
 
 ### Interaction with `skill_load`
 
-Skills loaded via `skill_load` are materialized into
-`skills/<name>` through the same reconcile path. You do not need to
-add anything to `WorkspaceBootstrapSpec` for skills — they are picked
-up automatically from session state whenever `workspace_exec` runs.
-The bootstrap spec is for static, session-independent setup.
+Skills loaded via `skill_load` are materialized into `skills/<name>` when
+`workspace_exec` runs, using the current session’s loaded skills. You do not
+need to duplicate skill sources in init hook `Inputs`; init hooks cover
+session-independent files and setup commands you want present before any tool
+run.
 
 ## What Persists Across Turns
 
