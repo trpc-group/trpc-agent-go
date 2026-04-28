@@ -15,7 +15,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	sessionrecall "trpc.group/trpc-go/trpc-agent-go/internal/session/tool/sessionrecall"
+	sessionrecall "trpc.group/trpc-go/trpc-agent-go/internal/session/tool/recall"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 

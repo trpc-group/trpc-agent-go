@@ -7,9 +7,9 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package sessionrecall provides agent-facing tools for on-demand
+// Package recall provides agent-facing tools for on-demand
 // session history search and loading.
-package sessionrecall
+package recall
 
 import (
 	"context"
