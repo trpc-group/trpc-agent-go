@@ -617,6 +617,24 @@ err := sessionService.CreateSessionSummary(
 
 The framework provides two modes for managing conversation context sent to the LLM:
 
+Before choosing a mode, distinguish the three context-reduction mechanisms:
+
+| Mechanism | Layer | What changes | Typical use |
+| --- | --- | --- | --- |
+| Summary | Session Service + prompt assembly | Uses an LLM to create a persisted summary of historical events. With `WithAddSessionSummary(true)`, the request injects that summary and appends only incremental events after the summary point | Preserve semantic continuity in long sessions while avoiding repeated full-history prompts |
+| Context compaction | Agent prompt assembly | Does not call an LLM and does not drop whole turns. It only rewrites `tool result` content during request projection, such as replacing old results with placeholders or truncating oversized results with head+tail preservation | Keep the conversation structure and active tool chain while shrinking large tool outputs |
+| Token tailoring | Model provider | Drops or keeps message rounds according to a token budget right before the provider call. The default strategy tries to preserve system messages and the latest turn, but preservation is still limited by the available budget | Final fallback to keep the request within the model context window |
+
+The normal call path is: the agent assembles the prompt, injects the summary when
+configured, and optionally compacts `tool result` content. If summary injection is
+enabled and the compacted request still approaches the context window, the flow
+may synchronously refresh the summary once and rebuild the request before the LLM
+call. Finally, model-layer token tailoring trims the message list by budget. In
+short, context compaction and token tailoring can both reduce prompt size, but
+compaction shrinks tool-output payloads inside messages, while tailoring drops
+message rounds. Summary is different again: it creates a semantic replacement for
+historical context.
+
 ### Mode 1: Enable Summary Injection (Recommended)
 
 ```go
@@ -700,7 +718,18 @@ When the first history message is not a user role, the summary is a standalone u
 
 > **Tip**: For very long conversations (hundreds of turns) where you want old summaries to naturally age out (replaced by newer summaries), use `SessionSummaryInjectionUser` mode.
 
-**Optional: Prompt-side context compaction**
+#### Context Compaction Details
+
+Context compaction is not another name for summary, and it is not token
+tailoring. It only targets `tool result` content, which is the part most likely
+to grow unexpectedly. It does not summarize ordinary user/assistant messages
+with an LLM, and it does not discard complete message rounds the way token
+tailoring may.
+
+> **Naming note**: "compaction" in `WithEnableContextCompaction(true)` means
+> prompt-side tool result compaction/pruning. Semantic summaries are still
+> controlled by `WithAddSessionSummary(true)` and the configured session
+> summarizer.
 
 When `WithEnableContextCompaction(true)` is enabled, the framework adds two compaction passes before the LLM call:
 
@@ -730,7 +759,7 @@ agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
     llmagent.WithAddSessionSummary(true),
-    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableContextCompaction(true), // only shrinks tool results; does not generate a summary
     llmagent.WithContextCompactionThresholdRatio(0.7),
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: old tool results → placeholder
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail

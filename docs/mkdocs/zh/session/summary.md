@@ -620,6 +620,22 @@ err := sessionService.CreateSessionSummary(
 
 框架提供两种模式来管理发送给 LLM 的对话上下文：
 
+在选择模式前，先区分三类上下文减载机制：
+
+| 机制 | 所在层 | 改动对象 | 典型用途 |
+| --- | --- | --- | --- |
+| Summary | Session Service + prompt assembly | 用 LLM 将历史事件生成可持久化摘要；开启 `WithAddSessionSummary(true)` 后，请求中注入摘要，并只拼接摘要时间点之后的增量事件 | 长会话保留语义连续性，减少反复发送完整历史 |
+| Context compaction | Agent prompt assembly | 不调用 LLM，不删除整轮消息；只在请求投影阶段改写 `tool result` 内容，例如旧结果替换为占位符、超大结果首尾保留截断 | 工具输出很长，但希望尽量保留对话结构和当前轮工具链路 |
+| Token tailoring | Model provider | 模型调用前按 token budget 删除或保留消息轮次，默认策略会尽量保留系统消息和最新轮次，但最终仍受可用预算约束 | 最后一层兜底，保证请求落入模型 context window |
+
+正常调用链路大致是：先由 agent 组装 prompt；如果启用了
+`WithAddSessionSummary(true)`，则注入 summary；随后按需压缩 `tool result`。
+如果开启了摘要注入且压完后仍接近 context window，会在 LLM 调用前同步尝试
+刷新一次 summary 并重建请求；最后模型层的 token tailoring 再按预算裁剪
+消息列表。也就是说，context compaction 和 token tailoring 都能减少 prompt
+体积，但前者缩小消息内部的工具输出，后者删减消息轮次；summary 则是用新的
+语义摘要替代一段历史。
+
 ### 模式 1：启用摘要注入（推荐）
 
 ```go
@@ -703,7 +719,15 @@ agent := llmagent.New(
 
 > **提示**：如果你的场景是超长对话（数百轮），且希望旧摘要能被自然淘汰（被新的摘要替代），建议使用 `SessionSummaryInjectionUser` 模式。
 
-**可选：Prompt 侧上下文压缩**
+#### Context Compaction 细节
+
+Context compaction 不是 summary 的同义词，也不是 token tailoring。它只处理
+`tool result` 这种容易异常膨胀的内容，不会把普通 user/assistant 消息做
+LLM 摘要，也不会像 token tailoring 那样直接丢弃完整消息轮次。
+
+> **命名说明**：`WithEnableContextCompaction(true)` 中的 "compaction"
+> 指 prompt-side tool result compaction/pruning；如果需要语义摘要，仍然由
+> `WithAddSessionSummary(true)` 和会话摘要器负责。
 
 当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前执行两遍压缩：
 
@@ -733,7 +757,7 @@ agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
     llmagent.WithAddSessionSummary(true),
-    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableContextCompaction(true), // 只压 tool result，不生成摘要
     llmagent.WithContextCompactionThresholdRatio(0.7),
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: 旧 tool result → 占位符
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: 任意超大 result → 首尾保留截断
