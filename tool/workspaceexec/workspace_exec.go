@@ -287,9 +287,9 @@ func toInternalBootstrapSpec(
 // Declaration returns the schema for workspace_exec.
 func (t *ExecTool) Declaration() *tool.Declaration {
 	desc := "Execute a shell command inside the current " +
-		"executor workspace. This is the default general shell " +
-		"runner for shared executor-side work that does not " +
-		"depend on a specific skill, including file operations, " +
+		"executor workspace. This is the general shell runner " +
+		"for shared executor-side work that does not depend on " +
+		"a specific skill, including file operations, " +
 		"repo inspection, validation commands, and " +
 		"environment-dependent network commands such as curl or " +
 		"git. It does not require a skill name and runs in the " +
@@ -305,7 +305,8 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 		"cwd": {
 			Type: "string",
 			Description: "Optional workspace-relative cwd. " +
-				"Prefer ., work, out, or runs. Other workspace paths may be available when prepared by other tools.",
+				"Command paths are resolved relative to cwd. " +
+				"Set cwd to a target directory and use paths relative to it, or leave cwd at the workspace root and use workspace-root paths.",
 		},
 		"env": {
 			Type: "object",

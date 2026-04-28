@@ -1501,15 +1501,12 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 		sys,
 		"Each entry includes a path to that skill's SKILL.md on disk.",
 	)
-	// With the bare WithSkills(repo) default profile now being
-	// knowledge_only (skill_load + doc helpers, no skill_run / skill_exec),
-	// suppressing the skill protocol guidance via an explicit empty
-	// SkillsToolingGuide no longer also hides the built-in capability
-	// disclosure block. The overview thus carries the
-	// "Skill tool availability:" header describing the knowledge-only
-	// surface.
-	require.Contains(t, sys, "Skill tool availability:")
-	require.Contains(
+	// Suppressing the skill tooling guidance leaves only the overview;
+	// skill_load-capable configurations no longer inject a separate
+	// negative capability block because execution may still be available
+	// through other registered tools such as workspace_exec.
+	require.NotContains(t, sys, "Skill tool availability:")
+	require.NotContains(
 		t,
 		sys,
 		"This configuration supports skill discovery and "+
