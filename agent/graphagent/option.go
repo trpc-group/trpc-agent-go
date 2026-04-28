@@ -41,8 +41,9 @@ const (
 	// ReasoningContentModeKeepAll keeps all reasoning_content in messages.
 	// Use this for debugging or when you need to retain thinking chains.
 	ReasoningContentModeKeepAll = processor.ReasoningContentModeKeepAll
-	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from previous
-	// request turns while keeping the current request's reasoning_content.
+	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from
+	// ordinary previous request turns while keeping the current request's
+	// reasoning_content and previous tool-call request reasoning.
 	// This is the default mode, recommended for DeepSeek thinking mode.
 	ReasoningContentModeDiscardPreviousTurns = processor.ReasoningContentModeDiscardPreviousTurns
 	// ReasoningContentModeDiscardAll discards all reasoning_content from all messages.

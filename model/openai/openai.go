@@ -707,7 +707,7 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 				ToolCalls: m.convertToolCalls(msg.ToolCalls),
 			}
 			// Pass reasoning_content to API if present (required by DeepSeek for
-			// tool call scenarios within the same request turn).
+			// tool-call replay across current and later request turns).
 			if msg.ReasoningContent != "" ||
 				m.shouldBackfillReasoningContent(msg) {
 				assistantMsg.SetExtraFields(map[string]any{
