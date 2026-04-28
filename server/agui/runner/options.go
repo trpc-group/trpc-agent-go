@@ -36,31 +36,32 @@ const (
 
 // Options holds the options for the runner.
 type Options struct {
-	TranslatorFactory                      TranslatorFactory     // TranslatorFactory creates a translator for an AG-UI run.
-	UserIDResolver                         UserIDResolver        // UserIDResolver derives the user identifier for an AG-UI run.
-	TranslateCallbacks                     *translator.Callbacks // TranslateCallbacks translates the run events to AG-UI events.
-	RunAgentInputHook                      RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
-	AppName                                string                // AppName is the name of the application.
-	AppNameResolver                        AppNameResolver       // AppNameResolver derives the app name for an AG-UI run.
-	SessionService                         session.Service       // SessionService is the session service.
-	StateResolver                          StateResolver         // StateResolver resolves runtime state for an AG-UI run.
-	RunOptionResolver                      RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
-	AggregatorFactory                      aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
-	AggregationOption                      []aggregator.Option   // AggregationOption is the aggregation options for each run.
-	FlushInterval                          time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
-	MessagesSnapshotFollowEnabled          bool                  // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
-	MessagesSnapshotFollowMaxDuration      time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
-	StartSpan                              StartSpan             // StartSpan starts a span for an AG-UI run.
-	PostRunFinalizationTimeout             time.Duration         // PostRunFinalizationTimeout bounds how long post-run finalization is allowed to take.
-	Timeout                                time.Duration         // Timeout controls how long a run is allowed to execute.
-	CancelOnContextDoneEnabled             bool                  // CancelOnContextDoneEnabled cancels the run when the parent context is done.
-	GraphNodeLifecycleActivityEnabled      bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
-	GraphNodeInterruptActivityEnabled      bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
-	GraphNodeInterruptActivityTopLevelOnly bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
-	ReasoningContentEnabled                bool                  // ReasoningContentEnabled controls whether reasoning content events are emitted.
-	EventSourceMetadataEnabled             bool                  // EventSourceMetadataEnabled attaches original trpc-agent-go source metadata to translated AG-UI events.
-	ToolResultInputTranslationEnabled      bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
-	StreamingToolResultActivityEnabled     bool                  // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
+	TranslatorFactory                         TranslatorFactory     // TranslatorFactory creates a translator for an AG-UI run.
+	UserIDResolver                            UserIDResolver        // UserIDResolver derives the user identifier for an AG-UI run.
+	TranslateCallbacks                        *translator.Callbacks // TranslateCallbacks translates the run events to AG-UI events.
+	RunAgentInputHook                         RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
+	AppName                                   string                // AppName is the name of the application.
+	AppNameResolver                           AppNameResolver       // AppNameResolver derives the app name for an AG-UI run.
+	SessionService                            session.Service       // SessionService is the session service.
+	StateResolver                             StateResolver         // StateResolver resolves runtime state for an AG-UI run.
+	RunOptionResolver                         RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
+	AggregatorFactory                         aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
+	AggregationOption                         []aggregator.Option   // AggregationOption is the aggregation options for each run.
+	FlushInterval                             time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
+	MessagesSnapshotFollowEnabled             bool                  // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
+	MessagesSnapshotFollowMaxDuration         time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
+	MessagesSnapshotRunLifecycleEventsEnabled bool                  // MessagesSnapshotRunLifecycleEventsEnabled includes persisted RUN_* events as activity messages in MESSAGES_SNAPSHOT.
+	StartSpan                                 StartSpan             // StartSpan starts a span for an AG-UI run.
+	PostRunFinalizationTimeout                time.Duration         // PostRunFinalizationTimeout bounds how long post-run finalization is allowed to take.
+	Timeout                                   time.Duration         // Timeout controls how long a run is allowed to execute.
+	CancelOnContextDoneEnabled                bool                  // CancelOnContextDoneEnabled cancels the run when the parent context is done.
+	GraphNodeLifecycleActivityEnabled         bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
+	GraphNodeInterruptActivityEnabled         bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
+	GraphNodeInterruptActivityTopLevelOnly    bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
+	ReasoningContentEnabled                   bool                  // ReasoningContentEnabled controls whether reasoning content events are emitted.
+	EventSourceMetadataEnabled                bool                  // EventSourceMetadataEnabled attaches original trpc-agent-go source metadata to translated AG-UI events.
+	ToolResultInputTranslationEnabled         bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
+	StreamingToolResultActivityEnabled        bool                  // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
 }
 
 // NewOptions creates a new options instance.
@@ -196,6 +197,14 @@ func WithMessagesSnapshotFollowEnabled(enabled bool) Option {
 func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
 	return func(o *Options) {
 		o.MessagesSnapshotFollowMaxDuration = d
+	}
+}
+
+// WithMessagesSnapshotRunLifecycleEventsEnabled controls whether persisted RUN_* events
+// are included as activity messages in MESSAGES_SNAPSHOT.
+func WithMessagesSnapshotRunLifecycleEventsEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotRunLifecycleEventsEnabled = enabled
 	}
 }
 

@@ -847,6 +847,65 @@ server, err := agui.New(
 
 如果需要更复杂的聚合策略，可以实现 `aggregator.Aggregator` 并通过自定义工厂注入。需要注意的是，虽然每个会话都会单独创建一个聚合器，省去了跨会话的状态维护和并发处理，但聚合方法本身仍有可能被并发调用，因此仍需妥善处理并发。
 
+### 消息快照中的 run 生命周期事件
+
+消息快照路由返回的顶层事件用于描述本次快照请求的生命周期，成功时事件序列为：
+
+`RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED`
+
+默认情况下，`MESSAGES_SNAPSHOT.messages` 仅包含由历史 AG-UI track 还原出的对话消息和可展示 activity，不包含已持久化的历史 `RUN_STARTED`、`RUN_FINISHED`、`RUN_ERROR`。
+
+若需要在消息快照中保留历史 run 的生命周期状态，可以启用 `agui.WithMessagesSnapshotRunLifecycleEventsEnabled(true)`：
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotRunLifecycleEventsEnabled(true),
+)
+```
+
+启用后，历史 `RUN_STARTED`、`RUN_FINISHED`、`RUN_ERROR` 会写入 `MESSAGES_SNAPSHOT.messages`，消息的 `role` 为 `activity`。事件语义按所在层级区分：
+
+- `MESSAGES_SNAPSHOT.messages` 中 `role` 为 `activity`、`activityType` 为 `RUN_*` 的消息表示历史会话中已持久化的 run 生命周期事件；
+- 消息快照路由顶层返回的 `RUN_STARTED`、`RUN_FINISHED`、`RUN_ERROR` 表示本次快照请求的生命周期或加载错误。
+
+开启后，`MESSAGES_SNAPSHOT` 中的历史 `RUN_*` 消息形态如下：
+
+```json
+{
+  "type": "MESSAGES_SNAPSHOT",
+  "messages": [
+    {
+      "id": "event-id-1",
+      "role": "activity",
+      "activityType": "RUN_STARTED",
+      "content": {
+        "threadId": "thread-1",
+        "runId": "run-1"
+      }
+    },
+    {
+      "id": "event-id-2",
+      "role": "assistant",
+      "content": "hello"
+    },
+    {
+      "id": "event-id-3",
+      "role": "activity",
+      "activityType": "RUN_ERROR",
+      "content": {
+        "runId": "run-1",
+        "message": "model call failed",
+        "code": "MODEL_ERROR"
+      }
+    }
+  ]
+}
+```
+
 ### 消息快照续传
 
 默认情况下，消息快照路由只返回一次性快照并立即结束连接。当用户在一次实时对话的中途刷新或重连时，仅靠快照可能无法覆盖快照边界之后继续产生的事件。如需在快照之后继续流式接收后续 AG-UI 事件，需要使用消息快照续传功能。

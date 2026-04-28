@@ -24,13 +24,14 @@ import (
 
 // reducer reduces the AG-UI track events into message snapshots.
 type reducer struct {
-	appName              string
-	userID               string
-	texts                map[string]*textState
-	reasonings           map[string]*reasoningState
-	lastReasoningChunkID string
-	toolCalls            map[string]*toolCallState
-	messages             []*aguievents.Message
+	appName                   string
+	userID                    string
+	includeRunLifecycleEvents bool
+	texts                     map[string]*textState
+	reasonings                map[string]*reasoningState
+	lastReasoningChunkID      string
+	toolCalls                 map[string]*toolCallState
+	messages                  []*aguievents.Message
 }
 
 // textPhase is the phase of the text message.
@@ -86,8 +87,12 @@ type toolCallState struct {
 
 // Reduce reduces the AG-UI track events into message snapshots.
 // In order to fetch the history messages as much as possible, still return the messages even if there is an error.
-func Reduce(appName, userID string, events []session.TrackEvent) ([]aguievents.Message, error) {
-	r := new(appName, userID)
+func Reduce(appName, userID string, events []session.TrackEvent, opt ...Option) ([]aguievents.Message, error) {
+	opts := options{}
+	for _, o := range opt {
+		o(&opts)
+	}
+	r := new(appName, userID, opts)
 	var err error
 	for _, trackEvent := range events {
 		if err = r.reduce(trackEvent); err != nil {
@@ -109,14 +114,15 @@ func Reduce(appName, userID string, events []session.TrackEvent) ([]aguievents.M
 }
 
 // new creates a new reducer.
-func new(appName, userID string) *reducer {
+func new(appName, userID string, opts options) *reducer {
 	return &reducer{
-		appName:    appName,
-		userID:     userID,
-		texts:      make(map[string]*textState),
-		reasonings: make(map[string]*reasoningState),
-		toolCalls:  make(map[string]*toolCallState),
-		messages:   make([]*aguievents.Message, 0),
+		appName:                   appName,
+		userID:                    userID,
+		includeRunLifecycleEvents: opts.includeRunLifecycleEvents,
+		texts:                     make(map[string]*textState),
+		reasonings:                make(map[string]*reasoningState),
+		toolCalls:                 make(map[string]*toolCallState),
+		messages:                  make([]*aguievents.Message, 0),
 	}
 }
 
@@ -134,6 +140,12 @@ func (r *reducer) reduce(trackEvent session.TrackEvent) error {
 
 func (r *reducer) reduceEvent(evt aguievents.Event) error {
 	switch e := evt.(type) {
+	case *aguievents.RunStartedEvent:
+		return r.handleRunStarted(e)
+	case *aguievents.RunFinishedEvent:
+		return r.handleRunFinished(e)
+	case *aguievents.RunErrorEvent:
+		return r.handleRunError(e)
 	case *aguievents.TextMessageStartEvent:
 		return r.handleTextStart(e)
 	case *aguievents.TextMessageContentEvent:
@@ -256,6 +268,59 @@ func (r *reducer) sanitizeSnapshotMessage(message *aguievents.Message) *aguieven
 	empty := ""
 	cloned.Content = &empty
 	return &cloned
+}
+
+func (r *reducer) handleRunStarted(e *aguievents.RunStartedEvent) error {
+	if !r.includeRunLifecycleEvents {
+		return nil
+	}
+	content := map[string]any{
+		"threadId": e.ThreadID(),
+		"runId":    e.RunID(),
+	}
+	r.appendRunActivity(e, content)
+	return nil
+}
+
+func (r *reducer) handleRunFinished(e *aguievents.RunFinishedEvent) error {
+	if !r.includeRunLifecycleEvents {
+		return nil
+	}
+	content := map[string]any{
+		"threadId": e.ThreadID(),
+		"runId":    e.RunID(),
+	}
+	if e.Result != nil {
+		content["result"] = e.Result
+	}
+	r.appendRunActivity(e, content)
+	return nil
+}
+
+func (r *reducer) handleRunError(e *aguievents.RunErrorEvent) error {
+	if !r.includeRunLifecycleEvents {
+		return nil
+	}
+	content := map[string]any{
+		"message": e.Message,
+	}
+	if e.RunID() != "" {
+		content["runId"] = e.RunID()
+	}
+	if e.Code != nil {
+		content["code"] = *e.Code
+	}
+	r.appendRunActivity(e, content)
+	return nil
+}
+
+func (r *reducer) appendRunActivity(e aguievents.Event, content map[string]any) {
+	r.messages = append(r.messages, &aguievents.Message{
+		ID:           e.GetBaseEvent().ID(),
+		Role:         types.RoleActivity,
+		ActivityType: string(e.Type()),
+		Content:      content,
+	})
 }
 
 // handleTextStart handles the text message start event.

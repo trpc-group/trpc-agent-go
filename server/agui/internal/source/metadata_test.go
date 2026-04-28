@@ -196,11 +196,13 @@ func TestRecordSnapshotMetadataIndexesSupportedEvents(t *testing.T) {
 			Role: aguitypes.RoleAssistant,
 		}},
 	)
+	runStarted := aguievents.NewRunStartedEvent("thread", "run")
+	runFinished := aguievents.NewRunFinishedEvent("thread", "run")
+	runError := aguievents.NewRunErrorEvent("boom")
 	customEvent := aguievents.NewCustomEvent("custom")
 	rawEvent := aguievents.NewRawEvent(map[string]any{
 		"foo": "bar",
 	})
-	runStarted := aguievents.NewRunStartedEvent("thread", "run")
 
 	tests := []struct {
 		name          string
@@ -383,6 +385,27 @@ func TestRecordSnapshotMetadataIndexesSupportedEvents(t *testing.T) {
 			},
 		},
 		{
+			name:  "run started",
+			event: runStarted,
+			wantMessages: map[string]Metadata{
+				runStarted.ID(): metadata,
+			},
+		},
+		{
+			name:  "run finished",
+			event: runFinished,
+			wantMessages: map[string]Metadata{
+				runFinished.ID(): metadata,
+			},
+		},
+		{
+			name:  "run error",
+			event: runError,
+			wantMessages: map[string]Metadata{
+				runError.ID(): metadata,
+			},
+		},
+		{
 			name:  "custom event",
 			event: customEvent,
 			wantMessages: map[string]Metadata{
@@ -395,10 +418,6 @@ func TestRecordSnapshotMetadataIndexesSupportedEvents(t *testing.T) {
 			wantMessages: map[string]Metadata{
 				rawEvent.ID(): metadata,
 			},
-		},
-		{
-			name:  "unsupported event",
-			event: runStarted,
 		},
 	}
 

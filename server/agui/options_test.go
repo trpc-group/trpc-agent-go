@@ -153,6 +153,12 @@ func TestWithMessagesSnapshotFollowMaxDuration(t *testing.T) {
 	assert.Equal(t, 2*time.Second, ro.MessagesSnapshotFollowMaxDuration)
 }
 
+func TestWithMessagesSnapshotRunLifecycleEventsEnabled(t *testing.T) {
+	opts := newOptions(WithMessagesSnapshotRunLifecycleEventsEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.MessagesSnapshotRunLifecycleEventsEnabled)
+}
+
 func TestWithCancelEnabled(t *testing.T) {
 	opts := newOptions(WithCancelEnabled(true))
 	assert.True(t, opts.cancelEnabled)

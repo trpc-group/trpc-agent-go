@@ -138,6 +138,107 @@ func TestMessagesSnapshotHappyPath(t *testing.T) {
 	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
 }
 
+func TestMessagesSnapshotIncludesRunEventsWhenEnabled(t *testing.T) {
+	svc := &testSessionService{
+		trackEvents: []session.TrackEvent{
+			newTrackEvent(t, aguievents.NewRunStartedEvent("thread", "real-run-1")),
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "hello")),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("assistant-1")),
+			newTrackEvent(t, aguievents.NewRunFinishedEventWithOptions(
+				"thread",
+				"real-run-1",
+				aguievents.WithResult("ok"),
+			)),
+			newTrackEvent(t, aguievents.NewRunErrorEvent(
+				"boom",
+				aguievents.WithRunID("real-run-2"),
+				aguievents.WithErrorCode("E_RUN"),
+			)),
+		},
+	}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:            noopBaseRunner{},
+		userIDResolver:    NewOptions().UserIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+		messagesSnapshotRunLifecycleEventsEnabled: true,
+	}
+
+	stream, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "history-run"},
+	)
+	require.NoError(t, err)
+
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 4)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
+
+	assert.Equal(t, types.RoleActivity, snapshot.Messages[0].Role)
+	assert.Equal(t, string(aguievents.EventTypeRunStarted), snapshot.Messages[0].ActivityType)
+	startedContent, ok := snapshot.Messages[0].ContentActivity()
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"threadId": "thread", "runId": "real-run-1"}, startedContent)
+
+	assert.Equal(t, types.RoleAssistant, snapshot.Messages[1].Role)
+	content, ok := snapshot.Messages[1].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "hello", content)
+
+	assert.Equal(t, types.RoleActivity, snapshot.Messages[2].Role)
+	assert.Equal(t, string(aguievents.EventTypeRunFinished), snapshot.Messages[2].ActivityType)
+	finishedContent, ok := snapshot.Messages[2].ContentActivity()
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"threadId": "thread", "runId": "real-run-1", "result": "ok"}, finishedContent)
+
+	assert.Equal(t, types.RoleActivity, snapshot.Messages[3].Role)
+	assert.Equal(t, string(aguievents.EventTypeRunError), snapshot.Messages[3].ActivityType)
+	errContent, ok := snapshot.Messages[3].ContentActivity()
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"message": "boom", "runId": "real-run-2", "code": "E_RUN"}, errContent)
+}
+
+func TestMessagesSnapshotOmitsRunEventsByDefault(t *testing.T) {
+	svc := &testSessionService{
+		trackEvents: []session.TrackEvent{
+			newTrackEvent(t, aguievents.NewRunStartedEvent("thread", "real-run")),
+			newTrackEvent(t, aguievents.NewRunFinishedEvent("thread", "real-run")),
+			newTrackEvent(t, aguievents.NewRunErrorEvent("boom", aguievents.WithRunID("real-run"))),
+		},
+	}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:            noopBaseRunner{},
+		userIDResolver:    NewOptions().UserIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+	}
+
+	stream, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "history-run"},
+	)
+	require.NoError(t, err)
+
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	assert.Empty(t, snapshot.Messages)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
+}
+
 func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 	assistantMetadata := source.Metadata{
 		EventID:      "evt-assistant",

@@ -129,7 +129,12 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	if err != nil {
 		return nil, nil, fmt.Errorf("get track events: %w", err)
 	}
-	messages, err := reduce.Reduce(sessionKey.AppName, sessionKey.UserID, trackEvents.Events)
+	messages, err := reduce.Reduce(
+		sessionKey.AppName,
+		sessionKey.UserID,
+		trackEvents.Events,
+		reduce.WithRunLifecycleEvents(r.messagesSnapshotRunLifecycleEventsEnabled),
+	)
 	if err != nil {
 		err = fmt.Errorf("reduce track events: %w", err)
 	}

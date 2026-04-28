@@ -239,6 +239,12 @@ func recordSnapshotMetadata(
 		messages[e.ID()] = metadata
 	case *aguievents.MessagesSnapshotEvent:
 		messages[e.ID()] = metadata
+	case *aguievents.RunStartedEvent:
+		messages[e.ID()] = metadata
+	case *aguievents.RunFinishedEvent:
+		messages[e.ID()] = metadata
+	case *aguievents.RunErrorEvent:
+		messages[e.ID()] = metadata
 	case *aguievents.CustomEvent:
 		messages[e.ID()] = metadata
 	case *aguievents.RawEvent:
