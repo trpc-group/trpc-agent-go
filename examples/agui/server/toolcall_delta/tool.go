@@ -65,8 +65,8 @@ func (s *documentStore) createDocument(ctx context.Context, args createDocumentA
 	if title == "" {
 		title = "Untitled Document"
 	}
-	content := strings.TrimSpace(args.Content)
-	if content == "" {
+	content := args.Content
+	if strings.TrimSpace(content) == "" {
 		return createDocumentResult{}, fmt.Errorf("content is required")
 	}
 	createdAt := time.Now()
@@ -83,6 +83,6 @@ func (s *documentStore) createDocument(ctx context.Context, args createDocumentA
 	return createDocumentResult{
 		DocumentID: id,
 		Title:      title,
-		Bytes:      len([]byte(content)),
+		Bytes:      len(content),
 	}, nil
 }
