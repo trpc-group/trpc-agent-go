@@ -79,6 +79,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		graphNodeInterruptActivityEnabled:      opts.GraphNodeInterruptActivityEnabled,
 		graphNodeInterruptActivityTopLevelOnly: opts.GraphNodeInterruptActivityTopLevelOnly,
 		reasoningContentEnabled:                opts.ReasoningContentEnabled,
+		eventSourceMetadataEnabled:             opts.EventSourceMetadataEnabled,
 		userIDResolver:                         opts.UserIDResolver,
 		translateCallbacks:                     opts.TranslateCallbacks,
 		runAgentInputHook:                      opts.RunAgentInputHook,
@@ -109,6 +110,7 @@ type runner struct {
 	graphNodeInterruptActivityEnabled      bool
 	graphNodeInterruptActivityTopLevelOnly bool
 	reasoningContentEnabled                bool
+	eventSourceMetadataEnabled             bool
 	userIDResolver                         UserIDResolver
 	translateCallbacks                     *translator.Callbacks
 	runAgentInputHook                      RunAgentInputHook
@@ -250,6 +252,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		translator.WithGraphNodeInterruptActivityEnabled(r.graphNodeInterruptActivityEnabled),
 		translator.WithGraphNodeInterruptActivityTopLevelOnly(r.graphNodeInterruptActivityTopLevelOnly),
 		translator.WithReasoningContentEnabled(r.reasoningContentEnabled),
+		translator.WithEventSourceMetadataEnabled(r.eventSourceMetadataEnabled),
 		translator.WithStreamingToolResultActivityEnabled(r.streamingToolResultActivityEnabled),
 	)
 	if err != nil {
@@ -555,7 +558,9 @@ func (r *runner) emitToolResultEvent(ctx context.Context, events chan<- aguieven
 		messageID = msg.ToolID
 	}
 	if r.toolResultInputTranslationEnabled {
-		return r.handleAgentEvent(ctx, events, input, newToolResultInputEvent(messageID, msg))
+		event := newToolResultInputEvent(messageID, msg)
+		r.attachToolResultInputSourceMetadata(ctx, input.key, event, msg.ToolID)
+		return r.handleAgentEvent(ctx, events, input, event)
 	}
 	toolResultEvent := aguievents.NewToolCallResultEvent(messageID, msg.ToolID, msg.Content)
 	return r.emitEvent(ctx, events, toolResultEvent, input)

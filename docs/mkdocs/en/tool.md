@@ -541,6 +541,70 @@ searchTool := duckduckgo.NewTool(
 )
 ```
 
+### Claude Code ToolSet
+
+`tool/claudecode` provides a code-oriented ToolSet that exposes a Claude Code-style tool surface inside the framework. It covers file editing, repository search, command execution, and web retrieval, and can be attached directly to `LLMAgent` or other runtimes. If your goal is to invoke the local Claude Code CLI and consume its execution trace and tool events, see the [Claude Code Agent guide](claudecode.md).
+
+By default, `claudecode` exposes a core set of workflow tools: `Bash`, `TaskStop`, `TaskOutput`, `Read`, `Glob`, `Grep`, `WebFetch`, and `WebSearch`. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`.
+
+The following table lists the tools currently exposed by `claudecode`:
+
+| Tool | Description |
+| --- | --- |
+| `Bash` | Executes local shell commands. |
+| `TaskStop` | Stops a background task started by `Bash`. |
+| `TaskOutput` | Reads the current or final output of a background task. |
+| `Read` | Reads file contents. |
+| `Glob` | Finds files by path pattern. |
+| `Grep` | Searches repository content. |
+| `WebFetch` | Fetches the content of a specific URL. |
+| `WebSearch` | Performs an open web search. |
+| `Write` | Creates a file or overwrites a file with complete contents. Only exposed when read-only mode is disabled. |
+| `Edit` | Performs targeted replacement in an existing text file. Only exposed when read-only mode is disabled. |
+| `NotebookEdit` | Edits `.ipynb` files at the cell level. Only exposed when read-only mode is disabled. |
+
+#### Basic Usage
+
+```go
+import (
+	"log"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/claudecode"
+)
+
+toolSet, err := claudecode.NewToolSet(
+	claudecode.WithBaseDir("."),
+)
+if err != nil {
+	log.Fatal(err)
+}
+defer toolSet.Close()
+
+agent := llmagent.New(
+	"claude-style-agent",
+	llmagent.WithToolSets([]tool.ToolSet{toolSet}),
+)
+```
+
+`llmagent.WithToolSets(...)` attaches these tools as a ToolSet. Calling `Tools()` returns the flattened list of individual tools.
+
+#### Common Options
+
+The main `tool/claudecode` options focus on working directory, read-only mode, and web behavior:
+
+| Option | Description |
+| --- | --- |
+| `WithName(name)` | Overrides the ToolSet name. The default name is `claudecode`. |
+| `WithBaseDir(dir)` | Sets the base directory used by file, search, and command execution tools. |
+| `WithReadOnly(readOnly)` | Removes `Write`, `Edit`, and `NotebookEdit` when enabled. |
+| `WithMaxFileSize(size)` | Limits the maximum readable file size. |
+| `WithWebFetchOptions(opts)` | Configures domain policy, timeout, and content handling for `WebFetch`. |
+| `WithWebSearchOptions(opts)` | Configures backend, paging, and request options for `WebSearch`. |
+
+`WithBaseDir` defines the working scope for `Read`, `Write`, `Edit`, `Glob`, and `Grep`, and also determines the default working directory for `Bash`. When read-only mode is enabled, the toolset keeps only read, search, command, and web capabilities. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`.
+
 ## MCP Tools
 
 MCP (Model Context Protocol) is an open protocol that standardizes how applications provide context to LLMs. MCP tools are based on JSON-RPC 2.0 and provide standardized integration with external services for Agents.
@@ -1055,6 +1119,8 @@ mathTool := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     // forward child Agent streaming events to parent flow.
     agenttool.WithStreamInner(true),
+    // hide child assistant prose while still forwarding inner tool progress.
+    agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
 )
 
 // 3) Use in parent Agent
@@ -1068,11 +1134,15 @@ parent := llmagent.New(
 
 ### Streaming Inner Forwarding
 
-When `WithStreamInner(true)` is enabled, AgentTool forwards child Agent events to the parent flow as they happen:
+When `WithStreamInner(true)` is enabled, AgentTool forwards child Agent events
+to the parent flow as they happen:
 
 - Forwarded items are actual `event.Event` instances, carrying incremental text in `choice.Delta.Content`
 - To avoid duplication, the child Agent’s final full message is not forwarded again; it is aggregated into the final `tool.response` content for the next LLM turn (to satisfy providers requiring tool messages)
 - UI guidance: show forwarded child deltas; avoid printing the aggregated final `tool.response` content unless debugging
+- `WithInnerTextMode(agenttool.InnerTextModeExclude)` lets you keep inner tool
+  progress visible while suppressing forwarded child assistant text. This is
+  useful when an outer coordinator will produce the final user-facing answer.
 
 Example: Only show tool fragments when needed to avoid duplicates
 
@@ -1082,8 +1152,9 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 }
 
 // Child Agent forwarded deltas (author != parent)
-if ev.Author != parentName && len(ev.Choices) > 0 {
-    if delta := ev.Choices[0].Delta.Content; delta != "" {
+if ev.Author != parentName && ev.Response != nil &&
+    len(ev.Response.Choices) > 0 {
+    if delta := ev.Response.Choices[0].Delta.Content; delta != "" {
         fmt.Print(delta)
     }
 }
@@ -1101,6 +1172,14 @@ if ev.Author != parentName && len(ev.Choices) > 0 {
   - true: Forward child Agent events to the parent flow (recommended: enable `GenerationConfig{Stream: true}` for both parent and child Agents)
   - false: Treat as a callable-only tool, without inner event forwarding
 
+- WithInnerTextMode(InnerTextMode):
+
+  - `InnerTextModeInclude`: (effective default) forward child assistant text
+    when inner streaming is enabled
+  - `InnerTextModeExclude`: suppress forwarded child assistant text while
+    keeping inner tool calls, tool completions, and the aggregated final tool
+    response
+
 - WithHistoryScope(HistoryScope):
   - `HistoryScopeIsolated` (default): Keep the child Agent fully isolated; it only sees the current tool arguments (no inherited history).
   - `HistoryScopeParentBranch`: Inherit parent conversation history by using a hierarchical filter key `parent/child-uuid`. This allows the content processor to include parent events via prefix matching while keeping child events isolated under a sub-branch. Typical use cases: “edit/optimize/continue previous output”.
@@ -1112,6 +1191,7 @@ child := agenttool.NewTool(
     childAgent,
     agenttool.WithSkipSummarization(false),
     agenttool.WithStreamInner(true),
+    agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
     agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
 )
 ```
@@ -1120,6 +1200,9 @@ child := agenttool.NewTool(
 
 - Completion signaling: Tool response events are marked `RequiresCompletion=true`; Runner sends completion automatically
 - De-duplication: When inner deltas are forwarded, avoid printing the aggregated final `tool.response` text again by default
+- Progress-only UX: combine `WithStreamInner(true)` with
+  `WithInnerTextMode(agenttool.InnerTextModeExclude)` when users should see
+  inner progress without seeing duplicated child prose
 - Model compatibility: Some providers require a tool message after tool_calls; AgentTool automatically supplies the aggregated content
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
@@ -1233,7 +1316,7 @@ apply to all agents
 
 - 🎯 **Per-Run Control**: Independent configuration per invocation, no Agent modification needed
 - 💰 **Cost Optimization**: Reduce tool descriptions sent to LLM, lowering token costs
-- 🛡️ **Smart Protection**: Framework tools (`transfer_to_agent`, `knowledge_search`) automatically preserved, never filtered
+- 🛡️ **Smart Protection**: Framework tools (`transfer_to_agent`, `knowledge_search`, optional `await_user_reply`) automatically preserved, never filtered
 - 🔧 **Flexible Customization**: Support for built-in filters and custom FilterFunc
 
 #### Tool Search (Automatic Tool Selection)
@@ -1483,7 +1566,7 @@ The framework automatically distinguishes **user tools** from **framework tools*
 | Tool Category       | Includes                                                                                                                      | Filtered?                         |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | **User Tools**      | Tools registered via `WithTools`<br>Tools registered via `WithToolSets`                                                       | ✅ Subject to filtering           |
-| **Framework Tools** | `transfer_to_agent` (multi-Agent coordination)<br>`knowledge_search` (knowledge base retrieval)<br>`agentic_knowledge_search` | ❌ Never filtered, auto-preserved |
+| **Framework Tools** | `transfer_to_agent` (multi-Agent coordination)<br>`knowledge_search` (knowledge base retrieval)<br>`agentic_knowledge_search`<br>`await_user_reply` (one-shot follow-up routing, when enabled) | ❌ Never filtered, auto-preserved |
 
 **Example:**
 
@@ -1496,6 +1579,7 @@ agent := llmagent.New("assistant",
     }),
     llmagent.WithSubAgents([]agent.Agent{subAgent1, subAgent2}), // Auto-adds transfer_to_agent
     llmagent.WithKnowledge(kb),                                   // Auto-adds knowledge_search
+    llmagent.WithAwaitUserReplyTool(true),                        // Auto-adds await_user_reply
 )
 
 // Runtime filtering: only allow calculator
@@ -1509,7 +1593,36 @@ runner.Run(ctx, userID, sessionID, message,
 // ❌ textTool          - User tool, filtered out
 // ✅ transfer_to_agent - Framework tool, auto-preserved
 // ✅ knowledge_search  - Framework tool, auto-preserved
+// ✅ await_user_reply  - Framework tool, auto-preserved
 ```
+
+#### `await_user_reply` for Follow-Up Turns
+
+`await_user_reply` is an optional framework tool. Enable it with
+`llmagent.WithAwaitUserReplyTool(true)` when an Agent may ask the user for
+missing information and you want the next user message to resume at that same
+Agent.
+
+Use it together with `runner.WithAwaitUserReplyRouting(true)`:
+
+```go
+profileAgent := llmagent.New("profile-agent",
+    llmagent.WithAwaitUserReplyTool(true),
+    llmagent.WithInstruction(`
+If you must ask the user for a missing field, call await_user_reply
+immediately before your question.
+`),
+)
+
+r := runner.NewRunner(
+    "crm-app",
+    profileAgent,
+    runner.WithAwaitUserReplyRouting(true),
+)
+```
+
+The route is one-shot: Runner consumes it on the next user turn and then clears
+it automatically.
 
 #### Important Notes
 
@@ -1664,7 +1777,9 @@ if !removed {
 Runtime ToolSet updates integrate seamlessly with the **tool filtering** logic described earlier:
 
 - Tools coming from `WithTools` or any ToolSet (including dynamically added ones) are treated as **user tools** and are subject to `WithToolFilter` and per‑run filters.
-- Framework tools such as `transfer_to_agent`, `knowledge_search`, and `agentic_knowledge_search` remain **never filtered** and are always available.
+- Framework tools such as `transfer_to_agent`, `knowledge_search`,
+  `agentic_knowledge_search`, and optional `await_user_reply` remain
+  **never filtered** and are always available.
 
 #### Tool Call Arguments Auto Repair
 

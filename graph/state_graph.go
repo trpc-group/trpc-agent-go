@@ -2787,13 +2787,17 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		startTime := time.Now()
 		emitAgentStartEvent(ctx, eventChan, invocationID, nodeID, startTime)
 
-		// Execute the target agent.
+		// Execute the target agent through RunWithPlugins so that Runner-scoped
+		// PluginManager AgentCallbacks (BeforeAgent/AfterAgent) consistently
+		// apply to sub-agents invoked via agent-nodes, matching chain/parallel/
+		// cycle/transfer behavior. See issue #1432.
+		//
 		// Important: wrap the context with the sub-invocation so downstream
 		// callbacks (model/tool) can access it via agent.InvocationFromContext(ctx).
 		subCtx := WithGraphCompletionCapture(
 			agent.NewInvocationContext(ctx, invocation),
 		)
-		agentEventChan, err := targetAgent.Run(subCtx, invocation)
+		agentEventChan, err := agent.RunWithPlugins(subCtx, invocation, targetAgent)
 		if err != nil {
 			// Emit agent execution error event.
 			endTime := time.Now()

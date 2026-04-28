@@ -40,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolawaitreply "trpc.group/trpc-go/trpc-agent-go/tool/awaitreply"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
@@ -79,6 +80,10 @@ type LLMAgent struct {
 	option               Options
 }
 
+const invalidOutputSchemaAwaitUserReply = "" +
+	"Invalid LLMAgent configuration: if output_schema is set, " +
+	"await_user_reply must be disabled"
+
 // New creates a new LLMAgent with the given options.
 func New(name string, opts ...Option) *LLMAgent {
 	options := defaultOptions
@@ -88,9 +93,13 @@ func New(name string, opts ...Option) *LLMAgent {
 		opt(&options)
 	}
 	prepareSkillsRepository(&options)
+	applySkillsExecutorFallback(&options)
 
 	// Validate output_schema configuration before registering tools.
 	if options.OutputSchema != nil {
+		if options.EnableAwaitUserReplyTool {
+			panic(invalidOutputSchemaAwaitUserReply)
+		}
 		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
 		}
@@ -512,6 +521,46 @@ func prepareSkillsRepository(options *Options) {
 	)
 }
 
+// applySkillsExecutorFallback auto-wires a local code executor when the
+// caller enabled skills via WithSkills but did not provide an executor.
+// This preserves the zero-config upgrade path (WithSkills alone should
+// keep working) while still letting callers fully opt out.
+//
+// The fallback is intentionally skipped when:
+//   - an executor was already configured via WithCodeExecutor,
+//   - the caller used WithAllowedSkillTools to drive fine-grained tool
+//     selection (they are being explicit about what they want), or
+//   - the caller explicitly selected SkillToolProfileKnowledgeOnly,
+//     which is the opt-out signal for "no convenience execution wiring
+//     from the framework".
+//
+// Note: the distinction between the unconfigured default and an
+// explicit KnowledgeOnly profile is intentional; both normalize to the
+// same built-in skill tool set, but only an explicit opt-in disables
+// the fallback.
+//
+// Scope of the fallback: the auto-injected CodeExecutor exists to power
+// execution tools such as workspace_exec. It must not silently expand
+// the agent's execution surface to also auto-execute fenced code from
+// assistant replies. Therefore, when this path injects an executor and
+// the caller has NOT explicitly configured
+// WithEnableCodeExecutionResponseProcessor, the function also disables
+// EnableCodeExecutionResponseProcessor. Callers who explicitly set
+// that option (true or false) keep their configured value.
+func applySkillsExecutorFallback(options *Options) {
+	if options == nil ||
+		options.skillsRepository == nil ||
+		options.codeExecutor != nil ||
+		options.allowedSkillTools != nil ||
+		skillprofile.IsExplicitKnowledgeOnly(options.skillToolProfile) {
+		return
+	}
+	options.codeExecutor = defaultCodeExecutor()
+	if !options.codeExecutionResponseProcessorExplicit {
+		options.EnableCodeExecutionResponseProcessor = false
+	}
+}
+
 // initializeModels initializes the models map and determines the initial
 // model based on WithModel and WithModels options.
 func initializeModels(options *Options) (model.Model, map[string]model.Model) {
@@ -811,8 +860,10 @@ func appendWorkspaceExecTool(
 	inv *agent.Invocation,
 ) []tool.Tool {
 	var exec codeexecutor.CodeExecutor
+	var loadedSkillsRepo skill.Repository
 	if options != nil {
 		exec = options.codeExecutor
+		loadedSkillsRepo = options.skillsRepository
 	}
 	return appendWorkspaceExecToolWithExecutor(
 		allTools,
@@ -821,9 +872,21 @@ func appendWorkspaceExecTool(
 		executorSupportsWorkspaceExecSessions(options),
 		reg,
 		inv,
+		options,
+		loadedSkillsRepo,
 	)
 }
 
+// appendWorkspaceExecToolWithExecutor wires workspace_exec and its
+// companion tools into allTools.
+//
+// loadedSkillsRepo is the effective skill repository for the current
+// invocation. Callers on the invocation-scoped path pass the result
+// of skillRepositoryForInvocation so that surface-patch repo
+// overrides propagate into workspace_exec's loaded-skills reconcile;
+// static callers (agent construction time) pass
+// options.skillsRepository because no invocation context exists yet.
+// Passing nil disables loaded-skills reconcile for this ExecTool.
 func appendWorkspaceExecToolWithExecutor(
 	allTools []tool.Tool,
 	exec codeexecutor.CodeExecutor,
@@ -831,14 +894,20 @@ func appendWorkspaceExecToolWithExecutor(
 	sessional bool,
 	reg *codeexecutor.WorkspaceRegistry,
 	inv *agent.Invocation,
+	options *Options,
+	loadedSkillsRepo skill.Repository,
 ) []tool.Tool {
 	if !enabled {
 		return allTools
 	}
-	execTool := toolworkspaceexec.NewExecTool(
-		exec,
+	toolOpts := []func(*toolworkspaceexec.ExecTool){
 		toolworkspaceexec.WithWorkspaceRegistry(reg),
+	}
+	toolOpts = append(
+		toolOpts,
+		workspacePrepOptions(options, loadedSkillsRepo)...,
 	)
+	execTool := toolworkspaceexec.NewExecTool(exec, toolOpts...)
 	allTools = append(
 		allTools,
 		execTool,
@@ -861,6 +930,41 @@ func appendWorkspaceExecToolWithExecutor(
 
 func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
 	return codeexecutor.NewWorkspaceRegistry()
+}
+
+// workspacePrepOptions translates llmagent-level workspace options
+// (WithWorkspaceBootstrap, invocation-scoped loaded-skills wiring,
+// explicit disable switch) into the public workspaceexec options.
+// The workspaceexec package owns reconciler construction and
+// conversation-files wiring, so no internal workspaceprep type ever
+// crosses this boundary.
+//
+// loadedSkillsRepo is the repository the caller has already resolved
+// for the current invocation; see appendWorkspaceExecToolWithExecutor
+// for how callers pick between invocation-scoped and agent-default
+// repos. Passing a nil repo skips the loaded-skills wiring entirely,
+// which is what we want when the agent has no skill support
+// configured at all.
+func workspacePrepOptions(
+	opts *Options,
+	loadedSkillsRepo skill.Repository,
+) []func(*toolworkspaceexec.ExecTool) {
+	if opts == nil || opts.disableWorkspacePreparers {
+		return nil
+	}
+	var out []func(*toolworkspaceexec.ExecTool)
+	if len(opts.workspaceBootstrap.Files) > 0 ||
+		len(opts.workspaceBootstrap.Commands) > 0 {
+		out = append(out, toolworkspaceexec.WithWorkspaceBootstrap(
+			opts.workspaceBootstrap,
+		))
+	}
+	if loadedSkillsRepo != nil {
+		out = append(out, toolworkspaceexec.WithLoadedSkills(
+			loadedSkillsRepo,
+		))
+	}
+	return out
 }
 
 func buildSkillRunTool(
@@ -1418,6 +1522,10 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 		}
 	}
 
+	if a.option.EnableAwaitUserReplyTool {
+		base = append(base, toolawaitreply.New())
+	}
+
 	if len(a.subAgents) == 0 {
 		return base
 	}
@@ -1480,6 +1588,7 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 //   - knowledge_search / agentic_knowledge_search (auto-added when
 //     WithKnowledge is set)
 //   - transfer_to_agent (auto-added when WithSubAgents is set)
+//   - await_user_reply (auto-added when WithAwaitUserReplyTool(true))
 //
 // This method is used by the tool filtering logic to distinguish user
 // tools from framework tools.
@@ -1502,7 +1611,8 @@ func (a *LLMAgent) UserTools() []tool.Tool {
 	// When ToolSets are refreshed on each run, user tools include:
 	//   - Tools from WithTools (tracked in userToolNames)
 	//   - Tools coming from ToolSets (wrapped as NamedTool).
-	// Framework tools (knowledge_search, transfer_to_agent, etc.)
+	// Framework tools (knowledge_search, transfer_to_agent,
+	// await_user_reply, etc.)
 	// remain excluded.
 	allTools := a.getAllToolsLocked()
 	userTools := make([]tool.Tool, 0, len(allTools))

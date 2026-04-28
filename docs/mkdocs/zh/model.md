@@ -205,7 +205,11 @@ type GenerationConfig struct {
     // 存在惩罚
     PresencePenalty *float64 `json:"presence_penalty,omitempty"`
 
-    // 推理努力程度 ("low", "medium", "high")
+    // 推理努力程度。可选值取决于服务方：
+    //   - OpenAI o-series："low"、"medium"、"high"
+    //   - DeepSeek v4（deepseek-v4-pro / deepseek-v4-flash）："high"、"max"
+    //     （服务端为兼容旧配置，会把 "low"/"medium" 映射为 "high"，
+    //     "xhigh" 映射为 "max"）
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
     // 是否启用思考模式
@@ -1481,8 +1485,9 @@ model := openai.New("deepseek-chat",
 
 框架会根据模型的上下文窗口自动计算 "maxInputTokens"：
 
-!!! note "Context Window 注册"
-    Token 裁剪和会话摘要的 `WithContextThreshold` 都依赖框架内置的模型 context window 注册表。注册表已覆盖大量常见模型，但不一定包含所有模型——特别是私有部署或较新发布的模型。如果你的模型未被识别，请在启动时调用 `model.RegisterModelContextWindow("my-model", 32768)` 或 `model.RegisterModelContextWindows(map[string]int{...})` 手动注册。完整示例参见[会话摘要文档](session.md#会话摘要summary)。
+> **Context Window 注册**
+>
+> Token 裁剪和会话摘要的 `WithContextThreshold` 都依赖框架内置的模型 context window 注册表。注册表已覆盖大量常见模型，但不一定包含所有模型——特别是私有部署或较新发布的模型。如果你的模型未被识别，请在启动时调用 `model.RegisterModelContextWindow("my-model", 32768)` 或 `model.RegisterModelContextWindows(map[string]int{...})` 手动注册。完整示例参见[会话摘要文档](session/summary.md)。
 
 ```
 safetyMargin = contextWindow × 10%

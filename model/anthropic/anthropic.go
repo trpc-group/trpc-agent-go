@@ -30,7 +30,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const functionToolType = "function"
+const (
+	functionToolType       = "function"
+	claudeMythosPreview    = "claude-mythos-preview"
+	claudeOpus47           = "claude-opus-4-7"
+	claudeOpus46           = "claude-opus-4-6"
+	claudeOpus46Alias      = "claude-4.6-opus"
+	claudeSonnet46         = "claude-sonnet-4-6"
+	claudeSonnet46Alias    = "claude-4.6-sonnet"
+	defaultThinkingDisplay = anthropic.ThinkingConfigAdaptiveDisplaySummarized
+)
 
 // Model implements the model.Model interface for Anthropic API.
 type Model struct {
@@ -299,10 +308,75 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	if len(request.Stop) > 0 {
 		chatRequest.StopSequences = append(chatRequest.StopSequences, request.Stop...)
 	}
-	if request.ThinkingEnabled != nil && *request.ThinkingEnabled && request.ThinkingTokens != nil {
-		chatRequest.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(*request.ThinkingTokens))
+	if err := m.applyThinkingConfig(chatRequest, request); err != nil {
+		return nil, err
 	}
 	return chatRequest, nil
+}
+
+func (m *Model) applyThinkingConfig(
+	chatRequest *anthropic.MessageNewParams,
+	request *model.Request,
+) error {
+	if request.ThinkingEnabled == nil {
+		return nil
+	}
+	if !*request.ThinkingEnabled {
+		if isClaudeMythosPreview(m.name) {
+			return fmt.Errorf("anthropic: thinking cannot be disabled for model %s", m.name)
+		}
+		if !supportsAdaptiveThinking(m.name) {
+			return nil
+		}
+		disabled := anthropic.NewThinkingConfigDisabledParam()
+		chatRequest.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
+		return nil
+	}
+	if supportsAdaptiveThinking(m.name) {
+		chatRequest.Thinking = newAdaptiveThinkingConfig()
+		if request.ReasoningEffort != nil {
+			chatRequest.OutputConfig.Effort = anthropic.OutputConfigEffort(*request.ReasoningEffort)
+		}
+		return nil
+	}
+	if request.ThinkingTokens == nil {
+		return nil
+	}
+	chatRequest.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(*request.ThinkingTokens))
+	return nil
+}
+
+func newAdaptiveThinkingConfig() anthropic.ThinkingConfigParamUnion {
+	return anthropic.ThinkingConfigParamUnion{
+		OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
+			Display: defaultThinkingDisplay,
+		},
+	}
+}
+
+func supportsAdaptiveThinking(modelName string) bool {
+	return modelNameMatches(
+		modelName,
+		claudeMythosPreview,
+		claudeOpus47,
+		claudeOpus46,
+		claudeOpus46Alias,
+		claudeSonnet46,
+		claudeSonnet46Alias,
+	)
+}
+
+func isClaudeMythosPreview(modelName string) bool {
+	return modelNameMatches(modelName, claudeMythosPreview)
+}
+
+func modelNameMatches(modelName string, targets ...string) bool {
+	for _, target := range targets {
+		if modelName == target || strings.HasPrefix(modelName, target+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // applyCacheControl applies independent cache control breakpoints.

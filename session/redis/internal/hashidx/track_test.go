@@ -66,6 +66,44 @@ func TestClient_AppendTrackEvent(t *testing.T) {
 	})
 }
 
+func TestClient_AppendTrackEvent_PreservesExistingTTLWithoutRefresh(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createCfg.SessionTTL = 10 * time.Second
+	createClient := NewClient(rdb, createCfg)
+
+	appendCfg := createCfg
+	appendCfg.SessionTTL = 0
+	appendClient := NewClient(rdb, appendCfg)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trk-ttl"}
+
+	_, err := createClient.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	metaKey := createClient.keys.SessionMetaKey(key)
+	assert.Equal(t, 10*time.Second, mr.TTL(metaKey))
+
+	mr.FastForward(4 * time.Second)
+
+	tracksJSON, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+
+	err = appendClient.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}, tracksJSON)
+	require.NoError(t, err)
+
+	assert.Equal(t, 6*time.Second, mr.TTL(metaKey))
+
+	tracks, err := createClient.ListTracksForSession(ctx, key)
+	require.NoError(t, err)
+	assert.Contains(t, tracks, session.Track("alpha"))
+}
+
 func TestClient_GetTrackEvents(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())

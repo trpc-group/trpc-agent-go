@@ -35,6 +35,94 @@ const (
 	memoryNotFoundErrMarker = "not found"
 )
 
+// reconcile tuning constants.
+//
+// These are intentionally package-private: the goal is to keep the
+// public surface of the memory package unchanged. If a concrete backend
+// ever needs to override them, they can be promoted into
+// AutoMemoryConfig without touching any exported API.
+//
+// Reconcile combines two independent signals so it works uniformly
+// across vector-backed and keyword-backed stores:
+//
+//  1. The Score reported by SearchMemories.
+//     - For vector backends (pgvector / sqlitevec / chromadb) this is
+//     cosine similarity in [0, 1].
+//     - For keyword backends (inmemory / sqlite / mysql / redis /
+//     postgres) this is a BM25-based relevance in [0, 1]. Keyword
+//     scores are systematically lower than vector scores for
+//     semantically identical inputs, so the Score thresholds are
+//     deliberately moderate rather than aggressive.
+//
+//  2. Token-level Jaccard similarity between the candidate memory
+//     content and the best-matching existing entry. This uses the same
+//     tokenizer that the keyword search scorer relies on (gse for CJK +
+//     CJK trigrams + English words), so it catches "same core entities,
+//     different filler words" cases that low BM25/vector scores miss
+//     on their own.
+//
+// A candidate is treated as a near-duplicate when either signal
+// crosses its threshold (logical OR). This keeps reconcile effective
+// on both backend families without forcing callers to distinguish
+// them or tune backend-specific parameters.
+const (
+	// reconcileTopK caps how many candidates SearchMemories is asked to
+	// return per reconcile probe. Keeping this small bounds the extra
+	// cost while still surfacing the closest match reliably.
+	reconcileTopK = 3
+
+	// reconcileSkipScore: at or above this search Score the candidate
+	// is treated as an equivalent memory. The add is either dropped or
+	// rewritten into a topic-only update.
+	reconcileSkipScore = 0.90
+
+	// reconcileUpdateScore: below skip but above update means the
+	// stored memory is close enough to be refreshed with the new
+	// wording / topics via an update.
+	reconcileUpdateScore = 0.60
+
+	// reconcileJaccardHigh: token overlap strong enough that the two
+	// texts almost certainly describe the same fact. Treated the same
+	// as crossing reconcileSkipScore.
+	reconcileJaccardHigh = 0.70
+
+	// reconcileJaccardMid: meaningful token overlap that warrants an
+	// update even when the Score signal is weak. Primarily helps
+	// keyword-backed stores where BM25 tends to land in the 0.4–0.6
+	// band on paraphrases.
+	reconcileJaccardMid = 0.40
+
+	// reconcileMinProbeScore is passed as SimilarityThreshold to
+	// SearchMemories so the backend can stop scanning once candidates
+	// drop below a clearly irrelevant band.
+	reconcileMinProbeScore = 0.30
+)
+
+// Reconcile decision tiers. A higher tier is always preferred when
+// choosing among candidates, so a clearly duplicate entry is never
+// shadowed by a weaker-signal candidate with slightly higher token
+// overlap but no threshold crossing.
+const (
+	reconcileTierNone   = 0
+	reconcileTierUpdate = 1
+	reconcileTierSkip   = 2
+)
+
+// reconcileDecisionTier classifies a candidate against the reconcile
+// thresholds. The same helper is shared by the candidate picker in
+// decideAddOp and by the final switch, so both always agree on what
+// "skip" / "update" / "keep" mean.
+func reconcileDecisionTier(score, jaccard float64) int {
+	switch {
+	case score >= reconcileSkipScore || jaccard >= reconcileJaccardHigh:
+		return reconcileTierSkip
+	case score >= reconcileUpdateScore || jaccard >= reconcileJaccardMid:
+		return reconcileTierUpdate
+	default:
+		return reconcileTierNone
+	}
+}
+
 // MemoryJob represents a job for async memory extraction.
 type MemoryJob struct {
 	Ctx      context.Context
@@ -328,6 +416,13 @@ func (w *AutoMemoryWorker) createAutoMemory(
 			userKey.AppName, userKey.UserID, err)
 		return fmt.Errorf("auto_memory: extract failed: %w", err)
 	}
+
+	// Reconcile Add operations against the store so that near-duplicate
+	// memories get merged into updates instead of accumulating as
+	// separate rows. Any failure inside reconcile is non-fatal: the
+	// original ops slice is used and the worker keeps its pre-reconcile
+	// behavior.
+	ops = w.reconcileOps(ctx, userKey, ops)
 
 	// Execute operations.
 	for _, op := range ops {
@@ -623,4 +718,278 @@ func scanDeltaSince(
 		}
 	}
 	return latestTs, messages
+}
+
+// reconcileOps rewrites extractor Add operations whose content is
+// already covered by an existing memory, using the backend's own
+// SearchMemories as the similarity oracle.
+//
+// The function is deliberately backend-agnostic: it relies only on the
+// MemoryOperator contract that every memory service already satisfies,
+// so vector-backed stores and keyword-backed stores receive the same
+// treatment. Vector backends benefit the most because their Score is a
+// true semantic similarity; keyword backends still benefit on cases
+// with heavy lexical overlap, which covers the common "same sentence
+// re-extracted with minor wording drift" bug.
+//
+// Failures are swallowed and the original operation is preserved so
+// reconcile can never make behavior worse than the pre-reconcile
+// baseline.
+func (w *AutoMemoryWorker) reconcileOps(
+	ctx context.Context,
+	userKey memory.UserKey,
+	ops []*extractor.Operation,
+) []*extractor.Operation {
+	if len(ops) == 0 || w.operator == nil {
+		return ops
+	}
+	out := make([]*extractor.Operation, 0, len(ops))
+	for _, op := range ops {
+		if op == nil {
+			continue
+		}
+		if op.Type != extractor.OperationAdd {
+			out = append(out, op)
+			continue
+		}
+		// Preserve the original Add tool gating. When the caller
+		// disabled memory_add, reconcile must not sneak a mutation
+		// through by rewriting the op into an Update. Leave the op
+		// untouched and let executeOperation's EnabledTools check
+		// skip it as it would have without reconcile.
+		if !w.isToolEnabled(memory.AddToolName) {
+			out = append(out, op)
+			continue
+		}
+		decided := w.decideAddOp(ctx, userKey, op)
+		// If reconcile rewrites an Add into an Update but memory_update
+		// is disabled, the original Add would still have run under the
+		// pre-reconcile behavior. Fall back to the original Add so the
+		// Add tool gating keeps deciding the outcome, rather than
+		// silently dropping the write.
+		if decided != nil &&
+			decided.Type == extractor.OperationUpdate &&
+			!w.isToolEnabled(memory.UpdateToolName) {
+			out = append(out, op)
+			continue
+		}
+		if decided != nil {
+			out = append(out, decided)
+		}
+	}
+	return out
+}
+
+// decideAddOp inspects the store for memories similar to op.Memory and
+// returns either the original op (keep as Add), a rewritten op (Update
+// merging topics), or nil (drop the redundant Add).
+func (w *AutoMemoryWorker) decideAddOp(
+	ctx context.Context,
+	userKey memory.UserKey,
+	op *extractor.Operation,
+) *extractor.Operation {
+	query := strings.TrimSpace(op.Memory)
+	if query == "" {
+		return op
+	}
+	candidates, err := w.operator.SearchMemories(
+		ctx, userKey, query,
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:               query,
+			MaxResults:          reconcileTopK,
+			SimilarityThreshold: reconcileMinProbeScore,
+			// Kind / TimeAfter / TimeBefore intentionally left zero:
+			// a new candidate should be compared against every stored
+			// memory regardless of the classifier's current guess.
+		}),
+	)
+	if err != nil || len(candidates) == 0 {
+		return op
+	}
+	// Pick the candidate that produces the strongest reconcile
+	// decision tier, not the highest Jaccard alone. Otherwise a
+	// high-score duplicate could be shadowed by a candidate with
+	// slightly higher token overlap that still sits below all
+	// reconcile thresholds, causing the Add to be kept despite a
+	// clearly duplicate entry existing.
+	var best *memory.Entry
+	bestJaccard := 0.0
+	bestTier := -1
+	for _, c := range candidates {
+		if c == nil || c.Memory == nil {
+			continue
+		}
+		j := tokenJaccard(op.Memory, c.Memory.Memory)
+		tier := reconcileDecisionTier(c.Score, j)
+		if best == nil ||
+			tier > bestTier ||
+			(tier == bestTier &&
+				(c.Score > best.Score ||
+					(c.Score == best.Score && j > bestJaccard))) {
+			best = c
+			bestJaccard = j
+			bestTier = tier
+		}
+	}
+	if best == nil || best.Memory == nil || best.ID == "" {
+		return op
+	}
+
+	// Classify with two independent signals in logical OR so both
+	// vector-backed and keyword-backed stores see reconcile kick in
+	// on the same kinds of near-duplicates.
+	switch bestTier {
+	case reconcileTierSkip:
+		if hasNewTopics(best.Memory.Topics, op.Topics) {
+			log.DebugfContext(ctx,
+				"auto_memory: reconcile merge topics for user %s/%s "+
+					"(best=%s score=%.3f jaccard=%.3f)",
+				userKey.AppName, userKey.UserID,
+				best.ID, best.Score, bestJaccard)
+			return toUpdateOp(op, best)
+		}
+		log.DebugfContext(ctx,
+			"auto_memory: reconcile drop duplicate for user %s/%s "+
+				"(best=%s score=%.3f jaccard=%.3f)",
+			userKey.AppName, userKey.UserID,
+			best.ID, best.Score, bestJaccard)
+		return nil
+
+	case reconcileTierUpdate:
+		log.DebugfContext(ctx,
+			"auto_memory: reconcile rewrite add as update for user "+
+				"%s/%s (best=%s score=%.3f jaccard=%.3f)",
+			userKey.AppName, userKey.UserID,
+			best.ID, best.Score, bestJaccard)
+		return toUpdateOp(op, best)
+
+	default:
+		return op
+	}
+}
+
+// tokenJaccard returns the token-level Jaccard similarity between two
+// memory texts using the same tokenizer stack that powers keyword
+// search (gse segmentation for CJK plus CJK trigrams plus English
+// tokens). This is what makes reconcile effective on "core entities
+// match, filler words differ" phrasing drift regardless of whether
+// the underlying store is vector-backed or keyword-backed.
+func tokenJaccard(a, b string) float64 {
+	as := textTokenSet(a)
+	bs := textTokenSet(b)
+	if len(as) == 0 && len(bs) == 0 {
+		return 0
+	}
+	var inter int
+	// Iterate over the smaller set for a cheap speedup.
+	small, large := as, bs
+	if len(bs) < len(as) {
+		small, large = bs, as
+	}
+	for t := range small {
+		if _, ok := large[t]; ok {
+			inter++
+		}
+	}
+	union := len(as) + len(bs) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
+}
+
+func textTokenSet(text string) map[string]struct{} {
+	tokens := dedupStrings(append(
+		BuildSearchTokens(text),
+		buildFallbackCJKTrigrams(text)...,
+	))
+	set := make(map[string]struct{}, len(tokens))
+	for _, t := range tokens {
+		set[t] = struct{}{}
+	}
+	return set
+}
+
+// toUpdateOp converts an OperationAdd into an OperationUpdate that
+// targets the given existing entry, merging topics so repeated
+// extractions can accumulate category labels without inventing new
+// synonymous topic names.
+func toUpdateOp(op *extractor.Operation, best *memory.Entry) *extractor.Operation {
+	merged := mergeTopics(best.Memory.Topics, op.Topics)
+	updated := *op
+	updated.Type = extractor.OperationUpdate
+	updated.MemoryID = best.ID
+	updated.Topics = merged
+	// Preserve the existing memory kind when the extractor did not
+	// classify this candidate itself. executeOperation -> opToMetadata
+	// defaults an empty kind to KindFact and ApplyMetadataPatch always
+	// writes Kind unconditionally, so a missing carry-over would
+	// silently downgrade an episode (or any custom kind) on the
+	// stored entry.
+	if updated.MemoryKind == "" && best.Memory != nil {
+		updated.MemoryKind = EffectiveKind(best.Memory)
+	}
+	// Keep other episodic metadata as-is: UpdateMemory flows through
+	// ApplyMetadataPatch which only overwrites non-zero fields, so the
+	// existing entry's metadata is preserved when the extractor did not
+	// supply replacements.
+	return &updated
+}
+
+// mergeTopics returns a case-insensitive de-duplicated union of the
+// two topic slices, preserving the ordering of the existing slice
+// first and appending new topics not yet present. Both inputs flow
+// through the same trimming and empty-filtering pipeline so a
+// fresh-only merge (when the existing entry had no topics) still
+// emits a normalized slice.
+func mergeTopics(existing, fresh []string) []string {
+	seen := make(map[string]struct{}, len(existing)+len(fresh))
+	out := make([]string, 0, len(existing)+len(fresh))
+	for _, t := range existing {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		key := strings.ToLower(t)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, t)
+	}
+	for _, t := range fresh {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		key := strings.ToLower(t)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, t)
+	}
+	return out
+}
+
+// hasNewTopics reports whether fresh contains any topic not already
+// present in existing (case-insensitive).
+func hasNewTopics(existing, fresh []string) bool {
+	if len(fresh) == 0 {
+		return false
+	}
+	known := make(map[string]struct{}, len(existing))
+	for _, t := range existing {
+		known[strings.ToLower(strings.TrimSpace(t))] = struct{}{}
+	}
+	for _, t := range fresh {
+		k := strings.ToLower(strings.TrimSpace(t))
+		if k == "" {
+			continue
+		}
+		if _, ok := known[k]; !ok {
+			return true
+		}
+	}
+	return false
 }

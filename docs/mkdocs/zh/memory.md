@@ -1667,9 +1667,102 @@ llmAgent := llmagent.New(
 )
 ```
 
+## 外部长时记忆平台集成（`mem0`）
+
+`memory/mem0` 是当前对 [mem0](https://mem0.ai) 的集成实现，适合把长期记忆的提取与存储交给外部托管平台，同时仍然让 Agent 通过标准记忆工具查询结果。
+
+它与上文介绍的内置 Memory 后端不同：`memory/mem0` **不是** 完整的 `memory.Service` 实现，而是采用 ingest-first 模式。Runner 会在每轮对话后把 session transcript 发送给 mem0，由 mem0 在平台侧完成提取，Agent 再通过只读工具读取结果。
+
+**适用场景**：外部长时记忆平台、每轮响应后的后台提取，以及不需要本地 CRUD 写路径的场景。
+
+### 配置示例
+
+```go
+import (
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+mem0Svc, err := memorymem0.NewService(
+    memorymem0.WithAPIKey(os.Getenv("MEM0_API_KEY")),
+    memorymem0.WithLoadToolEnabled(true),
+)
+if err != nil {
+    panic(err)
+}
+defer mem0Svc.Close()
+
+sessionSvc := sessioninmemory.NewSessionService()
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(openai.New("deepseek-chat")),
+    llmagent.WithTools(mem0Svc.Tools()),
+)
+
+r := runner.NewRunner(
+    "my-app",
+    agent,
+    runner.WithSessionService(sessionSvc),
+    runner.WithSessionIngestor(mem0Svc),
+)
+defer r.Close()
+```
+
+**接入要点**：
+
+- 通过 `llmagent.WithTools(mem0Svc.Tools())` 注册工具
+- 通过 `runner.WithSessionIngestor(mem0Svc)` 把 session transcript 交给 mem0
+- 不要对该集成使用 `runner.WithMemoryService(...)`
+
+### 为什么用 `WithSessionIngestor(...)`，而不是 `WithMemoryService(...)`
+
+`runner.WithMemoryService(...)` 面向的是实现完整 `memory.Service` 契约的内置 Memory 后端。这个契约除了读接口，还包括 `AddMemory`、`UpdateMemory`、`DeleteMemory`、`ClearMemories`、`EnqueueAutoMemoryJob(...)` 等由框架直接拥有语义的写入与自动提取能力。
+
+`memory/mem0` 的边界不同。它并不把完整的 CRUD 生命周期暴露给框架，而是接收完整的 session transcript，转交给 mem0 做托管提取，然后再通过只读工具把检索能力暴露给 Agent。
+
+使用 `runner.WithSessionIngestor(...)` 可以更准确地表达这层边界：
+
+- Runner 在每轮结束后把完整 session transcript 发送出去
+- 记忆提取与存储由 mem0 在服务端完成
+- `metadata`、`agent_id`、`run_id` 这类按请求传递的 ingest 字段，可以通过 `session.IngestOption` 透传
+- 不会把该集成误解成支持完整框架侧 CRUD 或 preload 的内置后端
+
+简单说，`MemoryService` 表示“框架直接管理记忆”，而 `SessionIngestor` 表示“框架把 transcript 交给外部记忆系统”。`mem0` 属于后者。
+
+### 配置选项
+
+| 选项 | 作用 | 默认值 |
+| ---- | ---- | ------ |
+| `WithAPIKey(key)` | mem0 API Key，所有请求必需。 | 必填 |
+| `WithHost(url)` | 覆盖 mem0 API Host / Base URL。 | `https://api.mem0.ai` |
+| `WithOrgProject(orgID, projectID)` | 为 ingest 与读取请求追加 mem0 的 `org_id` / `project_id`。 | 空 |
+| `WithAsyncMode(bool)` | 控制 ingest 请求里的 `async_mode`。 | `true` |
+| `WithVersion(v)` | 设置 mem0 ingest 请求里的版本字段。 | `v2` |
+| `WithTimeout(d)` | HTTP 客户端超时时间。 | `10s` |
+| `WithLoadToolEnabled(bool)` | 是否在 `Tools()` 里暴露 `memory_load`。 | `false` |
+| `WithAsyncMemoryNum(n)` | 后台 ingest worker 数量。 | `1` |
+| `WithMemoryQueueSize(n)` | 每个 worker 的队列长度。 | `10` |
+| `WithMemoryJobTimeout(d)` | 队列任务与同步 fallback ingest 的超时时间。 | `30s` |
+
+### 注意事项
+
+- `Tools()` 默认暴露 `memory_search`；`memory_load` 可按需开启。
+- 所有读取仍然基于当前 `<appName, userID>` 做隔离。
+- Runner 会自动把 session 上下文带入 ingest；如果有需要，也可以通过 `session.WithIngestMetadata`、`session.WithIngestAgentID`、`session.WithIngestRunID` 追加信息。
+- 当 mem0 返回结构化 metadata 时，检索结果仍可携带 `Topics`、`Kind`、`EventTime`、`Participants`、`Location` 等字段。
+- 使用完成后请调用 `Close()`，确保后台 worker 干净退出。
+- 如果你需要完整的 CRUD 工具面，或依赖框架侧 preload，建议优先选择内置 Memory 后端。
+
 ## 参考链接
 
 - [Memory 模块源码](https://github.com/trpc-group/trpc-agent-go/tree/main/memory)
 - [工具驱动模式示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)
 - [自动提取模式示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
+- [mem0 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0)
+- [生态建设文档](https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/zh/ecosystem.md)
 - [API 文档](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)

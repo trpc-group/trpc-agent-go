@@ -368,6 +368,9 @@ When AgentTool enables `WithStreamInner(true)`, it also forwards the child Agent
 
 - Forwarded child events are standard `event.Event` items; incremental text appears in `choice.Delta.Content`.
 - To avoid duplicate display, the child’s final full message is not forwarded; it is aggregated into the final `tool.response` content so the next LLM turn has tool messages as required by some providers.
+- If you only want inner progress and not the child assistant prose, combine
+  `WithStreamInner(true)` with
+  `WithInnerTextMode(agenttool.InnerTextModeExclude)`.
 
 Runner automatically sends completion signals for events requiring them (`RequiresCompletion=true`), so manual handling is not needed.
 

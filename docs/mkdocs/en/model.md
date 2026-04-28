@@ -205,7 +205,11 @@ type GenerationConfig struct {
     // Presence penalty.
     PresencePenalty *float64 `json:"presence_penalty,omitempty"`
 
-    // Reasoning effort level ("low", "medium", "high").
+    // Reasoning effort level. Accepted values depend on the provider:
+    //   - OpenAI o-series: "low", "medium", "high".
+    //   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): "high", "max"
+    //     (server maps "low"/"medium" -> "high" and "xhigh" -> "max" for
+    //     backward compatibility).
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
     // Whether to enable thinking mode.
@@ -1495,8 +1499,9 @@ model := openai.New("deepseek-chat",
 
 The framework automatically calculates "maxInputTokens" based on the model's context window:
 
-!!! note "Context Window Registration"
-    Both Token Tailoring and session summary `WithContextThreshold` rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with `model.RegisterModelContextWindow("my-model", 32768)` or `model.RegisterModelContextWindows(map[string]int{...})`. See the [Session Summary documentation](session.md#session-summary) for a full example.
+> **Context Window Registration**
+>
+> Both Token Tailoring and session summary `WithContextThreshold` rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with `model.RegisterModelContextWindow("my-model", 32768)` or `model.RegisterModelContextWindows(map[string]int{...})`. See the [Session Summary documentation](session/summary.md) for a full example.
 
 ```
 safetyMargin = contextWindow × 10%

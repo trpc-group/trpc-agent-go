@@ -612,6 +612,68 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 	)
 }
 
+func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_spawn"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_list"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_get"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_cancel"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_spawn"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_list"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_get"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_cancel"),
+	)
+}
+
+func TestNewRuntime_ExposesSubagentService(t *testing.T) {
+	t.Parallel()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-enable-openclaw-tools",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+
+	require.NotNil(t, rt.SubagentService())
+}
+
+func TestRuntimeSubagentServiceNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var rt *Runtime
+	require.Nil(t, rt.SubagentService())
+}
+
 func TestNewRuntimeStores_CreatesAllStores(t *testing.T) {
 	t.Parallel()
 
@@ -1418,7 +1480,20 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 		sys,
 		"Each entry includes a path to that skill's SKILL.md on disk.",
 	)
-	require.NotContains(t, sys, "Skill tool availability:")
+	// With the bare WithSkills(repo) default profile now being
+	// knowledge_only (skill_load + doc helpers, no skill_run / skill_exec),
+	// suppressing the skill protocol guidance via an explicit empty
+	// SkillsToolingGuide no longer also hides the built-in capability
+	// disclosure block. The overview thus carries the
+	// "Skill tool availability:" header describing the knowledge-only
+	// surface.
+	require.Contains(t, sys, "Skill tool availability:")
+	require.Contains(
+		t,
+		sys,
+		"This configuration supports skill discovery and "+
+			"knowledge loading only.",
+	)
 }
 
 func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
