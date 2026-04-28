@@ -578,15 +578,22 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 		request.StructuredOutput.Type == model.StructuredOutputJSONSchema &&
 		request.StructuredOutput.JSONSchema != nil {
 		js := request.StructuredOutput.JSONSchema
-		chatRequest.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
-				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name:        js.Name,
-					Schema:      js.Schema,
-					Strict:      openai.Bool(js.Strict),
-					Description: openai.String(js.Description),
+		if m.variant == VariantDeepSeek {
+			jsonObject := shared.NewResponseFormatJSONObjectParam()
+			chatRequest.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONObject: &jsonObject,
+			}
+		} else {
+			chatRequest.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+						Name:        js.Name,
+						Schema:      js.Schema,
+						Strict:      openai.Bool(js.Strict),
+						Description: openai.String(js.Description),
+					},
 				},
-			},
+			}
 		}
 		if len(request.Tools) > 0 {
 			// Parallel tool calls can interfere with strict JSON schema
