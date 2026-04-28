@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 type mockSummarizerWithTs struct {
@@ -159,6 +160,30 @@ func (t *thresholdSummarizer) Summarize(context.Context, *session.Session) (stri
 func (t *thresholdSummarizer) SetPrompt(string)         {}
 func (t *thresholdSummarizer) SetModel(model.Model)     {}
 func (t *thresholdSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+type recordingThresholdSummarizer struct {
+	out              string
+	checker          func(*session.Session) bool
+	summarizedEvents int
+	summarizedScope  string
+}
+
+func (r *recordingThresholdSummarizer) ShouldSummarize(sess *session.Session) bool {
+	return r.checker(sess)
+}
+
+func (r *recordingThresholdSummarizer) Summarize(
+	_ context.Context,
+	sess *session.Session,
+) (string, error) {
+	r.summarizedEvents = len(sess.Events)
+	r.summarizedScope = isummaryscope.GetScopeFilterKey(sess)
+	return r.out, nil
+}
+
+func (r *recordingThresholdSummarizer) SetPrompt(string)         {}
+func (r *recordingThresholdSummarizer) SetModel(model.Model)     {}
+func (r *recordingThresholdSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func makeEvent(content string, ts time.Time, filterKey string) event.Event {
 	return event.Event{
@@ -1186,6 +1211,52 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	defer mockSvc.mu.Unlock()
 	require.Equal(t, "summary-user-messages", mockSvc.summaries["user-messages"])
 	require.Equal(t, "summary-", mockSvc.summaries[""])
+}
+
+func TestCreateSessionSummaryWithCascade_FullTargetUsesTriggerFilterKeyForChecks(t *testing.T) {
+	now := time.Now()
+	const (
+		appName = "app"
+		branch  = "app/child"
+	)
+	sess := &session.Session{
+		ID:      "test-session",
+		AppName: appName,
+		UserID:  "test-user",
+		Events: []event.Event{
+			makeEvent("branch-1", now.Add(-4*time.Minute), branch),
+			makeEvent("branch-2", now.Add(-3*time.Minute), branch),
+			makeEvent("other", now.Add(-2*time.Minute), "app/other"),
+			makeEvent("branch-3", now.Add(-time.Minute), branch),
+		},
+	}
+	summarizer := &recordingThresholdSummarizer{
+		out:     "full-summary",
+		checker: summary.CheckEventThreshold(2),
+	}
+
+	err := CreateSessionSummaryWithCascade(
+		context.Background(),
+		sess,
+		branch,
+		false,
+		NewSummaryDispatchPolicy([]string{""}, true),
+		func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+			_, err := SummarizeSession(ctx, summarizer, sess, filterKey, force)
+			return err
+		},
+	)
+	require.NoError(t, err)
+
+	sess.SummariesMu.RLock()
+	fullSummary := sess.Summaries[session.SummaryFilterKeyAllContents]
+	branchSummary := sess.Summaries[branch]
+	sess.SummariesMu.RUnlock()
+	require.NotNil(t, fullSummary)
+	require.Equal(t, "full-summary", fullSummary.Summary)
+	require.Nil(t, branchSummary)
+	require.Equal(t, len(sess.Events), summarizer.summarizedEvents)
+	require.Empty(t, summarizer.summarizedScope)
 }
 
 func TestIsSingleFilterKey(t *testing.T) {

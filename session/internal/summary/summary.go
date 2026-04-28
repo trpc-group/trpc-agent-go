@@ -144,7 +144,13 @@ func SummarizeSession(
 	// Build input with previous summary prepended.
 	input := prependPrevSummary(prevText, delta, time.Now())
 	tmp := buildFilterSession(base, filterKey, input)
-	if !force && !ShouldSummarize(ctx, m, tmp) {
+	checkTmp := tmp
+	if filterKey == session.SummaryFilterKeyAllContents {
+		if triggerFilterKey := summaryTriggerFilterKeyFromContext(ctx); triggerFilterKey != "" {
+			checkTmp = buildFilterSession(base, triggerFilterKey, input)
+		}
+	}
+	if !force && !ShouldSummarize(ctx, m, checkTmp) {
 		return false, nil
 	}
 
@@ -189,6 +195,26 @@ func selectUpdatedAt(tmp *session.Session, prevAt, latestTs time.Time, hasDelta 
 // lastIncludedTsKey is the key for the last included timestamp.
 // This key is used to store the last included timestamp in the session state.
 const lastIncludedTsKey = "summary:last_included_ts"
+
+type summaryTriggerFilterKeyContextKey struct{}
+
+func contextWithSummaryTriggerFilterKey(ctx context.Context, filterKey string) context.Context {
+	if filterKey == "" {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, summaryTriggerFilterKeyContextKey{}, filterKey)
+}
+
+func summaryTriggerFilterKeyFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	filterKey, _ := ctx.Value(summaryTriggerFilterKeyContextKey{}).(string)
+	return filterKey
+}
 
 func readLastIncludedTimestamp(tmp *session.Session) time.Time {
 	if tmp == nil {
@@ -350,7 +376,12 @@ func CreateSessionSummaryWithCascade(
 		return nil
 	}
 	if len(targets) == 1 {
-		return createSummaryFunc(ctx, sess, targets[0], force)
+		target := targets[0]
+		if target == session.SummaryFilterKeyAllContents &&
+			filterKey != session.SummaryFilterKeyAllContents {
+			ctx = contextWithSummaryTriggerFilterKey(ctx, filterKey)
+		}
+		return createSummaryFunc(ctx, sess, target, force)
 	}
 
 	// Optimization: when all events match the filterKey, the filterKey summary
@@ -378,7 +409,12 @@ func CreateSessionSummaryWithCascade(
 	for i, fk := range targets {
 		go func(i int, fk string) {
 			defer summaryWg.Done()
-			err := createSummaryFunc(ctx, sess, fk, force)
+			callCtx := ctx
+			if fk == session.SummaryFilterKeyAllContents &&
+				filterKey != session.SummaryFilterKeyAllContents {
+				callCtx = contextWithSummaryTriggerFilterKey(callCtx, filterKey)
+			}
+			err := createSummaryFunc(callCtx, sess, fk, force)
 			if err != nil {
 				result[i] = fmt.Errorf("create session summary for filterKey %q failed: %w", fk, err)
 			}
