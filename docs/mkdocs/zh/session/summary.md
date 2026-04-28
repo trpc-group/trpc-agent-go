@@ -144,6 +144,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/session/pgvector"
 )
 
+// embedder := ...（例如 OpenAI / Gemini embedder；详见嵌入器配置文档）
 sessionService, err := pgvector.NewService(
     pgvector.WithDSN(os.Getenv("PGVECTOR_DSN")),
     pgvector.WithEmbedder(embedder),
@@ -170,7 +171,8 @@ llmAgent := llmagent.New(
   `session_search` 和 `session_load`。
 - 当前 `session/pgvector` 支持这条链路；纯内存摘要示例不会暴露这两个工具。
 - `current_hidden` 会严格搜索当前 session 中、位于 `summary:last_included_ts`
-  之前的历史内容。
+  之前的历史内容。`summary:last_included_ts` 是摘要中记录的
+  `last_included_ts` 时间戳，表示该摘要覆盖到的最后一个事件时间。
 - `current_session` 会搜索整个当前 session，不受 summary cutoff 限制。
   当请求投影或 context compaction 把当前 session 的细节裁掉时，这个 scope
   最有用。
