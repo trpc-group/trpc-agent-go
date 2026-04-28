@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/mysql"
+	sessionnoop "trpc.group/trpc-go/trpc-agent-go/session/noop"
 	sessionpgvector "trpc.group/trpc-go/trpc-agent-go/session/pgvector"
 	"trpc.group/trpc-go/trpc-agent-go/session/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis"
@@ -46,6 +47,7 @@ type SessionType string
 // Session type constants.
 const (
 	SessionInMemory   SessionType = "inmemory"
+	SessionNoop       SessionType = "noop"
 	SessionSQLite     SessionType = "sqlite"
 	SessionRedis      SessionType = "redis"
 	SessionPostgres   SessionType = "postgres"
@@ -67,7 +69,7 @@ type SessionServiceConfig struct {
 // type.
 //
 // Parameters:
-//   - sessionType: one of inmemory, sqlite, redis, postgres, pgvector,
+//   - sessionType: one of inmemory, noop, sqlite, redis, postgres, pgvector,
 //     mysql, clickhouse
 //   - cfg: session service configuration (eventLimit, ttl, hooks)
 //
@@ -100,6 +102,8 @@ func NewSessionServiceByType(
 		return newMySQLSessionService(cfg)
 	case SessionClickHouse:
 		return newClickHouseSessionService(cfg)
+	case SessionNoop:
+		return sessionnoop.NewService(), nil
 	case SessionInMemory:
 		fallthrough
 	default:
