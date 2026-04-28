@@ -580,6 +580,11 @@ func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
+	require.Contains(
+		t,
+		decl.Description,
+		"same assistant message must call exec_command",
+	)
 	require.NotContains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
 }
 
@@ -595,6 +600,11 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+	require.Contains(
+		t,
+		decl.Description,
+		"same assistant message must call exec_command",
+	)
 }
 
 func TestBuildOpenClawTools_IncludesConversationHistoryTool(
@@ -1546,6 +1556,17 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
+		"A preamble-only skill response is invalid",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Do not stop after announcing the skill-backed "+
+			"next step",
+	)
+	require.Contains(
+		t,
+		sys,
 		"Never say that you could read or load a matching skill later",
 	)
 	require.Contains(
@@ -1920,6 +1941,13 @@ func TestNewAgent_KnowledgeOnlyProfileHidesSkillRun(t *testing.T) {
 		"Before the first matching load, start with one "+
 			"brief user-visible preamble",
 	)
+	require.Contains(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad).
+			Description,
+		"same assistant message must include the required "+
+			"tool call",
+	)
 }
 
 func TestNewAgent_KnowledgeOnlyProfileUsesToolingGuidance(
@@ -1996,6 +2024,11 @@ func TestNewAgent_FullProfileUsesToolingGuidance(t *testing.T) {
 				t,
 				content,
 				strings.TrimSpace(openClawToolingGuidance),
+			)
+			require.Contains(
+				t,
+				content,
+				artifactCompletionRule,
 			)
 		})
 	}

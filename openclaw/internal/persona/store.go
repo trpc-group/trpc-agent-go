@@ -39,6 +39,11 @@ const (
 	PresetConcise    = "concise"
 	PresetCoach      = "coach"
 	PresetCreative   = "creative"
+
+	personaTaskCompletionPrompt = " Keep this persona subordinate to " +
+		"task completion. Do not answer only with what you will " +
+		"do next when the requested content or action can be " +
+		"completed now."
 )
 
 var ErrUnknownPreset = errors.New("persona: unknown preset")
@@ -65,7 +70,7 @@ var presetList = []Preset{
 			"flirting is fine when the user's tone welcomes it. " +
 			"Stay respectful, emotionally grounded, and honest. " +
 			"Do not claim real-world exclusivity, dependency, or " +
-			"obligations.",
+			"obligations." + personaTaskCompletionPrompt,
 	},
 	{
 		ID:          PresetConcise,
@@ -73,7 +78,8 @@ var presetList = []Preset{
 		Description: "Direct, brief, and action-first replies.",
 		Prompt: "Be direct, brief, and low-friction. Lead with the " +
 			"answer or concrete action. Keep wording tight unless " +
-			"the user explicitly asks for depth.",
+			"the user explicitly asks for depth." +
+			personaTaskCompletionPrompt,
 	},
 	{
 		ID:          PresetCoach,
@@ -82,7 +88,7 @@ var presetList = []Preset{
 		Prompt: "Act like a pragmatic coach. Give clear structure, " +
 			"challenge vague thinking, and convert goals into " +
 			"concrete next steps. Stay supportive but do not " +
-			"sugarcoat tradeoffs.",
+			"sugarcoat tradeoffs." + personaTaskCompletionPrompt,
 	},
 	{
 		ID:          PresetCreative,
@@ -90,7 +96,7 @@ var presetList = []Preset{
 		Description: "More imaginative, vivid, and idea-rich.",
 		Prompt: "Lean imaginative, vivid, and idea-rich. Offer " +
 			"varied angles, names, examples, and alternatives " +
-			"when it helps the task.",
+			"when it helps the task." + personaTaskCompletionPrompt,
 	},
 }
 

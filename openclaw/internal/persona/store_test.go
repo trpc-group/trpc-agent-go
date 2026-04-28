@@ -24,6 +24,21 @@ func TestLookup(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, PresetGirlfriend, preset.ID)
 
+	for _, id := range []string{
+		PresetGirlfriend,
+		PresetConcise,
+		PresetCoach,
+		PresetCreative,
+	} {
+		preset, ok := Lookup(id)
+		require.True(t, ok)
+		require.Contains(
+			t,
+			preset.Prompt,
+			"Do not answer only with what you will do next",
+		)
+	}
+
 	preset, ok = Lookup("")
 	require.True(t, ok)
 	require.Equal(t, PresetDefault, preset.ID)

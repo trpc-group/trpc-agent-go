@@ -47,7 +47,10 @@ const (
 		"Do not use message unless you need an additional " +
 		"side message beyond the final result. The final " +
 		"answer will be delivered automatically to the job " +
-		"target. Do not ask for confirmation unless blocked."
+		"target. Do not ask for confirmation unless blocked. " +
+		"Do not return only a statement of what you will do; " +
+		"perform the scheduled task and report the result or " +
+		"the exact blocker."
 
 	scheduledRunMessagePrefix = "Execute the following existing " +
 		"scheduled job once now. Ignore any wording about " +
