@@ -6246,7 +6246,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
 </span><span id="__span-50-35"><a id="__codelineno-50-35" name="__codelineno-50-35"></a><span class="w">    </span><span class="p">)</span>
 </span><span id="__span-50-36"><a id="__codelineno-50-36" name="__codelineno-50-36"></a>
 </span><span id="__span-50-37"><a id="__codelineno-50-37" name="__codelineno-50-37"></a><span class="w">    </span><span class="c1">// 2. 创建模型和 Agent</span>
-</span><span id="__span-50-38"><a id="__codelineno-50-38" name="__codelineno-50-38"></a><span class="w">    </span><span class="nx">llmModel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;DeepSeek-V3-Online-64K&quot;</span><span class="p">)</span>
+</span><span id="__span-50-38"><a id="__codelineno-50-38" name="__codelineno-50-38"></a><span class="w">    </span><span class="nx">llmModel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)</span>
 </span><span id="__span-50-39"><a id="__codelineno-50-39" name="__codelineno-50-39"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;calculator-assistant&quot;</span><span class="p">,</span>
 </span><span id="__span-50-40"><a id="__codelineno-50-40" name="__codelineno-50-40"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">llmModel</span><span class="p">),</span>
 </span><span id="__span-50-41"><a id="__codelineno-50-41" name="__codelineno-50-41"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;你是一个数学助手&quot;</span><span class="p">),</span>
@@ -6314,7 +6314,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
 </span><span id="__span-51-9"><a id="__codelineno-51-9" name="__codelineno-51-9"></a><span class="nb">cd</span><span class="w"> </span>streamalbe_server<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span><span class="p">&amp;</span>
 </span><span id="__span-51-10"><a id="__codelineno-51-10" name="__codelineno-51-10"></a>
 </span><span id="__span-51-11"><a id="__codelineno-51-11" name="__codelineno-51-11"></a><span class="c1"># 运行主程序</span>
-</span><span id="__span-51-12"><a id="__codelineno-51-12" name="__codelineno-51-12"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>-model<span class="o">=</span><span class="s2">&quot;deepseek-chat&quot;</span>
+</span><span id="__span-51-12"><a id="__codelineno-51-12" name="__codelineno-51-12"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>-model<span class="o">=</span><span class="s2">&quot;deepseek-v4-flash&quot;</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="_40">总结</h2>
 <p>Tool 工具系统为 tRPC-Agent-Go 提供了丰富的扩展能力，支持函数工具、DuckDuckGo 搜索工具和 MCP 协议工具。</p>
@@ -6340,7 +6340,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月28日 03:14:51 UTC">2026-04-28 03:14:51</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月28日 04:43:07 UTC">2026-04-28 04:43:07</span>
   </span>
 
     
