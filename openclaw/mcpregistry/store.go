@@ -185,11 +185,6 @@ func (s *FileStore) Upsert(
 	if err != nil {
 		return EntryView{}, err
 	}
-	conn, err := normalizeConnection(req.Connection)
-	if err != nil {
-		return EntryView{}, err
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -215,13 +210,33 @@ func (s *FileStore) Upsert(
 		)
 	}
 
+	description := strings.TrimSpace(req.Description)
+	conn := req.Connection
+	if req.UpdateOnly && index >= 0 {
+		existing := state.Entries[index]
+		conn = mergeConnection(
+			rawConnectionForEntry(existing, secrets),
+			conn,
+		)
+		if description == "" {
+			description = existing.Description
+		}
+	}
+	if strings.TrimSpace(conn.Description) == "" {
+		conn.Description = description
+	}
+	conn, err = normalizeConnection(conn)
+	if err != nil {
+		return EntryView{}, err
+	}
+
 	safeConn, hasSensitive := redactConnection(conn)
 	entry := Entry{
 		ID:                 id,
 		Name:               name,
 		Scope:              scope,
 		ScopeKey:           scopeKey,
-		Description:        strings.TrimSpace(req.Description),
+		Description:        description,
 		Connection:         safeConn,
 		HasSensitiveValues: hasSensitive,
 		CreatedAt:          now,
@@ -561,6 +576,62 @@ func normalizeTransport(raw string, command string, serverURL string) string {
 	}
 }
 
+func rawConnectionForEntry(
+	entry Entry,
+	secrets secretState,
+) mcp.ConnectionConfig {
+	if secrets.Connections != nil {
+		if raw, ok := secrets.Connections[entry.ID]; ok {
+			return raw
+		}
+	}
+	return entry.Connection
+}
+
+func mergeConnection(
+	base mcp.ConnectionConfig,
+	update mcp.ConnectionConfig,
+) mcp.ConnectionConfig {
+	out := mcp.ConnectionConfig{
+		Transport:   base.Transport,
+		ServerURL:   base.ServerURL,
+		Headers:     cloneStringMap(base.Headers),
+		Command:     base.Command,
+		Args:        cloneStringSlice(base.Args),
+		Timeout:     base.Timeout,
+		Description: base.Description,
+		ClientInfo:  base.ClientInfo,
+	}
+	if strings.TrimSpace(update.Transport) != "" {
+		out.Transport = update.Transport
+	}
+	if strings.TrimSpace(update.ServerURL) != "" {
+		out.ServerURL = update.ServerURL
+	}
+	if update.Headers != nil {
+		out.Headers = cloneStringMap(update.Headers)
+	}
+	if strings.TrimSpace(update.Command) != "" {
+		out.Command = update.Command
+	}
+	if update.Args != nil {
+		out.Args = cloneStringSlice(update.Args)
+	}
+	if update.Timeout != 0 {
+		out.Timeout = update.Timeout
+	}
+	if strings.TrimSpace(update.Description) != "" {
+		out.Description = update.Description
+	}
+	if strings.TrimSpace(update.ClientInfo.Name) != "" {
+		out.ClientInfo.Name = update.ClientInfo.Name
+	}
+	if strings.TrimSpace(update.ClientInfo.Version) != "" {
+		out.ClientInfo.Version = update.ClientInfo.Version
+	}
+	return out
+}
+
 func redactConnection(cfg mcp.ConnectionConfig) (mcp.ConnectionConfig, bool) {
 	out := cfg
 	out.Headers = cloneStringMap(cfg.Headers)
@@ -577,6 +648,9 @@ func redactConnection(cfg mcp.ConnectionConfig) (mcp.ConnectionConfig, bool) {
 			hasSensitive = true
 		}
 	}
+	args, ok := redactArgs(out.Args)
+	out.Args = args
+	hasSensitive = hasSensitive || ok
 	return out, hasSensitive
 }
 
@@ -613,6 +687,64 @@ func isSensitiveQueryKey(key string) bool {
 		}
 	}
 	return false
+}
+
+func redactArgs(args []string) ([]string, bool) {
+	out := cloneStringSlice(args)
+	changed := false
+	redactNext := false
+	for i, arg := range out {
+		if redactNext {
+			out[i] = secretRedaction
+			changed = true
+			redactNext = false
+			continue
+		}
+		redacted, ok := redactArg(arg)
+		if ok {
+			out[i] = redacted
+			changed = true
+			continue
+		}
+		if isSensitiveArgName(arg) {
+			redactNext = true
+		}
+	}
+	return out, changed
+}
+
+func redactArg(arg string) (string, bool) {
+	if redactedURL, ok := redactURL(arg); ok {
+		return redactedURL, true
+	}
+	for _, sep := range []string{"=", ":"} {
+		index := strings.Index(arg, sep)
+		if index < 0 {
+			continue
+		}
+		key := strings.TrimSpace(arg[:index])
+		value := strings.TrimSpace(arg[index+len(sep):])
+		if isSensitiveArgName(key) ||
+			isSensitiveArgName(valueKey(value)) {
+			return arg[:index+len(sep)] + secretRedaction, true
+		}
+	}
+	return arg, false
+}
+
+func valueKey(value string) string {
+	for _, sep := range []string{":", "="} {
+		index := strings.Index(value, sep)
+		if index >= 0 {
+			return value[:index]
+		}
+	}
+	return value
+}
+
+func isSensitiveArgName(name string) bool {
+	name = strings.TrimLeft(strings.ToLower(strings.TrimSpace(name)), "-")
+	return isSensitiveHeader(name) || isSensitiveQueryKey(name)
 }
 
 func entryID(scope Scope, key string, name string) string {

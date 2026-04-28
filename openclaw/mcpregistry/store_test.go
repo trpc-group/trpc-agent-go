@@ -80,6 +80,89 @@ func TestFileStore_RedactsSensitiveValuesAndResolvesRawConfig(t *testing.T) {
 	require.Equal(t, "Bearer secret", servers["docs"].Headers["Authorization"])
 }
 
+func TestFileStore_RedactsSensitiveStdioArgs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+	runtime := testRuntimeContext()
+
+	_, err := store.Upsert(context.Background(), UpsertRequest{
+		Context: runtime,
+		Name:    "docs",
+		Scope:   ScopeSession,
+		Connection: mcp.ConnectionConfig{
+			Transport: "stdio",
+			Command:   "mcporter",
+			Args: []string{
+				"--token",
+				"arg-secret",
+				"--api-key=inline-secret",
+				"--header=Authorization: Bearer header-secret",
+				"https://example.com/mcp?token=url-secret",
+				"--plain",
+				"ok",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	registryBytes, err := os.ReadFile(
+		filepath.Join(dir, defaultRegistryFileName),
+	)
+	require.NoError(t, err)
+	registryText := string(registryBytes)
+	require.NotContains(t, registryText, "arg-secret")
+	require.NotContains(t, registryText, "inline-secret")
+	require.NotContains(t, registryText, "header-secret")
+	require.NotContains(t, registryText, "url-secret")
+	require.Contains(t, registryText, secretRedaction)
+
+	servers, err := store.ServerConfigs(context.Background(), runtime)
+	require.NoError(t, err)
+	require.Equal(t, "arg-secret", servers["docs"].Args[1])
+	require.Equal(t, "--api-key=inline-secret", servers["docs"].Args[2])
+}
+
+func TestFileStore_UpdateMergesExistingConnection(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(t.TempDir())
+	runtime := testRuntimeContext()
+	_, err := store.Upsert(context.Background(), UpsertRequest{
+		Context:     runtime,
+		Name:        "docs",
+		Scope:       ScopeChat,
+		Description: "old docs",
+		Connection: mcp.ConnectionConfig{
+			Transport: "streamable_http",
+			ServerURL: "https://example.com/mcp?token=secret",
+			Headers: map[string]string{
+				"Authorization": "Bearer secret",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	view, err := store.Upsert(context.Background(), UpsertRequest{
+		Context:     runtime,
+		Name:        "docs",
+		Scope:       ScopeChat,
+		Description: "new docs",
+		UpdateOnly:  true,
+		Connection:  mcp.ConnectionConfig{},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "new docs", view.Description)
+	require.True(t, view.HasSensitiveValues)
+
+	servers, err := store.ServerConfigs(context.Background(), runtime)
+	require.NoError(t, err)
+	require.Equal(t, "https://example.com/mcp?token=secret",
+		servers["docs"].ServerURL)
+	require.Equal(t, "Bearer secret", servers["docs"].Headers["Authorization"])
+}
+
 func TestFileStore_ScopeVisibilityAndAliasPrecedence(t *testing.T) {
 	t.Parallel()
 
