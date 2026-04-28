@@ -9,6 +9,8 @@
 
 package service
 
+import "time"
+
 const (
 	// defaultPath is the default path for the AG-UI service.
 	defaultPath = "/"
@@ -20,12 +22,13 @@ const (
 
 // Options holds the options for an AG-UI transport implementation.
 type Options struct {
-	AppName                 string // AppName is the name of the application.
-	Path                    string // Path is the request URL path served by the handler.
-	MessagesSnapshotEnabled bool   // MessagesSnapshotEnabled enables the messages snapshot handler.
-	MessagesSnapshotPath    string // MessagesSnapshotPath is the HTTP path for the messages snapshot handler.
-	CancelEnabled           bool   // CancelEnabled enables the cancel handler.
-	CancelPath              string // CancelPath is the HTTP path for the cancel handler.
+	AppName                 string        // AppName is the name of the application.
+	Path                    string        // Path is the request URL path served by the handler.
+	MessagesSnapshotEnabled bool          // MessagesSnapshotEnabled enables the messages snapshot handler.
+	MessagesSnapshotPath    string        // MessagesSnapshotPath is the HTTP path for the messages snapshot handler.
+	CancelEnabled           bool          // CancelEnabled enables the cancel handler.
+	CancelPath              string        // CancelPath is the HTTP path for the cancel handler.
+	HeartbeatInterval       time.Duration // HeartbeatInterval controls how often heartbeat frames are sent.
 }
 
 // NewOptions creates a new options instance.
@@ -81,5 +84,12 @@ func WithCancelEnabled(e bool) Option {
 func WithCancelPath(p string) Option {
 	return func(s *Options) {
 		s.CancelPath = p
+	}
+}
+
+// WithHeartbeatInterval sets how often the transport sends heartbeat frames.
+func WithHeartbeatInterval(d time.Duration) Option {
+	return func(s *Options) {
+		s.HeartbeatInterval = d
 	}
 }

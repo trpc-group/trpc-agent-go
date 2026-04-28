@@ -277,6 +277,20 @@ type PostRunFinalizingTranslator interface {
 
 ## 进阶用法
 
+### SSE 心跳保活
+
+在一些部署环境中，网关、负载均衡或浏览器可能会关闭长时间没有数据写入的 SSE 连接。如果你的 Agent 运行过程中可能出现较长时间没有事件输出的情况，可以通过 `agui.WithHeartbeatInterval(d)` 开启传输层心跳：
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithPath("/agui"),
+    agui.WithHeartbeatInterval(15*time.Second),
+)
+```
+
+服务端会按配置间隔写入 SSE comment 帧 `:\n\n`，用于保持连接活跃。该能力默认关闭，传入小于等于 0 的间隔表示关闭。
+
 ### 自定义通信协议
 
 AG-UI 协议未强制规定通信协议，框架使用 SSE 作为 AG-UI 的默认通信协议，如果希望改用 WebSocket 等其他协议，可以实现 `service.Service` 接口：

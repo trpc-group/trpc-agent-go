@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -214,6 +215,24 @@ func TestNewCancelEnabledWiresServiceOptions(t *testing.T) {
 	assert.Equal(t, "/api/chat", captured.Path)
 	assert.True(t, captured.CancelEnabled)
 	assert.Equal(t, "/api/cancel", captured.CancelPath)
+}
+
+func TestNewHeartbeatIntervalWiresServiceOptions(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	var captured *service.Options
+	customFactory := func(_ aguirunner.Runner, opt ...service.Option) service.Service {
+		captured = service.NewOptions(opt...)
+		return dummyAGUIService{}
+	}
+	srv, err := New(r,
+		WithHeartbeatInterval(2*time.Second),
+		WithServiceFactory(customFactory),
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
+	assert.NotNil(t, captured)
+	assert.Equal(t, 2*time.Second, captured.HeartbeatInterval)
 }
 
 func TestPathDefault(t *testing.T) {

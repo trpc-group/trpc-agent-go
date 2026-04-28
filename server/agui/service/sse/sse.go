@@ -16,6 +16,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguisse "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
@@ -35,6 +36,7 @@ type sse struct {
 	handler                 http.Handler
 	messagesSnapshotEnabled bool
 	cancelEnabled           bool
+	heartbeatInterval       time.Duration
 }
 
 // New creates a new SSE service.
@@ -48,6 +50,7 @@ func New(runner aguirunner.Runner, opt ...service.Option) service.Service {
 		writer:                  aguisse.NewSSEWriter(),
 		messagesSnapshotEnabled: opts.MessagesSnapshotEnabled,
 		cancelEnabled:           opts.CancelEnabled,
+		heartbeatInterval:       opts.HeartbeatInterval,
 	}
 	h := http.NewServeMux()
 	h.HandleFunc(s.path, s.handle)
@@ -243,6 +246,12 @@ func (s *sse) handleEvents(
 	events <-chan aguievents.Event,
 	drain bool,
 ) error {
+	var heartbeat <-chan time.Time
+	if s.heartbeatInterval > 0 {
+		ticker := time.NewTicker(s.heartbeatInterval)
+		defer ticker.Stop()
+		heartbeat = ticker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -250,6 +259,13 @@ func (s *sse) handleEvents(
 				go drainEvents(events)
 			}
 			return nil
+		case <-heartbeat:
+			if err := writeHeartbeat(w); err != nil {
+				if drain {
+					go drainEvents(events)
+				}
+				return err
+			}
 		case evt, ok := <-events:
 			if !ok {
 				return nil
@@ -262,6 +278,16 @@ func (s *sse) handleEvents(
 			}
 		}
 	}
+}
+
+func writeHeartbeat(w http.ResponseWriter) error {
+	if _, err := w.Write([]byte(":\n\n")); err != nil {
+		return err
+	}
+	if flusher, ok := w.(interface{ Flush() }); ok {
+		flusher.Flush()
+	}
+	return nil
 }
 
 // handleCancel cancels a running run identified by the request payload.
