@@ -298,6 +298,9 @@ func TestRedisService_EnqueueSummaryJob_AsyncDisabled_FallbackToSync(t *testing.
 	defer func() {
 		require.NoError(t, s.Close())
 	}()
+	if s.asyncWorker != nil {
+		s.asyncWorker.Stop()
+	}
 
 	// Create a session first.
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
