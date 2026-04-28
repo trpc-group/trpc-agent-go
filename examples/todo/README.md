@@ -227,9 +227,14 @@ All of these boil down to "the list must still be there next time
   the same thing:
   - **Hard tool contract (enforced in code, tool call fails on
     violation):**
-    - The `todos` field is required (JSON-schema level). Items are
-      validated only when present, and an empty list is accepted —
-      see the note right after this block on why.
+    - The `todos` field is required and must be an array. A missing
+      field or an explicit `null` is rejected at the runtime edge —
+      not silently treated as "clear all". The legitimate clear
+      gesture is an explicit empty array, `{"todos": []}`. This
+      asymmetry is on purpose: a destructive operation should require
+      an explicit token, so that an upstream provider, retry
+      middleware, or hand-rolled caller that accidentally drops the
+      field cannot wipe a session's plan in one shot.
     - Every item must carry a non-empty `content`, a non-empty
       `activeForm`, and a valid `status`
       (`pending` / `in_progress` / `completed`).
@@ -239,11 +244,13 @@ All of these boil down to "the list must still be there next time
       to avoid silently merging items the model meant to keep
       distinct).
 
-  Why an empty list is allowed: the tool is also the legitimate way
-  to _clear_ a checklist (e.g. after all items completed under
-  `WithClearOnAllDone(false)`, or when a plan is abandoned and
-  replaced). Rejecting `[]` would force callers to invent a separate
-  clear path just to satisfy the validator.
+  Why explicit `[]` is the only clear path: the tool _is_ the
+  legitimate way to clear a checklist (e.g. after all items
+  completed under `WithClearOnAllDone(false)`, or when a plan is
+  abandoned and replaced), but only when the caller explicitly says
+  so. Forcing the empty-array spelling preserves the symmetry the
+  schema declares (`required: ["todos"]`, type: array) and matches
+  how the same shape is enforced for any structured tool input.
   - **Prompt-only guidance (the model is encouraged to follow, but
     the tool will not reject it):** keeping exactly one item
     `in_progress` while actively working, not leaving stale

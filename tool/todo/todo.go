@@ -50,6 +50,7 @@
 package todo
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -249,21 +250,8 @@ func (t *Tool) Declaration() *tool.Declaration {
 // message so that a misconfigured agent still gets feedback from the
 // model instead of a hard stop.
 func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
-	var in writeInput
-	if err := json.Unmarshal(jsonArgs, &in); err != nil {
-		return nil, fmt.Errorf("todo_write: invalid arguments: %w", err)
-	}
-	// `{"todos": null}` and a missing `todos` field both unmarshal to a
-	// nil slice. Treat them as an explicit empty list so that the tool
-	// never serialises `null` for a field declared as an array in both
-	// the input and the output schema. Semantically this matches the
-	// "submit an empty list" convention callers can already use to
-	// clear the checklist, and keeps the two persistence layers
-	// (Session.SetState + StateDelta) byte-identical.
-	if in.Todos == nil {
-		in.Todos = []Item{}
-	}
-	if err := validateTodos(in.Todos); err != nil {
+	in, err := decodeWriteInput(jsonArgs)
+	if err != nil {
 		return nil, fmt.Errorf("todo_write: %w", err)
 	}
 
@@ -344,19 +332,8 @@ func (t *Tool) StateDeltaForInvocation(
 	// drop the delta on mismatch: if this path ever fires it indicates
 	// a framework-level bug, and corrupting the canonical session
 	// store is strictly worse than losing one turn of persistence.
-	var in writeInput
-	if err := json.Unmarshal(args, &in); err != nil {
-		return nil
-	}
-	// Mirror Call(): coerce a missing/null todos field to an empty
-	// slice so the canonical delta stays a JSON array. Call() has
-	// already done the same on its own path, this keeps the two
-	// persistence layers byte-identical even if an arg array was
-	// rewritten between Call and StateDeltaForInvocation.
-	if in.Todos == nil {
-		in.Todos = []Item{}
-	}
-	if err := validateTodos(in.Todos); err != nil {
+	in, err := decodeWriteInput(args)
+	if err != nil {
 		return nil
 	}
 	branch := ""
@@ -378,6 +355,59 @@ func (t *Tool) StateDeltaForInvocation(
 		return nil
 	}
 	return map[string][]byte{key: encoded}
+}
+
+// decodeWriteInput parses the raw tool arguments into a writeInput,
+// rejecting structurally legal but semantically destructive shapes
+// before any persistence happens.
+//
+// Specifically: a missing `todos` field and `{"todos": null}` both
+// unmarshal to a nil slice and would otherwise round-trip through
+// validateTodos as "empty list = clear all". We refuse them at the
+// edge so that an upstream provider, retry middleware, or hand-rolled
+// caller that accidentally drops the field cannot wipe a session's
+// plan in one shot. The legitimate clear gesture is an explicit empty
+// array (`{"todos": []}`); making the destructive path require an
+// explicit token preserves the symmetry the JSON schema declares
+// (`required: ["todos"]`, type: array) and matches how the same shape
+// is enforced for any structured tool input.
+//
+// The helper is shared between Call() and StateDeltaForInvocation()
+// so the two persistence layers cannot drift on whether to accept a
+// given payload.
+func decodeWriteInput(jsonArgs []byte) (writeInput, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(jsonArgs, &raw); err != nil {
+		return writeInput{}, fmt.Errorf("invalid arguments: %w", err)
+	}
+	todosRaw, ok := raw["todos"]
+	if !ok {
+		return writeInput{}, fmt.Errorf(
+			"todos field is required and must be an array " +
+				"(use [] to clear the checklist)",
+		)
+	}
+	if bytes.Equal(bytes.TrimSpace(todosRaw), []byte("null")) {
+		return writeInput{}, fmt.Errorf(
+			"todos must be an array, got null " +
+				"(use [] to clear the checklist)",
+		)
+	}
+	var todos []Item
+	if err := json.Unmarshal(todosRaw, &todos); err != nil {
+		return writeInput{}, fmt.Errorf("todos must be an array: %w", err)
+	}
+	if todos == nil {
+		// json.Unmarshal of `[]` produces a non-nil empty slice;
+		// any other shape that survives the checks above and still
+		// yields nil is treated as the same kind of structural mishap
+		// the explicit checks above are there to catch.
+		todos = []Item{}
+	}
+	if err := validateTodos(todos); err != nil {
+		return writeInput{}, err
+	}
+	return writeInput{Todos: todos}, nil
 }
 
 // validateTodos checks the list against the tool's structural contract.

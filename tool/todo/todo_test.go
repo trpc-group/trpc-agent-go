@@ -380,15 +380,17 @@ func TestAllCompleted(t *testing.T) {
 	}
 }
 
-// TestCall_NormalisesNullAndMissingTodos guards the second entry path
-// for the "todos must never marshal to null" contract: the one where
-// the LLM sends `{"todos": null}` or omits the field entirely. A plain
-// json.Unmarshal leaves Todos nil, which would then round-trip through
-// validation (empty list is legal) and marshal back to "null". Both
-// Call() and StateDeltaForInvocation() must coerce nil -> []Item{} so
-// that Output.Todos and the persisted state stay consistent with the
-// declared array schema.
-func TestCall_NormalisesNullAndMissingTodos(t *testing.T) {
+// TestCall_RejectsNullAndMissingTodos pins down the strict-input
+// contract: a missing `todos` field or `{"todos": null}` payload is
+// refused at the edge instead of being silently treated as "clear all".
+// The destructive shape (wipe the entire checklist) must be reachable
+// only via an explicit empty array, see
+// TestCall_AcceptsExplicitEmptyArrayClear.
+//
+// Beyond the error path we also verify that the rejection is total:
+// no in-run state was written, no canonical state delta is published,
+// and any pre-existing list in the session is left intact.
+func TestCall_RejectsNullAndMissingTodos(t *testing.T) {
 	inputs := map[string][]byte{
 		"null_todos":    []byte(`{"todos": null}`),
 		"missing_field": []byte(`{}`),
@@ -398,52 +400,110 @@ func TestCall_NormalisesNullAndMissingTodos(t *testing.T) {
 			ctx, sess := newTestCtx("")
 			tl := New()
 
-			res, err := tl.Call(ctx, args)
-			if err != nil {
-				t.Fatalf("Call: %v", err)
+			// Seed a real plan so we can prove the rejection does
+			// not collateral-damage prior state.
+			seedArgs := mustMarshal(t, writeInput{Todos: []Item{
+				{Content: "Keep me", ActiveForm: "Keeping me", Status: StatusInProgress},
+			}})
+			if _, err := tl.Call(ctx, seedArgs); err != nil {
+				t.Fatalf("seed Call: %v", err)
 			}
-			out, ok := res.(Output)
-			if !ok {
-				t.Fatalf("unexpected result type: %T", res)
-			}
-			if out.Todos == nil {
-				t.Fatalf("Output.Todos must be non-nil, got nil")
-			}
-			if len(out.Todos) != 0 {
-				t.Fatalf("Output.Todos must be empty, got %#v", out.Todos)
-			}
-			blob, err := json.Marshal(out)
-			if err != nil {
-				t.Fatalf("marshal Output: %v", err)
-			}
-			if !strings.Contains(string(blob), `"todos":[]`) {
-				t.Fatalf("Output should serialise todos as [], got %s", blob)
-			}
-			if strings.Contains(string(blob), `"todos":null`) {
-				t.Fatalf("Output still serialises todos as null: %s", blob)
-			}
-			// Persisted state (in-run SetState) must also be the []
-			// encoding, not null.
 			key := stateKey(DefaultStateKeyPrefix, "")
-			raw, ok := sess.GetState(key)
+			before, ok := sess.GetState(key)
 			if !ok {
-				t.Fatalf("expected persisted state at %q", key)
-			}
-			if string(raw) != "[]" {
-				t.Fatalf("persisted state = %q, want %q", raw, "[]")
+				t.Fatalf("seed state missing at %q", key)
 			}
 
-			// Canonical state delta must match (not "null").
-			inv, _ := agent.InvocationFromContext(ctx)
-			delta := tl.StateDeltaForInvocation(inv, "", args, nil)
-			deltaRaw, ok := delta[key]
-			if !ok {
-				t.Fatalf("StateDeltaForInvocation missing key %q", key)
+			res, err := tl.Call(ctx, args)
+			if err == nil {
+				t.Fatalf("Call(%s) must reject, got Output=%#v", name, res)
 			}
-			if string(deltaRaw) != "[]" {
-				t.Fatalf("state delta = %q, want %q", deltaRaw, "[]")
+			if !strings.Contains(err.Error(), "todos") {
+				t.Fatalf("error must mention todos field, got %v", err)
+			}
+
+			after, ok := sess.GetState(key)
+			if !ok {
+				t.Fatalf("session state vanished after rejection")
+			}
+			if string(after) != string(before) {
+				t.Fatalf("session state mutated by a rejected call:\n  before=%s\n  after =%s",
+					before, after)
+			}
+
+			// The canonical state delta must also be empty: a
+			// rejected call must not publish anything.
+			inv, _ := agent.InvocationFromContext(ctx)
+			if delta := tl.StateDeltaForInvocation(inv, "", args, nil); delta != nil {
+				t.Fatalf("StateDeltaForInvocation must drop rejected input, got %v", delta)
 			}
 		})
+	}
+}
+
+// TestCall_AcceptsExplicitEmptyArrayClear documents the only
+// supported clear gesture: an explicit empty array. Compared with
+// TestCall_RejectsNullAndMissingTodos this is the symmetric "yes"
+// case — the destructive operation is reachable, but only when the
+// caller spells it out.
+func TestCall_AcceptsExplicitEmptyArrayClear(t *testing.T) {
+	ctx, sess := newTestCtx("")
+	tl := New()
+
+	// Seed a real plan first.
+	seedArgs := mustMarshal(t, writeInput{Todos: []Item{
+		{Content: "First", ActiveForm: "Doing first", Status: StatusInProgress},
+	}})
+	if _, err := tl.Call(ctx, seedArgs); err != nil {
+		t.Fatalf("seed Call: %v", err)
+	}
+
+	res, err := tl.Call(ctx, []byte(`{"todos": []}`))
+	if err != nil {
+		t.Fatalf("Call with explicit []: %v", err)
+	}
+	out, ok := res.(Output)
+	if !ok {
+		t.Fatalf("unexpected result type: %T", res)
+	}
+	if out.Todos == nil {
+		t.Fatalf("Output.Todos must be non-nil empty, got nil")
+	}
+	if len(out.Todos) != 0 {
+		t.Fatalf("Output.Todos must be empty, got %#v", out.Todos)
+	}
+	if len(out.OldTodos) != 1 || out.OldTodos[0].Content != "First" {
+		t.Fatalf("Output.OldTodos should reflect prior state, got %#v", out.OldTodos)
+	}
+
+	blob, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal Output: %v", err)
+	}
+	if !strings.Contains(string(blob), `"todos":[]`) {
+		t.Fatalf("Output must serialise todos as [], got %s", blob)
+	}
+	if strings.Contains(string(blob), `"todos":null`) {
+		t.Fatalf("Output must not serialise todos as null: %s", blob)
+	}
+
+	key := stateKey(DefaultStateKeyPrefix, "")
+	raw, ok := sess.GetState(key)
+	if !ok {
+		t.Fatalf("expected persisted state at %q", key)
+	}
+	if string(raw) != "[]" {
+		t.Fatalf("persisted state = %q, want %q", raw, "[]")
+	}
+
+	inv, _ := agent.InvocationFromContext(ctx)
+	delta := tl.StateDeltaForInvocation(inv, "", []byte(`{"todos": []}`), nil)
+	deltaRaw, ok := delta[key]
+	if !ok {
+		t.Fatalf("StateDeltaForInvocation missing key %q", key)
+	}
+	if string(deltaRaw) != "[]" {
+		t.Fatalf("state delta = %q, want %q", deltaRaw, "[]")
 	}
 }
 
