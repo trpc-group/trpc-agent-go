@@ -366,8 +366,8 @@ func TestTrackerAggregatesToolCallArgs(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallStartEvent("call-1", "create_document",
 		aguievents.WithParentMessageID("msg"))))
-	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallArgsEvent("call-1", `{"content":"hel`)))
-	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallArgsEvent("call-1", `lo"}`)))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallArgsEvent("call-1", `{"content":"12`)))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallArgsEvent("call-1", `34"}`)))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallEndEvent("call-1")))
 	sess, err := svc.GetSession(ctx, key)
 	require.NoError(t, err)
@@ -379,7 +379,7 @@ func TestTrackerAggregatesToolCallArgs(t *testing.T) {
 	args, ok := parsed.(*aguievents.ToolCallArgsEvent)
 	require.True(t, ok)
 	require.Equal(t, "call-1", args.ToolCallID)
-	require.Equal(t, `{"content":"hello"}`, args.Delta)
+	require.Equal(t, `{"content":"1234"}`, args.Delta)
 }
 
 func TestTrackerAggregationDisabled(t *testing.T) {

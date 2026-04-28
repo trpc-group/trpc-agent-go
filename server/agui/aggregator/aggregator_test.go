@@ -84,10 +84,10 @@ func TestAggregatorMergesReasoningSameMessage(t *testing.T) {
 func TestAggregatorMergesToolArgsSameToolCall(t *testing.T) {
 	ctx := context.Background()
 	agg := New(ctx)
-	events, err := agg.Append(ctx, aguievents.NewToolCallArgsEvent("call-1", `{"content":"hel`))
+	events, err := agg.Append(ctx, aguievents.NewToolCallArgsEvent("call-1", `{"content":"12`))
 	require.NoError(t, err)
 	require.Nil(t, events)
-	events, err = agg.Append(ctx, aguievents.NewToolCallArgsEvent("call-1", `lo"}`))
+	events, err = agg.Append(ctx, aguievents.NewToolCallArgsEvent("call-1", `34"}`))
 	require.NoError(t, err)
 	require.Nil(t, events)
 	flushed, err := agg.Flush(ctx)
@@ -96,7 +96,7 @@ func TestAggregatorMergesToolArgsSameToolCall(t *testing.T) {
 	args, ok := flushed[0].(*aguievents.ToolCallArgsEvent)
 	require.True(t, ok)
 	require.Equal(t, "call-1", args.ToolCallID)
-	require.Equal(t, `{"content":"hello"}`, args.Delta)
+	require.Equal(t, `{"content":"1234"}`, args.Delta)
 }
 
 func TestAggregatorFlushesToolArgsOnToolCallChange(t *testing.T) {
@@ -124,7 +124,7 @@ func TestAggregatorFlushesToolArgsOnToolCallChange(t *testing.T) {
 func TestAggregatorPreservesInterruptedToolArgs(t *testing.T) {
 	ctx := context.Background()
 	agg := New(ctx)
-	events, err := agg.Append(ctx, aguievents.NewToolCallArgsEvent("call-1", `{"content":"hel`))
+	events, err := agg.Append(ctx, aguievents.NewToolCallArgsEvent("call-1", `{"content":"12`))
 	require.NoError(t, err)
 	require.Nil(t, events)
 	custom := aguievents.NewCustomEvent("progress", aguievents.WithValue("interrupted"))
@@ -134,9 +134,9 @@ func TestAggregatorPreservesInterruptedToolArgs(t *testing.T) {
 	first, ok := events[0].(*aguievents.ToolCallArgsEvent)
 	require.True(t, ok)
 	require.Equal(t, "call-1", first.ToolCallID)
-	require.Equal(t, `{"content":"hel`, first.Delta)
+	require.Equal(t, `{"content":"12`, first.Delta)
 	require.Same(t, custom, events[1])
-	events, err = agg.Append(ctx, aguievents.NewToolCallArgsEvent("call-1", `lo"}`))
+	events, err = agg.Append(ctx, aguievents.NewToolCallArgsEvent("call-1", `34"}`))
 	require.NoError(t, err)
 	require.Nil(t, events)
 	rest, err := agg.Flush(ctx)
@@ -145,7 +145,7 @@ func TestAggregatorPreservesInterruptedToolArgs(t *testing.T) {
 	second, ok := rest[0].(*aguievents.ToolCallArgsEvent)
 	require.True(t, ok)
 	require.Equal(t, "call-1", second.ToolCallID)
-	require.Equal(t, `lo"}`, second.Delta)
+	require.Equal(t, `34"}`, second.Delta)
 }
 
 func TestAggregatorFlushesBeforeNonTextEvent(t *testing.T) {
