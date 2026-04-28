@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 const (
@@ -64,7 +65,7 @@ func run(ctx context.Context) error {
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("A2A server: %s\n", *host)
 
-	server, err := startA2AServer(ctx, *host, &deterministicMathAgent{})
+	server, err := startA2AServer(ctx, *host, buildRemoteMathAgent())
 	if err != nil {
 		return err
 	}
@@ -265,52 +266,60 @@ func consumeEvents(events <-chan *event.Event) (bool, string, error) {
 	return toolCalled, finalText.String(), nil
 }
 
-type deterministicMathAgent struct{}
+func buildRemoteMathAgent() agent.Agent {
+	calculatorTool := function.NewFunctionTool(
+		calculate,
+		function.WithName("calculator"),
+		function.WithDescription("Calculate an arithmetic expression."),
+	)
 
-func (a *deterministicMathAgent) Run(
-	ctx context.Context,
-	invocation *agent.Invocation,
-) (<-chan *event.Event, error) {
-	ch := make(chan *event.Event, 1)
-	go func() {
-		defer close(ch)
-		content := "Remote A2A result: 17*23+5 = 396."
-		response := &model.Response{
-			ID:        "remote-math-response",
-			Object:    model.ObjectTypeChatCompletion,
-			Created:   time.Now().Unix(),
-			Model:     "deterministic-math-agent",
-			Done:      true,
-			IsPartial: false,
-			Choices: []model.Choice{{
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: content,
-				},
-			}},
-		}
-		agent.EmitEvent(ctx, invocation, ch, event.New(invocation.InvocationID, remoteAgent, event.WithResponse(response)))
-	}()
-	return ch, nil
+	return llmagent.New(
+		remoteAgent,
+		llmagent.WithModel(openai.New(*modelName)),
+		llmagent.WithDescription("A remote A2A math agent. Use it for arithmetic questions."),
+		llmagent.WithInstruction(
+			"You are a remote math agent exposed over A2A. "+
+				"For every arithmetic request, call the calculator tool first. "+
+				"Then answer with the calculation result in one short sentence.",
+		),
+		llmagent.WithGenerationConfig(model.GenerationConfig{
+			Stream:      false,
+			MaxTokens:   intPtr(500),
+			Temperature: floatPtr(0),
+		}),
+		llmagent.WithTools([]tool.Tool{calculatorTool}),
+	)
 }
 
-func (a *deterministicMathAgent) Tools() []tool.Tool {
-	return nil
+type calculatorInput struct {
+	Expression string `json:"expression,omitempty" jsonschema_description:"Arithmetic expression, for example 17*23+5."`
 }
 
-func (a *deterministicMathAgent) Info() agent.Info {
-	return agent.Info{
-		Name:        remoteAgent,
-		Description: "A remote A2A math agent. Use it for arithmetic questions.",
+type calculatorOutput struct {
+	Expression string `json:"expression"`
+	Result     int    `json:"result"`
+}
+
+func calculate(_ context.Context, input calculatorInput) (calculatorOutput, error) {
+	expression := strings.TrimSpace(input.Expression)
+	if expression == "" {
+		expression = "17*23+5"
 	}
-}
+	normalized := strings.NewReplacer(
+		" ", "",
+		"×", "*",
+		"乘以", "*",
+		"加", "+",
+	).Replace(expression)
+	if normalized != "17*23+5" {
+		return calculatorOutput{}, fmt.Errorf("unsupported demo expression %q", expression)
+	}
 
-func (a *deterministicMathAgent) SubAgents() []agent.Agent {
-	return nil
-}
-
-func (a *deterministicMathAgent) FindSubAgent(name string) agent.Agent {
-	return nil
+	fmt.Printf("Remote internal tool called: calculator expression=%s\n", expression)
+	return calculatorOutput{
+		Expression: expression,
+		Result:     17*23 + 5,
+	}, nil
 }
 
 func intPtr(v int) *int {
