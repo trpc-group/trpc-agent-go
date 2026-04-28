@@ -3670,7 +3670,9 @@ Escalation 只是指控制流上抛 / 中止循环，并不是“版本升级”
 <span class="normal"><a href="#__codelineno-9-27">27</a></span>
 <span class="normal"><a href="#__codelineno-9-28">28</a></span>
 <span class="normal"><a href="#__codelineno-9-29">29</a></span>
-<span class="normal"><a href="#__codelineno-9-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-9-30">30</a></span>
+<span class="normal"><a href="#__codelineno-9-31">31</a></span>
+<span class="normal"><a href="#__codelineno-9-32">32</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
 </span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">    </span><span class="nx">agenttool</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/agent&quot;</span>
@@ -3693,13 +3695,15 @@ Escalation 只是指控制流上抛 / 中止循环，并不是“版本升级”
 </span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithSkipSummarization</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span>
 </span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22"></a><span class="w">    </span><span class="c1">// 开启转发：把子 Agent 的流式事件内联到父流程</span>
 </span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithStreamInner</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24"></a><span class="p">)</span>
-</span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25"></a>
-</span><span id="__span-9-26"><a id="__codelineno-9-26" name="__codelineno-9-26"></a><span class="c1">// 在主 Agent 中使用 Agent 工具</span>
-</span><span id="__span-9-27"><a id="__codelineno-9-27" name="__codelineno-9-27"></a><span class="nx">mainAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-9-28"><a id="__codelineno-9-28" name="__codelineno-9-28"></a><span class="w">    </span><span class="s">&quot;chat-assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-9-29"><a id="__codelineno-9-29" name="__codelineno-9-29"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">timeTool</span><span class="p">,</span><span class="w"> </span><span class="nx">agentTool</span><span class="p">}),</span>
-</span><span id="__span-9-30"><a id="__codelineno-9-30" name="__codelineno-9-30"></a><span class="p">)</span>
+</span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24"></a><span class="w">    </span><span class="c1">// 工具结果只返回子 Agent 最后一条完整 assistant 消息</span>
+</span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithResponseMode</span><span class="p">(</span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">ResponseModeFinalOnly</span><span class="p">),</span>
+</span><span id="__span-9-26"><a id="__codelineno-9-26" name="__codelineno-9-26"></a><span class="p">)</span>
+</span><span id="__span-9-27"><a id="__codelineno-9-27" name="__codelineno-9-27"></a>
+</span><span id="__span-9-28"><a id="__codelineno-9-28" name="__codelineno-9-28"></a><span class="c1">// 在主 Agent 中使用 Agent 工具</span>
+</span><span id="__span-9-29"><a id="__codelineno-9-29" name="__codelineno-9-29"></a><span class="nx">mainAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-9-30"><a id="__codelineno-9-30" name="__codelineno-9-30"></a><span class="w">    </span><span class="s">&quot;chat-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-9-31"><a id="__codelineno-9-31" name="__codelineno-9-31"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">timeTool</span><span class="p">,</span><span class="w"> </span><span class="nx">agentTool</span><span class="p">}),</span>
+</span><span id="__span-9-32"><a id="__codelineno-9-32" name="__codelineno-9-32"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="agent">Agent工具架构</h4>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
@@ -3804,7 +3808,12 @@ Escalation 只是指控制流上抛 / 中止循环，并不是“版本升级”
 <li><code>WithStreamInner(false)</code>：按普通可调用工具处理，不转发内部流</li>
 <li><code>WithInnerTextMode(agenttool.InnerTextModeInclude)</code>：启用内部转发时，继续展示子 Agent 的 assistant 文本</li>
 <li><code>WithInnerTextMode(agenttool.InnerTextModeExclude)</code>：保留内部进度事件，但不再转发子 Agent 的 assistant 正文</li>
+<li><code>WithResponseMode(agenttool.ResponseModeDefault)</code>：默认兼容模式，把子 Agent 的 assistant 消息拼接成工具结果</li>
+<li><code>WithResponseMode(agenttool.ResponseModeFinalOnly)</code>：只把子 Agent 最后一条完整 assistant 消息作为工具结果返回</li>
 </ul>
+<p>当子 Agent 是一个上下文隔离的独立工作者，而父 Agent 只应该消费它的最终答案时，
+使用 <code>ResponseModeFinalOnly</code>。如果还希望在流式 UI 中隐藏子 Agent 的正文，
+再单独组合 <code>InnerTextModeExclude</code>。</p>
 <h3 id="agent-agent-transfer">Agent 委托 (Agent Transfer)</h3>
 <p>Agent 委托通过 <code>transfer_to_agent</code> 工具实现 Agent 间的任务委托，允许主 Agent 根据任务类型自动选择合适的 SubAgent。</p>
 <h4 id="_23">使用场景</h4>
@@ -4394,7 +4403,7 @@ Escalation 只是指控制流上抛 / 中止循环，并不是“版本升级”
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月24日 08:39:28 UTC">2026-04-24 08:39:28</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月28日 03:14:51 UTC">2026-04-28 03:14:51</span>
   </span>
 
     
