@@ -494,6 +494,11 @@ func (w *Worker) applyDeletionsWithGate(ctx context.Context, names []string) boo
 			rev.Status = RevisionActive
 			now := time.Now().UTC()
 			rev.PromotedAt = &now
+		} else {
+			// No publisher means we cannot actually delete the skill
+			// from the live repository. Skip pointer/audit/metrics to
+			// avoid diverging state.
+			continue
 		}
 		if w.activePointer != nil {
 			if err := w.activePointer.Clear(ctx, rev.SkillID); err != nil {
@@ -596,6 +601,7 @@ func (w *Worker) runSpecGate(ctx context.Context, rev *Revision, existing []Exis
 	report, err := w.specGate.Validate(ctx, rev, existing)
 	if err != nil {
 		log.WarnfContext(ctx, "evolution: spec gate error on %q: %v", rev.Spec.Name, err)
+		return false // fail closed on error
 	}
 	rev.SpecReport = report
 	if report != nil && !report.Passed {
@@ -612,6 +618,7 @@ func (w *Worker) runSafetyGate(ctx context.Context, rev *Revision) bool {
 	report, err := w.safetyGate.Scan(ctx, rev)
 	if err != nil {
 		log.WarnfContext(ctx, "evolution: safety gate error on %q: %v", rev.Spec.Name, err)
+		return false // fail closed on error
 	}
 	rev.SafetyReport = report
 	if report != nil && !report.Passed {
@@ -628,6 +635,7 @@ func (w *Worker) runEffectivenessGate(ctx context.Context, rev *Revision, outcom
 	report, err := w.effectivenessGate.Evaluate(ctx, rev, outcome)
 	if err != nil {
 		log.WarnfContext(ctx, "evolution: effectiveness gate error on %q: %v", rev.Spec.Name, err)
+		return false // fail closed on error
 	}
 	rev.EffectivenessReport = report
 	if report != nil && !report.Passed {

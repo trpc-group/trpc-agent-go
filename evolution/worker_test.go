@@ -649,7 +649,7 @@ func TestWorker_ProcessJob_RedactsSecretsBeforeReviewer(t *testing.T) {
 	addEvents(sess,
 		model.Message{
 			Role:    model.RoleUser,
-			Content: "OPENAI_API_KEY=sk-top-secret",
+			Content: "OPENAI_API_KEY=sk-test-REDACT-ME-333",
 		},
 		model.Message{
 			Role: model.RoleAssistant,
@@ -679,7 +679,8 @@ func TestWorker_ProcessJob_RedactsSecretsBeforeReviewer(t *testing.T) {
 	got := rev.snapshot()
 	require.NotNil(t, got)
 	require.Len(t, got.Transcript, 3)
-	assert.NotContains(t, got.Transcript[0].Content, "sk-test-REDACT-ME-222")
+	assert.NotContains(t, got.Transcript[0].Content, "sk-test-REDACT-ME-333")
+	assert.Contains(t, got.Transcript[0].Content, reviewerRedactedValue)
 	assert.NotContains(t, got.Transcript[1].ToolCalls[0].Arguments, "tok-FAKE-0000000")
 	assert.NotContains(t, got.Transcript[2].Content, "tok-FAKE-0000000")
 	require.NotNil(t, got.Outcome)
