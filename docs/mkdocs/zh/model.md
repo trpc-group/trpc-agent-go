@@ -2275,7 +2275,34 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#6-token-裁剪token-tailoring)。
+关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#7-token-token-tailoring)。
+
+#### 5. 流式工具调用增量：ShowToolCallDelta
+
+默认情况下，Anthropic 适配层会先在内部累积工具调用参数，等模型完成这次工具调用后，再通过最终响应的 `Response.Choices[0].Message.ToolCalls` 一次性返回完整参数。
+
+`WithShowToolCallDelta` 用于在流式阶段透出 Anthropic 的 `input_json_delta` 分片。工具参数较长，或前端需要展示参数生成过程时，可以开启这个选项：
+
+```go
+llm := anthropic.New(
+    "claude-sonnet-4-0",
+    anthropic.WithShowToolCallDelta(true),
+)
+```
+
+当启用 `WithShowToolCallDelta(true)` 时：
+
+- 流式响应中会出现 `Response.Choices[0].Delta.ToolCalls`；
+- `Delta.ToolCalls[*].Function.Arguments` 是本次新增的参数字符串片段，通常不是完整 JSON；
+- `Delta.ToolCalls[*].ID` 和 `Index` 可用于把同一个工具调用的多个片段串起来；
+- 最终响应仍然会在 `Response.Choices[0].Message.ToolCalls` 中返回完整工具调用，原有工具执行链路可以继续复用。
+
+典型处理方式：
+
+1. 在每个部分响应中读取
+   `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments`；
+2. 按工具调用 `ID` 或 `Index` 分组，并按顺序追加 `Arguments` 片段；
+3. 将累积后的字符串作为 JSON 参数处理；边生成边展示的场景可以先按字符串渲染，等它构成合法 JSON 后再反序列化。
 
 ## Provider
 
