@@ -380,6 +380,8 @@ agentTool := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     // 开启转发：把子 Agent 的流式事件内联到父流程
     agenttool.WithStreamInner(true),
+    // 工具结果只返回子 Agent 最后一条完整 assistant 消息
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
 )
 
 // 在主 Agent 中使用 Agent 工具
@@ -403,7 +405,7 @@ mainAgent := llmagent.New(
 
 ```
 🚀 Agent 工具示例
-模型：deepseek-chat
+模型：deepseek-v4-flash
 可用工具：current_time, math-specialist
 ==================================================
 
@@ -463,6 +465,12 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 - `WithStreamInner(false)`：按普通可调用工具处理，不转发内部流
 - `WithInnerTextMode(agenttool.InnerTextModeInclude)`：启用内部转发时，继续展示子 Agent 的 assistant 文本
 - `WithInnerTextMode(agenttool.InnerTextModeExclude)`：保留内部进度事件，但不再转发子 Agent 的 assistant 正文
+- `WithResponseMode(agenttool.ResponseModeDefault)`：默认兼容模式，把子 Agent 的 assistant 消息拼接成工具结果
+- `WithResponseMode(agenttool.ResponseModeFinalOnly)`：只把子 Agent 最后一条完整 assistant 消息作为工具结果返回
+
+当子 Agent 是一个上下文隔离的独立工作者，而父 Agent 只应该消费它的最终答案时，
+使用 `ResponseModeFinalOnly`。如果还希望在流式 UI 中隐藏子 Agent 的正文，
+再单独组合 `InnerTextModeExclude`。
 
 ### Agent 委托 (Agent Transfer)
 
@@ -727,7 +735,7 @@ for evt := range events {
 ```bash
 cd examples/multiagent/chain
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### 并行 Agent 示例
@@ -735,7 +743,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/multiagent/parallel
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### 循环 Agent 示例
@@ -743,7 +751,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/multiagent/cycle
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat -max-iterations 5
+go run main.go -model deepseek-v4-flash -max-iterations 5
 ```
 
 ### 辅助功能示例
@@ -753,7 +761,7 @@ go run main.go -model deepseek-chat -max-iterations 5
 ```bash
 cd examples/agenttool
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Agent 委托示例
@@ -761,7 +769,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/transfer
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 ## 自定义和扩展

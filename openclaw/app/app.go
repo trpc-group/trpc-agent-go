@@ -88,9 +88,73 @@ const (
 
 	defaultDebugRecorderDir = "debug"
 
-	defaultAgentName        = "assistant"
+	defaultAgentName = "assistant"
+
+	preambleOnlyFinalAnswerRule = "A preamble-only response such as " +
+		"`I will ...`, `I'll ...`, `我先...`, or " +
+		"`接下来...` is not a valid final answer. If " +
+		"tool work is needed, the same assistant message " +
+		"must include the tool call; if no tool is needed, " +
+		"return the requested content or completed result " +
+		"instead of an announcement. "
+	substantiveSameTurnRule = "For writing, summarization, " +
+		"recommendation, explanation, or analysis tasks, " +
+		"produce the requested content in the same turn. "
+	artifactCompletionRule = "For requests to create, write, send, " +
+		"publish, upload, schedule, or update an artifact " +
+		"or external resource, the turn is not complete " +
+		"until you have performed the action and returned " +
+		"the resulting link, id, file marker, or exact " +
+		"blocker after recovery."
+	openClawPostToolPrompt = "[OpenClaw Tool Result Prompt] " +
+		"Treat tool results as mid-task state, not as " +
+		"permission to stop. Compare the latest tool result " +
+		"with the user's original/current request and keep " +
+		"working autonomously until the requested content, " +
+		"artifact, or external action is complete or blocked. " +
+		"If the request is complete, return the concrete " +
+		"user-facing result: link, id, file marker, sent " +
+		"status, created document title, scheduled job id, " +
+		"or the exact blocker. If work is still needed and " +
+		"an available tool can advance, verify, or recover " +
+		"the task, call that tool in the same assistant turn. " +
+		"Do not answer only with what you will do next. Do " +
+		"not stop at a plan, progress note, or tool-result " +
+		"summary when a next tool call is available. Do not " +
+		"ask for confirmation for an in-scope next step unless " +
+		"it is destructive, expensive, or genuinely ambiguous. " +
+		"Do not claim that a document, message, upload, " +
+		"schedule, file, wiki page, or external resource was " +
+		"created, sent, written, published, or updated unless " +
+		"the latest tool result proves it. If a tool failed " +
+		"or returned a partial result, recover with available " +
+		"tools when there is a clear path: corrected " +
+		"parameters, canonical ids, alternate lookup, retry, " +
+		"or verification. Only return a blocker when no safe " +
+		"next step remains. For files and media, return " +
+		"`MEDIA:` or `MEDIA_DIR:` lines only after the " +
+		"file or directory exists and is intended to be " +
+		"sent. For docs and iWiki, return the link, id, " +
+		"or title when available. " +
+		"Keep final answers concise and user-facing; avoid " +
+		"exposing tool/source/process details unless they are " +
+		"the exact result or blocker."
+	skillPreambleOnlyRule = "A preamble-only skill response is " +
+		"invalid. "
+	skillSameTurnToolRule = "If you say you will read, load, " +
+		"use, write, create, send, or publish through a " +
+		"skill, the same assistant message must include " +
+		"the required tool call. Do not stop after " +
+		"announcing the skill-backed next step. "
+
 	defaultAgentInstruction = "You are a helpful assistant. " +
-		"Keep replies concise."
+		"Keep replies concise, but make each reply " +
+		"substantive enough to complete the user's request. " +
+		"Act without asking for confirmation when the next " +
+		"step is clearly in scope, cheap, and reversible. " +
+		preambleOnlyFinalAnswerRule +
+		substantiveSameTurnRule +
+		artifactCompletionRule
 	openClawSkillsGuidance = "Treat the skill overview below as the " +
 		"skills available in this session. Each entry " +
 		"includes a path to that skill's SKILL.md on disk. " +
@@ -104,6 +168,10 @@ const (
 		"that skill right away in the same turn. That " +
 		"brief preamble is part of acting immediately, " +
 		"not a pause to ask what to do next. That preamble may " +
+		"not be the whole reply. " +
+		skillPreambleOnlyRule +
+		skillSameTurnToolRule +
+		"That preamble may " +
 		"announce the immediate task, but do not use it " +
 		"for substantive guidance, capability " +
 		"disclaimers, or explanations about which " +
@@ -125,6 +193,28 @@ const (
 		"need. Do not respond with capability disclaimers " +
 		"such as `I can read the skill` when you can load " +
 		"it now. Announce the next step briefly and do it. " +
+		"When the user asks you to add, teach, configure, " +
+		"preserve, or reuse a durable capability, workflow, " +
+		"integration, domain rule, team process, API, CLI, " +
+		"MCP endpoint, document convention, or tool usage " +
+		"pattern, or to remember an executable workflow or " +
+		"integration, prefer creating or updating a local " +
+		"skill over treating it as a one-off answer. For " +
+		"lightweight facts, preferences, or simple standing " +
+		"rules, use memory instead. " +
+		"Use platform code and tools for stable safety " +
+		"boundaries, secrets, permissions, file paths, " +
+		"validation, and execution guarantees; use skill " +
+		"context for evolving behavior, triggers, " +
+		"constraints, examples, recovery paths, and domain " +
+		"knowledge. If you create or update a skill, do not " +
+		"stop after describing the idea: choose a writable " +
+		"user-managed skill root, not bundled skills unless " +
+		"explicitly asked to edit them, write the skill files, " +
+		"avoid storing raw secrets, validate or inspect the skill, " +
+		"refresh or reload skills when the runtime provides " +
+		"that path, and then use the skill to complete the " +
+		"current task. " +
 		"Reuse bundled scripts, templates, and assets " +
 		"when they already fit. If multiple skills match, " +
 		"use the smallest set that covers the task. Keep " +
@@ -146,8 +236,12 @@ const (
 		"brief user-visible preamble that says which skill " +
 		"or skill docs you are reading next, then call this " +
 		"tool right away in the same turn. Do not pause " +
-		"after that preamble to ask what to do next. Do " +
-		"not use that preamble for " +
+		"after that preamble to ask what to do next, and do " +
+		"not send the preamble as the whole reply. " +
+		skillPreambleOnlyRule +
+		skillSameTurnToolRule +
+		"Do not " +
+		"use that preamble for " +
 		"capability disclaimers, implementation-split " +
 		"explanations, or substantive guidance about the " +
 		"task. Do not answer from a short skill summary, " +
@@ -170,6 +264,9 @@ const (
 		"input, use " +
 		"write_stdin and kill_session when needed. Use message " +
 		"to send to the current chat or an explicit target. " +
+		artifactCompletionRule + " " +
+		"Use the available tool path to complete the request " +
+		"in this turn. " +
 		"Chat uploads are saved to stable host paths. For host " +
 		"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or " +
 		"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
@@ -2288,6 +2385,7 @@ func newAgent(
 			conversation.ProjectEventMessage,
 		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
+		llmagent.WithPostToolPrompt(openClawPostToolPrompt),
 	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
@@ -2746,11 +2844,6 @@ func resolveWorkspaceSkillsRoot(cwd, raw string) string {
 	cwdSkills := filepath.Join(cwd, defaultSkillsDir)
 	if dirExists(cwdSkills) {
 		return cwdSkills
-	}
-
-	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
-	if dirExists(repoBundled) {
-		return repoBundled
 	}
 	return cwdSkills
 }

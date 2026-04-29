@@ -722,6 +722,47 @@ if err := mcpToolSet.Init(ctx); err != nil {
 }
 ```
 
+#### 按请求 HTTP Header
+
+对 SSE 和 Streamable HTTP 传输，可以使用上游 MCP 客户端提供的
+`mcp.WithHTTPBeforeRequest`，在每一次 MCP HTTP 请求发出前，从当前调用
+的 context 动态注入 header。一个长生命周期 MCP ToolSet 服务多个已登录
+用户时，可以用它按用户注入 token、JWT 或业务签名。把 hook 通过
+`WithMCPOptions` 传入即可：
+
+```go
+import (
+    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+mcpToolSet := toolmcp.NewMCPToolSet(
+    toolmcp.ConnectionConfig{
+        Transport: "streamable_http",
+        ServerURL: "http://localhost:3000/mcp",
+    },
+    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+        func(ctx context.Context, req *http.Request) error {
+            token, ok := tokenFromContext(ctx)
+            if !ok {
+                return nil
+            }
+            req.Header.Set("Authorization", "Bearer "+token)
+            return nil
+        },
+    )),
+)
+```
+
+`ConnectionConfig.Headers` 提供的静态 header 会先生效；之后每次 HTTP
+请求都会走一遍 before-request hook，hook 内对同名 header 的 `Set` 会
+覆盖静态值。
+
+如果你是通过 `llmagent.WithToolSets(...)` 挂载这个 ToolSet，并且希望
+`initialize` / `tools/list` 也能拿到请求级 header，建议同时配合
+`llmagent.WithRefreshToolSetsOnRun(true)`，或者先手动 `toolSet.Tools(ctx)`，
+再通过 `llmagent.WithTools(...)` 注入。
+
 ### 会话重连支持
 
 MCP ToolSet 支持自动会话重连，当服务器重启或会话过期时自动恢复连接。
@@ -1099,6 +1140,7 @@ mathTool := agenttool.NewTool(
     agenttool.WithSkipSummarization(false), // 可选，默认 false，当设置为 true 时会跳过外层模型总结，在 tool.response 后直接结束本轮
     agenttool.WithStreamInner(true),        // 开启：把子 Agent 的流式事件转发给父流程
     agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude), // 隐藏子 Agent 正文，仅保留内部进度
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),  // 工具结果只返回子 Agent 最后一条完整 assistant 消息
 )
 
 // 3) 在父 Agent 中使用该工具
@@ -1136,6 +1178,51 @@ if ev.Author != parentName && ev.Response != nil &&
 }
 ```
 
+### 工具结果响应模式
+
+AgentTool 内部始终是以事件流的形式运行子 Agent。响应模式只控制
+AgentTool 最终作为“工具结果”返回给父 Agent 的内容；它不会改变
+子 Agent 的 session 写入、事件过滤键，也不会改变内部流式转发行为。
+
+默认情况下，AgentTool 保持历史兼容行为：子 Agent 产生的每一条非空
+assistant 消息都会被追加到同一个工具结果字符串里。这个行为对存量调用方最安全，
+但长任务子 Agent 往往会输出进度、草稿或中间结论，这些中间 assistant 内容也会
+进入父 Agent 看到的 `tool.response`。
+
+当子 Agent 的目标是“隔离上下文、独立完成任务、只把最终答案交给父 Agent”
+时，可以使用 `WithResponseMode(agenttool.ResponseModeFinalOnly)`：
+
+```go
+childTool := agenttool.NewTool(
+    childAgent,
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
+)
+```
+
+在 final-only 模式下，AgentTool 会：
+
+- 忽略 partial assistant 增量
+- 忽略非 assistant 消息、空 assistant 消息以及 tool 消息
+- 返回子 Agent 最后一条完整 assistant 消息
+- 如果子 Agent 结束时没有完整 assistant 消息，则返回空字符串
+- 子 Agent 报错时仍返回 `agent error: ...`
+
+它和 `WithSkipSummarization(true)` 不是一回事。`WithSkipSummarization`
+控制的是父流程拿到工具响应后，是否再调用一次外层模型做总结；
+`WithResponseMode` 控制的是工具响应本身应该包含哪些子 Agent 内容。
+
+组合示例：
+
+```go
+childTool := agenttool.NewTool(
+    childAgent,
+    // 不把子 Agent 的中间推理/进度 assistant 文本拼进工具结果。
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
+    // 父流程拿到 tool.response 后直接结束本轮，不再额外总结。
+    agenttool.WithSkipSummarization(true),
+)
+```
+
 ### 选项说明
 
 - WithSkipSummarization(bool)：
@@ -1153,6 +1240,11 @@ if ev.Author != parentName && ev.Response != nil &&
   - `InnerTextModeInclude`：实际默认行为，开启内部转发时继续展示子 Agent 的 assistant 文本
   - `InnerTextModeExclude`：隐藏子 Agent 的 assistant 文本，但继续保留内部 tool call、tool.done，以及聚合后的最终工具响应
 
+- WithResponseMode(ResponseMode)：
+
+  - `ResponseModeDefault`（默认）：保持历史兼容行为，把子 Agent 的 assistant 消息拼接成工具结果
+  - `ResponseModeFinalOnly`：只把子 Agent 最后一条完整 assistant 消息作为工具结果返回
+
 - WithHistoryScope(HistoryScope)：
   - `HistoryScopeIsolated`（默认）：保持子调用完全隔离，只读取本次工具参数（不继承父历史）。
   - `HistoryScopeParentBranch`：通过分层过滤键 `父键/子名-UUID（Universally Unique Identifier，通用唯一识别码）` 继承父会话历史；内容处理器会基于前缀匹配纳入父事件，同时子事件仍写入独立子分支。典型场景：基于上一轮产出进行“编辑/优化/续写”。
@@ -1165,6 +1257,7 @@ child := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     agenttool.WithStreamInner(true),
     agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
     agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
 )
 ```
@@ -1175,6 +1268,9 @@ child := agenttool.NewTool(
 - 内容去重：如果已转发子 Agent 的增量内容，默认不要再把最终 `tool.response` 的聚合内容打印出来
 - “只看进度”体验：当你希望用户看到内部进度、但不想重复看到子 Agent 正文时，可组合使用 `WithStreamInner(true)` 和 `WithInnerTextMode(agenttool.InnerTextModeExclude)`
 - 模型兼容性：一些模型要求工具调用后必须跟随工具消息，AgentTool 已自动填充聚合后的工具内容满足此要求
+- 子 Agent 上下文隔离和工具结果裁剪是两件事：
+  `WithHistoryScope(agenttool.HistoryScopeIsolated)` 控制子 Agent 能读到什么；
+  `WithResponseMode(agenttool.ResponseModeFinalOnly)` 控制父 Agent 作为工具结果收到什么。
 - `WithSkipSummarization(true)` 只会跳过额外的外层总结型 LLM 调用，不会把 `tool.response` 变成 assistant final response；如果你需要真正的终止信号，仍应持续消费到 `runner.completion`
 
 ## 工具集成与使用
@@ -1798,7 +1894,7 @@ func main() {
     )
 
     // 2. 创建模型和 Agent
-    llmModel := openai.New("DeepSeek-V3-Online-64K")
+    llmModel := openai.New("deepseek-v4-flash")
     agent := llmagent.New("calculator-assistant",
         llmagent.WithModel(llmModel),
         llmagent.WithInstruction("你是一个数学助手"),
@@ -1858,7 +1954,7 @@ cd examples/mcp_tool
 cd streamalbe_server && go run main.go &
 
 # 运行主程序
-go run main.go -model="deepseek-chat"
+go run main.go -model="deepseek-v4-flash"
 ```
 
 ## 总结

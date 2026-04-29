@@ -40,7 +40,7 @@ The example currently uses:
 
 ```go
 modelInstance := openai.New(
-    "deepseek-chat",
+    "deepseek-v4-flash",
     openai.WithVariant(openai.VariantOpenAI),
 )
 ```

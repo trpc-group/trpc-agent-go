@@ -84,6 +84,42 @@ func TestCreateSessionSummary_InvalidKey(t *testing.T) {
 	err := s.CreateSessionSummary(context.Background(), sess, "", false)
 	require.Error(t, err)
 }
+
+func TestCreateSessionSummary_FilterAllowlistSkipsDisallowedKey(t *testing.T) {
+	summarizer := &mockSummarizerImpl{
+		summaryText:     "blocked summary",
+		shouldSummarize: true,
+	}
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
+	defer db.Close()
+	s.opts.summaryFilterAllowlist = []string{"allowed"}
+
+	sess := &session.Session{
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		Events: []event.Event{
+			{
+				FilterKey:    "blocked",
+				InvocationID: "inv-1",
+				Timestamp:    time.Now().Add(-time.Minute),
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{Message: model.Message{
+							Role:    model.RoleUser,
+							Content: "hello",
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	err := s.CreateSessionSummary(context.Background(), sess, "blocked", true)
+	require.NoError(t, err)
+	assert.Empty(t, sess.Summaries)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 func TestCreateSessionSummary_CreateNewSummary(t *testing.T) {
 	summarizer := &mockSummarizerImpl{summaryText: "new summary", shouldSummarize: true}
 	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})

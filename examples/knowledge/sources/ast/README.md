@@ -18,7 +18,7 @@ This example shows how the knowledge module handles:
 ```bash
 export OPENAI_API_KEY=sk-xxxx
 export OPENAI_BASE_URL=https://api.openai.com/v1
-export MODEL_NAME=deepseek-chat
+export MODEL_NAME=deepseek-v4-flash
 go run main.go
 
 # force mock embedder for chunk preview without real embeddings

@@ -13,6 +13,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestModelInterface tests the Model interface definition.
@@ -28,12 +30,8 @@ func TestModelInterface(t *testing.T) {
 	ctx := context.Background()
 	responseChan, err := mock.GenerateContent(ctx, nil)
 
-	if err == nil {
-		t.Error("Model.GenerateContent() with nil request should return error")
-	}
-	if responseChan != nil {
-		t.Error("Model.GenerateContent() with nil request should return nil channel")
-	}
+	require.Error(t, err)
+	require.Nil(t, responseChan)
 }
 
 // mockModel is a simple mock implementation for testing the interface.

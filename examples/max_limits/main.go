@@ -39,7 +39,7 @@ func main() {
 
 	// Configure a simple OpenAI model. Adjust the model name / variant as needed.
 	modelInstance := openai.New(
-		"deepseek-chat",
+		"deepseek-v4-flash",
 		openai.WithVariant(openai.VariantOpenAI),
 	)
 

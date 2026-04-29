@@ -489,10 +489,11 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
 		filterKeyCh := make(chan string, 10)
 		config := AsyncSummaryConfig{
-			Summarizer:        summarizer,
-			AsyncSummaryNum:   2,
-			SummaryQueueSize:  10,
-			SummaryJobTimeout: time.Second,
+			Summarizer:            summarizer,
+			AsyncSummaryNum:       2,
+			SummaryQueueSize:      10,
+			SummaryJobTimeout:     time.Second,
+			SummaryDispatchPolicy: NewSummaryDispatchPolicy(nil, true),
 			CreateSummaryFunc: func(_ context.Context, _ *session.Session, fk string, _ bool) error {
 				filterKeyCh <- fk
 				return nil

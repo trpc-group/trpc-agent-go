@@ -54,8 +54,9 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_NoSkillsRepo(
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	sys := req.Messages[0].Content
 	require.Contains(t, sys, workspaceExecGuidanceHeader)
-	require.Contains(t, sys, "default general shell runner")
-	require.Contains(t, sys, "workspace is its scope, not its capability limit")
+	require.Contains(t, sys, "general shell runner for the current executor workspace")
+	require.Contains(t, sys, "Command paths are resolved relative to cwd")
+	require.Contains(t, sys, "Choose one path base per command")
 	require.Contains(t, sys, "Prefer work/, out/, and runs/")
 	require.Contains(t, sys, "staged automatically under work/inputs")
 	require.Contains(t, sys, "Network access depends on the current executor environment")
@@ -96,14 +97,20 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_InteractiveWithSkillsRepo(
 	sys := req.Messages[0].Content
 	require.Contains(t, sys, "base")
 	require.Contains(t, sys, workspaceExecGuidanceHeader)
-	require.Contains(t, sys, "default general shell runner")
-	require.Contains(t, sys, "workspace is its scope, not its capability limit")
+	require.Contains(t, sys, "general shell runner for the current executor workspace")
+	require.Contains(t, sys, "Command paths are resolved relative to cwd")
+	require.Contains(t, sys, "Choose one path base per command")
 	require.Contains(t, sys, "staged automatically under work/inputs")
 	require.Contains(t, sys, "Network access depends on the current executor environment")
 	require.Contains(t, sys, "verify first before claiming the limitation")
 	require.Contains(t, sys, "command availability, file presence, or access to a known URL")
 	require.Contains(t, sys, "workspace_save_artifact")
-	require.Contains(t, sys, "Paths under skills/")
+	require.Contains(t, sys, "Skill working copies appear under skills/<name>")
+	require.Contains(t, sys, "Use the loaded SKILL.md as the source of truth")
+	require.Contains(t, sys, "prefer setting cwd to skills/<name>")
+	require.Contains(t, sys, "scripts/build.sh")
+	require.Contains(t, sys, "skills/<name>/scripts/build.sh")
+	require.Contains(t, sys, "Do not mix these forms")
 	require.Contains(t, sys, "workspace_write_stdin")
 	require.Contains(t, sys, "workspace_kill_session")
 	require.Contains(t, sys, "current invocation")
@@ -141,7 +148,11 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_UsesSkillsRepoResolver(
 	)
 
 	require.NotEmpty(t, req.Messages)
-	require.Contains(t, req.Messages[0].Content, "Paths under skills/")
+	require.Contains(
+		t,
+		req.Messages[0].Content,
+		"Skill working copies appear under skills/<name>",
+	)
 }
 
 func TestWorkspaceExecRequestProcessor_ProcessRequest_ResolverCanDisableSkillsGuidance(
@@ -165,7 +176,11 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_ResolverCanDisableSkillsGu
 	)
 
 	require.NotEmpty(t, req.Messages)
-	require.NotContains(t, req.Messages[0].Content, "Paths under skills/")
+	require.NotContains(
+		t,
+		req.Messages[0].Content,
+		"Skill working copies appear under skills/<name>",
+	)
 }
 
 func TestWorkspaceExecRequestProcessor_ProcessRequest_DisabledByResolver(

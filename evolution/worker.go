@@ -538,55 +538,7 @@ func (w *Worker) buildRevision(spec *SkillSpec, action, parentName string) *Revi
 func (w *Worker) processRevision(ctx context.Context, rev *Revision, existing []ExistingSkill, actionLabel string, outcome *Outcome) bool {
 	w.bumpGateMetric(func(m *approvalGateMetrics) { m.CandidatesSeen++ })
 
-	// Run gates first so we can record the verdict on the revision
-	// before we persist it.
-	gatePassed := true
-	if w.specGate != nil {
-		report, err := w.specGate.Validate(ctx, rev, existing)
-		if err != nil {
-			log.WarnfContext(ctx, "evolution: spec gate error on %q: %v", rev.Spec.Name, err)
-		}
-		rev.SpecReport = report
-		if report != nil && !report.Passed {
-			gatePassed = false
-			w.bumpGateMetric(func(m *approvalGateMetrics) { m.SpecGateRejected++ })
-			log.InfofContext(ctx,
-				"evolution: spec gate rejected %q revision=%s reasons=%v",
-				rev.Spec.Name, rev.RevisionID, report.Reasons)
-		}
-	}
-	if w.safetyGate != nil {
-		report, err := w.safetyGate.Scan(ctx, rev)
-		if err != nil {
-			log.WarnfContext(ctx, "evolution: safety gate error on %q: %v", rev.Spec.Name, err)
-		}
-		rev.SafetyReport = report
-		if report != nil && !report.Passed {
-			gatePassed = false
-			w.bumpGateMetric(func(m *approvalGateMetrics) { m.SafetyGateRejected++ })
-			log.InfofContext(ctx,
-				"evolution: safety gate rejected %q revision=%s reasons=%v",
-				rev.Spec.Name, rev.RevisionID, report.Reasons)
-		}
-	}
-	// Phase C: effectiveness gate. Only runs when spec+safety passed
-	// (no point evaluating effectiveness of an already-rejected
-	// revision) and an EffectivenessGate is configured.
-	if gatePassed && w.effectivenessGate != nil {
-		report, err := w.effectivenessGate.Evaluate(ctx, rev, outcome)
-		if err != nil {
-			log.WarnfContext(ctx, "evolution: effectiveness gate error on %q: %v", rev.Spec.Name, err)
-		}
-		rev.EffectivenessReport = report
-		if report != nil && !report.Passed {
-			gatePassed = false
-			rev.Status = RevisionPendingEval
-			w.bumpGateMetric(func(m *approvalGateMetrics) { m.EffectivenessGateRejected++ })
-			log.InfofContext(ctx,
-				"evolution: effectiveness gate held %q revision=%s reasons=%v",
-				rev.Spec.Name, rev.RevisionID, report.Reasons)
-		}
-	}
+	gatePassed := w.runGates(ctx, rev, existing, outcome)
 	if !gatePassed && rev.Status == RevisionPending {
 		rev.Status = RevisionRejected
 	}
@@ -604,15 +556,7 @@ func (w *Worker) processRevision(ctx context.Context, rev *Revision, existing []
 	// Decide whether to publish.
 	shouldPublish := gatePassed || w.approvalGateShadow
 	if !shouldPublish {
-		if w.candidateStore != nil {
-			_ = w.candidateStore.AppendAudit(ctx, AuditEvent{
-				Action:     "reject",
-				SkillID:    rev.SkillID,
-				RevisionID: rev.RevisionID,
-				Status:     string(rev.Status),
-				Reason:     gateRejectReason(rev),
-			})
-		}
+		w.auditReject(ctx, rev)
 		return false
 	}
 	if !gatePassed && w.approvalGateShadow {
@@ -622,6 +566,97 @@ func (w *Worker) processRevision(ctx context.Context, rev *Revision, existing []
 			rev.RevisionID, gateRejectReason(rev))
 	}
 
+	return w.publishRevision(ctx, rev, actionLabel, gatePassed)
+}
+
+// runGates evaluates spec, safety, and effectiveness gates in order.
+// Returns true if all gates pass (or if no gates are configured).
+func (w *Worker) runGates(ctx context.Context, rev *Revision, existing []ExistingSkill, outcome *Outcome) bool {
+	passed := true
+	if w.specGate != nil {
+		if !w.runSpecGate(ctx, rev, existing) {
+			passed = false
+		}
+	}
+	if w.safetyGate != nil {
+		if !w.runSafetyGate(ctx, rev) {
+			passed = false
+		}
+	}
+	// Phase C: effectiveness gate. Only runs when spec+safety passed.
+	if passed && w.effectivenessGate != nil {
+		if !w.runEffectivenessGate(ctx, rev, outcome) {
+			passed = false
+		}
+	}
+	return passed
+}
+
+func (w *Worker) runSpecGate(ctx context.Context, rev *Revision, existing []ExistingSkill) bool {
+	report, err := w.specGate.Validate(ctx, rev, existing)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: spec gate error on %q: %v", rev.Spec.Name, err)
+	}
+	rev.SpecReport = report
+	if report != nil && !report.Passed {
+		w.bumpGateMetric(func(m *approvalGateMetrics) { m.SpecGateRejected++ })
+		log.InfofContext(ctx,
+			"evolution: spec gate rejected %q revision=%s reasons=%v",
+			rev.Spec.Name, rev.RevisionID, report.Reasons)
+		return false
+	}
+	return true
+}
+
+func (w *Worker) runSafetyGate(ctx context.Context, rev *Revision) bool {
+	report, err := w.safetyGate.Scan(ctx, rev)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: safety gate error on %q: %v", rev.Spec.Name, err)
+	}
+	rev.SafetyReport = report
+	if report != nil && !report.Passed {
+		w.bumpGateMetric(func(m *approvalGateMetrics) { m.SafetyGateRejected++ })
+		log.InfofContext(ctx,
+			"evolution: safety gate rejected %q revision=%s reasons=%v",
+			rev.Spec.Name, rev.RevisionID, report.Reasons)
+		return false
+	}
+	return true
+}
+
+func (w *Worker) runEffectivenessGate(ctx context.Context, rev *Revision, outcome *Outcome) bool {
+	report, err := w.effectivenessGate.Evaluate(ctx, rev, outcome)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: effectiveness gate error on %q: %v", rev.Spec.Name, err)
+	}
+	rev.EffectivenessReport = report
+	if report != nil && !report.Passed {
+		rev.Status = RevisionPendingEval
+		w.bumpGateMetric(func(m *approvalGateMetrics) { m.EffectivenessGateRejected++ })
+		log.InfofContext(ctx,
+			"evolution: effectiveness gate held %q revision=%s reasons=%v",
+			rev.Spec.Name, rev.RevisionID, report.Reasons)
+		return false
+	}
+	return true
+}
+
+// auditReject appends a rejection audit event.
+func (w *Worker) auditReject(ctx context.Context, rev *Revision) {
+	if w.candidateStore != nil {
+		_ = w.candidateStore.AppendAudit(ctx, AuditEvent{
+			Action:     "reject",
+			SkillID:    rev.SkillID,
+			RevisionID: rev.RevisionID,
+			Status:     string(rev.Status),
+			Reason:     gateRejectReason(rev),
+		})
+	}
+}
+
+// publishRevision writes the skill, updates the active pointer,
+// and appends a promotion audit event.
+func (w *Worker) publishRevision(ctx context.Context, rev *Revision, actionLabel string, gatePassed bool) bool {
 	if w.publisher == nil {
 		return false
 	}

@@ -724,6 +724,47 @@ mcpToolSet := mcp.NewMCPToolSet(
 )
 ```
 
+#### Per-Request HTTP Headers
+
+For SSE and Streamable HTTP transports, `mcp.WithHTTPBeforeRequest` from the
+upstream MCP client can inject headers for each outgoing MCP request from the
+current call context. This is useful when one long-lived MCP ToolSet serves
+multiple logged-in users and each tool call needs a user-specific token or
+signature. Pass the hook through `WithMCPOptions`:
+
+```go
+import (
+    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+mcpToolSet := toolmcp.NewMCPToolSet(
+    toolmcp.ConnectionConfig{
+        Transport: "streamable_http",
+        ServerURL: "http://localhost:3000/mcp",
+    },
+    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+        func(ctx context.Context, req *http.Request) error {
+            token, ok := tokenFromContext(ctx)
+            if !ok {
+                return nil
+            }
+            req.Header.Set("Authorization", "Bearer "+token)
+            return nil
+        },
+    )),
+)
+```
+
+Static headers configured through `ConnectionConfig.Headers` are applied
+first; the before-request hook runs on every HTTP request and can override
+those values for the same header name.
+
+If you mount that ToolSet through `llmagent.WithToolSets(...)` and need
+`initialize` / `tools/list` to also observe request-scoped headers, pair it
+with `llmagent.WithRefreshToolSetsOnRun(true)` or pre-load tools with
+`toolSet.Tools(ctx)` and pass them via `llmagent.WithTools(...)`.
+
 ### Session Reconnection Support
 
 MCP ToolSet supports automatic session reconnection to recover from server restarts or session expiration.
@@ -1121,6 +1162,8 @@ mathTool := agenttool.NewTool(
     agenttool.WithStreamInner(true),
     // hide child assistant prose while still forwarding inner tool progress.
     agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
+    // return only the child Agent's final assistant message as the tool result.
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
 )
 
 // 3) Use in parent Agent
@@ -1160,6 +1203,57 @@ if ev.Author != parentName && ev.Response != nil &&
 }
 ```
 
+### Tool Result Response Modes
+
+AgentTool always executes the child Agent as an event stream. The response mode
+only controls the value returned to the parent Agent as the tool result. It does
+not change child session storage, event filter keys, or inner streaming.
+
+By default, AgentTool preserves its legacy behavior: every non-empty assistant
+message emitted by the child Agent is appended into one tool-result string.
+This is useful for compatibility, but it can be surprising for long-running
+child Agents that emit progress, drafts, or intermediate assistant messages.
+Those intermediate assistant messages can become part of the parent Agent's
+`tool.response`.
+
+Use `WithResponseMode(agenttool.ResponseModeFinalOnly)` when the child Agent is
+used as an isolated worker and the parent Agent should only see the child's
+final answer:
+
+```go
+childTool := agenttool.NewTool(
+    childAgent,
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
+)
+```
+
+In final-only mode, AgentTool:
+
+- ignores partial assistant chunks
+- ignores non-assistant messages, empty assistant messages, and tool messages
+- returns the last complete child assistant message
+- returns an empty string when the child Agent completes without a complete
+  assistant message
+- still returns child Agent errors as `agent error: ...`
+
+This is different from `WithSkipSummarization(true)`. `WithSkipSummarization`
+controls whether the parent flow performs an extra outer summarization call
+after the tool response. `WithResponseMode` controls what the tool response
+contains in the first place.
+
+Example with both settings:
+
+```go
+childTool := agenttool.NewTool(
+    childAgent,
+    // Keep the child Agent's chain-of-work out of the tool result.
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
+    // End the parent turn after tool.response instead of asking the parent
+    // model to summarize the result again.
+    agenttool.WithSkipSummarization(true),
+)
+```
+
 ### Options
 
 - WithSkipSummarization(bool):
@@ -1180,6 +1274,13 @@ if ev.Author != parentName && ev.Response != nil &&
     keeping inner tool calls, tool completions, and the aggregated final tool
     response
 
+- WithResponseMode(ResponseMode):
+
+  - `ResponseModeDefault` (default): keep legacy concatenation of child
+    assistant messages into the tool result
+  - `ResponseModeFinalOnly`: return only the last complete child assistant
+    message as the tool result
+
 - WithHistoryScope(HistoryScope):
   - `HistoryScopeIsolated` (default): Keep the child Agent fully isolated; it only sees the current tool arguments (no inherited history).
   - `HistoryScopeParentBranch`: Inherit parent conversation history by using a hierarchical filter key `parent/child-uuid`. This allows the content processor to include parent events via prefix matching while keeping child events isolated under a sub-branch. Typical use cases: “edit/optimize/continue previous output”.
@@ -1192,6 +1293,7 @@ child := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     agenttool.WithStreamInner(true),
     agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
     agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
 )
 ```
@@ -1204,6 +1306,10 @@ child := agenttool.NewTool(
   `WithInnerTextMode(agenttool.InnerTextModeExclude)` when users should see
   inner progress without seeing duplicated child prose
 - Model compatibility: Some providers require a tool message after tool_calls; AgentTool automatically supplies the aggregated content
+- Child context isolation and tool-result shaping are separate concerns.
+  `WithHistoryScope(agenttool.HistoryScopeIsolated)` controls what the child
+  can read. `WithResponseMode(agenttool.ResponseModeFinalOnly)` controls what
+  the parent receives as the tool result.
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
 ## Tool Integration and Usage
@@ -1844,7 +1950,7 @@ func main() {
     )
 
     // 2. Create model and Agent.
-    llmModel := openai.New("DeepSeek-V3-Online-64K")
+    llmModel := openai.New("deepseek-v4-flash")
     agent := llmagent.New("calculator-assistant",
         llmagent.WithModel(llmModel),
         llmagent.WithInstruction("You are a math assistant."),
@@ -1904,7 +2010,7 @@ cd examples/mcp_tool
 cd streamalbe_server && go run main.go &
 
 # Run the main program.
-go run main.go -model="deepseek-chat"
+go run main.go -model="deepseek-v4-flash"
 ```
 
 ## Summary

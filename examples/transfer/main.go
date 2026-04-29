@@ -34,7 +34,7 @@ import (
 
 func main() {
 	// Parse command line flags.
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	debug := flag.Bool("debug", false, "Enable debug logging and verbose event traces")
 	endInvocation := flag.Bool("end-invocation", false, "Enable end parent invocation after transfer")
 	flag.Parse()

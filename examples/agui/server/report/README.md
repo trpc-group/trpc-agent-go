@@ -8,7 +8,7 @@ Make sure the required API key for your chosen model provider is exported (e.g. 
 
 ```bash
 cd examples/agui
-go run ./server/reportagent --model deepseek-chat
+go run ./server/reportagent --model deepseek-v4-flash
 ```
 
 The server will display startup logs indicating the bound address:

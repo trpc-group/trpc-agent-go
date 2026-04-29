@@ -13,6 +13,7 @@ This example demonstrates LLM-driven session summarization integrated with the f
 - Simple trigger configuration using event-count threshold.
 - Prompt construction that injects the latest summary and recent events.
 - Context-aware routing can be found in `examples/summary/contextaware`.
+- FilterKey summary dispatch policy, including allowlists and full-session cascade control, can be found in `examples/summary/filterkey`.
 - Summary injection mode comparison can be found in `examples/summary/injection`.
 - Backend-specific persistence:
   - Summary text is stored in `sess.Summaries[filterKey]` for both backends.
@@ -43,7 +44,7 @@ go run main.go -events 0 -tokens 0 -time-sec 0
 
 Command-line flags:
 
-- `-model`: Model name to use for both chat and summarization. Default: `deepseek-chat`.
+- `-model`: Model name to use for both chat and summarization. Default: `deepseek-v4-flash`.
 - `-streaming`: Enable streaming mode for responses. Default: `true`.
 - `-events`: Event count threshold to trigger summarization. Default: `1`.
 - `-tokens`: Token-count threshold to trigger summarization (0=disabled). Default: `0`.
@@ -65,7 +66,7 @@ Example output:
 
 ```
 📝 Session Summarization Chat
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Service: inmemory
 EventThreshold: 1
 TokenThreshold: 0

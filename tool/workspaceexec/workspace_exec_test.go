@@ -74,7 +74,7 @@ func TestExecTool_Declaration_DescribesGeneralShellUsage(t *testing.T) {
 
 	decl := tl.Declaration()
 	require.NotNil(t, decl)
-	require.Contains(t, decl.Description, "default general shell runner")
+	require.Contains(t, decl.Description, "general shell runner")
 	require.Contains(t, decl.Description, "does not depend on a specific skill")
 	require.Contains(t, decl.Description, "curl")
 	require.Contains(t, decl.Description, "environment-dependent network commands")

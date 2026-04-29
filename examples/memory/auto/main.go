@@ -37,7 +37,7 @@ import (
 var (
 	modelName = flag.String(
 		"model",
-		"deepseek-chat",
+		"deepseek-v4-flash",
 		"Model for chat responses",
 	)
 	extModel = flag.String(

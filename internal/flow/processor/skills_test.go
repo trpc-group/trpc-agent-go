@@ -637,17 +637,16 @@ func TestSkillsRequestProcessor_KnowledgeOnlyGuidance(t *testing.T) {
 	require.NotEmpty(t, req.Messages)
 	sys := req.Messages[0].Content
 	require.Contains(t, sys, skillsOverviewHeader)
-	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill discovery and knowledge loading only")
-	require.Contains(t, sys, "Built-in skill execution tools are unavailable")
-	require.Contains(t, sys, "routing summaries only")
-	require.Contains(t, sys, "call skill_load before relying on it")
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, "skill discovery and knowledge loading only")
+	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.NotContains(t, sys, "skill_run runs with CWD")
 	require.NotContains(t, sys, ".venv/")
 	require.Contains(t, sys, "Use skills for progressive disclosure only")
 	require.Contains(t, sys, "inspect only the documentation needed")
-	require.Contains(t, sys, "Prefer loading one plausible skill early")
+	require.Contains(t, sys, "workspace_exec is registered")
+	require.Contains(t, sys, "If no execution tool is registered")
 }
 
 func TestSkillsRequestProcessor_KnowledgeOnlyGuidance_Disabled(t *testing.T) {
@@ -689,8 +688,8 @@ func TestSkillsRequestProcessor_LoadOnlyGuidance(t *testing.T) {
 	require.NotEmpty(t, req.Messages)
 	sys := req.Messages[0].Content
 	require.Contains(t, sys, skillsOverviewHeader)
-	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill discovery and knowledge loading only")
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, "skill discovery and knowledge loading only")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, "skill_load.docs or include_all_docs")
 	require.Contains(t, sys, "prefer loading it before repeating the same domain workflow")

@@ -38,8 +38,10 @@ const (
 	subagentRunPrompt = "You are running as an OpenClaw background " +
 		"subagent. Complete the delegated task once. The parent " +
 		"chat will receive your final result automatically. Keep " +
-		"the result concise and action-oriented. Do not spawn more " +
-		"subagents from inside this subagent."
+		"the result concise and action-oriented. Do not return " +
+		"only a statement of what you will do; complete the " +
+		"task and report the result or exact blocker. Do not " +
+		"spawn more subagents from inside this subagent."
 )
 
 type deliveryTarget struct {

@@ -46,7 +46,7 @@ func main() {
 	fmt.Println(strings.Repeat("=", 50))
 
 	chat := &httpHeadersChat{
-		modelName: "deepseek-chat",
+		modelName: "deepseek-v4-flash",
 	}
 
 	if err := chat.run(); err != nil {
