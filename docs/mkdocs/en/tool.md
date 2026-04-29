@@ -724,6 +724,47 @@ mcpToolSet := mcp.NewMCPToolSet(
 )
 ```
 
+#### Per-Request HTTP Headers
+
+For SSE and Streamable HTTP transports, `mcp.WithHTTPBeforeRequest` from the
+upstream MCP client can inject headers for each outgoing MCP request from the
+current call context. This is useful when one long-lived MCP ToolSet serves
+multiple logged-in users and each tool call needs a user-specific token or
+signature. Pass the hook through `WithMCPOptions`:
+
+```go
+import (
+    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+mcpToolSet := toolmcp.NewMCPToolSet(
+    toolmcp.ConnectionConfig{
+        Transport: "streamable_http",
+        ServerURL: "http://localhost:3000/mcp",
+    },
+    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+        func(ctx context.Context, req *http.Request) error {
+            token, ok := tokenFromContext(ctx)
+            if !ok {
+                return nil
+            }
+            req.Header.Set("Authorization", "Bearer "+token)
+            return nil
+        },
+    )),
+)
+```
+
+Static headers configured through `ConnectionConfig.Headers` are applied
+first; the before-request hook runs on every HTTP request and can override
+those values for the same header name.
+
+If you mount that ToolSet through `llmagent.WithToolSets(...)` and need
+`initialize` / `tools/list` to also observe request-scoped headers, pair it
+with `llmagent.WithRefreshToolSetsOnRun(true)` or pre-load tools with
+`toolSet.Tools(ctx)` and pass them via `llmagent.WithTools(...)`.
+
 ### Session Reconnection Support
 
 MCP ToolSet supports automatic session reconnection to recover from server restarts or session expiration.

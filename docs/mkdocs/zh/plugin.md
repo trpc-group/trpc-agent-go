@@ -192,6 +192,82 @@ runnerInstance := runner.NewRunner(
 defer runnerInstance.Close()
 ```
 
+## 工具身份注入
+
+插件可以通过 `BeforeTool` 和 `AfterTool` 对所有工具调用增加前置或后置处理。
+对于已经在 Web 层拿到当前用户身份的业务场景，`plugin/identity` 提供了一套可复用的
+身份透传插件：
+
+```go
+import (
+	"context"
+	"net/http"
+
+	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+	tmcp "trpc.group/trpc-go/trpc-mcp-go"
+)
+
+provider := identity.ProviderFunc(func(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+) (*identity.Identity, error) {
+	return &identity.Identity{
+		UserID: userID,
+		Headers: map[string]string{
+			"Authorization": "Bearer " + resolveAccessToken(userID),
+		},
+		EnvVars: map[string]string{
+			"USER_ACCESS_TOKEN": resolveUserAccessToken(userID),
+		},
+	}, nil
+})
+
+mcpTools := toolmcp.NewMCPToolSet(
+	toolmcp.ConnectionConfig{
+		Transport: "streamable",
+		ServerURL: "https://mcp.example.com",
+	},
+	toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+		func(ctx context.Context, req *http.Request) error {
+			headers, err := identity.HeadersFromContext(ctx)
+			if err != nil {
+				return err
+			}
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			return nil
+		},
+	)),
+)
+
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(identity.NewPlugin(provider)),
+)
+```
+
+插件会在 Agent 运行前解析身份并写入 Invocation 状态；每次工具调用前，它会把身份放进
+工具调用的 context。MCP HTTP 传输可以通过 `WithMCPOptions` 传入一个
+`mcp.WithHTTPBeforeRequest` hook，在 hook 中从 context 读取
+`Identity.Headers` 并写到请求头，这样每次外发的 HTTP 请求都会带上当前用户
+的 header。命令执行类工具则应当在真正执行时从 context 读取
+`Identity.EnvVars`，这样密钥不会进入模型可见的工具参数。对于 `workspace_exec`
+和 `skill_run`，可以用
+`codeexecutor.NewEnvInjectingCodeExecutor(exec, identity.EnvVarsFromContext)`
+包装执行器。
+
+如果你是通过 `llmagent.WithToolSets(...)` 挂载这个 MCP ToolSet，并且希望
+`initialize` / `tools/list` 也拿到请求级身份 header，记得同时开启
+`llmagent.WithRefreshToolSetsOnRun(true)`。这会让每次 Run 额外执行一轮
+`initialize` / `tools/list`，对工具较多或 `tools/list` 较慢的 MCP Server
+会有额外开销，请按需开启。如果你更希望用一个固定的发现上下文，则可以手动调用
+`toolSet.Tools(ctx)`，再通过 `llmagent.WithTools(...)` 注入。
+
 ## 插件是如何执行的？
 
 ### 作用域与传播
