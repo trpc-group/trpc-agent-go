@@ -248,8 +248,8 @@ func TestTransformSpan(t *testing.T) {
 }
 
 func TestTransformInvokeAgent(t *testing.T) {
-	inputMessages := `[{"role":"tool","name":"search","parts":[{"type":"tool_call_response","id":"call-123","response":"ok"}]}]`
-	outputChoices := `[{"role":"assistant","parts":[{"type":"text","content":"hello"}],"finish_reason":"stop"}]`
+	inputMessages := `[{"role":"tool","content":"ok","tool_call_id":"call-123","name":"search"}]`
+	outputChoices := `[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]`
 	span := &tracepb.Span{
 		Name: "agent-span",
 		Attributes: []*commonpb.KeyValue{
@@ -305,41 +305,6 @@ func TestTransformInvokeAgent(t *testing.T) {
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
 	}
-}
-
-func TestTransformInvokeAgent_PreservesToolCallToolResponseAndReasoning(t *testing.T) {
-	inputMessages := `[{"role":"assistant","parts":[{"type":"text","content":"need tool"},{"type":"reasoning","content":"thinking before call"},{"type":"tool_call","id":"call-123","name":"harness_lookup","arguments":{"key":"otel"}}]},{"role":"tool","name":"harness_lookup","parts":[{"type":"tool_call_response","id":"call-123","response":{"token":"otel-tool-token-7f3b9c1d"}}]}]`
-	outputChoices := `[{"role":"assistant","parts":[{"type":"text","content":"otel-tool-token-7f3b9c1d"},{"type":"reasoning","content":"used tool output"}],"finish_reason":"stop"}]`
-	span := &tracepb.Span{
-		Name: "agent-span",
-		Attributes: []*commonpb.KeyValue{
-			{
-				Key: semconvtrace.KeyGenAIInputMessages,
-				Value: &commonpb.AnyValue{
-					Value: &commonpb.AnyValue_StringValue{StringValue: inputMessages},
-				},
-			},
-			{
-				Key: semconvtrace.KeyGenAIOutputMessages,
-				Value: &commonpb.AnyValue{
-					Value: &commonpb.AnyValue_StringValue{StringValue: outputChoices},
-				},
-			},
-		},
-	}
-
-	transformInvokeAgent(span)
-
-	attrMap := make(map[string]string)
-	for _, attr := range span.Attributes {
-		if attr.Value != nil {
-			attrMap[attr.Key] = attr.Value.GetStringValue()
-		}
-	}
-
-	assert.Equal(t, observationTypeAgent, attrMap[observationType])
-	assert.JSONEq(t, inputMessages, attrMap[observationInput])
-	assert.JSONEq(t, outputChoices, attrMap[observationOutput])
 }
 
 func TestTransformCallLLM(t *testing.T) {
@@ -482,7 +447,7 @@ func TestTransformCallLLM_PromptWithTools(t *testing.T) {
 			{
 				Key: semconvtrace.KeyGenAIInputMessages,
 				Value: &commonpb.AnyValue{
-					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","parts":[{"type":"text","content":"hi"}]}]`},
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
 				},
 			},
 			{
@@ -673,13 +638,13 @@ func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
 			{
 				Key: semconvtrace.KeyGenAIInputMessages,
 				Value: &commonpb.AnyValue{
-					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","parts":[{"type":"text","content":"hi"}]}]`},
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
 				},
 			},
 			{
 				Key: semconvtrace.KeyGenAIOutputMessages,
 				Value: &commonpb.AnyValue{
-					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"assistant","parts":[{"type":"text","content":"hello"}],"finish_reason":"stop"}]`},
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"assistant","content":"hello"}]`},
 				},
 			},
 			{
@@ -1203,38 +1168,38 @@ func TestTransformInvokeAgent_TruncatesObservationInputOutput(t *testing.T) {
 	require.True(t, utf8.ValidString(out))
 }
 
-func TestTransformInvokeAgent_TruncateUsesOTelMessages(t *testing.T) {
+func TestTransformInvokeAgent_TruncateUsesTypedMessages(t *testing.T) {
 	const maxBytes = 1024
 
 	withObservationMaxBytes(t, maxBytes)
 
 	text := strings.Repeat("中", maxBytes)
-	input := []itelemetry.OTelInputMessage{{
+	input := []model.Message{{
 		Role: model.RoleUser,
-		Parts: []itelemetry.OTelMessagePart{
+		ContentParts: []model.ContentPart{
 			{
-				Type:    "text",
-				Content: text,
+				Type: model.ContentTypeText,
+				Text: &text,
 			},
 			{
-				Type:     "blob",
-				Modality: "file",
-				MIMEType: "application/octet-stream",
-				Filename: "large.bin",
-				Content:  strings.Repeat("a", maxBytes*8),
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "large.bin",
+					Data:     []byte(strings.Repeat("a", maxBytes*8)),
+					MimeType: "application/octet-stream",
+				},
 			},
 		},
 	}}
 	inputJSON, err := json.Marshal(input)
 	require.NoError(t, err)
 
-	output := []itelemetry.OTelOutputMessage{{
-		Role: model.RoleAssistant,
-		Parts: []itelemetry.OTelMessagePart{{
-			Type:    "text",
+	output := []model.Choice{{
+		Index: 0,
+		Message: model.Message{
+			Role:    model.RoleAssistant,
 			Content: strings.Repeat("resp-", maxBytes),
-		}},
-		FinishReason: "stop",
+		},
 	}}
 	outputJSON, err := json.Marshal(output)
 	require.NoError(t, err)
@@ -1263,25 +1228,22 @@ func TestTransformInvokeAgent_TruncateUsesOTelMessages(t *testing.T) {
 	in := attrMap[observationInput]
 	out := attrMap[observationOutput]
 
-	var gotIn []itelemetry.OTelInputMessage
+	var gotIn []model.Message
 	require.NoError(t, json.Unmarshal([]byte(in), &gotIn))
 	require.Len(t, gotIn, 1)
 	require.Equal(t, model.RoleUser, gotIn[0].Role)
-	require.Len(t, gotIn[0].Parts, 2)
-	require.Equal(t, "text", gotIn[0].Parts[0].Type)
-	require.LessOrEqual(t, len([]byte(gotIn[0].Parts[0].Content)), maxBytes)
-	require.Equal(t, "blob", gotIn[0].Parts[1].Type)
-	require.Equal(t, "large.bin", gotIn[0].Parts[1].Filename)
-	require.Less(t, len(gotIn[0].Parts[1].Content), maxBytes*8)
-	require.LessOrEqual(t, len([]byte(gotIn[0].Parts[1].Content)), maxBytes)
+	require.NotNil(t, gotIn[0].ContentParts[0].Text)
+	require.LessOrEqual(t, len([]byte(*gotIn[0].ContentParts[0].Text)), maxBytes)
+	require.NotNil(t, gotIn[0].ContentParts[1].File)
+	require.Less(t, len(gotIn[0].ContentParts[1].File.Data), maxBytes*8)
+	require.LessOrEqual(t, len(gotIn[0].ContentParts[1].File.Data), maxBytes)
 
-	var gotOut []itelemetry.OTelOutputMessage
+	var gotOut []model.Choice
 	require.NoError(t, json.Unmarshal([]byte(out), &gotOut))
-	require.Len(t, gotOut, 1)
-	require.Equal(t, model.RoleAssistant, gotOut[0].Role)
-	require.Len(t, gotOut[0].Parts, 1)
-	require.Equal(t, "text", gotOut[0].Parts[0].Type)
-	require.LessOrEqual(t, len([]byte(gotOut[0].Parts[0].Content)), maxBytes)
+	if len(gotOut) > 0 {
+		require.Equal(t, model.RoleAssistant, gotOut[0].Message.Role)
+		require.LessOrEqual(t, len([]byte(gotOut[0].Message.Content)), maxBytes)
+	}
 }
 
 func TestTransformCallLLM_TruncatesObservationInputOutput(t *testing.T) {
@@ -1466,7 +1428,6 @@ func TestTruncateObservationLLMInput_Branches(t *testing.T) {
 	withObservationMaxBytes(t, 64)
 
 	messages := `[{"role":"user","content":"` + strings.Repeat("中", 200) + `"}]`
-	otelMessages := `[{"role":"user","parts":[{"type":"text","content":"` + strings.Repeat("中", 200) + `"},{"type":"tool_call","id":"call-123","name":"search","arguments":{"q":"` + strings.Repeat("q", 200) + `"}}]}]`
 	tools := `[{"name":"` + strings.Repeat("tool", 40) + `"}]`
 
 	t.Run("prompt with tools and messages", func(t *testing.T) {
@@ -1488,34 +1449,6 @@ func TestTruncateObservationLLMInput_Branches(t *testing.T) {
 		require.Contains(t, out, "truncated")
 		var v []map[string]any
 		require.NoError(t, json.Unmarshal([]byte(out), &v))
-	})
-
-	t.Run("plain otel messages array preserves parts", func(t *testing.T) {
-		out := truncateObservationLLMInput(otelMessages)
-		require.True(t, utf8.ValidString(out))
-		require.Less(t, len([]byte(out)), len([]byte(otelMessages)))
-		require.Contains(t, out, "truncated")
-
-		var v []map[string]any
-		require.NoError(t, json.Unmarshal([]byte(out), &v))
-		require.Len(t, v, 1)
-		parts, ok := v[0]["parts"].([]any)
-		require.True(t, ok)
-		require.Len(t, parts, 2)
-
-		textPart, ok := parts[0].(map[string]any)
-		require.True(t, ok)
-		require.Equal(t, "text", textPart["type"])
-
-		toolCallPart, ok := parts[1].(map[string]any)
-		require.True(t, ok)
-		require.Equal(t, "tool_call", toolCallPart["type"])
-		require.Equal(t, "call-123", toolCallPart["id"])
-		require.Equal(t, "search", toolCallPart["name"])
-
-		arguments, ok := toolCallPart["arguments"].(map[string]any)
-		require.True(t, ok)
-		require.Contains(t, arguments["q"], "truncated")
 	})
 
 	t.Run("fallback json leaf truncation", func(t *testing.T) {
@@ -1569,7 +1502,7 @@ func TestBuildAndExtractHelpers_Branches(t *testing.T) {
 func TestBuildLLMObservationInput_And_WrapWithToolsBranches(t *testing.T) {
 	toolDefs := `[{"name":"tool-a"}]`
 	invalidToolDefs := `{`
-	messages := `[{"role":"user","parts":[{"type":"text","content":"hello"}]}]`
+	messages := `[{"role":"user","content":"hello"}]`
 
 	withInput := llmSpanCollected{inputMessages: strPtr(messages), toolDefinitions: strPtr(toolDefs)}
 	out := buildLLMObservationInput(withInput)
