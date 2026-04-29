@@ -198,3 +198,141 @@ func TestService_CreateSessionSummary_NoTTL(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, execCalled)
 }
+
+func TestService_CreateSessionSummary_FilterAllowlistSkipsDisallowedKey(t *testing.T) {
+	mockCli := &mockClient{}
+	called := false
+	mockSum := &mockSummarizer{
+		summarizeFunc: func(ctx context.Context, session *session.Session) (string, error) {
+			called = true
+			return "blocked-summary", nil
+		},
+	}
+	s := &Service{
+		chClient: mockCli,
+		opts: ServiceOpts{
+			summarizer:             mockSum,
+			summaryFilterAllowlist: []string{"allowed"},
+		},
+		tableSessionSummaries: "session_summaries",
+	}
+
+	sess := &session.Session{
+		ID:      "sess1",
+		AppName: "app1",
+		UserID:  "user1",
+		Events:  []event.Event{{ID: "1"}},
+	}
+
+	err := s.CreateSessionSummary(context.Background(), sess, "blocked", true)
+	assert.NoError(t, err)
+	assert.False(t, called)
+}
+
+func TestService_EnqueueSummaryJob_CascadeDisabled(t *testing.T) {
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockClient{}, nil
+	})
+
+	mockCli := &mockClient{}
+	mockSum := &mockSummarizer{
+		summarizeFunc: func(ctx context.Context, session *session.Session) (string, error) {
+			return "branch-summary", nil
+		},
+	}
+
+	s, err := NewService(
+		WithSkipDBInit(true),
+		WithSummarizer(mockSum),
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSummaryJobTimeout(time.Second),
+		WithCascadeFullSessionSummary(false),
+		WithClickHouseDSN("clickhouse://localhost:9000"),
+	)
+	assert.NoError(t, err)
+	s.chClient = mockCli
+
+	persistedKeyCh := make(chan string, 2)
+	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		persistedKeyCh <- args[3].(string)
+		return nil
+	}
+
+	sess := &session.Session{
+		ID:        "sess1",
+		AppName:   "app1",
+		UserID:    "user1",
+		Summaries: make(map[string]*session.Summary),
+		Events:    []event.Event{{ID: "1"}},
+	}
+
+	err = s.EnqueueSummaryJob(context.Background(), sess, "tool-usage", true)
+	assert.NoError(t, err)
+
+	var persistedKeys []string
+	select {
+	case key := <-persistedKeyCh:
+		persistedKeys = append(persistedKeys, key)
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "timeout waiting for summary execution")
+	}
+
+	assert.NoError(t, s.Close())
+	for {
+		select {
+		case key := <-persistedKeyCh:
+			persistedKeys = append(persistedKeys, key)
+		default:
+			assert.Equal(t, []string{"tool-usage"}, persistedKeys)
+			return
+		}
+	}
+}
+
+func TestService_EnqueueSummaryJob_SyncFallbackCascadesFullSession(t *testing.T) {
+	mockCli := &mockClient{}
+	mockSum := &mockSummarizer{
+		summarizeFunc: func(ctx context.Context, session *session.Session) (string, error) {
+			return "summary", nil
+		},
+	}
+	s := &Service{
+		chClient: mockCli,
+		opts: ServiceOpts{
+			summarizer: mockSum,
+		},
+		tableSessionSummaries: "session_summaries",
+	}
+
+	persistedKeyCh := make(chan string, 2)
+	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		persistedKeyCh <- args[3].(string)
+		return nil
+	}
+
+	sess := &session.Session{
+		ID:        "sess1",
+		AppName:   "app1",
+		UserID:    "user1",
+		Summaries: make(map[string]*session.Summary),
+		Events: []event.Event{
+			{ID: "1", FilterKey: "tool-usage", Version: event.CurrentVersion},
+			{ID: "2", FilterKey: "other", Version: event.CurrentVersion},
+		},
+	}
+
+	err := s.EnqueueSummaryJob(context.Background(), sess, "tool-usage", true)
+	assert.NoError(t, err)
+
+	persistedKeys := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		select {
+		case key := <-persistedKeyCh:
+			persistedKeys = append(persistedKeys, key)
+		case <-time.After(2 * time.Second):
+			assert.FailNow(t, "timeout waiting for summary persistence")
+		}
+	}
+	assert.ElementsMatch(t, []string{"tool-usage", session.SummaryFilterKeyAllContents}, persistedKeys)
+}

@@ -150,6 +150,10 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 				AsyncSummaryNum:   opts.asyncSummaryNum,
 				SummaryQueueSize:  opts.summaryQueueSize,
 				SummaryJobTimeout: opts.summaryJobTimeout,
+				SummaryDispatchPolicy: isummary.NewSummaryDispatchPolicy(
+					opts.summaryFilterAllowlist,
+					opts.shouldCascadeFullSessionSummary(),
+				),
 				CreateSummaryFunc: s.CreateSessionSummary,
 			},
 		)

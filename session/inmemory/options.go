@@ -46,6 +46,13 @@ type serviceOpts struct {
 	summaryQueueSize int
 	// summaryJobTimeout is the timeout for processing a single summary job.
 	summaryJobTimeout time.Duration
+	// summaryFilterAllowlist restricts which non-empty filterKeys may trigger
+	// branch summaries.
+	summaryFilterAllowlist []string
+	// cascadeFullSessionSummary controls whether allowed branch summaries also
+	// refresh the full-session summary. Nil preserves the legacy default of
+	// enabling full-session cascade for zero-value options.
+	cascadeFullSessionSummary *bool
 	// appendEventHooks are hooks for AppendEvent.
 	appendEventHooks []session.AppendEventHook
 	// getSessionHooks are hooks for GetSession.
@@ -64,6 +71,13 @@ var (
 		summaryJobTimeout: defaultSummaryJobTimeout,
 	}
 )
+
+func (opts serviceOpts) shouldCascadeFullSessionSummary() bool {
+	if opts.cascadeFullSessionSummary == nil {
+		return true
+	}
+	return *opts.cascadeFullSessionSummary
+}
 
 // WithSessionEventLimit sets the limit of events in a session.
 func WithSessionEventLimit(limit int) ServiceOpt {
@@ -140,6 +154,23 @@ func WithSummaryJobTimeout(timeout time.Duration) ServiceOpt {
 			return
 		}
 		opts.summaryJobTimeout = timeout
+	}
+}
+
+// WithSummaryFilterAllowlist restricts which non-empty filterKeys may trigger
+// branch summaries. Keys use the same exact format as event filter keys.
+func WithSummaryFilterAllowlist(filterKeys ...string) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.summaryFilterAllowlist = append([]string{}, filterKeys...)
+	}
+}
+
+// WithCascadeFullSessionSummary controls whether an allowed branch summary also
+// refreshes the full-session summary keyed by SummaryFilterKeyAllContents.
+func WithCascadeFullSessionSummary(enable bool) ServiceOpt {
+	return func(opts *serviceOpts) {
+		enabled := enable
+		opts.cascadeFullSessionSummary = &enabled
 	}
 }
 
