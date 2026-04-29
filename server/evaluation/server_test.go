@@ -25,6 +25,7 @@ import (
 	coreevaluation "trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -158,6 +159,57 @@ func (f *fakeEvalResultManager) Close() error {
 	return nil
 }
 
+type fakeMetricManager struct {
+	list   func(ctx context.Context, appName, evalSetID string) ([]string, error)
+	get    func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error)
+	add    func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error
+	delete func(ctx context.Context, appName, evalSetID, metricName string) error
+	update func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error
+	close  func() error
+}
+
+func (f *fakeMetricManager) List(ctx context.Context, appName, evalSetID string) ([]string, error) {
+	if f.list != nil {
+		return f.list(ctx, appName, evalSetID)
+	}
+	return nil, errors.New("list is not configured")
+}
+
+func (f *fakeMetricManager) Get(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+	if f.get != nil {
+		return f.get(ctx, appName, evalSetID, metricName)
+	}
+	return nil, errors.New("get is not configured")
+}
+
+func (f *fakeMetricManager) Add(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+	if f.add != nil {
+		return f.add(ctx, appName, evalSetID, evalMetric)
+	}
+	return errors.New("add is not configured")
+}
+
+func (f *fakeMetricManager) Delete(ctx context.Context, appName, evalSetID, metricName string) error {
+	if f.delete != nil {
+		return f.delete(ctx, appName, evalSetID, metricName)
+	}
+	return errors.New("delete is not configured")
+}
+
+func (f *fakeMetricManager) Update(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+	if f.update != nil {
+		return f.update(ctx, appName, evalSetID, evalMetric)
+	}
+	return errors.New("update is not configured")
+}
+
+func (f *fakeMetricManager) Close() error {
+	if f.close != nil {
+		return f.close()
+	}
+	return nil
+}
+
 type failingResponseWriter struct {
 	header     http.Header
 	statusCode int
@@ -240,6 +292,13 @@ func newTestEvalResult(evalSetResultID, evalSetID string, numRuns int) *evalresu
 	}
 }
 
+func newTestMetric(metricName string, threshold float64) *metric.EvalMetric {
+	return &metric.EvalMetric{
+		MetricName: metricName,
+		Threshold:  threshold,
+	}
+}
+
 func intPtr(v int) *int {
 	return &v
 }
@@ -270,6 +329,23 @@ func newTestServer(t *testing.T, opts ...Option) *Server {
 				return newTestEvalSet(evalSetID), nil
 			},
 		}),
+		WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				return newTestMetric(metricName, 1), nil
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return nil
+			},
+		}),
 		WithEvalResultManager(&fakeEvalResultManager{
 			list: func(ctx context.Context, appName string) ([]string, error) {
 				return []string{}, nil
@@ -289,6 +365,7 @@ func TestNewValidation(t *testing.T) {
 	_, err := New(
 		WithAppName("demo-app"),
 		WithEvalSetManager(&fakeEvalSetManager{}),
+		WithMetricManager(&fakeMetricManager{}),
 		WithEvalResultManager(&fakeEvalResultManager{}),
 	)
 	require.Error(t, err)
@@ -300,11 +377,13 @@ func TestNewCustomPaths(t *testing.T) {
 		WithBasePath("/api/evaluation"),
 		WithRunsPath("/executions"),
 		WithSetsPath("/datasets"),
+		WithMetricsPath("/quality-metrics"),
 		WithResultsPath("/outputs"),
 	)
 	assert.Equal(t, "/api/evaluation", srv.BasePath())
 	assert.Equal(t, "/api/evaluation/executions", srv.RunsPath())
 	assert.Equal(t, "/api/evaluation/datasets", srv.SetsPath())
+	assert.Equal(t, "/api/evaluation/quality-metrics", srv.MetricsPath())
 	assert.Equal(t, "/api/evaluation/outputs", srv.ResultsPath())
 }
 
@@ -326,6 +405,7 @@ func TestNewPropagatesRouteRegistrarError(t *testing.T) {
 		WithAppName("demo-app"),
 		WithAgentEvaluator(&fakeAgentEvaluator{}),
 		WithEvalSetManager(&fakeEvalSetManager{}),
+		WithMetricManager(&fakeMetricManager{}),
 		WithEvalResultManager(&fakeEvalResultManager{}),
 		WithRouteRegistrar(&stubRouteRegistrar{register: func(mux *http.ServeMux, server *Server) error {
 			return errors.New("register failed")
@@ -340,6 +420,7 @@ func TestDefaultPathsAreRESTful(t *testing.T) {
 	srv := newTestServer(t)
 	assert.Equal(t, "/evaluation", srv.BasePath())
 	assert.Equal(t, "/evaluation/sets", srv.SetsPath())
+	assert.Equal(t, "/evaluation/metrics", srv.MetricsPath())
 	assert.Equal(t, "/evaluation/runs", srv.RunsPath())
 	assert.Equal(t, "/evaluation/results", srv.ResultsPath())
 }
@@ -349,28 +430,11 @@ func TestNewRejectsInvalidConfigAndNormalizesBasePath(t *testing.T) {
 		_, err := New(
 			WithAgentEvaluator(&fakeAgentEvaluator{}),
 			WithEvalSetManager(&fakeEvalSetManager{}),
+			WithMetricManager(&fakeMetricManager{}),
 			WithEvalResultManager(&fakeEvalResultManager{}),
 		)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "app name")
-	})
-	t.Run("missing eval set manager", func(t *testing.T) {
-		_, err := New(
-			WithAppName("demo-app"),
-			WithAgentEvaluator(&fakeAgentEvaluator{}),
-			WithEvalResultManager(&fakeEvalResultManager{}),
-		)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "eval set manager")
-	})
-	t.Run("missing eval result manager", func(t *testing.T) {
-		_, err := New(
-			WithAppName("demo-app"),
-			WithAgentEvaluator(&fakeAgentEvaluator{}),
-			WithEvalSetManager(&fakeEvalSetManager{}),
-		)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "eval result manager")
 	})
 	t.Run("normalize relative base path", func(t *testing.T) {
 		srv := newTestServer(t, WithBasePath("evaluation/"))
@@ -380,6 +444,120 @@ func TestNewRejectsInvalidConfigAndNormalizesBasePath(t *testing.T) {
 		srv := newTestServer(t, WithBasePath(" "))
 		assert.Equal(t, "/evaluation", srv.BasePath())
 	})
+}
+
+func TestNewAllowsNilMetricManagerAndSkipsMetricRoutes(t *testing.T) {
+	srv, err := New(
+		WithAppName("demo-app"),
+		WithAgentEvaluator(&fakeAgentEvaluator{
+			evaluate: func(ctx context.Context, evalSetID string, opt ...coreevaluation.Option) (*coreevaluation.EvaluationResult, error) {
+				return newTestEvaluationResult(evalSetID, "result-default", 1, time.Second), nil
+			},
+		}),
+		WithEvalSetManager(&fakeEvalSetManager{
+			list: func(ctx context.Context, appName string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
+				return newTestEvalSet(evalSetID), nil
+			},
+		}),
+		WithEvalResultManager(&fakeEvalResultManager{
+			list: func(ctx context.Context, appName string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetResultID string) (*evalresult.EvalSetResult, error) {
+				return newTestEvalResult(evalSetResultID, "math-basic", 1), nil
+			},
+		}),
+	)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"?setId=math-basic", nil)
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusNotFound, recorder.Code)
+}
+
+func TestNewAllowsNilEvalSetManagerAndSkipsSetRoutes(t *testing.T) {
+	srv, err := New(
+		WithAppName("demo-app"),
+		WithAgentEvaluator(&fakeAgentEvaluator{
+			evaluate: func(ctx context.Context, evalSetID string, opt ...coreevaluation.Option) (*coreevaluation.EvaluationResult, error) {
+				return newTestEvaluationResult(evalSetID, "result-default", 1, time.Second), nil
+			},
+		}),
+		WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				return newTestMetric(metricName, 1), nil
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return nil
+			},
+		}),
+		WithEvalResultManager(&fakeEvalResultManager{
+			list: func(ctx context.Context, appName string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetResultID string) (*evalresult.EvalSetResult, error) {
+				return newTestEvalResult(evalSetResultID, "math-basic", 1), nil
+			},
+		}),
+	)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodGet, srv.SetsPath(), nil)
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusNotFound, recorder.Code)
+}
+
+func TestNewAllowsNilEvalResultManagerAndSkipsResultRoutes(t *testing.T) {
+	srv, err := New(
+		WithAppName("demo-app"),
+		WithAgentEvaluator(&fakeAgentEvaluator{
+			evaluate: func(ctx context.Context, evalSetID string, opt ...coreevaluation.Option) (*coreevaluation.EvaluationResult, error) {
+				return newTestEvaluationResult(evalSetID, "result-default", 1, time.Second), nil
+			},
+		}),
+		WithEvalSetManager(&fakeEvalSetManager{
+			list: func(ctx context.Context, appName string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
+				return newTestEvalSet(evalSetID), nil
+			},
+		}),
+		WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				return newTestMetric(metricName, 1), nil
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return nil
+			},
+		}),
+	)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodGet, srv.ResultsPath(), nil)
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusNotFound, recorder.Code)
 }
 
 func TestCloseReturnsNil(t *testing.T) {
@@ -473,6 +651,21 @@ func TestHandleCreateRunTimeoutReturnsGatewayTimeout(t *testing.T) {
 	assert.JSONEq(t, `{"error":"evaluation timed out"}`, recorder.Body.String())
 }
 
+func TestHandleCreateRunTrimsSetIDBeforeEvaluate(t *testing.T) {
+	var gotSetID string
+	srv := newTestServer(t, WithAgentEvaluator(&fakeAgentEvaluator{
+		evaluate: func(ctx context.Context, evalSetID string, opt ...coreevaluation.Option) (*coreevaluation.EvaluationResult, error) {
+			gotSetID = evalSetID
+			return newTestEvaluationResult(evalSetID, "result-default", 1, time.Second), nil
+		},
+	}))
+	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewBufferString(`{"setId":" math-basic "}`))
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusCreated, recorder.Code)
+	assert.Equal(t, "math-basic", gotSetID)
+}
+
 func TestHandleRunsRejectsReadRequests(t *testing.T) {
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, srv.RunsPath(), nil)
@@ -494,6 +687,8 @@ func TestHandleOptionsRequests(t *testing.T) {
 	}{
 		{name: "sets", path: srv.SetsPath()},
 		{name: "set detail", path: srv.SetsPath() + "/math-basic"},
+		{name: "metrics", path: srv.MetricsPath()},
+		{name: "metric detail", path: srv.MetricsPath() + "/accuracy?setId=math-basic"},
 		{name: "runs", path: srv.RunsPath()},
 		{name: "runs trailing slash", path: srv.RunsPath() + "/"},
 		{name: "results", path: srv.ResultsPath()},
@@ -506,7 +701,7 @@ func TestHandleOptionsRequests(t *testing.T) {
 			srv.Handler().ServeHTTP(recorder, req)
 			require.Equal(t, http.StatusNoContent, recorder.Code)
 			assert.Equal(t, "*", recorder.Header().Get("Access-Control-Allow-Origin"))
-			assert.Equal(t, "GET, POST, OPTIONS", recorder.Header().Get("Access-Control-Allow-Methods"))
+			assert.Equal(t, "GET, POST, PUT, DELETE, OPTIONS", recorder.Header().Get("Access-Control-Allow-Methods"))
 			assert.Equal(t, "Content-Type", recorder.Header().Get("Access-Control-Allow-Headers"))
 		})
 	}
@@ -640,6 +835,410 @@ func TestHandleSetErrorsAndMethods(t *testing.T) {
 			},
 		}))
 		req := httptest.NewRequest(http.MethodGet, srv.SetsPath()+"/missing", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusNotFound, recorder.Code)
+		assert.JSONEq(t, `{"error":"not found"}`, recorder.Body.String())
+	})
+}
+
+func TestHandleMetricQueries(t *testing.T) {
+	srv := newTestServer(t, WithMetricManager(&fakeMetricManager{
+		list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+			return []string{"accuracy", "groundedness"}, nil
+		},
+		get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+			switch metricName {
+			case "groundedness":
+				return newTestMetric("groundedness", 0.9), nil
+			default:
+				return newTestMetric(metricName, 0.8), nil
+			}
+		},
+	}))
+	t.Run("list", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusOK, recorder.Code)
+		var resp ListMetricsResponse
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+		require.Len(t, resp.Metrics, 2)
+		assert.Equal(t, "accuracy", resp.Metrics[0].MetricName)
+		assert.Equal(t, 0.8, resp.Metrics[0].Threshold)
+		assert.Equal(t, "groundedness", resp.Metrics[1].MetricName)
+	})
+	t.Run("list redirects trailing slash", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"/?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusPermanentRedirect, recorder.Code)
+		assert.Equal(t, srv.MetricsPath()+"?setId=math-basic", recorder.Header().Get("Location"))
+	})
+	t.Run("detail", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"/accuracy?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusOK, recorder.Code)
+		var resp MetricResponse
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+		require.NotNil(t, resp.Metric)
+		assert.Equal(t, "accuracy", resp.Metric.MetricName)
+		assert.Equal(t, 0.8, resp.Metric.Threshold)
+	})
+	t.Run("detail redirects trailing slash", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"/accuracy/?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusPermanentRedirect, recorder.Code)
+		assert.Equal(t, srv.MetricsPath()+"/accuracy?setId=math-basic", recorder.Header().Get("Location"))
+	})
+	t.Run("detail with escaped slash", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"/acc%2Furacy?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusOK, recorder.Code)
+		var resp MetricResponse
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+		require.NotNil(t, resp.Metric)
+		assert.Equal(t, "acc/uracy", resp.Metric.MetricName)
+	})
+	t.Run("detail rejects additional segments", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"/accuracy/extra?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusNotFound, recorder.Code)
+	})
+}
+
+func TestHandleMetricWrites(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		var gotSetID string
+		var gotMetric *metric.EvalMetric
+		getCalls := 0
+		srv := newTestServer(t, WithMetricManager(&fakeMetricManager{
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				gotSetID = evalSetID
+				gotMetric = evalMetric
+				return nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				getCalls++
+				if getCalls == 1 {
+					return nil, os.ErrNotExist
+				}
+				return newTestMetric(metricName, 0.75), nil
+			},
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return nil
+			},
+		}))
+		req := httptest.NewRequest(http.MethodPost, srv.MetricsPath(), bytes.NewBufferString(`{"setId":"math-basic","metric":{"metricName":"accuracy","threshold":0.75}}`))
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusCreated, recorder.Code)
+		require.NotNil(t, gotMetric)
+		assert.Equal(t, "math-basic", gotSetID)
+		assert.Equal(t, "accuracy", gotMetric.MetricName)
+		assert.Equal(t, 0.75, gotMetric.Threshold)
+		assert.Equal(t, 2, getCalls)
+		var resp MetricResponse
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+		require.NotNil(t, resp.Metric)
+		assert.Equal(t, "accuracy", resp.Metric.MetricName)
+	})
+	t.Run("update fills metric name from path", func(t *testing.T) {
+		var gotMetric *metric.EvalMetric
+		srv := newTestServer(t, WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				return newTestMetric(metricName, 0.91), nil
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				gotMetric = evalMetric
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return nil
+			},
+		}))
+		req := httptest.NewRequest(http.MethodPut, srv.MetricsPath()+"/accuracy", bytes.NewBufferString(`{"setId":"math-basic","metric":{"threshold":0.91}}`))
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusOK, recorder.Code)
+		require.NotNil(t, gotMetric)
+		assert.Equal(t, "accuracy", gotMetric.MetricName)
+		assert.Equal(t, 0.91, gotMetric.Threshold)
+		var resp MetricResponse
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+		require.NotNil(t, resp.Metric)
+		assert.Equal(t, "accuracy", resp.Metric.MetricName)
+		assert.Equal(t, 0.91, resp.Metric.Threshold)
+	})
+	t.Run("delete", func(t *testing.T) {
+		var gotSetID string
+		var gotMetricName string
+		srv := newTestServer(t, WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				return newTestMetric(metricName, 1), nil
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				gotSetID = evalSetID
+				gotMetricName = metricName
+				return nil
+			},
+		}))
+		req := httptest.NewRequest(http.MethodDelete, srv.MetricsPath()+"/accuracy?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusNoContent, recorder.Code)
+		assert.Equal(t, "math-basic", gotSetID)
+		assert.Equal(t, "accuracy", gotMetricName)
+		assert.Empty(t, recorder.Body.String())
+	})
+}
+
+func TestHandleMetricErrorsAndMethods(t *testing.T) {
+	t.Run("collection rejects unsupported method", func(t *testing.T) {
+		srv := newTestServer(t)
+		req := httptest.NewRequest(http.MethodPut, srv.MetricsPath(), nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusMethodNotAllowed, recorder.Code)
+		assert.Equal(t, "GET, POST", recorder.Header().Get("Allow"))
+	})
+	t.Run("item rejects unsupported method", func(t *testing.T) {
+		srv := newTestServer(t)
+		req := httptest.NewRequest(http.MethodPost, srv.MetricsPath()+"/accuracy?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusMethodNotAllowed, recorder.Code)
+		assert.Equal(t, "GET, PUT, DELETE", recorder.Header().Get("Allow"))
+	})
+	t.Run("list requires set id", func(t *testing.T) {
+		srv := newTestServer(t)
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath(), nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusBadRequest, recorder.Code)
+		assert.JSONEq(t, `{"error":"setId must not be empty"}`, recorder.Body.String())
+	})
+	t.Run("list returns internal error when list fails", func(t *testing.T) {
+		srv := newTestServer(t, WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return nil, errors.New("list failed")
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				return newTestMetric(metricName, 1), nil
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return nil
+			},
+		}))
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusInternalServerError, recorder.Code)
+		assert.JSONEq(t, `{"error":"internal server error"}`, recorder.Body.String())
+	})
+	t.Run("detail requires set id", func(t *testing.T) {
+		srv := newTestServer(t)
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"/accuracy", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusBadRequest, recorder.Code)
+		assert.JSONEq(t, `{"error":"setId must not be empty"}`, recorder.Body.String())
+	})
+	t.Run("detail rejects blank metric name", func(t *testing.T) {
+		srv := newTestServer(t)
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"/%20?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusNotFound, recorder.Code)
+		assert.JSONEq(t, `{"error":"not found"}`, recorder.Body.String())
+	})
+	t.Run("detail returns not found", func(t *testing.T) {
+		srv := newTestServer(t, WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				return nil, os.ErrNotExist
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return nil
+			},
+		}))
+		req := httptest.NewRequest(http.MethodGet, srv.MetricsPath()+"/missing?setId=math-basic", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusNotFound, recorder.Code)
+		assert.JSONEq(t, `{"error":"not found"}`, recorder.Body.String())
+	})
+	t.Run("create rejects unknown fields", func(t *testing.T) {
+		srv := newTestServer(t)
+		req := httptest.NewRequest(http.MethodPost, srv.MetricsPath(), bytes.NewBufferString(`{"setId":"math-basic","unexpected":true}`))
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusBadRequest, recorder.Code)
+		assert.Contains(t, recorder.Body.String(), "unknown field")
+	})
+	t.Run("create validates metric payload", func(t *testing.T) {
+		srv := newTestServer(t)
+		req := httptest.NewRequest(http.MethodPost, srv.MetricsPath(), bytes.NewBufferString(`{"setId":"math-basic"}`))
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusBadRequest, recorder.Code)
+		assert.JSONEq(t, `{"error":"metric must not be nil"}`, recorder.Body.String())
+	})
+	t.Run("create returns conflict when metric exists", func(t *testing.T) {
+		addCalled := false
+		srv := newTestServer(t, WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				return newTestMetric(metricName, 1), nil
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				addCalled = true
+				return nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return nil
+			},
+		}))
+		req := httptest.NewRequest(http.MethodPost, srv.MetricsPath(), bytes.NewBufferString(`{"setId":"math-basic","metric":{"metricName":"accuracy","threshold":0.8}}`))
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusConflict, recorder.Code)
+		assert.JSONEq(t, `{"error":"already exists"}`, recorder.Body.String())
+		assert.False(t, addCalled)
+	})
+	t.Run("create returns conflict when add loses race", func(t *testing.T) {
+		getCalls := 0
+		srv := newTestServer(t, WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				getCalls++
+				if getCalls == 1 {
+					return nil, os.ErrNotExist
+				}
+				return newTestMetric(metricName, 1), nil
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return errors.New("duplicate key")
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return nil
+			},
+		}))
+		req := httptest.NewRequest(http.MethodPost, srv.MetricsPath(), bytes.NewBufferString(`{"setId":"math-basic","metric":{"metricName":"accuracy","threshold":0.8}}`))
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusConflict, recorder.Code)
+		assert.JSONEq(t, `{"error":"already exists"}`, recorder.Body.String())
+		assert.Equal(t, 2, getCalls)
+	})
+	t.Run("update rejects mismatched metric name", func(t *testing.T) {
+		srv := newTestServer(t)
+		req := httptest.NewRequest(http.MethodPut, srv.MetricsPath()+"/accuracy", bytes.NewBufferString(`{"setId":"math-basic","metric":{"metricName":"groundedness","threshold":0.8}}`))
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusBadRequest, recorder.Code)
+		assert.JSONEq(t, `{"error":"metric.metricName must match path metricName when provided"}`, recorder.Body.String())
+	})
+	t.Run("update returns not found", func(t *testing.T) {
+		srv := newTestServer(t, WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				return nil, os.ErrNotExist
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return os.ErrNotExist
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return nil
+			},
+		}))
+		req := httptest.NewRequest(http.MethodPut, srv.MetricsPath()+"/accuracy", bytes.NewBufferString(`{"setId":"math-basic","metric":{"threshold":0.8}}`))
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusNotFound, recorder.Code)
+		assert.JSONEq(t, `{"error":"not found"}`, recorder.Body.String())
+	})
+	t.Run("delete requires set id", func(t *testing.T) {
+		srv := newTestServer(t)
+		req := httptest.NewRequest(http.MethodDelete, srv.MetricsPath()+"/accuracy", nil)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusBadRequest, recorder.Code)
+		assert.JSONEq(t, `{"error":"setId must not be empty"}`, recorder.Body.String())
+	})
+	t.Run("delete returns not found", func(t *testing.T) {
+		srv := newTestServer(t, WithMetricManager(&fakeMetricManager{
+			list: func(ctx context.Context, appName, evalSetID string) ([]string, error) {
+				return []string{}, nil
+			},
+			get: func(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+				return newTestMetric(metricName, 1), nil
+			},
+			add: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			update: func(ctx context.Context, appName, evalSetID string, evalMetric *metric.EvalMetric) error {
+				return nil
+			},
+			delete: func(ctx context.Context, appName, evalSetID, metricName string) error {
+				return os.ErrNotExist
+			},
+		}))
+		req := httptest.NewRequest(http.MethodDelete, srv.MetricsPath()+"/accuracy?setId=math-basic", nil)
 		recorder := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(recorder, req)
 		require.Equal(t, http.StatusNotFound, recorder.Code)
@@ -901,5 +1500,50 @@ func TestValidateRunEvaluationRequest(t *testing.T) {
 	require.EqualError(t, validateRunEvaluationRequest(nil), "request must not be nil")
 	require.EqualError(t, validateRunEvaluationRequest(&RunEvaluationRequest{SetID: "   "}), "setId must not be empty")
 	require.EqualError(t, validateRunEvaluationRequest(&RunEvaluationRequest{SetID: "math-basic", NumRuns: intPtr(-1)}), "numRuns must be greater than 0 when provided")
-	assert.NoError(t, validateRunEvaluationRequest(&RunEvaluationRequest{SetID: "math-basic"}))
+	req := &RunEvaluationRequest{SetID: " math-basic "}
+	require.NoError(t, validateRunEvaluationRequest(req))
+	assert.Equal(t, "math-basic", req.SetID)
+}
+
+func TestValidateCreateMetricRequest(t *testing.T) {
+	require.EqualError(t, validateCreateMetricRequest(nil), "request must not be nil")
+	require.EqualError(t, validateCreateMetricRequest(&CreateMetricRequest{SetID: "   "}), "setId must not be empty")
+	require.EqualError(t, validateCreateMetricRequest(&CreateMetricRequest{SetID: "math-basic"}), "metric must not be nil")
+	require.EqualError(t, validateCreateMetricRequest(&CreateMetricRequest{
+		SetID:  "math-basic",
+		Metric: &metric.EvalMetric{MetricName: "   "},
+	}), "metric.metricName must not be empty")
+	req := &CreateMetricRequest{
+		SetID:  " math-basic ",
+		Metric: &metric.EvalMetric{MetricName: " accuracy ", Threshold: 0.8},
+	}
+	require.NoError(t, validateCreateMetricRequest(req))
+	assert.Equal(t, "math-basic", req.SetID)
+	assert.Equal(t, "accuracy", req.Metric.MetricName)
+}
+
+func TestValidateUpdateMetricRequest(t *testing.T) {
+	require.EqualError(t, validateUpdateMetricRequest(nil), "request must not be nil")
+	require.EqualError(t, validateUpdateMetricRequest(&UpdateMetricRequest{SetID: "   "}), "setId must not be empty")
+	require.EqualError(t, validateUpdateMetricRequest(&UpdateMetricRequest{SetID: "math-basic"}), "metric must not be nil")
+	require.EqualError(t, validateUpdateMetricRequest(&UpdateMetricRequest{
+		SetID:  "math-basic",
+		Metric: &metric.EvalMetric{MetricName: "   "},
+	}), "metric.metricName must not be empty")
+	req := &UpdateMetricRequest{
+		SetID:  " math-basic ",
+		Metric: &metric.EvalMetric{MetricName: " accuracy ", Threshold: 0.8},
+	}
+	require.NoError(t, validateUpdateMetricRequest(req))
+	assert.Equal(t, "math-basic", req.SetID)
+	assert.Equal(t, "accuracy", req.Metric.MetricName)
+}
+
+func TestApplyMetricNameFromPath(t *testing.T) {
+	require.NoError(t, applyMetricNameFromPath(nil, "accuracy"))
+	evalMetric := &metric.EvalMetric{}
+	require.NoError(t, applyMetricNameFromPath(evalMetric, "accuracy"))
+	assert.Equal(t, "accuracy", evalMetric.MetricName)
+	require.NoError(t, applyMetricNameFromPath(&metric.EvalMetric{MetricName: "accuracy"}, "accuracy"))
+	require.EqualError(t, applyMetricNameFromPath(&metric.EvalMetric{MetricName: "groundedness"}, "accuracy"), "metric.metricName must match path metricName when provided")
 }
