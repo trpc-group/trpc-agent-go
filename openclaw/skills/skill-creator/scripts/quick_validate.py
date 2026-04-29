@@ -95,7 +95,15 @@ def validate_skill(skill_path):
                 "Invalid YAML in frontmatter: unsupported syntax without PyYAML installed",
             )
 
-    allowed_properties = {"name", "description", "license", "allowed-tools", "metadata"}
+    allowed_properties = {
+        "name",
+        "description",
+        "homepage",
+        "license",
+        "allowed-tools",
+        "metadata",
+        "user-invocable",
+    }
 
     unexpected_keys = set(frontmatter.keys()) - allowed_properties
     if unexpected_keys:
@@ -116,15 +124,20 @@ def validate_skill(skill_path):
         return False, f"Name must be a string, got {type(name).__name__}"
     name = name.strip()
     if name:
-        if not re.match(r"^[a-z0-9-]+$", name):
+        if not re.match(r"^[a-z0-9_-]+$", name):
             return (
                 False,
-                f"Name '{name}' should be hyphen-case (lowercase letters, digits, and hyphens only)",
+                f"Name '{name}' should use lowercase letters, digits, hyphens, or underscores only",
             )
-        if name.startswith("-") or name.endswith("-") or "--" in name:
+        if (
+            name.startswith(("-", "_"))
+            or name.endswith(("-", "_"))
+            or "--" in name
+            or "__" in name
+        ):
             return (
                 False,
-                f"Name '{name}' cannot start/end with hyphen or contain consecutive hyphens",
+                f"Name '{name}' cannot start/end with a separator or contain consecutive separators",
             )
         if len(name) > MAX_SKILL_NAME_LENGTH:
             return (
