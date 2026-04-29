@@ -441,6 +441,9 @@ func truncateObservationLLMInput(raw string) string {
 			return string(b)
 		}
 	}
+	if isOTelMessagesPayload(raw) {
+		return truncateObservationJSONLeafValues(raw)
+	}
 
 	var msgs []observationTelemetryMessage
 	if err := json.Unmarshal([]byte(raw), &msgs); err == nil {

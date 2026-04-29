@@ -3,10 +3,10 @@
 This directory contains local harness assets for observability validation, with
 the current focus on Langfuse-based telemetry verification.
 
-- Install the Langfuse skill before querying Langfuse data. The skill is open source on [GitHub](https://github.com/langfuse/skills) and can access data from the Langfuse platform.
-- If your environment supports the `gh skill` command, you can install it with `gh skill install langfuse/skills`.
-- `.harness/observability/.env` already contains the key for accessing the test project on the Langfuse platform.
-- `.harness/observability/.env` already contains access to an LLM that supports OpenAPI calls and real model invocations.
+- Copy `.harness/observability/.env.example` to `.harness/observability/.env` and fill in local credentials before running harness commands.
+- `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY` are required for exporting traces and querying Langfuse data.
+- `OPENAI_API_KEY` is required when the harness performs real model calls through an OpenAI-compatible endpoint. Set `OPENAI_BASE_URL` and `OPENAI_MODEL` when using a non-default compatible provider.
+- Install the Langfuse skill before querying Langfuse data. If your environment supports the `gh skill` command, install it with `gh skill install langfuse/skills`.
 - Put Langfuse observability test code under `.harness/observability/langfuse`.
 
 ## Verification Checklist

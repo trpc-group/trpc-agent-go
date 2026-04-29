@@ -1572,6 +1572,27 @@ func TestTruncateObservationLLMInput_Branches(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(out), &v))
 	})
 
+	t.Run("plain OTel messages array preserves parts", func(t *testing.T) {
+		raw := `[{"role":"user","parts":[{"type":"text","content":"` + strings.Repeat("otel-", 100) + `"}]}]`
+		out := truncateObservationLLMInput(raw)
+		require.True(t, utf8.ValidString(out))
+		require.Less(t, len([]byte(out)), len([]byte(raw)))
+		require.Contains(t, out, "truncated")
+
+		var messages []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &messages))
+		require.Len(t, messages, 1)
+		parts, ok := messages[0]["parts"].([]any)
+		require.True(t, ok)
+		require.Len(t, parts, 1)
+		part, ok := parts[0].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "text", part["type"])
+		content, ok := part["content"].(string)
+		require.True(t, ok)
+		require.Contains(t, content, "truncated")
+	})
+
 	t.Run("fallback json leaf truncation", func(t *testing.T) {
 		raw := `{"k":"` + strings.Repeat("v", 200) + `"}`
 		out := truncateObservationLLMInput(raw)
