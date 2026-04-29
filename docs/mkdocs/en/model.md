@@ -2289,7 +2289,37 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to [Token Tailoring under OpenAI Model](#3-token-tailoring).
+For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to [Token Tailoring under OpenAI Model](#7-token-tailoring).
+
+#### 5. Streaming Tool Call Deltas: ShowToolCallDelta
+
+By default, the Anthropic adapter accumulates tool-call arguments internally and returns the complete arguments once the model finishes the tool call, through `Response.Choices[0].Message.ToolCalls` in the final response.
+
+`WithShowToolCallDelta` exposes Anthropic `input_json_delta` chunks during streaming. Enable this option when tool arguments are long, or when the frontend needs to display argument generation progress:
+
+```go
+llm := anthropic.New(
+    "claude-sonnet-4-0",
+    anthropic.WithShowToolCallDelta(true),
+)
+```
+
+When `WithShowToolCallDelta(true)` is enabled:
+
+- Streaming responses may include `Response.Choices[0].Delta.ToolCalls`.
+- `Delta.ToolCalls[*].Function.Arguments` is the newly produced argument string fragment, and is usually not complete JSON.
+- `Delta.ToolCalls[*].ID` and `Index` can be used to join fragments for the same tool call.
+- The final response still returns the complete tool call in `Response.Choices[0].Message.ToolCalls`, so existing tool execution logic can continue to use the final response unchanged.
+
+Typical handling pattern:
+
+1. Read `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments` on each
+   partial response.
+2. Group chunks by tool call `ID` or `Index`, and append the `Arguments`
+   fragments in order.
+3. Treat the accumulated value as the tool argument JSON. For progressive
+   rendering, render the string as it grows and unmarshal it only after it
+   becomes valid JSON.
 
 ## Provider
 
