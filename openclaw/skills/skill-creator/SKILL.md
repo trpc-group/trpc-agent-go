@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.
+description: Create or update AgentSkills, especially when a user wants the agent to learn a reusable capability, workflow, integration, domain rule, team process, or tool usage pattern for future tasks. Use when designing, structuring, reviewing, validating, packaging, or improving skills with SKILL.md, scripts, references, and assets.
 ---
 
 # Skill Creator
@@ -20,6 +20,47 @@ equipped with procedural knowledge that no model can fully possess.
 2. Tool integrations - Instructions for working with specific file formats or APIs
 3. Domain expertise - Company-specific knowledge, schemas, business logic
 4. Bundled resources - Scripts, references, and assets for complex and repetitive tasks
+
+## Skill-First Capability Design
+
+Prefer a skill when the user wants the agent to keep a reusable capability
+instead of only completing the current turn. A skill is the durable form for
+user-taught behavior: it stores when the capability should trigger, how to use
+it, what constraints matter, how to recover from common failures, and which
+resources make execution reliable.
+
+Create or update a skill when the user asks to:
+
+- add, remember, teach, configure, preserve, or reuse a capability
+- connect to a tool, API, CLI, MCP endpoint, internal service, or workflow
+- encode a team process, domain rule, document convention, or review checklist
+- make future tasks follow a pattern instead of repeating instructions manually
+- restrict use by natural-language conditions such as requester, team, chat,
+  project, environment, or business context
+
+Do not create a skill for one-off work that is unlikely to repeat. Finish the
+task directly when the user only needs a single answer, file, edit, or command
+result and there is no durable workflow to preserve.
+
+Use memory instead of a skill for lightweight facts, preferences, and simple
+standing rules that do not need an executable workflow, tools, references,
+examples, or recovery paths. Use a skill when the remembered item is an
+operational capability that future tasks should be able to run.
+
+Keep the boundary clear:
+
+- Put stable platform invariants in application code or runtime config:
+  permissions, secret storage, file access, execution safety, validation, and
+  lifecycle management.
+- Put evolving behavior in the skill: triggers, operating steps, domain
+  knowledge, examples, recovery paths, and policy-like usage constraints.
+- Put deterministic, fragile, or frequently repeated operations in scripts.
+- Put long schemas, API docs, and detailed procedures in references.
+- Put reusable templates or media in assets.
+
+Natural-language constraints in a skill guide model behavior; they are not a
+hard security boundary. Do not rely on a skill description alone to protect
+secrets, permissions, or private data.
 
 ## Core Principles
 
@@ -241,7 +282,8 @@ Conclude this step when there is a clear sense of the functionality the skill sh
 To turn concrete examples into an effective skill, analyze each example by:
 
 1. Considering how to execute on the example from scratch
-2. Identifying what scripts, references, and assets would be helpful when executing these workflows repeatedly
+2. Deciding which parts are durable behavior and which parts need platform or runtime safeguards
+3. Identifying what scripts, references, and assets would be helpful when executing these workflows repeatedly
 
 Example: When building a `pdf-editor` skill to handle queries like "Help me rotate this PDF," the analysis shows:
 
@@ -257,6 +299,12 @@ Example: When building a `big-query` skill to handle queries like "How many user
 
 1. Querying BigQuery requires re-discovering the table schemas and relationships each time
 2. A `references/schema.md` file documenting the table schemas would be helpful to store in the skill
+
+Example: When building an `internal-docs` skill around a docs API, CLI, or MCP server, the analysis shows:
+
+1. The durable capability is knowing when to use the docs system, how to search, how to read, and how to publish safely
+2. Authentication, secret storage, network access, and execution limits belong to the surrounding platform or runtime config
+3. A concise `SKILL.md`, optional `references/usage.md`, and a small script or MCP config would be helpful to store in the skill
 
 To establish the skill's contents, analyze each concrete example to create a list of the reusable resources to include: scripts, references, and assets.
 
@@ -314,6 +362,12 @@ If you used `--examples`, delete any placeholder files that are not needed for t
 
 #### Update SKILL.md
 
+Write `SKILL.md` as the operating contract for the durable capability. It should explain when the capability applies, the smallest reliable workflow for using it, the important constraints, and the recovery paths that keep future runs moving.
+
+For tool, API, CLI, or MCP integrations, keep the skill as the user-facing capability boundary. Put the invocation recipe, schema lookup command, examples, and domain-specific constraints in the skill. Keep secrets out of the skill; reference environment variables, runtime config, auth helpers, or platform-managed credentials instead.
+
+When the user asks for a capability with contextual limits such as "only for this team", "only in this project", "only when I ask", or "only for these chats", capture those limits in clear natural language in the skill. Treat these limits as behavioral guidance for the model, not as a hard security boundary.
+
 **Writing Guidelines:** Always use imperative/infinitive form.
 
 ##### Frontmatter
@@ -326,7 +380,9 @@ Write the YAML frontmatter with `name` and `description`:
   - Include all "when to use" information here - Not in the body. The body is only loaded after triggering, so "When to Use This Skill" sections in the body are not helpful to Codex.
   - Example description for a `docx` skill: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. Use when Codex needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
 
-Do not include any other fields in YAML frontmatter.
+Keep generic skills to `name` and `description` unless the target runtime
+already supports additional fields such as `license`, `allowed-tools`,
+`metadata`, `homepage`, or `user-invocable`.
 
 ##### Body
 
@@ -334,7 +390,17 @@ Write instructions for using the skill and its bundled resources.
 
 ### Step 5: Packaging a Skill
 
-Once development of the skill is complete, it must be packaged into a distributable .skill file that gets shared with the user. The packaging process automatically validates the skill first to ensure it meets all requirements:
+Validate every new or modified package-format skill. Do not bulk-force this
+validator across legacy bundled OpenClaw skills that intentionally use a
+runtime-specific or non-packaged format; inspect or test those with the
+runtime's own workflow. Package a skill into a distributable .skill file only
+when the user asks for a shareable artifact, the skill needs to be installed
+elsewhere, or the runtime expects a packaged skill. For local durable
+capabilities, keep the skill in the writable skill root, refresh or reload
+skills when the runtime provides that path, and use it for the current task.
+
+The packaging process automatically validates the skill first to ensure it
+meets all requirements:
 
 ```bash
 scripts/package_skill.py <path/to/skill-folder>

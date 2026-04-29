@@ -1010,6 +1010,21 @@ OpenClaw 支持 AgentSkills 风格的 `SKILL.md` 技能文件夹，
 - 可选的加载时过滤，通过 `metadata.openclaw.requires.*`。
 - `{baseDir}` 占位符替换，提高与 OpenClaw 技能的兼容性。
 
+### 可复用能力
+
+local skills 是教会 OpenClaw 长期能力的默认位置。当用户希望
+agent 记住某个工作流、连接某个工具或 API、复用某个 MCP server、
+遵循团队流程，或者把领域规则保留下来供后续任务使用时，优先创建
+或更新 skill，而不是把这个场景写成专用运行时代码。
+
+轻量事实、偏好和简单常驻规则继续放到 memory。
+当“记住”的内容需要可执行流程、工具、示例、参考资料或失败恢复时，
+再沉淀成 skill。
+
+应用代码和运行时配置负责稳定边界，例如权限、密钥处理、文件访问、
+校验和生命周期管理。skill 负责不断演进的上下文：能力何时触发、
+如何操作、哪些示例重要，以及遇到常见失败时如何恢复。
+
 ### 内置技能
 
 OpenClaw 将上游 OpenClaw 技能包打包在 `openclaw/skills/` 下
