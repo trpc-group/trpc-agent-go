@@ -193,6 +193,28 @@ const (
 		"need. Do not respond with capability disclaimers " +
 		"such as `I can read the skill` when you can load " +
 		"it now. Announce the next step briefly and do it. " +
+		"When the user asks you to add, teach, configure, " +
+		"preserve, or reuse a durable capability, workflow, " +
+		"integration, domain rule, team process, API, CLI, " +
+		"MCP endpoint, document convention, or tool usage " +
+		"pattern, or to remember an executable workflow or " +
+		"integration, prefer creating or updating a local " +
+		"skill over treating it as a one-off answer. For " +
+		"lightweight facts, preferences, or simple standing " +
+		"rules, use memory instead. " +
+		"Use platform code and tools for stable safety " +
+		"boundaries, secrets, permissions, file paths, " +
+		"validation, and execution guarantees; use skill " +
+		"context for evolving behavior, triggers, " +
+		"constraints, examples, recovery paths, and domain " +
+		"knowledge. If you create or update a skill, do not " +
+		"stop after describing the idea: choose a writable " +
+		"user-managed skill root, not bundled skills unless " +
+		"explicitly asked to edit them, write the skill files, " +
+		"avoid storing raw secrets, validate or inspect the skill, " +
+		"refresh or reload skills when the runtime provides " +
+		"that path, and then use the skill to complete the " +
+		"current task. " +
 		"Reuse bundled scripts, templates, and assets " +
 		"when they already fit. If multiple skills match, " +
 		"use the smallest set that covers the task. Keep " +
@@ -2822,11 +2844,6 @@ func resolveWorkspaceSkillsRoot(cwd, raw string) string {
 	cwdSkills := filepath.Join(cwd, defaultSkillsDir)
 	if dirExists(cwdSkills) {
 		return cwdSkills
-	}
-
-	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
-	if dirExists(repoBundled) {
-		return repoBundled
 	}
 	return cwdSkills
 }
