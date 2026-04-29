@@ -30,7 +30,6 @@ import (
 	openai "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
-	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -1355,10 +1354,31 @@ func (m *Model) handleStreamingResponseWithEmitter(
 		}
 	}
 
-	// Call the stream complete callback before the final response is emitted.
-	m.handleStreamCompleteCallback(ctx, chatRequest, acc, stream.Err())
+	streamErr := normalizeTerminalStreamError(stream.Err(), acc)
 
-	m.emitStreamingFinalResponse(ctx, stream, acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
+	// Call the stream complete callback before the final response is emitted.
+	m.handleStreamCompleteCallback(ctx, chatRequest, acc, streamErr)
+
+	m.emitStreamingFinalResponse(ctx, streamErr, acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
+}
+
+func normalizeTerminalStreamError(
+	streamErr error,
+	acc openai.ChatCompletionAccumulator,
+) error {
+	if streamErr == nil || !hasTerminalFinishReason(acc) {
+		return streamErr
+	}
+	return nil
+}
+
+func hasTerminalFinishReason(acc openai.ChatCompletionAccumulator) bool {
+	for _, choice := range acc.Choices {
+		if choice.FinishReason != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // sanitizeChunkForAccumulator returns a defensive copy of the given chunk that
@@ -2131,14 +2151,14 @@ func toolCallDeltaIndexPointer(toolCall openai.ChatCompletionChunkChoiceDeltaToo
 // emitStreamingFinalResponse emits the final response with accumulated data.
 func (m *Model) emitStreamingFinalResponse(
 	ctx context.Context,
-	stream *ssestream.Stream[openai.ChatCompletionChunk],
+	streamErr error,
 	acc openai.ChatCompletionAccumulator,
 	idToIndexMap map[string]int,
 	extraFieldsMap map[string]map[string]any,
 	aggregatedReasoning string,
 	emit responseEmitter,
 ) {
-	if stream.Err() == nil {
+	if streamErr == nil {
 		// Check accumulated tool calls (batch processing after streaming is complete).
 		var hasToolCall bool
 		var accumulatedToolCalls []model.ToolCall
@@ -2176,7 +2196,7 @@ func (m *Model) emitStreamingFinalResponse(
 	// Send error response.
 	emit(&model.Response{
 		Error: &model.ResponseError{
-			Message: stream.Err().Error(),
+			Message: streamErr.Error(),
 			Type:    model.ErrorTypeStreamError,
 		},
 		Timestamp: time.Now(),

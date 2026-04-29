@@ -2515,6 +2515,19 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 			expectedCount: 1,
 		},
 		{
+			name: "Terminal_ToolCall_With_PostTerminal_Error", // Some compatible providers emit an error after terminal finish_reason.
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"completion_tokens":1,"prompt_tokens":10,"total_tokens":11}}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_789","type":"function","function":{"name":"search","arguments":"{\"query\":\"city novel\"}"}}]},"finish_reason":null}],"usage":{"completion_tokens":12,"prompt_tokens":10,"total_tokens":22}}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"completion_tokens":14,"prompt_tokens":10,"total_tokens":24}}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[],"usage":{"completion_tokens":14,"prompt_tokens":10,"total_tokens":24}}`,
+				`data: {"error":{"message":"list index out of range","type":"BadRequestError","param":null,"code":400}}`,
+			},
+			expectedTool:  "search",
+			expectedArgs:  `{"query":"city novel"}`,
+			expectedCount: 1,
+		},
+		{
 			name: "Abnormal_Mixed_Mode", // other "mixed" mode: content exists in tool call chunks {3 ""}.
 			chunks: []string{
 				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
