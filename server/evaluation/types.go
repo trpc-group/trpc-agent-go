@@ -12,6 +12,7 @@ import (
 	coreevaluation "trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 )
 
 // RunEvaluationRequest represents the request payload for creating an evaluation run.
@@ -28,6 +29,28 @@ type ListSetsResponse struct {
 // GetSetResponse represents the response payload for getting a set.
 type GetSetResponse struct {
 	Set *evalset.EvalSet `json:"set,omitempty"`
+}
+
+// CreateMetricRequest represents the request payload for creating a metric.
+type CreateMetricRequest struct {
+	SetID  string             `json:"setId,omitempty"`
+	Metric *metric.EvalMetric `json:"metric,omitempty"`
+}
+
+// UpdateMetricRequest represents the request payload for updating a metric.
+type UpdateMetricRequest struct {
+	SetID  string             `json:"setId,omitempty"`
+	Metric *metric.EvalMetric `json:"metric,omitempty"`
+}
+
+// ListMetricsResponse represents the response payload for listing metrics.
+type ListMetricsResponse struct {
+	Metrics []*metric.EvalMetric `json:"metrics,omitempty"`
+}
+
+// MetricResponse represents the response payload for getting or writing a metric.
+type MetricResponse struct {
+	Metric *metric.EvalMetric `json:"metric,omitempty"`
 }
 
 // CreateRunResponse represents the response payload for creating a run.

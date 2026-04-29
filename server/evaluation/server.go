@@ -24,6 +24,7 @@ import (
 	coreevaluation "trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -42,11 +43,13 @@ type Server struct {
 	appName           string
 	basePath          string
 	setsPath          string
+	metricsPath       string
 	runsPath          string
 	resultsPath       string
 	timeout           time.Duration
 	agentEvaluator    coreevaluation.AgentEvaluator
 	evalSetManager    evalset.Manager
+	metricManager     metric.Manager
 	evalResultManager evalresult.Manager
 	routeRegistrars   []RouteRegistrar
 	handler           http.Handler
@@ -61,16 +64,14 @@ func New(opts ...Option) (*Server, error) {
 	if options.agentEvaluator == nil {
 		return nil, errors.New("evaluation server: agent evaluator must not be nil")
 	}
-	if options.evalSetManager == nil {
-		return nil, errors.New("evaluation server: eval set manager must not be nil")
-	}
-	if options.evalResultManager == nil {
-		return nil, errors.New("evaluation server: eval result manager must not be nil")
-	}
 	basePath := normalizeBasePath(options.basePath)
 	setsPath, err := joinURLPath(basePath, options.setsPath)
 	if err != nil {
 		return nil, fmt.Errorf("evaluation server: join sets path: %w", err)
+	}
+	metricsPath, err := joinURLPath(basePath, options.metricsPath)
+	if err != nil {
+		return nil, fmt.Errorf("evaluation server: join metrics path: %w", err)
 	}
 	runsPath, err := joinURLPath(basePath, options.runsPath)
 	if err != nil {
@@ -84,11 +85,13 @@ func New(opts ...Option) (*Server, error) {
 		appName:           options.appName,
 		basePath:          basePath,
 		setsPath:          setsPath,
+		metricsPath:       metricsPath,
 		runsPath:          runsPath,
 		resultsPath:       resultsPath,
 		timeout:           options.timeout,
 		agentEvaluator:    options.agentEvaluator,
 		evalSetManager:    options.evalSetManager,
+		metricManager:     options.metricManager,
 		evalResultManager: options.evalResultManager,
 		routeRegistrars:   append([]RouteRegistrar(nil), options.routeRegistrars...),
 	}
@@ -113,6 +116,11 @@ func (s *Server) SetsPath() string {
 	return s.setsPath
 }
 
+// MetricsPath returns the metrics collection endpoint path.
+func (s *Server) MetricsPath() string {
+	return s.metricsPath
+}
+
 // RunsPath returns the runs collection endpoint path.
 func (s *Server) RunsPath() string {
 	return s.runsPath
@@ -130,19 +138,30 @@ func (s *Server) Close() error {
 
 func (s *Server) setupHandler() error {
 	mux := http.NewServeMux()
-	// Register collection and item routes for evaluation sets.
-	mux.HandleFunc(s.setsPath, s.handleSets)
-	mux.HandleFunc(s.setsPath+"/{$}", s.redirectTrailingSlashToCanonicalPath)
-	mux.HandleFunc(s.setsPath+"/{setId}", s.handleSetByID)
-	mux.HandleFunc(s.setsPath+"/{setId}/{$}", s.redirectTrailingSlashToCanonicalPath)
+	if s.evalSetManager != nil {
+		// Register collection and item routes for evaluation sets.
+		mux.HandleFunc(s.setsPath, s.handleSets)
+		mux.HandleFunc(s.setsPath+"/{$}", s.redirectTrailingSlashToCanonicalPath)
+		mux.HandleFunc(s.setsPath+"/{setId}", s.handleSetByID)
+		mux.HandleFunc(s.setsPath+"/{setId}/{$}", s.redirectTrailingSlashToCanonicalPath)
+	}
+	if s.metricManager != nil {
+		// Register collection and item routes for evaluation metrics.
+		mux.HandleFunc(s.metricsPath, s.handleMetrics)
+		mux.HandleFunc(s.metricsPath+"/{$}", s.redirectTrailingSlashToCanonicalPath)
+		mux.HandleFunc(s.metricsPath+"/{metricName}", s.handleMetricByName)
+		mux.HandleFunc(s.metricsPath+"/{metricName}/{$}", s.redirectTrailingSlashToCanonicalPath)
+	}
 	// Register collection and item routes for evaluation runs.
 	mux.HandleFunc(s.runsPath, s.handleRuns)
 	mux.HandleFunc(s.runsPath+"/{$}", s.redirectTrailingSlashToCanonicalPath)
-	// Register collection and item routes for evaluation results.
-	mux.HandleFunc(s.resultsPath, s.handleResults)
-	mux.HandleFunc(s.resultsPath+"/{$}", s.redirectTrailingSlashToCanonicalPath)
-	mux.HandleFunc(s.resultsPath+"/{resultId}", s.handleResultByID)
-	mux.HandleFunc(s.resultsPath+"/{resultId}/{$}", s.redirectTrailingSlashToCanonicalPath)
+	if s.evalResultManager != nil {
+		// Register collection and item routes for evaluation results.
+		mux.HandleFunc(s.resultsPath, s.handleResults)
+		mux.HandleFunc(s.resultsPath+"/{$}", s.redirectTrailingSlashToCanonicalPath)
+		mux.HandleFunc(s.resultsPath+"/{resultId}", s.handleResultByID)
+		mux.HandleFunc(s.resultsPath+"/{resultId}/{$}", s.redirectTrailingSlashToCanonicalPath)
+	}
 	for _, registrar := range s.routeRegistrars {
 		if err := registrar.RegisterRoutes(mux, s); err != nil {
 			return fmt.Errorf("evaluation server: register extra routes: %w", err)
@@ -167,173 +186,9 @@ func joinURLPath(basePath, child string) (string, error) {
 	return url.JoinPath(basePath, child)
 }
 
-func (s *Server) handleSets(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		s.handleCORS(w)
-		return
-	}
-	if r.Method != http.MethodGet {
-		w.Header().Set(headerAllow, http.MethodGet)
-		s.respondJSON(w, r, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	sets, err := s.listEvalSets(r.Context())
-	if err != nil {
-		s.respondStatusError(w, r, err)
-		return
-	}
-	s.respondJSON(w, r, http.StatusOK, &ListSetsResponse{
-		Sets: sets,
-	})
-}
-
-func (s *Server) handleSetByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		s.handleCORS(w)
-		return
-	}
-	if r.Method != http.MethodGet {
-		w.Header().Set(headerAllow, http.MethodGet)
-		s.respondJSON(w, r, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	id := strings.TrimSpace(r.PathValue("setId"))
-	if id == "" {
-		s.respondJSON(w, r, http.StatusNotFound, map[string]string{"error": "not found"})
-		return
-	}
-	set, err := s.evalSetManager.Get(r.Context(), s.appName, id)
-	if err != nil {
-		s.respondStatusError(w, r, err)
-		return
-	}
-	s.respondJSON(w, r, http.StatusOK, &GetSetResponse{
-		Set: set,
-	})
-}
-
-func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		s.handleCORS(w)
-		return
-	}
-	if r.Method != http.MethodPost {
-		w.Header().Set(headerAllow, http.MethodPost)
-		s.respondJSON(w, r, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	s.handleCreateRun(w, r)
-}
-
-func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
-	req, err := s.decodeRunEvaluationRequest(w, r)
-	if err != nil {
-		return
-	}
-	ctx, cancel := newExecutionContext(r.Context(), s.timeout)
-	defer cancel()
-	result, err := s.runEvaluation(ctx, req)
-	if err != nil {
-		s.respondStatusError(w, r, err)
-		return
-	}
-	s.respondJSON(w, r, http.StatusCreated, &CreateRunResponse{
-		EvaluationResult: result,
-	})
-}
-
-func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		s.handleCORS(w)
-		return
-	}
-	if r.Method != http.MethodGet {
-		w.Header().Set(headerAllow, http.MethodGet)
-		s.respondJSON(w, r, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	filterSetID := readSetIDFilter(r)
-	results, err := s.listEvalResults(r.Context(), filterSetID)
-	if err != nil {
-		s.respondStatusError(w, r, err)
-		return
-	}
-	s.respondJSON(w, r, http.StatusOK, &ListResultsResponse{
-		Results: results,
-	})
-}
-
-func (s *Server) handleResultByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		s.handleCORS(w)
-		return
-	}
-	if r.Method != http.MethodGet {
-		w.Header().Set(headerAllow, http.MethodGet)
-		s.respondJSON(w, r, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	id := strings.TrimSpace(r.PathValue("resultId"))
-	if id == "" {
-		s.respondJSON(w, r, http.StatusNotFound, map[string]string{"error": "not found"})
-		return
-	}
-	result, err := s.evalResultManager.Get(r.Context(), s.appName, id)
-	if err != nil {
-		s.respondStatusError(w, r, err)
-		return
-	}
-	s.respondJSON(w, r, http.StatusOK, &GetResultResponse{
-		Result: result,
-	})
-}
-
-func (s *Server) listEvalSets(ctx context.Context) ([]*evalset.EvalSet, error) {
-	ids, err := s.evalSetManager.List(ctx, s.appName)
-	if err != nil {
-		return nil, err
-	}
-	sets := make([]*evalset.EvalSet, 0, len(ids))
-	for _, id := range ids {
-		set, err := s.evalSetManager.Get(ctx, s.appName, id)
-		if err != nil {
-			return nil, err
-		}
-		sets = append(sets, set)
-	}
-	return sets, nil
-}
-
-func (s *Server) listEvalResults(ctx context.Context, filterSetID string) ([]*evalresult.EvalSetResult, error) {
-	ids, err := s.evalResultManager.List(ctx, s.appName)
-	if err != nil {
-		return nil, err
-	}
-	results := make([]*evalresult.EvalSetResult, 0, len(ids))
-	for _, id := range ids {
-		result, err := s.evalResultManager.Get(ctx, s.appName, id)
-		if err != nil {
-			return nil, err
-		}
-		if filterSetID != "" && result.EvalSetID != filterSetID {
-			continue
-		}
-		results = append(results, result)
-	}
-	return results, nil
-}
-
-func (s *Server) runEvaluation(ctx context.Context, req *RunEvaluationRequest) (*coreevaluation.EvaluationResult, error) {
-	evalOpts := make([]coreevaluation.Option, 0, 1)
-	if req.NumRuns != nil {
-		evalOpts = append(evalOpts, coreevaluation.WithNumRuns(*req.NumRuns))
-	}
-	return s.agentEvaluator.Evaluate(ctx, req.SetID, evalOpts...)
-}
-
 func (s *Server) handleCORS(w http.ResponseWriter) {
 	w.Header().Set(headerAccessControlOrigin, "*")
-	w.Header().Set(headerAccessControlMethods, strings.Join([]string{http.MethodGet, http.MethodPost, http.MethodOptions}, ", "))
+	w.Header().Set(headerAccessControlMethods, strings.Join([]string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions}, ", "))
 	w.Header().Set(headerAccessControlHeaders, "Content-Type")
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -412,14 +267,13 @@ func newExecutionContext(ctx context.Context, timeout time.Duration) (context.Co
 	return context.WithCancel(ctx)
 }
 
-func (s *Server) decodeRunEvaluationRequest(w http.ResponseWriter, r *http.Request) (*RunEvaluationRequest, error) {
+func (s *Server) decodeJSONRequestBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	defer r.Body.Close()
-	var req RunEvaluationRequest
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
+	if err := decoder.Decode(dst); err != nil {
 		s.respondJSON(w, r, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid request body: %v", err)})
-		return nil, err
+		return err
 	}
 	extraErr := decoder.Decode(&struct{}{})
 	if extraErr != io.EOF {
@@ -427,24 +281,7 @@ func (s *Server) decodeRunEvaluationRequest(w http.ResponseWriter, r *http.Reque
 		if extraErr == nil {
 			extraErr = errors.New("request body must contain a single JSON object")
 		}
-		return nil, extraErr
-	}
-	if err := validateRunEvaluationRequest(&req); err != nil {
-		s.respondJSON(w, r, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return nil, err
-	}
-	return &req, nil
-}
-
-func validateRunEvaluationRequest(req *RunEvaluationRequest) error {
-	if req == nil {
-		return errors.New("request must not be nil")
-	}
-	if strings.TrimSpace(req.SetID) == "" {
-		return errors.New("setId must not be empty")
-	}
-	if req.NumRuns != nil && *req.NumRuns <= 0 {
-		return errors.New("numRuns must be greater than 0 when provided")
+		return extraErr
 	}
 	return nil
 }
@@ -460,8 +297,4 @@ func errorMessageFromError(err error) string {
 		return "not found"
 	}
 	return "internal server error"
-}
-
-func readSetIDFilter(r *http.Request) string {
-	return strings.TrimSpace(r.URL.Query().Get("setId"))
 }

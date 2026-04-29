@@ -1452,6 +1452,7 @@ func TestHandlerRegisterRoutesMountsUnderEvaluationBasePath(t *testing.T) {
 		serverevaluation.WithAppName("demo-app"),
 		serverevaluation.WithAgentEvaluator(agentEvaluator),
 		serverevaluation.WithEvalSetManager(evalSetManager),
+		serverevaluation.WithMetricManager(newTestMetricManager(t)),
 		serverevaluation.WithEvalResultManager(resultManager),
 		serverevaluation.WithRouteRegistrar(handler),
 	)
