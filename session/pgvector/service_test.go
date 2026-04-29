@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -110,6 +111,51 @@ func (c *mockPostgresClient) Transaction(
 
 func (c *mockPostgresClient) Close() error {
 	return c.db.Close()
+}
+
+type recordingPostgresClient struct {
+	mu         sync.Mutex
+	filterKeys []string
+}
+
+func (c *recordingPostgresClient) ExecContext(
+	_ context.Context, _ string, args ...any,
+) (sql.Result, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(args) > 3 {
+		if filterKey, ok := args[3].(string); ok {
+			c.filterKeys = append(c.filterKeys, filterKey)
+		}
+	}
+	return sqlmock.NewResult(0, 1), nil
+}
+
+func (c *recordingPostgresClient) Query(
+	_ context.Context,
+	_ storage.HandlerFunc,
+	_ string, _ ...any,
+) error {
+	return nil
+}
+
+func (c *recordingPostgresClient) Transaction(
+	_ context.Context,
+	_ storage.TxFunc,
+) error {
+	return nil
+}
+
+func (c *recordingPostgresClient) Close() error {
+	return nil
+}
+
+func (c *recordingPostgresClient) persistedFilterKeys() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	keys := make([]string, len(c.filterKeys))
+	copy(keys, c.filterKeys)
+	return keys
 }
 
 // anyVectorArg matches pgvector.Vector arguments in
@@ -299,6 +345,98 @@ func TestNewService_ValidatesEmbedderDimensions(t *testing.T) {
 		"embedder=768 configured=1536",
 	)
 	require.False(t, builderCalled)
+}
+
+func TestNewService_InitializesAsyncSummaryWorker(t *testing.T) {
+	oldBuilder := storage.GetClientBuilder()
+	t.Cleanup(func() {
+		storage.SetClientBuilder(oldBuilder)
+	})
+
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	builderCalled := false
+	storage.SetClientBuilder(func(
+		_ context.Context,
+		_ ...storage.ClientBuilderOpt,
+	) (storage.Client, error) {
+		builderCalled = true
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	svc, err := NewService(
+		WithEmbedder(&mockEmbedder{dimensions: defaultIndexDimension}),
+		WithSummarizer(&mockSummarizer{}),
+		WithAsyncSummaryNum(1),
+		WithSkipDBInit(true),
+		WithCascadeFullSessionSummary(false),
+		WithSummaryFilterAllowlist("tool-usage"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	require.True(t, builderCalled)
+	require.NotNil(t, svc.asyncWorker)
+	require.Equal(t, []string{"tool-usage"}, svc.opts.summaryFilterAllowlist)
+	require.False(t, svc.opts.shouldCascadeFullSessionSummary())
+	require.NoError(t, svc.Close())
+}
+
+func TestNewService_AsyncSummaryWorkerHonorsDispatchPolicy(
+	t *testing.T,
+) {
+	oldBuilder := storage.GetClientBuilder()
+	t.Cleanup(func() {
+		storage.SetClientBuilder(oldBuilder)
+	})
+
+	recordingClient := &recordingPostgresClient{}
+	storage.SetClientBuilder(func(
+		_ context.Context,
+		_ ...storage.ClientBuilderOpt,
+	) (storage.Client, error) {
+		return recordingClient, nil
+	})
+
+	svc, err := NewService(
+		WithEmbedder(&mockEmbedder{dimensions: defaultIndexDimension}),
+		WithSummarizer(&activeSummarizer{text: "worker summary"}),
+		WithAsyncSummaryNum(1),
+		WithSkipDBInit(true),
+		WithCascadeFullSessionSummary(false),
+		WithSummaryFilterAllowlist("tool-usage"),
+	)
+	require.NoError(t, err)
+
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{
+		{
+			ID:           "evt-1",
+			InvocationID: "inv-1",
+			Timestamp:    time.Now().Add(-time.Minute),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{Message: model.Message{
+						Role:    model.RoleUser,
+						Content: "hello",
+					}},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, svc.EnqueueSummaryJob(
+		context.Background(), sess, "blocked", true,
+	))
+	require.NoError(t, svc.EnqueueSummaryJob(
+		context.Background(), sess, "tool-usage", true,
+	))
+	require.NoError(t, svc.Close())
+	require.Equal(t, []string{"tool-usage"},
+		recordingClient.persistedFilterKeys())
 }
 
 func TestValidateEmbedderDimensions_UnknownDimension(t *testing.T) {

@@ -99,6 +99,37 @@ func TestCreateSessionSummary_InvalidKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestCreateSessionSummary_FilterAllowlistSkipsDisallowedKey(t *testing.T) {
+	s, mock, db := newTestService(t, nil)
+	defer db.Close()
+	s.opts.summarizer = &activeSummarizer{text: "blocked summary"}
+	s.opts.summaryFilterAllowlist = []string{"allowed"}
+
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{
+		{
+			FilterKey:    "blocked",
+			InvocationID: "inv-1",
+			Timestamp:    time.Now().Add(-time.Minute),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{Message: model.Message{
+						Role:    model.RoleUser,
+						Content: "hello",
+					}},
+				},
+			},
+		},
+	}
+
+	err := s.CreateSessionSummary(
+		context.Background(), sess, "blocked", true,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, sess.Summaries)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // --- Tests for EnqueueSummaryJob ---
 
 func TestEnqueueSummaryJob_NilSummarizer(t *testing.T) {

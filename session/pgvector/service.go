@@ -229,6 +229,10 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 				AsyncSummaryNum:   opts.asyncSummaryNum,
 				SummaryQueueSize:  opts.summaryQueueSize,
 				SummaryJobTimeout: opts.summaryJobTimeout,
+				SummaryDispatchPolicy: isummary.NewSummaryDispatchPolicy(
+					opts.summaryFilterAllowlist,
+					opts.shouldCascadeFullSessionSummary(),
+				),
 				CreateSummaryFunc: s.CreateSessionSummary,
 			},
 		)

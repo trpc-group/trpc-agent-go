@@ -217,6 +217,10 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 			AsyncSummaryNum:   opts.asyncSummaryNum,
 			SummaryQueueSize:  opts.summaryQueueSize,
 			SummaryJobTimeout: opts.summaryJobTimeout,
+			SummaryDispatchPolicy: isummary.NewSummaryDispatchPolicy(
+				opts.summaryFilterAllowlist,
+				opts.shouldCascadeFullSessionSummary(),
+			),
 			CreateSummaryFunc: s.CreateSessionSummary,
 		})
 		s.asyncWorker.Start()
