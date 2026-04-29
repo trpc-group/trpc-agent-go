@@ -12,6 +12,7 @@ package evolution
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -89,6 +90,9 @@ func TestWriteFileAtomically_Overwrites(t *testing.T) {
 }
 
 func TestWriteFileAtomically_Permission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod semantics differ on Windows")
+	}
 	dir := t.TempDir()
 	target := filepath.Join(dir, "perm.txt")
 	err := writeFileAtomically(target, []byte("data"), 0o600)
@@ -154,6 +158,9 @@ func TestRenderSkillMarkdown_SpecialCharsInName(t *testing.T) {
 }
 
 func TestWriteFileAtomically_ReadonlyDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod semantics differ on Windows")
+	}
 	dir := t.TempDir()
 	// Create a readonly subdirectory.
 	roDir := filepath.Join(dir, "readonly")

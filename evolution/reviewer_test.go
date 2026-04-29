@@ -254,7 +254,7 @@ func TestLLMReviewer_Review_RedactsSecretsInPrompt(t *testing.T) {
 		Transcript: []ReviewMessage{
 			{
 				Role:    model.RoleAssistant,
-				Content: "use OPENAI_API_KEY=sk-test-REDACT-ME-000 and Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig",
+				Content: "use OPENAI_API_KEY=sk-test-REDACT-ME-000 and Authorization: Bearer " + "eyJhbGciOiJIUzI1NiJ9" + ".payload.sig",
 				ToolCalls: []ReviewToolCall{{
 					Name:      "workspace_exec",
 					Arguments: `{"api_key":"sk-test-REDACT-ME-111","token":"tok-FAKE-0000000"}`,

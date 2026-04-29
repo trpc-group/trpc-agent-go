@@ -12,6 +12,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -579,6 +580,28 @@ func TestShouldAttemptSessionReconnect(t *testing.T) {
 					t.Errorf("Error '%s': expected shouldRetry=%v, got %v",
 						tt.errorMsg, tt.shouldRetry, result)
 				}
+			}
+		})
+	}
+}
+
+func TestIsIgnorableCloseError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"unrelated error", fmt.Errorf("connection refused"), false},
+		{"process already finished", fmt.Errorf("process already finished"), true},
+		{"mixed case", fmt.Errorf("Process Already Finished"), true},
+		{"wrapped process done", fmt.Errorf("close: %w", os.ErrProcessDone), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isIgnorableCloseError(tt.err)
+			if got != tt.want {
+				t.Errorf("isIgnorableCloseError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}
