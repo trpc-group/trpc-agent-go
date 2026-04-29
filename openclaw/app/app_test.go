@@ -1593,6 +1593,24 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
+		"prefer creating or updating a local skill over "+
+			"treating it as a one-off answer.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Use platform code and tools for stable safety "+
+			"boundaries",
+	)
+	require.Contains(
+		t,
+		sys,
+		"write the skill files under an available local "+
+			"skill root",
+	)
+	require.Contains(
+		t,
+		sys,
 		"Keep exploring nearby runtime facts, retries, "+
 			"and recovery paths",
 	)
