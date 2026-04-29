@@ -657,14 +657,14 @@ func TestWorker_ProcessJob_RedactsSecretsBeforeReviewer(t *testing.T) {
 				Type: "function",
 				Function: model.FunctionDefinitionParam{
 					Name:      "workspace_exec",
-					Arguments: []byte(`{"token":"abc1234567890"}`),
+					Arguments: []byte(`{"token":"tok-FAKE-0000000"}`),
 				},
 			}},
 		},
 		model.Message{
 			Role:     model.RoleTool,
 			ToolName: "workspace_exec",
-			Content:  "Authorization: Bearer abc1234567890",
+			Content:  "Authorization: Bearer tok-FAKE-0000000",
 		},
 	)
 
@@ -672,18 +672,18 @@ func TestWorker_ProcessJob_RedactsSecretsBeforeReviewer(t *testing.T) {
 		ctx: context.Background(),
 		job: LearningJob{
 			Session: sess,
-			Outcome: &Outcome{Status: OutcomeFail, Notes: "api_key=sk-top-secret"},
+			Outcome: &Outcome{Status: OutcomeFail, Notes: "api_key=sk-test-REDACT-ME-222"},
 		},
 	})
 
 	got := rev.snapshot()
 	require.NotNil(t, got)
 	require.Len(t, got.Transcript, 3)
-	assert.NotContains(t, got.Transcript[0].Content, "sk-top-secret")
-	assert.NotContains(t, got.Transcript[1].ToolCalls[0].Arguments, "abc1234567890")
-	assert.NotContains(t, got.Transcript[2].Content, "abc1234567890")
+	assert.NotContains(t, got.Transcript[0].Content, "sk-test-REDACT-ME-222")
+	assert.NotContains(t, got.Transcript[1].ToolCalls[0].Arguments, "tok-FAKE-0000000")
+	assert.NotContains(t, got.Transcript[2].Content, "tok-FAKE-0000000")
 	require.NotNil(t, got.Outcome)
-	assert.NotContains(t, got.Outcome.Notes, "sk-top-secret")
+	assert.NotContains(t, got.Outcome.Notes, "sk-test-REDACT-ME-222")
 	assert.Contains(t, got.Outcome.Notes, reviewerRedactedValue)
 }
 

@@ -21,8 +21,8 @@ import (
 func RenderSkillMarkdown(spec *SkillSpec) string {
 	var b strings.Builder
 	b.WriteString("---\n")
-	b.WriteString("name: " + yamlEscape(spec.Name) + "\n")
-	b.WriteString("description: " + yamlEscape(spec.Description) + "\n")
+	b.WriteString("name: " + yamlScalar(spec.Name) + "\n")
+	b.WriteString("description: " + yamlScalar(spec.Description) + "\n")
 	b.WriteString("---\n\n")
 	b.WriteString("# " + spec.Name + "\n\n")
 	b.WriteString("## When to use\n\n")
@@ -55,15 +55,16 @@ func sanitizeSkillName(name string) string {
 	return s
 }
 
-// yamlEscape wraps a string in double quotes if it contains YAML-special
-// characters. Plain strings are returned as-is.
-func yamlEscape(s string) string {
-	if strings.ContainsAny(s, ":#{}[]&*!|>'\"%@`") || strings.ContainsAny(s, "\n\r") {
-		escaped := strings.ReplaceAll(s, `\`, `\\`)
-		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-		return `"` + escaped + `"`
-	}
-	return s
+// yamlScalar formats a string for a plain YAML front-matter value.
+// The skill package's parseFrontMatterYAML reads plain values as raw text
+// (no YAML unquoting), so we must NOT add quotes — they would be preserved
+// literally and break name-based lookups.
+// Multi-line values are collapsed to a single line; newlines in skill names
+// or descriptions are not meaningful.
+func yamlScalar(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.TrimSpace(s)
 }
 
 // writeFileAtomically writes data to a temp file and renames it to target,

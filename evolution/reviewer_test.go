@@ -254,24 +254,24 @@ func TestLLMReviewer_Review_RedactsSecretsInPrompt(t *testing.T) {
 		Transcript: []ReviewMessage{
 			{
 				Role:    model.RoleAssistant,
-				Content: "use OPENAI_API_KEY=sk-super-secret-value and Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig",
+				Content: "use OPENAI_API_KEY=sk-test-REDACT-ME-000 and Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig",
 				ToolCalls: []ReviewToolCall{{
 					Name:      "workspace_exec",
-					Arguments: `{"api_key":"sk-another-secret","token":"abc1234567890"}`,
+					Arguments: `{"api_key":"sk-test-REDACT-ME-111","token":"tok-FAKE-0000000"}`,
 				}},
 			},
 		},
 		Outcome: &Outcome{
 			Status: OutcomeFail,
-			Notes:  "Authorization: Bearer abc1234567890",
+			Notes:  "Authorization: Bearer tok-FAKE-0000000",
 		},
 	})
 	require.NoError(t, err)
 	prompt := reviewModel.request.Messages[1].Content
 
-	assert.NotContains(t, prompt, "sk-super-secret-value")
-	assert.NotContains(t, prompt, "sk-another-secret")
-	assert.NotContains(t, prompt, "abc1234567890")
+	assert.NotContains(t, prompt, "sk-test-REDACT-ME-000")
+	assert.NotContains(t, prompt, "sk-test-REDACT-ME-111")
+	assert.NotContains(t, prompt, "tok-FAKE-0000000")
 	assert.Contains(t, prompt, reviewerRedactedValue)
 }
 

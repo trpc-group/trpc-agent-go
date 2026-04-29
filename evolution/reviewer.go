@@ -147,15 +147,20 @@ func (r *LLMReviewer) Review(ctx context.Context, input *ReviewInput) (*ReviewDe
 	}
 
 	var full strings.Builder
+	sawDelta := false
 	for resp := range respCh {
 		if resp.Error != nil {
 			return nil, fmt.Errorf("evolution: reviewer response error: %s", resp.Error.Message)
 		}
 		for _, c := range resp.Choices {
 			if c.Delta.Content != "" {
+				sawDelta = true
 				full.WriteString(c.Delta.Content)
 			}
-			if c.Message.Content != "" {
+			// Only use Message.Content as a fallback for non-streaming
+			// providers. Streaming providers emit both Delta and Message,
+			// so appending both would duplicate the text.
+			if !sawDelta && c.Message.Content != "" {
 				full.WriteString(c.Message.Content)
 			}
 		}

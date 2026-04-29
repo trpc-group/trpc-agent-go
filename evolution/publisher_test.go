@@ -107,10 +107,11 @@ func TestRenderSkillMarkdown_WithPitfalls(t *testing.T) {
 	assert.Contains(t, md, "- Watch out")
 }
 
-func TestYamlEscape(t *testing.T) {
-	assert.Equal(t, "simple", yamlEscape("simple"))
-	assert.Equal(t, `"has: colon"`, yamlEscape("has: colon"))
-	assert.Equal(t, `"has # hash"`, yamlEscape("has # hash"))
+func TestYamlScalar(t *testing.T) {
+	assert.Equal(t, "simple", yamlScalar("simple"))
+	assert.Equal(t, "has: colon", yamlScalar("has: colon"))
+	assert.Equal(t, "has # hash", yamlScalar("has # hash"))
+	assert.Equal(t, "line one line two", yamlScalar("line one\nline two"))
 }
 
 func TestFilePublisher_DeleteSkill(t *testing.T) {
