@@ -11,6 +11,7 @@ package telemetry
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -1167,7 +1168,7 @@ func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, "test-agent"))
 }
 
-func TestTraceBeforeAfterInvokeAgent_NormalizesToolResponseMessageFields(t *testing.T) {
+func TestTraceBeforeAfterInvokeAgent_UsesOTelMessageSchema(t *testing.T) {
 	beforeSpan := newRecordingSpan()
 	inv := &agent.Invocation{
 		AgentName:    "test-agent",
@@ -1183,10 +1184,17 @@ func TestTraceBeforeAfterInvokeAgent_NormalizesToolResponseMessageFields(t *test
 	TraceBeforeInvokeAgent(beforeSpan, inv, "desc", "instructions", nil)
 	beforeJSON, ok := attrStringValue(beforeSpan.attrs, semconvtrace.KeyGenAIInputMessages)
 	require.True(t, ok)
-	require.Contains(t, beforeJSON, `"tool_call_id":"call-before"`)
-	require.Contains(t, beforeJSON, `"name":"search"`)
-	require.NotContains(t, beforeJSON, `"tool_id"`)
-	require.NotContains(t, beforeJSON, `"tool_name"`)
+	beforeMessages, err := ParseOTelInputMessagesJSON(beforeJSON)
+	require.NoError(t, err)
+	require.Len(t, beforeMessages, 1)
+	require.Equal(t, model.RoleTool, beforeMessages[0].Role)
+	require.Equal(t, "search", beforeMessages[0].Name)
+	require.Len(t, beforeMessages[0].Parts, 1)
+	require.Equal(t, otelPartTypeToolCallResponse, beforeMessages[0].Parts[0].Type)
+	require.Equal(t, "call-before", beforeMessages[0].Parts[0].ID)
+	var beforeResponse string
+	require.NoError(t, json.Unmarshal(beforeMessages[0].Parts[0].Response, &beforeResponse))
+	require.Equal(t, "ok", beforeResponse)
 
 	afterSpan := newRecordingSpan()
 	rsp := &model.Response{
@@ -1205,10 +1213,222 @@ func TestTraceBeforeAfterInvokeAgent_NormalizesToolResponseMessageFields(t *test
 	TraceAfterInvokeAgent(afterSpan, event.New("evt1", "author", event.WithResponse(rsp)), nil, 0, model.ErrorTypeRunError)
 	afterJSON, ok := attrStringValue(afterSpan.attrs, semconvtrace.KeyGenAIOutputMessages)
 	require.True(t, ok)
-	require.Contains(t, afterJSON, `"tool_call_id":"call-after"`)
-	require.Contains(t, afterJSON, `"name":"search"`)
-	require.NotContains(t, afterJSON, `"tool_id"`)
-	require.NotContains(t, afterJSON, `"tool_name"`)
+	afterMessages, err := ParseOTelOutputMessagesJSON(afterJSON)
+	require.NoError(t, err)
+	require.Len(t, afterMessages, 1)
+	require.Equal(t, model.RoleTool, afterMessages[0].Role)
+	require.Equal(t, "search", afterMessages[0].Name)
+	require.Equal(t, "", afterMessages[0].FinishReason)
+	require.Len(t, afterMessages[0].Parts, 1)
+	require.Equal(t, otelPartTypeToolCallResponse, afterMessages[0].Parts[0].Type)
+	require.Equal(t, "call-after", afterMessages[0].Parts[0].ID)
+	var afterResponse string
+	require.NoError(t, json.Unmarshal(afterMessages[0].Parts[0].Response, &afterResponse))
+	require.Equal(t, "ok", afterResponse)
+}
+
+func TestMarshalTelemetryMessages_OTelMultimodalParts(t *testing.T) {
+	text := "structured text"
+	imageData := []byte("image-bytes")
+	audioData := []byte("audio-bytes")
+	fileData := []byte("video-bytes")
+
+	msg := model.Message{
+		Role:    model.RoleAssistant,
+		Content: "prefix text",
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeText,
+				Text: &text,
+			},
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL:    "https://example.com/kitten.png",
+					Detail: "high",
+				},
+			},
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data:   imageData,
+					Format: "png",
+					Detail: "low",
+				},
+			},
+			{
+				Type: model.ContentTypeAudio,
+				Audio: &model.Audio{
+					Data:   audioData,
+					Format: "mp3",
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "paper.pdf",
+					FileID:   "file-123",
+					MimeType: "application/pdf",
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "clip.mp4",
+					Data:     fileData,
+					MimeType: "video/mp4",
+				},
+			},
+		},
+		ReasoningContent: "think step by step",
+		ToolCalls: []model.ToolCall{{
+			ID:   "call-1",
+			Type: "function",
+			Function: model.FunctionDefinitionParam{
+				Name:      "search",
+				Arguments: []byte(`{"q":"otel"}`),
+			},
+		}},
+	}
+
+	bts, err := marshalTelemetryMessages([]model.Message{msg})
+	require.NoError(t, err)
+
+	var messages []OTelInputMessage
+	require.NoError(t, json.Unmarshal(bts, &messages))
+	require.Len(t, messages, 1)
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
+	require.Len(t, messages[0].Parts, 9)
+
+	require.Equal(t, otelPartTypeText, messages[0].Parts[0].Type)
+	require.Equal(t, "prefix text", messages[0].Parts[0].Content)
+
+	require.Equal(t, otelPartTypeText, messages[0].Parts[1].Type)
+	require.Equal(t, text, messages[0].Parts[1].Content)
+
+	require.Equal(t, otelPartTypeURI, messages[0].Parts[2].Type)
+	require.Equal(t, otelModalityImage, messages[0].Parts[2].Modality)
+	require.Equal(t, "https://example.com/kitten.png", messages[0].Parts[2].URI)
+	require.Equal(t, "high", messages[0].Parts[2].Detail)
+
+	require.Equal(t, otelPartTypeBlob, messages[0].Parts[3].Type)
+	require.Equal(t, otelModalityImage, messages[0].Parts[3].Modality)
+	require.Equal(t, "image/png", messages[0].Parts[3].MIMEType)
+	require.Equal(t, base64.StdEncoding.EncodeToString(imageData), messages[0].Parts[3].Content)
+	require.Equal(t, "low", messages[0].Parts[3].Detail)
+
+	require.Equal(t, otelPartTypeBlob, messages[0].Parts[4].Type)
+	require.Equal(t, otelModalityAudio, messages[0].Parts[4].Modality)
+	require.Equal(t, "audio/mpeg", messages[0].Parts[4].MIMEType)
+	require.Equal(t, base64.StdEncoding.EncodeToString(audioData), messages[0].Parts[4].Content)
+
+	require.Equal(t, otelPartTypeFile, messages[0].Parts[5].Type)
+	require.Equal(t, otelModalityFile, messages[0].Parts[5].Modality)
+	require.Equal(t, "application/pdf", messages[0].Parts[5].MIMEType)
+	require.Equal(t, "file-123", messages[0].Parts[5].FileID)
+	require.Equal(t, "paper.pdf", messages[0].Parts[5].Filename)
+
+	require.Equal(t, otelPartTypeBlob, messages[0].Parts[6].Type)
+	require.Equal(t, otelModalityVideo, messages[0].Parts[6].Modality)
+	require.Equal(t, "video/mp4", messages[0].Parts[6].MIMEType)
+	require.Equal(t, base64.StdEncoding.EncodeToString(fileData), messages[0].Parts[6].Content)
+	require.Equal(t, "clip.mp4", messages[0].Parts[6].Filename)
+
+	require.Equal(t, otelPartTypeReasoning, messages[0].Parts[7].Type)
+	require.Equal(t, "think step by step", messages[0].Parts[7].Content)
+
+	require.Equal(t, otelPartTypeToolCall, messages[0].Parts[8].Type)
+	require.Equal(t, "call-1", messages[0].Parts[8].ID)
+	require.Equal(t, "search", messages[0].Parts[8].Name)
+	require.JSONEq(t, `{"q":"otel"}`, string(messages[0].Parts[8].Arguments))
+}
+
+func TestMarshalTelemetryChoices_OTelOutputMessages(t *testing.T) {
+	finishReason := "tool_call"
+	choices := []model.Choice{{
+		Index: 0,
+		Message: model.Message{
+			Role:             model.RoleAssistant,
+			Content:          "hello",
+			ReasoningContent: "thinking",
+			ToolCalls: []model.ToolCall{{
+				ID:   "call-1",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "weather",
+					Arguments: []byte(`{"city":"paris"}`),
+				},
+			}},
+		},
+		FinishReason: &finishReason,
+	}}
+
+	bts, err := marshalTelemetryChoices(choices)
+	require.NoError(t, err)
+
+	var messages []OTelOutputMessage
+	require.NoError(t, json.Unmarshal(bts, &messages))
+	require.Len(t, messages, 1)
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
+	require.Equal(t, "tool_call", messages[0].FinishReason)
+	require.Len(t, messages[0].Parts, 3)
+	require.Equal(t, otelPartTypeText, messages[0].Parts[0].Type)
+	require.Equal(t, "hello", messages[0].Parts[0].Content)
+	require.Equal(t, otelPartTypeReasoning, messages[0].Parts[1].Type)
+	require.Equal(t, "thinking", messages[0].Parts[1].Content)
+	require.Equal(t, otelPartTypeToolCall, messages[0].Parts[2].Type)
+	require.Equal(t, "call-1", messages[0].Parts[2].ID)
+	require.Equal(t, "weather", messages[0].Parts[2].Name)
+	require.JSONEq(t, `{"city":"paris"}`, string(messages[0].Parts[2].Arguments))
+}
+
+func TestMarshalTelemetryMessages_OTelToolCallResponseAndReasoningParts(t *testing.T) {
+	messagesIn := []model.Message{
+		{
+			Role:             model.RoleAssistant,
+			Content:          "need tool",
+			ReasoningContent: "thinking before call",
+			ToolCalls: []model.ToolCall{{
+				ID:   "call-42",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "harness_lookup",
+					Arguments: []byte(`{"key":"otel"}`),
+				},
+			}},
+		},
+		{
+			Role:     model.RoleTool,
+			ToolID:   "call-42",
+			ToolName: "harness_lookup",
+			Content:  `{"token":"otel-tool-token-7f3b9c1d"}`,
+		},
+	}
+
+	bts, err := marshalTelemetryMessages(messagesIn)
+	require.NoError(t, err)
+
+	var messages []OTelInputMessage
+	require.NoError(t, json.Unmarshal(bts, &messages))
+	require.Len(t, messages, 2)
+
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
+	require.Len(t, messages[0].Parts, 3)
+	require.Equal(t, otelPartTypeText, messages[0].Parts[0].Type)
+	require.Equal(t, "need tool", messages[0].Parts[0].Content)
+	require.Equal(t, otelPartTypeReasoning, messages[0].Parts[1].Type)
+	require.Equal(t, "thinking before call", messages[0].Parts[1].Content)
+	require.Equal(t, otelPartTypeToolCall, messages[0].Parts[2].Type)
+	require.Equal(t, "call-42", messages[0].Parts[2].ID)
+	require.Equal(t, "harness_lookup", messages[0].Parts[2].Name)
+	require.JSONEq(t, `{"key":"otel"}`, string(messages[0].Parts[2].Arguments))
+
+	require.Equal(t, model.RoleTool, messages[1].Role)
+	require.Equal(t, "harness_lookup", messages[1].Name)
+	require.Len(t, messages[1].Parts, 1)
+	require.Equal(t, otelPartTypeToolCallResponse, messages[1].Parts[0].Type)
+	require.Equal(t, "call-42", messages[1].Parts[0].ID)
+	require.JSONEq(t, `{"token":"otel-tool-token-7f3b9c1d"}`, string(messages[1].Parts[0].Response))
 }
 
 func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
