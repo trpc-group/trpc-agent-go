@@ -1766,6 +1766,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#5-showtoolcalldelta" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. 流式工具调用增量：ShowToolCallDelta
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4045,6 +4054,15 @@
   <a href="#4-token-token-tailoring" class="md-nav__link">
     <span class="md-ellipsis">
       4. Token 裁剪（Token Tailoring）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-showtoolcalldelta" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. 流式工具调用增量：ShowToolCallDelta
     </span>
   </a>
   
@@ -7430,7 +7448,32 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 </span><span id="__span-75-6"><a id="__codelineno-75-6" name="__codelineno-75-6"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTailoringStrategy</span><span class="p">(</span><span class="nx">customStrategy</span><span class="p">),</span><span class="w">        </span><span class="c1">// 可选：自定义策略</span>
 </span><span id="__span-75-7"><a id="__codelineno-75-7" name="__codelineno-75-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 <a href="#6-token-裁剪token-tailoring">OpenAI Model 的 Token 裁剪部分</a>。</p>
+<p>关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 <a href="#7-token-token-tailoring">OpenAI Model 的 Token 裁剪部分</a>。</p>
+<h4 id="5-showtoolcalldelta">5. 流式工具调用增量：ShowToolCallDelta</h4>
+<p>默认情况下，Anthropic 适配层会先在内部累积工具调用参数，等模型完成这次工具调用后，再通过最终响应的 <code>Response.Choices[0].Message.ToolCalls</code> 一次性返回完整参数。</p>
+<p><code>WithShowToolCallDelta</code> 用于在流式阶段透出 Anthropic 的 <code>input_json_delta</code> 分片。工具参数较长，或前端需要展示参数生成过程时，可以开启这个选项：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-76-1">1</a></span>
+<span class="normal"><a href="#__codelineno-76-2">2</a></span>
+<span class="normal"><a href="#__codelineno-76-3">3</a></span>
+<span class="normal"><a href="#__codelineno-76-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-76-1"><a id="__codelineno-76-1" name="__codelineno-76-1"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-76-2"><a id="__codelineno-76-2" name="__codelineno-76-2"></a><span class="w">    </span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
+</span><span id="__span-76-3"><a id="__codelineno-76-3" name="__codelineno-76-3"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithShowToolCallDelta</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-76-4"><a id="__codelineno-76-4" name="__codelineno-76-4"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>当启用 <code>WithShowToolCallDelta(true)</code> 时：</p>
+<ul>
+<li>流式响应中会出现 <code>Response.Choices[0].Delta.ToolCalls</code>；</li>
+<li><code>Delta.ToolCalls[*].Function.Arguments</code> 是本次新增的参数字符串片段，通常不是完整 JSON；</li>
+<li><code>Delta.ToolCalls[*].ID</code> 和 <code>Index</code> 可用于把同一个工具调用的多个片段串起来；</li>
+<li>最终响应仍然会在 <code>Response.Choices[0].Message.ToolCalls</code> 中返回完整工具调用，原有工具执行链路可以继续复用。</li>
+</ul>
+<p>典型处理方式：</p>
+<ol>
+<li>在每个部分响应中读取
+   <code>Response.Choices[0].Delta.ToolCalls[*].Function.Arguments</code>；</li>
+<li>按工具调用 <code>ID</code> 或 <code>Index</code> 分组，并按顺序追加 <code>Arguments</code> 片段；</li>
+<li>将累积后的字符串作为 JSON 参数处理；边生成边展示的场景可以先按字符串渲染，等它构成合法 JSON 后再反序列化。</li>
+</ol>
 <h2 id="provider">Provider</h2>
 <p>随着多个大模型供应商的出现，一些供应商定义了各自的 API 规范。目前，框架已接入 OpenAI 和 Anthropic 的 API，并以 Model 的形式提供，用户可以通过 <code>openai.New</code> 和 <code>anthropic.New</code> 来使用不同供应商的模型。</p>
 <p>然而，不同供应商在实例化方式和配置项上存在差异，开发者在切换供应商时往往需要修改大量代码，增加了切换成本。</p>
@@ -7483,54 +7526,6 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 </tbody>
 </table>
 <h3 id="_50">使用示例</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-76-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-76-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-76-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-76-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-76-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-76-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-76-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-76-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-76-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-76-10">10</a></span>
-<span class="normal"><a href="#__codelineno-76-11">11</a></span>
-<span class="normal"><a href="#__codelineno-76-12">12</a></span>
-<span class="normal"><a href="#__codelineno-76-13">13</a></span>
-<span class="normal"><a href="#__codelineno-76-14">14</a></span>
-<span class="normal"><a href="#__codelineno-76-15">15</a></span>
-<span class="normal"><a href="#__codelineno-76-16">16</a></span>
-<span class="normal"><a href="#__codelineno-76-17">17</a></span>
-<span class="normal"><a href="#__codelineno-76-18">18</a></span>
-<span class="normal"><a href="#__codelineno-76-19">19</a></span>
-<span class="normal"><a href="#__codelineno-76-20">20</a></span>
-<span class="normal"><a href="#__codelineno-76-21">21</a></span>
-<span class="normal"><a href="#__codelineno-76-22">22</a></span>
-<span class="normal"><a href="#__codelineno-76-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-76-1"><a id="__codelineno-76-1" name="__codelineno-76-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-76-2"><a id="__codelineno-76-2" name="__codelineno-76-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-76-3"><a id="__codelineno-76-3" name="__codelineno-76-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
-</span><span id="__span-76-4"><a id="__codelineno-76-4" name="__codelineno-76-4"></a><span class="p">)</span>
-</span><span id="__span-76-5"><a id="__codelineno-76-5" name="__codelineno-76-5"></a>
-</span><span id="__span-76-6"><a id="__codelineno-76-6" name="__codelineno-76-6"></a><span class="nx">providerName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;openai&quot;</span><span class="w">        </span><span class="c1">// provider 支持 openai 和 anthropic.</span>
-</span><span id="__span-76-7"><a id="__codelineno-76-7" name="__codelineno-76-7"></a><span class="nx">modelName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;deepseek-v4-flash&quot;</span>
-</span><span id="__span-76-8"><a id="__codelineno-76-8" name="__codelineno-76-8"></a>
-</span><span id="__span-76-9"><a id="__codelineno-76-9" name="__codelineno-76-9"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
-</span><span id="__span-76-10"><a id="__codelineno-76-10" name="__codelineno-76-10"></a><span class="w">    </span><span class="nx">providerName</span><span class="p">,</span>
-</span><span id="__span-76-11"><a id="__codelineno-76-11" name="__codelineno-76-11"></a><span class="w">    </span><span class="nx">modelName</span><span class="p">,</span>
-</span><span id="__span-76-12"><a id="__codelineno-76-12" name="__codelineno-76-12"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
-</span><span id="__span-76-13"><a id="__codelineno-76-13" name="__codelineno-76-13"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">baseURL</span><span class="p">),</span>
-</span><span id="__span-76-14"><a id="__codelineno-76-14" name="__codelineno-76-14"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithChannelBufferSize</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">channelBufferSize</span><span class="p">),</span>
-</span><span id="__span-76-15"><a id="__codelineno-76-15" name="__codelineno-76-15"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">tokenTailoring</span><span class="p">),</span>
-</span><span id="__span-76-16"><a id="__codelineno-76-16" name="__codelineno-76-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithMaxInputTokens</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">maxInputTokens</span><span class="p">),</span>
-</span><span id="__span-76-17"><a id="__codelineno-76-17" name="__codelineno-76-17"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithHeaders</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-76-18"><a id="__codelineno-76-18" name="__codelineno-76-18"></a><span class="w">        </span><span class="s">&quot;X-Custom-Header&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;custom-value&quot;</span><span class="p">,</span>
-</span><span id="__span-76-19"><a id="__codelineno-76-19" name="__codelineno-76-19"></a><span class="w">        </span><span class="s">&quot;X-Request-ID&quot;</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;req-123&quot;</span><span class="p">,</span>
-</span><span id="__span-76-20"><a id="__codelineno-76-20" name="__codelineno-76-20"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-76-21"><a id="__codelineno-76-21" name="__codelineno-76-21"></a><span class="p">)</span>
-</span><span id="__span-76-22"><a id="__codelineno-76-22" name="__codelineno-76-22"></a>
-</span><span id="__span-76-23"><a id="__codelineno-76-23" name="__codelineno-76-23"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;chat-assistant&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">))</span>
-</span></code></pre></div></td></tr></table></div>
-<p><strong>高级配置：使用 TokenTailoringConfig</strong>：</p>
-<p>对于需要精细调整 token 分配策略的高级用户，可以使用 <code>WithTokenTailoringConfig</code>：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-77-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-77-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-77-3"> 3</a></span>
@@ -7549,97 +7544,94 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <span class="normal"><a href="#__codelineno-77-16">16</a></span>
 <span class="normal"><a href="#__codelineno-77-17">17</a></span>
 <span class="normal"><a href="#__codelineno-77-18">18</a></span>
-<span class="normal"><a href="#__codelineno-77-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+<span class="normal"><a href="#__codelineno-77-19">19</a></span>
+<span class="normal"><a href="#__codelineno-77-20">20</a></span>
+<span class="normal"><a href="#__codelineno-77-21">21</a></span>
+<span class="normal"><a href="#__codelineno-77-22">22</a></span>
+<span class="normal"><a href="#__codelineno-77-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
 </span><span id="__span-77-3"><a id="__codelineno-77-3" name="__codelineno-77-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
 </span><span id="__span-77-4"><a id="__codelineno-77-4" name="__codelineno-77-4"></a><span class="p">)</span>
 </span><span id="__span-77-5"><a id="__codelineno-77-5" name="__codelineno-77-5"></a>
-</span><span id="__span-77-6"><a id="__codelineno-77-6" name="__codelineno-77-6"></a><span class="c1">// 为所有 provider 自定义 token 裁剪预算参数</span>
-</span><span id="__span-77-7"><a id="__codelineno-77-7" name="__codelineno-77-7"></a><span class="nx">config</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
-</span><span id="__span-77-8"><a id="__codelineno-77-8" name="__codelineno-77-8"></a><span class="w">    </span><span class="nx">ProtocolOverheadTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">1024</span><span class="p">,</span>
-</span><span id="__span-77-9"><a id="__codelineno-77-9" name="__codelineno-77-9"></a><span class="w">    </span><span class="nx">ReserveOutputTokens</span><span class="p">:</span><span class="w">    </span><span class="mi">4096</span><span class="p">,</span>
-</span><span id="__span-77-10"><a id="__codelineno-77-10" name="__codelineno-77-10"></a><span class="w">    </span><span class="nx">SafetyMarginRatio</span><span class="p">:</span><span class="w">      </span><span class="mf">0.15</span><span class="p">,</span>
-</span><span id="__span-77-11"><a id="__codelineno-77-11" name="__codelineno-77-11"></a><span class="p">}</span>
-</span><span id="__span-77-12"><a id="__codelineno-77-12" name="__codelineno-77-12"></a>
-</span><span id="__span-77-13"><a id="__codelineno-77-13" name="__codelineno-77-13"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
-</span><span id="__span-77-14"><a id="__codelineno-77-14" name="__codelineno-77-14"></a><span class="w">    </span><span class="s">&quot;openai&quot;</span><span class="p">,</span>
-</span><span id="__span-77-15"><a id="__codelineno-77-15" name="__codelineno-77-15"></a><span class="w">    </span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">,</span>
-</span><span id="__span-77-16"><a id="__codelineno-77-16" name="__codelineno-77-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
-</span><span id="__span-77-17"><a id="__codelineno-77-17" name="__codelineno-77-17"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-77-18"><a id="__codelineno-77-18" name="__codelineno-77-18"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="nx">config</span><span class="p">),</span>
-</span><span id="__span-77-19"><a id="__codelineno-77-19" name="__codelineno-77-19"></a><span class="p">)</span>
+</span><span id="__span-77-6"><a id="__codelineno-77-6" name="__codelineno-77-6"></a><span class="nx">providerName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;openai&quot;</span><span class="w">        </span><span class="c1">// provider 支持 openai 和 anthropic.</span>
+</span><span id="__span-77-7"><a id="__codelineno-77-7" name="__codelineno-77-7"></a><span class="nx">modelName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;deepseek-v4-flash&quot;</span>
+</span><span id="__span-77-8"><a id="__codelineno-77-8" name="__codelineno-77-8"></a>
+</span><span id="__span-77-9"><a id="__codelineno-77-9" name="__codelineno-77-9"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
+</span><span id="__span-77-10"><a id="__codelineno-77-10" name="__codelineno-77-10"></a><span class="w">    </span><span class="nx">providerName</span><span class="p">,</span>
+</span><span id="__span-77-11"><a id="__codelineno-77-11" name="__codelineno-77-11"></a><span class="w">    </span><span class="nx">modelName</span><span class="p">,</span>
+</span><span id="__span-77-12"><a id="__codelineno-77-12" name="__codelineno-77-12"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
+</span><span id="__span-77-13"><a id="__codelineno-77-13" name="__codelineno-77-13"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">baseURL</span><span class="p">),</span>
+</span><span id="__span-77-14"><a id="__codelineno-77-14" name="__codelineno-77-14"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithChannelBufferSize</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">channelBufferSize</span><span class="p">),</span>
+</span><span id="__span-77-15"><a id="__codelineno-77-15" name="__codelineno-77-15"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">tokenTailoring</span><span class="p">),</span>
+</span><span id="__span-77-16"><a id="__codelineno-77-16" name="__codelineno-77-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithMaxInputTokens</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">maxInputTokens</span><span class="p">),</span>
+</span><span id="__span-77-17"><a id="__codelineno-77-17" name="__codelineno-77-17"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithHeaders</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-77-18"><a id="__codelineno-77-18" name="__codelineno-77-18"></a><span class="w">        </span><span class="s">&quot;X-Custom-Header&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;custom-value&quot;</span><span class="p">,</span>
+</span><span id="__span-77-19"><a id="__codelineno-77-19" name="__codelineno-77-19"></a><span class="w">        </span><span class="s">&quot;X-Request-ID&quot;</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;req-123&quot;</span><span class="p">,</span>
+</span><span id="__span-77-20"><a id="__codelineno-77-20" name="__codelineno-77-20"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-77-21"><a id="__codelineno-77-21" name="__codelineno-77-21"></a><span class="p">)</span>
+</span><span id="__span-77-22"><a id="__codelineno-77-22" name="__codelineno-77-22"></a>
+</span><span id="__span-77-23"><a id="__codelineno-77-23" name="__codelineno-77-23"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;chat-assistant&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>高级配置：使用 TokenTailoringConfig</strong>：</p>
+<p>对于需要精细调整 token 分配策略的高级用户，可以使用 <code>WithTokenTailoringConfig</code>：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-78-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-78-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-78-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-78-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-78-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-78-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-78-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-78-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-78-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-78-10">10</a></span>
+<span class="normal"><a href="#__codelineno-78-11">11</a></span>
+<span class="normal"><a href="#__codelineno-78-12">12</a></span>
+<span class="normal"><a href="#__codelineno-78-13">13</a></span>
+<span class="normal"><a href="#__codelineno-78-14">14</a></span>
+<span class="normal"><a href="#__codelineno-78-15">15</a></span>
+<span class="normal"><a href="#__codelineno-78-16">16</a></span>
+<span class="normal"><a href="#__codelineno-78-17">17</a></span>
+<span class="normal"><a href="#__codelineno-78-18">18</a></span>
+<span class="normal"><a href="#__codelineno-78-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-78-3"><a id="__codelineno-78-3" name="__codelineno-78-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
+</span><span id="__span-78-4"><a id="__codelineno-78-4" name="__codelineno-78-4"></a><span class="p">)</span>
+</span><span id="__span-78-5"><a id="__codelineno-78-5" name="__codelineno-78-5"></a>
+</span><span id="__span-78-6"><a id="__codelineno-78-6" name="__codelineno-78-6"></a><span class="c1">// 为所有 provider 自定义 token 裁剪预算参数</span>
+</span><span id="__span-78-7"><a id="__codelineno-78-7" name="__codelineno-78-7"></a><span class="nx">config</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
+</span><span id="__span-78-8"><a id="__codelineno-78-8" name="__codelineno-78-8"></a><span class="w">    </span><span class="nx">ProtocolOverheadTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">1024</span><span class="p">,</span>
+</span><span id="__span-78-9"><a id="__codelineno-78-9" name="__codelineno-78-9"></a><span class="w">    </span><span class="nx">ReserveOutputTokens</span><span class="p">:</span><span class="w">    </span><span class="mi">4096</span><span class="p">,</span>
+</span><span id="__span-78-10"><a id="__codelineno-78-10" name="__codelineno-78-10"></a><span class="w">    </span><span class="nx">SafetyMarginRatio</span><span class="p">:</span><span class="w">      </span><span class="mf">0.15</span><span class="p">,</span>
+</span><span id="__span-78-11"><a id="__codelineno-78-11" name="__codelineno-78-11"></a><span class="p">}</span>
+</span><span id="__span-78-12"><a id="__codelineno-78-12" name="__codelineno-78-12"></a>
+</span><span id="__span-78-13"><a id="__codelineno-78-13" name="__codelineno-78-13"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
+</span><span id="__span-78-14"><a id="__codelineno-78-14" name="__codelineno-78-14"></a><span class="w">    </span><span class="s">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-78-15"><a id="__codelineno-78-15" name="__codelineno-78-15"></a><span class="w">    </span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">,</span>
+</span><span id="__span-78-16"><a id="__codelineno-78-16" name="__codelineno-78-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
+</span><span id="__span-78-17"><a id="__codelineno-78-17" name="__codelineno-78-17"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-78-18"><a id="__codelineno-78-18" name="__codelineno-78-18"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="nx">config</span><span class="p">),</span>
+</span><span id="__span-78-19"><a id="__codelineno-78-19" name="__codelineno-78-19"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>完整代码可参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider">examples/provider</a>。</p>
 <h3 id="provider_1">注册自定义 Provider</h3>
 <p>框架支持通过注册自定义 Provider 来接入其他大模型供应商或自定义实现的模型。</p>
 <p>通过 <code>provider.Register</code> 可以定义根据 Options 创建自定义模型实例的方法。</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-78-1">1</a></span>
-<span class="normal"><a href="#__codelineno-78-2">2</a></span>
-<span class="normal"><a href="#__codelineno-78-3">3</a></span>
-<span class="normal"><a href="#__codelineno-78-4">4</a></span>
-<span class="normal"><a href="#__codelineno-78-5">5</a></span>
-<span class="normal"><a href="#__codelineno-78-6">6</a></span>
-<span class="normal"><a href="#__codelineno-78-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
-</span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2"></a>
-</span><span id="__span-78-3"><a id="__codelineno-78-3" name="__codelineno-78-3"></a><span class="nx">provider</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">*</span><span class="nx">provider</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-4"><a id="__codelineno-78-4" name="__codelineno-78-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newCustomModel</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">ModelName</span><span class="p">,</span><span class="w"> </span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">APIKey</span><span class="p">)),</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-78-5"><a id="__codelineno-78-5" name="__codelineno-78-5"></a><span class="p">})</span>
-</span><span id="__span-78-6"><a id="__codelineno-78-6" name="__codelineno-78-6"></a>
-</span><span id="__span-78-7"><a id="__codelineno-78-7" name="__codelineno-78-7"></a><span class="nx">customModel</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-model&quot;</span><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-79-1">1</a></span>
+<span class="normal"><a href="#__codelineno-79-2">2</a></span>
+<span class="normal"><a href="#__codelineno-79-3">3</a></span>
+<span class="normal"><a href="#__codelineno-79-4">4</a></span>
+<span class="normal"><a href="#__codelineno-79-5">5</a></span>
+<span class="normal"><a href="#__codelineno-79-6">6</a></span>
+<span class="normal"><a href="#__codelineno-79-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
+</span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2"></a>
+</span><span id="__span-79-3"><a id="__codelineno-79-3" name="__codelineno-79-3"></a><span class="nx">provider</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">*</span><span class="nx">provider</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-4"><a id="__codelineno-79-4" name="__codelineno-79-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newCustomModel</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">ModelName</span><span class="p">,</span><span class="w"> </span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">APIKey</span><span class="p">)),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-79-5"><a id="__codelineno-79-5" name="__codelineno-79-5"></a><span class="p">})</span>
+</span><span id="__span-79-6"><a id="__codelineno-79-6" name="__codelineno-79-6"></a>
+</span><span id="__span-79-7"><a id="__codelineno-79-7" name="__codelineno-79-7"></a><span class="nx">customModel</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-model&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="failover">模型容灾（Failover）</h2>
 <p><code>model/failover</code> 提供了一个按优先级顺序兜底的模型包装器。它可将多个 <code>model.Model</code> 组成主备链路，在主模型不可用时自动切到下一个候选模型，适用于主备域名、主备网关或不同模型提供方之间的切换场景。</p>
-<p><strong>快速开始：</strong></p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-79-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-79-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-79-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-79-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-79-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-79-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-79-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-79-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-79-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-79-10">10</a></span>
-<span class="normal"><a href="#__codelineno-79-11">11</a></span>
-<span class="normal"><a href="#__codelineno-79-12">12</a></span>
-<span class="normal"><a href="#__codelineno-79-13">13</a></span>
-<span class="normal"><a href="#__codelineno-79-14">14</a></span>
-<span class="normal"><a href="#__codelineno-79-15">15</a></span>
-<span class="normal"><a href="#__codelineno-79-16">16</a></span>
-<span class="normal"><a href="#__codelineno-79-17">17</a></span>
-<span class="normal"><a href="#__codelineno-79-18">18</a></span>
-<span class="normal"><a href="#__codelineno-79-19">19</a></span>
-<span class="normal"><a href="#__codelineno-79-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/failover&quot;</span>
-</span><span id="__span-79-3"><a id="__codelineno-79-3" name="__codelineno-79-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
-</span><span id="__span-79-4"><a id="__codelineno-79-4" name="__codelineno-79-4"></a><span class="p">)</span>
-</span><span id="__span-79-5"><a id="__codelineno-79-5" name="__codelineno-79-5"></a>
-</span><span id="__span-79-6"><a id="__codelineno-79-6" name="__codelineno-79-6"></a><span class="nx">primary</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-79-7"><a id="__codelineno-79-7" name="__codelineno-79-7"></a><span class="w">    </span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">,</span>
-</span><span id="__span-79-8"><a id="__codelineno-79-8" name="__codelineno-79-8"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.openai.com/v1&quot;</span><span class="p">),</span>
-</span><span id="__span-79-9"><a id="__codelineno-79-9" name="__codelineno-79-9"></a><span class="p">)</span>
-</span><span id="__span-79-10"><a id="__codelineno-79-10" name="__codelineno-79-10"></a><span class="nx">backup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-79-11"><a id="__codelineno-79-11" name="__codelineno-79-11"></a><span class="w">    </span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">,</span>
-</span><span id="__span-79-12"><a id="__codelineno-79-12" name="__codelineno-79-12"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.deepseek.com/v1&quot;</span><span class="p">),</span>
-</span><span id="__span-79-13"><a id="__codelineno-79-13" name="__codelineno-79-13"></a><span class="p">)</span>
-</span><span id="__span-79-14"><a id="__codelineno-79-14" name="__codelineno-79-14"></a>
-</span><span id="__span-79-15"><a id="__codelineno-79-15" name="__codelineno-79-15"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">failover</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-79-16"><a id="__codelineno-79-16" name="__codelineno-79-16"></a><span class="w">    </span><span class="nx">failover</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backup</span><span class="p">),</span>
-</span><span id="__span-79-17"><a id="__codelineno-79-17" name="__codelineno-79-17"></a><span class="p">)</span>
-</span><span id="__span-79-18"><a id="__codelineno-79-18" name="__codelineno-79-18"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-19"><a id="__codelineno-79-19" name="__codelineno-79-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-79-20"><a id="__codelineno-79-20" name="__codelineno-79-20"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p><code>failover.New(...)</code> 返回普通的 <code>model.Model</code>，可以直接传给 <code>llmagent.WithModel(...)</code> 等接受 <code>model.Model</code> 的位置使用。完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/failover">examples/model/failover</a>。</p>
-<p><strong>切换规则：</strong></p>
-<ul>
-<li>按 <code>WithCandidates(...)</code> 传入的顺序依次尝试候选模型。</li>
-<li>只有在收到首个非错误 chunk 之前，才允许从当前候选模型切换到下一个候选模型。</li>
-<li>如果当前候选模型在此之前直接返回 <code>error</code>，或返回带 <code>Response.Error</code> 的错误响应，就会继续尝试下一个候选模型。</li>
-<li>一旦已经向调用方返回过任意非错误 chunk，后续即使流式过程中再出错，也不会重放到备模型，而是直接将错误返回给调用方。</li>
-</ul>
-<h2 id="hedge">模型对冲（Hedge）</h2>
-<p><code>model/hedge</code> 提供了一个用于对冲首 token 尾延迟的模型包装器。它会先启动主候选，再按配置的 hedge delay 逐步补发后续候选；如果当前已启动候选都已经失败，则会提前拉起下一个候选。谁先返回首个有意义响应，谁就成为本次请求的胜者，其余候选会被取消。</p>
 <p><strong>快速开始：</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-80-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-80-2"> 2</a></span>
@@ -7660,9 +7652,8 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <span class="normal"><a href="#__codelineno-80-17">17</a></span>
 <span class="normal"><a href="#__codelineno-80-18">18</a></span>
 <span class="normal"><a href="#__codelineno-80-19">19</a></span>
-<span class="normal"><a href="#__codelineno-80-20">20</a></span>
-<span class="normal"><a href="#__codelineno-80-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/hedge&quot;</span>
+<span class="normal"><a href="#__codelineno-80-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/failover&quot;</span>
 </span><span id="__span-80-3"><a id="__codelineno-80-3" name="__codelineno-80-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
 </span><span id="__span-80-4"><a id="__codelineno-80-4" name="__codelineno-80-4"></a><span class="p">)</span>
 </span><span id="__span-80-5"><a id="__codelineno-80-5" name="__codelineno-80-5"></a>
@@ -7675,13 +7666,65 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 </span><span id="__span-80-12"><a id="__codelineno-80-12" name="__codelineno-80-12"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.deepseek.com/v1&quot;</span><span class="p">),</span>
 </span><span id="__span-80-13"><a id="__codelineno-80-13" name="__codelineno-80-13"></a><span class="p">)</span>
 </span><span id="__span-80-14"><a id="__codelineno-80-14" name="__codelineno-80-14"></a>
-</span><span id="__span-80-15"><a id="__codelineno-80-15" name="__codelineno-80-15"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-80-16"><a id="__codelineno-80-16" name="__codelineno-80-16"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;chat-hedge&quot;</span><span class="p">),</span>
-</span><span id="__span-80-17"><a id="__codelineno-80-17" name="__codelineno-80-17"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backup</span><span class="p">),</span>
-</span><span id="__span-80-18"><a id="__codelineno-80-18" name="__codelineno-80-18"></a><span class="p">)</span>
-</span><span id="__span-80-19"><a id="__codelineno-80-19" name="__codelineno-80-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-20"><a id="__codelineno-80-20" name="__codelineno-80-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-80-21"><a id="__codelineno-80-21" name="__codelineno-80-21"></a><span class="p">}</span>
+</span><span id="__span-80-15"><a id="__codelineno-80-15" name="__codelineno-80-15"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">failover</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-80-16"><a id="__codelineno-80-16" name="__codelineno-80-16"></a><span class="w">    </span><span class="nx">failover</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backup</span><span class="p">),</span>
+</span><span id="__span-80-17"><a id="__codelineno-80-17" name="__codelineno-80-17"></a><span class="p">)</span>
+</span><span id="__span-80-18"><a id="__codelineno-80-18" name="__codelineno-80-18"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-19"><a id="__codelineno-80-19" name="__codelineno-80-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-80-20"><a id="__codelineno-80-20" name="__codelineno-80-20"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>failover.New(...)</code> 返回普通的 <code>model.Model</code>，可以直接传给 <code>llmagent.WithModel(...)</code> 等接受 <code>model.Model</code> 的位置使用。完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/failover">examples/model/failover</a>。</p>
+<p><strong>切换规则：</strong></p>
+<ul>
+<li>按 <code>WithCandidates(...)</code> 传入的顺序依次尝试候选模型。</li>
+<li>只有在收到首个非错误 chunk 之前，才允许从当前候选模型切换到下一个候选模型。</li>
+<li>如果当前候选模型在此之前直接返回 <code>error</code>，或返回带 <code>Response.Error</code> 的错误响应，就会继续尝试下一个候选模型。</li>
+<li>一旦已经向调用方返回过任意非错误 chunk，后续即使流式过程中再出错，也不会重放到备模型，而是直接将错误返回给调用方。</li>
+</ul>
+<h2 id="hedge">模型对冲（Hedge）</h2>
+<p><code>model/hedge</code> 提供了一个用于对冲首 token 尾延迟的模型包装器。它会先启动主候选，再按配置的 hedge delay 逐步补发后续候选；如果当前已启动候选都已经失败，则会提前拉起下一个候选。谁先返回首个有意义响应，谁就成为本次请求的胜者，其余候选会被取消。</p>
+<p><strong>快速开始：</strong></p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-81-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-81-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-81-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-81-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-81-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-81-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-81-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-81-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-81-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-81-10">10</a></span>
+<span class="normal"><a href="#__codelineno-81-11">11</a></span>
+<span class="normal"><a href="#__codelineno-81-12">12</a></span>
+<span class="normal"><a href="#__codelineno-81-13">13</a></span>
+<span class="normal"><a href="#__codelineno-81-14">14</a></span>
+<span class="normal"><a href="#__codelineno-81-15">15</a></span>
+<span class="normal"><a href="#__codelineno-81-16">16</a></span>
+<span class="normal"><a href="#__codelineno-81-17">17</a></span>
+<span class="normal"><a href="#__codelineno-81-18">18</a></span>
+<span class="normal"><a href="#__codelineno-81-19">19</a></span>
+<span class="normal"><a href="#__codelineno-81-20">20</a></span>
+<span class="normal"><a href="#__codelineno-81-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/hedge&quot;</span>
+</span><span id="__span-81-3"><a id="__codelineno-81-3" name="__codelineno-81-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-81-4"><a id="__codelineno-81-4" name="__codelineno-81-4"></a><span class="p">)</span>
+</span><span id="__span-81-5"><a id="__codelineno-81-5" name="__codelineno-81-5"></a>
+</span><span id="__span-81-6"><a id="__codelineno-81-6" name="__codelineno-81-6"></a><span class="nx">primary</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-81-7"><a id="__codelineno-81-7" name="__codelineno-81-7"></a><span class="w">    </span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">,</span>
+</span><span id="__span-81-8"><a id="__codelineno-81-8" name="__codelineno-81-8"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.openai.com/v1&quot;</span><span class="p">),</span>
+</span><span id="__span-81-9"><a id="__codelineno-81-9" name="__codelineno-81-9"></a><span class="p">)</span>
+</span><span id="__span-81-10"><a id="__codelineno-81-10" name="__codelineno-81-10"></a><span class="nx">backup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-81-11"><a id="__codelineno-81-11" name="__codelineno-81-11"></a><span class="w">    </span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">,</span>
+</span><span id="__span-81-12"><a id="__codelineno-81-12" name="__codelineno-81-12"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.deepseek.com/v1&quot;</span><span class="p">),</span>
+</span><span id="__span-81-13"><a id="__codelineno-81-13" name="__codelineno-81-13"></a><span class="p">)</span>
+</span><span id="__span-81-14"><a id="__codelineno-81-14" name="__codelineno-81-14"></a>
+</span><span id="__span-81-15"><a id="__codelineno-81-15" name="__codelineno-81-15"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-81-16"><a id="__codelineno-81-16" name="__codelineno-81-16"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;chat-hedge&quot;</span><span class="p">),</span>
+</span><span id="__span-81-17"><a id="__codelineno-81-17" name="__codelineno-81-17"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backup</span><span class="p">),</span>
+</span><span id="__span-81-18"><a id="__codelineno-81-18" name="__codelineno-81-18"></a><span class="p">)</span>
+</span><span id="__span-81-19"><a id="__codelineno-81-19" name="__codelineno-81-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-20"><a id="__codelineno-81-20" name="__codelineno-81-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-81-21"><a id="__codelineno-81-21" name="__codelineno-81-21"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>hedge.New(...)</code> 同样返回普通的 <code>model.Model</code>，可以直接传给 <code>llmagent.WithModel(...)</code> 等接受 <code>model.Model</code> 的位置使用。上面这段代码使用包默认 delay；如果要显式控制补发时序，可继续使用 <code>WithDelay(...)</code> 或 <code>WithDelays(...)</code>。完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge">examples/model/hedge</a>。</p>
 <p><strong>调度与提交规则：</strong></p>
@@ -7694,13 +7737,13 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 </ul>
 <p><strong>配置示例：</strong></p>
 <p>下面的片段只展示调度配置差异。</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-81-1">1</a></span>
-<span class="normal"><a href="#__codelineno-81-2">2</a></span>
-<span class="normal"><a href="#__codelineno-81-3">3</a></span>
-<span class="normal"><a href="#__codelineno-81-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
-</span><span id="__span-81-3"><a id="__codelineno-81-3" name="__codelineno-81-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelay</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">),</span>
-</span><span id="__span-81-4"><a id="__codelineno-81-4" name="__codelineno-81-4"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-82-1">1</a></span>
+<span class="normal"><a href="#__codelineno-82-2">2</a></span>
+<span class="normal"><a href="#__codelineno-82-3">3</a></span>
+<span class="normal"><a href="#__codelineno-82-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-82-1"><a id="__codelineno-82-1" name="__codelineno-82-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-82-2"><a id="__codelineno-82-2" name="__codelineno-82-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
+</span><span id="__span-82-3"><a id="__codelineno-82-3" name="__codelineno-82-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelay</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">),</span>
+</span><span id="__span-82-4"><a id="__codelineno-82-4" name="__codelineno-82-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>上面这段配置表示：</p>
 <ul>
@@ -7708,13 +7751,13 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <li><code>candidate[1]</code> 在 <code>100ms</code> 启动。</li>
 <li><code>candidate[2]</code> 在 <code>200ms</code> 启动。</li>
 </ul>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-82-1">1</a></span>
-<span class="normal"><a href="#__codelineno-82-2">2</a></span>
-<span class="normal"><a href="#__codelineno-82-3">3</a></span>
-<span class="normal"><a href="#__codelineno-82-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-82-1"><a id="__codelineno-82-1" name="__codelineno-82-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-82-2"><a id="__codelineno-82-2" name="__codelineno-82-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
-</span><span id="__span-82-3"><a id="__codelineno-82-3" name="__codelineno-82-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelays</span><span class="p">(</span><span class="mi">80</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">,</span><span class="w"> </span><span class="mi">250</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">),</span>
-</span><span id="__span-82-4"><a id="__codelineno-82-4" name="__codelineno-82-4"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-83-1">1</a></span>
+<span class="normal"><a href="#__codelineno-83-2">2</a></span>
+<span class="normal"><a href="#__codelineno-83-3">3</a></span>
+<span class="normal"><a href="#__codelineno-83-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-83-1"><a id="__codelineno-83-1" name="__codelineno-83-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-83-2"><a id="__codelineno-83-2" name="__codelineno-83-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
+</span><span id="__span-83-3"><a id="__codelineno-83-3" name="__codelineno-83-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelays</span><span class="p">(</span><span class="mi">80</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">,</span><span class="w"> </span><span class="mi">250</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">),</span>
+</span><span id="__span-83-4"><a id="__codelineno-83-4" name="__codelineno-83-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>上面这段配置表示：</p>
 <ul>
@@ -7723,13 +7766,13 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <li><code>candidate[2]</code> 在 <code>250ms</code> 启动。</li>
 </ul>
 <p>这里 <code>WithDelays(...)</code> 传入的是相对请求开始时刻的绝对启动偏移，不是相对上一个候选的增量间隔。</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-83-1">1</a></span>
-<span class="normal"><a href="#__codelineno-83-2">2</a></span>
-<span class="normal"><a href="#__codelineno-83-3">3</a></span>
-<span class="normal"><a href="#__codelineno-83-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-83-1"><a id="__codelineno-83-1" name="__codelineno-83-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-83-2"><a id="__codelineno-83-2" name="__codelineno-83-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
-</span><span id="__span-83-3"><a id="__codelineno-83-3" name="__codelineno-83-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelays</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">),</span>
-</span><span id="__span-83-4"><a id="__codelineno-83-4" name="__codelineno-83-4"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-84-1">1</a></span>
+<span class="normal"><a href="#__codelineno-84-2">2</a></span>
+<span class="normal"><a href="#__codelineno-84-3">3</a></span>
+<span class="normal"><a href="#__codelineno-84-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-84-1"><a id="__codelineno-84-1" name="__codelineno-84-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-84-2"><a id="__codelineno-84-2" name="__codelineno-84-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
+</span><span id="__span-84-3"><a id="__codelineno-84-3" name="__codelineno-84-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelays</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">),</span>
+</span><span id="__span-84-4"><a id="__codelineno-84-4" name="__codelineno-84-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>上面这段配置表示：</p>
 <ul>
@@ -7760,7 +7803,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月28日 04:43:07 UTC">2026-04-28 04:43:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月29日 05:54:41 UTC">2026-04-29 05:54:41</span>
   </span>
 
     

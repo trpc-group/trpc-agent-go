@@ -1757,6 +1757,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#5-streaming-tool-call-deltas-showtoolcalldelta" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Streaming Tool Call Deltas: ShowToolCallDelta
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4027,6 +4036,15 @@
   <a href="#4-token-tailoring" class="md-nav__link">
     <span class="md-ellipsis">
       4. Token Tailoring
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-streaming-tool-call-deltas-showtoolcalldelta" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Streaming Tool Call Deltas: ShowToolCallDelta
     </span>
   </a>
   
@@ -7443,7 +7461,35 @@ to preserve the default clean text-streaming behavior.</p>
 </span><span id="__span-74-6"><a id="__codelineno-74-6" name="__codelineno-74-6"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTailoringStrategy</span><span class="p">(</span><span class="nx">customStrategy</span><span class="p">),</span><span class="w">        </span><span class="c1">// Optional: custom strategy</span>
 </span><span id="__span-74-7"><a id="__codelineno-74-7" name="__codelineno-74-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to <a href="#3-token-tailoring">Token Tailoring under OpenAI Model</a>.</p>
+<p>For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to <a href="#7-token-tailoring">Token Tailoring under OpenAI Model</a>.</p>
+<h4 id="5-streaming-tool-call-deltas-showtoolcalldelta">5. Streaming Tool Call Deltas: ShowToolCallDelta</h4>
+<p>By default, the Anthropic adapter accumulates tool-call arguments internally and returns the complete arguments once the model finishes the tool call, through <code>Response.Choices[0].Message.ToolCalls</code> in the final response.</p>
+<p><code>WithShowToolCallDelta</code> exposes Anthropic <code>input_json_delta</code> chunks during streaming. Enable this option when tool arguments are long, or when the frontend needs to display argument generation progress:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-75-1">1</a></span>
+<span class="normal"><a href="#__codelineno-75-2">2</a></span>
+<span class="normal"><a href="#__codelineno-75-3">3</a></span>
+<span class="normal"><a href="#__codelineno-75-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-75-1"><a id="__codelineno-75-1" name="__codelineno-75-1"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-75-2"><a id="__codelineno-75-2" name="__codelineno-75-2"></a><span class="w">    </span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
+</span><span id="__span-75-3"><a id="__codelineno-75-3" name="__codelineno-75-3"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithShowToolCallDelta</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-75-4"><a id="__codelineno-75-4" name="__codelineno-75-4"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>When <code>WithShowToolCallDelta(true)</code> is enabled:</p>
+<ul>
+<li>Streaming responses may include <code>Response.Choices[0].Delta.ToolCalls</code>.</li>
+<li><code>Delta.ToolCalls[*].Function.Arguments</code> is the newly produced argument string fragment, and is usually not complete JSON.</li>
+<li><code>Delta.ToolCalls[*].ID</code> and <code>Index</code> can be used to join fragments for the same tool call.</li>
+<li>The final response still returns the complete tool call in <code>Response.Choices[0].Message.ToolCalls</code>, so existing tool execution logic can continue to use the final response unchanged.</li>
+</ul>
+<p>Typical handling pattern:</p>
+<ol>
+<li>Read <code>Response.Choices[0].Delta.ToolCalls[*].Function.Arguments</code> on each
+   partial response.</li>
+<li>Group chunks by tool call <code>ID</code> or <code>Index</code>, and append the <code>Arguments</code>
+   fragments in order.</li>
+<li>Treat the accumulated value as the tool argument JSON. For progressive
+   rendering, render the string as it grows and unmarshal it only after it
+   becomes valid JSON.</li>
+</ol>
 <h2 id="provider">Provider</h2>
 <p>With the emergence of multiple large model providers, some have defined their own API specifications. Currently, the framework has integrated the APIs of OpenAI and Anthropic, and exposes them as models. Users can access different provider models through <code>openai.New</code> and <code>anthropic.New</code>.</p>
 <p>However, there are differences in instantiation and configuration between providers, which often requires developers to modify a significant amount of code when switching between providers, increasing the cost of switching.</p>
@@ -7496,46 +7542,6 @@ to preserve the default clean text-streaming behavior.</p>
 </tbody>
 </table>
 <h3 id="usage-example_4">Usage Example</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-75-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-75-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-75-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-75-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-75-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-75-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-75-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-75-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-75-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-75-10">10</a></span>
-<span class="normal"><a href="#__codelineno-75-11">11</a></span>
-<span class="normal"><a href="#__codelineno-75-12">12</a></span>
-<span class="normal"><a href="#__codelineno-75-13">13</a></span>
-<span class="normal"><a href="#__codelineno-75-14">14</a></span>
-<span class="normal"><a href="#__codelineno-75-15">15</a></span>
-<span class="normal"><a href="#__codelineno-75-16">16</a></span>
-<span class="normal"><a href="#__codelineno-75-17">17</a></span>
-<span class="normal"><a href="#__codelineno-75-18">18</a></span>
-<span class="normal"><a href="#__codelineno-75-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-75-1"><a id="__codelineno-75-1" name="__codelineno-75-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-75-2"><a id="__codelineno-75-2" name="__codelineno-75-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-75-3"><a id="__codelineno-75-3" name="__codelineno-75-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
-</span><span id="__span-75-4"><a id="__codelineno-75-4" name="__codelineno-75-4"></a><span class="p">)</span>
-</span><span id="__span-75-5"><a id="__codelineno-75-5" name="__codelineno-75-5"></a>
-</span><span id="__span-75-6"><a id="__codelineno-75-6" name="__codelineno-75-6"></a><span class="nx">providerName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;openai&quot;</span><span class="w">        </span><span class="c1">// provider supports openai and anthropic.</span>
-</span><span id="__span-75-7"><a id="__codelineno-75-7" name="__codelineno-75-7"></a><span class="nx">modelName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;deepseek-v4-flash&quot;</span>
-</span><span id="__span-75-8"><a id="__codelineno-75-8" name="__codelineno-75-8"></a>
-</span><span id="__span-75-9"><a id="__codelineno-75-9" name="__codelineno-75-9"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
-</span><span id="__span-75-10"><a id="__codelineno-75-10" name="__codelineno-75-10"></a><span class="w">    </span><span class="nx">providerName</span><span class="p">,</span>
-</span><span id="__span-75-11"><a id="__codelineno-75-11" name="__codelineno-75-11"></a><span class="w">    </span><span class="nx">modelName</span><span class="p">,</span>
-</span><span id="__span-75-12"><a id="__codelineno-75-12" name="__codelineno-75-12"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
-</span><span id="__span-75-13"><a id="__codelineno-75-13" name="__codelineno-75-13"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">baseURL</span><span class="p">),</span>
-</span><span id="__span-75-14"><a id="__codelineno-75-14" name="__codelineno-75-14"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithChannelBufferSize</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">channelBufferSize</span><span class="p">),</span>
-</span><span id="__span-75-15"><a id="__codelineno-75-15" name="__codelineno-75-15"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">tokenTailoring</span><span class="p">),</span>
-</span><span id="__span-75-16"><a id="__codelineno-75-16" name="__codelineno-75-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithMaxInputTokens</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">maxInputTokens</span><span class="p">),</span>
-</span><span id="__span-75-17"><a id="__codelineno-75-17" name="__codelineno-75-17"></a><span class="p">)</span>
-</span><span id="__span-75-18"><a id="__codelineno-75-18" name="__codelineno-75-18"></a>
-</span><span id="__span-75-19"><a id="__codelineno-75-19" name="__codelineno-75-19"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;chat-assistant&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">))</span>
-</span></code></pre></div></td></tr></table></div>
-<p><strong>Advanced Configuration with TokenTailoringConfig</strong>:</p>
-<p>For advanced users who need to fine-tune token allocation strategy, you can use <code>WithTokenTailoringConfig</code>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-76-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-76-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-76-3"> 3</a></span>
@@ -7555,97 +7561,86 @@ to preserve the default clean text-streaming behavior.</p>
 <span class="normal"><a href="#__codelineno-76-17">17</a></span>
 <span class="normal"><a href="#__codelineno-76-18">18</a></span>
 <span class="normal"><a href="#__codelineno-76-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-76-1"><a id="__codelineno-76-1" name="__codelineno-76-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-76-2"><a id="__codelineno-76-2" name="__codelineno-76-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-76-2"><a id="__codelineno-76-2" name="__codelineno-76-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
 </span><span id="__span-76-3"><a id="__codelineno-76-3" name="__codelineno-76-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
 </span><span id="__span-76-4"><a id="__codelineno-76-4" name="__codelineno-76-4"></a><span class="p">)</span>
 </span><span id="__span-76-5"><a id="__codelineno-76-5" name="__codelineno-76-5"></a>
-</span><span id="__span-76-6"><a id="__codelineno-76-6" name="__codelineno-76-6"></a><span class="c1">// Custom token tailoring budget parameters for all providers</span>
-</span><span id="__span-76-7"><a id="__codelineno-76-7" name="__codelineno-76-7"></a><span class="nx">config</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
-</span><span id="__span-76-8"><a id="__codelineno-76-8" name="__codelineno-76-8"></a><span class="w">    </span><span class="nx">ProtocolOverheadTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">1024</span><span class="p">,</span>
-</span><span id="__span-76-9"><a id="__codelineno-76-9" name="__codelineno-76-9"></a><span class="w">    </span><span class="nx">ReserveOutputTokens</span><span class="p">:</span><span class="w">    </span><span class="mi">4096</span><span class="p">,</span>
-</span><span id="__span-76-10"><a id="__codelineno-76-10" name="__codelineno-76-10"></a><span class="w">    </span><span class="nx">SafetyMarginRatio</span><span class="p">:</span><span class="w">      </span><span class="mf">0.15</span><span class="p">,</span>
-</span><span id="__span-76-11"><a id="__codelineno-76-11" name="__codelineno-76-11"></a><span class="p">}</span>
-</span><span id="__span-76-12"><a id="__codelineno-76-12" name="__codelineno-76-12"></a>
-</span><span id="__span-76-13"><a id="__codelineno-76-13" name="__codelineno-76-13"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
-</span><span id="__span-76-14"><a id="__codelineno-76-14" name="__codelineno-76-14"></a><span class="w">    </span><span class="s">&quot;openai&quot;</span><span class="p">,</span>
-</span><span id="__span-76-15"><a id="__codelineno-76-15" name="__codelineno-76-15"></a><span class="w">    </span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">,</span>
-</span><span id="__span-76-16"><a id="__codelineno-76-16" name="__codelineno-76-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
-</span><span id="__span-76-17"><a id="__codelineno-76-17" name="__codelineno-76-17"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-76-18"><a id="__codelineno-76-18" name="__codelineno-76-18"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="nx">config</span><span class="p">),</span>
-</span><span id="__span-76-19"><a id="__codelineno-76-19" name="__codelineno-76-19"></a><span class="p">)</span>
+</span><span id="__span-76-6"><a id="__codelineno-76-6" name="__codelineno-76-6"></a><span class="nx">providerName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;openai&quot;</span><span class="w">        </span><span class="c1">// provider supports openai and anthropic.</span>
+</span><span id="__span-76-7"><a id="__codelineno-76-7" name="__codelineno-76-7"></a><span class="nx">modelName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;deepseek-v4-flash&quot;</span>
+</span><span id="__span-76-8"><a id="__codelineno-76-8" name="__codelineno-76-8"></a>
+</span><span id="__span-76-9"><a id="__codelineno-76-9" name="__codelineno-76-9"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
+</span><span id="__span-76-10"><a id="__codelineno-76-10" name="__codelineno-76-10"></a><span class="w">    </span><span class="nx">providerName</span><span class="p">,</span>
+</span><span id="__span-76-11"><a id="__codelineno-76-11" name="__codelineno-76-11"></a><span class="w">    </span><span class="nx">modelName</span><span class="p">,</span>
+</span><span id="__span-76-12"><a id="__codelineno-76-12" name="__codelineno-76-12"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
+</span><span id="__span-76-13"><a id="__codelineno-76-13" name="__codelineno-76-13"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">baseURL</span><span class="p">),</span>
+</span><span id="__span-76-14"><a id="__codelineno-76-14" name="__codelineno-76-14"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithChannelBufferSize</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">channelBufferSize</span><span class="p">),</span>
+</span><span id="__span-76-15"><a id="__codelineno-76-15" name="__codelineno-76-15"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">tokenTailoring</span><span class="p">),</span>
+</span><span id="__span-76-16"><a id="__codelineno-76-16" name="__codelineno-76-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithMaxInputTokens</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">maxInputTokens</span><span class="p">),</span>
+</span><span id="__span-76-17"><a id="__codelineno-76-17" name="__codelineno-76-17"></a><span class="p">)</span>
+</span><span id="__span-76-18"><a id="__codelineno-76-18" name="__codelineno-76-18"></a>
+</span><span id="__span-76-19"><a id="__codelineno-76-19" name="__codelineno-76-19"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;chat-assistant&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>Advanced Configuration with TokenTailoringConfig</strong>:</p>
+<p>For advanced users who need to fine-tune token allocation strategy, you can use <code>WithTokenTailoringConfig</code>:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-77-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-77-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-77-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-77-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-77-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-77-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-77-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-77-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-77-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-77-10">10</a></span>
+<span class="normal"><a href="#__codelineno-77-11">11</a></span>
+<span class="normal"><a href="#__codelineno-77-12">12</a></span>
+<span class="normal"><a href="#__codelineno-77-13">13</a></span>
+<span class="normal"><a href="#__codelineno-77-14">14</a></span>
+<span class="normal"><a href="#__codelineno-77-15">15</a></span>
+<span class="normal"><a href="#__codelineno-77-16">16</a></span>
+<span class="normal"><a href="#__codelineno-77-17">17</a></span>
+<span class="normal"><a href="#__codelineno-77-18">18</a></span>
+<span class="normal"><a href="#__codelineno-77-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-77-3"><a id="__codelineno-77-3" name="__codelineno-77-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
+</span><span id="__span-77-4"><a id="__codelineno-77-4" name="__codelineno-77-4"></a><span class="p">)</span>
+</span><span id="__span-77-5"><a id="__codelineno-77-5" name="__codelineno-77-5"></a>
+</span><span id="__span-77-6"><a id="__codelineno-77-6" name="__codelineno-77-6"></a><span class="c1">// Custom token tailoring budget parameters for all providers</span>
+</span><span id="__span-77-7"><a id="__codelineno-77-7" name="__codelineno-77-7"></a><span class="nx">config</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
+</span><span id="__span-77-8"><a id="__codelineno-77-8" name="__codelineno-77-8"></a><span class="w">    </span><span class="nx">ProtocolOverheadTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">1024</span><span class="p">,</span>
+</span><span id="__span-77-9"><a id="__codelineno-77-9" name="__codelineno-77-9"></a><span class="w">    </span><span class="nx">ReserveOutputTokens</span><span class="p">:</span><span class="w">    </span><span class="mi">4096</span><span class="p">,</span>
+</span><span id="__span-77-10"><a id="__codelineno-77-10" name="__codelineno-77-10"></a><span class="w">    </span><span class="nx">SafetyMarginRatio</span><span class="p">:</span><span class="w">      </span><span class="mf">0.15</span><span class="p">,</span>
+</span><span id="__span-77-11"><a id="__codelineno-77-11" name="__codelineno-77-11"></a><span class="p">}</span>
+</span><span id="__span-77-12"><a id="__codelineno-77-12" name="__codelineno-77-12"></a>
+</span><span id="__span-77-13"><a id="__codelineno-77-13" name="__codelineno-77-13"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
+</span><span id="__span-77-14"><a id="__codelineno-77-14" name="__codelineno-77-14"></a><span class="w">    </span><span class="s">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-77-15"><a id="__codelineno-77-15" name="__codelineno-77-15"></a><span class="w">    </span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">,</span>
+</span><span id="__span-77-16"><a id="__codelineno-77-16" name="__codelineno-77-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
+</span><span id="__span-77-17"><a id="__codelineno-77-17" name="__codelineno-77-17"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-77-18"><a id="__codelineno-77-18" name="__codelineno-77-18"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="nx">config</span><span class="p">),</span>
+</span><span id="__span-77-19"><a id="__codelineno-77-19" name="__codelineno-77-19"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Full code can be found in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider">examples/provider</a>.</p>
 <h3 id="registering-a-custom-provider">Registering a Custom Provider</h3>
 <p>The framework supports registering custom providers to integrate other large model providers or custom model implementations.</p>
 <p>Using <code>provider.Register</code>, you can define a method to create custom model instances based on the options.</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-77-1">1</a></span>
-<span class="normal"><a href="#__codelineno-77-2">2</a></span>
-<span class="normal"><a href="#__codelineno-77-3">3</a></span>
-<span class="normal"><a href="#__codelineno-77-4">4</a></span>
-<span class="normal"><a href="#__codelineno-77-5">5</a></span>
-<span class="normal"><a href="#__codelineno-77-6">6</a></span>
-<span class="normal"><a href="#__codelineno-77-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
-</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2"></a>
-</span><span id="__span-77-3"><a id="__codelineno-77-3" name="__codelineno-77-3"></a><span class="nx">provider</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">*</span><span class="nx">provider</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-77-4"><a id="__codelineno-77-4" name="__codelineno-77-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newCustomModel</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">ModelName</span><span class="p">,</span><span class="w"> </span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">APIKey</span><span class="p">)),</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-77-5"><a id="__codelineno-77-5" name="__codelineno-77-5"></a><span class="p">})</span>
-</span><span id="__span-77-6"><a id="__codelineno-77-6" name="__codelineno-77-6"></a>
-</span><span id="__span-77-7"><a id="__codelineno-77-7" name="__codelineno-77-7"></a><span class="nx">customModel</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-model&quot;</span><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-78-1">1</a></span>
+<span class="normal"><a href="#__codelineno-78-2">2</a></span>
+<span class="normal"><a href="#__codelineno-78-3">3</a></span>
+<span class="normal"><a href="#__codelineno-78-4">4</a></span>
+<span class="normal"><a href="#__codelineno-78-5">5</a></span>
+<span class="normal"><a href="#__codelineno-78-6">6</a></span>
+<span class="normal"><a href="#__codelineno-78-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
+</span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2"></a>
+</span><span id="__span-78-3"><a id="__codelineno-78-3" name="__codelineno-78-3"></a><span class="nx">provider</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">*</span><span class="nx">provider</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-78-4"><a id="__codelineno-78-4" name="__codelineno-78-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newCustomModel</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">ModelName</span><span class="p">,</span><span class="w"> </span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">APIKey</span><span class="p">)),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-78-5"><a id="__codelineno-78-5" name="__codelineno-78-5"></a><span class="p">})</span>
+</span><span id="__span-78-6"><a id="__codelineno-78-6" name="__codelineno-78-6"></a>
+</span><span id="__span-78-7"><a id="__codelineno-78-7" name="__codelineno-78-7"></a><span class="nx">customModel</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-model&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="model-failover">Model Failover</h2>
 <p><code>model/failover</code> provides a priority-ordered fallback wrapper for models. It can compose multiple <code>model.Model</code> instances into a primary/backup chain and automatically switch to the next candidate when the current one is unavailable. This is useful for scenarios such as primary/backup domains, gateways, or model providers.</p>
 <p><strong>Quick Start</strong>:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-78-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-78-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-78-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-78-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-78-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-78-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-78-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-78-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-78-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-78-10">10</a></span>
-<span class="normal"><a href="#__codelineno-78-11">11</a></span>
-<span class="normal"><a href="#__codelineno-78-12">12</a></span>
-<span class="normal"><a href="#__codelineno-78-13">13</a></span>
-<span class="normal"><a href="#__codelineno-78-14">14</a></span>
-<span class="normal"><a href="#__codelineno-78-15">15</a></span>
-<span class="normal"><a href="#__codelineno-78-16">16</a></span>
-<span class="normal"><a href="#__codelineno-78-17">17</a></span>
-<span class="normal"><a href="#__codelineno-78-18">18</a></span>
-<span class="normal"><a href="#__codelineno-78-19">19</a></span>
-<span class="normal"><a href="#__codelineno-78-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/failover&quot;</span>
-</span><span id="__span-78-3"><a id="__codelineno-78-3" name="__codelineno-78-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
-</span><span id="__span-78-4"><a id="__codelineno-78-4" name="__codelineno-78-4"></a><span class="p">)</span>
-</span><span id="__span-78-5"><a id="__codelineno-78-5" name="__codelineno-78-5"></a>
-</span><span id="__span-78-6"><a id="__codelineno-78-6" name="__codelineno-78-6"></a><span class="nx">primary</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-78-7"><a id="__codelineno-78-7" name="__codelineno-78-7"></a><span class="w">    </span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">,</span>
-</span><span id="__span-78-8"><a id="__codelineno-78-8" name="__codelineno-78-8"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.openai.com/v1&quot;</span><span class="p">),</span>
-</span><span id="__span-78-9"><a id="__codelineno-78-9" name="__codelineno-78-9"></a><span class="p">)</span>
-</span><span id="__span-78-10"><a id="__codelineno-78-10" name="__codelineno-78-10"></a><span class="nx">backup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-78-11"><a id="__codelineno-78-11" name="__codelineno-78-11"></a><span class="w">    </span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">,</span>
-</span><span id="__span-78-12"><a id="__codelineno-78-12" name="__codelineno-78-12"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.deepseek.com/v1&quot;</span><span class="p">),</span>
-</span><span id="__span-78-13"><a id="__codelineno-78-13" name="__codelineno-78-13"></a><span class="p">)</span>
-</span><span id="__span-78-14"><a id="__codelineno-78-14" name="__codelineno-78-14"></a>
-</span><span id="__span-78-15"><a id="__codelineno-78-15" name="__codelineno-78-15"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">failover</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-78-16"><a id="__codelineno-78-16" name="__codelineno-78-16"></a><span class="w">    </span><span class="nx">failover</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backup</span><span class="p">),</span>
-</span><span id="__span-78-17"><a id="__codelineno-78-17" name="__codelineno-78-17"></a><span class="p">)</span>
-</span><span id="__span-78-18"><a id="__codelineno-78-18" name="__codelineno-78-18"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-19"><a id="__codelineno-78-19" name="__codelineno-78-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-78-20"><a id="__codelineno-78-20" name="__codelineno-78-20"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p><code>failover.New(...)</code> returns a regular <code>model.Model</code>, so it can be passed directly to places that accept <code>model.Model</code>, such as <code>llmagent.WithModel(...)</code>. For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/failover">examples/model/failover</a>.</p>
-<p><strong>Switching Rules</strong>:</p>
-<ul>
-<li>Candidates are tried in the order provided to <code>WithCandidates(...)</code>.</li>
-<li>Switching is allowed only before the first non-error chunk is received.</li>
-<li>If the current candidate returns an <code>error</code> directly before that point, or returns an error response with <code>Response.Error</code>, the wrapper continues with the next candidate.</li>
-<li>Once any non-error chunk has been returned to the caller, later streaming failures are surfaced directly instead of replaying the request on the backup candidate.</li>
-</ul>
-<h2 id="model-hedge">Model Hedge</h2>
-<p><code>model/hedge</code> provides a wrapper for hedging the time to first meaningful response. It starts the primary candidate immediately, then launches later candidates according to the configured hedge delay. If all currently active candidates have already failed, it launches the next candidate early. The first candidate that produces a meaningful response becomes the winner, and the remaining candidates are canceled.</p>
-<p><strong>Quick Start:</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-79-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-79-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-79-3"> 3</a></span>
@@ -7665,9 +7660,8 @@ to preserve the default clean text-streaming behavior.</p>
 <span class="normal"><a href="#__codelineno-79-17">17</a></span>
 <span class="normal"><a href="#__codelineno-79-18">18</a></span>
 <span class="normal"><a href="#__codelineno-79-19">19</a></span>
-<span class="normal"><a href="#__codelineno-79-20">20</a></span>
-<span class="normal"><a href="#__codelineno-79-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/hedge&quot;</span>
+<span class="normal"><a href="#__codelineno-79-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/failover&quot;</span>
 </span><span id="__span-79-3"><a id="__codelineno-79-3" name="__codelineno-79-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
 </span><span id="__span-79-4"><a id="__codelineno-79-4" name="__codelineno-79-4"></a><span class="p">)</span>
 </span><span id="__span-79-5"><a id="__codelineno-79-5" name="__codelineno-79-5"></a>
@@ -7680,13 +7674,65 @@ to preserve the default clean text-streaming behavior.</p>
 </span><span id="__span-79-12"><a id="__codelineno-79-12" name="__codelineno-79-12"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.deepseek.com/v1&quot;</span><span class="p">),</span>
 </span><span id="__span-79-13"><a id="__codelineno-79-13" name="__codelineno-79-13"></a><span class="p">)</span>
 </span><span id="__span-79-14"><a id="__codelineno-79-14" name="__codelineno-79-14"></a>
-</span><span id="__span-79-15"><a id="__codelineno-79-15" name="__codelineno-79-15"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-79-16"><a id="__codelineno-79-16" name="__codelineno-79-16"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;chat-hedge&quot;</span><span class="p">),</span>
-</span><span id="__span-79-17"><a id="__codelineno-79-17" name="__codelineno-79-17"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backup</span><span class="p">),</span>
-</span><span id="__span-79-18"><a id="__codelineno-79-18" name="__codelineno-79-18"></a><span class="p">)</span>
-</span><span id="__span-79-19"><a id="__codelineno-79-19" name="__codelineno-79-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-20"><a id="__codelineno-79-20" name="__codelineno-79-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-79-21"><a id="__codelineno-79-21" name="__codelineno-79-21"></a><span class="p">}</span>
+</span><span id="__span-79-15"><a id="__codelineno-79-15" name="__codelineno-79-15"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">failover</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-79-16"><a id="__codelineno-79-16" name="__codelineno-79-16"></a><span class="w">    </span><span class="nx">failover</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backup</span><span class="p">),</span>
+</span><span id="__span-79-17"><a id="__codelineno-79-17" name="__codelineno-79-17"></a><span class="p">)</span>
+</span><span id="__span-79-18"><a id="__codelineno-79-18" name="__codelineno-79-18"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-19"><a id="__codelineno-79-19" name="__codelineno-79-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-79-20"><a id="__codelineno-79-20" name="__codelineno-79-20"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>failover.New(...)</code> returns a regular <code>model.Model</code>, so it can be passed directly to places that accept <code>model.Model</code>, such as <code>llmagent.WithModel(...)</code>. For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/failover">examples/model/failover</a>.</p>
+<p><strong>Switching Rules</strong>:</p>
+<ul>
+<li>Candidates are tried in the order provided to <code>WithCandidates(...)</code>.</li>
+<li>Switching is allowed only before the first non-error chunk is received.</li>
+<li>If the current candidate returns an <code>error</code> directly before that point, or returns an error response with <code>Response.Error</code>, the wrapper continues with the next candidate.</li>
+<li>Once any non-error chunk has been returned to the caller, later streaming failures are surfaced directly instead of replaying the request on the backup candidate.</li>
+</ul>
+<h2 id="model-hedge">Model Hedge</h2>
+<p><code>model/hedge</code> provides a wrapper for hedging the time to first meaningful response. It starts the primary candidate immediately, then launches later candidates according to the configured hedge delay. If all currently active candidates have already failed, it launches the next candidate early. The first candidate that produces a meaningful response becomes the winner, and the remaining candidates are canceled.</p>
+<p><strong>Quick Start:</strong></p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-80-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-80-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-80-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-80-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-80-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-80-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-80-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-80-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-80-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-80-10">10</a></span>
+<span class="normal"><a href="#__codelineno-80-11">11</a></span>
+<span class="normal"><a href="#__codelineno-80-12">12</a></span>
+<span class="normal"><a href="#__codelineno-80-13">13</a></span>
+<span class="normal"><a href="#__codelineno-80-14">14</a></span>
+<span class="normal"><a href="#__codelineno-80-15">15</a></span>
+<span class="normal"><a href="#__codelineno-80-16">16</a></span>
+<span class="normal"><a href="#__codelineno-80-17">17</a></span>
+<span class="normal"><a href="#__codelineno-80-18">18</a></span>
+<span class="normal"><a href="#__codelineno-80-19">19</a></span>
+<span class="normal"><a href="#__codelineno-80-20">20</a></span>
+<span class="normal"><a href="#__codelineno-80-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/hedge&quot;</span>
+</span><span id="__span-80-3"><a id="__codelineno-80-3" name="__codelineno-80-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-80-4"><a id="__codelineno-80-4" name="__codelineno-80-4"></a><span class="p">)</span>
+</span><span id="__span-80-5"><a id="__codelineno-80-5" name="__codelineno-80-5"></a>
+</span><span id="__span-80-6"><a id="__codelineno-80-6" name="__codelineno-80-6"></a><span class="nx">primary</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-80-7"><a id="__codelineno-80-7" name="__codelineno-80-7"></a><span class="w">    </span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">,</span>
+</span><span id="__span-80-8"><a id="__codelineno-80-8" name="__codelineno-80-8"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.openai.com/v1&quot;</span><span class="p">),</span>
+</span><span id="__span-80-9"><a id="__codelineno-80-9" name="__codelineno-80-9"></a><span class="p">)</span>
+</span><span id="__span-80-10"><a id="__codelineno-80-10" name="__codelineno-80-10"></a><span class="nx">backup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-80-11"><a id="__codelineno-80-11" name="__codelineno-80-11"></a><span class="w">    </span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">,</span>
+</span><span id="__span-80-12"><a id="__codelineno-80-12" name="__codelineno-80-12"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.deepseek.com/v1&quot;</span><span class="p">),</span>
+</span><span id="__span-80-13"><a id="__codelineno-80-13" name="__codelineno-80-13"></a><span class="p">)</span>
+</span><span id="__span-80-14"><a id="__codelineno-80-14" name="__codelineno-80-14"></a>
+</span><span id="__span-80-15"><a id="__codelineno-80-15" name="__codelineno-80-15"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-80-16"><a id="__codelineno-80-16" name="__codelineno-80-16"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;chat-hedge&quot;</span><span class="p">),</span>
+</span><span id="__span-80-17"><a id="__codelineno-80-17" name="__codelineno-80-17"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backup</span><span class="p">),</span>
+</span><span id="__span-80-18"><a id="__codelineno-80-18" name="__codelineno-80-18"></a><span class="p">)</span>
+</span><span id="__span-80-19"><a id="__codelineno-80-19" name="__codelineno-80-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-20"><a id="__codelineno-80-20" name="__codelineno-80-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-80-21"><a id="__codelineno-80-21" name="__codelineno-80-21"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>hedge.New(...)</code> also returns a regular <code>model.Model</code>, so it can be passed directly to places that accept <code>model.Model</code>, such as <code>llmagent.WithModel(...)</code>. This quick start uses the package default delay. Use <code>WithDelay(...)</code> or <code>WithDelays(...)</code> when you need explicit launch scheduling. For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge">examples/model/hedge</a>.</p>
 <p><strong>Scheduling And Commit Rules</strong>:</p>
@@ -7699,13 +7745,13 @@ to preserve the default clean text-streaming behavior.</p>
 </ul>
 <p><strong>Configuration Examples</strong>:</p>
 <p>The following snippets show only the scheduling differences.</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-80-1">1</a></span>
-<span class="normal"><a href="#__codelineno-80-2">2</a></span>
-<span class="normal"><a href="#__codelineno-80-3">3</a></span>
-<span class="normal"><a href="#__codelineno-80-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
-</span><span id="__span-80-3"><a id="__codelineno-80-3" name="__codelineno-80-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelay</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">),</span>
-</span><span id="__span-80-4"><a id="__codelineno-80-4" name="__codelineno-80-4"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-81-1">1</a></span>
+<span class="normal"><a href="#__codelineno-81-2">2</a></span>
+<span class="normal"><a href="#__codelineno-81-3">3</a></span>
+<span class="normal"><a href="#__codelineno-81-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
+</span><span id="__span-81-3"><a id="__codelineno-81-3" name="__codelineno-81-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelay</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">),</span>
+</span><span id="__span-81-4"><a id="__codelineno-81-4" name="__codelineno-81-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>This configuration means:</p>
 <ul>
@@ -7713,13 +7759,13 @@ to preserve the default clean text-streaming behavior.</p>
 <li><code>candidate[1]</code> starts at <code>100ms</code>.</li>
 <li><code>candidate[2]</code> starts at <code>200ms</code>.</li>
 </ul>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-81-1">1</a></span>
-<span class="normal"><a href="#__codelineno-81-2">2</a></span>
-<span class="normal"><a href="#__codelineno-81-3">3</a></span>
-<span class="normal"><a href="#__codelineno-81-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
-</span><span id="__span-81-3"><a id="__codelineno-81-3" name="__codelineno-81-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelays</span><span class="p">(</span><span class="mi">80</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">,</span><span class="w"> </span><span class="mi">250</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">),</span>
-</span><span id="__span-81-4"><a id="__codelineno-81-4" name="__codelineno-81-4"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-82-1">1</a></span>
+<span class="normal"><a href="#__codelineno-82-2">2</a></span>
+<span class="normal"><a href="#__codelineno-82-3">3</a></span>
+<span class="normal"><a href="#__codelineno-82-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-82-1"><a id="__codelineno-82-1" name="__codelineno-82-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-82-2"><a id="__codelineno-82-2" name="__codelineno-82-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
+</span><span id="__span-82-3"><a id="__codelineno-82-3" name="__codelineno-82-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelays</span><span class="p">(</span><span class="mi">80</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">,</span><span class="w"> </span><span class="mi">250</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Millisecond</span><span class="p">),</span>
+</span><span id="__span-82-4"><a id="__codelineno-82-4" name="__codelineno-82-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>This configuration means:</p>
 <ul>
@@ -7728,13 +7774,13 @@ to preserve the default clean text-streaming behavior.</p>
 <li><code>candidate[2]</code> starts at <code>250ms</code>.</li>
 </ul>
 <p><code>WithDelays(...)</code> uses absolute launch offsets from request start, not incremental gaps relative to the previous candidate.</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-82-1">1</a></span>
-<span class="normal"><a href="#__codelineno-82-2">2</a></span>
-<span class="normal"><a href="#__codelineno-82-3">3</a></span>
-<span class="normal"><a href="#__codelineno-82-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-82-1"><a id="__codelineno-82-1" name="__codelineno-82-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-82-2"><a id="__codelineno-82-2" name="__codelineno-82-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
-</span><span id="__span-82-3"><a id="__codelineno-82-3" name="__codelineno-82-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelays</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">),</span>
-</span><span id="__span-82-4"><a id="__codelineno-82-4" name="__codelineno-82-4"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-83-1">1</a></span>
+<span class="normal"><a href="#__codelineno-83-2">2</a></span>
+<span class="normal"><a href="#__codelineno-83-3">3</a></span>
+<span class="normal"><a href="#__codelineno-83-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-83-1"><a id="__codelineno-83-1" name="__codelineno-83-1"></a><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-83-2"><a id="__codelineno-83-2" name="__codelineno-83-2"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithCandidates</span><span class="p">(</span><span class="nx">primary</span><span class="p">,</span><span class="w"> </span><span class="nx">backupA</span><span class="p">,</span><span class="w"> </span><span class="nx">backupB</span><span class="p">),</span>
+</span><span id="__span-83-3"><a id="__codelineno-83-3" name="__codelineno-83-3"></a><span class="w">    </span><span class="nx">hedge</span><span class="p">.</span><span class="nx">WithDelays</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">),</span>
+</span><span id="__span-83-4"><a id="__codelineno-83-4" name="__codelineno-83-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>This configuration means:</p>
 <ul>
@@ -7765,7 +7811,7 @@ to preserve the default clean text-streaming behavior.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 28, 2026 04:43:07 UTC">2026-04-28 04:43:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 29, 2026 05:54:41 UTC">2026-04-29 05:54:41</span>
   </span>
 
     
