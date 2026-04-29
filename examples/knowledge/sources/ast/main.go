@@ -60,10 +60,7 @@ func main() {
 
 func demonstrateRepoSource(ctx context.Context, goRepoURL string, protoRepo string) {
 	src := repo.New(
-		nil,
-		repo.WithRepository(
-			repo.Repository{URL: goRepoURL, Branch: "main"},
-		),
+		repo.WithRepository(repo.Repository{URL: goRepoURL, Branch: "main"}),
 		repo.WithName("AST Repository"),
 		repo.WithFileExtensions([]string{".go", ".md"}),
 	)
@@ -101,7 +98,7 @@ func demonstrateRepoSource(ctx context.Context, goRepoURL string, protoRepo stri
 	}
 
 	storeType := util.VectorStoreType(*vectorStore)
-	vs, err := util.NewVectorStoreByType(storeType)
+	vs, err := util.NewVectorStoreByTypeWithDimension(storeType, emb.GetDimensions())
 	if err != nil {
 		log.Printf("create vector store failed: %v", err)
 		return

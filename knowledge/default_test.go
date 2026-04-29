@@ -91,6 +91,27 @@ func TestBuiltinKnowledge_LoadNoSources(t *testing.T) {
 	}
 }
 
+func TestBuiltinKnowledge_SourcesReturnsShallowClone(t *testing.T) {
+	srcA := &mockSource{name: "source-a"}
+	srcB := &mockSource{name: "source-b"}
+	kb := &BuiltinKnowledge{
+		sources: []source.Source{srcA, srcB},
+	}
+
+	cloned := kb.Sources()
+	if len(cloned) != 2 {
+		t.Fatalf("len(cloned) = %d, want 2", len(cloned))
+	}
+	if cloned[0] != srcA || cloned[1] != srcB {
+		t.Fatalf("Sources() returned unexpected slice contents: %#v", cloned)
+	}
+
+	cloned[0] = &mockSource{name: "mutated"}
+	if kb.sources[0] != srcA {
+		t.Fatalf("mutating cloned slice should not replace original source")
+	}
+}
+
 func TestStatsAddAndAvg(t *testing.T) {
 	buckets := []int{10, 20, 30}
 	ss := loader.NewStats(buckets)

@@ -52,9 +52,19 @@ const (
 
 // NewVectorStoreByType creates a vector store based on the specified type.
 func NewVectorStoreByType(storeType VectorStoreType) (vectorstore.VectorStore, error) {
+	return NewVectorStoreByTypeWithDimension(storeType, 0)
+}
+
+// NewVectorStoreByTypeWithDimension creates a vector store based on the
+// specified type and, when relevant, configures it for the embedder dimension
+// used by the caller.
+func NewVectorStoreByTypeWithDimension(
+	storeType VectorStoreType,
+	indexDimension int,
+) (vectorstore.VectorStore, error) {
 	switch storeType {
 	case VectorStorePGVector:
-		return newPGVectorStore()
+		return newPGVectorStore(indexDimension)
 	case VectorStoreSQLiteVec:
 		return newSQLiteVecStore()
 	case VectorStoreTCVector:
@@ -70,7 +80,7 @@ func NewVectorStoreByType(storeType VectorStoreType) (vectorstore.VectorStore, e
 	}
 }
 
-func newPGVectorStore() (vectorstore.VectorStore, error) {
+func newPGVectorStore(indexDimension int) (vectorstore.VectorStore, error) {
 	host := GetEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
 	portStr := GetEnvOrDefault("PGVECTOR_PORT", "5432")
 	port, _ := strconv.Atoi(portStr)
@@ -78,16 +88,30 @@ func newPGVectorStore() (vectorstore.VectorStore, error) {
 	password := GetEnvOrDefault("PGVECTOR_PASSWORD", "")
 	database := GetEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
 	table := GetEnvOrDefault("PGVECTOR_TABLE", "trpc_agent_go")
+	if indexDimension <= 0 {
+		dimStr := strings.TrimSpace(GetEnvOrDefault("PGVECTOR_INDEX_DIMENSION", ""))
+		if dimStr != "" {
+			dim, err := strconv.Atoi(dimStr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid PGVECTOR_INDEX_DIMENSION %q: %w", dimStr, err)
+			}
+			indexDimension = dim
+		}
+	}
 
 	encodedUser := url.QueryEscape(user)
 	encodedPassword := url.QueryEscape(password)
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
 		encodedUser, encodedPassword, host, port, database)
 
-	return pgvector.New(
+	opts := []pgvector.Option{
 		pgvector.WithPGVectorClientDSN(dsn),
 		pgvector.WithTable(table),
-	)
+	}
+	if indexDimension > 0 {
+		opts = append(opts, pgvector.WithIndexDimension(indexDimension))
+	}
+	return pgvector.New(opts...)
 }
 
 func newTCVectorStore() (vectorstore.VectorStore, error) {

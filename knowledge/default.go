@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -135,6 +136,15 @@ func New(opts ...Option) *BuiltinKnowledge {
 		)
 	}
 	return dk
+}
+
+// Sources returns a shallow copy of the configured sources. It is primarily
+// used by tool-layer helpers that need source-level context such as repository
+// descriptions, without relying on per-chunk metadata.
+func (dk *BuiltinKnowledge) Sources() []source.Source {
+	dk.dataOperationMu.RLock()
+	defer dk.dataOperationMu.RUnlock()
+	return slices.Clone(dk.sources)
 }
 
 // ShowDocumentInfo shows the document info from the vector store.

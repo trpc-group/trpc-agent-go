@@ -188,8 +188,9 @@ func (r *Reader) processContent(content, name string, baseMetadata map[string]an
 
 func (r *Reader) nodesToDocuments(result *codeast.Result, baseMetadata map[string]any) []*document.Document {
 	payloads := codeast.NodesToDocumentPayloads(result, codeast.NodeDocumentPayloadOptions{
-		BaseMetadata: baseMetadata,
-		FileInfo:     result.File,
+		BaseMetadata:  baseMetadata,
+		ScopeBasePath: repoRootFromMetadata(baseMetadata),
+		FileInfo:      result.File,
 		FormatType: func(entityType codeast.EntityType) string {
 			return string(entityType)
 		},
@@ -223,7 +224,7 @@ func (r *Reader) createFileDocumentFromInfo(content, name string, baseMetadata m
 	doc.Metadata["trpc_ast_name"] = name
 	doc.Metadata["trpc_ast_full_name"] = name
 	doc.Metadata["trpc_ast_language"] = "go"
-	doc.Metadata["trpc_ast_scope"] = "code"
+	doc.Metadata["trpc_ast_scope"] = resolveScope(name, baseMetadata)
 	doc.Metadata["trpc_ast_file_path"] = name
 	if fileInfo != nil {
 		if fileInfo.Package != "" {
@@ -288,4 +289,25 @@ func (r *Reader) Name() string {
 // SupportedExtensions returns the file extensions this reader supports.
 func (r *Reader) SupportedExtensions() []string {
 	return supportedExtensions
+}
+
+// resolveScope returns the AST scope ("code" or "example") for a file-level
+// document. When baseMetadata provides a repository root under
+// source.MetaRepoPath, detection is anchored at that root.
+func resolveScope(filePath string, baseMetadata map[string]any) string {
+	if codeast.IsExamplePath(filePath, repoRootFromMetadata(baseMetadata)) {
+		return string(codeast.ScopeExample)
+	}
+	return string(codeast.ScopeCode)
+}
+
+func repoRootFromMetadata(baseMetadata map[string]any) string {
+	if baseMetadata != nil {
+		if v, ok := baseMetadata[source.MetaRepoPath]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
 }

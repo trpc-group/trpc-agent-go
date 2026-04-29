@@ -41,7 +41,7 @@ func TestReadDocumentsFromRemoteBranch(t *testing.T) {
 		},
 	}}, nil)
 
-	src := New(nil, WithRepository(Repository{URL: remoteURL, Branch: "feature"}))
+	src := New(WithRepository(Repository{URL: remoteURL, Branch: "feature"}))
 	docs, err := src.ReadDocuments(context.Background())
 	if err != nil {
 		t.Fatalf("ReadDocuments() error = %v", err)
@@ -72,7 +72,7 @@ func TestReadDocumentsFromRemoteTag(t *testing.T) {
 		},
 	}}, nil)
 
-	src := New(nil, WithRepository(Repository{URL: remoteURL, Tag: "v1.0.0"}))
+	src := New(WithRepository(Repository{URL: remoteURL, Tag: "v1.0.0"}))
 	docs, err := src.ReadDocuments(context.Background())
 	if err != nil {
 		t.Fatalf("ReadDocuments() error = %v", err)
@@ -106,7 +106,7 @@ func TestReadDocumentsFromRemoteCommit(t *testing.T) {
 	}}, nil)
 	firstSHA := latestCommitSHA(t, remoteURL, "main~1")
 
-	src := New(nil, WithRepository(Repository{URL: remoteURL, Commit: firstSHA}))
+	src := New(WithRepository(Repository{URL: remoteURL, Commit: firstSHA}))
 	docs, err := src.ReadDocuments(context.Background())
 	if err != nil {
 		t.Fatalf("ReadDocuments() error = %v", err)
@@ -144,7 +144,7 @@ func TestReadDocumentsRemoteVersionPriorityPrefersCommit(t *testing.T) {
 	}}, nil)
 	firstSHA := latestCommitSHA(t, remoteURL, "main~1")
 
-	src := New(nil, WithRepository(Repository{
+	src := New(WithRepository(Repository{
 		URL:    remoteURL,
 		Branch: "feature",
 		Tag:    "v1.0.0",
@@ -176,7 +176,7 @@ func TestReadDocumentsRemoteBranchNotFound(t *testing.T) {
 		},
 	}}, nil)
 
-	src := New(nil, WithRepository(Repository{URL: remoteURL, Branch: "missing-branch"}))
+	src := New(WithRepository(Repository{URL: remoteURL, Branch: "missing-branch"}))
 	_, err := src.ReadDocuments(context.Background())
 	if err == nil {
 		t.Fatal("expected error for missing remote branch")
@@ -197,7 +197,13 @@ type Service struct{}
 func (s *Service) Do(ctx context.Context) error { return nil }
 `)
 
-	src := New([]string{repoRoot}, WithRepoName("demo-repo"), WithRepoURL("https://example.com/demo.git"), WithBranch("main"))
+	src := New(WithRepository(Repository{
+		Dir:         repoRoot,
+		RepoName:    "demo-repo",
+		Description: "demo repository for tests",
+		RepoURL:     "https://example.com/demo.git",
+		Branch:      "main",
+	}))
 	docs, err := src.ReadDocuments(context.Background())
 	if err != nil {
 		t.Fatalf("ReadDocuments() error = %v", err)
@@ -244,7 +250,9 @@ package demo;
 message SkipProto { string name = 1; }
 `)
 
-	src := New([]string{repoRoot}, WithSkipSuffixes([]string{".pb.go", ".pb.proto", ".trpc.go", "_mock.go"}))
+	src := New(WithRepository(Repository{Dir: repoRoot}),
+		WithSkipSuffixes([]string{".pb.go", ".pb.proto", ".trpc.go", "_mock.go"}),
+	)
 	docs, err := src.ReadDocuments(context.Background())
 	if err != nil {
 		t.Fatalf("ReadDocuments() error = %v", err)
@@ -265,7 +273,7 @@ func TestReadDocumentsParserTaskRespectsSubdirFilter(t *testing.T) {
 	writeRepoFile(t, filepath.Join(repoRoot, "service.go"), "package demo\n\ntype Root struct{}\n")
 	writeRepoFile(t, filepath.Join(repoRoot, "internal", "api.go"), "package internal\n\ntype Internal struct{}\n")
 
-	src := New([]string{repoRoot}, WithSubdir("internal"))
+	src := New(WithRepository(Repository{Dir: repoRoot, Subdir: "internal"}))
 	docs, err := src.ReadDocuments(context.Background())
 	if err != nil {
 		t.Fatalf("ReadDocuments() error = %v", err)
@@ -283,7 +291,7 @@ func TestReadDocumentsRejectsEscapingSubdir(t *testing.T) {
 	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
 	writeRepoFile(t, filepath.Join(repoRoot, "service.go"), "package demo\n\nfunc Root() {}\n")
 
-	src := New([]string{repoRoot}, WithSubdir("../outside"))
+	src := New(WithRepository(Repository{Dir: repoRoot, Subdir: "../outside"}))
 	_, err := src.ReadDocuments(context.Background())
 	if err == nil {
 		t.Fatal("expected error for escaping subdir")
@@ -297,7 +305,10 @@ func TestReadDocumentsRejectsAbsoluteSubdir(t *testing.T) {
 	repoRoot := t.TempDir()
 	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
 
-	src := New([]string{repoRoot}, WithSubdir(filepath.Join(string(filepath.Separator), "tmp", "demo")))
+	src := New(WithRepository(Repository{
+		Dir:    repoRoot,
+		Subdir: filepath.Join(string(filepath.Separator), "tmp", "demo"),
+	}))
 	_, err := src.ReadDocuments(context.Background())
 	if err == nil {
 		t.Fatal("expected error for absolute subdir")
@@ -319,7 +330,7 @@ type Service struct{}
 func (s *Service) Do() error { return nil }
 `)
 
-	src := New([]string{repoRoot})
+	src := New(WithRepository(Repository{Dir: repoRoot}))
 	docs, err := src.ReadDocuments(context.Background())
 	if err != nil {
 		t.Fatalf("ReadDocuments() error = %v", err)
@@ -346,26 +357,14 @@ func (s *Service) Do() error { return nil }
 }
 
 func TestReadDocumentsRejectsMultipleRepositoriesPerSource(t *testing.T) {
-	repoRoot := t.TempDir()
-	src := New(nil, WithRepository(
-		Repository{Dir: repoRoot},
-		Repository{URL: "https://example.com/demo.git"},
-	))
+	src := New(WithRepository(Repository{Dir: t.TempDir()}),
+		WithRepository(Repository{URL: "https://example.com/demo.git"}),
+	)
 
 	_, err := src.ReadDocuments(context.Background())
 	if err == nil {
 		t.Fatal("expected error for multiple repositories per source")
 	}
-}
-
-func TestResolvedInputsUsesStructuredOptions(t *testing.T) {
-	src := New(nil, WithRepoURLs("https://example.com/demo.git"), WithDirs("/tmp/demo"))
-	inputs := src.resolvedInputs()
-	if len(inputs) != 2 {
-		t.Fatalf("expected 2 inputs, got %d", len(inputs))
-	}
-	assertEqual(t, inputs[0], "https://example.com/demo.git")
-	assertEqual(t, inputs[1], "/tmp/demo")
 }
 
 func TestFirstNonEmpty(t *testing.T) {
@@ -375,24 +374,56 @@ func TestFirstNonEmpty(t *testing.T) {
 	assertEqual(t, firstNonEmpty("", "", ""), "")
 }
 
-func TestResolvedRepositoriesUsesStructuredRepositories(t *testing.T) {
-	src := New(nil, WithRepository(
-		Repository{URL: "https://example.com/demo.git", Branch: "main"},
-		Repository{Dir: "/tmp/demo", Tag: "v1.0.0"},
-	))
-	repositories := src.resolvedRepositories()
-	if len(repositories) != 2 {
-		t.Fatalf("expected 2 repositories, got %d", len(repositories))
+func TestResolvedRepositoryUsesStructuredRepository(t *testing.T) {
+	src := New(WithRepository(Repository{URL: "https://example.com/demo.git", Branch: "main"}))
+	repository, ok := src.resolvedRepository()
+	if !ok {
+		t.Fatal("expected repository to be configured")
 	}
-	assertEqual(t, repositories[0].URL, "https://example.com/demo.git")
-	assertEqual(t, repositories[0].Branch, "main")
-	assertEqual(t, repositories[1].Dir, "/tmp/demo")
-	assertEqual(t, repositories[1].Tag, "v1.0.0")
+	assertEqual(t, repository.URL, "https://example.com/demo.git")
+	assertEqual(t, repository.Branch, "main")
+}
+
+func TestResolvedRepositoryAndDescriptorEdgeCases(t *testing.T) {
+	t.Run("missing repository returns false", func(t *testing.T) {
+		src := New()
+		if _, ok := src.resolvedRepository(); ok {
+			t.Fatal("expected unresolved repository")
+		}
+		if _, _, ok := src.RepositoryDescriptor(); ok {
+			t.Fatal("expected no repository descriptor")
+		}
+		if _, err := src.ReadDocuments(context.Background()); err == nil {
+			t.Fatal("expected missing repository error")
+		}
+	})
+
+	t.Run("descriptor uses configured dir and description", func(t *testing.T) {
+		repoDir := filepath.Join(t.TempDir(), "demo-repo")
+		src := New(WithRepository(Repository{
+			Dir:         repoDir,
+			Description: "demo repository",
+		}))
+
+		name, description, ok := src.RepositoryDescriptor()
+		if !ok {
+			t.Fatal("expected repository descriptor")
+		}
+		assertEqual(t, name, "demo-repo")
+		assertEqual(t, description, "demo repository")
+	})
+
+	t.Run("descriptor rejects empty repository", func(t *testing.T) {
+		src := New(WithRepository(Repository{}))
+		if _, _, ok := src.RepositoryDescriptor(); ok {
+			t.Fatal("expected no repository descriptor")
+		}
+	})
 }
 
 func TestWithFileExtensionsCopiesCallerSlice(t *testing.T) {
 	extensions := []string{".go", ".proto"}
-	src := New(nil, WithFileExtensions(extensions))
+	src := New(WithFileExtensions(extensions))
 
 	extensions[0] = ".md"
 
@@ -404,29 +435,25 @@ func TestWithFileExtensionsCopiesCallerSlice(t *testing.T) {
 }
 
 func TestOptionSettersBasicCoverage(t *testing.T) {
-	src := New(
-		nil,
-		WithName("repo-src"),
+	src := New(WithName("repo-src"),
 		WithMetadata(map[string]any{"k": "v"}),
 		WithMetadataValue("k2", "v2"),
-		WithTag("v1.0.0"),
-		WithCommit("commit-sha"),
+		WithRepository(Repository{Dir: "/tmp/repo", Tag: "v1.0.0", Commit: "commit-sha"}),
 		WithSkipDirs([]string{"vendor", "third_party"}),
 	)
 
 	assertEqual(t, src.name, "repo-src")
 	assertEqual(t, src.metadata["k"], "v")
 	assertEqual(t, src.metadata["k2"], "v2")
-	assertEqual(t, src.tag, "v1.0.0")
-	assertEqual(t, src.commit, "commit-sha")
+	assertEqual(t, src.repository.Tag, "v1.0.0")
+	assertEqual(t, src.repository.Commit, "commit-sha")
 	if len(src.skipDirs) != 2 {
 		t.Fatalf("skipDirs len = %d, want 2", len(src.skipDirs))
 	}
 }
 
 func TestSourceMetadataAndHelpers(t *testing.T) {
-	src := New(nil,
-		WithName("repo-src"),
+	src := New(WithName("repo-src"),
 		WithMetadata(map[string]any{"k": "v"}),
 	)
 
@@ -534,7 +561,7 @@ func TestCloneRemoteRepositoryUnknownTargetKind(t *testing.T) {
 }
 
 func TestInitializeReadersWithTransformerOptionCoverage(t *testing.T) {
-	src := New(nil, WithTransformers(noopTransformer{}))
+	src := New(WithTransformers(noopTransformer{}))
 	if src.readers == nil || len(src.readers) == 0 {
 		t.Fatal("expected readers to be initialized")
 	}
@@ -548,8 +575,7 @@ func TestGetFilePathsHonorsSkipAndExtensions(t *testing.T) {
 	writeRepoFile(t, filepath.Join(repoRoot, "vendor", "x.go"), "package vendor\n")
 	writeRepoFile(t, filepath.Join(repoRoot, ".git", "HEAD"), "ref: refs/heads/main\n")
 
-	src := New(nil,
-		WithFileExtensions([]string{".go"}),
+	src := New(WithFileExtensions([]string{".go"}),
 		WithSkipDirs([]string{".git", "vendor"}),
 		WithSkipSuffixes([]string{".pb.go"}),
 	)
@@ -607,7 +633,7 @@ func TestResolveRepositoryLocalPathMustBeDirectory(t *testing.T) {
 	filePath := filepath.Join(root, "not-dir.txt")
 	writeRepoFile(t, filePath, "x")
 
-	src := New(nil)
+	src := New()
 	_, _, _, err := src.resolveRepository(context.Background(), Repository{Dir: filePath})
 	if err == nil {
 		t.Fatal("expected error for non-directory local repository path")
@@ -654,7 +680,7 @@ func TestProcessFileMetadataAndErrors(t *testing.T) {
 		filePath := filepath.Join(repoRoot, "docs", "readme.go")
 		writeRepoFile(t, filePath, "package demo\n")
 
-		src := New(nil, WithName("repo-src"), WithMetadata(map[string]any{"k": "v"}))
+		src := New(WithName("repo-src"), WithMetadata(map[string]any{"k": "v"}))
 		src.readers = map[string]docreader.Reader{
 			"go": &stubReader{
 				fileDocs: []*document.Document{
@@ -664,7 +690,11 @@ func TestProcessFileMetadataAndErrors(t *testing.T) {
 			},
 		}
 
-		docs, err := src.processFile(filePath, repoRoot, &repoInfo{name: "repo", url: "https://example.com/repo.git", branch: "main"})
+		docs, err := src.processFile(filePath, repoRoot, &repoInfo{
+			name:   "repo",
+			url:    "https://example.com/repo.git",
+			branch: "main",
+		})
 		if err != nil {
 			t.Fatalf("processFile() error = %v", err)
 		}
@@ -689,7 +719,7 @@ func TestProcessFileMetadataAndErrors(t *testing.T) {
 	})
 
 	t.Run("stat file error", func(t *testing.T) {
-		src := New(nil)
+		src := New()
 		_, err := src.processFile(filepath.Join(t.TempDir(), "missing.go"), t.TempDir(), nil)
 		if err == nil {
 			t.Fatal("expected processFile stat error")
@@ -701,7 +731,7 @@ func TestProcessFileMetadataAndErrors(t *testing.T) {
 		filePath := filepath.Join(repoRoot, "demo.go")
 		writeRepoFile(t, filePath, "package demo\n")
 
-		src := New(nil)
+		src := New()
 		src.readers = map[string]docreader.Reader{}
 		_, err := src.processFile(filePath, repoRoot, nil)
 		if err == nil {
@@ -714,7 +744,7 @@ func TestProcessFileMetadataAndErrors(t *testing.T) {
 		filePath := filepath.Join(repoRoot, "demo.go")
 		writeRepoFile(t, filePath, "package demo\n")
 
-		src := New(nil)
+		src := New()
 		src.readers = map[string]docreader.Reader{
 			"go": &stubReader{fileErr: fmt.Errorf("boom")},
 		}
@@ -736,7 +766,7 @@ func TestProcessDirectoryMetadataFilteringAndErrors(t *testing.T) {
 		writeRepoFile(t, b, "package demo\n")
 		writeRepoFile(t, skip, "package demo\n")
 
-		src := New(nil, WithSkipSuffixes([]string{".pb.go"}), WithName("repo-src"), WithMetadata(map[string]any{"x": "y"}))
+		src := New(WithSkipSuffixes([]string{".pb.go"}), WithName("repo-src"), WithMetadata(map[string]any{"x": "y"}))
 		src.readers = map[string]docreader.Reader{
 			"go": &stubDirectoryReader{stubReader: &stubReader{}, dirDocs: []*document.Document{
 				{Metadata: map[string]any{"trpc_ast_file_path": a, "trpc_ast_type": "file"}},
@@ -776,7 +806,7 @@ func TestProcessDirectoryMetadataFilteringAndErrors(t *testing.T) {
 	})
 
 	t.Run("missing reader", func(t *testing.T) {
-		src := New(nil)
+		src := New()
 		src.readers = map[string]docreader.Reader{}
 		_, err := src.processDirectory(t.TempDir(), "go", t.TempDir(), nil, nil)
 		if err == nil {
@@ -785,7 +815,7 @@ func TestProcessDirectoryMetadataFilteringAndErrors(t *testing.T) {
 	})
 
 	t.Run("reader not directory capable", func(t *testing.T) {
-		src := New(nil)
+		src := New()
 		src.readers = map[string]docreader.Reader{"go": &stubReader{}}
 		_, err := src.processDirectory(t.TempDir(), "go", t.TempDir(), nil, nil)
 		if err == nil {
@@ -794,7 +824,7 @@ func TestProcessDirectoryMetadataFilteringAndErrors(t *testing.T) {
 	})
 
 	t.Run("directory reader error", func(t *testing.T) {
-		src := New(nil)
+		src := New()
 		src.readers = map[string]docreader.Reader{"go": &stubDirectoryReader{stubReader: &stubReader{}, dirErr: fmt.Errorf("bad dir")}}
 		_, err := src.processDirectory(t.TempDir(), "go", t.TempDir(), nil, nil)
 		if err == nil {
@@ -809,7 +839,7 @@ func TestClassifyFilesAndRelativePathExtraCoverage(t *testing.T) {
 		txt := filepath.Join(repoRoot, "a.txt")
 		writeRepoFile(t, txt, "x")
 
-		src := New(nil)
+		src := New()
 		src.readers = map[string]docreader.Reader{}
 		_, err := src.classifyFiles(repoRoot, []string{txt})
 		if err == nil {
@@ -844,7 +874,7 @@ func TestChooseRepoNameAndLooksLikeGitURLExtraCoverage(t *testing.T) {
 }
 
 func TestResolveRepositoryAndBuildBaseMetadataExtraCoverage(t *testing.T) {
-	src := New(nil)
+	src := New()
 
 	_, _, _, err := src.resolveRepository(context.Background(), Repository{Dir: filepath.Join(t.TempDir(), "missing")})
 	if err == nil {
@@ -857,6 +887,21 @@ func TestResolveRepositoryAndBuildBaseMetadataExtraCoverage(t *testing.T) {
 	}
 	if _, ok := base[source.MetaRepoName]; ok {
 		t.Fatalf("did not expect repo name in metadata without repo info")
+	}
+}
+
+func TestResolveRepositoryRejectsInvalidStructuredInputs(t *testing.T) {
+	src := New()
+
+	if _, _, _, err := src.resolveRepository(context.Background(), Repository{}); err == nil {
+		t.Fatal("expected error when neither URL nor Dir is configured")
+	}
+
+	if _, _, _, err := src.resolveRepository(context.Background(), Repository{
+		URL: "https://example.com/demo.git",
+		Dir: t.TempDir(),
+	}); err == nil {
+		t.Fatal("expected error when both URL and Dir are configured")
 	}
 }
 
