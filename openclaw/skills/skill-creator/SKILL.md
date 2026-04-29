@@ -42,6 +42,11 @@ Do not create a skill for one-off work that is unlikely to repeat. Finish the
 task directly when the user only needs a single answer, file, edit, or command
 result and there is no durable workflow to preserve.
 
+Use memory instead of a skill for lightweight facts, preferences, and simple
+standing rules that do not need an executable workflow, tools, references,
+examples, or recovery paths. Use a skill when the remembered item is an
+operational capability that future tasks should be able to run.
+
 Keep the boundary clear:
 
 - Put stable platform invariants in application code or runtime config:
@@ -375,7 +380,9 @@ Write the YAML frontmatter with `name` and `description`:
   - Include all "when to use" information here - Not in the body. The body is only loaded after triggering, so "When to Use This Skill" sections in the body are not helpful to Codex.
   - Example description for a `docx` skill: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. Use when Codex needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
 
-Do not include any other fields in YAML frontmatter.
+Keep generic skills to `name` and `description` unless the target runtime
+already supports additional fields such as `license`, `allowed-tools`,
+`metadata`, `homepage`, or `user-invocable`.
 
 ##### Body
 
@@ -383,7 +390,17 @@ Write instructions for using the skill and its bundled resources.
 
 ### Step 5: Packaging a Skill
 
-Once development of the skill is complete, it must be packaged into a distributable .skill file that gets shared with the user. The packaging process automatically validates the skill first to ensure it meets all requirements:
+Validate every new or modified package-format skill. Do not bulk-force this
+validator across legacy bundled OpenClaw skills that intentionally use a
+runtime-specific or non-packaged format; inspect or test those with the
+runtime's own workflow. Package a skill into a distributable .skill file only
+when the user asks for a shareable artifact, the skill needs to be installed
+elsewhere, or the runtime expects a packaged skill. For local durable
+capabilities, keep the skill in the writable skill root, refresh or reload
+skills when the runtime provides that path, and use it for the current task.
+
+The packaging process automatically validates the skill first to ensure it
+meets all requirements:
 
 ```bash
 scripts/package_skill.py <path/to/skill-folder>

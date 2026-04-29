@@ -1117,6 +1117,10 @@ reuse an MCP server, follow a team process, or preserve a domain rule for
 future tasks, prefer creating or updating a skill instead of adding
 case-specific runtime logic.
 
+Use memory for lightweight facts, preferences, and simple standing rules.
+Use a skill when the remembered item needs an operational workflow, tools,
+examples, references, or recovery paths.
+
 Use application code and runtime config for stable boundaries such as
 permissions, secret handling, file access, validation, and lifecycle
 management. Use skills for the evolving context: when the capability should

@@ -1599,15 +1599,21 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
+		"For lightweight facts, preferences, or simple "+
+			"standing rules, use memory instead.",
+	)
+	require.Contains(
+		t,
+		sys,
 		"Use platform code and tools for stable safety "+
 			"boundaries",
 	)
 	require.Contains(
 		t,
 		sys,
-		"write the skill files under an available local "+
-			"skill root",
+		"choose a writable user-managed skill root",
 	)
+	require.Contains(t, sys, "not bundled skills unless")
 	require.Contains(
 		t,
 		sys,
@@ -3045,7 +3051,7 @@ func TestResolveWorkspaceSkillsRoot_CwdSkills(t *testing.T) {
 	require.Equal(t, filepath.Join(cwd, defaultSkillsDir), got)
 }
 
-func TestResolveWorkspaceSkillsRoot_RepoBundled(t *testing.T) {
+func TestResolveWorkspaceSkillsRoot_IgnoresRepoBundled(t *testing.T) {
 	cwd := t.TempDir()
 	require.NoError(t, os.MkdirAll(
 		filepath.Join(cwd, appName, defaultSkillsDir),
@@ -3053,7 +3059,7 @@ func TestResolveWorkspaceSkillsRoot_RepoBundled(t *testing.T) {
 	))
 
 	got := resolveWorkspaceSkillsRoot(cwd, "")
-	require.Equal(t, filepath.Join(cwd, appName, defaultSkillsDir), got)
+	require.Equal(t, filepath.Join(cwd, defaultSkillsDir), got)
 }
 
 func TestResolveSkillRoots_IncludesExpectedRoots(t *testing.T) {
@@ -3116,6 +3122,20 @@ func TestResolveSkillRoots_UsesInstalledBundledSkills(t *testing.T) {
 		roots,
 		filepath.Join(cwd, appName, defaultSkillsDir),
 	)
+}
+
+func TestResolveSkillRoots_SeparatesRepoBundledSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := t.TempDir()
+	stateDir := t.TempDir()
+	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
+	require.NoError(t, os.MkdirAll(repoBundled, 0o700))
+
+	roots := resolveSkillRoots(cwd, agentConfig{StateDir: stateDir})
+	require.Contains(t, roots, filepath.Join(cwd, defaultSkillsDir))
+	require.Contains(t, roots, repoBundled)
 }
 
 func TestResolveBundledSkillsRoot_RepoFallback(t *testing.T) {
