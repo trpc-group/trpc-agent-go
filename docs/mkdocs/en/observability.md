@@ -12,12 +12,6 @@ tRPC-Agent-Go provides comprehensive observability features built on the OpenTel
 - **Multi-platform Support**: Supports mainstream monitoring platforms such as Jaeger, Prometheus, Galileo, and ZhiYan Monitoring Bao.
 - **Flexible Configuration**: Supports multiple configuration methods and custom extensions.
 
-### Telemetry Protocol
-
-For the OpenTelemetry-aligned multimodal message schema, provider capability
-boundaries, and replay rules, see
-[Telemetry Multimodal Protocol](telemetry-multimodal.md).
-
 ## Integration with Different Monitoring Platforms
 
 ### Langfuse Integration
