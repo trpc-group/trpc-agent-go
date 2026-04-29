@@ -320,20 +320,7 @@ func truncateObservationInputMessages(raw string) string {
 	if maxLeafBytes < 0 || len([]byte(raw)) <= maxLeafBytes {
 		return raw
 	}
-
-	var msgs []model.Message
-	if err := json.Unmarshal([]byte(raw), &msgs); err != nil {
-		return truncateObservationValue(raw)
-	}
-
-	if maxLeafBytes > 0 {
-		plan := truncateMessagesPlan{textLimit: maxLeafBytes, binaryLimit: maxLeafBytes}
-		sanitizeMessagesForObservation(msgs, plan)
-	}
-	if b, err := json.Marshal(msgs); err == nil {
-		return string(b)
-	}
-	return truncateObservationValue(raw)
+	return truncateObservationJSONLeafValues(raw)
 }
 
 func truncateObservationOutputChoices(raw string) string {
@@ -344,27 +331,7 @@ func truncateObservationOutputChoices(raw string) string {
 	if maxLeafBytes < 0 || len([]byte(raw)) <= maxLeafBytes {
 		return raw
 	}
-
-	var choices []model.Choice
-	if err := json.Unmarshal([]byte(raw), &choices); err != nil {
-		return truncateObservationValue(raw)
-	}
-
-	if maxLeafBytes > 0 {
-		plan := truncateMessagesPlan{textLimit: maxLeafBytes, binaryLimit: maxLeafBytes}
-		for i := range choices {
-			msg := choices[i].Message
-			delta := choices[i].Delta
-			sanitizeSingleMessageForObservation(&msg, plan)
-			sanitizeSingleMessageForObservation(&delta, plan)
-			choices[i].Message = msg
-			choices[i].Delta = delta
-		}
-	}
-	if b, err := json.Marshal(choices); err == nil {
-		return string(b)
-	}
-	return truncateObservationValue(raw)
+	return truncateObservationJSONLeafValues(raw)
 }
 
 func truncateObservationLLMInput(raw string) string {
@@ -392,6 +359,12 @@ func truncateObservationLLMInput(raw string) string {
 		if b, err := json.Marshal(prompt); err == nil {
 			return string(b)
 		}
+	}
+
+	// Handle OTel role+parts payloads before the legacy model.Message branch so
+	// truncation preserves multimodal parts instead of dropping them.
+	if msgs, err := itelemetry.ParseOTelInputMessagesJSON(raw); err == nil && msgs != nil {
+		return truncateObservationInputMessages(raw)
 	}
 
 	var msgs []model.Message
