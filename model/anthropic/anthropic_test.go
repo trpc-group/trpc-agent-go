@@ -631,54 +631,104 @@ func Test_buildStreamingPartialResponse_TextAndThinkingAndStop(t *testing.T) {
 
 	// Text delta empty -> skip.
 	e1 := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`)
-	resp, err := buildStreamingPartialResponse(acc, e1)
+	resp, err := buildStreamingPartialResponse(acc, e1, false)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 
 	// Text delta non-empty -> content delta.
 	e2 := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"abc"}}`)
-	resp, err = buildStreamingPartialResponse(acc, e2)
+	resp, err = buildStreamingPartialResponse(acc, e2, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.Equal(t, "abc", resp.Choices[0].Delta.Content)
 
 	// Thinking delta non-empty -> reasoning delta.
 	e3 := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"think"}}`)
-	resp, err = buildStreamingPartialResponse(acc, e3)
+	resp, err = buildStreamingPartialResponse(acc, e3, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.Equal(t, "think", resp.Choices[0].Delta.ReasoningContent)
 
 	// Message delta with stop_reason -> finish reason set.
 	e4 := anthropicStreamEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":""},"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":0,"output_tokens":0,"server_tool_use":{"web_search_requests":0}}}`)
-	resp, err = buildStreamingPartialResponse(acc, e4)
+	resp, err = buildStreamingPartialResponse(acc, e4, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.NotNil(t, resp.Choices[0].FinishReason)
 
 	// Unknown type should be skipped.
 	e5 := anthropicStreamEvent("unknown", `{"type":"unknown"}`)
-	resp, err = buildStreamingPartialResponse(acc, e5)
+	resp, err = buildStreamingPartialResponse(acc, e5, false)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 
 	// Content block delta with input_json_delta should be skipped.
 	e6 := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}`)
-	resp, err = buildStreamingPartialResponse(acc, e6)
+	acc.Content = []anthropic.ContentBlockUnion{
+		anthropicContentUnion("tool_use", `{"type":"tool_use","id":"id1","name":"fn","input":{}}`),
+	}
+	resp, err = buildStreamingPartialResponse(acc, e6, false)
+	assert.NoError(t, err)
+	assert.Nil(t, resp)
+
+	// Content block delta with input_json_delta should be emitted when enabled.
+	resp, err = buildStreamingPartialResponse(acc, e6, true)
+	assert.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices[0].Delta.ToolCalls, 1)
+	assert.Equal(t, "id1", resp.Choices[0].Delta.ToolCalls[0].ID)
+	assert.Equal(t, "fn", resp.Choices[0].Delta.ToolCalls[0].Function.Name)
+	assert.Equal(t, "{}", string(resp.Choices[0].Delta.ToolCalls[0].Function.Arguments))
+	require.NotNil(t, resp.Choices[0].Delta.ToolCalls[0].Index)
+	assert.Equal(t, 0, *resp.Choices[0].Delta.ToolCalls[0].Index)
+
+	// Input JSON delta without a resolved tool_use block should be skipped.
+	acc.Content = []anthropic.ContentBlockUnion{
+		anthropicContentUnion("text", `{"type":"text","text":"not a tool"}`),
+	}
+	resp, err = buildStreamingPartialResponse(acc, e6, true)
+	assert.NoError(t, err)
+	assert.Nil(t, resp)
+	e6OutOfRange := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}`)
+	resp, err = buildStreamingPartialResponse(acc, e6OutOfRange, true)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 
 	// Thinking delta empty should be skipped.
 	e7 := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}`)
-	resp, err = buildStreamingPartialResponse(acc, e7)
+	resp, err = buildStreamingPartialResponse(acc, e7, false)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 
 	// Message delta with empty stop_reason should be skipped.
 	e8 := anthropicStreamEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"","stop_sequence":""},"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":0,"output_tokens":0,"server_tool_use":{"web_search_requests":0}}}`)
-	resp, err = buildStreamingPartialResponse(acc, e8)
+	resp, err = buildStreamingPartialResponse(acc, e8, false)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
+}
+
+func Test_buildStreamingPartialResponse_ToolCallDeltaIndexUsesToolCallOrdinal(t *testing.T) {
+	acc := anthropic.Message{
+		ID:    "acc1",
+		Model: anthropic.Model("claude-test"),
+		Content: []anthropic.ContentBlockUnion{
+			anthropicContentUnion("text", `{"type":"text","text":"before"}`),
+			anthropicContentUnion("tool_use", `{"type":"tool_use","id":"id1","name":"fn","input":{}}`),
+		},
+	}
+	event := anthropicStreamEvent(
+		"content_block_delta",
+		`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"a\":1}"}}`,
+	)
+	resp, err := buildStreamingPartialResponse(acc, event, true)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices[0].Delta.ToolCalls, 1)
+	require.NotNil(t, resp.Choices[0].Delta.ToolCalls[0].Index)
+	assert.Equal(t, 0, *resp.Choices[0].Delta.ToolCalls[0].Index)
+	assert.Equal(t, "id1", resp.Choices[0].Delta.ToolCalls[0].ID)
+	assert.Equal(t, "fn", resp.Choices[0].Delta.ToolCalls[0].Function.Name)
+	assert.Equal(t, `{"a":1}`, string(resp.Choices[0].Delta.ToolCalls[0].Function.Arguments))
 }
 
 func Test_buildStreamingFinalResponse_Aggregation(t *testing.T) {
@@ -1212,6 +1262,7 @@ func Test_HandleStreamingResponse_ToolInputDeltaOverridesStartInput(t *testing.T
 	m := New(
 		"claude-test",
 		WithHTTPClientOptions(),
+		WithShowToolCallDelta(true),
 		WithChatStreamCompleteCallback(func(_ context.Context, _ *anthropic.MessageNewParams, acc *anthropic.Message, err error) {
 			assert.NoError(t, err)
 			callbackAcc = acc
@@ -1224,11 +1275,20 @@ func Test_HandleStreamingResponse_ToolInputDeltaOverridesStartInput(t *testing.T
 	})
 	require.NoError(t, err)
 	var final *model.Response
+	var toolCallDeltas []model.ToolCall
 	for resp := range ch {
+		if len(resp.Choices) > 0 {
+			toolCallDeltas = append(toolCallDeltas, resp.Choices[0].Delta.ToolCalls...)
+		}
 		if resp.Done {
 			final = resp
 		}
 	}
+	require.Len(t, toolCallDeltas, 2)
+	assert.Equal(t, "toolu_1", toolCallDeltas[0].ID)
+	assert.Equal(t, "lookup", toolCallDeltas[0].Function.Name)
+	assert.Equal(t, `{"a":1,`, string(toolCallDeltas[0].Function.Arguments))
+	assert.Equal(t, `"b":2}`, string(toolCallDeltas[1].Function.Arguments))
 	require.NotNil(t, final)
 	require.Nil(t, final.Error)
 	require.Len(t, final.Choices, 1)
@@ -1244,6 +1304,63 @@ func Test_HandleStreamingResponse_ToolInputDeltaOverridesStartInput(t *testing.T
 	toolUse, ok := callbackAcc.Content[0].AsAny().(anthropic.ToolUseBlock)
 	require.True(t, ok)
 	assert.JSONEq(t, `{"a":1,"b":2}`, string(toolUse.Input))
+}
+
+func Test_HandleStreamingResponse_ToolInputDeltaHiddenByDefault(t *testing.T) {
+	sse := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_sse_tool_1","type":"message","role":"assistant","model":"claude-3-sonnet","content":[],"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":3,"output_tokens":0,"server_tool_use":{"web_search_requests":0}}}}`,
+		"",
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"lookup","input":{"a":1}}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"a\":1,"}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"b\":2}"}}`,
+		"",
+		"event: content_block_stop",
+		`data: {"type":"content_block_stop","index":0}`,
+		"",
+		"event: message_delta",
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":""},"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":3,"output_tokens":5,"server_tool_use":{"web_search_requests":0}}}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(sse))}, nil
+		})}
+	}
+	m := New("claude-test", WithHTTPClientOptions())
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("U")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	require.NoError(t, err)
+	var final *model.Response
+	var toolCallDeltas []model.ToolCall
+	for resp := range ch {
+		if len(resp.Choices) > 0 {
+			toolCallDeltas = append(toolCallDeltas, resp.Choices[0].Delta.ToolCalls...)
+		}
+		if resp.Done {
+			final = resp
+		}
+	}
+	assert.Empty(t, toolCallDeltas)
+	require.NotNil(t, final)
+	require.Nil(t, final.Error)
+	require.Len(t, final.Choices, 1)
+	require.Len(t, final.Choices[0].Message.ToolCalls, 1)
+	assert.JSONEq(t, `{"a":1,"b":2}`, string(final.Choices[0].Message.ToolCalls[0].Function.Arguments))
 }
 
 func Test_HandleStreamingResponse_ToolInputPreservesStartInputWithoutDelta(t *testing.T) {
