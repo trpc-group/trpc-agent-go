@@ -250,6 +250,8 @@ func TestTransformSpan(t *testing.T) {
 func TestTransformInvokeAgent(t *testing.T) {
 	inputMessages := `[{"role":"tool","content":"ok","tool_call_id":"call-123","name":"search"}]`
 	outputChoices := `[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]`
+	inputMessagesOTel := `[{"role":"tool","parts":[{"type":"tool_call_response","id":"call-123","response":"ok"}],"name":"search"}]`
+	outputMessagesOTel := `[{"role":"assistant","parts":[{"type":"text","content":"hello"}],"finish_reason":"stop"}]`
 	span := &tracepb.Span{
 		Name: "agent-span",
 		Attributes: []*commonpb.KeyValue{
@@ -263,6 +265,18 @@ func TestTransformInvokeAgent(t *testing.T) {
 				Key: semconvtrace.KeyGenAIOutputMessages,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: outputChoices},
+				},
+			},
+			{
+				Key: semconvtrace.KeyGenAIInputMessagesOTel,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: inputMessagesOTel},
+				},
+			},
+			{
+				Key: semconvtrace.KeyGenAIOutputMessagesOTel,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: outputMessagesOTel},
 				},
 			},
 			{
@@ -296,8 +310,8 @@ func TestTransformInvokeAgent(t *testing.T) {
 	}
 
 	assert.Equal(t, observationTypeAgent, attrMap[observationType])
-	assert.Equal(t, inputMessages, attrMap[observationInput])
-	assert.Equal(t, outputChoices, attrMap[observationOutput])
+	assert.JSONEq(t, inputMessagesOTel, attrMap[observationInput])
+	assert.JSONEq(t, outputMessagesOTel, attrMap[observationOutput])
 	assert.Equal(t, "keep-this", attrMap["other.attribute"])
 
 	// Token usage attributes should be filtered out for InvokeAgent observations.
@@ -305,6 +319,52 @@ func TestTransformInvokeAgent(t *testing.T) {
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
 	}
+}
+
+func TestTransformInvokeAgent_UsesOnlyOTelMessages(t *testing.T) {
+	legacyInput := `[{"role":"user","content":"legacy input"}]`
+	legacyOutput := `[{"index":0,"message":{"role":"assistant","content":"legacy output"},"finish_reason":"stop"}]`
+	otelInput := `[{"role":"user","parts":[{"type":"text","content":"otel input"}]}]`
+	otelOutput := `[{"role":"assistant","parts":[{"type":"text","content":"otel output"}],"finish_reason":"stop"}]`
+
+	span := &tracepb.Span{
+		Name: "agent-span",
+		Attributes: []*commonpb.KeyValue{
+			stringKV(semconvtrace.KeyGenAIInputMessages, legacyInput),
+			stringKV(semconvtrace.KeyGenAIInputMessagesOTel, otelInput),
+			stringKV(semconvtrace.KeyGenAIOutputMessages, legacyOutput),
+			stringKV(semconvtrace.KeyGenAIOutputMessagesOTel, otelOutput),
+		},
+	}
+	transformInvokeAgent(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+		require.NotEqual(t, semconvtrace.KeyGenAIInputMessages, attr.Key)
+		require.NotEqual(t, semconvtrace.KeyGenAIInputMessagesOTel, attr.Key)
+		require.NotEqual(t, semconvtrace.KeyGenAIOutputMessages, attr.Key)
+		require.NotEqual(t, semconvtrace.KeyGenAIOutputMessagesOTel, attr.Key)
+	}
+	require.JSONEq(t, otelInput, attrMap[observationInput])
+	require.JSONEq(t, otelOutput, attrMap[observationOutput])
+
+	legacyOnlySpan := &tracepb.Span{
+		Name: "agent-span",
+		Attributes: []*commonpb.KeyValue{
+			stringKV(semconvtrace.KeyGenAIInputMessages, legacyInput),
+			stringKV(semconvtrace.KeyGenAIOutputMessages, legacyOutput),
+		},
+	}
+	transformInvokeAgent(legacyOnlySpan)
+	attrMap = make(map[string]string)
+	for _, attr := range legacyOnlySpan.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+		require.NotEqual(t, semconvtrace.KeyGenAIInputMessages, attr.Key)
+		require.NotEqual(t, semconvtrace.KeyGenAIOutputMessages, attr.Key)
+	}
+	require.NotContains(t, attrMap, observationInput)
+	require.NotContains(t, attrMap, observationOutput)
 }
 
 func TestTransformCallLLM(t *testing.T) {
@@ -419,6 +479,55 @@ func TestTransformCallLLM(t *testing.T) {
 	}
 }
 
+func TestTransformCallLLM_UsesOnlyOTelMessages(t *testing.T) {
+	legacyInput := `[{"role":"user","content":"legacy input"}]`
+	legacyOutput := `[{"index":0,"message":{"role":"assistant","content":"legacy output"},"finish_reason":"stop"}]`
+	otelInput := `[{"role":"user","parts":[{"type":"text","content":"otel input"}]}]`
+	otelOutput := `[{"role":"assistant","parts":[{"type":"text","content":"otel output"}],"finish_reason":"stop"}]`
+
+	span := &tracepb.Span{
+		Name: "llm-call",
+		Attributes: []*commonpb.KeyValue{
+			stringKV(semconvtrace.KeyGenAIInputMessages, legacyInput),
+			stringKV(semconvtrace.KeyGenAIInputMessagesOTel, otelInput),
+			stringKV(semconvtrace.KeyGenAIOutputMessages, legacyOutput),
+			stringKV(semconvtrace.KeyGenAIOutputMessagesOTel, otelOutput),
+			stringKV(semconvtrace.KeyLLMResponse, `{"text":"raw response"}`),
+		},
+	}
+	transformCallLLM(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+		require.NotEqual(t, semconvtrace.KeyGenAIInputMessages, attr.Key)
+		require.NotEqual(t, semconvtrace.KeyGenAIInputMessagesOTel, attr.Key)
+		require.NotEqual(t, semconvtrace.KeyGenAIOutputMessages, attr.Key)
+		require.NotEqual(t, semconvtrace.KeyGenAIOutputMessagesOTel, attr.Key)
+		require.NotEqual(t, semconvtrace.KeyLLMResponse, attr.Key)
+	}
+	require.JSONEq(t, otelInput, attrMap[observationInput])
+	require.JSONEq(t, otelOutput, attrMap[observationOutput])
+
+	legacyOnlySpan := &tracepb.Span{
+		Name: "llm-call",
+		Attributes: []*commonpb.KeyValue{
+			stringKV(semconvtrace.KeyGenAIInputMessages, legacyInput),
+			stringKV(semconvtrace.KeyGenAIOutputMessages, legacyOutput),
+			stringKV(semconvtrace.KeyLLMResponse, `{"text":"raw response"}`),
+		},
+	}
+	transformCallLLM(legacyOnlySpan)
+	attrMap = make(map[string]string)
+	for _, attr := range legacyOnlySpan.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+		require.NotEqual(t, semconvtrace.KeyGenAIInputMessages, attr.Key)
+		require.NotEqual(t, semconvtrace.KeyGenAIOutputMessages, attr.Key)
+	}
+	require.NotEqual(t, legacyInput, attrMap[observationInput])
+	require.JSONEq(t, `{"text":"raw response"}`, attrMap[observationOutput])
+}
+
 func TestTransformCallLLM_PromptWithTools(t *testing.T) {
 	toolDefs := []*tool.Declaration{
 		{
@@ -445,9 +554,9 @@ func TestTransformCallLLM_PromptWithTools(t *testing.T) {
 				},
 			},
 			{
-				Key: semconvtrace.KeyGenAIInputMessages,
+				Key: semconvtrace.KeyGenAIInputMessagesOTel,
 				Value: &commonpb.AnyValue{
-					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","parts":[{"type":"text","content":"hi"}]}]`},
 				},
 			},
 			{
@@ -465,6 +574,7 @@ func TestTransformCallLLM_PromptWithTools(t *testing.T) {
 	for _, attr := range span.Attributes {
 		attrMap[attr.Key] = attr.Value.GetStringValue()
 		assert.NotEqual(t, semconvtrace.KeyGenAIInputMessages, attr.Key, "input messages should be folded into observation.input")
+		assert.NotEqual(t, semconvtrace.KeyGenAIInputMessagesOTel, attr.Key, "OTel input messages should be folded into observation.input")
 		assert.NotEqual(t, semconvtrace.KeyGenAIRequestToolDefinitions, attr.Key, "tool definitions should be folded into observation.input")
 	}
 
@@ -1143,12 +1253,16 @@ func TestTransformInvokeAgent_TruncatesObservationInputOutput(t *testing.T) {
 		Name: "agent-span",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key:   semconvtrace.KeyGenAIInputMessages,
-				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigIn}},
+				Key: semconvtrace.KeyGenAIInputMessagesOTel,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{
+					StringValue: `[{"role":"user","parts":[{"type":"text","content":"` + bigIn + `"}]}]`,
+				}},
 			},
 			{
-				Key:   semconvtrace.KeyGenAIOutputMessages,
-				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigOut}},
+				Key: semconvtrace.KeyGenAIOutputMessagesOTel,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{
+					StringValue: `[{"role":"assistant","parts":[{"type":"text","content":"` + bigOut + `"}]}]`,
+				}},
 			},
 		},
 	}
@@ -1162,44 +1276,36 @@ func TestTransformInvokeAgent_TruncatesObservationInputOutput(t *testing.T) {
 
 	in := attrMap[observationInput]
 	out := attrMap[observationOutput]
-	require.LessOrEqual(t, len([]byte(in)), maxBytes)
-	require.LessOrEqual(t, len([]byte(out)), maxBytes)
 	require.True(t, utf8.ValidString(in))
 	require.True(t, utf8.ValidString(out))
+	require.Contains(t, in, defaultTruncateMarker)
+	require.Contains(t, out, defaultTruncateMarker)
 }
 
-func TestTransformInvokeAgent_TruncateUsesTypedMessages(t *testing.T) {
+func TestTransformInvokeAgent_TruncateUsesOTelMessages(t *testing.T) {
 	const maxBytes = 1024
 
 	withObservationMaxBytes(t, maxBytes)
 
 	text := strings.Repeat("中", maxBytes)
-	input := []model.Message{{
-		Role: model.RoleUser,
-		ContentParts: []model.ContentPart{
+	input := []map[string]any{{
+		"role": "user",
+		"parts": []map[string]any{
+			{"type": "text", "content": text},
 			{
-				Type: model.ContentTypeText,
-				Text: &text,
-			},
-			{
-				Type: model.ContentTypeFile,
-				File: &model.File{
-					Name:     "large.bin",
-					Data:     []byte(strings.Repeat("a", maxBytes*8)),
-					MimeType: "application/octet-stream",
-				},
+				"type":      "blob",
+				"data":      strings.Repeat("a", maxBytes*8),
+				"mime_type": "application/octet-stream",
+				"modality":  "file",
 			},
 		},
 	}}
 	inputJSON, err := json.Marshal(input)
 	require.NoError(t, err)
 
-	output := []model.Choice{{
-		Index: 0,
-		Message: model.Message{
-			Role:    model.RoleAssistant,
-			Content: strings.Repeat("resp-", maxBytes),
-		},
+	output := []map[string]any{{
+		"role":  "assistant",
+		"parts": []map[string]any{{"type": "text", "content": strings.Repeat("resp-", maxBytes)}},
 	}}
 	outputJSON, err := json.Marshal(output)
 	require.NoError(t, err)
@@ -1208,11 +1314,11 @@ func TestTransformInvokeAgent_TruncateUsesTypedMessages(t *testing.T) {
 		Name: "agent-span-typed",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key:   semconvtrace.KeyGenAIInputMessages,
+				Key:   semconvtrace.KeyGenAIInputMessagesOTel,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: string(inputJSON)}},
 			},
 			{
-				Key:   semconvtrace.KeyGenAIOutputMessages,
+				Key:   semconvtrace.KeyGenAIOutputMessagesOTel,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: string(outputJSON)}},
 			},
 		},
@@ -1228,22 +1334,37 @@ func TestTransformInvokeAgent_TruncateUsesTypedMessages(t *testing.T) {
 	in := attrMap[observationInput]
 	out := attrMap[observationOutput]
 
-	var gotIn []model.Message
+	var gotIn []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(in), &gotIn))
 	require.Len(t, gotIn, 1)
-	require.Equal(t, model.RoleUser, gotIn[0].Role)
-	require.NotNil(t, gotIn[0].ContentParts[0].Text)
-	require.LessOrEqual(t, len([]byte(*gotIn[0].ContentParts[0].Text)), maxBytes)
-	require.NotNil(t, gotIn[0].ContentParts[1].File)
-	require.Less(t, len(gotIn[0].ContentParts[1].File.Data), maxBytes*8)
-	require.LessOrEqual(t, len(gotIn[0].ContentParts[1].File.Data), maxBytes)
+	require.Equal(t, "user", gotIn[0]["role"])
+	inParts, ok := gotIn[0]["parts"].([]any)
+	require.True(t, ok)
+	require.Len(t, inParts, 2)
+	textPart, ok := inParts[0].(map[string]any)
+	require.True(t, ok)
+	textContent, ok := textPart["content"].(string)
+	require.True(t, ok)
+	require.LessOrEqual(t, len([]byte(textContent)), maxBytes)
+	blobPart, ok := inParts[1].(map[string]any)
+	require.True(t, ok)
+	blobData, ok := blobPart["data"].(string)
+	require.True(t, ok)
+	require.Less(t, len(blobData), maxBytes*8)
+	require.LessOrEqual(t, len([]byte(blobData)), maxBytes)
 
-	var gotOut []model.Choice
+	var gotOut []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &gotOut))
-	if len(gotOut) > 0 {
-		require.Equal(t, model.RoleAssistant, gotOut[0].Message.Role)
-		require.LessOrEqual(t, len([]byte(gotOut[0].Message.Content)), maxBytes)
-	}
+	require.Len(t, gotOut, 1)
+	require.Equal(t, "assistant", gotOut[0]["role"])
+	outParts, ok := gotOut[0]["parts"].([]any)
+	require.True(t, ok)
+	require.Len(t, outParts, 1)
+	outPart, ok := outParts[0].(map[string]any)
+	require.True(t, ok)
+	content, ok := outPart["content"].(string)
+	require.True(t, ok)
+	require.LessOrEqual(t, len([]byte(content)), maxBytes)
 }
 
 func TestTransformCallLLM_TruncatesObservationInputOutput(t *testing.T) {
@@ -1502,9 +1623,9 @@ func TestBuildAndExtractHelpers_Branches(t *testing.T) {
 func TestBuildLLMObservationInput_And_WrapWithToolsBranches(t *testing.T) {
 	toolDefs := `[{"name":"tool-a"}]`
 	invalidToolDefs := `{`
-	messages := `[{"role":"user","content":"hello"}]`
+	messages := `[{"role":"user","parts":[{"type":"text","content":"hello"}]}]`
 
-	withInput := llmSpanCollected{inputMessages: strPtr(messages), toolDefinitions: strPtr(toolDefs)}
+	withInput := llmSpanCollected{inputMessagesOTel: strPtr(messages), toolDefinitions: strPtr(toolDefs)}
 	out := buildLLMObservationInput(withInput)
 	require.Contains(t, out, `"tools"`)
 	require.Contains(t, out, `"messages"`)

@@ -326,6 +326,13 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		} else {
 			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
 		}
+		if bts, err := marshalOTelTelemetryMessages([]model.Message{invoke.Message}); err == nil {
+			span.SetAttributes(
+				attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, string(bts)),
+			)
+		} else {
+			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>"))
+		}
 		agentName, agentID := resolveInvocationAgentIdentity(invoke)
 		if agentName != "" {
 			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, agentName))
@@ -405,6 +412,11 @@ func TraceAfterInvokeAgent(
 		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			span.SetAttributes(
 				attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)),
+			)
+		}
+		if bts, err := marshalOTelTelemetryChoices(rsp.Choices); err == nil {
+			span.SetAttributes(
+				attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, string(bts)),
 			)
 		}
 		var finishReasons []string
@@ -581,6 +593,11 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
 	}
+	if bts, err := marshalOTelTelemetryMessages(req.Messages); err == nil {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, string(bts)))
+	} else {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>"))
+	}
 
 	return attrs
 }
@@ -626,6 +643,9 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 	if len(rsp.Choices) > 0 {
 		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)))
+		}
+		if bts, err := marshalOTelTelemetryChoices(rsp.Choices); err == nil {
+			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, string(bts)))
 		}
 
 		// Extract finish reasons

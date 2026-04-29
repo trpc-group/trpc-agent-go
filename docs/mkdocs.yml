@@ -64,7 +64,9 @@ nav:
     - A2A: a2a.md
     - A2UI: a2ui.md
     - OpenClaw Runtime: openclaw-runtime.md
-  - Observability: observability.md
+  - Observability:
+      - Overview: observability.md
+      - Multimodal Telemetry: telemetry-multimodal.md
   - Ecosystem: ecosystem.md
 
 plugins:

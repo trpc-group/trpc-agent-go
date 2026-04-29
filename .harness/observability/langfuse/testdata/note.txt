@@ -1,0 +1,3 @@
+Telemetry harness note
+
+If the provider supports attached text files, mention that this note came from the Langfuse multimodal observability harness.
