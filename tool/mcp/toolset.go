@@ -257,44 +257,42 @@ func (m *mcpSessionManager) createClient() (mcp.Connector, error) {
 		return mcp.NewStdioClient(config, clientInfo)
 
 	case transportSSE:
-		var options []mcp.ClientOption
-
-		if len(m.config.Headers) > 0 {
-			headers := http.Header{}
-			for k, v := range m.config.Headers {
-				headers.Set(k, v)
-			}
-			options = append(options, mcp.WithHTTPHeaders(headers))
-		}
-
-		// Add MCP options if configured.
-		if len(m.mcpOptions) > 0 {
-			options = append(options, m.mcpOptions...)
-		}
-
+		options := m.buildHTTPOptions()
 		return mcp.NewSSEClient(m.config.ServerURL, clientInfo, options...)
 
 	case transportStreamable:
-		var options []mcp.ClientOption
-
-		if len(m.config.Headers) > 0 {
-			headers := http.Header{}
-			for k, v := range m.config.Headers {
-				headers.Set(k, v)
-			}
-			options = append(options, mcp.WithHTTPHeaders(headers))
-		}
-
-		// Add MCP options if configured.
-		if len(m.mcpOptions) > 0 {
-			options = append(options, m.mcpOptions...)
-		}
-
+		options := m.buildHTTPOptions()
 		return mcp.NewClient(m.config.ServerURL, clientInfo, options...)
 
 	default:
 		return nil, fmt.Errorf("unsupported transport: %s", m.config.Transport)
 	}
+}
+
+// buildHTTPOptions builds MCP client options for HTTP-based transports (SSE, Streamable).
+//
+// Static headers from ConnectionConfig.Headers are applied first via
+// WithHTTPHeaders, followed by any user-provided options from WithMCPOptions
+// in registration order. For per-request dynamic headers (e.g. user-specific
+// auth tokens), pass mcp.WithHTTPBeforeRequest to WithMCPOptions and read the
+// required values from context inside the hook. See the package-level
+// documentation for an example.
+func (m *mcpSessionManager) buildHTTPOptions() []mcp.ClientOption {
+	var options []mcp.ClientOption
+
+	if len(m.config.Headers) > 0 {
+		headers := http.Header{}
+		for k, v := range m.config.Headers {
+			headers.Set(k, v)
+		}
+		options = append(options, mcp.WithHTTPHeaders(headers))
+	}
+
+	if len(m.mcpOptions) > 0 {
+		options = append(options, m.mcpOptions...)
+	}
+
+	return options
 }
 
 // createTimeoutContext creates a context with timeout if configured and no existing deadline.

@@ -173,6 +173,32 @@ func WithName(name string) ToolSetOption {
 	}
 }
 
+// Per-request dynamic HTTP headers (e.g. user-specific Authorization tokens)
+// are supported directly through the upstream MCP client. Pass an
+// mcp.WithHTTPBeforeRequest hook to WithMCPOptions and read whatever
+// request-scoped values you need from the context:
+//
+//	import (
+//	    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+//	    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+//	)
+//
+//	ts := toolmcp.NewMCPToolSet(cfg,
+//	    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+//	        func(ctx context.Context, req *http.Request) error {
+//	            for k, v := range headersFromContext(ctx) {
+//	                req.Header.Set(k, v)
+//	            }
+//	            return nil
+//	        },
+//	    )),
+//	)
+//
+// When this ToolSet is wired into llmagent via WithToolSets, enable
+// llmagent.WithRefreshToolSetsOnRun(true) if initialize/listTools must also
+// observe request-scoped headers. Otherwise only tools/call is guaranteed to
+// use the current run context.
+
 // validateTransport validates the transport string and returns the internal transport type.
 func validateTransport(t string) (transport, error) {
 	switch t {
