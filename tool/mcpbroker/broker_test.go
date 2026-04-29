@@ -176,6 +176,7 @@ func startBrokerHTTPServerWithOptions(t *testing.T, opts brokerHTTPServerOptions
 }
 
 func (s *brokerHTTPServer) Close() {
+	s.server.CloseClientConnections()
 	s.server.Close()
 }
 
