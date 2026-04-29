@@ -143,6 +143,28 @@ func TestFilePublisher_DeleteSkill_EmptyName(t *testing.T) {
 	assert.Error(t, pub.DeleteSkill(context.Background(), ""))
 }
 
+func TestFilePublisher_DeleteSkill_WhitespaceOnlyName(t *testing.T) {
+	dir := t.TempDir()
+	pub := NewFilePublisher(dir)
+	err := pub.DeleteSkill(context.Background(), "   ")
+	assert.Error(t, err, "whitespace-only name should error")
+	assert.Contains(t, err.Error(), "empty name")
+}
+
+func TestFilePublisher_UpsertSkill_MkdirFailure(t *testing.T) {
+	// Use a path that cannot be created (file masquerades as dir).
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "skill-dir")
+	require.NoError(t, os.WriteFile(blocker, []byte("not-a-dir"), 0o644))
+
+	pub := NewFilePublisher(blocker) // root is a file, MkdirAll will fail
+	err := pub.UpsertSkill(context.Background(), &SkillSpec{
+		Name:  "Test",
+		Steps: []string{"s"},
+	})
+	require.Error(t, err, "UpsertSkill should fail when MkdirAll fails")
+}
+
 func TestFilePublisher_DeleteSkill_RefusesRoot(t *testing.T) {
 	dir := t.TempDir()
 	pub := NewFilePublisher(dir)

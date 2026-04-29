@@ -153,6 +153,20 @@ func TestRenderSkillMarkdown_SpecialCharsInName(t *testing.T) {
 	assert.Contains(t, md, "# Deploy: Multi-Region")
 }
 
+func TestWriteFileAtomically_ReadonlyDir(t *testing.T) {
+	dir := t.TempDir()
+	// Create a readonly subdirectory.
+	roDir := filepath.Join(dir, "readonly")
+	require.NoError(t, os.MkdirAll(roDir, 0o755))
+	require.NoError(t, os.Chmod(roDir, 0o444))
+	defer os.Chmod(roDir, 0o755) // cleanup
+
+	target := filepath.Join(roDir, "file.txt")
+	err := writeFileAtomically(target, []byte("data"), 0o644)
+	require.Error(t, err, "should fail when directory is readonly")
+	assert.Contains(t, err.Error(), "create temp file")
+}
+
 func TestRenderSkillMarkdown_NewlineInDescription(t *testing.T) {
 	spec := &SkillSpec{
 		Name:        "Skill",

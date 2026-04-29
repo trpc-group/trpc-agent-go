@@ -989,6 +989,485 @@ func TestWorker_ApprovalGate_ShadowModePublishesAnyway(t *testing.T) {
 	assert.Equal(t, 1, metrics.ShadowModeBypassed)
 }
 
+// --- Tests for applyDeletionsWithGate ---
+
+func TestWorker_ApplyDeletionsWithGate_DeletesExistingSkill(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{{Name: "Stale"}},
+		bodies:    map[string]string{"Stale": "old body"},
+	}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	// Pre-set the active pointer so we can verify Clear is called.
+	require.NoError(t, ptr.Set(context.Background(), SkillIDFromName("Stale"), "fake-rev"))
+
+	rev := &mockReviewer{decision: &ReviewDecision{Deletions: []string{"Stale"}}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		SpecGate:       NewDefaultSpecGate(),
+		SafetyGate:     NewDefaultSafetyGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "drop it"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	require.Equal(t, []string{"Stale"}, pub.deletions, "publisher should receive the deletion")
+	pub.mu.Unlock()
+
+	// Active pointer should be cleared.
+	got, err := ptr.Get(context.Background(), SkillIDFromName("Stale"))
+	require.NoError(t, err)
+	assert.Empty(t, got, "active pointer should be cleared after deletion")
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.DeletionsApplied)
+}
+
+func TestWorker_ApplyDeletionsWithGate_NilPublisherSkips(t *testing.T) {
+	dir := t.TempDir()
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{{Name: "Existing"}},
+		bodies:    map[string]string{"Existing": "body"},
+	}
+	store := NewFileCandidateStore(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{Deletions: []string{"Existing"}}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      nil, // no publisher
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "drop it"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	// With nil publisher, the deletion should be skipped (no panic, no mutation).
+	repo.mu.Lock()
+	assert.Equal(t, 0, repo.refreshed, "repo should not refresh when publisher is nil")
+	repo.mu.Unlock()
+}
+
+func TestWorker_ApplyDeletionsWithGate_NonexistentSkillSkipped(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{} // no skills
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{Deletions: []string{"Ghost"}}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		SpecGate:       NewDefaultSpecGate(),
+		SafetyGate:     NewDefaultSafetyGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "drop it"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.deletions, "publisher should NOT receive deletion for nonexistent skill")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 0, metrics.DeletionsApplied)
+}
+
+// --- Tests for applyUpdatesWithGate ---
+
+func TestWorker_ApplyUpdatesWithGate_PassesGates(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{{Name: "Existing", Description: "old"}},
+		bodies:    map[string]string{"Existing": "old body"},
+	}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Updates: []*SkillUpdate{{
+			Name: "Existing",
+			NewSpec: &SkillSpec{
+				Name:        "Existing",
+				Description: "updated desc",
+				WhenToUse:   "always",
+				Steps:       []string{"step one", "step two"},
+			},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		SpecGate:       NewDefaultSpecGate(),
+		SafetyGate:     NewDefaultSafetyGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "improve"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	require.Len(t, pub.skills, 1, "update should reach publisher")
+	assert.Equal(t, "Existing", pub.skills[0].Name)
+	assert.Equal(t, "updated desc", pub.skills[0].Description)
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.UpdatesApplied)
+}
+
+func TestWorker_ApplyUpdatesWithGate_SpecGateRejects(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{{Name: "Existing", Description: "old"}},
+		bodies:    map[string]string{"Existing": "old body"},
+	}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	// The update has empty description, so spec gate will reject it.
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Updates: []*SkillUpdate{{
+			Name: "Existing",
+			NewSpec: &SkillSpec{
+				Name:        "Existing",
+				Description: "d",
+				WhenToUse:   "w",
+				Steps:       []string{"only one"}, // min 2 steps
+			},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		SpecGate:       NewDefaultSpecGate(),
+		SafetyGate:     NewDefaultSafetyGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "improve"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.skills, "publisher should NOT receive spec-gate-rejected update")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.SpecGateRejected)
+	assert.Equal(t, 0, metrics.UpdatesApplied)
+}
+
+// --- Tests for Enqueue ---
+
+func TestWorker_Enqueue_NilReviewer(t *testing.T) {
+	w := NewWorker(WorkerConfig{Reviewer: nil})
+	err := w.Enqueue(context.Background(), LearningJob{Session: newTestSession()})
+	assert.NoError(t, err, "enqueue with nil reviewer should silently return nil")
+}
+
+func TestWorker_Enqueue_NilSession(t *testing.T) {
+	rev := &mockReviewer{decision: &ReviewDecision{}}
+	w := NewWorker(WorkerConfig{Reviewer: rev})
+	err := w.Enqueue(context.Background(), LearningJob{Session: nil})
+	assert.NoError(t, err, "enqueue with nil session should silently return nil")
+}
+
+func TestWorker_Enqueue_SynchronousFallbackWhenNotStarted(t *testing.T) {
+	pub := &mockPublisher{}
+	rev := &mockReviewer{
+		decision: &ReviewDecision{
+			Skills: []*SkillSpec{{
+				Name:        "Sync Skill",
+				Description: "d",
+				WhenToUse:   "w",
+				Steps:       []string{"go"},
+			}},
+		},
+	}
+	w := NewWorker(WorkerConfig{
+		Reviewer:  rev,
+		Publisher: pub,
+		Policy:    alwaysPolicy{},
+	})
+	// Do NOT call w.Start() — the worker is not started.
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "work"},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+	)
+	err := w.Enqueue(context.Background(), LearningJob{Session: sess})
+	require.NoError(t, err)
+
+	// Since worker is not started, the job should be processed synchronously.
+	pub.mu.Lock()
+	require.Len(t, pub.skills, 1, "job should be processed synchronously when worker not started")
+	assert.Equal(t, "Sync Skill", pub.skills[0].Name)
+	pub.mu.Unlock()
+}
+
+func TestWorker_Enqueue_CancelledContextReturnsNil(t *testing.T) {
+	rev := &mockReviewer{decision: &ReviewDecision{}}
+	w := NewWorker(WorkerConfig{Reviewer: rev})
+	w.Start()
+	defer w.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before enqueue
+
+	err := w.Enqueue(ctx, LearningJob{Session: newTestSession()})
+	assert.NoError(t, err, "cancelled context should return nil")
+}
+
+// --- Tests for runSafetyGate ---
+
+func TestWorker_SafetyGate_PassesCleanRevision(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Skills: []*SkillSpec{{
+			Name:        "Clean Skill",
+			Description: "no dangerous content",
+			WhenToUse:   "when needed",
+			Steps:       []string{"step 1", "step 2"},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		SpecGate:       NewDefaultSpecGate(),
+		SafetyGate:     NewDefaultSafetyGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "work"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	require.Len(t, pub.skills, 1, "clean revision should pass safety gate")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 0, metrics.SafetyGateRejected)
+}
+
+func TestWorker_SafetyGate_RejectsDangerousContent(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Skills: []*SkillSpec{{
+			Name:        "Dangerous Skill",
+			Description: "run rm -rf / to clean up",
+			WhenToUse:   "when cleaning",
+			Steps:       []string{"rm -rf /home", "done"},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		SpecGate:       NewDefaultSpecGate(),
+		SafetyGate:     NewDefaultSafetyGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "work"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.skills, "dangerous revision should be rejected by safety gate")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.SafetyGateRejected)
+}
+
+// --- Tests for applySkills (non-gated path with publisher) ---
+
+func TestWorker_ApplySkills_WithPublisher(t *testing.T) {
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	rev := &mockReviewer{
+		decision: &ReviewDecision{
+			Skills: []*SkillSpec{
+				{Name: "Skill A", Steps: []string{"a"}},
+				{Name: "Skill B", Steps: []string{"b"}},
+			},
+		},
+	}
+	w := NewWorker(WorkerConfig{
+		Reviewer:  rev,
+		Publisher: pub,
+		Policy:    alwaysPolicy{},
+		SkillRepo: repo,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "go"},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	require.Len(t, pub.skills, 2, "both skills should be published")
+	pub.mu.Unlock()
+
+	repo.mu.Lock()
+	assert.Equal(t, 1, repo.refreshed, "repo should be refreshed after writing skills")
+	repo.mu.Unlock()
+}
+
+func TestWorker_ApplySkills_NilPublisher(t *testing.T) {
+	repo := &mockSkillRepo{}
+	rev := &mockReviewer{
+		decision: &ReviewDecision{
+			Skills: []*SkillSpec{
+				{Name: "Orphan", Steps: []string{"a"}},
+			},
+		},
+	}
+	w := NewWorker(WorkerConfig{
+		Reviewer:  rev,
+		Publisher: nil, // no publisher
+		Policy:    alwaysPolicy{},
+		SkillRepo: repo,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "go"},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	repo.mu.Lock()
+	assert.Equal(t, 0, repo.refreshed, "repo should not refresh when no publisher")
+	repo.mu.Unlock()
+}
+
+func TestWorker_ApplySkills_NilSpecInSlice(t *testing.T) {
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	rev := &mockReviewer{
+		decision: &ReviewDecision{
+			Skills: []*SkillSpec{nil, {Name: "Valid", Steps: []string{"go"}}},
+		},
+	}
+	w := NewWorker(WorkerConfig{
+		Reviewer:  rev,
+		Publisher: pub,
+		Policy:    alwaysPolicy{},
+		SkillRepo: repo,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "go"},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	require.Len(t, pub.skills, 1, "nil specs should be skipped")
+	assert.Equal(t, "Valid", pub.skills[0].Name)
+	pub.mu.Unlock()
+}
+
+func TestWorker_ApplySkills_PublisherError(t *testing.T) {
+	pub := &mockPublisher{err: fmt.Errorf("disk full")}
+	repo := &mockSkillRepo{}
+	rev := &mockReviewer{
+		decision: &ReviewDecision{
+			Skills: []*SkillSpec{
+				{Name: "Fail", Steps: []string{"a"}},
+			},
+		},
+	}
+	w := NewWorker(WorkerConfig{
+		Reviewer:  rev,
+		Publisher: pub,
+		Policy:    alwaysPolicy{},
+		SkillRepo: repo,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "go"},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	// Publisher error means no mutation -> no refresh.
+	repo.mu.Lock()
+	assert.Equal(t, 0, repo.refreshed, "repo should not refresh when publisher errors")
+	repo.mu.Unlock()
+}
+
 func TestWorker_ApprovalGate_EffectivenessGateHoldsOnFail(t *testing.T) {
 	dir := t.TempDir()
 	pub := &mockPublisher{}

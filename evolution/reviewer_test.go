@@ -647,6 +647,129 @@ func TestLLMReviewer_Review_OutcomeWithUnknownStatusRendersUnknownLabel(t *testi
 	assert.Contains(t, prompt, "- status: unknown")
 }
 
+// --- Tests for normalizeSkillSpec edge cases ---
+
+func TestNormalizeSkillSpec_NilReturnsNil(t *testing.T) {
+	got, err := normalizeSkillSpec(nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestNormalizeSkillSpec_AllEmptyReturnsNil(t *testing.T) {
+	got, err := normalizeSkillSpec(&SkillSpec{
+		Name:        "  ",
+		Description: "  ",
+		WhenToUse:   "  ",
+		Steps:       []string{"  ", ""},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got, "all-whitespace spec should normalize to nil")
+}
+
+func TestNormalizeSkillSpec_MissingName(t *testing.T) {
+	_, err := normalizeSkillSpec(&SkillSpec{
+		Name:        "",
+		Description: "desc",
+		WhenToUse:   "when",
+		Steps:       []string{"step"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "skill name is required")
+}
+
+func TestNormalizeSkillSpec_MissingWhenToUse(t *testing.T) {
+	_, err := normalizeSkillSpec(&SkillSpec{
+		Name:        "Skill",
+		Description: "desc",
+		WhenToUse:   "",
+		Steps:       []string{"step"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "skill when_to_use is required")
+}
+
+func TestNormalizeSkillSpec_MissingSteps(t *testing.T) {
+	_, err := normalizeSkillSpec(&SkillSpec{
+		Name:        "Skill",
+		Description: "desc",
+		WhenToUse:   "when",
+		Steps:       nil,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "skill steps are required")
+}
+
+func TestNormalizeSkillSpec_TrimsAndFiltersSteps(t *testing.T) {
+	got, err := normalizeSkillSpec(&SkillSpec{
+		Name:        " My Skill ",
+		Description: " desc ",
+		WhenToUse:   " when ",
+		Steps:       []string{"  step1 ", "", "  step2  "},
+		Pitfalls:    []string{"  pit  ", "  "},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "My Skill", got.Name)
+	assert.Equal(t, "desc", got.Description)
+	assert.Equal(t, "when", got.WhenToUse)
+	assert.Equal(t, []string{"step1", "step2"}, got.Steps)
+	assert.Equal(t, []string{"pit"}, got.Pitfalls)
+}
+
+// --- Tests for messageText (ContentParts extraction) ---
+
+func TestMessageText_ContentFieldPreferred(t *testing.T) {
+	msg := model.Message{Content: "direct content"}
+	assert.Equal(t, "direct content", messageText(msg))
+}
+
+func TestMessageText_ContentPartsExtraction(t *testing.T) {
+	text1 := "hello"
+	text2 := "world"
+	msg := model.Message{
+		Content: "", // empty content
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &text1},
+			{Type: model.ContentTypeImage}, // non-text part, skipped
+			{Type: model.ContentTypeText, Text: &text2},
+		},
+	}
+	assert.Equal(t, "hello\nworld", messageText(msg))
+}
+
+func TestMessageText_EmptyContentAndNoParts(t *testing.T) {
+	msg := model.Message{Content: ""}
+	assert.Equal(t, "", messageText(msg))
+}
+
+// --- Tests for truncateMessageContent ---
+
+func TestTruncateMessageContent_NonPositiveMaxDisabled(t *testing.T) {
+	content := strings.Repeat("x", 100)
+	assert.Equal(t, content, truncateMessageContent(content, 0))
+	assert.Equal(t, content, truncateMessageContent(content, -5))
+}
+
+func TestTruncateMessageContent_ShortContentUnchanged(t *testing.T) {
+	content := "short"
+	assert.Equal(t, content, truncateMessageContent(content, 100))
+}
+
+func TestTruncateMessageContent_VerySmallMaxChars(t *testing.T) {
+	content := strings.Repeat("x", 100)
+	got := truncateMessageContent(content, 20)
+	// maxChars < 32 means simple head-only truncation
+	assert.Equal(t, 20, len(got))
+	assert.Equal(t, strings.Repeat("x", 20), got)
+}
+
+func TestTruncateMessageContent_HeadTailWithPlaceholder(t *testing.T) {
+	content := strings.Repeat("A", 100) + strings.Repeat("B", 100) + strings.Repeat("C", 100)
+	got := truncateMessageContent(content, 100)
+	assert.Contains(t, got, "AAA")
+	assert.Contains(t, got, "CCC")
+	assert.Contains(t, got, "chars omitted by reviewer transcript truncation")
+}
+
 func TestLLMReviewer_Review_SystemPromptIncludesFailureAwareGuidance(t *testing.T) {
 	reviewModel := &recordingReviewModel{
 		responses: []*model.Response{{
