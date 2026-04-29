@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
 	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -87,6 +88,36 @@ func TestExecTool_UsesManagerBaseEnv(t *testing.T) {
 	res := out.(execResult)
 	require.Equal(t, "exited", res.Status)
 	require.Contains(t, strings.TrimSpace(res.Output), "ok")
+}
+
+func TestExecTool_UsesIdentityEnvFromContext(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager()
+	tool := newExecCommandTool(mgr)
+
+	ctx := identity.NewContext(context.Background(), &identity.Identity{
+		EnvVars: map[string]string{
+			"OPENCLAW_IDENTITY_ENV":   "ctx-value",
+			"OPENCLAW_CONTEXT_TARGET": "from-context",
+		},
+	})
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf '%s|%s' \"$OPENCLAW_IDENTITY_ENV\" \"$OPENCLAW_CONTEXT_TARGET\"",
+		"env": map[string]string{
+			"OPENCLAW_CONTEXT_TARGET": "explicit",
+		},
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.Contains(t, strings.TrimSpace(res.Output), "ctx-value|explicit")
 }
 
 func TestExecTool_RedactsSensitiveEnvValueOutput(t *testing.T) {
