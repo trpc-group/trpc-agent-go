@@ -42,6 +42,12 @@ func (s *Service) CreateSessionSummary(
 	if err := key.CheckSessionKey(); err != nil {
 		return fmt.Errorf("check session key: %w", err)
 	}
+	if !isummary.NewSummaryDispatchPolicy(
+		s.opts.summaryFilterAllowlist,
+		s.opts.shouldCascadeFullSessionSummary(),
+	).AllowsFilterKey(filterKey) {
+		return nil
+	}
 
 	updated, err := isummary.SummarizeSession(
 		ctx,
@@ -125,6 +131,10 @@ func (s *Service) EnqueueSummaryJob(
 		sess,
 		filterKey,
 		force,
+		isummary.NewSummaryDispatchPolicy(
+			s.opts.summaryFilterAllowlist,
+			s.opts.shouldCascadeFullSessionSummary(),
+		),
 		s.CreateSessionSummary,
 	)
 }

@@ -168,6 +168,20 @@ func TestWithSummaryJobTimeout(t *testing.T) {
 	}
 }
 
+func TestWithSummaryFilterAllowlist(t *testing.T) {
+	opts := serviceOpts{}
+	WithSummaryFilterAllowlist("app/billing", "app/support")(&opts)
+	assert.Equal(t, []string{"app/billing", "app/support"}, opts.summaryFilterAllowlist)
+}
+
+func TestWithCascadeFullSessionSummary(t *testing.T) {
+	opts := serviceOpts{}
+	WithCascadeFullSessionSummary(false)(&opts)
+	require.NotNil(t, opts.cascadeFullSessionSummary)
+	assert.False(t, *opts.cascadeFullSessionSummary)
+	assert.False(t, opts.shouldCascadeFullSessionSummary())
+}
+
 func TestServiceOptsIntegration(t *testing.T) {
 	s := &fakeOptionsSummarizer{}
 	service := NewSessionService(
@@ -180,6 +194,8 @@ func TestServiceOptsIntegration(t *testing.T) {
 		WithAsyncSummaryNum(5),
 		WithSummaryQueueSize(100),
 		WithSummaryJobTimeout(5*time.Second),
+		WithSummaryFilterAllowlist("app/billing"),
+		WithCascadeFullSessionSummary(false),
 	)
 	defer service.Close()
 
@@ -193,4 +209,8 @@ func TestServiceOptsIntegration(t *testing.T) {
 	assert.Equal(t, 5, service.opts.asyncSummaryNum)
 	assert.Equal(t, 100, service.opts.summaryQueueSize)
 	assert.Equal(t, 5*time.Second, service.opts.summaryJobTimeout)
+	assert.Equal(t, []string{"app/billing"}, service.opts.summaryFilterAllowlist)
+	require.NotNil(t, service.opts.cascadeFullSessionSummary)
+	assert.False(t, *service.opts.cascadeFullSessionSummary)
+	assert.False(t, service.opts.shouldCascadeFullSessionSummary())
 }

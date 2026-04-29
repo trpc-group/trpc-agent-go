@@ -942,6 +942,63 @@ userSummary, found := sessionService.GetSessionSummaryText(
     ctx, sess, session.WithSummaryFilterKey("my-app/user-messages"))
 ```
 
+### Restricting Summary Targets
+
+By default, when a non-empty branch `FilterKey` triggers summarization, the
+session service refreshes both that branch summary and the full-session summary
+(`SummaryFilterKeyAllContents`). If some branches do not need summaries, you can
+reduce LLM usage with an allowlist and optionally disable the full-session
+cascade:
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(summarizer),
+    inmemory.WithSummaryFilterAllowlist(
+        "my-app/user-messages",
+        "my-app/tool-calls",
+    ),
+    inmemory.WithCascadeFullSessionSummary(false),
+)
+```
+
+Behavior notes:
+
+- `WithSummaryFilterAllowlist(...)` only controls non-empty branch summary
+  targets. It does not block `session.SummaryFilterKeyAllContents`.
+- `WithCascadeFullSessionSummary(...)` controls whether a non-empty branch
+  trigger also refreshes the full-session summary.
+- To keep only full-session summaries from branch-triggered automatic summary,
+  pass an explicit empty allowlist and leave cascade enabled:
+
+```go
+sessionService, err := mysql.NewService(
+    mysql.WithMySQLClientDSN(dsn),
+    mysql.WithSummarizer(summarizer),
+    mysql.WithSummaryFilterAllowlist(""),
+)
+```
+
+- `mysql.WithSummaryFilterAllowlist("")` and
+  `mysql.WithSummaryFilterAllowlist()` both mean "no branch keys are allowed";
+  with the default cascade behavior, the full-session summary still refreshes.
+- If you also set `mysql.WithCascadeFullSessionSummary(false)`, non-empty branch
+  triggers have no summary target and no summary is generated.
+- Allowlist matching is hierarchical and segment-aware, not a raw string prefix
+  check. Internally the framework appends the filter-key delimiter (`"/"`) to
+  both sides and then checks whether either key is an ancestor/descendant of
+  the other.
+- Examples:
+  - Allowing `my-app/tool` matches `my-app/tool` and `my-app/tool/search`.
+  - Allowing `my-app/tool/search` also matches `my-app/tool`.
+  - Allowing `my-app/tool` does not match `my-app/toolbox`.
+  - Allowing `my-app/tool` does not match `other-app/tool`.
+- `session.SummaryFilterKeyAllContents` remains available for direct
+  full-session summaries even when an allowlist is configured.
+- Leaving the allowlist unset preserves the legacy behavior and allows every
+  branch `FilterKey` to trigger summaries.
+- Passing an explicit empty allowlist blocks branch summary targets; with
+  cascade enabled, branch triggers still refresh the full-session summary.
+
 ## How It Works
 
 1. **Incremental processing**: The summarizer tracks the last summary time for each session; subsequent runs only process events after the last summary

@@ -180,6 +180,50 @@ func TestMemoryService_EnqueueSummaryJob_AsyncEnabled_Default(t *testing.T) {
 	require.Equal(t, "async-summary", sum.Summary)
 }
 
+func TestMemoryService_CreateSessionSummary_FilterAllowlistAndCascade(t *testing.T) {
+	s := NewSessionService(
+		WithSummarizer(&fakeSummarizer{allow: true, out: "branch-summary"}),
+		WithSummaryFilterAllowlist("branch"),
+		WithCascadeFullSessionSummary(false),
+	)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	allowed := event.New("inv-1", "author")
+	allowed.Timestamp = time.Now().Add(-time.Minute)
+	allowed.FilterKey = "branch"
+	allowed.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "allowed"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, allowed))
+
+	disallowed := event.New("inv-2", "author")
+	disallowed.Timestamp = time.Now()
+	disallowed.FilterKey = "other"
+	disallowed.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "other"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, disallowed))
+
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "other", false))
+
+	got, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	_, ok := got.Summaries["other"]
+	require.False(t, ok)
+
+	sessWithEvents, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sessWithEvents)
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sessWithEvents, "branch", false))
+
+	got, err = s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, got.Summaries["branch"])
+	require.Equal(t, "branch-summary", got.Summaries["branch"].Summary)
+	_, ok = got.Summaries[""]
+	require.False(t, ok)
+}
+
 func TestMemoryService_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {
 	// Create service with async summary enabled but no summarizer
 	s := NewSessionService(
