@@ -210,6 +210,9 @@ func (s *FileCandidateStore) WriteRevision(_ context.Context, rev *Revision) err
 	if strings.TrimSpace(rev.RevisionID) == "" {
 		return errors.New("evolution: write revision: empty revision id")
 	}
+	if err := validateRevisionID(rev.RevisionID); err != nil {
+		return err
+	}
 	if rev.CreatedAt.IsZero() {
 		rev.CreatedAt = time.Now().UTC()
 	}
@@ -239,6 +242,9 @@ func (s *FileCandidateStore) WriteRevision(_ context.Context, rev *Revision) err
 
 // ReadRevision implements CandidateStore.
 func (s *FileCandidateStore) ReadRevision(_ context.Context, skillID, revisionID string) (*Revision, error) {
+	if err := validateRevisionID(revisionID); err != nil {
+		return nil, err
+	}
 	metaPath := filepath.Join(s.skillDir(skillID), "revisions", revisionID, "meta.json")
 	raw, err := os.ReadFile(metaPath)
 	if err != nil {
@@ -381,6 +387,21 @@ func (p *FileActivePointer) Clear(_ context.Context, skillID string) error {
 	path := filepath.Join(p.root, sanitizeSkillName(skillID), "active.txt")
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	return nil
+}
+
+// validateRevisionID rejects revision IDs that contain path separators
+// or parent-directory traversal sequences. Without this check, a
+// malicious or buggy caller could craft a revisionID like
+// "../../etc/passwd" and escape the intended directory subtree when
+// the ID is joined into a filepath.
+func validateRevisionID(id string) error {
+	if strings.Contains(id, "..") {
+		return fmt.Errorf("evolution: invalid revision id %q: contains path traversal", id)
+	}
+	if strings.Contains(id, "/") || strings.Contains(id, string(os.PathSeparator)) {
+		return fmt.Errorf("evolution: invalid revision id %q: contains path separator", id)
 	}
 	return nil
 }

@@ -15,6 +15,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFileCandidateStoreRoundTrip(t *testing.T) {
@@ -301,4 +304,324 @@ func TestOutcomeBasedEffectivenessGatePassesDeleteOnFail(t *testing.T) {
 	if !report.Passed {
 		t.Fatalf("delete revisions should always pass effectiveness gate")
 	}
+}
+
+// --- Path traversal validation tests ---
+
+func TestValidateRevisionID_Clean(t *testing.T) {
+	assert.NoError(t, validateRevisionID("20250101T120000.000-abcdef012345"))
+	assert.NoError(t, validateRevisionID("rev-1"))
+	assert.NoError(t, validateRevisionID("simple"))
+}
+
+func TestValidateRevisionID_PathSeparator(t *testing.T) {
+	err := validateRevisionID("../../etc/passwd")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+}
+
+func TestValidateRevisionID_ForwardSlash(t *testing.T) {
+	err := validateRevisionID("foo/bar")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path separator")
+}
+
+func TestValidateRevisionID_DoubleDot(t *testing.T) {
+	err := validateRevisionID("foo..bar")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+}
+
+func TestWriteRevision_RejectsPathTraversal(t *testing.T) {
+	store := NewFileCandidateStore(t.TempDir())
+	rev := &Revision{
+		SkillID:    "my-skill",
+		RevisionID: "..escape",
+		Source:     "test",
+		Action:     "create",
+		Spec:       &SkillSpec{Name: "x"},
+		Status:     RevisionPending,
+	}
+	err := store.WriteRevision(context.Background(), rev)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+}
+
+func TestWriteRevision_RejectsSlashInID(t *testing.T) {
+	store := NewFileCandidateStore(t.TempDir())
+	rev := &Revision{
+		SkillID:    "my-skill",
+		RevisionID: "foo/bar",
+		Source:     "test",
+		Action:     "create",
+		Spec:       &SkillSpec{Name: "x"},
+		Status:     RevisionPending,
+	}
+	err := store.WriteRevision(context.Background(), rev)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path separator")
+}
+
+func TestReadRevision_RejectsPathTraversal(t *testing.T) {
+	store := NewFileCandidateStore(t.TempDir())
+	_, err := store.ReadRevision(context.Background(), "skill", "..etc")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+}
+
+func TestWriteRevision_NilRevision(t *testing.T) {
+	store := NewFileCandidateStore(t.TempDir())
+	err := store.WriteRevision(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil revision")
+}
+
+func TestWriteRevision_EmptySkillID(t *testing.T) {
+	store := NewFileCandidateStore(t.TempDir())
+	err := store.WriteRevision(context.Background(), &Revision{
+		SkillID:    "   ",
+		RevisionID: "rev-1",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty skill id")
+}
+
+func TestWriteRevision_EmptyRevisionID(t *testing.T) {
+	store := NewFileCandidateStore(t.TempDir())
+	err := store.WriteRevision(context.Background(), &Revision{
+		SkillID:    "my-skill",
+		RevisionID: "  ",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty revision id")
+}
+
+func TestWriteRevision_DeletionRevisionNoSpec(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	rev := &Revision{
+		SkillID:    "doomed",
+		RevisionID: "rev-del-1",
+		Source:     "reviewer",
+		Action:     "delete",
+		Spec:       nil, // deletions have no spec
+		Status:     RevisionActive,
+	}
+	err := store.WriteRevision(context.Background(), rev)
+	require.NoError(t, err)
+
+	// meta.json should exist, SKILL.md should not
+	metaPath := filepath.Join(dir, "doomed", "revisions", "rev-del-1", "meta.json")
+	_, err = os.Stat(metaPath)
+	assert.NoError(t, err)
+
+	skillPath := filepath.Join(dir, "doomed", "revisions", "rev-del-1", "SKILL.md")
+	_, err = os.Stat(skillPath)
+	assert.True(t, os.IsNotExist(err), "SKILL.md should not exist for deletion revision")
+}
+
+func TestListRevisions_EmptySkill(t *testing.T) {
+	store := NewFileCandidateStore(t.TempDir())
+	list, err := store.ListRevisions(context.Background(), "nonexistent")
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}
+
+func TestListRevisions_MultipleRevisions(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	ctx := context.Background()
+
+	for _, id := range []string{"rev-a", "rev-b", "rev-c"} {
+		err := store.WriteRevision(ctx, &Revision{
+			SkillID:    "multi",
+			RevisionID: id,
+			Source:     "test",
+			Action:     "create",
+			Spec:       &SkillSpec{Name: "Multi", Description: "d", WhenToUse: "w", Steps: []string{"s"}},
+			Status:     RevisionActive,
+		})
+		require.NoError(t, err)
+	}
+
+	list, err := store.ListRevisions(ctx, "multi")
+	require.NoError(t, err)
+	assert.Len(t, list, 3)
+}
+
+func TestAppendAudit_EmptySkillID(t *testing.T) {
+	store := NewFileCandidateStore(t.TempDir())
+	err := store.AppendAudit(context.Background(), AuditEvent{
+		Action:  "promote",
+		SkillID: "  ",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty skill id")
+}
+
+func TestAppendAudit_FillsTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	err := store.AppendAudit(context.Background(), AuditEvent{
+		Action:  "promote",
+		SkillID: "fill-time",
+	})
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(filepath.Join(dir, "fill-time", "audit.log"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"at"`)
+}
+
+func TestFileActivePointer_SetEmptySkillID(t *testing.T) {
+	p := NewFileActivePointer(t.TempDir())
+	err := p.Set(context.Background(), "", "rev-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty skill id")
+}
+
+func TestFileActivePointer_SetEmptyRevisionID(t *testing.T) {
+	p := NewFileActivePointer(t.TempDir())
+	err := p.Set(context.Background(), "skill-1", "  ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty revision id")
+}
+
+func TestFileActivePointer_ClearNonexistent(t *testing.T) {
+	p := NewFileActivePointer(t.TempDir())
+	err := p.Clear(context.Background(), "ghost")
+	assert.NoError(t, err, "clearing a non-existent pointer should be a no-op")
+}
+
+func TestSkillIDFromName(t *testing.T) {
+	assert.Equal(t, "deploy-service", SkillIDFromName("Deploy Service"))
+	assert.Equal(t, "unnamed-skill", SkillIDFromName(""))
+}
+
+func TestOutcomeBasedEffectivenessGate_NilRevision(t *testing.T) {
+	g := NewOutcomeBasedEffectivenessGate()
+	report, err := g.Evaluate(context.Background(), nil, nil)
+	require.NoError(t, err)
+	assert.False(t, report.Passed)
+	assert.Contains(t, report.Reasons[0], "nil revision")
+}
+
+func TestOutcomeBasedEffectivenessGate_AgentErrorHeld(t *testing.T) {
+	g := NewOutcomeBasedEffectivenessGate()
+	report, _ := g.Evaluate(context.Background(),
+		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Outcome{Status: OutcomeAgentError},
+	)
+	assert.False(t, report.Passed)
+}
+
+func TestDefaultSpecGate_NilCandidate(t *testing.T) {
+	g := NewDefaultSpecGate()
+	report, err := g.Validate(context.Background(), nil, nil)
+	require.NoError(t, err)
+	assert.False(t, report.Passed)
+	assert.Contains(t, report.Reasons[0], "nil candidate")
+}
+
+func TestDefaultSpecGate_NilSpec(t *testing.T) {
+	g := NewDefaultSpecGate()
+	report, err := g.Validate(context.Background(), &Revision{Action: "create", Spec: nil}, nil)
+	require.NoError(t, err)
+	assert.False(t, report.Passed)
+	assert.Contains(t, report.Reasons[0], "missing spec body")
+}
+
+func TestDefaultSpecGate_DeleteAction_AlwaysPasses(t *testing.T) {
+	g := NewDefaultSpecGate()
+	report, err := g.Validate(context.Background(), &Revision{Action: "delete"}, nil)
+	require.NoError(t, err)
+	assert.True(t, report.Passed)
+}
+
+func TestDefaultSpecGate_NameTooLong(t *testing.T) {
+	g := &DefaultSpecGate{MinSteps: 1, MaxNameLen: 10}
+	rev := &Revision{Action: "create", Spec: &SkillSpec{
+		Name:        "This is a very long skill name exceeding 10 chars",
+		Description: "desc",
+		WhenToUse:   "when",
+		Steps:       []string{"step"},
+	}}
+	report, err := g.Validate(context.Background(), rev, nil)
+	require.NoError(t, err)
+	assert.False(t, report.Passed)
+	assert.Contains(t, report.Reasons[0], "longer than")
+}
+
+func TestDefaultSafetyGate_NilRevision(t *testing.T) {
+	g := NewDefaultSafetyGate()
+	report, err := g.Scan(context.Background(), nil)
+	require.NoError(t, err)
+	assert.True(t, report.Passed, "nil revision should pass safety gate")
+}
+
+func TestDefaultSafetyGate_NilSpec(t *testing.T) {
+	g := NewDefaultSafetyGate()
+	report, err := g.Scan(context.Background(), &Revision{Spec: nil})
+	require.NoError(t, err)
+	assert.True(t, report.Passed, "nil spec should pass safety gate")
+}
+
+func TestDefaultSafetyGate_DetectsPrivateKey(t *testing.T) {
+	g := NewDefaultSafetyGate()
+	rev := &Revision{Spec: &SkillSpec{
+		Name:        "keys",
+		Description: "-----BEGIN RSA PRIVATE KEY-----",
+		WhenToUse:   "never",
+		Steps:       []string{"noop"},
+	}}
+	report, _ := g.Scan(context.Background(), rev)
+	assert.False(t, report.Passed)
+}
+
+func TestDefaultSafetyGate_DetectsEtcPasswd(t *testing.T) {
+	g := NewDefaultSafetyGate()
+	rev := &Revision{Spec: &SkillSpec{
+		Name:        "path",
+		Description: "read /etc/passwd for users",
+		WhenToUse:   "recon",
+		Steps:       []string{"do"},
+	}}
+	report, _ := g.Scan(context.Background(), rev)
+	assert.False(t, report.Passed)
+}
+
+func TestDefaultSafetyGate_DetectsSSHKey(t *testing.T) {
+	g := NewDefaultSafetyGate()
+	rev := &Revision{Spec: &SkillSpec{
+		Name:        "ssh",
+		Description: "access .ssh/id_rsa",
+		WhenToUse:   "theft",
+		Steps:       []string{"steal"},
+	}}
+	report, _ := g.Scan(context.Background(), rev)
+	assert.False(t, report.Passed)
+}
+
+func TestDefaultSafetyGate_DetectsRmRfRoot(t *testing.T) {
+	g := NewDefaultSafetyGate()
+	rev := &Revision{Spec: &SkillSpec{
+		Name:        "nuke",
+		Description: "ok",
+		WhenToUse:   "never",
+		Steps:       []string{"rm -rf /home"},
+	}}
+	report, _ := g.Scan(context.Background(), rev)
+	assert.False(t, report.Passed)
+}
+
+func TestDefaultSafetyGate_DetectsGithubToken(t *testing.T) {
+	g := NewDefaultSafetyGate()
+	rev := &Revision{Spec: &SkillSpec{
+		Name:        "token",
+		Description: "set ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123 as env",
+		WhenToUse:   "auth",
+		Steps:       []string{"do"},
+	}}
+	report, _ := g.Scan(context.Background(), rev)
+	assert.False(t, report.Passed)
 }

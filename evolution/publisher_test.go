@@ -156,3 +156,33 @@ func TestFilePublisher_DeleteSkill_RefusesRoot(t *testing.T) {
 	_, err := os.Stat(dir)
 	assert.NoError(t, err, "root directory must remain intact after delete")
 }
+
+func TestFilePublisher_UpsertSkill_NilSpec(t *testing.T) {
+	dir := t.TempDir()
+	pub := NewFilePublisher(dir)
+	err := pub.UpsertSkill(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil spec")
+}
+
+func TestFilePublisher_UpsertSkill_EmptyName(t *testing.T) {
+	dir := t.TempDir()
+	pub := NewFilePublisher(dir)
+	// Empty name sanitizes to "unnamed-skill"
+	spec := &SkillSpec{
+		Name:  "",
+		Steps: []string{"s"},
+	}
+	err := pub.UpsertSkill(context.Background(), spec)
+	require.NoError(t, err)
+
+	// Should write under "unnamed-skill"
+	target := filepath.Join(dir, "unnamed-skill", "SKILL.md")
+	_, err = os.Stat(target)
+	assert.NoError(t, err)
+}
+
+func TestNewFilePublisher(t *testing.T) {
+	pub := NewFilePublisher("/some/path")
+	assert.Equal(t, "/some/path", pub.root)
+}
