@@ -22,6 +22,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	docreader "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
@@ -234,6 +235,69 @@ func (s *Service) Do(ctx context.Context) error { return nil }
 	}
 }
 
+func TestReadGraphFromLocalRepoBuildsCodeEdges(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "service.go"), `package demo
+
+type Service struct{}
+
+func helper() {}
+
+func (s *Service) Do() {
+	helper()
+}
+`)
+
+	src := New(WithRepository(Repository{Dir: repoRoot, RepoName: "demo-repo"}))
+	data, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGraph() error = %v", err)
+	}
+	namespace := "repo:demo-repo#default"
+	serviceSourceID := repoGraphSourceID(namespace, "symbol", "example.com/demo.Service")
+	methodSourceID := repoGraphSourceID(namespace, "symbol", "example.com/demo.Service.Do")
+	helperSourceID := repoGraphSourceID(namespace, "symbol", "example.com/demo.helper")
+	fileSourceID := repoGraphSourceID(namespace, "file", "service.go")
+	repoSourceID := repoGraphSourceID(namespace, "repo", "demo-repo")
+	serviceID := generatedGraphID("node", serviceSourceID)
+	methodID := generatedGraphID("node", methodSourceID)
+	helperID := generatedGraphID("node", helperSourceID)
+	fileID := generatedGraphID("node", fileSourceID)
+	repoID := generatedGraphID("node", repoSourceID)
+	if !hasGraphNode(data, methodID) {
+		t.Fatalf("expected method node, got %+v", data.Nodes)
+	}
+	if !hasGraphNodeSourceID(data, methodID, methodSourceID) {
+		t.Fatalf("expected method source_id metadata, got %+v", data.Nodes)
+	}
+	if !hasGraphNodeMetadataValue(data, methodID, "trpc_ast_full_name", "example.com/demo.Service.Do") {
+		t.Fatalf("expected full_name metadata, got %+v", data.Nodes)
+	}
+	if !hasGraphNodeMetadataKey(data, methodID, source.MetaRepoName) {
+		t.Fatalf("expected repo_name metadata, got %+v", data.Nodes)
+	}
+	if hasGraphNodeMetadataKey(data, methodID, source.MetaRepoURL) ||
+		hasGraphNodeMetadataKey(data, methodID, source.MetaRepoPath) {
+		t.Fatalf("did not expect repo identity metadata, got %+v", data.Nodes)
+	}
+	if !hasGraphEdge(data, serviceID, methodID, "METHOD") {
+		t.Fatalf("expected METHOD edge, got %+v", data.Edges)
+	}
+	if !hasGraphEdge(data, methodID, helperID, "CALLS") {
+		t.Fatalf("expected CALLS edge, got %+v", data.Edges)
+	}
+	if hasGraphNode(data, fileID) {
+		t.Fatalf("did not expect file node, got %+v", data.Nodes)
+	}
+	if hasGraphNode(data, repoID) {
+		t.Fatalf("did not expect repo node, got %+v", data.Nodes)
+	}
+	if hasGraphEdge(data, repoID, fileID, "CONTAINS") {
+		t.Fatalf("did not expect repo contains file edge, got %+v", data.Edges)
+	}
+}
+
 func TestReadDocumentsSkipsGeneratedFiles(t *testing.T) {
 	repoRoot := t.TempDir()
 	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
@@ -356,15 +420,13 @@ func (s *Service) Do() error { return nil }
 	assertEqual(t, methodCount, 1)
 }
 
-func TestReadDocumentsRejectsMultipleRepositoriesPerSource(t *testing.T) {
+func TestWithRepositoryLastOptionWins(t *testing.T) {
+	secondRepo := t.TempDir()
 	src := New(WithRepository(Repository{Dir: t.TempDir()}),
-		WithRepository(Repository{URL: "https://example.com/demo.git"}),
+		WithRepository(Repository{Dir: secondRepo}),
 	)
 
-	_, err := src.ReadDocuments(context.Background())
-	if err == nil {
-		t.Fatal("expected error for multiple repositories per source")
-	}
+	assertEqual(t, src.repository.Dir, secondRepo)
 }
 
 func TestFirstNonEmpty(t *testing.T) {
@@ -376,20 +438,13 @@ func TestFirstNonEmpty(t *testing.T) {
 
 func TestResolvedRepositoryUsesStructuredRepository(t *testing.T) {
 	src := New(WithRepository(Repository{URL: "https://example.com/demo.git", Branch: "main"}))
-	repository, ok := src.resolvedRepository()
-	if !ok {
-		t.Fatal("expected repository to be configured")
-	}
-	assertEqual(t, repository.URL, "https://example.com/demo.git")
-	assertEqual(t, repository.Branch, "main")
+	assertEqual(t, src.repository.URL, "https://example.com/demo.git")
+	assertEqual(t, src.repository.Branch, "main")
 }
 
 func TestResolvedRepositoryAndDescriptorEdgeCases(t *testing.T) {
 	t.Run("missing repository returns false", func(t *testing.T) {
 		src := New()
-		if _, ok := src.resolvedRepository(); ok {
-			t.Fatal("expected unresolved repository")
-		}
 		if _, _, ok := src.RepositoryDescriptor(); ok {
 			t.Fatal("expected no repository descriptor")
 		}
@@ -987,6 +1042,53 @@ func findDocByFullName(docs []*document.Document, fullName string) *document.Doc
 		}
 	}
 	return nil
+}
+
+func hasGraphNode(data *graph.Data, id string) bool {
+	for _, node := range data.Nodes {
+		if node.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGraphNodeSourceID(data *graph.Data, id, sourceID string) bool {
+	for _, node := range data.Nodes {
+		if node.ID == id && node.Metadata[source.MetaSourceID] == sourceID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGraphNodeMetadataKey(data *graph.Data, id, key string) bool {
+	for _, node := range data.Nodes {
+		if node.ID != id {
+			continue
+		}
+		_, ok := node.Metadata[key]
+		return ok
+	}
+	return false
+}
+
+func hasGraphNodeMetadataValue(data *graph.Data, id, key string, value any) bool {
+	for _, node := range data.Nodes {
+		if node.ID == id && node.Metadata[key] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGraphEdge(data *graph.Data, fromID, toID, edgeType string) bool {
+	for _, edge := range data.Edges {
+		if edge.FromID == fromID && edge.ToID == toID && edge.Type == edgeType {
+			return true
+		}
+	}
+	return false
 }
 
 type repoCommit struct {

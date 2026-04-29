@@ -222,6 +222,13 @@ func TestCodeDedupKeyFallbacksAndScalarBranches(t *testing.T) {
 	require.Empty(t, codeDedupKey(nil))
 	require.Empty(t, codeDedupKey(&DocumentResult{}))
 
+	require.Equal(t, "id:node:abc", codeDedupKey(&DocumentResult{ID: "node:abc"}))
+	require.Equal(t, "source_id:repo:x#default#symbol:pkg.F", codeDedupKey(&DocumentResult{
+		Metadata: map[string]any{
+			"trpc_agent_go_source_id": "repo:x#default#symbol:pkg.F",
+		},
+	}))
+
 	require.Equal(t, "repo:repo-a|full_name:pkg.F", codeDedupKey(&DocumentResult{
 		Metadata: map[string]any{
 			"trpc_ast_repo_name": "repo-a",

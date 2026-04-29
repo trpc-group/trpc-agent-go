@@ -454,7 +454,7 @@ func getCodeWithComment(fset *token.FileSet, node ast.Node, doc *ast.CommentGrou
 	}
 
 	lines := bytes.Split(content, []byte("\n"))
-	if actualStartLine <= 0 || endPos.Line > len(lines) {
+	if actualStartLine <= 0 || endPos.Line > len(lines) || endPos.Line < actualStartLine {
 		var buf bytes.Buffer
 		printer.Fprint(&buf, fset, node)
 		return buf.String()
@@ -510,7 +510,7 @@ func getCodeWithGenDecl(fset *token.FileSet, spec ast.Node, genDecl *ast.GenDecl
 		}
 	}
 	endLine := specEnd.Line
-	if startLine <= 0 || endLine > len(lines) {
+	if startLine <= 0 || endLine > len(lines) || endLine < startLine {
 		var buf bytes.Buffer
 		printer.Fprint(&buf, fset, spec)
 		if genDecl != nil {

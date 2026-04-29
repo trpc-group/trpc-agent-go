@@ -54,8 +54,13 @@ func (s *Service) Do(ctx context.Context) error {
 	if result.Edges == nil {
 		t.Fatal("expected edges slice to be initialized")
 	}
-	if len(result.Edges) != 0 {
-		t.Fatalf("len(edges) = %d, want 0", len(result.Edges))
+	if len(result.Edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(result.Edges))
+	}
+	if result.Edges[0].Type != codeast.RelationMethod ||
+		result.Edges[0].FromID != "demo.Service" ||
+		result.Edges[0].ToID != "demo.Service.Do" {
+		t.Fatalf("unexpected method edge: %+v", result.Edges[0])
 	}
 }
 
@@ -74,7 +79,12 @@ func TestParseDirectoryRespectsGoModAndFindsNodes(t *testing.T) {
 
 type Service struct{}
 
-func (s *Service) Do() error { return nil }
+func helper() {}
+
+func (s *Service) Do() error {
+	helper()
+	return nil
+}
 `)
 
 	parser := NewParser()
@@ -87,6 +97,95 @@ func (s *Service) Do() error { return nil }
 	}
 	if len(result.Nodes) < 2 {
 		t.Fatalf("len(nodes) = %d, want >= 2", len(result.Nodes))
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo.Service", "example.com/demo.Service.Do", codeast.RelationMethod) {
+		t.Fatalf("expected METHOD edge, got %+v", result.Edges)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo.Service.Do", "example.com/demo.helper", codeast.RelationCalls) {
+		t.Fatalf("expected CALLS edge, got %+v", result.Edges)
+	}
+}
+
+func TestParseDirectoryFullModeAnalyzesTypedEdges(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "lib", "lib.go"), `package lib
+
+type Runner interface {
+	Run()
+}
+
+type Worker struct{}
+
+func (w Worker) Run() {}
+`)
+	writeFile(t, filepath.Join(dir, "app", "app.go"), `package app
+
+import "example.com/demo/lib"
+
+func Use(w lib.Worker) {
+	w.Run()
+}
+`)
+
+	parser := NewParser()
+	result, err := parser.ParseDirectory(dir)
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v", err)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo/lib.Worker", "example.com/demo/lib.Runner", codeast.RelationImplements) {
+		t.Fatalf("expected IMPLEMENTS edge, got %+v", result.Edges)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo/app.Use", "example.com/demo/lib.Worker.Run", codeast.RelationCalls) {
+		t.Fatalf("expected cross-package CALLS edge, got %+v", result.Edges)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo/app.Use", "example.com/demo/lib.Worker", codeast.RelationParam) {
+		t.Fatalf("expected cross-package PARAM edge, got %+v", result.Edges)
+	}
+}
+
+func TestParseDirectoryFullModeResolvesImportAliasesInTypeDeps(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "lib", "lib.go"), `package lib
+
+type Runner interface {
+	Run()
+}
+
+type Worker struct{}
+`)
+	writeFile(t, filepath.Join(dir, "app", "app.go"), `package app
+
+import alias "example.com/demo/lib"
+
+type Holder struct {
+	Worker alias.Worker
+}
+
+type WorkerAlias = alias.Worker
+
+func Use(w alias.Worker) alias.Runner {
+	return nil
+}
+`)
+
+	parser := NewParser()
+	result, err := parser.ParseDirectory(dir)
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v", err)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo/app.Use", "example.com/demo/lib.Worker", codeast.RelationParam) {
+		t.Fatalf("expected aliased PARAM edge, got %+v", result.Edges)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo/app.Use", "example.com/demo/lib.Runner", codeast.RelationReturns) {
+		t.Fatalf("expected aliased RETURNS edge, got %+v", result.Edges)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo/app.Holder", "example.com/demo/lib.Worker", codeast.RelationField) {
+		t.Fatalf("expected aliased FIELD edge, got %+v", result.Edges)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo/app.WorkerAlias", "example.com/demo/lib.Worker", codeast.RelationAliasOf) {
+		t.Fatalf("expected aliased ALIAS_OF edge, got %+v", result.Edges)
 	}
 }
 
@@ -292,4 +391,13 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
+}
+
+func hasCodeEdge(edges []*codeast.Edge, fromID, toID string, edgeType codeast.RelationType) bool {
+	for _, edge := range edges {
+		if edge.FromID == fromID && edge.ToID == toID && edge.Type == edgeType {
+			return true
+		}
+	}
+	return false
 }

@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 )
 
@@ -78,6 +79,7 @@ const (
 	MetaURLScheme     = MetaPrefix + "url_scheme"
 	MetaInputCount    = MetaPrefix + "input_count"
 	MetaInputs        = MetaPrefix + "inputs"
+	MetaSourceID      = MetaPrefix + "source_id"
 
 	MetaChunkType             = MetaPrefix + "chunk_type"
 	MetaChunkSize             = MetaPrefix + "chunk_size"
@@ -110,6 +112,14 @@ type Source interface {
 
 	// GetMetadata returns the metadata that user set
 	GetMetadata() map[string]any
+}
+
+// GraphSource represents a knowledge source that can provide graph data directly.
+type GraphSource interface {
+	// ReadGraph reads and returns graph nodes and edges representing the source.
+	// LoadGraphSource stores returned nodes in the graph store and indexes them
+	// as vector documents for seed retrieval.
+	ReadGraph(ctx context.Context) (*graph.Data, error)
 }
 
 // MetadataFieldPrefix is the prefix for metadata fields in filter conditions.

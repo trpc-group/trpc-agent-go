@@ -96,6 +96,7 @@ type KnowledgeSearchResponse struct {
 
 // DocumentResult represents a single document result with metadata and score.
 type DocumentResult struct {
+	ID       string         `json:"id,omitempty"`
 	Text     string         `json:"text"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 	Score    float64        `json:"score"`
@@ -405,6 +406,7 @@ func convertSearchResults(
 	documents := make([]*DocumentResult, 0, len(result.Documents))
 	for _, doc := range result.Documents {
 		documents = append(documents, &DocumentResult{
+			ID:       doc.Document.ID,
 			Text:     doc.Document.Content,
 			Metadata: filterMetadata(doc.Document.Metadata, excludeKeys),
 			Score:    doc.Score,

@@ -33,8 +33,6 @@ const defaultRepoSourceName = "Repository Source"
 // Source represents a knowledge source for a code repository.
 type Source struct {
 	repository     Repository
-	hasRepository  bool
-	multiRepoError bool
 	name           string
 	metadata       map[string]any
 	readers        map[string]reader.Reader
@@ -83,13 +81,7 @@ func (s *Source) initializeReaders() {
 
 // ReadDocuments reads all repository inputs and returns documents.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
-	if s.multiRepoError {
-		return nil, fmt.Errorf("repo source supports only one repository per source")
-	}
-	repository, ok := s.resolvedRepository()
-	if !ok {
-		return nil, fmt.Errorf("repo source %q has no repository configured; use WithRepository(...)", s.name)
-	}
+	repository := s.repository
 	repoRoot, repoInfo, cleanup, err := s.resolveRepository(ctx, repository)
 	if err != nil {
 		return nil, err
@@ -220,13 +212,6 @@ func (s *Source) classifyFiles(repoRoot string, filePaths []string) (*fileClassi
 	return fc, nil
 }
 
-func (s *Source) resolvedRepository() (Repository, bool) {
-	if !s.hasRepository {
-		return Repository{}, false
-	}
-	return s.repository, true
-}
-
 // Name returns the source name.
 func (s *Source) Name() string { return s.name }
 
@@ -242,10 +227,7 @@ func (s *Source) GetMetadata() map[string]any {
 // tool-layer prompt construction. It is intentionally source-level metadata and
 // is not copied into per-chunk document metadata.
 func (s *Source) RepositoryDescriptor() (name, description string, ok bool) {
-	repository, ok := s.resolvedRepository()
-	if !ok {
-		return "", "", false
-	}
+	repository := s.repository
 	rawInput := repository.URL
 	if rawInput == "" {
 		rawInput = repository.Dir
@@ -257,9 +239,10 @@ func (s *Source) RepositoryDescriptor() (name, description string, ok bool) {
 }
 
 type repoInfo struct {
-	name   string
-	url    string
-	branch string
+	name       string
+	url        string
+	branch     string
+	targetKind checkoutTargetKind
 }
 
 type checkoutTargetKind string
@@ -300,15 +283,17 @@ func (s *Source) resolveRepository(ctx context.Context, repository Repository) (
 			return "", nil, nil, fmt.Errorf("failed to create temp dir: %w", err)
 		}
 		cleanup := func() { _ = os.RemoveAll(tmpDir) }
+		targetKind, _ := resolveCheckoutTarget(repository)
 		target, err := cloneRemoteRepository(ctx, repository, tmpDir)
 		if err != nil {
 			cleanup()
 			return "", nil, nil, err
 		}
 		info := &repoInfo{
-			name:   chooseRepoName(repository.RepoName, repository.URL, tmpDir),
-			url:    chooseRepoURL(repository.RepoURL, repository.URL),
-			branch: target,
+			name:       chooseRepoName(repository.RepoName, repository.URL, tmpDir),
+			url:        chooseRepoURL(repository.RepoURL, repository.URL),
+			branch:     target,
+			targetKind: targetKind,
 		}
 		return tmpDir, info, cleanup, nil
 	}
@@ -324,10 +309,12 @@ func (s *Source) resolveRepository(ctx context.Context, repository Repository) (
 	if !stat.IsDir() {
 		return "", nil, nil, fmt.Errorf("repository input must be a directory or git URL: %s", repository.Dir)
 	}
+	targetKind, _ := resolveCheckoutTarget(repository)
 	info := &repoInfo{
-		name:   chooseRepoName(repository.RepoName, absPath, absPath),
-		url:    chooseRepoURL(repository.RepoURL, ""),
-		branch: firstNonEmpty(repository.Commit, repository.Tag, repository.Branch),
+		name:       chooseRepoName(repository.RepoName, absPath, absPath),
+		url:        chooseRepoURL(repository.RepoURL, ""),
+		branch:     firstNonEmpty(repository.Commit, repository.Tag, repository.Branch),
+		targetKind: targetKind,
 	}
 	return absPath, info, nil, nil
 }

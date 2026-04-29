@@ -149,11 +149,11 @@ func (s *codeDedupStore) loadOrCreate(invocation *agent.Invocation) *dedupEntry 
 
 // codeDedupKey returns a stable key identifying the underlying code chunk.
 //
-// The repository name (trpc_ast_repo_name) is always prepended to every key
-// when present, so that the same full_name / file_path in different
-// repositories is never mistakenly deduplicated against each other.
+// Document ID and trpc_agent_go_source_id are preferred because graph-backed
+// code nodes use generated graph IDs and keep the original repo source key in
+// metadata.
 //
-// Preference order (after the optional repo prefix):
+// Fallback preference order (after the optional repo prefix):
 //  1. AST fully-qualified symbol name (most specific for code entities).
 //  2. file_path + line range (covers chunks that have no full_name but still
 //     map to a unique span, e.g. markdown or raw text chunks).
@@ -165,9 +165,15 @@ func codeDedupKey(doc *DocumentResult) string {
 	if doc == nil {
 		return ""
 	}
+	if doc.ID != "" {
+		return "id:" + doc.ID
+	}
 	md := doc.Metadata
 	if md == nil {
 		return ""
+	}
+	if v, ok := stringFromMeta(md, "trpc_agent_go_source_id"); ok && v != "" {
+		return "source_id:" + v
 	}
 	repo, _ := stringFromMeta(md, "trpc_ast_repo_name")
 	prefix := ""

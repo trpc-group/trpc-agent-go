@@ -6,6 +6,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf => ../../knowledge/document/reader/pdf
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini => ../../knowledge/embedder/gemini
+	trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age => ../../knowledge/graphstore/age
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract => ../../knowledge/ocr/tesseract
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../../knowledge/vectorstore/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus => ../../knowledge/vectorstore/milvus
@@ -22,6 +23,7 @@ require (
 	github.com/getkin/kin-openapi v0.124.0
 	trpc.group/trpc-go/trpc-agent-go v1.8.2-0.20260429121222-b41f42aefbc5
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.5.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.8.1-0.20251222024650-ea147adf3d21
@@ -172,11 +174,13 @@ require (
 	golang.org/x/crypto v0.43.0 // indirect
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa // indirect
 	golang.org/x/image v0.32.0 // indirect
+	golang.org/x/mod v0.28.0 // indirect
 	golang.org/x/net v0.45.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
+	golang.org/x/tools v0.37.0 // indirect
 	google.golang.org/genproto v0.0.0-20250303144028-a0af3efb3deb // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250324211829-b45e905df463 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect

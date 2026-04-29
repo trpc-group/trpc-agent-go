@@ -80,7 +80,7 @@ func TestKnowledgeSearchTool(t *testing.T) {
 		kb := stubKnowledge{result: &knowledge.SearchResult{
 			Documents: []*knowledge.Result{
 				{
-					Document: &document.Document{Content: "foo", Metadata: map[string]any{"source": "test"}},
+					Document: &document.Document{ID: "doc-1", Content: "foo", Metadata: map[string]any{"source": "test"}},
 					Score:    0.9,
 				},
 			},
@@ -90,6 +90,7 @@ func TestKnowledgeSearchTool(t *testing.T) {
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
 		require.Len(t, rsp.Documents, 1)
+		require.Equal(t, "doc-1", rsp.Documents[0].ID)
 		require.Equal(t, "foo", rsp.Documents[0].Text)
 		require.Equal(t, 0.9, rsp.Documents[0].Score)
 		require.Equal(t, "test", rsp.Documents[0].Metadata["source"])

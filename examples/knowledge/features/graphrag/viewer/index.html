@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AGE Graph Viewer</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --line: #d8dde6;
+      --text: #20242a;
+      --muted: #68707d;
+      --accent: #176b87;
+      --accent-2: #2d7d46;
+      --danger: #aa3f3f;
+      --code: #f0f3f7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: 54px minmax(0, 1fr);
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(160px, 1fr) minmax(240px, 440px) 110px 110px auto auto;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 650;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    input,
+    button,
+    select {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+    }
+
+    input {
+      width: 100%;
+      padding: 0 10px;
+    }
+
+    input[type="number"] {
+      min-width: 0;
+    }
+
+    button {
+      padding: 0 13px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: .68;
+    }
+
+    main {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 380px;
+    }
+
+    #network {
+      min-width: 0;
+      min-height: 0;
+      background: #fbfcfd;
+    }
+
+    aside {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      border-left: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1px;
+      border-bottom: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .stat {
+      padding: 12px;
+      background: var(--panel);
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1.1;
+    }
+
+    .stat span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .summary {
+      max-height: 170px;
+      overflow: auto;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .summary-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #edf0f4;
+      font-size: 12px;
+    }
+
+    .summary-row code {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .summary-row b {
+      color: var(--accent-2);
+      font-weight: 700;
+    }
+
+    .details {
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+    }
+
+    .details h2 {
+      margin: 0 0 4px;
+      font-size: 18px;
+      line-height: 1.25;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 12px 0;
+    }
+
+    .pill {
+      padding: 3px 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    pre {
+      margin: 10px 0 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--code);
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .section-title {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .status {
+      min-width: 140px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }
+
+    .status.error {
+      color: var(--danger);
+    }
+
+    @media (max-width: 900px) {
+      body {
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      header {
+        grid-template-columns: 1fr;
+      }
+
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(360px, 1fr) 360px;
+      }
+
+      aside {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .status {
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AGE Graph Viewer</h1>
+    <input id="query" type="search" placeholder="Search id, name, content" autocomplete="off">
+    <input id="node-limit" type="number" min="1" max="5000" value="100" title="Node limit">
+    <input id="edge-limit" type="number" min="1" max="20000" value="1000" title="Edge limit">
+    <button id="load" class="primary" type="button">Load</button>
+    <div id="status" class="status">Ready</div>
+  </header>
+  <main>
+    <div id="network"></div>
+    <aside>
+      <div class="stats">
+        <div class="stat"><strong id="node-count">0</strong><span>Nodes</span></div>
+        <div class="stat"><strong id="edge-count">0</strong><span>Edges</span></div>
+      </div>
+      <div id="summary" class="summary"></div>
+      <div id="details" class="details">
+        <h2>No node selected</h2>
+        <div class="muted">Select a node from the graph.</div>
+      </div>
+    </aside>
+  </main>
+  <script>
+    const nodes = new vis.DataSet();
+    const edges = new vis.DataSet();
+    const detailsByID = new Map();
+    const network = new vis.Network(
+      document.getElementById("network"),
+      { nodes, edges },
+      {
+        autoResize: true,
+        interaction: { hover: true, multiselect: false, navigationButtons: true },
+        physics: {
+          stabilization: { iterations: 120 },
+          barnesHut: { gravitationalConstant: -5200, springLength: 160, springConstant: 0.035 }
+        },
+        nodes: {
+          shape: "dot",
+          size: 18,
+          borderWidth: 2,
+          color: { background: "#ffffff", border: "#176b87", highlight: { background: "#e8f4f8", border: "#0d4f66" } },
+          font: { size: 13, face: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif", color: "#20242a" }
+        },
+        edges: {
+          arrows: { to: { enabled: true, scaleFactor: 0.65 } },
+          color: { color: "#97a3b3", highlight: "#176b87" },
+          font: { size: 11, align: "middle", color: "#68707d", strokeWidth: 3, strokeColor: "#ffffff" },
+          smooth: { type: "dynamic" }
+        }
+      }
+    );
+
+    const statusEl = document.getElementById("status");
+    const queryEl = document.getElementById("query");
+    const nodeLimitEl = document.getElementById("node-limit");
+    const edgeLimitEl = document.getElementById("edge-limit");
+    const loadEl = document.getElementById("load");
+    const detailsEl = document.getElementById("details");
+
+    loadEl.addEventListener("click", () => loadGraph());
+    queryEl.addEventListener("keydown", event => {
+      if (event.key === "Enter") loadGraph();
+    });
+    network.on("click", params => {
+      if (!params.nodes.length) return;
+      renderDetails(detailsByID.get(params.nodes[0]));
+    });
+
+    async function loadGraph() {
+      setStatus("Loading", false);
+      loadEl.disabled = true;
+      try {
+        const params = new URLSearchParams({
+          node_limit: boundedNumber(nodeLimitEl.value, 100, 1, 5000),
+          edge_limit: boundedNumber(edgeLimitEl.value, 1000, 1, 20000)
+        });
+        if (queryEl.value.trim()) params.set("query", queryEl.value.trim());
+        const response = await fetch(`/api/graph?${params.toString()}`);
+        if (!response.ok) throw new Error(await response.text());
+        const graph = await response.json();
+        applyGraph(graph);
+        setStatus("Loaded", false);
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        loadEl.disabled = false;
+      }
+    }
+
+    async function loadSummary() {
+      try {
+        const response = await fetch("/api/summary");
+        if (!response.ok) return;
+        renderSummary(await response.json());
+      } catch (_) {
+      }
+    }
+
+    function applyGraph(graph) {
+      detailsByID.clear();
+      nodes.clear();
+      edges.clear();
+      const nextNodes = (graph.nodes || []).map(node => {
+        detailsByID.set(node.id, node);
+        return {
+          id: node.id,
+          label: node.name || node.label || node.id,
+          title: node.kind || node.label || "",
+          group: node.kind || node.label || "Node"
+        };
+      });
+      const nextEdges = (graph.edges || []).map(edge => ({
+        id: edge.id,
+        from: edge.from,
+        to: edge.to,
+        label: edge.label
+      }));
+      nodes.add(nextNodes);
+      edges.add(nextEdges);
+      document.getElementById("node-count").textContent = String(nextNodes.length);
+      document.getElementById("edge-count").textContent = String(nextEdges.length);
+      if (nextNodes.length) {
+        network.fit({ animation: { duration: 250, easingFunction: "easeInOutQuad" } });
+      }
+    }
+
+    function renderSummary(rows) {
+      const container = document.getElementById("summary");
+      container.innerHTML = "";
+      for (const row of rows || []) {
+        const item = document.createElement("div");
+        item.className = "summary-row";
+        const code = document.createElement("code");
+        code.textContent = `${row.from_label} - ${row.edge_label} -> ${row.to_label}`;
+        const count = document.createElement("b");
+        count.textContent = row.count;
+        item.append(code, count);
+        container.appendChild(item);
+      }
+    }
+
+    function renderDetails(node) {
+      if (!node) return;
+      const metadata = (node.properties && node.properties.metadata) || {};
+      detailsEl.innerHTML = "";
+      const title = document.createElement("h2");
+      title.textContent = node.name || node.id;
+      const id = document.createElement("div");
+      id.className = "muted";
+      id.textContent = node.properties?.id || node.id;
+      const pills = document.createElement("div");
+      pills.className = "pill-row";
+      for (const value of [node.label, node.kind, metadata.trpc_ast_package, metadata.trpc_ast_file_path].filter(Boolean)) {
+        const pill = document.createElement("span");
+        pill.className = "pill";
+        pill.textContent = String(value);
+        pills.appendChild(pill);
+      }
+      detailsEl.append(title, id, pills);
+      appendSection("ID", node.properties?.id || node.id || "");
+      appendSection("Name", node.name || "");
+      appendSection("Content", node.content || "");
+      appendSection("Metadata", JSON.stringify(metadata, null, 2));
+    }
+
+    function appendSection(title, content) {
+      const label = document.createElement("div");
+      label.className = "section-title";
+      label.textContent = title;
+      const pre = document.createElement("pre");
+      pre.textContent = content || "";
+      detailsEl.append(label, pre);
+    }
+
+    function setStatus(message, isError) {
+      statusEl.textContent = message;
+      statusEl.classList.toggle("error", Boolean(isError));
+    }
+
+    function boundedNumber(value, fallback, min, max) {
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isFinite(parsed)) return String(fallback);
+      return String(Math.min(Math.max(parsed, min), max));
+    }
+
+    loadSummary();
+    loadGraph();
+  </script>
+</body>
+</html>

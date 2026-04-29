@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	reposource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo"
@@ -45,6 +46,24 @@ type captureSourceKnowledge struct {
 
 func (s *captureSourceKnowledge) Sources() []source.Source {
 	return s.sources
+}
+
+type captureGraphKnowledge struct {
+	*captureKnowledge
+}
+
+func (s *captureGraphKnowledge) Traverse(
+	ctx context.Context,
+	query *graph.TraverseQuery,
+) (*graph.TraverseResult, error) {
+	return nil, nil
+}
+
+func (s *captureGraphKnowledge) FindPaths(
+	ctx context.Context,
+	query *graph.PathQuery,
+) (*graph.PathResult, error) {
+	return nil, nil
 }
 
 type stubRepoDescriptorSource struct {
@@ -121,7 +140,7 @@ func TestCodeSearchTool(t *testing.T) {
 
 	t.Run("returns normal knowledge search response", func(t *testing.T) {
 		kb := &captureKnowledge{result: &knowledge.SearchResult{Documents: []*knowledge.Result{{
-			Document: &document.Document{Content: "func NewClient() *Client { return &Client{} }", Metadata: map[string]any{
+			Document: &document.Document{ID: "node-1", Content: "func NewClient() *Client { return &Client{} }", Metadata: map[string]any{
 				"trpc_ast_type":      "Function",
 				"trpc_ast_scope":     "code",
 				"trpc_ast_full_name": "example.com/project/client.NewClient",
@@ -134,6 +153,7 @@ func TestCodeSearchTool(t *testing.T) {
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
 		require.Len(t, rsp.Documents, 1)
+		require.Equal(t, "node-1", rsp.Documents[0].ID)
 		require.Equal(t, "func NewClient() *Client { return &Client{} }", rsp.Documents[0].Text)
 		require.Equal(t, "example.com/project/client.NewClient", rsp.Documents[0].Metadata["trpc_ast_full_name"])
 		require.NotContains(t, rsp.Documents[0].Metadata, "trpc_ast_type")
@@ -195,6 +215,64 @@ func TestCodeSearchTool(t *testing.T) {
 		require.NotNil(t, kb.lastRequest.SearchFilter)
 		require.NotNil(t, kb.lastRequest.SearchFilter.FilterCondition)
 		require.Equal(t, searchfilter.OperatorAnd, kb.lastRequest.SearchFilter.FilterCondition.Operator)
+	})
+}
+
+func TestCodeGraphSearchTool(t *testing.T) {
+	t.Run("builds code graph tool set with code-oriented descriptions", func(t *testing.T) {
+		kb := &stubGraphKnowledge{}
+		toolSet := NewCodeGraphSearchTool(
+			kb,
+			WithCodeSearchRepoInfos([]CodeRepoInfo{{Name: "repo-a", Description: "core framework"}}),
+		)
+
+		require.Equal(t, defaultCodeGraphSearchToolName, toolSet.Name())
+		tools := toolSet.Tools(context.Background())
+		require.Len(t, tools, 3)
+		require.Equal(t, graphSearchToolName, tools[0].Declaration().Name)
+		require.Equal(t, graphTraverseToolName, tools[1].Declaration().Name)
+		require.Equal(t, graphFindPathsToolName, tools[2].Declaration().Name)
+		require.Contains(t, tools[0].Declaration().Description, "code_graph_traverse")
+		require.Contains(t, tools[0].Declaration().Description, "metadata.trpc_ast_full_name")
+		require.Contains(t, tools[0].Declaration().Description, "repo-a")
+		require.Contains(t, tools[1].Declaration().Description, `direction "in", edge_types ["CALLS"]`)
+		require.Contains(t, tools[2].Declaration().Description, "Find paths between two AST-backed code graph nodes")
+	})
+
+	t.Run("uses configured set name and search options", func(t *testing.T) {
+		kb := &captureGraphKnowledge{
+			captureKnowledge: &captureKnowledge{
+				result: &knowledge.SearchResult{Documents: []*knowledge.Result{{
+					Document: &document.Document{Content: "func NewClient() {}", Metadata: map[string]any{
+						"trpc_ast_full_name": "example.com/demo.NewClient",
+						"trpc_ast_type":      "Function",
+					}},
+					Score: 0.8,
+				}}},
+			},
+		}
+		toolSet := NewCodeGraphSearchTool(
+			kb,
+			WithCodeSearchToolName("repo_graph"),
+			WithCodeSearchMaxResults(7),
+			WithCodeSearchMinScore(0.4),
+			WithCodeSearchFilter(map[string]any{"metadata.trpc_ast_scope": "code"}),
+		)
+		require.Equal(t, "repo_graph", toolSet.Name())
+
+		tools := toolSet.Tools(context.Background())
+		filter := &searchfilter.UniversalFilterCondition{Field: "metadata.trpc_ast_type", Operator: "eq", Value: "Function"}
+		res, err := tools[0].(ctool.CallableTool).Call(context.Background(), marshalCodeSearchFilterArgs(t, "new client", filter))
+		require.NoError(t, err)
+		rsp := res.(*KnowledgeSearchResponse)
+		require.Len(t, rsp.Documents, 1)
+		require.Equal(t, 7, kb.lastRequest.MaxResults)
+		require.Equal(t, 0.4, kb.lastRequest.MinScore)
+		require.NotNil(t, kb.lastRequest.SearchFilter)
+		require.NotNil(t, kb.lastRequest.SearchFilter.FilterCondition)
+		require.Equal(t, searchfilter.OperatorAnd, kb.lastRequest.SearchFilter.FilterCondition.Operator)
+		require.Equal(t, "example.com/demo.NewClient", rsp.Documents[0].Metadata["trpc_ast_full_name"])
+		require.NotContains(t, rsp.Documents[0].Metadata, "trpc_ast_type")
 	})
 }
 

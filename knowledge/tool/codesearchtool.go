@@ -22,8 +22,11 @@ import (
 )
 
 const (
-	defaultCodeSearchToolName = "code_search"
-	defaultCodeSearchMinScore = 0.1
+	defaultCodeSearchToolName        = "code_search"
+	defaultCodeGraphSearchToolName   = "code_graph"
+	defaultCodeGraphSearchMinScore   = 0.1
+	defaultCodeGraphSearchMaxResults = 5
+	defaultCodeSearchMinScore        = 0.1
 )
 
 // defaultCodeSearchExcludedMetadataKeys lists metadata fields that are stripped
@@ -216,13 +219,14 @@ func NewCodeSearchTool(kb knowledge.Knowledge, opts ...CodeSearchOption) tool.To
 	}
 
 	agenticFilterInfo := map[string][]any{
-		"metadata.trpc_ast_type":      CodeEntityTypes,
-		"metadata.trpc_ast_scope":     CodeScopeTypes,
-		"content":                     {},
-		"metadata.trpc_ast_full_name": {},
-		"metadata.trpc_ast_package":   {},
-		"metadata.trpc_ast_file_path": {},
-		"metadata.trpc_ast_signature": {},
+		"metadata.trpc_ast_type":           CodeEntityTypes,
+		"metadata.trpc_ast_scope":          CodeScopeTypes,
+		"content":                          {},
+		"metadata.trpc_agent_go_source_id": {},
+		"metadata.trpc_ast_full_name":      {},
+		"metadata.trpc_ast_package":        {},
+		"metadata.trpc_ast_file_path":      {},
+		"metadata.trpc_ast_signature":      {},
 	}
 
 	if len(o.repoInfos) > 0 {
@@ -269,6 +273,103 @@ func NewCodeSearchTool(kb knowledge.Knowledge, opts ...CodeSearchOption) tool.To
 	}
 
 	return NewAgenticFilterSearchTool(kb, agenticFilterInfo, wrappedOpts...)
+}
+
+// NewCodeGraphSearchTool creates a code-oriented graph tool set.
+//
+// When used through llmagent.WithToolSets, the exposed tool names become
+// code_graph_search, code_graph_traverse, and code_graph_find_paths. The search
+// tool locates AST symbol nodes, while traverse and find_paths use graph edges
+// such as CALLS, METHOD, FIELD, PARAM, RETURNS, ALIAS_OF, IMPLEMENTS, and
+// CONTAINS to inspect local code relationships.
+func NewCodeGraphSearchTool(kb knowledge.GraphKnowledge, opts ...CodeSearchOption) tool.ToolSet {
+	o := &codeSearchOptions{
+		toolName:     defaultCodeGraphSearchToolName,
+		maxResults:   defaultCodeGraphSearchMaxResults,
+		minScore:     defaultCodeGraphSearchMinScore,
+		dedupEnabled: true,
+	}
+	for _, opt := range opts {
+		opt(o)
+	}
+	if len(o.repoInfos) == 0 {
+		o.repoInfos = deriveCodeRepoInfos(kb)
+	}
+
+	description := o.toolDescription
+	if description == "" {
+		description = codeGraphSearchToolDescription
+		if len(o.repoInfos) > 0 {
+			description += buildCodeRepoSection(o.repoInfos)
+		}
+	}
+
+	wrappedSearchOpts := []Option{
+		WithToolName(graphSearchToolName),
+		WithToolDescription(description),
+		WithMaxResults(o.maxResults),
+		WithMinScore(o.minScore),
+		WithExcludeMetadataKeys(defaultCodeSearchExcludedMetadataKeys...),
+	}
+	if len(o.extraExcludeMetadataKeys) > 0 {
+		wrappedSearchOpts = append(wrappedSearchOpts, WithExcludeMetadataKeys(o.extraExcludeMetadataKeys...))
+	}
+	if o.staticFilter != nil {
+		wrappedSearchOpts = append(wrappedSearchOpts, WithFilter(o.staticFilter))
+	}
+	if o.conditionedFilter != nil {
+		wrappedSearchOpts = append(wrappedSearchOpts, WithConditionedFilter(o.conditionedFilter))
+	}
+	if o.dedupEnabled {
+		dedup := newCodeDedupStoreWithCap(o.maxDedupKeysPerInvocation)
+		wrappedSearchOpts = append(wrappedSearchOpts, WithResultPostProcessor(dedup.filter))
+	}
+
+	setName := strings.TrimSpace(o.toolName)
+	if setName == "" {
+		setName = defaultCodeGraphSearchToolName
+	}
+	return &graphToolSet{
+		name: setName,
+		tools: []tool.Tool{
+			NewAgenticFilterSearchTool(kb, codeSearchAgenticFilterInfo(o.repoInfos, o.extraFields), wrappedSearchOpts...),
+			NewGraphTraverseTool(kb,
+				WithGraphToolName(graphTraverseToolName),
+				WithGraphToolDescription(codeGraphTraverseToolDescription),
+			),
+			NewGraphFindPathsTool(kb,
+				WithGraphToolName(graphFindPathsToolName),
+				WithGraphToolDescription(codeGraphFindPathsToolDescription),
+			),
+		},
+	}
+}
+
+func codeSearchAgenticFilterInfo(repoInfos []CodeRepoInfo, extraFields map[string][]any) map[string][]any {
+	agenticFilterInfo := map[string][]any{
+		"metadata.trpc_ast_type":           CodeEntityTypes,
+		"metadata.trpc_ast_scope":          CodeScopeTypes,
+		"metadata.kind":                    {"code"},
+		"content":                          {},
+		"metadata.trpc_agent_go_source_id": {},
+		"metadata.trpc_ast_full_name":      {},
+		"metadata.trpc_ast_package":        {},
+		"metadata.trpc_ast_file_path":      {},
+		"metadata.trpc_ast_signature":      {},
+	}
+	if len(repoInfos) > 0 {
+		agenticFilterInfo["metadata.trpc_ast_repo_name"] = codeRepoNamesToAnySlice(repoInfos)
+	} else {
+		agenticFilterInfo["metadata.trpc_ast_repo_name"] = []any{}
+	}
+	for k, v := range extraFields {
+		if _, collides := agenticFilterInfo[k]; collides {
+			log.Warnf("code_graph_search: extra filter field %q overrides the built-in entry; "+
+				"make sure this is intentional (e.g. for metadata.trpc_ast_repo_name)", k)
+		}
+		agenticFilterInfo[k] = v
+	}
+	return agenticFilterInfo
 }
 
 func buildCodeRepoSection(infos []CodeRepoInfo) string {
@@ -432,3 +533,88 @@ This tool keeps track of the AST chunks it has already returned within the curre
    - "How is X configured or initialized at startup?"
 3. When the tool responds with a message saying all top results were already returned, do NOT call it again with a near-identical query. Either pick a different angle (different symbol / package / scope filter) or stop searching.
 4. Prefer issuing a small number of well-differentiated queries (2-4) over many similar ones.`
+
+const codeGraphSearchToolDescription = `Search code graph nodes in an AST-backed code knowledge graph.
+Use this tool first when you need graph reasoning over a codebase: callers/callees, struct methods, interface implementations, type dependencies, or paths between two code entities. Each returned document has an "id" field containing the generated graph node ID. Pass those IDs to code_graph_traverse.start_ids or code_graph_find_paths.from_id/to_id when you need relationships, not just matching code text. The original repository source key is stored in metadata.trpc_agent_go_source_id.
+
+== CODE GRAPH WORKFLOW ==
+
+1. Start with code_graph_search to find precise seed nodes.
+   - Prefer a full natural-language query for semantic lookup, for example "where is the client request encoded before RPC send".
+   - Use metadata filters when the user names an exact symbol, package, file, repo, or entity type.
+   - Use content with like only for literal snippets, exact error strings, API names, or log text.
+
+2. Use code_graph_traverse when the question asks for local relationships around one or more seed nodes.
+   - "Who calls this function?" => direction "in", edge_types ["CALLS"].
+   - "What does this function call?" => direction "out", edge_types ["CALLS"].
+   - "What methods belong to this struct/interface?" => direction "out", edge_types ["METHOD"].
+   - "What fields does this struct contain?" => direction "out", edge_types ["FIELD"].
+   - "What are the parameter or return type dependencies?" => direction "out", edge_types ["PARAM", "RETURNS"].
+   - "Which types implement this interface?" => try direction "in" or "both", edge_types ["IMPLEMENTS"].
+   - Use max_depth=1 for focused answers. Increase depth only when the user asks for a wider dependency/call chain.
+
+3. Use code_graph_find_paths when the user asks how two code entities are connected.
+   - Resolve each endpoint with code_graph_search first unless you already have exact graph node IDs.
+   - Use edge_types to constrain the path when the relationship is known, for example ["CALLS"] for call paths.
+   - Keep max_depth modest first, such as 3-5, and increase only if no path is found.
+
+== EDGE TYPES ==
+
+- CALLS: function or method call relationship.
+- METHOD: type to method relationship.
+- FIELD: type to field relationship.
+- PARAM: function/method to parameter type relationship.
+- RETURNS: function/method to return type relationship.
+- ALIAS_OF: alias type relationship.
+- IMPLEMENTS: implementation relationship between concrete type and interface.
+- CONTAINS: AST/code containment relationship when available.
+
+== FILTER GUIDANCE ==
+
+Use these metadata fields to make seed search precise:
+- metadata.trpc_agent_go_source_id: original repository source key, formatted like repo:<repo-url-or-name>#<revision>#symbol:<fully-qualified-symbol>. Use "like" on this field for exact repo or symbol constraints.
+- metadata.trpc_ast_scope: code or example. Use code for implementation, example only when the user asks for examples.
+- metadata.trpc_ast_type: Function, Method, Struct, Interface, Variable, Alias, Package, Class, Module, Namespace, Template, Enum, Service, RPC, Message.
+- metadata.trpc_ast_package: package or module path.
+- metadata.trpc_ast_file_path: repository-relative file path.
+- metadata.trpc_ast_signature: function/type signature.
+- content: raw code content for literal matching.
+
+Examples:
+- Find exact method:
+  {"query": "", "filter": {"field": "metadata.trpc_agent_go_source_id", "operator": "like", "value": "%#symbol:example.com/project.Client.Do"}}
+- Find code in a file:
+  {"query": "client request encoding", "filter": {"field": "metadata.trpc_ast_file_path", "operator": "eq", "value": "client/codec.go"}}
+- Find interface implementations:
+  First search the interface by source_id, package/name, or query, then traverse with direction "in" or "both" and edge_types ["IMPLEMENTS"].
+
+== IMPORTANT ==
+
+Do not guess graph node IDs. Search first, then use returned IDs for traversal/path queries.
+Do not traverse all edge types unless the user asks for broad context. Pick edge types based on the question.
+For exact code strings, use content like rather than semantic query alone.
+For broad architectural questions, split the work: find main symbols, traverse relevant relationships, then summarize only grounded nodes and edges.`
+
+const codeGraphTraverseToolDescription = `Traverse an AST-backed code graph from known node IDs or from nodes resolved by query/filter.
+Use this after code_graph_search when the user asks about local code relationships such as callers, callees, methods, fields, type dependencies, or implementations.
+
+Direction and edge type guide:
+- callers: direction "in", edge_types ["CALLS"].
+- callees/dependencies called by a function: direction "out", edge_types ["CALLS"].
+- methods of a type: direction "out", edge_types ["METHOD"].
+- fields of a type: direction "out", edge_types ["FIELD"].
+- parameter and return type dependencies: direction "out", edge_types ["PARAM", "RETURNS"].
+- interface implementations: direction "in" or "both", edge_types ["IMPLEMENTS"].
+
+Prefer max_depth=1 for precise local context. Use max_depth=2 only for a short chain, and keep max_nodes bounded so the result stays explainable.`
+
+const codeGraphFindPathsToolDescription = `Find paths between two AST-backed code graph nodes.
+Use this when the user asks how two functions/types/packages are connected, why one symbol depends on another, or what call/type path links them.
+
+Resolve endpoints with code_graph_search first unless exact graph node IDs are already known. Use edge_types to constrain the relationship:
+- ["CALLS"] for call paths.
+- ["METHOD", "CALLS"] for type-to-method-to-call flows.
+- ["PARAM", "RETURNS", "FIELD", "ALIAS_OF"] for type dependency paths.
+- ["IMPLEMENTS"] for interface implementation paths.
+
+Start with max_depth 3-5 and max_paths 3-10. If no path is found, broaden direction to "both" or relax edge_types before increasing depth.`
