@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Evaluation Server API
   version: 1.0.0
-  description: HTTP API for listing evaluation sets, running evaluations, and retrieving evaluation results.
+  description: HTTP API for listing evaluation sets, managing evaluation metrics, running evaluations, and retrieving evaluation results.
 servers:
   - url: "{basePath}"
     variables:
@@ -35,6 +35,104 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GetSetResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+  /metrics:
+    get:
+      operationId: listMetrics
+      summary: List evaluation metrics
+      parameters:
+        - $ref: "#/components/parameters/MetricSetID"
+      responses:
+        "200":
+          description: Evaluation metrics were returned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListMetricsResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      operationId: createMetric
+      summary: Create an evaluation metric
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMetricRequest"
+      responses:
+        "201":
+          description: Evaluation metric was created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+  /metrics/{metricName}:
+    get:
+      operationId: getMetric
+      summary: Get an evaluation metric
+      parameters:
+        - $ref: "#/components/parameters/MetricName"
+        - $ref: "#/components/parameters/MetricSetID"
+      responses:
+        "200":
+          description: Evaluation metric detail was returned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+    put:
+      operationId: updateMetric
+      summary: Update an evaluation metric
+      parameters:
+        - $ref: "#/components/parameters/MetricName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMetricRequest"
+      responses:
+        "200":
+          description: Evaluation metric was updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+    delete:
+      operationId: deleteMetric
+      summary: Delete an evaluation metric
+      parameters:
+        - $ref: "#/components/parameters/MetricName"
+        - $ref: "#/components/parameters/MetricSetID"
+      responses:
+        "204":
+          description: Evaluation metric was deleted successfully.
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
         "404":
           $ref: "#/components/responses/ErrorResponse"
         "500":
@@ -106,6 +204,18 @@ components:
       required: true
       schema:
         type: string
+    MetricSetID:
+      name: setId
+      in: query
+      required: true
+      schema:
+        type: string
+    MetricName:
+      name: metricName
+      in: path
+      required: true
+      schema:
+        type: string
     ResultSetID:
       name: setId
       in: query
@@ -157,6 +267,42 @@ components:
       properties:
         set:
           $ref: "#/components/schemas/EvalSet"
+      additionalProperties: false
+    CreateMetricRequest:
+      type: object
+      properties:
+        setId:
+          type: string
+        metric:
+          $ref: "#/components/schemas/EvalMetric"
+      required:
+        - setId
+        - metric
+      additionalProperties: false
+    UpdateMetricRequest:
+      type: object
+      properties:
+        setId:
+          type: string
+        metric:
+          $ref: "#/components/schemas/EvalMetric"
+      required:
+        - setId
+        - metric
+      additionalProperties: false
+    ListMetricsResponse:
+      type: object
+      properties:
+        metrics:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalMetric"
+      additionalProperties: false
+    MetricResponse:
+      type: object
+      properties:
+        metric:
+          $ref: "#/components/schemas/EvalMetric"
       additionalProperties: false
     CreateRunResponse:
       type: object
@@ -211,6 +357,16 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/EvalMetricResult"
+    EvalMetric:
+      type: object
+      properties:
+        metricName:
+          type: string
+        threshold:
+          type: number
+        criterion:
+          type: object
+          additionalProperties: true
     EvalSet:
       type: object
       properties:

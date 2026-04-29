@@ -15,11 +15,13 @@ import (
 	coreevaluation "trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 )
 
 const (
 	defaultBasePath    = "/evaluation"
 	defaultSetsPath    = "/sets"
+	defaultMetricsPath = "/metrics"
 	defaultRunsPath    = "/runs"
 	defaultResultsPath = "/results"
 )
@@ -31,11 +33,13 @@ type options struct {
 	appName           string
 	basePath          string
 	setsPath          string
+	metricsPath       string
 	runsPath          string
 	resultsPath       string
 	timeout           time.Duration
 	agentEvaluator    coreevaluation.AgentEvaluator
 	evalSetManager    evalset.Manager
+	metricManager     metric.Manager
 	evalResultManager evalresult.Manager
 	routeRegistrars   []RouteRegistrar
 }
@@ -44,6 +48,7 @@ func newOptions(opt ...Option) *options {
 	opts := &options{
 		basePath:    defaultBasePath,
 		setsPath:    defaultSetsPath,
+		metricsPath: defaultMetricsPath,
 		runsPath:    defaultRunsPath,
 		resultsPath: defaultResultsPath,
 	}
@@ -71,6 +76,13 @@ func WithBasePath(path string) Option {
 func WithSetsPath(path string) Option {
 	return func(opts *options) {
 		opts.setsPath = path
+	}
+}
+
+// WithMetricsPath sets the metrics collection path relative to BasePath.
+func WithMetricsPath(path string) Option {
+	return func(opts *options) {
+		opts.metricsPath = path
 	}
 }
 
@@ -103,13 +115,23 @@ func WithAgentEvaluator(agentEvaluator coreevaluation.AgentEvaluator) Option {
 }
 
 // WithEvalSetManager sets the eval set manager used by the evaluation server.
+// When omitted, set routes are not registered.
 func WithEvalSetManager(manager evalset.Manager) Option {
 	return func(opts *options) {
 		opts.evalSetManager = manager
 	}
 }
 
+// WithMetricManager sets the metric manager used by the evaluation server.
+// When omitted, metric routes are not registered.
+func WithMetricManager(manager metric.Manager) Option {
+	return func(opts *options) {
+		opts.metricManager = manager
+	}
+}
+
 // WithEvalResultManager sets the eval result manager used by the evaluation server.
+// When omitted, result routes are not registered.
 func WithEvalResultManager(manager evalresult.Manager) Option {
 	return func(opts *options) {
 		opts.evalResultManager = manager
