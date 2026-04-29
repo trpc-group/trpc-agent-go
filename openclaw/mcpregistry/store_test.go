@@ -11,10 +11,12 @@ package mcpregistry
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -45,7 +47,7 @@ func TestFileStore_RedactsSensitiveValuesAndResolvesRawConfig(t *testing.T) {
 		Description: "Docs MCP",
 		Connection: mcp.ConnectionConfig{
 			Transport: "streamable_http",
-			ServerURL: "https://example.com/mcp?apikey=secret&plain=ok",
+			ServerURL: "https://user:pass@example.com/mcp?apikey=secret&plain=ok",
 			Headers: map[string]string{
 				"Authorization": "Bearer secret",
 				"X-Trace":       "trace",
@@ -57,25 +59,30 @@ func TestFileStore_RedactsSensitiveValuesAndResolvesRawConfig(t *testing.T) {
 	require.Equal(t, "docs", view.Selector)
 	require.True(t, view.HasSensitiveValues)
 	require.NotContains(t, view.ServerURL, "secret")
+	require.NotContains(t, view.ServerURL, "user")
+	require.NotContains(t, view.ServerURL, "pass")
 
-	registryBytes, err := os.ReadFile(
-		filepath.Join(dir, defaultRegistryFileName),
+	persisted, ok, err := readPersistedStateFile(
+		filepath.Join(dir, defaultStateFileName),
 	)
 	require.NoError(t, err)
-	require.NotContains(t, string(registryBytes), "Bearer secret")
-	require.NotContains(t, string(registryBytes), "apikey=secret")
+	require.True(t, ok)
+	require.Len(t, persisted.Registry.Entries, 1)
+	entry := persisted.Registry.Entries[0]
+	require.NotContains(t, entry.Connection.ServerURL, "apikey=secret")
+	require.NotContains(t, entry.Connection.ServerURL, "user")
+	require.NotContains(t, entry.Connection.ServerURL, "pass")
+	require.Equal(t, secretRedaction, entry.Connection.Headers["Authorization"])
 
-	secretsBytes, err := os.ReadFile(
-		filepath.Join(dir, defaultSecretsFileName),
-	)
-	require.NoError(t, err)
-	require.Contains(t, string(secretsBytes), "Bearer secret")
+	raw := persisted.Secrets.Connections[entry.ID]
+	require.Equal(t, "Bearer secret", raw.Headers["Authorization"])
+	require.Contains(t, raw.ServerURL, "user:pass")
 
 	servers, err := store.ServerConfigs(context.Background(), runtime)
 	require.NoError(t, err)
 	require.Contains(t, servers, "docs")
 	require.Contains(t, servers, "chat:docs")
-	require.Equal(t, "https://example.com/mcp?apikey=secret&plain=ok",
+	require.Equal(t, "https://user:pass@example.com/mcp?apikey=secret&plain=ok",
 		servers["docs"].ServerURL)
 	require.Equal(t, "Bearer secret", servers["docs"].Headers["Authorization"])
 }
@@ -107,9 +114,13 @@ func TestFileStore_RedactsSensitiveStdioArgs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	registryBytes, err := os.ReadFile(
-		filepath.Join(dir, defaultRegistryFileName),
+	persisted, ok, err := readPersistedStateFile(
+		filepath.Join(dir, defaultStateFileName),
 	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, persisted.Registry.Entries, 1)
+	registryBytes, err := json.Marshal(persisted.Registry)
 	require.NoError(t, err)
 	registryText := string(registryBytes)
 	require.NotContains(t, registryText, "arg-secret")
@@ -309,6 +320,89 @@ func TestFileStore_DeleteRemovesEntryAndSecret(t *testing.T) {
 
 	_, err = os.Stat(filepath.Join(dir, defaultSecretsFileName))
 	require.True(t, os.IsNotExist(err))
+
+	persisted, ok, err := readPersistedStateFile(
+		filepath.Join(dir, defaultStateFileName),
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Empty(t, persisted.Registry.Entries)
+	require.Empty(t, persisted.Secrets.Connections)
+}
+
+func TestFileStore_LoadsLegacySplitFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+	runtime := testRuntimeContext()
+	id := entryID(ScopeSession, runtime.SessionID, "docs")
+	now := time.Now()
+	require.NoError(t, writeJSONFile(
+		filepath.Join(dir, defaultRegistryFileName),
+		registryState{Entries: []Entry{{
+			ID:                 id,
+			Name:               "docs",
+			Scope:              ScopeSession,
+			ScopeKey:           runtime.SessionID,
+			Connection:         mcp.ConnectionConfig{ServerURL: secretRedaction},
+			HasSensitiveValues: true,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}}},
+		0o600,
+	))
+	require.NoError(t, writeJSONFile(
+		filepath.Join(dir, defaultSecretsFileName),
+		secretState{Connections: map[string]mcp.ConnectionConfig{
+			id: {ServerURL: "https://example.com/mcp?token=secret"},
+		}},
+		0o600,
+	))
+
+	servers, err := store.ServerConfigs(context.Background(), runtime)
+	require.NoError(t, err)
+	require.Equal(t, "https://example.com/mcp?token=secret",
+		servers["docs"].ServerURL)
+}
+
+func TestFileStore_UpsertReturnsQualifiedSelectorWhenBareNameIsShadowed(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store := NewFileStore(t.TempDir())
+	runtime := testRuntimeContext()
+	_, err := store.Upsert(context.Background(), UpsertRequest{
+		Context: runtime,
+		Name:    "docs",
+		Scope:   ScopeSession,
+		Connection: mcp.ConnectionConfig{
+			ServerURL: "https://session.example.com/mcp",
+		},
+	})
+	require.NoError(t, err)
+
+	view, err := store.Upsert(context.Background(), UpsertRequest{
+		Context: runtime,
+		Name:    "docs",
+		Scope:   ScopeGlobal,
+		Connection: mcp.ConnectionConfig{
+			ServerURL: "https://global.example.com/mcp",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "global:docs", view.Selector)
+	require.Equal(t, "global:docs", view.QualifiedSelector)
+
+	views, err := store.List(context.Background(), runtime)
+	require.NoError(t, err)
+	viewsByScope := make(map[Scope]EntryView, len(views))
+	for _, candidate := range views {
+		viewsByScope[candidate.Scope] = candidate
+	}
+	require.Equal(t, "docs", viewsByScope[ScopeSession].Selector)
+	require.Equal(t, "global:docs", viewsByScope[ScopeGlobal].Selector)
 }
 
 func TestFileStore_ExactChatEntryOverridesStorageFallback(t *testing.T) {

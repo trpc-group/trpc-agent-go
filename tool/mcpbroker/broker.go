@@ -274,20 +274,13 @@ func (b *Broker) resolveTargetWithContext(
 	}
 
 	if serverName != "" {
-		_, merged, err := b.resolveNamedServersWithContext(ctx)
+		_, merged, err := b.resolveNamedServersWithContext(
+			ctx,
+		)
 		if err != nil {
 			return resolvedTarget{}, err
 		}
-		server, ok := merged[serverName]
-		if !ok {
-			return resolvedTarget{}, fmt.Errorf("unknown MCP server: %s", serverName)
-		}
-		return resolvedTarget{
-			Name:       server.Name,
-			Origin:     server.Origin,
-			TargetType: server.TargetType,
-			Config:     server.Config,
-		}, nil
+		return resolveNamedTarget(serverName, merged)
 	}
 
 	if !b.options.allowAdHocHTTP {
@@ -383,22 +376,40 @@ func (b *Broker) resolveCallSelector(
 		return target, baseURL, toolName, nil
 	}
 
-	serverName, toolName, err := b.splitNamedToolSelectorWithContext(
-		ctx,
+	_, merged, err := b.resolveNamedServersWithContext(ctx)
+	if err != nil {
+		return resolvedTarget{}, "", "", err
+	}
+
+	serverName, toolName, err := splitNamedToolSelectorFromServers(
+		merged,
 		selector,
 	)
 	if err != nil {
 		return resolvedTarget{}, "", "", err
 	}
-	target, targetErr := b.resolveTargetWithContext(ctx, targetInput{
-		ServerName: serverName,
-		Transport:  transport,
-		Headers:    headers,
-	})
+	target, targetErr := resolveNamedTarget(serverName, merged)
 	if targetErr != nil {
 		return resolvedTarget{}, "", "", targetErr
 	}
 	return target, serverName, toolName, nil
+}
+
+func resolveNamedTarget(
+	serverName string,
+	merged map[string]namedServer,
+) (resolvedTarget, error) {
+	serverName = strings.TrimSpace(serverName)
+	server, ok := merged[serverName]
+	if !ok {
+		return resolvedTarget{}, fmt.Errorf("unknown MCP server: %s", serverName)
+	}
+	return resolvedTarget{
+		Name:       server.Name,
+		Origin:     server.Origin,
+		TargetType: server.TargetType,
+		Config:     server.Config,
+	}, nil
 }
 
 func (b *Broker) splitNamedToolSelector(selector string) (string, string, error) {
@@ -409,14 +420,23 @@ func (b *Broker) splitNamedToolSelectorWithContext(
 	ctx context.Context,
 	selector string,
 ) (string, string, error) {
-	selector = strings.TrimSpace(selector)
-	if selector == "" {
-		return "", "", fmt.Errorf("selector is required")
-	}
-
 	_, merged, err := b.resolveNamedServersWithContext(ctx)
 	if err != nil {
 		return "", "", err
+	}
+	return splitNamedToolSelectorFromServers(
+		merged,
+		selector,
+	)
+}
+
+func splitNamedToolSelectorFromServers(
+	merged map[string]namedServer,
+	selector string,
+) (string, string, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return "", "", fmt.Errorf("selector is required")
 	}
 
 	bestName := ""

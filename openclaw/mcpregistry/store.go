@@ -42,6 +42,7 @@ const (
 
 	defaultRegistryFileName = "registry.json"
 	defaultSecretsFileName  = "secrets.json"
+	defaultStateFileName    = "state.json"
 
 	secretRedaction = "***"
 
@@ -147,9 +148,15 @@ type DeleteRequest struct {
 // FileStore persists registry metadata and raw sensitive connection values.
 type FileStore struct {
 	mu           sync.Mutex
+	statePath    string
 	registryPath string
 	secretsPath  string
 	now          func() time.Time
+}
+
+type persistedState struct {
+	Registry registryState `json:"registry"`
+	Secrets  secretState   `json:"secrets"`
 }
 
 type registryState struct {
@@ -169,6 +176,7 @@ func DefaultDir(stateDir string) string {
 func NewFileStore(dir string) *FileStore {
 	dir = strings.TrimSpace(dir)
 	return &FileStore{
+		statePath:    filepath.Join(dir, defaultStateFileName),
 		registryPath: filepath.Join(dir, defaultRegistryFileName),
 		secretsPath:  filepath.Join(dir, defaultSecretsFileName),
 		now:          time.Now,
@@ -267,7 +275,8 @@ func (s *FileStore) Upsert(
 	if err := s.saveLocked(ctx, state, secrets); err != nil {
 		return EntryView{}, err
 	}
-	return viewForEntry(entry, entry.Name), nil
+	selector := selectorForEntry(state.Entries, req.Context, entry)
+	return viewForEntry(entry, selector), nil
 }
 
 // Delete removes one scoped MCP server registration.
@@ -388,6 +397,15 @@ func (s *FileStore) loadLocked(
 	if err := ctx.Err(); err != nil {
 		return registryState{}, secretState{}, err
 	}
+	persisted, ok, err := readPersistedStateFile(s.statePath)
+	if err != nil {
+		return registryState{}, secretState{}, err
+	}
+	if ok {
+		state, secrets := normalizePersistedState(persisted)
+		return state, secrets, nil
+	}
+
 	state, err := readJSONFile[registryState](s.registryPath)
 	if err != nil {
 		return registryState{}, secretState{}, err
@@ -396,10 +414,11 @@ func (s *FileStore) loadLocked(
 	if err != nil {
 		return registryState{}, secretState{}, err
 	}
-	if secrets.Connections == nil {
-		secrets.Connections = make(map[string]mcp.ConnectionConfig)
-	}
-	return state, secrets, nil
+	state, normalizedSecrets := normalizePersistedState(persistedState{
+		Registry: state,
+		Secrets:  secrets,
+	})
+	return state, normalizedSecrets, nil
 }
 
 func (s *FileStore) saveLocked(
@@ -412,15 +431,46 @@ func (s *FileStore) saveLocked(
 	}
 	sortEntries(state.Entries)
 	if len(secrets.Connections) == 0 {
-		if err := writeJSONFile(s.registryPath, state, 0o600); err != nil {
-			return err
-		}
-		return removeIfExists(s.secretsPath)
+		secrets.Connections = nil
 	}
-	if err := writeJSONFile(s.secretsPath, secrets, 0o600); err != nil {
+	if err := writeJSONFile(s.statePath, persistedState{
+		Registry: state,
+		Secrets:  secrets,
+	}, 0o600); err != nil {
 		return err
 	}
-	return writeJSONFile(s.registryPath, state, 0o600)
+	if err := removeIfExists(s.registryPath); err != nil {
+		return err
+	}
+	return removeIfExists(s.secretsPath)
+}
+
+func normalizePersistedState(
+	persisted persistedState,
+) (registryState, secretState) {
+	secrets := persisted.Secrets
+	if secrets.Connections == nil {
+		secrets.Connections = make(map[string]mcp.ConnectionConfig)
+	}
+	return persisted.Registry, secrets
+}
+
+func readPersistedStateFile(path string) (persistedState, bool, error) {
+	var out persistedState
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return out, false, nil
+		}
+		return out, false, err
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return out, true, nil
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return out, false, err
+	}
+	return out, true, nil
 }
 
 func readJSONFile[T any](path string) (T, error) {
@@ -716,8 +766,12 @@ func redactURL(raw string) (string, bool) {
 	if err != nil {
 		return raw, false
 	}
-	query := parsed.Query()
 	changed := false
+	if parsed.User != nil {
+		parsed.User = url.User(secretRedaction)
+		changed = true
+	}
+	query := parsed.Query()
 	for key := range query {
 		if isSensitiveQueryKey(key) {
 			query.Set(key, secretRedaction)
@@ -885,6 +939,26 @@ func aliasMap(entries []Entry) map[string]string {
 		out[entry.ID] = entry.Name
 	}
 	return out
+}
+
+func selectorForEntry(
+	entries []Entry,
+	runtime RuntimeContext,
+	entry Entry,
+) string {
+	visible := make([]Entry, 0, len(entries))
+	for _, candidate := range entries {
+		if isEntryVisible(candidate, runtime) {
+			visible = append(visible, candidate)
+		}
+	}
+	visible = preferExactChatEntries(visible, runtime)
+	sortEntries(visible)
+	aliases := aliasMap(visible)
+	if selector := aliases[entry.ID]; selector != "" {
+		return selector
+	}
+	return qualifiedName(entry)
 }
 
 func viewForEntry(entry Entry, selector string) EntryView {

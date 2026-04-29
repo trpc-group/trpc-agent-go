@@ -262,6 +262,36 @@ func TestListServers_UsesContextServerResolver(t *testing.T) {
 	require.Equal(t, "https://example.com/mcp", target.Config.ServerURL)
 }
 
+func TestResolveCallSelector_UsesOneResolverSnapshot(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	broker := New(
+		WithServerResolver(func(
+			context.Context,
+		) (map[string]legacymcp.ConnectionConfig, error) {
+			callCount++
+			return map[string]legacymcp.ConnectionConfig{
+				"docs": {
+					ServerURL: "https://example.com/mcp",
+				},
+			}, nil
+		}),
+	)
+
+	target, serverName, toolName, err := broker.resolveCallSelector(
+		context.Background(),
+		"docs.search",
+		"",
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "docs", serverName)
+	require.Equal(t, "search", toolName)
+	require.Equal(t, "https://example.com/mcp", target.Config.ServerURL)
+	require.Equal(t, 1, callCount)
+}
+
 func TestResolveNamedServers_ServerResolverErrors(t *testing.T) {
 	broker := New(
 		WithServerResolver(func(
