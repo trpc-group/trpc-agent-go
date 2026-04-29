@@ -211,6 +211,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/team/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/telemetry-multimodal/</loc>
+        <lastmod>2026-04-29</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/telemetry-multimodal/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/telemetry-multimodal/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/tool/</loc>
         <lastmod>2026-04-29</lastmod>
         <changefreq>daily</changefreq>
@@ -608,6 +615,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/team/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/team/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/telemetry-multimodal/</loc>
+        <lastmod>2026-04-29</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/telemetry-multimodal/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/telemetry-multimodal/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/tool/</loc>

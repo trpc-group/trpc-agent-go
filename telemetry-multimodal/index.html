@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/knowledge/extractor/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/telemetry-multimodal/">
       
       
-        <link rel="prev" href="../filter/">
+        <link rel="prev" href="../observability/">
       
       
-        <link rel="next" href="../management/">
+        <link rel="next" href="../ecosystem/">
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
     
     
       
-        <title>Extractor - tRPC-Agent-Go</title>
+        <title>Telemetry Multimodal Protocol - tRPC-Agent-Go</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.7e37652d.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -48,9 +48,9 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="../assets/stylesheets/extra.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
   
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#extractor-content-extraction" class="md-skip">
+        <a href="#telemetry-multimodal-protocol" class="md-skip">
           Skip to content
         </a>
       
@@ -100,9 +100,9 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href=".." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../assets/img/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Extractor
+              Telemetry Multimodal Protocol
             
           </span>
         </div>
@@ -172,7 +172,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../zh/knowledge/extractor/" hreflang="zh" class="md-select__link">
+            <a href="../zh/telemetry-multimodal/" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -263,7 +263,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href=".." class="md-tabs__link">
         
   
   
@@ -280,8 +280,6 @@
   
   
   
-    
-  
   
     
     
@@ -289,13 +287,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../agent/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../agent/" class="md-tabs__link">
           
   
   
@@ -318,7 +314,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../gateway/" class="md-tabs__link">
+        <a href="../gateway/" class="md-tabs__link">
           
   
   
@@ -334,11 +330,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../observability/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../observability/" class="md-tabs__link">
           
   
   
@@ -356,7 +354,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../ecosystem/" class="md-tabs__link">
+      <a href="../ecosystem/" class="md-tabs__link">
         
   
   
@@ -391,9 +389,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href=".." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../assets/img/logo.png" alt="logo">
 
     </a>
     tRPC-Agent-Go
@@ -420,7 +418,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href=".." class="md-nav__link">
         
   
   
@@ -439,29 +437,24 @@
       
   
   
-    
   
   
-  
     
     
     
     
       
-        
-        
-      
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -474,7 +467,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Components
@@ -529,7 +522,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agent/" class="md-nav__link">
+      <a href="../agent/" class="md-nav__link">
         
   
   
@@ -552,7 +545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../multiagent/" class="md-nav__link">
+      <a href="../multiagent/" class="md-nav__link">
         
   
   
@@ -575,7 +568,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../team/" class="md-nav__link">
+      <a href="../team/" class="md-nav__link">
         
   
   
@@ -598,7 +591,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../graph/" class="md-nav__link">
+      <a href="../graph/" class="md-nav__link">
         
   
   
@@ -621,7 +614,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../custom-agent/" class="md-nav__link">
+      <a href="../custom-agent/" class="md-nav__link">
         
   
   
@@ -644,7 +637,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../dify/" class="md-nav__link">
+      <a href="../dify/" class="md-nav__link">
         
   
   
@@ -667,7 +660,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../claudecode/" class="md-nav__link">
+      <a href="../claudecode/" class="md-nav__link">
         
   
   
@@ -698,7 +691,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runner/" class="md-nav__link">
+      <a href="../runner/" class="md-nav__link">
         
   
   
@@ -721,7 +714,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../codeexecutor/" class="md-nav__link">
+      <a href="../codeexecutor/" class="md-nav__link">
         
   
   
@@ -744,7 +737,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../error-handling/" class="md-nav__link">
+      <a href="../error-handling/" class="md-nav__link">
         
   
   
@@ -767,7 +760,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../model/" class="md-nav__link">
+      <a href="../model/" class="md-nav__link">
         
   
   
@@ -790,7 +783,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../callbacks/" class="md-nav__link">
+      <a href="../callbacks/" class="md-nav__link">
         
   
   
@@ -813,7 +806,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../plugin/" class="md-nav__link">
+      <a href="../plugin/" class="md-nav__link">
         
   
   
@@ -836,7 +829,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/" class="md-nav__link">
+      <a href="../memory/" class="md-nav__link">
         
   
   
@@ -859,7 +852,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../artifact/" class="md-nav__link">
+      <a href="../artifact/" class="md-nav__link">
         
   
   
@@ -882,7 +875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skill/" class="md-nav__link">
+      <a href="../skill/" class="md-nav__link">
         
   
   
@@ -905,7 +898,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../tool/" class="md-nav__link">
+      <a href="../tool/" class="md-nav__link">
         
   
   
@@ -969,7 +962,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/" class="md-nav__link">
+      <a href="../session/" class="md-nav__link">
         
   
   
@@ -992,7 +985,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/summary/" class="md-nav__link">
+      <a href="../session/summary/" class="md-nav__link">
         
   
   
@@ -1015,7 +1008,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/inmemory/" class="md-nav__link">
+      <a href="../session/inmemory/" class="md-nav__link">
         
   
   
@@ -1038,7 +1031,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/sqlite/" class="md-nav__link">
+      <a href="../session/sqlite/" class="md-nav__link">
         
   
   
@@ -1061,7 +1054,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/redis/" class="md-nav__link">
+      <a href="../session/redis/" class="md-nav__link">
         
   
   
@@ -1084,7 +1077,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/mysql/" class="md-nav__link">
+      <a href="../session/mysql/" class="md-nav__link">
         
   
   
@@ -1107,7 +1100,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/postgres/" class="md-nav__link">
+      <a href="../session/postgres/" class="md-nav__link">
         
   
   
@@ -1130,7 +1123,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/pgvector/" class="md-nav__link">
+      <a href="../session/pgvector/" class="md-nav__link">
         
   
   
@@ -1153,7 +1146,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/clickhouse/" class="md-nav__link">
+      <a href="../session/clickhouse/" class="md-nav__link">
         
   
   
@@ -1181,8 +1174,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1193,11 +1184,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_13" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_13" >
         
           
           <label class="md-nav__link" for="__nav_2_13" id="__nav_2_13_label" tabindex="0">
@@ -1213,7 +1204,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_13_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_13_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_13">
             <span class="md-nav__icon md-icon"></span>
             Knowledge
@@ -1227,7 +1218,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../knowledge/" class="md-nav__link">
         
   
   
@@ -1250,7 +1241,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../embedder/" class="md-nav__link">
+      <a href="../knowledge/embedder/" class="md-nav__link">
         
   
   
@@ -1273,7 +1264,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../reranker/" class="md-nav__link">
+      <a href="../knowledge/reranker/" class="md-nav__link">
         
   
   
@@ -1296,7 +1287,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../source/" class="md-nav__link">
+      <a href="../knowledge/source/" class="md-nav__link">
         
   
   
@@ -1319,7 +1310,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filter/" class="md-nav__link">
+      <a href="../knowledge/filter/" class="md-nav__link">
         
   
   
@@ -1339,32 +1330,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Extractor
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../knowledge/extractor/" class="md-nav__link">
         
   
   
@@ -1375,80 +1344,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#difference-between-extractor-reader-and-ocr" class="md-nav__link">
-    <span class="md-ellipsis">
-      Difference between Extractor, Reader, and OCR
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#current-integration-points" class="md-nav__link">
-    <span class="md-ellipsis">
-      Current integration points
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#docling-extractor" class="md-nav__link">
-    <span class="md-ellipsis">
-      Docling Extractor
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#example" class="md-nav__link">
-    <span class="md-ellipsis">
-      Example
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#when-to-use-an-extractor" class="md-nav__link">
-    <span class="md-ellipsis">
-      When to use an Extractor
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related-documents" class="md-nav__link">
-    <span class="md-ellipsis">
-      Related documents
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1461,7 +1356,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../management/" class="md-nav__link">
+      <a href="../knowledge/management/" class="md-nav__link">
         
   
   
@@ -1484,7 +1379,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ocr/" class="md-nav__link">
+      <a href="../knowledge/ocr/" class="md-nav__link">
         
   
   
@@ -1548,7 +1443,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/" class="md-nav__link">
         
   
   
@@ -1571,7 +1466,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/inmemory/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/inmemory/" class="md-nav__link">
         
   
   
@@ -1594,7 +1489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/pgvector/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/pgvector/" class="md-nav__link">
         
   
   
@@ -1617,7 +1512,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/tcvector/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/tcvector/" class="md-nav__link">
         
   
   
@@ -1640,7 +1535,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/elasticsearch/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
         
   
   
@@ -1663,7 +1558,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/qdrant/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/qdrant/" class="md-nav__link">
         
   
   
@@ -1686,7 +1581,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/milvus/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/milvus/" class="md-nav__link">
         
   
   
@@ -1717,7 +1612,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../knowledge/troubleshooting/" class="md-nav__link">
         
   
   
@@ -1748,7 +1643,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../planner/" class="md-nav__link">
+      <a href="../planner/" class="md-nav__link">
         
   
   
@@ -1771,7 +1666,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../event/" class="md-nav__link">
+      <a href="../event/" class="md-nav__link">
         
   
   
@@ -1794,7 +1689,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/" class="md-nav__link">
+      <a href="../evaluation/" class="md-nav__link">
         
   
   
@@ -1817,7 +1712,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../promptiter/" class="md-nav__link">
+      <a href="../promptiter/" class="md-nav__link">
         
   
   
@@ -1888,7 +1783,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../gateway/" class="md-nav__link">
+      <a href="../gateway/" class="md-nav__link">
         
   
   
@@ -1911,7 +1806,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/" class="md-nav__link">
+      <a href="../agui/" class="md-nav__link">
         
   
   
@@ -1934,7 +1829,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2a/" class="md-nav__link">
+      <a href="../a2a/" class="md-nav__link">
         
   
   
@@ -1957,7 +1852,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2ui/" class="md-nav__link">
+      <a href="../a2ui/" class="md-nav__link">
         
   
   
@@ -1980,7 +1875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../openclaw-runtime/" class="md-nav__link">
+      <a href="../openclaw-runtime/" class="md-nav__link">
         
   
   
@@ -2007,24 +1902,29 @@
       
   
   
+    
   
   
+  
     
     
     
     
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
             
   
   
@@ -2037,7 +1937,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             Observability
@@ -2051,7 +1951,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../observability/" class="md-nav__link">
+      <a href="../observability/" class="md-nav__link">
         
   
   
@@ -2071,10 +1971,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../telemetry-multimodal/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Telemetry Multimodal Protocol
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -2085,6 +2007,89 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#otel-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      OTel References
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#telemetry-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      Telemetry Contract
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#otel-message-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      OTel Message Shape
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#framework-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      Framework Mapping
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#capability-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      Capability Matrix
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#video-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Video Strategy
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -2104,7 +2109,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../ecosystem/" class="md-nav__link">
+      <a href="../ecosystem/" class="md-nav__link">
         
   
   
@@ -2146,54 +2151,63 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#difference-between-extractor-reader-and-ocr" class="md-nav__link">
+  <a href="#overview" class="md-nav__link">
     <span class="md-ellipsis">
-      Difference between Extractor, Reader, and OCR
+      Overview
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#current-integration-points" class="md-nav__link">
+  <a href="#otel-references" class="md-nav__link">
     <span class="md-ellipsis">
-      Current integration points
+      OTel References
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#docling-extractor" class="md-nav__link">
+  <a href="#telemetry-contract" class="md-nav__link">
     <span class="md-ellipsis">
-      Docling Extractor
+      Telemetry Contract
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#example" class="md-nav__link">
+  <a href="#otel-message-shape" class="md-nav__link">
     <span class="md-ellipsis">
-      Example
+      OTel Message Shape
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#when-to-use-an-extractor" class="md-nav__link">
+  <a href="#framework-mapping" class="md-nav__link">
     <span class="md-ellipsis">
-      When to use an Extractor
+      Framework Mapping
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#related-documents" class="md-nav__link">
+  <a href="#capability-matrix" class="md-nav__link">
     <span class="md-ellipsis">
-      Related documents
+      Capability Matrix
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#video-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Video Strategy
     </span>
   </a>
   
@@ -2215,7 +2229,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge/extractor.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/telemetry-multimodal.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2224,170 +2238,199 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge/extractor.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/telemetry-multimodal.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="extractor-content-extraction">Extractor Content Extraction</h1>
-<blockquote>
-<p><strong>Full example</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/extractor">examples/knowledge/features/extractor</a></p>
-</blockquote>
-<p>Extractors are used before Reader and Chunking to convert complex raw inputs into an intermediate format that is easier to process downstream.</p>
-<p>The typical pipeline looks like this:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>raw file / URL response body -&gt; Extractor -&gt; markdown / text -&gt; Reader -&gt; Chunking -&gt; Document
+<h1 id="telemetry-multimodal-protocol">Telemetry Multimodal Protocol</h1>
+<h2 id="overview">Overview</h2>
+<p>This page defines the tracing contract, the framework-to-OTel mapping, and
+provider capabilities.</p>
+<h2 id="otel-references">OTel References</h2>
+<ul>
+<li><a href="https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/#gen-ai-input-messages">OpenTelemetry GenAI attribute: <code>gen_ai.input.messages</code></a></li>
+<li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-input-messages.json">OpenTelemetry GenAI input messages JSON schema</a></li>
+<li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-output-messages.json">OpenTelemetry GenAI output messages JSON schema</a></li>
+<li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/openai/">OpenTelemetry GenAI OpenAI semantic conventions</a></li>
+</ul>
+<h2 id="telemetry-contract">Telemetry Contract</h2>
+<ul>
+<li><code>gen_ai.input.messages</code> is an OTel semantic payload. It is not a raw provider
+  request body.</li>
+<li><code>gen_ai.output.messages</code> is an OTel semantic payload for model outputs. It is
+  not guaranteed to match a provider SDK response shape.</li>
+<li><code>llm.request</code> and <code>llm.response</code> remain provider-oriented snapshots and can
+  still differ from OTel message telemetry.</li>
+</ul>
+<h2 id="otel-message-shape">OTel Message Shape</h2>
+<p>Each message uses:</p>
+<ul>
+<li><code>role</code></li>
+<li>optional <code>name</code></li>
+<li>required <code>parts</code></li>
+</ul>
+<p>Supported part shapes used by the framework:</p>
+<ul>
+<li><code>text</code>: text content.</li>
+<li><code>blob</code>: inline binary data, serialized as base64 in <code>content</code>.</li>
+<li><code>uri</code>: external references such as image URLs.</li>
+<li><code>file</code>: file identifiers such as uploaded provider files.</li>
+<li><code>tool_call</code>: assistant tool requests.</li>
+<li><code>tool_call_response</code>: tool outputs sent back to the model.</li>
+<li><code>reasoning</code>: provider reasoning or thinking content.</li>
+</ul>
+<p>Example:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-0-10">10</a></span>
+<span class="normal"><a href="#__codelineno-0-11">11</a></span>
+<span class="normal"><a href="#__codelineno-0-12">12</a></span>
+<span class="normal"><a href="#__codelineno-0-13">13</a></span>
+<span class="normal"><a href="#__codelineno-0-14">14</a></span>
+<span class="normal"><a href="#__codelineno-0-15">15</a></span>
+<span class="normal"><a href="#__codelineno-0-16">16</a></span>
+<span class="normal"><a href="#__codelineno-0-17">17</a></span>
+<span class="normal"><a href="#__codelineno-0-18">18</a></span>
+<span class="normal"><a href="#__codelineno-0-19">19</a></span>
+<span class="normal"><a href="#__codelineno-0-20">20</a></span>
+<span class="normal"><a href="#__codelineno-0-21">21</a></span>
+<span class="normal"><a href="#__codelineno-0-22">22</a></span>
+<span class="normal"><a href="#__codelineno-0-23">23</a></span>
+<span class="normal"><a href="#__codelineno-0-24">24</a></span>
+<span class="normal"><a href="#__codelineno-0-25">25</a></span>
+<span class="normal"><a href="#__codelineno-0-26">26</a></span>
+<span class="normal"><a href="#__codelineno-0-27">27</a></span>
+<span class="normal"><a href="#__codelineno-0-28">28</a></span>
+<span class="normal"><a href="#__codelineno-0-29">29</a></span>
+<span class="normal"><a href="#__codelineno-0-30">30</a></span>
+<span class="normal"><a href="#__codelineno-0-31">31</a></span>
+<span class="normal"><a href="#__codelineno-0-32">32</a></span>
+<span class="normal"><a href="#__codelineno-0-33">33</a></span>
+<span class="normal"><a href="#__codelineno-0-34">34</a></span>
+<span class="normal"><a href="#__codelineno-0-35">35</a></span>
+<span class="normal"><a href="#__codelineno-0-36">36</a></span>
+<span class="normal"><a href="#__codelineno-0-37">37</a></span>
+<span class="normal"><a href="#__codelineno-0-38">38</a></span>
+<span class="normal"><a href="#__codelineno-0-39">39</a></span>
+<span class="normal"><a href="#__codelineno-0-40">40</a></span>
+<span class="normal"><a href="#__codelineno-0-41">41</a></span>
+<span class="normal"><a href="#__codelineno-0-42">42</a></span>
+<span class="normal"><a href="#__codelineno-0-43">43</a></span>
+<span class="normal"><a href="#__codelineno-0-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="p">[</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;parts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">      </span><span class="p">{</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">        </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;text&quot;</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">        </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;What is in this document?&quot;</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">      </span><span class="p">{</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">        </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;file&quot;</span><span class="p">,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">        </span><span class="nt">&quot;modality&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;file&quot;</span><span class="p">,</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">        </span><span class="nt">&quot;mime_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;application/pdf&quot;</span><span class="p">,</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">        </span><span class="nt">&quot;file_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;file-123&quot;</span><span class="p">,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">        </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;paper.pdf&quot;</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="w">    </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">    </span><span class="nt">&quot;parts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="w">      </span><span class="p">{</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="w">        </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_call&quot;</span><span class="p">,</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="w">        </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;call_1&quot;</span><span class="p">,</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">        </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;search&quot;</span><span class="p">,</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="w">        </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="w">          </span><span class="nt">&quot;q&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;OpenTelemetry&quot;</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool&quot;</span><span class="p">,</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="w">    </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;search&quot;</span><span class="p">,</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="w">    </span><span class="nt">&quot;parts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="w">      </span><span class="p">{</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a><span class="w">        </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_call_response&quot;</span><span class="p">,</span>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="w">        </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;call_1&quot;</span><span class="p">,</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="w">        </span><span class="nt">&quot;response&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a><span class="w">          </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44"></a><span class="p">]</span>
 </span></code></pre></div></td></tr></table></div>
-<p>This is useful for inputs such as PDFs, HTML, Office documents, and images that are not ideal for direct text chunking.</p>
-<h2 id="difference-between-extractor-reader-and-ocr">Difference between Extractor, Reader, and OCR</h2>
+<h2 id="framework-mapping">Framework Mapping</h2>
+<p><code>model.Message</code> and <code>model.ContentPart</code> are mapped as follows:</p>
 <ul>
-<li><strong>Extractor</strong>: converts complex formats into <code>markdown</code> or <code>text</code>; conceptually it is document conversion, and some implementations may also include OCR internally</li>
-<li><strong>Reader</strong>: reads <code>markdown</code>, <code>text</code>, <code>json</code>, <code>csv</code>, and other supported formats, then performs chunking</li>
-<li><strong>OCR</strong>: recognizes text from images or scanned pages, usually as an internal enhancement for PDF reading</li>
+<li><code>Message.Content</code> becomes a <code>text</code> part.</li>
+<li><code>ContentParts[text]</code> becomes a <code>text</code> part.</li>
+<li><code>ContentParts[image]</code>:<ul>
+<li>URL input becomes <code>uri</code> with <code>modality: image</code></li>
+<li>inline bytes become <code>blob</code> with <code>modality: image</code></li>
+<li><code>detail</code> is preserved as an additional property</li>
 </ul>
-<p>You can think of them like this:</p>
+</li>
+<li><code>ContentParts[audio]</code> becomes <code>blob</code> with <code>modality: audio</code></li>
+<li><code>ContentParts[file]</code>:<ul>
+<li><code>file_id</code> becomes <code>file</code></li>
+<li>inline bytes become <code>blob</code></li>
+<li>modality is inferred from MIME type, so image/audio/video files are visible
+  in telemetry even though the core model currently has no <code>video</code> content type</li>
+</ul>
+</li>
+<li><code>Message.ToolCalls</code> becomes <code>tool_call</code> parts</li>
+<li><code>role=tool</code> messages become <code>tool_call_response</code> parts</li>
+<li><code>Message.ReasoningContent</code> becomes a <code>reasoning</code> part</li>
+</ul>
+<h2 id="capability-matrix">Capability Matrix</h2>
+<p>The framework normalizes multimodal data at the telemetry layer, but provider
+support still depends on each model adapter.</p>
 <ul>
-<li><code>Extractor</code> solves “first turn complex content into readable text”</li>
-<li><code>Reader</code> solves “how to organize text into documents and chunks”</li>
-<li><code>OCR</code> solves “whether text can be recognized from image content”</li>
+<li>OpenAI-compatible adapters in <code>model/openai</code> support user text, image, audio,
+  and file input. System and assistant <code>ContentParts</code> are effectively text-only.
+  Tool calls are supported. The current built-in OpenAI adapter uses Chat
+  Completions, not Responses.</li>
+<li>Gemini in <code>model/gemini</code> supports text, image, audio, and inline file bytes.
+  File-by-ID is not a first-class generic path in the current adapter.</li>
+<li>Anthropic in <code>model/anthropic</code> currently keeps only text parts in message
+  conversion. Non-text parts are dropped before the provider call.</li>
+<li>Ollama in <code>model/ollama</code> supports text and inline image bytes. Audio and file
+  inputs are not mapped.</li>
+<li>Hunyuan in <code>model/hunyuan</code> supports text, image, and audio, but file content
+  is not converted today.</li>
+<li>Hugging Face in <code>model/huggingface</code> supports text and image in its converter.
+  Audio and file inputs are rejected.</li>
 </ul>
-<p>If your input is already in formats such as <code>.md</code>, <code>.txt</code>, or <code>.json</code>, you usually do not need an extra Extractor and can pass it directly to a Reader.</p>
-<p>If the input is a complex static web page, a complicated PDF, an academic paper, a poster, or other content with strong layout structure, it is generally better to use an <code>Extractor</code> first, especially an implementation such as <code>Docling</code> that preserves structure more effectively.</p>
-<h2 id="current-integration-points">Current integration points</h2>
-<p>The following Sources currently support content extraction via <code>WithExtractor(...)</code>:</p>
+<h2 id="video-strategy">Video Strategy</h2>
+<p>Video handling is split by layer:</p>
 <ul>
-<li><code>filesource.WithExtractor(...)</code></li>
-<li><code>dirsource.WithExtractor(...)</code></li>
-<li><code>urlsource.WithExtractor(...)</code></li>
-<li><code>autosource.WithExtractor(...)</code></li>
+<li>Telemetry layer:<ul>
+<li>represent video as <code>blob</code>, <code>uri</code>, or <code>file</code></li>
+<li>set <code>modality: video</code></li>
+<li>preserve <code>mime_type</code> and <code>filename</code> when available</li>
 </ul>
-<p>For <code>URL Source</code>, the common pipeline is:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a>URL -&gt; download response body -&gt; Extractor -&gt; markdown -&gt; Markdown Reader -&gt; MarkdownChunking
-</span></code></pre></div></td></tr></table></div>
-<p>This means that when a URL returns complex content such as <code>application/pdf</code> or <code>text/html</code>, you can first pass it through an Extractor and then continue processing it with the appropriate Reader.</p>
-<p>For Extractors that support direct remote source fetching, such as Docling, <code>URL Source</code> can also call the service-side URL conversion API directly instead of downloading the response locally first.</p>
-<h2 id="docling-extractor">Docling Extractor</h2>
-<p>The built-in content extractor currently provided in this repository is <code>Docling</code>:</p>
-<ul>
-<li>package path: <code>trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling</code></li>
-<li>default support: <code>.pdf</code>, <code>.html</code>, <code>.docx</code>, <code>.pptx</code>, images, <code>.csv</code>, and more</li>
-<li>default output: <code>markdown</code></li>
+</li>
+<li>Model abstraction layer:<ul>
+<li>there is no first-class <code>ContentTypeVideo</code> yet</li>
+<li>current short-term strategy is to stage video through file-like telemetry
+  representations</li>
 </ul>
-<p>If you want to try it locally, you can start <code>Docling Serve</code> with Docker:</p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </span><span class="m">5001</span>:5001<span class="w"> </span>ghcr.io/docling-project/docling-serve
-</span></code></pre></div></td></tr></table></div>
-<p><code>Docling</code> has a relatively low barrier to entry for local usage and is practical to run directly on a development machine for document conversion experiments.</p>
-<p>Docling is a good fit for:</p>
-<ul>
-<li>PDF -&gt; Markdown</li>
-<li>HTML pages -&gt; Markdown</li>
-<li>Office documents -&gt; Markdown / text</li>
+</li>
 </ul>
-<p>For scanned PDFs, image-based PDFs, and structurally complex HTML / Office documents, <strong>Docling should generally be the preferred main processing path</strong>.</p>
-<p>Also note that <code>Docling</code> already includes OCR capability internally, so in this kind of pipeline you usually <strong>do not need to configure a separate OCR capability in addition to it</strong>.</p>
-<h2 id="example">Example</h2>
-<p>The example below shows how to inject Docling into URL Source so that linked content is extracted before chunking:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-3-10">10</a></span>
-<span class="normal"><a href="#__codelineno-3-11">11</a></span>
-<span class="normal"><a href="#__codelineno-3-12">12</a></span>
-<span class="normal"><a href="#__codelineno-3-13">13</a></span>
-<span class="normal"><a href="#__codelineno-3-14">14</a></span>
-<span class="normal"><a href="#__codelineno-3-15">15</a></span>
-<span class="normal"><a href="#__codelineno-3-16">16</a></span>
-<span class="normal"><a href="#__codelineno-3-17">17</a></span>
-<span class="normal"><a href="#__codelineno-3-18">18</a></span>
-<span class="normal"><a href="#__codelineno-3-19">19</a></span>
-<span class="normal"><a href="#__codelineno-3-20">20</a></span>
-<span class="normal"><a href="#__codelineno-3-21">21</a></span>
-<span class="normal"><a href="#__codelineno-3-22">22</a></span>
-<span class="normal"><a href="#__codelineno-3-23">23</a></span>
-<span class="normal"><a href="#__codelineno-3-24">24</a></span>
-<span class="normal"><a href="#__codelineno-3-25">25</a></span>
-<span class="normal"><a href="#__codelineno-3-26">26</a></span>
-<span class="normal"><a href="#__codelineno-3-27">27</a></span>
-<span class="normal"><a href="#__codelineno-3-28">28</a></span>
-<span class="normal"><a href="#__codelineno-3-29">29</a></span>
-<span class="normal"><a href="#__codelineno-3-30">30</a></span>
-<span class="normal"><a href="#__codelineno-3-31">31</a></span>
-<span class="normal"><a href="#__codelineno-3-32">32</a></span>
-<span class="normal"><a href="#__codelineno-3-33">33</a></span>
-<span class="normal"><a href="#__codelineno-3-34">34</a></span>
-<span class="normal"><a href="#__codelineno-3-35">35</a></span>
-<span class="normal"><a href="#__codelineno-3-36">36</a></span>
-<span class="normal"><a href="#__codelineno-3-37">37</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling&quot;</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">urlsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/url&quot;</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="c1">// Register the markdown reader for extractor output.</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown&quot;</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="p">)</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="w">    </span><span class="nx">ext</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">docling</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a><span class="w">        </span><span class="nx">docling</span><span class="p">.</span><span class="nx">WithEndpoint</span><span class="p">(</span><span class="s">&quot;http://localhost:5001&quot;</span><span class="p">),</span>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="nx">ext</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="w">    </span><span class="nx">src</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a><span class="w">            </span><span class="s">&quot;https://arxiv.org/pdf/1706.03762&quot;</span><span class="p">,</span>
-</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24"></a><span class="w">            </span><span class="s">&quot;https://www.rfc-editor.org/rfc/rfc9110.html&quot;</span><span class="p">,</span>
-</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">ext</span><span class="p">),</span>
-</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithChunkSize</span><span class="p">(</span><span class="mi">500</span><span class="p">),</span>
-</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithChunkOverlap</span><span class="p">(</span><span class="mi">50</span><span class="p">),</span>
-</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30"></a>
-</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31"></a><span class="w">    </span><span class="nx">docs</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">src</span><span class="p">.</span><span class="nx">ReadDocuments</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
-</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35"></a>
-</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">docs</span>
-</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p>For a more complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/extractor">examples/knowledge/features/extractor</a>.</p>
-<h2 id="when-to-use-an-extractor">When to use an Extractor</h2>
-<p>Recommended cases for using an <code>Extractor</code>:</p>
-<ul>
-<li>when you want to preserve better structure from PDF / HTML content</li>
-<li>when the original format is not suitable for direct reading by existing Readers</li>
-<li>when you want to normalize multiple complex formats into Markdown before entering the same chunking pipeline</li>
-</ul>
-<p>Cases where you may not need an <code>Extractor</code>:</p>
-<ul>
-<li>the input is already <code>.md</code>, <code>.txt</code>, <code>.json</code>, or another directly readable format</li>
-<li>you only need plain text extraction from PDF and do not care about Markdown structure</li>
-<li>you only need OCR on image content rather than full document conversion</li>
-</ul>
-<p>Cases where <code>OCR</code> may be a better fit than an <code>Extractor</code>:</p>
-<ul>
-<li>the input is a single image or a pure image stream</li>
-<li>you only care about recognized plain text, not Markdown structure or layout preservation</li>
-<li>you want OCR to be used as an internal enhancement for a Reader instead of introducing a full document conversion service</li>
-</ul>
-<h2 id="related-documents">Related documents</h2>
-<ul>
-<li><a href="../source/">Source</a> - Source types and configuration</li>
-<li><a href="../ocr/">OCR</a> - OCR for scanned documents and images</li>
-<li><a href="../">Knowledge overview</a> - Overall Knowledge module architecture and capabilities</li>
-</ul>
+<p>When the shared model abstraction gains <code>ContentTypeVideo</code>, this page should be
+updated with the exact field mapping and provider matrix changes.</p>
 
 
 
@@ -2410,7 +2453,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 10, 2026 07:58:56 UTC">2026-04-10 07:58:56</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 29, 2026 05:53:25 UTC">2026-04-29 05:53:25</span>
   </span>
 
     
@@ -2420,7 +2463,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 10, 2026 07:58:56 UTC">2026-04-10 07:58:56</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 29, 2026 05:53:25 UTC">2026-04-29 05:53:25</span>
   </span>
 
     
@@ -2501,7 +2544,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../filter/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Filter">
+          <a href="../observability/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Overview">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -2511,20 +2554,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Filter
+                Overview
               </div>
             </div>
           </a>
         
         
           
-          <a href="../management/" class="md-footer__link md-footer__link--next" aria-label="Next: Management">
+          <a href="../ecosystem/" class="md-footer__link md-footer__link--next" aria-label="Next: Ecosystem">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Management
+                Ecosystem
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -2560,12 +2603,12 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../assets/javascripts/bundle.92b07e13.min.js"></script>
       
-        <script src="../../assets/javascripts/mathjax.js"></script>
+        <script src="../assets/javascripts/mathjax.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       
