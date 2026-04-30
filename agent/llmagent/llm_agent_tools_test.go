@@ -286,7 +286,7 @@ type staticResultTool struct {
 }
 
 func (t staticResultTool) Call(_ context.Context, _ []byte) (any, error) { return t.result, nil }
-func (t staticResultTool) Declaration() *tool.Declaration                  { return t.decl }
+func (t staticResultTool) Declaration() *tool.Declaration                { return t.decl }
 
 type refreshPerInvocationModel struct {
 	mu sync.Mutex

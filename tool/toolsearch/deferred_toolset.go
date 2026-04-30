@@ -44,6 +44,8 @@ type catalogSnapshot struct {
 	Index       *localIndex
 }
 
+// DeferredToolSet is a ToolSet that dynamically exposes a search tool plus
+// only the loaded tools needed for the next model step.
 type DeferredToolSet struct {
 	name                string
 	searchToolName      string
