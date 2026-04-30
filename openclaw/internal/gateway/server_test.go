@@ -4566,6 +4566,51 @@ func TestServer_HandleMessagesStream_Success(t *testing.T) {
 	require.Contains(t, rr.Body.String(), `"reply":"ok"`)
 }
 
+func TestServer_HandleMessagesStream_ProgressAfterTextDeltaOption(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const (
+		firstDelta = "checking "
+		replyText  = "done"
+		requestID  = "req-1"
+	)
+
+	srv, err := New(&staticRunner{
+		events: progressAfterDeltaEvents(
+			firstDelta,
+			replyText,
+			requestID,
+		),
+	})
+	require.NoError(t, err)
+
+	reqBody, err := json.Marshal(map[string]any{
+		"from": "u1",
+		"text": "hello",
+		"stream_options": map[string]bool{
+			"progress_after_text_delta": true,
+		},
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesStreamPath(),
+		bytes.NewReader(reqBody),
+	)
+	srv.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "event: message.delta")
+	require.Contains(t, rr.Body.String(), `"tool_name":"`+
+		streamToolReadDocument+`"`)
+	require.Contains(t, rr.Body.String(), `"tool_status":"`+
+		string(gwproto.StreamToolStatusCompleted)+`"`)
+}
+
 func TestServer_HandleMessagesStream_ErrorPaths(t *testing.T) {
 	t.Parallel()
 
