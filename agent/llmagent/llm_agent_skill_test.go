@@ -41,7 +41,7 @@ const (
 	skillsCapabilityHeader      = "Skill tool availability:"
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
 	skillRootsHeader            = "Skill roots:"
-	workspaceExecGuidanceHeader = "Executor workspace guidance:"
+	workspaceExecGuidanceHeader = "Workspace shell guidance:"
 )
 
 // createTestSkill makes a minimal skill folder with SKILL.md.
@@ -1837,11 +1837,16 @@ func TestLLMAgent_WorkspaceExecGuidanceWithoutSkillsRepo(t *testing.T) {
 
 	sys := findSystemMessageContaining(req, workspaceExecGuidanceHeader)
 	require.NotEmpty(t, sys)
-	require.Contains(t, sys, "general shell runner for the current executor workspace")
+	require.Contains(t, sys, "shell command tool for the current workspace")
+	require.Contains(t, sys, "Prefer task-specific tools")
+	require.Contains(t, sys, "general shell fallback tool")
+	require.Contains(t, sys, "workspace or shell environment")
+	require.Contains(t, sys, "external information retrieval")
 	require.Contains(t, sys, "Command paths are resolved relative to cwd")
 	require.Contains(t, sys, "Choose one path base per command")
 	require.Contains(t, sys, "Prefer work/, out/, and runs/")
-	require.Contains(t, sys, "verify first before claiming the limitation")
+	require.Contains(t, sys, "check it only when that environment matters")
+	require.NotContains(t, sys, "curl")
 	require.NotContains(t, sys, "workspace_save_artifact")
 	require.NotContains(t, sys, "skills/")
 	require.NotContains(t, sys, "workspace_write_stdin")
