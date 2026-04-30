@@ -184,8 +184,30 @@ type Usage struct {
     // Total number of tokens used in response.
     TotalTokens int `json:"total_tokens"`
 
+    // Details of prompt token usage.
+    PromptTokensDetails PromptTokensDetails `json:"prompt_tokens_details"`
+
+    // Details of completion token usage.
+    CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+
     // Timing statistics (optional).
     TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+}
+
+type PromptTokensDetails struct {
+    // Number of cached tokens in the prompt.
+    CachedTokens int `json:"cached_tokens"`
+
+    // Number of tokens used to create the cache (Anthropic).
+    CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+
+    // Number of tokens read from cache (Anthropic).
+    CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+    // Number of tokens generated for reasoning.
+    ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 }
 
 type TimingInfo struct {
@@ -212,6 +234,8 @@ type TimingInfo struct {
     ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 ```
+
+`CompletionTokensDetails.ReasoningTokens` corresponds to OpenAI-compatible `completion_tokens_details.reasoning_tokens`. It can be `0` when the model does not use reasoning tokens or the provider does not report them.
 
 ### Event Types
 

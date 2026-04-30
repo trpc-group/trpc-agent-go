@@ -135,11 +135,23 @@ func (c *inProcGatewayClient) StreamMessage(
 	ctx context.Context,
 	req gwclient.MessageRequest,
 ) (<-chan gwclient.StreamEvent, error) {
+	return c.StreamMessageWithOptions(ctx, req, nil)
+}
+
+func (c *inProcGatewayClient) StreamMessageWithOptions(
+	ctx context.Context,
+	req gwclient.MessageRequest,
+	opts *gwclient.MessageStreamOptions,
+) (<-chan gwclient.StreamEvent, error) {
 	if c == nil || c.srv == nil {
 		return nil, errors.New(errNilGatewayServer)
 	}
 
-	stream, apiErr, status := c.srv.StreamMessage(ctx, req)
+	stream, apiErr, status := c.srv.StreamMessageWithOptions(
+		ctx,
+		req,
+		opts,
+	)
 	if err := errorForGWStatus(status, apiErr); err != nil {
 		return nil, err
 	}

@@ -207,16 +207,21 @@ type GenerationConfig struct {
 
     // Reasoning effort level. Accepted values depend on the provider:
     //   - OpenAI o-series: "low", "medium", "high".
+    //   - Anthropic adaptive thinking: "low", "medium", "high", "max",
+    //     and "xhigh" on models that support it.
     //   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): "high", "max"
     //     (server maps "low"/"medium" -> "high" and "xhigh" -> "max" for
     //     backward compatibility).
+    // OpenAI-compatible providers forward this field to the selected backend
+    // model; use values supported by that backend.
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
     // Whether to enable thinking mode.
-    ThinkingEnabled *bool `json:"-"`
+    // nil means no thinking-toggle field is emitted, so the provider default applies.
+    ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
 
     // Maximum token count for thinking mode.
-    ThinkingTokens *int `json:"-"`
+    ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 ```
 
@@ -257,7 +262,29 @@ type ResponseError struct {
     Param   string    `json:"param,omitempty"`
     Code    string    `json:"code,omitempty"`
 }
+
+// Usage represents token usage information.
+type Usage struct {
+    PromptTokens            int                     `json:"prompt_tokens"`
+    CompletionTokens        int                     `json:"completion_tokens"`
+    TotalTokens             int                     `json:"total_tokens"`
+    PromptTokensDetails     PromptTokensDetails     `json:"prompt_tokens_details"`
+    CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+    TimingInfo              *TimingInfo             `json:"timing_info,omitempty"`
+}
+
+type PromptTokensDetails struct {
+    CachedTokens        int `json:"cached_tokens"`
+    CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+    CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+    ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+}
 ```
+
+For OpenAI-compatible providers, `completion_tokens_details.reasoning_tokens` is mapped to `Usage.CompletionTokensDetails.ReasoningTokens`. The value may be `0` when the provider does not spend or report reasoning tokens; for reasoning models, set `ReasoningEffort` and/or `ThinkingEnabled` when you want to request reasoning behavior.
 
 ## OpenAI Model
 
