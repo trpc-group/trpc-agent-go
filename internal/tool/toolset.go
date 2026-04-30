@@ -98,6 +98,21 @@ func (t *NamedTool) Original() tool.Tool {
 	return t.original
 }
 
+// UnwrapNamedTool returns the innermost non-NamedTool wrapped by t.
+// NamedTool always implements both CallableTool and StreamableTool via
+// delegation, so runtime capability checks must inspect the original tool
+// chain instead of stopping after one wrapper.
+func UnwrapNamedTool(t tool.Tool) tool.Tool {
+	current := t
+	for {
+		named, ok := current.(*NamedTool)
+		if !ok || named == nil || named.original == nil {
+			return current
+		}
+		current = named.original
+	}
+}
+
 // Call delegates to the original tool's Call method.
 func (t *NamedTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if callable, ok := t.original.(tool.CallableTool); ok {

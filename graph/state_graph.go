@@ -5331,10 +5331,7 @@ func toolStateDeltaForInvocation(
 	if tl == nil || len(result) == 0 {
 		return nil
 	}
-	original := tl
-	if namedTool, ok := tl.(*itool.NamedTool); ok {
-		original = namedTool.Original()
-	}
+	original := itool.UnwrapNamedTool(tl)
 	invocation, ok := invocationcarrier.InvocationStateCarrierFromContext(ctx)
 	if !ok || invocation == nil {
 		invocation = invocationFromContextOrDefault(ctx, graphInvocationFromState(state))

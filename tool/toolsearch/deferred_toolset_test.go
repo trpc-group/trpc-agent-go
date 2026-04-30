@@ -395,6 +395,80 @@ func TestDeferredToolSet_LLMAgentScenarios(t *testing.T) {
 	})
 }
 
+func TestDeferredToolSet_LLMAgentNamedDeferredMCPToolSet(t *testing.T) {
+	handler := &recordingMCPHTTPHandler{}
+	mcpToolSet := mcp.NewMCPToolSet(
+		mcp.ConnectionConfig{
+			Transport: "streamable",
+			ServerURL: "http://mcp.test",
+		},
+		mcp.WithName("remote"),
+		mcp.WithMCPOptions(
+			tmcp.WithClientGetSSEEnabled(false),
+			tmcp.WithHTTPReqHandler(handler),
+		),
+	)
+	t.Cleanup(func() { _ = mcpToolSet.Close() })
+	deferred, err := NewDeferredToolSet(
+		WithName("demo_mcp"),
+		WithToolSets(mcpToolSet),
+		WithMaxResults(1),
+		WithCatalogRefreshPolicy(CatalogRefreshPolicy{TTL: time.Minute}),
+	)
+	require.NoError(t, err)
+
+	modelStub := &scriptedCaptureModel{
+		t:        t,
+		name:     "llm-mcp-named-deferred",
+		deferred: deferred,
+		responses: []model.Message{
+			assistantToolCallMessage(
+				"search-1",
+				"demo_mcp_tool_search",
+				`{"query":"weather in shenzhen","limit":1}`,
+			),
+			assistantToolCallMessage(
+				"tool-1",
+				"demo_mcp_remote_weather_lookup",
+				`{"location":"Shenzhen"}`,
+			),
+			{Role: model.RoleAssistant, Content: "done"},
+		},
+	}
+
+	agt := llmagent.New(
+		"runtime-tool-search-named-mcp",
+		llmagent.WithModel(modelStub),
+		llmagent.WithToolSets([]tool.ToolSet{deferred}),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("llm-named-mcp"),
+		agent.WithInvocationMessage(model.NewUserMessage("help")),
+		agent.WithInvocationSession(&session.Session{ID: "named-mcp"}),
+	)
+	events, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	finalText, errMsg := collectFinalAssistantTextAndError(events)
+	require.Empty(t, errMsg)
+	require.Equal(t, "done", finalText)
+	require.Len(t, modelStub.summaries, 3)
+	require.Equal(t, []string{"demo_mcp_tool_search"}, modelStub.summaries[0].ToolNames)
+	require.Equal(
+		t,
+		[]string{"demo_mcp_remote_weather_lookup", "demo_mcp_tool_search"},
+		modelStub.summaries[1].ToolNames,
+	)
+	require.Equal(
+		t,
+		[]string{"demo_mcp_remote_weather_lookup", "demo_mcp_tool_search"},
+		modelStub.summaries[2].ToolNames,
+	)
+	require.Equal(t, []string{"remote_weather_lookup"}, modelStub.summaries[1].LoadedTools)
+	require.Equal(t, 1, handler.listToolsCount)
+	require.Equal(t, 1, handler.callCount)
+}
+
 func TestDeferredToolSet_GraphAgentScenarios(t *testing.T) {
 	t.Run("pure deferred tool set", func(t *testing.T) {
 		runGraphAgentScenario(t, graphScenario{
@@ -462,6 +536,101 @@ func TestDeferredToolSet_GraphAgentScenarios(t *testing.T) {
 		require.Equal(t, 1, handler.listToolsCount)
 		require.Equal(t, 1, handler.callCount)
 	})
+}
+
+func TestDeferredToolSet_GraphAgentNamedDeferredMCPToolSet(t *testing.T) {
+	handler := &recordingMCPHTTPHandler{}
+	mcpToolSet := mcp.NewMCPToolSet(
+		mcp.ConnectionConfig{
+			Transport: "streamable",
+			ServerURL: "http://mcp.test",
+		},
+		mcp.WithName("remote"),
+		mcp.WithMCPOptions(
+			tmcp.WithClientGetSSEEnabled(false),
+			tmcp.WithHTTPReqHandler(handler),
+		),
+	)
+	t.Cleanup(func() { _ = mcpToolSet.Close() })
+	deferred, err := NewDeferredToolSet(
+		WithName("demo_mcp"),
+		WithToolSets(mcpToolSet),
+		WithMaxResults(1),
+		WithCatalogRefreshPolicy(CatalogRefreshPolicy{TTL: time.Minute}),
+	)
+	require.NoError(t, err)
+
+	modelStub := &scriptedCaptureModel{
+		t:        t,
+		name:     "graph-mcp-named-deferred",
+		deferred: deferred,
+		responses: []model.Message{
+			assistantToolCallMessage(
+				"search-1",
+				"demo_mcp_tool_search",
+				`{"query":"weather in shenzhen","limit":1}`,
+			),
+			assistantToolCallMessage(
+				"tool-1",
+				"demo_mcp_remote_weather_lookup",
+				`{"location":"Shenzhen"}`,
+			),
+			{Role: model.RoleAssistant, Content: "done"},
+		},
+	}
+
+	graphBuilder := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddLLMNode(
+			"llm",
+			modelStub,
+			"use tools when needed",
+			nil,
+			graph.WithToolSets([]tool.ToolSet{deferred}),
+		).
+		AddToolsNode(
+			"tools",
+			nil,
+			graph.WithToolSets([]tool.ToolSet{deferred}),
+		).
+		AddNode("done", func(context.Context, graph.State) (any, error) {
+			return nil, nil
+		}).
+		AddToolsConditionalEdges("llm", "tools", "done").
+		AddEdge("tools", "llm").
+		SetEntryPoint("llm").
+		SetFinishPoint("done")
+
+	compiled, err := graphBuilder.Compile()
+	require.NoError(t, err)
+	graphAgent, err := graphagent.New("graph-runtime-search-named-mcp", compiled)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("graph-named-mcp"),
+		agent.WithInvocationMessage(model.NewUserMessage("help")),
+		agent.WithInvocationSession(&session.Session{ID: "graph-named-mcp"}),
+	)
+	events, err := graphAgent.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	finalText, errMsg := collectFinalAssistantTextAndError(events)
+	require.Empty(t, errMsg)
+	require.Equal(t, "done", finalText)
+	require.Len(t, modelStub.summaries, 3)
+	require.Equal(t, []string{"demo_mcp_tool_search"}, modelStub.summaries[0].ToolNames)
+	require.Equal(
+		t,
+		[]string{"demo_mcp_remote_weather_lookup", "demo_mcp_tool_search"},
+		modelStub.summaries[1].ToolNames,
+	)
+	require.Equal(
+		t,
+		[]string{"demo_mcp_remote_weather_lookup", "demo_mcp_tool_search"},
+		modelStub.summaries[2].ToolNames,
+	)
+	require.Equal(t, []string{"remote_weather_lookup"}, modelStub.summaries[1].LoadedTools)
+	require.Equal(t, 1, handler.listToolsCount)
+	require.Equal(t, 1, handler.callCount)
 }
 
 func TestDeferredToolSet_LLMAgentRepeatedToolSearchStopsAtIterationLimit(t *testing.T) {

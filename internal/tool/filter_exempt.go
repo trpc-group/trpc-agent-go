@@ -20,11 +20,9 @@ type filterExemptTool interface {
 // This remains an internal runtime detail so the public tool contract does not
 // need an extra marker interface just for DeferredToolSet's search entrypoint.
 func IsFilterExemptTool(t pubtool.Tool) bool {
+	t = UnwrapNamedTool(t)
 	if t == nil {
 		return false
-	}
-	if named, ok := t.(*NamedTool); ok && named != nil {
-		return IsFilterExemptTool(named.original)
 	}
 	exempt, ok := t.(filterExemptTool)
 	return ok && exempt.ExemptFromToolFilter()
