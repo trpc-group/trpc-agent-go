@@ -4039,7 +4039,9 @@ func TestInProcGatewayClient_StreamMessageWithOptions_ProgressAfterText(
 	require.Equal(t, gwproto.StreamEventTypeMessageDelta, events[2].Type)
 	require.Equal(t, firstDelta, events[2].Delta)
 	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[3].Type)
-	require.Equal(t, "Running demo_tool", events[3].Summary)
+	require.Equal(t, "Running local tool", events[3].Summary)
+	require.Equal(t, "demo_tool", events[3].ToolName)
+	require.Equal(t, gwproto.StreamToolStatusRunning, events[3].ToolStatus)
 	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[4].Type)
 	require.Equal(t, gwproto.StreamProgressStageSummarizing, events[4].Stage)
 }
