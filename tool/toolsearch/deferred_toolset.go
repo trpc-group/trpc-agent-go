@@ -436,7 +436,7 @@ func searchInputSchema() *tool.Schema {
 				Description: "Natural-language description of the tool you need.",
 			},
 			"limit": {
-				Type:        "number",
+				Type:        "integer",
 				Description: "Optional maximum number of tools to load.",
 			},
 		},

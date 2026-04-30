@@ -188,9 +188,16 @@ func TestToolSet_TaskOutputReadsBackgroundBashTask(t *testing.T) {
 	})
 	require.NotNil(t, nonBlocking.Task)
 	require.Contains(t, []string{"not_ready", "success"}, nonBlocking.RetrievalStatus)
+	require.Eventually(t, func() bool {
+		out := callToolAs[taskOutputOutput](t, taskOutputTool, taskOutputInput{
+			TaskID: bgOut.BackgroundTaskID,
+			Block:  boolPtr(false),
+		})
+		return out.Task != nil && out.Task.Status == "completed"
+	}, 10*time.Second, 100*time.Millisecond)
 	blocking := callToolAs[taskOutputOutput](t, taskOutputTool, taskOutputInput{
 		TaskID:  bgOut.BackgroundTaskID,
-		Timeout: intPtr(5_000),
+		Timeout: intPtr(1_000),
 	})
 	require.Equal(t, "success", blocking.RetrievalStatus)
 	require.NotNil(t, blocking.Task)

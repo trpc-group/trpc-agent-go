@@ -239,6 +239,16 @@ func TestLocalIndex_SearchHonorsBucketFairness(t *testing.T) {
 	require.Equal(t, []string{"mcp_alpha", "web_fetch"}, names)
 }
 
+func TestSearchInputSchema_UsesIntegerLimit(t *testing.T) {
+	t.Parallel()
+
+	schema := searchInputSchema()
+	require.NotNil(t, schema)
+	limit := schema.Properties["limit"]
+	require.NotNil(t, limit)
+	require.Equal(t, "integer", limit.Type)
+}
+
 func TestDeferredToolSet_SearchLoadFlowAndSessionPersistence(t *testing.T) {
 	weather := newWeatherTool("weather_lookup", "Look up the weather for one city.")
 	stock := newStockTool("stock_quote", "查询股票价格与行情。")

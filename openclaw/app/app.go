@@ -2390,8 +2390,7 @@ func newAgent(
 	} else if len(providerTools) > 0 {
 		tools = append(tools, providerTools...)
 	}
-	if hasToolNamed(tools, ocbrowser.ToolName) ||
-		hasToolNamed(providerTools, ocbrowser.ToolName) {
+	if hasToolNamed(tools, ocbrowser.ToolName) {
 		instruction = strings.TrimSpace(
 			instruction + "\n\n" + browserToolingGuidance,
 		)
