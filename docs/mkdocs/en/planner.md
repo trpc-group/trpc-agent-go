@@ -39,7 +39,7 @@ Planner workflow:
 ## Enable and Capture Thinking (without Planner)
 
 You can enable and read a model's internal reasoning ("thinking") even without using a Planner. 
-Configure GenerationConfig to request thinking, and then capture ReasoningContent from responses.
+Configure `GenerationConfig` to request reasoning/thinking, and then capture `ReasoningContent` from responses.
 
 ### Enable via GenerationConfig
 ```go
@@ -49,9 +49,11 @@ genConfig := model.GenerationConfig{
     Temperature: 0.7,
 }
 
-// Enable thinking (if provider/model supports it).
+// Request reasoning/thinking (if provider/model supports it).
+reasoningEffort := "high"
 thinkingEnabled := true
 thinkingTokens := 2048
+genConfig.ReasoningEffort = &reasoningEffort
 genConfig.ThinkingEnabled = &thinkingEnabled
 genConfig.ThinkingTokens  = &thinkingTokens
 ```
@@ -102,6 +104,8 @@ for e := range eventChan {
 
 Notes:
 - The visibility of reasoning depends on the model and provider; enabling related parameters expresses intent and does not guarantee it will be returned.
+- `ReasoningEffort` controls the requested reasoning budget for providers that support `reasoning_effort`. `ThinkingEnabled` controls explicit thinking toggles for providers that expose a `thinking` option.
+- `completion_tokens_details.reasoning_tokens` is reported in `response.Usage.CompletionTokensDetails.ReasoningTokens` when the provider returns it. The value may remain `0` if reasoning is not enabled, not used, or not reported.
 - In streaming mode, you may insert a blank line between reasoning and normal content to improve the reading experience.
 - Session history may aggregate segmented reasoning into the final message to aid later review and traceability.
 
@@ -116,9 +120,13 @@ type Options struct {
     // ReasoningEffort limits the reasoning effort of the reasoning model.
     // Accepted values depend on the provider:
     //   - OpenAI o-series: "low", "medium", "high".
+    //   - Anthropic adaptive thinking: "low", "medium", "high", "max",
+    //     and "xhigh" on models that support it.
     //   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): "high", "max"
     //     (server maps "low"/"medium" -> "high" and "xhigh" -> "max" for
     //     backward compatibility).
+    // OpenAI-compatible providers forward this field to the selected backend
+    // model; use values supported by that backend.
     ReasoningEffort *string
     // ThinkingEnabled enables thinking mode for models that support it.
     // Effective for DeepSeek v4 models, and for Claude / Gemini models via

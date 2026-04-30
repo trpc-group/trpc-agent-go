@@ -207,16 +207,21 @@ type GenerationConfig struct {
 
     // 推理努力程度。可选值取决于服务方：
     //   - OpenAI o-series："low"、"medium"、"high"
+    //   - Anthropic adaptive thinking："low"、"medium"、"high"、"max"，
+    //     以及支持该值的模型上的 "xhigh"
     //   - DeepSeek v4（deepseek-v4-pro / deepseek-v4-flash）："high"、"max"
     //     （服务端为兼容旧配置，会把 "low"/"medium" 映射为 "high"，
     //     "xhigh" 映射为 "max"）
+    // OpenAI-compatible 服务会将该字段透传给所选后端模型，
+    // 请使用该后端模型支持的取值。
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
     // 是否启用思考模式
-    ThinkingEnabled *bool `json:"-"`
+    // nil 表示不发送思考开关字段，由服务方默认值决定。
+    ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
 
     // 思考模式的最大令牌数
-    ThinkingTokens *int `json:"-"`
+    ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 ```
 
@@ -255,7 +260,29 @@ type ResponseError struct {
     Param   string    `json:"param,omitempty"`
     Code    string    `json:"code,omitempty"`
 }
+
+// Usage 表示 token 用量信息
+type Usage struct {
+    PromptTokens            int                     `json:"prompt_tokens"`
+    CompletionTokens        int                     `json:"completion_tokens"`
+    TotalTokens             int                     `json:"total_tokens"`
+    PromptTokensDetails     PromptTokensDetails     `json:"prompt_tokens_details"`
+    CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+    TimingInfo              *TimingInfo             `json:"timing_info,omitempty"`
+}
+
+type PromptTokensDetails struct {
+    CachedTokens        int `json:"cached_tokens"`
+    CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+    CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+    ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+}
 ```
+
+对于 OpenAI-compatible 服务，返回中的 `completion_tokens_details.reasoning_tokens` 会映射到 `Usage.CompletionTokensDetails.ReasoningTokens`。当服务方没有消耗或没有上报 reasoning tokens 时，该值可能为 `0`；如果希望 reasoning 模型进入推理行为，请按模型能力设置 `ReasoningEffort` 和/或 `ThinkingEnabled`。
 
 ## OpenAI Model
 
