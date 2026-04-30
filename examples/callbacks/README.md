@@ -49,23 +49,23 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 
 ### 2. ToolCallbacks
 
-- **BeforeToolCallback**: Triggered before each tool invocation. Use for argument validation, mocking tool results, logging, or **modifying tool arguments**. The `jsonArgs` parameter is a pointer, allowing callbacks to modify arguments that will be passed to the tool.
+- **BeforeToolCallback**: Triggered before each tool invocation. Use for argument validation, mocking tool results, logging, or **modifying tool arguments**. Return `BeforeToolResult.ModifiedArguments` to make the tool execute with updated arguments.
 - **AfterToolCallback**: Triggered after each tool invocation. Use for result post-processing, formatting, or logging.
 
 **Example output:**
 
-```
-🟠 BeforeToolCallback: tool=calculator, args={"operation":"add","a":1,"b":2}
+```text
+🟠 BeforeToolCallback: tool=calculator, args={"operation":"ADD","a":1,"b":2}
 🟠 BeforeToolCallback: ✅ Invocation present in ctx (agent=..., id=...)
-🟠 BeforeToolCallback: Modified args for calculator: {"original":{"operation":"add","a":1,"b":2},"timestamp":"1703123456"}
+🟠 BeforeToolCallback: Modified args for calculator: {"operation":"add","a":1,"b":2}
 🟤 AfterToolCallback: tool=calculator, args={...}, result=..., err=<nil>
 ```
 
-**Key Feature**: The `BeforeToolCallback` receives `jsonArgs` as a pointer (`*[]byte`), enabling scenarios like:
+**Key Feature**: The `BeforeToolCallback` can return `BeforeToolResult.ModifiedArguments`, enabling scenarios like:
 
 - **Argument Modification**: Modify tool arguments before execution
 - **Argument Validation**: Validate and sanitize inputs
-- **Argument Enrichment**: Add metadata, timestamps, or context to arguments
+- **Argument Enrichment**: Add metadata or context when the tool schema supports it
 - **Argument Transformation**: Convert or reformat arguments for specific tools
 
 ### 3. AgentCallbacks
@@ -173,7 +173,7 @@ After declaring and registering your callbacks, pass them to the agent during co
 You can short-circuit (skip) the default execution of a model, tool, or agent by returning a non-nil response/result from the corresponding callback. This is useful for mocking, early returns, blocking, or custom logic.
 
 - **ModelCallbacks**: If `BeforeModelCallback` returns a non-nil `*model.Response`, the model will not be called and this response will be used directly.
-- **ToolCallbacks**: If `BeforeToolCallback` returns a non-nil result, the tool will not be executed and this result will be used directly. Additionally, `BeforeToolCallback` can modify tool arguments via the `jsonArgs` pointer parameter.
+- **ToolCallbacks**: If `BeforeToolCallback` returns a non-nil custom result, the tool will not be executed and this result will be used directly. Additionally, `BeforeToolCallback` can return `ModifiedArguments` to make the tool execute with updated arguments.
 - **AgentCallbacks**: If `BeforeAgentCallback` returns a non-nil `*model.Response`, the agent execution will be skipped and this response will be used.
 
 **Example: Using original request in AfterModelCallback**
@@ -213,11 +213,20 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeTool
 ```go
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
     if args.Arguments != nil && args.ToolName == "calculator" {
-        // Add timestamp to arguments for logging purposes
-        originalArgs := string(args.Arguments)
-        modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-        args.Arguments = []byte(modifiedArgs)
-        fmt.Printf("Modified args for %s: %s\n", args.ToolName, modifiedArgs)
+        // Normalize operation while preserving the calculator schema
+        var payload map[string]any
+        if err := json.Unmarshal(args.Arguments, &payload); err != nil {
+            return nil, err
+        }
+        if op, ok := payload["operation"].(string); ok {
+            payload["operation"] = strings.ToLower(op)
+        }
+        modifiedJSON, err := json.Marshal(payload)
+        if err != nil {
+            return nil, err
+        }
+        fmt.Printf("Modified args for %s: %s\n", args.ToolName, string(modifiedJSON))
+        return &tool.BeforeToolResult{ModifiedArguments: modifiedJSON}, nil
     }
     return nil, nil
 })
