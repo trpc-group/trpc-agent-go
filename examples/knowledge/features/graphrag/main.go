@@ -8,7 +8,7 @@
 //
 
 // Package main demonstrates GraphRAG over repository code in a multi-turn chat.
-// It loads the trpc-go repository through repo source, wires graph search,
+// It loads the trpc-agent-go repository through repo source, wires graph search,
 // traversal, and path tools into an LLM agent, and prints tool calls and
 // tool responses during the conversation.
 //
@@ -76,8 +76,8 @@ import (
 )
 
 var (
-	defaultRepoURL = "https://github.com/trpc-group/trpc-go"
-	defaultQuery   = "Find code related to client RPC invocation in trpc-go, traverse its callees, and explain the nearby call graph."
+	defaultRepoURL = "https://github.com/trpc-group/trpc-agent-go"
+	defaultQuery   = "Find code related to agent execution in trpc-agent-go, traverse its callees, and explain the nearby call graph."
 	query          = flag.String("query", "", "Optional initial query to ask before entering chat")
 	modelName      = flag.String("model", util.GetEnvOrDefault("MODEL_NAME", "deepseek-v3,2"), "Model to use")
 	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
@@ -143,11 +143,11 @@ func main() {
 		repoSrc := repo.New(
 			repo.WithRepository(repo.Repository{
 				URL:         defaultRepoURL,
-				RepoName:    "trpc-go",
+				RepoName:    "trpc-agent-go",
 				RepoURL:     defaultRepoURL,
-				Description: "The tRPC-Go framework repository used to demonstrate graph RAG over repo source.",
+				Description: "The tRPC-Agent-Go framework repository used to demonstrate graph RAG over repo source.",
 			}),
-			repo.WithName("trpc-go Repository"),
+			repo.WithName("trpc-agent-go Repository"),
 			repo.WithFileExtensions([]string{".go"}),
 		)
 		if err := kb.LoadGraphSource(
@@ -168,8 +168,8 @@ func main() {
 	graphToolSet := knowledgetool.NewCodeGraphSearchTool(
 		kb,
 		knowledgetool.WithCodeSearchRepoInfos([]knowledgetool.CodeRepoInfo{{
-			Name:        "trpc-go",
-			Description: "The tRPC-Go framework repository used to demonstrate graph RAG over repo source.",
+			Name:        "trpc-agent-go",
+			Description: "The tRPC-Agent-Go framework repository used to demonstrate graph RAG over repo source.",
 		}}),
 		knowledgetool.WithCodeSearchMaxResults(3),
 	)
