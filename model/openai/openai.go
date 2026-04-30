@@ -673,15 +673,16 @@ func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestO
 }
 
 // shouldBackfillReasoningContent reports whether replay should emit
-// model.ReasoningContentKey as an empty string for assistant tool-call
-// messages. Some providers require the key to be present during tool-call
-// replay even when no reasoning text was returned.
+// model.ReasoningContentKey as an empty string for assistant messages. Some
+// providers require the key to be present for every assistant message in
+// thinking mode even when no reasoning text was returned.
 func (m *Model) shouldBackfillReasoningContent(
 	msg model.Message,
 ) bool {
 	return m.reasoningContentBackfill &&
+		msg.Role == model.RoleAssistant &&
 		msg.ReasoningContent == "" &&
-		len(msg.ToolCalls) > 0
+		(msg.Content != "" || len(msg.ContentParts) > 0 || len(msg.ToolCalls) > 0)
 }
 
 // convertMessages converts our Message format to OpenAI's format.
@@ -713,8 +714,8 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 				Content:   m.convertAssistantMessageContent(msg),
 				ToolCalls: m.convertToolCalls(msg.ToolCalls),
 			}
-			// Pass reasoning_content to API if present (required by DeepSeek for
-			// tool-call replay across current and later request turns).
+			// Pass reasoning_content to API if present, or when provider replay
+			// requires the field for assistant history in thinking mode.
 			if msg.ReasoningContent != "" ||
 				m.shouldBackfillReasoningContent(msg) {
 				assistantMsg.SetExtraFields(map[string]any{
