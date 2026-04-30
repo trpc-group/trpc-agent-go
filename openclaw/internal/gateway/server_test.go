@@ -3757,8 +3757,9 @@ func TestServer_StreamMessage_ProgressStages(t *testing.T) {
 						Message: model.Message{
 							ToolCalls: []model.ToolCall{{
 								Type: "function",
+								ID:   testReadDocumentToolCallID,
 								Function: model.FunctionDefinitionParam{
-									Name: "read_document",
+									Name: streamToolReadDocument,
 									Arguments: []byte(
 										`{"page":2}`,
 									),
@@ -3771,6 +3772,13 @@ func TestServer_StreamMessage_ProgressStages(t *testing.T) {
 			{
 				Response: &model.Response{
 					Object: model.ObjectTypeToolResponse,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:     model.RoleTool,
+							ToolID:   testReadDocumentToolCallID,
+							ToolName: streamToolReadDocument,
+						},
+					}},
 				},
 			},
 			{
@@ -3827,6 +3835,13 @@ func TestServer_StreamMessage_ProgressStages(t *testing.T) {
 		events[2].Stage,
 	)
 	require.Equal(t, "Reading document page 2", events[2].Summary)
+	require.Equal(t, streamToolReadDocument, events[2].ToolName)
+	require.Equal(t, testReadDocumentToolCallID, events[2].ToolCallID)
+	require.Equal(
+		t,
+		gwproto.StreamToolStatusRunning,
+		events[2].ToolStatus,
+	)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeRunProgress,
@@ -3838,6 +3853,13 @@ func TestServer_StreamMessage_ProgressStages(t *testing.T) {
 		events[3].Stage,
 	)
 	require.Equal(t, progressSummaryAnswering, events[3].Summary)
+	require.Equal(t, streamToolReadDocument, events[3].ToolName)
+	require.Equal(t, testReadDocumentToolCallID, events[3].ToolCallID)
+	require.Equal(
+		t,
+		gwproto.StreamToolStatusCompleted,
+		events[3].ToolStatus,
+	)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeMessageDelta,
@@ -3905,6 +3927,13 @@ func TestServer_StreamMessage_ProgressAfterTextDelta(t *testing.T) {
 		events[3].Stage,
 	)
 	require.Equal(t, "Reading document page 2", events[3].Summary)
+	require.Equal(t, streamToolReadDocument, events[3].ToolName)
+	require.Equal(t, testReadDocumentToolCallID, events[3].ToolCallID)
+	require.Equal(
+		t,
+		gwproto.StreamToolStatusRunning,
+		events[3].ToolStatus,
+	)
 	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[4].Type)
 	require.Equal(
 		t,
@@ -3912,6 +3941,13 @@ func TestServer_StreamMessage_ProgressAfterTextDelta(t *testing.T) {
 		events[4].Stage,
 	)
 	require.Equal(t, progressSummaryAnswering, events[4].Summary)
+	require.Equal(t, streamToolReadDocument, events[4].ToolName)
+	require.Equal(t, testReadDocumentToolCallID, events[4].ToolCallID)
+	require.Equal(
+		t,
+		gwproto.StreamToolStatusCompleted,
+		events[4].ToolStatus,
+	)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeMessageCompleted,
@@ -4033,6 +4069,8 @@ func TestServer_StreamMessage_EmptyOptionsKeepDefaultProgressOrder(
 	)
 }
 
+const testReadDocumentToolCallID = "call-read-document"
+
 func progressAfterDeltaEvents(
 	firstDelta string,
 	replyText string,
@@ -4056,6 +4094,7 @@ func progressAfterDeltaEvents(
 					Message: model.Message{
 						ToolCalls: []model.ToolCall{{
 							Type: "function",
+							ID:   testReadDocumentToolCallID,
 							Function: model.FunctionDefinitionParam{
 								Name: streamToolReadDocument,
 								Arguments: []byte(
@@ -4070,6 +4109,13 @@ func progressAfterDeltaEvents(
 		{
 			Response: &model.Response{
 				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:     model.RoleTool,
+						ToolID:   testReadDocumentToolCallID,
+						ToolName: streamToolReadDocument,
+					},
+				}},
 			},
 		},
 		{
@@ -4107,6 +4153,7 @@ func TestStreamProgressHelpers(t *testing.T) {
 			Choices: []model.Choice{{
 				Message: model.Message{
 					ToolCalls: []model.ToolCall{{
+						ID: testReadDocumentToolCallID,
 						Function: model.FunctionDefinitionParam{
 							Name:      streamToolReadDocument,
 							Arguments: []byte(`{"page":2}`),
@@ -4123,10 +4170,24 @@ func TestStreamProgressHelpers(t *testing.T) {
 		update.stage,
 	)
 	require.Equal(t, "Reading document page 2", update.summary)
+	require.Equal(t, streamToolReadDocument, update.toolName)
+	require.Equal(t, testReadDocumentToolCallID, update.toolCallID)
+	require.Equal(
+		t,
+		gwproto.StreamToolStatusRunning,
+		update.toolStatus,
+	)
 
 	update, ok = progressUpdateFromRunnerEvent(&event.Event{
 		Response: &model.Response{
 			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolID:   testReadDocumentToolCallID,
+					ToolName: streamToolReadDocument,
+				},
+			}},
 		},
 	})
 	require.True(t, ok)
@@ -4136,12 +4197,20 @@ func TestStreamProgressHelpers(t *testing.T) {
 		update.stage,
 	)
 	require.Equal(t, progressSummaryAnswering, update.summary)
+	require.Equal(t, streamToolReadDocument, update.toolName)
+	require.Equal(t, testReadDocumentToolCallID, update.toolCallID)
+	require.Equal(
+		t,
+		gwproto.StreamToolStatusCompleted,
+		update.toolStatus,
+	)
 }
 
 func TestToolCallProgressSummaries(t *testing.T) {
 	t.Parallel()
 
 	update, ok := progressFromToolCall(model.ToolCall{
+		ID: testReadDocumentToolCallID,
 		Function: model.FunctionDefinitionParam{
 			Name:      streamToolReadSheet,
 			Arguments: []byte(`{"start_row":2,"end_row":4}`),
@@ -4154,6 +4223,13 @@ func TestToolCallProgressSummaries(t *testing.T) {
 		update.stage,
 	)
 	require.Equal(t, "Reading spreadsheet rows 2-4", update.summary)
+	require.Equal(t, streamToolReadSheet, update.toolName)
+	require.Equal(t, testReadDocumentToolCallID, update.toolCallID)
+	require.Equal(
+		t,
+		gwproto.StreamToolStatusRunning,
+		update.toolStatus,
+	)
 
 	update, ok = progressFromToolCall(model.ToolCall{
 		Function: model.FunctionDefinitionParam{
@@ -4193,7 +4269,8 @@ func TestToolCallProgressSummaries(t *testing.T) {
 		},
 	})
 	require.True(t, ok)
-	require.Equal(t, "Running custom_tool", update.summary)
+	require.Equal(t, progressSummaryTool, update.summary)
+	require.Equal(t, "custom_tool", update.toolName)
 
 	_, ok = progressFromToolCall(model.ToolCall{})
 	require.False(t, ok)
@@ -4234,16 +4311,20 @@ func TestSendProgressUpdateAndHelpers(t *testing.T) {
 		out,
 		run,
 		state,
-		gwproto.StreamProgressStagePreparing,
-		progressSummaryPrepare,
+		progressUpdate{
+			stage:   gwproto.StreamProgressStagePreparing,
+			summary: progressSummaryPrepare,
+		},
 	))
 	require.True(t, sendProgressUpdate(
 		ctx,
 		out,
 		run,
 		state,
-		gwproto.StreamProgressStagePreparing,
-		progressSummaryPrepare,
+		progressUpdate{
+			stage:   gwproto.StreamProgressStagePreparing,
+			summary: progressSummaryPrepare,
+		},
 	))
 	require.Len(t, out, 1)
 	evt := <-out
@@ -4262,8 +4343,10 @@ func TestSendProgressUpdateAndHelpers(t *testing.T) {
 		make(chan gwproto.StreamEvent),
 		run,
 		&progressState{startedAt: time.Now()},
-		gwproto.StreamProgressStagePreparing,
-		progressSummaryPrepare,
+		progressUpdate{
+			stage:   gwproto.StreamProgressStagePreparing,
+			summary: progressSummaryPrepare,
+		},
 	))
 
 	collected := collectGatewayStreamEvents(

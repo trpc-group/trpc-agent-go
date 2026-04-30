@@ -542,6 +542,7 @@ func TestClient_StreamMessageWithOptions_EnablesGatewayProgressAfterDelta(
 						Message: model.Message{
 							ToolCalls: []model.ToolCall{{
 								Type: "function",
+								ID:   "call-demo",
 								Function: model.FunctionDefinitionParam{
 									Name: "demo_tool",
 								},
@@ -553,6 +554,13 @@ func TestClient_StreamMessageWithOptions_EnablesGatewayProgressAfterDelta(
 			{
 				Response: &model.Response{
 					Object: model.ObjectTypeToolResponse,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:     model.RoleTool,
+							ToolID:   "call-demo",
+							ToolName: "demo_tool",
+						},
+					}},
 				},
 			},
 			{
@@ -596,7 +604,10 @@ func TestClient_StreamMessageWithOptions_EnablesGatewayProgressAfterDelta(
 		gwproto.StreamEventTypeRunProgress,
 		events[3].Type,
 	)
-	require.Equal(t, "Running demo_tool", events[3].Summary)
+	require.Equal(t, "Running local tool", events[3].Summary)
+	require.Equal(t, "demo_tool", events[3].ToolName)
+	require.Equal(t, "call-demo", events[3].ToolCallID)
+	require.Equal(t, gwproto.StreamToolStatusRunning, events[3].ToolStatus)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeRunProgress,
@@ -607,6 +618,9 @@ func TestClient_StreamMessageWithOptions_EnablesGatewayProgressAfterDelta(
 		gwproto.StreamProgressStageSummarizing,
 		events[4].Stage,
 	)
+	require.Equal(t, "demo_tool", events[4].ToolName)
+	require.Equal(t, "call-demo", events[4].ToolCallID)
+	require.Equal(t, gwproto.StreamToolStatusCompleted, events[4].ToolStatus)
 }
 
 func TestClient_StreamMessage_StatusError(t *testing.T) {
@@ -823,12 +837,19 @@ func TestParseSSEStream_EventFallbackAndErrors(t *testing.T) {
 		context.Background(),
 		bytes.NewBufferString(
 			"event: run.progress\n"+
-				"data: {\"summary\":\"Preparing\"}\n\n",
+				"data: {\"summary\":\"Preparing\","+
+				"\"tool_name\":\"kb_search\","+
+				"\"tool_call_id\":\"call-1\","+
+				"\"tool_status\":\"running\"}\n\n",
 		),
 		out,
 	)
 	require.NoError(t, err)
-	require.Equal(t, gwproto.StreamEventTypeRunProgress, (<-out).Type)
+	evt := <-out
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, evt.Type)
+	require.Equal(t, "kb_search", evt.ToolName)
+	require.Equal(t, "call-1", evt.ToolCallID)
+	require.Equal(t, gwproto.StreamToolStatusRunning, evt.ToolStatus)
 
 	err = parseSSEStream(
 		context.Background(),
