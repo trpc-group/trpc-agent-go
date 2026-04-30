@@ -11,6 +11,7 @@ package repo
 
 import (
 	"context"
+	//nolint:gosec // Used only for stable graph IDs, not cryptographic security.
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -19,9 +20,12 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
-	codegolang "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast/golang"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
+
+type codeASTDirectoryReader interface {
+	ReadCodeASTFromDirectory(dirPath string) (*codeast.Result, error)
+}
 
 // ReadGraph reads repository code as graph-native data.
 func (s *Source) ReadGraph(ctx context.Context) (*graph.Data, error) {
@@ -46,11 +50,27 @@ func (s *Source) ReadGraph(ctx context.Context) (*graph.Data, error) {
 		return &graph.Data{}, nil
 	}
 
-	result, err := codegolang.NewParser().ParseDirectory(rootToScan)
+	reader, err := s.goCodeASTReader()
+	if err != nil {
+		return nil, err
+	}
+	result, err := reader.ReadCodeASTFromDirectory(rootToScan)
 	if err != nil {
 		return nil, err
 	}
 	return s.graphDataFromCodeAST(result, repoRoot, repoInfo, allowedGoPaths), nil
+}
+
+func (s *Source) goCodeASTReader() (codeASTDirectoryReader, error) {
+	r, exists := s.readers[string(source.FileReaderTypeGo)]
+	if !exists {
+		return nil, missingReaderError(string(source.FileReaderTypeGo))
+	}
+	reader, ok := r.(codeASTDirectoryReader)
+	if !ok {
+		return nil, fmt.Errorf("reader for file type go is not code AST capable")
+	}
+	return reader, nil
 }
 
 func (s *Source) allowedGoPaths(repoRoot, rootToScan string) (map[string]struct{}, error) {
@@ -214,6 +234,7 @@ func repoGraphSourceID(namespace, kind, value string) string {
 }
 
 func generatedGraphID(kind, sourceID string) string {
+	// #nosec G401 -- this is a deterministic graph ID, not a security hash.
 	sum := sha1.Sum([]byte(sourceID))
 	return kind + ":" + hex.EncodeToString(sum[:12])
 }

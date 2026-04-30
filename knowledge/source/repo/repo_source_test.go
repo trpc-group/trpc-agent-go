@@ -13,19 +13,33 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	goparser "go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	docreader "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
+
+func init() {
+	docreader.RegisterReader([]string{".go"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testGoReader{}
+	})
+	docreader.RegisterReader([]string{".proto"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testProtoReader{}
+	})
+}
 
 func TestReadDocumentsFromRemoteBranch(t *testing.T) {
 	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
@@ -958,6 +972,344 @@ func TestResolveRepositoryRejectsInvalidStructuredInputs(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected error when both URL and Dir are configured")
 	}
+}
+
+type testGoReader struct{}
+
+func (r *testGoReader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
+	content, err := io.ReadAll(rd)
+	if err != nil {
+		return nil, err
+	}
+	result, err := r.parseFiles(filepath.Dir(name), []testGoFile{{path: name, content: string(content)}})
+	if err != nil {
+		return nil, err
+	}
+	return testCodeASTDocs(result), nil
+}
+
+func (r *testGoReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	result, err := r.parseFiles(filepath.Dir(filePath), []testGoFile{{path: filePath, content: string(content)}})
+	if err != nil {
+		return nil, err
+	}
+	return testCodeASTDocs(result), nil
+}
+
+func (r *testGoReader) ReadFromURL(_ string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *testGoReader) ReadFromDirectory(dirPath string) ([]*document.Document, error) {
+	result, err := r.ReadCodeASTFromDirectory(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	return testCodeASTDocs(result), nil
+}
+
+func (r *testGoReader) ReadCodeASTFromDirectory(dirPath string) (*codeast.Result, error) {
+	var filePaths []string
+	if err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) == ".go" && !strings.HasSuffix(path, "_test.go") {
+			filePaths = append(filePaths, path)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Strings(filePaths)
+
+	files := make([]testGoFile, 0, len(filePaths))
+	for _, filePath := range filePaths {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, testGoFile{path: filePath, content: string(content)})
+	}
+	return r.parseFiles(dirPath, files)
+}
+
+func (r *testGoReader) Name() string {
+	return "test-go"
+}
+
+func (r *testGoReader) SupportedExtensions() []string {
+	return []string{".go"}
+}
+
+func (r *testGoReader) parseFiles(baseDir string, files []testGoFile) (*codeast.Result, error) {
+	moduleRoot, modulePath := testGoModule(baseDir)
+	fset := token.NewFileSet()
+	var nodes []*codeast.Node
+	var calls []testGoCall
+	var edges []*codeast.Edge
+
+	for _, goFile := range files {
+		fileNode, err := goparser.ParseFile(fset, goFile.path, goFile.content, goparser.ParseComments)
+		if err != nil {
+			return nil, err
+		}
+		pkgPath := testGoPackagePath(moduleRoot, modulePath, filepath.Dir(goFile.path), fileNode.Name.Name)
+		for _, decl := range fileNode.Decls {
+			switch d := decl.(type) {
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					if _, ok := typeSpec.Type.(*ast.StructType); !ok {
+						continue
+					}
+					id := pkgPath + "." + typeSpec.Name.Name
+					nodes = append(nodes, testGoNode(fset, goFile, d, id, typeSpec.Name.Name, pkgPath, codeast.EntityStruct, d.Doc))
+				}
+			case *ast.FuncDecl:
+				receiver := testGoReceiverName(d)
+				name := d.Name.Name
+				id := pkgPath + "." + name
+				entityType := codeast.EntityFunction
+				if receiver != "" {
+					receiverType := strings.TrimPrefix(receiver, "*")
+					receiverID := pkgPath + "." + receiverType
+					id = receiverID + "." + name
+					entityType = codeast.EntityMethod
+					edges = append(edges, &codeast.Edge{FromID: receiverID, ToID: id, Type: codeast.RelationMethod})
+				}
+				node := testGoNode(fset, goFile, d, id, name, pkgPath, entityType, d.Doc)
+				if receiver != "" {
+					node.Metadata = map[string]any{codeast.MetadataKeyReceiverType: receiver}
+				}
+				nodes = append(nodes, node)
+				calls = append(calls, testGoCalls(d, id, pkgPath)...)
+			}
+		}
+	}
+
+	nodeSet := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		nodeSet[node.ID] = struct{}{}
+	}
+	for _, call := range calls {
+		targetID := call.packagePath + "." + call.name
+		if _, ok := nodeSet[targetID]; ok {
+			edges = append(edges, &codeast.Edge{FromID: call.fromID, ToID: targetID, Type: codeast.RelationCalls})
+		}
+	}
+	return &codeast.Result{Nodes: nodes, Edges: edges}, nil
+}
+
+type testGoFile struct {
+	path    string
+	content string
+}
+
+type testGoCall struct {
+	fromID      string
+	packagePath string
+	name        string
+}
+
+func testGoModule(baseDir string) (string, string) {
+	absDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		absDir = baseDir
+	}
+	for dir := absDir; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		content, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 2 && fields[0] == "module" {
+				return dir, fields[1]
+			}
+		}
+	}
+	return absDir, ""
+}
+
+func testGoPackagePath(moduleRoot, modulePath, dir, packageName string) string {
+	if modulePath == "" {
+		return packageName
+	}
+	rel, err := filepath.Rel(moduleRoot, dir)
+	if err != nil || rel == "." {
+		return modulePath
+	}
+	return filepath.ToSlash(filepath.Join(modulePath, rel))
+}
+
+func testGoNode(
+	fset *token.FileSet,
+	goFile testGoFile,
+	node ast.Node,
+	id string,
+	name string,
+	pkgPath string,
+	entityType codeast.EntityType,
+	doc *ast.CommentGroup,
+) *codeast.Node {
+	start := fset.Position(node.Pos()).Line
+	end := fset.Position(node.End()).Line
+	comment := ""
+	if doc != nil {
+		comment = strings.TrimSpace(doc.Text())
+	}
+	return &codeast.Node{
+		ID:         id,
+		Type:       entityType,
+		Name:       name,
+		FullName:   id,
+		Scope:      codeast.ScopeCode,
+		Language:   codeast.LanguageGo,
+		Comment:    comment,
+		Code:       testGoSnippet(goFile.content, start, end),
+		FilePath:   goFile.path,
+		LineStart:  start,
+		LineEnd:    end,
+		ChunkIndex: len(id),
+		Package:    pkgPath,
+	}
+}
+
+func testGoReceiverName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	switch expr := fn.Recv.List[0].Type.(type) {
+	case *ast.Ident:
+		return expr.Name
+	case *ast.StarExpr:
+		if ident, ok := expr.X.(*ast.Ident); ok {
+			return "*" + ident.Name
+		}
+	}
+	return ""
+}
+
+func testGoCalls(fn *ast.FuncDecl, fromID string, packagePath string) []testGoCall {
+	if fn.Body == nil {
+		return nil
+	}
+	var calls []testGoCall
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if ident, ok := call.Fun.(*ast.Ident); ok {
+			calls = append(calls, testGoCall{fromID: fromID, packagePath: packagePath, name: ident.Name})
+		}
+		return true
+	})
+	return calls
+}
+
+func testGoSnippet(content string, start, end int) string {
+	if start <= 0 || end < start {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if start > len(lines) {
+		return ""
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return strings.Join(lines[start-1:end], "\n")
+}
+
+func testCodeASTDocs(result *codeast.Result) []*document.Document {
+	if result == nil {
+		return nil
+	}
+	docs := make([]*document.Document, 0, len(result.Nodes))
+	for _, node := range result.Nodes {
+		metadata := map[string]any{
+			"trpc_ast_type":       string(node.Type),
+			"trpc_ast_name":       node.Name,
+			"trpc_ast_full_name":  node.FullName,
+			"trpc_ast_language":   string(node.Language),
+			"trpc_ast_scope":      string(node.Scope),
+			"trpc_ast_package":    node.Package,
+			"trpc_ast_file_path":  node.FilePath,
+			source.MetaFilePath:   node.FilePath,
+			source.MetaChunkIndex: node.ChunkIndex,
+		}
+		for k, v := range node.Metadata {
+			metadata["trpc_ast_"+k] = v
+		}
+		embeddingText, _ := json.Marshal(map[string]any{
+			"id":        node.ID,
+			"name":      node.Name,
+			"type":      string(node.Type),
+			"file_path": node.FilePath,
+		})
+		docs = append(docs, &document.Document{
+			Name:          node.Name,
+			Content:       node.Code,
+			EmbeddingText: string(embeddingText),
+			Metadata:      metadata,
+		})
+	}
+	return docs
+}
+
+type testProtoReader struct{}
+
+func (r *testProtoReader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
+	content, err := io.ReadAll(rd)
+	if err != nil {
+		return nil, err
+	}
+	return []*document.Document{r.document(name, string(content))}, nil
+}
+
+func (r *testProtoReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return []*document.Document{r.document(filePath, string(content))}, nil
+}
+
+func (r *testProtoReader) ReadFromURL(_ string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *testProtoReader) Name() string {
+	return "test-proto"
+}
+
+func (r *testProtoReader) SupportedExtensions() []string {
+	return []string{".proto"}
+}
+
+func (r *testProtoReader) document(name string, content string) *document.Document {
+	metadata := map[string]any{
+		"trpc_ast_type":      "file",
+		"trpc_ast_name":      name,
+		"trpc_ast_full_name": name,
+		"trpc_ast_language":  string(codeast.LanguageProto),
+		"trpc_ast_scope":     string(codeast.ScopeCode),
+		"trpc_ast_file_path": name,
+		source.MetaFilePath:  name,
+	}
+	return &document.Document{Name: filepath.Base(name), Content: content, Metadata: metadata}
 }
 
 type stubReader struct {

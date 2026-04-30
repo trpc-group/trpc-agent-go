@@ -479,44 +479,19 @@ func getCodeWithGenDecl(fset *token.FileSet, spec ast.Node, genDecl *ast.GenDecl
 	specPos := fset.Position(spec.Pos())
 	specEnd := fset.Position(spec.End())
 	if !specPos.IsValid() || specPos.Filename == "" {
-		var buf bytes.Buffer
-		if err := printer.Fprint(&buf, fset, spec); err != nil {
-			return ""
-		}
-		if genDecl != nil {
-			return genDecl.Tok.String() + " " + buf.String()
-		}
-		return buf.String()
+		return printNodeWithGenDeclPrefix(fset, spec, genDecl)
 	}
 
 	content, err := os.ReadFile(specPos.Filename)
 	if err != nil {
-		var buf bytes.Buffer
-		if err := printer.Fprint(&buf, fset, spec); err != nil {
-			return ""
-		}
-		if genDecl != nil {
-			return genDecl.Tok.String() + " " + buf.String()
-		}
-		return buf.String()
+		return printNodeWithGenDeclPrefix(fset, spec, genDecl)
 	}
 
 	lines := bytes.Split(content, []byte("\n"))
-	startLine := specPos.Line
-	if doc != nil {
-		docPos := fset.Position(doc.Pos())
-		if docPos.IsValid() && docPos.Line < startLine {
-			startLine = docPos.Line
-		}
-	}
+	startLine := codeStartLineWithDoc(fset, doc, specPos.Line)
 	endLine := specEnd.Line
 	if startLine <= 0 || endLine > len(lines) || endLine < startLine {
-		var buf bytes.Buffer
-		printer.Fprint(&buf, fset, spec)
-		if genDecl != nil {
-			return genDecl.Tok.String() + " " + buf.String()
-		}
-		return buf.String()
+		return printNodeWithGenDeclPrefix(fset, spec, genDecl)
 	}
 
 	specCode := string(bytes.Join(lines[startLine-1:endLine], []byte("\n")))
@@ -524,6 +499,28 @@ func getCodeWithGenDecl(fset *token.FileSet, spec ast.Node, genDecl *ast.GenDecl
 		return fmt.Sprintf("%s (\n\t%s\n)", genDecl.Tok.String(), strings.TrimSpace(specCode))
 	}
 	return specCode
+}
+
+func printNodeWithGenDeclPrefix(fset *token.FileSet, node ast.Node, genDecl *ast.GenDecl) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, node); err != nil {
+		return ""
+	}
+	if genDecl != nil {
+		return genDecl.Tok.String() + " " + buf.String()
+	}
+	return buf.String()
+}
+
+func codeStartLineWithDoc(fset *token.FileSet, doc *ast.CommentGroup, fallback int) int {
+	if doc == nil {
+		return fallback
+	}
+	docPos := fset.Position(doc.Pos())
+	if docPos.IsValid() && docPos.Line < fallback {
+		return docPos.Line
+	}
+	return fallback
 }
 
 func typeToString(fset *token.FileSet, expr ast.Expr) string {

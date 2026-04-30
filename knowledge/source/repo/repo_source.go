@@ -179,7 +179,7 @@ func (s *Source) classifyFiles(repoRoot string, filePaths []string) (*fileClassi
 		fileType := isource.GetFileType(filePath)
 		r, exists := s.readers[fileType]
 		if !exists {
-			return nil, fmt.Errorf("no reader available for file type: %s", fileType)
+			return nil, missingReaderError(fileType)
 		}
 
 		relPath, err := filepath.Rel(repoRoot, filePath)
@@ -210,6 +210,15 @@ func (s *Source) classifyFiles(repoRoot string, filePaths []string) (*fileClassi
 	slices.Sort(fc.codeFiles)
 	slices.Sort(fc.textFiles)
 	return fc, nil
+}
+
+func missingReaderError(fileType string) error {
+	switch fileType {
+	case "go":
+		return fmt.Errorf("no reader available for file type: go; import _ %q", "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang")
+	default:
+		return fmt.Errorf("no reader available for file type: %s", fileType)
+	}
 }
 
 // Name returns the source name.
@@ -448,7 +457,7 @@ func (s *Source) processFile(filePath, repoRoot string, info *repoInfo) ([]*docu
 	fileType := isource.GetFileType(filePath)
 	r, exists := s.readers[fileType]
 	if !exists {
-		return nil, fmt.Errorf("no reader available for file type: %s", fileType)
+		return nil, missingReaderError(fileType)
 	}
 	documents, err := r.ReadFromFile(filePath)
 	if err != nil {
@@ -492,7 +501,7 @@ func (s *Source) processFile(filePath, repoRoot string, info *repoInfo) ([]*docu
 func (s *Source) processDirectory(dirPath, fileType, repoRoot string, info *repoInfo, allowedPaths map[string]struct{}) ([]*document.Document, error) {
 	r, exists := s.readers[fileType]
 	if !exists {
-		return nil, fmt.Errorf("no reader available for file type: %s", fileType)
+		return nil, missingReaderError(fileType)
 	}
 	dirReader, ok := r.(directoryReader)
 	if !ok {

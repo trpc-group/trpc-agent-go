@@ -61,6 +61,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	util "trpc.group/trpc-go/trpc-agent-go/examples/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	agegraphstore "trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo"

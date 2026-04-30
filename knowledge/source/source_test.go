@@ -41,6 +41,18 @@ func (m *mockSource) GetMetadata() map[string]any {
 	return m.metadata
 }
 
+func TestFileReaderTypeGo(t *testing.T) {
+	if FileReaderTypeGo != "go" {
+		t.Fatalf("expected FileReaderTypeGo='go', got %s", FileReaderTypeGo)
+	}
+}
+
+func TestFileReaderTypeProto(t *testing.T) {
+	if FileReaderTypeProto != "proto" {
+		t.Fatalf("expected FileReaderTypeProto='proto', got %s", FileReaderTypeProto)
+	}
+}
+
 func TestGetAllMetadata(t *testing.T) {
 	tests := []struct {
 		name     string

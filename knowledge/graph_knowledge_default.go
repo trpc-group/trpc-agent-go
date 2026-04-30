@@ -121,6 +121,31 @@ func (gk *BuiltinGraphKnowledge) LoadGraphSource(
 	src source.GraphSource,
 	opts ...LoadOption,
 ) error {
+	if err := gk.validateGraphSource(src); err != nil {
+		return err
+	}
+	config := newGraphLoadConfig(opts...)
+	start := time.Now()
+	sourceName := graphSourceName(src)
+	data, err := readGraphSourceData(ctx, src, sourceName, config, start)
+	if err != nil {
+		return err
+	}
+	if err := gk.storeGraphData(ctx, data, config); err != nil {
+		return err
+	}
+	indexedSeeds, err := gk.indexGraphDataDocuments(ctx, data, config)
+	if err != nil {
+		return err
+	}
+	if config.showProgress {
+		log.InfofContext(ctx, "Loaded graph source %s | nodes %d | edges %d | seeds %d | elapsed %s",
+			sourceName, len(data.Nodes), len(data.Edges), indexedSeeds, time.Since(start).Truncate(time.Second))
+	}
+	return nil
+}
+
+func (gk *BuiltinGraphKnowledge) validateGraphSource(src source.GraphSource) error {
 	if src == nil {
 		return errors.New("graph source cannot be nil")
 	}
@@ -133,6 +158,10 @@ func (gk *BuiltinGraphKnowledge) LoadGraphSource(
 	if gk.embedder == nil {
 		return errors.New("graph embedder is not configured")
 	}
+	return nil
+}
+
+func newGraphLoadConfig(opts ...LoadOption) *loadConfig {
 	config := &loadConfig{}
 	for _, opt := range opts {
 		opt(config)
@@ -143,22 +172,34 @@ func (gk *BuiltinGraphKnowledge) LoadGraphSource(
 	if config.progressStepSize <= 0 {
 		config.progressStepSize = 100
 	}
-	start := time.Now()
-	sourceName := graphSourceName(src)
+	return config
+}
+
+func readGraphSourceData(
+	ctx context.Context,
+	src source.GraphSource,
+	sourceName string,
+	config *loadConfig,
+	start time.Time,
+) (*graph.Data, error) {
 	if config.showProgress {
 		log.InfofContext(ctx, "Reading graph source %s", sourceName)
 	}
 	data, err := src.ReadGraph(ctx)
 	if err != nil {
-		return fmt.Errorf("read graph source: %w", err)
+		return nil, fmt.Errorf("read graph source: %w", err)
 	}
 	if data == nil {
-		return errors.New("graph data cannot be nil")
+		return nil, errors.New("graph data cannot be nil")
 	}
 	if config.showProgress {
 		log.InfofContext(ctx, "Read graph source %s: %d node(s), %d edge(s) | elapsed %s",
 			sourceName, len(data.Nodes), len(data.Edges), time.Since(start).Truncate(time.Second))
 	}
+	return data, nil
+}
+
+func (gk *BuiltinGraphKnowledge) storeGraphData(ctx context.Context, data *graph.Data, config *loadConfig) error {
 	if len(data.Nodes) > 0 {
 		if config.showProgress {
 			log.InfofContext(ctx, "Adding %d graph node(s)", len(data.Nodes))
@@ -175,22 +216,22 @@ func (gk *BuiltinGraphKnowledge) LoadGraphSource(
 			return fmt.Errorf("add graph edges: %w", err)
 		}
 	}
-	docs := graphDataDocuments(data)
-	indexedSeeds := 0
-	if gk.vectorStore != nil {
-		if config.showProgress {
-			log.InfofContext(ctx, "Indexing %d graph seed document(s)", len(docs))
-		}
-		if err := gk.addGraphDocuments(ctx, docs, config); err != nil {
-			return err
-		}
-		indexedSeeds = len(docs)
-	}
-	if config.showProgress {
-		log.InfofContext(ctx, "Loaded graph source %s | nodes %d | edges %d | seeds %d | elapsed %s",
-			sourceName, len(data.Nodes), len(data.Edges), indexedSeeds, time.Since(start).Truncate(time.Second))
-	}
 	return nil
+}
+
+func (gk *BuiltinGraphKnowledge) indexGraphDataDocuments(
+	ctx context.Context,
+	data *graph.Data,
+	config *loadConfig,
+) (int, error) {
+	docs := graphDataDocuments(data)
+	if config.showProgress {
+		log.InfofContext(ctx, "Indexing %d graph seed document(s)", len(docs))
+	}
+	if err := gk.addGraphDocuments(ctx, docs, config); err != nil {
+		return 0, err
+	}
+	return len(docs), nil
 }
 
 func graphSourceName(src source.GraphSource) string {
