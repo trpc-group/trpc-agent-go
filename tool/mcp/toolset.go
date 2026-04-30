@@ -13,10 +13,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 
@@ -121,12 +119,9 @@ func (ts *ToolSet) Close() error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
-	// Close session manager
+	// Close session manager (best-effort; close never returns errors).
 	if ts.sessionManager != nil {
-		if err := ts.sessionManager.close(); err != nil {
-			log.Error("Failed to close session manager", err)
-			return fmt.Errorf("failed to close MCP session: %w", err)
-		}
+		ts.sessionManager.close()
 	}
 
 	log.Debug("MCP tool set closed successfully")
@@ -424,6 +419,9 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 }
 
 // close closes the MCP session and client connection.
+// Close errors are logged but not propagated: the goal of close is to
+// release resources, and common "errors" (process already exited, pipe
+// already closed) simply mean the resource is already released.
 func (m *mcpSessionManager) close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -440,26 +438,11 @@ func (m *mcpSessionManager) close() error {
 	m.client = nil
 
 	if err != nil {
-		if isIgnorableCloseError(err) {
-			log.Debug("Ignoring benign MCP client close error", "error", err)
-			return nil
-		}
-		log.Error("Failed to close MCP client", "error", err)
-		return fmt.Errorf("failed to close MCP client: %w", err)
+		log.Debug("MCP client close returned error (resource likely already released)", "error", err)
 	}
 
 	log.Debug("MCP session closed successfully")
 	return nil
-}
-
-func isIgnorableCloseError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, os.ErrProcessDone) {
-		return true
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "process already finished")
 }
 
 // isConnected returns whether the session is connected and initialized.

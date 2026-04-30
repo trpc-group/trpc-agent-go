@@ -1525,7 +1525,7 @@ func TestSessionManager_ListTools(t *testing.T) {
 	})
 }
 
-// TestSessionManager_Close_Error tests close with error
+// TestSessionManager_Close_Error tests close swallows client errors
 func TestSessionManager_Close_Error(t *testing.T) {
 	t.Run("close with client close error", func(t *testing.T) {
 		config := ConnectionConfig{
@@ -1542,11 +1542,8 @@ func TestSessionManager_Close_Error(t *testing.T) {
 		manager.mu.Unlock()
 
 		err := manager.close()
-		if err == nil {
-			t.Error("Expected error when client close fails")
-		}
-		if !strings.Contains(err.Error(), "failed to close") {
-			t.Errorf("Expected 'failed to close' error, got: %v", err)
+		if err != nil {
+			t.Errorf("Expected nil error (close errors are best-effort), got: %v", err)
 		}
 	})
 }
@@ -2088,9 +2085,9 @@ func TestCallTool_StructuredContentMarshalError(t *testing.T) {
 	}
 }
 
-// TestToolSet_Close_WithError tests Close with session manager error
+// TestToolSet_Close_WithError tests Close gracefully handles session manager errors
 func TestToolSet_Close_WithError(t *testing.T) {
-	t.Run("close with session manager error", func(t *testing.T) {
+	t.Run("close swallows session manager error", func(t *testing.T) {
 		config := ConnectionConfig{
 			Transport: "stdio",
 			Command:   "echo",
@@ -2108,15 +2105,12 @@ func TestToolSet_Close_WithError(t *testing.T) {
 		manager.mu.Unlock()
 
 		err := toolset.Close()
-		if err == nil {
-			t.Error("Expected error when session manager close fails")
-		}
-		if !strings.Contains(err.Error(), "failed to close MCP session") {
-			t.Errorf("Expected 'failed to close MCP session' error, got: %v", err)
+		if err != nil {
+			t.Errorf("Expected nil error (close errors are best-effort), got: %v", err)
 		}
 	})
 
-	t.Run("ignore process already finished close error", func(t *testing.T) {
+	t.Run("close swallows process already finished error", func(t *testing.T) {
 		config := ConnectionConfig{
 			Transport: "stdio",
 			Command:   "echo",
