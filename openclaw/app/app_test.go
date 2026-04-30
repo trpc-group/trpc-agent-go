@@ -3968,6 +3968,84 @@ func TestInProcGatewayClient_StreamMessage_StatusError(t *testing.T) {
 	)
 }
 
+func TestInProcGatewayClient_StreamMessageWithOptions_ProgressAfterText(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const firstDelta = "checking "
+
+	srv, err := gateway.New(&inProcGWTestRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: firstDelta},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name: "demo_tool",
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("done"),
+					}},
+					Done: true,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	stream, err := c.StreamMessageWithOptions(
+		context.Background(),
+		gwclient.MessageRequest{
+			From: "u1",
+			Text: "hi",
+		},
+		&gwclient.MessageStreamOptions{
+			ProgressAfterTextDelta: true,
+		},
+	)
+	require.NoError(t, err)
+
+	var events []gwclient.StreamEvent
+	for evt := range stream {
+		events = append(events, evt)
+	}
+	require.Len(t, events, 7)
+	require.Equal(t, gwproto.StreamEventTypeMessageDelta, events[2].Type)
+	require.Equal(t, firstDelta, events[2].Delta)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[3].Type)
+	require.Equal(t, "Running local tool", events[3].Summary)
+	require.Equal(t, "demo_tool", events[3].ToolName)
+	require.Equal(t, gwproto.StreamToolStatusRunning, events[3].ToolStatus)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[4].Type)
+	require.Equal(t, gwproto.StreamProgressStageSummarizing, events[4].Stage)
+}
+
 func TestInProcGatewayClient_NilServerFails(t *testing.T) {
 	t.Parallel()
 
@@ -5143,6 +5221,7 @@ type inProcGWTestRunner struct {
 	reply     string
 	requestID string
 	usage     *model.Usage
+	events    []*event.Event
 }
 
 func (r *inProcGWTestRunner) Run(
@@ -5152,6 +5231,15 @@ func (r *inProcGWTestRunner) Run(
 	_ model.Message,
 	_ ...agent.RunOption,
 ) (<-chan *event.Event, error) {
+	if len(r.events) > 0 {
+		ch := make(chan *event.Event, len(r.events))
+		for _, evt := range r.events {
+			ch <- evt
+		}
+		close(ch)
+		return ch, nil
+	}
+
 	reply := r.reply
 	if reply == "" {
 		reply = "ok"

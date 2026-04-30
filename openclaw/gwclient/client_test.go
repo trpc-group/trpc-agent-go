@@ -446,6 +446,183 @@ func TestClient_StreamMessage_Success(t *testing.T) {
 	require.Equal(t, "req-1", events[4].RequestID)
 }
 
+func TestClient_StreamMessageWithOptions_EncodesOptions(t *testing.T) {
+	t.Parallel()
+
+	type capturedStreamRequest struct {
+		body map[string]any
+		err  error
+	}
+	resultCh := make(chan capturedStreamRequest, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, err := io.ReadAll(r.Body)
+		var body map[string]any
+		if err == nil {
+			err = json.Unmarshal(data, &body)
+		}
+
+		w.Header().Set(headerContentType, gwproto.SSEContentType)
+		_, writeErr := io.WriteString(
+			w,
+			"data: {\"type\":\"run.completed\"}\n\n",
+		)
+		if err == nil {
+			err = writeErr
+		}
+		resultCh <- capturedStreamRequest{
+			body: body,
+			err:  err,
+		}
+	})
+
+	cli, err := New(handler, "/v1/gateway/messages", "/cancel")
+	require.NoError(t, err)
+
+	stream, err := cli.StreamMessageWithOptions(
+		context.Background(),
+		MessageRequest{
+			From: "u1",
+			Text: "hello",
+		},
+		&MessageStreamOptions{
+			ProgressAfterTextDelta: true,
+		},
+	)
+	require.NoError(t, err)
+
+	events := collectClientStreamEvents(t, stream)
+	require.Len(t, events, 1)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[0].Type,
+	)
+
+	var captured capturedStreamRequest
+	select {
+	case captured = <-resultCh:
+	default:
+		t.Fatal("missing captured request body")
+	}
+	require.NoError(t, captured.err)
+	body := captured.body
+	require.Equal(t, "u1", body["from"])
+	streamOptions, ok := body["stream_options"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(
+		t,
+		true,
+		streamOptions["progress_after_text_delta"],
+	)
+}
+
+func TestClient_StreamMessageWithOptions_EnablesGatewayProgressAfterDelta(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const firstDelta = "checking "
+
+	srv, err := gateway.New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Content: firstDelta,
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Type: "function",
+								ID:   "call-demo",
+								Function: model.FunctionDefinitionParam{
+									Name: "demo_tool",
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:     model.RoleTool,
+							ToolID:   "call-demo",
+							ToolName: "demo_tool",
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("done"),
+					}},
+					Done: true,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	cli, err := New(srv.Handler(), srv.MessagesPath(), srv.CancelPath())
+	require.NoError(t, err)
+
+	stream, err := cli.StreamMessageWithOptions(
+		context.Background(),
+		MessageRequest{
+			From: "u1",
+			Text: "hello",
+		},
+		&MessageStreamOptions{
+			ProgressAfterTextDelta: true,
+		},
+	)
+	require.NoError(t, err)
+
+	events := collectClientStreamEvents(t, stream)
+	require.Len(t, events, 7)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[2].Type,
+	)
+	require.Equal(t, firstDelta, events[2].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[3].Type,
+	)
+	require.Equal(t, "Running local tool", events[3].Summary)
+	require.Equal(t, "demo_tool", events[3].ToolName)
+	require.Equal(t, "call-demo", events[3].ToolCallID)
+	require.Equal(t, gwproto.StreamToolStatusRunning, events[3].ToolStatus)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[4].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageSummarizing,
+		events[4].Stage,
+	)
+	require.Equal(t, "demo_tool", events[4].ToolName)
+	require.Equal(t, "call-demo", events[4].ToolCallID)
+	require.Equal(t, gwproto.StreamToolStatusCompleted, events[4].ToolStatus)
+}
+
 func TestClient_StreamMessage_StatusError(t *testing.T) {
 	t.Parallel()
 
@@ -660,12 +837,19 @@ func TestParseSSEStream_EventFallbackAndErrors(t *testing.T) {
 		context.Background(),
 		bytes.NewBufferString(
 			"event: run.progress\n"+
-				"data: {\"summary\":\"Preparing\"}\n\n",
+				"data: {\"summary\":\"Preparing\","+
+				"\"tool_name\":\"kb_search\","+
+				"\"tool_call_id\":\"call-1\","+
+				"\"tool_status\":\"running\"}\n\n",
 		),
 		out,
 	)
 	require.NoError(t, err)
-	require.Equal(t, gwproto.StreamEventTypeRunProgress, (<-out).Type)
+	evt := <-out
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, evt.Type)
+	require.Equal(t, "kb_search", evt.ToolName)
+	require.Equal(t, "call-1", evt.ToolCallID)
+	require.Equal(t, gwproto.StreamToolStatusRunning, evt.ToolStatus)
 
 	err = parseSSEStream(
 		context.Background(),
