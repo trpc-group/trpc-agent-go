@@ -37,7 +37,7 @@ Planner 的工作流程：
 
 ## 不使用 Planner 的思维启用与抓取
 
-即使不使用 Planner，也可以启用并读取模型的内部推理（thinking）。通过 GenerationConfig 请求思维输出，并在响应中从 ReasoningContent 抓取推理内容。
+即使不使用 Planner，也可以启用并读取模型的内部推理（thinking）。通过 `GenerationConfig` 请求推理/思考，并在响应中从 `ReasoningContent` 抓取推理内容。
 
 ### 通过 GenerationConfig 启用
 ```go
@@ -47,9 +47,11 @@ genConfig := model.GenerationConfig{
     Temperature: 0.7,
 }
 
-// 启用思维（若提供方/模型支持）
+// 请求推理/思考（若提供方/模型支持）
+reasoningEffort := "high"
 thinkingEnabled := true
 thinkingTokens := 2048
+genConfig.ReasoningEffort = &reasoningEffort
 genConfig.ThinkingEnabled = &thinkingEnabled
 genConfig.ThinkingTokens  = &thinkingTokens
 ```
@@ -100,6 +102,8 @@ for e := range eventChan {
 
 注意：
 - 推理内容的可见性取决于模型与服务提供方；启用相关参数仅代表期望，并不保证一定返回。
+- `ReasoningEffort` 用于向支持 `reasoning_effort` 的服务请求推理预算；`ThinkingEnabled` 用于控制提供 `thinking` 选项的显式思考开关。
+- 当服务方返回 `completion_tokens_details.reasoning_tokens` 时，该字段会记录到 `response.Usage.CompletionTokensDetails.ReasoningTokens`。如果没有启用、没有实际使用或服务方未上报 reasoning tokens，该值可能保持为 `0`。
 - 在流式模式下，可在推理与正常内容之间适当插入空行，以提升阅读体验。
 - 会话历史可能会将分段推理汇总到最终消息，便于后续查看与回溯。
 
@@ -114,9 +118,13 @@ type Options struct {
     // ReasoningEffort 限制推理模型的推理程度
     // 可选值取决于服务方：
     //   - OpenAI o-series："low"、"medium"、"high"
+    //   - Anthropic adaptive thinking："low"、"medium"、"high"、"max"，
+    //     以及支持该值的模型上的 "xhigh"
     //   - DeepSeek v4（deepseek-v4-pro / deepseek-v4-flash）："high"、"max"
     //     （服务端为兼容旧配置，会把 "low"/"medium" 映射为 "high"，
     //     "xhigh" 映射为 "max"）
+    // OpenAI-compatible 服务会将该字段透传给所选后端模型，
+    // 请使用该后端模型支持的取值。
     ReasoningEffort *string
     // ThinkingEnabled 为支持思考的模型启用思考模式
     // 对 DeepSeek v4，以及通过 OpenAI API 的 Claude / Gemini 模型有效。
