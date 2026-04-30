@@ -40,9 +40,12 @@ type targetInput struct {
 }
 
 const (
-	phaseListTools    = "list_tools"
-	phaseInspectTools = "inspect_tools"
-	phaseCallTool     = "call_tool"
+	// PhaseListTools is ClientOptionsRequest.Phase / HeaderInjectRequest.Phase for mcp_list_tools.
+	PhaseListTools = "list_tools"
+	// PhaseInspectTools is ClientOptionsRequest.Phase / HeaderInjectRequest.Phase for mcp_inspect_tools.
+	PhaseInspectTools = "inspect_tools"
+	// PhaseCallTool is ClientOptionsRequest.Phase / HeaderInjectRequest.Phase for mcp_call.
+	PhaseCallTool = "call_tool"
 )
 
 type operationMetadata struct {
@@ -106,7 +109,7 @@ func (b *Broker) withPreparedHTTPHeaders(
 	if b.options.httpHeaderInjector == nil {
 		return cfg, nil
 	}
-	isAdHoc := target.Origin == "adhoc"
+	isAdHoc := target.Origin == OriginAdhoc
 	injected, err := b.options.httpHeaderInjector(ctx, &HeaderInjectRequest{
 		Selector:  meta.Selector,
 		BaseURL:   meta.BaseURL,
@@ -180,7 +183,7 @@ func interceptHTTPOperationError(
 		ToolName:  meta.ToolName,
 		Phase:     meta.Phase,
 		Transport: target.Config.Transport,
-		IsAdHoc:   target.Origin == "adhoc",
+		IsAdHoc:   target.Origin == OriginAdhoc,
 		Err:       err,
 	})
 	if interceptErr != nil {
@@ -195,7 +198,40 @@ func interceptHTTPOperationError(
 	return true, fmt.Errorf("broker error interceptor handled the error but returned no wrapped error")
 }
 
-func createClient(cfg mcpcfg.ConnectionConfig) (tmcp.Connector, error) {
+func (b *Broker) resolveClientOptions(
+	ctx context.Context,
+	selector string,
+	target resolvedTarget,
+	meta operationMetadata,
+	cfg mcpcfg.ConnectionConfig,
+) ([]tmcp.ClientOption, []tmcp.StdioClientOption, error) {
+	if b.options.clientOptionsProvider == nil {
+		return nil, nil, nil
+	}
+
+	req := &ClientOptionsRequest{
+		Selector:   selector,
+		ServerName: strings.TrimSpace(target.Name),
+		Origin:     target.Origin,
+		TargetType: target.TargetType,
+		Transport:  strings.TrimSpace(cfg.Transport),
+		BaseURL:    strings.TrimSpace(cfg.ServerURL),
+		ToolName:   meta.ToolName,
+		Phase:      meta.Phase,
+		Config:     cloneConnectionConfig(cfg),
+	}
+
+	out, err := b.options.clientOptionsProvider(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	if out == nil {
+		return nil, nil, nil
+	}
+	return out.HTTP, out.Stdio, nil
+}
+
+func createClient(cfg mcpcfg.ConnectionConfig, extraHTTP []tmcp.ClientOption, extraStdio []tmcp.StdioClientOption) (tmcp.Connector, error) {
 	clientInfo := cfg.ClientInfo
 	if clientInfo.Name == "" {
 		clientInfo = defaultClientInfo
@@ -214,11 +250,15 @@ func createClient(cfg mcpcfg.ConnectionConfig) (tmcp.Connector, error) {
 				Args:    cfg.Args,
 			},
 			Timeout: cfg.Timeout,
-		}, clientInfo)
+		}, clientInfo, extraStdio...)
 	case transportSSE:
-		return tmcp.NewSSEClient(cfg.ServerURL, clientInfo, httpHeaderOptions(cfg.Headers)...)
+		opts := httpHeaderOptions(cfg.Headers)
+		opts = append(opts, extraHTTP...)
+		return tmcp.NewSSEClient(cfg.ServerURL, clientInfo, opts...)
 	case transportStreamable:
-		return tmcp.NewClient(cfg.ServerURL, clientInfo, httpHeaderOptions(cfg.Headers)...)
+		opts := httpHeaderOptions(cfg.Headers)
+		opts = append(opts, extraHTTP...)
+		return tmcp.NewClient(cfg.ServerURL, clientInfo, opts...)
 	default:
 		return nil, fmt.Errorf("unsupported transport: %s", cfg.Transport)
 	}
@@ -251,10 +291,16 @@ func withTimeoutContext(ctx context.Context, timeout time.Duration) (context.Con
 	return context.WithTimeout(ctx, timeout)
 }
 
-func withOneShotClient[T any](ctx context.Context, cfg mcpcfg.ConnectionConfig, fn func(context.Context, tmcp.Connector) (T, error)) (T, error) {
+func withOneShotClient[T any](
+	ctx context.Context,
+	cfg mcpcfg.ConnectionConfig,
+	extraHTTP []tmcp.ClientOption,
+	extraStdio []tmcp.StdioClientOption,
+	fn func(context.Context, tmcp.Connector) (T, error),
+) (T, error) {
 	var zero T
 
-	client, err := createClient(cfg)
+	client, err := createClient(cfg, extraHTTP, extraStdio)
 	if err != nil {
 		return zero, err
 	}
