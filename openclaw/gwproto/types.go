@@ -39,6 +39,13 @@ type MessageRequest struct {
 	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
+// MessageStreamOptions controls optional streaming behaviors.
+type MessageStreamOptions struct {
+	// ProgressAfterTextDelta lets opt-in clients receive run.progress
+	// events after the first message.delta event has started.
+	ProgressAfterTextDelta bool `json:"progress_after_text_delta,omitempty"`
+}
+
 // APIError matches gateway error payloads.
 type APIError struct {
 	Type    string `json:"type"`
@@ -74,6 +81,9 @@ type StreamEventType string
 
 // StreamProgressStage identifies one high-level run progress stage.
 type StreamProgressStage string
+
+// StreamToolStatus identifies the visible lifecycle of one tool call.
+type StreamToolStatus string
 
 const (
 	// MessagesStreamSuffix is the default suffix for stream routes.
@@ -126,6 +136,11 @@ const (
 	StreamProgressStageRunningTool StreamProgressStage = "running_tool"
 	// StreamProgressStageSummarizing marks post-tool answer generation.
 	StreamProgressStageSummarizing StreamProgressStage = "summarizing"
+
+	// StreamToolStatusRunning marks a tool call that has started.
+	StreamToolStatusRunning StreamToolStatus = "running"
+	// StreamToolStatusCompleted marks a tool call result that returned.
+	StreamToolStatusCompleted StreamToolStatus = "completed"
 )
 
 // StreamEvent is one gateway streaming event payload.
@@ -135,14 +150,17 @@ type StreamEvent struct {
 	SessionID string `json:"session_id,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
 
-	Delta     string              `json:"delta,omitempty"`
-	Reply     string              `json:"reply,omitempty"`
-	Stage     StreamProgressStage `json:"stage,omitempty"`
-	Summary   string              `json:"summary,omitempty"`
-	ElapsedMS int64               `json:"elapsed_ms,omitempty"`
-	Usage     *Usage              `json:"usage,omitempty"`
-	Ignored   bool                `json:"ignored,omitempty"`
-	Error     *APIError           `json:"error,omitempty"`
+	Delta      string              `json:"delta,omitempty"`
+	Reply      string              `json:"reply,omitempty"`
+	Stage      StreamProgressStage `json:"stage,omitempty"`
+	Summary    string              `json:"summary,omitempty"`
+	ToolName   string              `json:"tool_name,omitempty"`
+	ToolCallID string              `json:"tool_call_id,omitempty"`
+	ToolStatus StreamToolStatus    `json:"tool_status,omitempty"`
+	ElapsedMS  int64               `json:"elapsed_ms,omitempty"`
+	Usage      *Usage              `json:"usage,omitempty"`
+	Ignored    bool                `json:"ignored,omitempty"`
+	Error      *APIError           `json:"error,omitempty"`
 }
 
 // ContentPartType is the type discriminator for ContentPart.

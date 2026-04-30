@@ -29,11 +29,32 @@ func (c *Client) StreamMessage(
 	ctx context.Context,
 	req MessageRequest,
 ) (<-chan StreamEvent, error) {
+	return c.streamMessage(ctx, req, nil)
+}
+
+// StreamMessageWithOptions sends one streaming message with opt-in
+// streaming behavior controls.
+func (c *Client) StreamMessageWithOptions(
+	ctx context.Context,
+	req MessageRequest,
+	opts *MessageStreamOptions,
+) (<-chan StreamEvent, error) {
+	return c.streamMessage(ctx, req, opts)
+}
+
+func (c *Client) streamMessage(
+	ctx context.Context,
+	req MessageRequest,
+	opts *MessageStreamOptions,
+) (<-chan StreamEvent, error) {
 	if strings.TrimSpace(c.streamPath) == "" {
 		return nil, errors.New("gwclient: empty stream path")
 	}
 
-	body, err := json.Marshal(req)
+	body, err := json.Marshal(streamMessageRequest{
+		MessageRequest: req,
+		StreamOptions:  opts,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("gwclient: marshal request: %w", err)
 	}
@@ -99,6 +120,11 @@ func (c *Client) StreamMessage(
 	}()
 
 	return out, nil
+}
+
+type streamMessageRequest struct {
+	MessageRequest
+	StreamOptions *MessageStreamOptions `json:"stream_options,omitempty"`
 }
 
 func streamStatusError(status int, body []byte) error {

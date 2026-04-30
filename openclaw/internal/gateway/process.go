@@ -31,6 +31,7 @@ type preparedMessageRun struct {
 	requestSystemPrompt string
 	inbound             InboundMessage
 	userMsg             model.Message
+	streamOptions       *gwproto.MessageStreamOptions
 	extensions          map[string]json.RawMessage
 }
 
@@ -88,6 +89,7 @@ func (s *Server) ProcessMessage(
 	prepared, earlyRsp, earlyStatus := s.prepareMessageRun(
 		ctx,
 		req,
+		nil,
 		trace,
 	)
 	if earlyRsp != nil {
@@ -177,6 +179,7 @@ func (s *Server) ProcessMessage(
 func (s *Server) prepareMessageRun(
 	ctx context.Context,
 	req gwproto.MessageRequest,
+	opts *gwproto.MessageStreamOptions,
 	trace *debugrecorder.Trace,
 ) (preparedMessageRun, *gwproto.MessageResponse, int) {
 	userMsg, mentionText, err := s.normalizeUserMessage(ctx, req)
@@ -262,8 +265,19 @@ func (s *Server) prepareMessageRun(
 		requestSystemPrompt: strings.TrimSpace(req.RequestSystemPrompt),
 		inbound:             msg,
 		userMsg:             userMsg,
+		streamOptions:       cloneStreamOptions(opts),
 		extensions:          cloneExtensions(req.Extensions),
 	}, nil, http.StatusOK
+}
+
+func cloneStreamOptions(
+	src *gwproto.MessageStreamOptions,
+) *gwproto.MessageStreamOptions {
+	if src == nil {
+		return nil
+	}
+	cloned := *src
+	return &cloned
 }
 
 func cloneExtensions(
