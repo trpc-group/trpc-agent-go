@@ -584,37 +584,20 @@ func (d *DeferredToolSet) sessionStateKey() string {
 	return "toolsearch:" + d.stateNamespace
 }
 
-func (d *DeferredToolSet) invocationSessionStateKey(
-	inv *agent.Invocation,
-) string {
-	if inv == nil || strings.TrimSpace(inv.InvocationID) == "" {
-		return ""
-	}
-	return d.sessionStateKey() + ":invocation:" + strings.TrimSpace(inv.InvocationID)
-}
-
 func (d *DeferredToolSet) loadSessionMirror(
 	inv *agent.Invocation,
 	fallback loadedState,
 ) loadedState {
-	if inv == nil || inv.Session == nil {
+	if inv == nil || inv.Session == nil || d.stateScope != StateScopeSession {
 		return fallback
 	}
-	keys := make([]string, 0, 2)
-	if d.stateScope == StateScopeSession {
-		keys = append(keys, d.sessionStateKey())
-	} else if key := d.invocationSessionStateKey(inv); key != "" {
-		keys = append(keys, key)
+	raw, ok := inv.Session.GetState(d.sessionStateKey())
+	if !ok || len(raw) == 0 {
+		return fallback
 	}
-	for _, key := range keys {
-		raw, ok := inv.Session.GetState(key)
-		if !ok || len(raw) == 0 {
-			continue
-		}
-		var stored loadedState
-		if err := json.Unmarshal(raw, &stored); err == nil {
-			return stored
-		}
+	var stored loadedState
+	if err := json.Unmarshal(raw, &stored); err == nil {
+		return stored
 	}
 	return fallback
 }
@@ -623,18 +606,10 @@ func (d *DeferredToolSet) storeSessionMirror(
 	inv *agent.Invocation,
 	state loadedState,
 ) {
-	if inv == nil || inv.Session == nil {
+	if inv == nil || inv.Session == nil || d.stateScope != StateScopeSession {
 		return
 	}
-	var key string
-	if d.stateScope == StateScopeSession {
-		key = d.sessionStateKey()
-	} else {
-		key = d.invocationSessionStateKey(inv)
-	}
-	if key == "" {
-		return
-	}
+	key := d.sessionStateKey()
 	if len(state.LoadedTools) == 0 {
 		inv.Session.SetState(key, nil)
 		return
@@ -709,17 +684,15 @@ func (t *searchTool) StateDeltaForInvocation(
 	_ []byte,
 	_ []byte,
 ) map[string][]byte {
-	if t == nil || t.parent == nil || inv == nil {
+	if t == nil || t.parent == nil || inv == nil ||
+		t.parent.stateScope != StateScopeSession {
 		return nil
 	}
 	carrier := invocationStateCarrier(inv)
-	key := t.parent.invocationSessionStateKey(carrier)
-	if t.parent.stateScope == StateScopeSession {
-		key = t.parent.sessionStateKey()
-	}
-	if key == "" {
+	if carrier == nil {
 		return nil
 	}
+	key := t.parent.sessionStateKey()
 	state, ok := agent.GetStateValue[loadedState](carrier, t.parent.invocationStateKey())
 	if !ok || len(state.LoadedTools) == 0 {
 		return map[string][]byte{

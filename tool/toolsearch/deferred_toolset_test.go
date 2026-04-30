@@ -311,6 +311,52 @@ func TestDeferredToolSet_SearchLoadFlowAndSessionPersistence(t *testing.T) {
 	)
 }
 
+func TestDeferredToolSet_InvocationScopeDoesNotPersistToSession(t *testing.T) {
+	weather := newWeatherTool("weather_lookup", "Look up the weather for one city.")
+	set, err := NewDeferredToolSet(
+		WithTools(weather),
+		WithMaxResults(1),
+	)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "session-1"}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	search := lookupTool(t, set.Tools(ctx), "tool_search")
+	args := []byte(`{"query":"weather","limit":1}`)
+	resultAny, err := search.(tool.CallableTool).Call(ctx, args)
+	require.NoError(t, err)
+	result := resultAny.(searchOutput)
+	require.Equal(t, []string{"weather_lookup"}, result.LoadedTools)
+	require.Equal(
+		t,
+		[]string{"tool_search", "weather_lookup"},
+		toolNames(set.Tools(ctx)),
+	)
+
+	resultBytes, err := json.Marshal(result)
+	require.NoError(t, err)
+	delta := search.(interface {
+		StateDeltaForInvocation(*agent.Invocation, string, []byte, []byte) map[string][]byte
+	}).StateDeltaForInvocation(inv, "call-1", args, resultBytes)
+	require.Nil(t, delta)
+
+	_, ok := inv.Session.GetState(set.sessionStateKey())
+	require.False(t, ok)
+
+	nextInv := agent.NewInvocation(
+		agent.WithInvocationSession(inv.Session),
+	)
+	nextCtx := agent.NewInvocationContext(context.Background(), nextInv)
+	require.Equal(
+		t,
+		[]string{"tool_search"},
+		toolNames(set.Tools(nextCtx)),
+	)
+}
+
 func TestDeferredToolSet_CatalogSnapshot_TTLZeroDisablesCaching(t *testing.T) {
 	source := &changingCatalogToolSet{name: "changing"}
 	set, err := NewDeferredToolSet(
