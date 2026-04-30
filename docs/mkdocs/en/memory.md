@@ -34,7 +34,7 @@ Auto Mode is available when an Extractor is configured and is recommended as the
 | **How it works**    | Agent decides when to call memory tools        | System extracts memories automatically from conversations |
 | **User experience** | Visible - user sees tool calls                 | Transparent - memories created silently in background     |
 | **Control**         | Agent has full control over what to remember   | Extractor decides based on conversation analysis          |
-| **Available tools** | All 6 tools                                    | `memory_search` by default; configurable `memory_load`; enabled write tools can be exposed |
+| **Available tools** | `memory_add`, `memory_update`, `memory_search`, `memory_load` by default; delete/clear configurable | `memory_search` exposed by default; `memory_load` exposed once enabled; enabled write operations are used by the extractor and hidden from the agent unless explicitly exposed |
 | **Processing**      | Synchronous - during response generation       | Asynchronous - background workers after response          |
 | **Best for**        | Precise control, user-driven memory management | Natural conversations, hands-off memory building          |
 
@@ -196,7 +196,9 @@ Agent: I've saved that information. How can I help you today?
 ### Auto Mode Configuration (Recommended)
 
 In Auto mode, an LLM-based extractor analyzes conversations and automatically
-creates memories. **The only difference from Agentic mode is in Step 1: add an Extractor**.
+creates memories. **The key setup difference is in Step 1: add an Extractor**.
+With an Extractor configured, `Tools()` follows Auto mode exposure rules and
+Runner triggers background extraction after responses.
 
 ```go
 package main
@@ -284,7 +286,7 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 | **Step 1**          | `NewMemoryService()`                | `NewMemoryService(WithExtractor(ext))` |
 | **Step 2**          | `WithTools(memoryService.Tools())`  | `WithTools(memoryService.Tools())`     |
 | **Step 3**          | `WithMemoryService(memoryService)`  | `WithMemoryService(memoryService)`     |
-| **Available tools** | add/update/delete/clear/search/load | search by default; load configurable; enabled write tools can be exposed |
+| **Available tools** | add/update/search/load by default; delete/clear configurable | search exposed by default; load exposed once enabled; enabled write operations are used by the extractor and hidden from the agent unless explicitly exposed |
 | **Memory creation** | Agent actively calls tools          | Background auto extraction             |
 
 ## Core Concepts
@@ -405,17 +407,20 @@ runner := runner.NewRunner(
 
 ### Memory Tool Configuration
 
-The memory service provides 6 tools. Common tools are enabled by default, while dangerous operations require manual enabling.
+The memory service provides 6 tools. In Agentic mode, common tools are enabled
+by default and dangerous operations require manual enabling. In Auto mode,
+extractor operation availability and agent-facing tool exposure are controlled
+separately.
 
 #### Tool List
 
 | Tool            | Function       | Agentic Mode    | Auto Extraction Mode | Description                                    |
 | --------------- | -------------- | --------------- | -------------------- | ---------------------------------------------- |
-| `memory_add`    | Add new memory | ✅ Default      | ⚙️ Hidden by default | Create new memory entry                        |
-| `memory_update` | Update memory  | ✅ Default      | ⚙️ Hidden by default | Modify existing memory                         |
-| `memory_search` | Search memory  | ✅ Default      | ✅ Default           | Find by keywords                               |
-| `memory_load`   | Load memories  | ✅ Default      | ⚙️ Configurable      | Load recent memories                           |
-| `memory_delete` | Delete memory  | ⚙️ Configurable | ⚙️ Hidden by default | Delete single memory                           |
+| `memory_add`    | Add new memory | ✅ Default      | ✅ Enabled for extractor; hidden from agent by default | Create new memory entry                        |
+| `memory_update` | Update memory  | ✅ Default      | ✅ Enabled for extractor; hidden from agent by default | Modify existing memory                         |
+| `memory_search` | Search memory  | ✅ Default      | ✅ Enabled and exposed by default           | Find by keywords                               |
+| `memory_load`   | Load memories  | ✅ Default      | ⚙️ Disabled by default; exposed once enabled | Load recent memories                           |
+| `memory_delete` | Delete memory  | ⚙️ Configurable | ✅ Enabled for extractor; hidden from agent by default | Delete single memory                           |
 | `memory_clear`  | Clear memories | ⚙️ Configurable | ⚙️ Disabled by default | Delete all memories                          |
 
 **Notes**:
@@ -423,10 +428,10 @@ The memory service provides 6 tools. Common tools are enabled by default, while 
 - **Agentic Mode**: Agent actively calls tools to manage memory, all tools are configurable
   - Default enabled tools: `memory_add`, `memory_update`, `memory_search`, `memory_load`
   - Default disabled tools: `memory_delete`, `memory_clear`
-- **Auto Mode**: LLM extractor handles write operations in background. Tools() exposes Search by default; Load can be enabled; `WithAutoMemoryExposedTools()` can selectively expose enabled write tools for hybrid usage.
+- **Auto Mode**: LLM extractor handles enabled write operations in background. `Tools()` exposes Search by default; Load is exposed once enabled; `WithAutoMemoryExposedTools()` can selectively expose enabled write tools for hybrid usage.
   - Default enabled tools: `memory_add`, `memory_update`, `memory_delete`, `memory_search`
   - Default disabled tools: `memory_load`, `memory_clear`
-  - Hidden by default: `memory_add`, `memory_update`, `memory_delete`
+  - Enabled but not returned by `Tools()` by default: `memory_add`, `memory_update`, `memory_delete`
 - **Default**: Available immediately when service is created, no extra configuration needed
 - **Configurable**: Can be enabled/disabled via `WithToolEnabled()`; in Auto mode, enabled write tools can be exposed via `WithAutoMemoryExposedTools()`
 
@@ -464,9 +469,11 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### Overwrite Semantics (IDs and duplicates)
 
-- Memory IDs are generated from memory content + sorted topics + appName + userID.
-  Adding the same content and topics for the same user is idempotent and overwrites
-  the existing entry (not append). UpdatedAt is refreshed.
+- Memory IDs are generated from memory content + appName + userID + canonical
+  episodic metadata. Topics are intentionally excluded, so changing tags does
+  not create a new memory. Adding the same content and identity metadata for the
+  same user is idempotent and overwrites the existing entry (not append).
+  UpdatedAt is refreshed.
 - If you need append semantics or different duplicate-handling strategies, you can
   implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).
 
@@ -1275,16 +1282,18 @@ session.AddMessage(ctx, sessionKey, agentMessage("It's sunny today"))
 
 ### Memory ID Idempotency
 
-Memory ID is generated from SHA256 hash of "content + sorted topics + appName + userID". Same content produces the same ID for the same user:
+Memory ID is generated from a SHA256 hash of memory content, appName, userID,
+and canonical episodic metadata. Topics are not part of identity, so the same
+content for the same user keeps the same ID even if topics change:
 
 ```go
 // First add
 memory.AddMemory(ctx, userKey, "User likes programming", []string{"hobby"})
 // Generated ID: abc123...
 
-// Second add with same content
-memory.AddMemory(ctx, userKey, "User likes programming", []string{"hobby"})
-// Same ID: abc123..., overwrites, refreshes updated_at
+// Second add with same content and different topics
+memory.AddMemory(ctx, userKey, "User likes programming", []string{"interests"})
+// Same ID: abc123..., overwrites, refreshes topics and updated_at
 ```
 
 **Implications**:
@@ -1297,10 +1306,10 @@ memory.AddMemory(ctx, userKey, "User likes programming", []string{"hobby"})
 
 Search behavior depends on the backend:
 
-- For `inmemory` / `redis` / `mysql` / `postgres`: `SearchMemories` uses **token matching** (not semantic search).
+- For `inmemory` / `redis` / `mysql` / `postgres`: `SearchMemories` uses **BM25-style lexical matching** (not semantic search).
 - For `pgvector` / `mysqlvec` / `sqlitevec`: `SearchMemories` uses **vector similarity search** and requires an embedder.
 
-**Token matching details** (non-vector backends):
+**Lexical matching details** (non-vector backends):
 
 **English tokenization**: lowercase → filter stopwords (a, the, is, etc.) → split by spaces
 
@@ -1519,21 +1528,21 @@ available. `memory_search` is exposed through `Tools()` by default,
 `memory_load` is exposed once enabled, and `WithAutoMemoryExposedTools`
 selectively exposes enabled write tools for hybrid usage.
 
-**Front-end Tools** (exposed via `Tools()` for agent to call):
+**Front-end Tools** (agent-facing tools returned by `Tools()`):
 
-| Tool            | Default | Description                   |
-| --------------- | ------- | ----------------------------- |
-| `memory_search` | ✅ On   | Search memories by query      |
-| `memory_load`   | ❌ Off  | Load all or recent N memories |
+| Tool            | Agent-facing default | Description                   |
+| --------------- | -------------------- | ----------------------------- |
+| `memory_search` | ✅ Exposed           | Search memories by query      |
+| `memory_load`   | ❌ Not exposed       | Load all or recent N memories; exposed once enabled |
 
-**Back-end Tools** (used by extractor in background by default):
+**Back-end Operations** (operation availability for the extractor):
 
-| Tool            | Default | Description                            |
-| --------------- | ------- | -------------------------------------- |
-| `memory_add`    | ✅ On   | Add new memories (extractor uses this) |
-| `memory_update` | ✅ On   | Update existing memories               |
-| `memory_delete` | ✅ On   | Delete memories                        |
-| `memory_clear`  | ❌ Off  | Clear all user memories (dangerous)    |
+| Tool            | Operation default | Agent-facing default | Description                            |
+| --------------- | ----------------- | -------------------- | -------------------------------------- |
+| `memory_add`    | ✅ On             | ❌ Hidden            | Add new memories                       |
+| `memory_update` | ✅ On             | ❌ Hidden            | Update existing memories               |
+| `memory_delete` | ✅ On             | ❌ Hidden            | Delete memories                        |
+| `memory_clear`  | ❌ Off            | ❌ Hidden            | Clear all user memories (dangerous)    |
 
 **Configuration Examples**:
 
