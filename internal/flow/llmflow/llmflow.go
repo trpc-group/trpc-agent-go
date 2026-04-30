@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -1315,6 +1316,12 @@ type InvocationToolSurfaceProvider interface {
 	) ([]tool.Tool, map[string]bool)
 }
 
+// ToolSnapshotControlProvider is an optional interface for agents whose tool
+// surface may change during one tool-call loop.
+type ToolSnapshotControlProvider interface {
+	DisableToolSnapshot(invocation *agent.Invocation) bool
+}
+
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
 //
 // User tools (can be filtered):
@@ -1331,11 +1338,18 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 		return nil
 	}
 
-	if cached, ok := agent.GetStateValue[[]tool.Tool](
-		invocation,
-		stateKeyToolsSnapshot,
-	); ok && cached != nil {
-		return cached
+	disableSnapshot := false
+	if provider, ok := invocation.Agent.(ToolSnapshotControlProvider); ok {
+		disableSnapshot = provider.DisableToolSnapshot(invocation)
+	}
+
+	if !disableSnapshot {
+		if cached, ok := agent.GetStateValue[[]tool.Tool](
+			invocation,
+			stateKeyToolsSnapshot,
+		); ok && cached != nil {
+			return cached
+		}
 	}
 
 	var allTools []tool.Tool
@@ -1355,7 +1369,9 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 
 	// If no filter is specified, return all tools for this invocation.
 	if invocation.RunOptions.ToolFilter == nil {
-		invocation.SetState(stateKeyToolsSnapshot, allTools)
+		if !disableSnapshot {
+			invocation.SetState(stateKeyToolsSnapshot, allTools)
+		}
 		invocation.SetState(
 			stateKeyHasFilteredUserTools,
 			hasTrackedUserTool(allTools, hasUserToolTracking, userToolNames),
@@ -1393,6 +1409,11 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 			continue
 		}
 
+		if itool.IsFilterExemptTool(t) {
+			filtered = append(filtered, t)
+			continue
+		}
+
 		// User tool: apply the filter function.
 		if invocation.RunOptions.ToolFilter(ctx, t) {
 			filtered = append(filtered, t)
@@ -1406,7 +1427,9 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 		return filtered[i].Declaration().Name < filtered[j].Declaration().Name
 	})
 
-	invocation.SetState(stateKeyToolsSnapshot, filtered)
+	if !disableSnapshot {
+		invocation.SetState(stateKeyToolsSnapshot, filtered)
+	}
 	invocation.SetState(
 		stateKeyHasFilteredUserTools,
 		hasTrackedUserTool(filtered, hasUserToolTracking, userToolNames),

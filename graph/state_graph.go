@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/invocationcarrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
@@ -613,10 +614,21 @@ func (sg *StateGraph) AddLLMNode(
 		streamOutputName:     node.streamOutputName,
 	}
 	if len(node.toolSets) > 0 {
-		if runner.refreshToolSetsOnRun {
-			runner.toolSets = append(runner.toolSets, node.toolSets...)
-		} else {
-			runner.tools = mergeToolsWithToolSets(context.Background(), runner.tools, node.toolSets)
+		if stepToolSets := filterToolSetsForStep(
+			runner.refreshToolSetsOnRun,
+			node.toolSets,
+		); len(stepToolSets) > 0 {
+			runner.toolSets = append(runner.toolSets, stepToolSets...)
+		}
+		if staticToolSets := filterStaticToolSets(
+			runner.refreshToolSetsOnRun,
+			node.toolSets,
+		); len(staticToolSets) > 0 {
+			runner.tools = mergeToolsWithToolSets(
+				context.Background(),
+				runner.tools,
+				staticToolSets,
+			)
 			node.baseTools = cloneToolsMap(runner.tools)
 		}
 	}
@@ -1145,8 +1157,17 @@ func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
 		if len(toolSets) == 0 {
 			return
 		}
-		if runner.refreshToolSetsOnRun {
-			runner.toolSets = append(runner.toolSets, toolSets...)
+		if stepToolSets := filterToolSetsForStep(
+			runner.refreshToolSetsOnRun,
+			toolSets,
+		); len(stepToolSets) > 0 {
+			runner.toolSets = append(runner.toolSets, stepToolSets...)
+		}
+		staticToolSets := filterStaticToolSets(
+			runner.refreshToolSetsOnRun,
+			toolSets,
+		)
+		if len(staticToolSets) == 0 {
 			return
 		}
 		if runner.tools == nil {
@@ -1155,7 +1176,7 @@ func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
 		runner.tools = mergeToolsWithToolSets(
 			context.Background(),
 			runner.tools,
-			toolSets,
+			staticToolSets,
 		)
 	}
 }
@@ -1410,8 +1431,9 @@ func (r *llmRunner) executeModel(
 	span oteltrace.Span,
 	instructionUsed string,
 ) (any, error) {
+	ctx = withGraphInvocationContext(ctx, state)
 	tools := r.tools
-	if r.refreshToolSetsOnRun && len(r.toolSets) > 0 {
+	if len(r.toolSets) > 0 {
 		tools = mergeToolsWithToolSets(ctx, tools, r.toolSets)
 	}
 	nodeID := r.nodeID
@@ -1631,6 +1653,40 @@ func executionContextFromState(state State) *ExecutionContext {
 		return nil
 	}
 	return execContext
+}
+
+func applyGraphToolStateDelta(state State, stateDelta map[string][]byte) {
+	if len(stateDelta) == 0 {
+		return
+	}
+	evt := &event.Event{StateDelta: stateDelta}
+	seen := map[*session.Session]struct{}{}
+	apply := func(sess *session.Session) {
+		if sess == nil {
+			return
+		}
+		if _, ok := seen[sess]; ok {
+			return
+		}
+		seen[sess] = struct{}{}
+		sess.ApplyEventStateDelta(evt)
+	}
+	if sess, ok := state[StateKeySession].(*session.Session); ok {
+		apply(sess)
+	}
+	if execCtx := executionContextFromState(state); execCtx != nil {
+		execCtx.stateMutex.Lock()
+		if sess, ok := execCtx.State[StateKeySession].(*session.Session); ok {
+			apply(sess)
+		}
+		execCtx.stateMutex.Unlock()
+		if execCtx.Invocation != nil {
+			apply(execCtx.Invocation.Session)
+		}
+	}
+	if invocation := graphInvocationFromState(state); invocation != nil {
+		apply(invocation.Session)
+	}
 }
 
 // modelResponseConfig contains configuration for processing model responses.
@@ -2155,14 +2211,17 @@ func newToolsNodeRuntime(
 	}
 	baseTools := tools
 	var staticTools map[string]tool.Tool
-	if node.refreshToolSetsOnRun {
-		staticTools = baseTools
-	} else {
+	if staticToolSets := filterStaticToolSets(
+		node.refreshToolSetsOnRun,
+		node.toolSets,
+	); len(staticToolSets) > 0 {
 		staticTools = mergeToolsWithToolSets(
 			context.Background(),
 			baseTools,
-			node.toolSets,
+			staticToolSets,
 		)
+	} else {
+		staticTools = baseTools
 	}
 	// Capture whether to execute tools in parallel.
 	parallel := node.enableParallelTools
@@ -2206,7 +2265,7 @@ func newToolsNodeRuntime(
 		}
 
 		// Process all tool calls and collect results.
-		newMessages, err := processToolCalls(ctx, toolCallsConfig{
+		newMessages, toolStateDelta, err := processToolCallsWithStateDelta(ctx, toolCallsConfig{
 			ToolCalls:      toolCalls,
 			Tools:          effectiveTools,
 			InvocationID:   invocationID,
@@ -2223,6 +2282,7 @@ func newToolsNodeRuntime(
 			}
 			return nil, err
 		}
+		applyGraphToolStateDelta(state, toolStateDelta)
 		upd := State{StateKeyMessages: newMessages}
 
 		if len(newMessages) > 0 {
@@ -2268,11 +2328,14 @@ func resolveToolsNodeRuntimeTools(
 	staticTools map[string]tool.Tool,
 ) map[string]tool.Tool {
 	effectiveTools := staticTools
-	if node.refreshToolSetsOnRun && len(node.toolSets) > 0 {
+	if stepToolSets := filterToolSetsForStep(
+		node.refreshToolSetsOnRun,
+		node.toolSets,
+	); len(stepToolSets) > 0 {
 		effectiveTools = mergeToolsWithToolSets(
 			ctx,
 			baseTools,
-			node.toolSets,
+			stepToolSets,
 		)
 	}
 	invocation, ok := agent.InvocationFromContext(ctx)
@@ -3873,6 +3936,7 @@ func runToolWithEventContexts(
 	state State,
 	retryPolicy *tool.RetryPolicy,
 ) (context.Context, *agent.Invocation, context.Context, *agent.Invocation, any, []byte, error) {
+	ctx = withGraphInvocationContext(ctx, state)
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	if invocation, ok := agent.InvocationFromContext(ctx); ok && jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
@@ -4929,8 +4993,24 @@ type toolCallsConfig struct {
 	RetryPolicy *tool.RetryPolicy
 }
 
+type toolCallResult struct {
+	Message    model.Message
+	StateDelta map[string][]byte
+}
+
 // processToolCalls executes all tool calls and returns the resulting messages.
-func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Message, error) {
+func processToolCalls(
+	ctx context.Context,
+	config toolCallsConfig,
+) ([]model.Message, error) {
+	messages, _, err := processToolCallsWithStateDelta(ctx, config)
+	return messages, err
+}
+
+func processToolCallsWithStateDelta(
+	ctx context.Context,
+	config toolCallsConfig,
+) ([]model.Message, map[string][]byte, error) {
 	// Use callbacks from config if provided; otherwise extract from state.
 	toolCallbacks := config.ToolCallbacks
 	if toolCallbacks == nil {
@@ -4939,8 +5019,9 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	// Serial path or single tool call.
 	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
 		newMessages := make([]model.Message, 0, len(config.ToolCalls))
+		var mergedStateDelta map[string][]byte
 		for _, toolCall := range config.ToolCalls {
-			toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
+			toolResult, err := executeSingleToolCallWithStateDelta(ctx, singleToolCallConfig{
 				ToolCall:      toolCall,
 				Tools:         config.Tools,
 				InvocationID:  config.InvocationID,
@@ -4951,18 +5032,22 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				RetryPolicy:   config.RetryPolicy,
 			})
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			newMessages = append(newMessages, toolMessage)
+			newMessages = append(newMessages, toolResult.Message)
+			mergedStateDelta = mergeStateDeltaMaps(
+				mergedStateDelta,
+				toolResult.StateDelta,
+			)
 		}
-		return newMessages, nil
+		return newMessages, mergedStateDelta, nil
 	}
 
 	// Parallel path: execute each tool call in its own goroutine while
 	// preserving the original order in the resulting messages slice.
 	type result struct {
 		idx int
-		msg model.Message
+		res toolCallResult
 		err error
 	}
 
@@ -4978,7 +5063,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		runCtx := agent.CloneContext(ctx)
 		go func(ctx context.Context) {
 			defer wg.Done()
-			msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
+			toolResult, err := executeSingleToolCallWithStateDelta(ctx, singleToolCallConfig{
 				ToolCall:      tc,
 				Tools:         config.Tools,
 				InvocationID:  config.InvocationID,
@@ -4994,7 +5079,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				results <- result{idx: i, err: err}
 				return
 			}
-			results <- result{idx: i, msg: msg}
+			results <- result{idx: i, res: toolResult}
 		}(runCtx)
 	}
 
@@ -5005,6 +5090,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 
 	// Aggregate while preserving order.
 	out := make([]model.Message, len(config.ToolCalls))
+	var mergedStateDelta map[string][]byte
 	var firstErr error
 	received := 0
 	for r := range results {
@@ -5014,16 +5100,20 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		}
 		// Only set when message exists; zero value is fine otherwise.
 		if r.err == nil {
-			out[r.idx] = r.msg
+			out[r.idx] = r.res.Message
+			mergedStateDelta = mergeStateDeltaMaps(
+				mergedStateDelta,
+				r.res.StateDelta,
+			)
 		}
 		if received == len(config.ToolCalls) {
 			break
 		}
 	}
 	if firstErr != nil {
-		return nil, firstErr
+		return nil, nil, firstErr
 	}
-	return out, nil
+	return out, mergedStateDelta, nil
 }
 
 // singleToolCallConfig contains configuration for executing a single tool call.
@@ -5039,12 +5129,26 @@ type singleToolCallConfig struct {
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
-func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (model.Message, error) {
+func executeSingleToolCall(
+	ctx context.Context,
+	config singleToolCallConfig,
+) (model.Message, error) {
+	result, err := executeSingleToolCallWithStateDelta(ctx, config)
+	if err != nil {
+		return model.Message{}, err
+	}
+	return result.Message, nil
+}
+
+func executeSingleToolCallWithStateDelta(
+	ctx context.Context,
+	config singleToolCallConfig,
+) (toolCallResult, error) {
 	id, name := config.ToolCall.ID, config.ToolCall.Function.Name
 	t := config.Tools[name]
 	if t == nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s not found", name)))
-		return model.Message{}, fmt.Errorf("tool %s not found", name)
+		return toolCallResult{}, fmt.Errorf("tool %s not found", name)
 	}
 
 	startTime := time.Now()
@@ -5118,6 +5222,19 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 			}
 		}
 	}
+	var stateDelta map[string][]byte
+	if eventErr == nil && result != nil {
+		if outputBytes, marshalErr := json.Marshal(result); marshalErr == nil {
+			stateDelta = toolStateDeltaForInvocation(
+				finalCtx,
+				config.State,
+				t,
+				id,
+				modifiedArgs,
+				outputBytes,
+			)
+		}
+	}
 	// Emit tool execution complete event.
 	event := emitToolCompleteEvent(finalCtx, eventInvocation, toolCompleteEventConfig{
 		EventChan:    config.EventChan,
@@ -5129,6 +5246,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Result:       result,
 		Error:        eventErr,
 		Arguments:    modifiedArgs,
+		StateDelta:   stateDelta,
 		ResponseID:   responseID,
 	})
 	if startedSpan {
@@ -5149,11 +5267,11 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	if err != nil {
 		if interruptErr != nil {
-			return model.Message{}, interruptErr
+			return toolCallResult{}, interruptErr
 		}
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
-		return model.Message{}, fmt.Errorf("tool %s call failed: %w", name, err)
+		return toolCallResult{}, fmt.Errorf("tool %s call failed: %w", name, err)
 	}
 
 	// Marshal result to JSON.
@@ -5161,10 +5279,13 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	if err != nil {
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
-		return model.Message{}, fmt.Errorf("failed to marshal tool result: %w", err)
+		return toolCallResult{}, fmt.Errorf("failed to marshal tool result: %w", err)
 	}
 
-	return model.NewToolMessage(id, name, string(content)), nil
+	return toolCallResult{
+		Message:    model.NewToolMessage(id, name, string(content)),
+		StateDelta: stateDelta,
+	}, nil
 }
 
 func invocationFromContextOrFallback(ctx context.Context, fallback *agent.Invocation) *agent.Invocation {
@@ -5186,6 +5307,45 @@ func invocationIDOrFallback(invocation *agent.Invocation, fallback string) strin
 		return invocation.InvocationID
 	}
 	return fallback
+}
+
+func toolStateDeltaForInvocation(
+	ctx context.Context,
+	state State,
+	tl tool.Tool,
+	toolCallID string,
+	args []byte,
+	result []byte,
+) map[string][]byte {
+	if tl == nil || len(result) == 0 {
+		return nil
+	}
+	original := tl
+	if namedTool, ok := tl.(*itool.NamedTool); ok {
+		original = namedTool.Original()
+	}
+	invocation, ok := invocationcarrier.InvocationStateCarrierFromContext(ctx)
+	if !ok || invocation == nil {
+		invocation = invocationFromContextOrDefault(ctx, graphInvocationFromState(state))
+	}
+	type stateDeltaProvider interface {
+		StateDelta(string, []byte, []byte) map[string][]byte
+	}
+	type invocationStateDeltaProvider interface {
+		StateDeltaForInvocation(
+			*agent.Invocation,
+			string,
+			[]byte,
+			[]byte,
+		) map[string][]byte
+	}
+	if isdp, ok := original.(invocationStateDeltaProvider); ok {
+		return isdp.StateDeltaForInvocation(invocation, toolCallID, args, result)
+	}
+	if sdp, ok := original.(stateDeltaProvider); ok {
+		return sdp.StateDelta(toolCallID, args, result)
+	}
+	return nil
 }
 
 // emitToolStartEvent emits a tool execution start event.
@@ -5229,6 +5389,7 @@ type toolCompleteEventConfig struct {
 	Result       any
 	Error        error
 	Arguments    []byte
+	StateDelta   map[string][]byte
 }
 
 // emitToolCompleteEvent emits a tool execution complete event.
@@ -5265,6 +5426,14 @@ func emitToolCompleteEvent(
 		WithToolEventError(config.Error),
 		WithToolEventIncludeResponse(true),
 	)
+	if len(config.StateDelta) > 0 {
+		if toolCompleteEvent.StateDelta == nil {
+			toolCompleteEvent.StateDelta = make(map[string][]byte, len(config.StateDelta))
+		}
+		for key, value := range config.StateDelta {
+			toolCompleteEvent.StateDelta[key] = value
+		}
+	}
 	agent.EmitEvent(ctx, invocation, config.EventChan, toolCompleteEvent)
 	return toolCompleteEvent
 }

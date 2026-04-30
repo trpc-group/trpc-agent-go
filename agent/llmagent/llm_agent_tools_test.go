@@ -11,11 +11,16 @@ package llmagent
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"sync"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -275,6 +280,88 @@ func (d *dynamicToolSet) Name() string {
 	return d.name
 }
 
+type staticResultTool struct {
+	decl   *tool.Declaration
+	result string
+}
+
+func (t staticResultTool) Call(_ context.Context, _ []byte) (any, error) { return t.result, nil }
+func (t staticResultTool) Declaration() *tool.Declaration                  { return t.decl }
+
+type refreshPerInvocationModel struct {
+	mu sync.Mutex
+
+	toolSet *dynamicToolSet
+
+	requestToolNames [][]string
+	callCount        int
+}
+
+func (m *refreshPerInvocationModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	names := make([]string, 0, len(req.Tools))
+	for name := range req.Tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	m.requestToolNames = append(m.requestToolNames, names)
+
+	m.callCount++
+	ch := make(chan *model.Response, 1)
+	switch m.callCount {
+	case 1:
+		m.toolSet.tools = []tool.Tool{
+			staticResultTool{
+				decl:   &tool.Declaration{Name: "lookup_v2"},
+				result: "v2",
+			},
+		}
+		ch <- &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:   "call-1",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "lookup_v1",
+							Arguments: []byte(`{}`),
+						},
+					}},
+				},
+			}},
+		}
+	case 2:
+		ch <- &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done"),
+			}},
+		}
+	case 3:
+		ch <- &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done-again"),
+			}},
+		}
+	default:
+		return nil, fmt.Errorf("unexpected extra model call %d", m.callCount)
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *refreshPerInvocationModel) Info() model.Info {
+	return model.Info{Name: "refresh-per-invocation-model"}
+}
+
 type toolSetContextKey string
 
 const testToolSetContextKey toolSetContextKey = "toolset-context-key"
@@ -377,6 +464,66 @@ func TestLLMAgent_RefreshToolSetsOnRun(t *testing.T) {
 				name,
 			)
 		}
+	}
+}
+
+func TestLLMAgent_RefreshToolSetsOnRun_StableWithinInvocation(t *testing.T) {
+	dyn := &dynamicToolSet{
+		name: "",
+		tools: []tool.Tool{
+			staticResultTool{
+				decl:   &tool.Declaration{Name: "lookup_v1"},
+				result: "v1",
+			},
+		},
+	}
+	modelStub := &refreshPerInvocationModel{toolSet: dyn}
+	agt := New(
+		"dynamic-agent",
+		WithModel(modelStub),
+		WithToolSets([]tool.ToolSet{dyn}),
+		WithRefreshToolSetsOnRun(true),
+	)
+
+	inv1 := agent.NewInvocation(
+		agent.WithInvocationID("refresh-run-1"),
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{ID: "refresh-session"}),
+	)
+	events, err := agt.Run(context.Background(), inv1)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	for range events {
+	}
+
+	if len(modelStub.requestToolNames) != 2 {
+		t.Fatalf("expected 2 model calls in first invocation, got %d", len(modelStub.requestToolNames))
+	}
+	if got := modelStub.requestToolNames[0]; len(got) != 1 || got[0] != "lookup_v1" {
+		t.Fatalf("expected first invocation call 1 tools [lookup_v1], got %v", got)
+	}
+	if got := modelStub.requestToolNames[1]; len(got) != 1 || got[0] != "lookup_v1" {
+		t.Fatalf("expected first invocation call 2 tools [lookup_v1], got %v", got)
+	}
+
+	inv2 := agent.NewInvocation(
+		agent.WithInvocationID("refresh-run-2"),
+		agent.WithInvocationMessage(model.NewUserMessage("hi again")),
+		agent.WithInvocationSession(inv1.Session),
+	)
+	events, err = agt.Run(context.Background(), inv2)
+	if err != nil {
+		t.Fatalf("Run error on second invocation: %v", err)
+	}
+	for range events {
+	}
+
+	if len(modelStub.requestToolNames) != 3 {
+		t.Fatalf("expected 3 total model calls after second invocation, got %d", len(modelStub.requestToolNames))
+	}
+	if got := modelStub.requestToolNames[2]; len(got) != 1 || got[0] != "lookup_v2" {
+		t.Fatalf("expected second invocation tools [lookup_v2], got %v", got)
 	}
 }
 

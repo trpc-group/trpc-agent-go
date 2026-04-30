@@ -647,12 +647,11 @@ func appendStaticToolSetTools(
 	userToolNames map[string]bool,
 	options *Options,
 ) ([]tool.Tool, map[string]bool) {
-	if options.RefreshToolSetsOnRun {
-		return allTools, userToolNames
-	}
-
 	ctx := context.Background()
 	for _, toolSet := range options.ToolSets {
+		if shouldRefreshToolSetTools(options.RefreshToolSetsOnRun, toolSet) {
+			continue
+		}
 		namedToolSet := itool.NewNamedToolSet(toolSet)
 		for _, t := range namedToolSet.Tools(ctx) {
 			allTools = append(allTools, t)
@@ -1138,6 +1137,7 @@ func codeExecutorSupportsWorkspaceExecSessions(
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
+	ctx = agent.NewInvocationContext(ctx, invocation)
 	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
 		invocation,
@@ -1503,12 +1503,13 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 	base := make([]tool.Tool, len(a.tools))
 	copy(base, a.tools)
 
-	// When RefreshToolSetsOnRun is enabled, rebuild tools from ToolSets
-	// on each call to keep ToolSet-provided tools in sync with their
-	// underlying dynamic source (for example, MCP ListTools).
-	if a.option.RefreshToolSetsOnRun && len(a.option.ToolSets) > 0 {
+	// Rebuild only the ToolSets that opt into dynamic refresh for this step.
+	if len(a.option.ToolSets) > 0 {
 		dynamic := make([]tool.Tool, 0)
 		for _, toolSet := range a.option.ToolSets {
+			if !shouldRefreshToolSetTools(a.option.RefreshToolSetsOnRun, toolSet) {
+				continue
+			}
 			namedToolSet := itool.NewNamedToolSet(toolSet)
 			setTools := namedToolSet.Tools(ctx)
 			dynamic = append(dynamic, setTools...)
@@ -1598,7 +1599,7 @@ func (a *LLMAgent) UserTools() []tool.Tool {
 
 	// When ToolSets are static, user tool tracking is based on the
 	// snapshot captured at construction time.
-	if !a.option.RefreshToolSetsOnRun {
+	if !a.option.RefreshToolSetsOnRun && !hasStepDynamicToolSets(a.option.ToolSets) {
 		userTools := make([]tool.Tool, 0, len(a.userToolNames))
 		for _, t := range a.tools {
 			if a.userToolNames[t.Declaration().Name] {
@@ -1642,7 +1643,7 @@ func (a *LLMAgent) FilterTools(ctx context.Context) []tool.Tool {
 	for name, isUser := range a.userToolNames {
 		userToolNames[name] = isUser
 	}
-	refreshToolSets := a.option.RefreshToolSetsOnRun
+	refreshToolSets := a.option.RefreshToolSetsOnRun || hasStepDynamicToolSets(a.option.ToolSets)
 	filter := a.option.toolFilter
 	a.mu.RUnlock()
 
@@ -1662,12 +1663,25 @@ func (a *LLMAgent) FilterTools(ctx context.Context) []tool.Tool {
 			continue
 		}
 
-		if filter == nil || filter(ctx, t) {
+		if itool.IsFilterExemptTool(t) || filter == nil || filter(ctx, t) {
 			filtered = append(filtered, t)
 		}
 	}
 
 	return filtered
+}
+
+// DisableToolSnapshot reports whether one invocation must re-evaluate tools on
+// each model step instead of using one fixed llmflow snapshot.
+//
+// RefreshToolSetsOnRun intentionally remains a per-invocation refresh policy:
+// toolsets may be rebuilt when one run starts, but the resulting tool surface
+// stays stable within that invocation unless a ToolSet explicitly opts into
+// step-dynamic behavior.
+func (a *LLMAgent) DisableToolSnapshot(*agent.Invocation) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return hasStepDynamicToolSets(a.option.ToolSets)
 }
 
 // CodeExecutor returns the code executor used by this agent.

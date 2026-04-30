@@ -65,6 +65,12 @@ func (s *NamedToolSet) Name() string {
 	return s.toolSet.Name()
 }
 
+// StepDynamic forwards the optional step-dynamic marker from the
+// underlying ToolSet when present.
+func (s *NamedToolSet) StepDynamic() bool {
+	return IsStepDynamicToolSet(s.toolSet)
+}
+
 // NamedTool wraps an original tool with a prefixed name to avoid conflicts.
 type NamedTool struct {
 	original tool.Tool

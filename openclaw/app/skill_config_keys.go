@@ -24,6 +24,7 @@ const (
 	configKeyToolsPrefix         = "tools."
 	configKeyToolProvidersPrefix = "tools.providers."
 	configKeyToolSetsPrefix      = "tools.toolsets."
+	configKeyToolSearchPrefix    = "tools.tool_search"
 
 	configKeyPluginsEntriesPrefix = "plugins.entries."
 	configKeyPluginsEnabledSuffix = ".enabled"
@@ -103,6 +104,28 @@ func addToolSurfaceKeys(set map[string]struct{}, opts runOptions) {
 	}
 	if opts.EnableLocalExec {
 		addConfigKey(set, configKeyToolsPrefix+configKeyLocalExec)
+	}
+	if opts.ToolSearch.Enabled {
+		addConfigKey(set, configKeyToolSearchPrefix)
+		addConfigKey(set, configKeyToolSearchPrefix+".enabled")
+		if opts.ToolSearch.MaxResults > 0 {
+			addConfigKey(set, configKeyToolSearchPrefix+".max_results")
+		}
+		if len(opts.ToolSearch.AlwaysInclude) > 0 {
+			addConfigKey(set, configKeyToolSearchPrefix+".always_include")
+		}
+		if strings.TrimSpace(opts.ToolSearch.SearchToolName) != "" {
+			addConfigKey(set, configKeyToolSearchPrefix+".search_tool_name")
+		}
+		if opts.ToolSearch.PersistLoadedTools {
+			addConfigKey(set, configKeyToolSearchPrefix+".persist_loaded_tools")
+		}
+		if opts.ToolSearch.CatalogCacheTTL > 0 {
+			addConfigKey(set, configKeyToolSearchPrefix+".catalog_cache_ttl")
+		}
+		if strings.TrimSpace(opts.ToolSearch.StateNamespace) != "" {
+			addConfigKey(set, configKeyToolSearchPrefix+".state_namespace")
+		}
 	}
 }
 

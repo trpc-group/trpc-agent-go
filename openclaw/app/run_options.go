@@ -243,6 +243,7 @@ type runOptions struct {
 	ToolSets      []pluginSpec
 
 	RefreshToolSetsOnRun bool
+	ToolSearch           toolSearchRuntimeOptions
 }
 
 func parseRunOptions(args []string) (runOptions, error) {
@@ -1084,15 +1085,36 @@ type skillEntryConfig struct {
 }
 
 type toolsConfig struct {
-	EnableLocalExec           *bool   `yaml:"enable_local_exec,omitempty"`
-	EnableOpenClawTools       *bool   `yaml:"enable_openclaw_tools,omitempty"`
-	OpenClawToolingGuide      *string `yaml:"openclaw_tooling_guidance,omitempty"`
-	OpenClawToolingGuideCamel *string `yaml:"openClawToolingGuidance,omitempty"`
-	EnableParallelTools       *bool   `yaml:"enable_parallel_tools,omitempty"`
-	RefreshToolSetsOnRun      *bool   `yaml:"refresh_toolsets_on_run,omitempty"`
+	EnableLocalExec           *bool             `yaml:"enable_local_exec,omitempty"`
+	EnableOpenClawTools       *bool             `yaml:"enable_openclaw_tools,omitempty"`
+	OpenClawToolingGuide      *string           `yaml:"openclaw_tooling_guidance,omitempty"`
+	OpenClawToolingGuideCamel *string           `yaml:"openClawToolingGuidance,omitempty"`
+	EnableParallelTools       *bool             `yaml:"enable_parallel_tools,omitempty"`
+	RefreshToolSetsOnRun      *bool             `yaml:"refresh_toolsets_on_run,omitempty"`
+	ToolSearch                *toolSearchConfig `yaml:"tool_search,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
+}
+
+type toolSearchRuntimeOptions struct {
+	Enabled            bool
+	MaxResults         int
+	AlwaysInclude      []string
+	SearchToolName     string
+	PersistLoadedTools bool
+	CatalogCacheTTL    time.Duration
+	StateNamespace     string
+}
+
+type toolSearchConfig struct {
+	Enabled            *bool    `yaml:"enabled,omitempty"`
+	MaxResults         *int     `yaml:"max_results,omitempty"`
+	AlwaysInclude      []string `yaml:"always_include,omitempty"`
+	SearchToolName     *string  `yaml:"search_tool_name,omitempty"`
+	PersistLoadedTools *bool    `yaml:"persist_loaded_tools,omitempty"`
+	CatalogCacheTTL    *string  `yaml:"catalog_cache_ttl,omitempty"`
+	StateNamespace     *string  `yaml:"state_namespace,omitempty"`
 }
 
 type sessionConfig struct {
@@ -1628,6 +1650,50 @@ func (cfg *fileConfig) apply(
 		}
 		if len(cfg.Tools.ToolSets) > 0 {
 			opts.ToolSets = convertPluginSpecs(cfg.Tools.ToolSets)
+		}
+		if cfg.Tools.ToolSearch != nil {
+			if cfg.Tools.ToolSearch.Enabled != nil {
+				opts.ToolSearch.Enabled = *cfg.Tools.ToolSearch.Enabled
+			}
+			if cfg.Tools.ToolSearch.MaxResults != nil &&
+				*cfg.Tools.ToolSearch.MaxResults > 0 {
+				opts.ToolSearch.MaxResults = *cfg.Tools.ToolSearch.MaxResults
+			}
+			if len(cfg.Tools.ToolSearch.AlwaysInclude) > 0 {
+				opts.ToolSearch.AlwaysInclude = append(
+					[]string(nil),
+					cfg.Tools.ToolSearch.AlwaysInclude...,
+				)
+			}
+			if cfg.Tools.ToolSearch.SearchToolName != nil {
+				opts.ToolSearch.SearchToolName = strings.TrimSpace(
+					*cfg.Tools.ToolSearch.SearchToolName,
+				)
+			}
+			if cfg.Tools.ToolSearch.PersistLoadedTools != nil {
+				opts.ToolSearch.PersistLoadedTools =
+					*cfg.Tools.ToolSearch.PersistLoadedTools
+			}
+			if cfg.Tools.ToolSearch.CatalogCacheTTL != nil {
+				ttlText := strings.TrimSpace(
+					*cfg.Tools.ToolSearch.CatalogCacheTTL,
+				)
+				if ttlText != "" {
+					ttl, err := time.ParseDuration(ttlText)
+					if err != nil {
+						return fmt.Errorf(
+							"parse tools.tool_search.catalog_cache_ttl: %w",
+							err,
+						)
+					}
+					opts.ToolSearch.CatalogCacheTTL = ttl
+				}
+			}
+			if cfg.Tools.ToolSearch.StateNamespace != nil {
+				opts.ToolSearch.StateNamespace = strings.TrimSpace(
+					*cfg.Tools.ToolSearch.StateNamespace,
+				)
+			}
 		}
 	}
 

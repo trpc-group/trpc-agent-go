@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/invocationcarrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -4231,11 +4232,11 @@ func TestExecutor_taskInvocationContext_CoversBranches(t *testing.T) {
 	type ctxKey string
 
 	const (
-		testKey      ctxKey = "k"
-		testValue           = "v"
-		invocationID        = "inv"
-		parentBranch        = "parent"
-		nodeID              = "child"
+		testKey       = ctxKey("k")
+		testValue     = "v"
+		invocationID  = "inv"
+		parentBranch  = "parent"
+		nodeID        = "child"
 	)
 
 	ctx := context.WithValue(context.Background(), testKey, testValue)
@@ -4255,6 +4256,12 @@ func TestExecutor_taskInvocationContext_CoversBranches(t *testing.T) {
 	require.NotNil(t, gotInv)
 	require.NotNil(t, gotCtx)
 	require.Equal(t, nodeID, gotInv.Branch)
+	require.NotEqual(t, invocationID, gotInv.InvocationID)
+	require.NotNil(t, gotInv.GetParentInvocation())
+	require.Equal(t, invocationID, gotInv.GetParentInvocation().InvocationID)
+	carrier, ok := invocationcarrier.InvocationStateCarrierFromContext(gotCtx)
+	require.True(t, ok)
+	require.Same(t, inv, carrier)
 
 	inv.Branch = parentBranch
 	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, task)
@@ -4272,6 +4279,8 @@ func TestExecutor_taskInvocationContext_CoversBranches(t *testing.T) {
 	require.NotNil(t, gotInv)
 	require.NotNil(t, gotCtx)
 	require.Equal(t, "graph", agent.InvocationTraceNodeID(gotInv))
+	require.NotEqual(t, invocationID, gotInv.InvocationID)
+	require.Equal(t, invocationID, gotInv.GetParentInvocation().InvocationID)
 }
 
 func TestExecutor_executeStepTask_RecoversFromPanic(t *testing.T) {

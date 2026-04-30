@@ -106,6 +106,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	}
 	// Setup invocation
 	ga.setupInvocation(invocation)
+	ctx = agent.NewInvocationContext(ctx, invocation)
 	out := make(chan *event.Event, ga.eventChannelBufferSize(invocation))
 	emitChan := out
 	if shouldHideGraphAgentBarrierEvents(invocation) {

@@ -351,15 +351,16 @@ func (n *Node) Tools(ctx context.Context) []tool.Tool {
 		}
 		toolsByName[name] = currentTool
 	}
-	if n.refreshToolSetsOnRun {
-		for _, toolSet := range n.toolSets {
-			namedToolSet := itool.NewNamedToolSet(toolSet)
-			for _, currentTool := range namedToolSet.Tools(ctx) {
-				if currentTool == nil || currentTool.Declaration() == nil {
-					continue
-				}
-				toolsByName[currentTool.Declaration().Name] = currentTool
+	for _, toolSet := range filterToolSetsForStep(
+		n.refreshToolSetsOnRun,
+		n.toolSets,
+	) {
+		namedToolSet := itool.NewNamedToolSet(toolSet)
+		for _, currentTool := range namedToolSet.Tools(ctx) {
+			if currentTool == nil || currentTool.Declaration() == nil {
+				continue
 			}
+			toolsByName[currentTool.Declaration().Name] = currentTool
 		}
 	}
 	tools := make([]tool.Tool, 0, len(toolsByName))

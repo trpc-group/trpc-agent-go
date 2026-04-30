@@ -267,7 +267,7 @@ func (a *LLMAgent) userToolsForInvocation(
 	toolSets := append([]tool.ToolSet(nil), a.option.ToolSets...)
 	a.mu.RUnlock()
 
-	if !refreshToolSets {
+	if !refreshToolSets && !hasStepDynamicToolSets(toolSets) {
 		userTools := make([]tool.Tool, 0, len(userToolNames))
 		for _, t := range staticTools {
 			if userToolNames[t.Declaration().Name] {
@@ -276,9 +276,22 @@ func (a *LLMAgent) userToolsForInvocation(
 		}
 		return userTools, userToolNames
 	}
-	userTools := append([]tool.Tool(nil), baseTools...)
-	userToolNames = collectUserToolNames(baseTools)
+
+	userTools := make([]tool.Tool, 0, len(staticTools)+len(toolSets)*2)
+	if refreshToolSets {
+		userTools = append(userTools, baseTools...)
+		userToolNames = collectUserToolNames(baseTools)
+	} else {
+		for _, t := range staticTools {
+			if userToolNames[t.Declaration().Name] {
+				userTools = append(userTools, t)
+			}
+		}
+	}
 	for _, toolSet := range toolSets {
+		if !shouldRefreshToolSetTools(refreshToolSets, toolSet) {
+			continue
+		}
 		namedToolSet := itool.NewNamedToolSet(toolSet)
 		for _, t := range namedToolSet.Tools(ctx) {
 			userTools = append(userTools, t)
@@ -303,10 +316,26 @@ func filterInvocationUserTools(
 		if tl == nil || tl.Declaration() == nil {
 			continue
 		}
-		if filter(ctx, tl) {
+		if itool.IsFilterExemptTool(tl) || filter(ctx, tl) {
 			filtered = append(filtered, tl)
 			filteredNames[tl.Declaration().Name] = true
 		}
 	}
 	return filtered, filteredNames
+}
+
+func shouldRefreshToolSetTools(
+	refreshToolSetsOnRun bool,
+	toolSet tool.ToolSet,
+) bool {
+	return refreshToolSetsOnRun || itool.IsStepDynamicToolSet(toolSet)
+}
+
+func hasStepDynamicToolSets(toolSets []tool.ToolSet) bool {
+	for _, toolSet := range toolSets {
+		if itool.IsStepDynamicToolSet(toolSet) {
+			return true
+		}
+	}
+	return false
 }
