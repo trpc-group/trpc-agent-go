@@ -3857,6 +3857,244 @@ func TestServer_StreamMessage_ProgressStages(t *testing.T) {
 	)
 }
 
+func TestServer_StreamMessage_ProgressAfterTextDelta(t *testing.T) {
+	t.Parallel()
+
+	const (
+		firstDelta = "checking "
+		replyText  = "done"
+		requestID  = "req-1"
+	)
+
+	srv, err := New(&staticRunner{
+		events: progressAfterDeltaEvents(
+			firstDelta,
+			replyText,
+			requestID,
+		),
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessageWithOptions(
+		ctx,
+		gwproto.MessageRequest{
+			From: "u1",
+			Text: "hello",
+		},
+		progressAfterMessageDeltaOptions(),
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 7)
+	require.Equal(t, gwproto.StreamEventTypeRunStarted, events[0].Type)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[1].Type)
+	require.Equal(t, gwproto.StreamEventTypeMessageDelta, events[2].Type)
+	require.Equal(t, firstDelta, events[2].Delta)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[3].Type)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageReadingDocument,
+		events[3].Stage,
+	)
+	require.Equal(t, "Reading document page 2", events[3].Summary)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[4].Type)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageSummarizing,
+		events[4].Stage,
+	)
+	require.Equal(t, progressSummaryAnswering, events[4].Summary)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[5].Type,
+	)
+	require.Equal(t, replyText, events[5].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[6].Type,
+	)
+}
+
+func TestServer_StreamMessage_DefaultProgressStopsAfterDelta(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const (
+		firstDelta = "checking "
+		replyText  = "done"
+		requestID  = "req-1"
+	)
+
+	srv, err := New(&staticRunner{
+		events: progressAfterDeltaEvents(
+			firstDelta,
+			replyText,
+			requestID,
+		),
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 5)
+	require.Equal(t, gwproto.StreamEventTypeRunStarted, events[0].Type)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[1].Type)
+	require.Equal(t, gwproto.StreamEventTypeMessageDelta, events[2].Type)
+	require.Equal(t, firstDelta, events[2].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[3].Type,
+	)
+	require.Equal(t, replyText, events[3].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[4].Type,
+	)
+}
+
+func TestServer_StreamMessage_EmptyOptionsKeepDefaultProgressOrder(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const (
+		firstDelta = "checking "
+		replyText  = "done"
+		requestID  = "req-1"
+	)
+
+	srv, err := New(&staticRunner{
+		events: progressAfterDeltaEvents(
+			firstDelta,
+			replyText,
+			requestID,
+		),
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessageWithOptions(
+		ctx,
+		gwproto.MessageRequest{
+			From: "u1",
+			Text: "hello",
+		},
+		&gwproto.MessageStreamOptions{},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 5)
+	require.Equal(t, gwproto.StreamEventTypeRunStarted, events[0].Type)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[1].Type)
+	require.Equal(t, gwproto.StreamEventTypeMessageDelta, events[2].Type)
+	require.Equal(t, firstDelta, events[2].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[3].Type,
+	)
+	require.Equal(t, replyText, events[3].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[4].Type,
+	)
+}
+
+func progressAfterDeltaEvents(
+	firstDelta string,
+	replyText string,
+	requestID string,
+) []*event.Event {
+	return []*event.Event{
+		{
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletionChunk,
+				Choices: []model.Choice{{
+					Delta: model.Message{
+						Content: firstDelta,
+					},
+				}},
+			},
+		},
+		{
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{{
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name: streamToolReadDocument,
+								Arguments: []byte(
+									`{"page":2}`,
+								),
+							},
+						}},
+					},
+				}},
+			},
+		},
+		{
+			Response: &model.Response{
+				Object: model.ObjectTypeToolResponse,
+			},
+		},
+		{
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{
+					{
+						Message: model.NewAssistantMessage(
+							replyText,
+						),
+					},
+				},
+				Done: true,
+			},
+			RequestID: requestID,
+		},
+	}
+}
+
+func progressAfterMessageDeltaOptions() *gwproto.MessageStreamOptions {
+	return &gwproto.MessageStreamOptions{
+		ProgressAfterTextDelta: true,
+	}
+}
+
 func TestStreamProgressHelpers(t *testing.T) {
 	t.Parallel()
 

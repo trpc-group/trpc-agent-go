@@ -68,6 +68,24 @@ func (s *Server) StreamMessage(
 	ctx context.Context,
 	req gwproto.MessageRequest,
 ) (<-chan gwproto.StreamEvent, *gwproto.APIError, int) {
+	return s.streamMessage(ctx, req, nil)
+}
+
+// StreamMessageWithOptions processes a request with opt-in stream behavior
+// controls and returns a stream of gateway events.
+func (s *Server) StreamMessageWithOptions(
+	ctx context.Context,
+	req gwproto.MessageRequest,
+	opts *gwproto.MessageStreamOptions,
+) (<-chan gwproto.StreamEvent, *gwproto.APIError, int) {
+	return s.streamMessage(ctx, req, opts)
+}
+
+func (s *Server) streamMessage(
+	ctx context.Context,
+	req gwproto.MessageRequest,
+	opts *gwproto.MessageStreamOptions,
+) (<-chan gwproto.StreamEvent, *gwproto.APIError, int) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -93,6 +111,7 @@ func (s *Server) StreamMessage(
 	prepared, earlyRsp, earlyStatus := s.prepareMessageRun(
 		ctx,
 		req,
+		opts,
 		trace,
 	)
 	if earlyRsp != nil {
@@ -172,7 +191,7 @@ func (s *Server) handleMessagesStream(
 		return
 	}
 
-	var req gwproto.MessageRequest
+	var req streamMessageRequest
 	if err := s.decodeJSON(r, &req); err != nil {
 		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
@@ -181,7 +200,11 @@ func (s *Server) handleMessagesStream(
 		return
 	}
 
-	events, apiErr, status := s.StreamMessage(r.Context(), req)
+	events, apiErr, status := s.streamMessage(
+		r.Context(),
+		req.MessageRequest,
+		req.StreamOptions,
+	)
 	if apiErr != nil {
 		s.writeError(w, *apiErr, status)
 		return
@@ -198,6 +221,11 @@ func (s *Server) handleMessagesStream(
 			return
 		}
 	}
+}
+
+type streamMessageRequest struct {
+	gwproto.MessageRequest
+	StreamOptions *gwproto.MessageStreamOptions `json:"stream_options,omitempty"`
 }
 
 func writeSSEEvent(
@@ -307,20 +335,19 @@ func (s *Server) streamLocked(
 			continue
 		}
 
-		if !sentText {
-			if update, ok := progressUpdateFromRunnerEvent(evt); ok {
-				if !sendProgressUpdate(
-					ctx,
-					out,
-					run,
-					&progress,
-					update.stage,
-					update.summary,
-				) {
-					return streamOutcome{
-						status: traceStatusError,
-						errMsg: contextErrMessage(ctx),
-					}
+		if update, ok := progressUpdateFromRunnerEvent(evt); ok &&
+			shouldSendProgressForEvent(run.streamOptions, sentText) {
+			if !sendProgressUpdate(
+				ctx,
+				out,
+				run,
+				&progress,
+				update.stage,
+				update.summary,
+			) {
+				return streamOutcome{
+					status: traceStatusError,
+					errMsg: contextErrMessage(ctx),
 				}
 			}
 		}
@@ -529,6 +556,16 @@ func (s *Server) streamLocked(
 		}
 	}
 	return streamOutcome{status: traceStatusOK}
+}
+
+func shouldSendProgressForEvent(
+	opts *gwproto.MessageStreamOptions,
+	sentText bool,
+) bool {
+	if !sentText {
+		return true
+	}
+	return opts != nil && opts.ProgressAfterTextDelta
 }
 
 func sendStreamEvent(

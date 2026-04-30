@@ -39,6 +39,13 @@ type MessageRequest struct {
 	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
+// MessageStreamOptions controls optional streaming behaviors.
+type MessageStreamOptions struct {
+	// ProgressAfterTextDelta lets opt-in clients receive run.progress
+	// events after the first message.delta event has started.
+	ProgressAfterTextDelta bool `json:"progress_after_text_delta,omitempty"`
+}
+
 // APIError matches gateway error payloads.
 type APIError struct {
 	Type    string `json:"type"`
