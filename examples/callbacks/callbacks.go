@@ -11,9 +11,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -40,8 +40,8 @@ var (
 	_ = tool.NewCallbacks().
 		RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
 			fmt.Printf("🌐 Global BeforeTool: executing %s\n", args.ToolName)
-			// Note: args.Arguments is a slice, so modifications will be visible to the caller.
-			// This allows callbacks to modify tool arguments before execution.
+			// Return BeforeToolResult.ModifiedArguments when a callback needs
+			// the actual tool execution to use updated arguments.
 			return nil, nil
 		}).
 		RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
@@ -143,13 +143,24 @@ func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolC
 		}
 
 		// Demonstrate argument modification capability.
-		// Since args.Arguments is a slice, we can modify the arguments that will be passed to the tool.
+		// Assigning args.Arguments makes the updated value visible to later
+		// callback logic. Returning ModifiedArguments makes the tool execute
+		// with the updated arguments.
+		var modifiedArgs []byte
 		if args.Arguments != nil && args.ToolName == "calculator" {
-			// Example: Add a timestamp to the arguments for logging purposes.
-			originalArgs := string(args.Arguments)
-			modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-			args.Arguments = []byte(modifiedArgs)
-			fmt.Printf("🟠 BeforeToolCallback: Modified args for calculator: %s\n", modifiedArgs)
+			// Example: normalize the operation while preserving the calculator schema.
+			var calcArgs calculatorArgs
+			if err := json.Unmarshal(args.Arguments, &calcArgs); err != nil {
+				return nil, err
+			}
+			calcArgs.Operation = strings.ToLower(calcArgs.Operation)
+			modifiedArgsJSON, err := json.Marshal(calcArgs)
+			if err != nil {
+				return nil, err
+			}
+			modifiedArgs = modifiedArgsJSON
+			args.Arguments = modifiedArgs
+			fmt.Printf("🟠 BeforeToolCallback: Modified args for calculator: %s\n", string(modifiedArgsJSON))
 		}
 
 		if args.Arguments != nil && c.shouldReturnCustomToolResult(args.ToolName, args.Arguments) {
@@ -157,6 +168,9 @@ func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolC
 			return &tool.BeforeToolResult{
 				CustomResult: c.createCustomCalculatorResult(),
 			}, nil
+		}
+		if modifiedArgs != nil {
+			return &tool.BeforeToolResult{ModifiedArguments: modifiedArgs}, nil
 		}
 		return nil, nil
 	}
