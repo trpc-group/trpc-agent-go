@@ -684,7 +684,7 @@ func (t *searchTool) StateDeltaForInvocation(
 	inv *agent.Invocation,
 	_ string,
 	_ []byte,
-	_ []byte,
+	result []byte,
 ) map[string][]byte {
 	if t == nil || t.parent == nil || inv == nil ||
 		t.parent.stateScope != StateScopeSession {
@@ -697,8 +697,11 @@ func (t *searchTool) StateDeltaForInvocation(
 	key := t.parent.sessionStateKey()
 	state, ok := agent.GetStateValue[loadedState](carrier, t.parent.invocationStateKey())
 	if !ok || len(state.LoadedTools) == 0 {
-		return map[string][]byte{
-			key: nil,
+		state = loadedStateFromSearchOutput(result)
+		if len(state.LoadedTools) == 0 {
+			return map[string][]byte{
+				key: nil,
+			}
 		}
 	}
 	b, err := json.Marshal(state)
@@ -707,5 +710,18 @@ func (t *searchTool) StateDeltaForInvocation(
 	}
 	return map[string][]byte{
 		key: b,
+	}
+}
+
+func loadedStateFromSearchOutput(result []byte) loadedState {
+	if len(result) == 0 {
+		return loadedState{}
+	}
+	var output searchOutput
+	if err := json.Unmarshal(result, &output); err != nil {
+		return loadedState{}
+	}
+	return loadedState{
+		LoadedTools: append([]string(nil), output.LoadedTools...),
 	}
 }

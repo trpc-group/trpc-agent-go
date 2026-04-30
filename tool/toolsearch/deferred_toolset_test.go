@@ -367,6 +367,30 @@ func TestDeferredToolSet_InvocationScopeDoesNotPersistToSession(t *testing.T) {
 	)
 }
 
+func TestSearchTool_StateDeltaFallsBackToSearchOutput(t *testing.T) {
+	weather := newWeatherTool("weather_lookup", "Look up the weather for one city.")
+	set, err := NewDeferredToolSet(
+		WithTools(weather),
+		WithPersistLoadedTools(true),
+		WithMaxResults(1),
+	)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "session-1"}),
+	)
+	resultBytes := mustJSON(t, searchOutput{
+		LoadedTools: []string{"weather_lookup"},
+	})
+
+	delta := set.searchTool.StateDeltaForInvocation(inv, "call-1", nil, resultBytes)
+	require.Contains(t, delta, set.sessionStateKey())
+
+	var state loadedState
+	require.NoError(t, json.Unmarshal(delta[set.sessionStateKey()], &state))
+	require.Equal(t, []string{"weather_lookup"}, state.LoadedTools)
+}
+
 func TestDeferredToolSet_CatalogSnapshot_TTLZeroDisablesCaching(t *testing.T) {
 	source := &changingCatalogToolSet{name: "changing"}
 	set, err := NewDeferredToolSet(

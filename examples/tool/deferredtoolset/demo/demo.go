@@ -79,6 +79,15 @@ const (
 		"data. If the visible tools are still weakly related, call the search tool " +
 		"again with a more specific weather or precipitation query. Once a live " +
 		"weather tool is visible, call it once, then answer briefly and stop."
+
+	SessionPersistenceFirstPrompt = "First turn: call tool_search exactly once " +
+		"to find the weather tool for Shenzhen. Then call weather_lookup exactly " +
+		"once for Shenzhen. Then answer in one short sentence and stop."
+
+	SessionPersistenceSecondPrompt = "Second turn: weather_lookup should already " +
+		"be visible from session state. Do not call tool_search. Call " +
+		"weather_lookup exactly once for Guangzhou, then answer in one short " +
+		"sentence and stop."
 )
 
 // RunConfig controls one example or smoke-test execution.
@@ -99,10 +108,14 @@ type RequestSummary struct {
 
 // RunResult captures the most important outputs from one example execution.
 type RunResult struct {
-	FinalText         string
-	Requests          []RequestSummary
-	MCPListToolsCount int
-	MCPCallCount      int
+	FinalText          string
+	Requests           []RequestSummary
+	FirstTurnRequests  []RequestSummary
+	SecondTurnRequests []RequestSummary
+	TurnFinalTexts     []string
+	TurnToolCalls      [][]string
+	MCPListToolsCount  int
+	MCPCallCount       int
 }
 
 type loggingModel struct {
@@ -140,6 +153,7 @@ func RunBasic(ctx context.Context, cfg RunConfig) (RunResult, error) {
 	deferred, err := runtimetoolsearch.NewDeferredToolSet(
 		runtimetoolsearch.WithName("demo_basic"),
 		runtimetoolsearch.WithStateNamespace("examples/basic"),
+		runtimetoolsearch.WithStateScope(runtimetoolsearch.StateScopeInvocation),
 		runtimetoolsearch.WithTools(
 			newWeatherTool("weather_lookup", "Look up the current weather for one city."),
 			newStockTool("stock_quote", "Look up one stock quote."),
@@ -159,6 +173,7 @@ func RunMixed(ctx context.Context, cfg RunConfig) (RunResult, error) {
 	deferred, err := runtimetoolsearch.NewDeferredToolSet(
 		runtimetoolsearch.WithName("demo_mixed"),
 		runtimetoolsearch.WithStateNamespace("examples/mixed"),
+		runtimetoolsearch.WithStateScope(runtimetoolsearch.StateScopeInvocation),
 		runtimetoolsearch.WithTools(
 			newWeatherTool("weather_lookup", "Look up the current weather for one city."),
 			newStockTool("stock_quote", "Look up one stock quote."),
@@ -198,6 +213,7 @@ func RunMCP(ctx context.Context, cfg RunConfig) (RunResult, error) {
 	deferred, err := runtimetoolsearch.NewDeferredToolSet(
 		runtimetoolsearch.WithName("demo_mcp"),
 		runtimetoolsearch.WithStateNamespace("examples/mcp"),
+		runtimetoolsearch.WithStateScope(runtimetoolsearch.StateScopeInvocation),
 		runtimetoolsearch.WithToolSets(mcpToolSet),
 		runtimetoolsearch.WithCatalogRefreshPolicy(
 			runtimetoolsearch.CatalogRefreshPolicy{TTL: 30 * time.Second},
@@ -228,6 +244,7 @@ func RunGraph(ctx context.Context, cfg RunConfig) (RunResult, error) {
 	deferred, err := runtimetoolsearch.NewDeferredToolSet(
 		runtimetoolsearch.WithName("demo_graph"),
 		runtimetoolsearch.WithStateNamespace("examples/graph"),
+		runtimetoolsearch.WithStateScope(runtimetoolsearch.StateScopeInvocation),
 		runtimetoolsearch.WithTools(
 			newWeatherTool("weather_lookup", "Look up the current weather for one city."),
 			newStockTool("stock_quote", "Look up one stock quote."),
@@ -293,6 +310,7 @@ func RunLowRelevance(ctx context.Context, cfg RunConfig) (RunResult, error) {
 	deferred, err := runtimetoolsearch.NewDeferredToolSet(
 		runtimetoolsearch.WithName("demo_lowrelevance"),
 		runtimetoolsearch.WithStateNamespace("examples/lowrelevance"),
+		runtimetoolsearch.WithStateScope(runtimetoolsearch.StateScopeInvocation),
 		runtimetoolsearch.WithTools(
 			newCitySignalTool(
 				"umbrella_etiquette",
@@ -336,6 +354,81 @@ func RunLowRelevance(ctx context.Context, cfg RunConfig) (RunResult, error) {
 		nil,
 		[]tool.ToolSet{deferred},
 	)
+}
+
+// RunSessionPersistence demonstrates StateScopeSession across two user turns in
+// one runner session. The first turn loads weather_lookup; the second turn must
+// start with weather_lookup already visible without another tool_search call.
+func RunSessionPersistence(ctx context.Context, cfg RunConfig) (RunResult, error) {
+	cfg = normalizeRunConfig(cfg)
+	deferred, err := runtimetoolsearch.NewDeferredToolSet(
+		runtimetoolsearch.WithStateNamespace("examples/session-persistence"),
+		runtimetoolsearch.WithStateScope(runtimetoolsearch.StateScopeSession),
+		runtimetoolsearch.WithTools(
+			newWeatherTool("weather_lookup", "Look up the current weather for one city."),
+			newStockTool("stock_quote", "Look up one stock quote."),
+		),
+		runtimetoolsearch.WithMaxResults(1),
+	)
+	if err != nil {
+		return RunResult{}, err
+	}
+
+	modelWrapper := newLoggingModel(openai.New(cfg.ModelName), cfg.Output, []*runtimetoolsearch.DeferredToolSet{deferred})
+	llm := llmagent.New(
+		"deferred-session-persistence",
+		llmagent.WithModel(modelWrapper),
+		llmagent.WithInstruction(RuntimeSearchInstruction),
+		llmagent.WithGenerationConfig(defaultGenerationConfig()),
+		llmagent.WithMaxToolIterations(6),
+		llmagent.WithToolSets([]tool.ToolSet{deferred}),
+	)
+
+	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+	defer cancel()
+
+	rr := runner.NewRunner("examples-deferredtoolset-session-persistence", llm)
+	defer rr.Close()
+
+	fmt.Fprintln(cfg.Output, "[turn 1] load weather_lookup into session state")
+	firstFinal, firstToolCalls, err := runAgentTurn(
+		runCtx,
+		cfg.Output,
+		rr,
+		"session-persistence-demo",
+		SessionPersistenceFirstPrompt,
+	)
+	if err != nil {
+		return RunResult{}, err
+	}
+	firstRequests := modelWrapper.Summaries()
+
+	fmt.Fprintln(cfg.Output, "[turn 2] reuse the same session without tool_search")
+	secondFinal, secondToolCalls, err := runAgentTurn(
+		runCtx,
+		cfg.Output,
+		rr,
+		"session-persistence-demo",
+		SessionPersistenceSecondPrompt,
+	)
+	if err != nil {
+		return RunResult{}, err
+	}
+	allRequests := modelWrapper.Summaries()
+	secondRequests := append([]RequestSummary(nil), allRequests[len(firstRequests):]...)
+
+	result := RunResult{
+		FinalText:          secondFinal,
+		Requests:           allRequests,
+		FirstTurnRequests:  firstRequests,
+		SecondTurnRequests: secondRequests,
+		TurnFinalTexts:     []string{firstFinal, secondFinal},
+		TurnToolCalls:      [][]string{firstToolCalls, secondToolCalls},
+	}
+	if err := validateSessionPersistenceResult(result); err != nil {
+		return result, fmt.Errorf("session persistence smoke check failed: %w", err)
+	}
+	return result, nil
 }
 
 func runLLMAgent(
@@ -411,6 +504,25 @@ func runAgent(
 		return "", err
 	}
 	return consumeEvents(events, cfg.Output)
+}
+
+func runAgentTurn(
+	ctx context.Context,
+	output io.Writer,
+	rr runner.Runner,
+	sessionID string,
+	prompt string,
+) (string, []string, error) {
+	events, err := rr.Run(
+		ctx,
+		"demo-user",
+		sessionID,
+		model.NewUserMessage(prompt),
+	)
+	if err != nil {
+		return "", nil, err
+	}
+	return consumeEventsWithTrace(events, output)
 }
 
 func defaultGenerationConfig() model.GenerationConfig {
@@ -575,13 +687,22 @@ func (h *recordingMCPHTTPHandler) Handle(
 }
 
 func consumeEvents(events <-chan *event.Event, output io.Writer) (string, error) {
+	finalText, _, err := consumeEventsWithTrace(events, output)
+	return finalText, err
+}
+
+func consumeEventsWithTrace(
+	events <-chan *event.Event,
+	output io.Writer,
+) (string, []string, error) {
 	var finalText string
+	var toolCallNames []string
 	for ev := range events {
 		if ev == nil {
 			continue
 		}
 		if ev.Error != nil {
-			return finalText, fmt.Errorf("%s: %s", ev.Error.Type, ev.Error.Message)
+			return finalText, toolCallNames, fmt.Errorf("%s: %s", ev.Error.Type, ev.Error.Message)
 		}
 		if ev.Response == nil || len(ev.Response.Choices) == 0 {
 			continue
@@ -595,6 +716,7 @@ func consumeEvents(events <-chan *event.Event, output io.Writer) (string, error)
 					names = append(names, toolCall.Function.Name)
 				}
 				sort.Strings(names)
+				toolCallNames = append(toolCallNames, names...)
 				fmt.Fprintf(output, "[assistant tool_calls] %v\n", names)
 			case msg.Role == model.RoleTool && msg.ToolName != "":
 				fmt.Fprintf(
@@ -609,9 +731,9 @@ func consumeEvents(events <-chan *event.Event, output io.Writer) (string, error)
 		}
 	}
 	if finalText == "" {
-		return "", fmt.Errorf("run completed without a final assistant message")
+		return "", toolCallNames, fmt.Errorf("run completed without a final assistant message")
 	}
-	return finalText, nil
+	return finalText, toolCallNames, nil
 }
 
 func collectDeferredToolSets(
@@ -673,6 +795,51 @@ func messageRoles(req *model.Request) []string {
 		roles = append(roles, string(msg.Role))
 	}
 	return roles
+}
+
+func validateSessionPersistenceResult(result RunResult) error {
+	if len(result.FirstTurnRequests) == 0 {
+		return fmt.Errorf("first turn produced no model requests")
+	}
+	if len(result.SecondTurnRequests) == 0 {
+		return fmt.Errorf("second turn produced no model requests")
+	}
+	if len(result.TurnToolCalls) < 2 {
+		return fmt.Errorf("missing tool-call trace")
+	}
+	if !containsName(result.TurnToolCalls[0], "tool_search") {
+		return fmt.Errorf("first turn did not call tool_search")
+	}
+	if !containsName(result.TurnToolCalls[0], "weather_lookup") {
+		return fmt.Errorf("first turn did not call weather_lookup")
+	}
+	if !containsName(result.FirstTurnRequests[len(result.FirstTurnRequests)-1].LoadedTools, "weather_lookup") {
+		return fmt.Errorf("first turn did not load weather_lookup")
+	}
+
+	secondInitial := result.SecondTurnRequests[0]
+	if !containsName(secondInitial.LoadedTools, "weather_lookup") {
+		return fmt.Errorf("second turn did not rehydrate weather_lookup from session state")
+	}
+	if !containsName(secondInitial.ToolNames, "weather_lookup") {
+		return fmt.Errorf("second turn did not expose weather_lookup before tool_search")
+	}
+	if containsName(result.TurnToolCalls[1], "tool_search") {
+		return fmt.Errorf("second turn called tool_search despite session persistence")
+	}
+	if !containsName(result.TurnToolCalls[1], "weather_lookup") {
+		return fmt.Errorf("second turn did not call weather_lookup")
+	}
+	return nil
+}
+
+func containsName(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func compactOneLine(text string) string {
