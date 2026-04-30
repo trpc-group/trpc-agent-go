@@ -605,6 +605,100 @@ The main `tool/claudecode` options focus on working directory, read-only mode, a
 
 `WithBaseDir` defines the working scope for `Read`, `Write`, `Edit`, `Glob`, and `Grep`, and also determines the default working directory for `Bash`. When read-only mode is enabled, the toolset keeps only read, search, command, and web capabilities. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`.
 
+### Todo Tool
+
+The Todo tool gives an Agent a structured, persistent checklist for multi-step work. The model calls `todo_write` to publish or update its current plan; the list is persisted on the session, surfaced to the frontend in the tool result, and (by default) followed by a short nudge that reminds the model to keep marking items as it goes.
+
+Reach for it when:
+
+- the task spans several non-trivial steps and the model tends to drop one;
+- the user (or a downstream UI) needs visible progress while the agent works;
+- the same conversation may pause for input and later pick the plan back up.
+
+#### Basic Usage
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/todo"
+)
+
+todoTool := todo.New()
+
+agent := llmagent.New("todo-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction(todo.DefaultToolPrompt),
+    llmagent.WithTools([]tool.Tool{todoTool}),
+)
+```
+
+`todo.DefaultToolPrompt` is a ready-made system-instruction snippet that teaches the model when to call `todo_write` and how to phrase items. You can replace it with your own copy; the runtime checks below stay the same.
+
+#### Tool Result
+
+`todo_write` returns a structured result instead of free-form text, so any caller — terminal, AG-UI, a custom HTTP frontend — can render the same data without parsing prose:
+
+```go
+type Output struct {
+    Message  string `json:"message"`             // default nudge + hook output
+    Todos    []Item `json:"todos"`               // current list after this write
+    OldTodos []Item `json:"oldTodos,omitempty"`  // list before this write
+}
+```
+
+`Todos` and `OldTodos` ride directly on the tool-result event, so an AG-UI client (or any frontend that consumes `tool_call_result`) can decode them and render both the new state and the diff without going back to the session store. The terminal demo in `examples/todo/` inlines a small ASCII formatter; rich frontends are free to render the same structured data in whatever style fits.
+
+#### Cross-turn Persistence and Branch Isolation
+
+Each write is published as a session state delta, so the list survives across `Runner.Run` calls and across processes when the session service is durable.
+
+The list is keyed by `Invocation.Branch`, which defaults to the agent's name when no explicit branch has been set (so a sub-agent or agent-tool reads and writes its own list and never overwrites the parent's plan). For the basic wiring above (`llmagent.New("todo-assistant", ...)`) the canonical read is therefore:
+
+```go
+items, err := todo.GetTodos(sess, "todo-assistant") // the agent name
+// items == nil + err == nil → no list yet
+// len(items) == 0           → list explicitly cleared
+```
+
+If you have configured a custom branch (for example via `WithInvocationBranch`, or by running this Agent as a sub-agent of a parent), pass that branch value instead. An empty `branch` only reads the top-level slot when `Invocation.Branch` was explicitly set to `""`.
+
+#### Input Validation
+
+Every call is validated against the rules below; if any rule fails the call is rejected and the session state is not modified:
+
+- The `todos` field is **required** and must be an array. A missing field or a literal `null` is rejected — it is _not_ silently treated as "clear all". To clear the list, send `{"todos": []}`.
+- Every item must carry a non-empty `content`, a non-empty `activeForm`, and a valid `status` (`pending` / `in_progress` / `completed`).
+- **At most one** item may be `in_progress` at a time.
+- `content` strings must be unique across the list (exact match — no trim / case-fold / unicode normalisation).
+
+Stylistic guidance — for example "keep exactly one item `in_progress` while actively working", item phrasing, or when `todo_write` is worth a call — lives in `todo.DefaultToolPrompt` rather than in these checks, so you can adjust the prompt for your domain or model family without changing the tool.
+
+#### Customization
+
+```go
+todoTool := todo.New(
+    // Persist the list under a different state-key namespace. The
+    // default already isolates by branch, so most users do not need
+    // this.
+    todo.WithStateKeyPrefix("temp:plan"),
+    // By default the list is cleared once every item is completed,
+    // so the next planning cycle starts from scratch. Set false to
+    // keep the completed items visible.
+    todo.WithClearOnAllDone(false),
+    // Replace the default "after each write" nudge string.
+    todo.WithNudgeMessage("Keep going; mark items as you finish them."),
+    // Append extra guidance derived from the diff between the
+    // previous list and the one just submitted (custom prompts,
+    // telemetry, metrics, ...). Hooks are expected to be read-only.
+    todo.WithNudgeHook(func(ctx context.Context, oldTodos, submitted []todo.Item) string {
+        return ""
+    }),
+)
+```
+
+A complete runnable demo, including the multi-turn pause/resume scenario and an ASCII renderer, lives in [`examples/todo/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todo).
+
 ## MCP Tools
 
 MCP (Model Context Protocol) is an open protocol that standardizes how applications provide context to LLMs. MCP tools are based on JSON-RPC 2.0 and provide standardized integration with external services for Agents.
