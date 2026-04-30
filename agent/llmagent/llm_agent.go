@@ -1199,7 +1199,7 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 		}
 		// Use the context from result if provided.
 		if result != nil && result.Context != nil {
-			ctx = result.Context
+			ctx = agent.NewInvocationContext(result.Context, invocation)
 		}
 		if result != nil && result.CustomResponse != nil {
 			// Create a channel that returns the custom response and then closes.

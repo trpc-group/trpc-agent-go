@@ -292,7 +292,8 @@ func (d *DeferredToolSet) catalogSnapshot(ctx context.Context) *catalogSnapshot 
 	now := time.Now()
 	d.mu.RLock()
 	if d.snapshot != nil &&
-		(d.refreshPolicy.TTL <= 0 || now.Before(d.expires)) {
+		d.refreshPolicy.TTL > 0 &&
+		now.Before(d.expires) {
 		snapshot := d.snapshot
 		d.mu.RUnlock()
 		return snapshot

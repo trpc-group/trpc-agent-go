@@ -355,6 +355,9 @@ func (n *Node) Tools(ctx context.Context) []tool.Tool {
 		n.refreshToolSetsOnRun,
 		n.toolSets,
 	) {
+		if toolSet == nil {
+			continue
+		}
 		namedToolSet := itool.NewNamedToolSet(toolSet)
 		for _, currentTool := range namedToolSet.Tools(ctx) {
 			if currentTool == nil || currentTool.Declaration() == nil {

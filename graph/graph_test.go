@@ -203,7 +203,25 @@ func TestNode_Tools_RefreshesToolSetsWhenEnabled(t *testing.T) {
 		toolSets:             []tool.ToolSet{&simpleToolSet{name: "simple"}},
 		refreshToolSetsOnRun: true,
 	}
-	tools := node.Tools(nil)
+	tools := node.Tools(context.TODO())
+	require.Len(t, tools, 2)
+	assert.Equal(t, "base", tools[0].Declaration().Name)
+	assert.Equal(t, "simple_echo", tools[1].Declaration().Name)
+}
+
+func TestNode_Tools_SkipsNilToolSets(t *testing.T) {
+	node := &Node{
+		baseTools: map[string]tool.Tool{
+			"base": &graphTestTool{name: "base"},
+		},
+		toolSets: []tool.ToolSet{
+			nil,
+			&simpleToolSet{name: "simple"},
+		},
+		refreshToolSetsOnRun: true,
+	}
+
+	tools := node.Tools(context.TODO())
 	require.Len(t, tools, 2)
 	assert.Equal(t, "base", tools[0].Declaration().Name)
 	assert.Equal(t, "simple_echo", tools[1].Declaration().Name)

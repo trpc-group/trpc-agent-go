@@ -913,6 +913,41 @@ skills:
 	require.Equal(t, "b,c", opts.SkillsAllowBundled)
 }
 
+func TestParseRunOptions_ToolSearchRejectsNonPositiveMaxResults(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  tool_search:
+    max_results: 0
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tools.tool_search.max_results must be > 0")
+}
+
+func TestParseRunOptions_ToolSearchNormalizesAlwaysInclude(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  tool_search:
+    always_include:
+      - " weather_lookup "
+      - ""
+      - "  stock_quote"
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		[]string{"weather_lookup", "stock_quote"},
+		opts.ToolSearch.AlwaysInclude,
+	)
+}
+
 func TestParseRunOptions_KnowledgesEntriesConfig(t *testing.T) {
 	t.Parallel()
 

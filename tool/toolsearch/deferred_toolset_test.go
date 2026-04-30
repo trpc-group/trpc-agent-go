@@ -113,6 +113,24 @@ func (s *staticToolSet) Tools(context.Context) []tool.Tool {
 func (s *staticToolSet) Close() error { return nil }
 func (s *staticToolSet) Name() string { return s.name }
 
+type changingCatalogToolSet struct {
+	name  string
+	calls int
+}
+
+func (s *changingCatalogToolSet) Tools(context.Context) []tool.Tool {
+	s.calls++
+	return []tool.Tool{
+		newStaticStringTool(
+			fmt.Sprintf("%s_tool_%d", s.name, s.calls),
+			"Change on every catalog rebuild.",
+		),
+	}
+}
+
+func (s *changingCatalogToolSet) Close() error { return nil }
+func (s *changingCatalogToolSet) Name() string { return s.name }
+
 type recordingMCPHTTPHandler struct {
 	mu             sync.Mutex
 	listToolsCount int
@@ -291,6 +309,21 @@ func TestDeferredToolSet_SearchLoadFlowAndSessionPersistence(t *testing.T) {
 		[]string{"current_time", "tool_search", "weather_lookup"},
 		toolNames(set.Tools(cleanCtx)),
 	)
+}
+
+func TestDeferredToolSet_CatalogSnapshot_TTLZeroDisablesCaching(t *testing.T) {
+	source := &changingCatalogToolSet{name: "changing"}
+	set, err := NewDeferredToolSet(
+		WithToolSets(source),
+		WithCatalogRefreshPolicy(CatalogRefreshPolicy{TTL: 0}),
+	)
+	require.NoError(t, err)
+
+	snap1 := set.catalogSnapshot(context.Background())
+	snap2 := set.catalogSnapshot(context.Background())
+
+	require.Equal(t, 2, source.calls)
+	require.NotEqual(t, snap1.Fingerprint, snap2.Fingerprint)
 }
 
 func TestDeferredToolSet_LLMAgentScenarios(t *testing.T) {

@@ -2517,6 +2517,16 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:      "tools.tool_search",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				ToolSearch: toolSearchRuntimeOptions{
+					Enabled: true,
+				},
+			},
+			wantErr: true,
+		},
+		{
 			name:      "knowledges",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{

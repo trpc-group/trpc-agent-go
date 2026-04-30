@@ -4232,11 +4232,11 @@ func TestExecutor_taskInvocationContext_CoversBranches(t *testing.T) {
 	type ctxKey string
 
 	const (
-		testKey       = ctxKey("k")
-		testValue     = "v"
-		invocationID  = "inv"
-		parentBranch  = "parent"
-		nodeID        = "child"
+		testKey      = ctxKey("k")
+		testValue    = "v"
+		invocationID = "inv"
+		parentBranch = "parent"
+		nodeID       = "child"
 	)
 
 	ctx := context.WithValue(context.Background(), testKey, testValue)
@@ -4281,6 +4281,31 @@ func TestExecutor_taskInvocationContext_CoversBranches(t *testing.T) {
 	require.Equal(t, "graph", agent.InvocationTraceNodeID(gotInv))
 	require.NotEqual(t, invocationID, gotInv.InvocationID)
 	require.Equal(t, invocationID, gotInv.GetParentInvocation().InvocationID)
+}
+
+func TestExecutor_Execute_NilContextUsesBackground(t *testing.T) {
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddNode("done", func(ctx context.Context, s State) (any, error) {
+		return State{"ok": true}, nil
+	})
+	sg.SetEntryPoint("done")
+	sg.SetFinishPoint("done")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	var nilCtx context.Context
+	require.NotPanics(t, func() {
+		ch, err := exec.Execute(nilCtx, State{}, &agent.Invocation{
+			InvocationID: "nil-ctx",
+		})
+		require.NoError(t, err)
+		for range ch {
+		}
+	})
 }
 
 func TestExecutor_executeStepTask_RecoversFromPanic(t *testing.T) {

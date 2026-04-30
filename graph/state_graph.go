@@ -2332,11 +2332,18 @@ func resolveToolsNodeRuntimeTools(
 		node.refreshToolSetsOnRun,
 		node.toolSets,
 	); len(stepToolSets) > 0 {
-		effectiveTools = mergeToolsWithToolSets(
+		stepMerged := mergeToolsWithToolSets(
 			ctx,
 			baseTools,
 			stepToolSets,
 		)
+		effectiveTools = cloneToolsMap(staticTools)
+		if effectiveTools == nil {
+			effectiveTools = make(map[string]tool.Tool, len(stepMerged))
+		}
+		for name, currentTool := range stepMerged {
+			effectiveTools[name] = currentTool
+		}
 	}
 	invocation, ok := agent.InvocationFromContext(ctx)
 	if !ok {
@@ -5090,6 +5097,7 @@ func processToolCallsWithStateDelta(
 
 	// Aggregate while preserving order.
 	out := make([]model.Message, len(config.ToolCalls))
+	perIndexDeltas := make([]map[string][]byte, len(config.ToolCalls))
 	var mergedStateDelta map[string][]byte
 	var firstErr error
 	received := 0
@@ -5101,10 +5109,7 @@ func processToolCallsWithStateDelta(
 		// Only set when message exists; zero value is fine otherwise.
 		if r.err == nil {
 			out[r.idx] = r.res.Message
-			mergedStateDelta = mergeStateDeltaMaps(
-				mergedStateDelta,
-				r.res.StateDelta,
-			)
+			perIndexDeltas[r.idx] = r.res.StateDelta
 		}
 		if received == len(config.ToolCalls) {
 			break
@@ -5112,6 +5117,12 @@ func processToolCallsWithStateDelta(
 	}
 	if firstErr != nil {
 		return nil, nil, firstErr
+	}
+	for i := range config.ToolCalls {
+		mergedStateDelta = mergeStateDeltaMaps(
+			mergedStateDelta,
+			perIndexDeltas[i],
+		)
 	}
 	return out, mergedStateDelta, nil
 }

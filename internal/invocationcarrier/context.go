@@ -8,6 +8,8 @@
 //
 //
 
+// Package invocationcarrier stores and retrieves the stable invocation used to
+// share invocation-scoped state across cloned execution contexts.
 package invocationcarrier
 
 import (

@@ -40,6 +40,25 @@ func (m *mockFlow) Run(ctx context.Context, inv *agent.Invocation) (<-chan *even
 	return ch, nil
 }
 
+type beforeAgentContextKey struct{}
+
+type checkingFlow struct {
+	sawInvocation bool
+	sawValue      any
+}
+
+func (f *checkingFlow) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	got, ok := agent.InvocationFromContext(ctx)
+	f.sawInvocation = ok && got == inv
+	f.sawValue = ctx.Value(beforeAgentContextKey{})
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
 func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
@@ -196,6 +215,41 @@ func TestLLMAgent_CallbackContextPropagation(t *testing.T) {
 
 	// Verify that the context value was captured in AfterAgent callback.
 	require.Equal(t, testValue, capturedValue, "context value should be propagated from BeforeAgent to AfterAgent")
+}
+
+func TestLLMAgent_Run_BeforeCallbackReplacementKeepsInvocation(t *testing.T) {
+	t.Parallel()
+
+	const testValue = "fresh-root"
+
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return &agent.BeforeAgentResult{
+			Context: context.WithValue(
+				context.Background(),
+				beforeAgentContextKey{},
+				testValue,
+			),
+		}, nil
+	})
+
+	flow := &checkingFlow{}
+	agt := New("test-agent", WithAgentCallbacks(callbacks))
+	agt.flow = flow
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("test"),
+	}
+
+	events, err := agt.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	require.True(t, flow.sawInvocation)
+	require.Equal(t, testValue, flow.sawValue)
 }
 
 func TestLLMAgent_Run_StreamOverride(t *testing.T) {

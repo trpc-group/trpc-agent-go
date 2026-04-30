@@ -2171,6 +2171,17 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support tools.toolsets",
 		)
 	}
+	if opts.ToolSearch.Enabled ||
+		opts.ToolSearch.MaxResults != 0 ||
+		len(opts.ToolSearch.AlwaysInclude) > 0 ||
+		strings.TrimSpace(opts.ToolSearch.SearchToolName) != "" ||
+		opts.ToolSearch.PersistLoadedTools ||
+		opts.ToolSearch.CatalogCacheTTL != 0 ||
+		strings.TrimSpace(opts.ToolSearch.StateNamespace) != "" {
+		return errors.New(
+			"claude-code agent does not support tool_search",
+		)
+	}
 	if len(opts.KnowledgesConfig) > 0 {
 		return errors.New(
 			"claude-code agent does not support knowledges",

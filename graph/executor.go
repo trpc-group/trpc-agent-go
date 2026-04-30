@@ -270,6 +270,9 @@ func (e *Executor) Execute(
 	if invocation == nil {
 		return nil, errors.New("invocation is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ctx = agent.NewInvocationContext(ctx, invocation)
 	agent.GetOrCreateStreamHub(invocation)
 

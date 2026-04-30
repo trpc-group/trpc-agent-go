@@ -1655,15 +1655,26 @@ func (cfg *fileConfig) apply(
 			if cfg.Tools.ToolSearch.Enabled != nil {
 				opts.ToolSearch.Enabled = *cfg.Tools.ToolSearch.Enabled
 			}
-			if cfg.Tools.ToolSearch.MaxResults != nil &&
-				*cfg.Tools.ToolSearch.MaxResults > 0 {
+			if cfg.Tools.ToolSearch.MaxResults != nil {
+				if *cfg.Tools.ToolSearch.MaxResults <= 0 {
+					return fmt.Errorf(
+						"tools.tool_search.max_results must be > 0",
+					)
+				}
 				opts.ToolSearch.MaxResults = *cfg.Tools.ToolSearch.MaxResults
 			}
 			if len(cfg.Tools.ToolSearch.AlwaysInclude) > 0 {
-				opts.ToolSearch.AlwaysInclude = append(
-					[]string(nil),
-					cfg.Tools.ToolSearch.AlwaysInclude...,
+				names := make(
+					[]string,
+					0,
+					len(cfg.Tools.ToolSearch.AlwaysInclude),
 				)
+				for _, raw := range cfg.Tools.ToolSearch.AlwaysInclude {
+					if name := strings.TrimSpace(raw); name != "" {
+						names = append(names, name)
+					}
+				}
+				opts.ToolSearch.AlwaysInclude = names
 			}
 			if cfg.Tools.ToolSearch.SearchToolName != nil {
 				opts.ToolSearch.SearchToolName = strings.TrimSpace(
