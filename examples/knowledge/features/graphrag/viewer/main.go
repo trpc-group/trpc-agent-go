@@ -41,6 +41,8 @@ var (
 	seedLimit = flag.Int("seed-limit", 12, "Search seed node limit")
 )
 
+const ageSessionSQL = `LOAD 'age'; SET search_path = ag_catalog, "$user", public`
+
 type server struct {
 	db        *sql.DB
 	graphName string
@@ -150,11 +152,23 @@ func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if _, err := db.ExecContext(ctx, `LOAD 'age'; SET search_path = ag_catalog, public`); err != nil {
+	if _, err := db.ExecContext(ctx, ageSessionSQL); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return db, nil
+}
+
+func (s *server) ageConn(ctx context.Context) (*sql.Conn, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, ageSessionSQL); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return conn, nil
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +242,12 @@ func (s *server) searchSeeds(ctx context.Context, query string) ([]vertexValue, 
 		needle,
 		*seedLimit,
 	)
-	rows, err := s.db.QueryContext(ctx, s.cypherSQL(cypher, "n agtype"))
+	conn, err := s.ageConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	rows, err := conn.QueryContext(ctx, s.cypherSQL(cypher, "n agtype"))
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +269,12 @@ func (s *server) searchSeeds(ctx context.Context, query string) ([]vertexValue, 
 }
 
 func (s *server) queryTriples(ctx context.Context, cypher string, result *graphResponse, seenNodes map[string]struct{}, seenEdges map[string]struct{}, maxNodes, maxEdges int) error {
-	rows, err := s.db.QueryContext(ctx, s.cypherSQL(cypher, "n agtype, r agtype, m agtype"))
+	conn, err := s.ageConn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	rows, err := conn.QueryContext(ctx, s.cypherSQL(cypher, "n agtype, r agtype, m agtype"))
 	if err != nil {
 		return err
 	}
@@ -288,7 +312,13 @@ func (s *server) queryTriples(ctx context.Context, cypher string, result *graphR
 
 func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	cypher := `MATCH (a)-[r]->(b) RETURN label(a), label(r), label(b), count(r) ORDER BY count(r) DESC`
-	rows, err := s.db.QueryContext(r.Context(), s.cypherSQL(cypher, "from_label agtype, edge_label agtype, to_label agtype, edge_count agtype"))
+	conn, err := s.ageConn(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer conn.Close()
+	rows, err := conn.QueryContext(r.Context(), s.cypherSQL(cypher, "from_label agtype, edge_label agtype, to_label agtype, edge_count agtype"))
 	if err != nil {
 		writeError(w, err)
 		return
