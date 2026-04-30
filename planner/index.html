@@ -2236,7 +2236,7 @@
 </ol>
 <h2 id="enable-and-capture-thinking-without-planner">Enable and Capture Thinking (without Planner)</h2>
 <p>You can enable and read a model's internal reasoning ("thinking") even without using a Planner. 
-Configure GenerationConfig to request thinking, and then capture ReasoningContent from responses.</p>
+Configure <code>GenerationConfig</code> to request reasoning/thinking, and then capture <code>ReasoningContent</code> from responses.</p>
 <h3 id="enable-via-generationconfig">Enable via GenerationConfig</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
@@ -2248,17 +2248,21 @@ Configure GenerationConfig to request thinking, and then capture ReasoningConten
 <span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-1-10">10</a></span>
-<span class="normal"><a href="#__codelineno-1-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nx">genConfig</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-1-11">11</a></span>
+<span class="normal"><a href="#__codelineno-1-12">12</a></span>
+<span class="normal"><a href="#__codelineno-1-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nx">genConfig</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="nx">Stream</span><span class="p">:</span><span class="w">      </span><span class="kc">true</span><span class="p">,</span><span class="w">  </span><span class="c1">// streaming or non-streaming</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">   </span><span class="mi">2000</span><span class="p">,</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="nx">Temperature</span><span class="p">:</span><span class="w"> </span><span class="mf">0.7</span><span class="p">,</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="p">}</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="c1">// Enable thinking (if provider/model supports it).</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="nx">thinkingEnabled</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="nx">thinkingTokens</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">2048</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="nx">genConfig</span><span class="p">.</span><span class="nx">ThinkingEnabled</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">thinkingEnabled</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="nx">genConfig</span><span class="p">.</span><span class="nx">ThinkingTokens</span><span class="w">  </span><span class="p">=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">thinkingTokens</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="c1">// Request reasoning/thinking (if provider/model supports it).</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="nx">reasoningEffort</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;high&quot;</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="nx">thinkingEnabled</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="nx">thinkingTokens</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">2048</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="nx">genConfig</span><span class="p">.</span><span class="nx">ReasoningEffort</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">reasoningEffort</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="nx">genConfig</span><span class="p">.</span><span class="nx">ThinkingEnabled</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">thinkingEnabled</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="nx">genConfig</span><span class="p">.</span><span class="nx">ThinkingTokens</span><span class="w">  </span><span class="p">=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">thinkingTokens</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Attach genConfig to your Agent when constructing it.</p>
 <h3 id="capture-reasoning-from-responses">Capture reasoning from responses</h3>
@@ -2338,6 +2342,8 @@ Configure GenerationConfig to request thinking, and then capture ReasoningConten
 </span></code></pre></div></td></tr></table></div>
 <p>Notes:
 - The visibility of reasoning depends on the model and provider; enabling related parameters expresses intent and does not guarantee it will be returned.
+- <code>ReasoningEffort</code> controls the requested reasoning budget for providers that support <code>reasoning_effort</code>. <code>ThinkingEnabled</code> controls explicit thinking toggles for providers that expose a <code>thinking</code> option.
+- <code>completion_tokens_details.reasoning_tokens</code> is reported in <code>response.Usage.CompletionTokensDetails.ReasoningTokens</code> when the provider returns it. The value may remain <code>0</code> if reasoning is not enabled, not used, or not reported.
 - In streaming mode, you may insert a blank line between reasoning and normal content to improve the reading experience.
 - Session history may aggregate segmented reasoning into the final message to aid later review and traceability.</p>
 <h2 id="builtinplanner">BuiltinPlanner</h2>
@@ -2360,24 +2366,32 @@ Configure GenerationConfig to request thinking, and then capture ReasoningConten
 <span class="normal"><a href="#__codelineno-3-15">15</a></span>
 <span class="normal"><a href="#__codelineno-3-16">16</a></span>
 <span class="normal"><a href="#__codelineno-3-17">17</a></span>
-<span class="normal"><a href="#__codelineno-3-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Options</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-3-18">18</a></span>
+<span class="normal"><a href="#__codelineno-3-19">19</a></span>
+<span class="normal"><a href="#__codelineno-3-20">20</a></span>
+<span class="normal"><a href="#__codelineno-3-21">21</a></span>
+<span class="normal"><a href="#__codelineno-3-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Options</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">    </span><span class="c1">// ReasoningEffort limits the reasoning effort of the reasoning model.</span>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">    </span><span class="c1">// Accepted values depend on the provider:</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="c1">//   - OpenAI o-series: &quot;low&quot;, &quot;medium&quot;, &quot;high&quot;.</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="c1">//   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): &quot;high&quot;, &quot;max&quot;</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="c1">//     (server maps &quot;low&quot;/&quot;medium&quot; -&gt; &quot;high&quot; and &quot;xhigh&quot; -&gt; &quot;max&quot; for</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="c1">//     backward compatibility).</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="w">    </span><span class="nx">ReasoningEffort</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="c1">// ThinkingEnabled enables thinking mode for models that support it.</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="c1">// Effective for DeepSeek v4 models, and for Claude / Gemini models via</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="w">    </span><span class="c1">// the OpenAI API. When left nil, trpc-agent-go does not emit the</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="w">    </span><span class="c1">// &quot;thinking&quot; field at all; the provider then applies its own default</span>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="w">    </span><span class="c1">// (DeepSeek v4&#39;s server-side default is &quot;enabled&quot;).</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="w">    </span><span class="nx">ThinkingEnabled</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="w">    </span><span class="c1">// ThinkingTokens controls the length of thinking.</span>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="w">    </span><span class="c1">// Only effective for Claude and Gemini models via OpenAI API.</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a><span class="w">    </span><span class="nx">ThinkingTokens</span><span class="w"> </span><span class="o">*</span><span class="kt">int</span>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="p">}</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="c1">//   - Anthropic adaptive thinking: &quot;low&quot;, &quot;medium&quot;, &quot;high&quot;, &quot;max&quot;,</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="c1">//     and &quot;xhigh&quot; on models that support it.</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="c1">//   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): &quot;high&quot;, &quot;max&quot;</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="w">    </span><span class="c1">//     (server maps &quot;low&quot;/&quot;medium&quot; -&gt; &quot;high&quot; and &quot;xhigh&quot; -&gt; &quot;max&quot; for</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="c1">//     backward compatibility).</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="c1">// OpenAI-compatible providers forward this field to the selected backend</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="w">    </span><span class="c1">// model; use values supported by that backend.</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="w">    </span><span class="nx">ReasoningEffort</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="w">    </span><span class="c1">// ThinkingEnabled enables thinking mode for models that support it.</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="w">    </span><span class="c1">// Effective for DeepSeek v4 models, and for Claude / Gemini models via</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="w">    </span><span class="c1">// the OpenAI API. When left nil, trpc-agent-go does not emit the</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="w">    </span><span class="c1">// &quot;thinking&quot; field at all; the provider then applies its own default</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a><span class="w">    </span><span class="c1">// (DeepSeek v4&#39;s server-side default is &quot;enabled&quot;).</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="w">    </span><span class="nx">ThinkingEnabled</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="w">    </span><span class="c1">// ThinkingTokens controls the length of thinking.</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a><span class="w">    </span><span class="c1">// Only effective for Claude and Gemini models via OpenAI API.</span>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="w">    </span><span class="nx">ThinkingTokens</span><span class="w"> </span><span class="o">*</span><span class="kt">int</span>
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Implementation details for BuiltinPlanner:</p>
 <ul>
@@ -2592,7 +2606,7 @@ Configure GenerationConfig to request thinking, and then capture ReasoningConten
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 27, 2026 07:48:47 UTC">2026-04-27 07:48:47</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 30, 2026 08:40:00 UTC">2026-04-30 08:40:00</span>
   </span>
 
     

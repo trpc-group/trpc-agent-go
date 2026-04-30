@@ -4337,7 +4337,12 @@
 <span class="normal"><a href="#__codelineno-7-45">45</a></span>
 <span class="normal"><a href="#__codelineno-7-46">46</a></span>
 <span class="normal"><a href="#__codelineno-7-47">47</a></span>
-<span class="normal"><a href="#__codelineno-7-48">48</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="c1">// Request represents the request sent to the model.</span>
+<span class="normal"><a href="#__codelineno-7-48">48</a></span>
+<span class="normal"><a href="#__codelineno-7-49">49</a></span>
+<span class="normal"><a href="#__codelineno-7-50">50</a></span>
+<span class="normal"><a href="#__codelineno-7-51">51</a></span>
+<span class="normal"><a href="#__codelineno-7-52">52</a></span>
+<span class="normal"><a href="#__codelineno-7-53">53</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="c1">// Request represents the request sent to the model.</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Request</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="c1">// Message list, containing system instructions, user input and assistant replies.</span>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="nx">Messages</span><span class="w"> </span><span class="p">[]</span><span class="nx">Message</span><span class="w"> </span><span class="s">`json:&quot;messages&quot;`</span>
@@ -4374,17 +4379,22 @@
 </span><span id="__span-7-35"><a id="__codelineno-7-35" name="__codelineno-7-35"></a>
 </span><span id="__span-7-36"><a id="__codelineno-7-36" name="__codelineno-7-36"></a><span class="w">    </span><span class="c1">// Reasoning effort level. Accepted values depend on the provider:</span>
 </span><span id="__span-7-37"><a id="__codelineno-7-37" name="__codelineno-7-37"></a><span class="w">    </span><span class="c1">//   - OpenAI o-series: &quot;low&quot;, &quot;medium&quot;, &quot;high&quot;.</span>
-</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38"></a><span class="w">    </span><span class="c1">//   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): &quot;high&quot;, &quot;max&quot;</span>
-</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39"></a><span class="w">    </span><span class="c1">//     (server maps &quot;low&quot;/&quot;medium&quot; -&gt; &quot;high&quot; and &quot;xhigh&quot; -&gt; &quot;max&quot; for</span>
-</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40"></a><span class="w">    </span><span class="c1">//     backward compatibility).</span>
-</span><span id="__span-7-41"><a id="__codelineno-7-41" name="__codelineno-7-41"></a><span class="w">    </span><span class="nx">ReasoningEffort</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;reasoning_effort,omitempty&quot;`</span>
-</span><span id="__span-7-42"><a id="__codelineno-7-42" name="__codelineno-7-42"></a>
-</span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="w">    </span><span class="c1">// Whether to enable thinking mode.</span>
-</span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="w">    </span><span class="nx">ThinkingEnabled</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;-&quot;`</span>
-</span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a>
-</span><span id="__span-7-46"><a id="__codelineno-7-46" name="__codelineno-7-46"></a><span class="w">    </span><span class="c1">// Maximum token count for thinking mode.</span>
-</span><span id="__span-7-47"><a id="__codelineno-7-47" name="__codelineno-7-47"></a><span class="w">    </span><span class="nx">ThinkingTokens</span><span class="w"> </span><span class="o">*</span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;-&quot;`</span>
-</span><span id="__span-7-48"><a id="__codelineno-7-48" name="__codelineno-7-48"></a><span class="p">}</span>
+</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38"></a><span class="w">    </span><span class="c1">//   - Anthropic adaptive thinking: &quot;low&quot;, &quot;medium&quot;, &quot;high&quot;, &quot;max&quot;,</span>
+</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39"></a><span class="w">    </span><span class="c1">//     and &quot;xhigh&quot; on models that support it.</span>
+</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40"></a><span class="w">    </span><span class="c1">//   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): &quot;high&quot;, &quot;max&quot;</span>
+</span><span id="__span-7-41"><a id="__codelineno-7-41" name="__codelineno-7-41"></a><span class="w">    </span><span class="c1">//     (server maps &quot;low&quot;/&quot;medium&quot; -&gt; &quot;high&quot; and &quot;xhigh&quot; -&gt; &quot;max&quot; for</span>
+</span><span id="__span-7-42"><a id="__codelineno-7-42" name="__codelineno-7-42"></a><span class="w">    </span><span class="c1">//     backward compatibility).</span>
+</span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="w">    </span><span class="c1">// OpenAI-compatible providers forward this field to the selected backend</span>
+</span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="w">    </span><span class="c1">// model; use values supported by that backend.</span>
+</span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a><span class="w">    </span><span class="nx">ReasoningEffort</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;reasoning_effort,omitempty&quot;`</span>
+</span><span id="__span-7-46"><a id="__codelineno-7-46" name="__codelineno-7-46"></a>
+</span><span id="__span-7-47"><a id="__codelineno-7-47" name="__codelineno-7-47"></a><span class="w">    </span><span class="c1">// Whether to enable thinking mode.</span>
+</span><span id="__span-7-48"><a id="__codelineno-7-48" name="__codelineno-7-48"></a><span class="w">    </span><span class="c1">// nil means no thinking-toggle field is emitted, so the provider default applies.</span>
+</span><span id="__span-7-49"><a id="__codelineno-7-49" name="__codelineno-7-49"></a><span class="w">    </span><span class="nx">ThinkingEnabled</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;thinking_enabled,omitempty&quot;`</span>
+</span><span id="__span-7-50"><a id="__codelineno-7-50" name="__codelineno-7-50"></a>
+</span><span id="__span-7-51"><a id="__codelineno-7-51" name="__codelineno-7-51"></a><span class="w">    </span><span class="c1">// Maximum token count for thinking mode.</span>
+</span><span id="__span-7-52"><a id="__codelineno-7-52" name="__codelineno-7-52"></a><span class="w">    </span><span class="nx">ThinkingTokens</span><span class="w"> </span><span class="o">*</span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;thinking_tokens,omitempty&quot;`</span>
+</span><span id="__span-7-53"><a id="__codelineno-7-53" name="__codelineno-7-53"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>GenerationConfig</code> itself is just a plain struct, and its zero value
 means <code>Stream=false</code>. For <code>LLMAgent</code>, if you omit
@@ -4419,7 +4429,27 @@ explicit defaults.</p>
 <span class="normal"><a href="#__codelineno-8-24">24</a></span>
 <span class="normal"><a href="#__codelineno-8-25">25</a></span>
 <span class="normal"><a href="#__codelineno-8-26">26</a></span>
-<span class="normal"><a href="#__codelineno-8-27">27</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="c1">// Response represents the response returned by the model.</span>
+<span class="normal"><a href="#__codelineno-8-27">27</a></span>
+<span class="normal"><a href="#__codelineno-8-28">28</a></span>
+<span class="normal"><a href="#__codelineno-8-29">29</a></span>
+<span class="normal"><a href="#__codelineno-8-30">30</a></span>
+<span class="normal"><a href="#__codelineno-8-31">31</a></span>
+<span class="normal"><a href="#__codelineno-8-32">32</a></span>
+<span class="normal"><a href="#__codelineno-8-33">33</a></span>
+<span class="normal"><a href="#__codelineno-8-34">34</a></span>
+<span class="normal"><a href="#__codelineno-8-35">35</a></span>
+<span class="normal"><a href="#__codelineno-8-36">36</a></span>
+<span class="normal"><a href="#__codelineno-8-37">37</a></span>
+<span class="normal"><a href="#__codelineno-8-38">38</a></span>
+<span class="normal"><a href="#__codelineno-8-39">39</a></span>
+<span class="normal"><a href="#__codelineno-8-40">40</a></span>
+<span class="normal"><a href="#__codelineno-8-41">41</a></span>
+<span class="normal"><a href="#__codelineno-8-42">42</a></span>
+<span class="normal"><a href="#__codelineno-8-43">43</a></span>
+<span class="normal"><a href="#__codelineno-8-44">44</a></span>
+<span class="normal"><a href="#__codelineno-8-45">45</a></span>
+<span class="normal"><a href="#__codelineno-8-46">46</a></span>
+<span class="normal"><a href="#__codelineno-8-47">47</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="c1">// Response represents the response returned by the model.</span>
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Response</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="c1">// OpenAI compatible fields.</span>
 </span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="nx">ID</span><span class="w">                </span><span class="kt">string</span><span class="w">   </span><span class="s">`json:&quot;id,omitempty&quot;`</span>
@@ -4446,7 +4476,28 @@ explicit defaults.</p>
 </span><span id="__span-8-25"><a id="__codelineno-8-25" name="__codelineno-8-25"></a><span class="w">    </span><span class="nx">Param</span><span class="w">   </span><span class="kt">string</span><span class="w">    </span><span class="s">`json:&quot;param,omitempty&quot;`</span>
 </span><span id="__span-8-26"><a id="__codelineno-8-26" name="__codelineno-8-26"></a><span class="w">    </span><span class="nx">Code</span><span class="w">    </span><span class="kt">string</span><span class="w">    </span><span class="s">`json:&quot;code,omitempty&quot;`</span>
 </span><span id="__span-8-27"><a id="__codelineno-8-27" name="__codelineno-8-27"></a><span class="p">}</span>
+</span><span id="__span-8-28"><a id="__codelineno-8-28" name="__codelineno-8-28"></a>
+</span><span id="__span-8-29"><a id="__codelineno-8-29" name="__codelineno-8-29"></a><span class="c1">// Usage represents token usage information.</span>
+</span><span id="__span-8-30"><a id="__codelineno-8-30" name="__codelineno-8-30"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Usage</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-31"><a id="__codelineno-8-31" name="__codelineno-8-31"></a><span class="w">    </span><span class="nx">PromptTokens</span><span class="w">            </span><span class="kt">int</span><span class="w">                     </span><span class="s">`json:&quot;prompt_tokens&quot;`</span>
+</span><span id="__span-8-32"><a id="__codelineno-8-32" name="__codelineno-8-32"></a><span class="w">    </span><span class="nx">CompletionTokens</span><span class="w">        </span><span class="kt">int</span><span class="w">                     </span><span class="s">`json:&quot;completion_tokens&quot;`</span>
+</span><span id="__span-8-33"><a id="__codelineno-8-33" name="__codelineno-8-33"></a><span class="w">    </span><span class="nx">TotalTokens</span><span class="w">             </span><span class="kt">int</span><span class="w">                     </span><span class="s">`json:&quot;total_tokens&quot;`</span>
+</span><span id="__span-8-34"><a id="__codelineno-8-34" name="__codelineno-8-34"></a><span class="w">    </span><span class="nx">PromptTokensDetails</span><span class="w">     </span><span class="nx">PromptTokensDetails</span><span class="w">     </span><span class="s">`json:&quot;prompt_tokens_details&quot;`</span>
+</span><span id="__span-8-35"><a id="__codelineno-8-35" name="__codelineno-8-35"></a><span class="w">    </span><span class="nx">CompletionTokensDetails</span><span class="w"> </span><span class="nx">CompletionTokensDetails</span><span class="w"> </span><span class="s">`json:&quot;completion_tokens_details&quot;`</span>
+</span><span id="__span-8-36"><a id="__codelineno-8-36" name="__codelineno-8-36"></a><span class="w">    </span><span class="nx">TimingInfo</span><span class="w">              </span><span class="o">*</span><span class="nx">TimingInfo</span><span class="w">             </span><span class="s">`json:&quot;timing_info,omitempty&quot;`</span>
+</span><span id="__span-8-37"><a id="__codelineno-8-37" name="__codelineno-8-37"></a><span class="p">}</span>
+</span><span id="__span-8-38"><a id="__codelineno-8-38" name="__codelineno-8-38"></a>
+</span><span id="__span-8-39"><a id="__codelineno-8-39" name="__codelineno-8-39"></a><span class="kd">type</span><span class="w"> </span><span class="nx">PromptTokensDetails</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-40"><a id="__codelineno-8-40" name="__codelineno-8-40"></a><span class="w">    </span><span class="nx">CachedTokens</span><span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;cached_tokens&quot;`</span>
+</span><span id="__span-8-41"><a id="__codelineno-8-41" name="__codelineno-8-41"></a><span class="w">    </span><span class="nx">CacheCreationTokens</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;cache_creation_tokens,omitempty&quot;`</span>
+</span><span id="__span-8-42"><a id="__codelineno-8-42" name="__codelineno-8-42"></a><span class="w">    </span><span class="nx">CacheReadTokens</span><span class="w">     </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;cache_read_tokens,omitempty&quot;`</span>
+</span><span id="__span-8-43"><a id="__codelineno-8-43" name="__codelineno-8-43"></a><span class="p">}</span>
+</span><span id="__span-8-44"><a id="__codelineno-8-44" name="__codelineno-8-44"></a>
+</span><span id="__span-8-45"><a id="__codelineno-8-45" name="__codelineno-8-45"></a><span class="kd">type</span><span class="w"> </span><span class="nx">CompletionTokensDetails</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-46"><a id="__codelineno-8-46" name="__codelineno-8-46"></a><span class="w">    </span><span class="nx">ReasoningTokens</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;reasoning_tokens,omitempty&quot;`</span>
+</span><span id="__span-8-47"><a id="__codelineno-8-47" name="__codelineno-8-47"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<p>For OpenAI-compatible providers, <code>completion_tokens_details.reasoning_tokens</code> is mapped to <code>Usage.CompletionTokensDetails.ReasoningTokens</code>. The value may be <code>0</code> when the provider does not spend or report reasoning tokens; for reasoning models, set <code>ReasoningEffort</code> and/or <code>ThinkingEnabled</code> when you want to request reasoning behavior.</p>
 <h2 id="openai-model">OpenAI Model</h2>
 <h3 id="model-name-parameter">Model Name Parameter</h3>
 <p>When creating an OpenAI model instance using <code>openai.New(name string, opts ...Option)</code>, the first parameter is the actual model name that gets sent to the OpenAI API, as the <strong>specific model identifier</strong> that tells the API which language model to use.</p>
@@ -7738,7 +7789,7 @@ to preserve the default clean text-streaming behavior.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 29, 2026 05:54:41 UTC">2026-04-29 05:54:41</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 30, 2026 08:40:00 UTC">2026-04-30 08:40:00</span>
   </span>
 
     
