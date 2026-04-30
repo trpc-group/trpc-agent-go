@@ -1119,12 +1119,53 @@ The key design point is:
 - `mcpbroker` does not manage a full OAuth session state machine
 
 When `WithAllowAdHocHTTP(true)` is enabled, URL selectors may come from
-model-visible context. In production, validate `req.IsAdHoc` and `req.BaseURL`
-inside your `HTTPHeaderInjector` before returning sensitive headers.
+model-visible context. Split the responsibilities:
+
+- `HTTPHeaderInjector` only decides **whether and to whom** sensitive headers
+  should be injected. Use `req.IsAdHoc` and `req.BaseURL` to filter at a coarse
+  level (e.g. return `nil` for unknown base URLs so tokens are not leaked to
+  untrusted targets).
+- URL allowlists / domain checks and other **network egress policy** belong in
+  `tmcp.WithHTTPBeforeRequest` returned from `WithClientOptionsProvider`. See
+  the next section.
 
 See:
 
 - `examples/mcpbroker/authhooks`
+
+#### Client options (`WithClientOptionsProvider`)
+
+Beyond header injection and error interception, `WithClientOptionsProvider` runs **after** target resolution and `WithHTTPHeaderInjector`, but **before** the underlying `trpc-mcp-go` client is created. Business code returns `tmcp.ClientOption` / `tmcp.StdioClientOption` values.
+
+- **Order**: default HTTP headers (including injected headers) are applied first; provider HTTP options are appended next, so hooks like `WithHTTPBeforeRequest` can enforce URL policy, audit, or override headers.
+- **`ClientOptionsRequest`**: includes `Selector`, `ServerName`, `Origin` (`mcpbroker.OriginCode` / `mcpbroker.OriginAdhoc`), `TargetType`, `Phase` (e.g. `mcpbroker.PhaseListTools`), `ToolName` (for `mcp_call`), and a defensive copy of `Config` for this call.
+- **Return values**: `(nil, nil)` means “no extra options”; a non-nil `error` aborts before connect (good for URL deny contracts).
+- **stdio**: for named stdio targets, populate `ClientOptions.Stdio` (e.g. `WithStdioCapabilities`).
+
+There is **no built-in** URL blocklist (to avoid accidental breakage); use `tmcp.WithHTTPBeforeRequest` (or similar) inside the provider when you need egress control.
+
+Example (illustrative):
+
+```go
+mcpbroker.New(
+    mcpbroker.WithAllowAdHocHTTP(true),
+    mcpbroker.WithClientOptionsProvider(func(ctx context.Context, req *mcpbroker.ClientOptionsRequest) (*mcpbroker.ClientOptions, error) {
+        if req.Origin == mcpbroker.OriginAdhoc {
+            return &mcpbroker.ClientOptions{
+                HTTP: []tmcp.ClientOption{
+                    tmcp.WithHTTPBeforeRequest(func(ctx context.Context, httpReq *http.Request) error {
+                        if !hostAllowed(httpReq.URL) {
+                            return fmt.Errorf("MCP endpoint not allowed: %s", httpReq.URL.Host)
+                        }
+                        return nil
+                    }),
+                },
+            }, nil
+        }
+        return nil, nil
+    }),
+)
+```
 
 ## Agent Tool (AgentTool)
 

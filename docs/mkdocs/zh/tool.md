@@ -1101,12 +1101,52 @@ broker := mcpbroker.New(
 - `mcpbroker` 本身不管理复杂的 OAuth session 状态机
 
 开启 `WithAllowAdHocHTTP(true)` 后，URL selector 可能来自模型可见上下文。
-生产环境中应在 `HTTPHeaderInjector` 里基于 `req.IsAdHoc` 和 `req.BaseURL`
-做 allowlist / URL 校验，再返回敏感 Header。
+两类职责建议分开处理：
+
+- `HTTPHeaderInjector` 只决定**是否、向谁**注入敏感 Header。可以基于
+  `req.IsAdHoc` 和 `req.BaseURL` 做粗粒度判断，例如对未知 BaseURL 直接返回
+  `nil`，避免向不可信目标泄露 token。
+- 出站 URL allowlist / 域名校验等**网络出站策略**放到
+  `WithClientOptionsProvider` 返回的 `tmcp.WithHTTPBeforeRequest` 里实现，
+  详见下一节。
 
 完整示例可参考：
 
 - `examples/mcpbroker/authhooks`
+
+#### 底层 Client 选项（`WithClientOptionsProvider`）
+
+除 Header 注入与错误拦截外，可用 `WithClientOptionsProvider` 在**解析目标并完成 `WithHTTPHeaderInjector` 之后、创建底层 MCP 客户端之前**，由业务返回 `trpc-mcp-go` 原生的 `tmcp.ClientOption` / `tmcp.StdioClientOption`。
+
+- **顺序**：默认的 HTTP Header（含注入结果）先应用，再追加 provider 返回的 HTTP options，便于在 `WithHTTPBeforeRequest` 等钩子里做 URL 校验、审计或覆盖 Header。
+- **`ClientOptionsRequest`**：携带 `Selector`、`ServerName`、`Origin`（`mcpbroker.OriginCode` / `mcpbroker.OriginAdhoc`）、`TargetType`、`Phase`（如 `mcpbroker.PhaseListTools`）、`ToolName`（调用阶段）、以及本次调用的配置副本 `Config`。
+- **返回值**：`nil, nil` 表示不追加；返回 `error` 会在建连前失败（适合 URL policy 拒绝等契约）。
+- **`stdio`**：命名 stdio 目标时，向 `ClientOptions.Stdio` 传入选项即可（例如 `WithStdioCapabilities`）。
+
+框架**不内置**易误杀的 URL 全局拒绝列表；若需限制 ad-hoc 出站，可在 provider 里结合 `tmcp.WithHTTPBeforeRequest` 自行实现策略。
+
+示例（仅说明形态，按业务调整）：
+
+```go
+mcpbroker.New(
+    mcpbroker.WithAllowAdHocHTTP(true),
+    mcpbroker.WithClientOptionsProvider(func(ctx context.Context, req *mcpbroker.ClientOptionsRequest) (*mcpbroker.ClientOptions, error) {
+        if req.Origin == mcpbroker.OriginAdhoc {
+            return &mcpbroker.ClientOptions{
+                HTTP: []tmcp.ClientOption{
+                    tmcp.WithHTTPBeforeRequest(func(ctx context.Context, httpReq *http.Request) error {
+                        if !hostAllowed(httpReq.URL) {
+                            return fmt.Errorf("MCP endpoint not allowed: %s", httpReq.URL.Host)
+                        }
+                        return nil
+                    }),
+                },
+            }, nil
+        }
+        return nil, nil
+    }),
+)
+```
 
 ## Agent 工具 (AgentTool)
 
