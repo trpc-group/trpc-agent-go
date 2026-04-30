@@ -3524,8 +3524,8 @@
 </tr>
 <tr>
 <td><strong>可用工具</strong></td>
-<td>全部 6 个工具</td>
-<td>默认暴露 <code>memory_search</code>；<code>memory_load</code> 可配置；已启用写工具可显式暴露</td>
+<td>默认暴露 <code>memory_add</code>、<code>memory_update</code>、<code>memory_search</code>、<code>memory_load</code>；delete/clear 可配置</td>
+<td>默认暴露 <code>memory_search</code>；<code>memory_load</code> 启用后暴露；已启用的写操作由提取器使用，但不对 Agent 暴露，除非显式配置</td>
 </tr>
 <tr>
 <td><strong>处理方式</strong></td>
@@ -3756,7 +3756,7 @@
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a>Agent：我已经保存了这些信息。今天有什么可以帮你的？
 </span></code></pre></div></td></tr></table></div>
 <h3 id="auto-mode">自动提取模式配置（Auto Mode，推荐）</h3>
-<p>自动提取模式下，基于 LLM 的提取器分析对话并自动创建记忆。<strong>与工具驱动模式的区别仅在步骤 1：多配置一个 Extractor</strong>。</p>
+<p>自动提取模式下，基于 LLM 的提取器分析对话并自动创建记忆。<strong>关键配置差异在步骤 1：多配置一个 Extractor</strong>。配置 Extractor 后，<code>Tools()</code> 会按 Auto 模式规则暴露工具，Runner 会在响应后触发后台记忆提取。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
@@ -3919,8 +3919,8 @@
 </tr>
 <tr>
 <td><strong>可用工具</strong></td>
-<td>add/update/delete/clear/search/load</td>
-<td>默认 search；load 可配置；已启用写工具可显式暴露</td>
+<td>默认 add/update/search/load；delete/clear 可配置</td>
+<td>默认暴露 search；load 启用后暴露；已启用的写操作由提取器使用，但不对 Agent 暴露，除非显式配置</td>
 </tr>
 <tr>
 <td><strong>记忆创建</strong></td>
@@ -3990,7 +3990,7 @@
 <li>Agent 通过 Memory Tools 与 Memory Service 交互</li>
 <li>Memory Service 管理记忆的生命周期（CRUD 操作）</li>
 <li>记忆以 Entry 形式存储，包含内容、主题、时间戳等</li>
-<li>Memory ID 通过内容 + 主题的 SHA256 哈希生成，确保幂等性</li>
+<li>Memory ID 通过内容、用户维度和规范化事件元数据的 SHA256 哈希生成，确保幂等性</li>
 <li>Storage Backends 提供持久化，支持多种存储选项</li>
 </ol>
 <h3 id="_12">核心组件</h3>
@@ -4021,7 +4021,7 @@
 <tr>
 <td><strong>Memory ID</strong></td>
 <td>记忆的唯一标识符</td>
-<td>基于内容 + 主题的 SHA256 哈希，相同内容产生相同 ID</td>
+<td>基于内容、用户维度和规范化事件元数据的 SHA256 哈希；主题不参与身份</td>
 </tr>
 <tr>
 <td><strong>Topics</strong></td>
@@ -4075,7 +4075,7 @@
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a>       │
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a>       ↓
 </span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a>┌──────────────┐
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a>│ 2. 生成 ID   │  SHA256（内容 + 主题） → 唯一标识符
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a>│ 2. 生成 ID   │  SHA256（内容 + 用户维度 + 事件元数据） → 唯一标识符
 </span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a>└──────┬───────┘
 </span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a>       │
 </span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a>       ↓
@@ -4110,27 +4110,43 @@
 <li>将查询文本分词（支持中英文）</li>
 <li>过滤停用词（a、the、is、of 等）</li>
 <li>对每条记忆的内容和主题进行匹配</li>
-<li>返回所有匹配的记忆，按更新时间排序</li>
+<li>返回匹配的记忆，优先按相关性得分排序，分数相同时再按更新时间排序</li>
 </ol>
 <h4 id="id">记忆 ID 生成策略</h4>
-<p>记忆 ID 基于内容和主题的 SHA256 哈希生成，确保相同内容产生相同 ID：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span>
-<span class="normal"><a href="#__codelineno-7-2">2</a></span>
-<span class="normal"><a href="#__codelineno-7-3">3</a></span>
-<span class="normal"><a href="#__codelineno-7-4">4</a></span>
-<span class="normal"><a href="#__codelineno-7-5">5</a></span>
-<span class="normal"><a href="#__codelineno-7-6">6</a></span>
-<span class="normal"><a href="#__codelineno-7-7">7</a></span>
-<span class="normal"><a href="#__codelineno-7-8">8</a></span>
-<span class="normal"><a href="#__codelineno-7-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="c1">// 生成逻辑（伪代码，省略错误处理）</span>
+<p>记忆 ID 基于内容、appName、userID 和规范化事件元数据的 SHA256 哈希生成；主题不参与 ID，因此调整标签不会生成新记忆：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-7-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-7-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-7-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-7-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-7-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-7-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-7-10">10</a></span>
+<span class="normal"><a href="#__codelineno-7-11">11</a></span>
+<span class="normal"><a href="#__codelineno-7-12">12</a></span>
+<span class="normal"><a href="#__codelineno-7-13">13</a></span>
+<span class="normal"><a href="#__codelineno-7-14">14</a></span>
+<span class="normal"><a href="#__codelineno-7-15">15</a></span>
+<span class="normal"><a href="#__codelineno-7-16">16</a></span>
+<span class="normal"><a href="#__codelineno-7-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="c1">// 生成逻辑（伪代码，省略错误处理）</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="nx">content</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;memory:&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">记忆内容</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="k">if</span><span class="w"> </span><span class="nx">len</span><span class="err">（）</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="nx">topics</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">sort</span><span class="p">(</span><span class="nx">topics</span><span class="p">)</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">    </span><span class="nx">content</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="s">&quot;|topics:&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">join</span><span class="p">(</span><span class="nx">topics</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;,&quot;</span><span class="p">)</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="p">}</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="nx">content</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="s">&quot;|app:&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">appName</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="nx">content</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="s">&quot;|user:&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">userID</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="nx">memoryID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">SHA256</span><span class="p">(</span><span class="nx">content</span><span class="p">)</span><span class="w"> </span><span class="c1">// 64 位十六进制字符串</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="nx">content</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="s">&quot;|app:&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">appName</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="nx">content</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="s">&quot;|user:&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">userID</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="k">if</span><span class="w"> </span><span class="nx">kind</span><span class="w"> </span><span class="nx">需要参与身份</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">    </span><span class="nx">content</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="s">&quot;|kind:&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">kind</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="p">}</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="k">if</span><span class="w"> </span><span class="nx">eventTime</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="nx">content</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="s">&quot;|event_time:&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">eventTime</span><span class="p">.</span><span class="nx">UTC</span><span class="p">().</span><span class="nx">Format</span><span class="p">(</span><span class="nx">time</span><span class="p">.</span><span class="nx">RFC3339</span><span class="p">)</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="p">}</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">participants</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="nx">content</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="s">&quot;|participants:&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">join</span><span class="p">(</span><span class="nx">排序并去重后的</span><span class="w"> </span><span class="nx">participants</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;,&quot;</span><span class="p">)</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="p">}</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="k">if</span><span class="w"> </span><span class="nx">location</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="w">    </span><span class="nx">content</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="s">&quot;|location:&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">TrimSpace</span><span class="p">(</span><span class="nx">location</span><span class="p">)</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="p">}</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="nx">memoryID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">SHA256</span><span class="p">(</span><span class="nx">content</span><span class="p">)</span><span class="w"> </span><span class="c1">// 64 位十六进制字符串</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>特性</strong>：</p>
 <ul>
@@ -4314,7 +4330,7 @@
 </tbody>
 </table>
 <h3 id="_18">记忆工具配置</h3>
-<p>记忆服务提供 6 个工具，默认启用常用工具，危险操作需手动启用。</p>
+<p>记忆服务提供 6 个工具。工具驱动模式下默认启用常用工具，危险操作需手动启用；自动提取模式下，提取器可用的操作和对 Agent 暴露的工具分开控制。</p>
 <h4 id="_19">工具清单</h4>
 <table>
 <thead>
@@ -4331,35 +4347,35 @@
 <td><code>memory_add</code></td>
 <td>添加新记忆</td>
 <td>✅ 默认启用</td>
-<td>⚙️ 默认隐藏</td>
+<td>✅ 提取器默认可用；默认不暴露给 Agent</td>
 <td>创建新记忆条目</td>
 </tr>
 <tr>
 <td><code>memory_update</code></td>
 <td>更新记忆</td>
 <td>✅ 默认启用</td>
-<td>⚙️ 默认隐藏</td>
+<td>✅ 提取器默认可用；默认不暴露给 Agent</td>
 <td>修改现有记忆</td>
 </tr>
 <tr>
 <td><code>memory_search</code></td>
 <td>搜索记忆</td>
 <td>✅ 默认启用</td>
-<td>✅ 默认启用</td>
+<td>✅ 默认启用并暴露</td>
 <td>根据关键词查找</td>
 </tr>
 <tr>
 <td><code>memory_load</code></td>
 <td>加载记忆</td>
 <td>✅ 默认启用</td>
-<td>⚙️ 可配置</td>
+<td>⚙️ 默认禁用；启用后暴露</td>
 <td>加载最近的记忆</td>
 </tr>
 <tr>
 <td><code>memory_delete</code></td>
 <td>删除记忆</td>
 <td>⚙️ 可配置</td>
-<td>⚙️ 默认隐藏</td>
+<td>✅ 提取器默认可用；默认不暴露给 Agent</td>
 <td>删除单条记忆</td>
 </tr>
 <tr>
@@ -4378,10 +4394,10 @@
 <li>默认禁用工具：<code>memory_delete</code>、<code>memory_clear</code></li>
 </ul>
 </li>
-<li><strong>自动提取模式</strong>：LLM 提取器在后台管理写入操作，默认只暴露搜索工具；可启用 <code>memory_load</code>，也可通过 <code>WithAutoMemoryExposedTools()</code> 选择性暴露已启用的写工具<ul>
+<li><strong>自动提取模式</strong>：LLM 提取器在后台管理已启用的写入操作；<code>Tools()</code> 默认暴露搜索工具，<code>memory_load</code> 启用后暴露，也可通过 <code>WithAutoMemoryExposedTools()</code> 选择性暴露已启用的写工具<ul>
 <li>默认启用工具：<code>memory_add</code>、<code>memory_update</code>、<code>memory_delete</code>、<code>memory_search</code></li>
 <li>默认禁用工具：<code>memory_load</code>、<code>memory_clear</code></li>
-<li>默认不暴露工具：<code>memory_add</code>、<code>memory_update</code>、<code>memory_delete</code></li>
+<li>默认启用但不通过 <code>Tools()</code> 暴露给 Agent：<code>memory_add</code>、<code>memory_update</code>、<code>memory_delete</code></li>
 </ul>
 </li>
 <li><strong>默认启用</strong>：创建服务时自动可用，无需额外配置</li>
@@ -4436,7 +4452,7 @@ Auto 模式下哪些已启用工具会通过 <code>Tools()</code> 暴露给 Agen
 </span></code></pre></div></td></tr></table></div>
 <h3 id="id_1">覆盖语义（ID 与重复）</h3>
 <ul>
-<li>记忆 ID 基于「内容 + 排序后的主题 + appName + userID」生成。对同一用户重复添加相同内容与主题是幂等的：会覆盖原有记录（非追加），并刷新 UpdatedAt。</li>
+<li>记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。</li>
 <li>如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。</li>
 </ul>
 <h3 id="_21">自定义工具实现</h3>
@@ -5658,7 +5674,7 @@ MySQL 9.0+ 使用原生 <code>VECTOR</code> 类型，旧版本自动降级为 <c
 </span><span id="__span-34-8"><a id="__codelineno-34-8" name="__codelineno-34-8"></a><span class="c1">// 新会话：Memory 保留，Session 重置</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="memory-id">Memory ID 的幂等性</h3>
-<p>Memory ID 基于「内容 + 排序后的主题 + appName + userID」的 SHA256 哈希生成，同一用户下相同内容会产生相同 ID：</p>
+<p>Memory ID 基于「内容 + appName + userID + 规范化事件元数据」的 SHA256 哈希生成；主题不参与 ID，因此同一用户下相同内容即使 topics 改变也会产生相同 ID：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-35-1">1</a></span>
 <span class="normal"><a href="#__codelineno-35-2">2</a></span>
 <span class="normal"><a href="#__codelineno-35-3">3</a></span>
@@ -5669,9 +5685,9 @@ MySQL 9.0+ 使用原生 <code>VECTOR</code> 类型，旧版本自动降级为 <c
 </span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2"></a><span class="nx">memory</span><span class="p">.</span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;用户喜欢编程&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;爱好&quot;</span><span class="p">})</span>
 </span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3"></a><span class="c1">// 生成 ID：abc123...</span>
 </span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4"></a>
-</span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5"></a><span class="c1">// 第二次添加相同内容</span>
-</span><span id="__span-35-6"><a id="__codelineno-35-6" name="__codelineno-35-6"></a><span class="nx">memory</span><span class="p">.</span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;用户喜欢编程&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;爱好&quot;</span><span class="p">})</span>
-</span><span id="__span-35-7"><a id="__codelineno-35-7" name="__codelineno-35-7"></a><span class="c1">// 生成相同 ID：abc123...，覆盖更新，刷新 updated_at</span>
+</span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5"></a><span class="c1">// 第二次添加相同内容，但使用不同 topics</span>
+</span><span id="__span-35-6"><a id="__codelineno-35-6" name="__codelineno-35-6"></a><span class="nx">memory</span><span class="p">.</span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;用户喜欢编程&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;兴趣&quot;</span><span class="p">})</span>
+</span><span id="__span-35-7"><a id="__codelineno-35-7" name="__codelineno-35-7"></a><span class="c1">// 生成相同 ID：abc123...，覆盖更新，刷新 topics 和 updated_at</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>影响</strong>：</p>
 <ul>
@@ -5682,10 +5698,10 @@ MySQL 9.0+ 使用原生 <code>VECTOR</code> 类型，旧版本自动降级为 <c
 <h3 id="_29">搜索行为说明</h3>
 <p>搜索行为取决于后端：</p>
 <ul>
-<li>对 <code>inmemory</code> / <code>redis</code> / <code>mysql</code> / <code>postgres</code>：<code>SearchMemories</code> 使用<strong>Token 匹配</strong>（不是语义搜索）。</li>
+<li>对 <code>inmemory</code> / <code>redis</code> / <code>mysql</code> / <code>postgres</code>：<code>SearchMemories</code> 使用 <strong>BM25 风格 lexical 关键词匹配</strong>（不是语义搜索）。</li>
 <li>对 <code>pgvector</code> / <code>mysqlvec</code> / <code>sqlitevec</code>：<code>SearchMemories</code> 使用<strong>向量相似度检索</strong>，并且需要配置 Embedder。</li>
 </ul>
-<p><strong>Token 匹配细节</strong>（非向量后端）：</p>
+<p><strong>Lexical 匹配细节</strong>（非向量后端）：</p>
 <p><strong>英文分词</strong>：转小写 → 过滤停用词（a、the、is 等）→ 空格分割</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-36-1">1</a></span>
 <span class="normal"><a href="#__codelineno-36-2">2</a></span>
@@ -6020,34 +6036,35 @@ MySQL 9.0+ 使用原生 <code>VECTOR</code> 类型，旧版本自动降级为 <c
 默认会通过 <code>Tools()</code> 暴露给 Agent，启用 <code>memory_load</code> 后也会暴露；
 <code>WithAutoMemoryExposedTools</code> 则用于选择性暴露已启用的写工具，支持
 Hybrid 用法。</p>
-<p><strong>前端工具</strong>（通过 <code>Tools()</code> 暴露给 Agent 调用）：</p>
+<p><strong>前端工具</strong>（通过 <code>Tools()</code> 暴露给 Agent 调用；默认状态指 Agent 侧暴露状态）：</p>
 <table>
 <thead>
 <tr>
 <th>工具</th>
-<th>默认</th>
+<th>Agent 侧默认</th>
 <th>说明</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>memory_search</code></td>
-<td>✅ 开</td>
+<td>✅ 暴露</td>
 <td>按查询搜索记忆</td>
 </tr>
 <tr>
 <td><code>memory_load</code></td>
-<td>❌ 关</td>
-<td>加载全部或最近 N 条记忆</td>
+<td>❌ 不暴露</td>
+<td>加载全部或最近 N 条记忆；启用后暴露</td>
 </tr>
 </tbody>
 </table>
-<p><strong>后端工具</strong>（默认由提取器在后台使用）：</p>
+<p><strong>后端操作</strong>（提取器可用性与 Agent 侧暴露状态分开控制）：</p>
 <table>
 <thead>
 <tr>
 <th>工具</th>
-<th>默认</th>
+<th>操作默认</th>
+<th>Agent 侧默认</th>
 <th>说明</th>
 </tr>
 </thead>
@@ -6055,21 +6072,25 @@ Hybrid 用法。</p>
 <tr>
 <td><code>memory_add</code></td>
 <td>✅ 开</td>
-<td>添加新记忆（提取器使用）</td>
+<td>❌ 隐藏</td>
+<td>添加新记忆</td>
 </tr>
 <tr>
 <td><code>memory_update</code></td>
 <td>✅ 开</td>
+<td>❌ 隐藏</td>
 <td>更新现有记忆</td>
 </tr>
 <tr>
 <td><code>memory_delete</code></td>
 <td>✅ 开</td>
+<td>❌ 隐藏</td>
 <td>删除记忆</td>
 </tr>
 <tr>
 <td><code>memory_clear</code></td>
 <td>❌ 关</td>
+<td>❌ 隐藏</td>
 <td>清空用户所有记忆（危险操作）</td>
 </tr>
 </tbody>
@@ -6396,7 +6417,7 @@ Hybrid 用法。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月28日 04:43:07 UTC">2026-04-28 04:43:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月30日 02:44:10 UTC">2026-04-30 02:44:10</span>
   </span>
 
     

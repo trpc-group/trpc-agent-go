@@ -3421,8 +3421,8 @@ interactions.</p>
 </tr>
 <tr>
 <td><strong>Available tools</strong></td>
-<td>All 6 tools</td>
-<td><code>memory_search</code> by default; configurable <code>memory_load</code>; enabled write tools can be exposed</td>
+<td><code>memory_add</code>, <code>memory_update</code>, <code>memory_search</code>, <code>memory_load</code> by default; delete/clear configurable</td>
+<td><code>memory_search</code> exposed by default; <code>memory_load</code> exposed once enabled; enabled write operations are used by the extractor and hidden from the agent unless explicitly exposed</td>
 </tr>
 <tr>
 <td><strong>Processing</strong></td>
@@ -3637,7 +3637,9 @@ based on conversation content to manage memories. Configuration involves three s
 </span></code></pre></div></td></tr></table></div>
 <h3 id="auto-mode-configuration-recommended">Auto Mode Configuration (Recommended)</h3>
 <p>In Auto mode, an LLM-based extractor analyzes conversations and automatically
-creates memories. <strong>The only difference from Agentic mode is in Step 1: add an Extractor</strong>.</p>
+creates memories. <strong>The key setup difference is in Step 1: add an Extractor</strong>.
+With an Extractor configured, <code>Tools()</code> follows Auto mode exposure rules and
+Runner triggers background extraction after responses.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
@@ -3808,8 +3810,8 @@ creates memories. <strong>The only difference from Agentic mode is in Step 1: ad
 </tr>
 <tr>
 <td><strong>Available tools</strong></td>
-<td>add/update/delete/clear/search/load</td>
-<td>search by default; load configurable; enabled write tools can be exposed</td>
+<td>add/update/search/load by default; delete/clear configurable</td>
+<td>search exposed by default; load exposed once enabled; enabled write operations are used by the extractor and hidden from the agent unless explicitly exposed</td>
 </tr>
 <tr>
 <td><strong>Memory creation</strong></td>
@@ -4002,7 +4004,10 @@ available: sqlitevec and mysqlvec.</p>
 </span><span id="__span-7-52"><a id="__codelineno-7-52" name="__codelineno-7-52"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="memory-tool-configuration">Memory Tool Configuration</h3>
-<p>The memory service provides 6 tools. Common tools are enabled by default, while dangerous operations require manual enabling.</p>
+<p>The memory service provides 6 tools. In Agentic mode, common tools are enabled
+by default and dangerous operations require manual enabling. In Auto mode,
+extractor operation availability and agent-facing tool exposure are controlled
+separately.</p>
 <h4 id="tool-list">Tool List</h4>
 <table>
 <thead>
@@ -4019,35 +4024,35 @@ available: sqlitevec and mysqlvec.</p>
 <td><code>memory_add</code></td>
 <td>Add new memory</td>
 <td>✅ Default</td>
-<td>⚙️ Hidden by default</td>
+<td>✅ Enabled for extractor; hidden from agent by default</td>
 <td>Create new memory entry</td>
 </tr>
 <tr>
 <td><code>memory_update</code></td>
 <td>Update memory</td>
 <td>✅ Default</td>
-<td>⚙️ Hidden by default</td>
+<td>✅ Enabled for extractor; hidden from agent by default</td>
 <td>Modify existing memory</td>
 </tr>
 <tr>
 <td><code>memory_search</code></td>
 <td>Search memory</td>
 <td>✅ Default</td>
-<td>✅ Default</td>
+<td>✅ Enabled and exposed by default</td>
 <td>Find by keywords</td>
 </tr>
 <tr>
 <td><code>memory_load</code></td>
 <td>Load memories</td>
 <td>✅ Default</td>
-<td>⚙️ Configurable</td>
+<td>⚙️ Disabled by default; exposed once enabled</td>
 <td>Load recent memories</td>
 </tr>
 <tr>
 <td><code>memory_delete</code></td>
 <td>Delete memory</td>
 <td>⚙️ Configurable</td>
-<td>⚙️ Hidden by default</td>
+<td>✅ Enabled for extractor; hidden from agent by default</td>
 <td>Delete single memory</td>
 </tr>
 <tr>
@@ -4066,10 +4071,10 @@ available: sqlitevec and mysqlvec.</p>
 <li>Default disabled tools: <code>memory_delete</code>, <code>memory_clear</code></li>
 </ul>
 </li>
-<li><strong>Auto Mode</strong>: LLM extractor handles write operations in background. Tools() exposes Search by default; Load can be enabled; <code>WithAutoMemoryExposedTools()</code> can selectively expose enabled write tools for hybrid usage.<ul>
+<li><strong>Auto Mode</strong>: LLM extractor handles enabled write operations in background. <code>Tools()</code> exposes Search by default; Load is exposed once enabled; <code>WithAutoMemoryExposedTools()</code> can selectively expose enabled write tools for hybrid usage.<ul>
 <li>Default enabled tools: <code>memory_add</code>, <code>memory_update</code>, <code>memory_delete</code>, <code>memory_search</code></li>
 <li>Default disabled tools: <code>memory_load</code>, <code>memory_clear</code></li>
-<li>Hidden by default: <code>memory_add</code>, <code>memory_update</code>, <code>memory_delete</code></li>
+<li>Enabled but not returned by <code>Tools()</code> by default: <code>memory_add</code>, <code>memory_update</code>, <code>memory_delete</code></li>
 </ul>
 </li>
 <li><strong>Default</strong>: Available immediately when service is created, no extra configuration needed</li>
@@ -4126,9 +4131,11 @@ default unless you expose them explicitly.</p>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="overwrite-semantics-ids-and-duplicates">Overwrite Semantics (IDs and duplicates)</h3>
 <ul>
-<li>Memory IDs are generated from memory content + sorted topics + appName + userID.
-  Adding the same content and topics for the same user is idempotent and overwrites
-  the existing entry (not append). UpdatedAt is refreshed.</li>
+<li>Memory IDs are generated from memory content + appName + userID + canonical
+  episodic metadata. Topics are intentionally excluded, so changing tags does
+  not create a new memory. Adding the same content and identity metadata for the
+  same user is idempotent and overwrites the existing entry (not append).
+  UpdatedAt is refreshed.</li>
 <li>If you need append semantics or different duplicate-handling strategies, you can
   implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).</li>
 </ul>
@@ -5502,7 +5509,9 @@ falls back to <code>BLOB</code> storage with Go-side cosine similarity for older
 </span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a><span class="c1">// New session: Memory retained, Session reset</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="memory-id-idempotency">Memory ID Idempotency</h3>
-<p>Memory ID is generated from SHA256 hash of "content + sorted topics + appName + userID". Same content produces the same ID for the same user:</p>
+<p>Memory ID is generated from a SHA256 hash of memory content, appName, userID,
+and canonical episodic metadata. Topics are not part of identity, so the same
+content for the same user keeps the same ID even if topics change:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-34-1">1</a></span>
 <span class="normal"><a href="#__codelineno-34-2">2</a></span>
 <span class="normal"><a href="#__codelineno-34-3">3</a></span>
@@ -5513,9 +5522,9 @@ falls back to <code>BLOB</code> storage with Go-side cosine similarity for older
 </span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2"></a><span class="nx">memory</span><span class="p">.</span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;User likes programming&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;hobby&quot;</span><span class="p">})</span>
 </span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3"></a><span class="c1">// Generated ID: abc123...</span>
 </span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4"></a>
-</span><span id="__span-34-5"><a id="__codelineno-34-5" name="__codelineno-34-5"></a><span class="c1">// Second add with same content</span>
-</span><span id="__span-34-6"><a id="__codelineno-34-6" name="__codelineno-34-6"></a><span class="nx">memory</span><span class="p">.</span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;User likes programming&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;hobby&quot;</span><span class="p">})</span>
-</span><span id="__span-34-7"><a id="__codelineno-34-7" name="__codelineno-34-7"></a><span class="c1">// Same ID: abc123..., overwrites, refreshes updated_at</span>
+</span><span id="__span-34-5"><a id="__codelineno-34-5" name="__codelineno-34-5"></a><span class="c1">// Second add with same content and different topics</span>
+</span><span id="__span-34-6"><a id="__codelineno-34-6" name="__codelineno-34-6"></a><span class="nx">memory</span><span class="p">.</span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;User likes programming&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;interests&quot;</span><span class="p">})</span>
+</span><span id="__span-34-7"><a id="__codelineno-34-7" name="__codelineno-34-7"></a><span class="c1">// Same ID: abc123..., overwrites, refreshes topics and updated_at</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Implications</strong>:</p>
 <ul>
@@ -5526,10 +5535,10 @@ falls back to <code>BLOB</code> storage with Go-side cosine similarity for older
 <h3 id="search-behavior-notes">Search Behavior Notes</h3>
 <p>Search behavior depends on the backend:</p>
 <ul>
-<li>For <code>inmemory</code> / <code>redis</code> / <code>mysql</code> / <code>postgres</code>: <code>SearchMemories</code> uses <strong>token matching</strong> (not semantic search).</li>
+<li>For <code>inmemory</code> / <code>redis</code> / <code>mysql</code> / <code>postgres</code>: <code>SearchMemories</code> uses <strong>BM25-style lexical matching</strong> (not semantic search).</li>
 <li>For <code>pgvector</code> / <code>mysqlvec</code> / <code>sqlitevec</code>: <code>SearchMemories</code> uses <strong>vector similarity search</strong> and requires an embedder.</li>
 </ul>
-<p><strong>Token matching details</strong> (non-vector backends):</p>
+<p><strong>Lexical matching details</strong> (non-vector backends):</p>
 <p><strong>English tokenization</strong>: lowercase → filter stopwords (a, the, is, etc.) → split by spaces</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-35-1">1</a></span>
 <span class="normal"><a href="#__codelineno-35-2">2</a></span>
@@ -5864,34 +5873,35 @@ low-weight CJK character trigram fallback</p>
 available. <code>memory_search</code> is exposed through <code>Tools()</code> by default,
 <code>memory_load</code> is exposed once enabled, and <code>WithAutoMemoryExposedTools</code>
 selectively exposes enabled write tools for hybrid usage.</p>
-<p><strong>Front-end Tools</strong> (exposed via <code>Tools()</code> for agent to call):</p>
+<p><strong>Front-end Tools</strong> (agent-facing tools returned by <code>Tools()</code>):</p>
 <table>
 <thead>
 <tr>
 <th>Tool</th>
-<th>Default</th>
+<th>Agent-facing default</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>memory_search</code></td>
-<td>✅ On</td>
+<td>✅ Exposed</td>
 <td>Search memories by query</td>
 </tr>
 <tr>
 <td><code>memory_load</code></td>
-<td>❌ Off</td>
-<td>Load all or recent N memories</td>
+<td>❌ Not exposed</td>
+<td>Load all or recent N memories; exposed once enabled</td>
 </tr>
 </tbody>
 </table>
-<p><strong>Back-end Tools</strong> (used by extractor in background by default):</p>
+<p><strong>Back-end Operations</strong> (operation availability for the extractor):</p>
 <table>
 <thead>
 <tr>
 <th>Tool</th>
-<th>Default</th>
+<th>Operation default</th>
+<th>Agent-facing default</th>
 <th>Description</th>
 </tr>
 </thead>
@@ -5899,21 +5909,25 @@ selectively exposes enabled write tools for hybrid usage.</p>
 <tr>
 <td><code>memory_add</code></td>
 <td>✅ On</td>
-<td>Add new memories (extractor uses this)</td>
+<td>❌ Hidden</td>
+<td>Add new memories</td>
 </tr>
 <tr>
 <td><code>memory_update</code></td>
 <td>✅ On</td>
+<td>❌ Hidden</td>
 <td>Update existing memories</td>
 </tr>
 <tr>
 <td><code>memory_delete</code></td>
 <td>✅ On</td>
+<td>❌ Hidden</td>
 <td>Delete memories</td>
 </tr>
 <tr>
 <td><code>memory_clear</code></td>
 <td>❌ Off</td>
+<td>❌ Hidden</td>
 <td>Clear all user memories (dangerous)</td>
 </tr>
 </tbody>
@@ -6257,7 +6271,7 @@ to balance performance and cost.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 28, 2026 04:43:07 UTC">2026-04-28 04:43:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 30, 2026 02:44:10 UTC">2026-04-30 02:44:10</span>
   </span>
 
     
