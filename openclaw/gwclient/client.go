@@ -81,6 +81,9 @@ func NewWithStreamPath(
 // MessageRequest matches the gateway /messages JSON payload.
 type MessageRequest = gwproto.MessageRequest
 
+// MessageStreamOptions controls optional streaming behaviors.
+type MessageStreamOptions = gwproto.MessageStreamOptions
+
 // StreamEvent matches the gateway streaming event payload.
 type StreamEvent = gwproto.StreamEvent
 
