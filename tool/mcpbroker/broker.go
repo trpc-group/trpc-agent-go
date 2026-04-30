@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcpcfg "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+	tmcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
 const (
@@ -35,6 +36,22 @@ const (
 const (
 	targetTypeStdio = "stdio"
 	targetTypeHTTP  = "http"
+)
+
+// Exported target type strings match ClientOptionsRequest.TargetType after resolution.
+const (
+	// TargetTypeHTTP indicates SSE or streamable HTTP MCP transport.
+	TargetTypeHTTP = targetTypeHTTP
+	// TargetTypeStdio indicates stdio MCP transport.
+	TargetTypeStdio = targetTypeStdio
+)
+
+// Origin values for ClientOptionsRequest.Origin.
+const (
+	// OriginCode indicates a named server from WithServers.
+	OriginCode = originCode
+	// OriginAdhoc indicates an ad-hoc URL selector (requires WithAllowAdHocHTTP).
+	OriginAdhoc = "adhoc"
 )
 
 var defaultSensitiveHeaderDenylist = []string{
@@ -58,7 +75,36 @@ type brokerOptions struct {
 	allowAdHocHTTP              bool
 	adhocSensitiveHeaderDenyset map[string]struct{}
 	httpHeaderInjector          HTTPHeaderInjector
+	clientOptionsProvider       ClientOptionsProvider
 	errorInterceptor            ErrorInterceptor
+}
+
+// ClientOptionsProvider supplies extra trpc-mcp-go client options after the broker has resolved
+// the target and merged injected HTTP headers. Returning (nil, nil) applies no extra options.
+type ClientOptionsProvider func(context.Context, *ClientOptionsRequest) (*ClientOptions, error)
+
+// ClientOptionsRequest is the broker-side context passed to ClientOptionsProvider before creating
+// the underlying MCP client. Config is a defensive clone of the final ConnectionConfig for this call.
+type ClientOptionsRequest struct {
+	Selector   string
+	ServerName string
+	Origin     string // OriginCode or OriginAdhoc
+	TargetType string // TargetTypeHTTP or TargetTypeStdio
+
+	Transport string
+	BaseURL   string
+	ToolName  string
+	Phase     string // PhaseListTools | PhaseInspectTools | PhaseCallTool
+
+	Config mcpcfg.ConnectionConfig
+}
+
+// ClientOptions carries optional HTTP and stdio client options. HTTP applies to SSE and streamable
+// transports; Stdio applies to stdio transports. Default broker headers are applied first; options
+// here follow and may override or extend behavior (see trpc-mcp-go ClientOption / StdioClientOption).
+type ClientOptions struct {
+	HTTP  []tmcp.ClientOption
+	Stdio []tmcp.StdioClientOption
 }
 
 // HTTPHeaderInjector resolves per-run HTTP headers for MCP requests.
@@ -163,6 +209,15 @@ func WithHTTPHeaderInjector(fn HTTPHeaderInjector) Option {
 	}
 }
 
+// WithClientOptionsProvider registers a hook that returns extra trpc-mcp-go client options after
+// resolveTarget and WithHTTPHeaderInjector. Use this for URL policy, auditing, retries, custom HTTP
+// clients, or stdio options without adding parallel WithX hooks for each concern.
+func WithClientOptionsProvider(fn ClientOptionsProvider) Option {
+	return func(opts *brokerOptions) {
+		opts.clientOptionsProvider = fn
+	}
+}
+
 // WithErrorInterceptor intercepts HTTP MCP execution errors and may translate them for model consumption.
 func WithErrorInterceptor(fn ErrorInterceptor) Option {
 	return func(opts *brokerOptions) {
@@ -240,7 +295,7 @@ func (b *Broker) resolveTarget(input targetInput) (resolvedTarget, error) {
 		return resolvedTarget{}, err
 	}
 	return resolvedTarget{
-		Origin:     "adhoc",
+		Origin:     OriginAdhoc,
 		TargetType: targetType,
 		Config:     config,
 	}, nil

@@ -45,5 +45,3 @@ __pycache__
 examples/knowledge/evaluation/dataset/*
 !examples/claudecode/.claude
 !examples/evaluation/claudecode/.claude
-.harness/observablity/.env
-
