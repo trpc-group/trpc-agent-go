@@ -1286,8 +1286,7 @@ func isEmptyAssistantMessage(msg model.Message) bool {
 	}
 	return msg.Content == "" &&
 		len(msg.ContentParts) == 0 &&
-		len(msg.ToolCalls) == 0 &&
-		msg.ReasoningContent == ""
+		len(msg.ToolCalls) == 0
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.

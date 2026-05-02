@@ -216,6 +216,31 @@ func TestSanitizeMessagesWithTools_DowngradesOrphanToolCall(t *testing.T) {
 	}
 }
 
+func TestSanitizeMessagesWithTools_DropsReasoningOnlyAssistantAfterOrphanToolCall(t *testing.T) {
+	in := []model.Message{
+		{
+			Role:             model.RoleAssistant,
+			ReasoningContent: "I should call the tool.",
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "test_tool",
+						Arguments: []byte(`{"a":1}`),
+					},
+				},
+			},
+		},
+	}
+
+	out := SanitizeMessagesWithTools(in, nil)
+	if assert.Len(t, out, 1) {
+		assert.Equal(t, model.RoleUser, out[0].Role)
+		assert.Contains(t, out[0].Content, orphanToolCallTag)
+		assert.Contains(t, out[0].Content, "call_1")
+	}
+}
+
 func TestSanitizeMessagesWithTools_SplitsMatchedAndOrphanToolCalls(t *testing.T) {
 	in := []model.Message{
 		{
@@ -692,6 +717,6 @@ func TestIsEmptyAssistantMessage(t *testing.T) {
 	assert.True(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant}))
 	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleUser}))
 	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, Content: "x"}))
-	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ReasoningContent: "x"}))
+	assert.True(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ReasoningContent: "x"}))
 	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "call_1"}}}))
 }

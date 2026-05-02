@@ -4717,6 +4717,29 @@ func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 	}
 }
 
+func TestContentRequestProcessor_IsEmptyAssistantMessage(t *testing.T) {
+	assert.True(t, isEmptyAssistantMessage(model.Message{
+		Role: model.RoleAssistant,
+	}))
+	assert.True(t, isEmptyAssistantMessage(model.Message{
+		Role:             model.RoleAssistant,
+		ReasoningContent: "thinking without visible payload",
+	}))
+	assert.False(t, isEmptyAssistantMessage(model.Message{
+		Role:    model.RoleAssistant,
+		Content: "visible content",
+	}))
+	assert.False(t, isEmptyAssistantMessage(model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{ID: "call_1"},
+		},
+	}))
+	assert.False(t, isEmptyAssistantMessage(model.Message{
+		Role: model.RoleUser,
+	}))
+}
+
 func TestContentRequestProcessor_WithReasoningContentMode(t *testing.T) {
 	tests := []struct {
 		name         string
