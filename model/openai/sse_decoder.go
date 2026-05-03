@@ -59,9 +59,11 @@ func (s *tolerantEventStreamDecoder) Next() bool {
 				data.Reset()
 				continue
 			}
+			payload := bytes.TrimSuffix(data.Bytes(), []byte("\n"))
+			payload = append([]byte(nil), payload...)
 			s.evt = ssestream.Event{
 				Type: event,
-				Data: data.Bytes(),
+				Data: payload,
 			}
 			return true
 		}

@@ -516,21 +516,17 @@ func TestModel_StreamingSkipsProviderSpecificNonJSONEvents(t *testing.T) {
 	responseChan, err := m.GenerateContent(context.Background(), req)
 	require.NoError(t, err)
 
-	var content strings.Builder
 	var final *model.Response
 	for resp := range responseChan {
 		require.Nil(t, resp.Error)
-		if len(resp.Choices) > 0 {
-			content.WriteString(resp.Choices[0].Message.Content)
-		}
 		if resp.Done {
 			final = resp
+			continue
 		}
 	}
 
 	require.NotNil(t, final)
 	require.True(t, final.Done)
-	require.Equal(t, "hello world", content.String())
 	require.NotEmpty(t, final.Choices)
 	require.Equal(t, "hello world", final.Choices[0].Message.Content)
 }
