@@ -278,10 +278,30 @@ func (m *Model) handleStreamingResponse(
 			}
 
 		case *types.ConverseStreamOutputMemberMetadata:
-			// 元数据事件，更新 usage 信息
+			// 元数据事件，解析并发送 usage 信息
 			if ev.Value.Usage != nil {
-				// Usage 信息会在最终响应中一起返回
-				// 这里可以用于日志记录等
+				usageResponse := &model.Response{
+					Object:    model.ObjectTypeChatCompletionChunk,
+					Model:     m.modelID,
+					Created:   time.Now().Unix(),
+					Timestamp: time.Now(),
+					IsPartial: true,
+					Usage: &model.Usage{
+						PromptTokens:     int(aws.ToInt32(ev.Value.Usage.InputTokens)),
+						CompletionTokens: int(aws.ToInt32(ev.Value.Usage.OutputTokens)),
+						TotalTokens:      int(aws.ToInt32(ev.Value.Usage.TotalTokens)),
+						PromptTokensDetails: model.PromptTokensDetails{
+							CachedTokens:        int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
+							CacheCreationTokens: int(aws.ToInt32(ev.Value.Usage.CacheWriteInputTokens)),
+							CacheReadTokens:     int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
+						},
+					},
+				}
+				select {
+				case responseChan <- usageResponse:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}
@@ -380,7 +400,9 @@ func (m *Model) buildNonStreamingResponse(output *bedrockruntime.ConverseOutput)
 			CompletionTokens: int(aws.ToInt32(output.Usage.OutputTokens)),
 			TotalTokens:      int(aws.ToInt32(output.Usage.TotalTokens)),
 			PromptTokensDetails: model.PromptTokensDetails{
-				CachedTokens: int(aws.ToInt32(output.Usage.CacheReadInputTokens)),
+				CachedTokens:        int(aws.ToInt32(output.Usage.CacheReadInputTokens)),
+				CacheCreationTokens: int(aws.ToInt32(output.Usage.CacheWriteInputTokens)),
+				CacheReadTokens:     int(aws.ToInt32(output.Usage.CacheReadInputTokens)),
 			},
 		}
 	}

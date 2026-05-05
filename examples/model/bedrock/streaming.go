@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -258,21 +257,4 @@ func streamingMixedContent(ctx context.Context, m *bedrock.Model) {
 
 	printElapsed(start)
 	printDivider()
-}
-
-// collectStreamResponse 收集流式响应的完整内容（辅助函数）。
-func collectStreamResponse(ch <-chan *model.Response) (fullContent string, finalResp *model.Response, err error) {
-	var parts []string
-	for resp := range ch {
-		if resp.Error != nil {
-			return "", nil, fmt.Errorf("API 错误: %s", resp.Error.Message)
-		}
-		if resp.IsPartial && len(resp.Choices) > 0 {
-			parts = append(parts, resp.Choices[0].Delta.Content)
-		}
-		if resp.Done {
-			finalResp = resp
-		}
-	}
-	return strings.Join(parts, ""), finalResp, nil
 }

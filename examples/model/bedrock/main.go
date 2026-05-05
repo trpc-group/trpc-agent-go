@@ -65,11 +65,11 @@ func main() {
 	m := bedrock.New(*flagModel, bedrock.WithAWSConfig(cfg))
 
 	fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║           AWS Bedrock 模型使用示例 (trpc-agent-go)              ║")
+	fmt.Println("║           AWS Bedrock 模型使用示例 (trpc-agent-go)               ║")
 	fmt.Println("╠══════════════════════════════════════════════════════════════════╣")
-	fmt.Printf("║  模型: %-57s║\n", *flagModel)
-	fmt.Printf("║  区域: %-57s║\n", *flagRegion)
-	fmt.Printf("║  示例: %-57s║\n", *flagDemo)
+	fmt.Printf("║  模型: %-58s║\n", *flagModel)
+	fmt.Printf("║  区域: %-58s║\n", *flagRegion)
+	fmt.Printf("║  示例: %-58s║\n", *flagDemo)
 	fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
 
 	// 示例注册表
