@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/msgutil"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -110,7 +110,7 @@ func sanitizeToolRound(assistant model.Message, toolResults []model.Message, too
 		0,
 		1+len(toolResults)+len(validation.invalidToolCalls)+len(toolCallSplit.orphan)+len(split.orphan),
 	)
-	if !msgutil.IsEmptyAssistantMessage(filteredAssistant) {
+	if !message.IsEmptyAssistantMessage(filteredAssistant) {
 		out = append(out, filteredAssistant)
 		out = append(out, split.kept...)
 	}

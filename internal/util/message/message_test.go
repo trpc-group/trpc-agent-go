@@ -7,7 +7,7 @@
 //
 //
 
-package msgutil
+package message
 
 import (
 	"testing"

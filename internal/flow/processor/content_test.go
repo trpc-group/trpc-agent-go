@@ -24,7 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
-	"trpc.group/trpc-go/trpc-agent-go/internal/msgutil"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -4763,30 +4763,30 @@ func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 }
 
 func TestContentRequestProcessor_IsEmptyAssistantMessage(t *testing.T) {
-	assert.True(t, msgutil.IsEmptyAssistantMessage(model.Message{
+	assert.True(t, message.IsEmptyAssistantMessage(model.Message{
 		Role: model.RoleAssistant,
 	}))
-	assert.True(t, msgutil.IsEmptyAssistantMessage(model.Message{
+	assert.True(t, message.IsEmptyAssistantMessage(model.Message{
 		Role:             model.RoleAssistant,
 		ReasoningContent: "thinking without visible payload",
 	}))
-	assert.False(t, msgutil.IsEmptyAssistantMessage(model.Message{
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
 		Role:    model.RoleAssistant,
 		Content: "visible content",
 	}))
-	assert.False(t, msgutil.IsEmptyAssistantMessage(model.Message{
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
 		Role: model.RoleAssistant,
 		ToolCalls: []model.ToolCall{
 			{ID: "call_1"},
 		},
 	}))
-	assert.False(t, msgutil.IsEmptyAssistantMessage(model.Message{
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
 		Role: model.RoleAssistant,
 		ContentParts: []model.ContentPart{
 			{Type: model.ContentTypeText},
 		},
 	}))
-	assert.False(t, msgutil.IsEmptyAssistantMessage(model.Message{
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
 		Role: model.RoleUser,
 	}))
 }

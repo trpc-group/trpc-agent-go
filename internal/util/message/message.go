@@ -7,8 +7,8 @@
 //
 //
 
-// Package msgutil provides shared helpers for model messages.
-package msgutil
+// Package message provides shared helpers for model messages.
+package message
 
 import "trpc.group/trpc-go/trpc-agent-go/model"
 

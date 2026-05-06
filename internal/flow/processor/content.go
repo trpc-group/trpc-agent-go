@@ -28,7 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
-	"trpc.group/trpc-go/trpc-agent-go/internal/msgutil"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -925,7 +925,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 					requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
 				)
 				msg = p.projectEventMessage(inv, evt, msg)
-				if msgutil.IsEmptyAssistantMessage(msg) {
+				if message.IsEmptyAssistantMessage(msg) {
 					continue
 				}
 				messages = append(messages, msg)
@@ -1405,7 +1405,7 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 			requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
 		)
 		msg = p.projectEventMessage(inv, evt, msg)
-		if msgutil.IsEmptyAssistantMessage(msg) {
+		if message.IsEmptyAssistantMessage(msg) {
 			continue
 		}
 		messages = append(messages, msg)
