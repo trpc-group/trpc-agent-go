@@ -162,6 +162,30 @@ validate_resolvable_version() {
   return 1
 }
 
+require_line_number() {
+  local go_mod="$1"
+  local dep_path="$2"
+
+  awk -v dep_path="${dep_path}" '
+    $1 == "require" && $2 == dep_path {
+      print NR
+      exit
+    }
+    $1 == "require" && $2 == "(" {
+      in_require = 1
+      next
+    }
+    in_require && $1 == ")" {
+      in_require = 0
+      next
+    }
+    in_require && $1 == dep_path {
+      print NR
+      exit
+    }
+  ' "${go_mod}"
+}
+
 for go_mod in "${go_mod_files[@]}"; do
   rel_path="${go_mod#./}"
   mod_dir="$(dirname "${go_mod}")"
@@ -202,7 +226,7 @@ for go_mod in "${go_mod_files[@]}"; do
     dep_ver="${req#* }"
     is_repo_module_path "${dep_path}" || continue
 
-    line_number="$(awk -v dep_path="${dep_path}" '($1 == "require" && $2 == dep_path) || ($1 == dep_path) { print NR; exit }' "${go_mod}")"
+    line_number="$(require_line_number "${go_mod}" "${dep_path}")"
     [ -z "${line_number}" ] && line_number=1
 
     if ! validate_resolvable_version "${rel_path}" "${line_number}" "${dep_path}" "${dep_ver}"; then
