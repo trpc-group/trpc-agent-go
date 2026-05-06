@@ -66,6 +66,7 @@ func NewGraphToolSet(
 	wrappedSearchOpts := []Option{
 		WithToolName(graphSearchToolName),
 		WithToolDescription(defaultGraphSearchToolDescription),
+		withIncludeContentDefault(false),
 	}
 	wrappedSearchOpts = append(wrappedSearchOpts, searchOpts...)
 	return &graphToolSet{
@@ -112,29 +113,31 @@ func WithGraphToolDescription(description string) GraphToolOption {
 
 // GraphTraverseRequest is the input for the graph traverse tool.
 type GraphTraverseRequest struct {
-	StartIDs  []string                               `json:"start_ids,omitempty" jsonschema:"description=Known graph node IDs to start traversal from. Optional when query or filter is provided."`
-	Query     string                                 `json:"query,omitempty" jsonschema:"description=Search query used to resolve start node IDs before traversal. Can be empty when using only filter."`
-	Filter    *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions used to resolve start node IDs before traversal."`
-	MaxSeeds  int                                    `json:"max_seeds,omitempty" jsonschema:"description=Maximum start nodes resolved from query/filter. Default is 5."`
-	Direction string                                 `json:"direction,omitempty" jsonschema:"description=Traversal direction: out, in, or both. Default is out,enum=out,enum=in,enum=both"`
-	EdgeTypes []string                               `json:"edge_types,omitempty" jsonschema:"description=Optional edge types to follow"`
-	MaxDepth  int                                    `json:"max_depth,omitempty" jsonschema:"description=Maximum traversal depth. Default is 1"`
-	MaxNodes  int                                    `json:"max_nodes,omitempty" jsonschema:"description=Maximum number of nodes to return. Default is 100"`
+	StartIDs       []string                               `json:"start_ids,omitempty" jsonschema:"description=Known graph node IDs to start traversal from. Optional when query or filter is provided."`
+	Query          string                                 `json:"query,omitempty" jsonschema:"description=Search query used to resolve start node IDs before traversal. Can be empty when using only filter."`
+	Filter         *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions used to resolve start node IDs before traversal."`
+	MaxSeeds       int                                    `json:"max_seeds,omitempty" jsonschema:"description=Maximum start nodes resolved from query/filter. Default is 5."`
+	Direction      string                                 `json:"direction,omitempty" jsonschema:"description=Traversal direction: out, in, or both. Default is out,enum=out,enum=in,enum=both"`
+	EdgeTypes      []string                               `json:"edge_types,omitempty" jsonschema:"description=Optional edge types to follow"`
+	MaxDepth       int                                    `json:"max_depth,omitempty" jsonschema:"description=Maximum traversal depth. Default is 1"`
+	MaxNodes       int                                    `json:"max_nodes,omitempty" jsonschema:"description=Maximum number of nodes to return. Default is 100"`
+	IncludeContent bool                                   `json:"include_content,omitempty" jsonschema:"description=Whether to include full node content in the response. Default false keeps graph responses compact; set true only when the code body is needed."`
 }
 
 // GraphFindPathsRequest is the input for the graph find paths tool.
 type GraphFindPathsRequest struct {
-	FromID        string                                 `json:"from_id,omitempty" jsonschema:"description=Known graph node ID where the path starts. Optional when from_query or from_filter is provided."`
-	FromQuery     string                                 `json:"from_query,omitempty" jsonschema:"description=Search query used to resolve path start node IDs. Can be empty when using only from_filter."`
-	FromFilter    *searchfilter.UniversalFilterCondition `json:"from_filter,omitempty" jsonschema:"description=Filter conditions used to resolve path start node IDs."`
-	ToID          string                                 `json:"to_id,omitempty" jsonschema:"description=Known graph node ID where the path ends. Optional when to_query or to_filter is provided."`
-	ToQuery       string                                 `json:"to_query,omitempty" jsonschema:"description=Search query used to resolve path end node IDs. Can be empty when using only to_filter."`
-	ToFilter      *searchfilter.UniversalFilterCondition `json:"to_filter,omitempty" jsonschema:"description=Filter conditions used to resolve path end node IDs."`
-	MaxCandidates int                                    `json:"max_candidates,omitempty" jsonschema:"description=Maximum start/end node candidates resolved from query/filter. Default is 5."`
-	Direction     string                                 `json:"direction,omitempty" jsonschema:"description=Path search direction: out, in, or both. Default is out,enum=out,enum=in,enum=both"`
-	EdgeTypes     []string                               `json:"edge_types,omitempty" jsonschema:"description=Optional edge types to follow"`
-	MaxDepth      int                                    `json:"max_depth,omitempty" jsonschema:"description=Maximum path depth. Default is 5"`
-	MaxPaths      int                                    `json:"max_paths,omitempty" jsonschema:"description=Maximum number of paths to return. Default is 10"`
+	FromID         string                                 `json:"from_id,omitempty" jsonschema:"description=Known graph node ID where the path starts. Optional when from_query or from_filter is provided."`
+	FromQuery      string                                 `json:"from_query,omitempty" jsonschema:"description=Search query used to resolve path start node IDs. Can be empty when using only from_filter."`
+	FromFilter     *searchfilter.UniversalFilterCondition `json:"from_filter,omitempty" jsonschema:"description=Filter conditions used to resolve path start node IDs."`
+	ToID           string                                 `json:"to_id,omitempty" jsonschema:"description=Known graph node ID where the path ends. Optional when to_query or to_filter is provided."`
+	ToQuery        string                                 `json:"to_query,omitempty" jsonschema:"description=Search query used to resolve path end node IDs. Can be empty when using only to_filter."`
+	ToFilter       *searchfilter.UniversalFilterCondition `json:"to_filter,omitempty" jsonschema:"description=Filter conditions used to resolve path end node IDs."`
+	MaxCandidates  int                                    `json:"max_candidates,omitempty" jsonschema:"description=Maximum start/end node candidates resolved from query/filter. Default is 5."`
+	Direction      string                                 `json:"direction,omitempty" jsonschema:"description=Path search direction: out, in, or both. Default is out,enum=out,enum=in,enum=both"`
+	EdgeTypes      []string                               `json:"edge_types,omitempty" jsonschema:"description=Optional edge types to follow"`
+	MaxDepth       int                                    `json:"max_depth,omitempty" jsonschema:"description=Maximum path depth. Default is 5"`
+	MaxPaths       int                                    `json:"max_paths,omitempty" jsonschema:"description=Maximum number of paths to return. Default is 10"`
+	IncludeContent bool                                   `json:"include_content,omitempty" jsonschema:"description=Whether to include full node content in the response. Default false keeps graph responses compact; set true only when the code body is needed."`
 }
 
 // NewGraphTraverseTool creates a tool for traversing graph knowledge.
@@ -153,13 +156,17 @@ func NewGraphTraverseTool(kb knowledge.GraphKnowledge, opts ...GraphToolOption) 
 		if err != nil {
 			return nil, err
 		}
-		return kb.Traverse(ctx, &graph.TraverseQuery{
+		result, err := kb.Traverse(ctx, &graph.TraverseQuery{
 			StartIDs:  startIDs,
 			Direction: dir,
 			EdgeTypes: req.EdgeTypes,
 			MaxDepth:  req.MaxDepth,
 			MaxNodes:  req.MaxNodes,
 		})
+		if err != nil {
+			return nil, err
+		}
+		return graphTraverseToolResult(result, req.IncludeContent), nil
 	}
 	return function.NewFunctionTool(
 		fn,
@@ -193,13 +200,68 @@ func NewGraphFindPathsTool(kb knowledge.GraphKnowledge, opts ...GraphToolOption)
 			return nil, fmt.Errorf("resolve to node: %w", err)
 		}
 		maxPaths := resolveGraphToolLimit(req.MaxPaths, defaultGraphToolMaxPaths)
-		return findPathsForNodeCandidates(ctx, kb, fromIDs, toIDs, dir, req.EdgeTypes, req.MaxDepth, maxPaths)
+		result, err := findPathsForNodeCandidates(ctx, kb, fromIDs, toIDs, dir, req.EdgeTypes, req.MaxDepth, maxPaths)
+		if err != nil {
+			return nil, err
+		}
+		return graphPathToolResult(result, req.IncludeContent), nil
 	}
 	return function.NewFunctionTool(
 		fn,
 		function.WithName(options.toolName),
 		function.WithDescription(options.toolDescription),
 	)
+}
+
+func graphTraverseToolResult(result *graph.TraverseResult, includeContent bool) *graph.TraverseResult {
+	if result == nil || includeContent {
+		return result
+	}
+	return &graph.TraverseResult{
+		Nodes:     graphToolNodes(result.Nodes, includeContent),
+		Edges:     result.Edges,
+		Truncated: result.Truncated,
+		Message:   result.Message,
+	}
+}
+
+func graphPathToolResult(result *graph.PathResult, includeContent bool) *graph.PathResult {
+	if result == nil || includeContent {
+		return result
+	}
+	paths := make([]*graph.Path, 0, len(result.Paths))
+	for _, path := range result.Paths {
+		if path == nil {
+			paths = append(paths, nil)
+			continue
+		}
+		paths = append(paths, &graph.Path{
+			Nodes: graphToolNodes(path.Nodes, includeContent),
+			Edges: path.Edges,
+		})
+	}
+	return &graph.PathResult{
+		Paths:     paths,
+		Truncated: result.Truncated,
+		Message:   result.Message,
+	}
+}
+
+func graphToolNodes(nodes []*graph.Node, includeContent bool) []*graph.Node {
+	if includeContent {
+		return nodes
+	}
+	cloned := make([]*graph.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if node == nil {
+			cloned = append(cloned, nil)
+			continue
+		}
+		next := *node
+		next.Content = ""
+		cloned = append(cloned, &next)
+	}
+	return cloned
 }
 
 func buildGraphToolOptions(

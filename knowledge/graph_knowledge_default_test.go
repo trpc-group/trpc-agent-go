@@ -12,10 +12,14 @@ package knowledge
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 )
@@ -71,7 +75,7 @@ type stubGraphSource struct {
 	data *graph.Data
 }
 
-func (s *stubGraphSource) ReadGraph(ctx context.Context) (*graph.Data, error) {
+func (s *stubGraphSource) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) (*graph.Data, error) {
 	return s.data, nil
 }
 
@@ -233,6 +237,27 @@ func TestBuiltinGraphKnowledge_SearchPreservesVectorScore(t *testing.T) {
 	}
 }
 
+func TestNewGraphLoadConfig_OverrideConcurrency(t *testing.T) {
+	want := GraphLoadConcurrency{AddNodeRoutines: 3, AddEdgeRoutines: 4, EmbeddingRoutines: 5}
+	cfg := newGraphLoadConfig(WithGraphLoadConcurrency(want))
+	if cfg.concurrency != want {
+		t.Fatalf("concurrency = %+v, want %+v", cfg.concurrency, want)
+	}
+}
+
+func TestNewGraphLoadConfig_DefaultConcurrency(t *testing.T) {
+	cfg := newGraphLoadConfig()
+	if cfg.concurrency.AddNodeRoutines != defaultGraphStoreRoutines {
+		t.Fatalf("AddNodeRoutines = %d, want %d", cfg.concurrency.AddNodeRoutines, defaultGraphStoreRoutines)
+	}
+	if cfg.concurrency.AddEdgeRoutines != defaultGraphStoreRoutines {
+		t.Fatalf("AddEdgeRoutines = %d, want %d", cfg.concurrency.AddEdgeRoutines, defaultGraphStoreRoutines)
+	}
+	if cfg.concurrency.EmbeddingRoutines != defaultGraphDocumentRoutines {
+		t.Fatalf("EmbeddingRoutines = %d, want %d", cfg.concurrency.EmbeddingRoutines, defaultGraphDocumentRoutines)
+	}
+}
+
 func TestBuiltinGraphKnowledge_LoadGraphSourceRequiresConsistentBackends(t *testing.T) {
 	src := &stubGraphSource{data: &graph.Data{}}
 	tests := []struct {
@@ -314,6 +339,82 @@ func TestBuiltinGraphKnowledge_LoadGraphSourceIndexesVectorStoreDocuments(t *tes
 	}
 }
 
+func TestGraphSeedEmbeddingTextUsesStructuredFieldsAndTruncatesContent(t *testing.T) {
+	longContent := strings.Repeat("x", defaultGraphNodeContentRunes+1)
+	doc := &document.Document{
+		ID:      "node-1",
+		Name:    "adminPageHTML",
+		Content: longContent,
+		Metadata: map[string]any{
+			codeast.TrpcAstMetaPrefix + "type":      "Variable",
+			codeast.TrpcAstMetaPrefix + "full_name": "trpc.group/trpc-go/trpc-agent-go/openclaw.adminPageHTML",
+			codeast.TrpcAstMetaPrefix + "file_path": "openclaw/admin.go",
+			codeast.TrpcAstMetaPrefix + "signature": "const adminPageHTML = `...`",
+			codeast.TrpcAstMetaPrefix + "comment":   "admin page template",
+		},
+	}
+
+	text := graphSeedEmbeddingText(doc)
+	for _, want := range []string{
+		"type: Variable",
+		"name: adminPageHTML",
+		"full_name: trpc.group/trpc-go/trpc-agent-go/openclaw.adminPageHTML",
+		"file_path: openclaw/admin.go",
+		"signature: const adminPageHTML = `...`",
+		"comment: admin page template",
+		"...<truncated>",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("graphSeedEmbeddingText() missing %q in %q", want, text)
+		}
+	}
+	if strings.Contains(text, longContent) {
+		t.Fatalf("graphSeedEmbeddingText() contains full oversized content")
+	}
+}
+
+func TestBuiltinGraphKnowledge_LoadGraphSourceTruncatesStoredContent(t *testing.T) {
+	store := &stubGraphStore{}
+	vectorStore := inmemory.New()
+	embedder := &recordingGraphEmbedder{}
+	gk := NewGraphKnowledge(
+		WithGraphStore(store),
+		WithGraphVectorStore(vectorStore),
+		WithGraphEmbedder(embedder),
+	)
+	longContent := strings.Repeat("x", defaultGraphNodeContentRunes+1)
+	src := &stubGraphSource{data: &graph.Data{
+		Nodes: []*graph.Node{{
+			ID:      "node-1",
+			Name:    "node",
+			Content: longContent,
+		}},
+	}}
+
+	if err := gk.LoadGraphSource(context.Background(), src); err != nil {
+		t.Fatalf("LoadGraphSource() error = %v", err)
+	}
+	if len(store.nodes) != 1 {
+		t.Fatalf("stored nodes = %d, want 1", len(store.nodes))
+	}
+	if !strings.HasSuffix(store.nodes[0].Content, "...<truncated>") {
+		t.Fatalf("stored graph content was not truncated")
+	}
+	if strings.Contains(store.nodes[0].Content, longContent) {
+		t.Fatalf("stored graph content contains full oversized content")
+	}
+	doc, _, err := vectorStore.Get(context.Background(), "node-1")
+	if err != nil {
+		t.Fatalf("vectorStore.Get() error = %v", err)
+	}
+	if !strings.HasSuffix(doc.Content, "...<truncated>") {
+		t.Fatalf("vector document content was not truncated")
+	}
+	if len(embedder.texts) != 1 || !strings.HasSuffix(embedder.texts[0], "...<truncated>") {
+		t.Fatalf("embedding texts = %+v, want truncated content", embedder.texts)
+	}
+}
+
 func TestBuiltinGraphKnowledge_LoadGraphSourceAndVectorSeeds(t *testing.T) {
 	store := &stubGraphStore{}
 	vectorStore := inmemory.New()
@@ -347,5 +448,84 @@ func TestBuiltinGraphKnowledge_LoadGraphSourceAndVectorSeeds(t *testing.T) {
 	}
 	if len(result.Documents) != 1 || result.Documents[0].Document.ID != "example.com/demo.Service.Do" {
 		t.Fatalf("unexpected search documents: %+v", result.Documents)
+	}
+}
+
+type failingGraphEmbedder struct {
+	failAfter int
+	count     int
+}
+
+func (e *failingGraphEmbedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
+	e.count++
+	if e.count > e.failAfter {
+		return nil, errors.New("embedding failure")
+	}
+	return []float64{1}, nil
+}
+
+func (e *failingGraphEmbedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]any, error) {
+	embedding, err := e.GetEmbedding(ctx, text)
+	return embedding, nil, err
+}
+
+func (e *failingGraphEmbedder) GetDimensions() int {
+	return 1
+}
+
+func TestBuiltinGraphKnowledge_LoadGraphSourceWorkerFailure(t *testing.T) {
+	store := &stubGraphStore{}
+	nodes := make([]*graph.Node, 10)
+	for i := range nodes {
+		nodes[i] = &graph.Node{
+			ID:      fmt.Sprintf("node-%d", i),
+			Name:    fmt.Sprintf("Node%d", i),
+			Content: "content",
+		}
+	}
+	src := &stubGraphSource{data: &graph.Data{Nodes: nodes}}
+	gk := NewGraphKnowledge(
+		WithGraphStore(store),
+		WithGraphVectorStore(inmemory.New()),
+		WithGraphEmbedder(&failingGraphEmbedder{failAfter: 3}),
+	)
+
+	err := gk.LoadGraphSource(context.Background(), src, WithGraphLoadConcurrency(GraphLoadConcurrency{
+		EmbeddingRoutines: 4,
+	}))
+	if err == nil {
+		t.Fatal("expected error from worker failure")
+	}
+	if !strings.Contains(err.Error(), "embedding failure") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuiltinGraphKnowledge_LoadGraphSourceContextCancellation(t *testing.T) {
+	store := &stubGraphStore{}
+	nodes := make([]*graph.Node, 20)
+	for i := range nodes {
+		nodes[i] = &graph.Node{
+			ID:      fmt.Sprintf("node-%d", i),
+			Name:    fmt.Sprintf("Node%d", i),
+			Content: "content",
+		}
+	}
+	src := &stubGraphSource{data: &graph.Data{Nodes: nodes}}
+	gk := NewGraphKnowledge(
+		WithGraphStore(store),
+		WithGraphVectorStore(inmemory.New()),
+		WithGraphEmbedder(stubGraphEmbedder{}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := gk.LoadGraphSource(ctx, src, WithGraphLoadConcurrency(GraphLoadConcurrency{
+		AddNodeRoutines:   2,
+		EmbeddingRoutines: 4,
+	}))
+	if err == nil {
+		t.Fatal("expected error from context cancellation")
 	}
 }

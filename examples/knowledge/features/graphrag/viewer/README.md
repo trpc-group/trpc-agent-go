@@ -44,3 +44,11 @@ go run ./features/graphrag/viewer \
 ```
 
 The page also lets you change node and edge limits before loading graph data.
+
+The metadata filter accepts `key=value` patterns. The value side supports `*` as a wildcard, for example:
+
+```text
+trpc_ast_package=knowledge*
+trpc_ast_file_path=*graph*
+trpc_ast_type=Method
+```

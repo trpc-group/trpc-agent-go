@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,7 @@ var (
 )
 
 const ageSessionSQL = `LOAD 'age'; SET search_path = ag_catalog, "$user", public`
+const ageLockPrefix = "trpc-agent-go-age:"
 
 type server struct {
 	db        *sql.DB
@@ -183,8 +185,9 @@ func (s *server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		maxEdges = queryInt(r, "limit", maxEdges, 20000)
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	metadata := strings.TrimSpace(r.URL.Query().Get("metadata"))
 
-	result, err := s.loadGraph(ctx, query, maxNodes, maxEdges)
+	result, err := s.loadGraph(ctx, query, metadata, maxNodes, maxEdges)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -192,15 +195,15 @@ func (s *server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
-func (s *server) loadGraph(ctx context.Context, query string, maxNodes, maxEdges int) (*graphResponse, error) {
+func (s *server) loadGraph(ctx context.Context, query, metadata string, maxNodes, maxEdges int) (*graphResponse, error) {
 	result := &graphResponse{}
 	seenNodes := make(map[string]struct{})
 	seenEdges := make(map[string]struct{})
 	if query == "" {
-		return s.loadDefaultGraph(ctx, result, seenNodes, seenEdges, maxNodes, maxEdges)
+		return s.loadDefaultGraph(ctx, result, seenNodes, seenEdges, metadata, maxNodes, maxEdges)
 	}
 
-	seeds, err := s.searchSeeds(ctx, query)
+	seeds, err := s.searchSeeds(ctx, query, metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -214,9 +217,13 @@ func (s *server) loadGraph(ctx context.Context, query string, maxNodes, maxEdges
 	if len(ids) == 0 {
 		return result, nil
 	}
+	where := fmt.Sprintf("n.id IN [%s]", cypherStringList(ids))
+	if metadata != "" {
+		where += " AND " + cypherMetadataMatches("n", metadata)
+	}
 	cypher := fmt.Sprintf(
-		`MATCH (n:Node)-[r]-(m:Node) WHERE n.id IN [%s] RETURN n, r, m LIMIT %d`,
-		cypherStringList(ids),
+		`MATCH (n:Node)-[r]-(m:Node) WHERE %s RETURN n, r, m LIMIT %d`,
+		where,
 		maxEdges,
 	)
 	if err := s.queryTriples(ctx, cypher, result, seenNodes, seenEdges, maxNodes, maxEdges); err != nil {
@@ -225,21 +232,40 @@ func (s *server) loadGraph(ctx context.Context, query string, maxNodes, maxEdges
 	return result, nil
 }
 
-func (s *server) loadDefaultGraph(ctx context.Context, result *graphResponse, seenNodes map[string]struct{}, seenEdges map[string]struct{}, maxNodes, maxEdges int) (*graphResponse, error) {
-	cypher := fmt.Sprintf(`MATCH (n:Node)-[r]->(m:Node) RETURN n, r, m LIMIT %d`, maxEdges)
+func (s *server) loadDefaultGraph(
+	ctx context.Context,
+	result *graphResponse,
+	seenNodes map[string]struct{},
+	seenEdges map[string]struct{},
+	metadata string,
+	maxNodes int,
+	maxEdges int,
+) (*graphResponse, error) {
+	where := ""
+	if metadata != "" {
+		where = " WHERE " + cypherMetadataMatches("n", metadata) + " OR " + cypherMetadataMatches("m", metadata)
+	}
+	cypher := fmt.Sprintf(`MATCH (n:Node)-[r]->(m:Node)%s RETURN n, r, m LIMIT %d`, where, maxEdges)
 	if err := s.queryTriples(ctx, cypher, result, seenNodes, seenEdges, maxNodes, maxEdges); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-func (s *server) searchSeeds(ctx context.Context, query string) ([]vertexValue, error) {
+func (s *server) searchSeeds(ctx context.Context, query, metadata string) ([]vertexValue, error) {
 	needle := cypherString(strings.ToLower(query))
+	where := fmt.Sprintf(
+		`toLower(n.name) CONTAINS %s OR toLower(n.id) CONTAINS %s OR toLower(n.content) CONTAINS %s`,
+		needle,
+		needle,
+		needle,
+	)
+	if metadata != "" {
+		where = "(" + where + ") AND " + cypherMetadataMatches("n", metadata)
+	}
 	cypher := fmt.Sprintf(
-		`MATCH (n:Node) WHERE toLower(n.name) CONTAINS %s OR toLower(n.id) CONTAINS %s OR toLower(n.content) CONTAINS %s RETURN n LIMIT %d`,
-		needle,
-		needle,
-		needle,
+		`MATCH (n:Node) WHERE %s RETURN n LIMIT %d`,
+		where,
 		*seedLimit,
 	)
 	conn, err := s.ageConn(ctx)
@@ -247,6 +273,11 @@ func (s *server) searchSeeds(ctx context.Context, query string) ([]vertexValue, 
 		return nil, err
 	}
 	defer conn.Close()
+	unlock, err := s.lockAgeConn(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	rows, err := conn.QueryContext(ctx, s.cypherSQL(cypher, "n agtype"))
 	if err != nil {
 		return nil, err
@@ -274,6 +305,11 @@ func (s *server) queryTriples(ctx context.Context, cypher string, result *graphR
 		return err
 	}
 	defer conn.Close()
+	unlock, err := s.lockAgeConn(ctx, conn)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	rows, err := conn.QueryContext(ctx, s.cypherSQL(cypher, "n agtype, r agtype, m agtype"))
 	if err != nil {
 		return err
@@ -318,6 +354,12 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	unlock, err := s.lockAgeConn(r.Context(), conn)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer unlock()
 	rows, err := conn.QueryContext(r.Context(), s.cypherSQL(cypher, "from_label agtype, edge_label agtype, to_label agtype, edge_count agtype"))
 	if err != nil {
 		writeError(w, err)
@@ -348,6 +390,16 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) cypherSQL(cypher, columns string) string {
 	return fmt.Sprintf("SELECT * FROM cypher(%s, %s) AS (%s)", sqlString(s.graphName), dollarQuote(cypher), columns)
+}
+
+func (s *server) lockAgeConn(ctx context.Context, conn *sql.Conn) (func(), error) {
+	key := ageLockPrefix + s.graphName
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext($1))`, key); err != nil {
+		return nil, err
+	}
+	return func() {
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext($1))`, key)
+	}, nil
 }
 
 func canAddTriple(seen map[string]struct{}, from, to vertexValue, maxNodes int) bool {
@@ -483,6 +535,47 @@ func cypherStringList(values []string) string {
 		parts = append(parts, cypherString(value))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func cypherMetadataMatches(variable, pattern string) string {
+	key, value, ok := splitMetadataPattern(pattern)
+	if ok {
+		return fmt.Sprintf("toLower(toString(%s.metadata[%s])) =~ %s",
+			variable, cypherString(key), cypherString(metadataGlobRegex(value)))
+	}
+	return fmt.Sprintf("toLower(toString(%s.metadata)) =~ %s", variable, cypherString(metadataGlobRegex(pattern)))
+}
+
+func splitMetadataPattern(pattern string) (string, string, bool) {
+	key, value, ok := strings.Cut(pattern, "=")
+	if !ok {
+		return "", "", false
+	}
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return "", "", false
+	}
+	return key, value, true
+}
+
+func metadataGlobRegex(pattern string) string {
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	var builder strings.Builder
+	builder.WriteString(".*")
+	wrotePart := false
+	for _, part := range strings.Split(pattern, "*") {
+		if part == "" {
+			continue
+		}
+		builder.WriteString(regexp.QuoteMeta(part))
+		builder.WriteString(".*")
+		wrotePart = true
+	}
+	if !wrotePart {
+		return ".*"
+	}
+	return builder.String()
 }
 
 func cypherString(value string) string {

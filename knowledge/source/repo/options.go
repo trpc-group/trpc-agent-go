@@ -77,3 +77,12 @@ func WithTransformers(transformers ...transform.Transformer) Option {
 		s.transformers = append(s.transformers, transformers...)
 	}
 }
+
+// WithDocExtensions sets the file extensions (e.g. ".md", ".txt") that will be
+// included as document nodes when ReadGraph is called.
+// By default no document files are included in graph output.
+func WithDocExtensions(extensions []string) Option {
+	return func(s *Source) {
+		s.docExtensions = append([]string(nil), extensions...)
+	}
+}

@@ -13,7 +13,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,17 +22,42 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const (
-	defaultGraphSearchMaxSeeds = 5
+	defaultGraphSearchMaxSeeds   = 5
+	defaultGraphStoreRoutines    = 4
+	defaultGraphDocumentRoutines = 30
+	defaultGraphNodeContentRunes = 16 * 1024
 )
 
 // GraphKnowledgeOption configures BuiltinGraphKnowledge.
 type GraphKnowledgeOption func(*BuiltinGraphKnowledge)
+
+// GraphLoadOption configures graph source loading behavior.
+type GraphLoadOption func(*graphLoadConfig)
+
+// GraphLoadConcurrency configures concurrency for graph knowledge ingestion stages.
+// Source-specific parsing concurrency is configured on the source itself.
+type GraphLoadConcurrency struct {
+	// AddNodeRoutines controls graph node insertion routines.
+	AddNodeRoutines int
+	// AddEdgeRoutines controls graph edge insertion routines.
+	AddEdgeRoutines int
+	// EmbeddingRoutines controls graph seed document embedding and vector insertion routines.
+	EmbeddingRoutines int
+}
+
+type graphLoadConfig struct {
+	showProgress     bool
+	progressStepSize int
+	concurrency      GraphLoadConcurrency
+	readGraphOpts    []source.ReadGraphOption
+}
 
 // BuiltinGraphKnowledge is the default graph-plus-vector implementation of
 // GraphKnowledge.
@@ -70,6 +94,34 @@ func WithGraphVectorStore(store vectorstore.VectorStore) GraphKnowledgeOption {
 func WithGraphEmbedder(e embedder.Embedder) GraphKnowledgeOption {
 	return func(gk *BuiltinGraphKnowledge) {
 		gk.embedder = e
+	}
+}
+
+// WithGraphLoadProgress enables or disables progress logging during graph source load.
+func WithGraphLoadProgress(show bool) GraphLoadOption {
+	return func(config *graphLoadConfig) {
+		config.showProgress = show
+	}
+}
+
+// WithGraphLoadProgressStepSize sets the graph source load progress update granularity.
+func WithGraphLoadProgressStepSize(stepSize int) GraphLoadOption {
+	return func(config *graphLoadConfig) {
+		config.progressStepSize = stepSize
+	}
+}
+
+// WithGraphLoadConcurrency configures concurrency for graph source loading stages.
+func WithGraphLoadConcurrency(concurrency GraphLoadConcurrency) GraphLoadOption {
+	return func(config *graphLoadConfig) {
+		config.concurrency = concurrency
+	}
+}
+
+// WithGraphLoadReadGraphOpts passes options to the GraphSource.ReadGraph call.
+func WithGraphLoadReadGraphOpts(opts ...source.ReadGraphOption) GraphLoadOption {
+	return func(config *graphLoadConfig) {
+		config.readGraphOpts = append(config.readGraphOpts, opts...)
 	}
 }
 
@@ -119,7 +171,7 @@ func (gk *BuiltinGraphKnowledge) Search(
 func (gk *BuiltinGraphKnowledge) LoadGraphSource(
 	ctx context.Context,
 	src source.GraphSource,
-	opts ...LoadOption,
+	opts ...GraphLoadOption,
 ) error {
 	if err := gk.validateGraphSource(src); err != nil {
 		return err
@@ -131,6 +183,7 @@ func (gk *BuiltinGraphKnowledge) LoadGraphSource(
 	if err != nil {
 		return err
 	}
+	truncateGraphDataContent(data)
 	if err := gk.storeGraphData(ctx, data, config); err != nil {
 		return err
 	}
@@ -161,13 +214,19 @@ func (gk *BuiltinGraphKnowledge) validateGraphSource(src source.GraphSource) err
 	return nil
 }
 
-func newGraphLoadConfig(opts ...LoadOption) *loadConfig {
-	config := &loadConfig{}
+func newGraphLoadConfig(opts ...GraphLoadOption) *graphLoadConfig {
+	config := &graphLoadConfig{}
 	for _, opt := range opts {
 		opt(config)
 	}
-	if config.docParallelism == 0 {
-		config.docParallelism = runtime.NumCPU()
+	if config.concurrency.AddNodeRoutines == 0 {
+		config.concurrency.AddNodeRoutines = defaultGraphStoreRoutines
+	}
+	if config.concurrency.AddEdgeRoutines == 0 {
+		config.concurrency.AddEdgeRoutines = defaultGraphStoreRoutines
+	}
+	if config.concurrency.EmbeddingRoutines == 0 {
+		config.concurrency.EmbeddingRoutines = defaultGraphDocumentRoutines
 	}
 	if config.progressStepSize <= 0 {
 		config.progressStepSize = 100
@@ -179,13 +238,13 @@ func readGraphSourceData(
 	ctx context.Context,
 	src source.GraphSource,
 	sourceName string,
-	config *loadConfig,
+	config *graphLoadConfig,
 	start time.Time,
 ) (*graph.Data, error) {
 	if config.showProgress {
 		log.InfofContext(ctx, "Reading graph source %s", sourceName)
 	}
-	data, err := src.ReadGraph(ctx)
+	data, err := src.ReadGraph(ctx, config.readGraphOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("read graph source: %w", err)
 	}
@@ -199,7 +258,7 @@ func readGraphSourceData(
 	return data, nil
 }
 
-func (gk *BuiltinGraphKnowledge) storeGraphData(ctx context.Context, data *graph.Data, config *loadConfig) error {
+func (gk *BuiltinGraphKnowledge) storeGraphData(ctx context.Context, data *graph.Data, config *graphLoadConfig) error {
 	if len(data.Nodes) > 0 {
 		if config.showProgress {
 			log.InfofContext(ctx, "Adding %d graph node(s)", len(data.Nodes))
@@ -222,7 +281,7 @@ func (gk *BuiltinGraphKnowledge) storeGraphData(ctx context.Context, data *graph
 func (gk *BuiltinGraphKnowledge) indexGraphDataDocuments(
 	ctx context.Context,
 	data *graph.Data,
-	config *loadConfig,
+	config *graphLoadConfig,
 ) (int, error) {
 	docs := graphDataDocuments(data)
 	if config.showProgress {
@@ -246,42 +305,115 @@ func graphSourceName(src source.GraphSource) string {
 	return "graph source"
 }
 
-func (gk *BuiltinGraphKnowledge) addGraphNodes(ctx context.Context, nodes []*graph.Node, config *loadConfig) error {
-	if !config.showProgress {
+func (gk *BuiltinGraphKnowledge) addGraphNodes(ctx context.Context, nodes []*graph.Node, config *graphLoadConfig) error {
+	concurrency := config.concurrency.AddNodeRoutines
+	if concurrency <= 1 && !config.showProgress {
 		return gk.store.AddNodes(ctx, nodes)
 	}
-	for start := 0; start < len(nodes); start += config.progressStepSize {
-		end := start + config.progressStepSize
-		if end > len(nodes) {
-			end = len(nodes)
-		}
-		if err := gk.store.AddNodes(ctx, nodes[start:end]); err != nil {
-			return err
-		}
+	return runGraphBatches(ctx, len(nodes), config.progressStepSize, concurrency, func(start, end int) error {
+		return gk.store.AddNodes(ctx, nodes[start:end])
+	}, func(processed int) {
 		if config.showProgress {
-			log.InfofContext(ctx, "Added %d/%d graph node(s)", end, len(nodes))
+			log.InfofContext(ctx, "Added %d/%d graph node(s)", processed, len(nodes))
 		}
-	}
-	return nil
+	})
 }
 
-func (gk *BuiltinGraphKnowledge) addGraphEdges(ctx context.Context, edges []*graph.Edge, config *loadConfig) error {
-	if !config.showProgress {
+func (gk *BuiltinGraphKnowledge) addGraphEdges(ctx context.Context, edges []*graph.Edge, config *graphLoadConfig) error {
+	concurrency := config.concurrency.AddEdgeRoutines
+	if concurrency <= 1 && !config.showProgress {
 		return gk.store.AddEdges(ctx, edges)
 	}
-	for start := 0; start < len(edges); start += config.progressStepSize {
-		end := start + config.progressStepSize
-		if end > len(edges) {
-			end = len(edges)
-		}
-		if err := gk.store.AddEdges(ctx, edges[start:end]); err != nil {
-			return err
-		}
+	return runGraphBatches(ctx, len(edges), config.progressStepSize, concurrency, func(start, end int) error {
+		return gk.store.AddEdges(ctx, edges[start:end])
+	}, func(processed int) {
 		if config.showProgress {
-			log.InfofContext(ctx, "Added %d/%d graph edge(s)", end, len(edges))
+			log.InfofContext(ctx, "Added %d/%d graph edge(s)", processed, len(edges))
+		}
+	})
+}
+
+func runGraphBatches(
+	ctx context.Context,
+	total int,
+	batchSize int,
+	concurrency int,
+	process func(start, end int) error,
+	report func(processed int),
+) error {
+	if total == 0 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = total
+	}
+	if concurrency <= 1 {
+		for start := 0; start < total; start += batchSize {
+			end := start + batchSize
+			if end > total {
+				end = total
+			}
+			if err := process(start, end); err != nil {
+				return err
+			}
+			report(end)
+		}
+		return nil
+	}
+
+	type batch struct {
+		start int
+		end   int
+	}
+	jobs := make(chan batch)
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
+	var processed int64
+	if maxWorkers := (total + batchSize - 1) / batchSize; concurrency > maxWorkers {
+		concurrency = maxWorkers
+	}
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if err := process(job.start, job.end); err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				current := int(atomic.AddInt64(&processed, int64(job.end-job.start)))
+				report(current)
+			}
+		}()
+	}
+	for start := 0; start < total; start += batchSize {
+		end := start + batchSize
+		if end > total {
+			end = total
+		}
+		select {
+		case err := <-errCh:
+			close(jobs)
+			wg.Wait()
+			return err
+		case jobs <- batch{start: start, end: end}:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return ctx.Err()
 		}
 	}
-	return nil
+	close(jobs)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
 }
 
 // Traverse runs graph traversal against the configured graph store.
@@ -404,9 +536,9 @@ func graphNodeFromDocument(doc *document.Document) *graph.Node {
 func (gk *BuiltinGraphKnowledge) addGraphDocuments(
 	ctx context.Context,
 	docs []*document.Document,
-	config *loadConfig,
+	config *graphLoadConfig,
 ) error {
-	concurrency := config.docParallelism
+	concurrency := config.concurrency.EmbeddingRoutines
 	if concurrency <= 1 || len(docs) <= 1 {
 		for i, doc := range docs {
 			if err := gk.addGraphDocument(ctx, doc); err != nil {
@@ -448,6 +580,10 @@ func (gk *BuiltinGraphKnowledge) addGraphDocuments(
 			wg.Wait()
 			return err
 		case jobs <- doc:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return ctx.Err()
 		}
 	}
 	close(jobs)
@@ -460,7 +596,7 @@ func (gk *BuiltinGraphKnowledge) addGraphDocuments(
 	}
 }
 
-func (gk *BuiltinGraphKnowledge) reportGraphDocumentProgress(ctx context.Context, config *loadConfig, processed, total int) {
+func (gk *BuiltinGraphKnowledge) reportGraphDocumentProgress(ctx context.Context, config *graphLoadConfig, processed, total int) {
 	if !config.showProgress {
 		return
 	}
@@ -477,7 +613,8 @@ func (gk *BuiltinGraphKnowledge) addGraphDocument(ctx context.Context, doc *docu
 	if doc.ID == "" {
 		return errors.New("graph document id cannot be empty")
 	}
-	embedding, err := gk.embedder.GetEmbedding(ctx, buildEmbeddingText(doc))
+	embeddingText := graphSeedEmbeddingText(doc)
+	embedding, err := gk.embedder.GetEmbedding(ctx, embeddingText)
 	if err != nil {
 		return fmt.Errorf("generate graph seed embedding: %w", err)
 	}
@@ -485,6 +622,102 @@ func (gk *BuiltinGraphKnowledge) addGraphDocument(ctx context.Context, doc *docu
 		return fmt.Errorf("add graph seed document: %w", err)
 	}
 	return nil
+}
+
+func graphSeedEmbeddingText(doc *document.Document) string {
+	if doc == nil {
+		return ""
+	}
+	if doc.EmbeddingText != "" {
+		return doc.EmbeddingText
+	}
+	if doc.Metadata == nil {
+		return truncateGraphSeedContent(doc.Content)
+	}
+
+	var builder strings.Builder
+	appendGraphSeedField(&builder, "id", doc.ID)
+	appendGraphSeedField(&builder, "type", graphSeedMetadataString(doc.Metadata, codeast.TrpcAstMetaPrefix+"type"))
+	name := doc.Name
+	if name == "" {
+		name = graphSeedMetadataString(doc.Metadata, codeast.TrpcAstMetaPrefix+"name")
+	}
+	appendGraphSeedField(&builder, "name", name)
+	appendGraphSeedField(&builder, "full_name", graphSeedMetadataString(doc.Metadata, codeast.TrpcAstMetaPrefix+"full_name"))
+	appendGraphSeedField(&builder, "package", graphSeedMetadataString(doc.Metadata, codeast.TrpcAstMetaPrefix+"package"))
+	appendGraphSeedField(&builder, "file_path", graphSeedMetadataString(doc.Metadata, codeast.TrpcAstMetaPrefix+"file_path"))
+	appendGraphSeedField(&builder, "signature", graphSeedMetadataString(doc.Metadata, codeast.TrpcAstMetaPrefix+"signature"))
+	appendGraphSeedField(&builder, "comment", graphSeedMetadataString(doc.Metadata, codeast.TrpcAstMetaPrefix+"comment"))
+
+	content := truncateGraphSeedContent(doc.Content)
+	if content != "" {
+		if builder.Len() > 0 {
+			builder.WriteByte('\n')
+		}
+		builder.WriteString("code:\n")
+		builder.WriteString(content)
+	}
+	if builder.Len() == 0 {
+		return doc.Content
+	}
+	return builder.String()
+}
+
+func appendGraphSeedField(builder *strings.Builder, key, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	if builder.Len() > 0 {
+		builder.WriteByte('\n')
+	}
+	builder.WriteString(key)
+	builder.WriteString(": ")
+	builder.WriteString(value)
+}
+
+func graphSeedMetadataString(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func truncateGraphSeedContent(content string) string {
+	if defaultGraphNodeContentRunes <= 0 {
+		return ""
+	}
+	count := 0
+	for index := range content {
+		if count == defaultGraphNodeContentRunes {
+			return content[:index] + "\n...<truncated>"
+		}
+		count++
+	}
+	return content
+}
+
+func truncateGraphDataContent(data *graph.Data) {
+	if data == nil {
+		return
+	}
+	for _, node := range data.Nodes {
+		if node == nil {
+			continue
+		}
+		node.Content = truncateGraphSeedContent(node.Content)
+	}
 }
 
 func graphDataDocuments(data *graph.Data) []*document.Document {

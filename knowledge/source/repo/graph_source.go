@@ -16,19 +16,20 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	docreader "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
-type codeASTDirectoryReader interface {
-	ReadCodeASTFromDirectory(dirPath string) (*codeast.Result, error)
-}
-
 // ReadGraph reads repository code as graph-native data.
-func (s *Source) ReadGraph(ctx context.Context) (*graph.Data, error) {
+func (s *Source) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) (*graph.Data, error) {
+	parseConcurrency := source.ReadGraphParseConcurrency(opts)
+
 	repository := s.repository
 	repoRoot, repoInfo, cleanup, err := s.resolveRepository(ctx, repository)
 	if err != nil {
@@ -46,31 +47,35 @@ func (s *Source) ReadGraph(ctx context.Context) (*graph.Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(allowedGoPaths) == 0 {
-		return &graph.Data{}, nil
+
+	var data *graph.Data
+	if len(allowedGoPaths) > 0 {
+		parser, ok := codeast.GetDirectoryParser(codeast.FileTypeGo)
+		if !ok {
+			return nil, missingReaderError(codeast.FileTypeGo)
+		}
+		var parseOpts []codeast.ParseOption
+		if parseConcurrency > 0 {
+			parseOpts = append(parseOpts, codeast.WithParseConcurrency(parseConcurrency))
+		}
+		result, err := parser.ParseDirectory(rootToScan, parseOpts...)
+		if err != nil {
+			return nil, err
+		}
+		data = s.graphDataFromCodeAST(result, repoRoot, repoInfo, allowedGoPaths)
+	} else {
+		data = &graph.Data{}
 	}
 
-	reader, err := s.goCodeASTReader()
-	if err != nil {
-		return nil, err
+	if len(s.docExtensions) > 0 {
+		docNodes, err := s.readDocumentNodes(ctx, rootToScan, repoRoot, repoInfo)
+		if err != nil {
+			return nil, err
+		}
+		data.Nodes = append(data.Nodes, docNodes...)
 	}
-	result, err := reader.ReadCodeASTFromDirectory(rootToScan)
-	if err != nil {
-		return nil, err
-	}
-	return s.graphDataFromCodeAST(result, repoRoot, repoInfo, allowedGoPaths), nil
-}
 
-func (s *Source) goCodeASTReader() (codeASTDirectoryReader, error) {
-	r, exists := s.readers[string(source.FileReaderTypeGo)]
-	if !exists {
-		return nil, missingReaderError(string(source.FileReaderTypeGo))
-	}
-	reader, ok := r.(codeASTDirectoryReader)
-	if !ok {
-		return nil, fmt.Errorf("reader for file type go is not code AST capable")
-	}
-	return reader, nil
+	return data, nil
 }
 
 func (s *Source) allowedGoPaths(repoRoot, rootToScan string) (map[string]struct{}, error) {
@@ -252,4 +257,97 @@ func cloneAnyMap(metadata map[string]any) map[string]any {
 		cloned[k] = v
 	}
 	return cloned
+}
+
+// readDocumentNodes scans the directory for files matching s.docExtensions and
+// converts each document chunk into a graph.Node with kind="document".
+func (s *Source) readDocumentNodes(
+	ctx context.Context,
+	rootToScan string,
+	repoRoot string,
+	info *repoInfo,
+) ([]*graph.Node, error) {
+	filePaths, err := s.getFilePaths(rootToScan)
+	if err != nil {
+		return nil, err
+	}
+	namespace := repoGraphNamespace(info)
+	baseMetadata := s.buildBaseMetadata(repoRoot, info)
+	var nodes []*graph.Node
+	for _, filePath := range filePaths {
+		ext := strings.ToLower(filepath.Ext(filePath))
+		if !slices.Contains(s.docExtensions, ext) {
+			continue
+		}
+		r, ok := docreader.GetReader(ext)
+		if !ok {
+			continue
+		}
+		fileReader, ok := r.(interface {
+			ReadFromFile(string) ([]*document.Document, error)
+		})
+		if !ok {
+			continue
+		}
+		docs, err := fileReader.ReadFromFile(filePath)
+		if err != nil {
+			continue
+		}
+		relPath := toRelativeRepoPath(repoRoot, filePath)
+		for i, doc := range docs {
+			if doc == nil {
+				continue
+			}
+			chunkIndex := i
+			if doc.Metadata != nil {
+				if v, ok := doc.Metadata[source.MetaChunkIndex]; ok {
+					if n, ok := v.(int); ok {
+						chunkIndex = n
+					}
+				}
+			}
+			sourceID := repoGraphSourceID(namespace, "doc", fmt.Sprintf("%s#%d", relPath, chunkIndex))
+			nodeID := generatedGraphID("node", sourceID)
+			nodes = append(nodes, graphNodeFromDocumentChunk(doc, nodeID, sourceID, relPath, chunkIndex, baseMetadata))
+		}
+	}
+	_ = ctx
+	return nodes, nil
+}
+
+func graphNodeFromDocumentChunk(
+	doc *document.Document,
+	nodeID string,
+	sourceID string,
+	relPath string,
+	chunkIndex int,
+	baseMetadata map[string]any,
+) *graph.Node {
+	metadata := cloneAnyMap(baseMetadata)
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	metadata["kind"] = "document"
+	metadata[source.MetaSourceID] = sourceID
+	metadata[source.MetaFilePath] = relPath
+	metadata[source.MetaChunkIndex] = chunkIndex
+	metadata[source.MetaContentLength] = len([]rune(doc.Content))
+	if doc.Metadata != nil {
+		for k, v := range doc.Metadata {
+			if k == source.MetaRepoURL || k == source.MetaRepoPath {
+				continue
+			}
+			metadata[k] = v
+		}
+	}
+	name := doc.Name
+	if name == "" {
+		name = relPath
+	}
+	return &graph.Node{
+		ID:       nodeID,
+		Name:     name,
+		Content:  doc.Content,
+		Metadata: metadata,
+	}
 }

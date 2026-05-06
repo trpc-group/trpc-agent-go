@@ -19,7 +19,7 @@ import (
 )
 
 func TestParseContentBuildsNodesAndReservesEdges(t *testing.T) {
-	parser := NewParser()
+	parser := NewParser(WithEdgeAnalysis(true))
 	result, err := parser.ParseContent("service.go", `package demo
 
 import "context"
@@ -87,7 +87,7 @@ func (s *Service) Do() error {
 }
 `)
 
-	parser := NewParser()
+	parser := NewParser(WithEdgeAnalysis(true))
 	result, err := parser.ParseDirectory(dir)
 	if err != nil {
 		t.Fatalf("ParseDirectory() error = %v", err)
@@ -128,7 +128,7 @@ func Use(w lib.Worker) {
 }
 `)
 
-	parser := NewParser()
+	parser := NewParser(WithEdgeAnalysis(true))
 	result, err := parser.ParseDirectory(dir)
 	if err != nil {
 		t.Fatalf("ParseDirectory() error = %v", err)
@@ -141,6 +141,114 @@ func Use(w lib.Worker) {
 	}
 	if !hasCodeEdge(result.Edges, "example.com/demo/app.Use", "example.com/demo/lib.Worker", codeast.RelationParam) {
 		t.Fatalf("expected cross-package PARAM edge, got %+v", result.Edges)
+	}
+}
+
+func TestParseDirectoryFullModeAnalyzesCrossPackageImplements(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "api", "api.go"), `package api
+
+type Store interface {
+	Add()
+	Close() error
+}
+`)
+	writeFile(t, filepath.Join(dir, "impl", "impl.go"), `package impl
+
+type Store struct{}
+
+func (s *Store) Add() {}
+func (s *Store) Close() error { return nil }
+`)
+
+	parser := NewParser(WithEdgeAnalysis(true))
+	result, err := parser.ParseDirectory(dir)
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v", err)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo/impl.Store", "example.com/demo/api.Store", codeast.RelationImplements) {
+		t.Fatalf("expected cross-package IMPLEMENTS edge, got %+v", result.Edges)
+	}
+}
+
+func TestParseDirectoryFullModeAnalyzesCrossPackagePointerImplements(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "api", "api.go"), `package api
+
+type Store interface {
+	Add()
+}
+`)
+	writeFile(t, filepath.Join(dir, "impl", "impl.go"), `package impl
+
+type Store struct{}
+
+func (s *Store) Add() {}
+`)
+
+	parser := NewParser(WithEdgeAnalysis(true))
+	result, err := parser.ParseDirectory(dir)
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v", err)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo/impl.Store", "example.com/demo/api.Store", codeast.RelationImplements) {
+		t.Fatalf("expected pointer receiver cross-package IMPLEMENTS edge, got %+v", result.Edges)
+	}
+}
+
+func TestParseDirectoryModulesAnalyzesImportedInterfaceImplements(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "api", "api.go"), `package api
+
+type Store interface {
+	Add()
+	Close() error
+}
+`)
+	implDir := filepath.Join(dir, "impl")
+	writeFile(t, filepath.Join(implDir, "go.mod"), "module example.com/root/impl\n\ngo 1.21\n\nrequire example.com/root v0.0.0\n\nreplace example.com/root => ..\n")
+	writeFile(t, filepath.Join(implDir, "impl.go"), `package impl
+
+import "example.com/root/api"
+
+var _ api.Store = (*Store)(nil)
+
+type Store struct{}
+
+func (s *Store) Add() {}
+func (s *Store) Close() error { return nil }
+`)
+
+	parser := NewParser(WithEdgeAnalysis(true))
+	result, err := parser.ParseDirectory(dir)
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v", err)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/root/impl.Store", "example.com/root/api.Store", codeast.RelationImplements) {
+		t.Fatalf("expected cross-module IMPLEMENTS edge, got %+v", result.Edges)
+	}
+}
+
+func TestParseDirectoryFullModeSkipsEmptyInterfaceImplements(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "demo.go"), `package demo
+
+type NodeResult any
+
+type Store struct{}
+`)
+
+	parser := NewParser()
+	result, err := parser.ParseDirectory(dir)
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v", err)
+	}
+	if hasCodeEdge(result.Edges, "example.com/demo.Store", "example.com/demo.NodeResult", codeast.RelationImplements) {
+		t.Fatalf("unexpected empty-interface IMPLEMENTS edge, got %+v", result.Edges)
 	}
 }
 
@@ -170,7 +278,7 @@ func Use(w alias.Worker) alias.Runner {
 }
 `)
 
-	parser := NewParser()
+	parser := NewParser(WithEdgeAnalysis(true))
 	result, err := parser.ParseDirectory(dir)
 	if err != nil {
 		t.Fatalf("ParseDirectory() error = %v", err)
@@ -380,6 +488,51 @@ func TestBuildNodeEmbeddingText(t *testing.T) {
 	}
 	if decoded["id"] != node.ID {
 		t.Fatalf("payload id = %v, want %s", decoded["id"], node.ID)
+	}
+}
+
+func TestParserModuleConcurrencyUsesTotalBudget(t *testing.T) {
+	tests := []struct {
+		name        string
+		concurrency int
+		modules     int
+		wantModules int
+		wantPer     int
+	}{
+		{
+			name:        "default four modules",
+			concurrency: 100,
+			modules:     10,
+			wantModules: 4,
+			wantPer:     25,
+		},
+		{
+			name:        "small total caps modules",
+			concurrency: 3,
+			modules:     10,
+			wantModules: 3,
+			wantPer:     1,
+		},
+		{
+			name:        "few modules",
+			concurrency: 300,
+			modules:     2,
+			wantModules: 2,
+			wantPer:     150,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(WithConcurrency(tt.concurrency))
+			gotModules, gotPer := parser.moduleConcurrency(tt.modules)
+			if gotModules != tt.wantModules || gotPer != tt.wantPer {
+				t.Fatalf("moduleConcurrency() = (%d, %d), want (%d, %d)",
+					gotModules, gotPer, tt.wantModules, tt.wantPer)
+			}
+			if gotModules*gotPer > tt.concurrency {
+				t.Fatalf("moduleConcurrency product = %d, want <= %d", gotModules*gotPer, tt.concurrency)
+			}
+		})
 	}
 }
 

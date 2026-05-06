@@ -22,16 +22,26 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"golang.org/x/tools/go/packages"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 )
 
+const defaultGoModuleConcurrency = 4
+
+func init() {
+	codeast.RegisterDirectoryParser(codeast.FileTypeGo, NewParser(WithEdgeAnalysis(true)))
+}
+
 // Parser parses Go source content into code-aware AST nodes.
 type Parser struct {
-	extractor codeast.Extractor[*extractInput]
-	analyzer  codeast.Analyzer[*analyzeInput]
+	extractor      *defaultExtractor
+	analyzer       *defaultAnalyzer
+	concurrency    int
+	extractImports bool
+	extractEdges   bool
 }
 
 type extractInput struct {
@@ -40,12 +50,20 @@ type extractInput struct {
 }
 
 type analyzeInput struct {
-	pkg *parsedPackage
+	pkg        *parsedPackage
+	interfaces []*interfaceType
+}
+
+type interfaceType struct {
+	id       string
+	iface    *types.Interface
+	external bool
 }
 
 type parserConfig struct {
 	concurrency    int
 	extractImports bool
+	extractEdges   bool
 }
 
 // Option is a functional option for configuring the parser.
@@ -67,19 +85,44 @@ func WithExtractImports(enabled bool) Option {
 	}
 }
 
+// WithEdgeAnalysis enables or disables edge (relationship) extraction.
+// Edge analysis requires type-checked packages and is skipped when disabled,
+// reducing parse time for callers that only need node (symbol) data.
+// Defaults to false; set to true when graph-aware parsing is needed.
+func WithEdgeAnalysis(enabled bool) Option {
+	return func(c *parserConfig) {
+		c.extractEdges = enabled
+	}
+}
+
 // NewParser creates a new Go AST parser.
 func NewParser(opts ...Option) *Parser {
 	cfg := &parserConfig{
 		concurrency:    100,
 		extractImports: true,
+		extractEdges:   false,
 	}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 	return &Parser{
-		extractor: newDefaultExtractor(cfg.concurrency, cfg.extractImports),
-		analyzer:  newDefaultAnalyzer(),
+		extractor:      newDefaultExtractor(cfg.concurrency, cfg.extractImports),
+		analyzer:       newDefaultAnalyzer(),
+		concurrency:    cfg.concurrency,
+		extractImports: cfg.extractImports,
+		extractEdges:   cfg.extractEdges,
 	}
+}
+
+func (p *Parser) withConcurrency(concurrency int) *Parser {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	return NewParser(
+		WithConcurrency(concurrency),
+		WithExtractImports(p.extractImports),
+		WithEdgeAnalysis(p.extractEdges),
+	)
 }
 
 // ParseContent parses Go source content and returns semantic nodes plus reserved edge slots.
@@ -115,9 +158,13 @@ func (p *Parser) ParseContent(name, content string) (*codeast.Result, error) {
 		nodeSet[node.ID] = true
 	}
 
-	edges, err := p.analyzer.Analyze(&analyzeInput{pkg: pkg}, nodeSet)
-	if err != nil {
-		return nil, err
+	var edges []*codeast.Edge
+	if p.extractEdges {
+		var err error
+		edges, err = p.analyzer.Analyze(&analyzeInput{pkg: pkg}, nodeSet)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &codeast.Result{
@@ -128,7 +175,10 @@ func (p *Parser) ParseContent(name, content string) (*codeast.Result, error) {
 }
 
 // ParseDirectory parses a Go directory/module and returns semantic nodes across all files.
-func (p *Parser) ParseDirectory(dirPath string) (*codeast.Result, error) {
+func (p *Parser) ParseDirectory(dirPath string, opts ...codeast.ParseOption) (*codeast.Result, error) {
+	if concurrency := codeast.ParseConcurrency(opts); concurrency > 0 && concurrency != p.concurrency {
+		return p.withConcurrency(concurrency).ParseDirectory(dirPath)
+	}
 	absDir, err := filepath.Abs(dirPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %w", err)
@@ -144,14 +194,121 @@ func (p *Parser) ParseDirectory(dirPath string) (*codeast.Result, error) {
 		return p.parseDirectoryModule(absDir)
 	}
 
+	return p.parseDirectoryModules(absDir, modules)
+}
+
+func (p *Parser) parseDirectoryModules(absDir string, modules []string) (*codeast.Result, error) {
+	moduleConcurrency, perModuleConcurrency := p.moduleConcurrency(len(modules))
+	results, err := p.parseDirectoryModulesWithConcurrency(modules, moduleConcurrency, perModuleConcurrency)
+	if err != nil {
+		return nil, err
+	}
+	allNodes, allEdges, imports := mergeModuleResults(results)
+	return &codeast.Result{
+		File: &codeast.FileInfo{
+			Name:     absDir,
+			Language: codeast.LanguageGo,
+			Package:  modulePathForDir(absDir, absDir),
+			Imports:  sortedKeys(imports),
+		},
+		Nodes: allNodes,
+		Edges: allEdges,
+	}, nil
+}
+
+func (p *Parser) moduleConcurrency(moduleCount int) (int, int) {
+	total := p.concurrency
+	if total <= 0 {
+		total = 1
+	}
+	moduleConcurrency := defaultGoModuleConcurrency
+	if moduleConcurrency > moduleCount {
+		moduleConcurrency = moduleCount
+	}
+	if moduleConcurrency > total {
+		moduleConcurrency = total
+	}
+	if moduleConcurrency <= 0 {
+		moduleConcurrency = 1
+	}
+	perModuleConcurrency := total / moduleConcurrency
+	if perModuleConcurrency <= 0 {
+		perModuleConcurrency = 1
+	}
+	return moduleConcurrency, perModuleConcurrency
+}
+
+func (p *Parser) parseDirectoryModulesWithConcurrency(
+	modules []string,
+	moduleConcurrency int,
+	perModuleConcurrency int,
+) ([]*codeast.Result, error) {
+	if len(modules) == 0 {
+		return nil, nil
+	}
+	if moduleConcurrency <= 1 {
+		results := make([]*codeast.Result, len(modules))
+		moduleParser := p.withConcurrency(perModuleConcurrency)
+		for i, moduleDir := range modules {
+			result, err := moduleParser.parseDirectoryModule(moduleDir)
+			if err != nil {
+				return nil, err
+			}
+			results[i] = result
+		}
+		return results, nil
+	}
+
+	type job struct {
+		index int
+		path  string
+	}
+	jobs := make(chan job)
+	errCh := make(chan error, 1)
+	results := make([]*codeast.Result, len(modules))
+	var wg sync.WaitGroup
+	for i := 0; i < moduleConcurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			moduleParser := p.withConcurrency(perModuleConcurrency)
+			for item := range jobs {
+				result, err := moduleParser.parseDirectoryModule(item.path)
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				results[item.index] = result
+			}
+		}()
+	}
+	for i, moduleDir := range modules {
+		select {
+		case err := <-errCh:
+			close(jobs)
+			wg.Wait()
+			return nil, err
+		case jobs <- job{index: i, path: moduleDir}:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+		return results, nil
+	}
+}
+
+func mergeModuleResults(results []*codeast.Result) ([]*codeast.Node, []*codeast.Edge, map[string]struct{}) {
 	var allNodes []*codeast.Node
 	var allEdges []*codeast.Edge
 	imports := make(map[string]struct{})
-	for _, moduleDir := range modules {
-		result, err := p.parseDirectoryModule(moduleDir)
-		if err != nil {
-			return nil, err
-		}
+	for _, result := range results {
 		if result == nil {
 			continue
 		}
@@ -164,17 +321,7 @@ func (p *Parser) ParseDirectory(dirPath string) (*codeast.Result, error) {
 			imports[imp] = struct{}{}
 		}
 	}
-
-	return &codeast.Result{
-		File: &codeast.FileInfo{
-			Name:     absDir,
-			Language: codeast.LanguageGo,
-			Package:  modulePathForDir(absDir, absDir),
-			Imports:  sortedKeys(imports),
-		},
-		Nodes: allNodes,
-		Edges: allEdges,
-	}, nil
+	return allNodes, allEdges, imports
 }
 
 func (p *Parser) parseDirectoryModule(absDir string) (*codeast.Result, error) {
@@ -233,12 +380,11 @@ func (p *Parser) parseDirectoryFull(absDir string) (*codeast.Result, error) {
 		nodeSet[node.ID] = true
 	}
 	var allEdges []*codeast.Edge
-	for _, pkg := range parsedPkgs {
-		edges, err := p.analyzer.Analyze(&analyzeInput{pkg: pkg}, nodeSet)
+	if p.extractEdges {
+		allEdges, err = p.analyzePackages(parsedPkgs, nodeSet)
 		if err != nil {
 			return nil, err
 		}
-		allEdges = append(allEdges, edges...)
 	}
 
 	return &codeast.Result{
@@ -251,6 +397,118 @@ func (p *Parser) parseDirectoryFull(absDir string) (*codeast.Result, error) {
 		Nodes: allNodes,
 		Edges: allEdges,
 	}, nil
+}
+
+func (p *Parser) analyzePackages(parsedPkgs []*parsedPackage, nodeSet map[string]bool) ([]*codeast.Edge, error) {
+	if len(parsedPkgs) == 0 {
+		return nil, nil
+	}
+	interfaces := packageInterfaces(parsedPkgs, nodeSet)
+	concurrency := p.concurrency
+	if concurrency <= 1 || len(parsedPkgs) == 1 {
+		var allEdges []*codeast.Edge
+		for _, pkg := range parsedPkgs {
+			edges, err := p.analyzer.Analyze(&analyzeInput{pkg: pkg, interfaces: interfaces}, nodeSet)
+			if err != nil {
+				return nil, err
+			}
+			allEdges = append(allEdges, edges...)
+		}
+		return allEdges, nil
+	}
+	if concurrency > len(parsedPkgs) {
+		concurrency = len(parsedPkgs)
+	}
+
+	type job struct {
+		index int
+		pkg   *parsedPackage
+	}
+	jobs := make(chan job)
+	errCh := make(chan error, 1)
+	results := make([][]*codeast.Edge, len(parsedPkgs))
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			analyzer := newDefaultAnalyzer()
+			for item := range jobs {
+				edges, err := analyzer.Analyze(&analyzeInput{pkg: item.pkg, interfaces: interfaces}, nodeSet)
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				results[item.index] = edges
+			}
+		}()
+	}
+	for i, pkg := range parsedPkgs {
+		select {
+		case err := <-errCh:
+			close(jobs)
+			wg.Wait()
+			return nil, err
+		case jobs <- job{index: i, pkg: pkg}:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+	}
+
+	var allEdges []*codeast.Edge
+	for _, edges := range results {
+		allEdges = append(allEdges, edges...)
+	}
+	return allEdges, nil
+}
+
+func packageInterfaces(pkgs []*parsedPackage, nodeSet map[string]bool) []*interfaceType {
+	var interfaces []*interfaceType
+	seen := make(map[string]struct{})
+	appendInterfaces := func(pkg *types.Package, external bool) {
+		if pkg == nil {
+			return
+		}
+		scope := pkg.Scope()
+		for _, name := range scope.Names() {
+			obj := scope.Lookup(name)
+			typeName, ok := obj.(*types.TypeName)
+			if !ok {
+				continue
+			}
+			iface, ok := typeName.Type().Underlying().(*types.Interface)
+			if !ok || iface.NumMethods() == 0 {
+				continue
+			}
+			id := fmt.Sprintf("%s.%s", pkg.Path(), name)
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			if !external && nodeSet != nil && !nodeSet[id] {
+				continue
+			}
+			seen[id] = struct{}{}
+			interfaces = append(interfaces, &interfaceType{id: id, iface: iface, external: external})
+		}
+	}
+	for _, pkg := range pkgs {
+		if pkg == nil || pkg.Types == nil {
+			continue
+		}
+		appendInterfaces(pkg.Types, false)
+		for _, imported := range pkg.Types.Imports() {
+			appendInterfaces(imported, true)
+		}
+	}
+	return interfaces
 }
 
 func (p *Parser) parseDirectoryDirectAST(absDir string) (*codeast.Result, error) {

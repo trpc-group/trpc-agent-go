@@ -40,7 +40,7 @@
 
     header {
       display: grid;
-      grid-template-columns: minmax(160px, 1fr) minmax(240px, 440px) 110px 110px auto auto;
+      grid-template-columns: minmax(160px, 1fr) minmax(220px, 360px) minmax(180px, 280px) 110px 110px auto auto;
       align-items: center;
       gap: 10px;
       padding: 8px 14px;
@@ -277,6 +277,7 @@
       <small>developed by tRPC</small>
     </h1>
     <input id="query" type="search" placeholder="Search id, name, content" autocomplete="off">
+    <input id="metadata" type="search" placeholder="metadata key=value, e.g. trpc_ast_package=knowledge*" title="Filter metadata by key=value with * wildcard. Examples: trpc_ast_package=knowledge*, trpc_ast_file_path=*graph*, trpc_ast_type=Method" autocomplete="off">
     <input id="node-limit" type="number" min="1" max="5000" value="100" title="Node limit">
     <input id="edge-limit" type="number" min="1" max="20000" value="1000" title="Edge limit">
     <button id="load" class="primary" type="button">Load</button>
@@ -328,6 +329,7 @@
 
     const statusEl = document.getElementById("status");
     const queryEl = document.getElementById("query");
+    const metadataEl = document.getElementById("metadata");
     const nodeLimitEl = document.getElementById("node-limit");
     const edgeLimitEl = document.getElementById("edge-limit");
     const loadEl = document.getElementById("load");
@@ -335,6 +337,9 @@
 
     loadEl.addEventListener("click", () => loadGraph());
     queryEl.addEventListener("keydown", event => {
+      if (event.key === "Enter") loadGraph();
+    });
+    metadataEl.addEventListener("keydown", event => {
       if (event.key === "Enter") loadGraph();
     });
     network.on("click", params => {
@@ -351,6 +356,7 @@
           edge_limit: boundedNumber(edgeLimitEl.value, 1000, 1, 20000)
         });
         if (queryEl.value.trim()) params.set("query", queryEl.value.trim());
+        if (metadataEl.value.trim()) params.set("metadata", metadataEl.value.trim());
         const response = await fetch(`/api/graph?${params.toString()}`);
         if (!response.ok) throw new Error(await response.text());
         const graph = await response.json();

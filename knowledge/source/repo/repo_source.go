@@ -41,6 +41,7 @@ type Source struct {
 	transformers   []transform.Transformer
 	skipDirs       []string
 	skipSuffixes   []string
+	docExtensions  []string
 }
 
 // Repository describes one repository input and its version/scope configuration.

@@ -78,3 +78,57 @@ func TestCypherValueFormatsMetadataMap(t *testing.T) {
 		t.Fatalf("cypherValue() = %s, want %s", value, want)
 	}
 }
+
+func TestEdgeTypesDeduplicatesAndSorts(t *testing.T) {
+	labels, err := edgeTypes([]*graph.Edge{
+		{FromID: "a", ToID: "b", Type: "CALLS"},
+		{FromID: "b", ToID: "c", Type: "METHOD"},
+		{FromID: "c", ToID: "d", Type: "CALLS"},
+	})
+	if err != nil {
+		t.Fatalf("edgeTypes() error = %v", err)
+	}
+	if len(labels) != 2 || labels[0] != "CALLS" || labels[1] != "METHOD" {
+		t.Fatalf("edgeTypes() = %+v, want [CALLS METHOD]", labels)
+	}
+}
+
+func TestRelationshipPatternsExpandsMultipleEdgeTypes(t *testing.T) {
+	patterns, err := relationshipPatterns(graph.DirectionOut, []string{"METHOD", "CALLS"}, 2)
+	if err != nil {
+		t.Fatalf("relationshipPatterns() error = %v", err)
+	}
+	want := []string{
+		`-[:CALLS]->`,
+		`-[:METHOD]->`,
+		`-[:CALLS]->(:Node)-[:CALLS]->`,
+		`-[:CALLS]->(:Node)-[:METHOD]->`,
+		`-[:METHOD]->(:Node)-[:CALLS]->`,
+		`-[:METHOD]->(:Node)-[:METHOD]->`,
+	}
+	if len(patterns) != len(want) {
+		t.Fatalf("len(patterns) = %d, want %d: %+v", len(patterns), len(want), patterns)
+	}
+	for i := range want {
+		if patterns[i] != want[i] {
+			t.Fatalf("patterns[%d] = %q, want %q", i, patterns[i], want[i])
+		}
+	}
+}
+
+func TestRelationshipPatternsUsesVariableLengthForSingleEdgeType(t *testing.T) {
+	patterns, err := relationshipPatterns(graph.DirectionIn, []string{"CALLS"}, 3)
+	if err != nil {
+		t.Fatalf("relationshipPatterns() error = %v", err)
+	}
+	if len(patterns) != 1 || patterns[0] != `<-[:CALLS*1..3]-` {
+		t.Fatalf("patterns = %+v, want single variable-length pattern", patterns)
+	}
+}
+
+func TestRelationshipPatternsRejectsCombinationExplosion(t *testing.T) {
+	_, err := relationshipPatterns(graph.DirectionOut, []string{"A", "B", "C", "D", "E"}, 5)
+	if err == nil {
+		t.Fatal("relationshipPatterns() error is nil, want combination limit error")
+	}
+}

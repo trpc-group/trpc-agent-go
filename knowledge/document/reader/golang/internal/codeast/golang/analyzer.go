@@ -63,7 +63,7 @@ func (a *defaultAnalyzer) Analyze(input *analyzeInput, nodeSet map[string]bool) 
 		}
 	}
 
-	edges = append(edges, a.analyzeImplements(pkg, nodeSet)...)
+	edges = append(edges, a.analyzeImplements(pkg, input.interfaces, nodeSet)...)
 	return edges, nil
 }
 
@@ -282,7 +282,11 @@ func (a *defaultAnalyzer) extractCall(
 	}
 }
 
-func (a *defaultAnalyzer) analyzeImplements(pkg *parsedPackage, nodeSet map[string]bool) []*codeast.Edge {
+func (a *defaultAnalyzer) analyzeImplements(
+	pkg *parsedPackage,
+	interfaces []*interfaceType,
+	nodeSet map[string]bool,
+) []*codeast.Edge {
 	if pkg.Types == nil {
 		return nil
 	}
@@ -299,26 +303,19 @@ func (a *defaultAnalyzer) analyzeImplements(pkg *parsedPackage, nodeSet map[stri
 			continue
 		}
 
-		for _, ifaceName := range scope.Names() {
-			ifaceObj := scope.Lookup(ifaceName)
-			ifaceTypeName, ok := ifaceObj.(*types.TypeName)
-			if !ok {
+		fromID := fmt.Sprintf("%s.%s", pkg.ID, name)
+		for _, ifaceType := range interfaces {
+			if ifaceType == nil || ifaceType.iface == nil || ifaceType.id == "" {
 				continue
 			}
-			iface, ok := ifaceTypeName.Type().Underlying().(*types.Interface)
-			if !ok {
-				continue
-			}
-			if !types.Implements(typeName.Type(), iface) && !types.Implements(types.NewPointer(typeName.Type()), iface) {
+			if !types.Implements(typeName.Type(), ifaceType.iface) && !types.Implements(types.NewPointer(typeName.Type()), ifaceType.iface) {
 				continue
 			}
 
-			fromID := fmt.Sprintf("%s.%s", pkg.ID, name)
-			toID := fmt.Sprintf("%s.%s", pkg.ID, ifaceName)
-			if nodeSet == nil || (nodeSet[fromID] && nodeSet[toID]) {
+			if nodeSet == nil || (nodeSet[fromID] && (nodeSet[ifaceType.id] || ifaceType.external)) {
 				edges = append(edges, &codeast.Edge{
 					FromID: fromID,
-					ToID:   toID,
+					ToID:   ifaceType.id,
 					Type:   codeast.RelationImplements,
 				})
 			}

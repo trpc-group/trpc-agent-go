@@ -51,7 +51,7 @@ func (s *stubGraphKnowledge) FindPaths(
 func TestGraphTraverseTool(t *testing.T) {
 	kb := &stubGraphKnowledge{
 		traverseResult: &graph.TraverseResult{
-			Nodes: []*graph.Node{{ID: "a", Name: "A"}},
+			Nodes: []*graph.Node{{ID: "a", Name: "A", Content: "func A() {}"}},
 		},
 	}
 	graphTool := NewGraphTraverseTool(kb)
@@ -65,18 +65,26 @@ func TestGraphTraverseTool(t *testing.T) {
 		MaxNodes:  20,
 	})
 	require.Len(t, result.Nodes, 1)
+	require.Empty(t, result.Nodes[0].Content)
+	require.Equal(t, "func A() {}", kb.traverseResult.Nodes[0].Content)
 	require.Equal(t, []string{"a"}, kb.traverseQuery.StartIDs)
 	require.Equal(t, graph.DirectionBoth, kb.traverseQuery.Direction)
 	require.Equal(t, []string{"CALLS"}, kb.traverseQuery.EdgeTypes)
 	require.Equal(t, 2, kb.traverseQuery.MaxDepth)
 	require.Equal(t, 20, kb.traverseQuery.MaxNodes)
+
+	result = callGraphTool[*graph.TraverseResult](t, graphTool, &GraphTraverseRequest{
+		StartIDs:       []string{"a"},
+		IncludeContent: true,
+	})
+	require.Equal(t, "func A() {}", result.Nodes[0].Content)
 }
 
 func TestGraphFindPathsTool(t *testing.T) {
 	kb := &stubGraphKnowledge{
 		pathResult: &graph.PathResult{
 			Paths: []*graph.Path{{
-				Nodes: []*graph.Node{{ID: "a"}, {ID: "b"}},
+				Nodes: []*graph.Node{{ID: "a", Content: "func A() {}"}, {ID: "b", Content: "func B() {}"}},
 				Edges: []*graph.Edge{{FromID: "a", ToID: "b", Type: "CALLS"}},
 			}},
 		},
@@ -92,6 +100,8 @@ func TestGraphFindPathsTool(t *testing.T) {
 		MaxPaths:  5,
 	})
 	require.Len(t, result.Paths, 1)
+	require.Empty(t, result.Paths[0].Nodes[0].Content)
+	require.Equal(t, "func A() {}", kb.pathResult.Paths[0].Nodes[0].Content)
 	require.Equal(t, "a", kb.pathQuery.FromID)
 	require.Equal(t, "b", kb.pathQuery.ToID)
 	require.Equal(t, graph.DirectionOut, kb.pathQuery.Direction)
@@ -103,6 +113,13 @@ func TestGraphFindPathsTool(t *testing.T) {
 		ToID:   "b",
 	})
 	require.Equal(t, defaultGraphToolMaxPaths, kb.pathQuery.MaxPaths)
+
+	result = callGraphTool[*graph.PathResult](t, graphTool, &GraphFindPathsRequest{
+		FromID:         "a",
+		ToID:           "b",
+		IncludeContent: true,
+	})
+	require.Equal(t, "func A() {}", result.Paths[0].Nodes[0].Content)
 }
 
 func TestGraphToolSet(t *testing.T) {

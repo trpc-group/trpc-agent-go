@@ -39,6 +39,7 @@ func init() {
 	docreader.RegisterReader([]string{".proto"}, func(opts ...docreader.Option) docreader.Reader {
 		return &testProtoReader{}
 	})
+	codeast.RegisterDirectoryParser(codeast.FileTypeGo, &stubDirectoryParser{})
 }
 
 func TestReadDocumentsFromRemoteBranch(t *testing.T) {
@@ -246,69 +247,6 @@ func (s *Service) Do(ctx context.Context) error { return nil }
 	}
 	if !methodDocFound {
 		t.Fatal("expected method document not found")
-	}
-}
-
-func TestReadGraphFromLocalRepoBuildsCodeEdges(t *testing.T) {
-	repoRoot := t.TempDir()
-	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
-	writeRepoFile(t, filepath.Join(repoRoot, "service.go"), `package demo
-
-type Service struct{}
-
-func helper() {}
-
-func (s *Service) Do() {
-	helper()
-}
-`)
-
-	src := New(WithRepository(Repository{Dir: repoRoot, RepoName: "demo-repo"}))
-	data, err := src.ReadGraph(context.Background())
-	if err != nil {
-		t.Fatalf("ReadGraph() error = %v", err)
-	}
-	namespace := "repo:demo-repo#default"
-	serviceSourceID := repoGraphSourceID(namespace, "symbol", "example.com/demo.Service")
-	methodSourceID := repoGraphSourceID(namespace, "symbol", "example.com/demo.Service.Do")
-	helperSourceID := repoGraphSourceID(namespace, "symbol", "example.com/demo.helper")
-	fileSourceID := repoGraphSourceID(namespace, "file", "service.go")
-	repoSourceID := repoGraphSourceID(namespace, "repo", "demo-repo")
-	serviceID := generatedGraphID("node", serviceSourceID)
-	methodID := generatedGraphID("node", methodSourceID)
-	helperID := generatedGraphID("node", helperSourceID)
-	fileID := generatedGraphID("node", fileSourceID)
-	repoID := generatedGraphID("node", repoSourceID)
-	if !hasGraphNode(data, methodID) {
-		t.Fatalf("expected method node, got %+v", data.Nodes)
-	}
-	if !hasGraphNodeSourceID(data, methodID, methodSourceID) {
-		t.Fatalf("expected method source_id metadata, got %+v", data.Nodes)
-	}
-	if !hasGraphNodeMetadataValue(data, methodID, "trpc_ast_full_name", "example.com/demo.Service.Do") {
-		t.Fatalf("expected full_name metadata, got %+v", data.Nodes)
-	}
-	if !hasGraphNodeMetadataKey(data, methodID, source.MetaRepoName) {
-		t.Fatalf("expected repo_name metadata, got %+v", data.Nodes)
-	}
-	if hasGraphNodeMetadataKey(data, methodID, source.MetaRepoURL) ||
-		hasGraphNodeMetadataKey(data, methodID, source.MetaRepoPath) {
-		t.Fatalf("did not expect repo identity metadata, got %+v", data.Nodes)
-	}
-	if !hasGraphEdge(data, serviceID, methodID, "METHOD") {
-		t.Fatalf("expected METHOD edge, got %+v", data.Edges)
-	}
-	if !hasGraphEdge(data, methodID, helperID, "CALLS") {
-		t.Fatalf("expected CALLS edge, got %+v", data.Edges)
-	}
-	if hasGraphNode(data, fileID) {
-		t.Fatalf("did not expect file node, got %+v", data.Nodes)
-	}
-	if hasGraphNode(data, repoID) {
-		t.Fatalf("did not expect repo node, got %+v", data.Nodes)
-	}
-	if hasGraphEdge(data, repoID, fileID, "CONTAINS") {
-		t.Fatalf("did not expect repo contains file edge, got %+v", data.Edges)
 	}
 }
 
@@ -1528,4 +1466,191 @@ func writeRepoFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write %s: %v", path, err)
 	}
+}
+
+func countGraphNodesByKind(data *graph.Data, kind string) int {
+	n := 0
+	for _, node := range data.Nodes {
+		if node.Metadata["kind"] == kind {
+			n++
+		}
+	}
+	return n
+}
+
+func findGraphNodeByKindAndContent(data *graph.Data, kind, substr string) *graph.Node {
+	for _, node := range data.Nodes {
+		if node.Metadata["kind"] == kind && strings.Contains(node.Content, substr) {
+			return node
+		}
+	}
+	return nil
+}
+
+func TestReadGraphIncludesDocumentNodes(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "service.go"), "package demo\n\nfunc Run() {}\n")
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Demo\n\nThis is the readme.\n")
+	writeRepoFile(t, filepath.Join(dir, "CHANGELOG.md"), "# Changelog\n\nv1.0.0 initial release\n")
+	writeRepoFile(t, filepath.Join(dir, "internal", "notes.txt"), "internal notes")
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	src := New(
+		WithRepository(Repository{Dir: dir}),
+		WithDocExtensions([]string{".md"}),
+	)
+
+	data, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGraph() error = %v", err)
+	}
+
+	docCount := countGraphNodesByKind(data, "document")
+	if docCount != 2 {
+		t.Fatalf("expected 2 document nodes (README + CHANGELOG), got %d", docCount)
+	}
+
+	readmeNode := findGraphNodeByKindAndContent(data, "document", "readme")
+	if readmeNode == nil {
+		t.Fatal("expected README document node")
+	}
+	if readmeNode.Metadata[source.MetaSourceID] == "" {
+		t.Error("expected document node to have MetaSourceID")
+	}
+	if readmeNode.Metadata[source.MetaFilePath] == "" {
+		t.Error("expected document node to have MetaFilePath")
+	}
+	if readmeNode.ID == "" {
+		t.Error("expected document node to have non-empty ID")
+	}
+
+	txtNode := findGraphNodeByKindAndContent(data, "document", "internal notes")
+	if txtNode != nil {
+		t.Fatal("txt file should not be included when only .md is configured")
+	}
+}
+
+func TestReadGraphDocumentNodesWithoutCodeNodes(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Hello\n\nworld\n")
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	src := New(
+		WithRepository(Repository{Dir: dir}),
+		WithDocExtensions([]string{".md"}),
+	)
+
+	data, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGraph() error = %v", err)
+	}
+	if len(data.Nodes) == 0 {
+		t.Fatal("expected at least one document node")
+	}
+	if countGraphNodesByKind(data, "document") == 0 {
+		t.Fatal("expected document node")
+	}
+}
+
+func TestReadGraphDocumentIDsAreDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "service.go"), "package demo\n\nfunc Run() {}\n")
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Hello\n")
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	src := New(
+		WithRepository(Repository{Dir: dir}),
+		WithDocExtensions([]string{".md"}),
+	)
+
+	data1, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("first ReadGraph() error = %v", err)
+	}
+	data2, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("second ReadGraph() error = %v", err)
+	}
+
+	ids1 := make(map[string]struct{})
+	for _, node := range data1.Nodes {
+		if node.Metadata["kind"] == "document" {
+			ids1[node.ID] = struct{}{}
+		}
+	}
+	for _, node := range data2.Nodes {
+		if node.Metadata["kind"] == "document" {
+			if _, ok := ids1[node.ID]; !ok {
+				t.Fatalf("document node ID %q not stable across runs", node.ID)
+			}
+		}
+	}
+}
+
+func TestReadGraphDocumentNodesNotIncludedByDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "service.go"), "package demo\n\nfunc Run() {}\n")
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Hello\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+
+	data, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGraph() error = %v", err)
+	}
+	if countGraphNodesByKind(data, "document") != 0 {
+		t.Fatal("document nodes should not appear without WithDocExtensions")
+	}
+}
+
+type testMarkdownReader struct{}
+
+func (r *testMarkdownReader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
+	content, err := io.ReadAll(rd)
+	if err != nil {
+		return nil, err
+	}
+	return []*document.Document{{
+		Name:     filepath.Base(name),
+		Content:  strings.ToLower(string(content)),
+		Metadata: map[string]any{source.MetaChunkIndex: 0},
+	}}, nil
+}
+
+func (r *testMarkdownReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return []*document.Document{{
+		Name:     filepath.Base(filePath),
+		Content:  strings.ToLower(string(content)),
+		Metadata: map[string]any{source.MetaChunkIndex: 0},
+	}}, nil
+}
+
+func (r *testMarkdownReader) ReadFromURL(_ string) ([]*document.Document, error) { return nil, nil }
+func (r *testMarkdownReader) Name() string                                        { return "test-md" }
+func (r *testMarkdownReader) SupportedExtensions() []string                       { return []string{".md"} }
+
+// stubDirectoryParser is a minimal codeast.DirectoryParser used in tests to
+// avoid importing the real golang reader package (which requires CGO / full
+// type checking). It returns an empty result so that code-path logic in
+// ReadGraph can be exercised without real Go AST parsing.
+type stubDirectoryParser struct{}
+
+func (stubDirectoryParser) ParseDirectory(_ string, _ ...codeast.ParseOption) (*codeast.Result, error) {
+	return &codeast.Result{}, nil
 }

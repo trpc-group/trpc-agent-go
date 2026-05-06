@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore"
@@ -27,7 +28,8 @@ import (
 )
 
 const (
-	nodeLabel = "Node"
+	nodeLabel                          = "Node"
+	maxRelationshipPatternCombinations = 256
 )
 
 var (
@@ -38,8 +40,11 @@ var (
 
 // Store is an Apache AGE graph backend.
 type Store struct {
-	client postgres.Client
-	option options
+	client     postgres.Client
+	option     options
+	labelMu    sync.Mutex
+	queryMu    sync.Mutex
+	edgeLabels map[string]struct{}
 }
 
 // New creates an Apache AGE graph store.
@@ -62,8 +67,9 @@ func New(opts ...Option) (*Store, error) {
 	}
 
 	store := &Store{
-		client: client,
-		option: option,
+		client:     client,
+		option:     option,
+		edgeLabels: make(map[string]struct{}),
 	}
 	if err := store.initDB(context.Background()); err != nil {
 		_ = client.Close()
@@ -85,14 +91,91 @@ func (s *Store) initDB(ctx context.Context) error {
 		if err := row.Scan(&exists); err != nil {
 			return fmt.Errorf("age: check graph: %w", err)
 		}
-		if exists > 0 {
-			return nil
+		if exists == 0 {
+			if _, err := tx.ExecContext(ctx, `SELECT ag_catalog.create_graph($1)`, s.option.graphName); err != nil {
+				return fmt.Errorf("age: create graph: %w", err)
+			}
 		}
-		if _, err := tx.ExecContext(ctx, `SELECT ag_catalog.create_graph($1)`, s.option.graphName); err != nil {
-			return fmt.Errorf("age: create graph: %w", err)
+		return s.ensureVertexLabelTx(ctx, tx, nodeLabel)
+	})
+}
+
+func (s *Store) ensureVertexLabelTx(ctx context.Context, tx *sql.Tx, label string) error {
+	return s.ensureLabelTx(ctx, tx, label, "v", "create_vlabel")
+}
+
+func (s *Store) ensureEdgeLabels(ctx context.Context, labels []string) error {
+	if len(labels) == 0 {
+		return nil
+	}
+	s.labelMu.Lock()
+	defer s.labelMu.Unlock()
+
+	var missing []string
+	for _, label := range labels {
+		if _, ok := s.edgeLabels[label]; !ok {
+			missing = append(missing, label)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if err := s.withAgeTx(ctx, func(tx *sql.Tx) error {
+		for _, label := range missing {
+			if err := s.ensureLabelTx(ctx, tx, label, "e", "create_elabel"); err != nil {
+				return err
+			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	for _, label := range missing {
+		s.edgeLabels[label] = struct{}{}
+	}
+	return nil
+}
+
+func (s *Store) ensureLabelTx(ctx context.Context, tx *sql.Tx, label, kind, createFunc string) error {
+	var exists int
+	row := tx.QueryRowContext(ctx, `
+		SELECT COUNT(1)
+		FROM ag_catalog.ag_label label
+		JOIN ag_catalog.ag_graph graph ON label.graph = graph.graphid
+		WHERE graph.name = $1 AND label.name = $2 AND label.kind = $3
+	`, s.option.graphName, label, kind)
+	if err := row.Scan(&exists); err != nil {
+		return fmt.Errorf("age: check label %s: %w", label, err)
+	}
+	if exists > 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`SELECT ag_catalog.%s($1, $2)`, createFunc), s.option.graphName, label); err != nil {
+		return fmt.Errorf("age: create label %s: %w", label, err)
+	}
+	return nil
+}
+
+func edgeTypes(edges []*graph.Edge) ([]string, error) {
+	seen := make(map[string]struct{})
+	for i, edge := range edges {
+		if edge == nil {
+			return nil, fmt.Errorf("age: edge at index %d is nil", i)
+		}
+		if edge.FromID == "" || edge.ToID == "" {
+			return nil, fmt.Errorf("age: edge at index %d has empty endpoint", i)
+		}
+		if err := validateIdentifier("edge type", edge.Type); err != nil {
+			return nil, err
+		}
+		seen[edge.Type] = struct{}{}
+	}
+	labels := make([]string, 0, len(seen))
+	for label := range seen {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	return labels, nil
 }
 
 // AddNodes inserts or updates graph nodes in AGE.
@@ -135,6 +218,13 @@ func (s *Store) AddEdges(
 	if len(edges) == 0 {
 		return nil
 	}
+	edgeLabels, err := edgeTypes(edges)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureEdgeLabels(ctx, edgeLabels); err != nil {
+		return err
+	}
 	return s.withAgeTx(ctx, func(tx *sql.Tx) error {
 		for i, edge := range edges {
 			if edge == nil {
@@ -169,6 +259,9 @@ func (s *Store) AddEdges(
 
 // Traverse runs a graph traversal from one or more start nodes.
 func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*graph.TraverseResult, error) {
+	s.queryMu.Lock()
+	defer s.queryMu.Unlock()
+
 	if query == nil {
 		return nil, errors.New("age: traverse query is required")
 	}
@@ -193,38 +286,40 @@ func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*grap
 		}
 		nodes = append(nodes, startNodes...)
 
-		pattern, err := relationshipPattern(query.Direction, query.EdgeTypes, depth)
+		patterns, err := relationshipPatterns(query.Direction, query.EdgeTypes, depth)
 		if err != nil {
 			return err
 		}
 		for _, startID := range query.StartIDs {
-			cypher := fmt.Sprintf(
-				`MATCH p=(start:%s {id: %s})%s(n:%s) UNWIND nodes(p) AS node RETURN DISTINCT node.id, node.name, node.content, node.metadata LIMIT %d`,
-				nodeLabel,
-				cypherString(startID),
-				pattern,
-				nodeLabel,
-				maxNodes,
-			)
-			resultNodes, err := s.queryNodes(ctx, tx, cypher)
-			if err != nil {
-				return err
-			}
-			nodes = append(nodes, resultNodes...)
+			for _, pattern := range patterns {
+				cypher := fmt.Sprintf(
+					`MATCH p=(start:%s {id: %s})%s(n:%s) UNWIND nodes(p) AS node RETURN DISTINCT node.id, node.name, node.content, node.metadata LIMIT %d`,
+					nodeLabel,
+					cypherString(startID),
+					pattern,
+					nodeLabel,
+					maxNodes,
+				)
+				resultNodes, err := s.queryNodes(ctx, tx, cypher)
+				if err != nil {
+					return err
+				}
+				nodes = append(nodes, resultNodes...)
 
-			edgeCypher := fmt.Sprintf(
-				`MATCH p=(start:%s {id: %s})%s(n:%s) UNWIND relationships(p) AS edge RETURN DISTINCT edge.id, startNode(edge).id, endNode(edge).id, type(edge), edge.metadata LIMIT %d`,
-				nodeLabel,
-				cypherString(startID),
-				pattern,
-				nodeLabel,
-				maxNodes,
-			)
-			resultEdges, err := s.queryEdges(ctx, tx, edgeCypher)
-			if err != nil {
-				return err
+				edgeCypher := fmt.Sprintf(
+					`MATCH p=(start:%s {id: %s})%s(n:%s) UNWIND relationships(p) AS edge RETURN DISTINCT edge.id, startNode(edge).id, endNode(edge).id, type(edge), edge.metadata LIMIT %d`,
+					nodeLabel,
+					cypherString(startID),
+					pattern,
+					nodeLabel,
+					maxNodes,
+				)
+				resultEdges, err := s.queryEdges(ctx, tx, edgeCypher)
+				if err != nil {
+					return err
+				}
+				edges = append(edges, resultEdges...)
 			}
-			edges = append(edges, resultEdges...)
 		}
 		return nil
 	}); err != nil {
@@ -243,6 +338,9 @@ func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*grap
 
 // FindPaths finds paths between two graph nodes.
 func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.PathResult, error) {
+	s.queryMu.Lock()
+	defer s.queryMu.Unlock()
+
 	if query == nil {
 		return nil, errors.New("age: path query is required")
 	}
@@ -260,32 +358,37 @@ func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.P
 
 	var paths []*graph.Path
 	if err := s.withAgeTx(ctx, func(tx *sql.Tx) error {
-		pattern, err := relationshipPattern(query.Direction, query.EdgeTypes, depth)
+		patterns, err := relationshipPatterns(query.Direction, query.EdgeTypes, depth)
 		if err != nil {
 			return err
 		}
-		cypher := fmt.Sprintf(
-			`MATCH p=(from:%s {id: %s})%s(to:%s {id: %s}) RETURN [node IN nodes(p) | node.id], [edge IN relationships(p) | edge.id], [edge IN relationships(p) | startNode(edge).id], [edge IN relationships(p) | endNode(edge).id], [edge IN relationships(p) | type(edge)] LIMIT %d`,
-			nodeLabel,
-			cypherString(query.FromID),
-			pattern,
-			nodeLabel,
-			cypherString(query.ToID),
-			maxPaths,
-		)
-		rawPaths, err := s.queryAgPaths(ctx, tx, cypher)
-		if err != nil {
-			return err
-		}
-		for _, path := range rawPaths {
-			nodes, err := s.queryNodesByIDs(ctx, tx, path.nodeIDs)
+		for _, pattern := range patterns {
+			if len(paths) >= maxPaths {
+				return nil
+			}
+			cypher := fmt.Sprintf(
+				`MATCH p=(from:%s {id: %s})%s(to:%s {id: %s}) RETURN [node IN nodes(p) | node.id], [edge IN relationships(p) | edge.id], [edge IN relationships(p) | startNode(edge).id], [edge IN relationships(p) | endNode(edge).id], [edge IN relationships(p) | type(edge)] LIMIT %d`,
+				nodeLabel,
+				cypherString(query.FromID),
+				pattern,
+				nodeLabel,
+				cypherString(query.ToID),
+				maxPaths-len(paths),
+			)
+			rawPaths, err := s.queryAgPaths(ctx, tx, cypher)
 			if err != nil {
 				return err
 			}
-			paths = append(paths, &graph.Path{
-				Nodes: nodes,
-				Edges: pathEdges(path),
-			})
+			for _, path := range rawPaths {
+				nodes, err := s.queryNodesByIDs(ctx, tx, path.nodeIDs)
+				if err != nil {
+					return err
+				}
+				paths = append(paths, &graph.Path{
+					Nodes: nodes,
+					Edges: pathEdges(path),
+				})
+			}
 		}
 		return nil
 	}); err != nil {
@@ -304,6 +407,9 @@ func (s *Store) Close() error {
 
 func (s *Store) withAgeTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return s.client.Transaction(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "trpc-agent-go-age:"+s.option.graphName); err != nil {
+			return fmt.Errorf("age: acquire advisory lock: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `LOAD 'age'`); err != nil {
 			return fmt.Errorf("age: load extension: %w", err)
 		}
@@ -522,16 +628,110 @@ func relationshipPattern(direction graph.Direction, edgeTypes []string, depth in
 	}
 }
 
-func edgeTypeFilter(edgeTypes []string) (string, error) {
-	if len(edgeTypes) == 0 {
-		return "", nil
+func relationshipPatterns(direction graph.Direction, edgeTypes []string, depth int) ([]string, error) {
+	if depth <= 0 {
+		depth = 1
 	}
-	for _, edgeType := range edgeTypes {
-		if err := validateIdentifier("edge type", edgeType); err != nil {
-			return "", err
+	if direction != "" && direction != graph.DirectionOut && direction != graph.DirectionIn && direction != graph.DirectionBoth {
+		return nil, fmt.Errorf("age: unsupported direction %q", direction)
+	}
+	normalized, err := normalizeEdgeTypes(edgeTypes)
+	if err != nil {
+		return nil, err
+	}
+	if len(normalized) <= 1 {
+		pattern, err := relationshipPattern(direction, normalized, depth)
+		if err != nil {
+			return nil, err
+		}
+		return []string{pattern}, nil
+	}
+
+	var patterns []string
+	for pathLen := 1; pathLen <= depth; pathLen++ {
+		patternsForLen := powInt(len(normalized), pathLen)
+		if len(patterns)+patternsForLen > maxRelationshipPatternCombinations {
+			return nil, fmt.Errorf("age: too many edge type combinations: %d edge type(s) with max_depth %d exceeds %d", len(normalized), depth, maxRelationshipPatternCombinations)
+		}
+		sequences := make([][]string, 0, patternsForLen)
+		buildEdgeTypeSequences(&sequences, nil, normalized, pathLen)
+		for _, sequence := range sequences {
+			patterns = append(patterns, relationshipPatternForSequence(direction, sequence))
 		}
 	}
-	return ":" + strings.Join(edgeTypes, "|"), nil
+	return patterns, nil
+}
+
+func buildEdgeTypeSequences(result *[][]string, prefix []string, edgeTypes []string, remaining int) {
+	if remaining == 0 {
+		sequence := make([]string, len(prefix))
+		copy(sequence, prefix)
+		*result = append(*result, sequence)
+		return
+	}
+	for _, edgeType := range edgeTypes {
+		buildEdgeTypeSequences(result, append(prefix, edgeType), edgeTypes, remaining-1)
+	}
+}
+
+func relationshipPatternForSequence(direction graph.Direction, edgeTypes []string) string {
+	var b strings.Builder
+	for i, edgeType := range edgeTypes {
+		if i > 0 {
+			b.WriteString(fmt.Sprintf(`(:%s)`, nodeLabel))
+		}
+		b.WriteString(relationshipSegment(direction, edgeType))
+	}
+	return b.String()
+}
+
+func relationshipSegment(direction graph.Direction, edgeType string) string {
+	switch direction {
+	case "", graph.DirectionOut:
+		return fmt.Sprintf(`-[:%s]->`, edgeType)
+	case graph.DirectionIn:
+		return fmt.Sprintf(`<-[:%s]-`, edgeType)
+	case graph.DirectionBoth:
+		return fmt.Sprintf(`-[:%s]-`, edgeType)
+	default:
+		return ""
+	}
+}
+
+func edgeTypeFilter(edgeTypes []string) (string, error) {
+	normalized, err := normalizeEdgeTypes(edgeTypes)
+	if err != nil {
+		return "", err
+	}
+	if len(normalized) == 0 {
+		return "", nil
+	}
+	return ":" + strings.Join(normalized, "|"), nil
+}
+
+func normalizeEdgeTypes(edgeTypes []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(edgeTypes))
+	normalized := make([]string, 0, len(edgeTypes))
+	for _, edgeType := range edgeTypes {
+		if err := validateIdentifier("edge type", edgeType); err != nil {
+			return nil, err
+		}
+		if _, ok := seen[edgeType]; ok {
+			continue
+		}
+		seen[edgeType] = struct{}{}
+		normalized = append(normalized, edgeType)
+	}
+	sort.Strings(normalized)
+	return normalized, nil
+}
+
+func powInt(base, exp int) int {
+	result := 1
+	for i := 0; i < exp; i++ {
+		result *= base
+	}
+	return result
 }
 
 func validateIdentifier(name, value string) error {

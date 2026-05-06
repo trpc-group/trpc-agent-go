@@ -12,6 +12,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -231,16 +232,9 @@ func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, er
 		return nil, fmt.Errorf("failed to create embedding: %w", err)
 	}
 
-	// Extract embedding from response.
-	if len(response.Data) == 0 {
-		log.WarnContext(ctx, "received empty embedding response from OpenAI API")
-		return []float64{}, nil
-	}
-
-	embedding := response.Data[0].Embedding
-	if len(embedding) == 0 {
-		log.WarnContext(ctx, "received empty embedding vector from OpenAI API")
-		return []float64{}, nil
+	embedding, err := embeddingFromResponse(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create embedding: %w", err)
 	}
 
 	return embedding, nil
@@ -254,16 +248,9 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 		return nil, nil, fmt.Errorf("failed to create embedding: %w", err)
 	}
 
-	// Extract embedding from response.
-	if len(response.Data) == 0 {
-		log.WarnContext(ctx, "received empty embedding response from OpenAI API")
-		return []float64{}, nil, nil
-	}
-
-	embedding := response.Data[0].Embedding
-	if len(embedding) == 0 {
-		log.WarnContext(ctx, "received empty embedding vector from OpenAI API")
-		return []float64{}, nil, nil
+	embedding, err := embeddingFromResponse(response)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create embedding: %w", err)
 	}
 
 	// Extract usage information.
@@ -282,7 +269,11 @@ func (e *Embedder) responseWithRetry(ctx context.Context, text string) (*openai.
 	for attempt := 0; attempt <= e.maxRetries; attempt++ {
 		rsp, err := e.response(ctx, text)
 		if err == nil {
-			return rsp, nil
+			if _, validateErr := embeddingFromResponse(rsp); validateErr == nil {
+				return rsp, nil
+			} else {
+				err = validateErr
+			}
 		}
 
 		lastErr = err
@@ -306,7 +297,25 @@ func (e *Embedder) responseWithRetry(ctx context.Context, text string) (*openai.
 		}
 	}
 
+	if lastErr != nil {
+		log.ErrorfContext(ctx, "embedding request failed after %d attempt(s): %v; input_len=%d",
+			e.maxRetries+1, lastErr, len([]rune(text)))
+	}
 	return nil, lastErr
+}
+
+func embeddingFromResponse(response *openai.CreateEmbeddingResponse) ([]float64, error) {
+	if response == nil {
+		return nil, errors.New("received nil embedding response from OpenAI API")
+	}
+	if len(response.Data) == 0 {
+		return nil, errors.New("received empty embedding response from OpenAI API")
+	}
+	embedding := response.Data[0].Embedding
+	if len(embedding) == 0 {
+		return nil, errors.New("received empty embedding vector from OpenAI API")
+	}
+	return embedding, nil
 }
 
 // getBackoffDuration returns the backoff duration for the given attempt.

@@ -22,7 +22,6 @@ const (
 type options struct {
 	dsn          string
 	instanceName string
-	extraOptions []any
 
 	graphName string
 }
@@ -55,36 +54,16 @@ func WithPostgresInstance(instanceName string) Option {
 	}
 }
 
-// WithExtraOptions passes extra options to a customized postgres client builder.
-func WithExtraOptions(extraOptions ...any) Option {
-	return func(o *options) {
-		o.extraOptions = append(o.extraOptions, extraOptions...)
-	}
-}
-
 func (o options) builderOptions() ([]postgres.ClientBuilderOpt, error) {
 	if o.instanceName != "" {
 		builderOpts, ok := postgres.GetPostgresInstance(o.instanceName)
 		if !ok {
 			return nil, fmt.Errorf("postgres instance %s not found", o.instanceName)
 		}
-		return appendExtraOptions(builderOpts, o.extraOptions), nil
+		return builderOpts, nil
 	}
 	if o.dsn != "" {
-		return appendExtraOptions([]postgres.ClientBuilderOpt{
-			postgres.WithClientConnString(o.dsn),
-		}, o.extraOptions), nil
+		return []postgres.ClientBuilderOpt{postgres.WithClientConnString(o.dsn)}, nil
 	}
-	return appendExtraOptions(nil, o.extraOptions), nil
-}
-
-func appendExtraOptions(
-	builderOpts []postgres.ClientBuilderOpt,
-	extraOptions []any,
-) []postgres.ClientBuilderOpt {
-	builderOpts = append([]postgres.ClientBuilderOpt(nil), builderOpts...)
-	if len(extraOptions) == 0 {
-		return builderOpts
-	}
-	return append(builderOpts, postgres.WithExtraOptions(extraOptions...))
+	return nil, nil
 }

@@ -543,6 +543,7 @@ Use this tool first when you need graph reasoning over a codebase: callers/calle
    - Prefer a full natural-language query for semantic lookup, for example "where is the client request encoded before RPC send".
    - Use metadata filters when the user names an exact symbol, package, file, repo, or entity type.
    - Use content with like only for literal snippets, exact error strings, API names, or log text.
+   - Results include code content by default because they are bounded seed results. Set include_content=false when only IDs and metadata are needed.
 
 2. Use code_graph_traverse when the question asks for local relationships around one or more seed nodes.
    - "Who calls this function?" => direction "in", edge_types ["CALLS"].
@@ -593,6 +594,7 @@ Examples:
 Do not guess graph node IDs. Search first, then use returned IDs for traversal/path queries.
 Do not traverse all edge types unless the user asks for broad context. Pick edge types based on the question.
 For exact code strings, use content like rather than semantic query alone.
+For code_graph_traverse and code_graph_find_paths, leave include_content=false unless the answer needs the full code body.
 For broad architectural questions, split the work: find main symbols, traverse relevant relationships, then summarize only grounded nodes and edges.`
 
 const codeGraphTraverseToolDescription = `Traverse an AST-backed code graph from known node IDs or from nodes resolved by query/filter.
@@ -606,7 +608,8 @@ Direction and edge type guide:
 - parameter and return type dependencies: direction "out", edge_types ["PARAM", "RETURNS"].
 - interface implementations: direction "in" or "both", edge_types ["IMPLEMENTS"].
 
-Prefer max_depth=1 for precise local context. Use max_depth=2 only for a short chain, and keep max_nodes bounded so the result stays explainable.`
+Prefer max_depth=1 for precise local context. Use max_depth=2 only for a short chain, and keep max_nodes bounded so the result stays explainable.
+Full node content is omitted by default; set include_content=true only when the code body is required.`
 
 const codeGraphFindPathsToolDescription = `Find paths between two AST-backed code graph nodes.
 Use this when the user asks how two functions/types/packages are connected, why one symbol depends on another, or what call/type path links them.
@@ -617,4 +620,5 @@ Resolve endpoints with code_graph_search first unless exact graph node IDs are a
 - ["PARAM", "RETURNS", "FIELD", "ALIAS_OF"] for type dependency paths.
 - ["IMPLEMENTS"] for interface implementation paths.
 
-Start with max_depth 3-5 and max_paths 3-10. If no path is found, broaden direction to "both" or relax edge_types before increasing depth.`
+Start with max_depth 3-5 and max_paths 3-10. If no path is found, broaden direction to "both" or relax edge_types before increasing depth.
+Full node content is omitted by default; set include_content=true only when the code body is required.`

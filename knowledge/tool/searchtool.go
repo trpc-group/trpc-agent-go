@@ -120,6 +120,7 @@ type options struct {
 	minScore            float64
 	excludeMetadataKeys map[string]struct{}
 	postProcessor       ResultPostProcessor
+	includeContent      bool
 }
 
 // WithToolName sets the name of the knowledge search tool.
@@ -212,13 +213,20 @@ func WithResultPostProcessor(p ResultPostProcessor) Option {
 	}
 }
 
+func withIncludeContentDefault(include bool) Option {
+	return func(opts *options) {
+		opts.includeContent = include
+	}
+}
+
 // NewKnowledgeSearchTool creates a function tool for knowledge search using
 // the Knowledge interface.
 // This tool allows agents to search for relevant information in the knowledge base.
 func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 	opt := &options{
-		maxResults: defaultMaxResults,
-		minScore:   defaultMinScore,
+		maxResults:     defaultMaxResults,
+		minScore:       defaultMinScore,
+		includeContent: true,
 	}
 	for _, o := range opts {
 		o(opt)
@@ -258,7 +266,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
 
-		resp, err := convertSearchResults(result, opt.excludeMetadataKeys)
+		resp, err := convertSearchResults(result, opt.excludeMetadataKeys, opt.includeContent)
 		if err != nil {
 			return nil, err
 		}
@@ -283,8 +291,9 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 
 // KnowledgeSearchRequestWithFilter represents the input with filter for the knowledge search tool.
 type KnowledgeSearchRequestWithFilter struct {
-	Query  string                                 `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
-	Filter *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."`
+	Query          string                                 `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
+	Filter         *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."`
+	IncludeContent *bool                                  `json:"include_content,omitempty" jsonschema:"description=Whether to include full document content in the response. Default depends on the tool; graph tools default to false to keep responses compact."`
 }
 
 // NewAgenticFilterSearchTool creates a knowledge search tool with dynamic agent-controlled filtering.
@@ -300,8 +309,9 @@ func NewAgenticFilterSearchTool(
 	opts ...Option,
 ) tool.Tool {
 	opt := &options{
-		maxResults: defaultMaxResults,
-		minScore:   defaultMinScore,
+		maxResults:     defaultMaxResults,
+		minScore:       defaultMinScore,
+		includeContent: true,
 	}
 	for _, o := range opts {
 		o(opt)
@@ -346,7 +356,11 @@ func NewAgenticFilterSearchTool(
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
 
-		resp, err := convertSearchResults(result, opt.excludeMetadataKeys)
+		includeContent := opt.includeContent
+		if req.IncludeContent != nil {
+			includeContent = *req.IncludeContent
+		}
+		resp, err := convertSearchResults(result, opt.excludeMetadataKeys, includeContent)
 		if err != nil {
 			return nil, err
 		}
@@ -398,6 +412,7 @@ func applyPostProcessor(ctx context.Context, resp *KnowledgeSearchResponse, p Re
 func convertSearchResults(
 	result *knowledge.SearchResult,
 	excludeKeys map[string]struct{},
+	includeContent bool,
 ) (*KnowledgeSearchResponse, error) {
 	if result == nil || len(result.Documents) == 0 {
 		return nil, errors.New("no relevant information found")
@@ -405,9 +420,13 @@ func convertSearchResults(
 
 	documents := make([]*DocumentResult, 0, len(result.Documents))
 	for _, doc := range result.Documents {
+		text := ""
+		if includeContent {
+			text = doc.Document.Content
+		}
 		documents = append(documents, &DocumentResult{
 			ID:       doc.Document.ID,
-			Text:     doc.Document.Content,
+			Text:     text,
 			Metadata: filterMetadata(doc.Document.Metadata, excludeKeys),
 			Score:    doc.Score,
 		})

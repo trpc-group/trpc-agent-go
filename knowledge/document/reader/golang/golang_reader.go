@@ -139,7 +139,7 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 // ReadFromDirectory reads a Go module or directory and returns AST entity documents.
 // It performs package-aware parsing across the directory instead of processing files independently.
 func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error) {
-	result, err := r.ReadCodeASTFromDirectory(dirPath)
+	result, err := parseGoDirectory(dirPath, r.parser)
 	if err != nil {
 		return nil, err
 	}
@@ -154,8 +154,7 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 	return r.applyTransformers(r.nodesToDocuments(result, baseMetadata))
 }
 
-// ReadCodeASTFromDirectory parses a Go module or directory and returns the code AST result.
-func (r *Reader) ReadCodeASTFromDirectory(dirPath string) (*codeast.Result, error) {
+func parseGoDirectory(dirPath string, parser *codegolang.Parser) (*codeast.Result, error) {
 	absDir, err := filepath.Abs(dirPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %w", err)
@@ -167,15 +166,7 @@ func (r *Reader) ReadCodeASTFromDirectory(dirPath string) (*codeast.Result, erro
 	if !stat.IsDir() {
 		return nil, fmt.Errorf("not a directory: %s", dirPath)
 	}
-
-	result, err := r.parser.ParseDirectory(absDir)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil || len(result.Nodes) == 0 {
-		return nil, nil
-	}
-	return result, nil
+	return parser.ParseDirectory(absDir)
 }
 
 func (r *Reader) processContent(content, name string, baseMetadata map[string]any) ([]*document.Document, error) {

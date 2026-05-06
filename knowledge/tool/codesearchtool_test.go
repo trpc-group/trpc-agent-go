@@ -119,6 +119,22 @@ func marshalCodeSearchFilterArgs(t *testing.T, query string, filter *searchfilte
 	return bts
 }
 
+func marshalCodeSearchFilterArgsWithContent(
+	t *testing.T,
+	query string,
+	filter *searchfilter.UniversalFilterCondition,
+	includeContent bool,
+) []byte {
+	t.Helper()
+	bts, err := json.Marshal(&KnowledgeSearchRequestWithFilter{
+		Query:          query,
+		Filter:         filter,
+		IncludeContent: &includeContent,
+	})
+	require.NoError(t, err)
+	return bts
+}
+
 func TestCodeSearchTool(t *testing.T) {
 	t.Run("reuses agentic filter input schema", func(t *testing.T) {
 		kb := &captureKnowledge{}
@@ -262,6 +278,7 @@ func TestCodeGraphSearchTool(t *testing.T) {
 
 		tools := toolSet.Tools(context.Background())
 		filter := &searchfilter.UniversalFilterCondition{Field: "metadata.trpc_ast_type", Operator: "eq", Value: "Function"}
+
 		res, err := tools[0].(ctool.CallableTool).Call(context.Background(), marshalCodeSearchFilterArgs(t, "new client", filter))
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
@@ -272,7 +289,16 @@ func TestCodeGraphSearchTool(t *testing.T) {
 		require.NotNil(t, kb.lastRequest.SearchFilter.FilterCondition)
 		require.Equal(t, searchfilter.OperatorAnd, kb.lastRequest.SearchFilter.FilterCondition.Operator)
 		require.Equal(t, "example.com/demo.NewClient", rsp.Documents[0].Metadata["trpc_ast_full_name"])
+		require.Equal(t, "func NewClient() {}", rsp.Documents[0].Text)
 		require.NotContains(t, rsp.Documents[0].Metadata, "trpc_ast_type")
+
+		res, err = tools[0].(ctool.CallableTool).Call(
+			context.Background(),
+			marshalCodeSearchFilterArgsWithContent(t, "new client", filter, false),
+		)
+		require.NoError(t, err)
+		rsp = res.(*KnowledgeSearchResponse)
+		require.Empty(t, rsp.Documents[0].Text)
 	})
 }
 
