@@ -121,7 +121,7 @@ list_importable_packages() {
 		if [[ -z "${import_path}" || -z "${package_name}" ]]; then
 			continue
 		fi
-		if (( go_files == 0 && cgo_files == 0 )); then
+		if (( go_files == 0 )); then
 			continue
 		fi
 		if [[ "${package_name}" == "main" ]]; then

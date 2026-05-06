@@ -91,6 +91,12 @@ while IFS= read -r tag; do
     continue
   fi
   module_tags["${mod_path}"]+="${ver} "
+  if [[ "${ver}" =~ ^v([2-9][0-9]*)\. ]]; then
+    major_suffix="/v${BASH_REMATCH[1]}"
+    if [[ "${mod_path}" != *"${major_suffix}" ]]; then
+      module_tags["${mod_path}${major_suffix}"]+="${ver} "
+    fi
+  fi
 done < <(git tag)
 
 zero_placeholder="v0.0.0-00010101000000-000000000000"
