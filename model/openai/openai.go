@@ -63,6 +63,9 @@ const (
 	// VariantHunyuan is the Hunyuan variant with specific file handling.
 	VariantHunyuan Variant = "hunyuan"
 	// VariantDeepSeek is the DeepSeek variant with specific base_url handling.
+	// It backfills empty reasoning_content for assistant history messages by
+	// default, including when inferred from the default DeepSeek base URL. Use
+	// WithReasoningContentBackfill(false) to disable this behavior.
 	VariantDeepSeek Variant = "deepseek"
 	// VariantQwen is the Qwen variant with specific base_url handling.
 	VariantQwen Variant = "qwen"
@@ -119,6 +122,9 @@ type variantConfig struct {
 	// defaultOptimizeForCache controls the default value for cache optimization
 	// when WithOptimizeForCache is not explicitly set.
 	defaultOptimizeForCache bool
+	// defaultReasoningContentBackfill controls replay-time empty
+	// reasoning_content backfill for assistant messages.
+	defaultReasoningContentBackfill bool
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -152,8 +158,9 @@ var variantConfigs = map[Variant]variantConfig{
 		defaultBaseURL:            defaultDeepSeekBaseURL,
 		// DeepSeek v3.2+ (incl. v4-pro / v4-flash) uses
 		// {"thinking": {"type": "enabled"/"disabled"}} format.
-		thinkingEnabledKey:     "thinking",
-		thinkingValueConvertor: deepSeekThinkingValueConvertor,
+		thinkingEnabledKey:              "thinking",
+		thinkingValueConvertor:          deepSeekThinkingValueConvertor,
+		defaultReasoningContentBackfill: true,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
@@ -268,6 +275,9 @@ func New(name string, opts ...Option) *Model {
 	cfg, cfgOK := variantConfigs[o.Variant]
 	if !o.optimizeForCacheSet {
 		o.OptimizeForCache = cfgOK && cfg.defaultOptimizeForCache
+	}
+	if !o.reasoningContentBackfillSet {
+		o.ReasoningContentBackfill = cfgOK && cfg.defaultReasoningContentBackfill
 	}
 
 	// Set default API key and base URL if not specified.
