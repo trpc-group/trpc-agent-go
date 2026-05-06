@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/internal/msgutil"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -714,9 +715,9 @@ func TestSplitToolResults_GroupsByIDs(t *testing.T) {
 }
 
 func TestIsEmptyAssistantMessage(t *testing.T) {
-	assert.True(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant}))
-	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleUser}))
-	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, Content: "x"}))
-	assert.True(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ReasoningContent: "x"}))
-	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "call_1"}}}))
+	assert.True(t, msgutil.IsEmptyAssistantMessage(model.Message{Role: model.RoleAssistant}))
+	assert.False(t, msgutil.IsEmptyAssistantMessage(model.Message{Role: model.RoleUser}))
+	assert.False(t, msgutil.IsEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, Content: "x"}))
+	assert.True(t, msgutil.IsEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ReasoningContent: "x"}))
+	assert.False(t, msgutil.IsEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "call_1"}}}))
 }
