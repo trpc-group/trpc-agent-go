@@ -143,8 +143,14 @@ validate_resolvable_version() {
   local line_number="$2"
   local dep_path="$3"
   local dep_ver="$4"
+  local resolver_dir="${tmp_dir}/resolver"
 
-  if go mod download -json "${dep_path}@${dep_ver}" >/dev/null 2>&1; then
+  mkdir -p "${resolver_dir}"
+  if [ ! -f "${resolver_dir}/go.mod" ]; then
+    (cd "${resolver_dir}" && GOWORK=off go mod init example.com/module-version-check >/dev/null 2>&1)
+  fi
+
+  if (cd "${resolver_dir}" && GOWORK=off go mod download -json "${dep_path}@${dep_ver}" >/dev/null 2>&1); then
     return 0
   fi
 
