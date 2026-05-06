@@ -238,6 +238,21 @@ jobs:
       - name: Check go.mod and go.sum are tidy
         shell: bash
         run: bash .github/scripts/check-go-mod-tidy.sh
+  check-external-consumer:
+    name: check external consumer (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    needs: discover-go-modules
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover-go-modules.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ env.ROOT_GO_VERSION }}"
+      - name: Check module as an external consumer
+        shell: bash
+        run: bash .github/scripts/check-external-consumer.sh --module "${{ matrix.module }}"
   check-examples:
     name: check examples (${{ matrix.shard_label }})
     runs-on: ubuntu-latest
