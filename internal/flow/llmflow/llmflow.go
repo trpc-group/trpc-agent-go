@@ -573,6 +573,11 @@ func (f *Flow) processStreamingResponses(
 			response,
 			tracker,
 		)
+		callbackTimingAttachment := attachResponseUsageTimingForCallback(
+			response,
+			timingInfo,
+			&partialUsageState,
+		)
 		eventInvocation := invocation
 		if eventInvocation == nil {
 			eventInvocation = currentInvocation
@@ -591,7 +596,9 @@ func (f *Flow) processStreamingResponses(
 			return false
 		}
 		ctx = updatedCtx
-		if customResp != nil {
+		responseReplaced := customResp != nil
+		if responseReplaced {
+			callbackTimingAttachment.restore()
 			response = customResp
 		}
 		currentInvocation = invocationFromContextOrDefault(
@@ -601,6 +608,9 @@ func (f *Flow) processStreamingResponses(
 		timingInfo = responseUsageTimingInfo(currentInvocation)
 		if tracker != nil {
 			tracker.SetInvocationState(currentInvocation, timingInfo)
+		}
+		if !responseReplaced && timingInfo != callbackTimingAttachment.attachedTimingInfo {
+			callbackTimingAttachment.restore()
 		}
 		attachResponseUsageTiming(response, timingInfo, &partialUsageState)
 		// Repair tool call arguments in place when needed.
@@ -740,6 +750,72 @@ func trackModelResponseTelemetry(
 		return
 	}
 	tracker.TrackResponse(response)
+}
+
+type responseUsageTimingAttachment struct {
+	response           *model.Response
+	usage              *model.Usage
+	timingInfo         *model.TimingInfo
+	attachedUsage      *model.Usage
+	attachedTimingInfo *model.TimingInfo
+	createdUsage       bool
+}
+
+func attachResponseUsageTimingForCallback(
+	response *model.Response,
+	timingInfo *model.TimingInfo,
+	partialUsageState *partialUsageState,
+) responseUsageTimingAttachment {
+	attachment := responseUsageTimingAttachment{response: response}
+	if response != nil {
+		attachment.usage = response.Usage
+		if response.Usage != nil {
+			attachment.timingInfo = response.Usage.TimingInfo
+		}
+	}
+	attachResponseUsageTiming(response, timingInfo, partialUsageState)
+	if response != nil {
+		attachment.attachedUsage = response.Usage
+		if response.Usage != nil {
+			attachment.attachedTimingInfo = response.Usage.TimingInfo
+		}
+		attachment.createdUsage = attachment.usage == nil && response.Usage != nil
+	}
+	return attachment
+}
+
+func (a responseUsageTimingAttachment) restore() {
+	if a.response == nil || a.response.Usage == nil {
+		return
+	}
+	if a.createdUsage {
+		if a.response.Usage != a.attachedUsage {
+			return
+		}
+		if usageOnlyHasTimingInfo(a.response.Usage) {
+			a.response.Usage = nil
+			return
+		}
+		if a.response.Usage.TimingInfo == a.attachedTimingInfo {
+			a.response.Usage.TimingInfo = nil
+		}
+		return
+	}
+	if a.response.Usage == a.usage &&
+		a.response.Usage.TimingInfo == a.attachedTimingInfo {
+		a.response.Usage.TimingInfo = a.timingInfo
+	}
+}
+
+func usageOnlyHasTimingInfo(usage *model.Usage) bool {
+	if usage == nil {
+		return true
+	}
+	return usage.PromptTokens == 0 &&
+		usage.CompletionTokens == 0 &&
+		usage.TotalTokens == 0 &&
+		usage.PromptTokensDetails == (model.PromptTokensDetails{}) &&
+		usage.CompletionTokensDetails == (model.CompletionTokensDetails{})
 }
 
 func attachResponseUsageTiming(

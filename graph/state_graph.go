@@ -1873,6 +1873,16 @@ func shouldEmitModelResponseEvent(
 
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
+	currentInvocation := invocationFromContextOrDefault(ctx, config.Invocation)
+	timingInfo := responseUsageTimingInfo(currentInvocation)
+	if config.Tracker != nil {
+		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
+	}
+	callbackTimingAttachment := attachResponseUsageTimingForCallback(
+		config.Response,
+		timingInfo,
+		config.PartialUsage,
+	)
 	args := &model.AfterModelArgs{
 		Request:  config.Request,
 		Response: config.Response,
@@ -1887,9 +1897,12 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	if err != nil {
 		return ctx, nil, err
 	}
+	responseReplaced := false
 	if pluginOverride {
+		callbackTimingAttachment.restore()
 		config.Response = customResponse
 		args.Response = config.Response
+		responseReplaced = true
 	}
 
 	if !pluginOverride {
@@ -1903,13 +1916,18 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 			return ctx, nil, err
 		}
 		if customResponse != nil {
+			callbackTimingAttachment.restore()
 			config.Response = customResponse
+			responseReplaced = true
 		}
 	}
-	currentInvocation := invocationFromContextOrDefault(ctx, config.Invocation)
-	timingInfo := responseUsageTimingInfo(currentInvocation)
+	currentInvocation = invocationFromContextOrDefault(ctx, config.Invocation)
+	timingInfo = responseUsageTimingInfo(currentInvocation)
 	if config.Tracker != nil {
 		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
+	}
+	if !responseReplaced && timingInfo != callbackTimingAttachment.attachedTimingInfo {
+		callbackTimingAttachment.restore()
 	}
 	attachResponseUsageTiming(config.Response, timingInfo, config.PartialUsage)
 	eventInvocation := config.StableInvocation
@@ -4354,6 +4372,72 @@ func trackModelResponseTelemetry(
 type partialUsageState struct {
 	usage      *model.Usage
 	timingInfo *model.TimingInfo
+}
+
+type responseUsageTimingAttachment struct {
+	response           *model.Response
+	usage              *model.Usage
+	timingInfo         *model.TimingInfo
+	attachedUsage      *model.Usage
+	attachedTimingInfo *model.TimingInfo
+	createdUsage       bool
+}
+
+func attachResponseUsageTimingForCallback(
+	response *model.Response,
+	timingInfo *model.TimingInfo,
+	partialUsageState *partialUsageState,
+) responseUsageTimingAttachment {
+	attachment := responseUsageTimingAttachment{response: response}
+	if response != nil {
+		attachment.usage = response.Usage
+		if response.Usage != nil {
+			attachment.timingInfo = response.Usage.TimingInfo
+		}
+	}
+	attachResponseUsageTiming(response, timingInfo, partialUsageState)
+	if response != nil {
+		attachment.attachedUsage = response.Usage
+		if response.Usage != nil {
+			attachment.attachedTimingInfo = response.Usage.TimingInfo
+		}
+		attachment.createdUsage = attachment.usage == nil && response.Usage != nil
+	}
+	return attachment
+}
+
+func (a responseUsageTimingAttachment) restore() {
+	if a.response == nil || a.response.Usage == nil {
+		return
+	}
+	if a.createdUsage {
+		if a.response.Usage != a.attachedUsage {
+			return
+		}
+		if usageOnlyHasTimingInfo(a.response.Usage) {
+			a.response.Usage = nil
+			return
+		}
+		if a.response.Usage.TimingInfo == a.attachedTimingInfo {
+			a.response.Usage.TimingInfo = nil
+		}
+		return
+	}
+	if a.response.Usage == a.usage &&
+		a.response.Usage.TimingInfo == a.attachedTimingInfo {
+		a.response.Usage.TimingInfo = a.timingInfo
+	}
+}
+
+func usageOnlyHasTimingInfo(usage *model.Usage) bool {
+	if usage == nil {
+		return true
+	}
+	return usage.PromptTokens == 0 &&
+		usage.CompletionTokens == 0 &&
+		usage.TotalTokens == 0 &&
+		usage.PromptTokensDetails == (model.PromptTokensDetails{}) &&
+		usage.CompletionTokensDetails == (model.CompletionTokensDetails{})
 }
 
 func attachResponseUsageTiming(
