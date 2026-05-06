@@ -63,6 +63,9 @@ const (
 	// VariantHunyuan is the Hunyuan variant with specific file handling.
 	VariantHunyuan Variant = "hunyuan"
 	// VariantDeepSeek is the DeepSeek variant with specific base_url handling.
+	// It backfills empty reasoning_content for assistant history messages by
+	// default, including when inferred from the default DeepSeek base URL. Use
+	// WithReasoningContentBackfill(false) to disable this behavior.
 	VariantDeepSeek Variant = "deepseek"
 	// VariantQwen is the Qwen variant with specific base_url handling.
 	VariantQwen Variant = "qwen"
