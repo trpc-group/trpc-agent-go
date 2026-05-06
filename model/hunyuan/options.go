@@ -132,6 +132,7 @@ func WithContextWindow(tokens int) Option {
 	return func(opts *options) {
 		if tokens > 0 {
 			opts.contextWindow = tokens
+			opts.contextWindowConfigured = true
 		}
 	}
 }

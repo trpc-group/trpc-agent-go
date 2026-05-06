@@ -37,6 +37,7 @@ type Model struct {
 	client                     *hunyuan.Client
 	name                       string
 	contextWindow              int
+	contextWindowConfigured    bool
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
 	chatResponseCallback       ChatResponseCallbackFunc
@@ -114,7 +115,8 @@ type options struct {
 	// maxInputTokens is the max input tokens for token tailoring.
 	maxInputTokens int
 	// contextWindow is the model context window size in tokens.
-	contextWindow int
+	contextWindow           int
+	contextWindowConfigured bool
 	// tokenTailoringConfig allows customization of token tailoring parameters.
 	tokenTailoringConfig *model.TokenTailoringConfig
 }
@@ -165,16 +167,12 @@ func New(name string, opts ...Option) *Model {
 		tailoringStrategy:          o.tailoringStrategy,
 		maxInputTokens:             o.maxInputTokens,
 		contextWindow:              o.contextWindow,
+		contextWindowConfigured:    o.contextWindowConfigured,
 		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
 		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
 		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
-	}
-
-	if m.contextWindow <= 0 {
-		// Resolve context window for the model.
-		m.contextWindow = imodel.ResolveContextWindow(m.name)
 	}
 
 	return m
@@ -187,9 +185,9 @@ func (m *Model) Info() model.Info {
 	}
 }
 
-// ContextWindow returns the resolved model context window.
+// ContextWindow returns the configured model context window.
 func (m *Model) ContextWindow() (int, bool) {
-	if m.contextWindow <= 0 {
+	if !m.contextWindowConfigured || m.contextWindow <= 0 {
 		return 0, false
 	}
 	return m.contextWindow, true

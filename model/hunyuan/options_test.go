@@ -29,6 +29,11 @@ func TestWithContextWindow(t *testing.T) {
 	require.False(t, ok)
 	require.Zero(t, window)
 
+	m = New("hunyuan-test")
+	window, ok = m.ContextWindow()
+	require.False(t, ok)
+	require.Zero(t, window)
+
 	opts := &options{}
 	WithContextWindow(0)(opts)
 	require.Zero(t, opts.contextWindow)

@@ -869,7 +869,7 @@ func TestWithModelContextWindow(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 204800, window)
 
-	opts.RuntimeState[modelContextWindowRuntimeStateKey] = "bad"
+	opts.ModelContextWindow = -1
 	window, ok = ModelContextWindowFromRunOptions(opts)
 	require.False(t, ok)
 	require.Zero(t, window)

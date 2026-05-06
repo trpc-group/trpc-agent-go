@@ -220,6 +220,15 @@ eventChan, err := r.Run(
     userID,
     sessionID,
     userMessage,
+    agent.WithModel(modelInstance),
+)
+
+eventChan, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithModelName("my-custom-model"),
     agent.WithModelContextWindow(204800),
 )
 ```

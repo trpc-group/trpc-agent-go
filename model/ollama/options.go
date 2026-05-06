@@ -86,7 +86,8 @@ type options struct {
 	// maxInputTokens is the max input tokens for token tailoring.
 	maxInputTokens int
 	// contextWindow is the model context window size in tokens.
-	contextWindow int
+	contextWindow           int
+	contextWindowConfigured bool
 	// tokenTailoringConfig allows customization of token tailoring parameters.
 	tokenTailoringConfig *model.TokenTailoringConfig
 	// Additional options for Ollama API.
@@ -191,6 +192,7 @@ func WithContextWindow(tokens int) Option {
 	return func(opts *options) {
 		if tokens > 0 {
 			opts.contextWindow = tokens
+			opts.contextWindowConfigured = true
 		}
 	}
 }

@@ -38,6 +38,8 @@ type Model struct {
 	name                       string
 	host                       string
 	contextWindow              int
+	contextWindowConfigured    bool
+	contextWindowDiscovered    bool
 	httpClient                 *http.Client
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
@@ -125,6 +127,7 @@ func New(name string, opts ...Option) *Model {
 		tailoringStrategy:          o.tailoringStrategy,
 		maxInputTokens:             o.maxInputTokens,
 		contextWindow:              o.contextWindow,
+		contextWindowConfigured:    o.contextWindowConfigured,
 		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
 		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
 		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
@@ -143,6 +146,8 @@ func New(name string, opts ...Option) *Model {
 				err,
 			)
 			m.contextWindow = imodel.ResolveContextWindow(m.name)
+		} else if m.contextWindow > 0 {
+			m.contextWindowDiscovered = true
 		}
 	}
 	return m
@@ -155,9 +160,10 @@ func (m *Model) Info() model.Info {
 	}
 }
 
-// ContextWindow returns the resolved model context window.
+// ContextWindow returns the configured or discovered model context window.
 func (m *Model) ContextWindow() (int, bool) {
-	if m.contextWindow <= 0 {
+	if m.contextWindow <= 0 ||
+		(!m.contextWindowConfigured && !m.contextWindowDiscovered) {
 		return 0, false
 	}
 	return m.contextWindow, true
