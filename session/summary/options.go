@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -261,8 +262,7 @@ func WithContextThreshold(opts ...ContextThresholdOption) Option {
 			opt(&o)
 		}
 		if o.fallbackContextWindow == defaultContextThresholdFallbackWindow && s.model != nil {
-			name := s.model.Info().Name
-			if w, ok := model.LookupModelContextWindow(name); ok {
+			if w, ok := modelcontext.ResolveContextWindow(s.model); ok {
 				opts = append(opts, WithContextThresholdFallbackWindow(w))
 			}
 		}

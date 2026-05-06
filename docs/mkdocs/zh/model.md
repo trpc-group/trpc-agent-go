@@ -1516,7 +1516,7 @@ model := openai.New("deepseek-v4-flash",
 
 > **Context Window 注册**
 >
-> Token 裁剪和会话摘要的 `WithContextThreshold` 都依赖框架内置的模型 context window 注册表。注册表已覆盖大量常见模型，但不一定包含所有模型——特别是私有部署或较新发布的模型。如果你的模型未被识别，请在启动时调用 `model.RegisterModelContextWindow("my-model", 32768)` 或 `model.RegisterModelContextWindows(map[string]int{...})` 手动注册。完整示例参见[会话摘要文档](session/summary.md)。
+> Token 裁剪和会话摘要的 `WithContextThreshold` 都需要模型 context window。内置模型名会自动解析。对于私有部署、租户自定义模型或 endpoint ID，优先使用模型实例配置，例如 `openai.WithContextWindow(32768)` 或统一入口的 `provider.WithContextWindow(32768)`；对于单次运行覆盖，使用 `agent.WithModelContextWindow(32768)`。只有当模型名在当前进程中有稳定全局含义时，才使用 `model.RegisterModelContextWindow("my-model", 32768)`。完整示例参见[会话摘要文档](session/summary.md)。
 
 ```
 safetyMargin = contextWindow × 10%

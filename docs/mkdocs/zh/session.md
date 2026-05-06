@@ -1993,22 +1993,24 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 
 > **Context Window 注册**
 >
-> `WithContextThreshold` 和 Token Tailoring 都依赖框架内置的模型 context window 注册表。注册表已包含大量常见模型（OpenAI、Anthropic、Google、DeepSeek、Qwen 等），但不一定覆盖所有模型——特别是私有部署、微调变体或较新发布的模型。如果你的模型未被识别（context window 解析为 0 或回退到默认值），请在启动时手动注册：
+> `WithContextThreshold` 和 Token Tailoring 都需要模型 context window。内置模型名会自动解析。对于私有部署、微调变体、租户自定义模型或 endpoint ID，优先使用模型实例或单次运行配置，避免不同用户覆盖同一个进程级注册表：
 >
 > ```go
-> import "trpc.group/trpc-go/trpc-agent-go/model"
+> modelInstance := openai.New(
+>     "my-custom-model",
+>     openai.WithContextWindow(32768),
+> )
 >
-> func init() {
->     // 注册单个模型
->     model.RegisterModelContextWindow("my-custom-model", 32768)
->
->     // 或批量注册多个模型
->     model.RegisterModelContextWindows(map[string]int{
->         "my-custom-model-32k":  32768,
->         "my-custom-model-128k": 131072,
->     })
-> }
+> eventChan, err := r.Run(
+>     ctx,
+>     userID,
+>     sessionID,
+>     userMessage,
+>     agent.WithModelContextWindow(32768),
+> )
 > ```
+>
+> 只有当模型名在当前进程中有稳定全局含义时，才使用 `model.RegisterModelContextWindow` 或 `model.RegisterModelContextWindows`。
 >
 > 模型名匹配不区分大小写，注册表也支持前缀匹配（例如注册 `"my-model"` 会匹配 `"my-model-v2"`）。
 

@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
@@ -1275,10 +1276,20 @@ func shouldSyncCompactContext(
 
 func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
 	contextWindow := contextCompactionFallbackWindow
-	if inv != nil && inv.Model != nil {
-		if window, ok := model.LookupModelContextWindow(inv.Model.Info().Name); ok {
+	if inv != nil {
+		if window, ok := agent.ModelContextWindowFromRunOptions(
+			&inv.RunOptions,
+		); ok {
 			contextWindow = window
+		} else if inv.Model != nil {
+			if window, ok := modelcontext.ResolveContextWindow(inv.Model); ok {
+				contextWindow = window
+			}
 		}
+	}
+
+	if contextWindow <= 0 {
+		contextWindow = contextCompactionFallbackWindow
 	}
 
 	threshold := int(float64(contextWindow) * normalizeContextCompactionThresholdRatio(ratio))

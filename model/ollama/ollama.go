@@ -124,6 +124,7 @@ func New(name string, opts ...Option) *Model {
 		tokenCounter:               o.tokenCounter,
 		tailoringStrategy:          o.tailoringStrategy,
 		maxInputTokens:             o.maxInputTokens,
+		contextWindow:              o.contextWindow,
 		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
 		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
 		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
@@ -133,14 +134,16 @@ func New(name string, opts ...Option) *Model {
 		options:                    o.options,
 		keepAlive:                  o.keepAlive,
 	}
-	m.contextWindow, err = m.getContextWindow()
-	if err != nil {
-		log.Warnf(
-			"failed to get context window for %s: %v",
-			m.name,
-			err,
-		)
-		m.contextWindow = imodel.ResolveContextWindow(m.name)
+	if m.contextWindow <= 0 {
+		m.contextWindow, err = m.getContextWindow()
+		if err != nil {
+			log.Warnf(
+				"failed to get context window for %s: %v",
+				m.name,
+				err,
+			)
+			m.contextWindow = imodel.ResolveContextWindow(m.name)
+		}
 	}
 	return m
 }
@@ -150,6 +153,14 @@ func (m *Model) Info() model.Info {
 	return model.Info{
 		Name: m.name,
 	}
+}
+
+// ContextWindow returns the resolved model context window.
+func (m *Model) ContextWindow() (int, bool) {
+	if m.contextWindow <= 0 {
+		return 0, false
+	}
+	return m.contextWindow, true
 }
 
 func (m *Model) runChatRequestCallback(
@@ -245,7 +256,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	maxInputTokens := m.maxInputTokens
 	if maxInputTokens <= 0 {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
+		contextWindow := m.contextWindow
+		if contextWindow <= 0 {
+			contextWindow = imodel.ResolveContextWindow(m.name)
+		}
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(

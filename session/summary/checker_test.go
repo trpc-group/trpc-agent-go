@@ -1091,6 +1091,29 @@ func TestResolveContextWindowFromCtx_KnownModel(t *testing.T) {
 	assert.Equal(t, 200000, resolveContextWindowFromCtx(ctx, 0))
 }
 
+func TestResolveContextWindowFromCtx_ModelInstanceWindow(t *testing.T) {
+	inv := &agent.Invocation{
+		Model: &fakeModelWithContextWindow{
+			fakeModelWithName: fakeModelWithName{name: "unknown-private-model"},
+			window:            204800,
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	assert.Equal(t, 204800, resolveContextWindowFromCtx(ctx, 0))
+}
+
+func TestResolveContextWindowFromCtx_RunOptionOverridesModelWindow(t *testing.T) {
+	inv := &agent.Invocation{
+		Model: &fakeModelWithContextWindow{
+			fakeModelWithName: fakeModelWithName{name: "unknown-private-model"},
+			window:            204800,
+		},
+		RunOptions: agent.NewRunOptions(agent.WithModelContextWindow(32768)),
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	assert.Equal(t, 32768, resolveContextWindowFromCtx(ctx, 0))
+}
+
 func TestResolveContextWindowFromCtx_ZeroFallback(t *testing.T) {
 	// No invocation, fallback=0 → uses default constant.
 	assert.Equal(t, defaultContextThresholdFallbackWindow, resolveContextWindowFromCtx(context.Background(), 0))
@@ -1238,4 +1261,16 @@ func (m *fakeModelWithName) GenerateContent(
 
 func (m *fakeModelWithName) Info() model.Info {
 	return model.Info{Name: m.name}
+}
+
+type fakeModelWithContextWindow struct {
+	fakeModelWithName
+	window int
+}
+
+func (m *fakeModelWithContextWindow) ContextWindow() (int, bool) {
+	if m.window <= 0 {
+		return 0, false
+	}
+	return m.window, true
 }

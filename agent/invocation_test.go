@@ -849,6 +849,19 @@ func TestWithModelName(t *testing.T) {
 	require.Equal(t, "gpt-4", opts.ModelName)
 }
 
+func TestWithModelContextWindow(t *testing.T) {
+	opts := &RunOptions{}
+	WithModelContextWindow(204800)(opts)
+	window, ok := ModelContextWindowFromRunOptions(opts)
+	require.True(t, ok)
+	require.Equal(t, 204800, window)
+
+	WithModelContextWindow(0)(opts)
+	window, ok = ModelContextWindowFromRunOptions(opts)
+	require.True(t, ok)
+	require.Equal(t, 204800, window)
+}
+
 func TestWithInstruction(t *testing.T) {
 	opts := &RunOptions{}
 	WithInstruction(testRunInstruction)(opts)

@@ -363,6 +363,7 @@ func TestModelWithAllOptions(t *testing.T) {
 		WithChannelBufferSize(128),
 		WithEnableTokenTailoring(true),
 		WithMaxInputTokens(2048),
+		WithContextWindow(123456),
 		WithTokenCounter(counter),
 		WithTailoringStrategy(strategy),
 		WithTokenTailoringConfig(config),
@@ -370,6 +371,11 @@ func TestModelWithAllOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, modelInstance)
 	assert.Equal(t, "gpt-4", modelInstance.Info().Name)
+	contextWindowProvider, ok := modelInstance.(model.ContextWindowProvider)
+	assert.True(t, ok)
+	window, ok := contextWindowProvider.ContextWindow()
+	assert.True(t, ok)
+	assert.Equal(t, 123456, window)
 
 	modelInstance, err = Model(
 		"anthropic",

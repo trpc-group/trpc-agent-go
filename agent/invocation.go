@@ -68,6 +68,8 @@ const (
 	// Runner checks this key to skip redundant async summary
 	// enqueue during the same run.
 	SyncSummaryIntraRunStateKey = "__sync_summary_intra_run__"
+
+	modelContextWindowRuntimeStateKey = "__trpc_agent_model_context_window__"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -594,6 +596,33 @@ func WithModelName(name string) RunOption {
 	return func(opts *RunOptions) {
 		opts.ModelName = name
 	}
+}
+
+// WithModelContextWindow sets the model context window for this specific run.
+// This is useful for user-defined or private models whose names should not be
+// registered in the process-wide model registry.
+func WithModelContextWindow(tokens int) RunOption {
+	return func(opts *RunOptions) {
+		if tokens > 0 {
+			if opts.RuntimeState == nil {
+				opts.RuntimeState = make(map[string]any, 1)
+			}
+			opts.RuntimeState[modelContextWindowRuntimeStateKey] = tokens
+		}
+	}
+}
+
+// ModelContextWindowFromRunOptions returns the context window configured by
+// WithModelContextWindow.
+func ModelContextWindowFromRunOptions(opts *RunOptions) (int, bool) {
+	if opts == nil || opts.RuntimeState == nil {
+		return 0, false
+	}
+	tokens, ok := opts.RuntimeState[modelContextWindowRuntimeStateKey].(int)
+	if !ok || tokens <= 0 {
+		return 0, false
+	}
+	return tokens, true
 }
 
 // WithCodeExecutor sets the code executor for this specific run.

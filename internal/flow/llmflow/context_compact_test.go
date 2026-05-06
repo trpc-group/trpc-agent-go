@@ -167,7 +167,8 @@ func (p *unsafeTailRequestProcessor) ProcessRequest(
 }
 
 type compactingModel struct {
-	name string
+	name   string
+	window int
 }
 
 func (m *compactingModel) Info() model.Info {
@@ -181,6 +182,13 @@ func (m *compactingModel) GenerateContent(
 	ch := make(chan *model.Response)
 	close(ch)
 	return ch, nil
+}
+
+func (m *compactingModel) ContextWindow() (int, bool) {
+	if m.window <= 0 {
+		return 0, false
+	}
+	return m.window, true
 }
 
 type toolsCheckingTailRequestProcessor struct {
@@ -1096,6 +1104,29 @@ func TestContextCompactionThreshold(t *testing.T) {
 			agent.WithInvocationModel(&compactingModel{name: "compact-threshold-unknown"}),
 		)
 		require.Equal(t, 5734, contextCompactionThreshold(inv, 0))
+	})
+
+	t.Run("uses model instance window", func(t *testing.T) {
+		inv := agent.NewInvocation(
+			agent.WithInvocationModel(&compactingModel{
+				name:   "compact-threshold-instance",
+				window: 40000,
+			}),
+		)
+		require.Equal(t, 20000, contextCompactionThreshold(inv, 0.5))
+	})
+
+	t.Run("run option overrides model instance window", func(t *testing.T) {
+		inv := agent.NewInvocation(
+			agent.WithInvocationModel(&compactingModel{
+				name:   "compact-threshold-run-option",
+				window: 40000,
+			}),
+			agent.WithInvocationRunOptions(
+				agent.NewRunOptions(agent.WithModelContextWindow(10000)),
+			),
+		)
+		require.Equal(t, 5000, contextCompactionThreshold(inv, 0.5))
 	})
 }
 

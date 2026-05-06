@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -466,9 +467,13 @@ func CheckContextThreshold(opts ...ContextThresholdOption) ContextChecker {
 func resolveContextWindowFromCtx(ctx context.Context, fallback int) int {
 	if ctx != nil {
 		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+			if w, ok := agent.ModelContextWindowFromRunOptions(
+				&inv.RunOptions,
+			); ok {
+				return w
+			}
 			if inv.Model != nil {
-				name := inv.Model.Info().Name
-				if w, ok := model.LookupModelContextWindow(name); ok {
+				if w, ok := modelcontext.ResolveContextWindow(inv.Model); ok {
 					return w
 				}
 			}
