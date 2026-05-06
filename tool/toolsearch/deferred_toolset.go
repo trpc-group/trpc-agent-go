@@ -292,6 +292,17 @@ func (d *DeferredToolSet) LoadedToolNames(ctx context.Context) []string {
 
 func (d *DeferredToolSet) catalogSnapshot(ctx context.Context) *catalogSnapshot {
 	now := time.Now()
+	snapshot := d.baseCatalogSnapshot(ctx, now)
+	if filter := invocationToolFilter(ctx); filter != nil {
+		return d.filteredCatalogSnapshot(ctx, snapshot, filter)
+	}
+	return snapshot
+}
+
+func (d *DeferredToolSet) baseCatalogSnapshot(
+	ctx context.Context,
+	now time.Time,
+) *catalogSnapshot {
 	d.mu.RLock()
 	if d.snapshot != nil &&
 		d.refreshPolicy.TTL > 0 &&
@@ -315,17 +326,39 @@ func (d *DeferredToolSet) catalogSnapshot(ctx context.Context) *catalogSnapshot 
 	return snapshot
 }
 
+func (d *DeferredToolSet) filteredCatalogSnapshot(
+	ctx context.Context,
+	base *catalogSnapshot,
+	filter tool.FilterFunc,
+) *catalogSnapshot {
+	if base == nil || filter == nil {
+		return base
+	}
+	entries := make([]catalogEntry, 0, len(base.Entries))
+	entriesByName := make(map[string]catalogEntry, len(base.ByName))
+	for _, entry := range base.Entries {
+		if entry.Tool == nil || !filter(ctx, entry.Tool) {
+			continue
+		}
+		entries = append(entries, entry)
+		entriesByName[entry.Name] = entry
+	}
+	return &catalogSnapshot{
+		BuiltAt:     base.BuiltAt,
+		Fingerprint: catalogFingerprint(entries),
+		Entries:     entries,
+		ByName:      entriesByName,
+		Index:       newLocalIndex(entries, d.analyzer),
+	}
+}
+
 func (d *DeferredToolSet) buildCatalogSnapshot(
 	ctx context.Context,
 	now time.Time,
 ) *catalogSnapshot {
 	entriesByName := make(map[string]catalogEntry, len(d.directTools)+8)
-	filter := invocationToolFilter(ctx)
 	addEntry := func(tl tool.Tool, bucket string) {
 		if tl == nil || tl.Declaration() == nil {
-			return
-		}
-		if filter != nil && !filter(ctx, tl) {
 			return
 		}
 		decl := tl.Declaration()

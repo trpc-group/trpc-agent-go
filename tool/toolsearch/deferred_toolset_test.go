@@ -406,6 +406,58 @@ func TestDeferredToolSet_CatalogSnapshot_TTLZeroDisablesCaching(t *testing.T) {
 	require.NotEqual(t, snap1.Fingerprint, snap2.Fingerprint)
 }
 
+func TestDeferredToolSet_CatalogSnapshot_InvocationFilterDoesNotPolluteCache(t *testing.T) {
+	snapshotNames := func(snapshot *catalogSnapshot) []string {
+		names := make([]string, 0, len(snapshot.Entries))
+		for _, entry := range snapshot.Entries {
+			names = append(names, entry.Name)
+		}
+		sort.Strings(names)
+		return names
+	}
+	filteredContext := func(name string) context.Context {
+		inv := agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithToolFilter(tool.NewIncludeToolNamesFilter(name)),
+			)),
+		)
+		return agent.NewInvocationContext(context.Background(), inv)
+	}
+	newSet := func() *DeferredToolSet {
+		set, err := NewDeferredToolSet(
+			WithTools(
+				newWeatherTool("weather_lookup", "Look up the weather for one city."),
+				newStockTool("stock_quote", "查询股票价格与行情。"),
+			),
+			WithCatalogRefreshPolicy(CatalogRefreshPolicy{TTL: time.Minute}),
+		)
+		require.NoError(t, err)
+		return set
+	}
+
+	t.Run("unfiltered cache is filtered per invocation", func(t *testing.T) {
+		set := newSet()
+		unfiltered := set.catalogSnapshot(context.Background())
+		require.Equal(t, []string{"stock_quote", "weather_lookup"}, snapshotNames(unfiltered))
+
+		filtered := set.catalogSnapshot(filteredContext("weather_lookup"))
+		require.Equal(t, []string{"weather_lookup"}, snapshotNames(filtered))
+
+		again := set.catalogSnapshot(context.Background())
+		require.Same(t, unfiltered, again)
+		require.Equal(t, []string{"stock_quote", "weather_lookup"}, snapshotNames(again))
+	})
+
+	t.Run("filtered invocation does not cache filtered snapshot", func(t *testing.T) {
+		set := newSet()
+		filtered := set.catalogSnapshot(filteredContext("weather_lookup"))
+		require.Equal(t, []string{"weather_lookup"}, snapshotNames(filtered))
+
+		unfiltered := set.catalogSnapshot(context.Background())
+		require.Equal(t, []string{"stock_quote", "weather_lookup"}, snapshotNames(unfiltered))
+	})
+}
+
 func TestDeferredToolSet_LLMAgentScenarios(t *testing.T) {
 	t.Run("pure deferred tool set", func(t *testing.T) {
 		runLLMAgentScenario(t, llmScenario{
