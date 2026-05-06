@@ -41,35 +41,39 @@ fi
 # Detect if this is a fork and try to fetch upstream tags.
 skip_tag_validation=false
 origin_url="$(git config --get remote.origin.url 2>/dev/null || true)"
-
-if [[ "${origin_url}" != *"${root_module}"* ]]; then
-  echo "Detected fork repository (module: ${root_module}, origin: ${origin_url})"
-  
-  # Try to infer upstream URL from module path.
-  upstream_url=""
-  if [[ "${root_module}" == trpc.group/* ]]; then
-    repo_path="${root_module#trpc.group/}"
-    if [[ "${repo_path}" == trpc-go/* ]]; then
-      repo_path="trpc-group/${repo_path#trpc-go/}"
-    fi
-    upstream_url="https://github.com/${repo_path}.git"
-  elif [[ "${root_module}" == github.com/* ]]; then
-    repo_path="${root_module#github.com/}"
-    upstream_url="https://github.com/${repo_path}.git"
+canonical_repo_path=""
+if [[ "${root_module}" == trpc.group/* ]]; then
+  repo_path="${root_module#trpc.group/}"
+  if [[ "${repo_path}" =~ ^(.+)/v([2-9][0-9]*)$ ]]; then
+    repo_path="${BASH_REMATCH[1]}"
   fi
-  
-  if [ -n "${upstream_url}" ]; then
-    echo "Attempting to fetch tags from upstream: ${upstream_url}"
-    if git fetch "${upstream_url}" "+refs/tags/*:refs/tags/*" 2>/dev/null; then
-      echo "Successfully fetched upstream tags"
-    else
-      echo "::warning::Failed to fetch upstream tags, will skip tag validation"
-      skip_tag_validation=true
-    fi
+  if [[ "${repo_path}" == trpc-go/* ]]; then
+    repo_path="trpc-group/${repo_path#trpc-go/}"
+  fi
+  canonical_repo_path="${repo_path}"
+elif [[ "${root_module}" == github.com/* ]]; then
+  repo_path="${root_module#github.com/}"
+  if [[ "${repo_path}" =~ ^(.+)/v([2-9][0-9]*)$ ]]; then
+    repo_path="${BASH_REMATCH[1]}"
+  fi
+  canonical_repo_path="${repo_path}"
+fi
+
+if [[ -n "${canonical_repo_path}" && "${origin_url}" != *"${canonical_repo_path}"* ]]; then
+  echo "Detected fork repository (module: ${root_module}, origin: ${origin_url})"
+
+  upstream_url="https://github.com/${canonical_repo_path}.git"
+  echo "Attempting to fetch tags from upstream: ${upstream_url}"
+  if git fetch "${upstream_url}" "+refs/tags/*:refs/tags/*" 2>/dev/null; then
+    echo "Successfully fetched upstream tags"
   else
-    echo "::warning::Cannot infer upstream URL, will skip tag validation"
+    echo "::warning::Failed to fetch upstream tags, will skip tag validation"
     skip_tag_validation=true
   fi
+elif [[ -z "${canonical_repo_path}" && "${origin_url}" != *"${root_module}"* ]]; then
+  echo "Detected fork repository (module: ${root_module}, origin: ${origin_url})"
+  echo "::warning::Cannot infer upstream URL, will skip tag validation"
+  skip_tag_validation=true
 fi
 
 if [ "${skip_tag_validation}" = true ]; then
@@ -198,7 +202,7 @@ for go_mod in "${go_mod_files[@]}"; do
     dep_ver="${req#* }"
     is_repo_module_path "${dep_path}" || continue
 
-    line_number="$(grep -nF "${dep_path}" "${go_mod}" | head -n1 | cut -d: -f1)"
+    line_number="$(grep -nF "${dep_path}" "${go_mod}" | head -n1 | cut -d: -f1 || true)"
     [ -z "${line_number}" ] && line_number=1
 
     if ! validate_resolvable_version "${rel_path}" "${line_number}" "${dep_path}" "${dep_ver}"; then
