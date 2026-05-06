@@ -26,6 +26,7 @@ type TimingAttachment struct {
 	attachedUsage      *model.Usage
 	attachedTimingInfo *model.TimingInfo
 	createdUsage       bool
+	reusedUsage        bool
 }
 
 // AttachTimingForCallback attaches TimingInfo before callbacks and returns a restorer.
@@ -40,6 +41,11 @@ func AttachTimingForCallback(
 		if response.Usage != nil {
 			attachment.timingInfo = response.Usage.TimingInfo
 		}
+		attachment.reusedUsage = response.Usage == nil &&
+			response.IsPartial &&
+			partialState != nil &&
+			partialState.usage != nil &&
+			partialState.timingInfo == timingInfo
 	}
 	AttachTiming(response, timingInfo, partialState)
 	if response != nil {
@@ -47,7 +53,9 @@ func AttachTimingForCallback(
 		if response.Usage != nil {
 			attachment.attachedTimingInfo = response.Usage.TimingInfo
 		}
-		attachment.createdUsage = attachment.usage == nil && response.Usage != nil
+		attachment.createdUsage = attachment.usage == nil &&
+			response.Usage != nil &&
+			!attachment.reusedUsage
 	}
 	return attachment
 }
@@ -74,6 +82,12 @@ func (a TimingAttachment) Restore() {
 		}
 		if a.response.Usage.TimingInfo == a.attachedTimingInfo {
 			a.response.Usage.TimingInfo = nil
+		}
+		return
+	}
+	if a.reusedUsage {
+		if a.response.Usage == a.attachedUsage {
+			a.response.Usage = a.usage
 		}
 		return
 	}

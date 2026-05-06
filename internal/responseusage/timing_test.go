@@ -58,6 +58,25 @@ func TestTimingAttachment_RestoreIfTimingInfoChanged(t *testing.T) {
 	require.Nil(t, response.Usage)
 }
 
+func TestTimingAttachment_RestoreDetachesReusedPartialUsage(t *testing.T) {
+	timing := &model.TimingInfo{FirstTokenDuration: time.Millisecond}
+	var state PartialState
+	first := &model.Response{IsPartial: true}
+	second := &model.Response{IsPartial: true}
+
+	AttachTiming(first, timing, &state)
+	first.Usage.PromptTokens = 10
+	attachment := AttachTimingForCallback(second, timing, &state)
+	require.Same(t, first.Usage, second.Usage)
+
+	attachment.RestoreIfTimingInfoChanged(nil)
+
+	require.Nil(t, second.Usage)
+	require.NotNil(t, first.Usage)
+	require.Equal(t, 10, first.Usage.PromptTokens)
+	require.Same(t, timing, first.Usage.TimingInfo)
+}
+
 func TestTimingAttachment_RestoreKeepsCallbackMutatedUsage(t *testing.T) {
 	timing := &model.TimingInfo{FirstTokenDuration: time.Millisecond}
 	response := &model.Response{}
