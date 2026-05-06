@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -176,6 +177,7 @@ func startBrokerHTTPServerWithOptions(t *testing.T, opts brokerHTTPServerOptions
 }
 
 func (s *brokerHTTPServer) Close() {
+	s.server.CloseClientConnections()
 	s.server.Close()
 }
 
@@ -401,6 +403,38 @@ func TestNamedStdioServer_ListTools(t *testing.T) {
 	require.Equal(t, "add", output.Tools[0].Name)
 	require.Equal(t, "echo", output.Tools[1].Name)
 	require.Equal(t, "local_stdio.add", output.Tools[0].Selector)
+}
+
+func TestClientOptionsProvider_StdioMetadataAndDoesNotBreakStdio(t *testing.T) {
+	var sawStdio bool
+
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"local_stdio": {
+				Command: "go",
+				Args:    []string{"run", stdioServerDir(t)},
+				Timeout: 10 * time.Second,
+			},
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			require.Equal(t, TargetTypeStdio, req.TargetType)
+			require.Equal(t, OriginCode, req.Origin)
+			require.Equal(t, PhaseListTools, req.Phase)
+			sawStdio = true
+			return &ClientOptions{
+				Stdio: []tmcp.StdioClientOption{
+					tmcp.WithStdioCapabilities(map[string]any{"mcpbroker_test": true}),
+				},
+			}, nil
+		}),
+	)
+
+	output, err := broker.listTools(context.Background(), listToolsInput{
+		Selector: "local_stdio",
+	})
+	require.NoError(t, err)
+	require.True(t, sawStdio)
+	require.Len(t, output.Tools, 2)
 }
 
 func TestNamedHTTPServer_ListToolsAndCallTool(t *testing.T) {
@@ -654,7 +688,7 @@ func TestNamedHTTPServer_HeaderInjectorAddsAuthorization(t *testing.T) {
 			},
 		}),
 		WithHTTPHeaderInjector(func(ctx context.Context, req *HeaderInjectRequest) (map[string]string, error) {
-			if req.BaseURL != server.URL || req.Phase != phaseListTools {
+			if req.BaseURL != server.URL || req.Phase != PhaseListTools {
 				return nil, nil
 			}
 			token, _ := ctx.Value(tokenKey).(string)
@@ -700,6 +734,197 @@ func TestAdHocHTTPServer_HeaderInjectorCanInjectAuthorization(t *testing.T) {
 	require.Equal(t, "Bearer adhoc-token", server.LastAuthorization())
 }
 
+func TestClientOptionsProvider_AdHocReceivesMetadataAndCanAdjustHTTP(t *testing.T) {
+	server := startBrokerHTTPServerWithOptions(t, brokerHTTPServerOptions{
+		RequiredAuth: "Bearer provider-token",
+	})
+	defer server.Close()
+
+	var captured *ClientOptionsRequest
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithHTTPHeaderInjector(func(ctx context.Context, req *HeaderInjectRequest) (map[string]string, error) {
+			return map[string]string{"Authorization": "Bearer wrong-token"}, nil
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			captured = req
+			return &ClientOptions{
+				HTTP: []tmcp.ClientOption{
+					tmcp.WithHTTPBeforeRequest(func(ctx context.Context, httpReq *http.Request) error {
+						httpReq.Header.Set("Authorization", "Bearer provider-token")
+						return nil
+					}),
+				},
+			}, nil
+		}),
+	)
+
+	output, err := broker.listTools(context.Background(), listToolsInput{Selector: server.URL})
+	require.NoError(t, err)
+	require.Len(t, output.Tools, 2)
+
+	require.NotNil(t, captured)
+	require.Equal(t, OriginAdhoc, captured.Origin)
+	require.Equal(t, TargetTypeHTTP, captured.TargetType)
+	require.Equal(t, PhaseListTools, captured.Phase)
+	require.Equal(t, server.URL, captured.BaseURL)
+	require.Empty(t, captured.ServerName)
+	require.Equal(t, server.URL, captured.Selector)
+
+	require.Equal(t, "Bearer provider-token", server.LastAuthorization())
+}
+
+func TestClientOptionsProvider_NamedServerMetadata(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	var captured *ClientOptionsRequest
+
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"http_named": {
+				ServerURL: server.URL,
+				Transport: "streamable_http",
+				Timeout:   5 * time.Second,
+			},
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			captured = req
+			return nil, nil
+		}),
+	)
+
+	_, err := broker.listTools(context.Background(), listToolsInput{Selector: "http_named"})
+	require.NoError(t, err)
+
+	require.NotNil(t, captured)
+	require.Equal(t, OriginCode, captured.Origin)
+	require.Equal(t, "http_named", captured.ServerName)
+	require.Equal(t, "http_named", captured.Selector)
+	require.Equal(t, server.URL, captured.BaseURL)
+	require.Equal(t, PhaseListTools, captured.Phase)
+}
+
+func TestClientOptionsProvider_InspectToolsMetadata(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	var captured *ClientOptionsRequest
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			captured = req
+			return nil, nil
+		}),
+	)
+
+	output, err := broker.inspectTools(context.Background(), inspectToolsInput{
+		Selector: server.URL,
+		Tools:    []string{"echo"},
+	})
+	require.NoError(t, err)
+	require.Len(t, output.Tools, 1)
+
+	require.NotNil(t, captured)
+	require.Equal(t, OriginAdhoc, captured.Origin)
+	require.Equal(t, TargetTypeHTTP, captured.TargetType)
+	require.Equal(t, PhaseInspectTools, captured.Phase)
+	require.Equal(t, server.URL, captured.BaseURL)
+	require.Equal(t, server.URL, captured.Selector)
+	require.Empty(t, captured.ServerName)
+	require.Empty(t, captured.ToolName)
+}
+
+func TestClientOptionsProvider_CallToolMetadata(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	var captured *ClientOptionsRequest
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			captured = req
+			return nil, nil
+		}),
+	)
+
+	selector := server.URL + ".echo"
+	callOutput, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  selector,
+		Arguments: map[string]any{"text": "hello"},
+	})
+	require.NoError(t, err)
+	require.Len(t, callOutput.Content, 1)
+
+	require.NotNil(t, captured)
+	require.Equal(t, OriginAdhoc, captured.Origin)
+	require.Equal(t, TargetTypeHTTP, captured.TargetType)
+	require.Equal(t, PhaseCallTool, captured.Phase)
+	require.Equal(t, "echo", captured.ToolName)
+	require.Equal(t, server.URL, captured.BaseURL)
+	require.Equal(t, selector, captured.Selector)
+	require.Empty(t, captured.ServerName)
+}
+
+func TestClientOptionsProvider_RequestConfigIsDefensivelyCloned(t *testing.T) {
+	server := startBrokerHTTPServerWithOptions(t, brokerHTTPServerOptions{
+		RequiredAuth: "Bearer original-token",
+	})
+	defer server.Close()
+
+	configuredHeaders := map[string]string{"Authorization": "Bearer original-token"}
+
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"http_named": {
+				ServerURL: server.URL,
+				Transport: "streamable_http",
+				Headers:   configuredHeaders,
+				Timeout:   5 * time.Second,
+			},
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			require.Equal(t, server.URL, req.Config.ServerURL)
+			require.Equal(t, "Bearer original-token", req.Config.Headers["Authorization"])
+			req.Config.ServerURL = "http://provider-mutation.invalid"
+			req.Config.Headers["Authorization"] = "Bearer mutated-token"
+			req.Config.Headers["X-Provider-Injected"] = "yes"
+			return nil, nil
+		}),
+	)
+
+	output, err := broker.listTools(context.Background(), listToolsInput{Selector: "http_named"})
+	require.NoError(t, err)
+	require.Len(t, output.Tools, 2)
+
+	require.Equal(t, "Bearer original-token", server.LastAuthorization(),
+		"mutation through req.Config.Headers must not affect the real request headers")
+	require.Equal(t, map[string]string{"Authorization": "Bearer original-token"}, configuredHeaders,
+		"mutation through req.Config.Headers must not affect the broker's stored server config")
+}
+
+func TestClientOptionsProvider_ErrorStopsBeforeConnect(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	denyErr := errors.New("MCP endpoint denied by policy")
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			require.Equal(t, OriginAdhoc, req.Origin)
+			return nil, denyErr
+		}),
+	)
+
+	_, err := broker.listTools(context.Background(), listToolsInput{Selector: server.URL})
+	require.ErrorIs(t, err, denyErr)
+	require.Equal(t, 0, server.MethodCount("initialize"), "provider error must abort before MCP initialize")
+}
+
 func TestNamedHTTPServer_HeaderInjectorCanonicalizesOverrides(t *testing.T) {
 	server := startBrokerHTTPServerWithOptions(t, brokerHTTPServerOptions{
 		RequiredAuth: "Bearer injected-token",
@@ -735,7 +960,7 @@ func TestErrorInterceptor_CanWrapListToolsError(t *testing.T) {
 	broker := New(
 		WithAllowAdHocHTTP(true),
 		WithErrorInterceptor(func(ctx context.Context, req *BrokerErrorRequest) (*BrokerErrorDecision, error) {
-			require.Equal(t, phaseListTools, req.Phase)
+			require.Equal(t, PhaseListTools, req.Phase)
 			require.Equal(t, server.URL, req.BaseURL)
 			return &BrokerErrorDecision{
 				Handled:   true,
@@ -760,7 +985,7 @@ func TestErrorInterceptor_CanWrapCallError(t *testing.T) {
 	broker := New(
 		WithAllowAdHocHTTP(true),
 		WithErrorInterceptor(func(ctx context.Context, req *BrokerErrorRequest) (*BrokerErrorDecision, error) {
-			require.Equal(t, phaseCallTool, req.Phase)
+			require.Equal(t, PhaseCallTool, req.Phase)
 			require.Equal(t, "echo", req.ToolName)
 			return &BrokerErrorDecision{
 				Handled:   true,
@@ -991,7 +1216,7 @@ func TestResolveTargetValidation(t *testing.T) {
 
 	target, err := New(WithAllowAdHocHTTP(true)).resolveTarget(targetInput{URL: "https://example.com/mcp"})
 	require.NoError(t, err)
-	require.Equal(t, "adhoc", target.Origin)
+	require.Equal(t, OriginAdhoc, target.Origin)
 	require.Equal(t, targetTypeHTTP, target.TargetType)
 }
 
@@ -1075,7 +1300,7 @@ func TestErrorInterceptorBranches(t *testing.T) {
 	ctx := context.Background()
 	broker := New()
 	target := resolvedTarget{TargetType: targetTypeHTTP, Config: legacymcp.ConnectionConfig{Transport: "streamable"}}
-	meta := operationMetadata{Selector: "https://example.com/mcp", BaseURL: "https://example.com/mcp", Phase: phaseListTools}
+	meta := operationMetadata{Selector: "https://example.com/mcp", BaseURL: "https://example.com/mcp", Phase: PhaseListTools}
 
 	handled, err := interceptHTTPOperationError(ctx, broker, target, meta, nil)
 	require.False(t, handled)

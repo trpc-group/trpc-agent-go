@@ -146,6 +146,30 @@ func main() {}
 	}
 }
 
+func TestReadFromFileWithoutChunkMarksExampleScope(t *testing.T) {
+	tmpDir := t.TempDir()
+	exampleDir := filepath.Join(tmpDir, "examples")
+	if err := os.MkdirAll(exampleDir, 0755); err != nil {
+		t.Fatalf("failed to create examples dir: %v", err)
+	}
+	goFile := filepath.Join(exampleDir, "main.go")
+	writeTestFile(t, goFile, `package main
+
+func main() {}
+`)
+
+	r := New(reader.WithChunk(false)).(*Reader)
+	docs, err := r.ReadFromFile(goFile)
+	if err != nil {
+		t.Fatalf("ReadFromFile() error = %v", err)
+	}
+
+	if len(docs) != 1 {
+		t.Fatalf("len(docs) = %d, want 1", len(docs))
+	}
+	assertMetadataEquals(t, docs[0].Metadata, "trpc_ast_scope", "example")
+}
+
 func TestReadFromDirectoryParsesWholeModule(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeTestFile(t, filepath.Join(tmpDir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
@@ -338,6 +362,56 @@ func TestReadFromReaderInvalidGoChunkModes(t *testing.T) {
 		t.Fatalf("len(docs) = %d, want 1", len(docs))
 	}
 	assertMetadataEquals(t, docs[0].Metadata, "trpc_ast_type", "file")
+}
+
+func TestCreateFileDocumentFromInfoUsesRepoRootForExampleScope(t *testing.T) {
+	repoRoot := t.TempDir()
+	filePath := filepath.Join(repoRoot, "examples", "demo", "main.go")
+
+	r := New(reader.WithChunk(false)).(*Reader)
+	doc := r.createFileDocumentFromInfo(
+		"package main\nfunc main() {}\n",
+		filePath,
+		map[string]any{source.MetaRepoPath: repoRoot},
+		nil,
+	)
+
+	assertMetadataEquals(t, doc.Metadata, "trpc_ast_scope", "example")
+}
+
+func TestChunkedReaderUsesRepoRootForScope(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "examples")
+	repoRoot := filepath.Join(workspace, "repo")
+	filePath := filepath.Join(repoRoot, "pkg", "service.go")
+
+	r := New().(*Reader)
+	docs, err := r.processContent(
+		"package demo\n\nfunc Serve() {}\n",
+		filePath,
+		map[string]any{source.MetaRepoPath: repoRoot},
+	)
+	if err != nil {
+		t.Fatalf("processContent() error = %v", err)
+	}
+
+	doc := findDocByFullName(t, docs, "demo.Serve")
+	assertMetadataEquals(t, doc.Metadata, "trpc_ast_scope", "code")
+}
+
+func TestResolveScopeUsesRepoRootMetadata(t *testing.T) {
+	repoRoot := t.TempDir()
+
+	if got := resolveScope(filepath.Join(repoRoot, "examples", "demo", "main.go"), map[string]any{
+		source.MetaRepoPath: repoRoot,
+	}); got != "example" {
+		t.Fatalf("resolveScope(example) = %q, want example", got)
+	}
+
+	if got := resolveScope(filepath.Join(repoRoot, "pkg", "service.go"), map[string]any{
+		source.MetaRepoPath: repoRoot,
+	}); got != "code" {
+		t.Fatalf("resolveScope(code) = %q, want code", got)
+	}
 }
 
 func findDocByFullName(t *testing.T, docs []*document.Document, fullName string) *document.Document {

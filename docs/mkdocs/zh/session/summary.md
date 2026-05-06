@@ -620,6 +620,22 @@ err := sessionService.CreateSessionSummary(
 
 框架提供两种模式来管理发送给 LLM 的对话上下文：
 
+在选择模式前，先区分三类上下文减载机制：
+
+| 机制 | 所在层 | 改动对象 | 典型用途 |
+| --- | --- | --- | --- |
+| Summary | Session Service + prompt assembly | 用 LLM 将历史事件生成可持久化摘要；开启 `WithAddSessionSummary(true)` 后，请求中注入摘要，并只拼接摘要时间点之后的增量事件 | 长会话保留语义连续性，减少反复发送完整历史 |
+| Context compaction | Agent prompt assembly | 不调用 LLM，不删除整轮消息；只在请求投影阶段改写 `tool result` 内容，例如旧结果替换为占位符、超大结果首尾保留截断 | 工具输出很长，但希望尽量保留对话结构和当前轮工具链路 |
+| Token tailoring | Model provider | 模型调用前按 token budget 删除或保留消息轮次，默认策略会尽量保留系统消息和最新轮次，但最终仍受可用预算约束 | 最后一层兜底，保证请求落入模型 context window |
+
+正常调用链路大致是：先由 agent 组装 prompt；如果启用了
+`WithAddSessionSummary(true)`，则注入 summary；随后按需压缩 `tool result`。
+如果开启了摘要注入且压完后仍接近 context window，会在 LLM 调用前同步尝试
+刷新一次 summary 并重建请求；最后模型层的 token tailoring 再按预算裁剪
+消息列表。也就是说，context compaction 和 token tailoring 都能减少 prompt
+体积，但前者缩小消息内部的工具输出，后者删减消息轮次；summary 则是用新的
+语义摘要替代一段历史。
+
 ### 模式 1：启用摘要注入（推荐）
 
 ```go
@@ -703,7 +719,15 @@ agent := llmagent.New(
 
 > **提示**：如果你的场景是超长对话（数百轮），且希望旧摘要能被自然淘汰（被新的摘要替代），建议使用 `SessionSummaryInjectionUser` 模式。
 
-**可选：Prompt 侧上下文压缩**
+#### Context Compaction 细节
+
+Context compaction 不是 summary 的同义词，也不是 token tailoring。它只处理
+`tool result` 这种容易异常膨胀的内容，不会把普通 user/assistant 消息做
+LLM 摘要，也不会像 token tailoring 那样直接丢弃完整消息轮次。
+
+> **命名说明**：`WithEnableContextCompaction(true)` 中的 "compaction"
+> 指 prompt-side tool result compaction/pruning；如果需要语义摘要，仍然由
+> `WithAddSessionSummary(true)` 和会话摘要器负责。
 
 当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前执行两遍压缩：
 
@@ -733,7 +757,7 @@ agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
     llmagent.WithAddSessionSummary(true),
-    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableContextCompaction(true), // 只压 tool result，不生成摘要
     llmagent.WithContextCompactionThresholdRatio(0.7),
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: 旧 tool result → 占位符
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: 任意超大 result → 首尾保留截断
@@ -916,6 +940,59 @@ err := sessionService.CreateSessionSummary(ctx, sess, "my-app/tool-calls", false
 userSummary, found := sessionService.GetSessionSummaryText(
     ctx, sess, session.WithSummaryFilterKey("my-app/user-messages"))
 ```
+
+### 限制摘要目标
+
+默认情况下，当某个非空分支 `FilterKey` 触发摘要时，session service 会同时
+刷新该分支摘要和全量会话摘要（`SummaryFilterKeyAllContents`）。如果某些分支
+不需要摘要，可以通过 allowlist 控制范围，并按需关闭全量摘要级联：
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(summarizer),
+    inmemory.WithSummaryFilterAllowlist(
+        "my-app/user-messages",
+        "my-app/tool-calls",
+    ),
+    inmemory.WithCascadeFullSessionSummary(false),
+)
+```
+
+行为说明：
+
+- `WithSummaryFilterAllowlist(...)` 只控制非空分支摘要目标，不会阻止
+  `session.SummaryFilterKeyAllContents` 这个全量摘要目标。
+- `WithCascadeFullSessionSummary(...)` 控制非空分支触发摘要时，是否同时刷新
+  全量会话摘要。
+- 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入
+  空 allowlist，并保持默认 cascade 开启：
+
+```go
+sessionService, err := mysql.NewService(
+    mysql.WithMySQLClientDSN(dsn),
+    mysql.WithSummarizer(summarizer),
+    mysql.WithSummaryFilterAllowlist(""),
+)
+```
+
+- `mysql.WithSummaryFilterAllowlist("")` 和
+  `mysql.WithSummaryFilterAllowlist()` 都表示“不允许任何 branch key”；
+  在默认 cascade 行为下，仍然会刷新全量会话摘要。
+- 如果同时设置 `mysql.WithCascadeFullSessionSummary(false)`，非空 branch 触发时
+  就没有任何摘要目标，因此不会生成摘要。
+- allowlist 使用带分隔符的层级匹配，不是原始字符串前缀匹配。框架内部会先给
+  两边补上 filter key 分隔符（`"/"`），再判断两者是否处于同一条祖先/子孙
+  层级路径上。
+- 例子：
+  - 放行 `my-app/tool` 时，会匹配 `my-app/tool` 和 `my-app/tool/search`。
+  - 放行 `my-app/tool/search` 时，也会匹配 `my-app/tool`。
+  - 放行 `my-app/tool` 时，不会匹配 `my-app/toolbox`。
+  - 放行 `my-app/tool` 时，不会匹配 `other-app/tool`。
+- 即使配置了 allowlist，`session.SummaryFilterKeyAllContents` 仍然可以被直接
+  用于生成全量会话摘要。
+- 不配置 allowlist 时会保持兼容行为，所有分支 `FilterKey` 都可以触发摘要。
+- 显式传入空 allowlist 会阻止 branch 摘要目标；如果 cascade 开启，branch
+  触发时仍会刷新全量会话摘要。
 
 ## 工作原理
 

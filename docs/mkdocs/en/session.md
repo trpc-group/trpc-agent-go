@@ -1781,6 +1781,22 @@ eventChan, err := runner.Run(ctx, userID, sessionID, userMessage)
 
 The framework provides two distinct modes for managing conversation context sent to the LLM:
 
+First, separate the three context-reduction mechanisms:
+
+| Mechanism | Layer | What changes | Typical use |
+| --- | --- | --- | --- |
+| Summary | Session Service + prompt assembly | Uses an LLM to create a persisted historical summary. With `WithAddSessionSummary(true)`, the request injects that summary and appends only incremental events after the summary point | Preserve semantic continuity in long sessions |
+| Context compaction | Agent prompt assembly | Does not call an LLM or drop whole turns; it only rewrites `tool result` content | Clean up large search results, logs, web fetches, and similar tool outputs |
+| Token tailoring | Model provider | Drops or keeps message rounds by token budget immediately before the provider call | Final fallback to keep the request within the context window |
+
+In call order, the agent assembles the prompt, injects summary when
+`WithAddSessionSummary(true)` is enabled, and optionally compacts `tool result`
+content. If summary injection is enabled and the request still approaches the
+context window, the flow may refresh the summary once and rebuild the request.
+Finally, model-layer token tailoring trims the message list. Context compaction
+shrinks tool-output payloads inside messages, token tailoring drops message
+rounds, and summary creates a semantic replacement for historical context.
+
 **Mode 1: With Summary (`WithAddSessionSummary(true)`)**
 
 - The session summary is merged into the existing system message when one is already present, or prepended as a new system message when none exists.
@@ -1788,9 +1804,20 @@ The framework provides two distinct modes for managing conversation context sent
 - This ensures complete context: condensed history (summary) + all new conversations since summarization.
 - `WithMaxHistoryRuns` is **ignored** in this mode.
 
-**Optional: Prompt-side context compaction**
+**Context compaction details**
 
-When `WithEnableContextCompaction(true)` is enabled, the framework adds a lightweight Phase 1 compaction pass before the LLM call:
+Context compaction is not another name for summary, and it is not token
+tailoring. It only targets `tool result` content, which is the part most likely
+to grow unexpectedly. It does not summarize ordinary user/assistant messages
+with an LLM, and it does not discard complete message rounds the way token
+tailoring may.
+
+> **Naming note**: "compaction" in `WithEnableContextCompaction(true)` means
+> prompt-side tool result compaction/pruning. Semantic summaries are still
+> controlled by `WithAddSessionSummary(true)` and the configured session
+> summarizer.
+
+When `WithEnableContextCompaction(true)` is enabled, the framework adds prompt-side compaction before the LLM call:
 
 - **Pass 1** — Historical tool results from older requests that exceed `ContextCompactionToolResultMaxTokens` (default 1024 tokens) are replaced with a placeholder while keeping `ToolID` and `ToolName`.
 - **Pass 2** — Any single tool result (including the current request) exceeding `ContextCompactionOversizedToolResultMaxTokens` is truncated using head+tail preservation with a `[...N characters truncated...]` marker. **Disabled by default (value `0`)** — you must explicitly call `WithContextCompactionOversizedToolResultMaxTokens(...)` and keep `WithEnableContextCompaction(true)` for Pass 2 to fire (recommended opt-in value: 8192 tokens).
@@ -1803,7 +1830,7 @@ llmAgent := llmagent.New(
     "my-agent",
     llmagent.WithModel(summaryModel),
     llmagent.WithAddSessionSummary(true),
-    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableContextCompaction(true), // only shrinks tool results; does not generate a summary
     llmagent.WithContextCompactionThresholdRatio(0.7),
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: old tool results → placeholder
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
@@ -2311,12 +2338,51 @@ evt.FilterKey = "user-messages"
 
 **Technical Details:** The framework uses prefix matching (`strings.HasPrefix`) to determine which events should be included in the context. See `ContentRequestProcessor` filtering logic for details.
 
+#### Restricting Summary Targets
+
+By default, when a non-empty branch `FilterKey` triggers summarization, the session service refreshes both that branch summary and the full-session summary (`SummaryFilterKeyAllContents`). If some branches do not need summaries, you can reduce LLM usage with an allowlist and optionally disable the full-session cascade:
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(summarizer),
+    inmemory.WithSummaryFilterAllowlist(
+        "my-app/user-messages",
+        "my-app/tool-calls",
+    ),
+    inmemory.WithCascadeFullSessionSummary(false),
+)
+```
+
+- `WithSummaryFilterAllowlist(...)` only controls non-empty branch summary targets. It does not block `session.SummaryFilterKeyAllContents`.
+- `WithCascadeFullSessionSummary(...)` controls whether a non-empty branch trigger also refreshes the full-session summary.
+- To keep only full-session summaries from branch-triggered automatic summary, pass an explicit empty allowlist and leave cascade enabled:
+
+```go
+sessionService, err := mysql.NewService(
+    mysql.WithMySQLClientDSN(dsn),
+    mysql.WithSummarizer(summarizer),
+    mysql.WithSummaryFilterAllowlist(""),
+)
+```
+
+- `mysql.WithSummaryFilterAllowlist("")` and `mysql.WithSummaryFilterAllowlist()` both mean "no branch keys are allowed"; with the default cascade behavior, the full-session summary still refreshes.
+- If you also set `mysql.WithCascadeFullSessionSummary(false)`, non-empty branch triggers have no summary target and no summary is generated.
+- Allowlist matching is hierarchical and segment-aware, not a raw string prefix check. Internally the framework appends the filter-key delimiter (`"/"`) to both sides and then checks whether either key is an ancestor/descendant of the other.
+- Examples:
+  - Allowing `my-app/tool` matches `my-app/tool` and `my-app/tool/search`.
+  - Allowing `my-app/tool/search` also matches `my-app/tool`.
+  - Allowing `my-app/tool` does not match `my-app/toolbox`.
+  - Allowing `my-app/tool` does not match `other-app/tool`.
+- `session.SummaryFilterKeyAllContents` remains available for direct full-session summaries even when an allowlist is configured.
+- Leaving the allowlist unset preserves the legacy behavior and allows every branch `FilterKey` to trigger summaries.
+- Passing an explicit empty allowlist blocks branch summary targets; with cascade enabled, branch triggers still refresh the full-session summary.
+
 #### Complete Examples
 
 See the following examples for complete FilterKey usage scenarios:
 
 - [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook basics
-- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - Summarizing by FilterKey
+- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - Summarizing by FilterKey, allowlists, and full-session cascade control
 
 ### Performance Considerations
 

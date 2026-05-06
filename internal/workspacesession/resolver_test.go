@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -151,4 +153,69 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "sess-123", ws3.ID)
 	require.Equal(t, []string{"workspace", "sess-123"}, mgr.created)
+}
+
+// artifactProbeManager asserts CreateWorkspace's context can resolve an artifact
+// the same way init hooks and StageInputs do after resolver injects service.
+type artifactProbeManager struct {
+	t       *testing.T
+	version *int
+	sawOK   bool
+}
+
+func (m *artifactProbeManager) CreateWorkspace(
+	ctx context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	data, _, _, err := codeexecutor.LoadArtifactHelper(
+		ctx,
+		"app/requirements.txt",
+		m.version,
+	)
+	require.NoError(m.t, err)
+	require.Equal(m.t, "numpy==1\n", string(data))
+	m.sawOK = true
+	return codeexecutor.Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (*artifactProbeManager) Cleanup(context.Context, codeexecutor.Workspace) error {
+	return nil
+}
+
+func TestResolver_CreateWorkspace_InjectsArtifactContext(t *testing.T) {
+	svc := inmemory.NewService()
+	sess := &session.Session{
+		ID: "sess-art", AppName: "myapp", UserID: "u1",
+	}
+	info := artifact.SessionInfo{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	v, err := svc.SaveArtifact(
+		context.Background(),
+		info,
+		"app/requirements.txt",
+		&artifact.Artifact{Data: []byte("numpy==1\n")},
+	)
+	require.NoError(t, err)
+
+	probe := &artifactProbeManager{t: t, version: &v}
+	eng := codeexecutor.NewEngine(
+		probe,
+		&resolverStubFS{},
+		&resolverStubRunner{},
+	)
+
+	inv := agent.NewInvocation()
+	inv.Session = sess
+	inv.ArtifactService = svc
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	r := NewResolver(nil, nil)
+	ws, err := r.CreateWorkspace(ctx, eng, "ignored")
+	require.NoError(t, err)
+	require.Equal(t, sess.ID, ws.ID)
+	require.True(t, probe.sawOK)
 }

@@ -207,16 +207,21 @@ type GenerationConfig struct {
 
     // 推理努力程度。可选值取决于服务方：
     //   - OpenAI o-series："low"、"medium"、"high"
+    //   - Anthropic adaptive thinking："low"、"medium"、"high"、"max"，
+    //     以及支持该值的模型上的 "xhigh"
     //   - DeepSeek v4（deepseek-v4-pro / deepseek-v4-flash）："high"、"max"
     //     （服务端为兼容旧配置，会把 "low"/"medium" 映射为 "high"，
     //     "xhigh" 映射为 "max"）
+    // OpenAI-compatible 服务会将该字段透传给所选后端模型，
+    // 请使用该后端模型支持的取值。
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
     // 是否启用思考模式
-    ThinkingEnabled *bool `json:"-"`
+    // nil 表示不发送思考开关字段，由服务方默认值决定。
+    ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
 
     // 思考模式的最大令牌数
-    ThinkingTokens *int `json:"-"`
+    ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 ```
 
@@ -255,7 +260,29 @@ type ResponseError struct {
     Param   string    `json:"param,omitempty"`
     Code    string    `json:"code,omitempty"`
 }
+
+// Usage 表示 token 用量信息
+type Usage struct {
+    PromptTokens            int                     `json:"prompt_tokens"`
+    CompletionTokens        int                     `json:"completion_tokens"`
+    TotalTokens             int                     `json:"total_tokens"`
+    PromptTokensDetails     PromptTokensDetails     `json:"prompt_tokens_details"`
+    CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+    TimingInfo              *TimingInfo             `json:"timing_info,omitempty"`
+}
+
+type PromptTokensDetails struct {
+    CachedTokens        int `json:"cached_tokens"`
+    CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+    CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+    ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+}
 ```
+
+对于 OpenAI-compatible 服务，返回中的 `completion_tokens_details.reasoning_tokens` 会映射到 `Usage.CompletionTokensDetails.ReasoningTokens`。当服务方没有消耗或没有上报 reasoning tokens 时，该值可能为 `0`；如果希望 reasoning 模型进入推理行为，请按模型能力设置 `ReasoningEffort` 和/或 `ThinkingEnabled`。
 
 ## OpenAI Model
 
@@ -2275,7 +2302,34 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#6-token-裁剪token-tailoring)。
+关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#7-token-token-tailoring)。
+
+#### 5. 流式工具调用增量：ShowToolCallDelta
+
+默认情况下，Anthropic 适配层会先在内部累积工具调用参数，等模型完成这次工具调用后，再通过最终响应的 `Response.Choices[0].Message.ToolCalls` 一次性返回完整参数。
+
+`WithShowToolCallDelta` 用于在流式阶段透出 Anthropic 的 `input_json_delta` 分片。工具参数较长，或前端需要展示参数生成过程时，可以开启这个选项：
+
+```go
+llm := anthropic.New(
+    "claude-sonnet-4-0",
+    anthropic.WithShowToolCallDelta(true),
+)
+```
+
+当启用 `WithShowToolCallDelta(true)` 时：
+
+- 流式响应中会出现 `Response.Choices[0].Delta.ToolCalls`；
+- `Delta.ToolCalls[*].Function.Arguments` 是本次新增的参数字符串片段，通常不是完整 JSON；
+- `Delta.ToolCalls[*].ID` 和 `Index` 可用于把同一个工具调用的多个片段串起来；
+- 最终响应仍然会在 `Response.Choices[0].Message.ToolCalls` 中返回完整工具调用，原有工具执行链路可以继续复用。
+
+典型处理方式：
+
+1. 在每个部分响应中读取
+   `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments`；
+2. 按工具调用 `ID` 或 `Index` 分组，并按顺序追加 `Arguments` 片段；
+3. 将累积后的字符串作为 JSON 参数处理；边生成边展示的场景可以先按字符串渲染，等它构成合法 JSON 后再反序列化。
 
 ## Provider
 

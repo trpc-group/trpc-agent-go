@@ -207,16 +207,21 @@ type GenerationConfig struct {
 
     // Reasoning effort level. Accepted values depend on the provider:
     //   - OpenAI o-series: "low", "medium", "high".
+    //   - Anthropic adaptive thinking: "low", "medium", "high", "max",
+    //     and "xhigh" on models that support it.
     //   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): "high", "max"
     //     (server maps "low"/"medium" -> "high" and "xhigh" -> "max" for
     //     backward compatibility).
+    // OpenAI-compatible providers forward this field to the selected backend
+    // model; use values supported by that backend.
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
     // Whether to enable thinking mode.
-    ThinkingEnabled *bool `json:"-"`
+    // nil means no thinking-toggle field is emitted, so the provider default applies.
+    ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
 
     // Maximum token count for thinking mode.
-    ThinkingTokens *int `json:"-"`
+    ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 ```
 
@@ -257,7 +262,29 @@ type ResponseError struct {
     Param   string    `json:"param,omitempty"`
     Code    string    `json:"code,omitempty"`
 }
+
+// Usage represents token usage information.
+type Usage struct {
+    PromptTokens            int                     `json:"prompt_tokens"`
+    CompletionTokens        int                     `json:"completion_tokens"`
+    TotalTokens             int                     `json:"total_tokens"`
+    PromptTokensDetails     PromptTokensDetails     `json:"prompt_tokens_details"`
+    CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+    TimingInfo              *TimingInfo             `json:"timing_info,omitempty"`
+}
+
+type PromptTokensDetails struct {
+    CachedTokens        int `json:"cached_tokens"`
+    CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+    CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+    ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+}
 ```
+
+For OpenAI-compatible providers, `completion_tokens_details.reasoning_tokens` is mapped to `Usage.CompletionTokensDetails.ReasoningTokens`. The value may be `0` when the provider does not spend or report reasoning tokens; for reasoning models, set `ReasoningEffort` and/or `ThinkingEnabled` when you want to request reasoning behavior.
 
 ## OpenAI Model
 
@@ -2289,7 +2316,37 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to [Token Tailoring under OpenAI Model](#3-token-tailoring).
+For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to [Token Tailoring under OpenAI Model](#7-token-tailoring).
+
+#### 5. Streaming Tool Call Deltas: ShowToolCallDelta
+
+By default, the Anthropic adapter accumulates tool-call arguments internally and returns the complete arguments once the model finishes the tool call, through `Response.Choices[0].Message.ToolCalls` in the final response.
+
+`WithShowToolCallDelta` exposes Anthropic `input_json_delta` chunks during streaming. Enable this option when tool arguments are long, or when the frontend needs to display argument generation progress:
+
+```go
+llm := anthropic.New(
+    "claude-sonnet-4-0",
+    anthropic.WithShowToolCallDelta(true),
+)
+```
+
+When `WithShowToolCallDelta(true)` is enabled:
+
+- Streaming responses may include `Response.Choices[0].Delta.ToolCalls`.
+- `Delta.ToolCalls[*].Function.Arguments` is the newly produced argument string fragment, and is usually not complete JSON.
+- `Delta.ToolCalls[*].ID` and `Index` can be used to join fragments for the same tool call.
+- The final response still returns the complete tool call in `Response.Choices[0].Message.ToolCalls`, so existing tool execution logic can continue to use the final response unchanged.
+
+Typical handling pattern:
+
+1. Read `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments` on each
+   partial response.
+2. Group chunks by tool call `ID` or `Index`, and append the `Arguments`
+   fragments in order.
+3. Treat the accumulated value as the tool argument JSON. For progressive
+   rendering, render the string as it grows and unmarshal it only after it
+   becomes valid JSON.
 
 ## Provider
 

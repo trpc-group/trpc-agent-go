@@ -803,7 +803,7 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 			)
 		})
 
-	t.Run("assistant message without tool calls is not backfilled",
+	t.Run("assistant message without tool calls backfills empty reasoning_content",
 		func(t *testing.T) {
 			msgs := []model.Message{
 				{
@@ -826,12 +826,14 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 			err = json.Unmarshal(data, &parsed)
 			require.NoError(t, err)
 
-			_, ok := parsed[model.ReasoningContentKey]
-			assert.False(
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
 				t,
 				ok,
-				"reasoning_content should stay absent without tool calls",
+				"reasoning_content should be present when backfill "+
+					"is enabled",
 			)
+			assert.Equal(t, "", reasoningValue)
 		})
 
 	t.Run("assistant message with tool calls and reasoning_content", func(t *testing.T) {

@@ -152,6 +152,82 @@ runnerInstance := runner.NewRunner(
 defer runnerInstance.Close()
 ```
 
+## Tool Identity Injection
+
+Plugins can add pre-processing or post-processing to every tool call through
+`BeforeTool` and `AfterTool`. For web applications that already know the
+current user, `plugin/identity` provides a reusable identity propagation plugin:
+
+```go
+import (
+	"context"
+	"net/http"
+
+	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+	tmcp "trpc.group/trpc-go/trpc-mcp-go"
+)
+
+provider := identity.ProviderFunc(func(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+) (*identity.Identity, error) {
+	return &identity.Identity{
+		UserID: userID,
+		Headers: map[string]string{
+			"Authorization": "Bearer " + resolveAccessToken(userID),
+		},
+		EnvVars: map[string]string{
+			"USER_ACCESS_TOKEN": resolveUserAccessToken(userID),
+		},
+	}, nil
+})
+
+mcpTools := toolmcp.NewMCPToolSet(
+	toolmcp.ConnectionConfig{
+		Transport: "streamable",
+		ServerURL: "https://mcp.example.com",
+	},
+	toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+		func(ctx context.Context, req *http.Request) error {
+			headers, err := identity.HeadersFromContext(ctx)
+			if err != nil {
+				return err
+			}
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			return nil
+		},
+	)),
+)
+
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(identity.NewPlugin(provider)),
+)
+```
+
+The plugin stores the resolved identity in invocation state before the agent
+runs. Before each tool call it attaches that identity to the tool context.
+MCP HTTP transports can read `Identity.Headers` from that context via an
+`mcp.WithHTTPBeforeRequest` hook installed through `WithMCPOptions`, so every
+outgoing request picks up the current user's headers. Command-execution tools
+should read `Identity.EnvVars` from context at execution time so secrets never
+enter model-visible tool arguments. For `workspace_exec` and `skill_run`, wrap
+the executor with `codeexecutor.NewEnvInjectingCodeExecutor(exec,
+identity.EnvVarsFromContext)`.
+
+When you register that MCP ToolSet through `llmagent.WithToolSets(...)`, enable
+`llmagent.WithRefreshToolSetsOnRun(true)` if `initialize` / `tools/list` must
+also see request-scoped headers. That adds a fresh `initialize` /
+`tools/list` pass to each run, so enable it only when needed. If you need a
+fixed discovery context instead, call `toolSet.Tools(ctx)` yourself and pass
+the resulting tools via `llmagent.WithTools(...)`.
+
 ## How Plugins Execute
 
 ### Scope and propagation

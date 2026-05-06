@@ -15,6 +15,7 @@
 // Usage:
 //
 //	go run main.go -session=inmemory
+//	go run main.go -session=noop
 //	go run main.go -session=sqlite
 //	go run main.go -session=redis
 //	go run main.go -session=postgres
@@ -102,7 +103,7 @@ var (
 	sessServiceName = flag.String(
 		"session",
 		"redis",
-		"Name of the session service to use, inmemory / "+
+		"Name of the session service to use, inmemory / noop / "+
 			"sqlite / redis / postgres / pgvector / mysql / clickhouse",
 	)
 	streaming = flag.Bool(
@@ -133,7 +134,7 @@ var (
 	)
 	enableTrace = flag.Bool(
 		"enable-trace",
-		true,
+		false,
 		"Enable Langfuse tracing for session operations. "+
 			"Requires LANGFUSE_SECRET_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_HOST env vars.",
 	)
@@ -191,6 +192,7 @@ type multiTurnChat struct {
 	searchable     session.SearchableService
 	userID         string
 	sessionID      string
+	debugPersisted bool
 }
 
 // run starts the interactive chat session.
@@ -227,6 +229,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 	if searchable, ok := sessionService.(session.SearchableService); ok {
 		c.searchable = searchable
 	}
+	c.debugPersisted = sessionType != util.SessionNoop
 
 	modelInstance := openai.New(c.modelName)
 
@@ -326,7 +329,7 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 		}
 
 		// Print session events in debug mode.
-		if *debugMode {
+		if *debugMode && c.debugPersisted {
 			if err := util.PrintSessionEvents(
 				ctx,
 				c.sessionService,

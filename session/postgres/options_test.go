@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 )
 
@@ -302,11 +303,24 @@ func TestServiceOptions(t *testing.T) {
 		assert.Equal(t, 512, opts.summaryQueueSize)
 	})
 
+	t.Run("WithSummaryFilterAllowlist", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithSummaryFilterAllowlist("tool-usage", "user-messages")(opts)
+		assert.Equal(t, []string{"tool-usage", "user-messages"}, opts.summaryFilterAllowlist)
+	})
+
 	t.Run("WithSummaryJobTimeout", func(t *testing.T) {
 		opts := &ServiceOpts{}
 		timeout := 60 * time.Second
 		WithSummaryJobTimeout(timeout)(opts)
 		assert.Equal(t, timeout, opts.summaryJobTimeout)
+	})
+
+	t.Run("WithCascadeFullSessionSummary", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithCascadeFullSessionSummary(false)(opts)
+		require.NotNil(t, opts.cascadeFullSessionSummary)
+		assert.False(t, *opts.cascadeFullSessionSummary)
 	})
 
 	t.Run("WithPostgresInstance", func(t *testing.T) {
@@ -349,4 +363,13 @@ func TestServiceOptions(t *testing.T) {
 		WithSchema("public")(opts)
 		assert.Equal(t, "public", opts.schema)
 	})
+}
+
+func TestShouldCascadeFullSessionSummary(t *testing.T) {
+	disabled := false
+	assert.True(t, (ServiceOpts{}).shouldCascadeFullSessionSummary())
+	assert.True(t, defaultOptions.shouldCascadeFullSessionSummary())
+	assert.False(t, (ServiceOpts{
+		cascadeFullSessionSummary: &disabled,
+	}).shouldCascadeFullSessionSummary())
 }

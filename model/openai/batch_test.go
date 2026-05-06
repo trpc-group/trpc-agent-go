@@ -398,6 +398,45 @@ func TestGenerateBatchJSONL_ReasoningContentBackfill(t *testing.T) {
 			assert.Equal(t, "", reasoningValue)
 		})
 
+	t.Run("backfills assistant content message when enabled",
+		func(t *testing.T) {
+			requests := []*BatchRequestInput{
+				{
+					CustomID: customID,
+					Body: BatchRequest{
+						Request: model.Request{
+							Messages: []model.Message{
+								{
+									Role:    model.RoleAssistant,
+									Content: "Final answer without reasoning.",
+								},
+							},
+						},
+					},
+				},
+			}
+			m := New("default-model",
+				WithReasoningContentBackfill(true))
+
+			jsonlData, err := m.generateBatchJSONL(requests)
+			require.NoError(t, err)
+
+			lines := strings.Split(strings.TrimSpace(string(jsonlData)), "\n")
+			require.Len(t, lines, 1)
+
+			var decoded map[string]any
+			err = json.Unmarshal([]byte(lines[0]), &decoded)
+			require.NoError(t, err)
+
+			body := decoded["body"].(map[string]any)
+			messages := body["messages"].([]any)
+			message := messages[0].(map[string]any)
+
+			reasoningValue, ok := message[model.ReasoningContentKey]
+			require.True(t, ok)
+			assert.Equal(t, "", reasoningValue)
+		})
+
 	t.Run("keeps reasoning_content absent when disabled",
 		func(t *testing.T) {
 			m := New("default-model")

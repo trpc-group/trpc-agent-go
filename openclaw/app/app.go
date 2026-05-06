@@ -106,6 +106,39 @@ const (
 		"until you have performed the action and returned " +
 		"the resulting link, id, file marker, or exact " +
 		"blocker after recovery."
+	openClawPostToolPrompt = "[OpenClaw Tool Result Prompt] " +
+		"Treat tool results as mid-task state, not as " +
+		"permission to stop. Compare the latest tool result " +
+		"with the user's original/current request and keep " +
+		"working autonomously until the requested content, " +
+		"artifact, or external action is complete or blocked. " +
+		"If the request is complete, return the concrete " +
+		"user-facing result: link, id, file marker, sent " +
+		"status, created document title, scheduled job id, " +
+		"or the exact blocker. If work is still needed and " +
+		"an available tool can advance, verify, or recover " +
+		"the task, call that tool in the same assistant turn. " +
+		"Do not answer only with what you will do next. Do " +
+		"not stop at a plan, progress note, or tool-result " +
+		"summary when a next tool call is available. Do not " +
+		"ask for confirmation for an in-scope next step unless " +
+		"it is destructive, expensive, or genuinely ambiguous. " +
+		"Do not claim that a document, message, upload, " +
+		"schedule, file, wiki page, or external resource was " +
+		"created, sent, written, published, or updated unless " +
+		"the latest tool result proves it. If a tool failed " +
+		"or returned a partial result, recover with available " +
+		"tools when there is a clear path: corrected " +
+		"parameters, canonical ids, alternate lookup, retry, " +
+		"or verification. Only return a blocker when no safe " +
+		"next step remains. For files and media, return " +
+		"`MEDIA:` or `MEDIA_DIR:` lines only after the " +
+		"file or directory exists and is intended to be " +
+		"sent. For docs and iWiki, return the link, id, " +
+		"or title when available. " +
+		"Keep final answers concise and user-facing; avoid " +
+		"exposing tool/source/process details unless they are " +
+		"the exact result or blocker."
 	skillPreambleOnlyRule = "A preamble-only skill response is " +
 		"invalid. "
 	skillSameTurnToolRule = "If you say you will read, load, " +
@@ -160,6 +193,28 @@ const (
 		"need. Do not respond with capability disclaimers " +
 		"such as `I can read the skill` when you can load " +
 		"it now. Announce the next step briefly and do it. " +
+		"When the user asks you to add, teach, configure, " +
+		"preserve, or reuse a durable capability, workflow, " +
+		"integration, domain rule, team process, API, CLI, " +
+		"MCP endpoint, document convention, or tool usage " +
+		"pattern, or to remember an executable workflow or " +
+		"integration, prefer creating or updating a local " +
+		"skill over treating it as a one-off answer. For " +
+		"lightweight facts, preferences, or simple standing " +
+		"rules, use memory instead. " +
+		"Use platform code and tools for stable safety " +
+		"boundaries, secrets, permissions, file paths, " +
+		"validation, and execution guarantees; use skill " +
+		"context for evolving behavior, triggers, " +
+		"constraints, examples, recovery paths, and domain " +
+		"knowledge. If you create or update a skill, do not " +
+		"stop after describing the idea: choose a writable " +
+		"user-managed skill root, not bundled skills unless " +
+		"explicitly asked to edit them, write the skill files, " +
+		"avoid storing raw secrets, validate or inspect the skill, " +
+		"refresh or reload skills when the runtime provides " +
+		"that path, and then use the skill to complete the " +
+		"current task. " +
 		"Reuse bundled scripts, templates, and assets " +
 		"when they already fit. If multiple skills match, " +
 		"use the smallest set that covers the task. Keep " +
@@ -2330,6 +2385,7 @@ func newAgent(
 			conversation.ProjectEventMessage,
 		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
+		llmagent.WithPostToolPrompt(openClawPostToolPrompt),
 	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
@@ -2788,11 +2844,6 @@ func resolveWorkspaceSkillsRoot(cwd, raw string) string {
 	cwdSkills := filepath.Join(cwd, defaultSkillsDir)
 	if dirExists(cwdSkills) {
 		return cwdSkills
-	}
-
-	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
-	if dirExists(repoBundled) {
-		return repoBundled
 	}
 	return cwdSkills
 }

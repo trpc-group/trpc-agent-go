@@ -127,13 +127,22 @@ func (b *Broker) listTools(ctx context.Context, input listToolsInput) (listTools
 	cfg, err := b.withPreparedHTTPHeaders(ctx, target, operationMetadata{
 		Selector: input.Selector,
 		BaseURL:  target.Config.ServerURL,
-		Phase:    phaseListTools,
+		Phase:    PhaseListTools,
 	})
 	if err != nil {
 		return listToolsOutput{}, err
 	}
 
-	mcpTools, err := withOneShotClient(ctx, cfg, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
+	httpExtra, stdioExtra, err := b.resolveClientOptions(ctx, input.Selector, target, operationMetadata{
+		Selector: input.Selector,
+		BaseURL:  target.Config.ServerURL,
+		Phase:    PhaseListTools,
+	}, cfg)
+	if err != nil {
+		return listToolsOutput{}, err
+	}
+
+	mcpTools, err := withOneShotClient(ctx, cfg, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
 		result, listErr := client.ListTools(opCtx, &tmcp.ListToolsRequest{})
 		if listErr != nil {
 			return nil, fmt.Errorf("list MCP tools: %w", listErr)
@@ -144,7 +153,7 @@ func (b *Broker) listTools(ctx context.Context, input listToolsInput) (listTools
 		if handled, interceptErr := interceptHTTPOperationError(ctx, b, target, operationMetadata{
 			Selector: input.Selector,
 			BaseURL:  target.Config.ServerURL,
-			Phase:    phaseListTools,
+			Phase:    PhaseListTools,
 		}, err); handled {
 			return listToolsOutput{}, interceptErr
 		}
@@ -183,13 +192,22 @@ func (b *Broker) inspectTools(ctx context.Context, input inspectToolsInput) (ins
 	cfg, err := b.withPreparedHTTPHeaders(ctx, target, operationMetadata{
 		Selector: input.Selector,
 		BaseURL:  target.Config.ServerURL,
-		Phase:    phaseInspectTools,
+		Phase:    PhaseInspectTools,
 	})
 	if err != nil {
 		return inspectToolsOutput{}, err
 	}
 
-	mcpTools, err := withOneShotClient(ctx, cfg, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
+	httpExtra, stdioExtra, err := b.resolveClientOptions(ctx, input.Selector, target, operationMetadata{
+		Selector: input.Selector,
+		BaseURL:  target.Config.ServerURL,
+		Phase:    PhaseInspectTools,
+	}, cfg)
+	if err != nil {
+		return inspectToolsOutput{}, err
+	}
+
+	mcpTools, err := withOneShotClient(ctx, cfg, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
 		result, listErr := client.ListTools(opCtx, &tmcp.ListToolsRequest{})
 		if listErr != nil {
 			return nil, fmt.Errorf("list MCP tools: %w", listErr)
@@ -200,7 +218,7 @@ func (b *Broker) inspectTools(ctx context.Context, input inspectToolsInput) (ins
 		if handled, interceptErr := interceptHTTPOperationError(ctx, b, target, operationMetadata{
 			Selector: input.Selector,
 			BaseURL:  target.Config.ServerURL,
-			Phase:    phaseInspectTools,
+			Phase:    PhaseInspectTools,
 		}, err); handled {
 			return inspectToolsOutput{}, interceptErr
 		}
@@ -245,13 +263,23 @@ func (b *Broker) callTool(ctx context.Context, input callToolInput) (callToolOut
 		Selector: input.Selector,
 		BaseURL:  target.Config.ServerURL,
 		ToolName: toolName,
-		Phase:    phaseCallTool,
+		Phase:    PhaseCallTool,
 	})
 	if err != nil {
 		return callToolOutput{}, err
 	}
 
-	result, err := withOneShotClient(ctx, cfg, func(opCtx context.Context, client tmcp.Connector) (*tmcp.CallToolResult, error) {
+	httpExtra, stdioExtra, err := b.resolveClientOptions(ctx, input.Selector, target, operationMetadata{
+		Selector: input.Selector,
+		BaseURL:  target.Config.ServerURL,
+		ToolName: toolName,
+		Phase:    PhaseCallTool,
+	}, cfg)
+	if err != nil {
+		return callToolOutput{}, err
+	}
+
+	result, err := withOneShotClient(ctx, cfg, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) (*tmcp.CallToolResult, error) {
 		if validateErr := validateCallToolArguments(opCtx, client, toolName, input.Arguments); validateErr != nil {
 			return nil, validateErr
 		}
@@ -271,7 +299,7 @@ func (b *Broker) callTool(ctx context.Context, input callToolInput) (callToolOut
 			Selector: input.Selector,
 			BaseURL:  target.Config.ServerURL,
 			ToolName: toolName,
-			Phase:    phaseCallTool,
+			Phase:    PhaseCallTool,
 		}, err); handled {
 			return callToolOutput{}, interceptErr
 		}

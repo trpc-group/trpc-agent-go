@@ -161,7 +161,7 @@ type BeforeToolArgs struct {
     ToolCallID   string               // 模型发出的工具调用 ID
     ToolName     string               // 工具名称
     Declaration  *tool.Declaration    // 工具声明元数据
-    Arguments    []byte               // JSON 参数（可修改）
+    Arguments    []byte               // 当前 JSON 参数
 }
 
 type BeforeToolResult struct {
@@ -174,7 +174,7 @@ type AfterToolArgs struct {
     ToolCallID   string               // 模型发出的工具调用 ID
     ToolName     string               // 工具名称
     Declaration  *tool.Declaration    // 工具声明元数据
-    Arguments    []byte               // 原始 JSON 参数
+    Arguments    []byte               // before-tool 回调后的最终 JSON 参数
     Result       any                  // 工具执行结果（可能为 nil）
     Error        error                // 工具执行过程中发生的错误
 }
@@ -198,7 +198,8 @@ type AfterToolCallbackStructured  func(ctx context.Context, args *tool.AfterTool
 - 结构化参数提供更好的类型安全性和更清晰的意图
 - `BeforeToolResult.ModifiedArguments` 允许修改工具参数
 - `BeforeToolResult.Context` 和 `AfterToolResult.Context` 可在操作之间传递上下文
-- 可通过 `args.Arguments` 直接修改参数
+- 为了让工具执行使用修改后的参数，需要返回 `BeforeToolResult.ModifiedArguments`；
+  只给 `args.Arguments` 重新赋值，只会影响当前回调链中后续读取该字段的逻辑
 - BeforeToolCallbackStructured 返回非空自定义结果时，会跳过工具执行并直接使用该结果
 - `BeforeToolArgs` 和 `AfterToolArgs` 中提供了 `ToolCallID`
 - `AfterToolResult.SkipSummarization` 允许回调在判断工具结果后，让本轮在
@@ -253,10 +254,20 @@ toolCallbacks := tool.NewCallbacks(
 toolCallbacks := tool.NewCallbacks().
   RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
     if args.Arguments != nil && args.ToolName == "calculator" {
-      // 丰富参数
-      original := string(args.Arguments)
-      enriched := []byte(fmt.Sprintf(`{"original":%s,"ts":%d}`, original, time.Now().Unix()))
-      args.Arguments = enriched
+      // 规范化 operation，同时保留 calculator 的参数结构。
+      var payload map[string]any
+      if err := json.Unmarshal(args.Arguments, &payload); err != nil {
+        return nil, err
+      }
+      if op, ok := payload["operation"].(string); ok {
+        payload["operation"] = strings.ToLower(op)
+      }
+      modifiedJSON, err := json.Marshal(payload)
+      if err != nil {
+        return nil, err
+      }
+      args.Arguments = modifiedJSON
+      return &tool.BeforeToolResult{ModifiedArguments: modifiedJSON}, nil
     }
     return nil, nil
   }).
@@ -846,9 +857,19 @@ toolCallbacks := tool.NewCallbacks().
 toolCallbacks := tool.NewCallbacks().
   RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
     if args.Arguments != nil && args.ToolName == "calculator" {
-      originalArgs := string(args.Arguments)
-      modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-      args.Arguments = []byte(modifiedArgs)
+      var payload map[string]any
+      if err := json.Unmarshal(args.Arguments, &payload); err != nil {
+        return nil, err
+      }
+      if op, ok := payload["operation"].(string); ok {
+        payload["operation"] = strings.ToLower(op)
+      }
+      modifiedJSON, err := json.Marshal(payload)
+      if err != nil {
+        return nil, err
+      }
+      args.Arguments = modifiedJSON
+      return &tool.BeforeToolResult{ModifiedArguments: modifiedJSON}, nil
     }
     return nil, nil
   })

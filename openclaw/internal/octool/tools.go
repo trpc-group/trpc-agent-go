@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
@@ -283,8 +284,11 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 	env := mergeExecEnv(
 		in.Env,
 		mergeExecEnv(
-			uploadEnvFromContext(ctx, t.uploads),
-			memoryFileEnvFromContext(ctx, t.memoryStore),
+			identity.EnvVarsFromContext(ctx),
+			mergeExecEnv(
+				uploadEnvFromContext(ctx, t.uploads),
+				memoryFileEnvFromContext(ctx, t.memoryStore),
+			),
 		),
 	)
 

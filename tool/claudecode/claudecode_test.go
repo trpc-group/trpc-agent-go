@@ -1955,8 +1955,14 @@ func TestGrepHelpersCoverRemainingFallbackAndRipgrepBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "files_with_matches", fallbackOut.Mode)
 	require.Len(t, fallbackOut.Filenames, 1)
+	rgPath := writeExecutableFile(
+		t,
+		dir,
+		"fake-rg.sh",
+		"#!/bin/sh\nprintf 'main.go:1:alpha\\nmain.go:2:beta\\n'\n",
+	)
 	restore := withRipgrepForTest(func(string) (string, error) {
-		return writeExecutableFile(t, dir, "fake-rg.sh", "#!/bin/sh\nprintf 'main.go:1:alpha\\nmain.go:2:beta\\n'\n"), nil
+		return rgPath, nil
 	})
 	ripgrepContentOut, handled, err := runRipgrepCommand(context.Background(), dir, ".", grepInput{
 		Pattern:    "alpha",
@@ -1967,15 +1973,27 @@ func TestGrepHelpersCoverRemainingFallbackAndRipgrepBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "content", ripgrepContentOut.Mode)
 	require.Contains(t, ripgrepContentOut.Content, "main.go:1:alpha")
+	rgEmptyPath := writeExecutableFile(
+		t,
+		dir,
+		"fake-rg-empty.sh",
+		"#!/bin/sh\nexit 1\n",
+	)
 	restore = withRipgrepForTest(func(string) (string, error) {
-		return writeExecutableFile(t, dir, "fake-rg-empty.sh", "#!/bin/sh\nexit 1\n"), nil
+		return rgEmptyPath, nil
 	})
 	lines, err := execRipgrep(context.Background(), dir, "alpha")
 	restore()
 	require.NoError(t, err)
 	require.Empty(t, lines)
+	rgErrorPath := writeExecutableFile(
+		t,
+		dir,
+		"fake-rg-error.sh",
+		"#!/bin/sh\nexit 2\n",
+	)
 	restore = withRipgrepForTest(func(string) (string, error) {
-		return writeExecutableFile(t, dir, "fake-rg-error.sh", "#!/bin/sh\nexit 2\n"), nil
+		return rgErrorPath, nil
 	})
 	_, err = execRipgrep(context.Background(), dir, "alpha")
 	restore()
