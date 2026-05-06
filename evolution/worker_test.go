@@ -1527,3 +1527,170 @@ func TestWorker_ApprovalGate_EffectivenessGateHoldsOnFail(t *testing.T) {
 	stored, _ := store.ReadRevision(context.Background(), SkillIDFromName("Learn From Disaster"), list[0])
 	assert.Equal(t, RevisionPendingEval, stored.Status)
 }
+
+// ---------------------------------------------------------------------------
+// Phase D: HumanGate integration tests
+// ---------------------------------------------------------------------------
+
+func TestWorker_HumanGate_HoldsRevision(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Skills: []*SkillSpec{{
+			Name:        "New Skill",
+			Description: "does something",
+			WhenToUse:   "when needed",
+			Steps:       []string{"step1", "step2"},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		HumanGate:      NewAlwaysHoldGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "do work"},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+	)
+	w.processJob(&pendingJob{
+		ctx: context.Background(),
+		job: LearningJob{
+			Session: sess,
+			Outcome: &Outcome{Status: OutcomeSuccess},
+		},
+	})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.skills, "publisher should NOT receive a revision held by human gate")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.CandidatesSeen)
+	assert.Equal(t, 1, metrics.RevisionsWritten)
+	assert.Equal(t, 0, metrics.RevisionsPromoted)
+	assert.Equal(t, 1, metrics.HumanGateHeld)
+
+	// Revision should be in pending_approval status on disk
+	list, _ := store.ListRevisions(context.Background(), SkillIDFromName("New Skill"))
+	require.Len(t, list, 1)
+	stored, _ := store.ReadRevision(context.Background(), SkillIDFromName("New Skill"), list[0])
+	assert.Equal(t, RevisionPendingApproval, stored.Status)
+	assert.NotNil(t, stored.HumanReport)
+	assert.True(t, stored.HumanReport.Held)
+}
+
+func TestWorker_HumanGate_PassesUpdate(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{{Name: "Existing Skill"}},
+		bodies:    map[string]string{"Existing Skill": "body"},
+	}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Updates: []*SkillUpdate{{
+			Name: "Existing Skill",
+			NewSpec: &SkillSpec{
+				Name:        "Existing Skill",
+				Description: "updated",
+				WhenToUse:   "when needed",
+				Steps:       []string{"s1", "s2"},
+			},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		HumanGate:      NewCreateOnlyHoldGate(), // only holds creates
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "update work"},
+		model.Message{Role: model.RoleAssistant, Content: "updated"},
+	)
+	w.processJob(&pendingJob{
+		ctx: context.Background(),
+		job: LearningJob{
+			Session: sess,
+			Outcome: &Outcome{Status: OutcomeSuccess},
+		},
+	})
+
+	pub.mu.Lock()
+	assert.Len(t, pub.skills, 1, "update should pass through CreateOnlyHoldGate")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.RevisionsPromoted)
+	assert.Equal(t, 0, metrics.HumanGateHeld)
+}
+
+type errorHumanGate struct{}
+
+func (g *errorHumanGate) ShouldHold(_ context.Context, _ *Revision, _ *Outcome) (bool, error) {
+	return false, fmt.Errorf("gate unavailable")
+}
+
+func TestWorker_HumanGate_ErrorFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Skills: []*SkillSpec{{
+			Name:        "Error Gate Skill",
+			Description: "test",
+			WhenToUse:   "test",
+			Steps:       []string{"a", "b"},
+		}},
+	}}
+	w := NewWorker(WorkerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		Policy:         alwaysPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		HumanGate:      &errorHumanGate{},
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "x"},
+		model.Message{Role: model.RoleAssistant, Content: "y"},
+	)
+	w.processJob(&pendingJob{
+		ctx: context.Background(),
+		job: LearningJob{
+			Session: sess,
+			Outcome: &Outcome{Status: OutcomeSuccess},
+		},
+	})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.skills, "human gate error should fail closed (hold)")
+	pub.mu.Unlock()
+
+	metrics := w.ApprovalGateMetricsJSON()
+	assert.Equal(t, 1, metrics.HumanGateHeld)
+	assert.Equal(t, 0, metrics.RevisionsPromoted)
+}

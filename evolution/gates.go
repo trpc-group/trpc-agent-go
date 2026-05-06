@@ -69,6 +69,18 @@ type EffectivenessGate interface {
 	Evaluate(ctx context.Context, rev *Revision, outcome *Outcome) (*EffectivenessReport, error)
 }
 
+// HumanGate (Phase D) decides whether a revision that passed all
+// automatic gates should be held for human approval before promotion.
+// It does NOT make the approval decision itself — it only decides
+// "should we wait for a human?".
+//
+// ShouldHold is called synchronously in the worker goroutine and
+// must be fast (no LLM, no network). For async external checks,
+// always return hold=true and let the external system decide.
+type HumanGate interface {
+	ShouldHold(ctx context.Context, rev *Revision, outcome *Outcome) (bool, error)
+}
+
 // OutcomeBasedEffectivenessGate is the Phase C default. It gates
 // revisions based on the Outcome of the session that produced the
 // transcript the reviewer just analyzed. The idea is simple: if the
@@ -383,4 +395,31 @@ func containsPathTraversal(body string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// ---------------------------------------------------------------------------
+// Phase D: HumanGate default implementations
+// ---------------------------------------------------------------------------
+
+// AlwaysHoldGate holds every revision for human review (most conservative).
+type AlwaysHoldGate struct{}
+
+// NewAlwaysHoldGate returns a gate that holds all revisions.
+func NewAlwaysHoldGate() *AlwaysHoldGate { return &AlwaysHoldGate{} }
+
+// ShouldHold implements HumanGate.
+func (g *AlwaysHoldGate) ShouldHold(_ context.Context, _ *Revision, _ *Outcome) (bool, error) {
+	return true, nil
+}
+
+// CreateOnlyHoldGate holds new skill creations for human review
+// but auto-passes updates to existing skills.
+type CreateOnlyHoldGate struct{}
+
+// NewCreateOnlyHoldGate returns a gate that only holds creates.
+func NewCreateOnlyHoldGate() *CreateOnlyHoldGate { return &CreateOnlyHoldGate{} }
+
+// ShouldHold implements HumanGate.
+func (g *CreateOnlyHoldGate) ShouldHold(_ context.Context, rev *Revision, _ *Outcome) (bool, error) {
+	return rev.Action == "create", nil
 }

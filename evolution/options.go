@@ -36,6 +36,7 @@ type serviceOpts struct {
 	specGate           SpecGate
 	safetyGate         SafetyGate
 	effectivenessGate  EffectivenessGate
+	humanGate          HumanGate
 	approvalGateShadow bool
 
 	hasReviewerOptions bool
@@ -145,6 +146,15 @@ func WithSafetyGate(g SafetyGate) Option {
 // never promoted to Active.
 func WithEffectivenessGate(g EffectivenessGate) Option {
 	return func(o *serviceOpts) { o.effectivenessGate = g }
+}
+
+// WithHumanGate configures Phase D human approval. When set, revisions
+// that pass all automatic gates are held in pending_approval state
+// until an external system approves or rejects them. The gate itself
+// only decides "should we hold?" — the actual approve/reject action
+// is driven externally.
+func WithHumanGate(g HumanGate) Option {
+	return func(o *serviceOpts) { o.humanGate = g }
 }
 
 // WithApprovalGateShadow runs the approval gate in shadow mode: gates

@@ -62,6 +62,7 @@ type Worker struct {
 	specGate           SpecGate
 	safetyGate         SafetyGate
 	effectivenessGate  EffectivenessGate
+	humanGate          HumanGate
 	approvalGateShadow bool
 
 	// approvalGateMetrics records the last observed gate activity so
@@ -84,6 +85,7 @@ type approvalGateMetrics struct {
 	SpecGateRejected          int
 	SafetyGateRejected        int
 	EffectivenessGateRejected int
+	HumanGateHeld             int
 	RevisionsPromoted         int
 	Rollbacks                 int
 	DeletionsApplied          int
@@ -127,6 +129,7 @@ type WorkerConfig struct {
 	SpecGate           SpecGate
 	SafetyGate         SafetyGate
 	EffectivenessGate  EffectivenessGate
+	HumanGate          HumanGate
 	ApprovalGateShadow bool
 }
 
@@ -162,6 +165,7 @@ func NewWorker(cfg WorkerConfig) *Worker {
 		specGate:                  cfg.SpecGate,
 		safetyGate:                cfg.SafetyGate,
 		effectivenessGate:         cfg.EffectivenessGate,
+		humanGate:                 cfg.HumanGate,
 		approvalGateShadow:        cfg.ApprovalGateShadow,
 	}
 }
@@ -363,7 +367,8 @@ func (w *Worker) applyDecision(ctx context.Context, decision *ReviewDecision, ou
 // pipeline; when false, the original direct-publish path is used.
 func (w *Worker) approvalGateEnabled() bool {
 	return w.candidateStore != nil || w.activePointer != nil ||
-		w.specGate != nil || w.safetyGate != nil || w.effectivenessGate != nil
+		w.specGate != nil || w.safetyGate != nil || w.effectivenessGate != nil ||
+		w.humanGate != nil
 }
 
 // ApprovalGateMetrics returns a copy of the worker's current
@@ -384,6 +389,7 @@ type ApprovalGateMetricsSnapshot struct {
 	SpecGateRejected          int `json:"spec_gate_rejected"`
 	SafetyGateRejected        int `json:"safety_gate_rejected"`
 	EffectivenessGateRejected int `json:"effectiveness_gate_rejected"`
+	HumanGateHeld             int `json:"human_gate_held"`
 	RevisionsPromoted         int `json:"revisions_promoted"`
 	Rollbacks                 int `json:"rollbacks"`
 	DeletionsApplied          int `json:"deletions_applied"`
@@ -404,6 +410,7 @@ func (w *Worker) ApprovalGateMetricsJSON() ApprovalGateMetricsSnapshot {
 		SpecGateRejected:          m.SpecGateRejected,
 		SafetyGateRejected:        m.SafetyGateRejected,
 		EffectivenessGateRejected: m.EffectivenessGateRejected,
+		HumanGateHeld:             m.HumanGateHeld,
 		RevisionsPromoted:         m.RevisionsPromoted,
 		Rollbacks:                 m.Rollbacks,
 		DeletionsApplied:          m.DeletionsApplied,
@@ -594,6 +601,12 @@ func (w *Worker) runGates(ctx context.Context, rev *Revision, existing []Existin
 			passed = false
 		}
 	}
+	// Phase D: human gate. Only runs when all automatic gates passed.
+	if passed && w.humanGate != nil {
+		if !w.runHumanGate(ctx, rev, outcome) {
+			passed = false
+		}
+	}
 	return passed
 }
 
@@ -644,6 +657,23 @@ func (w *Worker) runEffectivenessGate(ctx context.Context, rev *Revision, outcom
 		log.InfofContext(ctx,
 			"evolution: effectiveness gate held %q revision=%s reasons=%v",
 			rev.Spec.Name, rev.RevisionID, report.Reasons)
+		return false
+	}
+	return true
+}
+
+func (w *Worker) runHumanGate(ctx context.Context, rev *Revision, outcome *Outcome) bool {
+	hold, err := w.humanGate.ShouldHold(ctx, rev, outcome)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: human gate error on %q: %v", rev.Spec.Name, err)
+		hold = true // fail-closed
+	}
+	rev.HumanReport = &HumanReport{Held: hold}
+	if hold {
+		rev.Status = RevisionPendingApproval
+		w.bumpGateMetric(func(m *approvalGateMetrics) { m.HumanGateHeld++ })
+		log.InfofContext(ctx, "evolution: human gate held %q revision=%s for approval",
+			rev.Spec.Name, rev.RevisionID)
 		return false
 	}
 	return true
@@ -720,6 +750,9 @@ func gateRejectReason(rev *Revision) string {
 	}
 	if rev.EffectivenessReport != nil && !rev.EffectivenessReport.Passed {
 		parts = append(parts, "effectiveness:"+strings.Join(rev.EffectivenessReport.Reasons, ";"))
+	}
+	if rev.HumanReport != nil && rev.HumanReport.Held {
+		parts = append(parts, "human:held_for_approval")
 	}
 	if len(parts) == 0 {
 		return "rejected"

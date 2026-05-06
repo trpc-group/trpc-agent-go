@@ -280,3 +280,44 @@ func TestNewOutcomeBasedEffectivenessGate_Defaults(t *testing.T) {
 	assert.Equal(t, 80.0, g.MinScore)
 	assert.True(t, g.RejectOnFail)
 }
+
+// ---------------------------------------------------------------------------
+// Phase D: HumanGate tests
+// ---------------------------------------------------------------------------
+
+func TestAlwaysHoldGate(t *testing.T) {
+	g := NewAlwaysHoldGate()
+	rev := &Revision{Action: "create", Spec: &SkillSpec{Name: "test"}}
+	hold, err := g.ShouldHold(context.Background(), rev, nil)
+	assert.NoError(t, err)
+	assert.True(t, hold)
+
+	rev.Action = "update"
+	hold, err = g.ShouldHold(context.Background(), rev, nil)
+	assert.NoError(t, err)
+	assert.True(t, hold)
+}
+
+func TestCreateOnlyHoldGate_Create(t *testing.T) {
+	g := NewCreateOnlyHoldGate()
+	rev := &Revision{Action: "create", Spec: &SkillSpec{Name: "new-skill"}}
+	hold, err := g.ShouldHold(context.Background(), rev, nil)
+	assert.NoError(t, err)
+	assert.True(t, hold)
+}
+
+func TestCreateOnlyHoldGate_Update(t *testing.T) {
+	g := NewCreateOnlyHoldGate()
+	rev := &Revision{Action: "update", Spec: &SkillSpec{Name: "existing-skill"}}
+	hold, err := g.ShouldHold(context.Background(), rev, nil)
+	assert.NoError(t, err)
+	assert.False(t, hold)
+}
+
+func TestCreateOnlyHoldGate_Delete(t *testing.T) {
+	g := NewCreateOnlyHoldGate()
+	rev := &Revision{Action: "delete", Spec: &SkillSpec{Name: "old-skill"}}
+	hold, err := g.ShouldHold(context.Background(), rev, nil)
+	assert.NoError(t, err)
+	assert.False(t, hold)
+}

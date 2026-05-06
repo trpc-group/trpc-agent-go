@@ -69,6 +69,12 @@ const (
 	// the current Active revision and can be promoted to Active or
 	// rejected based on evaluation results.
 	RevisionShadow RevisionStatus = "shadow"
+
+	// RevisionPendingApproval (Phase D) means the revision passed all
+	// automatic gates but is awaiting human approval before promotion.
+	// The worker does not block; an external system (CLI, API, webhook)
+	// drives the approval decision that either promotes or rejects.
+	RevisionPendingApproval RevisionStatus = "pending_approval"
 )
 
 // Revision is an immutable snapshot of a SkillSpec plus the metadata
@@ -97,6 +103,7 @@ type Revision struct {
 	SpecReport          *SpecReport          `json:"spec_report,omitempty"`
 	SafetyReport        *SafetyReport        `json:"safety_report,omitempty"`
 	EffectivenessReport *EffectivenessReport `json:"effectiveness_report,omitempty"`
+	HumanReport         *HumanReport         `json:"human_report,omitempty"`
 }
 
 // SpecReport is the deterministic SpecGate verdict.
@@ -114,6 +121,12 @@ type SafetyReport struct {
 // EffectivenessReport is the Phase C effectiveness verdict.
 type EffectivenessReport struct {
 	Passed  bool     `json:"passed"`
+	Reasons []string `json:"reasons,omitempty"`
+}
+
+// HumanReport is the Phase D human gate verdict.
+type HumanReport struct {
+	Held    bool     `json:"held"`
 	Reasons []string `json:"reasons,omitempty"`
 }
 
@@ -150,6 +163,9 @@ type CandidateStore interface {
 	// creation order (oldest first). Empty slice + nil error when the
 	// SkillID has no revisions yet.
 	ListRevisions(ctx context.Context, skillID string) ([]string, error)
+
+	// ListSkills returns all SkillIDs that have at least one revision.
+	ListSkills(ctx context.Context) ([]string, error)
 
 	// AppendAudit records one AuditEvent for the given SkillID.
 	AppendAudit(ctx context.Context, ev AuditEvent) error
@@ -297,6 +313,30 @@ func (s *FileCandidateStore) ListRevisions(_ context.Context, skillID string) ([
 		out[i] = it.id
 	}
 	return out, nil
+}
+
+// ListSkills implements CandidateStore. Returns all SkillIDs that have
+// at least one revision directory on disk.
+func (s *FileCandidateStore) ListSkills(_ context.Context) ([]string, error) {
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var skills []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// Only include directories that have a revisions/ subdirectory.
+		revDir := filepath.Join(s.root, e.Name(), "revisions")
+		if info, statErr := os.Stat(revDir); statErr == nil && info.IsDir() {
+			skills = append(skills, e.Name())
+		}
+	}
+	return skills, nil
 }
 
 // AppendAudit implements CandidateStore. Writes are serialized by a
