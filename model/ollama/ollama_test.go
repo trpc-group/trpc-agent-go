@@ -65,6 +65,20 @@ func Test_Model_Info(t *testing.T) {
 	assert.Equal(t, "llama3.2:latest", info.Name)
 }
 
+func TestNew_DoesNotPersistRegistryFallbackOnShowError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "show failed", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	m := New("gpt-4", WithHost(srv.URL))
+	assert.Zero(t, m.contextWindow)
+
+	window, ok := m.ContextWindow()
+	assert.False(t, ok)
+	assert.Zero(t, window)
+}
+
 func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
 	t.Run("request callback", func(t *testing.T) {
 		callbackCalled := false

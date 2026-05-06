@@ -145,7 +145,6 @@ func New(name string, opts ...Option) *Model {
 				m.name,
 				err,
 			)
-			m.contextWindow = imodel.ResolveContextWindow(m.name)
 		} else if m.contextWindow > 0 {
 			m.contextWindowDiscovered = true
 		}
@@ -263,7 +262,8 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	if maxInputTokens <= 0 {
 		// Auto-calculate based on model context window with custom or default parameters.
 		contextWindow := m.contextWindow
-		if contextWindow <= 0 {
+		if contextWindow <= 0 ||
+			(!m.contextWindowConfigured && !m.contextWindowDiscovered) {
 			contextWindow = imodel.ResolveContextWindow(m.name)
 		}
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
