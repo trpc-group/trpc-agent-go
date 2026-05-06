@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -765,6 +766,50 @@ func TestContentRequestProcessor_getIncrementMessages_ProjectsEvents(
 	messages := p.getIncrementMessages(inv, time.Time{})
 	assert.Len(t, messages, 1)
 	assert.Equal(t, "Projected: hello", messages[0].Content)
+}
+
+func TestContentRequestProcessor_getIncrementMessages_DropsReasoningOnlyAssistant(
+	t *testing.T,
+) {
+	projector := func(
+		_ *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		if msg.Role != model.RoleAssistant {
+			return msg
+		}
+		msg.Content = ""
+		msg.ReasoningContent = "reasoning without visible payload"
+		return msg
+	}
+
+	p := NewContentRequestProcessor(
+		WithEventMessageProjector(projector),
+	)
+	sess := &session.Session{
+		Events: []event.Event{
+			*event.NewResponseEvent(
+				"invocation-id",
+				"assistant",
+				&model.Response{
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "visible before projection",
+						},
+					}},
+				},
+			),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+
+	messages := p.getIncrementMessages(inv, time.Time{})
+	assert.Empty(t, messages)
 }
 
 func TestContentRequestProcessor_getCurrentInvocationMessages_ProjectsOnce(
@@ -4715,6 +4760,35 @@ func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 				result.ReasoningContent, tt.wantReasoning)
 		})
 	}
+}
+
+func TestContentRequestProcessor_IsEmptyAssistantMessage(t *testing.T) {
+	assert.True(t, message.IsEmptyAssistantMessage(model.Message{
+		Role: model.RoleAssistant,
+	}))
+	assert.True(t, message.IsEmptyAssistantMessage(model.Message{
+		Role:             model.RoleAssistant,
+		ReasoningContent: "thinking without visible payload",
+	}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
+		Role:    model.RoleAssistant,
+		Content: "visible content",
+	}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{ID: "call_1"},
+		},
+	}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
+		Role: model.RoleAssistant,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText},
+		},
+	}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
+		Role: model.RoleUser,
+	}))
 }
 
 func TestContentRequestProcessor_WithReasoningContentMode(t *testing.T) {
