@@ -63,11 +63,11 @@ func TestTimingAttachment_RestoreKeepsCallbackMutatedUsage(t *testing.T) {
 	response := &model.Response{}
 
 	attachment := AttachTimingForCallback(response, timing, nil)
-	response.Usage.PromptTokens = 10
+	response.Usage.PromptTokensDetails.CachedTokens = 10
 	attachment.Restore()
 
 	require.NotNil(t, response.Usage)
-	require.Equal(t, 10, response.Usage.PromptTokens)
+	require.Equal(t, 10, response.Usage.PromptTokensDetails.CachedTokens)
 	require.Nil(t, response.Usage.TimingInfo)
 }
 
