@@ -39,6 +39,13 @@ type BedrockClient interface {
 	ConverseStream(ctx context.Context, params *bedrockruntime.ConverseStreamInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
 }
 
+// StreamReader 定义流式事件读取器接口，用于解耦流式处理逻辑以便测试。
+type StreamReader interface {
+	Events() <-chan types.ConverseStreamOutput
+	Close() error
+	Err() error
+}
+
 // Model implements the model.Model interface for AWS Bedrock.
 type Model struct {
 	client            BedrockClient
@@ -115,7 +122,7 @@ func (m *Model) handleNonStreamingResponse(
 
 	output, err := m.client.Converse(ctx, input)
 	if err != nil {
-		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
+		m.sendErrorResponse(ctx, responseChan, classifyError(ctx, err, model.ErrorTypeAPIError), err)
 		return
 	}
 
@@ -140,13 +147,23 @@ func (m *Model) handleStreamingResponse(
 
 	output, err := m.client.ConverseStream(ctx, input)
 	if err != nil {
-		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
+		m.sendErrorResponse(ctx, responseChan, classifyError(ctx, err, model.ErrorTypeAPIError), err)
 		return
 	}
 
 	stream := output.GetStream()
 	defer stream.Close()
 
+	m.processStreamEvents(ctx, stream, responseChan)
+}
+
+// processStreamEvents 处理流式事件并将响应发送到 responseChan。
+// 该方法接受 StreamReader 接口，便于测试时注入 mock 实现。
+func (m *Model) processStreamEvents(
+	ctx context.Context,
+	stream StreamReader,
+	responseChan chan<- *model.Response,
+) {
 	// 用于累积工具调用信息
 	var (
 		toolCalls        []model.ToolCall
@@ -154,6 +171,8 @@ func (m *Model) handleStreamingResponse(
 		contentBuilder   strings.Builder
 		reasoningBuilder strings.Builder
 		toolCallIndex    int
+		finalResponse    *model.Response
+		usage            *model.Usage
 	)
 
 	for event := range stream.Events() {
@@ -250,9 +269,9 @@ func (m *Model) handleStreamingResponse(
 			}
 
 		case *types.ConverseStreamOutputMemberMessageStop:
-			// 消息结束，构建最终响应
+			// 消息结束，构建最终响应（延迟发送，等待 metadata 事件填充 usage）
 			finishReason := string(ev.Value.StopReason)
-			finalResponse := &model.Response{
+			finalResponse = &model.Response{
 				Object:    model.ObjectTypeChatCompletion,
 				Model:     m.modelID,
 				Created:   time.Now().Unix(),
@@ -271,36 +290,19 @@ func (m *Model) handleStreamingResponse(
 					},
 				},
 			}
-			select {
-			case responseChan <- finalResponse:
-			case <-ctx.Done():
-				return
-			}
 
 		case *types.ConverseStreamOutputMemberMetadata:
-			// 元数据事件，解析并发送 usage 信息
+			// 元数据事件，解析 usage 信息
 			if ev.Value.Usage != nil {
-				usageResponse := &model.Response{
-					Object:    model.ObjectTypeChatCompletionChunk,
-					Model:     m.modelID,
-					Created:   time.Now().Unix(),
-					Timestamp: time.Now(),
-					IsPartial: true,
-					Usage: &model.Usage{
-						PromptTokens:     int(aws.ToInt32(ev.Value.Usage.InputTokens)),
-						CompletionTokens: int(aws.ToInt32(ev.Value.Usage.OutputTokens)),
-						TotalTokens:      int(aws.ToInt32(ev.Value.Usage.TotalTokens)),
-						PromptTokensDetails: model.PromptTokensDetails{
-							CachedTokens:        int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
-							CacheCreationTokens: int(aws.ToInt32(ev.Value.Usage.CacheWriteInputTokens)),
-							CacheReadTokens:     int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
-						},
+				usage = &model.Usage{
+					PromptTokens:     int(aws.ToInt32(ev.Value.Usage.InputTokens)),
+					CompletionTokens: int(aws.ToInt32(ev.Value.Usage.OutputTokens)),
+					TotalTokens:      int(aws.ToInt32(ev.Value.Usage.TotalTokens)),
+					PromptTokensDetails: model.PromptTokensDetails{
+						CachedTokens:        int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
+						CacheCreationTokens: int(aws.ToInt32(ev.Value.Usage.CacheWriteInputTokens)),
+						CacheReadTokens:     int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
 					},
-				}
-				select {
-				case responseChan <- usageResponse:
-				case <-ctx.Done():
-					return
 				}
 			}
 		}
@@ -308,7 +310,19 @@ func (m *Model) handleStreamingResponse(
 
 	// 检查流错误
 	if err := stream.Err(); err != nil {
-		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, err)
+		m.sendErrorResponse(ctx, responseChan, classifyError(ctx, err, model.ErrorTypeStreamError), err)
+		return
+	}
+
+	// 流结束后发送最终响应，将 usage 合并到 finalResponse 中
+	if finalResponse != nil {
+		if usage != nil {
+			finalResponse.Usage = usage
+		}
+		select {
+		case responseChan <- finalResponse:
+		case <-ctx.Done():
+		}
 	}
 }
 
@@ -721,7 +735,7 @@ func buildToolConfig(tools map[string]tool.Tool) *types.ToolConfiguration {
 // convertSchemaToDocument 将 tool.Schema 转换为 document.Interface
 func convertSchemaToDocument(schema *tool.Schema) document.Interface {
 	if schema == nil {
-		return document.NewLazyDocument(map[string]interface{}{
+		return document.NewLazyDocument(map[string]any{
 			"type": "object",
 		})
 	}
@@ -731,12 +745,12 @@ func convertSchemaToDocument(schema *tool.Schema) document.Interface {
 }
 
 // schemaToMap 将 tool.Schema 递归转换为 map
-func schemaToMap(schema *tool.Schema) map[string]interface{} {
+func schemaToMap(schema *tool.Schema) map[string]any {
 	if schema == nil {
-		return map[string]interface{}{"type": "object"}
+		return map[string]any{"type": "object"}
 	}
 
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 
 	if schema.Type != "" {
 		result["type"] = schema.Type
@@ -748,7 +762,7 @@ func schemaToMap(schema *tool.Schema) map[string]interface{} {
 		result["required"] = schema.Required
 	}
 	if len(schema.Properties) > 0 {
-		props := make(map[string]interface{})
+		props := make(map[string]any)
 		for k, v := range schema.Properties {
 			props[k] = schemaToMap(v)
 		}
@@ -786,15 +800,24 @@ func marshalDocumentInterface(doc document.Interface) []byte {
 // unmarshalToDocument 将 JSON bytes 转换为 document.Interface
 func unmarshalToDocument(data []byte) document.Interface {
 	if len(data) == 0 {
-		return document.NewLazyDocument(map[string]interface{}{})
+		return document.NewLazyDocument(map[string]any{})
 	}
 
-	var v interface{}
+	var v any
 	if err := json.Unmarshal(data, &v); err != nil {
-		return document.NewLazyDocument(map[string]interface{}{})
+		return document.NewLazyDocument(map[string]any{})
 	}
 
 	return document.NewLazyDocument(v)
+}
+
+// classifyError 根据错误类型判断是否为调用方取消/超时，如果是则返回 ErrorTypeCancelled，
+// 否则返回 fallback 错误类型。
+func classifyError(ctx context.Context, err error, fallback string) string {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return model.ErrorTypeCancelled
+	}
+	return fallback
 }
 
 // sendErrorResponse 发送错误响应

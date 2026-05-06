@@ -17,6 +17,8 @@ const (
 	ErrorTypeAPIError    = "api_error"
 	ErrorTypeFlowError   = "flow_error"
 	ErrorTypeRunError    = "run_error"
+	// ErrorTypeCancelled 表示调用方主动取消或超时导致的错误。
+	ErrorTypeCancelled = "cancelled"
 )
 
 // Object type constants for Response.Object field.

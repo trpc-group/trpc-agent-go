@@ -282,6 +282,7 @@ func TestGenerateContent_NonStreaming_ContextCancelled(t *testing.T) {
 	// 应该收到错误响应或通道直接关闭
 	if len(responses) > 0 {
 		assert.NotNil(t, responses[0].Error)
+		assert.Equal(t, model.ErrorTypeCancelled, responses[0].Error.Type)
 	}
 }
 
@@ -309,7 +310,7 @@ func TestGenerateContent_NonStreaming_ToolCall(t *testing.T) {
 								Value: types.ToolUseBlock{
 									ToolUseId: aws.String("tool_001"),
 									Name:      aws.String("get_weather"),
-									Input:     document.NewLazyDocument(map[string]interface{}{"city": "Beijing"}),
+									Input:     document.NewLazyDocument(map[string]any{"city": "Beijing"}),
 								},
 							},
 						},
@@ -361,7 +362,7 @@ func TestGenerateContent_NonStreaming_ToolCall(t *testing.T) {
 	assert.Equal(t, functionToolType, tc.Type)
 
 	// 验证参数
-	var args map[string]interface{}
+	var args map[string]any
 	err = json.Unmarshal(tc.Function.Arguments, &args)
 	require.NoError(t, err)
 	assert.Equal(t, "Beijing", args["city"])
@@ -473,55 +474,13 @@ func TestGenerateContent_Streaming_SimpleText(t *testing.T) {
 	}
 
 	reader := newMockEventStreamReader(events)
-	_ = &mockBedrockClient{
-		converseStreamFunc: func(ctx context.Context, params *bedrockruntime.ConverseStreamInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
-			assert.Equal(t, "test-model", aws.ToString(params.ModelId))
-			_ = bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
-				es.Reader = reader
-			})
-			return &bedrockruntime.ConverseStreamOutput{}, nil
-		},
-	}
-
-	// 由于 ConverseStreamOutput 的 eventStream 字段是私有的，
-	// 我们直接测试流式事件处理逻辑
 	m := &Model{modelID: "test-model", channelBufferSize: 256}
 
-	// 使用 mock 直接测试流式处理逻辑
+	// 使用生产代码 processStreamEvents 处理流式事件
 	responseChan := make(chan *model.Response, 256)
 	go func() {
 		defer close(responseChan)
-		// 模拟流式事件处理
-		for event := range reader.Events() {
-			switch ev := event.(type) {
-			case *types.ConverseStreamOutputMemberContentBlockDelta:
-				if ev.Value.Delta != nil {
-					if delta, ok := ev.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
-						responseChan <- &model.Response{
-							Object:    model.ObjectTypeChatCompletionChunk,
-							Model:     m.modelID,
-							IsPartial: true,
-							Choices: []model.Choice{
-								{Delta: model.Message{Role: model.RoleAssistant, Content: delta.Value}},
-							},
-						}
-					}
-				}
-			case *types.ConverseStreamOutputMemberMessageStop:
-				finishReason := string(ev.Value.StopReason)
-				responseChan <- &model.Response{
-					Object: model.ObjectTypeChatCompletion,
-					Model:  m.modelID,
-					Done:   true,
-					Choices: []model.Choice{
-						{
-							Message:      model.Message{Role: model.RoleAssistant, Content: "Hello World!"},
-							FinishReason: &finishReason,
-						},
-					},
-				}
-			}
-		}
+		m.processStreamEvents(context.Background(), reader, responseChan)
 	}()
 
 	var responses []*model.Response
@@ -529,7 +488,7 @@ func TestGenerateContent_Streaming_SimpleText(t *testing.T) {
 		responses = append(responses, resp)
 	}
 
-	// 应该有 2 个增量 + 1 个最终响应
+	// 应该有 2 个增量 + 1 个最终响应（包含 usage）
 	require.Len(t, responses, 3)
 
 	// 验证增量响应
@@ -538,10 +497,14 @@ func TestGenerateContent_Streaming_SimpleText(t *testing.T) {
 	assert.True(t, responses[1].IsPartial)
 	assert.Equal(t, " World!", responses[1].Choices[0].Delta.Content)
 
-	// 验证最终响应
+	// 验证最终响应（usage 已合并到 finalResponse 中）
 	assert.True(t, responses[2].Done)
 	assert.Equal(t, "Hello World!", responses[2].Choices[0].Message.Content)
 	assert.Equal(t, "end_turn", *responses[2].Choices[0].FinishReason)
+	assert.NotNil(t, responses[2].Usage)
+	assert.Equal(t, 5, responses[2].Usage.PromptTokens)
+	assert.Equal(t, 3, responses[2].Usage.CompletionTokens)
+	assert.Equal(t, 8, responses[2].Usage.TotalTokens)
 }
 
 func TestGenerateContent_Streaming_ToolCall(t *testing.T) {
@@ -585,64 +548,24 @@ func TestGenerateContent_Streaming_ToolCall(t *testing.T) {
 	}
 
 	reader := newMockEventStreamReader(events)
+	m := &Model{modelID: "test-model", channelBufferSize: 256}
 
-	// 直接测试流式工具调用的事件处理逻辑
-	var (
-		toolCalls       []model.ToolCall
-		currentToolCall *model.ToolCall
-		toolCallIndex   int
-		finalResponse   *model.Response
-	)
+	// 使用生产代码 processStreamEvents 处理流式事件
+	responseChan := make(chan *model.Response, 256)
+	go func() {
+		defer close(responseChan)
+		m.processStreamEvents(context.Background(), reader, responseChan)
+	}()
 
-	for event := range reader.Events() {
-		switch ev := event.(type) {
-		case *types.ConverseStreamOutputMemberContentBlockStart:
-			if ev.Value.Start != nil {
-				if start, ok := ev.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
-					currentToolCall = &model.ToolCall{
-						Index: func() *int { idx := toolCallIndex; return &idx }(),
-						Type:  functionToolType,
-						ID:    aws.ToString(start.Value.ToolUseId),
-						Function: model.FunctionDefinitionParam{
-							Name: aws.ToString(start.Value.Name),
-						},
-					}
-					toolCallIndex++
-				}
-			}
-		case *types.ConverseStreamOutputMemberContentBlockDelta:
-			if ev.Value.Delta != nil {
-				if delta, ok := ev.Value.Delta.(*types.ContentBlockDeltaMemberToolUse); ok {
-					if currentToolCall != nil && delta.Value.Input != nil {
-						currentToolCall.Function.Arguments = append(
-							currentToolCall.Function.Arguments,
-							[]byte(aws.ToString(delta.Value.Input))...,
-						)
-					}
-				}
-			}
-		case *types.ConverseStreamOutputMemberContentBlockStop:
-			if currentToolCall != nil {
-				toolCalls = append(toolCalls, *currentToolCall)
-				currentToolCall = nil
-			}
-		case *types.ConverseStreamOutputMemberMessageStop:
-			finishReason := string(ev.Value.StopReason)
-			finalResponse = &model.Response{
-				Done: true,
-				Choices: []model.Choice{
-					{
-						Message: model.Message{
-							Role:      model.RoleAssistant,
-							ToolCalls: toolCalls,
-						},
-						FinishReason: &finishReason,
-					},
-				},
-			}
-		}
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
 	}
 
+	// 应该有 1 个最终响应（包含工具调用）
+	require.Len(t, responses, 1)
+
+	finalResponse := responses[0]
 	require.NotNil(t, finalResponse)
 	assert.True(t, finalResponse.Done)
 	assert.Equal(t, "tool_use", *finalResponse.Choices[0].FinishReason)
@@ -907,11 +830,11 @@ func TestSchemaToMap_Complete(t *testing.T) {
 	assert.Equal(t, "Test schema", result["description"])
 	assert.Equal(t, []string{"name"}, result["required"])
 
-	props, ok := result["properties"].(map[string]interface{})
+	props, ok := result["properties"].(map[string]any)
 	require.True(t, ok)
 	assert.Len(t, props, 3)
 
-	nameSchema, ok := props["name"].(map[string]interface{})
+	nameSchema, ok := props["name"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "string", nameSchema["type"])
 }
@@ -945,14 +868,14 @@ func TestSchemaToMap_WithDefault(t *testing.T) {
 // ============================================================================
 
 func TestMarshalDocumentInterface(t *testing.T) {
-	doc := document.NewLazyDocument(map[string]interface{}{
+	doc := document.NewLazyDocument(map[string]any{
 		"key": "value",
 		"num": 42,
 	})
 	result := marshalDocumentInterface(doc)
 	assert.NotEqual(t, "{}", string(result))
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	err := json.Unmarshal(result, &parsed)
 	require.NoError(t, err)
 	assert.Equal(t, "value", parsed["key"])
@@ -974,7 +897,7 @@ func TestUnmarshalToDocument(t *testing.T) {
 	resultBytes, err := doc.MarshalSmithyDocument()
 	require.NoError(t, err)
 
-	var v map[string]interface{}
+	var v map[string]any
 	err = json.Unmarshal(resultBytes, &v)
 	require.NoError(t, err)
 	assert.Equal(t, "Tokyo", v["city"])
@@ -1127,7 +1050,7 @@ func TestConvertOutputMessage_TextAndToolUse(t *testing.T) {
 				Value: types.ToolUseBlock{
 					ToolUseId: aws.String("tc_002"),
 					Name:      aws.String("web_search"),
-					Input:     document.NewLazyDocument(map[string]interface{}{"q": "golang"}),
+					Input:     document.NewLazyDocument(map[string]any{"q": "golang"}),
 				},
 			},
 		},
@@ -1382,7 +1305,7 @@ func TestIntegration_MistralLarge_ToolCall(t *testing.T) {
 		assert.Equal(t, "get_weather", tc.Function.Name)
 
 		// 验证参数中包含 city
-		var args map[string]interface{}
+		var args map[string]any
 		err = json.Unmarshal(tc.Function.Arguments, &args)
 		require.NoError(t, err)
 		assert.Contains(t, strings.ToLower(fmt.Sprintf("%v", args["city"])), "tokyo")
@@ -1534,6 +1457,7 @@ func TestGenerateContent_ConcurrentRequests(t *testing.T) {
 	m := New("test-model", WithClient(mock))
 
 	var wg sync.WaitGroup
+	errs := make([]error, 10)
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(idx int) {
@@ -1543,13 +1467,20 @@ func TestGenerateContent_ConcurrentRequests(t *testing.T) {
 					model.NewUserMessage(fmt.Sprintf("Request %d", idx)),
 				},
 			})
-			require.NoError(t, err)
+			if err != nil {
+				errs[idx] = err
+				return
+			}
 			for resp := range ch {
 				assert.NotNil(t, resp)
 			}
 		}(i)
 	}
 	wg.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "worker %d failed", i)
+	}
 
 	mu.Lock()
 	assert.Equal(t, 10, callCount)
@@ -1587,7 +1518,7 @@ func TestConvertSchemaToDocument_NilSchema(t *testing.T) {
 	resultBytes, err := doc.MarshalSmithyDocument()
 	require.NoError(t, err)
 
-	var v map[string]interface{}
+	var v map[string]any
 	err = json.Unmarshal(resultBytes, &v)
 	require.NoError(t, err)
 	assert.Equal(t, "object", v["type"])
@@ -1796,47 +1727,39 @@ func TestMistralLarge_Streaming_Mock(t *testing.T) {
 	}
 
 	reader := newMockEventStreamReader(events)
+	m := &Model{modelID: "mistral.mistral-large-3-675b-instruct", channelBufferSize: 256}
 
-	// 模拟流式处理
-	var (
-		contentBuilder strings.Builder
-		partialCount   int
-		finalResponse  *model.Response
-	)
+	// 使用生产代码 processStreamEvents 处理流式事件
+	responseChan := make(chan *model.Response, 256)
+	go func() {
+		defer close(responseChan)
+		m.processStreamEvents(context.Background(), reader, responseChan)
+	}()
 
-	for event := range reader.Events() {
-		switch ev := event.(type) {
-		case *types.ConverseStreamOutputMemberContentBlockDelta:
-			if ev.Value.Delta != nil {
-				if delta, ok := ev.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
-					contentBuilder.WriteString(delta.Value)
-					partialCount++
-				}
-			}
-		case *types.ConverseStreamOutputMemberMessageStop:
-			finishReason := string(ev.Value.StopReason)
-			finalResponse = &model.Response{
-				Object: model.ObjectTypeChatCompletion,
-				Model:  "mistral.mistral-large-3-675b-instruct",
-				Done:   true,
-				Choices: []model.Choice{
-					{
-						Message: model.Message{
-							Role:    model.RoleAssistant,
-							Content: contentBuilder.String(),
-						},
-						FinishReason: &finishReason,
-					},
-				},
-			}
-		}
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
 	}
 
-	assert.Equal(t, 3, partialCount)
-	require.NotNil(t, finalResponse)
-	assert.True(t, finalResponse.Done)
-	assert.Equal(t, "Bonjour! Comment allez-vous?", finalResponse.Choices[0].Message.Content)
-	assert.Equal(t, "end_turn", *finalResponse.Choices[0].FinishReason)
+	// 应该有 3 个增量 + 1 个最终响应（包含 usage）
+	require.Len(t, responses, 4)
+
+	// 验证增量响应
+	assert.True(t, responses[0].IsPartial)
+	assert.Equal(t, "Bonjour", responses[0].Choices[0].Delta.Content)
+	assert.True(t, responses[1].IsPartial)
+	assert.Equal(t, "! Comment", responses[1].Choices[0].Delta.Content)
+	assert.True(t, responses[2].IsPartial)
+	assert.Equal(t, " allez-vous?", responses[2].Choices[0].Delta.Content)
+
+	// 验证最终响应（usage 已合并到 finalResponse 中）
+	assert.True(t, responses[3].Done)
+	assert.Equal(t, "Bonjour! Comment allez-vous?", responses[3].Choices[0].Message.Content)
+	assert.Equal(t, "end_turn", *responses[3].Choices[0].FinishReason)
+	assert.NotNil(t, responses[3].Usage)
+	assert.Equal(t, 12, responses[3].Usage.PromptTokens)
+	assert.Equal(t, 8, responses[3].Usage.CompletionTokens)
+	assert.Equal(t, 20, responses[3].Usage.TotalTokens)
 }
 
 func TestMistralLarge_ToolCall_Mock(t *testing.T) {
@@ -1856,7 +1779,7 @@ func TestMistralLarge_ToolCall_Mock(t *testing.T) {
 								Value: types.ToolUseBlock{
 									ToolUseId: aws.String("mistral_tc_001"),
 									Name:      aws.String("get_weather"),
-									Input:     document.NewLazyDocument(map[string]interface{}{"location": "Paris", "unit": "celsius"}),
+									Input:     document.NewLazyDocument(map[string]any{"location": "Paris", "unit": "celsius"}),
 								},
 							},
 						},
@@ -1908,7 +1831,7 @@ func TestMistralLarge_ToolCall_Mock(t *testing.T) {
 	assert.Equal(t, "mistral_tc_001", tc.ID)
 	assert.Equal(t, "get_weather", tc.Function.Name)
 
-	var args map[string]interface{}
+	var args map[string]any
 	err = json.Unmarshal(tc.Function.Arguments, &args)
 	require.NoError(t, err)
 	assert.Equal(t, "Paris", args["location"])
@@ -1929,14 +1852,14 @@ func TestMistralLarge_SkillInvocation_Mock(t *testing.T) {
 								Value: types.ToolUseBlock{
 									ToolUseId: aws.String("skill_001"),
 									Name:      aws.String("code_interpreter"),
-									Input:     document.NewLazyDocument(map[string]interface{}{"code": "print('hello')"}),
+									Input:     document.NewLazyDocument(map[string]any{"code": "print('hello')"}),
 								},
 							},
 							&types.ContentBlockMemberToolUse{
 								Value: types.ToolUseBlock{
 									ToolUseId: aws.String("skill_002"),
 									Name:      aws.String("web_search"),
-									Input:     document.NewLazyDocument(map[string]interface{}{"query": "golang bedrock sdk"}),
+									Input:     document.NewLazyDocument(map[string]any{"query": "golang bedrock sdk"}),
 								},
 							},
 						},
