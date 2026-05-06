@@ -50,30 +50,30 @@ require (
 	golang.org/x/net v0.49.0
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5
-	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v1.6.1-0.20260311094958-7b74ee59e339
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v1.6.1-0.20260311094958-7b74ee59e339
-	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v0.0.0-20260226120000-4e084c8c87d8
-	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/session/mysql v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/session/postgres v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.3
-	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/storage/mysql v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/tool/email v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/tool/google v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/tool/openapi v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch v1.5.0
-	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia v0.0.0-20260226120000-4e084c8c87d8
+	trpc.group/trpc-go/trpc-agent-go v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/memory/redis v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/session/mysql v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/session/postgres v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/session/redis v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/tool/email v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/tool/google v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/tool/openapi v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch v1.8.0
+	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia v1.8.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
