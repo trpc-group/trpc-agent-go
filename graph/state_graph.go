@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
+	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -1639,7 +1640,7 @@ type modelResponseConfig struct {
 	Invocation       *agent.Invocation
 	StableInvocation *agent.Invocation
 	Tracker          *itelemetry.ChatMetricsTracker
-	PartialUsage     *partialUsageState
+	PartialUsage     *responseusage.PartialState
 	ModelCallbacks   *model.Callbacks
 	EventChan        chan<- *event.Event
 	InvocationID     string
@@ -1878,7 +1879,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	if config.Tracker != nil {
 		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
 	}
-	callbackTimingAttachment := attachResponseUsageTimingForCallback(
+	callbackTimingAttachment := responseusage.AttachTimingForCallback(
 		config.Response,
 		timingInfo,
 		config.PartialUsage,
@@ -1899,7 +1900,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	}
 	responseReplaced := false
 	if pluginOverride {
-		callbackTimingAttachment.restore()
+		callbackTimingAttachment.Restore()
 		config.Response = customResponse
 		args.Response = config.Response
 		responseReplaced = true
@@ -1916,7 +1917,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 			return ctx, nil, err
 		}
 		if customResponse != nil {
-			callbackTimingAttachment.restore()
+			callbackTimingAttachment.Restore()
 			config.Response = customResponse
 			responseReplaced = true
 		}
@@ -1926,10 +1927,10 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	if config.Tracker != nil {
 		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
 	}
-	if !responseReplaced && timingInfo != callbackTimingAttachment.attachedTimingInfo {
-		callbackTimingAttachment.restore()
+	if !responseReplaced {
+		callbackTimingAttachment.RestoreIfTimingInfoChanged(timingInfo)
 	}
-	attachResponseUsageTiming(config.Response, timingInfo, config.PartialUsage)
+	responseusage.AttachTiming(config.Response, timingInfo, config.PartialUsage)
 	eventInvocation := config.StableInvocation
 	if eventInvocation == nil {
 		eventInvocation = config.Invocation
@@ -4369,104 +4370,6 @@ func trackModelResponseTelemetry(
 	tracker.TrackResponse(response)
 }
 
-type partialUsageState struct {
-	usage      *model.Usage
-	timingInfo *model.TimingInfo
-}
-
-type responseUsageTimingAttachment struct {
-	response           *model.Response
-	usage              *model.Usage
-	timingInfo         *model.TimingInfo
-	attachedUsage      *model.Usage
-	attachedTimingInfo *model.TimingInfo
-	createdUsage       bool
-}
-
-func attachResponseUsageTimingForCallback(
-	response *model.Response,
-	timingInfo *model.TimingInfo,
-	partialUsageState *partialUsageState,
-) responseUsageTimingAttachment {
-	attachment := responseUsageTimingAttachment{response: response}
-	if response != nil {
-		attachment.usage = response.Usage
-		if response.Usage != nil {
-			attachment.timingInfo = response.Usage.TimingInfo
-		}
-	}
-	attachResponseUsageTiming(response, timingInfo, partialUsageState)
-	if response != nil {
-		attachment.attachedUsage = response.Usage
-		if response.Usage != nil {
-			attachment.attachedTimingInfo = response.Usage.TimingInfo
-		}
-		attachment.createdUsage = attachment.usage == nil && response.Usage != nil
-	}
-	return attachment
-}
-
-func (a responseUsageTimingAttachment) restore() {
-	if a.response == nil || a.response.Usage == nil {
-		return
-	}
-	if a.createdUsage {
-		if a.response.Usage != a.attachedUsage {
-			return
-		}
-		if usageOnlyHasTimingInfo(a.response.Usage) {
-			a.response.Usage = nil
-			return
-		}
-		if a.response.Usage.TimingInfo == a.attachedTimingInfo {
-			a.response.Usage.TimingInfo = nil
-		}
-		return
-	}
-	if a.response.Usage == a.usage &&
-		a.response.Usage.TimingInfo == a.attachedTimingInfo {
-		a.response.Usage.TimingInfo = a.timingInfo
-	}
-}
-
-func usageOnlyHasTimingInfo(usage *model.Usage) bool {
-	if usage == nil {
-		return true
-	}
-	return usage.PromptTokens == 0 &&
-		usage.CompletionTokens == 0 &&
-		usage.TotalTokens == 0 &&
-		usage.PromptTokensDetails == (model.PromptTokensDetails{}) &&
-		usage.CompletionTokensDetails == (model.CompletionTokensDetails{})
-}
-
-func attachResponseUsageTiming(
-	response *model.Response,
-	timingInfo *model.TimingInfo,
-	partialUsageState *partialUsageState,
-) {
-	if response == nil || timingInfo == nil {
-		return
-	}
-	if response.Usage == nil {
-		if response.IsPartial {
-			if partialUsageState == nil {
-				response.Usage = &model.Usage{}
-			} else {
-				if partialUsageState.usage == nil ||
-					partialUsageState.timingInfo != timingInfo {
-					partialUsageState.usage = &model.Usage{}
-					partialUsageState.timingInfo = timingInfo
-				}
-				response.Usage = partialUsageState.usage
-			}
-		} else {
-			response.Usage = &model.Usage{}
-		}
-	}
-	response.Usage.TimingInfo = timingInfo
-}
-
 func responseUsageTimingInfo(invocation *agent.Invocation) *model.TimingInfo {
 	if invocation == nil || invocation.RunOptions.DisableResponseUsageTracking {
 		return nil
@@ -4556,7 +4459,7 @@ type modelResponseProcessor struct {
 	invocation                     *agent.Invocation
 	tracker                        *itelemetry.ChatMetricsTracker
 	timingInfo                     *model.TimingInfo
-	partialUsageState              partialUsageState
+	partialUsageState              responseusage.PartialState
 	tap                            *modelDeltaStreamTap
 	reusableEvents                 []event.Event
 	reusableEventIdx               int
@@ -4829,7 +4732,7 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 	p.finalResponse = response
 	reusableEvent := nextReusableModelEvent(p.reusableEvents, &p.reusableEventIdx)
 	if p.fastResponsePath {
-		attachResponseUsageTiming(response, p.timingInfo, &p.partialUsageState)
+		responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 		lastEvent, err := emitFastModelResponseEvent(
 			p.ctx,
 			p.stableInvocation,

@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
+	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
@@ -525,11 +526,6 @@ func (f *Flow) runOneStep(
 }
 
 // processStreamingResponses handles the streaming response processing logic.
-type partialUsageState struct {
-	usage      *model.Usage
-	timingInfo *model.TimingInfo
-}
-
 func (f *Flow) processStreamingResponses(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -546,7 +542,7 @@ func (f *Flow) processStreamingResponses(
 	}
 	var tracker *itelemetry.ChatMetricsTracker
 	var timingInfo *model.TimingInfo
-	var partialUsageState partialUsageState
+	var partialUsageState responseusage.PartialState
 	if metricsInvocation != nil {
 		timingInfo = responseUsageTimingInfo(currentInvocation)
 		tracker = itelemetry.NewChatMetricsTracker(
@@ -573,7 +569,7 @@ func (f *Flow) processStreamingResponses(
 			response,
 			tracker,
 		)
-		callbackTimingAttachment := attachResponseUsageTimingForCallback(
+		callbackTimingAttachment := responseusage.AttachTimingForCallback(
 			response,
 			timingInfo,
 			&partialUsageState,
@@ -598,7 +594,7 @@ func (f *Flow) processStreamingResponses(
 		ctx = updatedCtx
 		responseReplaced := customResp != nil
 		if responseReplaced {
-			callbackTimingAttachment.restore()
+			callbackTimingAttachment.Restore()
 			response = customResp
 		}
 		currentInvocation = invocationFromContextOrDefault(
@@ -609,10 +605,10 @@ func (f *Flow) processStreamingResponses(
 		if tracker != nil {
 			tracker.SetInvocationState(currentInvocation, timingInfo)
 		}
-		if !responseReplaced && timingInfo != callbackTimingAttachment.attachedTimingInfo {
-			callbackTimingAttachment.restore()
+		if !responseReplaced {
+			callbackTimingAttachment.RestoreIfTimingInfoChanged(timingInfo)
 		}
-		attachResponseUsageTiming(response, timingInfo, &partialUsageState)
+		responseusage.AttachTiming(response, timingInfo, &partialUsageState)
 		// Repair tool call arguments in place when needed.
 		if currentInvocation != nil &&
 			jsonrepair.IsToolCallArgumentsJSONRepairEnabled(currentInvocation) {
@@ -750,99 +746,6 @@ func trackModelResponseTelemetry(
 		return
 	}
 	tracker.TrackResponse(response)
-}
-
-type responseUsageTimingAttachment struct {
-	response           *model.Response
-	usage              *model.Usage
-	timingInfo         *model.TimingInfo
-	attachedUsage      *model.Usage
-	attachedTimingInfo *model.TimingInfo
-	createdUsage       bool
-}
-
-func attachResponseUsageTimingForCallback(
-	response *model.Response,
-	timingInfo *model.TimingInfo,
-	partialUsageState *partialUsageState,
-) responseUsageTimingAttachment {
-	attachment := responseUsageTimingAttachment{response: response}
-	if response != nil {
-		attachment.usage = response.Usage
-		if response.Usage != nil {
-			attachment.timingInfo = response.Usage.TimingInfo
-		}
-	}
-	attachResponseUsageTiming(response, timingInfo, partialUsageState)
-	if response != nil {
-		attachment.attachedUsage = response.Usage
-		if response.Usage != nil {
-			attachment.attachedTimingInfo = response.Usage.TimingInfo
-		}
-		attachment.createdUsage = attachment.usage == nil && response.Usage != nil
-	}
-	return attachment
-}
-
-func (a responseUsageTimingAttachment) restore() {
-	if a.response == nil || a.response.Usage == nil {
-		return
-	}
-	if a.createdUsage {
-		if a.response.Usage != a.attachedUsage {
-			return
-		}
-		if usageOnlyHasTimingInfo(a.response.Usage) {
-			a.response.Usage = nil
-			return
-		}
-		if a.response.Usage.TimingInfo == a.attachedTimingInfo {
-			a.response.Usage.TimingInfo = nil
-		}
-		return
-	}
-	if a.response.Usage == a.usage &&
-		a.response.Usage.TimingInfo == a.attachedTimingInfo {
-		a.response.Usage.TimingInfo = a.timingInfo
-	}
-}
-
-func usageOnlyHasTimingInfo(usage *model.Usage) bool {
-	if usage == nil {
-		return true
-	}
-	return usage.PromptTokens == 0 &&
-		usage.CompletionTokens == 0 &&
-		usage.TotalTokens == 0 &&
-		usage.PromptTokensDetails == (model.PromptTokensDetails{}) &&
-		usage.CompletionTokensDetails == (model.CompletionTokensDetails{})
-}
-
-func attachResponseUsageTiming(
-	response *model.Response,
-	timingInfo *model.TimingInfo,
-	partialUsageState *partialUsageState,
-) {
-	if response == nil || timingInfo == nil {
-		return
-	}
-	if response.Usage == nil {
-		if response.IsPartial {
-			if partialUsageState == nil {
-				response.Usage = &model.Usage{}
-			} else {
-				if partialUsageState.usage == nil ||
-					partialUsageState.timingInfo != timingInfo {
-					partialUsageState.usage = &model.Usage{}
-					partialUsageState.timingInfo = timingInfo
-				}
-				response.Usage = partialUsageState.usage
-			}
-		} else {
-			response.Usage = &model.Usage{}
-		}
-	}
-	response.Usage.TimingInfo = timingInfo
 }
 
 func responseUsageTimingInfo(invocation *agent.Invocation) *model.TimingInfo {
