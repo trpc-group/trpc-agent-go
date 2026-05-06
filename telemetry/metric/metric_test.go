@@ -111,15 +111,14 @@ func TestStartAndClean(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			mp, err := NewMeterProvider(ctx, tt.opts...)
-			if err != nil {
-				t.Fatalf("NewMeterProvider returned error: %v", err)
-			}
-
 			if tt.expectError {
 				if err == nil {
 					t.Fatal("expected error but got nil")
 				}
 				return
+			}
+			if err != nil {
+				t.Fatalf("NewMeterProvider returned error: %v", err)
 			}
 
 			// Verify meter provider was created successfully
@@ -352,6 +351,12 @@ func TestInitMeterProvider(t *testing.T) {
 	if itelemetry.ExecuteToolMetricGenAIClientOperationDuration == nil {
 		t.Error("ExecuteToolMetricGenAIClientOperationDuration was not created")
 	}
+	if itelemetry.WorkflowMeter == nil {
+		t.Error("WorkflowMeter was not created")
+	}
+	if itelemetry.WorkflowMetricGenAIClientOperationDuration == nil {
+		t.Error("WorkflowMetricGenAIClientOperationDuration was not created")
+	}
 }
 
 func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
@@ -366,6 +371,7 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 	origInvokeTTFT := itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken
 	origInvokeTokenUsage := itelemetry.InvokeAgentMetricGenAIClientTokenUsage
 	origInvokeOpDur := itelemetry.InvokeAgentMetricGenAIClientOperationDuration
+	origWorkflowOpDur := itelemetry.WorkflowMetricGenAIClientOperationDuration
 	defer func() {
 		itelemetry.MeterProvider = originalMP
 		itelemetry.ChatMetricGenAIClientOperationDuration = origChatOpDur
@@ -378,6 +384,7 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 		itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = origInvokeTTFT
 		itelemetry.InvokeAgentMetricGenAIClientTokenUsage = origInvokeTokenUsage
 		itelemetry.InvokeAgentMetricGenAIClientOperationDuration = origInvokeOpDur
+		itelemetry.WorkflowMetricGenAIClientOperationDuration = origWorkflowOpDur
 	}()
 
 	reset := func(t *testing.T) {
@@ -427,6 +434,16 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 				itelemetry.InvokeAgentMetricGenAIClientTokenUsage = nil
 			case metrics.MetricGenAIClientOperationDuration:
 				itelemetry.InvokeAgentMetricGenAIClientOperationDuration = nil
+			}
+		}
+	}
+
+	nilWorkflowMetric := func(metricName string) func(t *testing.T) {
+		return func(t *testing.T) {
+			t.Helper()
+			switch metricName {
+			case metrics.MetricGenAIClientOperationDuration:
+				itelemetry.WorkflowMetricGenAIClientOperationDuration = nil
 			}
 		}
 	}
@@ -503,6 +520,13 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			metricName: metrics.MetricGenAIClientOperationDuration,
 			boundaries: []float64{0.1, 1, 10},
 		},
+		// --- Execute-workflow success ---
+		{
+			name:       "workflow: operation duration",
+			meterName:  metrics.MeterNameWorkflow,
+			metricName: metrics.MetricGenAIClientOperationDuration,
+			boundaries: []float64{0.1, 1, 10},
+		},
 
 		// --- Default/unsupported branches ---
 		{
@@ -536,6 +560,14 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			boundaries:  []float64{1},
 			wantErr:     true,
 			errContains: "unknown or unsupported invoke agent histogram metric",
+		},
+		{
+			name:        "unsupported workflow metric",
+			meterName:   metrics.MeterNameWorkflow,
+			metricName:  metrics.MetricGenAIClientTokenUsage,
+			boundaries:  []float64{1},
+			wantErr:     true,
+			errContains: "unknown or unsupported workflow histogram metric",
 		},
 
 		// --- Not initialized guards for every branch ---
@@ -626,6 +658,15 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			metricName:  metrics.MetricGenAIClientOperationDuration,
 			boundaries:  []float64{1},
 			before:      nilInvokeAgentMetric(metrics.MetricGenAIClientOperationDuration),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "workflow operation duration not initialized",
+			meterName:   metrics.MeterNameWorkflow,
+			metricName:  metrics.MetricGenAIClientOperationDuration,
+			boundaries:  []float64{1},
+			before:      nilWorkflowMetric(metrics.MetricGenAIClientOperationDuration),
 			wantErr:     true,
 			errContains: "not initialized",
 		},

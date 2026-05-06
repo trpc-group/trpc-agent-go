@@ -1,21 +1,21 @@
-# GenAIExecuteWorkflow 上报实现计划
+# GenAIWorkflow 上报实现计划
 
 ## 目标
 
-新增 `GenAIExecuteWorkflow` 监控项下的 graph node 耗时指标，用于统计每个 workflow/node 从 `nodeStart` 到最终 complete/error 的耗时。具体指标名使用 `gen_ai.client.operation.duration`，通过 `gen_ai.workflow.*` 维度区分 graph node 口径；不包含 stream、cache hit、retry attempt 维度，`gen_ai.system` 允许为空。
+新增 `GenAIWorkflow` 监控项下的 graph node 耗时指标，用于统计每个 workflow/node 从 `nodeStart` 到最终 complete/error 的耗时。具体指标名使用 `gen_ai.client.operation.duration`，通过 `gen_ai.workflow.*` 维度区分 graph node 口径；不包含 stream、cache hit、retry attempt 维度，`gen_ai.system` 允许为空。
 
 ## 改动范围
 
-- `[telemetry/semconv/metrics/metrics.go](telemetry/semconv/metrics/metrics.go)`: 复用/确认 metric name `gen_ai.client.operation.duration`，并为 `GenAIExecuteWorkflow` 监控项增加合适的 meter name。
+- `[telemetry/semconv/metrics/metrics.go](telemetry/semconv/metrics/metrics.go)`: 复用/确认 metric name `gen_ai.client.operation.duration`，并为 `GenAIWorkflow` 监控项增加合适的 meter name。
 - `[telemetry/semconv/trace/trace.go](telemetry/semconv/trace/trace.go)`: 增加 `gen_ai.app.name`、`gen_ai.user.id` 属性 key；`gen_ai.agent.*` 和 `gen_ai.workflow.*` 继续复用现有定义。
-- `[internal/telemetry/metric_execute_workflow.go](internal/telemetry/metric_execute_workflow.go)`: 新增内部上报模块，封装 histogram、attributes 构造和 no-op 行为。
+- `[internal/telemetry/metric_workflow.go](internal/telemetry/metric_workflow.go)`: 新增内部上报模块，封装 histogram、attributes 构造和 no-op 行为。
 - `[telemetry/metric/metric.go](telemetry/metric/metric.go)`: 初始化新 meter/histogram，并接入 `SetHistogramBuckets`。
 - `[graph/executor.go](graph/executor.go)`: 在 graph node 最终成功/失败路径接入上报。
 - 测试文件：新增内部 metric 单测，并扩展 `telemetry/metric` 与 `graph` 相关测试。
 
 ## 上报设计
 
-新增 `ExecuteWorkflowAttributes`，记录 `gen_ai.client.operation.duration` 时包含：
+新增 `WorkflowAttributes`，记录 `gen_ai.client.operation.duration` 时包含：
 
 - `gen_ai.system`: 有模型信息时取模型 system/name；无模型节点允许为空。
 - `gen_ai.app.name`: 优先从 `invocation.Session.AppName` 取，必要时 fallback 到 graph state session。
@@ -72,9 +72,9 @@ func (e *Executor) emitNodeErrorEvent(
 
 ## Metric 初始化
 
-在 `telemetry/metric/metric.go` 中仿照 `initInvokeAgentMetrics` 增加 `initExecuteWorkflowMetrics`：
+在 `telemetry/metric/metric.go` 中仿照 `initInvokeAgentMetrics` 增加 `initWorkflowMetrics`：
 
-- meter: `metrics.MeterNameExecuteWorkflow`
+- meter: `metrics.MeterNameWorkflow`
 - histogram: `metrics.MetricGenAIClientOperationDuration`
 - unit: `s`
 - description: `Duration of graph workflow/node execution`
@@ -83,7 +83,7 @@ func (e *Executor) emitNodeErrorEvent(
 
 ## 测试计划
 
-- `internal/telemetry/metric_execute_workflow_test.go`: 覆盖 attributes、空 system、错误时 `error.type`、nil histogram no-op。
+- `internal/telemetry/metric_workflow_test.go`: 覆盖 attributes、空 system、错误时 `error.type`、nil histogram no-op。
 - `telemetry/metric/metric_test.go`: 覆盖新 metric 初始化、bucket 设置、未知 metric 错误。
 - `graph/executor` 测试：覆盖成功节点上报一次、失败节点上报一次并带 `error.type`、retry 多次只上报最终一次、cache hit 上报但没有 cache hit 维度、before callback custom result 按成功上报。
 

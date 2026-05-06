@@ -1,10 +1,10 @@
-# GenAIExecuteWorkflow 监控项协议草案
+# GenAIWorkflow 监控项协议草案
 
 ## 背景
 
 `GenAIInvokeAgent` 当前用于统计一次 agent 调用的整体耗时。Graph 场景下，用户还需要按 graph node 维度观察执行耗时，用于定位首包耗时、慢节点和异常节点。
 
-`GenAIExecuteWorkflow` 拟作为 graph workflow/node 执行过程监控项，语义上借鉴 trace 中已有的 workflow 标记：
+`GenAIWorkflow` 拟作为 graph workflow/node 执行过程监控项，语义上借鉴 trace 中已有的 workflow 标记：
 
 - `gen_ai.workflow.id`
 - `gen_ai.workflow.name`
@@ -16,7 +16,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 监控项名称 | `GenAIExecuteWorkflow` |
+| 监控项名称 | `GenAIWorkflow` |
 | 监控项语义 | graph workflow/node 执行过程监控 |
 
 ### 指标定义
@@ -31,6 +31,7 @@
 
 | 维度名称 | 类型 | 描述 | 示例 | 要求级别 |
 | --- | --- | --- | --- | --- |
+| `gen_ai.operation.name` | string | GenAI 操作名称，固定为 `workflow`，与 trace workflow span operation 保持一致 | `workflow` | 必填 |
 | `gen_ai.system` | string | GenAI 产品标识，如 `openai`、`azure.ai.openai` 等；无模型节点允许为空 | `openai` | 允许为空 |
 | `gen_ai.app.name` | string | 应用名称 | `my_app` | 必填 |
 | `gen_ai.user.id` | string | user id | `user1` | 必填 |
@@ -71,7 +72,7 @@
 
 `GenAIInvokeAgent` 统计一次 agent 调用的整体耗时，适合看单次请求总耗时。
 
-`GenAIExecuteWorkflow` 统计 graph workflow/node 维度耗时，适合定位具体慢节点。两者是父子关系，指标名同为 `gen_ai.client.operation.duration` 时，需要通过 `gen_ai.workflow.*` 等维度区分 graph node 口径。
+`GenAIWorkflow` 统计 graph workflow/node 维度耗时，适合定位具体慢节点。两者是父子关系，指标名同为 `gen_ai.client.operation.duration` 时，需要通过 `gen_ai.workflow.*` 等维度区分 graph node 口径。
 
 ## 与现有代码的差异
 
@@ -89,7 +90,8 @@
 
 ## 已确认事项
 
-- 监控项名称统一为平台名称 `GenAIExecuteWorkflow`。
+- 监控项名称统一为平台名称 `GenAIWorkflow`。
+- 操作名称维度固定为 `gen_ai.operation.name=workflow`，与现有 trace 的 `workflow` span operation 保持一致。
 - app/user 维度统一使用 `gen_ai.*` 命名，即 `gen_ai.app.name`、`gen_ai.user.id`。
 - cache hit、retry attempt 不作为维度。
 - `gen_ai.system` 允许为空；有模型信息时优先使用模型 system。

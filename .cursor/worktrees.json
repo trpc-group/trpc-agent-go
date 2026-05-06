@@ -1,0 +1,6 @@
+{
+  "setup-worktree-unix": [
+    "cp $ROOT_WORKTREE_PATH/.env .",
+    "go mod tidy"
+  ],
+}
