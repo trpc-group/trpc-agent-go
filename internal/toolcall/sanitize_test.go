@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -208,6 +209,31 @@ func TestSanitizeMessagesWithTools_DowngradesOrphanToolCall(t *testing.T) {
 			},
 		},
 	}
+	out := SanitizeMessagesWithTools(in, nil)
+	if assert.Len(t, out, 1) {
+		assert.Equal(t, model.RoleUser, out[0].Role)
+		assert.Contains(t, out[0].Content, orphanToolCallTag)
+		assert.Contains(t, out[0].Content, "call_1")
+	}
+}
+
+func TestSanitizeMessagesWithTools_DropsReasoningOnlyAssistantAfterOrphanToolCall(t *testing.T) {
+	in := []model.Message{
+		{
+			Role:             model.RoleAssistant,
+			ReasoningContent: "I should call the tool.",
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "test_tool",
+						Arguments: []byte(`{"a":1}`),
+					},
+				},
+			},
+		},
+	}
+
 	out := SanitizeMessagesWithTools(in, nil)
 	if assert.Len(t, out, 1) {
 		assert.Equal(t, model.RoleUser, out[0].Role)
@@ -689,9 +715,9 @@ func TestSplitToolResults_GroupsByIDs(t *testing.T) {
 }
 
 func TestIsEmptyAssistantMessage(t *testing.T) {
-	assert.True(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant}))
-	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleUser}))
-	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, Content: "x"}))
-	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ReasoningContent: "x"}))
-	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "call_1"}}}))
+	assert.True(t, message.IsEmptyAssistantMessage(model.Message{Role: model.RoleAssistant}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{Role: model.RoleUser}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, Content: "x"}))
+	assert.True(t, message.IsEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ReasoningContent: "x"}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "call_1"}}}))
 }

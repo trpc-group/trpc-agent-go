@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -109,7 +110,7 @@ func sanitizeToolRound(assistant model.Message, toolResults []model.Message, too
 		0,
 		1+len(toolResults)+len(validation.invalidToolCalls)+len(toolCallSplit.orphan)+len(split.orphan),
 	)
-	if !isEmptyAssistantMessage(filteredAssistant) {
+	if !message.IsEmptyAssistantMessage(filteredAssistant) {
 		out = append(out, filteredAssistant)
 		out = append(out, split.kept...)
 	}
@@ -469,17 +470,6 @@ func downgradeOrphanToolResult(msg model.Message) model.Message {
 		Role:    model.RoleUser,
 		Content: content,
 	}
-}
-
-// isEmptyAssistantMessage reports whether an assistant message has no visible content and no tool calls.
-func isEmptyAssistantMessage(msg model.Message) bool {
-	if msg.Role != model.RoleAssistant {
-		return false
-	}
-	return msg.Content == "" &&
-		len(msg.ContentParts) == 0 &&
-		len(msg.ToolCalls) == 0 &&
-		msg.ReasoningContent == ""
 }
 
 // resolveSchemaRef resolves a local JSON schema #/$defs reference.
