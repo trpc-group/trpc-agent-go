@@ -10,6 +10,7 @@
 package gemini
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,6 +19,32 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 )
+
+func TestWithContextWindow(t *testing.T) {
+	m, err := New(context.Background(), "gemini-test",
+		WithContextWindow(204800),
+		WithGeminiClientConfig(&genai.ClientConfig{
+			APIKey:  "test-key",
+			Backend: 2,
+		}),
+	)
+	require.NoError(t, err)
+	window, ok := m.ContextWindow()
+	require.True(t, ok)
+	require.Equal(t, 204800, window)
+
+	m, err = New(context.Background(), "gemini-test",
+		WithContextWindow(0),
+		WithGeminiClientConfig(&genai.ClientConfig{
+			APIKey:  "test-key",
+			Backend: 2,
+		}),
+	)
+	require.NoError(t, err)
+	window, ok = m.ContextWindow()
+	require.False(t, ok)
+	require.Zero(t, window)
+}
 
 func TestOptions(t *testing.T) {
 	var (
