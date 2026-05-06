@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -924,7 +925,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 					requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
 				)
 				msg = p.projectEventMessage(inv, evt, msg)
-				if isEmptyAssistantMessage(msg) {
+				if message.IsEmptyAssistantMessage(msg) {
 					continue
 				}
 				messages = append(messages, msg)
@@ -1280,16 +1281,6 @@ func (p *ContentRequestProcessor) projectEventMessage(
 	return p.EventMessageProjector(inv, evt, msg)
 }
 
-func isEmptyAssistantMessage(msg model.Message) bool {
-	if msg.Role != model.RoleAssistant {
-		return false
-	}
-	return msg.Content == "" &&
-		len(msg.ContentParts) == 0 &&
-		len(msg.ToolCalls) == 0 &&
-		msg.ReasoningContent == ""
-}
-
 // getCurrentInvocationMessages gets messages only from the current invocation.
 // This is used when include_contents=none to preserve tool call history within
 // the current ReAct loop while isolating from parent/other branch history.
@@ -1414,7 +1405,7 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 			requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
 		)
 		msg = p.projectEventMessage(inv, evt, msg)
-		if isEmptyAssistantMessage(msg) {
+		if message.IsEmptyAssistantMessage(msg) {
 			continue
 		}
 		messages = append(messages, msg)

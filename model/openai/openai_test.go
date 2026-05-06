@@ -470,6 +470,67 @@ func TestModel_GenerateContentIter_Streaming(t *testing.T) {
 	require.True(t, sawHello)
 }
 
+func TestModel_StreamingSkipsProviderSpecificNonJSONEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		chunks := []string{
+			`: keep-alive`,
+			`data: : OPENROUTER PROCESSING`,
+			"event: ping\n" + `data: provider progress`,
+			`data: {"id":"provider-events","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+			`data: : keep-alive`,
+			`data: {"id":"provider-events","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}`,
+			`data: {"id":"provider-events","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hi"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	responseChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var final *model.Response
+	for resp := range responseChan {
+		require.Nil(t, resp.Error)
+		if resp.Done {
+			final = resp
+			continue
+		}
+	}
+
+	require.NotNil(t, final)
+	require.True(t, final.Done)
+	require.NotEmpty(t, final.Choices)
+	require.Equal(t, "hello world", final.Choices[0].Message.Content)
+}
+
 func TestModel_GenerateContentIter_StreamingContextCancellationRunsCallback(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
@@ -803,7 +864,7 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 			)
 		})
 
-	t.Run("assistant message without tool calls is not backfilled",
+	t.Run("assistant message without tool calls backfills empty reasoning_content",
 		func(t *testing.T) {
 			msgs := []model.Message{
 				{
@@ -826,12 +887,14 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 			err = json.Unmarshal(data, &parsed)
 			require.NoError(t, err)
 
-			_, ok := parsed[model.ReasoningContentKey]
-			assert.False(
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
 				t,
 				ok,
-				"reasoning_content should stay absent without tool calls",
+				"reasoning_content should be present when backfill "+
+					"is enabled",
 			)
+			assert.Equal(t, "", reasoningValue)
 		})
 
 	t.Run("assistant message with tool calls and reasoning_content", func(t *testing.T) {
