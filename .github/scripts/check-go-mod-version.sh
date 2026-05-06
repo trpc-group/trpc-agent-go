@@ -202,7 +202,7 @@ for go_mod in "${go_mod_files[@]}"; do
     dep_ver="${req#* }"
     is_repo_module_path "${dep_path}" || continue
 
-    line_number="$(grep -nF "${dep_path}" "${go_mod}" | head -n1 | cut -d: -f1 || true)"
+    line_number="$(awk -v dep_path="${dep_path}" '($1 == "require" && $2 == dep_path) || ($1 == dep_path) { print NR; exit }' "${go_mod}")"
     [ -z "${line_number}" ] && line_number=1
 
     if ! validate_resolvable_version "${rel_path}" "${line_number}" "${dep_path}" "${dep_ver}"; then
