@@ -951,6 +951,54 @@ func TestProcessStreamingResponses_UsesUpdatedInvocationForResponseUsageTiming(t
 	require.Nil(t, response2.Usage)
 }
 
+func TestProcessStreamingResponses_AttachesTimingInfoBeforeAfterModelCallbacks(t *testing.T) {
+	var callbackTimingInfo *model.TimingInfo
+	f := New(nil, nil, Options{
+		ModelCallbacks: model.NewCallbacks().RegisterAfterModel(
+			func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+				require.NotNil(t, args.Response)
+				require.NotNil(t, args.Response.Usage)
+				require.NotNil(t, args.Response.Usage.TimingInfo)
+				require.NotZero(t, args.Response.Usage.TimingInfo.FirstTokenDuration)
+				callbackTimingInfo = args.Response.Usage.TimingInfo
+				return &model.AfterModelResult{}, nil
+			},
+		),
+	})
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-callback-timing"),
+	)
+	response := &model.Response{
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage("done")},
+		},
+	}
+	responseSeq := func(yield func(*model.Response) bool) {
+		time.Sleep(time.Millisecond)
+		yield(response)
+	}
+	eventChan := make(chan *event.Event, 10)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(
+		agent.NewInvocationContext(context.Background(), invocation),
+		"s",
+	)
+	defer span.End()
+	lastEvent, err := f.processStreamingResponses(
+		ctx,
+		invocation,
+		&model.Request{},
+		responseSeq,
+		eventChan,
+		span,
+		true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.NotNil(t, response.Usage)
+	require.Same(t, callbackTimingInfo, response.Usage.TimingInfo)
+}
+
 func TestProcessStreamingResponses_UsesUpdatedInvocationForResponseUsageTimingOnSingleChunk(t *testing.T) {
 	updatedInvocation := agent.NewInvocation(
 		agent.WithInvocationID("inv-updated-single-usage"),
