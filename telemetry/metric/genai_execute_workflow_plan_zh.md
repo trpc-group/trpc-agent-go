@@ -2,11 +2,11 @@
 
 ## 目标
 
-新增 graph node 维度耗时指标 `GenAIExecuteWorkflow`，用于统计每个 workflow/node 从 `nodeStart` 到最终 complete/error 的耗时。指标不复用 `gen_ai.client.operation.duration`，不包含 stream、cache hit、retry attempt 维度，`gen_ai.system` 允许为空。
+新增 `GenAIExecuteWorkflow` 监控项下的 graph node 耗时指标，用于统计每个 workflow/node 从 `nodeStart` 到最终 complete/error 的耗时。具体指标名使用 `gen_ai.client.operation.duration`，通过 `gen_ai.workflow.*` 维度区分 graph node 口径；不包含 stream、cache hit、retry attempt 维度，`gen_ai.system` 允许为空。
 
 ## 改动范围
 
-- `[telemetry/semconv/metrics/metrics.go](telemetry/semconv/metrics/metrics.go)`: 增加 metric name `GenAIExecuteWorkflow` 和独立 meter name。
+- `[telemetry/semconv/metrics/metrics.go](telemetry/semconv/metrics/metrics.go)`: 复用/确认 metric name `gen_ai.client.operation.duration`，并为 `GenAIExecuteWorkflow` 监控项增加合适的 meter name。
 - `[telemetry/semconv/trace/trace.go](telemetry/semconv/trace/trace.go)`: 增加 `gen_ai.app.name`、`gen_ai.user.id` 属性 key；`gen_ai.agent.*` 和 `gen_ai.workflow.*` 继续复用现有定义。
 - `[internal/telemetry/metric_execute_workflow.go](internal/telemetry/metric_execute_workflow.go)`: 新增内部上报模块，封装 histogram、attributes 构造和 no-op 行为。
 - `[telemetry/metric/metric.go](telemetry/metric/metric.go)`: 初始化新 meter/histogram，并接入 `SetHistogramBuckets`。
@@ -15,7 +15,7 @@
 
 ## 上报设计
 
-新增 `ExecuteWorkflowAttributes`，包含：
+新增 `ExecuteWorkflowAttributes`，记录 `gen_ai.client.operation.duration` 时包含：
 
 - `gen_ai.system`: 有模型信息时取模型 system/name；无模型节点允许为空。
 - `gen_ai.app.name`: 优先从 `invocation.Session.AppName` 取，必要时 fallback 到 graph state session。
@@ -75,7 +75,7 @@ func (e *Executor) emitNodeErrorEvent(
 在 `telemetry/metric/metric.go` 中仿照 `initInvokeAgentMetrics` 增加 `initExecuteWorkflowMetrics`：
 
 - meter: `metrics.MeterNameExecuteWorkflow`
-- histogram: `metrics.MetricGenAIExecuteWorkflow`
+- histogram: `metrics.MetricGenAIClientOperationDuration`
 - unit: `s`
 - description: `Duration of graph workflow/node execution`
 

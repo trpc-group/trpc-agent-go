@@ -4,26 +4,30 @@
 
 `GenAIInvokeAgent` 当前用于统计一次 agent 调用的整体耗时。Graph 场景下，用户还需要按 graph node 维度观察执行耗时，用于定位首包耗时、慢节点和异常节点。
 
-`GenAIExecuteWorkflow` 拟作为 graph workflow/node 执行耗时监控项，语义上借鉴 trace 中已有的 workflow 标记：
+`GenAIExecuteWorkflow` 拟作为 graph workflow/node 执行过程监控项，语义上借鉴 trace 中已有的 workflow 标记：
 
 - `gen_ai.workflow.id`
 - `gen_ai.workflow.name`
 - `gen_ai.workflow.type`
 
-该监控项不复用 `gen_ai.client.operation.duration`，避免和 invoke agent、chat、execute tool 等 client operation 总耗时混在同一个统计口径中。
+该监控项的指标名使用 `gen_ai.client.operation.duration`，通过 workflow 维度标识 graph node 执行耗时语义。
 
-## 监控项定义
+## 监控项
 
 | 字段 | 内容 |
 | --- | --- |
 | 监控项名称 | `GenAIExecuteWorkflow` |
-| 指标语义 | graph workflow/node 执行耗时 |
-| 指标类型 | histogram |
-| 单位 | 秒 |
-| 上报时机 | graph node 执行完成或执行失败时上报一次 |
-| 指标名 | `GenAIExecuteWorkflow` |
+| 监控项语义 | graph workflow/node 执行过程监控 |
 
-## 维度定义
+### 指标定义
+
+| 指标名 | 指标语义 | 指标类型 | 单位 | 上报时机 |
+| --- | --- | --- | --- | --- |
+| `gen_ai.client.operation.duration` | graph workflow/node 执行耗时 | histogram | 秒 | graph node 执行完成或执行失败时上报一次 |
+
+`histogram` 用于支持平均值、p95、p99 等聚合统计。
+
+### 维度定义
 
 | 维度名称 | 类型 | 描述 | 示例 | 要求级别 |
 | --- | --- | --- | --- | --- |
@@ -37,7 +41,7 @@
 | `error.type` | string | 错误类型 | `timeout` | 错误时必填 |
 | `gen_ai.agent.name` | string | agent name | `agent_1` | 选填 |
 
-## workflow 类型取值
+### workflow 类型取值
 
 `gen_ai.workflow.type` 建议复用框架现有 graph node 类型：
 
@@ -67,7 +71,7 @@
 
 `GenAIInvokeAgent` 统计一次 agent 调用的整体耗时，适合看单次请求总耗时。
 
-`GenAIExecuteWorkflow` 统计 graph workflow/node 维度耗时，适合定位具体慢节点。两者是父子关系，不建议共用同一个 metric 名称。
+`GenAIExecuteWorkflow` 统计 graph workflow/node 维度耗时，适合定位具体慢节点。两者是父子关系，指标名同为 `gen_ai.client.operation.duration` 时，需要通过 `gen_ai.workflow.*` 等维度区分 graph node 口径。
 
 ## 与现有代码的差异
 
