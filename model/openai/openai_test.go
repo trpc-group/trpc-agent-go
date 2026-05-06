@@ -887,7 +887,50 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 			)
 		})
 
-	t.Run("assistant message without tool calls is not backfilled",
+	t.Run("deepseek inferred from base URL backfills by default",
+		func(t *testing.T) {
+			msgs := []model.Message{
+				{
+					Role:    model.RoleAssistant,
+					Content: "Calling a tool.",
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-deepseek-inferred",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "calculator",
+								Arguments: []byte(`{"expression":"2+2"}`),
+							},
+						},
+					},
+				},
+			}
+
+			converted := New(
+				"deepseek-v4-pro",
+				WithBaseURL(defaultDeepSeekBaseURL),
+			).convertMessages(msgs)
+			require.Len(t, converted, 1)
+			require.NotNil(t, converted[0].OfAssistant)
+
+			data, err := json.Marshal(converted[0].OfAssistant)
+			require.NoError(t, err)
+
+			var parsed map[string]any
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
+				t,
+				ok,
+				"DeepSeek inferred from base URL should backfill "+
+					"reasoning_content by default",
+			)
+			assert.Equal(t, "", reasoningValue)
+		})
+
+	t.Run("assistant message without tool calls backfills empty reasoning_content",
 		func(t *testing.T) {
 			msgs := []model.Message{
 				{
@@ -910,12 +953,14 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 			err = json.Unmarshal(data, &parsed)
 			require.NoError(t, err)
 
-			_, ok := parsed[model.ReasoningContentKey]
-			assert.False(
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
 				t,
 				ok,
-				"reasoning_content should stay absent without tool calls",
+				"reasoning_content should be present when backfill "+
+					"is enabled",
 			)
+			assert.Equal(t, "", reasoningValue)
 		})
 
 	t.Run("assistant message with tool calls and reasoning_content", func(t *testing.T) {

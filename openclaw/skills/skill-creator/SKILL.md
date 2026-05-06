@@ -364,7 +364,9 @@ If you used `--examples`, delete any placeholder files that are not needed for t
 
 Write `SKILL.md` as the operating contract for the durable capability. It should explain when the capability applies, the smallest reliable workflow for using it, the important constraints, and the recovery paths that keep future runs moving.
 
-For tool, API, CLI, or MCP integrations, keep the skill as the user-facing capability boundary. Put the invocation recipe, schema lookup command, examples, and domain-specific constraints in the skill. Keep secrets out of the skill; reference environment variables, runtime config, auth helpers, or platform-managed credentials instead.
+For tool, API, CLI, or MCP integrations, keep the skill as the user-facing capability boundary. Put the invocation recipe, schema lookup command, examples, and domain-specific constraints in the skill. Keep shared, bundled, published, or repo-tracked skills free of raw secrets; reference environment variables, runtime config, auth helpers, or platform-managed credentials instead.
+
+If the user explicitly provides a complete private config or credential-bearing endpoint for a local runtime capability, store it in a local private config file such as skill-local `mcp.json` in a writable user-managed skill root, or another dedicated private config path, rather than asking the user to re-enter the same value as an environment variable. Keep that file non-shared, excluded from source control and packaging, and outside repo-tracked skill artifacts. Use restrictive file permissions when possible, do not edit shell startup or trusted env files just to persist it, do not echo secret values back, and keep the skill instructions focused on when and how to use that config.
 
 When the user asks for a capability with contextual limits such as "only for this team", "only in this project", "only when I ask", or "only for these chats", capture those limits in clear natural language in the skill. Treat these limits as behavioral guidance for the model, not as a hard security boundary.
 

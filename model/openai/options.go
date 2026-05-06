@@ -113,9 +113,8 @@ type options struct {
 	// Response.Choices[].Delta.ToolCalls instead of being
 	// suppressed until the final aggregated response.
 	ShowToolCallDelta bool
-	// ReasoningContentBackfill controls whether assistant
-	// tool-call messages should replay an empty
-	// reasoning_content field when the message has no
+	// ReasoningContentBackfill controls whether assistant messages should
+	// replay an empty reasoning_content field when the message has no
 	// reasoning text.
 	ReasoningContentBackfill    bool
 	reasoningContentBackfillSet bool
@@ -223,9 +222,8 @@ func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	}
 }
 
-// WithReasoningContentBackfill enables replay-time
-// reasoning_content backfill for assistant tool-call
-// messages that have no reasoning text.
+// WithReasoningContentBackfill enables replay-time reasoning_content backfill
+// for assistant messages that have no reasoning text.
 func WithReasoningContentBackfill(enabled bool) Option {
 	return func(opts *options) {
 		opts.ReasoningContentBackfill = enabled
