@@ -21,7 +21,6 @@ replace (
 
 require (
 	github.com/getkin/kin-openapi v0.124.0
-	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.2
 	trpc.group/trpc-go/trpc-agent-go v1.8.2-0.20260429121222-b41f42aefbc5
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.5.0
@@ -35,6 +34,8 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.0-20251126064502-c8c2594d2519
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
+
+require github.com/google/uuid v1.6.0 // indirect
 
 require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6 // indirect

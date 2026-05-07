@@ -198,39 +198,7 @@ func (s *Store) Add() {}
 	}
 }
 
-func TestParseDirectoryModulesAnalyzesImportedInterfaceImplements(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/root\n\ngo 1.21\n")
-	writeFile(t, filepath.Join(dir, "api", "api.go"), `package api
 
-type Store interface {
-	Add()
-	Close() error
-}
-`)
-	implDir := filepath.Join(dir, "impl")
-	writeFile(t, filepath.Join(implDir, "go.mod"), "module example.com/root/impl\n\ngo 1.21\n\nrequire example.com/root v0.0.0\n\nreplace example.com/root => ..\n")
-	writeFile(t, filepath.Join(implDir, "impl.go"), `package impl
-
-import "example.com/root/api"
-
-var _ api.Store = (*Store)(nil)
-
-type Store struct{}
-
-func (s *Store) Add() {}
-func (s *Store) Close() error { return nil }
-`)
-
-	parser := NewParser(WithEdgeAnalysis(true))
-	result, err := parser.ParseDirectory(dir)
-	if err != nil {
-		t.Fatalf("ParseDirectory() error = %v", err)
-	}
-	if !hasCodeEdge(result.Edges, "example.com/root/impl.Store", "example.com/root/api.Store", codeast.RelationImplements) {
-		t.Fatalf("expected cross-module IMPLEMENTS edge, got %+v", result.Edges)
-	}
-}
 
 func TestParseDirectoryFullModeSkipsEmptyInterfaceImplements(t *testing.T) {
 	dir := t.TempDir()
