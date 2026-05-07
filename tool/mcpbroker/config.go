@@ -136,6 +136,11 @@ func normalizeTransport(raw string, hasCommand, hasURL, adHoc bool) (string, tra
 	}
 }
 
+// cloneConnectionConfig returns a defensive copy of cfg. Scalar fields are duplicated by Go
+// value semantics; the Headers map and Args slice are deep-cloned via cloneStringMap and
+// cloneStringSlice. Mutations to the returned config (including its Headers / Args) therefore
+// do not propagate back to the source. Callers that hand the clone to external callbacks (such
+// as ClientOptionsProvider) rely on this contract.
 func cloneConnectionConfig(cfg mcpcfg.ConnectionConfig) mcpcfg.ConnectionConfig {
 	cfg.Headers = cloneStringMap(cfg.Headers)
 	cfg.Args = cloneStringSlice(cfg.Args)
