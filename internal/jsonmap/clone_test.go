@@ -53,4 +53,8 @@ func TestCloneFallbackKeepsNonJSONValues(t *testing.T) {
 	cloned := Clone(src)
 	require.NotNil(t, cloned)
 	require.Equal(t, ch, cloned["bad"])
+
+	cloned["extra"] = 1
+	_, exists := src["extra"]
+	require.False(t, exists)
 }
