@@ -60,7 +60,11 @@ nav:
       - PromptIter: promptiter.md
   - Server:
     - Gateway: gateway.md
-    - AG-UI: agui.md
+    - AG-UI:
+      - Overview: agui/index.md
+      - Real-Time Conversation Route: agui/chat.md
+      - Messages Snapshot Route: agui/history.md
+      - Cancel Route: agui/cancel.md
     - A2A: a2a.md
     - A2UI: a2ui.md
     - OpenClaw Runtime: openclaw-runtime.md
@@ -135,7 +139,11 @@ plugins:
                 - PromptIter: promptiter.md
             - 服务:
               - Gateway: gateway.md
-              - AG-UI: agui.md
+              - AG-UI:
+                - 总览: agui/index.md
+                - 实时对话路由: agui/chat.md
+                - 消息快照路由: agui/history.md
+                - 取消路由: agui/cancel.md
               - A2A: a2a.md
               - A2UI: a2ui.md
               - OpenClaw Runtime: openclaw-runtime.md
