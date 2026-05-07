@@ -9,6 +9,7 @@
 package jsonmap
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,6 +22,7 @@ func TestCloneNil(t *testing.T) {
 func TestCloneDeepCopiesJSONValues(t *testing.T) {
 	src := map[string]any{
 		"prompt_cache_key": "cache-1",
+		"seed":             int64(9007199254740993),
 		"metadata": map[string]any{
 			"session_id": "session-1",
 		},
@@ -37,6 +39,7 @@ func TestCloneDeepCopiesJSONValues(t *testing.T) {
 	clonedTags[0] = "changed"
 
 	require.Equal(t, "cache-1", src["prompt_cache_key"])
+	require.Equal(t, json.Number("9007199254740993"), cloned["seed"])
 	metadata := src["metadata"].(map[string]any)
 	require.Equal(t, "session-1", metadata["session_id"])
 	tags := src["tags"].([]any)

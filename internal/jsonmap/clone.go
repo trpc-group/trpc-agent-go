@@ -10,6 +10,7 @@
 package jsonmap
 
 import (
+	"bytes"
 	"encoding/json"
 	"maps"
 )
@@ -27,8 +28,10 @@ func Clone(src map[string]any) map[string]any {
 
 	raw, err := json.Marshal(src)
 	if err == nil {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
 		var cloned map[string]any
-		if err = json.Unmarshal(raw, &cloned); err == nil {
+		if err = decoder.Decode(&cloned); err == nil {
 			return cloned
 		}
 	}
