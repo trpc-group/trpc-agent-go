@@ -558,20 +558,57 @@ model := oaimodel.New("deepseek-v4-flash",
 )
 ```
 
-**回调中 `SetExtraFields` 与 `WithExtraFields` 的区别**：
+**请求体自定义方式的区别**：
 
-| 维度 | `WithExtraFields` | 回调中 `SetExtraFields` |
-| --- | --- | --- |
-| 设置时机 | 创建模型时一次性设置 | 每次请求发送前调用 |
-| 动态性 | 仅支持静态值 | 可基于 `ctx` 或运行时状态动态设置 |
-| 实现机制 | 通过 `openaiopt.WithJSONSet`（RequestOption 层）注入 | 设置在 `ChatCompletionNewParams` 结构体上（序列化层） |
-| 同名 key 冲突 | `WithExtraFields` 优先（后执行，覆盖同名 key） | 如果存在同名 key，会被 `WithExtraFields` 覆盖 |
+| 维度 | `WithExtraFields` | `agent.WithModelRequestExtraFields` | 回调中 `SetExtraFields` |
+| --- | --- | --- | --- |
+| 设置时机 | 创建模型时一次性设置 | 单次 `runner.Run(...)` 调用时设置 | 每次模型请求发送前调用 |
+| 动态性 | 仅支持静态值 | 适合运行时已知的动态值 | 可基于 `ctx` 或运行时状态动态设置 |
+| 实现机制 | 通过 `openaiopt.WithJSONSet`（RequestOption 层）注入 | 写入 `model.Request.ExtraFields`，再由支持的 adapter 注入 | 设置在 `ChatCompletionNewParams` 结构体上（序列化层） |
+| 同名 key 冲突 | 会被请求级 extra fields 覆盖 | 优先级高于模型级 extra fields | 如果存在同名 key，会被 RequestOption 层的 extra fields 覆盖 |
 
-当两者使用**不同的 key** 时，所有字段都会出现在最终的 JSON body 中，
-互不干扰。当两者设置了**相同的 key** 时，`WithExtraFields` 优先生效，
-因为 `WithJSONSet` 在结构体序列化之后才应用。
+当多种方式使用**不同的 key** 时，所有字段都会出现在最终的 JSON body 中，
+互不干扰。当它们设置了**相同的 key** 时，在 OpenAI 兼容 adapter 中，
+通过 `agent.WithModelRequestExtraFields` 传入的请求级 extra fields 优先生效。
 
-对于大多数需要按请求动态定制的场景，推荐在回调中使用 `SetExtraFields`。
+##### 从 Runner 传递请求级 extra fields
+
+如果某个供应商的顶层请求体字段需要随每次 `runner.Run(...)` 动态变化，
+可以使用 `agent.WithModelRequestExtraFields`。例如 OpenAI 兼容接口中的
+`prompt_cache_key`：
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+func runOnce(ctx context.Context, r runner.Runner, cacheKey string) error {
+    events, err := r.Run(
+        ctx,
+        "user-001",
+        "session-001",
+        model.NewUserMessage("Hello"),
+        agent.WithModelRequestExtraFields(map[string]any{
+            "prompt_cache_key": cacheKey,
+        }),
+    )
+    if err != nil {
+        return err
+    }
+    for range events {
+    }
+    return nil
+}
+```
+
+该选项会作用于本次运行中创建的每一次模型调用，包括普通 LLM Agent、
+Graph LLM 节点，以及经由 failover 或 hedge model 路由的请求。内置 OpenAI
+和 HuggingFace/OpenAI 兼容 adapter 会把这些字段合并到顶层 JSON 请求体中。
+其他供应商 adapter 默认不会使用该字段，除非后续显式增加对应的供应商映射。
 
 #### 2. 模型切换（Model Switching）
 
