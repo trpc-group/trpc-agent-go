@@ -261,7 +261,7 @@ func WithContextThreshold(opts ...ContextThresholdOption) Option {
 		for _, opt := range opts {
 			opt(&o)
 		}
-		if o.fallbackContextWindow == defaultContextThresholdFallbackWindow && s.model != nil {
+		if !o.fallbackContextWindowSet && s.model != nil {
 			if w, ok := modelcontext.ResolveContextWindow(s.model); ok {
 				opts = append(opts, WithContextThresholdFallbackWindow(w))
 			}

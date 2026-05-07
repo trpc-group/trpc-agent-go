@@ -1192,6 +1192,34 @@ func TestWithContextThreshold_SummarizerModelFallback(t *testing.T) {
 	assert.False(t, result)
 }
 
+func TestWithContextThreshold_ExplicitFallbackWindowPreserved(t *testing.T) {
+	defer SetTokenCounter(nil)
+	SetTokenCounter(testFixedTokenCounter{tokens: 5000})
+
+	fakeModel := &fakeModelWithName{name: "deepseek-chat"}
+	sum := NewSummarizer(fakeModel, WithContextThreshold(
+		WithContextThresholdFallbackWindow(defaultContextThresholdFallbackWindow),
+	))
+
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "hello"},
+				}}},
+			},
+		},
+	}
+
+	// Explicit fallback=8192 gives threshold=4096, so 5000 triggers.
+	// If it were treated as "unset", the deepseek-chat window fallback would
+	// raise the threshold to 65536 and this would not trigger.
+	result := sum.ShouldSummarize(sess)
+	assert.True(t, result)
+}
+
 func TestWithContextThreshold_UnknownSummarizerModel(t *testing.T) {
 	defer SetTokenCounter(nil)
 	SetTokenCounter(testFixedTokenCounter{tokens: 5000})
