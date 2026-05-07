@@ -451,6 +451,11 @@ type Request struct {
 	// JSON formatting. This field is optional and provider-agnostic.
 	StructuredOutput *StructuredOutput `json:"structured_output,omitempty"`
 
+	// ExtraFields stores provider-specific top-level request body fields.
+	// Model adapters merge these with model-level extra fields when supported;
+	// request-level values take precedence.
+	ExtraFields map[string]any `json:"-"`
+
 	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
 }
 

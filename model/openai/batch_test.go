@@ -459,6 +459,55 @@ func TestGenerateBatchJSONL_ReasoningContentBackfill(t *testing.T) {
 			assert.False(t, ok)
 		})
 
+	t.Run("deepseek backfills empty reasoning_content by default",
+		func(t *testing.T) {
+			m := New("deepseek-v4-pro", WithVariant(VariantDeepSeek))
+
+			jsonlData, err := m.generateBatchJSONL(requests)
+			require.NoError(t, err)
+
+			lines := strings.Split(strings.TrimSpace(string(jsonlData)), "\n")
+			require.Len(t, lines, 1)
+
+			var decoded map[string]any
+			err = json.Unmarshal([]byte(lines[0]), &decoded)
+			require.NoError(t, err)
+
+			body := decoded["body"].(map[string]any)
+			messages := body["messages"].([]any)
+			message := messages[0].(map[string]any)
+
+			reasoningValue, ok := message[model.ReasoningContentKey]
+			require.True(t, ok)
+			assert.Equal(t, "", reasoningValue)
+		})
+
+	t.Run("deepseek backfill can be explicitly disabled",
+		func(t *testing.T) {
+			m := New(
+				"deepseek-v4-pro",
+				WithVariant(VariantDeepSeek),
+				WithReasoningContentBackfill(false),
+			)
+
+			jsonlData, err := m.generateBatchJSONL(requests)
+			require.NoError(t, err)
+
+			lines := strings.Split(strings.TrimSpace(string(jsonlData)), "\n")
+			require.Len(t, lines, 1)
+
+			var decoded map[string]any
+			err = json.Unmarshal([]byte(lines[0]), &decoded)
+			require.NoError(t, err)
+
+			body := decoded["body"].(map[string]any)
+			messages := body["messages"].([]any)
+			message := messages[0].(map[string]any)
+
+			_, ok := message[model.ReasoningContentKey]
+			assert.False(t, ok)
+		})
+
 	t.Run("preserves non-empty reasoning_content", func(t *testing.T) {
 		requests := []*BatchRequestInput{
 			{

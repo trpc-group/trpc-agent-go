@@ -118,8 +118,9 @@ type options struct {
 	// ReasoningContentBackfill controls whether assistant messages should
 	// replay an empty reasoning_content field when the message has no
 	// reasoning text.
-	ReasoningContentBackfill bool
-	accumulateChunkUsage     AccumulateChunkUsage
+	ReasoningContentBackfill    bool
+	reasoningContentBackfillSet bool
+	accumulateChunkUsage        AccumulateChunkUsage
 	// OptimizeForCache controls whether to optimize message structure for prompt caching.
 	// When enabled, system messages will be moved to the front to improve cache hit rates.
 	// OpenAI's prompt caching is automatic and doesn't require explicit cache control,
@@ -228,6 +229,7 @@ func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 func WithReasoningContentBackfill(enabled bool) Option {
 	return func(opts *options) {
 		opts.ReasoningContentBackfill = enabled
+		opts.reasoningContentBackfillSet = true
 	}
 }
 
