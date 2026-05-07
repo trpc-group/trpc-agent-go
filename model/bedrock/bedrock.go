@@ -114,6 +114,19 @@ func (m *Model) handleNonStreamingResponse(
 	request *model.Request,
 	responseChan chan<- *model.Response,
 ) {
+	// Early check: if context is already cancelled, send error directly to avoid select race.
+	if ctx.Err() != nil {
+		responseChan <- &model.Response{
+			Error: &model.ResponseError{
+				Message: ctx.Err().Error(),
+				Type:    model.ErrorTypeCancelled,
+			},
+			Timestamp: time.Now(),
+			Done:      true,
+		}
+		return
+	}
+
 	input, err := m.buildConverseInput(request)
 	if err != nil {
 		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
@@ -503,18 +516,22 @@ func convertMessages(messages []model.Message) ([]types.Message, []types.SystemC
 			}
 
 		case model.RoleUser:
-			bedrockMsg := types.Message{
-				Role:    types.ConversationRoleUser,
-				Content: convertUserContentBlocks(msg),
+			content := convertUserContentBlocks(msg)
+			if len(content) > 0 {
+				bedrockMessages = append(bedrockMessages, types.Message{
+					Role:    types.ConversationRoleUser,
+					Content: content,
+				})
 			}
-			bedrockMessages = append(bedrockMessages, bedrockMsg)
 
 		case model.RoleAssistant:
-			bedrockMsg := types.Message{
-				Role:    types.ConversationRoleAssistant,
-				Content: convertAssistantContentBlocks(msg),
+			content := convertAssistantContentBlocks(msg)
+			if len(content) > 0 {
+				bedrockMessages = append(bedrockMessages, types.Message{
+					Role:    types.ConversationRoleAssistant,
+					Content: content,
+				})
 			}
-			bedrockMessages = append(bedrockMessages, bedrockMsg)
 
 		case model.RoleTool:
 			// Tool results are sent as ToolResult blocks in a user message
@@ -832,6 +849,14 @@ func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *mode
 		Timestamp: time.Now(),
 		Done:      true,
 	}
+	// Try non-blocking send first to avoid dropping error responses when context is cancelled
+	// but the buffered channel still has capacity.
+	select {
+	case responseChan <- errorResponse:
+		return
+	default:
+	}
+	// If channel is full, wait for either send or context cancellation.
 	select {
 	case responseChan <- errorResponse:
 	case <-ctx.Done():
