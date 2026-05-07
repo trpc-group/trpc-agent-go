@@ -1049,6 +1049,12 @@ func cloneRequestForContextCompaction(req *model.Request) *model.Request {
 	cloned.StructuredOutput = cloneStructuredOutputForContextCompaction(
 		req.StructuredOutput,
 	)
+	if req.ExtraFields != nil {
+		cloned.ExtraFields = make(map[string]any, len(req.ExtraFields))
+		for key, value := range req.ExtraFields {
+			cloned.ExtraFields[key] = value
+		}
+	}
 	if req.Tools != nil {
 		cloned.Tools = make(map[string]tool.Tool, len(req.Tools))
 		for name, t := range req.Tools {

@@ -107,6 +107,9 @@ func TestCloneRequestDeepCopiesSerializableFields(t *testing.T) {
 				},
 			},
 		},
+		ExtraFields: map[string]any{
+			"prompt_cache_key": "cache-1",
+		},
 		Tools: map[string]tool.Tool{
 			"lookup": toolImpl,
 		},
@@ -120,8 +123,10 @@ func TestCloneRequestDeepCopiesSerializableFields(t *testing.T) {
 	cloned.Messages[1].Content = "changed"
 	cloned.StructuredOutput.JSONSchema.Name = "changed"
 	cloned.StructuredOutput.JSONSchema.Schema["type"] = "array"
+	cloned.ExtraFields["prompt_cache_key"] = "changed"
 	cloned.Tools["other"] = stubTool{name: "other"}
 	assert.Equal(t, "user", request.Messages[1].Content)
+	assert.Equal(t, "cache-1", request.ExtraFields["prompt_cache_key"])
 	assert.Equal(t, "answer", request.StructuredOutput.JSONSchema.Name)
 	assert.Equal(t, "object", request.StructuredOutput.JSONSchema.Schema["type"])
 	assert.Len(t, request.Tools, 1)
