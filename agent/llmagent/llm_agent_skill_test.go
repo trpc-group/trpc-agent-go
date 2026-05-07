@@ -41,7 +41,7 @@ const (
 	skillsCapabilityHeader      = "Skill tool availability:"
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
 	skillRootsHeader            = "Skill roots:"
-	workspaceExecGuidanceHeader = "Executor workspace guidance:"
+	workspaceExecGuidanceHeader = "Workspace shell guidance:"
 )
 
 // createTestSkill makes a minimal skill folder with SKILL.md.
@@ -834,11 +834,13 @@ func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_WiresPrompt(
 		}
 	}
 	require.NotEmpty(t, sys)
-	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill discovery and knowledge loading only")
-	require.Contains(t, sys, "Built-in skill execution tools are unavailable")
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, "skill discovery and knowledge loading only")
+	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.NotContains(t, sys, "skill_run runs with CWD")
+	require.Contains(t, sys, "workspace_exec is registered")
+	require.Contains(t, sys, "If no execution tool is registered")
 }
 
 func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_GuidanceDisabled(
@@ -1083,8 +1085,8 @@ func TestLLMAgent_WithAllowedSkillTools_LoadOnly_WiresPrompt(
 		}
 	}
 	require.NotEmpty(t, sys)
-	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill discovery and knowledge loading only")
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, "skill discovery and knowledge loading only")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, "skill_load.docs or include_all_docs")
 	require.NotContains(t, sys, "skill_list_docs")
@@ -1835,10 +1837,22 @@ func TestLLMAgent_WorkspaceExecGuidanceWithoutSkillsRepo(t *testing.T) {
 
 	sys := findSystemMessageContaining(req, workspaceExecGuidanceHeader)
 	require.NotEmpty(t, sys)
-	require.Contains(t, sys, "default general shell runner")
-	require.Contains(t, sys, "workspace is its scope, not its capability limit")
+	require.Contains(t, sys, "shell command tool for the current workspace")
+	require.Contains(t, sys, "Prefer task-specific tools")
+	require.Contains(t, sys, "general shell fallback tool")
+	require.Contains(t, sys, "no suitable specialized tool is available")
+	require.Contains(t, sys, "specialized tool fails")
+	require.Contains(t, sys, "workspace or shell environment")
+	require.Contains(t, sys, "explicitly asks for shell execution")
+	require.Contains(t, sys, "external information retrieval")
+	require.Contains(t, sys, "cannot access the required source")
+	require.Contains(t, sys, "Command paths are resolved relative to cwd")
+	require.Contains(t, sys, "Choose one path base per command")
 	require.Contains(t, sys, "Prefer work/, out/, and runs/")
-	require.Contains(t, sys, "verify first before claiming the limitation")
+	require.Contains(t, sys, "check it only when that environment matters")
+	require.NotContains(t, sys, "curl")
+	require.NotContains(t, sys, "sufficient")
+	require.NotContains(t, sys, "insufficient")
 	require.NotContains(t, sys, "workspace_save_artifact")
 	require.NotContains(t, sys, "skills/")
 	require.NotContains(t, sys, "workspace_write_stdin")

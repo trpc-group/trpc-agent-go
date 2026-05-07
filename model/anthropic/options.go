@@ -97,6 +97,9 @@ type options struct {
 	// When enabled, cache control will be applied to the last assistant message
 	// to maximize cache reuse in subsequent turns.
 	cacheMessages bool
+	// showToolCallDelta controls whether to expose tool call argument deltas in
+	// streaming responses.
+	showToolCallDelta bool
 }
 
 var (
@@ -203,6 +206,16 @@ func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	return func(opts *options) {
 		opts.chatStreamCompleteCallback = fn
+	}
+}
+
+// WithShowToolCallDelta controls whether to expose tool call argument deltas in
+// streaming responses. When enabled, input_json_delta chunks from Anthropic will
+// be forwarded via Response.Choices[].Delta.ToolCalls so callers can reconstruct
+// arguments incrementally.
+func WithShowToolCallDelta(show bool) Option {
+	return func(opts *options) {
+		opts.showToolCallDelta = show
 	}
 }
 

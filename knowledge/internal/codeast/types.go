@@ -194,6 +194,7 @@ type DocumentPayload struct {
 // NodeDocumentPayloadOptions configures how AST nodes are mapped to document payloads.
 type NodeDocumentPayloadOptions struct {
 	BaseMetadata       map[string]any
+	ScopeBasePath      string
 	FileInfo           *FileInfo
 	FormatType         func(EntityType) string
 	BuildEmbeddingText func(*Node) string
@@ -235,7 +236,7 @@ func NodeToDocumentPayload(node *Node, opts NodeDocumentPayloadOptions) *Documen
 	metadata[TrpcAstMetaPrefix+"name"] = node.Name
 	metadata[TrpcAstMetaPrefix+"full_name"] = node.FullName
 	metadata[TrpcAstMetaPrefix+"language"] = string(node.Language)
-	metadata[TrpcAstMetaPrefix+"scope"] = string(node.Scope)
+	metadata[TrpcAstMetaPrefix+"scope"] = string(resolveNodeScope(node, opts.ScopeBasePath))
 	if node.Package != "" {
 		metadata[TrpcAstMetaPrefix+"package"] = node.Package
 	}
@@ -281,6 +282,19 @@ func NodeToDocumentPayload(node *Node, opts NodeDocumentPayloadOptions) *Documen
 		payload.EmbeddingText = opts.BuildEmbeddingText(node)
 	}
 	return payload
+}
+
+func resolveNodeScope(node *Node, basePath string) Scope {
+	if basePath == "" || node.FilePath == "" {
+		return node.Scope
+	}
+	if node.Scope != "" && node.Scope != ScopeCode && node.Scope != ScopeExample {
+		return node.Scope
+	}
+	if IsExamplePath(node.FilePath, basePath) {
+		return ScopeExample
+	}
+	return ScopeCode
 }
 
 // IsExamplePath checks if a file path is under an example directory within a repository.

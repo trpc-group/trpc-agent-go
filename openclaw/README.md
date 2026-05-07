@@ -1109,6 +1109,24 @@ borrows a few design ideas from OpenClaw:
 - `{baseDir}` placeholder substitution for better OpenClaw skill
   compatibility.
 
+### Durable capabilities
+
+Local skills are the default place to teach OpenClaw reusable capabilities.
+When a user wants the agent to remember a workflow, connect to a tool or API,
+reuse an MCP server, follow a team process, or preserve a domain rule for
+future tasks, prefer creating or updating a skill instead of adding
+case-specific runtime logic.
+
+Use memory for lightweight facts, preferences, and simple standing rules.
+Use a skill when the remembered item needs an operational workflow, tools,
+examples, references, or recovery paths.
+
+Use application code and runtime config for stable boundaries such as
+permissions, secret handling, file access, validation, and lifecycle
+management. Use skills for the evolving context: when the capability should
+trigger, how to operate it, which examples matter, and how to recover from
+common failures.
+
 ### Bundled skills
 
 OpenClaw vendors the upstream OpenClaw skill pack under `openclaw/skills/`

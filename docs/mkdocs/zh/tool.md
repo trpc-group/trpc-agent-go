@@ -598,6 +598,97 @@ agent := llmagent.New(
 
 `WithBaseDir` 定义了 `Read`、`Write`、`Edit`、`Glob`、`Grep` 等文件相关工具的工作范围，也决定了 `Bash` 的默认执行目录。启用只读模式后，工具集只保留读取、检索、命令执行和 Web 相关能力；关闭只读模式后，会额外暴露 `Write`、`Edit` 与 `NotebookEdit`。
 
+### Todo 工具
+
+Todo 工具为 Agent 提供一份结构化、可跨轮持久化的任务清单。模型通过 `todo_write` 发布或更新当前计划；清单会被持久化到 session、随 tool result 事件返回给前端，并在每次写入后默认追加一段简短提示，督促模型边推进边更新状态。
+
+适合下面这些场景：
+
+- 任务跨多个非平凡步骤，模型容易漏掉某一步；
+- 用户或下游 UI 需要在 Agent 工作过程中看到可见的进度；
+- 同一会话可能中途暂停（例如向用户追问信息），后续再续上原计划继续推进。
+
+#### 基础用法
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/todo"
+)
+
+todoTool := todo.New()
+
+agent := llmagent.New("todo-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction(todo.DefaultToolPrompt),
+    llmagent.WithTools([]tool.Tool{todoTool}),
+)
+```
+
+`todo.DefaultToolPrompt` 是开箱即用的 system instruction 片段，告诉模型何时调用 `todo_write` 以及如何撰写条目；你也可以替换成自己的版本，下文的运行时校验规则不受影响。
+
+#### 工具返回结构
+
+`todo_write` 返回的是结构化结果而不是自由文本，因此终端、AG-UI、自研 HTTP 前端等任何调用方都可以直接消费：
+
+```go
+type Output struct {
+    Message  string `json:"message"`             // 默认 nudge + hook 输出
+    Todos    []Item `json:"todos"`               // 本次写入后的当前清单
+    OldTodos []Item `json:"oldTodos,omitempty"`  // 本次写入前的清单
+}
+```
+
+`Todos` 和 `OldTodos` 会直接挂在 tool result 事件上，AG-UI 客户端（或任何消费 `tool_call_result` 的前端）解码后即可渲染最新状态和 diff，不需要回查 session。`examples/todo/` 中的终端示例内联了一个小型 ASCII 格式化函数；富前端可以按自己的风格渲染同一份结构化数据。
+
+#### 跨轮持久化与 Branch 隔离
+
+每次写入都会作为 session state delta 发布，因此清单可以跨 `Runner.Run` 调用持久化；当后端 session service 是持久化实现时，跨进程同样有效。
+
+清单按 `Invocation.Branch` 分键存储；当调用方没有显式设置 branch 时，框架会自动把它补成该 Agent 的名称（因此子 Agent 或 agent-tool 会读写自己的清单，不会覆盖父 Agent 的计划）。对应上面的基础接入（`llmagent.New("todo-assistant", ...)`），服务端读取应当写成：
+
+```go
+items, err := todo.GetTodos(sess, "todo-assistant") // 即 agent 名称
+// items == nil + err == nil → 还没有清单
+// len(items) == 0           → 清单已被显式清空
+```
+
+如果你配置了自定义 branch（例如通过 `WithInvocationBranch`，或把当前 Agent 作为子 Agent 运行在父 Agent 下），就传入对应的 branch 值。只有当 `Invocation.Branch` 被显式置为 `""` 时，传空字符串才会命中顶层槽位。
+
+#### 输入校验
+
+每次调用都会经过下面这组检查；任意一条不满足都会让本次调用直接失败，session 状态不会被修改：
+
+- `todos` 字段**必填**且必须是数组。缺失字段或字面量 `null` 会被直接拒绝，**不会**被当作"清空全部"。要清空清单请显式发送 `{"todos": []}`。
+- 每个条目必须包含非空的 `content`、非空的 `activeForm`，以及合法的 `status`（`pending` / `in_progress` / `completed`）。
+- 同一时刻**最多一个**条目处于 `in_progress`。
+- `content` 在清单内必须唯一（精确字符串匹配，不做 trim / 大小写归一 / Unicode 归一）。
+
+风格性建议——例如"实际工作期间始终恰好一个 `in_progress`"、条目措辞、何时值得调用 `todo_write` 等——放在 `todo.DefaultToolPrompt` 里，不在上述检查中强制；因此你可以根据自身业务或所用模型族调整 prompt，不需要改工具。
+
+#### 自定义
+
+```go
+todoTool := todo.New(
+    // 把清单存到自定义 state-key 命名空间下；默认布局已经按 branch
+    // 隔离，大多数场景不需要改这个。
+    todo.WithStateKeyPrefix("temp:plan"),
+    // 默认情况下，所有条目变成 completed 后清单会被清空，让下一轮
+    // 规划从零开始。设为 false 可以保留已完成条目。
+    todo.WithClearOnAllDone(false),
+    // 替换每次写入后默认追加的 nudge 文案。
+    todo.WithNudgeMessage("继续推进；完成一项就更新一项。"),
+    // 根据本次提交的清单和上一份清单的 diff 追加额外提示
+    // (例如自定义 prompt、埋点、指标计算)。Hook 期望是只读的。
+    todo.WithNudgeHook(func(ctx context.Context, oldTodos, submitted []todo.Item) string {
+        return ""
+    }),
+)
+```
+
+完整可运行示例（包含多轮暂停/续接场景与 ASCII 渲染器）见 [`examples/todo/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todo)。
+
 ## MCP Tools 协议工具
 
 MCP（Model Context Protocol）是一个开放协议，标准化了应用程序向 LLM 提供上下文的方式。MCP 工具基于 JSON-RPC 2.0 协议，为 Agent 提供了与外部服务的标准化集成能力。
@@ -721,6 +812,47 @@ if err := mcpToolSet.Init(ctx); err != nil {
     return fmt.Errorf("初始化 Streamable MCP 工具集失败: %w", err)
 }
 ```
+
+#### 按请求 HTTP Header
+
+对 SSE 和 Streamable HTTP 传输，可以使用上游 MCP 客户端提供的
+`mcp.WithHTTPBeforeRequest`，在每一次 MCP HTTP 请求发出前，从当前调用
+的 context 动态注入 header。一个长生命周期 MCP ToolSet 服务多个已登录
+用户时，可以用它按用户注入 token、JWT 或业务签名。把 hook 通过
+`WithMCPOptions` 传入即可：
+
+```go
+import (
+    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+mcpToolSet := toolmcp.NewMCPToolSet(
+    toolmcp.ConnectionConfig{
+        Transport: "streamable_http",
+        ServerURL: "http://localhost:3000/mcp",
+    },
+    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+        func(ctx context.Context, req *http.Request) error {
+            token, ok := tokenFromContext(ctx)
+            if !ok {
+                return nil
+            }
+            req.Header.Set("Authorization", "Bearer "+token)
+            return nil
+        },
+    )),
+)
+```
+
+`ConnectionConfig.Headers` 提供的静态 header 会先生效；之后每次 HTTP
+请求都会走一遍 before-request hook，hook 内对同名 header 的 `Set` 会
+覆盖静态值。
+
+如果你是通过 `llmagent.WithToolSets(...)` 挂载这个 ToolSet，并且希望
+`initialize` / `tools/list` 也能拿到请求级 header，建议同时配合
+`llmagent.WithRefreshToolSetsOnRun(true)`，或者先手动 `toolSet.Tools(ctx)`，
+再通过 `llmagent.WithTools(...)` 注入。
 
 ### 会话重连支持
 
@@ -1060,12 +1192,52 @@ broker := mcpbroker.New(
 - `mcpbroker` 本身不管理复杂的 OAuth session 状态机
 
 开启 `WithAllowAdHocHTTP(true)` 后，URL selector 可能来自模型可见上下文。
-生产环境中应在 `HTTPHeaderInjector` 里基于 `req.IsAdHoc` 和 `req.BaseURL`
-做 allowlist / URL 校验，再返回敏感 Header。
+两类职责建议分开处理：
+
+- `HTTPHeaderInjector` 只决定**是否、向谁**注入敏感 Header。可以基于
+  `req.IsAdHoc` 和 `req.BaseURL` 做粗粒度判断，例如对未知 BaseURL 直接返回
+  `nil`，避免向不可信目标泄露 token。
+- 出站 URL allowlist / 域名校验等**网络出站策略**放到
+  `WithClientOptionsProvider` 返回的 `tmcp.WithHTTPBeforeRequest` 里实现，
+  详见下一节。
 
 完整示例可参考：
 
 - `examples/mcpbroker/authhooks`
+
+#### 底层 Client 选项（`WithClientOptionsProvider`）
+
+除 Header 注入与错误拦截外，可用 `WithClientOptionsProvider` 在**解析目标并完成 `WithHTTPHeaderInjector` 之后、创建底层 MCP 客户端之前**，由业务返回 `trpc-mcp-go` 原生的 `tmcp.ClientOption` / `tmcp.StdioClientOption`。
+
+- **顺序**：默认的 HTTP Header（含注入结果）先应用，再追加 provider 返回的 HTTP options，便于在 `WithHTTPBeforeRequest` 等钩子里做 URL 校验、审计或覆盖 Header。
+- **`ClientOptionsRequest`**：携带 `Selector`、`ServerName`、`Origin`（`mcpbroker.OriginCode` / `mcpbroker.OriginAdhoc`）、`TargetType`、`Phase`（如 `mcpbroker.PhaseListTools`）、`ToolName`（调用阶段）、以及本次调用的配置副本 `Config`。
+- **返回值**：`nil, nil` 表示不追加；返回 `error` 会在建连前失败（适合 URL policy 拒绝等契约）。
+- **`stdio`**：命名 stdio 目标时，向 `ClientOptions.Stdio` 传入选项即可（例如 `WithStdioCapabilities`）。
+
+框架**不内置**易误杀的 URL 全局拒绝列表；若需限制 ad-hoc 出站，可在 provider 里结合 `tmcp.WithHTTPBeforeRequest` 自行实现策略。
+
+示例（仅说明形态，按业务调整）：
+
+```go
+mcpbroker.New(
+    mcpbroker.WithAllowAdHocHTTP(true),
+    mcpbroker.WithClientOptionsProvider(func(ctx context.Context, req *mcpbroker.ClientOptionsRequest) (*mcpbroker.ClientOptions, error) {
+        if req.Origin == mcpbroker.OriginAdhoc {
+            return &mcpbroker.ClientOptions{
+                HTTP: []tmcp.ClientOption{
+                    tmcp.WithHTTPBeforeRequest(func(ctx context.Context, httpReq *http.Request) error {
+                        if !hostAllowed(httpReq.URL) {
+                            return fmt.Errorf("MCP endpoint not allowed: %s", httpReq.URL.Host)
+                        }
+                        return nil
+                    }),
+                },
+            }, nil
+        }
+        return nil, nil
+    }),
+)
+```
 
 ## Agent 工具 (AgentTool)
 

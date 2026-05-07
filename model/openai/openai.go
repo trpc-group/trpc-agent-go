@@ -63,6 +63,9 @@ const (
 	// VariantHunyuan is the Hunyuan variant with specific file handling.
 	VariantHunyuan Variant = "hunyuan"
 	// VariantDeepSeek is the DeepSeek variant with specific base_url handling.
+	// It backfills empty reasoning_content for assistant history messages by
+	// default, including when inferred from the default DeepSeek base URL. Use
+	// WithReasoningContentBackfill(false) to disable this behavior.
 	VariantDeepSeek Variant = "deepseek"
 	// VariantQwen is the Qwen variant with specific base_url handling.
 	VariantQwen Variant = "qwen"
@@ -119,6 +122,9 @@ type variantConfig struct {
 	// defaultOptimizeForCache controls the default value for cache optimization
 	// when WithOptimizeForCache is not explicitly set.
 	defaultOptimizeForCache bool
+	// defaultReasoningContentBackfill controls replay-time empty
+	// reasoning_content backfill for assistant messages.
+	defaultReasoningContentBackfill bool
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -152,8 +158,9 @@ var variantConfigs = map[Variant]variantConfig{
 		defaultBaseURL:            defaultDeepSeekBaseURL,
 		// DeepSeek v3.2+ (incl. v4-pro / v4-flash) uses
 		// {"thinking": {"type": "enabled"/"disabled"}} format.
-		thinkingEnabledKey:     "thinking",
-		thinkingValueConvertor: deepSeekThinkingValueConvertor,
+		thinkingEnabledKey:              "thinking",
+		thinkingValueConvertor:          deepSeekThinkingValueConvertor,
+		defaultReasoningContentBackfill: true,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
@@ -268,6 +275,9 @@ func New(name string, opts ...Option) *Model {
 	cfg, cfgOK := variantConfigs[o.Variant]
 	if !o.optimizeForCacheSet {
 		o.OptimizeForCache = cfgOK && cfg.defaultOptimizeForCache
+	}
+	if !o.reasoningContentBackfillSet {
+		o.ReasoningContentBackfill = cfgOK && cfg.defaultReasoningContentBackfill
 	}
 
 	// Set default API key and base URL if not specified.
@@ -629,8 +639,12 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
 	opts := m.buildThinkingOption(request)
-	// Add extra fields to the request
+	// Add model-level extra fields to the request.
 	for key, value := range m.extraFields {
+		opts = append(opts, openaiopt.WithJSONSet(key, value))
+	}
+	// Add request-level extra fields after model-level fields so they take precedence.
+	for key, value := range request.ExtraFields {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
 
@@ -673,15 +687,16 @@ func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestO
 }
 
 // shouldBackfillReasoningContent reports whether replay should emit
-// model.ReasoningContentKey as an empty string for assistant tool-call
-// messages. Some providers require the key to be present during tool-call
-// replay even when no reasoning text was returned.
+// model.ReasoningContentKey as an empty string for assistant messages. Some
+// providers require the key to be present for every assistant message in
+// thinking mode even when no reasoning text was returned.
 func (m *Model) shouldBackfillReasoningContent(
 	msg model.Message,
 ) bool {
 	return m.reasoningContentBackfill &&
+		msg.Role == model.RoleAssistant &&
 		msg.ReasoningContent == "" &&
-		len(msg.ToolCalls) > 0
+		(msg.Content != "" || len(msg.ContentParts) > 0 || len(msg.ToolCalls) > 0)
 }
 
 // convertMessages converts our Message format to OpenAI's format.
@@ -713,8 +728,8 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 				Content:   m.convertAssistantMessageContent(msg),
 				ToolCalls: m.convertToolCalls(msg.ToolCalls),
 			}
-			// Pass reasoning_content to API if present (required by DeepSeek for
-			// tool-call replay across current and later request turns).
+			// Pass reasoning_content to API if present, or when provider replay
+			// requires the field for assistant history in thinking mode.
 			if msg.ReasoningContent != "" ||
 				m.shouldBackfillReasoningContent(msg) {
 				assistantMsg.SetExtraFields(map[string]any{

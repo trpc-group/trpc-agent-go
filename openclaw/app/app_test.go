@@ -1501,15 +1501,12 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 		sys,
 		"Each entry includes a path to that skill's SKILL.md on disk.",
 	)
-	// With the bare WithSkills(repo) default profile now being
-	// knowledge_only (skill_load + doc helpers, no skill_run / skill_exec),
-	// suppressing the skill protocol guidance via an explicit empty
-	// SkillsToolingGuide no longer also hides the built-in capability
-	// disclosure block. The overview thus carries the
-	// "Skill tool availability:" header describing the knowledge-only
-	// surface.
-	require.Contains(t, sys, "Skill tool availability:")
-	require.Contains(
+	// Suppressing the skill tooling guidance leaves only the overview;
+	// skill_load-capable configurations no longer inject a separate
+	// negative capability block because execution may still be available
+	// through other registered tools such as workspace_exec.
+	require.NotContains(t, sys, "Skill tool availability:")
+	require.NotContains(
 		t,
 		sys,
 		"This configuration supports skill discovery and "+
@@ -1593,6 +1590,30 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 		"Do not answer a matching skill task from the short "+
 			"summary, prior knowledge, or partial memory.",
 	)
+	require.Contains(
+		t,
+		sys,
+		"prefer creating or updating a local skill over "+
+			"treating it as a one-off answer.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"For lightweight facts, preferences, or simple "+
+			"standing rules, use memory instead.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Use platform code and tools for stable safety "+
+			"boundaries",
+	)
+	require.Contains(
+		t,
+		sys,
+		"choose a writable user-managed skill root",
+	)
+	require.Contains(t, sys, "not bundled skills unless")
 	require.Contains(
 		t,
 		sys,
@@ -3030,7 +3051,7 @@ func TestResolveWorkspaceSkillsRoot_CwdSkills(t *testing.T) {
 	require.Equal(t, filepath.Join(cwd, defaultSkillsDir), got)
 }
 
-func TestResolveWorkspaceSkillsRoot_RepoBundled(t *testing.T) {
+func TestResolveWorkspaceSkillsRoot_IgnoresRepoBundled(t *testing.T) {
 	cwd := t.TempDir()
 	require.NoError(t, os.MkdirAll(
 		filepath.Join(cwd, appName, defaultSkillsDir),
@@ -3038,7 +3059,7 @@ func TestResolveWorkspaceSkillsRoot_RepoBundled(t *testing.T) {
 	))
 
 	got := resolveWorkspaceSkillsRoot(cwd, "")
-	require.Equal(t, filepath.Join(cwd, appName, defaultSkillsDir), got)
+	require.Equal(t, filepath.Join(cwd, defaultSkillsDir), got)
 }
 
 func TestResolveSkillRoots_IncludesExpectedRoots(t *testing.T) {
@@ -3101,6 +3122,20 @@ func TestResolveSkillRoots_UsesInstalledBundledSkills(t *testing.T) {
 		roots,
 		filepath.Join(cwd, appName, defaultSkillsDir),
 	)
+}
+
+func TestResolveSkillRoots_SeparatesRepoBundledSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := t.TempDir()
+	stateDir := t.TempDir()
+	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
+	require.NoError(t, os.MkdirAll(repoBundled, 0o700))
+
+	roots := resolveSkillRoots(cwd, agentConfig{StateDir: stateDir})
+	require.Contains(t, roots, filepath.Join(cwd, defaultSkillsDir))
+	require.Contains(t, roots, repoBundled)
 }
 
 func TestResolveBundledSkillsRoot_RepoFallback(t *testing.T) {
@@ -3931,6 +3966,84 @@ func TestInProcGatewayClient_StreamMessage_StatusError(t *testing.T) {
 		"gwclient: status 400: invalid_request: missing user_id or from",
 		err.Error(),
 	)
+}
+
+func TestInProcGatewayClient_StreamMessageWithOptions_ProgressAfterText(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const firstDelta = "checking "
+
+	srv, err := gateway.New(&inProcGWTestRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: firstDelta},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name: "demo_tool",
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("done"),
+					}},
+					Done: true,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	stream, err := c.StreamMessageWithOptions(
+		context.Background(),
+		gwclient.MessageRequest{
+			From: "u1",
+			Text: "hi",
+		},
+		&gwclient.MessageStreamOptions{
+			ProgressAfterTextDelta: true,
+		},
+	)
+	require.NoError(t, err)
+
+	var events []gwclient.StreamEvent
+	for evt := range stream {
+		events = append(events, evt)
+	}
+	require.Len(t, events, 7)
+	require.Equal(t, gwproto.StreamEventTypeMessageDelta, events[2].Type)
+	require.Equal(t, firstDelta, events[2].Delta)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[3].Type)
+	require.Equal(t, "Running local tool", events[3].Summary)
+	require.Equal(t, "demo_tool", events[3].ToolName)
+	require.Equal(t, gwproto.StreamToolStatusRunning, events[3].ToolStatus)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[4].Type)
+	require.Equal(t, gwproto.StreamProgressStageSummarizing, events[4].Stage)
 }
 
 func TestInProcGatewayClient_NilServerFails(t *testing.T) {
@@ -5108,6 +5221,7 @@ type inProcGWTestRunner struct {
 	reply     string
 	requestID string
 	usage     *model.Usage
+	events    []*event.Event
 }
 
 func (r *inProcGWTestRunner) Run(
@@ -5117,6 +5231,15 @@ func (r *inProcGWTestRunner) Run(
 	_ model.Message,
 	_ ...agent.RunOption,
 ) (<-chan *event.Event, error) {
+	if len(r.events) > 0 {
+		ch := make(chan *event.Event, len(r.events))
+		for _, evt := range r.events {
+			ch <- evt
+		}
+		close(ch)
+		return ch, nil
+	}
+
 	reply := r.reply
 	if reply == "" {
 		reply = "ok"

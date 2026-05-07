@@ -68,6 +68,7 @@ type Model struct {
 	cacheSystemPrompt bool
 	cacheTools        bool
 	cacheMessages     bool
+	showToolCallDelta bool
 }
 
 // New creates a new Anthropic model adapter.
@@ -116,6 +117,7 @@ func New(name string, opts ...Option) *Model {
 		cacheSystemPrompt:          o.cacheSystemPrompt,
 		cacheTools:                 o.cacheTools,
 		cacheMessages:              o.cacheMessages,
+		showToolCallDelta:          o.showToolCallDelta,
 	}
 }
 
@@ -586,7 +588,7 @@ loop:
 		}
 		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
 		// Build partial response.
-		response, err := buildStreamingPartialResponse(acc.Message(), chunk)
+		response, err := buildStreamingPartialResponse(acc.Message(), chunk, m.showToolCallDelta)
 		if err != nil {
 			streamErr = err
 			break
@@ -771,7 +773,8 @@ func refreshContentBlockRawJSON(block *anthropic.ContentBlockUnion) error {
 // buildStreamingPartialResponse builds a partial streaming response for a chunk.
 // Returns nil if the chunk should be skipped.
 func buildStreamingPartialResponse(acc anthropic.Message,
-	chunk anthropic.MessageStreamEventUnion) (*model.Response, error) {
+	chunk anthropic.MessageStreamEventUnion,
+	showToolCallDelta bool) (*model.Response, error) {
 	now := time.Now()
 	response := &model.Response{
 		ID:        acc.ID,
@@ -801,6 +804,17 @@ func buildStreamingPartialResponse(acc anthropic.Message,
 				return nil, nil
 			}
 			response.Choices[0].Delta.ReasoningContent = delta.Thinking
+		case anthropic.InputJSONDelta:
+			if !showToolCallDelta || delta.PartialJSON == "" {
+				return nil, nil
+			}
+			block, index, ok := streamingToolCallTarget(acc, event.Index)
+			if !ok {
+				return nil, nil
+			}
+			response.Choices[0].Delta.ToolCalls = []model.ToolCall{
+				buildStreamingToolCallDelta(block, index, delta.PartialJSON),
+			}
 		default:
 			return nil, nil
 		}
@@ -814,6 +828,41 @@ func buildStreamingPartialResponse(acc anthropic.Message,
 		return nil, nil
 	}
 	return response, nil
+}
+
+func buildStreamingToolCallDelta(
+	block anthropic.ToolUseBlock,
+	index int,
+	partialJSON string,
+) model.ToolCall {
+	return model.ToolCall{
+		Index: &index,
+		ID:    block.ID,
+		Type:  functionToolType,
+		Function: model.FunctionDefinitionParam{
+			Name:      block.Name,
+			Arguments: []byte(partialJSON),
+		},
+	}
+}
+
+func streamingToolCallTarget(acc anthropic.Message, contentBlockIndex int64) (anthropic.ToolUseBlock, int, bool) {
+	index := int(contentBlockIndex)
+	if index < 0 || index >= len(acc.Content) {
+		return anthropic.ToolUseBlock{}, 0, false
+	}
+	toolCallIndex := 0
+	for i := 0; i <= index; i++ {
+		block, ok := acc.Content[i].AsAny().(anthropic.ToolUseBlock)
+		if !ok {
+			continue
+		}
+		if i == index {
+			return block, toolCallIndex, true
+		}
+		toolCallIndex++
+	}
+	return anthropic.ToolUseBlock{}, 0, false
 }
 
 // buildStreamingFinalResponse builds a final streaming response from the accumulator.

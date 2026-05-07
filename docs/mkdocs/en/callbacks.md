@@ -162,7 +162,7 @@ type BeforeToolArgs struct {
     ToolCallID   string               // The ID of tool call issued by the model
     ToolName     string               // The name of the tool
     Declaration  *tool.Declaration    // Tool declaration metadata
-    Arguments    []byte               // JSON arguments (can be modified)
+    Arguments    []byte               // Current JSON arguments
 }
 
 type BeforeToolResult struct {
@@ -175,7 +175,7 @@ type AfterToolArgs struct {
     ToolCallID   string               // The ID of tool call issued by the model
     ToolName     string               // The name of the tool
     Declaration  *tool.Declaration    // Tool declaration metadata
-    Arguments    []byte               // Original JSON arguments
+    Arguments    []byte               // Final JSON arguments after before-tool callbacks
     Result       any                  // Result from tool execution (may be nil)
     Error        error                // Any error that occurred during tool execution
 }
@@ -199,7 +199,8 @@ Key points:
 - Structured parameters provide better type safety and clearer intent.
 - `BeforeToolResult.ModifiedArguments` allows modifying tool arguments.
 - `BeforeToolResult.Context` and `AfterToolResult.Context` can pass context between operations.
-- Arguments can be modified directly via `args.Arguments`.
+- To make tool execution use updated arguments, return `BeforeToolResult.ModifiedArguments`;
+  assigning `args.Arguments` only affects later logic that reads that field in the same callback chain.
 - If BeforeToolCallbackStructured returns a non-nil custom result, the tool is skipped and that result is used directly.
 - `ToolCallID` is available in `BeforeToolArgs` and `AfterToolArgs`.
 - `AfterToolResult.SkipSummarization` lets a callback end the turn after
@@ -253,10 +254,20 @@ Example:
 toolCallbacks := tool.NewCallbacks().
   RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
     if args.Arguments != nil && args.ToolName == "calculator" {
-      // Enrich arguments.
-      original := string(args.Arguments)
-      enriched := []byte(fmt.Sprintf(`{"original":%s,"ts":%d}`, original, time.Now().Unix()))
-      args.Arguments = enriched
+      // Normalize the operation while preserving the calculator schema.
+      var payload map[string]any
+      if err := json.Unmarshal(args.Arguments, &payload); err != nil {
+        return nil, err
+      }
+      if op, ok := payload["operation"].(string); ok {
+        payload["operation"] = strings.ToLower(op)
+      }
+      modifiedJSON, err := json.Marshal(payload)
+      if err != nil {
+        return nil, err
+      }
+      args.Arguments = modifiedJSON
+      return &tool.BeforeToolResult{ModifiedArguments: modifiedJSON}, nil
     }
     return nil, nil
   }).
@@ -852,9 +863,19 @@ Modify arguments prior to execution (and telemetry/event reporting):
 toolCallbacks := tool.NewCallbacks().
   RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
     if args.Arguments != nil && args.ToolName == "calculator" {
-      originalArgs := string(args.Arguments)
-      modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-      args.Arguments = []byte(modifiedArgs)
+      var payload map[string]any
+      if err := json.Unmarshal(args.Arguments, &payload); err != nil {
+        return nil, err
+      }
+      if op, ok := payload["operation"].(string); ok {
+        payload["operation"] = strings.ToLower(op)
+      }
+      modifiedJSON, err := json.Marshal(payload)
+      if err != nil {
+        return nil, err
+      }
+      args.Arguments = modifiedJSON
+      return &tool.BeforeToolResult{ModifiedArguments: modifiedJSON}, nil
     }
     return nil, nil
   })

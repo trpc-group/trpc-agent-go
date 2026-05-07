@@ -12,6 +12,7 @@ package mcpbroker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -19,7 +20,15 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcpcfg "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+	tmcp "trpc.group/trpc-go/trpc-mcp-go"
 )
+
+// ErrClientOptionsProviderPanicked is the sentinel returned (wrapped via fmt.Errorf %w) when a
+// ClientOptionsProvider panics. The broker recovers the panic so it never unwinds through
+// trpc-mcp-go internals; callers can detect this case with errors.Is for observability or to
+// fall back to default options. The recovered panic value is included in the wrapped error
+// message via %v.
+var ErrClientOptionsProviderPanicked = errors.New("ClientOptionsProvider panicked")
 
 const (
 	listServersToolName  = "mcp_list_servers"
@@ -35,6 +44,22 @@ const (
 const (
 	targetTypeStdio = "stdio"
 	targetTypeHTTP  = "http"
+)
+
+// Exported target type strings match ClientOptionsRequest.TargetType after resolution.
+const (
+	// TargetTypeHTTP indicates SSE or streamable HTTP MCP transport.
+	TargetTypeHTTP = targetTypeHTTP
+	// TargetTypeStdio indicates stdio MCP transport.
+	TargetTypeStdio = targetTypeStdio
+)
+
+// Origin values for ClientOptionsRequest.Origin.
+const (
+	// OriginCode indicates a named server from WithServers.
+	OriginCode = originCode
+	// OriginAdhoc indicates an ad-hoc URL selector (requires WithAllowAdHocHTTP).
+	OriginAdhoc = "adhoc"
 )
 
 var defaultSensitiveHeaderDenylist = []string{
@@ -58,7 +83,68 @@ type brokerOptions struct {
 	allowAdHocHTTP              bool
 	adhocSensitiveHeaderDenyset map[string]struct{}
 	httpHeaderInjector          HTTPHeaderInjector
+	clientOptionsProvider       ClientOptionsProvider
 	errorInterceptor            ErrorInterceptor
+}
+
+// ClientOptionsProvider supplies extra trpc-mcp-go client options after the broker has resolved
+// the target and merged injected HTTP headers, but before the underlying MCP client is created.
+// Returning (nil, nil) applies no extra options.
+//
+// # Trust boundary
+//
+// The provider is host-trusted code registered via WithClientOptionsProvider; it is not
+// model-controlled or end-user-controlled input. The broker therefore does NOT subject the
+// returned options to the ad-hoc header denylist or any other sanitisation. By design, the
+// provider can override Authorization or any other header previously set by
+// WithHTTPHeaderInjector - hosts rely on this for service-account auth, request signing, and
+// audit hooks. The flip side is that a provider that accidentally shadows the injector's
+// Authorization is a host bug, not a framework vulnerability.
+//
+// # Failure modes
+//
+//   - If the provider returns an error, the broker aborts before establishing the MCP connection.
+//   - If the provider panics, the broker recovers and surfaces an error wrapping
+//     ErrClientOptionsProviderPanicked (use errors.Is to detect this case) instead of unwinding
+//     through trpc-mcp-go internals.
+//   - nil entries inside the returned ClientOptions.HTTP / .Stdio slices are silently filtered out
+//     so a conditional option builder that yields nil does not crash trpc-mcp-go.
+//
+// # Caveats
+//
+// HTTP-layer retries (e.g. tmcp.WithRetry) configured here are not aware of MCP-level side
+// effects. Retrying tools/call automatically can cause duplicated side effects; hosts that need
+// retry semantics for tool calls should implement them above the broker, gated by idempotency.
+type ClientOptionsProvider func(context.Context, *ClientOptionsRequest) (*ClientOptions, error)
+
+// ClientOptionsRequest is the broker-side context passed to ClientOptionsProvider before creating
+// the underlying MCP client. Config is a defensive clone of the final ConnectionConfig for this
+// call (see cloneConnectionConfig); mutations to Config (including its Headers map and Args slice)
+// do not propagate back to the broker or the actual request.
+type ClientOptionsRequest struct {
+	Selector   string
+	ServerName string
+	Origin     string // OriginCode or OriginAdhoc
+	TargetType string // TargetTypeHTTP or TargetTypeStdio
+
+	Transport string
+	BaseURL   string
+	ToolName  string
+	Phase     string // PhaseListTools | PhaseInspectTools | PhaseCallTool
+
+	Config mcpcfg.ConnectionConfig
+}
+
+// ClientOptions carries optional HTTP and stdio client options. HTTP applies to SSE and streamable
+// transports; Stdio applies to stdio transports.
+//
+// Default broker headers are applied first; options here follow and may override or extend
+// behavior intentionally (see trpc-mcp-go ClientOption / StdioClientOption). For example, a host
+// can use tmcp.WithHTTPBeforeRequest to rewrite an Authorization header set earlier by
+// WithHTTPHeaderInjector. nil entries in HTTP / Stdio are filtered out before being applied.
+type ClientOptions struct {
+	HTTP  []tmcp.ClientOption
+	Stdio []tmcp.StdioClientOption
 }
 
 // HTTPHeaderInjector resolves per-run HTTP headers for MCP requests.
@@ -163,6 +249,16 @@ func WithHTTPHeaderInjector(fn HTTPHeaderInjector) Option {
 	}
 }
 
+// WithClientOptionsProvider registers a hook that returns extra trpc-mcp-go client options after
+// resolveTarget and WithHTTPHeaderInjector. Use this for URL policy, auditing, custom HTTP
+// clients, or stdio options without adding parallel WithX hooks for each concern. See
+// ClientOptionsProvider for the trust boundary, failure modes, and the HTTP-retry caveat.
+func WithClientOptionsProvider(fn ClientOptionsProvider) Option {
+	return func(opts *brokerOptions) {
+		opts.clientOptionsProvider = fn
+	}
+}
+
 // WithErrorInterceptor intercepts HTTP MCP execution errors and may translate them for model consumption.
 func WithErrorInterceptor(fn ErrorInterceptor) Option {
 	return func(opts *brokerOptions) {
@@ -240,7 +336,7 @@ func (b *Broker) resolveTarget(input targetInput) (resolvedTarget, error) {
 		return resolvedTarget{}, err
 	}
 	return resolvedTarget{
-		Origin:     "adhoc",
+		Origin:     OriginAdhoc,
 		TargetType: targetType,
 		Config:     config,
 	}, nil

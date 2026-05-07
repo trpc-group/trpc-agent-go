@@ -34,10 +34,12 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-v4-flash", "Model name for LLM summarization")
-	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	maxWords  = flag.Int("max-words", 0, "Max summary words (0=unlimited)")
-	debug     = flag.Bool("debug", false, "Enable debug mode to print request messages")
+	modelName   = flag.String("model", "deepseek-v4-flash", "Model name for LLM summarization")
+	streaming   = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	maxWords    = flag.Int("max-words", 0, "Max summary words (0=unlimited)")
+	debug       = flag.Bool("debug", false, "Enable debug mode to print request messages")
+	allowlist   = flag.String("allowlist", "", "Comma-separated short filterKeys to summarize (empty=allow all branch filterKeys)")
+	cascadeFull = flag.Bool("cascade-full", true, "Refresh the full-session summary when a branch summary runs")
 )
 
 const defaultFilterKey = "default"
@@ -46,8 +48,10 @@ func main() {
 	flag.Parse()
 
 	chat := &filterKeyChat{
-		modelName:        *modelName,
-		currentFilterKey: defaultFilterKey,
+		modelName:                 *modelName,
+		currentFilterKey:          defaultFilterKey,
+		allowedBranchFilterKeys:   parseFilterKeyList(*allowlist),
+		cascadeFullSessionSummary: *cascadeFull,
 	}
 	if err := chat.run(); err != nil {
 		fmt.Printf("❌ Error: %v\n", err)
@@ -57,12 +61,14 @@ func main() {
 
 // filterKeyChat manages the conversation and filterKey summarization demo.
 type filterKeyChat struct {
-	modelName      string
-	runner         runner.Runner
-	sessionService session.Service
-	app            string
-	userID         string
-	sessionID      string
+	modelName                 string
+	runner                    runner.Runner
+	sessionService            session.Service
+	app                       string
+	userID                    string
+	sessionID                 string
+	allowedBranchFilterKeys   []string
+	cascadeFullSessionSummary bool
 
 	// currentFilterKey is the active filterKey for new messages.
 	currentFilterKey string
@@ -83,6 +89,8 @@ func (c *filterKeyChat) run() error {
 
 // setup constructs the model, summarizer manager, session service, and runner.
 func (c *filterKeyChat) setup(_ context.Context) error {
+	c.app = "filterkey-demo-app"
+
 	// Model used for both chat and summarization.
 	llm := openai.New(c.modelName)
 
@@ -91,13 +99,19 @@ func (c *filterKeyChat) setup(_ context.Context) error {
 
 	// In-memory session service with summarizer and AppendEventHook.
 	// The hook sets filterKey based on the current user-defined key.
-	sessService := inmemory.NewSessionService(
+	sessionOpts := []inmemory.ServiceOpt{
 		inmemory.WithSummarizer(sum),
+		inmemory.WithCascadeFullSessionSummary(c.cascadeFullSessionSummary),
 		inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
 			c.setEventFilterKey(ctx.Event)
 			return next()
 		}),
-	)
+	}
+	if len(c.allowedBranchFilterKeys) > 0 {
+		sessionOpts = append(sessionOpts,
+			inmemory.WithSummaryFilterAllowlist(c.prefixedFilterKeys(c.allowedBranchFilterKeys)...))
+	}
+	sessService := inmemory.NewSessionService(sessionOpts...)
 	c.sessionService = sessService
 
 	// Create tools for the agent.
@@ -141,7 +155,6 @@ func (c *filterKeyChat) setup(_ context.Context) error {
 	}
 
 	ag := llmagent.New("filterkey-demo-agent", agentOpts...)
-	c.app = "filterkey-demo-app"
 	c.runner = runner.NewRunner(c.app, ag, runner.WithSessionService(sessService))
 
 	// IDs.
@@ -151,6 +164,8 @@ func (c *filterKeyChat) setup(_ context.Context) error {
 	fmt.Printf("📝 Filter-Key Summarization Demo\n")
 	fmt.Printf("Model: %s | Streaming: %v | MaxWords: %d | Debug: %v\n",
 		c.modelName, *streaming, *maxWords, *debug)
+	fmt.Printf("Summary Policy: allowlist=%s | cascade-full=%v\n",
+		formatFilterKeyList(c.allowedBranchFilterKeys), c.cascadeFullSessionSummary)
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Printf("Session: %s\n\n", c.sessionID)
 
@@ -182,6 +197,14 @@ func (c *filterKeyChat) getCurrentFilterKey() string {
 	c.filterKeyMu.RLock()
 	defer c.filterKeyMu.RUnlock()
 	return c.currentFilterKey
+}
+
+func (c *filterKeyChat) prefixedFilterKeys(keys []string) []string {
+	prefixed := make([]string, 0, len(keys))
+	for _, key := range keys {
+		prefixed = append(prefixed, c.app+"/"+key)
+	}
+	return prefixed
 }
 
 // startChat runs the interactive conversation loop.
@@ -216,7 +239,8 @@ func (c *filterKeyChat) startChat(ctx context.Context) error {
 
 func (c *filterKeyChat) printHelp() {
 	fmt.Println("💡 This demo shows how to use filterKey to categorize conversations.")
-	fmt.Println("   Each filterKey gets its own separate summary.")
+	fmt.Printf("   Allowed branch summaries: %s\n", formatFilterKeyList(c.allowedBranchFilterKeys))
+	fmt.Printf("   Refresh full-session summary: %v\n", c.cascadeFullSessionSummary)
 	fmt.Println()
 	fmt.Println("📌 Commands:")
 	fmt.Println("   /key <name>    - Switch to a filterKey (any name you want)")
@@ -225,6 +249,34 @@ func (c *filterKeyChat) printHelp() {
 	fmt.Println("   /help          - Show this help")
 	fmt.Println("   /exit          - End the conversation")
 	fmt.Println()
+}
+
+func parseFilterKeyList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	keys := make([]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		key := strings.TrimSpace(part)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func formatFilterKeyList(keys []string) string {
+	if len(keys) == 0 {
+		return "all branch filterKeys"
+	}
+	return strings.Join(keys, ",")
 }
 
 // processMessage handles one message: run the agent, print the answer.

@@ -298,6 +298,9 @@ func TestRedisService_EnqueueSummaryJob_AsyncDisabled_FallbackToSync(t *testing.
 	defer func() {
 		require.NoError(t, s.Close())
 	}()
+	if s.asyncWorker != nil {
+		s.asyncWorker.Stop()
+	}
 
 	// Create a session first.
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
@@ -800,6 +803,80 @@ func TestRedisService_EnqueueSummaryJob_SingleFilterKey_PersistsBothKeys(t *test
 	sum, ok = m[""]
 	require.True(t, ok, "full-session summary (filter_key='') should exist in Redis")
 	require.Equal(t, "single-key-summary", sum.Summary)
+}
+
+func TestRedisService_CreateSessionSummary_FilterAllowlistSkipsDisallowedKey(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "blocked-summary"}),
+		WithSummaryFilterAllowlist("allowed"),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-allowlist"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	err = s.CreateSessionSummary(context.Background(), sess, "blocked", true)
+	require.NoError(t, err)
+
+	client := buildRedisClient(t, redisURL)
+	exists, err := client.Exists(context.Background(), hashidx.GetSessionSummaryKey("", key)).Result()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), exists)
+}
+
+func TestRedisService_EnqueueSummaryJob_CascadeDisabled(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(1),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "branch-only-summary"}),
+		WithCascadeFullSessionSummary(false),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-branch-only"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e1 := event.New("inv1", "author")
+	e1.Timestamp = time.Now()
+	e1.FilterKey = "tool-usage"
+	e1.Version = event.CurrentVersion
+	e1.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: "hello"},
+	}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e1))
+
+	sessFromStorage, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sessFromStorage)
+
+	s.asyncWorker.Stop()
+
+	err = s.EnqueueSummaryJob(context.Background(), sessFromStorage, "tool-usage", false)
+	require.NoError(t, err)
+
+	client := buildRedisClient(t, redisURL)
+	raw, err := client.Get(context.Background(), hashidx.GetSessionSummaryKey("", key)).Bytes()
+	require.NoError(t, err)
+	var summaries map[string]*session.Summary
+	require.NoError(t, json.Unmarshal(raw, &summaries))
+
+	sum, ok := summaries["tool-usage"]
+	require.True(t, ok)
+	require.Equal(t, "branch-only-summary", sum.Summary)
+
+	_, ok = summaries[""]
+	require.False(t, ok)
 }
 
 func TestRedisService_GetSessionSummaryText_NilSession(t *testing.T) {

@@ -45,6 +45,29 @@ import (
 
 // Additional unit tests for long-running tool tracking and preprocess
 
+func TestCloneRequestForContextCompactionDeepCopiesExtraFields(t *testing.T) {
+	req := &model.Request{
+		ExtraFields: map[string]any{
+			"prompt_cache_key": "cache-1",
+			"metadata": map[string]any{
+				"session_id": "session-1",
+			},
+		},
+	}
+
+	cloned := cloneRequestForContextCompaction(req)
+	require.NotNil(t, cloned)
+	require.NotNil(t, cloned.ExtraFields)
+
+	cloned.ExtraFields["prompt_cache_key"] = "changed"
+	clonedMetadata := cloned.ExtraFields["metadata"].(map[string]any)
+	clonedMetadata["session_id"] = "changed"
+
+	require.Equal(t, "cache-1", req.ExtraFields["prompt_cache_key"])
+	metadata := req.ExtraFields["metadata"].(map[string]any)
+	require.Equal(t, "session-1", metadata["session_id"])
+}
+
 // mockLongRunnerTool implements tool.Tool and a LongRunning() flag.
 type mockLongRunnerTool struct {
 	name string
@@ -949,6 +972,54 @@ func TestProcessStreamingResponses_UsesUpdatedInvocationForResponseUsageTiming(t
 	require.NotNil(t, lastEvent)
 	require.NotNil(t, response1.Usage)
 	require.Nil(t, response2.Usage)
+}
+
+func TestProcessStreamingResponses_AttachesTimingInfoBeforeAfterModelCallbacks(t *testing.T) {
+	var callbackTimingInfo *model.TimingInfo
+	f := New(nil, nil, Options{
+		ModelCallbacks: model.NewCallbacks().RegisterAfterModel(
+			func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+				require.NotNil(t, args.Response)
+				require.NotNil(t, args.Response.Usage)
+				require.NotNil(t, args.Response.Usage.TimingInfo)
+				require.NotZero(t, args.Response.Usage.TimingInfo.FirstTokenDuration)
+				callbackTimingInfo = args.Response.Usage.TimingInfo
+				return &model.AfterModelResult{}, nil
+			},
+		),
+	})
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-callback-timing"),
+	)
+	response := &model.Response{
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage("done")},
+		},
+	}
+	responseSeq := func(yield func(*model.Response) bool) {
+		time.Sleep(time.Millisecond)
+		yield(response)
+	}
+	eventChan := make(chan *event.Event, 10)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(
+		agent.NewInvocationContext(context.Background(), invocation),
+		"s",
+	)
+	defer span.End()
+	lastEvent, err := f.processStreamingResponses(
+		ctx,
+		invocation,
+		&model.Request{},
+		responseSeq,
+		eventChan,
+		span,
+		true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.NotNil(t, response.Usage)
+	require.Same(t, callbackTimingInfo, response.Usage.TimingInfo)
 }
 
 func TestProcessStreamingResponses_UsesUpdatedInvocationForResponseUsageTimingOnSingleChunk(t *testing.T) {

@@ -132,7 +132,6 @@ import (
 )
 
 repoSrc := reposource.New(
-    nil,
     reposource.WithRepository(
         reposource.Repository{
             URL:    "https://github.com/trpc-group/trpc-go",
@@ -182,7 +181,6 @@ Example: scan only Go and Markdown files under `server/`:
 
 ```go
 repoSrc := reposource.New(
-    nil,
     reposource.WithRepository(
         reposource.Repository{
             URL:    "https://github.com/trpc-group/trpc-go",

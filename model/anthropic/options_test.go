@@ -147,3 +147,13 @@ func TestWithTokenCounter_Nil(t *testing.T) {
 	WithTokenCounter(nil)(&opt)
 	assert.NotNil(t, opt.tokenCounter, "tokenCounter is nil")
 }
+
+func TestWithShowToolCallDelta(t *testing.T) {
+	opt := defaultOptions
+	WithShowToolCallDelta(true)(&opt)
+	assert.True(t, opt.showToolCallDelta)
+
+	opt = defaultOptions
+	WithShowToolCallDelta(false)(&opt)
+	assert.False(t, opt.showToolCallDelta)
+}
