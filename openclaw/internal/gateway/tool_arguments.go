@@ -57,7 +57,7 @@ func summarizeToolArguments(raw []byte) string {
 	}
 	value, ok := parseToolArgumentJSON(text)
 	if !ok {
-		return truncateToolArgumentRunes(text, toolArgumentMaxRunes)
+		return summarizeRawToolArgumentText(text)
 	}
 	if isEmptyToolArgumentValue(value) {
 		return ""
@@ -65,9 +65,16 @@ func summarizeToolArguments(raw []byte) string {
 	sanitized := sanitizeToolArgumentValue(value, 0)
 	body, err := json.Marshal(sanitized)
 	if err != nil {
-		return truncateToolArgumentRunes(text, toolArgumentMaxRunes)
+		return summarizeRawToolArgumentText(text)
 	}
 	return truncateToolArgumentRunes(string(body), toolArgumentMaxRunes)
+}
+
+func summarizeRawToolArgumentText(text string) string {
+	if containsSensitiveToolArgumentKey(text) {
+		return toolArgumentRedacted
+	}
+	return truncateToolArgumentRunes(text, toolArgumentMaxRunes)
 }
 
 func parseToolArgumentJSON(text string) (any, bool) {
@@ -144,14 +151,39 @@ func sanitizeToolArgumentList(value []any, depth int) []any {
 }
 
 func isSensitiveToolArgumentKey(key string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(key))
-	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized := canonicalToolArgumentKey(key)
 	for _, sensitive := range sensitiveToolArgumentKeys {
-		if strings.Contains(normalized, sensitive) {
+		if strings.Contains(
+			normalized,
+			canonicalToolArgumentKey(sensitive),
+		) {
 			return true
 		}
 	}
 	return false
+}
+
+func containsSensitiveToolArgumentKey(text string) bool {
+	normalized := canonicalToolArgumentKey(text)
+	for _, sensitive := range sensitiveToolArgumentKeys {
+		if strings.Contains(
+			normalized,
+			canonicalToolArgumentKey(sensitive),
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalToolArgumentKey(text string) string {
+	var builder strings.Builder
+	for _, r := range strings.ToLower(text) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
 }
 
 func isEmptyToolArgumentValue(value any) bool {

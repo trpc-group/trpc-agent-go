@@ -4395,6 +4395,21 @@ func TestSummarizeToolArgumentsRedactsAndTruncates(t *testing.T) {
 	)
 	require.Empty(t, summarizeToolArguments([]byte(`{}`)))
 	require.Equal(t, "plain text", summarizeToolArguments([]byte("plain text")))
+	require.Equal(
+		t,
+		toolArgumentRedacted,
+		summarizeToolArguments([]byte(`{"api_key":"secret`)),
+	)
+	require.Equal(
+		t,
+		`{"query":"trpc`,
+		summarizeToolArguments([]byte(`{"query":"trpc`)),
+	)
+	require.Equal(
+		t,
+		`{"apiKey":"[redacted]"}`,
+		summarizeToolArguments([]byte(`{"apiKey":"hidden"}`)),
+	)
 }
 
 func TestSendProgressUpdateAndHelpers(t *testing.T) {
