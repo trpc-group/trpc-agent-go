@@ -1255,6 +1255,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	case ReasoningContentModeDiscardAll:
 		// Discard all reasoning_content.
 		msg.ReasoningContent = ""
+		msg.ReasoningSignature = ""
 	case ReasoningContentModeKeepAll:
 		// Keep all reasoning_content: do nothing.
 	default:
@@ -1264,6 +1265,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 		// reasoning_content for provider replay requirements.
 		if messageRequestID != currentRequestID && !requestHasToolCalls {
 			msg.ReasoningContent = ""
+			msg.ReasoningSignature = ""
 		}
 	}
 	return msg
@@ -1287,7 +1289,8 @@ func isEmptyAssistantMessage(msg model.Message) bool {
 	return msg.Content == "" &&
 		len(msg.ContentParts) == 0 &&
 		len(msg.ToolCalls) == 0 &&
-		msg.ReasoningContent == ""
+		msg.ReasoningContent == "" &&
+		msg.ReasoningSignature == ""
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.

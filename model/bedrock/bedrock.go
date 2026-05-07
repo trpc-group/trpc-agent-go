@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -183,6 +185,7 @@ func (m *Model) processStreamEvents(
 		currentToolCall  *model.ToolCall
 		contentBuilder   strings.Builder
 		reasoningBuilder strings.Builder
+		signatureBuilder strings.Builder
 		toolCallIndex    int
 		finalResponse    *model.Response
 		usage            *model.Usage
@@ -268,6 +271,9 @@ func (m *Model) processStreamEvents(
 							case <-ctx.Done():
 								return
 							}
+						case *types.ReasoningContentBlockDeltaMemberSignature:
+							// Accumulate signature for round-tripping in multi-turn conversations.
+							signatureBuilder.WriteString(reasoningDelta.Value)
 						}
 
 					case *types.ContentBlockDeltaMemberToolUse:
@@ -301,10 +307,11 @@ func (m *Model) processStreamEvents(
 						{
 							Index: 0,
 							Message: model.Message{
-								Role:             model.RoleAssistant,
-								Content:          contentBuilder.String(),
-								ReasoningContent: reasoningBuilder.String(),
-								ToolCalls:        toolCalls,
+								Role:               model.RoleAssistant,
+								Content:            contentBuilder.String(),
+								ReasoningContent:   reasoningBuilder.String(),
+								ReasoningSignature: signatureBuilder.String(),
+								ToolCalls:          toolCalls,
 							},
 							FinishReason: &finishReason,
 						},
@@ -373,6 +380,9 @@ func (m *Model) buildConverseInput(request *model.Request) (*bedrockruntime.Conv
 		input.ToolConfig = buildToolConfig(request.Tools)
 	}
 
+	// Set additional model request fields (thinking/reasoning configuration)
+	input.AdditionalModelRequestFields = buildAdditionalModelRequestFields(request.GenerationConfig)
+
 	return input, nil
 }
 
@@ -399,6 +409,9 @@ func (m *Model) buildConverseStreamInput(request *model.Request) (*bedrockruntim
 	if len(request.Tools) > 0 {
 		input.ToolConfig = buildToolConfig(request.Tools)
 	}
+
+	// Set additional model request fields (thinking/reasoning configuration)
+	input.AdditionalModelRequestFields = buildAdditionalModelRequestFields(request.GenerationConfig)
 
 	return input, nil
 }
@@ -456,6 +469,7 @@ func convertOutputMessage(msg types.Message) model.Message {
 	var (
 		textBuilder      strings.Builder
 		reasoningBuilder strings.Builder
+		signatureBuilder strings.Builder
 		toolCalls        []model.ToolCall
 		toolCallIndex    int
 	)
@@ -481,12 +495,16 @@ func convertOutputMessage(msg types.Message) model.Message {
 				if reasoningBlock.Value.Text != nil {
 					reasoningBuilder.WriteString(*reasoningBlock.Value.Text)
 				}
+				if reasoningBlock.Value.Signature != nil {
+					signatureBuilder.WriteString(*reasoningBlock.Value.Signature)
+				}
 			}
 		}
 	}
 
 	result.Content = textBuilder.String()
 	result.ReasoningContent = reasoningBuilder.String()
+	result.ReasoningSignature = signatureBuilder.String()
 	result.ToolCalls = toolCalls
 	return result
 }
@@ -508,7 +526,7 @@ func convertMessages(messages []model.Message) ([]types.Message, []types.SystemC
 				})
 			}
 			for _, part := range msg.ContentParts {
-				if part.Type == model.ContentTypeText && part.Text != nil {
+				if part.Type == model.ContentTypeText && part.Text != nil && *part.Text != "" {
 					systemBlocks = append(systemBlocks, &types.SystemContentBlockMemberText{
 						Value: *part.Text,
 					})
@@ -516,7 +534,10 @@ func convertMessages(messages []model.Message) ([]types.Message, []types.SystemC
 			}
 
 		case model.RoleUser:
-			content := convertUserContentBlocks(msg)
+			content, err := convertUserContentBlocks(msg)
+			if err != nil {
+				return nil, nil, err
+			}
 			if len(content) > 0 {
 				bedrockMessages = append(bedrockMessages, types.Message{
 					Role:    types.ConversationRoleUser,
@@ -525,7 +546,10 @@ func convertMessages(messages []model.Message) ([]types.Message, []types.SystemC
 			}
 
 		case model.RoleAssistant:
-			content := convertAssistantContentBlocks(msg)
+			content, err := convertAssistantContentBlocks(msg)
+			if err != nil {
+				return nil, nil, err
+			}
 			if len(content) > 0 {
 				bedrockMessages = append(bedrockMessages, types.Message{
 					Role:    types.ConversationRoleAssistant,
@@ -561,7 +585,8 @@ func convertMessages(messages []model.Message) ([]types.Message, []types.SystemC
 }
 
 // convertUserContentBlocks converts user messages to Bedrock content blocks.
-func convertUserContentBlocks(msg model.Message) []types.ContentBlock {
+// Returns an error if an unsupported content type is encountered.
+func convertUserContentBlocks(msg model.Message) ([]types.ContentBlock, error) {
 	var blocks []types.ContentBlock
 
 	if msg.Content != "" {
@@ -576,28 +601,60 @@ func convertUserContentBlocks(msg model.Message) []types.ContentBlock {
 			}
 		case model.ContentTypeImage:
 			if part.Image != nil {
-				imageBlock := convertImageToBlock(part.Image)
-				if imageBlock != nil {
-					blocks = append(blocks, imageBlock)
+				imageBlock, err := convertImageToBlock(part.Image)
+				if err != nil {
+					return nil, err
 				}
+				blocks = append(blocks, imageBlock)
 			}
+		case model.ContentTypeFile:
+			if part.File != nil {
+				fileBlock, err := convertFileToBlock(part.File)
+				if err != nil {
+					return nil, err
+				}
+				blocks = append(blocks, fileBlock)
+			}
+		default:
+			return nil, fmt.Errorf("bedrock: unsupported content part type %q", part.Type)
 		}
 	}
 
-	return blocks
+	return blocks, nil
 }
 
 // convertAssistantContentBlocks converts assistant messages to Bedrock content blocks.
-func convertAssistantContentBlocks(msg model.Message) []types.ContentBlock {
+// Returns an error if an unsupported content type is encountered.
+func convertAssistantContentBlocks(msg model.Message) ([]types.ContentBlock, error) {
 	var blocks []types.ContentBlock
+
+	// Re-emit reasoning content block with both Text and Signature for round-tripping.
+	if msg.ReasoningContent != "" {
+		reasoningTextBlock := types.ReasoningTextBlock{
+			Text: aws.String(msg.ReasoningContent),
+		}
+		if msg.ReasoningSignature != "" {
+			reasoningTextBlock.Signature = aws.String(msg.ReasoningSignature)
+		}
+		blocks = append(blocks, &types.ContentBlockMemberReasoningContent{
+			Value: &types.ReasoningContentBlockMemberReasoningText{
+				Value: reasoningTextBlock,
+			},
+		})
+	}
 
 	if msg.Content != "" {
 		blocks = append(blocks, &types.ContentBlockMemberText{Value: msg.Content})
 	}
 
 	for _, part := range msg.ContentParts {
-		if part.Type == model.ContentTypeText && part.Text != nil && *part.Text != "" {
-			blocks = append(blocks, &types.ContentBlockMemberText{Value: *part.Text})
+		switch part.Type {
+		case model.ContentTypeText:
+			if part.Text != nil && *part.Text != "" {
+				blocks = append(blocks, &types.ContentBlockMemberText{Value: *part.Text})
+			}
+		default:
+			return nil, fmt.Errorf("bedrock: unsupported content part type %q in assistant message", part.Type)
 		}
 	}
 
@@ -613,13 +670,14 @@ func convertAssistantContentBlocks(msg model.Message) []types.ContentBlock {
 		})
 	}
 
-	return blocks
+	return blocks, nil
 }
 
 // convertImageToBlock converts image data to a Bedrock image block.
-func convertImageToBlock(img *model.Image) types.ContentBlock {
+// Returns an error if the image uses a URL source (not supported by Bedrock) or has no data.
+func convertImageToBlock(img *model.Image) (types.ContentBlock, error) {
 	if img == nil {
-		return nil
+		return nil, errors.New("bedrock: image content part has nil image data")
 	}
 
 	if len(img.Data) > 0 {
@@ -631,12 +689,76 @@ func convertImageToBlock(img *model.Image) types.ContentBlock {
 				},
 				Format: types.ImageFormat(format),
 			},
-		}
+		}, nil
 	}
 
-	// Bedrock does not directly support URL-based images; they need to be downloaded first.
-	// URL type is not handled here for now.
-	return nil
+	if img.URL != "" {
+		return nil, fmt.Errorf("bedrock: URL-based images are not supported, please provide image data directly (url: %s)", img.URL)
+	}
+
+	return nil, errors.New("bedrock: image content part has neither data nor URL")
+}
+
+// convertFileToBlock converts file data to a Bedrock document block.
+func convertFileToBlock(file *model.File) (types.ContentBlock, error) {
+	if file == nil {
+		return nil, errors.New("bedrock: file content part has nil file data")
+	}
+	if len(file.Data) == 0 && file.FileID == "" {
+		return nil, errors.New("bedrock: file content part has neither data nor file ID")
+	}
+	if len(file.Data) == 0 {
+		return nil, fmt.Errorf("bedrock: file ID-based files are not supported, please provide file data directly (file_id: %s)", file.FileID)
+	}
+
+	format := inferDocumentFormatFromMimeType(file.MimeType)
+	name := file.Name
+	if name == "" {
+		name = "file." + format
+	}
+	return &types.ContentBlockMemberDocument{
+		Value: types.DocumentBlock{
+			Format: types.DocumentFormat(format),
+			Name:   aws.String(name),
+			Source: &types.DocumentSourceMemberBytes{
+				Value: file.Data,
+			},
+		},
+	}, nil
+}
+
+// inferDocumentFormatFromMimeType infers the Bedrock document format from a MIME type.
+// Covers all DocumentFormat enum values: pdf, csv, doc, docx, xls, xlsx, html, txt, md.
+func inferDocumentFormatFromMimeType(mimeType string) string {
+	switch strings.ToLower(mimeType) {
+	case "application/pdf":
+		return "pdf"
+	case "text/csv":
+		return "csv"
+	case "application/msword":
+		return "doc"
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return "docx"
+	case "application/vnd.ms-excel":
+		return "xls"
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return "xlsx"
+	case "text/html":
+		return "html"
+	case "text/plain":
+		return "txt"
+	case "text/markdown":
+		return "md"
+	default:
+		// Try to extract format from mime type (e.g., "application/pdf" -> "pdf")
+		if idx := strings.LastIndex(mimeType, "/"); idx >= 0 {
+			suffix := mimeType[idx+1:]
+			if suffix != "" {
+				return suffix
+			}
+		}
+		return "txt"
+	}
 }
 
 // inferImageFormat infers the image format.
@@ -676,6 +798,47 @@ func mergeConsecutiveMessages(messages []types.Message) []types.Message {
 	}
 
 	return merged
+}
+
+// buildAdditionalModelRequestFields builds the AdditionalModelRequestFields for
+// thinking/reasoning configuration. Bedrock models (e.g. Claude) use this field
+// to enable extended thinking and set reasoning effort.
+//
+// The mapping follows the Bedrock Converse API specification:
+//   - ThinkingEnabled=true  → {"thinking": {"type": "enabled", "budget_tokens": N}}
+//   - ThinkingEnabled=false → {"thinking": {"type": "disabled"}}
+//   - ReasoningEffort       → {"reasoning_effort": "<value>"}
+//
+// Returns nil if no thinking/reasoning fields are configured.
+func buildAdditionalModelRequestFields(config model.GenerationConfig) document.Interface {
+	fields := make(map[string]any)
+
+	// Map ThinkingEnabled and ThinkingTokens to the "thinking" object.
+	if config.ThinkingEnabled != nil {
+		if *config.ThinkingEnabled {
+			thinking := map[string]any{
+				"type": "enabled",
+			}
+			if config.ThinkingTokens != nil && *config.ThinkingTokens > 0 {
+				thinking["budget_tokens"] = *config.ThinkingTokens
+			}
+			fields["thinking"] = thinking
+		} else {
+			fields["thinking"] = map[string]any{
+				"type": "disabled",
+			}
+		}
+	}
+
+	// Map ReasoningEffort to the "reasoning_effort" field.
+	if config.ReasoningEffort != nil && *config.ReasoningEffort != "" {
+		fields["reasoning_effort"] = *config.ReasoningEffort
+	}
+
+	if len(fields) == 0 {
+		return nil
+	}
+	return document.NewLazyDocument(fields)
 }
 
 // buildInferenceConfig builds the inference configuration.
@@ -735,7 +898,7 @@ func buildToolConfig(tools map[string]tool.Tool) *types.ToolConfiguration {
 
 		toolSpec := types.ToolSpecification{
 			Name:        aws.String(declaration.Name),
-			Description: aws.String(declaration.Description),
+			Description: aws.String(buildToolDescription(declaration)),
 			InputSchema: &types.ToolInputSchemaMemberJson{
 				Value: inputSchema,
 			},
@@ -751,6 +914,23 @@ func buildToolConfig(tools map[string]tool.Tool) *types.ToolConfiguration {
 	}
 }
 
+// buildToolDescription builds the description for a tool.
+// When OutputSchema is present, it appends the serialized output schema to the
+// description so the model knows the expected result structure.
+func buildToolDescription(declaration *tool.Declaration) string {
+	desc := declaration.Description
+	if declaration.OutputSchema == nil {
+		return desc
+	}
+	schemaJSON, err := json.Marshal(declaration.OutputSchema)
+	if err != nil {
+		log.Errorf("marshal output schema for tool %s: %v", declaration.Name, err)
+		return desc
+	}
+	desc += "\nOutput schema: " + string(schemaJSON)
+	return desc
+}
+
 // convertSchemaToDocument converts tool.Schema to document.Interface.
 func convertSchemaToDocument(schema *tool.Schema) document.Interface {
 	if schema == nil {
@@ -763,41 +943,22 @@ func convertSchemaToDocument(schema *tool.Schema) document.Interface {
 	return document.NewLazyDocument(schemaMap)
 }
 
-// schemaToMap recursively converts tool.Schema to a map.
+// schemaToMap converts tool.Schema to a map via JSON round-trip, preserving all
+// JSON Schema fields (including $ref, $defs, etc.) that the hand-written
+// whitelist approach would miss.
 func schemaToMap(schema *tool.Schema) map[string]any {
 	if schema == nil {
 		return map[string]any{"type": "object"}
 	}
 
-	result := make(map[string]any)
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return map[string]any{"type": "object"}
+	}
 
-	if schema.Type != "" {
-		result["type"] = schema.Type
-	}
-	if schema.Description != "" {
-		result["description"] = schema.Description
-	}
-	if len(schema.Required) > 0 {
-		result["required"] = schema.Required
-	}
-	if len(schema.Properties) > 0 {
-		props := make(map[string]any)
-		for k, v := range schema.Properties {
-			props[k] = schemaToMap(v)
-		}
-		result["properties"] = props
-	}
-	if schema.Items != nil {
-		result["items"] = schemaToMap(schema.Items)
-	}
-	if schema.AdditionalProperties != nil {
-		result["additionalProperties"] = schema.AdditionalProperties
-	}
-	if schema.Default != nil {
-		result["default"] = schema.Default
-	}
-	if len(schema.Enum) > 0 {
-		result["enum"] = schema.Enum
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return map[string]any{"type": "object"}
 	}
 
 	return result

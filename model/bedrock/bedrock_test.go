@@ -740,6 +740,161 @@ func TestBuildInferenceConfig_PartialFields(t *testing.T) {
 }
 
 // ============================================================================
+// Additional Model Request Fields Tests
+// ============================================================================
+
+func TestBuildAdditionalModelRequestFields_ThinkingEnabled(t *testing.T) {
+	enabled := true
+	tokens := 2048
+	config := model.GenerationConfig{
+		ThinkingEnabled: &enabled,
+		ThinkingTokens:  &tokens,
+	}
+	result := buildAdditionalModelRequestFields(config)
+	require.NotNil(t, result)
+
+	data, err := result.MarshalSmithyDocument()
+	require.NoError(t, err)
+
+	var fields map[string]any
+	err = json.Unmarshal(data, &fields)
+	require.NoError(t, err)
+
+	thinking, ok := fields["thinking"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "enabled", thinking["type"])
+	assert.Equal(t, float64(2048), thinking["budget_tokens"])
+}
+
+func TestBuildAdditionalModelRequestFields_ThinkingDisabled(t *testing.T) {
+	disabled := false
+	config := model.GenerationConfig{
+		ThinkingEnabled: &disabled,
+	}
+	result := buildAdditionalModelRequestFields(config)
+	require.NotNil(t, result)
+
+	data, err := result.MarshalSmithyDocument()
+	require.NoError(t, err)
+
+	var fields map[string]any
+	err = json.Unmarshal(data, &fields)
+	require.NoError(t, err)
+
+	thinking, ok := fields["thinking"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "disabled", thinking["type"])
+	_, hasBudget := thinking["budget_tokens"]
+	assert.False(t, hasBudget)
+}
+
+func TestBuildAdditionalModelRequestFields_ThinkingEnabledNoBudget(t *testing.T) {
+	enabled := true
+	config := model.GenerationConfig{
+		ThinkingEnabled: &enabled,
+	}
+	result := buildAdditionalModelRequestFields(config)
+	require.NotNil(t, result)
+
+	data, err := result.MarshalSmithyDocument()
+	require.NoError(t, err)
+
+	var fields map[string]any
+	err = json.Unmarshal(data, &fields)
+	require.NoError(t, err)
+
+	thinking, ok := fields["thinking"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "enabled", thinking["type"])
+	_, hasBudget := thinking["budget_tokens"]
+	assert.False(t, hasBudget)
+}
+
+func TestBuildAdditionalModelRequestFields_ReasoningEffort(t *testing.T) {
+	effort := "high"
+	config := model.GenerationConfig{
+		ReasoningEffort: &effort,
+	}
+	result := buildAdditionalModelRequestFields(config)
+	require.NotNil(t, result)
+
+	data, err := result.MarshalSmithyDocument()
+	require.NoError(t, err)
+
+	var fields map[string]any
+	err = json.Unmarshal(data, &fields)
+	require.NoError(t, err)
+
+	assert.Equal(t, "high", fields["reasoning_effort"])
+}
+
+func TestBuildAdditionalModelRequestFields_ThinkingAndReasoning(t *testing.T) {
+	enabled := true
+	tokens := 4096
+	effort := "medium"
+	config := model.GenerationConfig{
+		ThinkingEnabled: &enabled,
+		ThinkingTokens:  &tokens,
+		ReasoningEffort: &effort,
+	}
+	result := buildAdditionalModelRequestFields(config)
+	require.NotNil(t, result)
+
+	data, err := result.MarshalSmithyDocument()
+	require.NoError(t, err)
+
+	var fields map[string]any
+	err = json.Unmarshal(data, &fields)
+	require.NoError(t, err)
+
+	thinking, ok := fields["thinking"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "enabled", thinking["type"])
+	assert.Equal(t, float64(4096), thinking["budget_tokens"])
+	assert.Equal(t, "medium", fields["reasoning_effort"])
+}
+
+func TestBuildAdditionalModelRequestFields_NoConfig(t *testing.T) {
+	config := model.GenerationConfig{}
+	result := buildAdditionalModelRequestFields(config)
+	assert.Nil(t, result)
+}
+
+func TestBuildAdditionalModelRequestFields_EmptyReasoningEffort(t *testing.T) {
+	empty := ""
+	config := model.GenerationConfig{
+		ReasoningEffort: &empty,
+	}
+	result := buildAdditionalModelRequestFields(config)
+	assert.Nil(t, result)
+}
+
+func TestBuildAdditionalModelRequestFields_ZeroThinkingTokens(t *testing.T) {
+	enabled := true
+	zero := 0
+	config := model.GenerationConfig{
+		ThinkingEnabled: &enabled,
+		ThinkingTokens:  &zero,
+	}
+	result := buildAdditionalModelRequestFields(config)
+	require.NotNil(t, result)
+
+	data, err := result.MarshalSmithyDocument()
+	require.NoError(t, err)
+
+	var fields map[string]any
+	err = json.Unmarshal(data, &fields)
+	require.NoError(t, err)
+
+	thinking, ok := fields["thinking"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "enabled", thinking["type"])
+	// Zero budget_tokens should not be included
+	_, hasBudget := thinking["budget_tokens"]
+	assert.False(t, hasBudget)
+}
+
+// ============================================================================
 // Tool Configuration Tests
 // ============================================================================
 
@@ -827,7 +982,7 @@ func TestSchemaToMap_Complete(t *testing.T) {
 	result := schemaToMap(schema)
 	assert.Equal(t, "object", result["type"])
 	assert.Equal(t, "Test schema", result["description"])
-	assert.Equal(t, []string{"name"}, result["required"])
+	assert.Equal(t, []interface{}{"name"}, result["required"])
 
 	props, ok := result["properties"].(map[string]any)
 	require.True(t, ok)
@@ -859,7 +1014,7 @@ func TestSchemaToMap_WithDefault(t *testing.T) {
 		Default: 42,
 	}
 	result := schemaToMap(schema)
-	assert.Equal(t, 42, result["default"])
+	assert.Equal(t, float64(42), result["default"])
 }
 
 // ============================================================================
@@ -921,7 +1076,8 @@ func TestConvertImageToBlock_WithData(t *testing.T) {
 		Data:   []byte{0x89, 0x50, 0x4E, 0x47}, // PNG magic bytes
 		Format: "png",
 	}
-	block := convertImageToBlock(img)
+	block, err := convertImageToBlock(img)
+	require.NoError(t, err)
 	require.NotNil(t, block)
 
 	imgBlock, ok := block.(*types.ContentBlockMemberImage)
@@ -930,16 +1086,17 @@ func TestConvertImageToBlock_WithData(t *testing.T) {
 }
 
 func TestConvertImageToBlock_Nil(t *testing.T) {
-	block := convertImageToBlock(nil)
-	assert.Nil(t, block)
+	_, err := convertImageToBlock(nil)
+	assert.Error(t, err)
 }
 
 func TestConvertImageToBlock_URLOnly(t *testing.T) {
 	img := &model.Image{
 		URL: "https://example.com/image.png",
 	}
-	block := convertImageToBlock(img)
-	assert.Nil(t, block) // URL type not supported yet
+	_, err := convertImageToBlock(img)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "URL-based images are not supported")
 }
 
 func TestInferImageFormat(t *testing.T) {
@@ -971,7 +1128,8 @@ func TestInferImageFormat(t *testing.T) {
 
 func TestConvertUserContentBlocks_TextOnly(t *testing.T) {
 	msg := model.Message{Content: "Hello world"}
-	blocks := convertUserContentBlocks(msg)
+	blocks, err := convertUserContentBlocks(msg)
+	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 	textBlock, ok := blocks[0].(*types.ContentBlockMemberText)
 	require.True(t, ok)
@@ -980,7 +1138,8 @@ func TestConvertUserContentBlocks_TextOnly(t *testing.T) {
 
 func TestConvertUserContentBlocks_Empty(t *testing.T) {
 	msg := model.Message{}
-	blocks := convertUserContentBlocks(msg)
+	blocks, err := convertUserContentBlocks(msg)
+	require.NoError(t, err)
 	require.Len(t, blocks, 0) // Empty message should not produce any content blocks
 }
 
@@ -995,7 +1154,8 @@ func TestConvertUserContentBlocks_WithContentParts(t *testing.T) {
 			}},
 		},
 	}
-	blocks := convertUserContentBlocks(msg)
+	blocks, err := convertUserContentBlocks(msg)
+	require.NoError(t, err)
 	require.Len(t, blocks, 2)
 }
 
@@ -1017,7 +1177,8 @@ func TestConvertAssistantContentBlocks_WithToolCalls(t *testing.T) {
 			},
 		},
 	}
-	blocks := convertAssistantContentBlocks(msg)
+	blocks, err := convertAssistantContentBlocks(msg)
+	require.NoError(t, err)
 	require.Len(t, blocks, 2) // 1 text + 1 tool_use
 
 	textBlock, ok := blocks[0].(*types.ContentBlockMemberText)
@@ -1032,7 +1193,8 @@ func TestConvertAssistantContentBlocks_WithToolCalls(t *testing.T) {
 
 func TestConvertAssistantContentBlocks_Empty(t *testing.T) {
 	msg := model.Message{}
-	blocks := convertAssistantContentBlocks(msg)
+	blocks, err := convertAssistantContentBlocks(msg)
+	require.NoError(t, err)
 	require.Len(t, blocks, 0) // Empty message should not produce any content blocks
 }
 
@@ -1074,6 +1236,137 @@ func TestConvertOutputMessage_MultipleTextBlocks(t *testing.T) {
 
 	result := convertOutputMessage(msg)
 	assert.Equal(t, "Part 1. Part 2.", result.Content)
+}
+
+func TestConvertOutputMessage_ReasoningWithSignature(t *testing.T) {
+	msg := types.Message{
+		Role: types.ConversationRoleAssistant,
+		Content: []types.ContentBlock{
+			&types.ContentBlockMemberReasoningContent{
+				Value: &types.ReasoningContentBlockMemberReasoningText{
+					Value: types.ReasoningTextBlock{
+						Text:      aws.String("Let me think step by step..."),
+						Signature: aws.String("sig_abc123"),
+					},
+				},
+			},
+			&types.ContentBlockMemberText{Value: "The answer is 42."},
+		},
+	}
+
+	result := convertOutputMessage(msg)
+	assert.Equal(t, model.RoleAssistant, result.Role)
+	assert.Equal(t, "The answer is 42.", result.Content)
+	assert.Equal(t, "Let me think step by step...", result.ReasoningContent)
+	assert.Equal(t, "sig_abc123", result.ReasoningSignature)
+}
+
+func TestConvertOutputMessage_ReasoningWithoutSignature(t *testing.T) {
+	msg := types.Message{
+		Role: types.ConversationRoleAssistant,
+		Content: []types.ContentBlock{
+			&types.ContentBlockMemberReasoningContent{
+				Value: &types.ReasoningContentBlockMemberReasoningText{
+					Value: types.ReasoningTextBlock{
+						Text: aws.String("Reasoning without signature"),
+					},
+				},
+			},
+			&types.ContentBlockMemberText{Value: "Result."},
+		},
+	}
+
+	result := convertOutputMessage(msg)
+	assert.Equal(t, "Reasoning without signature", result.ReasoningContent)
+	assert.Equal(t, "", result.ReasoningSignature)
+}
+
+func TestConvertAssistantContentBlocks_WithReasoningAndSignature(t *testing.T) {
+	msg := model.Message{
+		Content:            "The answer is 42.",
+		ReasoningContent:   "Let me think step by step...",
+		ReasoningSignature: "sig_abc123",
+	}
+	blocks, err := convertAssistantContentBlocks(msg)
+	require.NoError(t, err)
+	require.Len(t, blocks, 2) // 1 reasoning + 1 text
+
+	// First block should be reasoning content with signature
+	reasoningBlock, ok := blocks[0].(*types.ContentBlockMemberReasoningContent)
+	require.True(t, ok)
+	reasoningText, ok := reasoningBlock.Value.(*types.ReasoningContentBlockMemberReasoningText)
+	require.True(t, ok)
+	assert.Equal(t, "Let me think step by step...", aws.ToString(reasoningText.Value.Text))
+	assert.Equal(t, "sig_abc123", aws.ToString(reasoningText.Value.Signature))
+
+	// Second block should be text
+	textBlock, ok := blocks[1].(*types.ContentBlockMemberText)
+	require.True(t, ok)
+	assert.Equal(t, "The answer is 42.", textBlock.Value)
+}
+
+func TestConvertAssistantContentBlocks_WithReasoningNoSignature(t *testing.T) {
+	msg := model.Message{
+		Content:          "The answer is 42.",
+		ReasoningContent: "Reasoning text only",
+	}
+	blocks, err := convertAssistantContentBlocks(msg)
+	require.NoError(t, err)
+	require.Len(t, blocks, 2) // 1 reasoning + 1 text
+
+	// First block should be reasoning content without signature
+	reasoningBlock, ok := blocks[0].(*types.ContentBlockMemberReasoningContent)
+	require.True(t, ok)
+	reasoningText, ok := reasoningBlock.Value.(*types.ReasoningContentBlockMemberReasoningText)
+	require.True(t, ok)
+	assert.Equal(t, "Reasoning text only", aws.ToString(reasoningText.Value.Text))
+	assert.Nil(t, reasoningText.Value.Signature)
+
+	// Second block should be text
+	textBlock, ok := blocks[1].(*types.ContentBlockMemberText)
+	require.True(t, ok)
+	assert.Equal(t, "The answer is 42.", textBlock.Value)
+}
+
+func TestConvertAssistantContentBlocks_ReasoningRoundTrip(t *testing.T) {
+	// Simulate a round-trip: output message -> model.Message -> assistant content blocks
+	outputMsg := types.Message{
+		Role: types.ConversationRoleAssistant,
+		Content: []types.ContentBlock{
+			&types.ContentBlockMemberReasoningContent{
+				Value: &types.ReasoningContentBlockMemberReasoningText{
+					Value: types.ReasoningTextBlock{
+						Text:      aws.String("Step 1: analyze. Step 2: conclude."),
+						Signature: aws.String("sig_roundtrip_xyz"),
+					},
+				},
+			},
+			&types.ContentBlockMemberText{Value: "Final answer."},
+		},
+	}
+
+	// Convert output to model.Message
+	modelMsg := convertOutputMessage(outputMsg)
+	assert.Equal(t, "Step 1: analyze. Step 2: conclude.", modelMsg.ReasoningContent)
+	assert.Equal(t, "sig_roundtrip_xyz", modelMsg.ReasoningSignature)
+
+	// Convert back to Bedrock content blocks
+	blocks, err := convertAssistantContentBlocks(modelMsg)
+	require.NoError(t, err)
+	require.Len(t, blocks, 2)
+
+	// Verify reasoning block preserves both text and signature
+	reasoningBlock, ok := blocks[0].(*types.ContentBlockMemberReasoningContent)
+	require.True(t, ok)
+	reasoningText, ok := reasoningBlock.Value.(*types.ReasoningContentBlockMemberReasoningText)
+	require.True(t, ok)
+	assert.Equal(t, "Step 1: analyze. Step 2: conclude.", aws.ToString(reasoningText.Value.Text))
+	assert.Equal(t, "sig_roundtrip_xyz", aws.ToString(reasoningText.Value.Signature))
+
+	// Verify text block
+	textBlock, ok := blocks[1].(*types.ContentBlockMemberText)
+	require.True(t, ok)
+	assert.Equal(t, "Final answer.", textBlock.Value)
 }
 
 // ============================================================================
@@ -1919,4 +2212,264 @@ func TestMistralLarge_SkillInvocation_Mock(t *testing.T) {
 	assert.Equal(t, "code_interpreter", resp.Choices[0].Message.ToolCalls[0].Function.Name)
 	assert.Equal(t, "skill_002", resp.Choices[0].Message.ToolCalls[1].ID)
 	assert.Equal(t, "web_search", resp.Choices[0].Message.ToolCalls[1].Function.Name)
+}
+
+// TestBuildToolDescription_NoOutputSchema verifies that when OutputSchema is nil,
+// the description is returned unchanged.
+func TestBuildToolDescription_NoOutputSchema(t *testing.T) {
+	decl := &tool.Declaration{
+		Name:        "example_tool",
+		Description: "A simple tool",
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "A simple tool", desc)
+}
+
+// TestBuildToolDescription_AppendsOutputSchema verifies that when OutputSchema is present,
+// the serialized schema is appended to the description.
+func TestBuildToolDescription_AppendsOutputSchema(t *testing.T) {
+	outputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"result": {Type: "string", Description: "The result value"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "example_tool",
+		Description:  "A tool with output",
+		OutputSchema: outputSchema,
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Contains(t, desc, "A tool with output")
+	assert.Contains(t, desc, "Output schema:")
+	assert.Contains(t, desc, `"result"`)
+	assert.Contains(t, desc, `"string"`)
+}
+
+// TestBuildToolDescription_EmptyDescription verifies that output schema is still appended
+// even when the base description is empty.
+func TestBuildToolDescription_EmptyDescription(t *testing.T) {
+	decl := &tool.Declaration{
+		Name:        "empty_desc_tool",
+		Description: "",
+		OutputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"count": {Type: "integer"},
+			},
+		},
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Contains(t, desc, "Output schema:")
+	assert.Contains(t, desc, `"count"`)
+}
+
+// TestBuildToolDescription_MarshalError verifies that when OutputSchema cannot be marshaled,
+// the original description is returned as fallback.
+func TestBuildToolDescription_MarshalError(t *testing.T) {
+	decl := &tool.Declaration{
+		Name:        "bad_schema_tool",
+		Description: "fallback desc",
+		OutputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: func() {}, // functions cannot be marshaled
+		},
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "fallback desc", desc, "should fall back to original description on marshal error")
+}
+
+// ============================================================================
+// Unsupported Content Type Error Tests
+// ============================================================================
+
+// TestConvertUserContentBlocks_UnsupportedType verifies that truly unsupported content types
+// return an error instead of being silently dropped.
+func TestConvertUserContentBlocks_UnsupportedType(t *testing.T) {
+	msg := model.Message{
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentType("unknown_type")},
+		},
+	}
+	_, err := convertUserContentBlocks(msg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported content part type")
+	assert.Contains(t, err.Error(), "unknown_type")
+}
+
+// TestConvertUserContentBlocks_FileWithData verifies that file content parts are converted correctly.
+func TestConvertUserContentBlocks_FileWithData(t *testing.T) {
+	msg := model.Message{
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeFile, File: &model.File{
+				Name:     "report.pdf",
+				Data:     []byte("fake-pdf-data"),
+				MimeType: "application/pdf",
+			}},
+		},
+	}
+	blocks, err := convertUserContentBlocks(msg)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	docBlock, ok := blocks[0].(*types.ContentBlockMemberDocument)
+	require.True(t, ok)
+	assert.Equal(t, types.DocumentFormat("pdf"), docBlock.Value.Format)
+	assert.Equal(t, "report.pdf", aws.ToString(docBlock.Value.Name))
+}
+
+// TestConvertUserContentBlocks_FileNilData verifies that file with nil File field is skipped.
+func TestConvertUserContentBlocks_FileNilData(t *testing.T) {
+	msg := model.Message{
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeFile, File: nil},
+		},
+	}
+	blocks, err := convertUserContentBlocks(msg)
+	require.NoError(t, err)
+	require.Len(t, blocks, 0)
+}
+
+// TestConvertAssistantContentBlocks_UnsupportedType verifies that unsupported content types
+// in assistant messages return an error.
+func TestConvertAssistantContentBlocks_UnsupportedType(t *testing.T) {
+	msg := model.Message{
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeImage},
+		},
+	}
+	_, err := convertAssistantContentBlocks(msg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported content part type")
+}
+
+// TestConvertImageToBlock_EmptyImage verifies that an image with neither data nor URL returns an error.
+func TestConvertImageToBlock_EmptyImage(t *testing.T) {
+	img := &model.Image{}
+	_, err := convertImageToBlock(img)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "neither data nor URL")
+}
+
+// TestConvertMessages_UnsupportedContentTypeReturnsError verifies that convertMessages
+// propagates errors from unsupported content types to the caller.
+func TestConvertMessages_UnsupportedContentTypeReturnsError(t *testing.T) {
+	messages := []model.Message{
+		{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentType("unknown_type")},
+			},
+		},
+	}
+	_, _, err := convertMessages(messages)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported content part type")
+}
+
+// TestConvertMessages_URLImageReturnsError verifies that a user message with only a URL image
+// returns an error instead of silently dropping the message.
+func TestConvertMessages_URLImageReturnsError(t *testing.T) {
+	messages := []model.Message{
+		{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.com/img.png"}},
+			},
+		},
+	}
+	_, _, err := convertMessages(messages)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "URL-based images are not supported")
+}
+
+// TestConvertFileToBlock_Success verifies successful file to document block conversion.
+func TestConvertFileToBlock_Success(t *testing.T) {
+	file := &model.File{
+		Name:     "doc.pdf",
+		Data:     []byte("pdf-content"),
+		MimeType: "application/pdf",
+	}
+	block, err := convertFileToBlock(file)
+	require.NoError(t, err)
+	require.NotNil(t, block)
+
+	docBlock, ok := block.(*types.ContentBlockMemberDocument)
+	require.True(t, ok)
+	assert.Equal(t, types.DocumentFormat("pdf"), docBlock.Value.Format)
+	assert.Equal(t, "doc.pdf", aws.ToString(docBlock.Value.Name))
+	src, ok := docBlock.Value.Source.(*types.DocumentSourceMemberBytes)
+	require.True(t, ok)
+	assert.Equal(t, []byte("pdf-content"), src.Value)
+}
+
+// TestConvertFileToBlock_Nil verifies that nil file returns an error.
+func TestConvertFileToBlock_Nil(t *testing.T) {
+	_, err := convertFileToBlock(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil file data")
+}
+
+// TestConvertFileToBlock_NoDataNoFileID verifies that file with neither data nor file ID returns an error.
+func TestConvertFileToBlock_NoDataNoFileID(t *testing.T) {
+	file := &model.File{Name: "empty.txt"}
+	_, err := convertFileToBlock(file)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "neither data nor file ID")
+}
+
+// TestConvertFileToBlock_FileIDOnly verifies that file with only file ID returns an error.
+func TestConvertFileToBlock_FileIDOnly(t *testing.T) {
+	file := &model.File{FileID: "file-123"}
+	_, err := convertFileToBlock(file)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "file ID-based files are not supported")
+}
+
+// TestConvertFileToBlock_NoName verifies that file without name gets a default name.
+func TestConvertFileToBlock_NoName(t *testing.T) {
+	file := &model.File{
+		Data:     []byte("content"),
+		MimeType: "text/plain",
+	}
+	block, err := convertFileToBlock(file)
+	require.NoError(t, err)
+	docBlock, ok := block.(*types.ContentBlockMemberDocument)
+	require.True(t, ok)
+	assert.Equal(t, "file.txt", aws.ToString(docBlock.Value.Name))
+}
+
+// TestInferDocumentFormatFromMimeType verifies MIME type to document format inference.
+func TestInferDocumentFormatFromMimeType(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// All DocumentFormat enum values covered
+		{"application/pdf", "pdf"},
+		{"text/csv", "csv"},
+		{"application/msword", "doc"},
+		{"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"},
+		{"application/vnd.ms-excel", "xls"},
+		{"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"},
+		{"text/html", "html"},
+		{"text/plain", "txt"},
+		{"text/markdown", "md"},
+		// Fallback: extract suffix from MIME type
+		{"application/json", "json"},
+		// Empty string defaults to txt
+		{"", "txt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.expected, inferDocumentFormatFromMimeType(tt.input))
+		})
+	}
 }
