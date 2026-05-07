@@ -516,6 +516,63 @@ server, err := agui.New(
 )
 ```
 
+## 流式工具调用参数
+
+默认情况下，AG-UI 服务端会在模型完成一次工具调用后发送完整的 `TOOL_CALL_START → TOOL_CALL_ARGS → TOOL_CALL_END`。也就是说，前端通常只能在工具参数全部生成完成后，才能看到这次工具调用的参数。
+
+如果工具参数本身生成时间较长，或者前端需要在工具执行前实时展示参数生成进度，可以开启工具调用参数流式输出。开启后，AG-UI 服务端会把模型流式产生的工具参数分片转换成多条 `TOOL_CALL_ARGS` 事件，前端可以按 `toolCallId` 累积这些分片并增量展示。
+
+该能力要求底层模型适配层支持并开启 tool call delta 输出。以 OpenAI 适配层为例，可以同时开启模型层和 AG-UI 层开关：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+llm := openai.New(
+    "gpt-5.5",
+    openai.WithShowToolCallDelta(true), // Forward tool_calls chunks.
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithToolCallDeltaStreamingEnabled(true),
+)
+```
+
+这里有两个开关需要同时满足：
+
+- `openai.WithShowToolCallDelta(true)`：OpenAI 适配层不再过滤原始 `tool_calls` 流式分片，并把它们转成框架内部的工具调用增量。
+- `agui.WithToolCallDeltaStreamingEnabled(true)`：AG-UI 服务端将这些分片转换为实时 `TOOL_CALL_ARGS` 事件。
+
+其他模型适配层如果也支持框架内部的工具调用增量，AG-UI 层会按同一逻辑处理。
+
+启用后，同一次工具调用的实时事件流通常会表现为：
+
+```text
+RUN_STARTED
+→ TOOL_CALL_START
+→ TOOL_CALL_ARGS
+→ TOOL_CALL_ARGS
+→ ...
+→ TOOL_CALL_END
+→ TOOL_CALL_RESULT
+→ TEXT_MESSAGE_*
+→ RUN_FINISHED
+```
+
+前端处理时只需要关注两点：
+
+- `TOOL_CALL_ARGS.delta` 是本次新增的参数字符串片段，不一定是完整 JSON；应按 `toolCallId` 累积后再解析。
+- 同一工具调用的 `TOOL_CALL_ARGS` 不保证在事件流中连续；前端状态应按 `toolCallId` 分组维护，而不是依赖相邻事件。
+
+工具调用结束时，AG-UI 服务端会发送 `TOOL_CALL_END`。如果运行被取消或异常结束，服务端也会尽量补齐仍未关闭的协议事件，避免前端停留在未完成状态。
+
+实时对话路由会把每个 `TOOL_CALL_ARGS` 分片发送给前端；如果配置了 `SessionService`，写入会话前会对相邻且相同 `toolCallId` 的 `TOOL_CALL_ARGS` 做聚合。消息快照路由用于恢复累计后的工具调用参数，不保留实时分片的数量和边界。
+
+完整示例可参考 [examples/agui/server/toolcall_delta](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/toolcall_delta)。
+
 ## 流式工具执行结果
 
 [`StreamableTool`](../tool.md#🌊-流式工具支持) 在执行过程中先返回流式中间结果，在结束时返回最终结果。工具可以在流中返回 `tool.FinalResultChunk` 或 `tool.FinalResultStateChunk` 指定最终结果；如果没有返回这两类结果，框架会把已收到的普通流式中间结果转成文本，并按返回顺序拼接为最终结果。
