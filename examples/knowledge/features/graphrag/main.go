@@ -45,6 +45,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -55,15 +56,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	util "trpc.group/trpc-go/trpc-agent-go/examples/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	agegraphstore "trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
@@ -80,11 +80,11 @@ var (
 	defaultQuery   = "Find code related to agent execution in trpc-agent-go, traverse its callees, and explain the nearby call graph."
 	query          = flag.String("query", "", "Optional initial query to ask before entering chat")
 	modelName      = flag.String("model", util.GetEnvOrDefault("MODEL_NAME", "deepseek-v3,2"), "Model to use")
-	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	embeddingModel = flag.String("embedding-model", util.GetEnvOrDefault("EMBEDDING_MODEL", "server:277357"), "Embedding model to use")
 	embeddingDim   = flag.Int("embedding-dimension", defaultEmbeddingDimension(), "Embedding dimension; <=0 probes once")
 	recreate       = flag.Bool("recreate", false, "Drop pgvector table and reload graph source; false reuses existing graph/vector data")
-	progressStep   = flag.Int("progress-step", 100, "Graph seed indexing progress step")
+	progressStep   = flag.Int("progress-step", 1000, "Graph seed indexing progress step")
+	debugFile      = flag.String("debug-file", "", "Write JSONL tool trace to this file when set")
 )
 
 func main() {
@@ -93,7 +93,6 @@ func main() {
 
 	fmt.Println("GraphRAG Chat Demo")
 	fmt.Printf("Model: %s\n", *modelName)
-	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Println(strings.Repeat("=", 50))
 
 	ageDSN, ageGraphName := ageConfig()
@@ -110,17 +109,13 @@ func main() {
 	}
 	defer graphStore.Close()
 
-	embedder := newOpenAIEmbedder(*embeddingDim)
-	resolvedDimension, err := resolveEmbeddingDimension(ctx, embedder, *embeddingDim)
+	embedder, resolvedDimension, err := setupEmbedder(ctx)
 	if err != nil {
-		log.Fatalf("resolve embedding dimension: %v", err)
-	}
-	if *embeddingDim <= 0 {
-		embedder = newOpenAIEmbedder(resolvedDimension)
+		log.Fatalf("setup embedder: %v", err)
 	}
 	fmt.Printf("Embedding: %s (%d dimensions)\n", *embeddingModel, resolvedDimension)
-	vectorDSN, vectorTable := pgVectorConfig()
 
+	vectorDSN, vectorTable := pgVectorConfig()
 	if *recreate {
 		if err := dropPGVectorTable(ctx, vectorDSN, vectorTable); err != nil {
 			log.Fatalf("drop pgvector table: %v", err)
@@ -140,27 +135,9 @@ func main() {
 		knowledge.WithGraphEmbedder(embedder),
 	)
 	if *recreate {
-		repoSrc := repo.New(
-			repo.WithRepository(repo.Repository{
-				URL:         defaultRepoURL,
-				RepoName:    "trpc-agent-go",
-				RepoURL:     defaultRepoURL,
-				Description: "The tRPC-Agent-Go framework repository used to demonstrate graph RAG over repo source.",
-			}),
-			repo.WithName("trpc-agent-go Repository"),
-			repo.WithFileExtensions([]string{".go"}),
-		)
-		if err := kb.LoadGraphSource(
-			ctx,
-			repoSrc,
-			knowledge.WithShowProgress(true),
-			knowledge.WithProgressStepSize(*progressStep),
-			knowledge.WithSourceConcurrency(10),
-			knowledge.WithDocConcurrency(10),
-		); err != nil {
+		if err := loadGraphSource(ctx, kb); err != nil {
 			log.Fatalf("load graph from repo source: %v", err)
 		}
-		fmt.Printf("Loaded graph from repo source: %s\n", defaultRepoURL)
 	} else {
 		fmt.Println("Skipped graph source loading; using existing AGE graph and pgvector data")
 	}
@@ -178,7 +155,7 @@ func main() {
 		"graph-knowledge-assistant",
 		llmagent.WithModel(openaimodel.New(*modelName)),
 		llmagent.WithInstruction(graphAgentInstruction()),
-		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: *streaming}),
+		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
 		llmagent.WithToolSets([]tool.ToolSet{graphToolSet}),
 	)
 
@@ -189,36 +166,29 @@ func main() {
 	)
 	defer r.Close()
 
-	chat := &graphChat{
-		runner:    r,
-		userID:    "graph-demo-user",
-		sessionID: fmt.Sprintf("graph-demo-session-%d", time.Now().Unix()),
-		streaming: *streaming,
+	var trace *jsonlTrace
+	if *debugFile != "" {
+		trace, err = newJSONLTrace(*debugFile)
+		if err != nil {
+			log.Fatalf("open debug file: %v", err)
+		}
+		defer trace.Close()
+		fmt.Printf("Debug trace: %s\n", *debugFile)
 	}
+
+	sessionID := fmt.Sprintf("graph-demo-session-%d", time.Now().Unix())
+	fmt.Printf("\nChat ready. Session: %s\n", sessionID)
+	fmt.Printf("Type '/exit' to end the conversation.\n")
+	fmt.Printf("Try: %s\n", defaultQuery)
+	fmt.Println(strings.Repeat("=", 50))
+
 	if strings.TrimSpace(*query) != "" {
 		fmt.Printf("\nInitial query: %s\n", *query)
-		if err := chat.processMessage(ctx, *query); err != nil {
+		if err := runTurn(ctx, r, "graph-demo-user", sessionID, *query, trace); err != nil {
 			log.Fatalf("run initial query: %v", err)
 		}
 		fmt.Println()
 	}
-	if err := chat.start(ctx); err != nil {
-		log.Fatalf("chat failed: %v", err)
-	}
-}
-
-type graphChat struct {
-	runner    runner.Runner
-	userID    string
-	sessionID string
-	streaming bool
-}
-
-func (c *graphChat) start(ctx context.Context) error {
-	fmt.Printf("\nChat ready. Session: %s\n", c.sessionID)
-	fmt.Printf("Type '/exit' to end the conversation.\n")
-	fmt.Printf("Try: %s\n", defaultQuery)
-	fmt.Println(strings.Repeat("=", 50))
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -232,37 +202,31 @@ func (c *graphChat) start(ctx context.Context) error {
 		}
 		if userInput == "/exit" || userInput == "/quit" {
 			fmt.Println("Done.")
-			return nil
+			return
 		}
-		if err := c.processMessage(ctx, userInput); err != nil {
+		if err := runTurn(ctx, r, "graph-demo-user", sessionID, userInput, trace); err != nil {
 			fmt.Printf("Error: %v\n", err)
 		}
 		fmt.Println()
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("input scanner error: %w", err)
+		log.Fatalf("input scanner: %v", err)
 	}
-	return nil
 }
 
-func (c *graphChat) processMessage(ctx context.Context, userMessage string) error {
-	eventChan, err := c.runner.Run(
-		ctx,
-		c.userID,
-		c.sessionID,
-		model.NewUserMessage(userMessage),
-		agent.WithRequestID(uuid.New().String()),
-	)
+// runTurn sends one user message and prints the streamed response with tool activity.
+func runTurn(ctx context.Context, r runner.Runner, userID, sessionID, userMessage string, trace *jsonlTrace) error {
+	trace.write("user_message", map[string]any{"message": userMessage})
+
+	eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage(userMessage))
 	if err != nil {
-		return fmt.Errorf("run graph knowledge agent: %w", err)
+		return fmt.Errorf("run agent: %w", err)
 	}
-	return c.processResponse(eventChan)
-}
 
-func (c *graphChat) processResponse(eventChan <-chan *event.Event) error {
 	fmt.Print("Assistant: ")
 	assistantStarted := true
 	toolCallsDetected := false
+
 	for evt := range eventChan {
 		if evt == nil {
 			continue
@@ -271,13 +235,66 @@ func (c *graphChat) processResponse(eventChan <-chan *event.Event) error {
 			fmt.Printf("\nEvent error: %s\n", evt.Error.Message)
 			continue
 		}
-		if c.handleToolCalls(evt, &assistantStarted, &toolCallsDetected) {
+		if evt.Response == nil || len(evt.Response.Choices) == 0 {
 			continue
 		}
-		if c.handleToolResponses(evt, &assistantStarted) {
-			continue
+
+		for ci, choice := range evt.Response.Choices {
+			if len(choice.Message.ToolCalls) > 0 {
+				toolCallsDetected = true
+				if assistantStarted {
+					fmt.Println()
+				}
+				fmt.Println()
+				fmt.Printf("Tool calls (%d):\n", len(choice.Message.ToolCalls))
+				for i, call := range choice.Message.ToolCalls {
+					fmt.Printf("  [%d] %s id=%s\n", i+1, call.Function.Name, call.ID)
+					if len(call.Function.Arguments) > 0 {
+						fmt.Println("      args:")
+						fmt.Println(indentBlock(formatToolArguments(string(call.Function.Arguments)), "        "))
+					}
+					trace.write("tool_call", map[string]any{
+						"tool_name": call.Function.Name,
+						"tool_id":   call.ID,
+						"arguments": decodeJSONValue(string(call.Function.Arguments)),
+					})
+				}
+				fmt.Println("Executing tools...")
+				fmt.Println()
+				assistantStarted = false
+				continue
+			}
+
+			if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+				fmt.Printf("Tool result: %s id=%s\n", choice.Message.ToolName, choice.Message.ToolID)
+				fmt.Println(formatToolResponse(choice.Message.Content))
+				fmt.Println()
+				trace.write("tool_result", map[string]any{
+					"tool_name": choice.Message.ToolName,
+					"tool_id":   choice.Message.ToolID,
+					"result":    decodeJSONValue(choice.Message.Content),
+				})
+				assistantStarted = false
+				continue
+			}
+
+			if ci > 0 {
+				continue
+			}
+			content := choice.Delta.Content
+			if content == "" {
+				content = choice.Message.Content
+			}
+			if content != "" {
+				if !assistantStarted {
+					if toolCallsDetected {
+						fmt.Print("Assistant: ")
+					}
+					assistantStarted = true
+				}
+				fmt.Print(content)
+			}
 		}
-		c.handleContent(evt, &assistantStarted, toolCallsDetected)
 		if evt.IsFinalResponse() {
 			fmt.Println()
 			break
@@ -286,106 +303,131 @@ func (c *graphChat) processResponse(eventChan <-chan *event.Event) error {
 	return nil
 }
 
-func (c *graphChat) handleToolCalls(evt *event.Event, assistantStarted *bool, toolCallsDetected *bool) bool {
-	if evt.Response == nil || len(evt.Response.Choices) == 0 {
-		return false
-	}
-	calls := evt.Response.Choices[0].Message.ToolCalls
-	if len(calls) == 0 {
-		return false
-	}
-	*toolCallsDetected = true
-	if *assistantStarted {
-		fmt.Println()
-	}
-	fmt.Println()
-	fmt.Printf("Tool calls (%d):\n", len(calls))
-	for i, call := range calls {
-		fmt.Printf("  [%d] %s id=%s\n", i+1, call.Function.Name, call.ID)
-		if len(call.Function.Arguments) > 0 {
-			fmt.Println("      args:")
-			fmt.Println(indentBlock(formatToolArguments(string(call.Function.Arguments)), "        "))
-		}
-	}
-	fmt.Println("Executing tools...")
-	fmt.Println()
-	*assistantStarted = false
-	return true
+// timedGraphSource wraps a GraphSource and logs parse timing.
+type timedGraphSource struct {
+	name string
+	src  source.GraphSource
 }
 
-func (c *graphChat) handleToolResponses(evt *event.Event, assistantStarted *bool) bool {
-	if evt.Response == nil || len(evt.Response.Choices) == 0 {
-		return false
-	}
-	printed := false
-	for _, choice := range evt.Response.Choices {
-		if choice.Message.Role != model.RoleTool || choice.Message.ToolID == "" {
-			continue
-		}
-		if printed {
-			fmt.Println()
-		}
-		fmt.Printf("Tool result: %s id=%s\n", choice.Message.ToolName, choice.Message.ToolID)
-		fmt.Println(formatToolResponse(choice.Message.Content))
-		printed = true
-	}
-	if printed {
-		fmt.Println()
-		*assistantStarted = false
-	}
-	return printed
-}
-
-func (c *graphChat) handleContent(evt *event.Event, assistantStarted *bool, toolCallsDetected bool) {
-	if evt.Response == nil || len(evt.Response.Choices) == 0 {
-		return
-	}
-	choice := evt.Response.Choices[0]
-	content := choice.Delta.Content
-	if !c.streaming && content == "" {
-		content = choice.Message.Content
-	}
-	if content == "" {
-		return
-	}
-	if !*assistantStarted {
-		if toolCallsDetected {
-			fmt.Print("Assistant: ")
-		}
-		*assistantStarted = true
-	}
-	fmt.Print(content)
-}
-
-func defaultEmbeddingDimension() int {
-	dimension := strings.TrimSpace(util.GetEnvOrDefault("EMBEDDING_DIMENSION", "0"))
-	value, err := strconv.Atoi(dimension)
+func (s timedGraphSource) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) (*graph.Data, error) {
+	start := time.Now()
+	data, err := s.src.ReadGraph(ctx, opts...)
+	elapsed := time.Since(start).Truncate(time.Millisecond)
 	if err != nil {
-		return 0
+		fmt.Printf("Graph source parse failed: %s | elapsed=%s\n", s.name, elapsed)
+		return nil, err
+	}
+	fmt.Printf("Graph source parsed: %s | nodes=%d edges=%d elapsed=%s\n", s.name, len(data.Nodes), len(data.Edges), elapsed)
+	return data, nil
+}
+
+// loadGraphSource loads the trpc-agent-go repo into the graph knowledge base.
+func loadGraphSource(ctx context.Context, kb *knowledge.BuiltinGraphKnowledge) error {
+	repoSrc := repo.New(
+		repo.WithRepository(repo.Repository{
+			URL:         defaultRepoURL,
+			RepoName:    "trpc-agent-go",
+			RepoURL:     defaultRepoURL,
+			Description: "The tRPC-Agent-Go framework repository used to demonstrate graph RAG over repo source.",
+		}),
+		repo.WithName("trpc-agent-go Repository"),
+		repo.WithFileExtensions([]string{".go"}),
+	)
+	err := kb.LoadGraphSource(
+		ctx,
+		timedGraphSource{name: "trpc-agent-go Repository", src: repoSrc},
+		knowledge.WithGraphLoadProgress(true),
+		knowledge.WithGraphLoadProgressStepSize(*progressStep),
+		knowledge.WithGraphLoadConcurrency(knowledge.GraphLoadConcurrency{
+			AddNodeRoutines:   200,
+			AddEdgeRoutines:   200,
+			EmbeddingRoutines: 10,
+		}),
+		knowledge.WithGraphLoadReadGraphOpts(source.WithReadGraphParseConcurrency(300)),
+	)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Loaded graph from repo source: %s\n", defaultRepoURL)
+	return nil
+}
+
+// jsonlTrace appends JSON lines to a file for debugging tool activity.
+// A nil receiver is safe to call on all methods.
+type jsonlTrace struct {
+	file    *os.File
+	encoder *json.Encoder
+}
+
+func newJSONLTrace(path string) (*jsonlTrace, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return nil, err
+	}
+	return &jsonlTrace{file: f, encoder: json.NewEncoder(f)}, nil
+}
+
+func (t *jsonlTrace) write(kind string, fields map[string]any) {
+	if t == nil {
+		return
+	}
+	fields["kind"] = kind
+	fields["timestamp"] = time.Now().Format(time.RFC3339Nano)
+	if err := t.encoder.Encode(fields); err != nil {
+		log.Printf("write debug trace: %v", err)
+	}
+}
+
+func decodeJSONValue(raw string) any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return raw
 	}
 	return value
 }
 
-func newOpenAIEmbedder(dimension int) *openaiembedder.Embedder {
-	opts := []openaiembedder.Option{openaiembedder.WithModel(*embeddingModel)}
-	if dimension > 0 {
-		opts = append(opts, openaiembedder.WithDimensions(dimension))
+func (t *jsonlTrace) Close() error {
+	if t == nil || t.file == nil {
+		return nil
 	}
-	return openaiembedder.New(opts...)
+	return t.file.Close()
 }
 
-func resolveEmbeddingDimension(ctx context.Context, embedder *openaiembedder.Embedder, configured int) (int, error) {
-	if configured > 0 {
-		return configured, nil
+func setupEmbedder(ctx context.Context) (*openaiembedder.Embedder, int, error) {
+	opts := []openaiembedder.Option{
+		openaiembedder.WithModel(*embeddingModel),
+		openaiembedder.WithMaxRetries(20),
 	}
-	embedding, err := embedder.GetEmbedding(ctx, "dimension probe")
+	if *embeddingDim > 0 {
+		opts = append(opts, openaiembedder.WithDimensions(*embeddingDim))
+	}
+	e := openaiembedder.New(opts...)
+	if *embeddingDim > 0 {
+		return e, *embeddingDim, nil
+	}
+	vec, err := e.GetEmbedding(ctx, "dimension probe")
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
-	if len(embedding) == 0 {
-		return 0, fmt.Errorf("embedding probe returned empty vector")
+	if len(vec) == 0 {
+		return nil, 0, fmt.Errorf("embedding probe returned empty vector")
 	}
-	return len(embedding), nil
+	dim := len(vec)
+	return openaiembedder.New(append(opts, openaiembedder.WithDimensions(dim))...), dim, nil
+}
+
+func defaultEmbeddingDimension() int {
+	value, err := strconv.Atoi(strings.TrimSpace(util.GetEnvOrDefault("EMBEDDING_DIMENSION", "0")))
+	if err != nil {
+		return 0
+	}
+	return value
 }
 
 func newAGEGraphStore() (*agegraphstore.Store, error) {
@@ -403,7 +445,6 @@ func ageConfig() (string, string) {
 	password := util.GetEnvOrDefault("AGE_PASSWORD", "123")
 	database := util.GetEnvOrDefault("AGE_DATABASE", "contextengine")
 	graphName := util.GetEnvOrDefault("AGE_GRAPH_NAME", "knowledge_graph")
-
 	dsn := strings.TrimSpace(util.GetEnvOrDefault("AGE_DSN", ""))
 	if dsn == "" {
 		dsn = (&url.URL{
@@ -424,7 +465,6 @@ func pgVectorConfig() (string, string) {
 	password := util.GetEnvOrDefault("PGVECTOR_PASSWORD", "123")
 	database := util.GetEnvOrDefault("PGVECTOR_DATABASE", "contextengine")
 	table := util.GetEnvOrDefault("PGVECTOR_TABLE", "trpc_agent_go_graph")
-
 	dsn := strings.TrimSpace(util.GetEnvOrDefault("PGVECTOR_DSN", ""))
 	if dsn == "" {
 		dsn = (&url.URL{
@@ -498,14 +538,23 @@ func newVectorStore(dsn, table string, indexDimension int) (*pgvector.VectorStor
 func graphAgentInstruction() string {
 	return strings.Join([]string{
 		"You are a code graph assistant.",
-		"Use code_graph_search only to find seed code graph nodes.",
-		"For mechanism, architecture, flow, lifecycle, or implementation questions, do not answer from search results alone: after finding a relevant seed, call code_graph_traverse at least once.",
+		"Use code_graph_search only to find seed code graph nodes and collect their graph node IDs.",
+		"For mechanism, architecture, flow, lifecycle, or implementation questions, do not answer from search results alone: after finding a relevant seed node ID, call code_graph_traverse at least once.",
 		"Do not repeat near-identical code_graph_search calls after useful results or duplicate-result messages; traverse a known candidate or answer from gathered evidence.",
-		"Use code_graph_traverse when the user asks about neighbors, callees, callers, dependencies, local graph context, or how a mechanism is wired.",
-		"Use code_graph_find_paths when the user asks how two code entities are connected.",
-		"When calling code_graph_traverse, prefer query plus a metadata filter instead of guessing node IDs.",
-		"When calling code_graph_find_paths, prefer from_query/from_filter and to_query/to_filter instead of guessing node IDs.",
-		"For function execution flow, traverse direction \"out\" with edge_types [\"CALLS\"]. For callers, traverse direction \"in\" with edge_types [\"CALLS\"]. For type structure, use METHOD, FIELD, PARAM, RETURNS, ALIAS_OF, or IMPLEMENTS as appropriate.",
+		"",
+		"== code_graph_traverse usage ==",
+		"code_graph_traverse requires start_ids — graph node IDs returned by code_graph_search. It has NO query or filter parameter. Always pass IDs, not names or package paths.",
+		"Workflow: (1) call code_graph_search to find relevant symbols and collect their 'id' fields, (2) pass those IDs as start_ids to code_graph_traverse.",
+		"IMPORTANT: as soon as code_graph_search returns a relevant interface or type node ID, immediately call code_graph_traverse with IMPLEMENTS/METHOD/FIELD edges. Do NOT keep calling code_graph_search to enumerate package members — traverse does that in one call.",
+		"To find all implementations of an interface: search for the interface → get its ID → traverse with edge_types [\"IMPLEMENTS\"], direction \"in\", max_depth 1.",
+		"To find callers of a function: traverse direction \"in\", edge_types [\"CALLS\"], max_depth 1.",
+		"To find callees of a function: traverse direction \"out\", edge_types [\"CALLS\"], max_depth 1.",
+		"To inspect a type's methods or fields: traverse direction \"out\", edge_types [\"METHOD\"] or [\"FIELD\"], max_depth 1.",
+		"",
+		"== code_graph_find_paths usage ==",
+		"Use code_graph_find_paths when the user asks how two specific code entities are connected.",
+		"Before calling code_graph_find_paths, resolve both endpoints with code_graph_search and pass the returned graph node IDs as from_id and to_id.",
+		"",
 		"Keep tool use concise: usually 1-2 seed searches plus 1-2 targeted traversals are enough before answering.",
 		"Ground the final answer in the returned node names and edge directions.",
 	}, "\n")

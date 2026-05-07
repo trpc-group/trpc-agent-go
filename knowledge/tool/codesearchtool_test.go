@@ -249,10 +249,14 @@ func TestCodeGraphSearchTool(t *testing.T) {
 		require.Equal(t, graphTraverseToolName, tools[1].Declaration().Name)
 		require.Equal(t, graphFindPathsToolName, tools[2].Declaration().Name)
 		require.Contains(t, tools[0].Declaration().Description, "code_graph_traverse")
+		require.Contains(t, tools[0].Declaration().Description, "code_graph_find_paths")
 		require.Contains(t, tools[0].Declaration().Description, "metadata.trpc_ast_full_name")
 		require.Contains(t, tools[0].Declaration().Description, "repo-a")
-		require.Contains(t, tools[1].Declaration().Description, `direction "in", edge_types ["CALLS"]`)
+		require.Contains(t, tools[0].Declaration().Description, "MULTI-CALL STRATEGY")
+		require.Contains(t, tools[1].Declaration().Description, "code_graph_search")
+		require.Contains(t, tools[1].Declaration().Description, `"edge_types": ["CALLS"], "direction": "in"`)
 		require.Contains(t, tools[2].Declaration().Description, "Find paths between two AST-backed code graph nodes")
+		require.Contains(t, tools[2].Declaration().Description, "code_graph_search")
 	})
 
 	t.Run("uses configured set name and search options", func(t *testing.T) {
@@ -277,6 +281,16 @@ func TestCodeGraphSearchTool(t *testing.T) {
 		require.Equal(t, "repo_graph", toolSet.Name())
 
 		tools := toolSet.Tools(context.Background())
+
+		// Cross-tool references in descriptions must reflect the custom set name.
+		require.Contains(t, tools[0].Declaration().Description, "repo_graph_traverse")
+		require.Contains(t, tools[0].Declaration().Description, "repo_graph_find_paths")
+		require.NotContains(t, tools[0].Declaration().Description, "code_graph_traverse")
+		require.Contains(t, tools[1].Declaration().Description, "repo_graph_search")
+		require.NotContains(t, tools[1].Declaration().Description, "code_graph_search")
+		require.Contains(t, tools[2].Declaration().Description, "repo_graph_search")
+		require.Contains(t, tools[2].Declaration().Description, "repo_graph_traverse")
+
 		filter := &searchfilter.UniversalFilterCondition{Field: "metadata.trpc_ast_type", Operator: "eq", Value: "Function"}
 
 		res, err := tools[0].(ctool.CallableTool).Call(context.Background(), marshalCodeSearchFilterArgs(t, "new client", filter))

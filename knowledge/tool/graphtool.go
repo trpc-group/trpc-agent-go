@@ -14,12 +14,8 @@ import (
 	"errors"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -31,10 +27,9 @@ const (
 	graphFindPathsToolName               = "find_paths"
 	defaultGraphSearchToolDescription    = "Search graph nodes by query and metadata filter before graph traversal or path finding."
 	defaultGraphTraverseToolName         = "graph_traverse"
-	defaultGraphTraverseToolDescription  = "Traverse a graph knowledge base from known start node IDs, or from nodes resolved by query and filter."
+	defaultGraphTraverseToolDescription  = "Traverse a graph knowledge base from known start node IDs. Use graph_search first when IDs are unknown."
 	defaultGraphFindPathsToolName        = "graph_find_paths"
-	defaultGraphFindPathsToolDescription = "Find paths between known node IDs, or between nodes resolved by query and filter."
-	defaultGraphToolSearchMaxResults     = 5
+	defaultGraphFindPathsToolDescription = "Find paths between two known node IDs. Use graph_search first when endpoint IDs are unknown."
 	defaultGraphToolMaxPaths             = 10
 )
 
@@ -60,8 +55,8 @@ func NewGraphToolSet(
 	searchOpts ...Option,
 ) tool.ToolSet {
 	agenticFilterInfo := map[string][]any{
-		"content":       {},
-		"metadata.kind": {},
+		"content":                 {},
+		"metadata.trpc_ast_scope": {"code", "example"},
 	}
 	wrappedSearchOpts := []Option{
 		WithToolName(graphSearchToolName),
@@ -113,31 +108,23 @@ func WithGraphToolDescription(description string) GraphToolOption {
 
 // GraphTraverseRequest is the input for the graph traverse tool.
 type GraphTraverseRequest struct {
-	StartIDs       []string                               `json:"start_ids,omitempty" jsonschema:"description=Known graph node IDs to start traversal from. Optional when query or filter is provided."`
-	Query          string                                 `json:"query,omitempty" jsonschema:"description=Search query used to resolve start node IDs before traversal. Can be empty when using only filter."`
-	Filter         *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions used to resolve start node IDs before traversal."`
-	MaxSeeds       int                                    `json:"max_seeds,omitempty" jsonschema:"description=Maximum start nodes resolved from query/filter. Default is 5."`
-	Direction      string                                 `json:"direction,omitempty" jsonschema:"description=Traversal direction: out, in, or both. Default is out,enum=out,enum=in,enum=both"`
-	EdgeTypes      []string                               `json:"edge_types,omitempty" jsonschema:"description=Optional edge types to follow"`
-	MaxDepth       int                                    `json:"max_depth,omitempty" jsonschema:"description=Maximum traversal depth. Default is 1"`
-	MaxNodes       int                                    `json:"max_nodes,omitempty" jsonschema:"description=Maximum number of nodes to return. Default is 100"`
-	IncludeContent bool                                   `json:"include_content,omitempty" jsonschema:"description=Whether to include full node content in the response. Default false keeps graph responses compact; set true only when the code body is needed."`
+	StartIDs       []string `json:"start_ids,omitempty" jsonschema:"description=Required. Graph node IDs to start traversal from. Use graph_search first when IDs are unknown."`
+	Direction      string   `json:"direction,omitempty" jsonschema:"description=Traversal direction: out, in, or both. Default is out,enum=out,enum=in,enum=both"`
+	EdgeTypes      []string `json:"edge_types,omitempty" jsonschema:"description=Optional edge types to follow"`
+	MaxDepth       int      `json:"max_depth,omitempty" jsonschema:"description=Maximum traversal depth. Default is 1"`
+	MaxNodes       int      `json:"max_nodes,omitempty" jsonschema:"description=Maximum number of nodes to return. Default is 100"`
+	IncludeContent bool     `json:"include_content,omitempty" jsonschema:"description=Whether to include full node content in the response. Default false keeps graph responses compact, and you will receive basically node metadata; set true only when the code body is needed."`
 }
 
 // GraphFindPathsRequest is the input for the graph find paths tool.
 type GraphFindPathsRequest struct {
-	FromID         string                                 `json:"from_id,omitempty" jsonschema:"description=Known graph node ID where the path starts. Optional when from_query or from_filter is provided."`
-	FromQuery      string                                 `json:"from_query,omitempty" jsonschema:"description=Search query used to resolve path start node IDs. Can be empty when using only from_filter."`
-	FromFilter     *searchfilter.UniversalFilterCondition `json:"from_filter,omitempty" jsonschema:"description=Filter conditions used to resolve path start node IDs."`
-	ToID           string                                 `json:"to_id,omitempty" jsonschema:"description=Known graph node ID where the path ends. Optional when to_query or to_filter is provided."`
-	ToQuery        string                                 `json:"to_query,omitempty" jsonschema:"description=Search query used to resolve path end node IDs. Can be empty when using only to_filter."`
-	ToFilter       *searchfilter.UniversalFilterCondition `json:"to_filter,omitempty" jsonschema:"description=Filter conditions used to resolve path end node IDs."`
-	MaxCandidates  int                                    `json:"max_candidates,omitempty" jsonschema:"description=Maximum start/end node candidates resolved from query/filter. Default is 5."`
-	Direction      string                                 `json:"direction,omitempty" jsonschema:"description=Path search direction: out, in, or both. Default is out,enum=out,enum=in,enum=both"`
-	EdgeTypes      []string                               `json:"edge_types,omitempty" jsonschema:"description=Optional edge types to follow"`
-	MaxDepth       int                                    `json:"max_depth,omitempty" jsonschema:"description=Maximum path depth. Default is 5"`
-	MaxPaths       int                                    `json:"max_paths,omitempty" jsonschema:"description=Maximum number of paths to return. Default is 10"`
-	IncludeContent bool                                   `json:"include_content,omitempty" jsonschema:"description=Whether to include full node content in the response. Default false keeps graph responses compact; set true only when the code body is needed."`
+	FromID         string   `json:"from_id,omitempty" jsonschema:"description=Required graph node ID where the path starts. Use graph_search first when the ID is unknown."`
+	ToID           string   `json:"to_id,omitempty" jsonschema:"description=Required graph node ID where the path ends. Use graph_search first when the ID is unknown."`
+	Direction      string   `json:"direction,omitempty" jsonschema:"description=Path search direction: out, in, or both. Default is out,enum=out,enum=in,enum=both"`
+	EdgeTypes      []string `json:"edge_types,omitempty" jsonschema:"description=Optional edge types to follow"`
+	MaxDepth       int      `json:"max_depth,omitempty" jsonschema:"description=Maximum path depth. Default is 5"`
+	MaxPaths       int      `json:"max_paths,omitempty" jsonschema:"description=Maximum number of paths to return. Default is 10"`
+	IncludeContent bool     `json:"include_content,omitempty" jsonschema:"description=Whether to include full node content in the response. Default false keeps graph responses compact; set true only when the code body is needed."`
 }
 
 // NewGraphTraverseTool creates a tool for traversing graph knowledge.
@@ -152,12 +139,11 @@ func NewGraphTraverseTool(kb knowledge.GraphKnowledge, opts ...GraphToolOption) 
 		if err != nil {
 			return nil, err
 		}
-		startIDs, err := resolveGraphNodeIDs(ctx, kb, req.StartIDs, req.Query, req.Filter, req.MaxSeeds, nil, nil)
-		if err != nil {
-			return nil, err
+		if len(req.StartIDs) == 0 {
+			return nil, errors.New("start_ids is required; use graph_search first to resolve node IDs")
 		}
 		result, err := kb.Traverse(ctx, &graph.TraverseQuery{
-			StartIDs:  startIDs,
+			StartIDs:  req.StartIDs,
 			Direction: dir,
 			EdgeTypes: req.EdgeTypes,
 			MaxDepth:  req.MaxDepth,
@@ -187,20 +173,18 @@ func NewGraphFindPathsTool(kb knowledge.GraphKnowledge, opts ...GraphToolOption)
 		if err != nil {
 			return nil, err
 		}
-		fromIDs, err := resolveGraphNodeIDs(
-			ctx, kb, stringAsIDs(req.FromID), req.FromQuery, req.FromFilter, req.MaxCandidates, nil, nil,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("resolve from node: %w", err)
-		}
-		toIDs, err := resolveGraphNodeIDs(
-			ctx, kb, stringAsIDs(req.ToID), req.ToQuery, req.ToFilter, req.MaxCandidates, nil, nil,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("resolve to node: %w", err)
+		if req.FromID == "" || req.ToID == "" {
+			return nil, errors.New("from_id and to_id are required; use graph_search first to resolve endpoint node IDs")
 		}
 		maxPaths := resolveGraphToolLimit(req.MaxPaths, defaultGraphToolMaxPaths)
-		result, err := findPathsForNodeCandidates(ctx, kb, fromIDs, toIDs, dir, req.EdgeTypes, req.MaxDepth, maxPaths)
+		result, err := kb.FindPaths(ctx, &graph.PathQuery{
+			FromID:    req.FromID,
+			ToID:      req.ToID,
+			Direction: dir,
+			EdgeTypes: req.EdgeTypes,
+			MaxDepth:  req.MaxDepth,
+			MaxPaths:  maxPaths,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -290,181 +274,6 @@ func parseGraphDirection(value string) (graph.Direction, error) {
 	default:
 		return "", fmt.Errorf("unsupported direction %q", value)
 	}
-}
-
-func resolveGraphNodeIDs(
-	ctx context.Context,
-	kb knowledge.GraphKnowledge,
-	explicitIDs []string,
-	query string,
-	filter *searchfilter.UniversalFilterCondition,
-	maxResults int,
-	staticFilter map[string]any,
-	conditionedFilter *searchfilter.UniversalFilterCondition,
-) ([]string, error) {
-	if len(explicitIDs) > 0 {
-		return dedupStrings(explicitIDs), nil
-	}
-	if query == "" && filter == nil {
-		return nil, errors.New("requires node IDs, query, or filter")
-	}
-	ids, err := searchGraphNodeIDs(ctx, kb, query, filter, maxResults, staticFilter, conditionedFilter)
-	if err != nil {
-		return nil, err
-	}
-	if len(ids) == 0 {
-		return nil, errors.New("no matching graph nodes found")
-	}
-	return ids, nil
-}
-
-func searchGraphNodeIDs(
-	ctx context.Context,
-	kb knowledge.Knowledge,
-	query string,
-	filter *searchfilter.UniversalFilterCondition,
-	maxResults int,
-	staticFilter map[string]any,
-	conditionedFilter *searchfilter.UniversalFilterCondition,
-) ([]string, error) {
-	maxResults = resolveGraphToolLimit(maxResults, defaultGraphToolSearchMaxResults)
-	invocation, ok := agent.InvocationFromContext(ctx)
-	var runnerFilter map[string]any
-	var runnerConditionedFilter *searchfilter.UniversalFilterCondition
-	if ok {
-		runnerFilter = invocation.RunOptions.KnowledgeFilter
-		runnerConditionedFilter = invocation.RunOptions.KnowledgeConditionedFilter
-	}
-
-	finalFilter := mergeFilterConditions(
-		convertMetadataToFilterCondition(staticFilter),
-		conditionedFilter,
-		convertMetadataToFilterCondition(runnerFilter),
-		runnerConditionedFilter,
-		filter,
-	)
-	if query == "" && finalFilter == nil {
-		return nil, errors.New("requires query or filter")
-	}
-
-	searchReq := &knowledge.SearchRequest{
-		Query: query,
-		SearchFilter: &knowledge.SearchFilter{
-			FilterCondition: finalFilter,
-		},
-		MaxResults: maxResults,
-	}
-	if query == "" {
-		searchReq.SearchMode = vectorstore.SearchModeFilter
-	}
-
-	result, err := kb.Search(ctx, searchReq)
-	if err != nil {
-		return nil, fmt.Errorf("search graph nodes: %w", err)
-	}
-	return graphNodeIDsFromSearchResult(result), nil
-}
-
-func graphNodeIDsFromSearchResult(result *knowledge.SearchResult) []string {
-	if result == nil {
-		return nil
-	}
-	ids := make([]string, 0, 1+len(result.Documents))
-	if result.Document != nil {
-		ids = append(ids, graphNodeIDFromDocument(result.Document))
-	}
-	for _, item := range result.Documents {
-		if item == nil || item.Document == nil {
-			continue
-		}
-		ids = append(ids, graphNodeIDFromDocument(item.Document))
-	}
-	return dedupStrings(ids)
-}
-
-func graphNodeIDFromDocument(doc *document.Document) string {
-	if doc == nil {
-		return ""
-	}
-	return doc.ID
-}
-
-func findPathsForNodeCandidates(
-	ctx context.Context,
-	kb knowledge.GraphKnowledge,
-	fromIDs []string,
-	toIDs []string,
-	direction graph.Direction,
-	edgeTypes []string,
-	maxDepth int,
-	maxPaths int,
-) (*graph.PathResult, error) {
-	result := &graph.PathResult{}
-	for _, fromID := range fromIDs {
-		for _, toID := range toIDs {
-			if fromID == "" || toID == "" {
-				continue
-			}
-			pairMaxPaths := maxPaths
-			if maxPaths > 0 {
-				remaining := maxPaths - len(result.Paths)
-				if remaining <= 0 {
-					result.Truncated = true
-					return result, nil
-				}
-				pairMaxPaths = remaining
-			}
-			pairResult, err := kb.FindPaths(ctx, &graph.PathQuery{
-				FromID:    fromID,
-				ToID:      toID,
-				Direction: direction,
-				EdgeTypes: edgeTypes,
-				MaxDepth:  maxDepth,
-				MaxPaths:  pairMaxPaths,
-			})
-			if err != nil {
-				return nil, err
-			}
-			if pairResult == nil {
-				continue
-			}
-			result.Paths = append(result.Paths, pairResult.Paths...)
-			if pairResult.Truncated {
-				result.Truncated = true
-			}
-			if maxPaths > 0 && len(result.Paths) >= maxPaths {
-				if len(result.Paths) > maxPaths {
-					result.Paths = result.Paths[:maxPaths]
-				}
-				result.Truncated = true
-				return result, nil
-			}
-		}
-	}
-	return result, nil
-}
-
-func stringAsIDs(id string) []string {
-	if id == "" {
-		return nil
-	}
-	return []string{id}
-}
-
-func dedupStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
 }
 
 func resolveGraphToolLimit(value, fallback int) int {

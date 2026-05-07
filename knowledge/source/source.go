@@ -79,7 +79,6 @@ const (
 	MetaURLScheme     = MetaPrefix + "url_scheme"
 	MetaInputCount    = MetaPrefix + "input_count"
 	MetaInputs        = MetaPrefix + "inputs"
-	MetaSourceID      = MetaPrefix + "source_id"
 
 	MetaChunkType             = MetaPrefix + "chunk_type"
 	MetaChunkSize             = MetaPrefix + "chunk_size"

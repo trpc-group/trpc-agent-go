@@ -1343,15 +1343,6 @@ func hasGraphNode(data *graph.Data, id string) bool {
 	return false
 }
 
-func hasGraphNodeSourceID(data *graph.Data, id, sourceID string) bool {
-	for _, node := range data.Nodes {
-		if node.ID == id && node.Metadata[source.MetaSourceID] == sourceID {
-			return true
-		}
-	}
-	return false
-}
-
 func hasGraphNodeMetadataKey(data *graph.Data, id, key string) bool {
 	for _, node := range data.Nodes {
 		if node.ID != id {
@@ -1468,19 +1459,31 @@ func writeRepoFile(t *testing.T, path, content string) {
 	}
 }
 
-func countGraphNodesByKind(data *graph.Data, kind string) int {
+func isGraphDocumentNode(node *graph.Node) bool {
+	if node == nil || node.Metadata == nil {
+		return false
+	}
+	filePath, _ := node.Metadata[source.MetaFilePath].(string)
+	if filePath == "" {
+		return false
+	}
+	_, hasASTScope := node.Metadata["trpc_ast_scope"]
+	return !hasASTScope
+}
+
+func countGraphDocumentNodes(data *graph.Data) int {
 	n := 0
 	for _, node := range data.Nodes {
-		if node.Metadata["kind"] == kind {
+		if isGraphDocumentNode(node) {
 			n++
 		}
 	}
 	return n
 }
 
-func findGraphNodeByKindAndContent(data *graph.Data, kind, substr string) *graph.Node {
+func findGraphDocumentNodeByContent(data *graph.Data, substr string) *graph.Node {
 	for _, node := range data.Nodes {
-		if node.Metadata["kind"] == kind && strings.Contains(node.Content, substr) {
+		if isGraphDocumentNode(node) && strings.Contains(node.Content, substr) {
 			return node
 		}
 	}
@@ -1509,26 +1512,29 @@ func TestReadGraphIncludesDocumentNodes(t *testing.T) {
 		t.Fatalf("ReadGraph() error = %v", err)
 	}
 
-	docCount := countGraphNodesByKind(data, "document")
+	docCount := countGraphDocumentNodes(data)
 	if docCount != 2 {
 		t.Fatalf("expected 2 document nodes (README + CHANGELOG), got %d", docCount)
 	}
 
-	readmeNode := findGraphNodeByKindAndContent(data, "document", "readme")
+	readmeNode := findGraphDocumentNodeByContent(data, "readme")
 	if readmeNode == nil {
 		t.Fatal("expected README document node")
 	}
-	if readmeNode.Metadata[source.MetaSourceID] == "" {
-		t.Error("expected document node to have MetaSourceID")
-	}
 	if readmeNode.Metadata[source.MetaFilePath] == "" {
 		t.Error("expected document node to have MetaFilePath")
+	}
+	if _, ok := readmeNode.Metadata["kind"]; ok {
+		t.Error("document node should not have legacy kind metadata")
+	}
+	if _, ok := readmeNode.Metadata["trpc_ast_scope"]; ok {
+		t.Error("document node should not use trpc_ast_scope")
 	}
 	if readmeNode.ID == "" {
 		t.Error("expected document node to have non-empty ID")
 	}
 
-	txtNode := findGraphNodeByKindAndContent(data, "document", "internal notes")
+	txtNode := findGraphDocumentNodeByContent(data, "internal notes")
 	if txtNode != nil {
 		t.Fatal("txt file should not be included when only .md is configured")
 	}
@@ -1554,7 +1560,7 @@ func TestReadGraphDocumentNodesWithoutCodeNodes(t *testing.T) {
 	if len(data.Nodes) == 0 {
 		t.Fatal("expected at least one document node")
 	}
-	if countGraphNodesByKind(data, "document") == 0 {
+	if countGraphDocumentNodes(data) == 0 {
 		t.Fatal("expected document node")
 	}
 }
@@ -1585,12 +1591,12 @@ func TestReadGraphDocumentIDsAreDeterministic(t *testing.T) {
 
 	ids1 := make(map[string]struct{})
 	for _, node := range data1.Nodes {
-		if node.Metadata["kind"] == "document" {
+		if isGraphDocumentNode(node) {
 			ids1[node.ID] = struct{}{}
 		}
 	}
 	for _, node := range data2.Nodes {
-		if node.Metadata["kind"] == "document" {
+		if isGraphDocumentNode(node) {
 			if _, ok := ids1[node.ID]; !ok {
 				t.Fatalf("document node ID %q not stable across runs", node.ID)
 			}
@@ -1610,7 +1616,7 @@ func TestReadGraphDocumentNodesNotIncludedByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadGraph() error = %v", err)
 	}
-	if countGraphNodesByKind(data, "document") != 0 {
+	if countGraphDocumentNodes(data) != 0 {
 		t.Fatal("document nodes should not appear without WithDocExtensions")
 	}
 }
@@ -1642,8 +1648,8 @@ func (r *testMarkdownReader) ReadFromFile(filePath string) ([]*document.Document
 }
 
 func (r *testMarkdownReader) ReadFromURL(_ string) ([]*document.Document, error) { return nil, nil }
-func (r *testMarkdownReader) Name() string                                        { return "test-md" }
-func (r *testMarkdownReader) SupportedExtensions() []string                       { return []string{".md"} }
+func (r *testMarkdownReader) Name() string                                       { return "test-md" }
+func (r *testMarkdownReader) SupportedExtensions() []string                      { return []string{".md"} }
 
 // stubDirectoryParser is a minimal codeast.DirectoryParser used in tests to
 // avoid importing the real golang reader package (which requires CGO / full

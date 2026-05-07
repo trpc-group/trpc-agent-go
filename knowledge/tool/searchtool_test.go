@@ -808,7 +808,7 @@ func TestSearchToolAdditionalOptionCoverage(t *testing.T) {
 	t.Run("option helpers handle conditioned filter exclude keys and nil post processor", func(t *testing.T) {
 		opts := &options{}
 		condition := &searchfilter.UniversalFilterCondition{
-			Field:    "metadata.kind",
+			Field:    "metadata.category",
 			Operator: searchfilter.OperatorEqual,
 			Value:    "api",
 		}
@@ -841,7 +841,7 @@ func TestSearchToolAdditionalOptionCoverage(t *testing.T) {
 			},
 		}
 		condition := &searchfilter.UniversalFilterCondition{
-			Field:    "metadata.kind",
+			Field:    "metadata.category",
 			Operator: searchfilter.OperatorEqual,
 			Value:    "api",
 		}

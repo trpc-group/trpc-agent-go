@@ -122,6 +122,19 @@ func TestGraphFindPathsTool(t *testing.T) {
 	require.Equal(t, "func A() {}", result.Paths[0].Nodes[0].Content)
 }
 
+func TestGraphFindPathsToolRequiresEndpointIDs(t *testing.T) {
+	kb := &stubGraphKnowledge{}
+	graphTool := NewGraphFindPathsTool(kb)
+
+	_, err := graphTool.(ctool.CallableTool).Call(
+		context.Background(),
+		mustMarshalGraphToolArgs(t, &GraphFindPathsRequest{FromID: "a"}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "from_id and to_id are required")
+	require.Nil(t, kb.pathQuery)
+}
+
 func TestGraphToolSet(t *testing.T) {
 	kb := &stubGraphKnowledge{}
 	toolSet := NewGraphToolSet(kb)

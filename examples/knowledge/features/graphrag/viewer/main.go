@@ -35,15 +35,19 @@ import (
 var content embed.FS
 
 var (
-	addr      = flag.String("addr", util.GetEnvOrDefault("GRAPH_VIEWER_ADDR", "127.0.0.1:3012"), "HTTP listen address")
-	graphName = flag.String("graph", util.GetEnvOrDefault("AGE_GRAPH_NAME", "knowledge_graph"), "Apache AGE graph name")
-	nodeLimit = flag.Int("node-limit", 100, "Default node limit")
-	edgeLimit = flag.Int("edge-limit", 1000, "Default edge limit")
-	seedLimit = flag.Int("seed-limit", 12, "Search seed node limit")
+	addr          = flag.String("addr", util.GetEnvOrDefault("GRAPH_VIEWER_ADDR", "127.0.0.1:3012"), "HTTP listen address")
+	graphName     = flag.String("graph", util.GetEnvOrDefault("AGE_GRAPH_NAME", "knowledge_graph"), "Apache AGE graph name")
+	nodeLimit     = flag.Int("node-limit", 100, "Default node limit")
+	edgeLimit     = flag.Int("edge-limit", 1000, "Default edge limit")
+	seedLimit     = flag.Int("seed-limit", 12, "Search seed node limit")
+	searchTimeout = flag.Duration("search-timeout", 8*time.Second, "Statement timeout for seed search queries")
 )
 
 const ageSessionSQL = `LOAD 'age'; SET search_path = ag_catalog, "$user", public`
-const ageLockPrefix = "trpc-agent-go-age:"
+
+// maxPoolConns is the connection pool size. Each connection initialises an AGE
+// session independently.
+const maxPoolConns = 4
 
 type server struct {
 	db        *sql.DB
@@ -51,8 +55,9 @@ type server struct {
 }
 
 type graphResponse struct {
-	Nodes []node `json:"nodes"`
-	Edges []edge `json:"edges"`
+	Nodes   []node `json:"nodes"`
+	Edges   []edge `json:"edges"`
+	Message string `json:"message,omitempty"`
 }
 
 type node struct {
@@ -113,6 +118,8 @@ func main() {
 	}
 	mux.Handle("/", http.FileServer(http.FS(static)))
 	mux.HandleFunc("/api/graph", s.handleGraph)
+	mux.HandleFunc("/api/neighbors", s.handleNeighbors)
+	mux.HandleFunc("/api/path", s.handlePath)
 	mux.HandleFunc("/api/summary", s.handleSummary)
 	mux.HandleFunc("/api/health", s.handleHealth)
 
@@ -147,20 +154,19 @@ func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(maxPoolConns)
+	db.SetMaxIdleConns(maxPoolConns)
 	db.SetConnMaxLifetime(30 * time.Minute)
 	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if _, err := db.ExecContext(ctx, ageSessionSQL); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return db, nil
 }
 
+// ageConn acquires a connection from the pool and initialises an AGE session on
+// it. The session SET is idempotent so running it on every checkout is safe and
+// keeps the pool transparent to callers.
 func (s *server) ageConn(ctx context.Context) (*sql.Conn, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -181,13 +187,17 @@ func (s *server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	maxNodes := queryInt(r, "node_limit", *nodeLimit, 5000)
 	maxEdges := queryInt(r, "edge_limit", *edgeLimit, 20000)
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		maxEdges = queryInt(r, "limit", maxEdges, 20000)
-	}
 	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	queryField := strings.TrimSpace(r.URL.Query().Get("query_field"))
 	metadata := strings.TrimSpace(r.URL.Query().Get("metadata"))
+	edgeTypes := parseCommaList(r.URL.Query().Get("edge_type"))
+	if query != "" && strings.HasPrefix(queryField, "metadata.") {
+		metadata = appendMetadataFilter(metadata, strings.TrimPrefix(queryField, "metadata."), query)
+		query = ""
+		queryField = ""
+	}
 
-	result, err := s.loadGraph(ctx, query, metadata, maxNodes, maxEdges)
+	result, err := s.loadGraph(ctx, query, queryField, metadata, edgeTypes, maxNodes, maxEdges)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -195,15 +205,178 @@ func (s *server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
-func (s *server) loadGraph(ctx context.Context, query, metadata string, maxNodes, maxEdges int) (*graphResponse, error) {
+// handleNeighbors returns the immediate neighbours of a node identified by its
+// graph node ID property, not the AGE internal numeric id.
+//
+// Query params:
+//
+//	id        – required; the node's "id" property value
+//	depth     – optional; traversal depth (1-3, default 1)
+//	edge_type – optional; comma-separated edge labels to include (all if empty)
+//	node_limit / edge_limit – same semantics as /api/graph
+func (s *server) handleNeighbors(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	nodeID := strings.TrimSpace(r.URL.Query().Get("id"))
+	if nodeID == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+	depth := queryInt(r, "depth", 1, 3)
+	maxNodes := queryInt(r, "node_limit", *nodeLimit, 5000)
+	maxEdges := queryInt(r, "edge_limit", *edgeLimit, 20000)
+	edgeTypes := parseCommaList(r.URL.Query().Get("edge_type"))
+
+	result, err := s.loadNeighbors(ctx, nodeID, depth, edgeTypes, maxNodes, maxEdges)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *server) handlePath(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	fromID := strings.TrimSpace(r.URL.Query().Get("from_id"))
+	toID := strings.TrimSpace(r.URL.Query().Get("to_id"))
+	if fromID == "" || toID == "" {
+		http.Error(w, "from_id and to_id are required", http.StatusBadRequest)
+		return
+	}
+	result, err := s.findPath(ctx, fromID, toID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *server) findPath(ctx context.Context, fromID, toID string) (*graphResponse, error) {
+	const maxDepth = 4
+	result := &graphResponse{}
+	seenNodes := make(map[string]struct{})
+	seenEdges := make(map[string]struct{})
+	cypher := fmt.Sprintf(
+		`MATCH p = (from:Node {id: %s})-[r*1..%d]-(to:Node {id: %s}) RETURN nodes(p), relationships(p) LIMIT 1`,
+		cypherString(fromID), maxDepth, cypherString(toID),
+	)
+	conn, err := s.ageConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	timeoutMS := int(searchTimeout.Milliseconds())
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("SET statement_timeout = %d", timeoutMS)); err != nil {
+		return nil, err
+	}
+	rows, err := conn.QueryContext(ctx, s.cypherSQL(cypher, "nodes agtype, edges agtype"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rawNodes, rawEdges string
+		if err := rows.Scan(&rawNodes, &rawEdges); err != nil {
+			return nil, err
+		}
+		nodes, err := parseVertexList(rawNodes)
+		if err != nil {
+			return nil, err
+		}
+		edges, err := parseEdgeList(rawEdges)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range nodes {
+			addNode(result, seenNodes, n, len(nodes))
+		}
+		for _, e := range edges {
+			addEdge(result, seenEdges, e)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(result.Nodes) == 0 {
+		result.Message = "path not found"
+	}
+	return result, nil
+}
+
+func (s *server) loadNeighbors(
+	ctx context.Context,
+	nodeID string,
+	depth int,
+	edgeTypes []string,
+	maxNodes, maxEdges int,
+) (*graphResponse, error) {
+	result := &graphResponse{}
+	seenNodes := make(map[string]struct{})
+	seenEdges := make(map[string]struct{})
+
+	where := ""
+	if edgeFilter := buildEdgeTypeFilter("last(r)", edgeTypes); edgeFilter != "" {
+		where = " WHERE " + edgeFilter
+	}
+
+	// Use variable-length path so depth > 1 works with a single query.
+	cypher := fmt.Sprintf(
+		`MATCH (n:Node {id: %s})-[r*1..%d]-(m:Node)%s RETURN n, last(r), m LIMIT %d`,
+		cypherString(nodeID), depth, where, maxEdges,
+	)
+	conn, err := s.ageConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	timeoutMS := int(searchTimeout.Milliseconds())
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("SET statement_timeout = %d", timeoutMS)); err != nil {
+		return nil, err
+	}
+	rows, err := conn.QueryContext(ctx, s.cypherSQL(cypher, "n agtype, r agtype, m agtype"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var rawN, rawR, rawM string
+		if err := rows.Scan(&rawN, &rawR, &rawM); err != nil {
+			return nil, err
+		}
+		n, err := parseVertex(rawN)
+		if err != nil {
+			return nil, err
+		}
+		r, err := parseEdge(rawR)
+		if err != nil {
+			return nil, err
+		}
+		m, err := parseVertex(rawM)
+		if err != nil {
+			return nil, err
+		}
+		if len(result.Edges) >= maxEdges {
+			break
+		}
+		if !canAddTriple(seenNodes, n, m, maxNodes) {
+			continue
+		}
+		addNode(result, seenNodes, n, maxNodes)
+		addNode(result, seenNodes, m, maxNodes)
+		addEdge(result, seenEdges, r)
+	}
+	return result, rows.Err()
+}
+
+func (s *server) loadGraph(ctx context.Context, query, queryField, metadata string, edgeTypes []string, maxNodes, maxEdges int) (*graphResponse, error) {
 	result := &graphResponse{}
 	seenNodes := make(map[string]struct{})
 	seenEdges := make(map[string]struct{})
 	if query == "" {
-		return s.loadDefaultGraph(ctx, result, seenNodes, seenEdges, metadata, maxNodes, maxEdges)
+		return s.loadDefaultGraph(ctx, result, seenNodes, seenEdges, metadata, edgeTypes, maxNodes, maxEdges)
 	}
 
-	seeds, err := s.searchSeeds(ctx, query, metadata)
+	seeds, err := s.searchSeeds(ctx, query, queryField, metadata, maxNodes)
 	if err != nil {
 		return nil, err
 	}
@@ -217,19 +390,49 @@ func (s *server) loadGraph(ctx context.Context, query, metadata string, maxNodes
 	if len(ids) == 0 {
 		return result, nil
 	}
-	where := fmt.Sprintf("n.id IN [%s]", cypherStringList(ids))
-	if metadata != "" {
-		where += " AND " + cypherMetadataMatches("n", metadata)
-	}
-	cypher := fmt.Sprintf(
-		`MATCH (n:Node)-[r]-(m:Node) WHERE %s RETURN n, r, m LIMIT %d`,
-		where,
-		maxEdges,
-	)
-	if err := s.queryTriples(ctx, cypher, result, seenNodes, seenEdges, maxNodes, maxEdges); err != nil {
+	if err := s.loadSeedEdges(ctx, ids, metadata, edgeTypes, result, seenNodes, seenEdges, maxNodes, maxEdges); err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+func (s *server) loadSeedEdges(
+	ctx context.Context,
+	ids []string,
+	metadata string,
+	edgeTypes []string,
+	result *graphResponse,
+	seenNodes map[string]struct{},
+	seenEdges map[string]struct{},
+	maxNodes int,
+	maxEdges int,
+) error {
+	const chunkSize = 20
+	for start := 0; start < len(ids) && len(result.Edges) < maxEdges; start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		conditions := []string{fmt.Sprintf("n.id IN [%s]", cypherStringList(ids[start:end]))}
+		if metadata != "" {
+			conditions = append(conditions, buildMetadataFilter("n", metadata))
+		}
+		if edgeFilter := buildEdgeTypeFilter("last(r)", edgeTypes); edgeFilter != "" {
+			conditions = append(conditions, edgeFilter)
+		}
+		// AGE plans plain -[r]- expansion poorly with property-filtered seeds.
+		// A one-hop variable-length path keeps this path consistent with /api/neighbors
+		// and avoids statement timeouts on package-level filters.
+		cypher := fmt.Sprintf(
+			`MATCH (n:Node)-[r*1..1]-(m:Node) WHERE %s RETURN n, last(r), m LIMIT %d`,
+			strings.Join(conditions, " AND "),
+			maxEdges-len(result.Edges),
+		)
+		if err := s.queryTriples(ctx, cypher, result, seenNodes, seenEdges, maxNodes, maxEdges); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *server) loadDefaultGraph(
@@ -238,12 +441,21 @@ func (s *server) loadDefaultGraph(
 	seenNodes map[string]struct{},
 	seenEdges map[string]struct{},
 	metadata string,
+	edgeTypes []string,
 	maxNodes int,
 	maxEdges int,
 ) (*graphResponse, error) {
-	where := ""
+	var conditions []string
 	if metadata != "" {
-		where = " WHERE " + cypherMetadataMatches("n", metadata) + " OR " + cypherMetadataMatches("m", metadata)
+		f := buildMetadataFilter("n", metadata)
+		conditions = append(conditions, "("+f+" OR "+strings.Replace(f, "n.", "m.", 1)+")")
+	}
+	if edgeFilter := buildEdgeTypeFilter("r", edgeTypes); edgeFilter != "" {
+		conditions = append(conditions, edgeFilter)
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
 	cypher := fmt.Sprintf(`MATCH (n:Node)-[r]->(m:Node)%s RETURN n, r, m LIMIT %d`, where, maxEdges)
 	if err := s.queryTriples(ctx, cypher, result, seenNodes, seenEdges, maxNodes, maxEdges); err != nil {
@@ -252,32 +464,49 @@ func (s *server) loadDefaultGraph(
 	return result, nil
 }
 
-func (s *server) searchSeeds(ctx context.Context, query, metadata string) ([]vertexValue, error) {
+// searchSeeds finds seed nodes matching query on the specified field.
+// queryField can be "id", "name", "content", or "metadata.<key>".
+// An empty queryField defaults to searching only the "name" field.
+// The match is case-insensitive substring (CONTAINS).
+// Content/comment fields use a smaller limit to avoid slow full-scan queries.
+func (s *server) searchSeeds(ctx context.Context, query, queryField, metadata string, maxNodes int) ([]vertexValue, error) {
 	needle := cypherString(strings.ToLower(query))
-	where := fmt.Sprintf(
-		`toLower(n.name) CONTAINS %s OR toLower(n.id) CONTAINS %s OR toLower(n.content) CONTAINS %s`,
-		needle,
-		needle,
-		needle,
-	)
-	if metadata != "" {
-		where = "(" + where + ") AND " + cypherMetadataMatches("n", metadata)
+	var where string
+	limit := *seedLimit
+	switch {
+	case queryField == "id":
+		where = fmt.Sprintf(`toLower(toString(n.id)) CONTAINS %s`, needle)
+	case queryField == "content":
+		where = fmt.Sprintf(`toLower(toString(n.content)) CONTAINS %s`, needle)
+		if limit > 5 {
+			limit = 5
+		}
+	case strings.HasPrefix(queryField, "metadata."):
+		metaKey := strings.TrimPrefix(queryField, "metadata.")
+		where = fmt.Sprintf(`toLower(toString(n.metadata[%s])) CONTAINS %s`, cypherString(metaKey), needle)
+		limit = maxNodes
+		// comment is also a large text field
+		if metaKey == "trpc_ast_comment" && limit > 5 {
+			limit = 5
+		}
+	default:
+		// "name" or unspecified
+		where = fmt.Sprintf(`toLower(toString(n.name)) CONTAINS %s`, needle)
 	}
-	cypher := fmt.Sprintf(
-		`MATCH (n:Node) WHERE %s RETURN n LIMIT %d`,
-		where,
-		*seedLimit,
-	)
+	if metadata != "" {
+		where = "(" + where + ") AND " + buildMetadataFilter("n", metadata)
+	}
+	cypher := fmt.Sprintf(`MATCH (n:Node) WHERE %s RETURN n LIMIT %d`, where, limit)
+
 	conn, err := s.ageConn(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
-	unlock, err := s.lockAgeConn(ctx, conn)
-	if err != nil {
+	timeoutMS := int(searchTimeout.Milliseconds())
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("SET statement_timeout = %d", timeoutMS)); err != nil {
 		return nil, err
 	}
-	defer unlock()
 	rows, err := conn.QueryContext(ctx, s.cypherSQL(cypher, "n agtype"))
 	if err != nil {
 		return nil, err
@@ -305,11 +534,10 @@ func (s *server) queryTriples(ctx context.Context, cypher string, result *graphR
 		return err
 	}
 	defer conn.Close()
-	unlock, err := s.lockAgeConn(ctx, conn)
-	if err != nil {
+	timeoutMS := int(searchTimeout.Milliseconds())
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("SET statement_timeout = %d", timeoutMS)); err != nil {
 		return err
 	}
-	defer unlock()
 	rows, err := conn.QueryContext(ctx, s.cypherSQL(cypher, "n agtype, r agtype, m agtype"))
 	if err != nil {
 		return err
@@ -354,12 +582,6 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	unlock, err := s.lockAgeConn(r.Context(), conn)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	defer unlock()
 	rows, err := conn.QueryContext(r.Context(), s.cypherSQL(cypher, "from_label agtype, edge_label agtype, to_label agtype, edge_count agtype"))
 	if err != nil {
 		writeError(w, err)
@@ -390,16 +612,6 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) cypherSQL(cypher, columns string) string {
 	return fmt.Sprintf("SELECT * FROM cypher(%s, %s) AS (%s)", sqlString(s.graphName), dollarQuote(cypher), columns)
-}
-
-func (s *server) lockAgeConn(ctx context.Context, conn *sql.Conn) (func(), error) {
-	key := ageLockPrefix + s.graphName
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext($1))`, key); err != nil {
-		return nil, err
-	}
-	return func() {
-		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext($1))`, key)
-	}, nil
 }
 
 func canAddTriple(seen map[string]struct{}, from, to vertexValue, maxNodes int) bool {
@@ -475,6 +687,32 @@ func parseEdge(raw string) (edgeValue, error) {
 	return e, nil
 }
 
+func parseVertexList(raw string) ([]vertexValue, error) {
+	var nodes []vertexValue
+	if err := decodeAgtypeList(raw, &nodes); err != nil {
+		return nil, err
+	}
+	for i := range nodes {
+		if nodes[i].Properties == nil {
+			nodes[i].Properties = map[string]any{}
+		}
+	}
+	return nodes, nil
+}
+
+func parseEdgeList(raw string) ([]edgeValue, error) {
+	var edges []edgeValue
+	if err := decodeAgtypeList(raw, &edges); err != nil {
+		return nil, err
+	}
+	for i := range edges {
+		if edges[i].Properties == nil {
+			edges[i].Properties = map[string]any{}
+		}
+	}
+	return edges, nil
+}
+
 func decodeAgtype(raw, suffix string, dst any) error {
 	raw = strings.TrimSpace(raw)
 	raw = strings.TrimSuffix(raw, suffix)
@@ -482,6 +720,19 @@ func decodeAgtype(raw, suffix string, dst any) error {
 	decoder.UseNumber()
 	if err := decoder.Decode(dst); err != nil {
 		return fmt.Errorf("decode agtype %q: %w", raw, err)
+	}
+	return nil
+}
+
+func decodeAgtypeList(raw string, dst any) error {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimSuffix(raw, "::agtype")
+	raw = strings.ReplaceAll(raw, "::vertex", "")
+	raw = strings.ReplaceAll(raw, "::edge", "")
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(dst); err != nil {
+		return fmt.Errorf("decode agtype list %q: %w", raw, err)
 	}
 	return nil
 }
@@ -506,7 +757,7 @@ func metadataKind(properties map[string]any) string {
 	if !ok {
 		return ""
 	}
-	for _, key := range []string{"trpc_ast_type", "kind", "trpc_ast_scope"} {
+	for _, key := range []string{"trpc_ast_type", "trpc_ast_scope"} {
 		if value, ok := stringProperty(raw, key); ok && value != "" {
 			return value
 		}
@@ -514,27 +765,62 @@ func metadataKind(properties map[string]any) string {
 	return ""
 }
 
-func queryInt(r *http.Request, key string, fallback, max int) int {
-	raw := strings.TrimSpace(r.URL.Query().Get(key))
-	if raw == "" {
-		return fallback
+// buildMetadataFilter builds a Cypher WHERE clause fragment for metadata filtering.
+// Supports multiple AND-combined conditions separated by ";", and per-condition
+// key=value glob matching. Examples:
+//
+//	"trpc_ast_type=Method"
+//	"trpc_ast_package=knowledge*;trpc_ast_type=Function"
+//	"client"  (full-metadata substring match)
+func buildMetadataFilter(variable, pattern string) string {
+	parts := splitConditions(pattern)
+	clauses := make([]string, 0, len(parts))
+	for _, part := range parts {
+		clauses = append(clauses, cypherMetadataMatches(variable, part))
 	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return fallback
+	if len(clauses) == 1 {
+		return clauses[0]
 	}
-	if value > max {
-		return max
-	}
-	return value
+	return "(" + strings.Join(clauses, " AND ") + ")"
 }
 
-func cypherStringList(values []string) string {
-	parts := make([]string, 0, len(values))
-	for _, value := range values {
-		parts = append(parts, cypherString(value))
+func appendMetadataFilter(existing, key, value string) string {
+	filter := strings.TrimSpace(key) + "=" + strings.TrimSpace(value)
+	if strings.TrimSpace(existing) == "" {
+		return filter
 	}
-	return strings.Join(parts, ", ")
+	return existing + ";" + filter
+}
+
+func buildEdgeTypeFilter(edgeExpr string, edgeTypes []string) string {
+	if len(edgeTypes) == 0 {
+		return ""
+	}
+	quoted := make([]string, 0, len(edgeTypes))
+	for _, t := range edgeTypes {
+		if t != "" {
+			quoted = append(quoted, cypherString(t))
+		}
+	}
+	if len(quoted) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("label(%s) IN [%s]", edgeExpr, strings.Join(quoted, ", "))
+}
+
+// splitConditions splits a metadata filter string on ";" into individual conditions.
+func splitConditions(pattern string) []string {
+	raw := strings.Split(pattern, ";")
+	out := make([]string, 0, len(raw))
+	for _, s := range raw {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return []string{pattern}
+	}
+	return out
 }
 
 func cypherMetadataMatches(variable, pattern string) string {
@@ -584,6 +870,14 @@ func cypherString(value string) string {
 	return "'" + value + "'"
 }
 
+func cypherStringList(values []string) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, cypherString(value))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func sqlString(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
@@ -600,6 +894,31 @@ func trimAgtypeString(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.Trim(value, `"`)
 	return value
+}
+
+func queryInt(r *http.Request, key string, fallback, max int) int {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func parseCommaList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, value any) {

@@ -10,6 +10,7 @@
 package age
 
 import (
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
@@ -57,6 +58,30 @@ func TestParseAgStringListPreservesNullPositions(t *testing.T) {
 	}
 	if values[0] != "edge-1" || values[1] != "" || values[2] != "edge-3" {
 		t.Fatalf("values = %+v, want preserved null slot", values)
+	}
+}
+
+func TestPathQueryCypherUsesPropertiesInListComprehension(t *testing.T) {
+	cypher := pathQueryCypher("from-node", "to-node", "-[:CALLS*1..3]->", 5)
+	for _, want := range []string{
+		"[node IN nodes(p) | properties(node).id]",
+		"[edge IN relationships(p) | properties(edge).id]",
+		"[edge IN relationships(p) | properties(startNode(edge)).id]",
+		"[edge IN relationships(p) | properties(endNode(edge)).id]",
+	} {
+		if !strings.Contains(cypher, want) {
+			t.Fatalf("pathQueryCypher() missing %q in %s", want, cypher)
+		}
+	}
+	for _, bad := range []string{
+		"| node.id]",
+		"| edge.id]",
+		"| startNode(edge).id]",
+		"| endNode(edge).id]",
+	} {
+		if strings.Contains(cypher, bad) {
+			t.Fatalf("pathQueryCypher() contains AGE-incompatible property access %q in %s", bad, cypher)
+		}
 	}
 }
 

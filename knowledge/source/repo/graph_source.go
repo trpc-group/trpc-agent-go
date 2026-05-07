@@ -112,7 +112,7 @@ func (s *Source) graphDataFromCodeAST(
 	edgeMap := make(map[string]*graph.Edge)
 	keptSymbols := make(map[string]struct{})
 	symbolIDs := make(map[string]string)
-	symbolSourceIDs := make(map[string]string)
+	symbolNodeKeys := make(map[string]string)
 
 	for _, astNode := range result.Nodes {
 		if astNode == nil || astNode.ID == "" {
@@ -122,12 +122,12 @@ func (s *Source) graphDataFromCodeAST(
 		if _, ok := allowedGoPaths[relPath]; !ok {
 			continue
 		}
-		sourceID := repoGraphSourceID(namespace, "symbol", astNode.ID)
-		nodeID := generatedGraphID("node", sourceID)
+		nodeKey := repoGraphNodeKey(namespace, "symbol", astNode.ID)
+		nodeID := generatedGraphID("node", nodeKey)
 		keptSymbols[astNode.ID] = struct{}{}
 		symbolIDs[astNode.ID] = nodeID
-		symbolSourceIDs[astNode.ID] = sourceID
-		nodeMap[nodeID] = graphNodeFromCodeAST(astNode, nodeID, sourceID, relPath, baseMetadata)
+		symbolNodeKeys[astNode.ID] = nodeKey
+		nodeMap[nodeID] = graphNodeFromCodeAST(astNode, nodeID, relPath, baseMetadata)
 	}
 
 	for _, astEdge := range result.Edges {
@@ -142,8 +142,8 @@ func (s *Source) graphDataFromCodeAST(
 		}
 		fromID := symbolIDs[astEdge.FromID]
 		toID := symbolIDs[astEdge.ToID]
-		edgeSourceID := repoGraphEdgeKey(symbolSourceIDs[astEdge.FromID], string(astEdge.Type), symbolSourceIDs[astEdge.ToID])
-		edgeID := generatedGraphID("edge", edgeSourceID)
+		edgeKey := repoGraphEdgeKey(symbolNodeKeys[astEdge.FromID], string(astEdge.Type), symbolNodeKeys[astEdge.ToID])
+		edgeID := generatedGraphID("edge", edgeKey)
 		edgeMap[edgeID] = &graph.Edge{
 			ID:       edgeID,
 			FromID:   fromID,
@@ -154,7 +154,6 @@ func (s *Source) graphDataFromCodeAST(
 		if edgeMap[edgeID].Metadata == nil {
 			edgeMap[edgeID].Metadata = make(map[string]any)
 		}
-		edgeMap[edgeID].Metadata[source.MetaSourceID] = edgeSourceID
 		edgeMap[edgeID].Metadata["builder"] = "repo_graph_source"
 	}
 
@@ -172,7 +171,6 @@ func (s *Source) graphDataFromCodeAST(
 func graphNodeFromCodeAST(
 	astNode *codeast.Node,
 	nodeID string,
-	sourceID string,
 	relPath string,
 	baseMetadata map[string]any,
 ) *graph.Node {
@@ -180,8 +178,6 @@ func graphNodeFromCodeAST(
 	if metadata == nil {
 		metadata = make(map[string]any)
 	}
-	metadata["kind"] = "code"
-	metadata[source.MetaSourceID] = sourceID
 	metadata[codeast.TrpcAstMetaPrefix+"type"] = string(astNode.Type)
 	metadata[codeast.TrpcAstMetaPrefix+"name"] = astNode.Name
 	metadata[codeast.TrpcAstMetaPrefix+"full_name"] = astNode.FullName
@@ -231,16 +227,16 @@ func repoGraphNamespace(info *repoInfo) string {
 	return "repo:" + repoKey + "#" + revision
 }
 
-func repoGraphSourceID(namespace, kind, value string) string {
+func repoGraphNodeKey(namespace, kind, value string) string {
 	if value == "" {
 		return namespace + "#" + kind
 	}
 	return namespace + "#" + kind + ":" + value
 }
 
-func generatedGraphID(kind, sourceID string) string {
+func generatedGraphID(kind, key string) string {
 	// #nosec G401 -- this is a deterministic graph ID, not a security hash.
-	sum := sha1.Sum([]byte(sourceID))
+	sum := sha1.Sum([]byte(key))
 	return kind + ":" + hex.EncodeToString(sum[:12])
 }
 
@@ -260,7 +256,7 @@ func cloneAnyMap(metadata map[string]any) map[string]any {
 }
 
 // readDocumentNodes scans the directory for files matching s.docExtensions and
-// converts each document chunk into a graph.Node with kind="document".
+// converts each document chunk into a document-scoped graph.Node.
 func (s *Source) readDocumentNodes(
 	ctx context.Context,
 	rootToScan string,
@@ -306,9 +302,9 @@ func (s *Source) readDocumentNodes(
 					}
 				}
 			}
-			sourceID := repoGraphSourceID(namespace, "doc", fmt.Sprintf("%s#%d", relPath, chunkIndex))
-			nodeID := generatedGraphID("node", sourceID)
-			nodes = append(nodes, graphNodeFromDocumentChunk(doc, nodeID, sourceID, relPath, chunkIndex, baseMetadata))
+			nodeKey := repoGraphNodeKey(namespace, "doc", fmt.Sprintf("%s#%d", relPath, chunkIndex))
+			nodeID := generatedGraphID("node", nodeKey)
+			nodes = append(nodes, graphNodeFromDocumentChunk(doc, nodeID, relPath, chunkIndex, baseMetadata))
 		}
 	}
 	_ = ctx
@@ -318,7 +314,6 @@ func (s *Source) readDocumentNodes(
 func graphNodeFromDocumentChunk(
 	doc *document.Document,
 	nodeID string,
-	sourceID string,
 	relPath string,
 	chunkIndex int,
 	baseMetadata map[string]any,
@@ -327,8 +322,6 @@ func graphNodeFromDocumentChunk(
 	if metadata == nil {
 		metadata = make(map[string]any)
 	}
-	metadata["kind"] = "document"
-	metadata[source.MetaSourceID] = sourceID
 	metadata[source.MetaFilePath] = relPath
 	metadata[source.MetaChunkIndex] = chunkIndex
 	metadata[source.MetaContentLength] = len([]rune(doc.Content))

@@ -43,7 +43,6 @@ type Store struct {
 	client     postgres.Client
 	option     options
 	labelMu    sync.Mutex
-	queryMu    sync.Mutex
 	edgeLabels map[string]struct{}
 }
 
@@ -82,7 +81,7 @@ func (s *Store) initDB(ctx context.Context) error {
 	if _, err := s.client.ExecContext(ctx, "CREATE EXTENSION IF NOT EXISTS age"); err != nil {
 		return fmt.Errorf("age: create extension: %w", err)
 	}
-	return s.withAgeTx(ctx, func(tx *sql.Tx) error {
+	return s.withLockedAgeTx(ctx, func(tx *sql.Tx) error {
 		var exists int
 		row := tx.QueryRowContext(ctx,
 			`SELECT COUNT(1) FROM ag_catalog.ag_graph WHERE name = $1`,
@@ -120,7 +119,7 @@ func (s *Store) ensureEdgeLabels(ctx context.Context, labels []string) error {
 	if len(missing) == 0 {
 		return nil
 	}
-	if err := s.withAgeTx(ctx, func(tx *sql.Tx) error {
+	if err := s.withLockedAgeTx(ctx, func(tx *sql.Tx) error {
 		for _, label := range missing {
 			if err := s.ensureLabelTx(ctx, tx, label, "e", "create_elabel"); err != nil {
 				return err
@@ -259,9 +258,6 @@ func (s *Store) AddEdges(
 
 // Traverse runs a graph traversal from one or more start nodes.
 func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*graph.TraverseResult, error) {
-	s.queryMu.Lock()
-	defer s.queryMu.Unlock()
-
 	if query == nil {
 		return nil, errors.New("age: traverse query is required")
 	}
@@ -338,9 +334,6 @@ func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*grap
 
 // FindPaths finds paths between two graph nodes.
 func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.PathResult, error) {
-	s.queryMu.Lock()
-	defer s.queryMu.Unlock()
-
 	if query == nil {
 		return nil, errors.New("age: path query is required")
 	}
@@ -366,15 +359,7 @@ func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.P
 			if len(paths) >= maxPaths {
 				return nil
 			}
-			cypher := fmt.Sprintf(
-				`MATCH p=(from:%s {id: %s})%s(to:%s {id: %s}) RETURN [node IN nodes(p) | node.id], [edge IN relationships(p) | edge.id], [edge IN relationships(p) | startNode(edge).id], [edge IN relationships(p) | endNode(edge).id], [edge IN relationships(p) | type(edge)] LIMIT %d`,
-				nodeLabel,
-				cypherString(query.FromID),
-				pattern,
-				nodeLabel,
-				cypherString(query.ToID),
-				maxPaths-len(paths),
-			)
+			cypher := pathQueryCypher(query.FromID, query.ToID, pattern, maxPaths-len(paths))
 			rawPaths, err := s.queryAgPaths(ctx, tx, cypher)
 			if err != nil {
 				return err
@@ -397,6 +382,18 @@ func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.P
 	return &graph.PathResult{Paths: paths}, nil
 }
 
+func pathQueryCypher(fromID, toID, pattern string, limit int) string {
+	return fmt.Sprintf(
+		`MATCH p=(from:%s {id: %s})%s(to:%s {id: %s}) RETURN [node IN nodes(p) | properties(node).id], [edge IN relationships(p) | properties(edge).id], [edge IN relationships(p) | properties(startNode(edge)).id], [edge IN relationships(p) | properties(endNode(edge)).id], [edge IN relationships(p) | type(edge)] LIMIT %d`,
+		nodeLabel,
+		cypherString(fromID),
+		pattern,
+		nodeLabel,
+		cypherString(toID),
+		limit,
+	)
+}
+
 // Close closes the graph client.
 func (s *Store) Close() error {
 	if s.client != nil {
@@ -406,6 +403,18 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) withAgeTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	return s.client.Transaction(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `LOAD 'age'`); err != nil {
+			return fmt.Errorf("age: load extension: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `SET search_path = ag_catalog, "$user", public`); err != nil {
+			return fmt.Errorf("age: set search path: %w", err)
+		}
+		return fn(tx)
+	})
+}
+
+func (s *Store) withLockedAgeTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return s.client.Transaction(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "trpc-agent-go-age:"+s.option.graphName); err != nil {
 			return fmt.Errorf("age: acquire advisory lock: %w", err)
