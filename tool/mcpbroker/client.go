@@ -221,14 +221,65 @@ func (b *Broker) resolveClientOptions(
 		Config:     cloneConnectionConfig(cfg),
 	}
 
-	out, err := b.options.clientOptionsProvider(ctx, req)
+	out, err := invokeClientOptionsProvider(ctx, b.options.clientOptionsProvider, req)
 	if err != nil {
 		return nil, nil, err
 	}
 	if out == nil {
 		return nil, nil, nil
 	}
-	return out.HTTP, out.Stdio, nil
+	return filterNilClientOptions(out.HTTP), filterNilStdioClientOptions(out.Stdio), nil
+}
+
+// invokeClientOptionsProvider runs the host-supplied provider with a panic guard so a
+// misbehaving hook surfaces as an error wrapping ErrClientOptionsProviderPanicked instead
+// of crashing the agent. The provider runs on the hot path of every list/inspect/call
+// invocation; recover() here is cheap insurance against host bugs that would otherwise
+// unwind through trpc-mcp-go internals.
+func invokeClientOptionsProvider(
+	ctx context.Context,
+	fn ClientOptionsProvider,
+	req *ClientOptionsRequest,
+) (out *ClientOptions, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+			err = fmt.Errorf("%w: %v", ErrClientOptionsProviderPanicked, r)
+		}
+	}()
+	return fn(ctx, req)
+}
+
+// filterNilClientOptions drops nil entries so trpc-mcp-go's option application loop never
+// invokes a nil ClientOption (which would panic). Hosts often build options conditionally,
+// so tolerating sparse slices keeps the contract forgiving.
+func filterNilClientOptions(opts []tmcp.ClientOption) []tmcp.ClientOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	result := make([]tmcp.ClientOption, 0, len(opts))
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		result = append(result, opt)
+	}
+	return result
+}
+
+// filterNilStdioClientOptions mirrors filterNilClientOptions for the stdio transport.
+func filterNilStdioClientOptions(opts []tmcp.StdioClientOption) []tmcp.StdioClientOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	result := make([]tmcp.StdioClientOption, 0, len(opts))
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		result = append(result, opt)
+	}
+	return result
 }
 
 func createClient(cfg mcpcfg.ConnectionConfig, extraHTTP []tmcp.ClientOption, extraStdio []tmcp.StdioClientOption) (tmcp.Connector, error) {
