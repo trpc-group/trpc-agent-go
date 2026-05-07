@@ -236,9 +236,9 @@ func cloneRequest(request *model.Request) (*model.Request, error) {
 		return nil, fmt.Errorf("unmarshal request: %w", err)
 	}
 	if len(request.ExtraFields) > 0 {
-		cloned.ExtraFields = make(map[string]any, len(request.ExtraFields))
-		for key, value := range request.ExtraFields {
-			cloned.ExtraFields[key] = value
+		cloned.ExtraFields, err = cloneExtraFields(request.ExtraFields)
+		if err != nil {
+			return nil, err
 		}
 	}
 	if len(request.Tools) > 0 {
@@ -248,6 +248,18 @@ func cloneRequest(request *model.Request) (*model.Request, error) {
 		}
 	}
 	return &cloned, nil
+}
+
+func cloneExtraFields(fields map[string]any) (map[string]any, error) {
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request extra fields: %w", err)
+	}
+	var cloned map[string]any
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return nil, fmt.Errorf("unmarshal request extra fields: %w", err)
+	}
+	return cloned, nil
 }
 
 func hasFailoverResponseError(response *model.Response) bool {
