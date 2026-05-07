@@ -36,13 +36,6 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agent/"/>
     </url>
     <url>
-        <loc>https://trpc-group.github.io/trpc-agent-go/agui/</loc>
-        <lastmod>2026-05-07</lastmod>
-        <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agui/"/>
-        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/"/>
-    </url>
-    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/artifact/</loc>
         <lastmod>2026-05-07</lastmod>
         <changefreq>daily</changefreq>
@@ -223,6 +216,34 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/wikipedia/"/>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/wikipedia/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/agui/</loc>
+        <lastmod>2026-05-07</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agui/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/agui/cancel/</loc>
+        <lastmod>2026-05-07</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agui/cancel/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/cancel/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/agui/chat/</loc>
+        <lastmod>2026-05-07</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agui/chat/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/chat/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/agui/history/</loc>
+        <lastmod>2026-05-07</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agui/history/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/history/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/knowledge/</loc>
@@ -435,13 +456,6 @@
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agent/"/>
     </url>
     <url>
-        <loc>https://trpc-group.github.io/trpc-agent-go/zh/agui/</loc>
-        <lastmod>2026-05-07</lastmod>
-        <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agui/"/>
-    </url>
-    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/artifact/</loc>
         <lastmod>2026-05-07</lastmod>
         <changefreq>daily</changefreq>
@@ -622,6 +636,34 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/wikipedia/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/wikipedia/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/agui/</loc>
+        <lastmod>2026-05-07</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agui/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/agui/cancel/</loc>
+        <lastmod>2026-05-07</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/cancel/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agui/cancel/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/agui/chat/</loc>
+        <lastmod>2026-05-07</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/chat/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agui/chat/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/agui/history/</loc>
+        <lastmod>2026-05-07</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/history/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/agui/history/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/knowledge/</loc>
