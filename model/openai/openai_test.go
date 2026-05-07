@@ -4567,12 +4567,60 @@ func TestBuildChatRequest_WithExtraFields(t *testing.T) {
 			model.NewUserMessage("test"),
 		},
 		GenerationConfig: model.GenerationConfig{},
+		ExtraFields: map[string]any{
+			"prompt_cache_key": "cache-1",
+		},
 	}
 
 	chatReq, reqOpts := m.buildChatRequest(req)
 	assert.Equal(t, "gpt-3.5-turbo", chatReq.Model, "expected model to be gpt-3.5-turbo")
-	// Extra fields should be included in reqOpts
-	assert.NotEmpty(t, reqOpts, "expected request options to be present")
+	// Extra fields should be included in reqOpts.
+	assert.Len(t, reqOpts, 3, "expected model and request extra fields to be present")
+}
+
+func TestModel_GenerateContent_RequestExtraFieldsOverrideModelExtraFields(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-3.5-turbo",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithExtraFields(map[string]any{
+			"model_field":      "model_value",
+			"prompt_cache_key": "model-cache",
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		ExtraFields: map[string]any{
+			"prompt_cache_key": "request-cache",
+		},
+	}
+
+	responseChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	require.NotNil(t, captured)
+	assert.Equal(t, "model_value", captured["model_field"])
+	assert.Equal(t, "request-cache", captured["prompt_cache_key"])
 }
 
 // TestNew_WithAllOptions tests creating a model with all available options.

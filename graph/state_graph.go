@@ -1394,6 +1394,17 @@ func applyInvocationRequestOverrides(
 	if invocation.RunOptions.Stream != nil {
 		request.GenerationConfig.Stream = *invocation.RunOptions.Stream
 	}
+	if len(invocation.RunOptions.ModelRequestExtraFields) > 0 {
+		if request.ExtraFields == nil {
+			request.ExtraFields = make(
+				map[string]any,
+				len(invocation.RunOptions.ModelRequestExtraFields),
+			)
+		}
+		for key, value := range invocation.RunOptions.ModelRequestExtraFields {
+			request.ExtraFields[key] = value
+		}
+	}
 }
 
 func extractModelResponseSummary(result any) (string, string) {
