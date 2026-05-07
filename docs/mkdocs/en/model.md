@@ -562,22 +562,59 @@ model := oaimodel.New("deepseek-v4-flash",
 )
 ```
 
-**Difference between `SetExtraFields` in callback and `WithExtraFields`**:
+**Difference between request-body customization approaches**:
 
-| Aspect | `WithExtraFields` | `SetExtraFields` in `WithChatRequestCallback` |
-| --- | --- | --- |
-| Timing | Set once at model creation | Called before every request |
-| Dynamism | Static values only | Dynamic values based on `ctx` or runtime state |
-| Mechanism | Injected via `openaiopt.WithJSONSet` (RequestOption layer) | Set on the `ChatCompletionNewParams` struct (serialization layer) |
-| Same key conflict | `WithExtraFields` wins (applied later, overwrites same keys) | Overwritten by `WithExtraFields` if same key exists |
+| Aspect | `WithExtraFields` | `agent.WithModelRequestExtraFields` | `SetExtraFields` in `WithChatRequestCallback` |
+| --- | --- | --- | --- |
+| Timing | Set once at model creation | Set on one `runner.Run(...)` call | Called before every model request |
+| Dynamism | Static values only | Dynamic values known at run time | Dynamic values based on `ctx` or runtime state |
+| Mechanism | Injected via `openaiopt.WithJSONSet` (RequestOption layer) | Copied into `model.Request.ExtraFields`, then injected by supported adapters | Set on the `ChatCompletionNewParams` struct (serialization layer) |
+| Same key conflict | Overwritten by request-level extra fields | Takes precedence over model-level extra fields | Overwritten by RequestOption-layer extra fields if the same key exists |
 
-When both are used with **different keys**, all fields appear in the final
-JSON body without conflict. When both set the **same key**,
-`WithExtraFields` takes precedence because `WithJSONSet` is applied after
-struct serialization.
+When multiple approaches use **different keys**, all fields appear in the final
+JSON body without conflict. When they set the **same key**, request-level extra
+fields passed with `agent.WithModelRequestExtraFields` take precedence in
+OpenAI-compatible adapters.
 
-For most dynamic per-request customization, `SetExtraFields` in the callback
-is the recommended approach.
+##### Request-scoped extra fields from Runner
+
+Use `agent.WithModelRequestExtraFields` when a provider-specific top-level
+request body field should vary per `runner.Run(...)` call, for example
+`prompt_cache_key` on OpenAI-compatible endpoints:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+func runOnce(ctx context.Context, r runner.Runner, cacheKey string) error {
+    events, err := r.Run(
+        ctx,
+        "user-001",
+        "session-001",
+        model.NewUserMessage("Hello"),
+        agent.WithModelRequestExtraFields(map[string]any{
+            "prompt_cache_key": cacheKey,
+        }),
+    )
+    if err != nil {
+        return err
+    }
+    for range events {
+    }
+    return nil
+}
+```
+
+This option applies to every model call created during that run, including
+normal LLM agents, graph LLM nodes, and requests routed through failover or
+hedge models. The built-in OpenAI and HuggingFace/OpenAI-compatible adapters
+merge these fields into the top-level JSON request body. Other provider
+adapters ignore the field unless they add an explicit provider-specific mapping.
 
 #### 2. Model Switching
 
