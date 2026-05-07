@@ -17,7 +17,7 @@ const (
 	ErrorTypeAPIError    = "api_error"
 	ErrorTypeFlowError   = "flow_error"
 	ErrorTypeRunError    = "run_error"
-	// ErrorTypeCancelled 表示调用方主动取消或超时导致的错误。
+	// ErrorTypeCancelled indicates an error resulting from the caller actively canceling the operation or from a timeout.
 	ErrorTypeCancelled = "cancelled"
 )
 

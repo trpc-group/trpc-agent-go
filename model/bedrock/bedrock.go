@@ -39,7 +39,7 @@ type BedrockClient interface {
 	ConverseStream(ctx context.Context, params *bedrockruntime.ConverseStreamInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
 }
 
-// StreamReader 定义流式事件读取器接口，用于解耦流式处理逻辑以便测试。
+// StreamReader defines the stream event reader interface, decoupling stream processing logic for testing.
 type StreamReader interface {
 	Events() <-chan types.ConverseStreamOutput
 	Close() error
@@ -157,14 +157,14 @@ func (m *Model) handleStreamingResponse(
 	m.processStreamEvents(ctx, stream, responseChan)
 }
 
-// processStreamEvents 处理流式事件并将响应发送到 responseChan。
-// 该方法接受 StreamReader 接口，便于测试时注入 mock 实现。
+// processStreamEvents processes stream events and sends responses to responseChan.
+// This method accepts a StreamReader interface, allowing mock injection during testing.
 func (m *Model) processStreamEvents(
 	ctx context.Context,
 	stream StreamReader,
 	responseChan chan<- *model.Response,
 ) {
-	// 用于累积工具调用信息
+	// Variables for accumulating tool call information
 	var (
 		toolCalls        []model.ToolCall
 		currentToolCall  *model.ToolCall
@@ -175,59 +175,40 @@ func (m *Model) processStreamEvents(
 		usage            *model.Usage
 	)
 
-	for event := range stream.Events() {
-		switch ev := event.(type) {
-		case *types.ConverseStreamOutputMemberContentBlockStart:
-			// 处理内容块开始事件
-			if ev.Value.Start != nil {
-				switch start := ev.Value.Start.(type) {
-				case *types.ContentBlockStartMemberToolUse:
-					// 工具调用开始
-					currentToolCall = &model.ToolCall{
-						Index: func() *int { idx := toolCallIndex; return &idx }(),
-						Type:  functionToolType,
-						ID:    aws.ToString(start.Value.ToolUseId),
-						Function: model.FunctionDefinitionParam{
-							Name: aws.ToString(start.Value.Name),
-						},
-					}
-					toolCallIndex++
-				}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-stream.Events():
+			if !ok {
+				goto streamDone
 			}
-
-		case *types.ConverseStreamOutputMemberContentBlockDelta:
-			// 处理内容块增量事件
-			if ev.Value.Delta != nil {
-				switch delta := ev.Value.Delta.(type) {
-				case *types.ContentBlockDeltaMemberText:
-					// 文本增量
-					contentBuilder.WriteString(delta.Value)
-					partialResponse := &model.Response{
-						Object:    model.ObjectTypeChatCompletionChunk,
-						Model:     m.modelID,
-						Created:   time.Now().Unix(),
-						Timestamp: time.Now(),
-						IsPartial: true,
-						Choices: []model.Choice{
-							{
-								Delta: model.Message{
-									Role:    model.RoleAssistant,
-									Content: delta.Value,
-								},
+			switch ev := event.(type) {
+			case *types.ConverseStreamOutputMemberContentBlockStart:
+				// Handle content block start event
+				if ev.Value.Start != nil {
+					switch start := ev.Value.Start.(type) {
+					case *types.ContentBlockStartMemberToolUse:
+						// Tool call start
+						currentToolCall = &model.ToolCall{
+							Index: func() *int { idx := toolCallIndex; return &idx }(),
+							Type:  functionToolType,
+							ID:    aws.ToString(start.Value.ToolUseId),
+							Function: model.FunctionDefinitionParam{
+								Name: aws.ToString(start.Value.Name),
 							},
-						},
+						}
+						toolCallIndex++
 					}
-					select {
-					case responseChan <- partialResponse:
-					case <-ctx.Done():
-						return
-					}
+				}
 
-				case *types.ContentBlockDeltaMemberReasoningContent:
-					// 推理内容增量
-					switch reasoningDelta := delta.Value.(type) {
-					case *types.ReasoningContentBlockDeltaMemberText:
-						reasoningBuilder.WriteString(reasoningDelta.Value)
+			case *types.ConverseStreamOutputMemberContentBlockDelta:
+				// Handle content block delta event
+				if ev.Value.Delta != nil {
+					switch delta := ev.Value.Delta.(type) {
+					case *types.ContentBlockDeltaMemberText:
+						// Text delta
+						contentBuilder.WriteString(delta.Value)
 						partialResponse := &model.Response{
 							Object:    model.ObjectTypeChatCompletionChunk,
 							Model:     m.modelID,
@@ -237,8 +218,8 @@ func (m *Model) processStreamEvents(
 							Choices: []model.Choice{
 								{
 									Delta: model.Message{
-										Role:             model.RoleAssistant,
-										ReasoningContent: reasoningDelta.Value,
+										Role:    model.RoleAssistant,
+										Content: delta.Value,
 									},
 								},
 							},
@@ -248,73 +229,102 @@ func (m *Model) processStreamEvents(
 						case <-ctx.Done():
 							return
 						}
-					}
 
-				case *types.ContentBlockDeltaMemberToolUse:
-					// 工具调用参数增量
-					if currentToolCall != nil && delta.Value.Input != nil {
-						currentToolCall.Function.Arguments = append(
-							currentToolCall.Function.Arguments,
-							[]byte(aws.ToString(delta.Value.Input))...,
-						)
+					case *types.ContentBlockDeltaMemberReasoningContent:
+						// Reasoning content delta
+						switch reasoningDelta := delta.Value.(type) {
+						case *types.ReasoningContentBlockDeltaMemberText:
+							reasoningBuilder.WriteString(reasoningDelta.Value)
+							partialResponse := &model.Response{
+								Object:    model.ObjectTypeChatCompletionChunk,
+								Model:     m.modelID,
+								Created:   time.Now().Unix(),
+								Timestamp: time.Now(),
+								IsPartial: true,
+								Choices: []model.Choice{
+									{
+										Delta: model.Message{
+											Role:             model.RoleAssistant,
+											ReasoningContent: reasoningDelta.Value,
+										},
+									},
+								},
+							}
+							select {
+							case responseChan <- partialResponse:
+							case <-ctx.Done():
+								return
+							}
+						}
+
+					case *types.ContentBlockDeltaMemberToolUse:
+						// Tool call arguments delta
+						if currentToolCall != nil && delta.Value.Input != nil {
+							currentToolCall.Function.Arguments = append(
+								currentToolCall.Function.Arguments,
+								[]byte(aws.ToString(delta.Value.Input))...,
+							)
+						}
 					}
 				}
-			}
 
-		case *types.ConverseStreamOutputMemberContentBlockStop:
-			// 内容块结束
-			if currentToolCall != nil {
-				toolCalls = append(toolCalls, *currentToolCall)
-				currentToolCall = nil
-			}
+			case *types.ConverseStreamOutputMemberContentBlockStop:
+				// Content block end
+				if currentToolCall != nil {
+					toolCalls = append(toolCalls, *currentToolCall)
+					currentToolCall = nil
+				}
 
-		case *types.ConverseStreamOutputMemberMessageStop:
-			// 消息结束，构建最终响应（延迟发送，等待 metadata 事件填充 usage）
-			finishReason := string(ev.Value.StopReason)
-			finalResponse = &model.Response{
-				Object:    model.ObjectTypeChatCompletion,
-				Model:     m.modelID,
-				Created:   time.Now().Unix(),
-				Timestamp: time.Now(),
-				Done:      true,
-				Choices: []model.Choice{
-					{
-						Index: 0,
-						Message: model.Message{
-							Role:             model.RoleAssistant,
-							Content:          contentBuilder.String(),
-							ReasoningContent: reasoningBuilder.String(),
-							ToolCalls:        toolCalls,
+			case *types.ConverseStreamOutputMemberMessageStop:
+				// Message end, build final response (deferred send, waiting for metadata event to populate usage)
+				finishReason := string(ev.Value.StopReason)
+				finalResponse = &model.Response{
+					Object:    model.ObjectTypeChatCompletion,
+					Model:     m.modelID,
+					Created:   time.Now().Unix(),
+					Timestamp: time.Now(),
+					Done:      true,
+					Choices: []model.Choice{
+						{
+							Index: 0,
+							Message: model.Message{
+								Role:             model.RoleAssistant,
+								Content:          contentBuilder.String(),
+								ReasoningContent: reasoningBuilder.String(),
+								ToolCalls:        toolCalls,
+							},
+							FinishReason: &finishReason,
 						},
-						FinishReason: &finishReason,
 					},
-				},
-			}
+				}
 
-		case *types.ConverseStreamOutputMemberMetadata:
-			// 元数据事件，解析 usage 信息
-			if ev.Value.Usage != nil {
-				usage = &model.Usage{
-					PromptTokens:     int(aws.ToInt32(ev.Value.Usage.InputTokens)),
-					CompletionTokens: int(aws.ToInt32(ev.Value.Usage.OutputTokens)),
-					TotalTokens:      int(aws.ToInt32(ev.Value.Usage.TotalTokens)),
-					PromptTokensDetails: model.PromptTokensDetails{
-						CachedTokens:        int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
-						CacheCreationTokens: int(aws.ToInt32(ev.Value.Usage.CacheWriteInputTokens)),
-						CacheReadTokens:     int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
-					},
+			case *types.ConverseStreamOutputMemberMetadata:
+				// Metadata event, parse usage information
+				if ev.Value.Usage != nil {
+					usage = &model.Usage{
+						PromptTokens:     int(aws.ToInt32(ev.Value.Usage.InputTokens)),
+						CompletionTokens: int(aws.ToInt32(ev.Value.Usage.OutputTokens)),
+						TotalTokens:      int(aws.ToInt32(ev.Value.Usage.TotalTokens)),
+						PromptTokensDetails: model.PromptTokensDetails{
+							CachedTokens:        int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
+							CacheCreationTokens: int(aws.ToInt32(ev.Value.Usage.CacheWriteInputTokens)),
+							CacheReadTokens:     int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
+						},
+					}
 				}
 			}
 		}
 	}
 
-	// 检查流错误
+streamDone:
+
+	// Check stream error
 	if err := stream.Err(); err != nil {
 		m.sendErrorResponse(ctx, responseChan, classifyError(ctx, err, model.ErrorTypeStreamError), err)
 		return
 	}
 
-	// 流结束后发送最终响应，将 usage 合并到 finalResponse 中
+	// Send final response after stream ends, merging usage into finalResponse
 	if finalResponse != nil {
 		if usage != nil {
 			finalResponse.Usage = usage
@@ -326,7 +336,7 @@ func (m *Model) processStreamEvents(
 	}
 }
 
-// buildConverseInput 构建 Converse API 的输入参数
+// buildConverseInput builds the input parameters for the Converse API.
 func (m *Model) buildConverseInput(request *model.Request) (*bedrockruntime.ConverseInput, error) {
 	messages, systemBlocks, err := convertMessages(request.Messages)
 	if err != nil {
@@ -342,10 +352,10 @@ func (m *Model) buildConverseInput(request *model.Request) (*bedrockruntime.Conv
 		input.System = systemBlocks
 	}
 
-	// 设置推理配置
+	// Set inference configuration
 	input.InferenceConfig = buildInferenceConfig(request.GenerationConfig)
 
-	// 设置工具配置
+	// Set tool configuration
 	if len(request.Tools) > 0 {
 		input.ToolConfig = buildToolConfig(request.Tools)
 	}
@@ -353,7 +363,7 @@ func (m *Model) buildConverseInput(request *model.Request) (*bedrockruntime.Conv
 	return input, nil
 }
 
-// buildConverseStreamInput 构建 ConverseStream API 的输入参数
+// buildConverseStreamInput builds the input parameters for the ConverseStream API.
 func (m *Model) buildConverseStreamInput(request *model.Request) (*bedrockruntime.ConverseStreamInput, error) {
 	messages, systemBlocks, err := convertMessages(request.Messages)
 	if err != nil {
@@ -369,10 +379,10 @@ func (m *Model) buildConverseStreamInput(request *model.Request) (*bedrockruntim
 		input.System = systemBlocks
 	}
 
-	// 设置推理配置
+	// Set inference configuration
 	input.InferenceConfig = buildInferenceConfig(request.GenerationConfig)
 
-	// 设置工具配置
+	// Set tool configuration
 	if len(request.Tools) > 0 {
 		input.ToolConfig = buildToolConfig(request.Tools)
 	}
@@ -380,7 +390,7 @@ func (m *Model) buildConverseStreamInput(request *model.Request) (*bedrockruntim
 	return input, nil
 }
 
-// buildNonStreamingResponse 将 Converse API 的输出转换为 model.Response
+// buildNonStreamingResponse converts the Converse API output to model.Response.
 func (m *Model) buildNonStreamingResponse(output *bedrockruntime.ConverseOutput) *model.Response {
 	now := time.Now()
 	response := &model.Response{
@@ -391,14 +401,14 @@ func (m *Model) buildNonStreamingResponse(output *bedrockruntime.ConverseOutput)
 		Done:      true,
 	}
 
-	// 设置 finish reason
+	// Set finish reason
 	finishReason := string(output.StopReason)
 	choice := model.Choice{
 		Index:        0,
 		FinishReason: &finishReason,
 	}
 
-	// 解析输出消息
+	// Parse output message
 	if output.Output != nil {
 		if msgOutput, ok := output.Output.(*types.ConverseOutputMemberMessage); ok {
 			choice.Message = convertOutputMessage(msgOutput.Value)
@@ -407,7 +417,7 @@ func (m *Model) buildNonStreamingResponse(output *bedrockruntime.ConverseOutput)
 
 	response.Choices = []model.Choice{choice}
 
-	// 设置 usage
+	// Set usage
 	if output.Usage != nil {
 		response.Usage = &model.Usage{
 			PromptTokens:     int(aws.ToInt32(output.Usage.InputTokens)),
@@ -424,7 +434,7 @@ func (m *Model) buildNonStreamingResponse(output *bedrockruntime.ConverseOutput)
 	return response
 }
 
-// convertOutputMessage 将 Bedrock 消息转换为 model.Message
+// convertOutputMessage converts a Bedrock message to model.Message.
 func convertOutputMessage(msg types.Message) model.Message {
 	result := model.Message{
 		Role: model.RoleAssistant,
@@ -442,7 +452,7 @@ func convertOutputMessage(msg types.Message) model.Message {
 		case *types.ContentBlockMemberText:
 			textBuilder.WriteString(block.Value)
 		case *types.ContentBlockMemberToolUse:
-			// 将工具调用的 Input (document.Interface) 转换为 JSON bytes
+			// Convert tool call Input (document.Interface) to JSON bytes
 			inputBytes := marshalDocumentInterface(block.Value.Input)
 			toolCalls = append(toolCalls, model.ToolCall{
 				Index: func() *int { idx := toolCallIndex; toolCallIndex++; return &idx }(),
@@ -468,7 +478,7 @@ func convertOutputMessage(msg types.Message) model.Message {
 	return result
 }
 
-// convertMessages 将 model.Message 列表转换为 Bedrock 的消息格式
+// convertMessages converts a list of model.Message to Bedrock message format.
 func convertMessages(messages []model.Message) ([]types.Message, []types.SystemContentBlock, error) {
 	var (
 		bedrockMessages []types.Message
@@ -478,7 +488,7 @@ func convertMessages(messages []model.Message) ([]types.Message, []types.SystemC
 	for _, msg := range messages {
 		switch msg.Role {
 		case model.RoleSystem:
-			// 系统消息作为 system prompt
+			// System messages are used as system prompt
 			if msg.Content != "" {
 				systemBlocks = append(systemBlocks, &types.SystemContentBlockMemberText{
 					Value: msg.Content,
@@ -507,7 +517,7 @@ func convertMessages(messages []model.Message) ([]types.Message, []types.SystemC
 			bedrockMessages = append(bedrockMessages, bedrockMsg)
 
 		case model.RoleTool:
-			// 工具结果作为 user 消息中的 ToolResult 块
+			// Tool results are sent as ToolResult blocks in a user message
 			bedrockMsg := types.Message{
 				Role: types.ConversationRoleUser,
 				Content: []types.ContentBlock{
@@ -527,13 +537,13 @@ func convertMessages(messages []model.Message) ([]types.Message, []types.SystemC
 		}
 	}
 
-	// 合并连续的相同角色消息（Bedrock 要求消息交替出现）
+	// Merge consecutive messages with the same role (Bedrock requires alternating messages)
 	bedrockMessages = mergeConsecutiveMessages(bedrockMessages)
 
 	return bedrockMessages, systemBlocks, nil
 }
 
-// convertUserContentBlocks 将用户消息转换为 Bedrock 内容块
+// convertUserContentBlocks converts user messages to Bedrock content blocks.
 func convertUserContentBlocks(msg model.Message) []types.ContentBlock {
 	var blocks []types.ContentBlock
 
@@ -544,7 +554,7 @@ func convertUserContentBlocks(msg model.Message) []types.ContentBlock {
 	for _, part := range msg.ContentParts {
 		switch part.Type {
 		case model.ContentTypeText:
-			if part.Text != nil {
+			if part.Text != nil && *part.Text != "" {
 				blocks = append(blocks, &types.ContentBlockMemberText{Value: *part.Text})
 			}
 		case model.ContentTypeImage:
@@ -557,14 +567,10 @@ func convertUserContentBlocks(msg model.Message) []types.ContentBlock {
 		}
 	}
 
-	if len(blocks) == 0 {
-		blocks = append(blocks, &types.ContentBlockMemberText{Value: ""})
-	}
-
 	return blocks
 }
 
-// convertAssistantContentBlocks 将助手消息转换为 Bedrock 内容块
+// convertAssistantContentBlocks converts assistant messages to Bedrock content blocks.
 func convertAssistantContentBlocks(msg model.Message) []types.ContentBlock {
 	var blocks []types.ContentBlock
 
@@ -573,12 +579,12 @@ func convertAssistantContentBlocks(msg model.Message) []types.ContentBlock {
 	}
 
 	for _, part := range msg.ContentParts {
-		if part.Type == model.ContentTypeText && part.Text != nil {
+		if part.Type == model.ContentTypeText && part.Text != nil && *part.Text != "" {
 			blocks = append(blocks, &types.ContentBlockMemberText{Value: *part.Text})
 		}
 	}
 
-	// 添加工具调用块
+	// Add tool call blocks
 	for _, tc := range msg.ToolCalls {
 		inputDoc := unmarshalToDocument(tc.Function.Arguments)
 		blocks = append(blocks, &types.ContentBlockMemberToolUse{
@@ -590,14 +596,10 @@ func convertAssistantContentBlocks(msg model.Message) []types.ContentBlock {
 		})
 	}
 
-	if len(blocks) == 0 {
-		blocks = append(blocks, &types.ContentBlockMemberText{Value: ""})
-	}
-
 	return blocks
 }
 
-// convertImageToBlock 将图片数据转换为 Bedrock 图片块
+// convertImageToBlock converts image data to a Bedrock image block.
 func convertImageToBlock(img *model.Image) types.ContentBlock {
 	if img == nil {
 		return nil
@@ -615,12 +617,12 @@ func convertImageToBlock(img *model.Image) types.ContentBlock {
 		}
 	}
 
-	// URL 类型的图片 Bedrock 不直接支持，需要下载后传入
-	// 这里暂不处理 URL 类型
+	// Bedrock does not directly support URL-based images; they need to be downloaded first.
+	// URL type is not handled here for now.
 	return nil
 }
 
-// inferImageFormat 推断图片格式
+// inferImageFormat infers the image format.
 func inferImageFormat(format string) string {
 	switch strings.ToLower(format) {
 	case "png":
@@ -636,8 +638,8 @@ func inferImageFormat(format string) string {
 	}
 }
 
-// mergeConsecutiveMessages 合并连续的相同角色消息
-// Bedrock API 要求消息必须交替出现（user/assistant）
+// mergeConsecutiveMessages merges consecutive messages with the same role.
+// The Bedrock API requires messages to alternate (user/assistant).
 func mergeConsecutiveMessages(messages []types.Message) []types.Message {
 	if len(messages) <= 1 {
 		return messages
@@ -649,7 +651,7 @@ func mergeConsecutiveMessages(messages []types.Message) []types.Message {
 	for i := 1; i < len(messages); i++ {
 		last := &merged[len(merged)-1]
 		if last.Role == messages[i].Role {
-			// 合并内容块
+			// Merge content blocks
 			last.Content = append(last.Content, messages[i].Content...)
 		} else {
 			merged = append(merged, messages[i])
@@ -659,7 +661,7 @@ func mergeConsecutiveMessages(messages []types.Message) []types.Message {
 	return merged
 }
 
-// buildInferenceConfig 构建推理配置
+// buildInferenceConfig builds the inference configuration.
 func buildInferenceConfig(config model.GenerationConfig) *types.InferenceConfiguration {
 	inferenceConfig := &types.InferenceConfiguration{}
 	hasConfig := false
@@ -693,13 +695,13 @@ func buildInferenceConfig(config model.GenerationConfig) *types.InferenceConfigu
 	return inferenceConfig
 }
 
-// buildToolConfig 构建工具配置
+// buildToolConfig builds the tool configuration.
 func buildToolConfig(tools map[string]tool.Tool) *types.ToolConfiguration {
 	if len(tools) == 0 {
 		return nil
 	}
 
-	// 按名称排序以保证稳定性
+	// Sort by name for stability
 	toolNames := make([]string, 0, len(tools))
 	for name := range tools {
 		toolNames = append(toolNames, name)
@@ -711,7 +713,7 @@ func buildToolConfig(tools map[string]tool.Tool) *types.ToolConfiguration {
 		t := tools[name]
 		declaration := t.Declaration()
 
-		// 将 tool.Schema 转换为 document.Interface 作为 JSON schema
+		// Convert tool.Schema to document.Interface as JSON schema
 		inputSchema := convertSchemaToDocument(declaration.InputSchema)
 
 		toolSpec := types.ToolSpecification{
@@ -732,7 +734,7 @@ func buildToolConfig(tools map[string]tool.Tool) *types.ToolConfiguration {
 	}
 }
 
-// convertSchemaToDocument 将 tool.Schema 转换为 document.Interface
+// convertSchemaToDocument converts tool.Schema to document.Interface.
 func convertSchemaToDocument(schema *tool.Schema) document.Interface {
 	if schema == nil {
 		return document.NewLazyDocument(map[string]any{
@@ -744,7 +746,7 @@ func convertSchemaToDocument(schema *tool.Schema) document.Interface {
 	return document.NewLazyDocument(schemaMap)
 }
 
-// schemaToMap 将 tool.Schema 递归转换为 map
+// schemaToMap recursively converts tool.Schema to a map.
 func schemaToMap(schema *tool.Schema) map[string]any {
 	if schema == nil {
 		return map[string]any{"type": "object"}
@@ -784,7 +786,7 @@ func schemaToMap(schema *tool.Schema) map[string]any {
 	return result
 }
 
-// marshalDocumentInterface 将 document.Interface 转换为 JSON bytes
+// marshalDocumentInterface converts document.Interface to JSON bytes.
 func marshalDocumentInterface(doc document.Interface) []byte {
 	if doc == nil {
 		return []byte("{}")
@@ -797,7 +799,7 @@ func marshalDocumentInterface(doc document.Interface) []byte {
 	return data
 }
 
-// unmarshalToDocument 将 JSON bytes 转换为 document.Interface
+// unmarshalToDocument converts JSON bytes to document.Interface.
 func unmarshalToDocument(data []byte) document.Interface {
 	if len(data) == 0 {
 		return document.NewLazyDocument(map[string]any{})
@@ -811,8 +813,8 @@ func unmarshalToDocument(data []byte) document.Interface {
 	return document.NewLazyDocument(v)
 }
 
-// classifyError 根据错误类型判断是否为调用方取消/超时，如果是则返回 ErrorTypeCancelled，
-// 否则返回 fallback 错误类型。
+// classifyError determines whether the error is a caller cancellation/timeout.
+// If so, it returns ErrorTypeCancelled; otherwise it returns the fallback error type.
 func classifyError(ctx context.Context, err error, fallback string) string {
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return model.ErrorTypeCancelled
@@ -820,7 +822,7 @@ func classifyError(ctx context.Context, err error, fallback string) string {
 	return fallback
 }
 
-// sendErrorResponse 发送错误响应
+// sendErrorResponse sends an error response.
 func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *model.Response, errType string, err error) {
 	errorResponse := &model.Response{
 		Error: &model.ResponseError{

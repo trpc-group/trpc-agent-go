@@ -33,16 +33,16 @@ import (
 )
 
 // ============================================================================
-// Mock / Stub 类型
+// Mock / Stub Types
 // ============================================================================
 
-// stubTool 实现 tool.Tool 接口，用于测试。
+// stubTool implements the tool.Tool interface for testing.
 type stubTool struct{ decl *tool.Declaration }
 
 func (s stubTool) Call(_ context.Context, _ []byte) (any, error) { return nil, nil }
 func (s stubTool) Declaration() *tool.Declaration                { return s.decl }
 
-// mockBedrockClient 实现 BedrockClient 接口，用于单元测试。
+// mockBedrockClient implements the BedrockClient interface for unit testing.
 type mockBedrockClient struct {
 	converseFunc       func(ctx context.Context, params *bedrockruntime.ConverseInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error)
 	converseStreamFunc func(ctx context.Context, params *bedrockruntime.ConverseStreamInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
@@ -62,7 +62,7 @@ func (m *mockBedrockClient) ConverseStream(ctx context.Context, params *bedrockr
 	return nil, errors.New("converseStream not implemented")
 }
 
-// mockEventStreamReader 模拟 ConverseStreamOutputReader 接口。
+// mockEventStreamReader mocks the ConverseStreamOutputReader interface.
 type mockEventStreamReader struct {
 	events []types.ConverseStreamOutput
 	ch     chan types.ConverseStreamOutput
@@ -87,7 +87,7 @@ func (m *mockEventStreamReader) Close() error { return nil }
 func (m *mockEventStreamReader) Err() error   { return m.err }
 
 // ============================================================================
-// 基础测试
+// Basic Tests
 // ============================================================================
 
 func TestModel_Info(t *testing.T) {
@@ -126,13 +126,13 @@ func TestGenerateContent_NilRequest(t *testing.T) {
 }
 
 // ============================================================================
-// 非流式对话测试
+// Non-Streaming Conversation Tests
 // ============================================================================
 
 func TestGenerateContent_NonStreaming_SimpleText(t *testing.T) {
 	mock := &mockBedrockClient{
 		converseFunc: func(ctx context.Context, params *bedrockruntime.ConverseInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
-			// 验证请求参数
+			// Verify request parameters
 			assert.Equal(t, "test-model", aws.ToString(params.ModelId))
 			assert.Len(t, params.Messages, 1)
 			assert.Equal(t, types.ConversationRoleUser, params.Messages[0].Role)
@@ -180,7 +180,7 @@ func TestGenerateContent_NonStreaming_SimpleText(t *testing.T) {
 	assert.NotNil(t, resp.Choices[0].FinishReason)
 	assert.Equal(t, "end_turn", *resp.Choices[0].FinishReason)
 
-	// 验证 usage
+	// Verify usage
 	require.NotNil(t, resp.Usage)
 	assert.Equal(t, 10, resp.Usage.PromptTokens)
 	assert.Equal(t, 8, resp.Usage.CompletionTokens)
@@ -190,14 +190,14 @@ func TestGenerateContent_NonStreaming_SimpleText(t *testing.T) {
 func TestGenerateContent_NonStreaming_WithSystemMessage(t *testing.T) {
 	mock := &mockBedrockClient{
 		converseFunc: func(ctx context.Context, params *bedrockruntime.ConverseInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
-			// 验证系统消息被正确提取
+			// Verify system messages are correctly extracted
 			require.NotNil(t, params.System)
 			require.Len(t, params.System, 1)
 			sysBlock, ok := params.System[0].(*types.SystemContentBlockMemberText)
 			require.True(t, ok)
 			assert.Equal(t, "You are a helpful assistant.", sysBlock.Value)
 
-			// 验证用户消息
+			// Verify user messages
 			require.Len(t, params.Messages, 1)
 
 			return &bedrockruntime.ConverseOutput{
@@ -261,7 +261,7 @@ func TestGenerateContent_NonStreaming_APIError(t *testing.T) {
 
 func TestGenerateContent_NonStreaming_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // 立即取消
+	cancel() // Cancel immediately
 
 	mock := &mockBedrockClient{
 		converseFunc: func(ctx context.Context, params *bedrockruntime.ConverseInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
@@ -279,21 +279,20 @@ func TestGenerateContent_NonStreaming_ContextCancelled(t *testing.T) {
 	for resp := range ch {
 		responses = append(responses, resp)
 	}
-	// 应该收到错误响应或通道直接关闭
-	if len(responses) > 0 {
-		assert.NotNil(t, responses[0].Error)
-		assert.Equal(t, model.ErrorTypeCancelled, responses[0].Error.Type)
-	}
+	// A pre-cancelled context should produce exactly one error response with ErrorTypeCancelled
+	require.Len(t, responses, 1)
+	require.NotNil(t, responses[0].Error)
+	assert.Equal(t, model.ErrorTypeCancelled, responses[0].Error.Type)
 }
 
 // ============================================================================
-// 非流式工具调用测试
+// Non-Streaming Tool Call Tests
 // ============================================================================
 
 func TestGenerateContent_NonStreaming_ToolCall(t *testing.T) {
 	mock := &mockBedrockClient{
 		converseFunc: func(ctx context.Context, params *bedrockruntime.ConverseInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
-			// 验证工具配置
+			// Verify tool configuration
 			require.NotNil(t, params.ToolConfig)
 			require.Len(t, params.ToolConfig.Tools, 1)
 			toolSpec, ok := params.ToolConfig.Tools[0].(*types.ToolMemberToolSpec)
@@ -361,7 +360,7 @@ func TestGenerateContent_NonStreaming_ToolCall(t *testing.T) {
 	assert.Equal(t, "get_weather", tc.Function.Name)
 	assert.Equal(t, functionToolType, tc.Type)
 
-	// 验证参数
+	// Verify arguments
 	var args map[string]any
 	err = json.Unmarshal(tc.Function.Arguments, &args)
 	require.NoError(t, err)
@@ -371,8 +370,8 @@ func TestGenerateContent_NonStreaming_ToolCall(t *testing.T) {
 func TestGenerateContent_NonStreaming_ToolResult(t *testing.T) {
 	mock := &mockBedrockClient{
 		converseFunc: func(ctx context.Context, params *bedrockruntime.ConverseInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
-			// 验证工具结果消息被正确转换
-			// 工具结果应该作为 user 角色的 ToolResult 块
+			// Verify tool result messages are correctly converted
+			// Tool results should be sent as ToolResult blocks with user role
 			found := false
 			for _, msg := range params.Messages {
 				for _, block := range msg.Content {
@@ -436,7 +435,7 @@ func TestGenerateContent_NonStreaming_ToolResult(t *testing.T) {
 }
 
 // ============================================================================
-// 流式对话测试
+// Streaming Conversation Tests
 // ============================================================================
 
 func TestGenerateContent_Streaming_SimpleText(t *testing.T) {
@@ -476,7 +475,7 @@ func TestGenerateContent_Streaming_SimpleText(t *testing.T) {
 	reader := newMockEventStreamReader(events)
 	m := &Model{modelID: "test-model", channelBufferSize: 256}
 
-	// 使用生产代码 processStreamEvents 处理流式事件
+	// Use production code processStreamEvents to handle stream events
 	responseChan := make(chan *model.Response, 256)
 	go func() {
 		defer close(responseChan)
@@ -488,16 +487,16 @@ func TestGenerateContent_Streaming_SimpleText(t *testing.T) {
 		responses = append(responses, resp)
 	}
 
-	// 应该有 2 个增量 + 1 个最终响应（包含 usage）
+	// Should have 2 deltas + 1 final response (with usage)
 	require.Len(t, responses, 3)
 
-	// 验证增量响应
+	// Verify delta responses
 	assert.True(t, responses[0].IsPartial)
 	assert.Equal(t, "Hello", responses[0].Choices[0].Delta.Content)
 	assert.True(t, responses[1].IsPartial)
 	assert.Equal(t, " World!", responses[1].Choices[0].Delta.Content)
 
-	// 验证最终响应（usage 已合并到 finalResponse 中）
+	// Verify final response (usage merged into finalResponse)
 	assert.True(t, responses[2].Done)
 	assert.Equal(t, "Hello World!", responses[2].Choices[0].Message.Content)
 	assert.Equal(t, "end_turn", *responses[2].Choices[0].FinishReason)
@@ -550,7 +549,7 @@ func TestGenerateContent_Streaming_ToolCall(t *testing.T) {
 	reader := newMockEventStreamReader(events)
 	m := &Model{modelID: "test-model", channelBufferSize: 256}
 
-	// 使用生产代码 processStreamEvents 处理流式事件
+	// Use production code processStreamEvents to handle stream events
 	responseChan := make(chan *model.Response, 256)
 	go func() {
 		defer close(responseChan)
@@ -562,7 +561,7 @@ func TestGenerateContent_Streaming_ToolCall(t *testing.T) {
 		responses = append(responses, resp)
 	}
 
-	// 应该有 1 个最终响应（包含工具调用）
+	// Should have 1 final response (with tool calls)
 	require.Len(t, responses, 1)
 
 	finalResponse := responses[0]
@@ -602,7 +601,7 @@ func TestGenerateContent_Streaming_APIError(t *testing.T) {
 }
 
 // ============================================================================
-// 消息转换测试
+// Message Conversion Tests
 // ============================================================================
 
 func TestConvertMessages_AllRoles(t *testing.T) {
@@ -616,13 +615,13 @@ func TestConvertMessages_AllRoles(t *testing.T) {
 	bedrockMsgs, systemBlocks, err := convertMessages(messages)
 	require.NoError(t, err)
 
-	// 系统消息应该被提取到 systemBlocks
+	// System messages should be extracted to systemBlocks
 	require.Len(t, systemBlocks, 1)
 	sysBlock, ok := systemBlocks[0].(*types.SystemContentBlockMemberText)
 	require.True(t, ok)
 	assert.Equal(t, "Be helpful", sysBlock.Value)
 
-	// 其余消息应该交替出现
+	// Remaining messages should alternate
 	require.Len(t, bedrockMsgs, 3)
 	assert.Equal(t, types.ConversationRoleUser, bedrockMsgs[0].Role)
 	assert.Equal(t, types.ConversationRoleAssistant, bedrockMsgs[1].Role)
@@ -651,11 +650,11 @@ func TestConvertMessages_ToolMessages(t *testing.T) {
 	bedrockMsgs, _, err := convertMessages(messages)
 	require.NoError(t, err)
 
-	// user -> assistant -> user(tool_result)，合并后应该是 3 条
-	// 但 tool result 是 user 角色，不会与前面的 assistant 合并
+	// user -> assistant -> user(tool_result), should be 3 after merge
+	// tool result has user role, won't merge with the preceding assistant
 	require.Len(t, bedrockMsgs, 3)
 
-	// 验证最后一条是工具结果
+	// Verify the last message is a tool result
 	lastMsg := bedrockMsgs[2]
 	assert.Equal(t, types.ConversationRoleUser, lastMsg.Role)
 	require.Len(t, lastMsg.Content, 1)
@@ -680,7 +679,7 @@ func TestMergeConsecutiveMessages(t *testing.T) {
 	merged := mergeConsecutiveMessages(messages)
 	require.Len(t, merged, 2)
 	assert.Equal(t, types.ConversationRoleUser, merged[0].Role)
-	assert.Len(t, merged[0].Content, 2) // 两条 user 消息合并
+	assert.Len(t, merged[0].Content, 2) // Two user messages merged
 	assert.Equal(t, types.ConversationRoleAssistant, merged[1].Role)
 }
 
@@ -700,7 +699,7 @@ func TestMergeConsecutiveMessages_Single(t *testing.T) {
 }
 
 // ============================================================================
-// 推理配置测试
+// Inference Configuration Tests
 // ============================================================================
 
 func TestBuildInferenceConfig_AllFields(t *testing.T) {
@@ -741,7 +740,7 @@ func TestBuildInferenceConfig_PartialFields(t *testing.T) {
 }
 
 // ============================================================================
-// 工具配置测试
+// Tool Configuration Tests
 // ============================================================================
 
 func TestBuildToolConfig(t *testing.T) {
@@ -774,7 +773,7 @@ func TestBuildToolConfig(t *testing.T) {
 	require.NotNil(t, config)
 	require.Len(t, config.Tools, 2)
 
-	// 验证按名称排序
+	// Verify sorted by name
 	tool0, ok := config.Tools[0].(*types.ToolMemberToolSpec)
 	require.True(t, ok)
 	assert.Equal(t, "calculator", aws.ToString(tool0.Value.Name))
@@ -807,7 +806,7 @@ func TestBuildToolConfig_NilSchema(t *testing.T) {
 }
 
 // ============================================================================
-// Schema 转换测试
+// Schema Conversion Tests
 // ============================================================================
 
 func TestSchemaToMap_Complete(t *testing.T) {
@@ -864,7 +863,7 @@ func TestSchemaToMap_WithDefault(t *testing.T) {
 }
 
 // ============================================================================
-// Document 转换测试
+// Document Conversion Tests
 // ============================================================================
 
 func TestMarshalDocumentInterface(t *testing.T) {
@@ -893,7 +892,7 @@ func TestUnmarshalToDocument(t *testing.T) {
 	doc := unmarshalToDocument(data)
 	assert.NotNil(t, doc)
 
-	// 验证 document 可以正确序列化回 JSON
+	// Verify document can be correctly serialized back to JSON
 	resultBytes, err := doc.MarshalSmithyDocument()
 	require.NoError(t, err)
 
@@ -914,7 +913,7 @@ func TestUnmarshalToDocument_InvalidJSON(t *testing.T) {
 }
 
 // ============================================================================
-// 图片转换测试
+// Image Conversion Tests
 // ============================================================================
 
 func TestConvertImageToBlock_WithData(t *testing.T) {
@@ -940,7 +939,7 @@ func TestConvertImageToBlock_URLOnly(t *testing.T) {
 		URL: "https://example.com/image.png",
 	}
 	block := convertImageToBlock(img)
-	assert.Nil(t, block) // URL 类型暂不支持
+	assert.Nil(t, block) // URL type not supported yet
 }
 
 func TestInferImageFormat(t *testing.T) {
@@ -955,7 +954,7 @@ func TestInferImageFormat(t *testing.T) {
 		{"JPEG", "jpeg"},
 		{"gif", "gif"},
 		{"webp", "webp"},
-		{"unknown", "png"}, // 默认 png
+		{"unknown", "png"}, // Default png
 		{"", "png"},
 	}
 
@@ -967,7 +966,7 @@ func TestInferImageFormat(t *testing.T) {
 }
 
 // ============================================================================
-// 用户内容块转换测试
+// User Content Block Conversion Tests
 // ============================================================================
 
 func TestConvertUserContentBlocks_TextOnly(t *testing.T) {
@@ -982,7 +981,7 @@ func TestConvertUserContentBlocks_TextOnly(t *testing.T) {
 func TestConvertUserContentBlocks_Empty(t *testing.T) {
 	msg := model.Message{}
 	blocks := convertUserContentBlocks(msg)
-	require.Len(t, blocks, 1) // 应该有一个空文本块
+	require.Len(t, blocks, 0) // Empty message should not produce any content blocks
 }
 
 func TestConvertUserContentBlocks_WithContentParts(t *testing.T) {
@@ -1001,7 +1000,7 @@ func TestConvertUserContentBlocks_WithContentParts(t *testing.T) {
 }
 
 // ============================================================================
-// 助手内容块转换测试
+// Assistant Content Block Conversion Tests
 // ============================================================================
 
 func TestConvertAssistantContentBlocks_WithToolCalls(t *testing.T) {
@@ -1034,11 +1033,11 @@ func TestConvertAssistantContentBlocks_WithToolCalls(t *testing.T) {
 func TestConvertAssistantContentBlocks_Empty(t *testing.T) {
 	msg := model.Message{}
 	blocks := convertAssistantContentBlocks(msg)
-	require.Len(t, blocks, 1) // 应该有一个空文本块
+	require.Len(t, blocks, 0) // Empty message should not produce any content blocks
 }
 
 // ============================================================================
-// 输出消息转换测试
+// Output Message Conversion Tests
 // ============================================================================
 
 func TestConvertOutputMessage_TextAndToolUse(t *testing.T) {
@@ -1078,7 +1077,7 @@ func TestConvertOutputMessage_MultipleTextBlocks(t *testing.T) {
 }
 
 // ============================================================================
-// Options 测试
+// Options Tests
 // ============================================================================
 
 func TestWithAWSConfig(t *testing.T) {
@@ -1105,7 +1104,7 @@ func TestWithClient(t *testing.T) {
 }
 
 // ============================================================================
-// 错误响应测试
+// Error Response Tests
 // ============================================================================
 
 func TestSendErrorResponse(t *testing.T) {
@@ -1125,15 +1124,15 @@ func TestSendErrorResponse_ContextCancelled(t *testing.T) {
 	cancel()
 
 	m := &Model{modelID: "test-model"}
-	ch := make(chan *model.Response) // 无缓冲，写入会阻塞
-	// 不应该 panic
+	ch := make(chan *model.Response) // Unbuffered, write will block
+	// Should not panic
 	m.sendErrorResponse(ctx, ch, model.ErrorTypeAPIError, errors.New("test"))
 }
 
 // ============================================================================
-// 集成测试（需要真实 AWS 凭证，通过环境变量 BEDROCK_INTEGRATION_TEST=1 启用）
-// 测试模型: mistral.mistral-large-3-675b-instruct
-// 测试区域: us-east-1 (美东1区)
+// Integration Tests (requires real AWS credentials, enable via BEDROCK_INTEGRATION_TEST=1)
+// Test model: mistral.mistral-large-3-675b-instruct
+// Test region: us-east-1
 // ============================================================================
 
 const (
@@ -1144,14 +1143,14 @@ const (
 func skipIfNoIntegration(t *testing.T) {
 	t.Helper()
 	if os.Getenv("BEDROCK_INTEGRATION_TEST") != "1" {
-		t.Skip("跳过集成测试: 设置 BEDROCK_INTEGRATION_TEST=1 并配置 AWS 凭证以启用")
+		t.Skip("Skipping integration test: set BEDROCK_INTEGRATION_TEST=1 and configure AWS credentials to enable")
 	}
 }
 
 func newIntegrationModel(t *testing.T) *Model {
 	t.Helper()
 	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(integrationTestRegion))
-	require.NoError(t, err, "加载 AWS 配置失败，请确保已配置 AWS 凭证")
+	require.NoError(t, err, "Failed to load AWS config, please ensure AWS credentials are configured")
 	return New(integrationTestModelID, WithAWSConfig(cfg))
 }
 
@@ -1183,19 +1182,19 @@ func TestIntegration_MistralLarge_NonStreaming(t *testing.T) {
 	require.NotEmpty(t, responses)
 
 	lastResp := responses[len(responses)-1]
-	require.Nil(t, lastResp.Error, "API 返回错误: %v", lastResp.Error)
+	require.Nil(t, lastResp.Error, "API returned error: %v", lastResp.Error)
 	assert.True(t, lastResp.Done)
 	require.NotEmpty(t, lastResp.Choices)
 	assert.NotEmpty(t, lastResp.Choices[0].Message.Content)
 	assert.Equal(t, model.RoleAssistant, lastResp.Choices[0].Message.Role)
 	assert.NotNil(t, lastResp.Choices[0].FinishReason)
 
-	t.Logf("模型: %s", integrationTestModelID)
-	t.Logf("区域: %s", integrationTestRegion)
-	t.Logf("响应: %s", lastResp.Choices[0].Message.Content)
-	t.Logf("结束原因: %s", *lastResp.Choices[0].FinishReason)
+	t.Logf("Model: %s", integrationTestModelID)
+	t.Logf("Region: %s", integrationTestRegion)
+	t.Logf("Response: %s", lastResp.Choices[0].Message.Content)
+	t.Logf("Finish reason: %s", *lastResp.Choices[0].FinishReason)
 	if lastResp.Usage != nil {
-		t.Logf("Token 使用: prompt=%d, completion=%d, total=%d",
+		t.Logf("Token usage: prompt=%d, completion=%d, total=%d",
 			lastResp.Usage.PromptTokens, lastResp.Usage.CompletionTokens, lastResp.Usage.TotalTokens)
 	}
 }
@@ -1233,16 +1232,16 @@ func TestIntegration_MistralLarge_Streaming(t *testing.T) {
 	}
 
 	require.NotEmpty(t, responses)
-	assert.Greater(t, partialCount, 0, "应该收到至少一个增量响应")
-	require.NotNil(t, finalResp, "应该收到最终响应")
-	require.Nil(t, finalResp.Error, "API 返回错误: %v", finalResp.Error)
+	assert.Greater(t, partialCount, 0, "Should receive at least one delta response")
+	require.NotNil(t, finalResp, "Should receive a final response")
+	require.Nil(t, finalResp.Error, "API returned error: %v", finalResp.Error)
 	assert.NotEmpty(t, finalResp.Choices[0].Message.Content)
 
-	t.Logf("模型: %s (流式)", integrationTestModelID)
-	t.Logf("区域: %s", integrationTestRegion)
-	t.Logf("增量响应数: %d", partialCount)
-	t.Logf("最终响应: %s", finalResp.Choices[0].Message.Content)
-	t.Logf("结束原因: %s", *finalResp.Choices[0].FinishReason)
+	t.Logf("Model: %s (streaming)", integrationTestModelID)
+	t.Logf("Region: %s", integrationTestRegion)
+	t.Logf("Delta response count: %d", partialCount)
+	t.Logf("Final response: %s", finalResp.Choices[0].Message.Content)
+	t.Logf("Finish reason: %s", *finalResp.Choices[0].FinishReason)
 }
 
 func TestIntegration_MistralLarge_ToolCall(t *testing.T) {
@@ -1289,28 +1288,28 @@ func TestIntegration_MistralLarge_ToolCall(t *testing.T) {
 	require.NotEmpty(t, responses)
 
 	lastResp := responses[len(responses)-1]
-	require.Nil(t, lastResp.Error, "API 返回错误: %v", lastResp.Error)
+	require.Nil(t, lastResp.Error, "API returned error: %v", lastResp.Error)
 	assert.True(t, lastResp.Done)
 
-	t.Logf("模型: %s (工具调用)", integrationTestModelID)
-	t.Logf("区域: %s", integrationTestRegion)
-	t.Logf("结束原因: %s", *lastResp.Choices[0].FinishReason)
+	t.Logf("Model: %s (tool call)", integrationTestModelID)
+	t.Logf("Region: %s", integrationTestRegion)
+	t.Logf("Finish reason: %s", *lastResp.Choices[0].FinishReason)
 
 	if len(lastResp.Choices[0].Message.ToolCalls) > 0 {
 		assert.Equal(t, "tool_use", *lastResp.Choices[0].FinishReason)
 		tc := lastResp.Choices[0].Message.ToolCalls[0]
-		t.Logf("工具调用 ID: %s", tc.ID)
-		t.Logf("工具名称: %s", tc.Function.Name)
-		t.Logf("工具参数: %s", string(tc.Function.Arguments))
+		t.Logf("Tool call ID: %s", tc.ID)
+		t.Logf("Tool name: %s", tc.Function.Name)
+		t.Logf("Tool arguments: %s", string(tc.Function.Arguments))
 		assert.Equal(t, "get_weather", tc.Function.Name)
 
-		// 验证参数中包含 city
+		// Verify arguments contain city
 		var args map[string]any
 		err = json.Unmarshal(tc.Function.Arguments, &args)
 		require.NoError(t, err)
 		assert.Contains(t, strings.ToLower(fmt.Sprintf("%v", args["city"])), "tokyo")
 	} else {
-		t.Logf("模型未调用工具，返回文本: %s", lastResp.Choices[0].Message.Content)
+		t.Logf("Model did not call tool, returned text: %s", lastResp.Choices[0].Message.Content)
 	}
 }
 
@@ -1360,16 +1359,16 @@ func TestIntegration_MistralLarge_StreamingToolCall(t *testing.T) {
 
 	require.NotEmpty(t, responses)
 	require.NotNil(t, finalResp)
-	require.Nil(t, finalResp.Error, "API 返回错误: %v", finalResp.Error)
+	require.Nil(t, finalResp.Error, "API returned error: %v", finalResp.Error)
 
-	t.Logf("模型: %s (流式工具调用)", integrationTestModelID)
-	t.Logf("区域: %s", integrationTestRegion)
-	t.Logf("总响应数: %d", len(responses))
-	t.Logf("结束原因: %s", *finalResp.Choices[0].FinishReason)
+	t.Logf("Model: %s (streaming tool call)", integrationTestModelID)
+	t.Logf("Region: %s", integrationTestRegion)
+	t.Logf("Total responses: %d", len(responses))
+	t.Logf("Finish reason: %s", *finalResp.Choices[0].FinishReason)
 
 	if len(finalResp.Choices[0].Message.ToolCalls) > 0 {
 		tc := finalResp.Choices[0].Message.ToolCalls[0]
-		t.Logf("工具调用: %s(%s)", tc.Function.Name, string(tc.Function.Arguments))
+		t.Logf("Tool call: %s(%s)", tc.Function.Name, string(tc.Function.Arguments))
 		assert.Equal(t, "calculator", tc.Function.Name)
 	}
 }
@@ -1381,7 +1380,7 @@ func TestIntegration_MistralLarge_MultiTurn(t *testing.T) {
 
 	maxTokens := 256
 
-	// 第一轮对话
+	// First turn
 	ch, err := m.GenerateContent(context.Background(), &model.Request{
 		Messages: []model.Message{
 			model.NewSystemMessage("You are a math tutor. Be concise."),
@@ -1397,9 +1396,9 @@ func TestIntegration_MistralLarge_MultiTurn(t *testing.T) {
 	}
 	require.NotNil(t, firstResp)
 	require.Nil(t, firstResp.Error)
-	t.Logf("第一轮回复: %s", firstResp.Choices[0].Message.Content)
+	t.Logf("First turn reply: %s", firstResp.Choices[0].Message.Content)
 
-	// 第二轮对话（带上下文）
+	// Second turn (with context)
 	ch, err = m.GenerateContent(context.Background(), &model.Request{
 		Messages: []model.Message{
 			model.NewSystemMessage("You are a math tutor. Be concise."),
@@ -1418,11 +1417,11 @@ func TestIntegration_MistralLarge_MultiTurn(t *testing.T) {
 	require.NotNil(t, secondResp)
 	require.Nil(t, secondResp.Error)
 	assert.NotEmpty(t, secondResp.Choices[0].Message.Content)
-	t.Logf("第二轮回复: %s", secondResp.Choices[0].Message.Content)
+	t.Logf("Second turn reply: %s", secondResp.Choices[0].Message.Content)
 }
 
 // ============================================================================
-// 并发安全测试
+// Concurrency Safety Tests
 // ============================================================================
 
 func TestGenerateContent_ConcurrentRequests(t *testing.T) {
@@ -1434,7 +1433,7 @@ func TestGenerateContent_ConcurrentRequests(t *testing.T) {
 			mu.Lock()
 			callCount++
 			mu.Unlock()
-			time.Sleep(10 * time.Millisecond) // 模拟网络延迟
+			time.Sleep(10 * time.Millisecond) // Simulate network latency
 			return &bedrockruntime.ConverseOutput{
 				StopReason: types.StopReasonEndTurn,
 				Output: &types.ConverseOutputMemberMessage{
@@ -1488,7 +1487,7 @@ func TestGenerateContent_ConcurrentRequests(t *testing.T) {
 }
 
 // ============================================================================
-// 边界条件测试
+// Boundary Condition Tests
 // ============================================================================
 
 func TestConvertMessages_EmptyMessages(t *testing.T) {
@@ -1514,7 +1513,7 @@ func TestConvertSchemaToDocument_NilSchema(t *testing.T) {
 	doc := convertSchemaToDocument(nil)
 	assert.NotNil(t, doc)
 
-	// 验证 document 可以正确序列化
+	// Verify document can be correctly serialized
 	resultBytes, err := doc.MarshalSmithyDocument()
 	require.NoError(t, err)
 
@@ -1569,7 +1568,7 @@ func TestBuildNonStreamingResponse_WithCacheTokens(t *testing.T) {
 }
 
 // ============================================================================
-// 多轮对话测试
+// Multi-Turn Conversation Tests
 // ============================================================================
 
 func TestGenerateContent_MultiTurnConversation(t *testing.T) {
@@ -1577,7 +1576,7 @@ func TestGenerateContent_MultiTurnConversation(t *testing.T) {
 	mock := &mockBedrockClient{
 		converseFunc: func(ctx context.Context, params *bedrockruntime.ConverseInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
 			turnCount++
-			// 验证消息数量随对话轮次增加
+			// Verify message count increases with conversation turns
 			assert.GreaterOrEqual(t, len(params.Messages), turnCount)
 
 			return &bedrockruntime.ConverseOutput{
@@ -1601,7 +1600,7 @@ func TestGenerateContent_MultiTurnConversation(t *testing.T) {
 
 	m := New("test-model", WithClient(mock))
 
-	// 第一轮
+	// First turn
 	ch, err := m.GenerateContent(context.Background(), &model.Request{
 		Messages: []model.Message{
 			model.NewUserMessage("Hello"),
@@ -1615,7 +1614,7 @@ func TestGenerateContent_MultiTurnConversation(t *testing.T) {
 	require.NotNil(t, resp1)
 	assert.Contains(t, resp1.Choices[0].Message.Content, "Turn 1")
 
-	// 第二轮
+	// Second turn
 	ch, err = m.GenerateContent(context.Background(), &model.Request{
 		Messages: []model.Message{
 			model.NewUserMessage("Hello"),
@@ -1633,7 +1632,7 @@ func TestGenerateContent_MultiTurnConversation(t *testing.T) {
 }
 
 // ============================================================================
-// Mistral 模型特定测试（使用 Mock）
+// Mistral Model Specific Tests (Using Mock)
 // ============================================================================
 
 func TestMistralLarge_NonStreaming_Mock(t *testing.T) {
@@ -1729,7 +1728,7 @@ func TestMistralLarge_Streaming_Mock(t *testing.T) {
 	reader := newMockEventStreamReader(events)
 	m := &Model{modelID: "mistral.mistral-large-3-675b-instruct", channelBufferSize: 256}
 
-	// 使用生产代码 processStreamEvents 处理流式事件
+	// Use production code processStreamEvents to handle stream events
 	responseChan := make(chan *model.Response, 256)
 	go func() {
 		defer close(responseChan)
@@ -1741,10 +1740,10 @@ func TestMistralLarge_Streaming_Mock(t *testing.T) {
 		responses = append(responses, resp)
 	}
 
-	// 应该有 3 个增量 + 1 个最终响应（包含 usage）
+	// Should have 3 deltas + 1 final response (with usage)
 	require.Len(t, responses, 4)
 
-	// 验证增量响应
+	// Verify delta responses
 	assert.True(t, responses[0].IsPartial)
 	assert.Equal(t, "Bonjour", responses[0].Choices[0].Delta.Content)
 	assert.True(t, responses[1].IsPartial)
@@ -1752,7 +1751,7 @@ func TestMistralLarge_Streaming_Mock(t *testing.T) {
 	assert.True(t, responses[2].IsPartial)
 	assert.Equal(t, " allez-vous?", responses[2].Choices[0].Delta.Content)
 
-	// 验证最终响应（usage 已合并到 finalResponse 中）
+	// Verify final response (usage merged into finalResponse)
 	assert.True(t, responses[3].Done)
 	assert.Equal(t, "Bonjour! Comment allez-vous?", responses[3].Choices[0].Message.Content)
 	assert.Equal(t, "end_turn", *responses[3].Choices[0].FinishReason)
@@ -1839,7 +1838,7 @@ func TestMistralLarge_ToolCall_Mock(t *testing.T) {
 }
 
 func TestMistralLarge_SkillInvocation_Mock(t *testing.T) {
-	// 测试 Skill 调用场景：模型返回多个工具调用
+	// Test Skill invocation scenario: model returns multiple tool calls
 	mock := &mockBedrockClient{
 		converseFunc: func(ctx context.Context, params *bedrockruntime.ConverseInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
 			return &bedrockruntime.ConverseOutput{
@@ -1915,7 +1914,7 @@ func TestMistralLarge_SkillInvocation_Mock(t *testing.T) {
 	resp := responses[0]
 	require.Len(t, resp.Choices[0].Message.ToolCalls, 2)
 
-	// 验证两个工具调用
+	// Verify both tool calls
 	assert.Equal(t, "skill_001", resp.Choices[0].Message.ToolCalls[0].ID)
 	assert.Equal(t, "code_interpreter", resp.Choices[0].Message.ToolCalls[0].Function.Name)
 	assert.Equal(t, "skill_002", resp.Choices[0].Message.ToolCalls[1].ID)
