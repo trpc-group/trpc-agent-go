@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceprep"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
@@ -805,10 +806,10 @@ func normalizeCWD(raw string) (string, error) {
 	if s == "" {
 		return ".", nil
 	}
-	if hasGlobMeta(s) {
+	if workspacefacade.HasGlobMeta(s) {
 		return "", errors.New("cwd must not contain glob patterns")
 	}
-	if isWorkspaceEnvPath(s) {
+	if workspacefacade.IsWorkspaceEnvPath(s) {
 		out := codeexecutor.NormalizeGlobs([]string{s})
 		if len(out) == 0 {
 			return "", errors.New("invalid cwd")
@@ -885,10 +886,6 @@ func pollOutput(sessionID string, poll codeexecutor.ProgramPoll) execOutput {
 		out.SessionID = sessionID
 	}
 	return out
-}
-
-func hasGlobMeta(s string) bool {
-	return strings.ContainsAny(s, "*?[")
 }
 
 func execTimeout(raw int) time.Duration {
@@ -969,33 +966,6 @@ func firstNonEmpty(values ...string) string {
 
 func intPtrValue(v int) *int {
 	return &v
-}
-
-const (
-	envVarPrefix = "$"
-	envVarLBrace = "${"
-	envVarRBrace = "}"
-)
-
-func hasEnvPrefix(s string, name string) bool {
-	if strings.HasPrefix(s, envVarPrefix+name) {
-		tail := s[len(envVarPrefix+name):]
-		return tail == "" || strings.HasPrefix(tail, "/") || strings.HasPrefix(tail, "\\")
-	}
-	prefix := envVarLBrace + name + envVarRBrace
-	if strings.HasPrefix(s, prefix) {
-		tail := s[len(prefix):]
-		return tail == "" || strings.HasPrefix(tail, "/") || strings.HasPrefix(tail, "\\")
-	}
-	return false
-}
-
-func isWorkspaceEnvPath(s string) bool {
-	return hasEnvPrefix(s, codeexecutor.WorkspaceEnvDirKey) ||
-		hasEnvPrefix(s, codeexecutor.EnvSkillsDir) ||
-		hasEnvPrefix(s, codeexecutor.EnvWorkDir) ||
-		hasEnvPrefix(s, codeexecutor.EnvOutputDir) ||
-		hasEnvPrefix(s, codeexecutor.EnvRunDir)
 }
 
 func isAllowedWorkspacePath(rel string) bool {

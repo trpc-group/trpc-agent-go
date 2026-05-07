@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -1293,6 +1294,7 @@ func codeExecutorSupportsWorkspaceExecSessions(
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
+	ctx = a.withWorkspace(ctx)
 	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
 		invocation,
@@ -1457,6 +1459,21 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// treat them as "no limit", preserving existing behavior.
 	invocation.MaxLLMCalls = a.option.MaxLLMCalls
 	invocation.MaxToolIterations = a.option.MaxToolIterations
+}
+
+// withWorkspace installs a workspaceio.Workspace into ctx so that
+// AgentCallbacks (BeforeAgent/AfterAgent/BeforeTool/AfterTool) observe
+// the same invocation workspace as workspace_exec. The helper is a
+// no-op when the agent has no code executor configured.
+func (a *LLMAgent) withWorkspace(ctx context.Context) context.Context {
+	if a == nil || a.codeExecutor == nil {
+		return ctx
+	}
+	if _, ok := workspaceio.WorkspaceFromContext(ctx); ok {
+		return ctx
+	}
+	ws := workspaceio.New(a.codeExecutor, a.workspaceRegistry)
+	return workspaceio.WithWorkspace(ctx, ws)
 }
 
 // wrapEventChannel wraps the event channel to apply after agent callbacks.
