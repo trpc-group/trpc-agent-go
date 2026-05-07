@@ -74,11 +74,10 @@ func TestExecTool_Declaration_DescribesGeneralShellUsage(t *testing.T) {
 
 	decl := tl.Declaration()
 	require.NotNil(t, decl)
-	require.Contains(t, decl.Description, "general shell runner")
-	require.Contains(t, decl.Description, "does not depend on a specific skill")
-	require.Contains(t, decl.Description, "curl")
-	require.Contains(t, decl.Description, "environment-dependent network commands")
-	require.Contains(t, decl.Description, "work/inputs")
+	require.Contains(t, decl.Description, "Execute a shell command in the current workspace.")
+	require.NotContains(t, decl.Description, "curl")
+	require.NotContains(t, decl.Description, "network")
+	require.NotContains(t, decl.Description, "git")
 }
 
 func TestExecTool_AutoStagesInvocationMessageFiles(t *testing.T) {
