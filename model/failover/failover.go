@@ -235,6 +235,12 @@ func cloneRequest(request *model.Request) (*model.Request, error) {
 	if err := json.Unmarshal(payload, &cloned); err != nil {
 		return nil, fmt.Errorf("unmarshal request: %w", err)
 	}
+	if len(request.ExtraFields) > 0 {
+		cloned.ExtraFields = make(map[string]any, len(request.ExtraFields))
+		for key, value := range request.ExtraFields {
+			cloned.ExtraFields[key] = value
+		}
+	}
 	if len(request.Tools) > 0 {
 		cloned.Tools = make(map[string]tool.Tool, len(request.Tools))
 		for name, toolImpl := range request.Tools {
