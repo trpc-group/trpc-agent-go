@@ -29,4 +29,8 @@ type Store interface {
 
 	// FindPaths finds paths between two graph nodes.
 	FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.PathResult, error)
+
+	// Close releases any resources held by the store (e.g. database connections).
+	// Implementations that hold no resources may return nil.
+	Close() error
 }

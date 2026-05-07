@@ -19,6 +19,9 @@ type Node struct {
 }
 
 // Edge represents a directed graph edge.
+// ID is optional (omitempty): edges are uniquely identified by the
+// (FromID, ToID, Type) tuple in the graph store, so a separate ID is not
+// required for MERGE operations. When present it is stored as an edge property.
 type Edge struct {
 	ID       string         `json:"id,omitempty"`
 	FromID   string         `json:"from_id"`

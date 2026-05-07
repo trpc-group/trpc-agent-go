@@ -137,7 +137,10 @@ func TestGraphFindPathsToolRequiresEndpointIDs(t *testing.T) {
 
 func TestGraphToolSet(t *testing.T) {
 	kb := &stubGraphKnowledge{}
-	toolSet := NewGraphToolSet(kb)
+	toolSet := NewGraphToolSet(kb, map[string][]any{
+		"content":           {},
+		"metadata.category": {"doc", "tutorial"},
+	})
 
 	require.Equal(t, defaultGraphToolSetName, toolSet.Name())
 	tools := toolSet.Tools(context.Background())

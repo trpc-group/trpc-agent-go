@@ -71,6 +71,8 @@ func (s *stubGraphStore) FindPaths(
 	return &graph.PathResult{}, nil
 }
 
+func (s *stubGraphStore) Close() error { return nil }
+
 type stubGraphSource struct {
 	data *graph.Data
 }

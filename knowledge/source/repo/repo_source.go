@@ -32,16 +32,17 @@ const defaultRepoSourceName = "Repository Source"
 
 // Source represents a knowledge source for a code repository.
 type Source struct {
-	repository     Repository
-	name           string
-	metadata       map[string]any
-	readers        map[string]reader.Reader
-	fileExtensions []string
-	recursive      bool
-	transformers   []transform.Transformer
-	skipDirs       []string
-	skipSuffixes   []string
-	docExtensions  []string
+	repository       Repository
+	name             string
+	metadata         map[string]any
+	readers          map[string]reader.Reader
+	fileExtensions   []string
+	recursive        bool
+	transformers     []transform.Transformer
+	skipDirs         []string
+	skipSuffixes     []string
+	docExtensions    []string
+	parseConcurrency int
 }
 
 // Repository describes one repository input and its version/scope configuration.

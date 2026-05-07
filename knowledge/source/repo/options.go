@@ -86,3 +86,11 @@ func WithDocExtensions(extensions []string) Option {
 		s.docExtensions = append([]string(nil), extensions...)
 	}
 }
+
+// WithParseConcurrency sets the concurrency for code AST parsing in ReadGraph.
+// Zero or negative values mean use the parser's default.
+func WithParseConcurrency(n int) Option {
+	return func(s *Source) {
+		s.parseConcurrency = n
+	}
+}

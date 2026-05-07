@@ -29,6 +29,9 @@ import (
 // ReadGraph reads repository code as graph-native data.
 func (s *Source) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) (*graph.Data, error) {
 	parseConcurrency := source.ReadGraphParseConcurrency(opts)
+	if parseConcurrency <= 0 {
+		parseConcurrency = s.parseConcurrency
+	}
 
 	repository := s.repository
 	repoRoot, repoInfo, cleanup, err := s.resolveRepository(ctx, repository)

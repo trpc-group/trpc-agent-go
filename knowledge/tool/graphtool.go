@@ -49,15 +49,14 @@ type graphToolSet struct {
 // NewGraphToolSet creates the graph search, traverse, and path tools as a
 // single tool set. When used through llmagent.WithToolSets, the exposed tool
 // names become graph_search, graph_traverse, and graph_find_paths. The search
-// tool uses graph-native metadata filter guidance.
+// tool uses graph-native metadata filter guidance driven by agenticFilterInfo,
+// which declares the metadata fields and enumerated values exposed to the LLM
+// (e.g. {"metadata.category": ["doc", "tutorial"], "content": {}}).
 func NewGraphToolSet(
 	kb knowledge.GraphKnowledge,
+	agenticFilterInfo map[string][]any,
 	searchOpts ...Option,
 ) tool.ToolSet {
-	agenticFilterInfo := map[string][]any{
-		"content":                 {},
-		"metadata.trpc_ast_scope": {"code", "example"},
-	}
 	wrappedSearchOpts := []Option{
 		WithToolName(graphSearchToolName),
 		WithToolDescription(defaultGraphSearchToolDescription),
