@@ -45,6 +45,29 @@ import (
 
 // Additional unit tests for long-running tool tracking and preprocess
 
+func TestCloneRequestForContextCompactionDeepCopiesExtraFields(t *testing.T) {
+	req := &model.Request{
+		ExtraFields: map[string]any{
+			"prompt_cache_key": "cache-1",
+			"metadata": map[string]any{
+				"session_id": "session-1",
+			},
+		},
+	}
+
+	cloned := cloneRequestForContextCompaction(req)
+	require.NotNil(t, cloned)
+	require.NotNil(t, cloned.ExtraFields)
+
+	cloned.ExtraFields["prompt_cache_key"] = "changed"
+	clonedMetadata := cloned.ExtraFields["metadata"].(map[string]any)
+	clonedMetadata["session_id"] = "changed"
+
+	require.Equal(t, "cache-1", req.ExtraFields["prompt_cache_key"])
+	metadata := req.ExtraFields["metadata"].(map[string]any)
+	require.Equal(t, "session-1", metadata["session_id"])
+}
+
 // mockLongRunnerTool implements tool.Tool and a LongRunning() flag.
 type mockLongRunnerTool struct {
 	name string
