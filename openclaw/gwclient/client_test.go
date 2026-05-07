@@ -545,6 +545,10 @@ func TestClient_StreamMessageWithOptions_EnablesGatewayProgressAfterDelta(
 								ID:   "call-demo",
 								Function: model.FunctionDefinitionParam{
 									Name: "demo_tool",
+									Arguments: []byte(
+										`{"query":"hello",` +
+											`"api_key":"hidden"}`,
+									),
 								},
 							}},
 						},
@@ -607,6 +611,17 @@ func TestClient_StreamMessageWithOptions_EnablesGatewayProgressAfterDelta(
 	require.Equal(t, "Running local tool", events[3].Summary)
 	require.Equal(t, "demo_tool", events[3].ToolName)
 	require.Equal(t, "call-demo", events[3].ToolCallID)
+	require.Equal(
+		t,
+		`{"api_key":"[redacted]","query":"hello"}`,
+		events[3].ToolArguments,
+	)
+	require.Len(t, events[3].ToolCalls, 1)
+	require.Equal(
+		t,
+		events[3].ToolArguments,
+		events[3].ToolCalls[0].Function.Arguments,
+	)
 	require.Equal(t, gwproto.StreamToolStatusRunning, events[3].ToolStatus)
 	require.Equal(
 		t,
@@ -840,6 +855,7 @@ func TestParseSSEStream_EventFallbackAndErrors(t *testing.T) {
 				"data: {\"summary\":\"Preparing\","+
 				"\"tool_name\":\"kb_search\","+
 				"\"tool_call_id\":\"call-1\","+
+				"\"tool_arguments\":\"{\\\"query\\\":\\\"hello\\\"}\","+
 				"\"tool_status\":\"running\"}\n\n",
 		),
 		out,
@@ -849,6 +865,7 @@ func TestParseSSEStream_EventFallbackAndErrors(t *testing.T) {
 	require.Equal(t, gwproto.StreamEventTypeRunProgress, evt.Type)
 	require.Equal(t, "kb_search", evt.ToolName)
 	require.Equal(t, "call-1", evt.ToolCallID)
+	require.Equal(t, `{"query":"hello"}`, evt.ToolArguments)
 	require.Equal(t, gwproto.StreamToolStatusRunning, evt.ToolStatus)
 
 	err = parseSSEStream(

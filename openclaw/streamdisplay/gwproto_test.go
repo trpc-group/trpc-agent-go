@@ -22,11 +22,12 @@ func TestApplyStreamEventProjectsToolLifecycle(t *testing.T) {
 
 	projector := NewProjector(Options{Language: "en"})
 	require.True(t, projector.Apply(gwproto.StreamEvent{
-		Type:       gwproto.StreamEventTypeRunProgress,
-		Summary:    "Running git command",
-		ToolName:   toolExecCommand,
-		ToolCallID: "call_1",
-		ToolStatus: gwproto.StreamToolStatusRunning,
+		Type:          gwproto.StreamEventTypeRunProgress,
+		Summary:       "Running git command",
+		ToolName:      toolExecCommand,
+		ToolCallID:    "call_1",
+		ToolArguments: `{"command":"git status"}`,
+		ToolStatus:    gwproto.StreamToolStatusRunning,
 	}))
 	require.True(t, projector.Apply(gwproto.StreamEvent{
 		Type:       gwproto.StreamEventTypeRunProgress,
@@ -38,9 +39,42 @@ func TestApplyStreamEventProjectsToolLifecycle(t *testing.T) {
 
 	require.Equal(
 		t,
-		"- Ran exec_command\n  - Preparing final answer",
+		"- Ran exec_command\n"+
+			"  - Args: {\"command\":\"git status\"}\n"+
+			"  - Preparing final answer",
 		Render(projector.Snapshot()),
 	)
+}
+
+func TestApplyStreamEventProjectsNestedToolCalls(t *testing.T) {
+	t.Parallel()
+
+	projector := NewProjector(Options{Language: "en"})
+	require.True(t, projector.Apply(gwproto.StreamEvent{
+		Type:       gwproto.StreamEventTypeRunProgress,
+		Summary:    "Running local tools",
+		ToolStatus: gwproto.StreamToolStatusRunning,
+		ToolCalls: []gwproto.StreamToolCall{
+			{
+				ID: "call_read",
+				Function: &gwproto.StreamToolCallFunction{
+					Name:      toolReadFile,
+					Arguments: `{"path":"README.md"}`,
+				},
+			},
+			{
+				ToolCallID:    "call_patch",
+				ToolName:      toolApplyPatch,
+				ToolArguments: `{"patch":"*** Begin Patch"}`,
+			},
+		},
+	}))
+
+	rendered := Render(projector.Snapshot())
+	require.Contains(t, rendered, "- Exploring fs_read_file")
+	require.Contains(t, rendered, `"path":"README.md"`)
+	require.Contains(t, rendered, "- Writing apply_patch")
+	require.Contains(t, rendered, `"patch":"*** Begin Patch"`)
 }
 
 func TestApplyStreamEventHandlesDeltasAndIgnored(t *testing.T) {

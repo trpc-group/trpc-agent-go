@@ -57,12 +57,14 @@ type streamOutcome struct {
 }
 
 type progressState struct {
-	startedAt  time.Time
-	stage      gwproto.StreamProgressStage
-	summary    string
-	toolName   string
-	toolCallID string
-	toolStatus gwproto.StreamToolStatus
+	startedAt     time.Time
+	stage         gwproto.StreamProgressStage
+	summary       string
+	toolName      string
+	toolCallID    string
+	toolArguments string
+	toolCallsKey  string
+	toolStatus    gwproto.StreamToolStatus
 }
 
 // StreamMessage processes a request and returns a stream of gateway
@@ -586,11 +588,13 @@ func sendStreamEvent(
 }
 
 type progressUpdate struct {
-	stage      gwproto.StreamProgressStage
-	summary    string
-	toolName   string
-	toolCallID string
-	toolStatus gwproto.StreamToolStatus
+	stage         gwproto.StreamProgressStage
+	summary       string
+	toolName      string
+	toolCallID    string
+	toolArguments string
+	toolCalls     []gwproto.StreamToolCall
+	toolStatus    gwproto.StreamToolStatus
 }
 
 func progressUpdateFromRunnerEvent(
@@ -600,11 +604,20 @@ func progressUpdateFromRunnerEvent(
 		return progressUpdate{}, false
 	}
 	if evt.Response.IsToolCallResponse() {
-		toolCall, ok := firstToolCall(evt.Response)
+		toolCalls := toolCallsFromResponse(evt.Response)
+		if len(toolCalls) == 0 {
+			return progressUpdate{}, false
+		}
+		toolCall, ok := firstToolCallFromList(toolCalls)
 		if !ok {
 			return progressUpdate{}, false
 		}
-		return progressFromToolCall(toolCall)
+		update, ok := progressFromToolCall(toolCall)
+		if !ok {
+			return progressUpdate{}, false
+		}
+		update.toolCalls = streamToolCallsFromModel(toolCalls)
+		return update, true
 	}
 	if evt.Object == model.ObjectTypeToolResponse {
 		return progressFromToolResult(evt.Response), true
@@ -613,15 +626,31 @@ func progressUpdateFromRunnerEvent(
 }
 
 func firstToolCall(rsp *model.Response) (model.ToolCall, bool) {
+	return firstToolCallFromList(toolCallsFromResponse(rsp))
+}
+
+func toolCallsFromResponse(rsp *model.Response) []model.ToolCall {
 	if rsp == nil {
-		return model.ToolCall{}, false
+		return nil
 	}
 	for _, choice := range rsp.Choices {
 		if len(choice.Message.ToolCalls) > 0 {
-			return choice.Message.ToolCalls[0], true
+			return choice.Message.ToolCalls
 		}
 		if len(choice.Delta.ToolCalls) > 0 {
-			return choice.Delta.ToolCalls[0], true
+			return choice.Delta.ToolCalls
+		}
+	}
+	return nil
+}
+
+func firstToolCallFromList(
+	toolCalls []model.ToolCall,
+) (model.ToolCall, bool) {
+	for _, toolCall := range toolCalls {
+		if strings.TrimSpace(toolCall.ID) != "" ||
+			strings.TrimSpace(toolCall.Function.Name) != "" {
+			return toolCall, true
 		}
 	}
 	return model.ToolCall{}, false
@@ -649,6 +678,9 @@ func progressFromToolCall(
 	update := progressUpdate{
 		toolName:   name,
 		toolCallID: strings.TrimSpace(toolCall.ID),
+		toolArguments: summarizeToolArguments(
+			toolCall.Function.Arguments,
+		),
 		toolStatus: gwproto.StreamToolStatusRunning,
 	}
 	switch name {
@@ -672,6 +704,38 @@ func progressFromToolCall(
 		update.summary = progressSummaryTool
 		return update, true
 	}
+}
+
+func streamToolCallsFromModel(
+	toolCalls []model.ToolCall,
+) []gwproto.StreamToolCall {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+	calls := make([]gwproto.StreamToolCall, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		name := strings.TrimSpace(toolCall.Function.Name)
+		id := strings.TrimSpace(toolCall.ID)
+		if name == "" && id == "" {
+			continue
+		}
+		arguments := summarizeToolArguments(
+			toolCall.Function.Arguments,
+		)
+		calls = append(calls, gwproto.StreamToolCall{
+			ID:            id,
+			ToolCallID:    id,
+			Name:          name,
+			ToolName:      name,
+			Arguments:     arguments,
+			ToolArguments: arguments,
+			Function: &gwproto.StreamToolCallFunction{
+				Name:      name,
+				Arguments: arguments,
+			},
+		})
+	}
+	return calls
 }
 
 func progressFromToolResult(rsp *model.Response) progressUpdate {
@@ -809,10 +873,13 @@ func sendProgressUpdate(
 	if state == nil || update.stage == "" {
 		return true
 	}
+	toolCallsKey := streamToolCallsKey(update.toolCalls)
 	if state.stage == update.stage &&
 		state.summary == update.summary &&
 		state.toolName == update.toolName &&
 		state.toolCallID == update.toolCallID &&
+		state.toolArguments == update.toolArguments &&
+		state.toolCallsKey == toolCallsKey &&
 		state.toolStatus == update.toolStatus {
 		return true
 	}
@@ -820,18 +887,33 @@ func sendProgressUpdate(
 	state.summary = update.summary
 	state.toolName = update.toolName
 	state.toolCallID = update.toolCallID
+	state.toolArguments = update.toolArguments
+	state.toolCallsKey = toolCallsKey
 	state.toolStatus = update.toolStatus
 	return sendStreamEvent(ctx, out, gwproto.StreamEvent{
-		Type:       gwproto.StreamEventTypeRunProgress,
-		SessionID:  run.sessionID,
-		RequestID:  run.requestID,
-		Stage:      update.stage,
-		Summary:    update.summary,
-		ToolName:   update.toolName,
-		ToolCallID: update.toolCallID,
-		ToolStatus: update.toolStatus,
-		ElapsedMS:  time.Since(state.startedAt).Milliseconds(),
+		Type:          gwproto.StreamEventTypeRunProgress,
+		SessionID:     run.sessionID,
+		RequestID:     run.requestID,
+		Stage:         update.stage,
+		Summary:       update.summary,
+		ToolName:      update.toolName,
+		ToolCallID:    update.toolCallID,
+		ToolArguments: update.toolArguments,
+		ToolCalls:     update.toolCalls,
+		ToolStatus:    update.toolStatus,
+		ElapsedMS:     time.Since(state.startedAt).Milliseconds(),
 	})
+}
+
+func streamToolCallsKey(toolCalls []gwproto.StreamToolCall) string {
+	if len(toolCalls) == 0 {
+		return ""
+	}
+	body, err := json.Marshal(toolCalls)
+	if err != nil {
+		return ""
+	}
+	return string(body)
 }
 
 func singleStreamEvents(

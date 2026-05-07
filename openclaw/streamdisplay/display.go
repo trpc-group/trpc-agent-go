@@ -87,6 +87,7 @@ type Labels struct {
 	Explored          string
 	Writing           string
 	Wrote             string
+	Detail            string
 	Answer            string
 	Canceled          string
 	Ignored           string
@@ -110,6 +111,7 @@ type ToolUpdate struct {
 	Kind   ItemKind
 	Status ItemStatus
 	Text   string
+	Detail string
 }
 
 // Projector stores display state for one stream.
@@ -136,6 +138,7 @@ type Item struct {
 	Status ItemStatus
 	Name   string
 	Text   string
+	Detail string
 }
 
 // Snapshot is an immutable display view.
@@ -456,6 +459,9 @@ func mergeLabels(base Labels, override Labels) Labels {
 	if override.Wrote != "" {
 		base.Wrote = override.Wrote
 	}
+	if override.Detail != "" {
+		base.Detail = override.Detail
+	}
 	if override.Answer != "" {
 		base.Answer = override.Answer
 	}
@@ -484,6 +490,7 @@ func englishLabels() Labels {
 		Explored:          "Explored",
 		Writing:           "Writing",
 		Wrote:             "Wrote",
+		Detail:            "Args",
 		Answer:            "Answer",
 		Canceled:          "Canceled",
 		Ignored:           "Ignored",
@@ -504,6 +511,7 @@ func chineseLabels() Labels {
 		Explored:          "已查看",
 		Writing:           "正在写入",
 		Wrote:             "已写入",
+		Detail:            "参数",
 		Answer:            "回答",
 		Canceled:          "已取消",
 		Ignored:           "已忽略",
@@ -587,6 +595,7 @@ func toolItem(update ToolUpdate) Item {
 		Status: normalizeItemStatus(update.Status),
 		Name:   name,
 		Text:   strings.TrimSpace(update.Text),
+		Detail: strings.TrimSpace(update.Detail),
 	}
 }
 
@@ -649,6 +658,10 @@ func updateItem(existing *Item, next Item) bool {
 		existing.Text = next.Text
 		changed = true
 	}
+	if next.Detail != "" && existing.Detail != next.Detail {
+		existing.Detail = next.Detail
+		changed = true
+	}
 	return changed
 }
 
@@ -665,10 +678,15 @@ func renderItem(item Item, labels Labels, maxTextRunes int) string {
 		return ""
 	}
 	text := truncateRunes(strings.TrimSpace(item.Text), maxTextRunes)
-	if text == "" || text == item.Name {
-		return bulletPrefix + head
+	detail := truncateRunes(strings.TrimSpace(item.Detail), maxTextRunes)
+	lines := []string{bulletPrefix + head}
+	if detail != "" {
+		lines = append(lines, childPrefix+labels.Detail+": "+detail)
 	}
-	return bulletPrefix + head + "\n" + childPrefix + text
+	if text != "" && text != item.Name && text != detail {
+		lines = append(lines, childPrefix+text)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func itemHead(item Item, labels Labels) string {

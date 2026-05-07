@@ -69,6 +69,7 @@ func TestProjectorRendersEnglishToolLifecycle(t *testing.T) {
 		Kind:   ItemKindCommand,
 		Status: ItemStatusRunning,
 		Text:   "Running git command",
+		Detail: `{"command":"git status"}`,
 	}))
 	require.True(t, projector.ApplyTool(ToolUpdate{
 		ID:     "call_1",
@@ -85,6 +86,7 @@ func TestProjectorRendersEnglishToolLifecycle(t *testing.T) {
 	require.Equal(
 		t,
 		"- Ran exec_command\n"+
+			"  - Args: {\"command\":\"git status\"}\n"+
 			"  - Preparing final answer\n\n"+
 			"Answer\n"+
 			"done",
@@ -108,6 +110,7 @@ func TestProjectorRendersChineseLabels(t *testing.T) {
 		Kind:   ItemKindExplore,
 		Status: ItemStatusRunning,
 		Text:   "Scanning files",
+		Detail: `{"query":"*.go"}`,
 	}))
 
 	rendered := Render(projector.Snapshot())
@@ -116,6 +119,7 @@ func TestProjectorRendersChineseLabels(t *testing.T) {
 		"- 思考\n"+
 			"  - 先检查上下文\n\n"+
 			"- 正在查看 fs_search\n"+
+			"  - 参数: {\"query\":\"*.go\"}\n"+
 			"  - Scanning files",
 		rendered,
 	)

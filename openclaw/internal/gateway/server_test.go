@@ -557,7 +557,9 @@ func TestServerUploadContextMessages_UsesStorageUserOverride(t *testing.T) {
 	require.Contains(t, msgs[0].Content, "clip.mp4 [video]")
 }
 
-func TestServerInjectedContextMessages_IncludePersonaAndUploads(t *testing.T) {
+func TestServerInjectedContextMessages_IncludePersonaAndUploads(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	stateDir := t.TempDir()
@@ -718,7 +720,7 @@ func TestServerInjectedContextMessages_IncludeMemoryFiles(t *testing.T) {
 	require.Contains(t, msgs[2].Content, recentUploadContextHeader)
 }
 
-func TestServerInjectedContextMessages_UsesLayeredMemoryAndStorageScopedUploads(
+func TestServerInjectedContextMessages_LayeredMemoryAndScopedUploads(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -739,7 +741,11 @@ func TestServerInjectedContextMessages_UsesLayeredMemoryAndStorageScopedUploads(
 	require.NoError(t, err)
 	require.NoError(
 		t,
-		os.WriteFile(memoryPath, []byte("## Preferences\n\n- Remember my name."), 0o600),
+		os.WriteFile(
+			memoryPath,
+			[]byte("## Preferences\n\n- Remember my name."),
+			0o600,
+		),
 	)
 
 	otherMemoryPath, err := memoryStore.EnsureMemory(
@@ -750,7 +756,11 @@ func TestServerInjectedContextMessages_UsesLayeredMemoryAndStorageScopedUploads(
 	require.NoError(t, err)
 	require.NoError(
 		t,
-		os.WriteFile(otherMemoryPath, []byte("## Preferences\n\n- Chat rule."), 0o600),
+		os.WriteFile(
+			otherMemoryPath,
+			[]byte("## Preferences\n\n- Chat rule."),
+			0o600,
+		),
 	)
 
 	_, err = uploadStore.Save(
@@ -790,7 +800,9 @@ func TestServerInjectedContextMessages_UsesLayeredMemoryAndStorageScopedUploads(
 	require.Contains(t, msgs[2].Content, "clip.mp4 [video]")
 }
 
-func TestServerInjectedContextMessages_CanceledContextSkipsMemoryFiles(t *testing.T) {
+func TestServerInjectedContextMessages_CanceledContextSkipsMemoryFiles(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	root, err := memoryfile.DefaultRoot(t.TempDir())
@@ -814,7 +826,9 @@ func TestServerInjectedContextMessages_CanceledContextSkipsMemoryFiles(t *testin
 	require.Empty(t, msgs)
 }
 
-func TestServerInjectedContextMessages_EmptyAppNameSkipsMemoryFiles(t *testing.T) {
+func TestServerInjectedContextMessages_EmptyAppNameSkipsMemoryFiles(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	root, err := memoryfile.DefaultRoot(t.TempDir())
@@ -836,7 +850,9 @@ func TestServerInjectedContextMessages_EmptyAppNameSkipsMemoryFiles(t *testing.T
 	require.Empty(t, msgs)
 }
 
-func TestServerInjectedContextMessages_EmptyUserIDSkipsMemoryFiles(t *testing.T) {
+func TestServerInjectedContextMessages_EmptyUserIDSkipsMemoryFiles(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	root, err := memoryfile.DefaultRoot(t.TempDir())
@@ -858,7 +874,9 @@ func TestServerInjectedContextMessages_EmptyUserIDSkipsMemoryFiles(t *testing.T)
 	require.Empty(t, msgs)
 }
 
-func TestServerInjectedContextMessages_EmptyMemoryFileSkipsMessage(t *testing.T) {
+func TestServerInjectedContextMessages_EmptyMemoryFileSkipsMessage(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	root, err := memoryfile.DefaultRoot(t.TempDir())
@@ -3837,6 +3855,13 @@ func TestServer_StreamMessage_ProgressStages(t *testing.T) {
 	require.Equal(t, "Reading document page 2", events[2].Summary)
 	require.Equal(t, streamToolReadDocument, events[2].ToolName)
 	require.Equal(t, testReadDocumentToolCallID, events[2].ToolCallID)
+	require.Equal(t, `{"page":2}`, events[2].ToolArguments)
+	require.Len(t, events[2].ToolCalls, 1)
+	require.Equal(
+		t,
+		events[2].ToolArguments,
+		events[2].ToolCalls[0].Function.Arguments,
+	)
 	require.Equal(
 		t,
 		gwproto.StreamToolStatusRunning,
@@ -4172,6 +4197,13 @@ func TestStreamProgressHelpers(t *testing.T) {
 	require.Equal(t, "Reading document page 2", update.summary)
 	require.Equal(t, streamToolReadDocument, update.toolName)
 	require.Equal(t, testReadDocumentToolCallID, update.toolCallID)
+	require.Equal(t, `{"page":2}`, update.toolArguments)
+	require.Len(t, update.toolCalls, 1)
+	require.Equal(
+		t,
+		update.toolArguments,
+		update.toolCalls[0].Function.Arguments,
+	)
 	require.Equal(
 		t,
 		gwproto.StreamToolStatusRunning,
@@ -4225,6 +4257,7 @@ func TestToolCallProgressSummaries(t *testing.T) {
 	require.Equal(t, "Reading spreadsheet rows 2-4", update.summary)
 	require.Equal(t, streamToolReadSheet, update.toolName)
 	require.Equal(t, testReadDocumentToolCallID, update.toolCallID)
+	require.Equal(t, `{"end_row":4,"start_row":2}`, update.toolArguments)
 	require.Equal(
 		t,
 		gwproto.StreamToolStatusRunning,
@@ -4233,8 +4266,10 @@ func TestToolCallProgressSummaries(t *testing.T) {
 
 	update, ok = progressFromToolCall(model.ToolCall{
 		Function: model.FunctionDefinitionParam{
-			Name:      streamToolExecCommand,
-			Arguments: []byte(`{"command":"go test ./..."}`),
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"go test ./...","token":"hidden"}`,
+			),
 		},
 	})
 	require.True(t, ok)
@@ -4244,6 +4279,11 @@ func TestToolCallProgressSummaries(t *testing.T) {
 		update.stage,
 	)
 	require.Equal(t, progressSummaryGoTest, update.summary)
+	require.Equal(
+		t,
+		`{"command":"go test ./...","token":"[redacted]"}`,
+		update.toolArguments,
+	)
 
 	update, ok = progressFromToolCall(model.ToolCall{
 		Function: model.FunctionDefinitionParam{
@@ -4293,6 +4333,68 @@ func TestToolCallProgressSummaries(t *testing.T) {
 			},
 		}),
 	)
+}
+
+func TestProgressUpdateFromRunnerEventKeepsAllToolCalls(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	update, ok := progressUpdateFromRunnerEvent(&event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					ToolCalls: []model.ToolCall{
+						{
+							ID: "call_search",
+							Function: model.FunctionDefinitionParam{
+								Name:      "duckduckgo_search",
+								Arguments: []byte(`{"query":"repo"}`),
+							},
+						},
+						{
+							ID: "call_wiki",
+							Function: model.FunctionDefinitionParam{
+								Name: "wiki_wikipedia_search",
+								Arguments: []byte(
+									`{"query":"repo","limit":5}`,
+								),
+							},
+						},
+					},
+				},
+			}},
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, "duckduckgo_search", update.toolName)
+	require.Equal(t, "call_search", update.toolCallID)
+	require.Len(t, update.toolCalls, 2)
+	require.Equal(
+		t,
+		`{"query":"repo"}`,
+		update.toolCalls[0].Function.Arguments,
+	)
+	require.Equal(
+		t,
+		`{"limit":5,"query":"repo"}`,
+		update.toolCalls[1].Function.Arguments,
+	)
+}
+
+func TestSummarizeToolArgumentsRedactsAndTruncates(t *testing.T) {
+	t.Parallel()
+
+	detail := summarizeToolArguments([]byte(
+		`{"command":"git status","password":"hidden"}`,
+	))
+	require.Equal(
+		t,
+		`{"command":"git status","password":"[redacted]"}`,
+		detail,
+	)
+	require.Empty(t, summarizeToolArguments([]byte(`{}`)))
+	require.Equal(t, "plain text", summarizeToolArguments([]byte("plain text")))
 }
 
 func TestSendProgressUpdateAndHelpers(t *testing.T) {

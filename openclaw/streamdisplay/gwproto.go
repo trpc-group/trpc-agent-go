@@ -72,6 +72,9 @@ func applyStreamProgress(
 	projector *Projector,
 	evt gwproto.StreamEvent,
 ) bool {
+	if len(evt.ToolCalls) > 0 {
+		return applyStreamToolCalls(projector, evt)
+	}
 	toolName := strings.TrimSpace(evt.ToolName)
 	toolCallID := strings.TrimSpace(evt.ToolCallID)
 	if toolName == "" && toolCallID == "" {
@@ -83,7 +86,74 @@ func applyStreamProgress(
 		Kind:   streamToolKind(evt.Stage, toolName),
 		Status: streamItemStatus(evt.ToolStatus),
 		Text:   evt.Summary,
+		Detail: strings.TrimSpace(evt.ToolArguments),
 	})
+}
+
+func applyStreamToolCalls(
+	projector *Projector,
+	evt gwproto.StreamEvent,
+) bool {
+	changed := false
+	for _, call := range evt.ToolCalls {
+		update, ok := streamToolUpdateFromCall(evt, call)
+		if ok {
+			changed = projector.ApplyTool(update) || changed
+		}
+	}
+	return changed
+}
+
+func streamToolUpdateFromCall(
+	evt gwproto.StreamEvent,
+	call gwproto.StreamToolCall,
+) (ToolUpdate, bool) {
+	toolName := streamToolCallName(call)
+	toolCallID := streamToolCallID(call)
+	if toolName == "" && toolCallID == "" {
+		return ToolUpdate{}, false
+	}
+	return ToolUpdate{
+		ID:     toolCallID,
+		Name:   toolName,
+		Kind:   streamToolKind(evt.Stage, toolName),
+		Status: streamItemStatus(evt.ToolStatus),
+		Text:   evt.Summary,
+		Detail: streamToolCallDetail(call),
+	}, true
+}
+
+func streamToolCallName(call gwproto.StreamToolCall) string {
+	if name := strings.TrimSpace(call.ToolName); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(call.Name); name != "" {
+		return name
+	}
+	if call.Function == nil {
+		return ""
+	}
+	return strings.TrimSpace(call.Function.Name)
+}
+
+func streamToolCallID(call gwproto.StreamToolCall) string {
+	if id := strings.TrimSpace(call.ToolCallID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(call.ID)
+}
+
+func streamToolCallDetail(call gwproto.StreamToolCall) string {
+	if detail := strings.TrimSpace(call.ToolArguments); detail != "" {
+		return detail
+	}
+	if detail := strings.TrimSpace(call.Arguments); detail != "" {
+		return detail
+	}
+	if call.Function == nil {
+		return ""
+	}
+	return strings.TrimSpace(call.Function.Arguments)
 }
 
 func streamToolKind(

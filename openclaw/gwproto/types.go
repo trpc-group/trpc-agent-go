@@ -131,7 +131,9 @@ const (
 	// StreamProgressStageReadingDocument marks document extraction.
 	StreamProgressStageReadingDocument StreamProgressStage = "reading_document"
 	// StreamProgressStageReadingSpreadsheet marks tabular extraction.
-	StreamProgressStageReadingSpreadsheet StreamProgressStage = "reading_spreadsheet"
+	StreamProgressStageReadingSpreadsheet = StreamProgressStage(
+		"reading_spreadsheet",
+	)
 	// StreamProgressStageRunningTool marks a generic tool run.
 	StreamProgressStageRunningTool StreamProgressStage = "running_tool"
 	// StreamProgressStageSummarizing marks post-tool answer generation.
@@ -156,11 +158,31 @@ type StreamEvent struct {
 	Summary    string              `json:"summary,omitempty"`
 	ToolName   string              `json:"tool_name,omitempty"`
 	ToolCallID string              `json:"tool_call_id,omitempty"`
-	ToolStatus StreamToolStatus    `json:"tool_status,omitempty"`
-	ElapsedMS  int64               `json:"elapsed_ms,omitempty"`
-	Usage      *Usage              `json:"usage,omitempty"`
-	Ignored    bool                `json:"ignored,omitempty"`
-	Error      *APIError           `json:"error,omitempty"`
+	// ToolArguments is a compact, redacted argument summary for display.
+	ToolArguments string           `json:"tool_arguments,omitempty"`
+	ToolCalls     []StreamToolCall `json:"tool_calls,omitempty"`
+	ToolStatus    StreamToolStatus `json:"tool_status,omitempty"`
+	ElapsedMS     int64            `json:"elapsed_ms,omitempty"`
+	Usage         *Usage           `json:"usage,omitempty"`
+	Ignored       bool             `json:"ignored,omitempty"`
+	Error         *APIError        `json:"error,omitempty"`
+}
+
+// StreamToolCall describes one tool call inside a progress event.
+type StreamToolCall struct {
+	ID            string                  `json:"id,omitempty"`
+	ToolCallID    string                  `json:"tool_call_id,omitempty"`
+	Name          string                  `json:"name,omitempty"`
+	ToolName      string                  `json:"tool_name,omitempty"`
+	Arguments     string                  `json:"arguments,omitempty"`
+	ToolArguments string                  `json:"tool_arguments,omitempty"`
+	Function      *StreamToolCallFunction `json:"function,omitempty"`
+}
+
+// StreamToolCallFunction describes function-style tool call metadata.
+type StreamToolCallFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // ContentPartType is the type discriminator for ContentPart.
