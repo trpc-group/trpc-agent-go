@@ -587,7 +587,7 @@ translateCallbacks := translator.NewCallbacks().
   })
 ```
 
-TranslateCallbacks 的详细介绍参见 [agui](./agui.md)
+TranslateCallbacks 的详细介绍参见 [agui](./agui/index.md)
 
 ---
 
