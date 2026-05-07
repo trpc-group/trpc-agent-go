@@ -726,7 +726,7 @@ A2UI does not replace AG-UI's session, routing, or transport capabilities. Inste
 - Reuse server-side capabilities such as `SessionService`, cancellation, and message snapshots
 - Continue extending `userID`, session storage, and event translation logic through custom Runner options
 
-For full AG-UI usage details, see the [AG-UI Guide](./agui.md). For the general Planner capabilities, see [Planner](./planner.md).
+For full AG-UI usage details, see the [AG-UI Guide](./agui/index.md). For the general Planner capabilities, see [Planner](./planner.md).
 
 ## Best Practices
 
