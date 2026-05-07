@@ -531,3 +531,309 @@ func TestBuiltinGraphKnowledge_LoadGraphSourceContextCancellation(t *testing.T) 
 		t.Fatal("expected error from context cancellation")
 	}
 }
+
+func TestNewGraphKnowledgeOptions(t *testing.T) {
+	gs := &stubGraphStore{}
+	vs := &fixedScoreGraphVectorStore{}
+	emb := stubGraphEmbedder{}
+
+	tests := []struct {
+		name  string
+		opts  []GraphKnowledgeOption
+		check func(t *testing.T, gk *BuiltinGraphKnowledge)
+	}{
+		{
+			name: "no options leaves all fields nil",
+			opts: nil,
+			check: func(t *testing.T, gk *BuiltinGraphKnowledge) {
+				if gk.store != nil {
+					t.Fatal("store should be nil")
+				}
+				if gk.vectorStore != nil {
+					t.Fatal("vectorStore should be nil")
+				}
+				if gk.embedder != nil {
+					t.Fatal("embedder should be nil")
+				}
+			},
+		},
+		{
+			name: "WithGraphStore sets store",
+			opts: []GraphKnowledgeOption{WithGraphStore(gs)},
+			check: func(t *testing.T, gk *BuiltinGraphKnowledge) {
+				if gk.store != gs {
+					t.Fatal("store not set")
+				}
+			},
+		},
+		{
+			name: "WithGraphVectorStore sets vectorStore",
+			opts: []GraphKnowledgeOption{WithGraphVectorStore(vs)},
+			check: func(t *testing.T, gk *BuiltinGraphKnowledge) {
+				if gk.vectorStore != vs {
+					t.Fatal("vectorStore not set")
+				}
+			},
+		},
+		{
+			name: "WithGraphEmbedder sets embedder",
+			opts: []GraphKnowledgeOption{WithGraphEmbedder(emb)},
+			check: func(t *testing.T, gk *BuiltinGraphKnowledge) {
+				if gk.embedder == nil {
+					t.Fatal("embedder not set")
+				}
+			},
+		},
+		{
+			name: "all options together",
+			opts: []GraphKnowledgeOption{WithGraphStore(gs), WithGraphVectorStore(vs), WithGraphEmbedder(emb)},
+			check: func(t *testing.T, gk *BuiltinGraphKnowledge) {
+				if gk.store != gs {
+					t.Fatal("store not set")
+				}
+				if gk.vectorStore != vs {
+					t.Fatal("vectorStore not set")
+				}
+				if gk.embedder == nil {
+					t.Fatal("embedder not set")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gk := NewGraphKnowledge(tt.opts...)
+			tt.check(t, gk)
+		})
+	}
+}
+
+func TestGraphLoadOptions(t *testing.T) {
+	tests := []struct {
+		name  string
+		opts  []GraphLoadOption
+		check func(t *testing.T, cfg *graphLoadConfig)
+	}{
+		{
+			name: "WithGraphLoadProgress enables progress",
+			opts: []GraphLoadOption{WithGraphLoadProgress(true)},
+			check: func(t *testing.T, cfg *graphLoadConfig) {
+				if !cfg.showProgress {
+					t.Fatal("showProgress should be true")
+				}
+			},
+		},
+		{
+			name: "WithGraphLoadProgressStepSize sets step size",
+			opts: []GraphLoadOption{WithGraphLoadProgressStepSize(50)},
+			check: func(t *testing.T, cfg *graphLoadConfig) {
+				if cfg.progressStepSize != 50 {
+					t.Fatalf("progressStepSize = %d, want 50", cfg.progressStepSize)
+				}
+			},
+		},
+		{
+			name: "WithGraphLoadReadGraphOpts appends options",
+			opts: []GraphLoadOption{WithGraphLoadReadGraphOpts(source.WithReadGraphParseConcurrency(8))},
+			check: func(t *testing.T, cfg *graphLoadConfig) {
+				if len(cfg.readGraphOpts) != 1 {
+					t.Fatalf("readGraphOpts length = %d, want 1", len(cfg.readGraphOpts))
+				}
+			},
+		},
+		{
+			name: "default step size when not set or zero",
+			opts: nil,
+			check: func(t *testing.T, cfg *graphLoadConfig) {
+				if cfg.progressStepSize != 100 {
+					t.Fatalf("default progressStepSize = %d, want 100", cfg.progressStepSize)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := newGraphLoadConfig(tt.opts...)
+			tt.check(t, cfg)
+		})
+	}
+}
+
+func TestBuiltinGraphKnowledge_SearchEdgeCases(t *testing.T) {
+	fullyConfigured := NewGraphKnowledge(
+		WithGraphStore(&stubGraphStore{}),
+		WithGraphVectorStore(&fixedScoreGraphVectorStore{
+			score: 0.9,
+			doc:   &document.Document{ID: "n1", Name: "n1", Content: "c"},
+		}),
+		WithGraphEmbedder(stubGraphEmbedder{}),
+	)
+
+	tests := []struct {
+		name    string
+		gk      *BuiltinGraphKnowledge
+		req     *SearchRequest
+		wantErr string
+	}{
+		{
+			name:    "nil request",
+			gk:      fullyConfigured,
+			req:     nil,
+			wantErr: "search request cannot be nil",
+		},
+		{
+			name:    "empty query without filter",
+			gk:      fullyConfigured,
+			req:     &SearchRequest{Query: ""},
+			wantErr: "search query cannot be empty",
+		},
+		{
+			name:    "whitespace-only query without filter",
+			gk:      fullyConfigured,
+			req:     &SearchRequest{Query: "   "},
+			wantErr: "search query cannot be empty",
+		},
+		{
+			name: "nil vector store",
+			gk: NewGraphKnowledge(
+				WithGraphStore(&stubGraphStore{}),
+				WithGraphEmbedder(stubGraphEmbedder{}),
+			),
+			req:     &SearchRequest{Query: "test"},
+			wantErr: "graph vector store is not configured",
+		},
+		{
+			name: "nil embedder with non-empty query",
+			gk: NewGraphKnowledge(
+				WithGraphStore(&stubGraphStore{}),
+				WithGraphVectorStore(&fixedScoreGraphVectorStore{
+					score: 0.9,
+					doc:   &document.Document{ID: "n1", Name: "n1", Content: "c"},
+				}),
+			),
+			req:     &SearchRequest{Query: "test"},
+			wantErr: "graph embedder is not configured",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.gk.Search(context.Background(), tt.req)
+			if err == nil {
+				t.Fatalf("expected error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestBuiltinGraphKnowledge_TraverseRequiresStore(t *testing.T) {
+	gk := NewGraphKnowledge()
+	_, err := gk.Traverse(context.Background(), &graph.TraverseQuery{StartIDs: []string{"a"}})
+	if err == nil {
+		t.Fatal("expected error when store is nil")
+	}
+	if !strings.Contains(err.Error(), "graph store is not configured") {
+		t.Fatalf("error = %v, want 'graph store is not configured'", err)
+	}
+}
+
+func TestBuiltinGraphKnowledge_TraverseDelegates(t *testing.T) {
+	store := &stubGraphStore{
+		traverseResp: &graph.TraverseResult{
+			Nodes: []*graph.Node{{ID: "a"}},
+		},
+	}
+	gk := NewGraphKnowledge(WithGraphStore(store))
+	q := &graph.TraverseQuery{StartIDs: []string{"a"}}
+	result, err := gk.Traverse(context.Background(), q)
+	if err != nil {
+		t.Fatalf("Traverse() error = %v", err)
+	}
+	if store.traverseReq != q {
+		t.Fatal("query was not forwarded to store")
+	}
+	if len(result.Nodes) != 1 || result.Nodes[0].ID != "a" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestBuiltinGraphKnowledge_FindPathsRequiresStore(t *testing.T) {
+	gk := NewGraphKnowledge()
+	_, err := gk.FindPaths(context.Background(), &graph.PathQuery{FromID: "a", ToID: "b"})
+	if err == nil {
+		t.Fatal("expected error when store is nil")
+	}
+	if !strings.Contains(err.Error(), "graph store is not configured") {
+		t.Fatalf("error = %v, want 'graph store is not configured'", err)
+	}
+}
+
+func TestBuiltinGraphKnowledge_FindPathsDelegates(t *testing.T) {
+	store := &stubGraphStore{
+		pathResp: &graph.PathResult{
+			Paths: []*graph.Path{{Nodes: []*graph.Node{{ID: "a"}, {ID: "b"}}}},
+		},
+	}
+	gk := NewGraphKnowledge(WithGraphStore(store))
+	q := &graph.PathQuery{FromID: "a", ToID: "b"}
+	result, err := gk.FindPaths(context.Background(), q)
+	if err != nil {
+		t.Fatalf("FindPaths() error = %v", err)
+	}
+	if store.pathReq != q {
+		t.Fatal("query was not forwarded to store")
+	}
+	if len(result.Paths) != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+type namedStubGraphSource struct {
+	stubGraphSource
+	name string
+}
+
+func (s *namedStubGraphSource) Name() string { return s.name }
+
+func TestGraphSourceName(t *testing.T) {
+	tests := []struct {
+		name string
+		src  source.GraphSource
+		want string
+	}{
+		{
+			name: "unnamed source returns default",
+			src:  &stubGraphSource{},
+			want: "graph source",
+		},
+		{
+			name: "named source returns its name",
+			src:  &namedStubGraphSource{name: "my-source"},
+			want: "my-source",
+		},
+		{
+			name: "named source with empty name returns default",
+			src:  &namedStubGraphSource{name: ""},
+			want: "graph source",
+		},
+		{
+			name: "named source with whitespace-only name returns default",
+			src:  &namedStubGraphSource{name: "   "},
+			want: "graph source",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := graphSourceName(tt.src)
+			if got != tt.want {
+				t.Fatalf("graphSourceName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

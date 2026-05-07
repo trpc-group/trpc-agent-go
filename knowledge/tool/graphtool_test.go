@@ -183,3 +183,180 @@ func mustMarshalGraphToolArgs(t *testing.T, args any) []byte {
 	require.NoError(t, err)
 	return payload
 }
+
+func TestGraphTraverseToolResult(t *testing.T) {
+	tests := []struct {
+		name           string
+		result         *graph.TraverseResult
+		includeContent bool
+		wantNil        bool
+		wantContent    string
+	}{
+		{
+			name:           "nil result returns nil",
+			result:         nil,
+			includeContent: false,
+			wantNil:        true,
+		},
+		{
+			name: "includeContent true preserves content",
+			result: &graph.TraverseResult{
+				Nodes: []*graph.Node{{ID: "n1", Content: "body"}},
+			},
+			includeContent: true,
+			wantContent:    "body",
+		},
+		{
+			name: "includeContent false strips content",
+			result: &graph.TraverseResult{
+				Nodes: []*graph.Node{{ID: "n1", Content: "body"}},
+				Edges: []*graph.Edge{{FromID: "n1", ToID: "n2", Type: "CALLS"}},
+			},
+			includeContent: false,
+			wantContent:    "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := graphTraverseToolResult(tt.result, tt.includeContent)
+			if tt.wantNil {
+				require.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			require.Equal(t, tt.wantContent, got.Nodes[0].Content)
+		})
+	}
+}
+
+func TestGraphPathToolResult(t *testing.T) {
+	tests := []struct {
+		name           string
+		result         *graph.PathResult
+		includeContent bool
+		wantNil        bool
+		checkFunc      func(t *testing.T, got *graph.PathResult)
+	}{
+		{
+			name:           "nil result returns nil",
+			result:         nil,
+			includeContent: false,
+			wantNil:        true,
+		},
+		{
+			name: "nil path in paths is preserved",
+			result: &graph.PathResult{
+				Paths: []*graph.Path{nil},
+			},
+			includeContent: false,
+			checkFunc: func(t *testing.T, got *graph.PathResult) {
+				require.Len(t, got.Paths, 1)
+				require.Nil(t, got.Paths[0])
+			},
+		},
+		{
+			name: "includeContent true preserves content",
+			result: &graph.PathResult{
+				Paths: []*graph.Path{{
+					Nodes: []*graph.Node{{ID: "a", Content: "code"}},
+				}},
+			},
+			includeContent: true,
+			checkFunc: func(t *testing.T, got *graph.PathResult) {
+				require.Equal(t, "code", got.Paths[0].Nodes[0].Content)
+			},
+		},
+		{
+			name: "includeContent false strips content",
+			result: &graph.PathResult{
+				Paths: []*graph.Path{{
+					Nodes: []*graph.Node{{ID: "a", Content: "code"}},
+					Edges: []*graph.Edge{{FromID: "a", ToID: "b", Type: "CALLS"}},
+				}},
+			},
+			includeContent: false,
+			checkFunc: func(t *testing.T, got *graph.PathResult) {
+				require.Empty(t, got.Paths[0].Nodes[0].Content)
+				require.Len(t, got.Paths[0].Edges, 1)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := graphPathToolResult(tt.result, tt.includeContent)
+			if tt.wantNil {
+				require.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			tt.checkFunc(t, got)
+		})
+	}
+}
+
+func TestGraphToolNodes(t *testing.T) {
+	tests := []struct {
+		name           string
+		nodes          []*graph.Node
+		includeContent bool
+		wantLen        int
+		checkFunc      func(t *testing.T, got []*graph.Node)
+	}{
+		{
+			name:           "empty slice returns empty",
+			nodes:          []*graph.Node{},
+			includeContent: false,
+			wantLen:        0,
+			checkFunc:      func(t *testing.T, got []*graph.Node) {},
+		},
+		{
+			name:           "nil node in slice is preserved",
+			nodes:          []*graph.Node{nil, {ID: "x", Content: "c"}},
+			includeContent: false,
+			wantLen:        2,
+			checkFunc: func(t *testing.T, got []*graph.Node) {
+				require.Nil(t, got[0])
+				require.Empty(t, got[1].Content)
+			},
+		},
+		{
+			name:           "includeContent true returns original nodes",
+			nodes:          []*graph.Node{{ID: "x", Content: "c"}},
+			includeContent: true,
+			wantLen:        1,
+			checkFunc: func(t *testing.T, got []*graph.Node) {
+				require.Equal(t, "c", got[0].Content)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := graphToolNodes(tt.nodes, tt.includeContent)
+			require.Len(t, got, tt.wantLen)
+			tt.checkFunc(t, got)
+		})
+	}
+}
+
+func TestResolveGraphToolLimit(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    int
+		fallback int
+		want     int
+	}{
+		{name: "positive value used", value: 5, fallback: 10, want: 5},
+		{name: "zero uses fallback", value: 0, fallback: 10, want: 10},
+		{name: "negative uses fallback", value: -1, fallback: 10, want: 10},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, resolveGraphToolLimit(tt.value, tt.fallback))
+		})
+	}
+}
+
+func TestGraphToolSetNameFallback(t *testing.T) {
+	s := &graphToolSet{name: ""}
+	require.Equal(t, defaultGraphToolSetName, s.Name())
+}

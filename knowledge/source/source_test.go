@@ -348,3 +348,35 @@ func TestConstants(t *testing.T) {
 	require.Contains(t, MetaInputCount, expectedPrefix)
 	require.Contains(t, MetaInputs, expectedPrefix)
 }
+
+func TestReadGraphParseConcurrency(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []ReadGraphOption
+		want int
+	}{
+		{
+			name: "no opts returns zero",
+			opts: nil,
+			want: 0,
+		},
+		{
+			name: "single opt returns value",
+			opts: []ReadGraphOption{WithReadGraphParseConcurrency(8)},
+			want: 8,
+		},
+		{
+			name: "last opt wins",
+			opts: []ReadGraphOption{
+				WithReadGraphParseConcurrency(4),
+				WithReadGraphParseConcurrency(16),
+			},
+			want: 16,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, ReadGraphParseConcurrency(tt.opts))
+		})
+	}
+}
