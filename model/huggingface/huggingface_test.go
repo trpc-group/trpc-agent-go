@@ -3602,8 +3602,9 @@ func TestGenerateContent_WithExtraFields(t *testing.T) {
 		var req map[string]any
 		json.NewDecoder(r.Body).Decode(&req)
 
-		// Verify extra fields are present
-		assert.Equal(t, "custom_value", req["custom_field"])
+		// Verify extra fields are present and request-level fields take precedence.
+		assert.Equal(t, "request_value", req["custom_field"])
+		assert.Equal(t, "cache-1", req["prompt_cache_key"])
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ChatCompletionResponse{
@@ -3638,6 +3639,10 @@ func TestGenerateContent_WithExtraFields(t *testing.T) {
 	request := &model.Request{
 		Messages: []model.Message{
 			{Role: "user", Content: "Hello"},
+		},
+		ExtraFields: map[string]any{
+			"custom_field":     "request_value",
+			"prompt_cache_key": "cache-1",
 		},
 	}
 

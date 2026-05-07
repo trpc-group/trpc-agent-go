@@ -639,8 +639,12 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
 	opts := m.buildThinkingOption(request)
-	// Add extra fields to the request
+	// Add model-level extra fields to the request.
 	for key, value := range m.extraFields {
+		opts = append(opts, openaiopt.WithJSONSet(key, value))
+	}
+	// Add request-level extra fields after model-level fields so they take precedence.
+	for key, value := range request.ExtraFields {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
 

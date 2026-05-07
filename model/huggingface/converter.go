@@ -32,6 +32,10 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 		ExtraFields:      make(map[string]any),
 	}
 
+	for key, value := range req.ExtraFields {
+		hfReq.ExtraFields[key] = value
+	}
+
 	// Convert messages.
 	for _, msg := range req.Messages {
 		hfMsg, err := convertMessage(msg)

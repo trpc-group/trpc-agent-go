@@ -82,6 +82,17 @@ func (p *BasicRequestProcessor) ProcessRequest(
 	if invocation.RunOptions.Stream != nil {
 		req.GenerationConfig.Stream = *invocation.RunOptions.Stream
 	}
+	if len(invocation.RunOptions.ModelRequestExtraFields) > 0 {
+		if req.ExtraFields == nil {
+			req.ExtraFields = make(
+				map[string]any,
+				len(invocation.RunOptions.ModelRequestExtraFields),
+			)
+		}
+		for key, value := range invocation.RunOptions.ModelRequestExtraFields {
+			req.ExtraFields[key] = value
+		}
+	}
 
 	// Propagate structured output from invocation to request if present.
 	if invocation.StructuredOutput != nil {

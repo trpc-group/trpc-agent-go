@@ -241,6 +241,23 @@ func WithRuntimeState(state map[string]any) RunOption {
 	}
 }
 
+// WithModelRequestExtraFields merges provider-specific top-level fields into
+// each model request created during this run. Request-level fields take
+// precedence over model-level extra fields in adapters that support merging.
+func WithModelRequestExtraFields(fields map[string]any) RunOption {
+	return func(opts *RunOptions) {
+		if len(fields) == 0 {
+			return
+		}
+		if opts.ModelRequestExtraFields == nil {
+			opts.ModelRequestExtraFields = make(map[string]any, len(fields))
+		}
+		for key, value := range fields {
+			opts.ModelRequestExtraFields[key] = value
+		}
+	}
+}
+
 // MergeRuntimeState merges runtime state into existing RunOptions state.
 //
 // When a key already exists, the new value replaces the old one.
@@ -989,6 +1006,13 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+
+	// ModelRequestExtraFields contains provider-specific top-level request body
+	// fields for model calls made during this run.
+	//
+	// Adapters that support extra fields merge these with model-level extra
+	// fields, with these request-level values taking precedence.
+	ModelRequestExtraFields map[string]any
 
 	// CodeExecutor is the code executor to use for this specific run.
 	// If set, it temporarily overrides the agent's default code executor for
