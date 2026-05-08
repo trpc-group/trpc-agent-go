@@ -11,6 +11,7 @@ package anthropic
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -175,7 +176,8 @@ func Test_convertUserMessage(t *testing.T) {
 			{Type: model.ContentTypeText, Text: &p2},
 		},
 	}
-	out := convertUserMessage(msg)
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
 	assert.Equal(t, 3, len(out.Content))
 	// Validate text blocks order and content.
 	assert.NotNil(t, out.Content[0].OfText)
@@ -205,7 +207,8 @@ func Test_convertAssistantMessageContent(t *testing.T) {
 			},
 		},
 	}
-	out := convertAssistantMessageContent(msg)
+	out, err := convertAssistantMessageContent(msg)
+	require.NoError(t, err)
 	// Expect: 1 head text + 1 part text + 1 tool use.
 	assert.Equal(t, 3, len(out.Content))
 	assert.NotNil(t, out.Content[0].OfText)
@@ -225,7 +228,8 @@ func Test_convertSystemMessageContent(t *testing.T) {
 			{Type: model.ContentTypeText, Text: &p},
 		},
 	}
-	blocks := convertSystemMessageContent(msg)
+	blocks, err := convertSystemMessageContent(msg)
+	require.NoError(t, err)
 	assert.Equal(t, 2, len(blocks))
 	assert.Equal(t, "sys", blocks[0].Text)
 	assert.Equal(t, p, blocks[1].Text)
@@ -457,12 +461,6 @@ func Test_convertMessages_AllEmptyDropped(t *testing.T) {
 		{
 			Role:    model.RoleUser,
 			Content: "",
-			ContentParts: []model.ContentPart{
-				{
-					Type: model.ContentTypeImage,
-					Text: nil,
-				},
-			},
 		},
 		{
 			Role:    model.RoleSystem,
@@ -510,7 +508,8 @@ func Test_convertAssistantMessageContent_TwoToolCalls(t *testing.T) {
 			},
 		},
 	}
-	out := convertAssistantMessageContent(msg)
+	out, err := convertAssistantMessageContent(msg)
+	require.NoError(t, err)
 	// 1 head text + 2 tool uses.
 	assert.Equal(t, 3, len(out.Content))
 	assert.NotNil(t, out.Content[0].OfText)
@@ -529,7 +528,8 @@ func Test_convertUserMessage_OnlyTextParts(t *testing.T) {
 			{Type: model.ContentTypeText, Text: &b},
 		},
 	}
-	out := convertUserMessage(msg)
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
 	assert.Equal(t, 2, len(out.Content))
 	assert.NotNil(t, out.Content[0].OfText)
 	assert.Equal(t, a, out.Content[0].OfText.Text)
@@ -537,16 +537,169 @@ func Test_convertUserMessage_OnlyTextParts(t *testing.T) {
 	assert.Equal(t, b, out.Content[1].OfText.Text)
 }
 
-func Test_convertUserMessage_NonTextPartsIgnored(t *testing.T) {
+func Test_convertUserMessage_ImageURL(t *testing.T) {
 	msg := model.Message{
 		Role:    model.RoleUser,
-		Content: "",
+		Content: "inspect",
 		ContentParts: []model.ContentPart{
-			{Type: model.ContentTypeImage},
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL: "https://example.com/image.png",
+				},
+			},
 		},
 	}
-	out := convertUserMessage(msg)
-	assert.Equal(t, 0, len(out.Content))
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 2)
+	require.NotNil(t, out.Content[0].OfText)
+	require.NotNil(t, out.Content[1].OfImage)
+	require.NotNil(t, out.Content[1].OfImage.Source.OfURL)
+	assert.Equal(t, "inspect", out.Content[0].OfText.Text)
+	assert.Equal(t, "https://example.com/image.png", out.Content[1].OfImage.Source.OfURL.URL)
+}
+
+func Test_convertUserMessage_ImageData(t *testing.T) {
+	data := []byte("image-bytes")
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data:   data,
+					Format: "png",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfImage)
+	require.NotNil(t, out.Content[0].OfImage.Source.OfBase64)
+	assert.Equal(t, "image/png", string(out.Content[0].OfImage.Source.OfBase64.MediaType))
+	assert.Equal(t, base64.StdEncoding.EncodeToString(data), out.Content[0].OfImage.Source.OfBase64.Data)
+}
+
+func Test_convertUserMessage_FilePDFData(t *testing.T) {
+	data := []byte("%PDF-1.7\n")
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "report.pdf",
+					Data:     data,
+					MimeType: "application/pdf",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfDocument)
+	require.NotNil(t, out.Content[0].OfDocument.Source.OfBase64)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(data), out.Content[0].OfDocument.Source.OfBase64.Data)
+	assert.Equal(t, "report.pdf", out.Content[0].OfDocument.Title.Value)
+}
+
+func Test_convertUserMessage_FileTextData(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name: "notes.txt",
+					Data: []byte("hello"),
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfDocument)
+	require.NotNil(t, out.Content[0].OfDocument.Source.OfText)
+	assert.Equal(t, "hello", out.Content[0].OfDocument.Source.OfText.Data)
+	assert.Equal(t, "notes.txt", out.Content[0].OfDocument.Title.Value)
+}
+
+func Test_convertMessages_ImageOnlyUserPreserved(t *testing.T) {
+	msgs := []model.Message{
+		{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeImage,
+					Image: &model.Image{
+						URL: "https://example.com/image.png",
+					},
+				},
+			},
+		},
+	}
+	converted, systemPrompts, err := convertMessages(msgs)
+	require.NoError(t, err)
+	assert.Empty(t, systemPrompts)
+	require.Len(t, converted, 1)
+	require.Len(t, converted[0].Content, 1)
+	assert.NotNil(t, converted[0].Content[0].OfImage)
+}
+
+func Test_convertUserMessage_UnsupportedMultimodalParts(t *testing.T) {
+	tests := []struct {
+		name string
+		part model.ContentPart
+		want string
+	}{
+		{
+			name: "nil image",
+			part: model.ContentPart{Type: model.ContentTypeImage},
+			want: "image payload is nil",
+		},
+		{
+			name: "audio",
+			part: model.ContentPart{Type: model.ContentTypeAudio, Audio: &model.Audio{Data: []byte("audio"), Format: "mp3"}},
+			want: "audio content is not supported",
+		},
+		{
+			name: "file id",
+			part: model.ContentPart{Type: model.ContentTypeFile, File: &model.File{FileID: "file_123"}},
+			want: "file_id content is not supported",
+		},
+		{
+			name: "unsupported file media type",
+			part: model.ContentPart{Type: model.ContentTypeFile, File: &model.File{Name: "data.json", Data: []byte("{}"), MimeType: "application/json"}},
+			want: "unsupported file media type",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := convertUserMessage(model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{tt.part}})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func Test_convertNonUserMessage_UnsupportedMultimodalParts(t *testing.T) {
+	imagePart := model.ContentPart{
+		Type: model.ContentTypeImage,
+		Image: &model.Image{
+			URL: "https://example.com/image.png",
+		},
+	}
+	_, err := convertAssistantMessageContent(model.Message{Role: model.RoleAssistant, ContentParts: []model.ContentPart{imagePart}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "assistant content part 0")
+	_, err = convertSystemMessageContent(model.Message{Role: model.RoleSystem, ContentParts: []model.ContentPart{imagePart}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "system content part 0")
 }
 
 func Test_convertSystemMessageContent_OnlyParts(t *testing.T) {
@@ -566,7 +719,8 @@ func Test_convertSystemMessageContent_OnlyParts(t *testing.T) {
 			},
 		},
 	}
-	blocks := convertSystemMessageContent(msg)
+	blocks, err := convertSystemMessageContent(msg)
+	require.NoError(t, err)
 	assert.Equal(t, 2, len(blocks))
 	assert.Equal(t, a, blocks[0].Text)
 	assert.Equal(t, b, blocks[1].Text)
@@ -574,7 +728,8 @@ func Test_convertSystemMessageContent_OnlyParts(t *testing.T) {
 
 func Test_convertSystemMessageContent_Empty(t *testing.T) {
 	msg := model.Message{Role: model.RoleSystem}
-	blocks := convertSystemMessageContent(msg)
+	blocks, err := convertSystemMessageContent(msg)
+	require.NoError(t, err)
 	assert.Equal(t, 0, len(blocks))
 }
 
