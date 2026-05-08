@@ -54,8 +54,9 @@ Example — given a search result like:
     "score": 0.87
   }
 
-  Filter by document text (use "content" as field name, not "text"):
-    {"field": "content", "operator": "like", "value": "graph state"}
+  Filter by document text (use "content" as field name, not "text";
+  use %% wildcards for substring matching):
+    {"field": "content", "operator": "like", "value": "%graph state%"}
 
   Filter by metadata (note the "metadata." prefix):
     {"field": "metadata.topic", "operator": "eq", "value": "architecture"}
@@ -65,7 +66,7 @@ Example — given a search result like:
 
   Combine content and metadata:
     {"operator": "and", "value": [
-      {"field": "content", "operator": "like", "value": "graph state"},
+      {"field": "content", "operator": "like", "value": "%graph state%"},
       {"field": "metadata.source", "operator": "eq", "value": "docs/graph.md"}
     ]}
 
