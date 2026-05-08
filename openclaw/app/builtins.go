@@ -73,6 +73,11 @@ func init() {
 		memoryBackendPGVector,
 		newPGVectorMemoryBackend,
 	))
+
+	must(registry.RegisterKnowledgeProvider(
+		"builtin",
+		newBuiltinKnowledge,
+	))
 }
 
 func must(err error) {

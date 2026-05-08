@@ -34,6 +34,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memextractor "trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -154,6 +155,16 @@ type MemoryBackendFactory func(
 	spec MemoryBackendSpec,
 ) (memory.Service, error)
 
+// KnowledgeProviderDeps are dependencies passed to knowledge provider
+// factories.
+type KnowledgeProviderDeps struct{}
+
+// KnowledgeProviderFactory creates a knowledge implementation from config.
+type KnowledgeProviderFactory func(
+	deps KnowledgeProviderDeps,
+	spec PluginSpec,
+) (knowledge.Knowledge, error)
+
 // ToolProviderDeps are dependencies passed to tool provider factories.
 type ToolProviderDeps struct {
 	Model    model.Model
@@ -197,12 +208,13 @@ type ModelFactory func(spec ModelSpec) (model.Model, error)
 var (
 	mu sync.RWMutex
 
-	channelFactories = map[string]ChannelFactory{}
-	sessionFactories = map[string]SessionBackendFactory{}
-	memoryFactories  = map[string]MemoryBackendFactory{}
-	toolFactories    = map[string]ToolProviderFactory{}
-	toolSetFactories = map[string]ToolSetProviderFactory{}
-	modelFactories   = map[string]ModelFactory{}
+	channelFactories   = map[string]ChannelFactory{}
+	sessionFactories   = map[string]SessionBackendFactory{}
+	memoryFactories    = map[string]MemoryBackendFactory{}
+	knowledgeFactories = map[string]KnowledgeProviderFactory{}
+	toolFactories      = map[string]ToolProviderFactory{}
+	toolSetFactories   = map[string]ToolSetProviderFactory{}
+	modelFactories     = map[string]ModelFactory{}
 )
 
 // RegisterChannel registers a channel factory under typeName.
@@ -298,6 +310,46 @@ func LookupMemoryBackend(typeName string) (MemoryBackendFactory, bool) {
 	defer mu.RUnlock()
 	name := normalizeType(typeName)
 	f, ok := memoryFactories[name]
+	return f, ok
+}
+
+// RegisterKnowledgeProvider registers a knowledge provider factory under
+// typeName.
+func RegisterKnowledgeProvider(
+	typeName string,
+	f KnowledgeProviderFactory,
+) error {
+	name, err := validateType("knowledge provider", typeName)
+	if err != nil {
+		return err
+	}
+	if f == nil {
+		return fmt.Errorf(
+			"registry: knowledge provider factory is nil: %s",
+			name,
+		)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := knowledgeFactories[name]; ok {
+		return fmt.Errorf(
+			"registry: knowledge provider already registered: %s",
+			name,
+		)
+	}
+	knowledgeFactories[name] = f
+	return nil
+}
+
+// LookupKnowledgeProvider returns a knowledge provider factory by typeName.
+func LookupKnowledgeProvider(
+	typeName string,
+) (KnowledgeProviderFactory, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	name := normalizeType(typeName)
+	f, ok := knowledgeFactories[name]
 	return f, ok
 }
 
@@ -424,6 +476,8 @@ func Types(kind string) []string {
 		keys = mapKeys(sessionFactories)
 	case "memory backend":
 		keys = mapKeys(memoryFactories)
+	case "knowledge provider":
+		keys = mapKeys(knowledgeFactories)
 	case "tool provider":
 		keys = mapKeys(toolFactories)
 	case "toolset provider":
