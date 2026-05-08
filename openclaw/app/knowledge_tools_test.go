@@ -11,17 +11,50 @@ package app
 
 import (
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type providerKnowledge struct{}
+
+func (providerKnowledge) Search(
+	context.Context,
+	*knowledge.SearchRequest,
+) (*knowledge.SearchResult, error) {
+	doc := &document.Document{Content: "provider result"}
+	return &knowledge.SearchResult{
+		Document: doc,
+		Score:    1,
+		Text:     doc.Content,
+		Documents: []*knowledge.Result{{
+			Document: doc,
+			Score:    1,
+		}},
+	}, nil
+}
+
+func builtinKnowledgeEntry(t *testing.T, name, configYAML string) knowledgeEntry {
+	t.Helper()
+	return knowledgeEntry{
+		Type:   "builtin",
+		Name:   name,
+		Config: yamlNode(t, configYAML),
+	}
+}
 
 func TestRawKnowledgeComponentUnmarshalYAML_StoresNode(t *testing.T) {
 	t.Parallel()
@@ -40,8 +73,8 @@ embedder:
 func TestBuildKnowledgeTools_SingleKnowledgeUsesGenericTool(t *testing.T) {
 	t.Parallel()
 
-	bundle, err := buildKnowledgeTools(map[string]*yaml.Node{
-		"docs": yamlNode(t, `
+	bundle, err := buildKnowledgeTools([]knowledgeEntry{
+		builtinKnowledgeEntry(t, "docs", `
 embedder:
   type: openai
 vector_store:
@@ -57,15 +90,13 @@ vector_store:
 func TestBuildKnowledgeTools_MultipleKnowledgesCreateNamedTools(t *testing.T) {
 	t.Parallel()
 
-	bundle, err := buildKnowledgeTools(map[string]*yaml.Node{
-		"Docs KB": yamlNode(t, `
+	inmemory := `
 vector_store:
   type: inmemory
-`),
-		"FAQ": yamlNode(t, `
-vector_store:
-  type: inmemory
-`),
+`
+	bundle, err := buildKnowledgeTools([]knowledgeEntry{
+		builtinKnowledgeEntry(t, "Docs KB", inmemory),
+		builtinKnowledgeEntry(t, "FAQ", inmemory),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, bundle)
@@ -77,15 +108,13 @@ vector_store:
 func TestBuildKnowledgeTools_RejectsCollidingToolNames(t *testing.T) {
 	t.Parallel()
 
-	_, err := buildKnowledgeTools(map[string]*yaml.Node{
-		"Docs KB": yamlNode(t, `
+	inmemory := `
 vector_store:
   type: inmemory
-`),
-		"Docs-KB": yamlNode(t, `
-vector_store:
-  type: inmemory
-`),
+`
+	_, err := buildKnowledgeTools([]knowledgeEntry{
+		builtinKnowledgeEntry(t, "Docs KB", inmemory),
+		builtinKnowledgeEntry(t, "Docs-KB", inmemory),
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "knowledge tool name collision")
@@ -94,8 +123,8 @@ vector_store:
 func TestBuildKnowledgeTools_InvalidConfigFails(t *testing.T) {
 	t.Parallel()
 
-	_, err := buildKnowledgeTools(map[string]*yaml.Node{
-		"docs": yamlNode(t, `
+	_, err := buildKnowledgeTools([]knowledgeEntry{
+		builtinKnowledgeEntry(t, "docs", `
 vector_store:
   type: nope
 `),
@@ -104,17 +133,69 @@ vector_store:
 	require.Contains(t, err.Error(), "unsupported vector_store.type")
 }
 
+func TestBuildKnowledgeTools_ProviderKnowledge(t *testing.T) {
+	providerType := fmt.Sprintf(
+		"test_provider_%d",
+		time.Now().UnixNano(),
+	)
+	var gotSpec registry.PluginSpec
+	require.NoError(t, registry.RegisterKnowledgeProvider(
+		providerType,
+		func(
+			_ registry.KnowledgeProviderDeps,
+			spec registry.PluginSpec,
+		) (knowledge.Knowledge, error) {
+			gotSpec = spec
+			return providerKnowledge{}, nil
+		},
+	))
+
+	bundle, err := buildKnowledgeTools([]knowledgeEntry{
+		{
+			Type:       providerType,
+			Name:       "docs",
+			MaxResults: 7,
+			Config: yamlNode(t, `
+endpoint: http://127.0.0.1:8080
+`),
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, bundle)
+	require.Len(t, bundle.tools, 1)
+	require.Equal(t, "knowledge_search", bundle.tools[0].Declaration().Name)
+	require.Equal(t, providerType, gotSpec.Type)
+	require.Equal(t, "docs", gotSpec.Name)
+	require.NotNil(t, gotSpec.Config)
+	require.Equal(t, "http://127.0.0.1:8080", mappingValue(gotSpec.Config, "endpoint").Value)
+
+	callable, ok := bundle.tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	res, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"hello"}`),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+}
+
+func TestBuildKnowledgeTools_ProviderRequiresRegisteredType(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildKnowledgeTools([]knowledgeEntry{
+		{
+			Type: "missing_provider",
+			Name: "docs",
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported knowledge provider type")
+}
+
 func TestBuildKnowledgeTools_EmptyConfigsReturnNil(t *testing.T) {
 	t.Parallel()
 
 	bundle, err := buildKnowledgeTools(nil)
-	require.NoError(t, err)
-	require.Nil(t, bundle)
-
-	bundle, err = buildKnowledgeTools(map[string]*yaml.Node{
-		" ":    yamlNode(t, `vector_store: {type: inmemory}`),
-		"docs": nil,
-	})
 	require.NoError(t, err)
 	require.Nil(t, bundle)
 }
@@ -122,8 +203,8 @@ func TestBuildKnowledgeTools_EmptyConfigsReturnNil(t *testing.T) {
 func TestBuildKnowledgeTools_EmbedderDefaultsToOpenAI(t *testing.T) {
 	t.Parallel()
 
-	bundle, err := buildKnowledgeTools(map[string]*yaml.Node{
-		"docs": yamlNode(t, `
+	bundle, err := buildKnowledgeTools([]knowledgeEntry{
+		builtinKnowledgeEntry(t, "docs", `
 embedder:
   model: text-embedding-3-small
 vector_store:
@@ -136,16 +217,15 @@ vector_store:
 	require.Equal(t, "knowledge_search", bundle.tools[0].Declaration().Name)
 }
 
-func TestBuildKnowledgeTools_SingleKnowledgeUsesGenericToolNameWithMaxResultsConfig(t *testing.T) {
+func TestBuildKnowledgeTools_SingleKnowledgeUsesGenericToolNameWithMaxResults(t *testing.T) {
 	t.Parallel()
 
-	bundle, err := buildKnowledgeTools(map[string]*yaml.Node{
-		"docs": yamlNode(t, `
+	entry := builtinKnowledgeEntry(t, "docs", `
 vector_store:
   type: inmemory
-  max_results: 3
-`),
-	})
+`)
+	entry.MaxResults = 3
+	bundle, err := buildKnowledgeTools([]knowledgeEntry{entry})
 	require.NoError(t, err)
 	require.NotNil(t, bundle)
 	require.Len(t, bundle.tools, 1)
@@ -155,8 +235,8 @@ vector_store:
 func TestBuildKnowledgeTools_VectorStoreUsesTypeSpecificValidation(t *testing.T) {
 	t.Parallel()
 
-	_, err := buildKnowledgeTools(map[string]*yaml.Node{
-		"docs": yamlNode(t, `
+	_, err := buildKnowledgeTools([]knowledgeEntry{
+		builtinKnowledgeEntry(t, "docs", `
 vector_store:
   type: inmemory
   addresses:
@@ -170,8 +250,8 @@ vector_store:
 func TestBuildKnowledgeTools_VectorStoreTypeIsRequired(t *testing.T) {
 	t.Parallel()
 
-	_, err := buildKnowledgeTools(map[string]*yaml.Node{
-		"docs": yamlNode(t, `
+	_, err := buildKnowledgeTools([]knowledgeEntry{
+		builtinKnowledgeEntry(t, "docs", `
 vector_store:
   max_results: 5
 `),
@@ -180,55 +260,37 @@ vector_store:
 	require.Contains(t, err.Error(), "vector_store.type is required")
 }
 
-func TestBuildKnowledgeBases_TrimsNamesAndSkipsEmptyEntries(t *testing.T) {
+func TestNewBuiltinKnowledge_RequiresVectorStore(t *testing.T) {
 	t.Parallel()
 
-	knowledges, err := buildKnowledgeBases(map[string]*yaml.Node{
-		" docs ": yamlNode(t, `
-vector_store:
-  type: inmemory
+	_, err := newBuiltinKnowledge(
+		registry.KnowledgeProviderDeps{},
+		registry.PluginSpec{
+			Config: yamlNode(t, `
+embedder:
+  type: openai
 `),
-		"": yamlNode(t, `
-vector_store:
-  type: inmemory
-`),
-		"nil": nil,
-	})
-	require.NoError(t, err)
-	require.Len(t, knowledges, 1)
-	require.Contains(t, knowledges, "docs")
+		},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "vector_store is required")
 }
 
-func TestBuildKnowledgeBase_NilNodeReturnsNil(t *testing.T) {
+func TestNewBuiltinKnowledge_DecodeStrictFailure(t *testing.T) {
 	t.Parallel()
 
-	kb, err := buildKnowledgeBase(nil)
-	require.NoError(t, err)
-	require.Nil(t, kb)
-}
-
-func TestBuildKnowledgeBase_DecodeStrictFailure(t *testing.T) {
-	t.Parallel()
-
-	_, err := buildKnowledgeBase(yamlNode(t, `
+	_, err := newBuiltinKnowledge(
+		registry.KnowledgeProviderDeps{},
+		registry.PluginSpec{
+			Config: yamlNode(t, `
 unexpected: true
 vector_store:
   type: inmemory
-`))
+`),
+		},
+	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "decode failed")
-	require.Contains(t, err.Error(), "field unexpected not found")
-}
-
-func TestBuildKnowledgeBase_RequiresVectorStore(t *testing.T) {
-	t.Parallel()
-
-	_, err := buildKnowledgeBase(yamlNode(t, `
-embedder:
-  type: openai
-`))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "vector_store is required")
 }
 
 func TestBuildKnowledgeEmbedder_UnsupportedTypeFails(t *testing.T) {
@@ -423,19 +485,6 @@ dimensions: 384
 	require.Equal(t, 384, knowledgeEmbedderDimensions(emb))
 }
 
-func TestKnowledgeToolMaxResults_ReadsVectorStoreConfig(t *testing.T) {
-	t.Parallel()
-
-	maxResults, err := knowledgeToolMaxResults(yamlNode(t, `
-vector_store:
-  type: pgvector
-  url: postgres://user:pass@127.0.0.1:5432/dbname?sslmode=disable
-  max_results: 6
-`))
-	require.NoError(t, err)
-	require.Equal(t, 6, maxResults)
-}
-
 func TestBuildKnowledgeVectorStore_ElasticsearchBuildsSuccessfully(t *testing.T) {
 	t.Parallel()
 
@@ -608,8 +657,8 @@ func TestNewAgent_KnowledgeConfigRegistersSearchTool(t *testing.T) {
 		SkillsRoot:   t.TempDir(),
 		StateDir:     t.TempDir(),
 		SystemPrompt: "sys",
-		KnowledgesConfig: map[string]*yaml.Node{
-			"docs": yamlNode(t, `
+		KnowledgesConfig: []knowledgeEntry{
+			builtinKnowledgeEntry(t, "docs", `
 vector_store:
   type: inmemory
 `),
@@ -624,20 +673,18 @@ vector_store:
 func TestNewAgent_MultipleKnowledgeConfigsRegisterNamedTools(t *testing.T) {
 	t.Parallel()
 
+	inmemory := `
+vector_store:
+  type: inmemory
+`
 	mdl := &captureRequestModel{}
 	agt, _, err := newAgent(mdl, agentConfig{
 		AppName:    "demo",
 		SkillsRoot: t.TempDir(),
 		StateDir:   t.TempDir(),
-		KnowledgesConfig: map[string]*yaml.Node{
-			"docs": yamlNode(t, `
-vector_store:
-  type: inmemory
-`),
-			"faq": yamlNode(t, `
-vector_store:
-  type: inmemory
-`),
+		KnowledgesConfig: []knowledgeEntry{
+			builtinKnowledgeEntry(t, "docs", inmemory),
+			builtinKnowledgeEntry(t, "faq", inmemory),
 		},
 	}, nil, nil)
 	require.NoError(t, err)
@@ -654,8 +701,8 @@ func TestNewAgent_InvalidKnowledgeConfigReturnsError(t *testing.T) {
 		AppName:    "demo",
 		SkillsRoot: t.TempDir(),
 		StateDir:   t.TempDir(),
-		KnowledgesConfig: map[string]*yaml.Node{
-			"docs": yamlNode(t, `
+		KnowledgesConfig: []knowledgeEntry{
+			builtinKnowledgeEntry(t, "docs", `
 unexpected: true
 vector_store:
   type: inmemory

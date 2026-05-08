@@ -264,15 +264,16 @@ model:
 # This only configures the embedder and vector store. Content loading
 # can be triggered separately at runtime.
 knowledges:
-  entries:
+  providers:
     - name: "docs"
-      embedder:
-        type: "openai"
-        model: "text-embedding-3-small"
-        dimensions: 1536
-      vector_store:
-        type: "inmemory"
-        max_results: 5
+      max_results: 5
+      config:
+        embedder:
+          type: "openai"
+          model: "text-embedding-3-small"
+          dimensions: 1536
+        vector_store:
+          type: "inmemory"
 
 tools:
   # Optional; default is serial execution.
@@ -332,21 +333,22 @@ Notes:
 
   ```yaml
   knowledges:
-    entries:
+    providers:
       - name: "trpc_agent_go"
-        embedder:
-          type: "openai"
-          model: "text-embedding-3-small"
-          base_url: "${OPENAI_BASE_URL}"
-          api_key: "${OPENAI_API_KEY}"
-          dimensions: 1536
-        vector_store:
-          type: "pgvector"
-          url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
-          table: "trpc_agent_go"
-          index_dimension: 1536
-          enable_tsvector: true
-          max_results: 5
+        max_results: 5
+        config:
+          embedder:
+            type: "openai"
+            model: "text-embedding-3-small"
+            base_url: "${OPENAI_BASE_URL}"
+            api_key: "${OPENAI_API_KEY}"
+            dimensions: 1536
+          vector_store:
+            type: "pgvector"
+            url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
+            table: "trpc_agent_go"
+            index_dimension: 1536
+            enable_tsvector: true
   ```
 
   Use identifier-safe table names such as `trpc_agent_go`; do not use raw

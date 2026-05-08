@@ -253,15 +253,16 @@ model:
 # 可选：knowledge 后端，用于 knowledge search tools。
 # 这里只配置 embedder 和 vector store，知识内容加载需要在运行时单独触发。
 knowledges:
-  entries:
+  providers:
     - name: "docs"
-      embedder:
-        type: "openai"
-        model: "text-embedding-3-small"
-        dimensions: 1536
-      vector_store:
-        type: "inmemory"
-        max_results: 5
+      max_results: 5
+      config:
+        embedder:
+          type: "openai"
+          model: "text-embedding-3-small"
+          dimensions: 1536
+        vector_store:
+          type: "inmemory"
 
 tools:
   # 可选；默认为串行执行。
@@ -321,21 +322,22 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 
   ```yaml
   knowledges:
-    entries:
+    providers:
       - name: "trpc_agent_go"
-        embedder:
-          type: "openai"
-          model: "text-embedding-3-small"
-          base_url: "${OPENAI_BASE_URL}"
-          api_key: "${OPENAI_API_KEY}"
-          dimensions: 1536
-        vector_store:
-          type: "pgvector"
-          url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
-          table: "trpc_agent_go"
-          index_dimension: 1536
-          enable_tsvector: true
-          max_results: 5
+        max_results: 5
+        config:
+          embedder:
+            type: "openai"
+            model: "text-embedding-3-small"
+            base_url: "${OPENAI_BASE_URL}"
+            api_key: "${OPENAI_API_KEY}"
+            dimensions: 1536
+          vector_store:
+            type: "pgvector"
+            url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
+            table: "trpc_agent_go"
+            index_dimension: 1536
+            enable_tsvector: true
   ```
 
   表名建议使用 `trpc_agent_go` 这类安全标识符，不要直接用
