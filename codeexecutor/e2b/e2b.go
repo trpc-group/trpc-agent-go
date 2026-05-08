@@ -42,6 +42,14 @@ func WithDomain(domain string) Option {
 	return func(c *CodeExecutor) { c.domain = domain }
 }
 
+// WithAPIURL overrides the full base URL of the E2B management API
+// (e.g. "https://api.e2b.app" or "http://127.0.0.1:8080"). When set it
+// takes precedence over WithDomain/WithDebug URL construction. Falls back
+// to the E2B_API_URL env var when empty.
+func WithAPIURL(apiURL string) Option {
+	return func(c *CodeExecutor) { c.apiURL = apiURL }
+}
+
 // WithDebug toggles debug mode (plain HTTP to local sandboxes).
 func WithDebug(debug bool) Option {
 	return func(c *CodeExecutor) { c.debug = debug }
@@ -113,6 +121,7 @@ type CodeExecutor struct {
 	apiKey         string
 	accessToken    string
 	domain         string
+	apiURL         string
 	debug          bool
 	template       string
 	sandboxTimeout time.Duration
@@ -161,6 +170,7 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		APIKey:         c.apiKey,
 		AccessToken:    c.accessToken,
 		Domain:         c.domain,
+		APIURL:         c.apiURL,
 		Debug:          c.debug,
 		RequestTimeout: c.requestTimeout,
 		Timeout:        c.sandboxTimeout,

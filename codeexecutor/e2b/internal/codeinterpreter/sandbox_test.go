@@ -82,36 +82,109 @@ func TestConnectionConfig_APIBase(t *testing.T) {
 	}
 }
 
+func TestConnectionConfig_APIBase_APIURLOverride(t *testing.T) {
+	c := &ConnectionConfig{
+		Domain: "e2b.app",
+		APIURL: "http://127.0.0.1:8080",
+	}
+	if got := c.APIBase(); got != "http://127.0.0.1:8080" {
+		t.Errorf("api url override: %s", got)
+	}
+
+	c.Debug = true
+	if got := c.APIBase(); got != "http://127.0.0.1:8080" {
+		t.Errorf("api url override with debug: %s", got)
+	}
+
+	c2 := &ConnectionConfig{APIURL: "https://api.e2b.app/"}
+	if got := c2.APIBase(); got != "https://api.e2b.app" {
+		t.Errorf("api url trim slash: %s", got)
+	}
+
+	c3 := &ConnectionConfig{APIURL: "https://api.e2b.app///"}
+	if got := c3.APIBase(); got != "https://api.e2b.app" {
+		t.Errorf("api url trim multiple slashes: %s", got)
+	}
+}
+
+func TestConnectionConfig_APIBase_FromEnv(t *testing.T) {
+	t.Setenv("E2B_API_KEY", "k")
+	t.Setenv("E2B_API_URL", "http://my-e2b.local:9000")
+
+	c := &ConnectionConfig{}
+	c.init()
+
+	if c.APIURL != "http://my-e2b.local:9000" {
+		t.Errorf("api url from env: %q", c.APIURL)
+	}
+	if got := c.APIBase(); got != "http://my-e2b.local:9000" {
+		t.Errorf("api base from env: %s", got)
+	}
+}
+
+func TestConnectionConfig_APIBase_ExplicitWinsOverEnv(t *testing.T) {
+	t.Setenv("E2B_API_KEY", "k")
+	t.Setenv("E2B_API_URL", "http://from-env:1111")
+
+	c := &ConnectionConfig{APIURL: "http://explicit:2222"}
+	c.init()
+
+	if c.APIURL != "http://explicit:2222" {
+		t.Errorf("explicit api url overwritten: %q", c.APIURL)
+	}
+	if got := c.APIBase(); got != "http://explicit:2222" {
+		t.Errorf("api base: %s", got)
+	}
+}
+
 func TestSandbox_GetHost(t *testing.T) {
 	sbx := &Sandbox{
+		id:            "abc",
+		clientID:      "xyz",
+		sandboxDomain: "sbx.e2b.app",
+		connection:    &ConnectionConfig{Domain: "e2b.app"},
+	}
+	if got := sbx.GetHost(3000); got != "3000-abc.sbx.e2b.app" {
+		t.Errorf("host (with sandbox domain): %q", got)
+	}
+
+	sbx2 := &Sandbox{
 		id:         "abc",
 		clientID:   "xyz",
 		connection: &ConnectionConfig{Domain: "e2b.app"},
 	}
-	got := sbx.GetHost(3000)
-	if got != "3000-abc-xyz.e2b.app" {
-		t.Errorf("host: %q", got)
+	if got := sbx2.GetHost(3000); got != "3000-abc-xyz.e2b.app" {
+		t.Errorf("host (legacy fallback): %q", got)
 	}
 
-	sbx.clientID = ""
-	got = sbx.GetHost(8080)
-	if got != "8080-abc.e2b.app" {
+	sbx2.clientID = ""
+	if got := sbx2.GetHost(8080); got != "8080-abc.e2b.app" {
 		t.Errorf("host w/o client: %q", got)
 	}
 }
 
 func TestSandbox_JupyterURL(t *testing.T) {
 	sbx := &Sandbox{
+		id:            "sid",
+		clientID:      "cid",
+		sandboxDomain: "sbx.e2b.app",
+		connection:    &ConnectionConfig{Domain: "e2b.app"},
+	}
+	if got := sbx.jupyterURL(); got != "https://49999-sid.sbx.e2b.app" {
+		t.Errorf("jupyter url: %q", got)
+	}
+	sbx.connection.Debug = true
+	if got := sbx.jupyterURL(); got != "http://49999-sid.sbx.e2b.app" {
+		t.Errorf("debug jupyter url: %q", got)
+	}
+
+	sbxLegacy := &Sandbox{
 		id:         "sid",
 		clientID:   "cid",
 		connection: &ConnectionConfig{Domain: "e2b.app"},
 	}
-	if got := sbx.jupyterURL(); got != "https://49999-sid-cid.e2b.app" {
-		t.Errorf("jupyter url: %q", got)
-	}
-	sbx.connection.Debug = true
-	if got := sbx.jupyterURL(); got != "http://49999-sid-cid.e2b.app" {
-		t.Errorf("debug jupyter url: %q", got)
+	if got := sbxLegacy.jupyterURL(); got != "https://49999-sid-cid.e2b.app" {
+		t.Errorf("legacy jupyter url: %q", got)
 	}
 }
 
@@ -446,4 +519,90 @@ func TestConnect_MissingAPIKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error (no API key, no server)")
 	}
+}
+
+func TestDefaultHTTPClient_NoEnv(t *testing.T) {
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("SSL_CERT_DIR", "")
+
+	c := &ConnectionConfig{}
+	c.init()
+	if c.HTTPClient == nil {
+		t.Fatal("HTTPClient should be non-nil after init")
+	}
+	if c.HTTPClient.Transport != nil {
+		t.Errorf("expected default client without custom transport, got %T", c.HTTPClient.Transport)
+	}
+}
+
+func TestDefaultHTTPClient_SSLCertFile(t *testing.T) {
+	pemBytes := generateTestCAPEM(t)
+
+	dir := t.TempDir()
+	path := dir + "/ca.pem"
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+		t.Fatalf("write ca: %v", err)
+	}
+	t.Setenv("SSL_CERT_FILE", path)
+	t.Setenv("SSL_CERT_DIR", "")
+
+	c := &ConnectionConfig{}
+	c.init()
+	if c.HTTPClient == nil || c.HTTPClient.Transport == nil {
+		t.Fatal("expected HTTPClient with custom Transport when SSL_CERT_FILE is set")
+	}
+	tr, ok := c.HTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", c.HTTPClient.Transport)
+	}
+	if tr.TLSClientConfig == nil || tr.TLSClientConfig.RootCAs == nil {
+		t.Fatal("expected TLSClientConfig with non-nil RootCAs")
+	}
+}
+
+func TestDefaultHTTPClient_UserClientUntouched(t *testing.T) {
+	t.Setenv("SSL_CERT_FILE", "/nonexistent/should/be/ignored.pem")
+
+	custom := &http.Client{}
+	c := &ConnectionConfig{HTTPClient: custom}
+	c.init()
+	if c.HTTPClient != custom {
+		t.Error("user-provided HTTPClient must not be replaced by init()")
+	}
+}
+
+func TestSandbox_GetInfoConcurrentWithGetHost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sandboxID":"abc","clientID":"cid","state":"running","domain":"sbx.e2b.app"}`))
+	}))
+	defer srv.Close()
+
+	sbx := &Sandbox{
+		id:       "abc",
+		clientID: "cid",
+		connection: &ConnectionConfig{
+			APIKey:     "k",
+			Domain:     "e2b.app",
+			Debug:      true,
+			HTTPClient: &http.Client{Transport: &rewriteToServerTransport{target: srv.URL}},
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			if _, err := sbx.GetInfo(context.Background()); err != nil {
+				t.Errorf("GetInfo: %v", err)
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 200; i++ {
+		_ = sbx.GetHost(3000)
+		_ = sbx.jupyterURL()
+	}
+	<-done
 }
