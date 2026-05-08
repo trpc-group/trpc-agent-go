@@ -29,7 +29,6 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	util "trpc.group/trpc-go/trpc-agent-go/examples/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
-	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
