@@ -29,13 +29,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
-type knowledgeToolsBundle struct {
-	tools []tool.Tool
+// knowledgeEntry is the parsed intermediate representation of a knowledge
+// provider configuration.
+type knowledgeEntry struct {
+	Type       string
+	Name       string
+	MaxResults int
+	Config     *yaml.Node
 }
 
-type knowledgeDependencyConfig struct {
-	Embedder    *rawKnowledgeComponent `yaml:"embedder,omitempty"`
-	VectorStore *rawKnowledgeComponent `yaml:"vector_store,omitempty"`
+type knowledgeToolsBundle struct {
+	tools []tool.Tool
 }
 
 type rawKnowledgeComponent struct {
@@ -47,47 +51,97 @@ func (r *rawKnowledgeComponent) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-func buildKnowledgeTools(
-	configs map[string]*yaml.Node,
-) (*knowledgeToolsBundle, error) {
-	if len(configs) == 0 {
-		return nil, nil
-	}
+// builtinKnowledgeConfig is the config schema for the "builtin" knowledge
+// provider (embedder + vector_store).
+type builtinKnowledgeConfig struct {
+	Embedder    *rawKnowledgeComponent `yaml:"embedder,omitempty"`
+	VectorStore *rawKnowledgeComponent `yaml:"vector_store,omitempty"`
+}
 
-	knowledges, err := buildKnowledgeBases(configs)
+func newBuiltinKnowledge(
+	_ registry.KnowledgeProviderDeps,
+	spec registry.PluginSpec,
+) (knowledge.Knowledge, error) {
+	var cfg builtinKnowledgeConfig
+	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+		return nil, fmt.Errorf("decode failed: %w", err)
+	}
+	emb, err := buildKnowledgeEmbedder(cfg.Embedder)
 	if err != nil {
 		return nil, err
 	}
-	if len(knowledges) == 0 {
+	store, err := buildKnowledgeVectorStore(cfg.VectorStore, emb)
+	if err != nil {
+		return nil, err
+	}
+	return knowledge.New(
+		knowledge.WithEmbedder(emb),
+		knowledge.WithVectorStore(store),
+	), nil
+}
+
+func buildKnowledgeTools(
+	entries []knowledgeEntry,
+) (*knowledgeToolsBundle, error) {
+	if len(entries) == 0 {
 		return nil, nil
 	}
 
-	names := sortedKnowledgeNames(knowledges)
-	if len(names) == 1 {
-		maxResults, err := knowledgeToolMaxResults(configs[names[0]])
+	type knowledgeWithMaxResults struct {
+		kb         knowledge.Knowledge
+		maxResults int
+	}
+	knowledges := make(map[string]*knowledgeWithMaxResults, len(entries))
+	for _, entry := range entries {
+		f, ok := registry.LookupKnowledgeProvider(entry.Type)
+		if !ok {
+			return nil, fmt.Errorf(
+				"unsupported knowledge provider type: %s",
+				entry.Type,
+			)
+		}
+		kb, err := f(registry.KnowledgeProviderDeps{}, registry.PluginSpec{
+			Type:   entry.Type,
+			Name:   entry.Name,
+			Config: entry.Config,
+		})
 		if err != nil {
 			return nil, fmt.Errorf(
-				"knowledge %q tool config invalid: %w",
-				names[0],
+				"knowledge %q config invalid: %w",
+				entry.Name,
 				err,
 			)
 		}
+		knowledges[entry.Name] = &knowledgeWithMaxResults{
+			kb:         kb,
+			maxResults: entry.MaxResults,
+		}
+	}
+
+	names := make([]string, 0, len(knowledges))
+	for name := range knowledges {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	if len(names) == 1 {
+		entry := knowledges[names[0]]
 		toolOpts := []knowledgetool.Option{
 			knowledgetool.WithToolName("knowledge_search"),
 			knowledgetool.WithToolDescription(
 				"Search for relevant information in the knowledge base.",
 			),
 		}
-		if maxResults > 0 {
+		if entry.maxResults > 0 {
 			toolOpts = append(
 				toolOpts,
-				knowledgetool.WithMaxResults(maxResults),
+				knowledgetool.WithMaxResults(entry.maxResults),
 			)
 		}
 		return &knowledgeToolsBundle{
 			tools: []tool.Tool{
 				knowledgetool.NewKnowledgeSearchTool(
-					knowledges[names[0]],
+					entry.kb,
 					toolOpts...,
 				),
 			},
@@ -107,14 +161,7 @@ func buildKnowledgeTools(
 			)
 		}
 		seenToolNames[toolName] = name
-		maxResults, err := knowledgeToolMaxResults(configs[name])
-		if err != nil {
-			return nil, fmt.Errorf(
-				"knowledge %q tool config invalid: %w",
-				name,
-				err,
-			)
-		}
+		entry := knowledges[name]
 		toolOpts := []knowledgetool.Option{
 			knowledgetool.WithToolName(toolName),
 			knowledgetool.WithToolDescription(
@@ -124,78 +171,20 @@ func buildKnowledgeTools(
 				),
 			),
 		}
-		if maxResults > 0 {
+		if entry.maxResults > 0 {
 			toolOpts = append(
 				toolOpts,
-				knowledgetool.WithMaxResults(maxResults),
+				knowledgetool.WithMaxResults(entry.maxResults),
 			)
 		}
 		tools = append(tools, knowledgetool.NewAgenticFilterSearchTool(
-			knowledges[name],
+			entry.kb,
 			nil,
 			toolOpts...,
 		))
 	}
 
 	return &knowledgeToolsBundle{tools: tools}, nil
-}
-
-func buildKnowledgeBases(
-	configs map[string]*yaml.Node,
-) (map[string]knowledge.Knowledge, error) {
-	if len(configs) == 0 {
-		return nil, nil
-	}
-
-	out := make(map[string]knowledge.Knowledge, len(configs))
-	for rawName, node := range configs {
-		name := strings.TrimSpace(rawName)
-		if name == "" || node == nil {
-			continue
-		}
-
-		kb, err := buildKnowledgeBase(node)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"knowledge %q config invalid: %w",
-				name,
-				err,
-			)
-		}
-		out[name] = kb
-	}
-
-	if len(out) == 0 {
-		return nil, nil
-	}
-	return out, nil
-}
-
-func buildKnowledgeBase(
-	node *yaml.Node,
-) (knowledge.Knowledge, error) {
-	if node == nil {
-		return nil, nil
-	}
-
-	var cfg knowledgeDependencyConfig
-	if err := registry.DecodeStrict(node, &cfg); err != nil {
-		return nil, fmt.Errorf("decode failed: %w", err)
-	}
-
-	emb, err := buildKnowledgeEmbedder(cfg.Embedder)
-	if err != nil {
-		return nil, err
-	}
-	store, err := buildKnowledgeVectorStore(cfg.VectorStore, emb)
-	if err != nil {
-		return nil, err
-	}
-
-	return knowledge.New(
-		knowledge.WithEmbedder(emb),
-		knowledge.WithVectorStore(store),
-	), nil
 }
 
 type knowledgeTypeConfig struct {
@@ -434,71 +423,6 @@ func knowledgeEmbedderDimensions(e embedder.Embedder) int {
 		return 0
 	}
 	return e.GetDimensions()
-}
-
-func knowledgeToolMaxResults(node *yaml.Node) (int, error) {
-	if node == nil {
-		return 0, nil
-	}
-
-	var cfg knowledgeDependencyConfig
-	if err := registry.DecodeStrict(node, &cfg); err != nil {
-		return 0, fmt.Errorf("decode failed: %w", err)
-	}
-	return knowledgeVectorStoreMaxResults(cfg.VectorStore)
-}
-
-func knowledgeVectorStoreMaxResults(
-	cfg *rawKnowledgeComponent,
-) (int, error) {
-	if cfg == nil || cfg.Node == nil {
-		return 0, nil
-	}
-
-	typeName, err := knowledgeComponentType(cfg.Node)
-	if err != nil {
-		return 0, fmt.Errorf("vector_store type invalid: %w", err)
-	}
-	switch typeName {
-	case "", "inmemory":
-		var c inmemoryKnowledgeVectorStoreConfig
-		if err := registry.DecodeStrict(cfg.Node, &c); err != nil {
-			return 0, err
-		}
-		return positiveIntValue(c.MaxResults), nil
-	case "pgvector":
-		var c pgvectorKnowledgeVectorStoreConfig
-		if err := registry.DecodeStrict(cfg.Node, &c); err != nil {
-			return 0, err
-		}
-		return positiveIntValue(c.MaxResults), nil
-	case "elasticsearch":
-		var c elasticsearchKnowledgeVectorStoreConfig
-		if err := registry.DecodeStrict(cfg.Node, &c); err != nil {
-			return 0, err
-		}
-		return positiveIntValue(c.MaxResults), nil
-	default:
-		return 0, fmt.Errorf("unsupported vector_store.type: %s", typeName)
-	}
-}
-
-func positiveIntValue(v *int) int {
-	if v == nil || *v <= 0 {
-		return 0
-	}
-	return *v
-}
-
-func sortedKnowledgeNames(
-	knowledges map[string]knowledge.Knowledge,
-) []string {
-	names := make([]string, 0, len(knowledges))
-	for name := range knowledges {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 func knowledgeToolName(name string) string {

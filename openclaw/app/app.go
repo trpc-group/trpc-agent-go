@@ -34,8 +34,6 @@ import (
 	"syscall"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -2324,7 +2322,9 @@ func newAgent(
 			)
 		}
 	}
-	knowledgeTools, err := buildKnowledgeTools(cfg.KnowledgesConfig)
+	knowledgeTools, err := buildKnowledgeTools(
+		cfg.KnowledgesConfig,
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2648,7 +2648,7 @@ type agentConfig struct {
 	SkillsToolResults   bool
 	SkillsSkipFallback  bool
 	SkillsToolingGuide  *string
-	KnowledgesConfig    map[string]*yaml.Node
+	KnowledgesConfig    []knowledgeEntry
 
 	StateDir string
 
