@@ -625,6 +625,10 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Contains(t, body, "scrollbar-gutter: stable;")
 	require.Contains(t, body, `sidebar.querySelector(".sidebar-link.active")`)
 	require.Contains(t, body, "sidebar.scrollTop")
+	require.Contains(t, body, "openclaw.admin.pendingScroll")
+	require.Contains(t, body, "window.sessionStorage")
+	require.Contains(t, body, "window.scrollTo(0, pageTop)")
+	require.Contains(t, body, `window.addEventListener("pagehide"`)
 	require.NotContains(t, body, "scrollIntoView")
 	require.NotContains(t, body, `http-equiv="refresh"`)
 }
