@@ -13,6 +13,7 @@ import (
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	cxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 )
 
 // options holds construction-time configuration for FinalResponseCriterion.
@@ -23,6 +24,8 @@ type options struct {
 	json *cjson.JSONCriterion
 	// rouge configures ROUGE scoring comparison.
 	rouge *crouge.RougeCriterion
+	// xml configures XML validation.
+	xml *cxml.XMLCriterion
 	// compareName selects a registered comparison implementation by name.
 	compareName string
 	// compare overrides built-in comparison when provided.
@@ -52,6 +55,13 @@ func WithTextCriterion(criterion *text.TextCriterion) Option {
 func WithJSONCriterion(criterion *cjson.JSONCriterion) Option {
 	return func(o *options) {
 		o.json = criterion
+	}
+}
+
+// WithXMLCriterion sets the XML criterion.
+func WithXMLCriterion(criterion *cxml.XMLCriterion) Option {
+	return func(o *options) {
+		o.xml = criterion
 	}
 }
 

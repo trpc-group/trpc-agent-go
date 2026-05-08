@@ -9,10 +9,13 @@
 
 package text
 
+import clength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
+
 type options struct {
 	ignore          bool
 	caseInsensitive bool
 	matchStrategy   TextMatchStrategy
+	length          *clength.LengthCriterion
 	compareName     string
 	compare         CompareFunc
 }
@@ -46,6 +49,13 @@ func WithCaseInsensitive(caseInsensitive bool) Option {
 func WithMatchStrategy(matchStrategy TextMatchStrategy) Option {
 	return func(o *options) {
 		o.matchStrategy = matchStrategy
+	}
+}
+
+// WithLengthCriterion sets the length criterion.
+func WithLengthCriterion(criterion *clength.LengthCriterion) Option {
+	return func(o *options) {
+		o.length = criterion
 	}
 }
 

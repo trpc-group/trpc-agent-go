@@ -13,8 +13,10 @@ package json
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"reflect"
+	"strings"
 )
 
 // CompareFunc defines custom JSON comparison logic.
@@ -32,6 +34,8 @@ type JSONCriterion struct {
 	MatchStrategy JSONMatchStrategy `json:"matchStrategy,omitempty"`
 	// NumberTolerance defines the allowed absolute difference between numeric values. 1e-6 is the default.
 	NumberTolerance *float64 `json:"numberTolerance,omitempty"`
+	// Valid validates raw JSON content when used by callers that receive unparsed content.
+	Valid bool `json:"valid,omitempty"`
 	// CompareName selects a registered comparison implementation by name.
 	CompareName string `json:"compareName,omitempty"`
 	// Compare overrides default comparison when provided.
@@ -55,6 +59,7 @@ func New(opt ...Option) *JSONCriterion {
 		OnlyTree:        opts.onlyTree,
 		MatchStrategy:   opts.matchStrategy,
 		NumberTolerance: opts.numberTolerance,
+		Valid:           opts.valid,
 		CompareName:     opts.compareName,
 		Compare:         opts.compare,
 	}
@@ -71,6 +76,17 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 	if j.Compare != nil {
 		return j.Compare(actual, expected)
 	}
+	if j.Valid {
+		if err := validateRawJSON(actual); err != nil {
+			return false, fmt.Errorf("parse actual raw json: %w", err)
+		}
+		return true, nil
+	}
+	var err error
+	actual, expected, err = j.normalizeInputs(actual, expected)
+	if err != nil {
+		return false, err
+	}
 	tolerance := defaultNumberTolerance
 	if j.NumberTolerance != nil {
 		tolerance = *j.NumberTolerance
@@ -84,6 +100,59 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 	default:
 		return false, fmt.Errorf("invalid match strategy %s", j.MatchStrategy)
 	}
+}
+
+func (j *JSONCriterion) normalizeInputs(actual, expected any) (any, any, error) {
+	actualValue, err := parseRawMessage(actual)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse actual raw json: %w", err)
+	}
+	expectedValue, err := parseRawMessage(expected)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse expected raw json: %w", err)
+	}
+	return actualValue, expectedValue, nil
+}
+
+func validateRawJSON(value any) error {
+	switch v := value.(type) {
+	case json.RawMessage:
+		_, err := parseRawJSON(v)
+		return err
+	case string:
+		_, err := parseRawJSON(json.RawMessage(v))
+		return err
+	case []byte:
+		_, err := parseRawJSON(json.RawMessage(v))
+		return err
+	default:
+		_, err := json.Marshal(value)
+		return err
+	}
+}
+
+func parseRawMessage(value any) (any, error) {
+	raw, ok := value.(json.RawMessage)
+	if !ok {
+		return value, nil
+	}
+	return parseRawJSON(raw)
+}
+
+func parseRawJSON(raw json.RawMessage) (any, error) {
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	var v any
+	if err := decoder.Decode(&v); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("multiple json values")
+		}
+		return nil, err
+	}
+	return v, nil
 }
 
 func matchValueOnlyTree(actual, expected any, onlyTree map[string]any, tolerance float64) (bool, error) {

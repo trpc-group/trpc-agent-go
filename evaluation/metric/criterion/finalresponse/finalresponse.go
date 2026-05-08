@@ -21,6 +21,7 @@ import (
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	cxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 )
 
 // CompareFunc defines custom final response comparison logic.
@@ -34,6 +35,8 @@ type FinalResponseCriterion struct {
 	JSON *cjson.JSONCriterion `json:"json,omitempty"`
 	// Rouge scores the final response content with ROUGE.
 	Rouge *crouge.RougeCriterion `json:"rouge,omitempty"`
+	// XML validates the final response content as XML.
+	XML *cxml.XMLCriterion `json:"xml,omitempty"`
 	// CompareName selects a registered comparison implementation by name.
 	CompareName string `json:"compareName,omitempty"`
 	// Compare allows overriding the built-in matching logic.
@@ -47,6 +50,7 @@ func New(opt ...Option) *FinalResponseCriterion {
 		Text:        opts.text,
 		JSON:        opts.json,
 		Rouge:       opts.rouge,
+		XML:         opts.xml,
 		CompareName: opts.compareName,
 		Compare:     opts.compare,
 	}
@@ -60,37 +64,51 @@ func (c *FinalResponseCriterion) Match(ctx context.Context, actual, expected *ev
 	if c.Compare != nil {
 		return c.Compare(actual, expected)
 	}
-	if c.Text == nil && c.JSON == nil && c.Rouge == nil {
-		return false, fmt.Errorf("final response criterion must configure text, json, or rouge")
+	if !c.hasConfiguredCriterion() {
+		return false, fmt.Errorf("final response criterion must configure text, json, rouge, or xml")
 	}
 	if actual == nil || expected == nil {
 		return false, fmt.Errorf("actual or expected invocation is nil")
 	}
-	if actual.FinalResponse == nil && expected.FinalResponse == nil {
+	return c.matchFinalResponseContent(ctx, actual, expected)
+}
+
+func (c *FinalResponseCriterion) hasConfiguredCriterion() bool {
+	return c.Text != nil || c.JSON != nil || c.Rouge != nil || c.XML != nil
+}
+
+func (c *FinalResponseCriterion) matchFinalResponseContent(ctx context.Context, actual, expected *evalset.Invocation) (bool, error) {
+	actualMessage := actual.FinalResponse
+	expectedMessage := expected.FinalResponse
+	if actualMessage == nil && expectedMessage == nil {
 		return true, nil
 	}
-	if actual.FinalResponse == nil || expected.FinalResponse == nil {
+	if actualMessage == nil {
 		return false, fmt.Errorf("actual or expected final response is nil")
 	}
-
-	mismatchMessages := make([]string, 0, 3)
-
-	if c.JSON != nil {
-		if err := matchContentAsJSON(actual.FinalResponse.Content, expected.FinalResponse.Content, c.JSON); err != nil {
+	actualContent := actualMessage.Content
+	expectedContent := ""
+	if expectedMessage != nil {
+		expectedContent = expectedMessage.Content
+	}
+	mismatchMessages := make([]string, 0, 5)
+	appendMismatch := func(err error) {
+		if err != nil {
 			mismatchMessages = append(mismatchMessages, err.Error())
 		}
+	}
+	if c.JSON != nil {
+		appendMismatch(matchContentAsJSON(actualContent, expectedContent, c.JSON))
 	}
 	if c.Text != nil {
-		if err := matchContentAsText(actual.FinalResponse.Content, expected.FinalResponse.Content, c.Text); err != nil {
-			mismatchMessages = append(mismatchMessages, err.Error())
-		}
+		appendMismatch(matchContentAsText(actualContent, expectedContent, c.Text))
 	}
 	if c.Rouge != nil {
-		if err := matchContentAsRouge(ctx, actual.FinalResponse.Content, expected.FinalResponse.Content, c.Rouge); err != nil {
-			mismatchMessages = append(mismatchMessages, err.Error())
-		}
+		appendMismatch(matchContentAsRouge(ctx, actualContent, expectedContent, c.Rouge))
 	}
-
+	if c.XML != nil {
+		appendMismatch(matchContentAsXML(actualContent, expectedContent, c.XML))
+	}
 	if len(mismatchMessages) > 0 {
 		return false, errors.New(strings.Join(mismatchMessages, "; "))
 	}
@@ -117,20 +135,27 @@ func matchContentAsJSON(actual, expected string, criterion *cjson.JSONCriterion)
 	if criterion == nil || criterion.Ignore {
 		return nil
 	}
-	actualValue, err := parseContentAsJSON(actual)
-	if err != nil {
-		return fmt.Errorf("parse actual final response as json: %w", err)
-	}
-	expectedValue, err := parseContentAsJSON(expected)
-	if err != nil {
-		return fmt.Errorf("parse expected final response as json: %w", err)
-	}
-	ok, err := criterion.Match(actualValue, expectedValue)
+	ok, err := criterion.Match(json.RawMessage(actual), json.RawMessage(expected))
 	if err != nil {
 		return fmt.Errorf("json mismatch: %w", err)
 	}
 	if !ok {
 		return fmt.Errorf("json mismatch")
+	}
+	return nil
+}
+
+// matchContentAsXML validates a string using an XMLCriterion.
+func matchContentAsXML(actual, expected string, criterion *cxml.XMLCriterion) error {
+	if criterion == nil || criterion.Ignore {
+		return nil
+	}
+	ok, err := criterion.Match(actual, expected)
+	if err != nil {
+		return fmt.Errorf("xml mismatch: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("xml mismatch")
 	}
 	return nil
 }
@@ -148,14 +173,4 @@ func matchContentAsRouge(ctx context.Context, actual, expected string, criterion
 		return fmt.Errorf("rouge mismatch: %s", result.Reason())
 	}
 	return nil
-}
-
-// parseContentAsJSON parses a JSON string into an untyped Go value.
-func parseContentAsJSON(content string) (any, error) {
-	decoder := json.NewDecoder(strings.NewReader(content))
-	var v any
-	if err := decoder.Decode(&v); err != nil {
-		return nil, err
-	}
-	return v, nil
 }

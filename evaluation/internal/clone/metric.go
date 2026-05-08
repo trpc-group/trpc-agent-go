@@ -11,10 +11,12 @@ package clone
 
 import (
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	criterionlength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	criterionrouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	criteriontext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+	criterionxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
@@ -112,6 +114,7 @@ func cloneFinalResponseCriterion(src *finalresponse.FinalResponseCriterion) (*fi
 	}
 	copied.JSON = jsonCriterion
 	copied.Rouge = cloneRougeCriterion(src.Rouge)
+	copied.XML = cloneXMLCriterion(src.XML)
 	return &copied, nil
 }
 
@@ -120,6 +123,7 @@ func cloneTextCriterion(src *criteriontext.TextCriterion) *criteriontext.TextCri
 		return nil
 	}
 	copied := *src
+	copied.Length = cloneLengthCriterion(src.Length)
 	return &copied
 }
 
@@ -146,7 +150,25 @@ func cloneJSONCriterion(src *criterionjson.JSONCriterion) (*criterionjson.JSONCr
 	return &copied, nil
 }
 
+func cloneLengthCriterion(src *criterionlength.LengthCriterion) *criterionlength.LengthCriterion {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	copied.Min = cloneIntPtr(src.Min)
+	copied.Max = cloneIntPtr(src.Max)
+	return &copied
+}
+
 func cloneRougeCriterion(src *criterionrouge.RougeCriterion) *criterionrouge.RougeCriterion {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	return &copied
+}
+
+func cloneXMLCriterion(src *criterionxml.XMLCriterion) *criterionxml.XMLCriterion {
 	if src == nil {
 		return nil
 	}
