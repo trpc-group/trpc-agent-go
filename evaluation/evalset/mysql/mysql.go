@@ -304,7 +304,7 @@ func (m *manager) AddCase(ctx context.Context, appName, evalSetID string, evalCa
 		"INSERT INTO %s (app_name, eval_set_id, eval_id, eval_mode, eval_case) VALUES (?, ?, ?, ?, ?)",
 		m.tables.EvalCases,
 	)
-	if _, err := m.db.Exec(ctx, query, appName, evalSetID, cloned.EvalID, cloned.EvalMode, payload); err != nil {
+	if _, err := m.db.Exec(ctx, query, appName, evalSetID, cloned.EvalID, cloned.EvalMode, string(payload)); err != nil {
 		if mysqldb.IsDuplicateEntry(err) {
 			return fmt.Errorf("eval case %s.%s.%s already exists", appName, evalSetID, cloned.EvalID)
 		}
@@ -338,7 +338,7 @@ func (m *manager) UpdateCase(ctx context.Context, appName, evalSetID string, eva
 		"UPDATE %s SET eval_mode = ?, eval_case = ?, updated_at = CURRENT_TIMESTAMP(6) WHERE app_name = ? AND eval_set_id = ? AND eval_id = ?",
 		m.tables.EvalCases,
 	)
-	res, err := m.db.Exec(ctx, query, evalCase.EvalMode, payload, appName, evalSetID, evalCase.EvalID)
+	res, err := m.db.Exec(ctx, query, evalCase.EvalMode, string(payload), appName, evalSetID, evalCase.EvalID)
 	if err != nil {
 		return fmt.Errorf("update eval case %s.%s.%s: %w", appName, evalSetID, evalCase.EvalID, err)
 	}
