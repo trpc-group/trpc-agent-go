@@ -692,6 +692,27 @@ func Test_convertUserMessage_FileURLFallbackText(t *testing.T) {
 	assert.Equal(t, "File URL: data.json (application/json): https://example.com/data.json", out.Content[0].OfText.Text)
 }
 
+func Test_convertUserMessage_FileImageURLFallbackText(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "photo.png",
+					URL:      "https://example.com/photo.png",
+					MimeType: "image/png",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfText)
+	assert.Equal(t, "File URL: photo.png (image/png): https://example.com/photo.png", out.Content[0].OfText.Text)
+}
+
 func Test_convertUserMessage_FileImageData(t *testing.T) {
 	data := []byte("image-bytes")
 	msg := model.Message{

@@ -316,7 +316,9 @@ type Image struct {
 	Data []byte `json:"data"`
 	// Detail is the detail level: "low", "high", "auto".
 	Detail string `json:"detail,omitempty"`
-	// Format is the format of the image data.
+	// Format is the image format.
+	// Data-backed images usually use a subtype such as "png".
+	// URL-backed images may use a full MIME type such as "image/png".
 	Format string `json:"format,omitempty"`
 }
 

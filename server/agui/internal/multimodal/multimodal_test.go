@@ -33,6 +33,13 @@ func TestUserMessageFromInputContentsErrors(t *testing.T) {
 		_, err := UserMessageFromInputContents([]types.InputContent{{Type: types.InputContentTypeBinary, MimeType: "image/jpeg"}})
 		assert.ErrorContains(t, err, "binary input content requires at least one of id, url, or data")
 	})
+	t.Run("binary whitespace url requires payload", func(t *testing.T) {
+		_, err := UserMessageFromInputContents([]types.InputContent{{
+			Type: types.InputContentTypeBinary,
+			URL:  "  ",
+		}})
+		assert.ErrorContains(t, err, "binary input content requires at least one of id, url, or data")
+	})
 	t.Run("binary data URL missing comma", func(t *testing.T) {
 		_, err := UserMessageFromInputContents([]types.InputContent{{
 			Type:     types.InputContentTypeBinary,
@@ -73,7 +80,7 @@ func TestUserMessageFromInputContentsErrors(t *testing.T) {
 func TestUserMessageFromInputContentsTextAndImageURL(t *testing.T) {
 	msg, err := UserMessageFromInputContents([]types.InputContent{
 		{Type: types.InputContentTypeText, Text: "hello"},
-		{Type: types.InputContentTypeBinary, MimeType: "image/jpeg", URL: "https://example.com/a.jpg"},
+		{Type: types.InputContentTypeBinary, MimeType: "image/jpeg", URL: " https://example.com/a.jpg "},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, model.RoleUser, msg.Role)

@@ -1204,9 +1204,6 @@ func convertFileContentPart(file *model.File) (anthropic.ContentBlockParamUnion,
 	}
 	if fileURL := strings.TrimSpace(file.URL); fileURL != "" {
 		mediaType := fileURLMediaType(file)
-		if _, err := normalizeImageMediaType(mediaType); err == nil {
-			return anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: fileURL}), nil
-		}
 		if mediaType == "application/pdf" {
 			block := anthropic.NewDocumentBlock(anthropic.URLPDFSourceParam{
 				URL: fileURL,
