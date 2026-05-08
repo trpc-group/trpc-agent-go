@@ -263,8 +263,6 @@ type ContentPart struct {
 type File struct {
 	// Name is the name of the file, used when passing the file to the model as a string.
 	Name string `json:"filename"`
-	// URL is the URL of the file.
-	URL string `json:"url,omitempty"`
 	// Data is the raw file data, used when passing the file to the model as a string.
 	Data []byte `json:"data"`
 	// FileID is the ID of an uploaded file to use as input.

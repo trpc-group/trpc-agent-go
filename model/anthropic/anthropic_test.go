@@ -607,29 +607,6 @@ func Test_convertUserMessage_FilePDFData(t *testing.T) {
 	assert.Equal(t, "report.pdf", out.Content[0].OfDocument.Title.Value)
 }
 
-func Test_convertUserMessage_FilePDFURL(t *testing.T) {
-	msg := model.Message{
-		Role: model.RoleUser,
-		ContentParts: []model.ContentPart{
-			{
-				Type: model.ContentTypeFile,
-				File: &model.File{
-					Name:     "report.pdf",
-					URL:      "https://cos.example.com/report.pdf?sign=1",
-					MimeType: "application/pdf",
-				},
-			},
-		},
-	}
-	out, err := convertUserMessage(msg)
-	require.NoError(t, err)
-	require.Len(t, out.Content, 1)
-	require.NotNil(t, out.Content[0].OfDocument)
-	require.NotNil(t, out.Content[0].OfDocument.Source.OfURL)
-	assert.Equal(t, "https://cos.example.com/report.pdf?sign=1", out.Content[0].OfDocument.Source.OfURL.URL)
-	assert.Equal(t, "report.pdf", out.Content[0].OfDocument.Title.Value)
-}
-
 func Test_convertUserMessage_FileImageData(t *testing.T) {
 	data := []byte("image-bytes")
 	msg := model.Message{

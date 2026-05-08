@@ -90,54 +90,15 @@ func TestUserMessageFromInputContentsTextAndImageURL(t *testing.T) {
 	assert.Empty(t, msg.ContentParts[1].Image.Format)
 }
 
-func TestUserMessageFromInputContentsBinaryURLPDF(t *testing.T) {
+func TestUserMessageFromInputContentsBinaryURLNonImageFallsBackToText(t *testing.T) {
 	msg, err := UserMessageFromInputContents([]types.InputContent{
-		{
-			Type:     types.InputContentTypeBinary,
-			MimeType: "application/pdf",
-			Filename: "demo.pdf",
-			URL:      "https://cos.example.com/a.pdf?sign=1",
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, msg.ContentParts, 1)
-	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
-	require.NotNil(t, msg.ContentParts[0].File)
-	assert.Equal(t, "demo.pdf", msg.ContentParts[0].File.Name)
-	assert.Equal(t, "https://cos.example.com/a.pdf?sign=1", msg.ContentParts[0].File.URL)
-	assert.Equal(t, "application/pdf", msg.ContentParts[0].File.MimeType)
-}
-
-func TestUserMessageFromInputContentsBinaryURLPDFByFilename(t *testing.T) {
-	msg, err := UserMessageFromInputContents([]types.InputContent{
-		{
-			Type:     types.InputContentTypeBinary,
-			Filename: "demo.pdf",
-			URL:      "https://cos.example.com/download?sign=1",
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, msg.ContentParts, 1)
-	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
-	require.NotNil(t, msg.ContentParts[0].File)
-	assert.Equal(t, "demo.pdf", msg.ContentParts[0].File.Name)
-	assert.Equal(t, "https://cos.example.com/download?sign=1", msg.ContentParts[0].File.URL)
-	assert.Equal(t, "application/pdf", msg.ContentParts[0].File.MimeType)
-}
-
-func TestUserMessageFromInputContentsBinaryURLNonPDFFallsBackToText(t *testing.T) {
-	msg, err := UserMessageFromInputContents([]types.InputContent{
-		{
-			Type:     types.InputContentTypeBinary,
-			MimeType: "application/octet-stream",
-			URL:      "https://example.com/a.bin",
-		},
+		{Type: types.InputContentTypeBinary, MimeType: "application/pdf", URL: "https://example.com/a.pdf"},
 	})
 	require.NoError(t, err)
 	require.Len(t, msg.ContentParts, 1)
 	assert.Equal(t, model.ContentTypeText, msg.ContentParts[0].Type)
 	require.NotNil(t, msg.ContentParts[0].Text)
-	assert.Equal(t, "https://example.com/a.bin", *msg.ContentParts[0].Text)
+	assert.Equal(t, "https://example.com/a.pdf", *msg.ContentParts[0].Text)
 }
 
 func TestUserMessageFromInputContentsBinaryDataAudio(t *testing.T) {

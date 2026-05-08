@@ -77,7 +77,7 @@ curl -N -X POST http://localhost:8080/ \
 Multimodal input uses the tail `role=user` message in `messages` to represent the current user input. Unlike text input, `content` is no longer a string. It is an array of `InputContent` fragments. Each item represents one piece of input. Common types include:
 
 - Text fragment: `type` is `"text"`, and the text content is in the `text` field.
-- Binary fragment: `type` is `"binary"`. Provide `mimeType` when available. Image input can use `url` to point to an image URL when `mimeType` starts with `image/`. PDF input can use `url` when `mimeType` is `application/pdf` or `filename` ends with `.pdf`. Other binary content can use `data` to pass base64 content.
+- Binary fragment: `type` is `"binary"` and `mimeType` is required. Image input can use `url` to point to an image URL. Other binary content can use `data` to pass base64 content.
 
 URL request body example:
 
@@ -89,9 +89,8 @@ URL request body example:
         {
             "role": "user",
             "content": [
-                { "type": "text", "text": "Describe this image and summarize the PDF." },
-                { "type": "binary", "mimeType": "image/png", "url": "https://example.com/image.png" },
-                { "type": "binary", "mimeType": "application/pdf", "filename": "report.pdf", "url": "https://cos.example.com/report.pdf" }
+                { "type": "text", "text": "Describe this image." },
+                { "type": "binary", "mimeType": "image/png", "url": "https://example.com/image.png" }
             ]
         }
     ]
@@ -116,7 +115,7 @@ DATA request body example:
 }
 ```
 
-The `url` form is used for image input and PDF input. Other binary content uses `data`. When using `data`, the server decodes it with standard base64 decoding. `data` can be either a raw base64 string or a string with the `data:*;base64,` prefix.
+The `url` form is only used for image input. Other binary content uses `data`. When using `data`, the server decodes it with standard base64 decoding. `data` can be either a raw base64 string or a string with the `data:*;base64,` prefix.
 
 ### External Tool Result Input
 

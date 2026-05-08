@@ -14,7 +14,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net/url"
 	"path"
 	"strings"
 
@@ -80,12 +79,6 @@ func contentPartFromBinaryInput(part types.InputContent) (*model.ContentPart, er
 				Image: &model.Image{
 					URL: part.URL,
 				},
-			}, nil
-		}
-		if isPDFBinaryURL(part, mimeType) {
-			return &model.ContentPart{
-				Type: model.ContentTypeFile,
-				File: fileFromBinaryURL(part, mimeType),
 			}, nil
 		}
 		text := part.URL
@@ -180,52 +173,4 @@ func decodeBase64Payload(payload string) ([]byte, error) {
 		return nil, errors.New("base64 payload is empty")
 	}
 	return base64.StdEncoding.DecodeString(payload)
-}
-
-func isPDFBinaryURL(part types.InputContent, mimeType string) bool {
-	if mimeType == "application/pdf" {
-		return true
-	}
-	if hasPDFExtension(part.Filename) {
-		return true
-	}
-	return hasPDFExtension(pathFromURL(part.URL))
-}
-
-func fileFromBinaryURL(part types.InputContent, mimeType string) *model.File {
-	name := strings.TrimSpace(part.Filename)
-	if name == "" {
-		name = fileNameFromURL(part.URL)
-	}
-	if mimeType == "" && hasPDFExtension(name) {
-		mimeType = "application/pdf"
-	}
-	if mimeType == "" && hasPDFExtension(pathFromURL(part.URL)) {
-		mimeType = "application/pdf"
-	}
-	return &model.File{
-		Name:     name,
-		URL:      part.URL,
-		MimeType: mimeType,
-	}
-}
-
-func fileNameFromURL(rawURL string) string {
-	base := path.Base(strings.TrimSpace(pathFromURL(rawURL)))
-	if base == "." || base == "/" || base == ".." {
-		return ""
-	}
-	return base
-}
-
-func pathFromURL(rawURL string) string {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return ""
-	}
-	return parsed.Path
-}
-
-func hasPDFExtension(name string) bool {
-	return strings.EqualFold(path.Ext(strings.TrimSpace(name)), ".pdf")
 }
