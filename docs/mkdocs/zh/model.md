@@ -1556,7 +1556,7 @@ model := openai.New("deepseek-v4-flash",
 >
 > Token 裁剪和会话摘要的 `WithContextThreshold` 都依赖框架内置的模型 context window 注册表。注册表已覆盖大量常见模型，但不一定包含所有模型——特别是私有部署或较新发布的模型。如果你的模型未被识别，请在启动时调用 `model.RegisterModelContextWindow("my-model", 32768)` 或 `model.RegisterModelContextWindows(map[string]int{...})` 手动注册。完整示例参见[会话摘要文档](session/summary.md)。
 
-```
+```text
 outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
 safetyMargin = contextWindow × SafetyMarginRatio
 calculatedMax = contextWindow - outputReserve - ProtocolOverheadTokens - safetyMargin
@@ -1567,7 +1567,7 @@ maxInputTokens = max(messageBudget - estimatedToolsTokens, 0)
 
 例如 "gpt-4o"（contextWindow = 128000）：
 
-```
+```text
 safetyMargin = 128000 × 0.10 = 12800 tokens
 outputReserve = max(2048, request.MaxTokens, request.ThinkingTokens)
 calculatedMax = 128000 - outputReserve - 512 - 12800
@@ -1575,9 +1575,9 @@ ratioLimit = 128000 × 1.0 = 128000 tokens
 maxInputTokens = messageBudget - estimatedToolsTokens
 ```
 
-如果显式设置了 `WithMaxInputTokens`，框架会以该值作为消息预算起点，但在裁剪
-messages 前仍会扣除估算的 `Tools` schema 预算，避免注册大量工具时最终请求仍然
-超过 provider 的 context window。
+如果显式设置了 `WithMaxInputTokens`，框架会保留该值作为配置的 messages 预算，
+不会再从中扣除估算的 `Tools` schema 预算。该显式值仍会在应用输出预留和安全边际
+后，被限制在 context-safe 的硬预算内。
 
 **默认预算参数**：
 

@@ -535,9 +535,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Determine max input tokens using priority: user config > auto calculation > default.
 	maxInputTokens := m.maxInputTokens
 	outputReserveTokens := m.effectiveOutputReserveTokens(request)
-	if maxInputTokens <= 0 {
+	contextWindow := imodel.ResolveContextWindow(m.name)
+	autoBudget := maxInputTokens <= 0
+	if autoBudget {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
@@ -559,7 +560,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				imodel.DefaultMaxInputTokensRatio,
 			)
 		}
-		maxInputTokens = min(maxInputTokens, m.hardInputBudget(contextWindow, outputReserveTokens))
+	}
+
+	maxInputTokens = min(maxInputTokens, m.hardInputBudget(contextWindow, outputReserveTokens))
+	if autoBudget {
 		log.DebugfContext(
 			ctx,
 			"auto-calculated max input tokens: model=%s, "+
@@ -569,19 +573,18 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			outputReserveTokens,
 			maxInputTokens,
 		)
-	}
-
-	toolsTokens := m.estimateToolsTokens(ctx, request.Tools)
-	if toolsTokens > 0 {
-		maxInputTokens = max(maxInputTokens-toolsTokens, 0)
-		log.DebugfContext(
-			ctx,
-			"adjusted max input tokens after tools budget: model=%s, "+
-				"toolsTokens=%d, maxInputTokens=%d",
-			m.name,
-			toolsTokens,
-			maxInputTokens,
-		)
+		toolsTokens := m.estimateToolsTokens(ctx, request.Tools)
+		if toolsTokens > 0 {
+			maxInputTokens = max(maxInputTokens-toolsTokens, 0)
+			log.DebugfContext(
+				ctx,
+				"adjusted max input tokens after tools budget: model=%s, "+
+					"toolsTokens=%d, maxInputTokens=%d",
+				m.name,
+				toolsTokens,
+				maxInputTokens,
+			)
+		}
 	}
 
 	// Apply token tailoring.

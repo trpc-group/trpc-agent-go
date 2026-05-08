@@ -1572,7 +1572,7 @@ for request-scoped output limits and tool definitions:
 >
 > Both Token Tailoring and session summary `WithContextThreshold` rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with `model.RegisterModelContextWindow("my-model", 32768)` or `model.RegisterModelContextWindows(map[string]int{...})`. See the [Session Summary documentation](session/summary.md) for a full example.
 
-```
+```text
 outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
 safetyMargin = contextWindow × SafetyMarginRatio
 calculatedMax = contextWindow - outputReserve - ProtocolOverheadTokens - safetyMargin
@@ -1583,7 +1583,7 @@ maxInputTokens = max(messageBudget - estimatedToolsTokens, 0)
 
 For example, "gpt-4o" (contextWindow = 128000):
 
-```
+```text
 safetyMargin = 128000 × 0.10 = 12800 tokens
 outputReserve = max(2048, request.MaxTokens, request.ThinkingTokens)
 calculatedMax = 128000 - outputReserve - 512 - 12800
@@ -1591,10 +1591,10 @@ ratioLimit = 128000 × 1.0 = 128000 tokens
 maxInputTokens = messageBudget - estimatedToolsTokens
 ```
 
-If `WithMaxInputTokens` is set explicitly, the framework uses that value as the
-starting message budget and still subtracts the estimated `Tools` schema budget
-before trimming messages. This prevents the final request from exceeding the
-provider context window when many tools are registered.
+If `WithMaxInputTokens` is set explicitly, the framework keeps that value as the
+configured message budget and does not subtract the estimated `Tools` schema
+budget from it. The explicit value is still clamped to the context-safe hard
+budget after output reserves and safety margin are applied.
 
 **Default Budget Parameters**:
 

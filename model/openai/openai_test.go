@@ -2001,6 +2001,7 @@ func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Mes
 
 type captureMaxTokensStrategy struct {
 	maxTokens int
+	called    bool
 }
 
 func (s *captureMaxTokensStrategy) TailorMessages(
@@ -2009,6 +2010,7 @@ func (s *captureMaxTokensStrategy) TailorMessages(
 	maxTokens int,
 ) ([]model.Message, error) {
 	s.maxTokens = maxTokens
+	s.called = true
 	return messages, nil
 }
 
@@ -2074,8 +2076,14 @@ func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
 }
 
 func TestWithTokenTailoring_ClampsFloorToAvailableBudget(t *testing.T) {
-	const modelName = "token-tailoring-small-context"
+	modelName := strings.ToLower("token-tailoring-small-context-" +
+		strings.ReplaceAll(t.Name(), "/", "-"))
 	model.RegisterModelContextWindow(modelName, 4096)
+	t.Cleanup(func() {
+		imodel.ModelMutex.Lock()
+		defer imodel.ModelMutex.Unlock()
+		delete(imodel.ModelContextWindows, modelName)
+	})
 	strategy := &captureMaxTokensStrategy{}
 	m := New(modelName,
 		WithEnableTokenTailoring(true),
@@ -2091,15 +2099,15 @@ func TestWithTokenTailoring_ClampsFloorToAvailableBudget(t *testing.T) {
 
 	m.applyTokenTailoring(context.Background(), req)
 
+	require.True(t, strategy.called)
 	require.Zero(t, strategy.maxTokens)
 }
 
-func TestWithTokenTailoring_SubtractsToolsBudget(t *testing.T) {
+func TestWithTokenTailoring_SubtractsToolsBudgetForAutoLimit(t *testing.T) {
 	strategy := &captureMaxTokensStrategy{}
 	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
 	m := New("gpt-4o-mini",
 		WithEnableTokenTailoring(true),
-		WithMaxInputTokens(512),
 		WithTokenCounter(counter),
 		WithTailoringStrategy(strategy),
 	)
@@ -2126,7 +2134,80 @@ func TestWithTokenTailoring_SubtractsToolsBudget(t *testing.T) {
 
 	m.applyTokenTailoring(context.Background(), req)
 
-	require.Equal(t, max(512-toolsTokens, 0), strategy.maxTokens)
+	contextWindow := imodel.ResolveContextWindow("gpt-4o-mini")
+	want := imodel.CalculateMaxInputTokensWithParams(
+		contextWindow,
+		imodel.DefaultProtocolOverheadTokens,
+		imodel.DefaultReserveOutputTokens,
+		imodel.DefaultInputTokensFloor,
+		imodel.DefaultSafetyMarginRatio,
+		imodel.DefaultMaxInputTokensRatio,
+	)
+	want = min(want, m.hardInputBudget(contextWindow, imodel.DefaultReserveOutputTokens))
+	require.Equal(t, max(want-toolsTokens, 0), strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_KeepsExplicitLimitBeforeToolsBudget(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(512),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		Tools: map[string]tool.Tool{
+			"search": stubTool{decl: &tool.Declaration{
+				Name:        "search",
+				Description: strings.Repeat("tool description ", 10),
+				InputSchema: &tool.Schema{
+					Type: "object",
+					Properties: map[string]*tool.Schema{
+						"query": {
+							Type:        "string",
+							Description: strings.Repeat("query description ", 10),
+						},
+					},
+				},
+			}},
+		},
+	}
+	require.Greater(t, m.estimateToolsTokens(context.Background(), req.Tools), 0)
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.True(t, strategy.called)
+	require.Equal(t, 512, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_ClampsExplicitLimitToHardBudget(t *testing.T) {
+	modelName := strings.ToLower("token-tailoring-explicit-small-context-" +
+		strings.ReplaceAll(t.Name(), "/", "-"))
+	model.RegisterModelContextWindow(modelName, 4096)
+	t.Cleanup(func() {
+		imodel.ModelMutex.Lock()
+		defer imodel.ModelMutex.Unlock()
+		delete(imodel.ModelContextWindows, modelName)
+	})
+	strategy := &captureMaxTokensStrategy{}
+	m := New(modelName,
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(8192),
+		WithTailoringStrategy(strategy),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.True(t, strategy.called)
+	require.Equal(t,
+		m.hardInputBudget(4096, imodel.DefaultReserveOutputTokens),
+		strategy.maxTokens,
+	)
 }
 
 // TestWithEnableTokenTailoring_SimpleMode tests the simple mode of token tailoring.
