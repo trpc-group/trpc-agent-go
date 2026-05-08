@@ -29,10 +29,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	criterionlength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	criterionrouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+	criterionxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -331,6 +333,10 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 			FinalResponse: &finalresponse.FinalResponseCriterion{
 				Text: &text.TextCriterion{
 					CaseInsensitive: true,
+					Length: &criterionlength.LengthCriterion{
+						Min: intPtr(1),
+						Max: intPtr(10),
+					},
 				},
 				JSON: &criterionjson.JSONCriterion{
 					IgnoreTree: map[string]any{
@@ -346,6 +352,7 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 					Measure:   criterionrouge.RougeMeasureF1,
 					Threshold: criterionrouge.Score{Precision: 0.1, Recall: 0.2, F1: 0.3},
 				},
+				XML: &criterionxml.XMLCriterion{},
 			},
 			LLMJudge: &criterionllm.LLMCriterion{
 				Rubrics: []*criterionllm.Rubric{
@@ -409,6 +416,12 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 
 	dst.Criterion.FinalResponse.Rouge.RougeType = "rougeL"
 	assert.Equal(t, "rouge1", src.Criterion.FinalResponse.Rouge.RougeType)
+
+	*dst.Criterion.FinalResponse.Text.Length.Min = 2
+	assert.Equal(t, 1, *src.Criterion.FinalResponse.Text.Length.Min)
+
+	dst.Criterion.FinalResponse.XML.Ignore = true
+	assert.False(t, src.Criterion.FinalResponse.XML.Ignore)
 }
 
 func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
