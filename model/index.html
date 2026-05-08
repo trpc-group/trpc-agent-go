@@ -6514,7 +6514,9 @@ metrics logic.</p>
 </span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Token Calculation Formula</strong>:</p>
-<p>The framework automatically calculates "maxInputTokens" based on the model's context window:</p>
+<p>The framework automatically calculates <code>maxInputTokens</code> based on the model's
+context window. For OpenAI-compatible models, the automatic budget also accounts
+for request-scoped output limits and tool definitions:</p>
 <blockquote>
 <p><strong>Context Window Registration</strong></p>
 <p>Both Token Tailoring and session summary <code>WithContextThreshold</code> rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with <code>model.RegisterModelContextWindow("my-model", 32768)</code> or <code>model.RegisterModelContextWindows(map[string]int{...})</code>. See the <a href="../session/summary/">Session Summary documentation</a> for a full example.</p>
@@ -6522,27 +6524,37 @@ metrics logic.</p>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1">1</a></span>
 <span class="normal"><a href="#__codelineno-48-2">2</a></span>
 <span class="normal"><a href="#__codelineno-48-3">3</a></span>
-<span class="normal"><a href="#__codelineno-48-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a>safetyMargin = contextWindow × 10%
-</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a>calculatedMax = contextWindow - 2048 (output reserve) - 512 (protocol overhead) - safetyMargin
-</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a>ratioLimit = contextWindow × 100% (max input ratio)
-</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a>maxInputTokens = max(min(calculatedMax, ratioLimit), 1024 (minimum))
+<span class="normal"><a href="#__codelineno-48-4">4</a></span>
+<span class="normal"><a href="#__codelineno-48-5">5</a></span>
+<span class="normal"><a href="#__codelineno-48-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a>outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
+</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a>safetyMargin = contextWindow × SafetyMarginRatio
+</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a>calculatedMax = contextWindow - outputReserve - ProtocolOverheadTokens - safetyMargin
+</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a>ratioLimit = contextWindow × MaxInputTokensRatio
+</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a>messageBudget = min(max(min(calculatedMax, ratioLimit), InputTokensFloor), calculatedMax)
+</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a>maxInputTokens = max(messageBudget - estimatedToolsTokens, 0)
 </span></code></pre></div></td></tr></table></div>
 <p>For example, "gpt-4o" (contextWindow = 128000):</p>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1">1</a></span>
 <span class="normal"><a href="#__codelineno-49-2">2</a></span>
 <span class="normal"><a href="#__codelineno-49-3">3</a></span>
-<span class="normal"><a href="#__codelineno-49-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a>safetyMargin = 128000 × 0.10 = 12800 tokens
-</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a>calculatedMax = 128000 - 2048 - 512 - 12800 = 112640 tokens
-</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a>ratioLimit = 128000 × 1.0 = 128000 tokens
-</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a>maxInputTokens = 112640 tokens (approximately 88% of context window)
+<span class="normal"><a href="#__codelineno-49-4">4</a></span>
+<span class="normal"><a href="#__codelineno-49-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a>safetyMargin = 128000 × 0.10 = 12800 tokens
+</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a>outputReserve = max(2048, request.MaxTokens, request.ThinkingTokens)
+</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a>calculatedMax = 128000 - outputReserve - 512 - 12800
+</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a>ratioLimit = 128000 × 1.0 = 128000 tokens
+</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5"></a>maxInputTokens = messageBudget - estimatedToolsTokens
 </span></code></pre></div></td></tr></table></div>
+<p>If <code>WithMaxInputTokens</code> is set explicitly, the framework keeps that value as the
+configured message budget and does not subtract the estimated <code>Tools</code> schema
+budget from it. The explicit value is still clamped to the context-safe hard
+budget after output reserves and safety margin are applied.</p>
 <p><strong>Default Budget Parameters</strong>:</p>
 <p>The framework uses the following default values for token allocation (<strong>it is recommended to keep the defaults</strong>):</p>
 <ul>
 <li><strong>Protocol Overhead (ProtocolOverheadTokens)</strong>: 512 tokens - reserved for request/response formatting</li>
-<li><strong>Output Reserve (ReserveOutputTokens)</strong>: 2048 tokens - reserved for output generation</li>
+<li><strong>Output Reserve (ReserveOutputTokens)</strong>: 2048 tokens - minimum reserve for output generation; OpenAI-compatible requests reserve the larger value among this setting, <code>GenerationConfig.MaxTokens</code>, and <code>GenerationConfig.ThinkingTokens</code></li>
 <li><strong>Input Floor (InputTokensFloor)</strong>: 1024 tokens - ensures proper model processing</li>
-<li><strong>Output Floor (OutputTokensFloor)</strong>: 256 tokens - ensures meaningful responses</li>
+<li><strong>Output Floor (OutputTokensFloor)</strong>: deprecated and no longer used to auto-calculate output <code>MaxTokens</code></li>
 <li><strong>Safety Margin Ratio (SafetyMarginRatio)</strong>: 10% - buffer for token counting inaccuracies</li>
 <li><strong>Max Input Ratio (MaxInputTokensRatio)</strong>: 100% - maximum input ratio of context window</li>
 </ul>
@@ -7987,7 +7999,7 @@ to preserve the default clean text-streaming behavior.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 7, 2026 06:07:57 UTC">2026-05-07 06:07:57</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 8, 2026 06:31:19 UTC">2026-05-08 06:31:19</span>
   </span>
 
     
