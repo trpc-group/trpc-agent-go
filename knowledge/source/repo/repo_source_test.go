@@ -2097,11 +2097,11 @@ func TestReadDocumentNodesReaderErrorContinues(t *testing.T) {
 		WithDocExtensions([]string{".md"}),
 	)
 	nodes, err := src.readDocumentNodes(context.Background(), dir, dir, &repoInfo{name: "demo"})
-	if err != nil {
-		t.Fatalf("readDocumentNodes() error = %v (should continue on read error)", err)
+	if err == nil {
+		t.Fatal("readDocumentNodes() expected error for failed file read, got nil")
 	}
 	if len(nodes) != 1 {
-		t.Fatalf("expected 1 node (bad.md skipped on error), got %d", len(nodes))
+		t.Fatalf("expected 1 node (successful file still collected), got %d", len(nodes))
 	}
 }
 

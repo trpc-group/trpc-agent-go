@@ -27,6 +27,7 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const defaultGoModuleConcurrency = 4
@@ -325,9 +326,11 @@ func mergeModuleResults(results []*codeast.Result) ([]*codeast.Node, []*codeast.
 }
 
 func (p *Parser) parseDirectoryModule(absDir string) (*codeast.Result, error) {
-	if result, err := p.parseDirectoryFull(absDir); err == nil {
+	result, err := p.parseDirectoryFull(absDir)
+	if err == nil {
 		return result, nil
 	}
+	log.Infof("golang/parser: parseDirectoryFull failed for %s, falling back to direct AST: %v", absDir, err)
 	return p.parseDirectoryDirectAST(absDir)
 }
 

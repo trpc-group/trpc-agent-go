@@ -830,6 +830,14 @@ func parseAgString(raw string) string {
 	if value == "null" {
 		return ""
 	}
+	// AGE returns string agtype values in JSON-quoted form (e.g. "\"hello\\nworld\"").
+	// Use json.Unquote via json.Unmarshal to correctly handle escape sequences.
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		var unquoted string
+		if err := json.Unmarshal([]byte(value), &unquoted); err == nil {
+			return unquoted
+		}
+	}
 	value = strings.Trim(value, `"`)
 	return value
 }

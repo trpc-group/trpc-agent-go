@@ -93,7 +93,7 @@ func (p *Parser) ParseContent(name, content string) (*codeast.Result, error) {
 		fileInfo.Metadata["java_package"] = javaPackage
 	}
 
-	return &codeast.Result{File: fileInfo, Nodes: nodes, Edges: nil}, nil
+	return &codeast.Result{File: fileInfo, Nodes: nodes, Edges: []*codeast.Edge{}}, nil
 }
 
 // BuildRPCSignature builds a human-readable RPC signature.

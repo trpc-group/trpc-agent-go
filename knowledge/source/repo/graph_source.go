@@ -273,7 +273,11 @@ func (s *Source) readDocumentNodes(
 	namespace := repoGraphNamespace(info)
 	baseMetadata := s.buildBaseMetadata(repoRoot, info)
 	var nodes []*graph.Node
+	var readErrs []error
 	for _, filePath := range filePaths {
+		if err := ctx.Err(); err != nil {
+			return nodes, err
+		}
 		ext := strings.ToLower(filepath.Ext(filePath))
 		if !slices.Contains(s.docExtensions, ext) {
 			continue
@@ -290,6 +294,7 @@ func (s *Source) readDocumentNodes(
 		}
 		docs, err := fileReader.ReadFromFile(filePath)
 		if err != nil {
+			readErrs = append(readErrs, fmt.Errorf("read %s: %w", filePath, err))
 			continue
 		}
 		relPath := toRelativeRepoPath(repoRoot, filePath)
@@ -310,7 +315,9 @@ func (s *Source) readDocumentNodes(
 			nodes = append(nodes, graphNodeFromDocumentChunk(doc, nodeID, relPath, chunkIndex, baseMetadata))
 		}
 	}
-	_ = ctx
+	if len(readErrs) > 0 {
+		return nodes, fmt.Errorf("readDocumentNodes: %d file(s) failed, first: %w", len(readErrs), readErrs[0])
+	}
 	return nodes, nil
 }
 
