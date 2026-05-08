@@ -1549,36 +1549,44 @@ model := openai.New("deepseek-v4-flash",
 
 **Token 计算公式**：
 
-框架会根据模型的上下文窗口自动计算 "maxInputTokens"：
+框架会根据模型的上下文窗口自动计算 `maxInputTokens`。对 OpenAI-compatible
+模型，自动预算还会考虑本次请求的输出上限和工具定义：
 
 > **Context Window 注册**
 >
 > Token 裁剪和会话摘要的 `WithContextThreshold` 都依赖框架内置的模型 context window 注册表。注册表已覆盖大量常见模型，但不一定包含所有模型——特别是私有部署或较新发布的模型。如果你的模型未被识别，请在启动时调用 `model.RegisterModelContextWindow("my-model", 32768)` 或 `model.RegisterModelContextWindows(map[string]int{...})` 手动注册。完整示例参见[会话摘要文档](session/summary.md)。
 
-```
-safetyMargin = contextWindow × 10%
-calculatedMax = contextWindow - 2048（输出预留）- 512（协议开销）- safetyMargin
-ratioLimit = contextWindow × 100%（最大输入比例）
-maxInputTokens = max(min(calculatedMax, ratioLimit), 1024（最小值）)
+```text
+outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
+safetyMargin = contextWindow × SafetyMarginRatio
+calculatedMax = contextWindow - outputReserve - ProtocolOverheadTokens - safetyMargin
+ratioLimit = contextWindow × MaxInputTokensRatio
+messageBudget = min(max(min(calculatedMax, ratioLimit), InputTokensFloor), calculatedMax)
+maxInputTokens = max(messageBudget - estimatedToolsTokens, 0)
 ```
 
 例如 "gpt-4o"（contextWindow = 128000）：
 
-```
+```text
 safetyMargin = 128000 × 0.10 = 12800 tokens
-calculatedMax = 128000 - 2048 - 512 - 12800 = 112640 tokens
+outputReserve = max(2048, request.MaxTokens, request.ThinkingTokens)
+calculatedMax = 128000 - outputReserve - 512 - 12800
 ratioLimit = 128000 × 1.0 = 128000 tokens
-maxInputTokens = 112640 tokens（约占 context window 的 88%）
+maxInputTokens = messageBudget - estimatedToolsTokens
 ```
+
+如果显式设置了 `WithMaxInputTokens`，框架会保留该值作为配置的 messages 预算，
+不会再从中扣除估算的 `Tools` schema 预算。该显式值仍会在应用输出预留和安全边际
+后，被限制在 context-safe 的硬预算内。
 
 **默认预算参数**：
 
 框架使用以下默认值进行 token 分配（**建议保留默认值**）：
 
 - **协议开销（ProtocolOverheadTokens）**: 512 tokens - 用于请求/响应格式化
-- **输出预留（ReserveOutputTokens）**: 2048 tokens - 为输出生成预留
+- **输出预留（ReserveOutputTokens）**: 2048 tokens - 输出生成的最小预留；OpenAI-compatible 请求会在该值、`GenerationConfig.MaxTokens`、`GenerationConfig.ThinkingTokens` 中取最大值
 - **输入最小值（InputTokensFloor）**: 1024 tokens - 确保模型正常处理
-- **输出最小值（OutputTokensFloor）**: 256 tokens - 确保有意义的响应
+- **输出最小值（OutputTokensFloor）**: 已废弃，不再用于自动计算输出 `MaxTokens`
 - **安全边际比例（SafetyMarginRatio）**: 10% - token 计数不准确的缓冲
 - **最大输入比例（MaxInputTokensRatio）**: 100% - 上下文窗口的最大输入比例
 

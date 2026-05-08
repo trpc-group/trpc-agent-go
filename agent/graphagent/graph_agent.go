@@ -444,6 +444,9 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 			processor.WithContextCompactionOversizedToolResultMaxTokens(
 				ga.options.ContextCompactionOversizedToolResultMaxTokens,
 			),
+			processor.WithContextCompactionTokenCounter(
+				ga.options.ContextCompactionTokenCounter,
+			),
 			processor.WithPreserveSameBranch(true),
 			processor.WithPreserveForeignMessages(
 				ga.options.PreserveForeignMessages,
