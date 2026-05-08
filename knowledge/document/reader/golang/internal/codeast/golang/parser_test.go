@@ -198,8 +198,6 @@ func (s *Store) Add() {}
 	}
 }
 
-
-
 func TestParseDirectoryFullModeSkipsEmptyInterfaceImplements(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")

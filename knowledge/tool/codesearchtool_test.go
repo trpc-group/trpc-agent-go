@@ -66,6 +66,29 @@ func (s *captureGraphKnowledge) FindPaths(
 	return nil, nil
 }
 
+type captureGraphSourceKnowledge struct {
+	*captureKnowledge
+	sources []source.Source
+}
+
+func (s *captureGraphSourceKnowledge) Sources() []source.Source {
+	return s.sources
+}
+
+func (s *captureGraphSourceKnowledge) Traverse(
+	ctx context.Context,
+	query *graph.TraverseQuery,
+) (*graph.TraverseResult, error) {
+	return nil, nil
+}
+
+func (s *captureGraphSourceKnowledge) FindPaths(
+	ctx context.Context,
+	query *graph.PathQuery,
+) (*graph.PathResult, error) {
+	return nil, nil
+}
+
 type stubRepoDescriptorSource struct {
 	name        string
 	description string
@@ -365,6 +388,14 @@ func TestCodeSearchOptionHelpersAndDerivation(t *testing.T) {
 		require.Nil(t, deriveCodeRepoInfos(&captureKnowledge{}))
 	})
 
+	t.Run("derive repo infos returns nil when source provider has no sources", func(t *testing.T) {
+		kb := &captureSourceKnowledge{
+			captureKnowledge: &captureKnowledge{},
+			sources:          []source.Source{},
+		}
+		require.Nil(t, deriveCodeRepoInfos(kb))
+	})
+
 	t.Run("build repo section omits blank descriptions", func(t *testing.T) {
 		section := buildCodeRepoSection([]CodeRepoInfo{
 			{Name: "repo-a", Description: "core"},
@@ -507,4 +538,110 @@ func TestCodeSearchToolAdvancedOptions(t *testing.T) {
 		require.Len(t, rsp.Documents, 1)
 		require.Equal(t, "example.com/project.A", rsp.Documents[0].Metadata["trpc_ast_full_name"])
 	})
+}
+
+func TestCodeGraphSearchToolEdgeCases(t *testing.T) {
+	t.Run("empty tool name falls back to default", func(t *testing.T) {
+		kb := &stubGraphKnowledge{}
+		toolSet := NewCodeGraphSearchTool(kb, WithCodeSearchToolName("   "))
+		require.Equal(t, defaultCodeGraphSearchToolName, toolSet.Name())
+
+		tools := toolSet.Tools(context.Background())
+		require.Contains(t, tools[0].Declaration().Description, "code_graph_traverse")
+		require.Contains(t, tools[1].Declaration().Description, "code_graph_search")
+	})
+
+	t.Run("custom description skips resolver and repo section", func(t *testing.T) {
+		kb := &stubGraphKnowledge{}
+		toolSet := NewCodeGraphSearchTool(kb,
+			WithCodeSearchToolDescription("my custom graph search description"),
+			WithCodeSearchRepoInfos([]CodeRepoInfo{{Name: "repo-x"}}),
+		)
+		tools := toolSet.Tools(context.Background())
+		require.Contains(t, tools[0].Declaration().Description, "my custom graph search description")
+		require.NotContains(t, tools[0].Declaration().Description, "AVAILABLE REPOSITORIES")
+	})
+
+	t.Run("auto-derives repo infos from source provider", func(t *testing.T) {
+		kb := &captureGraphSourceKnowledge{
+			captureKnowledge: &captureKnowledge{},
+			sources: []source.Source{
+				&stubRepoDescriptorSource{name: "graph-repo", description: "a graph repo", ok: true},
+			},
+		}
+		toolSet := NewCodeGraphSearchTool(kb)
+		tools := toolSet.Tools(context.Background())
+		require.Contains(t, tools[0].Declaration().Description, "graph-repo")
+		require.Contains(t, tools[0].Declaration().Description, "a graph repo")
+	})
+
+	t.Run("conditioned filter is passed through", func(t *testing.T) {
+		kb := &captureGraphKnowledge{
+			captureKnowledge: &captureKnowledge{
+				result: &knowledge.SearchResult{Documents: []*knowledge.Result{{
+					Document: &document.Document{Content: "func F() {}", Metadata: map[string]any{
+						"trpc_ast_full_name": "example.com/p.F",
+					}},
+					Score: 0.8,
+				}}},
+			},
+		}
+		condition := &searchfilter.UniversalFilterCondition{
+			Field:    "metadata.trpc_ast_scope",
+			Operator: searchfilter.OperatorEqual,
+			Value:    "code",
+		}
+		toolSet := NewCodeGraphSearchTool(kb, WithCodeSearchConditionedFilter(condition))
+		tools := toolSet.Tools(context.Background())
+
+		filter := &searchfilter.UniversalFilterCondition{
+			Field: "metadata.trpc_ast_type", Operator: "eq", Value: "Function",
+		}
+		_, err := tools[0].(ctool.CallableTool).Call(
+			context.Background(),
+			marshalCodeSearchFilterArgs(t, "function F", filter),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, kb.lastRequest.SearchFilter)
+		require.Equal(t, searchfilter.OperatorAnd, kb.lastRequest.SearchFilter.FilterCondition.Operator)
+	})
+
+	t.Run("extra exclude metadata keys are applied", func(t *testing.T) {
+		kb := &captureGraphKnowledge{
+			captureKnowledge: &captureKnowledge{
+				result: &knowledge.SearchResult{Documents: []*knowledge.Result{{
+					Document: &document.Document{
+						Content: "func G() {}",
+						Metadata: map[string]any{
+							"trpc_ast_full_name": "example.com/p.G",
+							"internal_tag":       "secret",
+						},
+					},
+					Score: 0.9,
+				}}},
+			},
+		}
+		toolSet := NewCodeGraphSearchTool(kb,
+			WithCodeSearchExtraExcludeMetadataKeys("internal_tag"),
+		)
+		tools := toolSet.Tools(context.Background())
+
+		filter := &searchfilter.UniversalFilterCondition{
+			Field: "metadata.trpc_ast_type", Operator: "eq", Value: "Function",
+		}
+		res, err := tools[0].(ctool.CallableTool).Call(
+			context.Background(),
+			marshalCodeSearchFilterArgs(t, "function G", filter),
+		)
+		require.NoError(t, err)
+		rsp := res.(*KnowledgeSearchResponse)
+		require.Len(t, rsp.Documents, 1)
+		require.NotContains(t, rsp.Documents[0].Metadata, "internal_tag")
+	})
+}
+
+func TestCodeGraphNameResolver(t *testing.T) {
+	r := newCodeGraphNameResolver("my_graph")
+	got := r.resolve("Search with {{SEARCH_TOOL}}, traverse with {{TRAVERSE_TOOL}}, paths with {{FIND_PATHS_TOOL}}")
+	require.Equal(t, "Search with my_graph_search, traverse with my_graph_traverse, paths with my_graph_find_paths", got)
 }

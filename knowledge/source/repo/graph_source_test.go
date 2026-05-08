@@ -10,11 +10,15 @@
 package repo
 
 import (
+	"context"
+	"io"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	docreader "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -429,4 +433,352 @@ func TestGraphHelpersSmokeCheck(t *testing.T) {
 	require.False(t, hasGraphEdge(data, "n1", "n2", "other"))
 	require.True(t, hasGraphNodeMetadataValue(data, "n1", "k", "v"))
 	require.False(t, hasGraphNodeMetadataKey(data, "n1", "missing"))
+}
+
+type stringChunkIndexReader struct{}
+
+func (r *stringChunkIndexReader) ReadFromFile(_ string) ([]*document.Document, error) {
+	return []*document.Document{
+		{Name: "doc", Content: "content", Metadata: map[string]any{source.MetaChunkIndex: "not-an-int"}},
+	}, nil
+}
+
+func (r *stringChunkIndexReader) ReadFromReader(_ string, _ io.Reader) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *stringChunkIndexReader) ReadFromURL(_ string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *stringChunkIndexReader) Name() string                  { return "string-chunk-idx" }
+func (r *stringChunkIndexReader) SupportedExtensions() []string { return []string{".md"} }
+
+type noChunkIndexReader struct{}
+
+func (r *noChunkIndexReader) ReadFromFile(_ string) ([]*document.Document, error) {
+	return []*document.Document{
+		{Name: "doc", Content: "content", Metadata: map[string]any{"custom_key": "value"}},
+	}, nil
+}
+
+func (r *noChunkIndexReader) ReadFromReader(_ string, _ io.Reader) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *noChunkIndexReader) ReadFromURL(_ string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *noChunkIndexReader) Name() string                  { return "no-chunk-idx" }
+func (r *noChunkIndexReader) SupportedExtensions() []string { return []string{".md"} }
+
+func TestReadGraphZeroParseConcurrencySkipsOption(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "main.go"), "package demo\n\nfunc Main() {}\n")
+
+	parser := &configurableDirectoryParser{result: &codeast.Result{}}
+	codeast.RegisterDirectoryParser(codeast.FileTypeGo, parser)
+	defer codeast.RegisterDirectoryParser(codeast.FileTypeGo, stubDirectoryParser{})
+
+	t.Run("default zero skips option", func(t *testing.T) {
+		src := New(WithRepository(Repository{Dir: dir}))
+		_, err := src.ReadGraph(context.Background())
+		require.NoError(t, err)
+		require.Empty(t, parser.opts)
+	})
+
+	t.Run("negative option with negative source skips option", func(t *testing.T) {
+		parser.opts = nil
+		src := New(
+			WithRepository(Repository{Dir: dir}),
+			WithParseConcurrency(-1),
+		)
+		_, err := src.ReadGraph(context.Background(), source.WithReadGraphParseConcurrency(-5))
+		require.NoError(t, err)
+		require.Empty(t, parser.opts)
+	})
+}
+
+func TestReadGraphResolveRepositoryError(t *testing.T) {
+	src := New()
+	_, err := src.ReadGraph(context.Background())
+	require.Error(t, err)
+}
+
+func TestReadGraphResolveScanRootError(t *testing.T) {
+	src := New(WithRepository(Repository{Dir: t.TempDir(), Subdir: "../escape"}))
+	_, err := src.ReadGraph(context.Background())
+	require.Error(t, err)
+}
+
+func TestReadGraphFromRemoteRepo(t *testing.T) {
+	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
+		branch: "main",
+		files: map[string]string{
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
+			"service.go": "package demo\n\nfunc Run() {}\n",
+		},
+	}}, nil)
+
+	src := New(WithRepository(Repository{URL: remoteURL, Branch: "main"}))
+	data, err := src.ReadGraph(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+}
+
+func TestReadGraphFromRemoteRepoWithDocExtensions(t *testing.T) {
+	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
+		branch: "main",
+		files: map[string]string{
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
+			"service.go": "package demo\n\nfunc Run() {}\n",
+			"README.md":  "# Demo\n\nHello world\n",
+		},
+	}}, nil)
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	src := New(
+		WithRepository(Repository{URL: remoteURL, Branch: "main"}),
+		WithDocExtensions([]string{".md"}),
+	)
+	data, err := src.ReadGraph(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	require.NotEmpty(t, data.Nodes)
+
+	docCount := countGraphDocumentNodes(data)
+	require.Equal(t, 1, docCount)
+}
+
+func TestAllowedGoPathsFiltersTestFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "main.go"), "package main\n")
+	writeRepoFile(t, filepath.Join(dir, "main_test.go"), "package main\n")
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# readme\n")
+	writeRepoFile(t, filepath.Join(dir, "lib", "util.go"), "package lib\n")
+	writeRepoFile(t, filepath.Join(dir, "lib", "util_test.go"), "package lib\n")
+
+	src := New(WithFileExtensions([]string{".go", ".md"}))
+	allowed, err := src.allowedGoPaths(dir, dir)
+	require.NoError(t, err)
+
+	require.Contains(t, allowed, "main.go")
+	require.Contains(t, allowed, filepath.ToSlash("lib/util.go"))
+	require.NotContains(t, allowed, "main_test.go")
+	require.NotContains(t, allowed, filepath.ToSlash("lib/util_test.go"))
+	require.NotContains(t, allowed, "README.md")
+}
+
+func TestAllowedGoPathsErrorOnInvalidRoot(t *testing.T) {
+	src := New()
+	_, err := src.allowedGoPaths(t.TempDir(), filepath.Join(t.TempDir(), "nonexistent"))
+	require.Error(t, err)
+}
+
+func TestReadDocumentNodesErrorOnInvalidRoot(t *testing.T) {
+	src := New(WithDocExtensions([]string{".md"}))
+	_, err := src.readDocumentNodes(
+		context.Background(),
+		filepath.Join(t.TempDir(), "nonexistent"),
+		t.TempDir(),
+		&repoInfo{name: "demo"},
+	)
+	require.Error(t, err)
+}
+
+func TestReadDocumentNodesChunkIndexEdgeCases(t *testing.T) {
+	t.Run("non-int chunk index falls back to loop index for ID", func(t *testing.T) {
+		dir := t.TempDir()
+		writeRepoFile(t, filepath.Join(dir, "doc.md"), "content\n")
+
+		docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+			return &stringChunkIndexReader{}
+		})
+		defer docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+			return &testMarkdownReader{}
+		})
+
+		src := New(
+			WithRepository(Repository{Dir: dir}),
+			WithDocExtensions([]string{".md"}),
+		)
+		nodes, err := src.readDocumentNodes(context.Background(), dir, dir, &repoInfo{name: "demo"})
+		require.NoError(t, err)
+		require.Len(t, nodes, 1)
+		require.NotEmpty(t, nodes[0].ID)
+		require.Equal(t, "content", nodes[0].Content)
+	})
+
+	t.Run("metadata without chunk index key uses loop index", func(t *testing.T) {
+		dir := t.TempDir()
+		writeRepoFile(t, filepath.Join(dir, "doc.md"), "content\n")
+
+		docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+			return &noChunkIndexReader{}
+		})
+		defer docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+			return &testMarkdownReader{}
+		})
+
+		src := New(
+			WithRepository(Repository{Dir: dir}),
+			WithDocExtensions([]string{".md"}),
+		)
+		nodes, err := src.readDocumentNodes(context.Background(), dir, dir, &repoInfo{name: "demo"})
+		require.NoError(t, err)
+		require.Len(t, nodes, 1)
+		require.Equal(t, 0, nodes[0].Metadata[source.MetaChunkIndex])
+		require.Equal(t, "value", nodes[0].Metadata["custom_key"])
+	})
+}
+
+func TestGraphNodeFromCodeASTUnicodeContent(t *testing.T) {
+	astNode := &codeast.Node{
+		ID: "pkg.Unicode", Name: "Unicode", FullName: "pkg.Unicode",
+		Type: codeast.EntityFunction, Code: "func Unicode() string { return \"你好世界\" }",
+		Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+	}
+	node := graphNodeFromCodeAST(astNode, "node:unicode", "pkg/unicode.go", nil)
+	require.Equal(t, len([]rune(astNode.Code)), node.Metadata[source.MetaContentLength])
+	require.NotEqual(t, len(astNode.Code), node.Metadata[source.MetaContentLength])
+}
+
+func TestGraphNodeFromDocumentChunkUnicodeContent(t *testing.T) {
+	doc := &document.Document{
+		Name:    "notes.md",
+		Content: "你好世界 Hello World",
+	}
+	node := graphNodeFromDocumentChunk(doc, "node:udc", "notes.md", 0, nil)
+	require.Equal(t, len([]rune(doc.Content)), node.Metadata[source.MetaContentLength])
+}
+
+func TestGraphDataFromCodeASTSelfReferentialEdge(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "service.go"), "package demo\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	result := &codeast.Result{
+		Nodes: []*codeast.Node{
+			{
+				ID: "pkg.Recursive", Type: codeast.EntityFunction,
+				Name: "Recursive", FullName: "pkg.Recursive",
+				Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+				Code:      "func Recursive() { Recursive() }",
+				FilePath:  filepath.Join(dir, "service.go"),
+				LineStart: 1, LineEnd: 1,
+			},
+		},
+		Edges: []*codeast.Edge{
+			{FromID: "pkg.Recursive", ToID: "pkg.Recursive", Type: codeast.RelationCalls},
+		},
+	}
+	allowed := map[string]struct{}{"service.go": {}}
+	data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo"}, allowed)
+	require.Len(t, data.Nodes, 1)
+	require.Len(t, data.Edges, 1)
+	require.Equal(t, data.Edges[0].FromID, data.Edges[0].ToID)
+}
+
+func TestGraphDataFromCodeASTEdgeNilMetadata(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "service.go"), "package demo\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	result := &codeast.Result{
+		Nodes: []*codeast.Node{
+			{
+				ID: "pkg.A", Type: codeast.EntityFunction,
+				Name: "A", FullName: "pkg.A",
+				Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+				Code: "func A() {}", FilePath: filepath.Join(dir, "service.go"),
+				LineStart: 1, LineEnd: 1,
+			},
+			{
+				ID: "pkg.B", Type: codeast.EntityFunction,
+				Name: "B", FullName: "pkg.B",
+				Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+				Code: "func B() {}", FilePath: filepath.Join(dir, "service.go"),
+				LineStart: 2, LineEnd: 2,
+			},
+		},
+		Edges: []*codeast.Edge{
+			{FromID: "pkg.A", ToID: "pkg.B", Type: codeast.RelationCalls, Metadata: nil},
+		},
+	}
+	allowed := map[string]struct{}{"service.go": {}}
+	data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo"}, allowed)
+	require.Len(t, data.Edges, 1)
+	require.NotNil(t, data.Edges[0].Metadata)
+	require.Equal(t, "repo_graph_source", data.Edges[0].Metadata["builder"])
+}
+
+func TestGraphDataFromCodeASTEmptyAllowedPaths(t *testing.T) {
+	dir := t.TempDir()
+	src := New(WithRepository(Repository{Dir: dir}))
+	result := &codeast.Result{
+		Nodes: []*codeast.Node{
+			{
+				ID: "pkg.Func", Type: codeast.EntityFunction,
+				Name: "Func", FullName: "pkg.Func",
+				Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+				Code: "func Func() {}", FilePath: filepath.Join(dir, "service.go"),
+				LineStart: 1, LineEnd: 1,
+			},
+		},
+		Edges: []*codeast.Edge{
+			{FromID: "pkg.Func", ToID: "pkg.Func", Type: codeast.RelationCalls},
+		},
+	}
+	data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo"}, map[string]struct{}{})
+	require.Empty(t, data.Nodes)
+	require.Empty(t, data.Edges)
+}
+
+func TestReadDocumentNodesEmptyDocExtensions(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "doc.md"), "# hello\n")
+
+	src := New(WithDocExtensions([]string{}))
+	nodes, err := src.readDocumentNodes(context.Background(), dir, dir, &repoInfo{name: "demo"})
+	require.NoError(t, err)
+	require.Empty(t, nodes)
+}
+
+func TestReadDocumentNodesWithInfoBranchMetadata(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "doc.md"), "# content\n")
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	src := New(
+		WithRepository(Repository{Dir: dir, RepoName: "my-repo", RepoURL: "https://example.com/repo.git"}),
+		WithDocExtensions([]string{".md"}),
+	)
+	nodes, err := src.readDocumentNodes(
+		context.Background(), dir, dir,
+		&repoInfo{name: "my-repo", url: "https://example.com/repo.git", branch: "develop", targetKind: checkoutTargetBranch},
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, nodes)
+	for _, node := range nodes {
+		require.Contains(t, node.ID, "node:")
+		require.NotEmpty(t, node.Metadata[source.MetaFilePath])
+	}
+}
+
+func TestRepoGraphNamespaceCommitTargetKind(t *testing.T) {
+	info := &repoInfo{
+		url:        "https://example.com/repo",
+		branch:     "abc123",
+		targetKind: checkoutTargetCommit,
+	}
+	got := repoGraphNamespace(info)
+	require.Equal(t, "repo:https://example.com/repo#commit:abc123", got)
 }

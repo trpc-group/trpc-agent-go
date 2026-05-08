@@ -75,11 +75,11 @@ func TestOptionFunctions(t *testing.T) {
 
 func TestBuilderOptions(t *testing.T) {
 	tests := []struct {
-		name        string
-		opts        options
-		wantLen     int
-		wantNil     bool
-		wantErrSub  string
+		name       string
+		opts       options
+		wantLen    int
+		wantNil    bool
+		wantErrSub string
 	}{
 		{
 			name:    "neither DSN nor instance returns nil",

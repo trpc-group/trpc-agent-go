@@ -12,6 +12,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,8 +27,10 @@ type stubGraphKnowledge struct {
 
 	traverseQuery  *graph.TraverseQuery
 	traverseResult *graph.TraverseResult
+	traverseErr    error
 	pathQuery      *graph.PathQuery
 	pathResult     *graph.PathResult
+	pathErr        error
 }
 
 var _ knowledge.GraphKnowledge = (*stubGraphKnowledge)(nil)
@@ -37,7 +40,7 @@ func (s *stubGraphKnowledge) Traverse(
 	query *graph.TraverseQuery,
 ) (*graph.TraverseResult, error) {
 	s.traverseQuery = query
-	return s.traverseResult, nil
+	return s.traverseResult, s.traverseErr
 }
 
 func (s *stubGraphKnowledge) FindPaths(
@@ -45,7 +48,7 @@ func (s *stubGraphKnowledge) FindPaths(
 	query *graph.PathQuery,
 ) (*graph.PathResult, error) {
 	s.pathQuery = query
-	return s.pathResult, nil
+	return s.pathResult, s.pathErr
 }
 
 func TestGraphTraverseTool(t *testing.T) {
@@ -359,4 +362,126 @@ func TestResolveGraphToolLimit(t *testing.T) {
 func TestGraphToolSetNameFallback(t *testing.T) {
 	s := &graphToolSet{name: ""}
 	require.Equal(t, defaultGraphToolSetName, s.Name())
+}
+
+func TestGraphTraverseToolRequiresStartIDs(t *testing.T) {
+	kb := &stubGraphKnowledge{}
+	graphTool := NewGraphTraverseTool(kb)
+
+	_, err := graphTool.(ctool.CallableTool).Call(
+		context.Background(),
+		mustMarshalGraphToolArgs(t, &GraphTraverseRequest{Direction: "out"}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "start_ids is required")
+	require.Nil(t, kb.traverseQuery)
+}
+
+func TestParseGraphDirectionIn(t *testing.T) {
+	dir, err := parseGraphDirection("in")
+	require.NoError(t, err)
+	require.Equal(t, graph.DirectionIn, dir)
+}
+
+func TestWithGraphToolDescription(t *testing.T) {
+	kb := &stubGraphKnowledge{
+		traverseResult: &graph.TraverseResult{},
+	}
+	graphTool := NewGraphTraverseTool(kb,
+		WithGraphToolDescription("custom traverse description"),
+	)
+	require.Equal(t, "custom traverse description", graphTool.Declaration().Description)
+}
+
+func TestGraphTraverseToolResultPreservesFields(t *testing.T) {
+	result := &graph.TraverseResult{
+		Nodes:     []*graph.Node{{ID: "n1", Content: "body", Name: "Func"}},
+		Edges:     []*graph.Edge{{FromID: "n1", ToID: "n2", Type: "CALLS"}},
+		Truncated: true,
+		Message:   "truncated at 100 nodes",
+	}
+	got := graphTraverseToolResult(result, false)
+	require.True(t, got.Truncated)
+	require.Equal(t, "truncated at 100 nodes", got.Message)
+	require.Empty(t, got.Nodes[0].Content)
+	require.Equal(t, "Func", got.Nodes[0].Name)
+	require.Len(t, got.Edges, 1)
+}
+
+func TestGraphPathToolResultPreservesFields(t *testing.T) {
+	result := &graph.PathResult{
+		Paths: []*graph.Path{{
+			Nodes: []*graph.Node{{ID: "a", Content: "code", Name: "A"}},
+			Edges: []*graph.Edge{{FromID: "a", ToID: "b", Type: "CALLS"}},
+		}},
+		Truncated: true,
+		Message:   "path limit reached",
+	}
+	got := graphPathToolResult(result, false)
+	require.True(t, got.Truncated)
+	require.Equal(t, "path limit reached", got.Message)
+	require.Empty(t, got.Paths[0].Nodes[0].Content)
+	require.Equal(t, "A", got.Paths[0].Nodes[0].Name)
+}
+
+func TestGraphToolNodesPreservesNodeMetadata(t *testing.T) {
+	nodes := []*graph.Node{{
+		ID:       "x",
+		Name:     "MyFunc",
+		Content:  "func MyFunc() {}",
+		Metadata: map[string]any{"type": "Function"},
+	}}
+	got := graphToolNodes(nodes, false)
+	require.Len(t, got, 1)
+	require.Equal(t, "x", got[0].ID)
+	require.Equal(t, "MyFunc", got[0].Name)
+	require.Empty(t, got[0].Content)
+	require.Equal(t, map[string]any{"type": "Function"}, got[0].Metadata)
+}
+
+func TestGraphTraverseToolReturnsKBError(t *testing.T) {
+	kb := &stubGraphKnowledge{
+		traverseErr: errors.New("traverse failed"),
+	}
+	graphTool := NewGraphTraverseTool(kb)
+	_, err := graphTool.(ctool.CallableTool).Call(
+		context.Background(),
+		mustMarshalGraphToolArgs(t, &GraphTraverseRequest{
+			StartIDs:  []string{"a"},
+			Direction: "out",
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "traverse failed")
+}
+
+func TestGraphFindPathsToolRejectsUnsupportedDirection(t *testing.T) {
+	kb := &stubGraphKnowledge{}
+	graphTool := NewGraphFindPathsTool(kb)
+	_, err := graphTool.(ctool.CallableTool).Call(
+		context.Background(),
+		mustMarshalGraphToolArgs(t, &GraphFindPathsRequest{
+			FromID:    "a",
+			ToID:      "b",
+			Direction: "diagonal",
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `unsupported direction "diagonal"`)
+}
+
+func TestGraphFindPathsToolReturnsKBError(t *testing.T) {
+	kb := &stubGraphKnowledge{
+		pathErr: errors.New("path query failed"),
+	}
+	graphTool := NewGraphFindPathsTool(kb)
+	_, err := graphTool.(ctool.CallableTool).Call(
+		context.Background(),
+		mustMarshalGraphToolArgs(t, &GraphFindPathsRequest{
+			FromID: "a",
+			ToID:   "b",
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "path query failed")
 }
