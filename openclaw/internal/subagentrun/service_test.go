@@ -13,6 +13,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +28,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
+)
+
+const (
+	testStoreDirPerm  = 0o700
+	testStoreFilePerm = 0o600
 )
 
 type captureRunner struct {
@@ -189,6 +196,7 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 	require.Equal(t, "telegram:user", runner.userID)
 	require.Equal(t, "check the incident timeline", runner.message.Content)
 	require.True(t, strings.HasPrefix(runner.sessionID, subagentIDPrefix))
+	parentSessionKey := openclawsubagent.RuntimeStateKeyParentSessionID
 	require.Equal(
 		t,
 		true,
@@ -199,6 +207,11 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 		run.ID,
 		runner.runOpts.RuntimeState[openclawsubagent.RuntimeStateKeyRunID],
 	)
+	require.Equal(
+		t,
+		"telegram:dm:100",
+		runner.runOpts.RuntimeState[parentSessionKey],
+	)
 	require.NotContains(
 		t,
 		runner.runOpts.RuntimeState,
@@ -208,6 +221,11 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 		t,
 		runner.runOpts.RuntimeState,
 		coretaskrun.RuntimeStateKeyRunID,
+	)
+	require.NotContains(
+		t,
+		runner.runOpts.RuntimeState,
+		coretaskrun.RuntimeStateKeyParentSessionID,
 	)
 	require.Equal(
 		t,
@@ -329,6 +347,76 @@ func TestServiceListScopesByOwnerAndParent(t *testing.T) {
 	})
 	require.Len(t, filtered, 1)
 	require.Equal(t, first.ID, filtered[0].ID)
+}
+
+func TestServiceLoadsLegacySubagentRunsFile(t *testing.T) {
+	t.Parallel()
+
+	const (
+		legacyRunID          = "subagent:legacy"
+		legacyOwnerUserID    = "user-a"
+		legacyParentSession  = "parent-a"
+		legacyTask           = "legacy task"
+		legacyDelivery       = "telegram"
+		legacyDeliveryTarget = "100"
+	)
+
+	stateDir := t.TempDir()
+	storePath := subagentStorePath(stateDir)
+	require.NoError(t, os.MkdirAll(
+		filepath.Dir(storePath),
+		testStoreDirPerm,
+	))
+
+	createdAt := time.Now().Add(-time.Hour).UTC()
+	startedAt := createdAt.Add(time.Minute)
+	legacyFile := struct {
+		Version int               `json:"version"`
+		Runs    []coretaskrun.Run `json:"runs,omitempty"`
+	}{
+		Version: 1,
+		Runs: []coretaskrun.Run{{
+			ID:              legacyRunID,
+			OwnerUserID:     legacyOwnerUserID,
+			ParentSessionID: legacyParentSession,
+			ChildSessionID:  legacyRunID,
+			RequestID:       legacyRunID,
+			Task:            legacyTask,
+			Status:          coretaskrun.StatusRunning,
+			Metadata: map[string]string{
+				metadataDeliveryChannel: legacyDelivery,
+				metadataDeliveryTarget:  legacyDeliveryTarget,
+			},
+			CreatedAt: createdAt,
+			UpdatedAt: startedAt,
+			StartedAt: &startedAt,
+		}},
+	}
+	data, err := json.Marshal(legacyFile)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		storePath,
+		data,
+		testStoreFilePerm,
+	))
+
+	svc, err := NewService(stateDir, &captureRunner{reply: "ok"}, nil)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	runs := svc.ListForUser(legacyOwnerUserID, openclawsubagent.ListFilter{
+		ParentSessionID: legacyParentSession,
+	})
+	require.Len(t, runs, 1)
+	require.Equal(t, legacyRunID, runs[0].ID)
+	require.Equal(t, legacyParentSession, runs[0].ParentSessionID)
+	require.Equal(t, legacyRunID, runs[0].ChildSessionID)
+	require.Equal(t, legacyTask, runs[0].Task)
+	require.Equal(t, openclawsubagent.StatusFailed, runs[0].Status)
+	requireRunHidesInternalFields(t, runs[0])
 }
 
 func TestServiceValidatesInputAndPropagatesErrors(t *testing.T) {
