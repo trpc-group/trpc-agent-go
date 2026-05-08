@@ -601,7 +601,7 @@ translateCallbacks := translator.NewCallbacks().
   })
 ```
 
-For more details on TranslateCallbacks, see [agui](./agui.md).
+For more details on TranslateCallbacks, see [agui](./agui/index.md).
 
 ---
 

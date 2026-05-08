@@ -1220,6 +1220,37 @@ func TestWithContextThreshold_ExplicitFallbackWindowPreserved(t *testing.T) {
 	assert.True(t, result)
 }
 
+func TestWithContextThreshold_ReusedOptionDoesNotLeakResolvedFallback(t *testing.T) {
+	defer SetTokenCounter(nil)
+	SetTokenCounter(testFixedTokenCounter{tokens: 5000})
+
+	opt := WithContextThreshold()
+	_ = NewSummarizer(&fakeModelWithContextWindow{
+		fakeModelWithName: fakeModelWithName{name: "private-large-model"},
+		window:            200000,
+	}, opt)
+
+	sum := NewSummarizer(
+		&fakeModelWithName{name: "totally-unknown-model-xyz"},
+		opt,
+	)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "hello"},
+				}}},
+			},
+		},
+	}
+
+	// The second summarizer must use the default fallback window, not the
+	// first summarizer's resolved model window.
+	assert.True(t, sum.ShouldSummarize(sess))
+}
+
 func TestWithContextThreshold_UnknownSummarizerModel(t *testing.T) {
 	defer SetTokenCounter(nil)
 	SetTokenCounter(testFixedTokenCounter{tokens: 5000})
