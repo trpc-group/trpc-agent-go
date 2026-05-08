@@ -70,22 +70,22 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 	if j.Ignore {
 		return true, nil
 	}
+	if len(j.OnlyTree) > 0 && len(j.IgnoreTree) > 0 {
+		return false, fmt.Errorf("onlyTree and ignoreTree cannot be set at the same time")
+	}
+	if j.Compare != nil {
+		return j.Compare(actual, expected)
+	}
 	if j.Valid {
 		if err := validateRawJSON(actual); err != nil {
 			return false, fmt.Errorf("parse actual raw json: %w", err)
 		}
 		return true, nil
 	}
-	if len(j.OnlyTree) > 0 && len(j.IgnoreTree) > 0 {
-		return false, fmt.Errorf("onlyTree and ignoreTree cannot be set at the same time")
-	}
 	var err error
 	actual, expected, err = j.normalizeInputs(actual, expected)
 	if err != nil {
 		return false, err
-	}
-	if j.Compare != nil {
-		return j.Compare(actual, expected)
 	}
 	tolerance := defaultNumberTolerance
 	if j.NumberTolerance != nil {

@@ -36,6 +36,22 @@ func TestMapCriterionCompareOverride(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestJSONCriterionCompareReceivesRawMessage(t *testing.T) {
+	called := false
+	criterion := &JSONCriterion{
+		Compare: func(actual, expected any) (bool, error) {
+			called = true
+			_, actualRaw := actual.(json.RawMessage)
+			_, expectedRaw := expected.(json.RawMessage)
+			return actualRaw && expectedRaw, nil
+		},
+	}
+	ok, err := criterion.Match(json.RawMessage(`{"a":1}`), json.RawMessage(`{"a":1}`))
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
 func TestJSONCriterionOnlyTreeAndIgnoreTreeConflictBeforeCompare(t *testing.T) {
 	called := false
 	criterion := &JSONCriterion{
