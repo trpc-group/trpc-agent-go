@@ -20,6 +20,9 @@ export OPENAI_API_KEY="your-api-key"
 
 # Or using OpenAI
 export OPENAI_API_KEY="your-openai-api-key"
+
+# if use e2b executor
+export E2B_API_KEY="e2b_xxx"
 ```
 
 ### 3. Run

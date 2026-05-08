@@ -44,17 +44,17 @@ that:
 
 ## Command Line Arguments
 
-| Argument             | Description                                                                | Default            |
-| -------------------- | -------------------------------------------------------------------------- | ------------------ |
-| `-model`             | Name of the model to use                                                   | `deepseek-v4-flash`    |
-| `-stream`            | Stream responses                                                           | `true`             |
-| `-skills-root`       | Skills repository root directory                                           | `env or ./skills`  |
-| `-skills-guidance`   | Include built-in skills tooling/workspace guidance in the system message   | `true`             |
-| `-send-file-inputs`  | Forward user file content parts to the model provider                      | `false`            |
-| `-executor`          | Workspace executor: `local` or `container`                                 | `local`            |
-| `-trusted-local`     | Local executor: reuse a fixed workspace root (unsafe, opt-in)              | `false`            |
-| `-trusted-root`      | Trusted-local workspace root                                               | `./skill_workspace` |
-| `-inputs-host`       | Host dir exposed as `inputs/` inside skill workspaces                      | ``                 |
+| Argument             | Description                                                              | Default            |
+| -------------------- |--------------------------------------------------------------------------| ------------------ |
+| `-model`             | Name of the model to use                                                 | `deepseek-v4-flash`    |
+| `-stream`            | Stream responses                                                         | `true`             |
+| `-skills-root`       | Skills repository root directory                                         | `env or ./skills`  |
+| `-skills-guidance`   | Include built-in skills tooling/workspace guidance in the system message | `true`             |
+| `-send-file-inputs`  | Forward user file content parts to the model provider                    | `false`            |
+| `-executor`          | Workspace executor: `local` or `container` or `e2b`                       | `local`            |
+| `-trusted-local`     | Local executor: reuse a fixed workspace root (unsafe, opt-in)            | `false`            |
+| `-trusted-root`      | Trusted-local workspace root                                             | `./skill_workspace` |
+| `-inputs-host`       | Host dir exposed as `inputs/` inside skill workspaces                    | ``                 |
 
 ## Usage
 

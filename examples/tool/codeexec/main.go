@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -100,6 +101,12 @@ func (c *codeExecChat) setup(_ context.Context) error {
 		executor = local.New(
 			local.WithTimeout(30 * time.Second),
 		)
+	case "e2b":
+		e2be, err := e2bexec.New()
+		if err != nil {
+			return fmt.Errorf("e2b executor: %w", err)
+		}
+		executor = e2be
 	case "jupyter":
 		je, err := jupyter.New(
 			jupyter.WithStartTimeout(30*time.Second),
