@@ -77,7 +77,7 @@ curl -N -X POST http://localhost:8080/ \
 多模态输入使用 `messages` 尾部的 `role=user` 消息表示本轮用户输入。与文本输入不同，`content` 不再是字符串，而是由多个 `InputContent` 片段组成的数组。数组中的每个元素表示一段输入内容，常用类型包括：
 
 - 文本片段：`type` 为 `"text"`，文本内容写在 `text` 字段中。
-- 二进制片段：`type` 为 `"binary"`，需要提供 `mimeType`。图片输入可以通过 `url` 指向图片地址，其他二进制内容可以通过 `data` 传递 base64 内容。
+- 二进制片段：`type` 为 `"binary"`。建议在可用时提供 `mimeType`。当 `mimeType` 以 `image/` 开头时，图片输入可以通过 `url` 指向图片地址；PDF 输入可以在 `mimeType` 为 `application/pdf` 或 `filename` 以 `.pdf` 结尾时使用 `url`。其他二进制内容可以通过 `data` 传递 base64 内容。
 
 URL 请求体示例：
 
@@ -89,8 +89,9 @@ URL 请求体示例：
         {
             "role": "user",
             "content": [
-                { "type": "text", "text": "请描述这张图片。" },
-                { "type": "binary", "mimeType": "image/png", "url": "https://example.com/image.png" }
+                { "type": "text", "text": "请描述这张图片，并总结 PDF 内容。" },
+                { "type": "binary", "mimeType": "image/png", "url": "https://example.com/image.png" },
+                { "type": "binary", "mimeType": "application/pdf", "filename": "report.pdf", "url": "https://cos.example.com/report.pdf" }
             ]
         }
     ]
@@ -115,7 +116,7 @@ DATA 请求体示例：
 }
 ```
 
-`url` 方式仅用于图片输入；其他类型的二进制内容使用 `data`。使用 `data` 时，服务端会按标准 base64 解码；`data` 既可以是原始 base64 字符串，也可以带有 `data:*;base64,` 前缀。
+`url` 方式用于图片输入和 PDF 输入；其他类型的二进制内容使用 `data`。使用 `data` 时，服务端会按标准 base64 解码；`data` 既可以是原始 base64 字符串，也可以带有 `data:*;base64,` 前缀。
 
 ### 外部工具结果输入
 

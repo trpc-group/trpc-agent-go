@@ -1951,13 +1951,12 @@ request := &model.Request{
 Anthropic Model 支持在 `user` 消息中传入 Claude Messages API 可识别的多模态内容：
 
 - 图片：`ContentTypeImage`，支持 URL 或原始图片数据，图片格式支持 `jpeg`、`png`、`gif`、`webp`。
-- 文件：`ContentTypeFile`，支持原始数据形式的图片、PDF（`application/pdf`）和纯文本（`text/plain`）。
+- 文件：`ContentTypeFile`，支持图片原始数据、PDF 原始数据或 URL（`application/pdf`），以及纯文本原始数据（`text/plain`）。
 - 不支持：`ContentTypeAudio`、`FileID`、Office 文档、JSON、CSV 等普通文件类型。传入不支持的内容会返回错误。
 
 ```go
 import (
     "context"
-    "os"
 
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
@@ -1965,8 +1964,8 @@ import (
 
 func main() {
     llm := anthropic.New("claude-sonnet-4-6")
-    imageData, _ := os.ReadFile("diagram.png")
-    pdfData, _ := os.ReadFile("report.pdf")
+    imageURL := "https://cos.example.com/diagram.png"
+    pdfURL := "https://cos.example.com/report.pdf"
     request := &model.Request{
         Messages: []model.Message{
             model.NewSystemMessage("你是一个专业的文档和图像分析助手。"),
@@ -1977,15 +1976,14 @@ func main() {
                     {
                         Type: model.ContentTypeImage,
                         Image: &model.Image{
-                            Data:   imageData,
-                            Format: "png",
+                            URL: imageURL,
                         },
                     },
                     {
                         Type: model.ContentTypeFile,
                         File: &model.File{
                             Name:     "report.pdf",
-                            Data:     pdfData,
+                            URL:      pdfURL,
                             MimeType: "application/pdf",
                         },
                     },

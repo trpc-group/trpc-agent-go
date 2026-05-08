@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1157,10 +1158,24 @@ func convertFileContentPart(file *model.File) (anthropic.ContentBlockParamUnion,
 	if file.FileID != "" {
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file_id content is not supported")
 	}
+	mediaType := fileMediaType(file)
+	if fileURL := strings.TrimSpace(file.URL); fileURL != "" {
+		if _, err := normalizeImageMediaType(mediaType); err == nil {
+			return anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: fileURL}), nil
+		}
+		if mediaType == "application/pdf" {
+			block := anthropic.NewDocumentBlock(anthropic.URLPDFSourceParam{
+				URL: fileURL,
+			})
+			return applyDocumentTitle(block, file.Name), nil
+		}
+		if len(file.Data) == 0 {
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unsupported file URL media type %q", mediaType)
+		}
+	}
 	if len(file.Data) == 0 {
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file data is empty")
 	}
-	mediaType := fileMediaType(file)
 	if imageType, err := normalizeImageMediaType(mediaType); err == nil {
 		return anthropic.NewImageBlockBase64(imageType, base64.StdEncoding.EncodeToString(file.Data)), nil
 	}
@@ -1223,10 +1238,21 @@ func fileMediaType(file *model.File) string {
 	if mediaType := mediaTypeFromName(file.Name); mediaType != "" {
 		return mediaType
 	}
+	if mediaType := mediaTypeFromURL(file.URL); mediaType != "" {
+		return mediaType
+	}
 	if len(file.Data) > 0 {
 		return normalizeMediaType(http.DetectContentType(file.Data))
 	}
 	return ""
+}
+
+func mediaTypeFromURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	return mediaTypeFromName(parsed.Path)
 }
 
 func mediaTypeFromName(name string) string {
