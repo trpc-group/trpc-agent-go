@@ -365,6 +365,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithContextCompactionOversizedToolResultMaxTokens(
 			options.ContextCompactionOversizedToolResultMaxTokens,
 		),
+		processor.WithContextCompactionTokenCounter(
+			options.ContextCompactionTokenCounter,
+		),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 		processor.WithPreserveForeignMessages(options.PreserveForeignMessages),
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),

@@ -768,8 +768,22 @@ Pass 2 默认是关闭的（`0`），需要满足两个条件才会生效：(1) 
 
 - 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
 - 模型层的 token tailoring 仍然作为最后兜底
+- Context compaction 默认使用 `SimpleTokenCounter` 估算 token。如果业务使用了针对中文
+  或特定 provider 的自定义 counter，建议同时通过
+  `WithContextCompactionTokenCounter(...)` 传入同一个 counter，让 Pass 1 判断和
+  Pass 2 截断与模型层 token tailoring 使用一致的估算口径。
 
 ```go
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(1.6), // 中文内容较多时的示例值
+)
+
+modelInstance := openai.New(
+    "deepseek-v4-flash",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithTokenCounter(counter),
+)
+
 agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
@@ -779,6 +793,7 @@ agent := llmagent.New(
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: 旧 tool result → 占位符
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: 任意超大 result → 首尾保留截断
     llmagent.WithContextCompactionKeepRecentRequests(1),
+    llmagent.WithContextCompactionTokenCounter(counter),
 )
 ```
 
