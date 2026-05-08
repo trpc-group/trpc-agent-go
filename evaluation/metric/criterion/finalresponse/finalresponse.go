@@ -65,7 +65,7 @@ func (c *FinalResponseCriterion) Match(ctx context.Context, actual, expected *ev
 		return c.Compare(actual, expected)
 	}
 	if !c.hasConfiguredCriterion() {
-		return false, fmt.Errorf("final response criterion must configure text, json, rouge, length, or xml")
+		return false, fmt.Errorf("final response criterion must configure text, json, rouge, or xml")
 	}
 	if actual == nil || expected == nil {
 		return false, fmt.Errorf("actual or expected invocation is nil")

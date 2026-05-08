@@ -73,7 +73,7 @@ func TestFinalResponseCriterion_EmptyCriteriaError(t *testing.T) {
 	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "must configure text, json, rouge, length, or xml")
+	assert.Contains(t, err.Error(), "must configure text, json, rouge, or xml")
 }
 
 // TestFinalResponseCriterion_TextMismatch verifies mismatch reporting for text criteria.

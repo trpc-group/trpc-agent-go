@@ -71,7 +71,7 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 		return true, nil
 	}
 	if j.Valid {
-		if _, _, err := parseRawJSON(actual); err != nil {
+		if err := validateRawJSON(actual); err != nil {
 			return false, fmt.Errorf("parse actual raw json: %w", err)
 		}
 		return true, nil
@@ -103,35 +103,56 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 }
 
 func (j *JSONCriterion) normalizeInputs(actual, expected any) (any, any, error) {
-	actualValue, _, err := parseRawJSON(actual)
+	actualValue, err := parseRawMessage(actual)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse actual raw json: %w", err)
 	}
-	expectedValue, _, err := parseRawJSON(expected)
+	expectedValue, err := parseRawMessage(expected)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse expected raw json: %w", err)
 	}
 	return actualValue, expectedValue, nil
 }
 
-func parseRawJSON(value any) (any, bool, error) {
+func validateRawJSON(value any) error {
+	switch v := value.(type) {
+	case json.RawMessage:
+		_, err := parseRawJSON(v)
+		return err
+	case string:
+		_, err := parseRawJSON(json.RawMessage(v))
+		return err
+	case []byte:
+		_, err := parseRawJSON(json.RawMessage(v))
+		return err
+	default:
+		_, err := json.Marshal(value)
+		return err
+	}
+}
+
+func parseRawMessage(value any) (any, error) {
 	raw, ok := value.(json.RawMessage)
 	if !ok {
-		return value, false, nil
+		return value, nil
 	}
+	return parseRawJSON(raw)
+}
+
+func parseRawJSON(raw json.RawMessage) (any, error) {
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	var v any
 	if err := decoder.Decode(&v); err != nil {
-		return nil, true, err
+		return nil, err
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return nil, true, fmt.Errorf("multiple json values")
+			return nil, fmt.Errorf("multiple json values")
 		}
-		return nil, true, err
+		return nil, err
 	}
-	return v, true, nil
+	return v, nil
 }
 
 func matchValueOnlyTree(actual, expected any, onlyTree map[string]any, tolerance float64) (bool, error) {

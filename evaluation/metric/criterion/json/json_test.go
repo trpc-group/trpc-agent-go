@@ -114,6 +114,26 @@ func TestJSONCriterionValidRawMessage(t *testing.T) {
 	assert.True(t, ok)
 	assert.NoError(t, err)
 
+	ok, err = criterion.Match(`{"a":1}`, nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
+	ok, err = criterion.Match([]byte(`{"a":1}`), nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
+	ok, err = criterion.Match(`not json`, nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
+
+	ok, err = criterion.Match(map[string]any{"a": 1}, nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
+	ok, err = criterion.Match(map[string]any{"bad": make(chan int)}, nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
+
 	ok, err = criterion.Match(json.RawMessage(`{} {}`), nil)
 	assert.False(t, ok)
 	assert.Error(t, err)
