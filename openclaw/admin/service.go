@@ -6818,21 +6818,9 @@ const adminPageHTML = `<!doctype html>
           window.sessionStorage.setItem(pendingScrollKey, JSON.stringify({
             savedAt: Date.now(),
             targetPath: targetPath,
-            pageTop: window.scrollY || 0,
             sidebarTop: sidebar ? sidebar.scrollTop : 0
           }));
         } catch (err) {}
-      }
-
-      function restorePageScroll(pageTop) {
-        if (!Number.isFinite(pageTop)) return;
-        window.scrollTo(0, pageTop);
-        window.requestAnimationFrame(function() {
-          window.scrollTo(0, pageTop);
-        });
-        window.setTimeout(function() {
-          window.scrollTo(0, pageTop);
-        }, 0);
       }
 
       function revealActiveLink() {
@@ -6888,7 +6876,6 @@ const adminPageHTML = `<!doctype html>
         if (sidebar && Number.isFinite(pendingScroll.sidebarTop)) {
           sidebar.scrollTop = pendingScroll.sidebarTop;
         }
-        restorePageScroll(pendingScroll.pageTop);
       } else {
         revealActiveLink();
       }
