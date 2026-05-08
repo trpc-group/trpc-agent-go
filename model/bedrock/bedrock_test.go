@@ -982,7 +982,7 @@ func TestSchemaToMap_Complete(t *testing.T) {
 	result := schemaToMap(schema)
 	assert.Equal(t, "object", result["type"])
 	assert.Equal(t, "Test schema", result["description"])
-	assert.Equal(t, []interface{}{"name"}, result["required"])
+	assert.Equal(t, []any{"name"}, result["required"])
 
 	props, ok := result["properties"].(map[string]any)
 	require.True(t, ok)
