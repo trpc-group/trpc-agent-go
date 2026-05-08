@@ -32,10 +32,11 @@ import (
 // knowledgeEntry is the parsed intermediate representation of a knowledge
 // provider configuration.
 type knowledgeEntry struct {
-	Type       string
-	Name       string
-	MaxResults int
-	Config     *yaml.Node
+	Type        string
+	Name        string
+	Description string
+	MaxResults  int
+	Config      *yaml.Node
 }
 
 type knowledgeToolsBundle struct {
@@ -87,11 +88,12 @@ func buildKnowledgeTools(
 		return nil, nil
 	}
 
-	type knowledgeWithMaxResults struct {
-		kb         knowledge.Knowledge
-		maxResults int
+	type resolvedKnowledge struct {
+		kb          knowledge.Knowledge
+		description string
+		maxResults  int
 	}
-	knowledges := make(map[string]*knowledgeWithMaxResults, len(entries))
+	knowledges := make(map[string]*resolvedKnowledge, len(entries))
 	for _, entry := range entries {
 		f, ok := registry.LookupKnowledgeProvider(entry.Type)
 		if !ok {
@@ -112,9 +114,10 @@ func buildKnowledgeTools(
 				err,
 			)
 		}
-		knowledges[entry.Name] = &knowledgeWithMaxResults{
-			kb:         kb,
-			maxResults: entry.MaxResults,
+		knowledges[entry.Name] = &resolvedKnowledge{
+			kb:          kb,
+			description: entry.Description,
+			maxResults:  entry.MaxResults,
 		}
 	}
 
@@ -126,11 +129,13 @@ func buildKnowledgeTools(
 
 	if len(names) == 1 {
 		entry := knowledges[names[0]]
+		desc := entry.description
+		if desc == "" {
+			desc = "Search for relevant information in the knowledge base."
+		}
 		toolOpts := []knowledgetool.Option{
 			knowledgetool.WithToolName("knowledge_search"),
-			knowledgetool.WithToolDescription(
-				"Search for relevant information in the knowledge base.",
-			),
+			knowledgetool.WithToolDescription(desc),
 		}
 		if entry.maxResults > 0 {
 			toolOpts = append(
@@ -162,14 +167,16 @@ func buildKnowledgeTools(
 		}
 		seenToolNames[toolName] = name
 		entry := knowledges[name]
+		desc := entry.description
+		if desc == "" {
+			desc = fmt.Sprintf(
+				"Search for relevant information in the %q knowledge base.",
+				name,
+			)
+		}
 		toolOpts := []knowledgetool.Option{
 			knowledgetool.WithToolName(toolName),
-			knowledgetool.WithToolDescription(
-				fmt.Sprintf(
-					"Search for relevant information in the %q knowledge base.",
-					name,
-				),
-			),
+			knowledgetool.WithToolDescription(desc),
 		}
 		if entry.maxResults > 0 {
 			toolOpts = append(
