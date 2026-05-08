@@ -620,6 +620,12 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Contains(t, body, "telegram")
 	require.Contains(t, body, "Refresh page")
 	require.Contains(t, body, `data-page-stale-root`)
+	require.Contains(t, body, "overflow-y: auto;")
+	require.Contains(t, body, "overscroll-behavior: contain;")
+	require.Contains(t, body, "scrollbar-gutter: stable;")
+	require.Contains(t, body, `sidebar.querySelector(".sidebar-link.active")`)
+	require.Contains(t, body, "sidebar.scrollTop")
+	require.NotContains(t, body, "scrollIntoView")
 	require.NotContains(t, body, `http-equiv="refresh"`)
 }
 

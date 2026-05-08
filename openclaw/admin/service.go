@@ -2725,6 +2725,9 @@ const adminPageHTML = `<!doctype html>
       top: 0;
       align-self: start;
       height: 100vh;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
       padding: 24px 18px 22px;
       border-right: 1px solid rgba(215, 207, 194, 0.92);
       background: rgba(255, 250, 244, 0.78);
@@ -3921,6 +3924,7 @@ const adminPageHTML = `<!doctype html>
       .sidebar {
         position: static;
         height: auto;
+        overflow: visible;
         border-right: 0;
         border-bottom: 1px solid rgba(215, 207, 194, 0.92);
       }
@@ -6780,5 +6784,29 @@ const adminPageHTML = `<!doctype html>
       </div>
     </main>
   </div>
+  <script>
+    (function() {
+      const sidebar = document.querySelector(".sidebar");
+      if (!sidebar || sidebar.scrollHeight <= sidebar.clientHeight) {
+        return;
+      }
+      const activeLink = sidebar.querySelector(".sidebar-link.active");
+      if (!activeLink) {
+        return;
+      }
+      const sidebarRect = sidebar.getBoundingClientRect();
+      const activeRect = activeLink.getBoundingClientRect();
+      const viewportPadding = 16;
+      const topEdge = sidebarRect.top + viewportPadding;
+      const bottomEdge = sidebarRect.bottom - viewportPadding;
+      if (activeRect.top < topEdge) {
+        sidebar.scrollTop -= topEdge - activeRect.top;
+        return;
+      }
+      if (activeRect.bottom > bottomEdge) {
+        sidebar.scrollTop += activeRect.bottom - bottomEdge;
+      }
+    })();
+  </script>
 </body>
 </html>`
