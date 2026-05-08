@@ -2520,8 +2520,8 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			name:      "knowledges",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
-				KnowledgesConfig: map[string]*yaml.Node{
-					"docs": yamlNode(t, `
+				KnowledgesConfig: []knowledgeEntry{
+					builtinKnowledgeEntry(t, "docs", `
 vector_store:
   type: inmemory
 `),
