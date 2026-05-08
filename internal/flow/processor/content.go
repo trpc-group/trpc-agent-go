@@ -1267,6 +1267,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	case ReasoningContentModeDiscardAll:
 		// Discard all reasoning_content.
 		msg.ReasoningContent = ""
+		msg.ReasoningSignature = ""
 	case ReasoningContentModeKeepAll:
 		// Keep all reasoning_content: do nothing.
 	default:
@@ -1276,6 +1277,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 		// reasoning_content for provider replay requirements.
 		if messageRequestID != currentRequestID && !requestHasToolCalls {
 			msg.ReasoningContent = ""
+			msg.ReasoningSignature = ""
 		}
 	}
 	return msg
