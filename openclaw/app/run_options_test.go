@@ -1014,6 +1014,28 @@ func TestConvertKnowledgeConfigs_EmptyProvidersReturnNil(t *testing.T) {
 	require.Nil(t, configs)
 }
 
+func TestParseRunOptions_KnowledgesLegacyEntriesReturnsHelpfulError(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  entries:
+    - name: "docs"
+      embedder:
+        type: "openai"
+      vector_store:
+        type: "inmemory"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.Contains(t, err.Error(), "knowledges.entries is no longer supported")
+	require.Contains(t, err.Error(), "knowledges.providers")
+}
+
 func TestParseRunOptions_DebugRecorder_ConfigApplied(t *testing.T) {
 	t.Parallel()
 

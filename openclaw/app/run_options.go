@@ -1112,6 +1112,12 @@ type memoryConfig struct {
 
 type knowledgesConfig struct {
 	Providers []knowledgeProviderConfig `yaml:"providers,omitempty"`
+
+	// Entries is the deprecated field name (pre-v0.0.4). Kept here so
+	// that KnownFields(true) does not reject it with a confusing
+	// "field entries not found" error; instead we return a clear
+	// migration message in fileConfig.apply.
+	Entries []rawYAMLNode `yaml:"entries,omitempty"`
 }
 
 type knowledgeProviderConfig struct {
@@ -1473,6 +1479,14 @@ func (cfg *fileConfig) apply(
 		}
 	}
 	if cfg.Knowledges != nil {
+		if len(cfg.Knowledges.Entries) > 0 {
+			return fmt.Errorf(
+				"knowledges.entries is no longer supported; " +
+					"rename it to knowledges.providers and wrap " +
+					"embedder/vector_store under a 'config' key " +
+					"(see README for the new format)",
+			)
+		}
 		knowledges, err := convertKnowledgeConfigs(cfg.Knowledges.Providers)
 		if err != nil {
 			return err
