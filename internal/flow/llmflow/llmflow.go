@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
@@ -1050,6 +1051,7 @@ func cloneRequestForContextCompaction(req *model.Request) *model.Request {
 	cloned.StructuredOutput = cloneStructuredOutputForContextCompaction(
 		req.StructuredOutput,
 	)
+	cloned.ExtraFields = cloneJSONMapForContextCompaction(req.ExtraFields)
 	if req.Tools != nil {
 		cloned.Tools = make(map[string]tool.Tool, len(req.Tools))
 		for name, t := range req.Tools {
@@ -1182,23 +1184,7 @@ func cloneStructuredOutputForContextCompaction(
 func cloneJSONMapForContextCompaction(
 	src map[string]any,
 ) map[string]any {
-	if src == nil {
-		return nil
-	}
-
-	raw, err := json.Marshal(src)
-	if err == nil {
-		var cloned map[string]any
-		if err = json.Unmarshal(raw, &cloned); err == nil {
-			return cloned
-		}
-	}
-
-	cloned := make(map[string]any, len(src))
-	for k, v := range src {
-		cloned[k] = v
-	}
-	return cloned
+	return jsonmap.Clone(src)
 }
 
 func snapshotSummary(sess *session.Session, filterKey string) summarySnapshot {

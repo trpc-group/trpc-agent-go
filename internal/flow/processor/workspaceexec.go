@@ -21,7 +21,8 @@ import (
 )
 
 const (
-	workspaceExecGuidanceHeader = "Executor workspace guidance:"
+	workspaceExecGuidanceHeader       = "Workspace shell guidance:"
+	legacyWorkspaceExecGuidanceHeader = "Executor workspace guidance:"
 )
 
 type workspaceExecRequestProcessorOptions struct {
@@ -131,7 +132,7 @@ func (p *WorkspaceExecRequestProcessor) ProcessRequest(
 	idx := findSystemMessageIndex(req.Messages)
 	if idx >= 0 {
 		sys := &req.Messages[idx]
-		if !strings.Contains(sys.Content, workspaceExecGuidanceHeader) {
+		if !hasWorkspaceExecGuidance(sys.Content) {
 			if sys.Content != "" {
 				sys.Content += "\n\n" + guidance
 			} else {
@@ -154,6 +155,11 @@ func (p *WorkspaceExecRequestProcessor) ProcessRequest(
 	))
 }
 
+func hasWorkspaceExecGuidance(content string) bool {
+	return strings.Contains(content, workspaceExecGuidanceHeader) ||
+		strings.Contains(content, legacyWorkspaceExecGuidanceHeader)
+}
+
 func (p *WorkspaceExecRequestProcessor) guidanceText(
 	inv *agent.Invocation,
 ) string {
@@ -163,10 +169,23 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 	var b strings.Builder
 	b.WriteString(workspaceExecGuidanceHeader)
 	b.WriteString("\n")
-	b.WriteString("- workspace_exec is the general shell runner for the ")
-	b.WriteString("current executor workspace. It does not run on the ")
-	b.WriteString("agent host; the workspace is where files and commands ")
-	b.WriteString("are resolved.\n")
+	b.WriteString("- workspace_exec is a shell command tool for the ")
+	b.WriteString("current workspace. Use it when shell execution is ")
+	b.WriteString("needed.\n")
+	b.WriteString("- Prefer task-specific tools when one directly fits ")
+	b.WriteString("the task. Use workspace_exec as the general shell ")
+	b.WriteString("fallback tool when no suitable specialized tool is ")
+	b.WriteString("available, when a specialized tool fails, or when ")
+	b.WriteString("the task depends on the ")
+	b.WriteString("workspace or shell environment.\n")
+	b.WriteString("- When the user explicitly asks for shell execution, ")
+	b.WriteString("workspace_exec is appropriate.\n")
+	b.WriteString("- For external information retrieval, prefer dedicated ")
+	b.WriteString("search, fetch, or API tools when available. Use ")
+	b.WriteString("workspace_exec network commands only when the task ")
+	b.WriteString("depends on the workspace or shell environment, ")
+	b.WriteString("or when dedicated tools are unavailable, fail, or ")
+	b.WriteString("cannot access the required source.\n")
 	b.WriteString("- cwd is always workspace-relative. If omitted, the ")
 	b.WriteString("command starts at the workspace root. Command paths ")
 	b.WriteString("are resolved relative to cwd.\n")
@@ -180,16 +199,9 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 	b.WriteString("current request or visible session are staged ")
 	b.WriteString("automatically under work/inputs before ")
 	b.WriteString("workspace_exec runs.\n")
-	b.WriteString("- Network access depends on the current executor ")
-	b.WriteString("environment. If you need a network command such as ")
-	b.WriteString("curl, use a small bounded command to verify whether ")
-	b.WriteString("that environment allows it.\n")
-	b.WriteString("- When a limitation depends on the executor ")
-	b.WriteString("environment and a small bounded command can verify ")
-	b.WriteString("it, verify first before claiming the limitation. ")
-	b.WriteString("This applies to checks such as command ")
-	b.WriteString("availability, file presence, or access to a known ")
-	b.WriteString("URL.\n")
+	b.WriteString("- Network access through workspace_exec depends on the ")
+	b.WriteString("current shell environment; check it only when ")
+	b.WriteString("that environment matters to the task.\n")
 	if toolworkspaceexec.SupportsArtifactSave(inv) {
 		b.WriteString("- Use workspace_save_artifact only when you ")
 		b.WriteString("need a stable artifact reference for an already ")
