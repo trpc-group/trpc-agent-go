@@ -49,6 +49,17 @@ const (
 	StatusCanceled Status = "canceled"
 )
 
+// IsTerminal reports whether the status will no longer change under normal
+// execution.
+func (s Status) IsTerminal() bool {
+	switch s {
+	case StatusCompleted, StatusFailed, StatusCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Run is the OpenClaw product-facing view of one subagent run.
 type Run struct {
 	ID              string     `json:"id,omitempty"`
