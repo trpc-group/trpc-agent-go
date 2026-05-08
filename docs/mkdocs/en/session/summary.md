@@ -185,7 +185,25 @@ context before calling the session APIs and read the value inside your
 | --- | --- |
 | `WithEventThreshold(eventCount int)` | Trigger when event count since last summary exceeds threshold |
 | `WithTokenThreshold(tokenCount int)` | Trigger when token count since last summary exceeds threshold |
+| `WithContextThreshold(opts ...ContextThresholdOption)` | Trigger when token count since last summary exceeds a ratio of the current model's context window |
 | `WithTimeThreshold(interval time.Duration)` | Evaluated during summary checks; wraps `CheckTimeThreshold` and triggers when the checked session's last event is older than the interval |
+
+Use `WithTokenThreshold` when you want a fixed application-defined token
+threshold, for example "summarize after 4000 new tokens" regardless of which
+model is serving the request. The threshold is captured in the summarizer
+configuration and does not change when your application switches models.
+
+Use `WithContextThreshold` when the summary trigger should follow the active
+model's context window. It resolves the current invocation's
+`Model.Info().Name` at summary-check time, looks up that name in the model
+context-window registry, and computes `contextWindow * ratio` (default 50%).
+This is the recommended option for agents that can switch models within a
+session. For private deployments, endpoint IDs, fine-tuned models, or newly
+released models, register the runtime model name first:
+
+```go
+model.RegisterModelContextWindow("my-custom-model", 32768)
+```
 
 ### Combined Conditions
 
@@ -541,6 +559,7 @@ The Runner automatically checks trigger conditions after each conversation compl
 
 - Event count exceeds threshold (`WithEventThreshold`)
 - Token count exceeds threshold (`WithTokenThreshold`)
+- Token count exceeds the configured ratio of the active model's context window (`WithContextThreshold`)
 - On a summary check, the checked session's last event is older than the interval (`WithTimeThreshold`)
 - Custom combined conditions met (`WithChecksAny` / `WithChecksAll`)
 
@@ -1009,7 +1028,7 @@ sessionService, err := mysql.NewService(
 
 ## Best Practices
 
-1. **Choose appropriate thresholds**: Set event/token thresholds based on the LLM's context window and conversation patterns. For GPT-4 (8K context), consider `WithTokenThreshold(4000)` to leave room for responses
+1. **Choose appropriate thresholds**: Use `WithContextThreshold` for agents whose model can change at runtime, and use `WithTokenThreshold` when you intentionally want a fixed token budget. For custom model names, register their context window before relying on context-aware triggers
 2. **Use async processing**: Always use `EnqueueSummaryJob` instead of `CreateSessionSummary` in production to avoid blocking conversation flow
 3. **Monitor queue size**: If you frequently see "queue is full" warnings, increase `WithSummaryQueueSize` or `WithAsyncSummaryNum`
 4. **Customize prompts**: Tailor summary prompts to your application needs. For example, if building a customer support Agent, focus on key issues and solutions

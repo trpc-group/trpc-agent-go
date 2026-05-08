@@ -925,6 +925,56 @@ func TestClientOptionsProvider_ErrorStopsBeforeConnect(t *testing.T) {
 	require.Equal(t, 0, server.MethodCount("initialize"), "provider error must abort before MCP initialize")
 }
 
+func TestClientOptionsProvider_PanicIsRecoveredAsError(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			panic("provider blew up")
+		}),
+	)
+
+	_, err := broker.listTools(context.Background(), listToolsInput{Selector: server.URL})
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrClientOptionsProviderPanicked,
+		"panic must surface as an error wrapping the sentinel for errors.Is detection")
+	require.Contains(t, err.Error(), "provider blew up",
+		"recovered panic value must be preserved in the error message")
+	require.Equal(t, 0, server.MethodCount("initialize"),
+		"panicking provider must abort before MCP initialize")
+}
+
+func TestClientOptionsProvider_NilOptionEntriesAreFilteredOut(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	var beforeRequestCalled bool
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			return &ClientOptions{
+				HTTP: []tmcp.ClientOption{
+					nil,
+					tmcp.WithHTTPBeforeRequest(func(ctx context.Context, httpReq *http.Request) error {
+						beforeRequestCalled = true
+						return nil
+					}),
+					nil,
+				},
+			}, nil
+		}),
+	)
+
+	output, err := broker.listTools(context.Background(), listToolsInput{Selector: server.URL})
+	require.NoError(t, err, "nil entries in HTTP options must not crash trpc-mcp-go")
+	require.Len(t, output.Tools, 2)
+	require.True(t, beforeRequestCalled,
+		"non-nil HTTP option must still execute after nil filtering")
+}
+
 func TestNamedHTTPServer_HeaderInjectorCanonicalizesOverrides(t *testing.T) {
 	server := startBrokerHTTPServerWithOptions(t, brokerHTTPServerOptions{
 		RequiredAuth: "Bearer injected-token",

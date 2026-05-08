@@ -25,6 +25,27 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+func TestWithModelRequestExtraFields(t *testing.T) {
+	opts := &RunOptions{}
+	fields := map[string]any{
+		"prompt_cache_key": "cache-1",
+	}
+
+	WithModelRequestExtraFields(fields)(opts)
+	fields["prompt_cache_key"] = "changed"
+
+	require.NotNil(t, opts.ModelRequestExtraFields)
+	assert.Equal(t, "cache-1", opts.ModelRequestExtraFields["prompt_cache_key"])
+
+	WithModelRequestExtraFields(map[string]any{
+		"prompt_cache_key": "cache-2",
+		"tenant":           "tenant-a",
+	})(opts)
+
+	assert.Equal(t, "cache-2", opts.ModelRequestExtraFields["prompt_cache_key"])
+	assert.Equal(t, "tenant-a", opts.ModelRequestExtraFields["tenant"])
+}
+
 func TestWithInvocationBranch(t *testing.T) {
 	inv := NewInvocation(
 		WithInvocationBranch("test-branch"),
