@@ -217,21 +217,25 @@ model:
 # 可选：knowledge 后端，用于 knowledge search tools。
 # 这里只配置 embedder 和 vector store，知识内容加载需要在运行时单独触发。
 knowledges:
-  entries:
+  providers:
     - name: "docs"
-      embedder:
-        type: "openai"
-        model: "text-embedding-3-small"
-        dimensions: 1536
-      vector_store:
-        type: "inmemory"
-        max_results: 5
+      max_results: 5
+      config:
+        embedder:
+          type: "openai"
+          model: "text-embedding-3-small"
+          dimensions: 1536
+        vector_store:
+          type: "inmemory"
 
 tools:
   # 可选；默认为串行执行。
   # 启用后，当模型在一个步骤中返回多个 tool call 时，
   # OpenClaw 会并发执行它们。
   enable_parallel_tools: true
+  # 可选：覆盖内置的 OpenClaw tooling guidance 提示词。
+  # 不设置时使用内置默认值，设为 "" 可禁用它。
+  openclaw_tooling_guidance: ""
   providers:
     - type: "browser"
       name: "browser-runtime"
@@ -282,21 +286,22 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 
   ```yaml
   knowledges:
-    entries:
+    providers:
       - name: "trpc_agent_go"
-        embedder:
-          type: "openai"
-          model: "text-embedding-3-small"
-          base_url: "${OPENAI_BASE_URL}"
-          api_key: "${OPENAI_API_KEY}"
-          dimensions: 1536
-        vector_store:
-          type: "pgvector"
-          url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
-          table: "trpc_agent_go"
-          index_dimension: 1536
-          enable_tsvector: true
-          max_results: 5
+        max_results: 5
+        config:
+          embedder:
+            type: "openai"
+            model: "text-embedding-3-small"
+            base_url: "${OPENAI_BASE_URL}"
+            api_key: "${OPENAI_API_KEY}"
+            dimensions: 1536
+          vector_store:
+            type: "pgvector"
+            url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
+            table: "trpc_agent_go"
+            index_dimension: 1536
+            enable_tsvector: true
   ```
 
   表名建议使用 `trpc_agent_go` 这类安全标识符，不要直接用
@@ -971,6 +976,21 @@ OpenClaw 支持 AgentSkills 风格的 `SKILL.md` 技能文件夹，
 - 可选的加载时过滤，通过 `metadata.openclaw.requires.*`。
 - `{baseDir}` 占位符替换，提高与 OpenClaw 技能的兼容性。
 
+### 可复用能力
+
+local skills 是教会 OpenClaw 长期能力的默认位置。当用户希望
+agent 记住某个工作流、连接某个工具或 API、复用某个 MCP server、
+遵循团队流程，或者把领域规则保留下来供后续任务使用时，优先创建
+或更新 skill，而不是把这个场景写成专用运行时代码。
+
+轻量事实、偏好和简单常驻规则继续放到 memory。
+当“记住”的内容需要可执行流程、工具、示例、参考资料或失败恢复时，
+再沉淀成 skill。
+
+应用代码和运行时配置负责稳定边界，例如权限、密钥处理、文件访问、
+校验和生命周期管理。skill 负责不断演进的上下文：能力何时触发、
+如何操作、哪些示例重要，以及遇到常见失败时如何恢复。
+
 ### 内置技能
 
 OpenClaw 将上游 OpenClaw 技能包打包在 `openclaw/skills/` 下
@@ -1023,6 +1043,7 @@ skills:
   # 可选：限制默认启用的内置技能。
   # 仅适用于 ./openclaw/skills 下的内置技能。
   allowBundled: ["gh-issues", "notion"]
+  tool_profile: "knowledge_only" # knowledge_only|full
   load_mode: "turn" # once|turn|session
   loaded_content_in_tool_results: true
   max_loaded_skills: 0
@@ -1043,6 +1064,14 @@ skills:
 OpenClaw 默认将加载的技能正文/文档物化到 tool result 消息中。
 这样可以保持 system prompt 更稳定，同时仍允许 `SkillLoadMode`
 控制加载的技能状态的存活时间。
+
+`"knowledge_only"` 现在是默认值。它会保留
+`skill_load`、`skill_list_docs`、`skill_select_docs`，但隐藏
+`skill_run` 这类执行工具。适合让技能只提供说明和补充文档，
+实际执行仍统一走常规 runtime tool 表面。
+
+只有在你明确希望把内置的 skill 执行工具也暴露给模型时，
+才需要改成 `tool_profile: "full"`。
 
 内置技能指导默认更面向运行时：agent 在有技能自带脚本时优先使用，
 并可以使用最小的只读探测（如 `--help` 或 `--version`）来验证外部 CLI

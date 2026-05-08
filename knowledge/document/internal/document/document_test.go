@@ -12,6 +12,8 @@ package document
 import (
 	"strings"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 )
 
 func TestGenerateDocumentID(t *testing.T) {
@@ -55,5 +57,49 @@ func TestCreateDocument(t *testing.T) {
 	}
 	if doc.Metadata == nil {
 		t.Errorf("metadata map should be initialized")
+	}
+}
+
+func TestCreateDocumentFromPayloadNil(t *testing.T) {
+	doc := CreateDocumentFromPayload(nil)
+	if doc != nil {
+		t.Fatalf("expected nil document, got %+v", doc)
+	}
+}
+
+func TestCreateDocumentFromPayload(t *testing.T) {
+	payload := &codeast.DocumentPayload{
+		Name:          "service.go",
+		Content:       "package demo\nfunc run() {}",
+		EmbeddingText: "demo.run",
+		Metadata: map[string]any{
+			"scope":    "code",
+			"language": "go",
+		},
+	}
+
+	doc := CreateDocumentFromPayload(payload)
+	if doc == nil {
+		t.Fatalf("expected non-nil document")
+	}
+	if doc.Name != payload.Name {
+		t.Fatalf("unexpected name: got %q, want %q", doc.Name, payload.Name)
+	}
+	if doc.Content != payload.Content {
+		t.Fatalf("unexpected content: got %q, want %q", doc.Content, payload.Content)
+	}
+	if doc.EmbeddingText != payload.EmbeddingText {
+		t.Fatalf("unexpected embedding text: got %q, want %q", doc.EmbeddingText, payload.EmbeddingText)
+	}
+	if doc.Metadata["scope"] != "code" {
+		t.Fatalf("unexpected metadata scope: %v", doc.Metadata["scope"])
+	}
+	if doc.Metadata["language"] != "go" {
+		t.Fatalf("unexpected metadata language: %v", doc.Metadata["language"])
+	}
+
+	payload.Metadata["scope"] = "changed"
+	if doc.Metadata["scope"] != "code" {
+		t.Fatalf("expected document metadata to be copied, got %v", doc.Metadata["scope"])
 	}
 }

@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -765,6 +766,50 @@ func TestContentRequestProcessor_getIncrementMessages_ProjectsEvents(
 	messages := p.getIncrementMessages(inv, time.Time{})
 	assert.Len(t, messages, 1)
 	assert.Equal(t, "Projected: hello", messages[0].Content)
+}
+
+func TestContentRequestProcessor_getIncrementMessages_DropsReasoningOnlyAssistant(
+	t *testing.T,
+) {
+	projector := func(
+		_ *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		if msg.Role != model.RoleAssistant {
+			return msg
+		}
+		msg.Content = ""
+		msg.ReasoningContent = "reasoning without visible payload"
+		return msg
+	}
+
+	p := NewContentRequestProcessor(
+		WithEventMessageProjector(projector),
+	)
+	sess := &session.Session{
+		Events: []event.Event{
+			*event.NewResponseEvent(
+				"invocation-id",
+				"assistant",
+				&model.Response{
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "visible before projection",
+						},
+					}},
+				},
+			),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+
+	messages := p.getIncrementMessages(inv, time.Time{})
+	assert.Empty(t, messages)
 }
 
 func TestContentRequestProcessor_getCurrentInvocationMessages_ProjectsOnce(
@@ -1628,9 +1673,10 @@ func TestNewContentRequestProcessor(t *testing.T) {
 		PreloadMemory:                  0, // Default to disable preloading.
 		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
 		ContextCompactionConfig: ContextCompactionConfig{
-			KeepRecentRequests:           DefaultContextCompactionKeepRecentRequests,
-			ToolResultMaxTokens:          DefaultContextCompactionToolResultMaxTokens,
-			OversizedToolResultMaxTokens: DefaultContextCompactionOversizedToolResultMaxTokens,
+			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
+			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
+			// Pass 2 is opt-in; see WithContextCompactionOversizedToolResultMaxTokens.
+			OversizedToolResultMaxTokens: 0,
 		},
 	}
 
@@ -2540,6 +2586,79 @@ func TestContentRequestProcessor_IncludeContentsNoneTruncatesOversizedToolResult
 	require.Contains(t, req.Messages[2].Content, "[... ")
 	require.True(t, strings.HasPrefix(req.Messages[2].Content, "HEAD-"))
 	require.True(t, strings.HasSuffix(req.Messages[2].Content, "-TAIL"))
+}
+
+// TestContentRequestProcessor_IncludeContentsNoneRequiresEnabledForOversizedTruncation
+// asserts that the include_contents=none path leaves oversized tool results
+// untouched when EnableContextCompaction is false, even if a positive
+// OversizedToolResultMaxTokens threshold is configured.
+func TestContentRequestProcessor_IncludeContentsNoneRequiresEnabledForOversizedTruncation(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithContextCompactionOversizedToolResultMaxTokens(32),
+	)
+
+	original := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			{
+				Author:       "assistant",
+				RequestID:    "req-1",
+				InvocationID: "inv-1",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role: model.RoleAssistant,
+								ToolCalls: []model.ToolCall{
+									{
+										ID: "call-1",
+										Function: model.FunctionDefinitionParam{
+											Name:      "fetch",
+											Arguments: []byte(`{}`),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:       "tool",
+				RequestID:    "req-1",
+				InvocationID: "inv-1",
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+					Choices: []model.Choice{
+						{
+							Message: model.NewToolMessage("call-1", "fetch", original),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv-1"),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-1",
+			RuntimeState: map[string]any{
+				"include_contents": "none",
+			},
+		}),
+	)
+
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 3)
+	require.Equal(t, model.RoleTool, req.Messages[2].Role)
+	require.Equal(t, original, req.Messages[2].Content)
+	require.NotContains(t, req.Messages[2].Content, "[... ")
 }
 
 func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
@@ -3544,8 +3663,9 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCall1 := model.Message{
-		Role:    model.RoleAssistant,
-		Content: "Starting with step 1.",
+		Role:             model.RoleAssistant,
+		Content:          "Starting with step 1.",
+		ReasoningContent: "Need to execute step 1 before continuing.",
 		ToolCalls: []model.ToolCall{{
 			Type: "function",
 			ID:   "call_1",
@@ -3657,6 +3777,7 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 	if assert.Len(t, messages, 5) {
 		assert.True(t, model.MessagesEqual(userMsg, messages[0]))
 		assert.Equal(t, toolCall1.Content, messages[1].Content)
+		assert.Equal(t, toolCall1.ReasoningContent, messages[1].ReasoningContent)
 		assert.Equal(t, toolCall1.ToolCalls, messages[1].ToolCalls)
 		assert.Equal(t, model.RoleTool, messages[2].Role)
 		assert.Equal(t, toolResult1.ToolID, messages[2].ToolID)
@@ -3666,6 +3787,89 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 		assert.Equal(t, toolCall2.ToolCalls, messages[3].ToolCalls)
 		assert.True(t, model.MessagesEqual(toolResult2, messages[4]))
 	}
+}
+
+func TestContentRequestProcessor_getIncrementMessages_MixedToolContinuationPreservesRoundResults(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	userMsg := model.NewUserMessage("Please calculate 17 + 25 and ask external_note for topic mixed-tools-demo.")
+	toolCallMsg := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				Type: "function",
+				ID:   "call_calc",
+				Function: model.FunctionDefinitionParam{
+					Name:      "calculator",
+					Arguments: []byte(`{"a":17,"b":25,"operation":"add"}`),
+				},
+			},
+			{
+				Type: "function",
+				ID:   "call_external",
+				Function: model.FunctionDefinitionParam{
+					Name:      "external_note",
+					Arguments: []byte(`{"topic":"mixed-tools-demo"}`),
+				},
+			},
+		},
+	}
+	calculatorResult := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_calc",
+		ToolName: "calculator",
+		Content:  `{"result":42}`,
+	}
+	externalResult := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_external",
+		ToolName: "external_note",
+		Content:  "verified-by-caller",
+	}
+	createEvent := func(requestID, invocationID, author string, ts time.Time, msg model.Message, object string) event.Event {
+		return event.Event{
+			Author:       author,
+			RequestID:    requestID,
+			InvocationID: invocationID,
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			FilterKey:    "test-filter",
+			Response: &model.Response{
+				Done:    true,
+				Object:  object,
+				Choices: []model.Choice{{Index: 0, Message: msg}},
+			},
+		}
+	}
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			createEvent("req1", "inv1", "user", baseTime, userMsg, ""),
+			createEvent("req1", "inv1", "test-agent", baseTime.Add(time.Second), toolCallMsg, ""),
+			createEvent("req1", "inv1", "test-agent", baseTime.Add(2*time.Second), calculatorResult, model.ObjectTypeToolResponse),
+			createEvent("req2", "inv2", "test-agent", baseTime.Add(3*time.Second), externalResult, model.ObjectTypeToolResponse),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv2"),
+		agent.WithInvocationMessage(externalResult),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req2"}),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+	inv.AgentName = "test-agent"
+	p := NewContentRequestProcessor()
+	messages := p.getIncrementMessages(inv, time.Time{})
+	require.Len(t, messages, 4)
+	require.True(t, model.MessagesEqual(userMsg, messages[0]))
+	require.Equal(t, model.RoleAssistant, messages[1].Role)
+	require.Len(t, messages[1].ToolCalls, 2)
+	assert.ElementsMatch(t, []string{"call_calc", "call_external"}, []string{messages[1].ToolCalls[0].ID, messages[1].ToolCalls[1].ID})
+	require.Equal(t, model.RoleTool, messages[2].Role)
+	require.Equal(t, "call_calc", messages[2].ToolID)
+	require.Equal(t, `{"result":42}`, messages[2].Content)
+	require.Equal(t, model.RoleTool, messages[3].Role)
+	require.Equal(t, "call_external", messages[3].ToolID)
+	require.Equal(t, "verified-by-caller", messages[3].Content)
 }
 
 func TestInsertInvocationMessage(t *testing.T) {
@@ -4211,6 +4415,84 @@ func TestContentRequestProcessor_getCurrentInvocationMessages_IsolatedSubagent(t
 	assert.True(t, hasToolResult, "should include tool result message")
 }
 
+func TestContentRequestProcessor_getCurrentInvocationMessages_MixedToolContinuationPreservesRoundResults(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	createEvent := func(requestID string, ts time.Time, msg model.Message, object string) event.Event {
+		return event.Event{
+			Author:       "subagent",
+			RequestID:    requestID,
+			InvocationID: "subagent_inv",
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Object:  object,
+				Choices: []model.Choice{{Index: 0, Message: msg}},
+			},
+		}
+	}
+	toolCallMsg := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				Type: "function",
+				ID:   "call_calc",
+				Function: model.FunctionDefinitionParam{
+					Name:      "calculator",
+					Arguments: []byte(`{"a":17,"b":25,"operation":"add"}`),
+				},
+			},
+			{
+				Type: "function",
+				ID:   "call_external",
+				Function: model.FunctionDefinitionParam{
+					Name:      "external_note",
+					Arguments: []byte(`{"topic":"mixed-tools-demo"}`),
+				},
+			},
+		},
+	}
+	calculatorResult := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_calc",
+		ToolName: "calculator",
+		Content:  `{"result":42}`,
+	}
+	externalResult := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_external",
+		ToolName: "external_note",
+		Content:  "verified-by-caller",
+	}
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			createEvent("req1", baseTime, toolCallMsg, ""),
+			createEvent("req1", baseTime.Add(time.Second), calculatorResult, model.ObjectTypeToolResponse),
+			createEvent("req2", baseTime.Add(2*time.Second), model.Message{Role: model.RoleAssistant, Content: "waiting for external tool"}, ""),
+			createEvent("req2", baseTime.Add(3*time.Second), externalResult, model.ObjectTypeToolResponse),
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "subagent_inv",
+		AgentName:    "subagent",
+		Session:      sess,
+	}
+	inv.RunOptions.RequestID = "req2"
+	p := NewContentRequestProcessor()
+	messages := p.getCurrentInvocationMessages(inv)
+	require.Len(t, messages, 3)
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
+	require.Len(t, messages[0].ToolCalls, 2)
+	assert.ElementsMatch(t, []string{"call_calc", "call_external"}, []string{messages[0].ToolCalls[0].ID, messages[0].ToolCalls[1].ID})
+	require.Equal(t, model.RoleTool, messages[1].Role)
+	require.Equal(t, "call_calc", messages[1].ToolID)
+	require.Equal(t, `{"result":42}`, messages[1].Content)
+	require.Equal(t, model.RoleTool, messages[2].Role)
+	require.Equal(t, "call_external", messages[2].ToolID)
+	require.Equal(t, "verified-by-caller", messages[2].Content)
+}
+
 func TestContentRequestProcessor_getCurrentInvocationMessages_ReasoningContentDiscardPreviousTurns(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 
@@ -4272,14 +4554,84 @@ func TestContentRequestProcessor_getCurrentInvocationMessages_ReasoningContentDi
 	assert.Equal(t, "think2", messages[1].ReasoningContent, "current turn reasoning should be preserved")
 }
 
+func TestContentRequestProcessor_getCurrentInvocationMessages_ReasoningContentKeepsToolCallTurns(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	createEvent := func(requestID string, ts time.Time, msg model.Message, object string) event.Event {
+		return event.Event{
+			Author:       "agent1",
+			RequestID:    requestID,
+			InvocationID: "inv1",
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Object:  object,
+				Choices: []model.Choice{{Index: 0, Message: msg}},
+			},
+		}
+	}
+
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			createEvent("req1", baseTime, model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "I need to call a tool",
+				ReasoningContent: "think before tool",
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "call_weather",
+						Function: model.FunctionDefinitionParam{
+							Name:      "get_weather",
+							Arguments: []byte(`{"city":"Hangzhou"}`),
+						},
+					},
+				},
+			}, ""),
+			createEvent("req1", baseTime.Add(time.Second), model.Message{
+				Role:    model.RoleTool,
+				ToolID:  "call_weather",
+				Content: `{"condition":"cloudy"}`,
+			}, model.ObjectTypeToolResponse),
+			createEvent("req1", baseTime.Add(2*time.Second), model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "It is cloudy.",
+				ReasoningContent: "think after tool",
+			}, ""),
+			createEvent("req2", baseTime.Add(3*time.Second), model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "new turn",
+				ReasoningContent: "current think",
+			}, ""),
+		},
+	}
+
+	p := NewContentRequestProcessor()
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "agent1",
+		Session:      sess,
+		RunOptions: agent.RunOptions{
+			RequestID: "req2",
+		},
+	}
+
+	messages := p.getCurrentInvocationMessages(inv)
+	require.Len(t, messages, 4)
+	assert.Equal(t, "think before tool", messages[0].ReasoningContent)
+	assert.Equal(t, "think after tool", messages[2].ReasoningContent)
+	assert.Equal(t, "current think", messages[3].ReasoningContent)
+}
+
 func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 	tests := []struct {
-		name             string
-		mode             string
-		msg              model.Message
-		messageRequestID string
-		currentRequestID string
-		wantReasoning    string
+		name                string
+		mode                string
+		msg                 model.Message
+		messageRequestID    string
+		currentRequestID    string
+		requestHasToolCalls bool
+		wantReasoning       string
 	}{
 		{
 			name: "keep_all mode preserves reasoning content",
@@ -4304,6 +4656,19 @@ func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 			messageRequestID: "req-1",
 			currentRequestID: "req-2",
 			wantReasoning:    "", // Previous request's reasoning is discarded.
+		},
+		{
+			name: "default mode (empty) keeps previous request reasoning when request has tool calls",
+			mode: "",
+			msg: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          "final answer",
+				ReasoningContent: "thinking process",
+			},
+			messageRequestID:    "req-1",
+			currentRequestID:    "req-2",
+			requestHasToolCalls: true,
+			wantReasoning:       "thinking process",
 		},
 		{
 			name: "default mode (empty) keeps current request reasoning",
@@ -4384,12 +4749,46 @@ func TestContentRequestProcessor_ProcessReasoningContent(t *testing.T) {
 			p := &ContentRequestProcessor{
 				ReasoningContentMode: tt.mode,
 			}
-			result := p.processReasoningContent(tt.msg, tt.messageRequestID, tt.currentRequestID)
+			result := p.processReasoningContent(
+				tt.msg,
+				tt.messageRequestID,
+				tt.currentRequestID,
+				tt.requestHasToolCalls,
+			)
 			assert.Equal(t, tt.wantReasoning, result.ReasoningContent,
 				"processReasoningContent() reasoning = %v, want %v",
 				result.ReasoningContent, tt.wantReasoning)
 		})
 	}
+}
+
+func TestContentRequestProcessor_IsEmptyAssistantMessage(t *testing.T) {
+	assert.True(t, message.IsEmptyAssistantMessage(model.Message{
+		Role: model.RoleAssistant,
+	}))
+	assert.True(t, message.IsEmptyAssistantMessage(model.Message{
+		Role:             model.RoleAssistant,
+		ReasoningContent: "thinking without visible payload",
+	}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
+		Role:    model.RoleAssistant,
+		Content: "visible content",
+	}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{ID: "call_1"},
+		},
+	}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
+		Role: model.RoleAssistant,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText},
+		},
+	}))
+	assert.False(t, message.IsEmptyAssistantMessage(model.Message{
+		Role: model.RoleUser,
+	}))
 }
 
 func TestContentRequestProcessor_WithReasoningContentMode(t *testing.T) {

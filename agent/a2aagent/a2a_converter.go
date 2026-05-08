@@ -43,6 +43,7 @@ type InvocationA2AConverter interface {
 }
 
 type defaultA2AEventConverter struct {
+	dataPartMappers []A2ADataPartMapper
 }
 
 func (d *defaultA2AEventConverter) ConvertToEvents(
@@ -143,13 +144,13 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 	case *protocol.Task:
 		responseMsg = convertTaskToMessage(v)
 	case *protocol.TaskStatusUpdateEvent:
-		if !isTaskFailureState(v.Status.State) {
-			// submitted/completed updates are control signals.
+		if !isTaskFailureState(v.Status.State) && !hasStructuredErrorMetadata(v.Metadata) {
+			// submitted/completed updates without structured errors are control signals.
 			return nil, nil
 		}
 		responseMsg = convertTaskStatusToMessage(v)
 	case *protocol.TaskArtifactUpdateEvent:
-		if v.IsFinal() {
+		if v.IsFinal() && !hasStructuredErrorMetadata(v.Metadata) {
 			// Final artifact chunk is either an aggregated result or a termination signal,
 			// not incremental content for the user.
 			return nil, nil
@@ -161,6 +162,7 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 	}
 
 	if evt := d.buildRespEvent(true, responseMsg, agentName, invocation); evt != nil {
+		markTerminalStructuredErrorEvent(evt, result.Result)
 		events = append(events, evt)
 	}
 	return events, nil
@@ -320,7 +322,7 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	invocation *agent.Invocation) *event.Event {
 
 	// Parse A2A message parts to extract content and tool information
-	parseResult := parseA2AMessageParts(msg)
+	parseResult := parseA2AMessagePartsWithMappers(msg, d.dataPartMappers)
 
 	// Create event with appropriate response structure
 	return buildEventResponse(isStreaming, msg.MessageID, parseResult, invocation, agentName, msg.Role)
@@ -364,6 +366,9 @@ type parseResult struct {
 
 	// stateDelta holds structured state updates reconstructed from A2A metadata.
 	stateDelta map[string][]byte
+
+	// extensions holds custom event payloads reconstructed by DataPart mappers.
+	extensions map[string]json.RawMessage
 }
 
 // toolResponseData holds tool response information
@@ -373,26 +378,86 @@ type toolResponseData struct {
 	content string
 }
 
+func newDataPartMappingResult(result *parseResult) *A2ADataPartMappingResult {
+	if result == nil {
+		return &A2ADataPartMappingResult{}
+	}
+	return &A2ADataPartMappingResult{
+		textContent:         result.textContent,
+		reasoningContent:    result.reasoningContent,
+		codeExecution:       result.codeExecution,
+		codeExecutionResult: result.codeExecutionResult,
+		eventExtensions:     cloneA2AExtensions(result.extensions),
+	}
+}
+
+func applyDataPartMappingResult(dst *parseResult, mapped *A2ADataPartMappingResult) {
+	if dst == nil || mapped == nil {
+		return
+	}
+	if mapped.textContentSet {
+		dst.textContent = mapped.textContent
+	}
+	if mapped.reasoningContentSet {
+		dst.reasoningContent = mapped.reasoningContent
+	}
+	if mapped.codeExecutionSet {
+		dst.codeExecution = mapped.codeExecution
+	}
+	if mapped.codeExecutionResultSet {
+		dst.codeExecutionResult = mapped.codeExecutionResult
+	}
+	if len(mapped.eventExtensions) > 0 {
+		if dst.extensions == nil {
+			dst.extensions = make(map[string]json.RawMessage, len(mapped.eventExtensions))
+		}
+		for key, raw := range mapped.eventExtensions {
+			dst.extensions[key] = cloneA2AExtensionRawMessage(raw)
+		}
+	}
+	if len(mapped.toolCalls) > 0 {
+		dst.toolCalls = append(dst.toolCalls, mapped.toolCalls...)
+	}
+	if len(mapped.toolResponses) > 0 {
+		for _, resp := range mapped.toolResponses {
+			dst.toolResponses = append(dst.toolResponses, toolResponseData{
+				id:      resp.ID,
+				name:    resp.Name,
+				content: resp.Content,
+			})
+		}
+	}
+}
+
 // parseA2AMessageParts processes all parts in the A2A message and extracts content and tool information
 func parseA2AMessageParts(msg *protocol.Message) *parseResult {
+	return parseA2AMessagePartsWithMappers(msg, nil)
+}
+
+func parseA2AMessagePartsWithMappers(
+	msg *protocol.Message,
+	mappers []A2ADataPartMapper,
+) *parseResult {
 	parts := msg.Parts
-	var textContent strings.Builder
-	var reasoningContent strings.Builder
 	result := &parseResult{}
+	var textBuilder strings.Builder
+	var reasoningBuilder strings.Builder
 
 	for _, part := range parts {
 		switch part.GetKind() {
 		case protocol.KindText:
 			text, isThought := processTextPart(part)
 			if isThought {
-				reasoningContent.WriteString(text)
+				reasoningBuilder.WriteString(text)
 			} else {
-				textContent.WriteString(text)
+				textBuilder.WriteString(text)
 			}
 		case protocol.KindData:
-			processDataPart(part, result)
+			flushParseResultText(result, &textBuilder, &reasoningBuilder)
+			processDataPartWithMappers(part, result, mappers)
 		}
 	}
+	flushParseResultText(result, &textBuilder, &reasoningBuilder)
 
 	if msg.Metadata != nil {
 		if objectType, ok := msg.Metadata[ia2a.MessageMetadataObjectTypeKey].(string); ok {
@@ -409,8 +474,6 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 		}
 	}
 
-	result.textContent = textContent.String()
-	result.reasoningContent = reasoningContent.String()
 	result.taskState = taskStateFromMetadata(msg.Metadata)
 	result.responseError = ia2a.ResponseErrorFromMetadata(
 		msg.Metadata,
@@ -420,10 +483,32 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 	return result
 }
 
+func flushParseResultText(
+	result *parseResult,
+	textBuilder *strings.Builder,
+	reasoningBuilder *strings.Builder,
+) {
+	if result == nil {
+		return
+	}
+	if textBuilder != nil && textBuilder.Len() > 0 {
+		result.textContent += textBuilder.String()
+		textBuilder.Reset()
+	}
+	if reasoningBuilder != nil && reasoningBuilder.Len() > 0 {
+		result.reasoningContent += reasoningBuilder.String()
+		reasoningBuilder.Reset()
+	}
+}
+
 // processTextPart processes a TextPart and returns its content and whether it's a thought
 func processTextPart(part protocol.Part) (text string, isThought bool) {
-	p, ok := part.(*protocol.TextPart)
-	if !ok {
+	var p *protocol.TextPart
+	if textPart, ok := part.(*protocol.TextPart); ok {
+		p = textPart
+	} else if textPart, ok := part.(protocol.TextPart); ok {
+		p = &textPart
+	} else {
 		log.Warnf("unexpected part type: %T", part)
 		return "", false
 	}
@@ -449,37 +534,75 @@ func processTextPart(part protocol.Part) (text string, isThought bool) {
 
 // processDataPart processes a DataPart and updates the parseResult accordingly
 func processDataPart(part protocol.Part, result *parseResult) {
-	d, ok := part.(*protocol.DataPart)
-	if !ok {
+	processDataPartWithMappers(part, result, nil)
+}
+
+func processDataPartWithMappers(
+	part protocol.Part,
+	result *parseResult,
+	mappers []A2ADataPartMapper,
+) {
+	var d *protocol.DataPart
+	if dataPart, ok := part.(*protocol.DataPart); ok {
+		d = dataPart
+	} else if dataPart, ok := part.(protocol.DataPart); ok {
+		d = &dataPart
+	} else {
 		return
 	}
 
 	// Use GetDataPartType to get the type with correct precedence (adk_type first, then type)
 	// GetDataPartType handles nil metadata internally
 	typeStr := ia2a.GetDataPartType(d.Metadata)
-	if typeStr == "" {
+	builtInHandled := false
+	if typeStr != "" {
+		switch typeStr {
+		case ia2a.DataPartMetadataTypeFunctionCall:
+			if toolCall := processFunctionCall(d); toolCall != nil {
+				result.toolCalls = append(result.toolCalls, *toolCall)
+			}
+			builtInHandled = true
+		case ia2a.DataPartMetadataTypeFunctionResp:
+			content, id, name := processFunctionResponse(d)
+			result.toolResponses = append(result.toolResponses, toolResponseData{
+				id:      id,
+				name:    name,
+				content: content,
+			})
+			builtInHandled = true
+		case ia2a.DataPartMetadataTypeExecutableCode:
+			result.codeExecution = processExecutableCode(d)
+			builtInHandled = true
+		case ia2a.DataPartMetadataTypeCodeExecutionResult:
+			result.codeExecutionResult = processCodeExecutionResult(d)
+			builtInHandled = true
+		}
+	}
+
+	if builtInHandled {
 		return
 	}
 
-	switch typeStr {
-	case ia2a.DataPartMetadataTypeFunctionCall:
-		if toolCall := processFunctionCall(d); toolCall != nil {
-			result.toolCalls = append(result.toolCalls, *toolCall)
+	for _, mapper := range mappers {
+		if mapper == nil {
+			continue
 		}
-	case ia2a.DataPartMetadataTypeFunctionResp:
-		content, id, name := processFunctionResponse(d)
-		result.toolResponses = append(result.toolResponses, toolResponseData{
-			id:      id,
-			name:    name,
-			content: content,
-		})
-	case ia2a.DataPartMetadataTypeExecutableCode:
-		result.codeExecution = processExecutableCode(d)
-	case ia2a.DataPartMetadataTypeCodeExecutionResult:
-		result.codeExecutionResult = processCodeExecutionResult(d)
-	default:
-		log.Debugf("unknown DataPart type: %s", typeStr)
+		mappedResult := newDataPartMappingResult(result)
+		matched, err := mapper(d, mappedResult)
+		if err != nil {
+			log.Warnf("A2ADataPartMapper returns error, skip part: %v", err)
+			continue
+		}
+		if matched {
+			applyDataPartMappingResult(result, mappedResult)
+			return
+		}
 	}
+	if typeStr == "" {
+		log.Debugf("unknown DataPart with empty type skipped")
+		return
+	}
+	log.Debugf("unknown DataPart type skipped: %s", typeStr)
 }
 
 // processFunctionCall processes a function call DataPart and returns the ToolCall
@@ -624,6 +747,9 @@ func buildEventResponse(
 	}
 
 	evt := event.New(invocation.InvocationID, agentName, opts...)
+	if len(result.extensions) > 0 {
+		evt.Extensions = cloneA2AExtensions(result.extensions)
+	}
 
 	// Use llm_response_id from metadata when available (preserves original LLM Response.ID),
 	// fall back to messageID (which is ArtifactID in streaming, or Message.MessageID in unary).
@@ -662,8 +788,11 @@ func markGraphCompletionEvent(evt *event.Event, result *parseResult) {
 // - Text content uses Delta for incremental updates
 func buildStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
-	if respErr := taskResponseError(result); respErr != nil {
+	if respErr := terminalStreamingResponseError(result); respErr != nil {
 		return buildErrorResponse(messageID, respErr, now)
+	}
+	if result != nil && result.responseError != nil {
+		return buildRecoverableErrorResponse(messageID, result, role, now)
 	}
 
 	// Tool call: use Message (tool calls are complete units, not streamed incrementally)
@@ -711,14 +840,8 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 	}
 
 	// Text content: use Delta for streaming incremental updates
-	content := result.textContent
-	if result.codeExecution != "" {
-		content = result.codeExecution
-	} else if result.codeExecutionResult != "" {
-		content = result.codeExecutionResult
-	}
-
-	objectType := extractObjectType(result)
+	content := streamingResponseContent(result)
+	objectType := streamingResponseObjectType(result)
 	if objectType == "" {
 		objectType = model.ObjectTypeChatCompletionChunk
 	}
@@ -740,6 +863,51 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 		IsPartial: true,
 		Done:      false,
 	}
+}
+
+func terminalStreamingResponseError(result *parseResult) *model.ResponseError {
+	if result == nil || !isTaskFailureState(result.taskState) {
+		return nil
+	}
+	if result.responseError != nil {
+		return result.responseError
+	}
+	message := result.textContent
+	if message == "" {
+		message = taskFailureMessage(result.taskState)
+	}
+	return &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: message,
+	}
+}
+
+func streamingResponseContent(result *parseResult) string {
+	if result == nil {
+		return ""
+	}
+	content := result.textContent
+	if result.codeExecution != "" {
+		content = result.codeExecution
+	} else if result.codeExecutionResult != "" {
+		content = result.codeExecutionResult
+	}
+	// Some A2A servers surface invocation errors as a regular message decorated
+	// with structured error metadata. Preserve that message as normal stream
+	// content so callers can drain the stream to EOF instead of short-circuiting.
+	if content == "" && result.responseError != nil && !isTaskFailureState(result.taskState) {
+		content = result.responseError.Message
+	}
+	return content
+}
+
+func streamingResponseObjectType(result *parseResult) string {
+	objectType := extractObjectType(result)
+	if objectType == model.ObjectTypeError && result != nil &&
+		result.responseError != nil && !isTaskFailureState(result.taskState) {
+		return ""
+	}
+	return objectType
 }
 
 // extractObjectType determines the response object type from parseResult.
@@ -803,13 +971,8 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 
 	// Text content: final assistant response
 	// Only add if no tool calls (tool calls already include text content)
-	if len(result.toolCalls) == 0 && (result.textContent != "" || result.reasoningContent != "" || result.codeExecution != "" || result.codeExecutionResult != "") {
-		content := result.textContent
-		if result.codeExecution != "" {
-			content = result.codeExecution
-		} else if result.codeExecutionResult != "" {
-			content = result.codeExecutionResult
-		}
+	content := nonStreamingResponseContent(result)
+	if len(result.toolCalls) == 0 && (content != "" || result.reasoningContent != "") {
 		internalRole := convertA2ARoleToModelRole(role)
 		choices = append(choices, model.Choice{
 			Message: model.Message{
@@ -830,7 +993,7 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 		}}
 	}
 
-	objectType := extractObjectType(result)
+	objectType := nonStreamingResponseObjectType(result)
 	if objectType == "" {
 		objectType = model.ObjectTypeChatCompletion
 	}
@@ -882,6 +1045,79 @@ func taskResponseError(
 		Type:    model.ErrorTypeFlowError,
 		Message: message,
 	}
+}
+
+func buildRecoverableErrorResponse(messageID string, result *parseResult, role protocol.MessageRole, now time.Time) *model.Response {
+	content := streamingResponseContent(result)
+	objectType := streamingResponseObjectType(result)
+	if objectType == "" || objectType == model.ObjectTypeError {
+		objectType = model.ObjectTypeChatCompletion
+	}
+	return &model.Response{
+		ID: messageID,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:             convertA2ARoleToModelRole(role),
+				Content:          content,
+				ReasoningContent: result.reasoningContent,
+			},
+		}},
+		Object:    objectType,
+		Timestamp: now,
+		Created:   now.Unix(),
+		IsPartial: false,
+		Done:      false,
+		Error:     result.responseError,
+	}
+}
+
+func markTerminalStructuredErrorEvent(evt *event.Event, result protocol.StreamingMessageResult) {
+	if evt == nil || evt.Response == nil || evt.Response.Error == nil {
+		return
+	}
+	switch v := result.(type) {
+	case *protocol.TaskStatusUpdateEvent:
+		if isTaskFailureState(v.Status.State) || v.IsFinal() {
+			evt.Response.Done = true
+			evt.Response.IsPartial = false
+			evt.Response.Object = model.ObjectTypeError
+		}
+	case *protocol.TaskArtifactUpdateEvent:
+		if v.IsFinal() {
+			evt.Response.Done = true
+			evt.Response.IsPartial = false
+			evt.Response.Object = model.ObjectTypeError
+		}
+	}
+}
+
+func hasStructuredErrorMetadata(metadata map[string]any) bool {
+	return ia2a.ResponseErrorFromMetadata(metadata, "", "") != nil
+}
+
+func nonStreamingResponseContent(result *parseResult) string {
+	if result == nil {
+		return ""
+	}
+	content := result.textContent
+	if result.codeExecution != "" {
+		content = result.codeExecution
+	} else if result.codeExecutionResult != "" {
+		content = result.codeExecutionResult
+	}
+	if content == "" && result.responseError != nil && !isTaskFailureState(result.taskState) {
+		content = result.responseError.Message
+	}
+	return content
+}
+
+func nonStreamingResponseObjectType(result *parseResult) string {
+	objectType := extractObjectType(result)
+	if objectType == model.ObjectTypeError && result != nil &&
+		result.responseError != nil && !isTaskFailureState(result.taskState) {
+		return ""
+	}
+	return objectType
 }
 
 func taskFailureMessage(

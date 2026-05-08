@@ -57,18 +57,30 @@ func main() {
 
 更完整的示例可以参考：
 
-- [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go)
-- [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md)
+- [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go)（本地 backend）
+- [examples/codeexecution/container/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/container/README.md)（Docker container backend）
+- [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md)（Jupyter kernel backend）
 
-### `WithCodeExecutor` 的默认行为
+### `WithCodeExecutor` 与围栏代码自动执行
 
-`llmagent.WithCodeExecutor(...)` 不只是给 Agent 提供执行环境。
+`llmagent.WithCodeExecutor(...)` 和响应阶段的围栏代码自动执行是
+**两个独立开关**。先分清二者，能避免「只配了 executor，却自动执行了
+回复里代码块」这类常见困惑。
 
-默认情况下，它还会启用响应阶段的代码执行处理器。只要 assistant 的回复内容
-恰好是一个可执行的 fenced code block，框架就会自动提取并执行这段代码。
+- `WithCodeExecutor(...)` 提供的是**运行时**（runtime），给那些依赖
+  执行器的工具（最典型的就是 `workspace_exec`）执行命令用。它本身
+  不会让框架去扫描模型的最终回复、然后自动跑里面的代码。
+- `EnableCodeExecutionResponseProcessor`（默认：`true`，由
+  `WithEnableCodeExecutionResponseProcessor(enable bool)` 控制）
+  决定框架是否扫描 assistant 回复，如果恰好是一个可执行的围栏代码块
+  就自动运行。
 
-如果只想复用 workspace、`workspace_exec` 或其他依赖执行器的能力，而不希望
-自动执行模型输出中的代码块，建议同时设置：
+回复里的代码块真的被自动执行，必须**两个条件同时满足**：有可用的
+executor**且**响应处理器开着。
+
+如果你只想让 executor 服务于 `workspace_exec` 或其他工具驱动的
+执行路径，不希望自动执行模型回复里的代码块，**显式**关掉响应
+处理器：
 
 ```go
 agent := llmagent.New(
@@ -79,11 +91,20 @@ agent := llmagent.New(
 )
 ```
 
-适合关闭自动代码执行的常见场景：
+适合关掉围栏代码自动执行的典型场景：
 
 - 只想使用 `workspace_exec`
 - 只需要给某些工具提供 workspace/runtime
 - 希望代码执行必须通过显式工具调用触发
+
+与 `WithSkills(repo)` auto-fallback 的联动：当 skills 层代你**隐式**
+注入本地 `CodeExecutor` 时（见 Agent Skills 指南），这个隐式 executor
+的用途被严格收敛为 "只是给 `workspace_exec` 供电"：如果你没有显式
+调用过 `WithEnableCodeExecutionResponseProcessor(...)`，框架会自动
+把 `EnableCodeExecutionResponseProcessor` 置为 `false`，避免在未经你
+配置时自动打开额外能力。相对地，**显式** `WithCodeExecutor(...)` 时该
+开关保持框架默认，且不会被 skills 的隐式逻辑改写，从而不影响你原有
+行为。
 
 ## 怎么选后端
 
@@ -264,6 +285,72 @@ func main() {
 目录约定的作用，是让模型和工具在稳定路径上协作，而不需要暴露底层
 staging 过程。
 
+## Workspace init hooks
+
+Init hook 在 `WorkspaceManager.CreateWorkspace` **成功返回之后**、**在把 `Workspace` 交还给调用方之前**执行。通过常见的 `WorkspaceRegistry` 做会话级去重时，这通常对应**每个逻辑 workspace id 各一次**（多数情况下即每个 agent 会话工作区一次）。在 **trusted-local** 等会复用同一条物理目录的模式下，不同会话若仍走一次新的「工作区获取」，init 仍可能再跑；不要理解成「整个磁盘目录一生只跑一遍」。
+
+适合先用 `InputSpec` 拉固定输入（`artifact://`、`host://` 等），再跑确定性初始化命令（例如
+`pip install`）。使用 `codeexecutor.NewWorkspaceInitExecutor` 包装 `CodeExecutor`；若执行器不实现
+`EngineProvider` 等，构造会**返回 error**，应对返回值做显式处理。
+
+基于制品的输入要求在调用 `CreateWorkspace` 时的 `context` 上带有 artifact service 与（如适用）会话信息，要求与
+`WorkspaceFS.StageInputs` 一致。常规的 llmagent workspace 工具链会从当前 `agent.Invocation` 注入这些信息，
+下面的示例无需手写 context 装配。
+
+```go
+import (
+    "fmt"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+)
+
+func newAnalystAgent() (*llmagent.LLMAgent, error) {
+    exec, err := codeexecutor.NewWorkspaceInitExecutor(
+        local.New(),
+        codeexecutor.NewWorkspaceInitHook(codeexecutor.WorkspaceInitSpec{
+            Inputs: []codeexecutor.InputSpec{
+                {
+                    From: "artifact://app/requirements.txt@3",
+                    To:   "work/requirements.txt",
+                    Mode: "copy",
+                },
+            },
+            Commands: []codeexecutor.WorkspaceInitCommand{
+                {
+                    Name: "install-deps",
+                    Cmd:  "bash",
+                    Args: []string{
+                        "-lc",
+                        "python3 -m venv .venv && " +
+                            ".venv/bin/pip install -q -r work/requirements.txt",
+                    },
+                    Timeout: 2 * time.Minute,
+                },
+            },
+        }),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("workspace init executor: %w", err)
+    }
+    return llmagent.New(
+        "analyst",
+        llmagent.WithCodeExecutor(exec),
+    ), nil
+}
+```
+
+若后续改了 pin 过的依赖或其他初始化输入，需要换一个**新的逻辑 workspace**（例如新会话 id），或由你自己的流程再跑安装；
+init hook 不会在磁盘文件变化后自动按文件再执行。
+
+### 与 `skill_load` 的关系
+
+通过 `skill_load` 加载的技能会在 `workspace_exec` 执行时按当前会话
+写入 `skills/<name>`。不必在 init hook 的 `Inputs` 里重复声明技能来源；init hook 负责
+与会话无关、且希望在任意工具运行前就位的那份固定物料与初始化命令。
+
 ## 哪些文件会保留
 
 通常有两类情况：
@@ -340,7 +427,8 @@ staging 过程。
 ## 参考
 
 - 示例：
-  - [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go)
-  - [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md)
+  - [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go)（本地 backend）
+  - [examples/codeexecution/container/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/container/README.md)（Docker container backend）
+  - [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md)（Jupyter kernel backend）
 - 相关文档：
   - [Artifact 文档](artifact.md)

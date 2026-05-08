@@ -127,6 +127,16 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  131072,
 		},
 		{
+			name:      "exact match - DeepSeek v4 pro",
+			modelName: "deepseek-v4-pro",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - DeepSeek v4 flash",
+			modelName: "deepseek-v4-flash",
+			expected:  1000000,
+		},
+		{
 			name:      "exact match - Kimi K2.5",
 			modelName: "kimi-k2.5",
 			expected:  256000,

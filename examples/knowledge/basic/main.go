@@ -13,13 +13,13 @@
 // Required environment variables:
 //   - OPENAI_API_KEY: Your OpenAI API key for LLM and embeddings
 //   - OPENAI_BASE_URL: (Optional) Custom OpenAI API endpoint, defaults to https://api.openai.com/v1
-//   - MODEL_NAME: (Optional) Model name to use, defaults to deepseek-chat
+//   - MODEL_NAME: (Optional) Model name to use, defaults to deepseek-v4-flash
 //
 // Example usage:
 //
 //	export OPENAI_API_KEY=sk-xxxx
 //	export OPENAI_BASE_URL=https://api.openai.com/v1
-//	export MODEL_NAME=deepseek-chat
+//	export MODEL_NAME=deepseek-v4-flash
 //	go run main.go
 package main
 
@@ -48,7 +48,7 @@ import (
 
 var (
 	defaultQuery   = "What are Large Language Models and how do they work?"
-	modelName      = getEnvOrDefault("MODEL_NAME", "deepseek-chat")
+	modelName      = getEnvOrDefault("MODEL_NAME", "deepseek-v4-flash")
 	vectorStore    = flag.String("vectorstore", "inmemory", "Vector store type: inmemory|sqlitevec|pgvector|tcvector|elasticsearch")
 	query          = flag.String("query", defaultQuery, "Query to ask the knowledge base")
 	showProgress   = flag.Bool("show-progress", false, "Show load progress (log-based)")

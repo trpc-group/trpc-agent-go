@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
@@ -608,6 +609,7 @@ skills:
   watch: false
   watch_bundled: true
   watch_debounce_ms: 125
+  tool_profile: "knowledge_only"
   load_mode: "session"
   max_loaded_skills: 3
   loaded_content_in_tool_results: false
@@ -628,6 +630,7 @@ skills:
 tools:
   enable_local_exec: true
   enable_openclaw_tools: true
+  openclaw_tooling_guidance: ""
   enable_parallel_tools: true
   refresh_toolsets_on_run: true
   providers:
@@ -750,6 +753,11 @@ memory:
 	require.False(t, opts.SkillsWatch)
 	require.True(t, opts.SkillsWatchBundled)
 	require.Equal(t, 125*time.Millisecond, opts.SkillsWatchDebounce)
+	require.Equal(
+		t,
+		skillprofile.KnowledgeOnly,
+		opts.SkillsToolProfile,
+	)
 	require.Equal(t, "session", opts.SkillsLoadMode)
 	require.Equal(t, 3, opts.SkillsMaxLoaded)
 	require.False(t, opts.SkillsToolResults)
@@ -778,6 +786,8 @@ memory:
 
 	require.True(t, opts.EnableLocalExec)
 	require.True(t, opts.EnableOpenClawTools)
+	require.NotNil(t, opts.OpenClawToolingGuide)
+	require.Equal(t, "", *opts.OpenClawToolingGuide)
 	require.True(t, opts.EnableParallelTools)
 	require.True(t, opts.RefreshToolSetsOnRun)
 
@@ -903,36 +913,65 @@ skills:
 	require.Equal(t, "b,c", opts.SkillsAllowBundled)
 }
 
-func TestParseRunOptions_KnowledgesEntriesConfig(t *testing.T) {
+func TestParseRunOptions_KnowledgesProvidersConfig(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := writeTempConfig(t, `
 knowledges:
-  entries:
+  providers:
     - name: "docs"
-      embedder:
-        type: "openai"
-        model: "text-embedding-3-small"
-      vector_store:
-        type: "inmemory"
-        max_results: 5
+      max_results: 5
+      config:
+        embedder:
+          type: "openai"
+          model: "text-embedding-3-small"
+        vector_store:
+          type: "inmemory"
 `)
 
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
 	require.Len(t, opts.KnowledgesConfig, 1)
-	require.Contains(t, opts.KnowledgesConfig, "docs")
-	require.NotNil(t, opts.KnowledgesConfig["docs"])
+	require.Equal(t, "docs", opts.KnowledgesConfig[0].Name)
+	require.Equal(t, "builtin", opts.KnowledgesConfig[0].Type)
+	require.Equal(t, 5, opts.KnowledgesConfig[0].MaxResults)
 }
 
-func TestParseRunOptions_KnowledgesEntriesRequireName(t *testing.T) {
+func TestParseRunOptions_KnowledgesProvidersExternalConfig(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := writeTempConfig(t, `
 knowledges:
-  entries:
-    - vector_store:
-        type: "inmemory"
+  providers:
+    - type: "lingshan"
+      name: "lingshan"
+      max_results: 5
+      config:
+        knowledge_base_id: "kb1"
+        service_name: "trpc.test.knowledge.lingshan"
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Len(t, opts.KnowledgesConfig, 1)
+	entry := opts.KnowledgesConfig[0]
+	require.Equal(t, "lingshan", entry.Type)
+	require.Equal(t, "lingshan", entry.Name)
+	require.Equal(t, 5, entry.MaxResults)
+	require.NotNil(t, entry.Config)
+	require.Equal(t, "kb1", mappingValue(entry.Config, "knowledge_base_id").Value)
+	require.Equal(t, "trpc.test.knowledge.lingshan", mappingValue(entry.Config, "service_name").Value)
+}
+
+func TestParseRunOptions_KnowledgesProvidersRequireName(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  providers:
+    - config:
+        vector_store:
+          type: "inmemory"
 `)
 
 	_, err := parseRunOptions([]string{"-config", cfgPath})
@@ -940,21 +979,23 @@ knowledges:
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 1, exitErr.Code)
-	require.Contains(t, err.Error(), "knowledges.entries[0].name is empty")
+	require.Contains(t, err.Error(), "knowledges.providers[0].name is empty")
 }
 
-func TestParseRunOptions_KnowledgesEntriesRejectDuplicateNames(t *testing.T) {
+func TestParseRunOptions_KnowledgesProvidersRejectDuplicateNames(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := writeTempConfig(t, `
 knowledges:
-  entries:
+  providers:
     - name: "docs"
-      vector_store:
-        type: "inmemory"
+      config:
+        vector_store:
+          type: "inmemory"
     - name: "docs"
-      vector_store:
-        type: "inmemory"
+      config:
+        vector_store:
+          type: "inmemory"
 `)
 
 	_, err := parseRunOptions([]string{"-config", cfgPath})
@@ -965,26 +1006,7 @@ knowledges:
 	require.Contains(t, err.Error(), "duplicate knowledge name: docs")
 }
 
-func TestConvertKnowledgeConfigs_SkipsEntriesWithoutComponents(t *testing.T) {
-	t.Parallel()
-
-	configs, err := convertKnowledgeConfigs([]knowledgeEntryConfig{
-		{Name: "empty"},
-		{
-			Name: "docs",
-			VectorStore: &rawYAMLNode{Node: yamlNode(t, `
-type: inmemory
-max_results: 5
-`)},
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, configs, 1)
-	require.NotContains(t, configs, "empty")
-	require.Contains(t, configs, "docs")
-}
-
-func TestConvertKnowledgeConfigs_EmptyEntriesReturnNil(t *testing.T) {
+func TestConvertKnowledgeConfigs_EmptyProvidersReturnNil(t *testing.T) {
 	t.Parallel()
 
 	configs, err := convertKnowledgeConfigs(nil)
@@ -992,38 +1014,26 @@ func TestConvertKnowledgeConfigs_EmptyEntriesReturnNil(t *testing.T) {
 	require.Nil(t, configs)
 }
 
-func TestConvertKnowledgeConfigs_ClonesNestedNodes(t *testing.T) {
+func TestParseRunOptions_KnowledgesLegacyEntriesReturnsHelpfulError(t *testing.T) {
 	t.Parallel()
 
-	embedderNode := yamlNode(t, `
-type: openai
-model: text-embedding-3-small
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  entries:
+    - name: "docs"
+      embedder:
+        type: "openai"
+      vector_store:
+        type: "inmemory"
 `)
-	vectorStoreNode := yamlNode(t, `
-type: inmemory
-max_results: 5
-`)
 
-	configs, err := convertKnowledgeConfigs([]knowledgeEntryConfig{{
-		Name:        "docs",
-		Embedder:    &rawYAMLNode{Node: embedderNode},
-		VectorStore: &rawYAMLNode{Node: vectorStoreNode},
-	}})
-	require.NoError(t, err)
-
-	mappingValue(embedderNode, "model").Value = "mutated-model"
-	mappingValue(vectorStoreNode, "max_results").Value = "99"
-
-	gotEmbedder := mappingValue(configs["docs"], "embedder")
-	gotVectorStore := mappingValue(configs["docs"], "vector_store")
-	require.Equal(t, "text-embedding-3-small", mappingValue(gotEmbedder, "model").Value)
-	require.Equal(t, "5", mappingValue(gotVectorStore, "max_results").Value)
-}
-
-func TestCloneYAMLNode_NilReturnsNil(t *testing.T) {
-	t.Parallel()
-
-	require.Nil(t, cloneYAMLNode(nil))
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.Contains(t, err.Error(), "knowledges.entries is no longer supported")
+	require.Contains(t, err.Error(), "knowledges.providers")
 }
 
 func TestParseRunOptions_DebugRecorder_ConfigApplied(t *testing.T) {
@@ -1056,6 +1066,11 @@ func TestParseRunOptions_SkillsDefaults(t *testing.T) {
 		defaultSkillsWatchDebounce,
 		opts.SkillsWatchDebounce,
 	)
+	require.Equal(
+		t,
+		defaultSkillsToolProfile,
+		opts.SkillsToolProfile,
+	)
 	require.Equal(t, defaultSkillsLoadMode, opts.SkillsLoadMode)
 	require.True(t, opts.SkillsToolResults)
 	require.True(t, opts.SkillsSkipFallback)
@@ -1074,6 +1089,71 @@ func TestParseRunOptions_SkillsLoadMode_InvalidFails(t *testing.T) {
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 2, exitErr.Code)
+}
+
+func TestParseRunOptions_SkillsToolProfile_InvalidFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-skills-tool-profile", "bad",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 2, exitErr.Code)
+}
+
+func TestParseRunOptions_SkillsToolProfile_FullAccepted(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	opts, err := parseRunOptions([]string{
+		"-skills-tool-profile", "FULL",
+	})
+	require.NoError(t, err)
+	require.Equal(t, skillprofile.Full, opts.SkillsToolProfile)
+}
+
+func TestParseRunOptions_SkillsToolProfile_ConfigInvalidFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  tool_profile: "bad"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestSkillsOptionExitCode(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		2,
+		skillsOptionExitCode(map[string]struct{}{
+			flagSkillsToolProfile: {},
+		}),
+	)
+	require.Equal(
+		t,
+		2,
+		skillsOptionExitCode(map[string]struct{}{
+			flagSkillsLoadMode: {},
+		}),
+	)
+	require.Equal(t, 1, skillsOptionExitCode(map[string]struct{}{}))
 }
 
 func TestParseRunOptions_AdminDefaults(t *testing.T) {

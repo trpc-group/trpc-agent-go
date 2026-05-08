@@ -15,6 +15,9 @@ type options struct {
 	graphNodeInterruptActivityEnabled      bool // graphNodeInterruptActivityEnabled enables graph interrupt activity events.
 	graphNodeInterruptActivityTopLevelOnly bool // graphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 	reasoningContentEnabled                bool // reasoningContentEnabled controls whether reasoning content events are emitted.
+	eventSourceMetadataEnabled             bool // eventSourceMetadataEnabled attaches trpc-agent-go source metadata to translated AG-UI events.
+	toolCallDeltaStreamingEnabled          bool // toolCallDeltaStreamingEnabled streams partial tool-call arguments.
+	streamingToolResultActivityEnabled     bool // streamingToolResultActivityEnabled rewrites partial tool results as activity events.
 }
 
 // Option is a function that configures the options.
@@ -57,5 +60,31 @@ func WithGraphNodeInterruptActivityTopLevelOnly(enabled bool) Option {
 func WithReasoningContentEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.reasoningContentEnabled = enabled
+	}
+}
+
+// WithEventSourceMetadataEnabled controls whether the translator attaches
+// source metadata from the original trpc-agent-go event to each translated
+// AG-UI event via the AG-UI event's rawEvent field.
+func WithEventSourceMetadataEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.eventSourceMetadataEnabled = enabled
+	}
+}
+
+// WithToolCallDeltaStreamingEnabled controls whether the translator emits
+// streamed tool call events from chat completion tool-call deltas.
+func WithToolCallDeltaStreamingEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.toolCallDeltaStreamingEnabled = enabled
+	}
+}
+
+// WithStreamingToolResultActivityEnabled controls whether the translator rewrites
+// partial tool-result chunks into activity events and leaves only the final
+// tool result on the tool-result path.
+func WithStreamingToolResultActivityEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.streamingToolResultActivityEnabled = enabled
 	}
 }

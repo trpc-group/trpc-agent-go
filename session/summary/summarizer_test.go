@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 )
 
 func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
@@ -144,6 +145,93 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 		for _, event := range sess.Events {
 			assert.NotEqual(t, "system", event.Author, "no system events should be added.")
 		}
+	})
+
+	t.Run("branch scope excludes ancestor root events from summary text", func(t *testing.T) {
+		s := NewSummarizer(
+			&fakeModel{},
+			WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+		)
+		sess := &session.Session{
+			ID:      "branch-scope",
+			AppName: "app",
+			Events: []event.Event{
+				{
+					Author:    "user",
+					FilterKey: "app",
+					Timestamp: time.Now().Add(-3 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "root message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub",
+					Timestamp: time.Now().Add(-2 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "branch message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub/tool",
+					Timestamp: time.Now().Add(-1 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "descendant message"},
+					}}},
+				},
+			},
+		}
+		isummaryscope.SetScopeFilterKey(sess, "app/sub")
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotContains(t, text, "root message")
+		assert.Contains(t, text, "branch message")
+		assert.Contains(t, text, "descendant message")
+	})
+
+	t.Run("full-session summary keeps child branch content", func(t *testing.T) {
+		s := NewSummarizer(
+			&fakeModel{},
+			WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+		)
+		sess := &session.Session{
+			ID:      "full-session-mixed",
+			AppName: "app",
+			Events: []event.Event{
+				{
+					Author:    "user",
+					FilterKey: "app",
+					Timestamp: time.Now().Add(-3 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "root message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub",
+					Timestamp: time.Now().Add(-2 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "child message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub/tool",
+					Timestamp: time.Now().Add(-1 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "descendant message"},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "root message")
+		assert.Contains(t, text, "child message")
+		assert.Contains(t, text, "descendant message")
 	})
 
 }
@@ -292,6 +380,21 @@ func TestSessionSummarizer_GenerateSummary_ModelError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to generate summary")
 }
 
+func TestSessionSummarizer_GenerateSummary_NilResponseChannel(t *testing.T) {
+	s := NewSummarizer(&nilResponseChannelModel{})
+
+	sess := &session.Session{
+		ID: "test-nil-channel",
+		Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "test"}}}}, Timestamp: time.Now()},
+		},
+	}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model returned nil response channel")
+}
+
 func TestSessionSummarizer_GenerateSummary_ResponseError(t *testing.T) {
 	responseErrorModel := &responseErrorModel{}
 	s := NewSummarizer(responseErrorModel)
@@ -343,6 +446,27 @@ func TestSessionSummarizer_GenerateSummary_EmptyResponse(t *testing.T) {
 	_, err := s.Summarize(context.Background(), sess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "generated empty summary")
+}
+
+func TestSessionSummarizer_Summarize_ContextTimeoutWhileWaitingForResponse(t *testing.T) {
+	s := NewSummarizer(&blockingResponseModel{})
+	sess := &session.Session{
+		ID: "timeout",
+		Events: []event.Event{{
+			Author:    "user",
+			Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "test"}}}},
+			Timestamp: time.Now(),
+		}},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := s.Summarize(ctx, sess)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 500*time.Millisecond)
 }
 
 func TestSessionSummarizer_ShouldSummarize_EmptyEvents(t *testing.T) {
@@ -821,6 +945,26 @@ func (e *emptyResponseModel) GenerateContent(ctx context.Context, req *model.Req
 	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: ""}}}}
 	close(ch)
 	return ch, nil
+}
+
+// blockingResponseModel simulates a non-cooperative provider that neither
+// sends a response nor closes the response channel after ctx cancellation.
+type blockingResponseModel struct{}
+
+func (b *blockingResponseModel) Info() model.Info { return model.Info{Name: "blocking-response"} }
+func (b *blockingResponseModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	// The channel is intentionally never closed to exercise context timeout handling.
+	return make(chan *model.Response), nil
+}
+
+type nilResponseChannelModel struct{}
+
+func (n *nilResponseChannelModel) Info() model.Info {
+	return model.Info{Name: "nil-response-channel"}
+}
+
+func (n *nilResponseChannelModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	return nil, nil
 }
 
 func TestFormatResponseError(t *testing.T) {
@@ -1538,6 +1682,50 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
 		require.True(t, ok)
 		assert.Empty(t, string(raw))
+	})
+
+	t.Run("uses branch scope when building injected token text", func(t *testing.T) {
+		s := &sessionSummarizer{}
+		sess := &session.Session{
+			AppName: "app",
+			Events: []event.Event{
+				{
+					Author:    "user",
+					FilterKey: "app",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "root message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "branch message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub/tool",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "descendant message"},
+					}}},
+				},
+			},
+		}
+		isummaryscope.SetScopeFilterKey(sess, "app/sub")
+
+		checkSess := s.buildCheckSession(sess)
+		require.NotNil(t, checkSess)
+
+		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
+		require.True(t, ok)
+		text := string(raw)
+		assert.NotContains(t, text, "root message")
+		assert.Contains(t, text, "branch message")
+		assert.Contains(t, text, "descendant message")
 	})
 }
 

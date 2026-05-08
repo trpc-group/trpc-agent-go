@@ -76,6 +76,11 @@ type Message struct {
 	// ReasoningContent is hunyuan or deepseek think content
 	// - https://api-docs.deepseek.com/api/create-chat-completion#responses
 	ReasoningContent string `json:"reasoning_content,omitempty"`
+	// ReasoningSignature is a token that verifies the reasoning text was generated
+	// by the model. When passing a reasoning block back to the API in a multi-turn
+	// conversation, include the text and its signature unmodified.
+	// Currently used by AWS Bedrock (Claude) models.
+	ReasoningSignature string `json:"reasoning_signature,omitempty"`
 }
 
 // AddFilePath adds a file path to the message.
@@ -344,14 +349,34 @@ type GenerationConfig struct {
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
 
 	// ReasoningEffort limits the reasoning effort for reasoning models.
-	// Supported values: "low", "medium", "high".
-	// Only effective for OpenAI o-series models.
+	// The accepted values depend on the provider:
+	//   - OpenAI o-series: "low", "medium", "high".
+	//   - Anthropic adaptive thinking: "low", "medium", "high", "max", and
+	//     "xhigh" on models that support it.
+	//   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): "high", "max".
+	//     For backward compatibility, the DeepSeek service maps "low" and
+	//     "medium" to "high", and "xhigh" to "max", so older configurations
+	//     still work without errors.
+	// See:
+	//   - https://platform.openai.com/docs/api-reference/chat/create
+	//   - https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
+	//   - https://api-docs.deepseek.com/api/create-chat-completion
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
-	// ThinkingEnabled enables thinking mode for Claude and Gemini models via OpenAI API.
+	// ThinkingEnabled toggles thinking/reasoning mode for providers that
+	// expose it (e.g. DeepSeek v4 via the "thinking" object, Claude / Gemini
+	// via the OpenAI-compatible API).
+	//
+	// When left nil, trpc-agent-go does NOT emit any thinking-toggle field
+	// in the outgoing request, so the provider's server-side default takes
+	// effect (DeepSeek v4 defaults to "enabled"). Set to *true / *false to
+	// force a specific behavior. Anthropic adaptive-thinking models map *true
+	// to thinking.type=adaptive, while older Anthropic models map *true to
+	// thinking.type=enabled with ThinkingTokens.
 	ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
 
-	// ThinkingTokens controls the length of thinking for Claude and Gemini models via OpenAI API.
+	// ThinkingTokens controls the fixed thinking token budget for providers that support it.
+	// Anthropic adaptive-thinking models ignore this field and use ReasoningEffort instead.
 	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 
@@ -430,6 +455,11 @@ type Request struct {
 	// capabilities (e.g. OpenAI response_format with json_schema) to enforce
 	// JSON formatting. This field is optional and provider-agnostic.
 	StructuredOutput *StructuredOutput `json:"structured_output,omitempty"`
+
+	// ExtraFields stores provider-specific top-level request body fields.
+	// Model adapters merge these with model-level extra fields when supported;
+	// request-level values take precedence.
+	ExtraFields map[string]any `json:"-"`
 
 	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
 }

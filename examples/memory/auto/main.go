@@ -37,7 +37,7 @@ import (
 var (
 	modelName = flag.String(
 		"model",
-		"deepseek-chat",
+		"deepseek-v4-flash",
 		"Model for chat responses",
 	)
 	extModel = flag.String(
@@ -59,7 +59,7 @@ var (
 		"memory",
 		"inmemory",
 		"Memory service type: inmemory, sqlite, sqlitevec, redis, "+
-			"postgres, pgvector, mysql",
+			"postgres, pgvector, mysql, mysqlvec",
 	)
 )
 

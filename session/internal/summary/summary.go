@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
@@ -71,7 +71,7 @@ func prependPrevSummary(prevSummary string, delta []event.Event, now time.Time) 
 // buildFilterSession builds a temporary session containing filterKey events.
 // When filterKey=="", it represents the full-session input.
 func buildFilterSession(base *session.Session, filterKey string, evs []event.Event) *session.Session {
-	return &session.Session{
+	tmp := &session.Session{
 		ID:        base.ID + ":" + filterKey,
 		AppName:   base.AppName,
 		UserID:    base.UserID,
@@ -80,6 +80,8 @@ func buildFilterSession(base *session.Session, filterKey string, evs []event.Eve
 		UpdatedAt: time.Now(),
 		CreatedAt: base.CreatedAt,
 	}
+	isummaryscope.SetScopeFilterKey(tmp, filterKey)
+	return tmp
 }
 
 // SummarizeSession performs per-filterKey delta summarization using the given
@@ -142,7 +144,13 @@ func SummarizeSession(
 	// Build input with previous summary prepended.
 	input := prependPrevSummary(prevText, delta, time.Now())
 	tmp := buildFilterSession(base, filterKey, input)
-	if !force && !ShouldSummarize(ctx, m, tmp) {
+	checkTmp := tmp
+	if filterKey == session.SummaryFilterKeyAllContents {
+		if triggerFilterKey := summaryTriggerFilterKeyFromContext(ctx); triggerFilterKey != "" {
+			checkTmp = buildFilterSession(base, triggerFilterKey, input)
+		}
+	}
+	if !force && !ShouldSummarize(ctx, m, checkTmp) {
 		return false, nil
 	}
 
@@ -187,6 +195,26 @@ func selectUpdatedAt(tmp *session.Session, prevAt, latestTs time.Time, hasDelta 
 // lastIncludedTsKey is the key for the last included timestamp.
 // This key is used to store the last included timestamp in the session state.
 const lastIncludedTsKey = "summary:last_included_ts"
+
+type summaryTriggerFilterKeyContextKey struct{}
+
+func contextWithSummaryTriggerFilterKey(ctx context.Context, filterKey string) context.Context {
+	if filterKey == "" {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, summaryTriggerFilterKeyContextKey{}, filterKey)
+}
+
+func summaryTriggerFilterKeyFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	filterKey, _ := ctx.Value(summaryTriggerFilterKeyContextKey{}).(string)
+	return filterKey
+}
 
 func readLastIncludedTimestamp(tmp *session.Session) time.Time {
 	if tmp == nil {
@@ -326,21 +354,34 @@ func copySummaryToKey(sess *session.Session, srcKey, dstKey string) {
 	}
 }
 
-// CreateSessionSummaryWithCascade creates a session summary for the specified filterKey
-// and cascades to create a full-session summary if the filterKey is not already the full session.
-// The createSummaryFunc should create a summary for the given filterKey and return an error if failed.
-// When all events match the filterKey (single filterKey scenario), it generates only one summary
-// and copies it to both keys to avoid duplicate LLM calls. The copied summary is then persisted
-// via createSummaryFunc which detects existing in-memory summary and triggers persistence.
+// CreateSessionSummaryWithCascade creates one or more session summaries for the
+// specified filterKey according to the dispatch policy.
+//
+// The createSummaryFunc should create a summary for the given filterKey and
+// return an error if failed. When the policy selects both the branch key and
+// the full-session key and all events match the branch, the helper generates
+// only one summary and copies it to both keys to avoid duplicate LLM calls.
+// The copied summary is then persisted via createSummaryFunc which detects the
+// existing in-memory summary and triggers persistence.
 func CreateSessionSummaryWithCascade(
 	ctx context.Context,
 	sess *session.Session,
 	filterKey string,
 	force bool,
+	policy SummaryDispatchPolicy,
 	createSummaryFunc func(context.Context, *session.Session, string, bool) error,
 ) error {
-	if filterKey == session.SummaryFilterKeyAllContents {
-		return createSummaryFunc(ctx, sess, filterKey, force)
+	targets := policy.SummaryTargets(filterKey)
+	if len(targets) == 0 {
+		return nil
+	}
+	if len(targets) == 1 {
+		target := targets[0]
+		if target == session.SummaryFilterKeyAllContents &&
+			filterKey != session.SummaryFilterKeyAllContents {
+			ctx = contextWithSummaryTriggerFilterKey(ctx, filterKey)
+		}
+		return createSummaryFunc(ctx, sess, target, force)
 	}
 
 	// Optimization: when all events match the filterKey, the filterKey summary
@@ -363,12 +404,17 @@ func CreateSessionSummaryWithCascade(
 
 	// Multiple filterKeys detected: generate both summaries in parallel.
 	var summaryWg sync.WaitGroup
-	result := make([]error, 2)
-	summaryWg.Add(2)
-	for i, fk := range []string{filterKey, session.SummaryFilterKeyAllContents} {
+	result := make([]error, len(targets))
+	summaryWg.Add(len(targets))
+	for i, fk := range targets {
 		go func(i int, fk string) {
 			defer summaryWg.Done()
-			err := createSummaryFunc(ctx, sess, fk, force)
+			callCtx := ctx
+			if fk == session.SummaryFilterKeyAllContents &&
+				filterKey != session.SummaryFilterKeyAllContents {
+				callCtx = contextWithSummaryTriggerFilterKey(callCtx, filterKey)
+			}
+			err := createSummaryFunc(callCtx, sess, fk, force)
 			if err != nil {
 				result[i] = fmt.Errorf("create session summary for filterKey %q failed: %w", fk, err)
 			}
@@ -376,5 +422,10 @@ func CreateSessionSummaryWithCascade(
 	}
 	summaryWg.Wait()
 
-	return util.If(result[0] != nil, result[0], result[1])
+	for _, err := range result {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

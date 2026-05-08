@@ -59,7 +59,7 @@ func main() {
         summary.WithChecksAny(                         // Trigger when any condition is met
             summary.CheckEventThreshold(20),           // Trigger when 20+ new events since last summary
             summary.CheckTokenThreshold(4000),         // Trigger when 4000+ new tokens since last summary
-            summary.CheckTimeThreshold(5*time.Minute), // Trigger after 5 minutes of inactivity
+            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
         ),
         summary.WithMaxSummaryWords(200), // Limit summary to 200 words
     )
@@ -183,7 +183,7 @@ As conversations continue to grow, maintaining complete event history can consum
 
 **Core Features:**
 
-- **Automatic Triggering**: Automatically generate summaries based on event count, token count, or time thresholds
+- **Automatic Triggering**: During summary checks, automatically generate summaries based on event count, token count, or time thresholds
 - **Incremental Processing**: Only process new events since the last summary, avoiding redundant computation
 - **LLM-Driven**: Use configured LLM model to generate high-quality, context-aware summaries
 - **Non-Destructive**: Original events are fully preserved, summaries stored separately
@@ -205,7 +205,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(                         // Trigger when any condition is met
         summary.CheckEventThreshold(20),           // Trigger when 20+ new events since last summary
         summary.CheckTokenThreshold(4000),         // Trigger when 4000+ new tokens since last summary
-        summary.CheckTimeThreshold(5*time.Minute), // Trigger after 5 minutes of inactivity
+        summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
     ),
     summary.WithMaxSummaryWords(200),              // Limit summary to 200 words
 )
@@ -586,20 +586,21 @@ Suitable for production environments and distributed applications, provides high
 
 - **`WithEnableTracing(enable bool)`**: Enable OpenTelemetry tracing for Redis session operations. Default is `false`. When enabled, operations like `CreateSession`, `GetSession`, `AppendEvent`, `DeleteSession`, `AppendTrackEvent`, `CreateSessionSummary`, and `GetSessionSummaryText` automatically create spans.
 
-!!! note "About Root Span"
-    Session operations are executed by the Runner, occurring before and after the Agent's `Run()` call. The Agent's root span is created inside `agent.Run()`, so Session spans are not automatically attached as children of the Agent span. To see a complete Session span hierarchy in observability platforms like Langfuse, you need to manually create a root span before calling `runner.Run()`:
-
-    ```go
-    import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
-
-    // Create a root span before runner.Run(), so that session spans
-    // (create_session, get_session, append_event, etc.) become children
-    // of this root span via context propagation.
-    ctx, span := atrace.Tracer.Start(ctx, "my_request")
-    defer span.End()
-
-    eventChan, err := r.Run(ctx, userID, sessionID, message)
-    ```
+> **About Root Span**
+>
+> Session operations are executed by the Runner, occurring before and after the Agent's `Run()` call. The Agent's root span is created inside `agent.Run()`, so Session spans are not automatically attached as children of the Agent span. To see a complete Session span hierarchy in observability platforms like Langfuse, you need to manually create a root span before calling `runner.Run()`:
+>
+> ```go
+> import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+>
+> // Create a root span before runner.Run(), so that session spans
+> // (create_session, get_session, append_event, etc.) become children
+> // of this root span via context propagation.
+> ctx, span := atrace.Tracer.Start(ctx, "my_request")
+> defer span.End()
+>
+> eventChan, err := r.Run(ctx, userID, sessionID, message)
+> ```
 
 **Hook Configuration:**
 
@@ -693,8 +694,9 @@ How it works:
 - Async write timeout is 2 seconds (`defaultAsyncPersistTimeout`).
 - Calling `Close()` closes all channels and waits for workers to finish remaining tasks.
 
-!!! warning "Caution"
-    In async persistence mode, events still in the channel may be lost if the service process crashes unexpectedly. Evaluate whether to enable this based on your data consistency requirements.
+> **Caution**
+>
+> In async persistence mode, events still in the channel may be lost if the service process crashes unexpectedly. Evaluate whether to enable this based on your data consistency requirements.
 
 ### Storage Format & Version Migration
 
@@ -705,11 +707,12 @@ Redis Session storage has two data storage engines. Each session's storage versi
 | **ZSet** | Legacy | `{appName}` | All user data concentrated in one Cluster slot; hot spot risk at scale. Simple data structure with full Event JSON stored directly in SortedSet members. |
 | **HashIdx** | **New (default)** | `{userID}` | Per-user distribution eliminates hot spots; separated data and index (Hash for data + ZSet for index); ZSet stores only eventIDs to avoid memory bloat; independent session metadata supports flexible queries. |
 
-!!! info "How to distinguish new vs. legacy mode"
-    - **HashIdx is the new mode**: Session-related keys are prefixed with `hashidx:`, using `{userID}` as the hash tag to distribute data across different Redis Cluster slots by user.
-    - **ZSet is the legacy mode**: Session-related keys use `{appName}` as the hash tag, concentrating all user data for the same app in a single slot.
-    - **AppState is the exception**: `appstate:{appName}` has an identical format in both modes (no `hashidx:` prefix), so AppState is unaffected by storage version migration — zero migration cost.
-    - Newly created sessions use HashIdx storage in `CompatModeLegacy` (default) and `CompatModeNone` modes.
+> **How to distinguish new vs. legacy mode**
+>
+> - **HashIdx is the new mode**: Session-related keys are prefixed with `hashidx:`, using `{userID}` as the hash tag to distribute data across different Redis Cluster slots by user.
+> - **ZSet is the legacy mode**: Session-related keys use `{appName}` as the hash tag, concentrating all user data for the same app in a single slot.
+> - **AppState is the exception**: `appstate:{appName}` has an identical format in both modes (no `hashidx:` prefix), so AppState is unaffected by storage version migration — zero migration cost.
+> - Newly created sessions use HashIdx storage in `CompatModeLegacy` (default) and `CompatModeNone` modes.
 
 The new version uses **CompatMode** (compatibility mode) to enable smooth migration from the legacy storage format to the new one without downtime.
 
@@ -744,8 +747,9 @@ sessionService, err := redis.NewService(
 )
 ```
 
-!!! tip "When is Phase 1 needed?"
-    `CompatModeTransition` is only required for **canary/gray releases or mixed-version deployments**. If you can upgrade all instances at once (e.g., full release), you can skip Phase 1 and directly use the default `CompatModeLegacy`.
+> **When is Phase 1 needed?**
+>
+> `CompatModeTransition` is only required for **canary/gray releases or mixed-version deployments**. If you can upgrade all instances at once (e.g., full release), you can skip Phase 1 and directly use the default `CompatModeLegacy`.
 
 **UserState Considerations:** The old and new storage formats use **different Redis keys** for UserState (old: `userstate:{appName}:{userID}`, new: `hashidx:userstate:appName:{userID}`). After upgrading, new sessions created via HashIdx will **only read the new key** when merging UserState, and cannot access data in the old key.
 
@@ -765,8 +769,9 @@ sessionService, err := redis.NewService(
 )
 ```
 
-!!! warning "Important"
-    This compatibility concern only applies to **multi-node deployments where requests from the same user may be routed to both old and new version Session Service instances**. If you are running a single node, or your routing strategy ensures the same user always hits the same version instance, this limitation does not apply.
+> **Important**
+>
+> This compatibility concern only applies to **multi-node deployments where requests from the same user may be routed to both old and new version Session Service instances**. If you are running a single node, or your routing strategy ensures the same user always hits the same version instance, this limitation does not apply.
 
 **Phase 3: Cleanup Complete**
 
@@ -1675,7 +1680,7 @@ As conversations grow longer, maintaining full event history can become memory-i
 
 ### Key Features
 
-- **Automatic summarization**: Automatically trigger summaries based on configurable conditions such as event count, token count, or time threshold.
+- **Automatic summarization**: During summary checks, automatically trigger summaries based on configurable conditions such as event count, token count, or time threshold.
 - **Incremental summarization**: Only new events since the last summary are processed, avoiding redundant computation.
 - **LLM-powered**: Uses any configured LLM model to generate high-quality, context-aware summaries.
 - **Non-destructive**: Original events remain unchanged; summaries are stored separately.
@@ -1776,6 +1781,22 @@ eventChan, err := runner.Run(ctx, userID, sessionID, userMessage)
 
 The framework provides two distinct modes for managing conversation context sent to the LLM:
 
+First, separate the three context-reduction mechanisms:
+
+| Mechanism | Layer | What changes | Typical use |
+| --- | --- | --- | --- |
+| Summary | Session Service + prompt assembly | Uses an LLM to create a persisted historical summary. With `WithAddSessionSummary(true)`, the request injects that summary and appends only incremental events after the summary point | Preserve semantic continuity in long sessions |
+| Context compaction | Agent prompt assembly | Does not call an LLM or drop whole turns; it only rewrites `tool result` content | Clean up large search results, logs, web fetches, and similar tool outputs |
+| Token tailoring | Model provider | Drops or keeps message rounds by token budget immediately before the provider call | Final fallback to keep the request within the context window |
+
+In call order, the agent assembles the prompt, injects summary when
+`WithAddSessionSummary(true)` is enabled, and optionally compacts `tool result`
+content. If summary injection is enabled and the request still approaches the
+context window, the flow may refresh the summary once and rebuild the request.
+Finally, model-layer token tailoring trims the message list. Context compaction
+shrinks tool-output payloads inside messages, token tailoring drops message
+rounds, and summary creates a semantic replacement for historical context.
+
 **Mode 1: With Summary (`WithAddSessionSummary(true)`)**
 
 - The session summary is merged into the existing system message when one is already present, or prepended as a new system message when none exists.
@@ -1783,26 +1804,43 @@ The framework provides two distinct modes for managing conversation context sent
 - This ensures complete context: condensed history (summary) + all new conversations since summarization.
 - `WithMaxHistoryRuns` is **ignored** in this mode.
 
-**Optional: Prompt-side context compaction**
+**Context compaction details**
 
-When `WithEnableContextCompaction(true)` is enabled, the framework adds a lightweight Phase 1 compaction pass before the LLM call:
+Context compaction is not another name for summary, and it is not token
+tailoring. It only targets `tool result` content, which is the part most likely
+to grow unexpectedly. It does not summarize ordinary user/assistant messages
+with an LLM, and it does not discard complete message rounds the way token
+tailoring may.
+
+> **Naming note**: "compaction" in `WithEnableContextCompaction(true)` means
+> prompt-side tool result compaction/pruning. Semantic summaries are still
+> controlled by `WithAddSessionSummary(true)` and the configured session
+> summarizer.
+
+When `WithEnableContextCompaction(true)` is enabled, the framework adds prompt-side compaction before the LLM call:
 
 - **Pass 1** — Historical tool results from older requests that exceed `ContextCompactionToolResultMaxTokens` (default 1024 tokens) are replaced with a placeholder while keeping `ToolID` and `ToolName`.
-- **Pass 2** — Any single tool result (including the current request) exceeding `ContextCompactionOversizedToolResultMaxTokens` (default 8192 tokens) is truncated using head+tail preservation with a `[...N characters truncated...]` marker. Pass 2 fires independently of `EnableContextCompaction`.
-- The latest `ContextCompactionKeepRecentRequests` completed requests are exempt from Pass 1 (but not Pass 2).
+- **Pass 2** — Any single tool result (including the current request) exceeding `ContextCompactionOversizedToolResultMaxTokens` is truncated using head+tail preservation with a `[...N characters truncated...]` marker. **Disabled by default (value `0`)** — you must explicitly call `WithContextCompactionOversizedToolResultMaxTokens(...)` and keep `WithEnableContextCompaction(true)` for Pass 2 to fire (recommended opt-in value: 8192 tokens).
+- The latest `ContextCompactionKeepRecentRequests` completed requests are exempt from Pass 1 (but if Pass 2 is opted into, they remain subject to Pass 2 truncation).
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model.
 - Model-layer token tailoring remains the final fallback.
+- Context compaction uses `SimpleTokenCounter` by default. For CJK-heavy
+  workloads or provider-specific tokenization, pass the same custom counter
+  used by token tailoring via `WithContextCompactionTokenCounter(...)`.
 
 ```go
+counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1.6))
+
 llmAgent := llmagent.New(
     "my-agent",
     llmagent.WithModel(summaryModel),
     llmagent.WithAddSessionSummary(true),
-    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableContextCompaction(true), // only shrinks tool results; does not generate a summary
     llmagent.WithContextCompactionThresholdRatio(0.7),
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: old tool results → placeholder
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
     llmagent.WithContextCompactionKeepRecentRequests(1),
+    llmagent.WithContextCompactionTokenCounter(counter),
 )
 ```
 
@@ -1811,7 +1849,7 @@ llmAgent := llmagent.New(
 - No summary is prepended.
 - Only the **most recent `MaxHistoryRuns` conversation turns** are included.
 - When `MaxHistoryRuns=0` (default), no limit is applied and all history is included.
-- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted (Pass 1) and extremely large tool results in any request can be head+tail truncated (Pass 2) during request projection.
+- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted (Pass 1). If you additionally call `WithContextCompactionOversizedToolResultMaxTokens(8192)` (or another positive value), extremely large tool results in any request will be head+tail truncated (Pass 2). Both passes require the `EnableContextCompaction=true` master switch.
 - The pre-LLM synchronous summary retry is disabled in this mode.
 - Use this mode for short sessions or when you want direct control over context window size.
 
@@ -1860,27 +1898,28 @@ Configure the summarizer behavior with the following options:
 - **`WithContextThreshold(opts ...ContextThresholdOption)`**: Zero-configuration trigger that dynamically resolves the model's context window at evaluation time. It calculates a token threshold as a fraction of the context window (default 50%), adapting automatically when the user switches models mid-session. This is the recommended option for most use cases, similar to the auto-compact behavior in Codex CLI and Claude Code. Example: `WithContextThreshold()` for zero-config, or `WithContextThreshold(summary.WithContextThresholdRatio(0.6))` for custom ratio.
 - **`WithEventThreshold(eventCount int)`**: Trigger summarization when the number of new events since last summary exceeds the threshold. Example: `WithEventThreshold(20)` triggers when 20+ new events have occurred since last summary.
 - **`WithTokenThreshold(tokenCount int)`**: Trigger summarization when the new token count since last summary exceeds the threshold. Example: `WithTokenThreshold(4000)` triggers when 4000+ new tokens have been added since last summary.
-- **`WithTimeThreshold(interval time.Duration)`**: Trigger summarization when time elapsed since the last event exceeds the interval. Example: `WithTimeThreshold(5*time.Minute)` triggers after 5 minutes of inactivity.
+- **`WithTimeThreshold(interval time.Duration)`**: Evaluate the condition when a summary check runs; it wraps `CheckTimeThreshold` and triggers when the last event in the checked session is older than the interval. In the normal delta-summary path, that checked session contains only unsummarized events, so this effectively means the latest unsummarized event. This is not a standalone background timer. Example: `WithTimeThreshold(5*time.Minute)` means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."
 
-!!! note "Context Window Registration"
-    `WithContextThreshold` and Token Tailoring both rely on the framework's built-in model context window registry. The registry includes many popular models (OpenAI, Anthropic, Google, DeepSeek, Qwen, etc.), but may not cover every model — especially private deployments, fine-tuned variants, or newer releases. If your model is not recognized (context window resolves to 0 or falls back to the default), register it manually at startup:
-
-    ```go
-    import "trpc.group/trpc-go/trpc-agent-go/model"
-
-    func init() {
-        // Register a single model.
-        model.RegisterModelContextWindow("my-custom-model", 32768)
-
-        // Or register multiple models at once.
-        model.RegisterModelContextWindows(map[string]int{
-            "my-custom-model-32k": 32768,
-            "my-custom-model-128k": 131072,
-        })
-    }
-    ```
-
-    Model names are matched case-insensitively, and the registry also supports prefix matching (e.g., registering `"my-model"` will match `"my-model-v2"`).
+> **Context Window Registration**
+>
+> `WithContextThreshold` and Token Tailoring both rely on the framework's built-in model context window registry. The registry includes many popular models (OpenAI, Anthropic, Google, DeepSeek, Qwen, etc.), but may not cover every model — especially private deployments, fine-tuned variants, or newer releases. If your model is not recognized (context window resolves to 0 or falls back to the default), register it manually at startup:
+>
+> ```go
+> import "trpc.group/trpc-go/trpc-agent-go/model"
+>
+> func init() {
+>     // Register a single model.
+>     model.RegisterModelContextWindow("my-custom-model", 32768)
+>
+>     // Or register multiple models at once.
+>     model.RegisterModelContextWindows(map[string]int{
+>         "my-custom-model-32k": 32768,
+>         "my-custom-model-128k": 131072,
+>     })
+> }
+> ```
+>
+> Model names are matched case-insensitively, and the registry also supports prefix matching (e.g., registering `"my-model"` will match `"my-model-v2"`).
 
 **Composite Conditions:**
 
@@ -2218,7 +2257,7 @@ The `GetSessionSummaryText` method supports an optional `WithSummaryFilterKey` o
 
 2. **Delta Summarization**: New events are combined with the previous summary (prepended as a system event) to generate an updated summary that incorporates both old context and new information.
 
-3. **Trigger Evaluation**: Before generating a summary, the summarizer evaluates configured trigger conditions (based on incremental event count, token count, and time threshold since last summary). If conditions aren't met and `force=false`, summarization is skipped.
+3. **Trigger Evaluation**: Before generating a summary, the summarizer evaluates configured trigger conditions (based on incremental event count, incremental token count, and, for time-based checks, whether the last event in the checked session is older than the configured threshold. In the normal delta-summary path, that corresponds to the latest unsummarized event). If conditions aren't met and `force=false`, summarization is skipped.
 
 4. **Async Workers**: Summary jobs are distributed across multiple worker goroutines using hash-based distribution. This ensures jobs for the same session are processed sequentially while different sessions can be processed in parallel.
 
@@ -2305,12 +2344,51 @@ evt.FilterKey = "user-messages"
 
 **Technical Details:** The framework uses prefix matching (`strings.HasPrefix`) to determine which events should be included in the context. See `ContentRequestProcessor` filtering logic for details.
 
+#### Restricting Summary Targets
+
+By default, when a non-empty branch `FilterKey` triggers summarization, the session service refreshes both that branch summary and the full-session summary (`SummaryFilterKeyAllContents`). If some branches do not need summaries, you can reduce LLM usage with an allowlist and optionally disable the full-session cascade:
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(summarizer),
+    inmemory.WithSummaryFilterAllowlist(
+        "my-app/user-messages",
+        "my-app/tool-calls",
+    ),
+    inmemory.WithCascadeFullSessionSummary(false),
+)
+```
+
+- `WithSummaryFilterAllowlist(...)` only controls non-empty branch summary targets. It does not block `session.SummaryFilterKeyAllContents`.
+- `WithCascadeFullSessionSummary(...)` controls whether a non-empty branch trigger also refreshes the full-session summary.
+- To keep only full-session summaries from branch-triggered automatic summary, pass an explicit empty allowlist and leave cascade enabled:
+
+```go
+sessionService, err := mysql.NewService(
+    mysql.WithMySQLClientDSN(dsn),
+    mysql.WithSummarizer(summarizer),
+    mysql.WithSummaryFilterAllowlist(""),
+)
+```
+
+- `mysql.WithSummaryFilterAllowlist("")` and `mysql.WithSummaryFilterAllowlist()` both mean "no branch keys are allowed"; with the default cascade behavior, the full-session summary still refreshes.
+- If you also set `mysql.WithCascadeFullSessionSummary(false)`, non-empty branch triggers have no summary target and no summary is generated.
+- Allowlist matching is hierarchical and segment-aware, not a raw string prefix check. Internally the framework appends the filter-key delimiter (`"/"`) to both sides and then checks whether either key is an ancestor/descendant of the other.
+- Examples:
+  - Allowing `my-app/tool` matches `my-app/tool` and `my-app/tool/search`.
+  - Allowing `my-app/tool/search` also matches `my-app/tool`.
+  - Allowing `my-app/tool` does not match `my-app/toolbox`.
+  - Allowing `my-app/tool` does not match `other-app/tool`.
+- `session.SummaryFilterKeyAllContents` remains available for direct full-session summaries even when an allowlist is configured.
+- Leaving the allowlist unset preserves the legacy behavior and allows every branch `FilterKey` to trigger summaries.
+- Passing an explicit empty allowlist blocks branch summary targets; with cascade enabled, branch triggers still refresh the full-session summary.
+
 #### Complete Examples
 
 See the following examples for complete FilterKey usage scenarios:
 
 - [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook basics
-- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - Summarizing by FilterKey
+- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - Summarizing by FilterKey, allowlists, and full-session cascade control
 
 ### Performance Considerations
 
@@ -2351,7 +2429,7 @@ func main() {
         summary.WithChecksAny(
             summary.CheckEventThreshold(20),
             summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute),
+            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
         ),
     )
 

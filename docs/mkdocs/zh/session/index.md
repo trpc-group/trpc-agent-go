@@ -60,7 +60,7 @@ func main() {
         summary.WithChecksAny( // 任一条件满足即触发摘要
             summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
             summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
-            summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
+            summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；若最近一个待摘要事件已超过 5 分钟则触发
         ),
         summary.WithMaxSummaryWords(200), // 限制摘要在 200 字以内
     )
@@ -78,9 +78,11 @@ func main() {
         llmagent.WithModel(llm),
         llmagent.WithInstruction("你是一个智能助手"),
         llmagent.WithAddSessionSummary(true), // 可选：启用摘要注入到上下文
-        llmagent.WithEnableContextCompaction(true), // 可选：压缩历史超长 tool result
+        // 可选：只压缩 tool result 内容，不生成摘要；和 session summary / token tailoring 分层独立
+        llmagent.WithEnableContextCompaction(true), // Pass 1 + Pass 2 的总开关
         // 配合 WithAddSessionSummary(true) 时，还会在必要时多一次同步摘要重试
         llmagent.WithContextCompactionToolResultMaxTokens(1024),  // 旧 tool result → 占位符
+        // Pass 2 默认关闭，需要显式设置一个正阈值才会生效（推荐 8192）
         llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // 超大 result → 首尾保留截断
         llmagent.WithContextCompactionKeepRecentRequests(1),
         // 注意：WithAddSessionSummary(true) 时会忽略 WithMaxHistoryRuns 配置

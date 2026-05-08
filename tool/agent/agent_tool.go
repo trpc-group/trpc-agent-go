@@ -37,8 +37,10 @@ type Tool struct {
 	agent                  agent.Agent
 	skipSummarization      bool
 	streamInner            bool
+	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
+	responseMode           ResponseMode
 	name                   string
 	description            string
 	inputSchema            *tool.Schema
@@ -52,9 +54,51 @@ type Option func(*agentToolOptions)
 type agentToolOptions struct {
 	skipSummarization      bool
 	streamInner            bool
+	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
+	responseMode           ResponseMode
 	description            *string
+}
+
+// InnerTextMode controls whether forwarded inner assistant text is visible
+// in the parent flow when StreamInner is enabled.
+type InnerTextMode = tool.InnerTextMode
+
+const (
+	// InnerTextModeDefault preserves the default behavior.
+	InnerTextModeDefault = tool.InnerTextModeDefault
+
+	// InnerTextModeInclude forwards inner assistant text to the parent flow.
+	InnerTextModeInclude = tool.InnerTextModeInclude
+
+	// InnerTextModeExclude suppresses forwarded inner assistant text while
+	// still aggregating that text into the final tool response.
+	InnerTextModeExclude = tool.InnerTextModeExclude
+)
+
+// ResponseMode controls which child assistant text AgentTool returns as the tool
+// result. It does not change session event mirroring or inner streaming
+// behavior.
+type ResponseMode int
+
+const (
+	// ResponseModeDefault preserves the legacy assistant-content
+	// concatenation behavior.
+	ResponseModeDefault ResponseMode = iota
+
+	// ResponseModeFinalOnly returns only the last complete assistant message
+	// emitted by the child agent. If none is emitted, the tool result is
+	// an empty string.
+	ResponseModeFinalOnly
+)
+
+// WithResponseMode sets how AgentTool builds the tool result from child agent
+// events.
+func WithResponseMode(mode ResponseMode) Option {
+	return func(opts *agentToolOptions) {
+		opts.responseMode = mode
+	}
 }
 
 // WithSkipSummarization sets whether to skip summarization of the agent output.
@@ -70,6 +114,14 @@ func WithSkipSummarization(skip bool) Option {
 func WithStreamInner(enabled bool) Option {
 	return func(opts *agentToolOptions) {
 		opts.streamInner = enabled
+	}
+}
+
+// WithInnerTextMode controls whether forwarded inner assistant text is
+// visible in the parent flow when StreamInner is enabled.
+func WithInnerTextMode(mode InnerTextMode) Option {
+	return func(opts *agentToolOptions) {
+		opts.innerTextMode = tool.NormalizeInnerTextMode(mode)
 	}
 }
 
@@ -170,8 +222,10 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		agent:                  agent,
 		skipSummarization:      options.skipSummarization,
 		streamInner:            options.streamInner,
+		innerTextMode:          tool.NormalizeInnerTextMode(options.innerTextMode),
 		structuredStreamErrors: options.structuredStreamErrors,
 		historyScope:           options.historyScope,
+		responseMode:           normalizeResponseMode(options.responseMode),
 		name:                   info.Name,
 		description:            description,
 		inputSchema:            inputSchema,
@@ -677,6 +731,9 @@ func (at *Tool) buildChildFilterKey(parentInv *agent.Invocation) string {
 // collectResponse collects and concatenates assistant messages from the event
 // channel, returning the complete response text.
 func (at *Tool) collectResponse(inv *agent.Invocation, evCh <-chan *event.Event) (string, error) {
+	if at.responseMode == ResponseModeFinalOnly {
+		return collectFinalResponse(evCh)
+	}
 	if !shouldRewriteCallableCompletion(inv) {
 		return collectLegacyResponse(evCh)
 	}
@@ -719,17 +776,57 @@ func (at *Tool) collectResponse(inv *agent.Invocation, evCh <-chan *event.Event)
 	return response.String(), nil
 }
 
+// collectFinalResponse returns the last complete child assistant message. If no
+// complete assistant message is emitted, it returns an empty string and nil
+// error.
+func collectFinalResponse(evCh <-chan *event.Event) (string, error) {
+	var finalResponse string
+	for ev := range evCh {
+		if ev == nil {
+			continue
+		}
+		if ev.Error != nil {
+			return "", fmt.Errorf("agent error: %s", ev.Error.Message)
+		}
+		content, ok := assistantMessageContent(ev)
+		if !ok || ev.IsPartial {
+			continue
+		}
+		finalResponse = content
+	}
+	return finalResponse, nil
+}
+
+// collectLegacyResponse preserves the pre-#1365 concatenation semantics for the
+// default callable path. It applies a narrow fix for issue #1640 by skipping a
+// trailing graph-completion snapshot event that re-emits the same non-partial
+// assistant content that was already collected. Divergent snapshot content is
+// still concatenated to keep default output bytes stable for existing callers;
+// broader alignment with the snapshot-aware collector is tracked as a separate
+// semantic-change request.
 func collectLegacyResponse(evCh <-chan *event.Event) (string, error) {
 	var response strings.Builder
+	var lastNonPartialAssistantContent string
 	for ev := range evCh {
 		if ev.Error != nil {
 			return "", fmt.Errorf("agent error: %s", ev.Error.Message)
 		}
-		if ev.Response != nil && len(ev.Response.Choices) > 0 {
-			choice := ev.Response.Choices[0]
-			if choice.Message.Role == model.RoleAssistant && choice.Message.Content != "" {
-				response.WriteString(choice.Message.Content)
-			}
+		if ev.Response == nil || len(ev.Response.Choices) == 0 {
+			continue
+		}
+		choice := ev.Response.Choices[0]
+		if choice.Message.Role != model.RoleAssistant || choice.Message.Content == "" {
+			continue
+		}
+		content := choice.Message.Content
+		if !ev.IsPartial &&
+			isGraphCompletionSnapshotEvent(ev) &&
+			content == lastNonPartialAssistantContent {
+			continue
+		}
+		response.WriteString(content)
+		if !ev.IsPartial {
+			lastNonPartialAssistantContent = content
 		}
 	}
 	return response.String(), nil
@@ -737,6 +834,18 @@ func collectLegacyResponse(evCh <-chan *event.Event) (string, error) {
 
 func shouldRewriteCallableCompletion(inv *agent.Invocation) bool {
 	return inv != nil && agent.IsGraphCompletionEventDisabled(inv)
+}
+
+func normalizeResponseMode(mode ResponseMode) ResponseMode {
+	switch mode {
+	case ResponseModeDefault:
+		return ResponseModeDefault
+	case ResponseModeFinalOnly:
+		return mode
+	default:
+		log.Debugf("AgentTool: unknown response mode %d, using default", mode)
+		return ResponseModeDefault
+	}
 }
 
 // StreamableCall executes the agent tool with streaming support and returns a stream reader.
@@ -757,6 +866,7 @@ type streamCompletionState struct {
 	sawGraphCompletionSnapshot bool
 	lastAssistantResponseID    string
 	lastAssistantContent       string
+	finalOnlyResult            string
 	overrideResult             string
 }
 
@@ -836,6 +946,7 @@ func (at *Tool) forwardSubInvocationStream(
 			at.completeSuppressedBarrierStreamEvent(ctx, subInv, ev, &state)
 			continue
 		}
+		at.updateFinalOnlyStreamResult(ev, &state)
 		if agent.IsGraphCompletionEventDisabled(subInv) &&
 			isGraphCompletionSnapshotEvent(ev) {
 			if emitFinalResultChunk {
@@ -882,10 +993,28 @@ func (at *Tool) forwardSubInvocationStream(
 		at.flushPendingVisibleCompletionForSession(ctx, subInv, &state)
 	}
 	if emitFinalResultChunk {
+		if at.responseMode == ResponseModeFinalOnly {
+			at.emitFinalOnlyResultChunk(&state, writer)
+			return
+		}
 		at.emitPendingCompletionChunk(&state, writer)
 		return
 	}
 	at.emitPendingVisibleCompletionEvent(&state, writer)
+}
+
+func (at *Tool) updateFinalOnlyStreamResult(
+	ev *event.Event,
+	state *streamCompletionState,
+) {
+	if state == nil {
+		return
+	}
+	content, ok := assistantMessageContent(ev)
+	if !ok || ev.IsPartial {
+		return
+	}
+	state.finalOnlyResult = content
 }
 
 func (at *Tool) capturePendingVisibleCompletion(
@@ -1082,6 +1211,28 @@ func (at *Tool) emitPendingCompletionChunk(
 	}, nil)
 }
 
+func (at *Tool) emitFinalOnlyResultChunk(
+	state *streamCompletionState,
+	writer *tool.StreamWriter,
+) {
+	result := ""
+	var stateDelta map[string][]byte
+	if state != nil {
+		result = state.finalOnlyResult
+		if state.pendingCompletionChunk != nil {
+			stateDelta = state.pendingCompletionChunk.StateDelta
+		}
+	}
+	var content any = tool.FinalResultChunk{Result: result}
+	if len(stateDelta) > 0 {
+		content = tool.FinalResultStateChunk{
+			Result:     result,
+			StateDelta: cloneStateDelta(stateDelta),
+		}
+	}
+	_ = writer.Send(tool.StreamChunk{Content: content}, nil)
+}
+
 func (at *Tool) streamFromFallbackRunner(
 	ctx context.Context,
 	message model.Message,
@@ -1180,6 +1331,15 @@ func (at *Tool) TRPCAgentGoStructuredStreamErrorsOptIn() bool {
 // StreamInner exposes whether this AgentTool prefers the flow to treat it as
 // streamable (forwarding inner deltas) versus callable-only.
 func (at *Tool) StreamInner() bool { return at.streamInner }
+
+// InnerTextMode exposes how forwarded inner assistant text should be handled
+// when StreamInner is enabled.
+func (at *Tool) InnerTextMode() InnerTextMode {
+	if at == nil {
+		return tool.InnerTextModeInclude
+	}
+	return tool.NormalizeInnerTextMode(at.innerTextMode)
+}
 
 // Declaration returns the tool's declaration information.
 //

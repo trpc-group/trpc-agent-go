@@ -18,12 +18,12 @@ import (
 
 func TestNormalize(t *testing.T) {
 	tests := map[string]string{
-		"":                   Full,
+		"":                   KnowledgeOnly,
 		"full":               Full,
 		" FULL ":             Full,
 		"knowledge_only":     KnowledgeOnly,
 		" KNOWLEDGE_ONLY \n": KnowledgeOnly,
-		"unknown":            Full,
+		"unknown":            KnowledgeOnly,
 	}
 	for in, want := range tests {
 		if got := Normalize(in); got != want {
@@ -171,5 +171,23 @@ func TestFlagsHelpers(t *testing.T) {
 func TestIsKnowledgeOnly(t *testing.T) {
 	require.True(t, IsKnowledgeOnly(" KNOWLEDGE_ONLY "))
 	require.False(t, IsKnowledgeOnly("full"))
-	require.False(t, IsKnowledgeOnly("unknown"))
+	// Unknown profiles fall back to the KnowledgeOnly default, matching
+	// the framework-level behavior that leaves execution tools off
+	// unless they are explicitly opted in via Full.
+	require.True(t, IsKnowledgeOnly("unknown"))
+	require.True(t, IsKnowledgeOnly(""))
+}
+
+// TestIsExplicitKnowledgeOnly locks down the distinction that
+// llmagent's auto-fallback relies on: an empty profile still
+// normalizes to knowledge-only but counts as "unconfigured", while a
+// literal "knowledge_only" (in any casing) is an explicit opt-out of
+// the convenience fallbacks.
+func TestIsExplicitKnowledgeOnly(t *testing.T) {
+	require.True(t, IsExplicitKnowledgeOnly("knowledge_only"))
+	require.True(t, IsExplicitKnowledgeOnly(" KNOWLEDGE_ONLY "))
+	require.False(t, IsExplicitKnowledgeOnly(""))
+	require.False(t, IsExplicitKnowledgeOnly("   "))
+	require.False(t, IsExplicitKnowledgeOnly("full"))
+	require.False(t, IsExplicitKnowledgeOnly("unknown"))
 }

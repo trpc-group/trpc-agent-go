@@ -58,7 +58,7 @@ go build .
 
 ### Command-Line Flags
 
-- `-model`: LLM model to use (default: "deepseek-chat")
+- `-model`: LLM model to use (default: "deepseek-v4-flash")
 - `-storage`: Storage backend - "memory" or "sqlite" or "redis" (default: "memory")
 - `-db`: SQLite database file path (default: "checkpoints.db", only used with -storage=sqlite)
 - `-verbose`: Enable verbose execution output (default: false)

@@ -20,6 +20,7 @@ The Multi-Agent System is built on the SubAgent concept, implementing various co
 
 - **Agent Tool (AgentTool)** - Wraps Agents as tools for other Agents to call
 - **Agent Transfer** - Implements task delegation between Agents through the `transfer_to_agent` tool
+- **Await User Reply Routing** - Lets an Agent explicitly claim the next user turn when it needs follow-up information
 - **Team** - A high-level wrapper for coordinator teams and swarm-style handoffs (`team` package)
 
 ## SubAgent Basics
@@ -378,6 +379,8 @@ agentTool := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     // Enable inner forwarding: stream child Agent events inline to the parent
     agenttool.WithStreamInner(true),
+    // Return only the child Agent's final assistant message as the tool result.
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
 )
 
 // Use Agent tool in main Agent.
@@ -401,7 +404,7 @@ Chat Assistant (Main Agent)
 
 ```
 🚀 Agent Tool Example
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Available tools: current_time, math-specialist
 ==================================================
 
@@ -430,6 +433,8 @@ When `WithStreamInner(true)` is enabled for the Agent tool:
 
 - Child Agent events are forwarded as streaming `event.Event` items; you can directly display `choice.Delta.Content`
 - To avoid duplicates, the child Agent’s final full text is not forwarded again; it is aggregated into the final `tool.response` that follows tool_calls (satisfying provider requirements)
+- To keep inner progress but hide child assistant prose, add
+  `WithInnerTextMode(agenttool.InnerTextModeExclude)`
 - UI recommendations:
   - Show forwarded child deltas as they stream
   - By default, don’t reprint the final aggregated tool response text unless debugging
@@ -458,6 +463,19 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 - `WithSkipSummarization(true)`: Skip the outer summarization so the tool output is surfaced directly
 - `WithStreamInner(true)`: Forward child Agent events (use `Stream: true` on both parent and child Agents)
 - `WithStreamInner(false)`: Treat as a callable-only tool, without inner forwarding
+- `WithInnerTextMode(agenttool.InnerTextModeInclude)`: show child
+  assistant text when inner streaming is enabled
+- `WithInnerTextMode(agenttool.InnerTextModeExclude)`: keep inner
+  progress events, but suppress forwarded child assistant text
+- `WithResponseMode(agenttool.ResponseModeDefault)`: default compatibility mode;
+  concatenate child assistant messages into the tool result
+- `WithResponseMode(agenttool.ResponseModeFinalOnly)`: return only the last
+  complete child assistant message as the tool result
+
+Use `ResponseModeFinalOnly` when the child Agent is a context-isolated worker
+and the parent Agent should only consume its final answer. Use
+`InnerTextModeExclude` separately when you also want to hide child assistant
+text from the streamed UI.
 
 ### Agent Transfer
 
@@ -602,6 +620,110 @@ Compound Interest Calculation Result:
 - Result: $7,969.24 (interest approximately $2,969.24)
 ```
 
+#### Follow-Up Questions Across Turns
+
+`transfer_to_agent` solves **who handles the current run**. It does not, by
+itself, tell `Runner` who should handle the **next user message**.
+
+That becomes visible when a SubAgent asks a clarifying question:
+
+1. The coordinator transfers to a SubAgent.
+2. The SubAgent asks the user for missing information.
+3. The user replies in a later request.
+4. By default, `Runner` starts from its normal entry Agent again.
+
+The clean solution is to make this routing **explicit** and **one-shot**:
+
+- Enable `runner.WithAwaitUserReplyRouting(true)` on the Runner.
+- Enable `llmagent.WithAwaitUserReplyTool(true)` on any Agent that may ask the
+  user for follow-up data.
+- In that Agent's instruction, tell the model to call `await_user_reply`
+  immediately before it asks the user for missing information.
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+profileAgent := llmagent.New(
+    "profile-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithDescription(
+        "Collects and updates customer profile information.",
+    ),
+    llmagent.WithInstruction(`
+You update customer profiles.
+
+If any required field is missing:
+1. call await_user_reply
+2. ask one clear question to the user
+3. stop and wait for the next user message
+
+When all required fields are present, call update_profile.
+`),
+    llmagent.WithAwaitUserReplyTool(true),
+    llmagent.WithTools([]tool.Tool{updateProfileTool}),
+)
+
+coordinatorAgent := llmagent.New(
+    "coordinator-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction(`
+Delegate profile-update requests to profile-agent.
+Do not collect profile fields yourself.
+`),
+    llmagent.WithSubAgents([]agent.Agent{profileAgent}),
+)
+
+r := runner.NewRunner(
+    "crm-app",
+    coordinatorAgent,
+    runner.WithAwaitUserReplyRouting(true),
+)
+
+// Turn 1:
+// user: "Update my profile."
+// coordinator-agent -> transfer_to_agent(profile-agent)
+// profile-agent -> await_user_reply + "What phone number should I save?"
+
+// Turn 2 (same session):
+// user: "+1-555-0101"
+// Runner resumes directly at profile-agent for this turn.
+events, err := r.Run(
+    context.Background(),
+    "user-1",
+    "session-1",
+    model.NewUserMessage("+1-555-0101"),
+)
+if err != nil {
+    // handle error
+}
+for evt := range events {
+    if evt.IsRunnerCompletion() {
+        break
+    }
+}
+```
+
+Important behavior:
+
+- The route is consumed once. After the next user turn starts, it is cleared.
+- Explicit `agent.WithAgent(...)` or `agent.WithAgentByName(...)` still wins.
+- If the target Agent path is no longer valid, `Runner` falls back to its
+  default entry Agent and clears the stale route.
+- `Runner` restores nested SubAgents by their full agent-chain path, so you do
+  not need to register every SubAgent separately in the common
+  coordinator-plus-SubAgents setup.
+
+For custom Agents that do not use `LLMAgent`, see the `runner` guide for the
+low-level `agent.MarkAwaitingUserReply(...)` API.
+
 ## Environment Variable Configuration
 
 All multi-agent examples require the following environment variables:
@@ -622,7 +744,7 @@ All example code is located at [examples](https://github.com/trpc-group/trpc-age
 ```bash
 cd examples/multiagent/chain
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Parallel Agent Example
@@ -630,7 +752,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/multiagent/parallel
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Cycle Agent Example
@@ -638,7 +760,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/multiagent/cycle
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat -max-iterations 5
+go run main.go -model deepseek-v4-flash -max-iterations 5
 ```
 
 ### Auxiliary Function Examples
@@ -648,7 +770,7 @@ go run main.go -model deepseek-chat -max-iterations 5
 ```bash
 cd examples/agenttool
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Agent Transfer Example
@@ -656,7 +778,7 @@ go run main.go -model deepseek-chat
 ```bash
 cd examples/transfer
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 ## Customization and Extension

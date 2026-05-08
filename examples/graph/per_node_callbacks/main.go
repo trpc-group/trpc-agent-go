@@ -34,8 +34,8 @@ import (
 )
 
 const (
-	// Default model name for deepseek-chat.
-	defaultModelName = "deepseek-chat"
+	// Default model name for deepseek-v4-flash.
+	defaultModelName = "deepseek-v4-flash"
 )
 
 var (

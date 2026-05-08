@@ -425,6 +425,7 @@ func newMemberToolSet(
 			m,
 			agenttool.WithSkipSummarization(cfg.skipSummarization),
 			agenttool.WithStreamInner(cfg.streamInner),
+			agenttool.WithInnerTextMode(cfg.innerTextMode),
 			agenttool.WithHistoryScope(scope),
 		))
 	}

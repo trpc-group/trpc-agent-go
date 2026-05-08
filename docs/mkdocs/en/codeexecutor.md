@@ -57,19 +57,32 @@ func main() {
 
 More complete examples:
 
-- [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go)
-- [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md)
+- [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go) (local backend)
+- [examples/codeexecution/container/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/container/README.md) (Docker container backend)
+- [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md) (Jupyter kernel backend)
 
-### Default Behavior of `WithCodeExecutor`
+### `WithCodeExecutor` vs fenced-code auto-execution
 
-`llmagent.WithCodeExecutor(...)` does more than provide a runtime.
+`llmagent.WithCodeExecutor(...)` and the response-side fenced-code
+auto-execution processor are **two independent switches**. Understanding
+this distinction early avoids a common point of confusion: treating them
+as a single switch.
 
-By default, it also enables the response-side code execution processor. If the
-assistant reply is exactly one runnable fenced code block, the framework will
-extract and execute that block automatically.
+- `WithCodeExecutor(...)` supplies a *runtime* that execution-backed
+  tools — most notably `workspace_exec` — use to run commands. It does
+  not, by itself, cause anything to be executed from the assistant's
+  reply.
+- `EnableCodeExecutionResponseProcessor` (default: `true`, toggled via
+  `WithEnableCodeExecutionResponseProcessor(enable bool)`) controls
+  whether the framework scans the assistant reply and, if it is exactly
+  one runnable fenced code block, runs that block automatically.
 
-If you only want workspace support, `workspace_exec`, or other executor-backed
-tools, and do not want model output code blocks to auto-run, disable it:
+Auto-execution of fenced code actually fires only when *both* are true:
+an executor is available **and** the response processor is enabled.
+
+If you only want the executor to power `workspace_exec` or other
+tool-backed execution paths, and do not want assistant replies to be
+auto-executed, opt out of the response-side processor explicitly:
 
 ```go
 agent := llmagent.New(
@@ -80,11 +93,20 @@ agent := llmagent.New(
 )
 ```
 
-Common cases for disabling auto-execution:
+Common cases for disabling fenced-code auto-execution:
 
 - using `workspace_exec` only
 - providing a runtime for other tools
 - requiring code execution to happen only through explicit tool calls
+
+Interaction with `WithSkills(repo)` auto-fallback: when the skills
+layer implicitly injects a local `CodeExecutor` on your behalf (see the
+Agent Skills guide), that implicit executor is treated as "only here to
+power `workspace_exec`". In that case the framework automatically sets
+`EnableCodeExecutionResponseProcessor=false` unless you explicitly
+called `WithEnableCodeExecutionResponseProcessor(...)` yourself. Using
+`WithCodeExecutor(...)` explicitly, by contrast, leaves the switch at
+its framework default so your existing behavior is preserved.
 
 ## Choosing a Backend
 
@@ -272,6 +294,73 @@ flow is:
 This keeps the contract simple: tools and models rely on stable paths instead
 of dealing with staging internals.
 
+## Workspace init hooks
+
+Hooks run **after** `WorkspaceManager.CreateWorkspace` succeeds and **before** that `Workspace` is returned to callers. When the app uses a `WorkspaceRegistry` (the default for session-scoped tools), creation runs **once per logical workspace id**—usually once per agent session workspace. Trusted-local modes may reuse one physical directory across sessions; hooks may still run whenever a distinct workspace acquisition happens. Do not assume hooks run at most once per on-disk path: re-acquisition can run them again.
+
+Use init hooks to stage fixed inputs (`InputSpec`: `artifact://`, `host://`, etc.) and run deterministic setup commands (for example `pip install` inside a shell one-liner).
+
+Artifact-backed inputs require the artifact service and (when applicable)
+session fields on `context` when `CreateWorkspace` runs—the same requirements as
+`WorkspaceFS.StageInputs`. Standard llmagent workspace tools inject this from the
+current `agent.Invocation` when resolving the session workspace, so the example
+below works without manual context wiring.
+
+```go
+import (
+    "fmt"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+)
+
+func newAnalystAgent() (*llmagent.LLMAgent, error) {
+    exec, err := codeexecutor.NewWorkspaceInitExecutor(
+        local.New(),
+        codeexecutor.NewWorkspaceInitHook(codeexecutor.WorkspaceInitSpec{
+            Inputs: []codeexecutor.InputSpec{
+                {
+                    From: "artifact://app/requirements.txt@3",
+                    To:   "work/requirements.txt",
+                    Mode: "copy",
+                },
+            },
+            Commands: []codeexecutor.WorkspaceInitCommand{
+                {
+                    Name: "install-deps",
+                    Cmd:  "bash",
+                    Args: []string{
+                        "-lc",
+                        "python3 -m venv .venv && " +
+                            ".venv/bin/pip install -q -r work/requirements.txt",
+                    },
+                    Timeout: 2 * time.Minute,
+                },
+            },
+        }),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("workspace init executor: %w", err)
+    }
+    return llmagent.New(
+        "analyst",
+        llmagent.WithCodeExecutor(exec),
+    ), nil
+}
+```
+
+If init inputs change later, use a **new** logical workspace (for example a new session id) or run setup again yourself; hooks do not watch files for you.
+
+### Interaction with `skill_load`
+
+Skills loaded via `skill_load` are materialized into `skills/<name>` when
+`workspace_exec` runs, using the current session’s loaded skills. You do not
+need to duplicate skill sources in init hook `Inputs`; init hooks cover
+session-independent files and setup commands you want present before any tool
+run.
+
 ## What Persists Across Turns
 
 There are two important cases:
@@ -353,7 +442,8 @@ exposes it depends on the higher-level Agent and tool wiring.
 ## References
 
 - Examples:
-  - [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go)
-  - [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md)
+  - [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go) (local backend)
+  - [examples/codeexecution/container/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/container/README.md) (Docker container backend)
+  - [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md) (Jupyter kernel backend)
 - Related docs:
   - [Artifact](artifact.md)

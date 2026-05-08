@@ -18,11 +18,16 @@ import (
 )
 
 const (
-	// Full keeps the existing behavior and enables the complete built-in
-	// skill tool suite, including execution tools.
+	// Full enables the complete built-in skill tool suite, including
+	// skill_run / skill_exec and the interactive exec-session helpers.
+	// This profile is opt-in; callers that want skill-driven execution
+	// must request it explicitly.
 	Full = "full"
 	// KnowledgeOnly enables progressive-disclosure skill tools used for
-	// knowledge injection without exposing execution tools.
+	// knowledge injection without exposing execution tools. This is the
+	// default profile: agents that only configure a skill repository
+	// get skill_load / skill_list_docs / skill_select_docs, and rely on
+	// workspace_exec for any script execution.
 	KnowledgeOnly = "knowledge_only"
 
 	// ToolLoad is the built-in tool name for loading SKILL.md and optional docs.
@@ -55,15 +60,18 @@ type Flags struct {
 	KillSession bool
 }
 
-// Normalize canonicalizes a profile name and falls back to Full.
+// Normalize canonicalizes a profile name. An empty or unknown value
+// resolves to KnowledgeOnly, matching the framework default that keeps
+// skill execution tools (skill_run / skill_exec / interactive helpers)
+// off unless they are explicitly opted in via Full.
 func Normalize(profile string) string {
 	switch strings.ToLower(strings.TrimSpace(profile)) {
-	case KnowledgeOnly:
+	case Full:
+		return Full
+	case "", KnowledgeOnly:
 		return KnowledgeOnly
-	case "", Full:
-		return Full
 	default:
-		return Full
+		return KnowledgeOnly
 	}
 }
 
@@ -98,6 +106,16 @@ func ResolveFlags(profile string, allowedTools []string) (Flags, error) {
 // normalization.
 func IsKnowledgeOnly(profile string) bool {
 	return Normalize(profile) == KnowledgeOnly
+}
+
+// IsExplicitKnowledgeOnly reports whether the caller explicitly selected the
+// knowledge-only profile. It distinguishes an explicit opt-in from the
+// unconfigured default (empty string), which also normalizes to
+// KnowledgeOnly but carries different semantics around convenience
+// fallbacks (for example, llmagent auto-falling back to a local code
+// executor when skills are enabled without one).
+func IsExplicitKnowledgeOnly(profile string) bool {
+	return strings.ToLower(strings.TrimSpace(profile)) == KnowledgeOnly
 }
 
 // Any reports whether any built-in skill tool is enabled.

@@ -25,7 +25,7 @@ If you want to talk to the official DeepSeek API, point `OPENAI_BASE_URL` at `ht
 
 | Argument | Description | Default |
 | --- | --- | --- |
-| `-model` | Default model to use | `deepseek-chat` |
+| `-model` | Default model to use | `deepseek-v4-flash` |
 
 ## Run the example
 
@@ -38,7 +38,7 @@ With a different default model:
 
 ```bash
 cd examples/model/switch
-go run main.go -model deepseek-reasoner
+go run main.go -model deepseek-v4-pro
 ```
 
 With environment variables:
@@ -48,7 +48,7 @@ export OPENAI_API_KEY="your-api-key-here"
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 
 cd examples/model/switch
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 ## Commands
@@ -77,12 +77,12 @@ func main() {
     ctx := context.Background()
 
     models := map[string]model.Model{
-        "deepseek-chat": openai.New(
-            "deepseek-chat",
+        "deepseek-v4-flash": openai.New(
+            "deepseek-v4-flash",
             openai.WithVariant(openai.VariantDeepSeek),
         ),
-        "deepseek-reasoner": openai.New(
-            "deepseek-reasoner",
+        "deepseek-v4-pro": openai.New(
+            "deepseek-v4-pro",
             openai.WithVariant(openai.VariantDeepSeek),
         ),
     }
@@ -90,13 +90,13 @@ func main() {
     agt := llmagent.New(
         "switching-agent",
         llmagent.WithModels(models),
-        llmagent.WithModel(models["deepseek-chat"]),
+        llmagent.WithModel(models["deepseek-v4-flash"]),
     )
 
     r := runner.NewRunner("app-name", agt)
     defer r.Close()
 
-    if err := agt.SetModelByName("deepseek-reasoner"); err != nil {
+    if err := agt.SetModelByName("deepseek-v4-pro"); err != nil {
         panic(err)
     }
 
@@ -112,7 +112,7 @@ events, err := r.Run(
     userID,
     sessionID,
     model.NewUserMessage("Hello"),
-    agent.WithModelName("deepseek-chat"),
+    agent.WithModelName("deepseek-v4-flash"),
 )
 if err != nil {
     // Handle error.

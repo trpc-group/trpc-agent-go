@@ -24,7 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
@@ -62,6 +62,7 @@ const (
 
 	defaultSessionSummaryEventThreshold = 20
 	defaultSkillsLoadMode               = "turn"
+	defaultSkillsToolProfile            = skillprofile.KnowledgeOnly
 	defaultSkillsWatchDebounce          = 250 * time.Millisecond
 
 	flagAddSessionSummary                             = "add-session-summary"
@@ -93,6 +94,7 @@ const (
 	flagSkillsWatch         = "skills-watch"
 	flagSkillsWatchBundled  = "skills-watch-bundled"
 	flagSkillsWatchDebounce = "skills-watch-debounce"
+	flagSkillsToolProfile   = "skills-tool-profile"
 	flagSkillsLoadMode      = "skills-load-mode"
 	flagSkillsMaxLoaded     = "skills-max-loaded"
 	flagSkillsToolResults   = "skills-loaded-content-in-tool-results"
@@ -176,7 +178,7 @@ type runOptions struct {
 	OpenAIBaseURL       string
 	GenerationConfig    *model.GenerationConfig
 	ModelConfig         *yaml.Node
-	KnowledgesConfig    map[string]*yaml.Node
+	KnowledgesConfig    []knowledgeEntry
 	SkillsRoot          string
 	SkillsExtraDir      string
 	SkillsDebug         bool
@@ -185,6 +187,7 @@ type runOptions struct {
 	SkillsWatch         bool
 	SkillsWatchBundled  bool
 	SkillsWatchDebounce time.Duration
+	SkillsToolProfile   string
 	SkillsLoadMode      string
 	SkillsMaxLoaded     int
 	SkillsToolResults   bool
@@ -229,9 +232,10 @@ type runOptions struct {
 	SessionSummaryMaxWords            int
 	SessionSummaryApproxRunesPerToken float64
 
-	EnableLocalExec     bool
-	EnableOpenClawTools bool
-	EnableParallelTools bool
+	EnableLocalExec      bool
+	EnableOpenClawTools  bool
+	OpenClawToolingGuide *string
+	EnableParallelTools  bool
 
 	enableOpenClawToolsExplicit bool
 
@@ -261,6 +265,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		SkillsWatch:         true,
 		SkillsWatchDebounce: defaultSkillsWatchDebounce,
+		SkillsToolProfile:   defaultSkillsToolProfile,
 		SkillsLoadMode:      defaultSkillsLoadMode,
 		SkillsToolResults:   true,
 		SkillsSkipFallback:  true,
@@ -372,8 +377,10 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.IntVar(
 		&opts.ContextCompactionOversizedToolResultMaxTokens,
 		flagContextCompactionOversizedToolResultMaxTokens,
-		processor.DefaultContextCompactionOversizedToolResultMaxTokens,
-		"Truncate oversized tool results with head+tail preservation (0=disable)",
+		0,
+		"Truncate oversized tool results with head+tail preservation when "+
+			"context compaction is enabled (0=disable; recommended opt-in "+
+			"value is 8192). Requires --enable-context-compaction.",
 	)
 	fs.IntVar(
 		&opts.MaxHistoryRuns,
@@ -592,6 +599,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Also watch bundled skills roots for local changes",
 	)
 	fs.StringVar(
+		&opts.SkillsToolProfile,
+		flagSkillsToolProfile,
+		defaultSkillsToolProfile,
+		"Built-in skill tool profile: full|knowledge_only",
+	)
+	fs.StringVar(
 		&opts.SkillsLoadMode,
 		flagSkillsLoadMode,
 		defaultSkillsLoadMode,
@@ -754,7 +767,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.SessionSummaryIdleThreshold,
 		"session-summary-idle",
 		0,
-		"Summarize when time since last event exceeds duration (0 disables)",
+		"Summarize on summary checks when the checked session's last event is older than duration (0 disables)",
 	)
 	fs.IntVar(
 		&opts.SessionSummaryMaxWords,
@@ -845,7 +858,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 	if err := finalizeRunOptions(&opts); err != nil {
 		return runOptions{}, &exitError{
-			Code: loadModeExitCode(setFlags),
+			Code: skillsOptionExitCode(setFlags),
 			Err:  err,
 		}
 	}
@@ -1046,6 +1059,8 @@ type skillsConfig struct {
 	WatchBundledCamel  *bool    `yaml:"watchBundled,omitempty"`
 	WatchDebounceMS    *int     `yaml:"watch_debounce_ms,omitempty"`
 	WatchDebounceCamel *int     `yaml:"watchDebounceMs,omitempty"`
+	ToolProfile        *string  `yaml:"tool_profile,omitempty"`
+	ToolProfileCamel   *string  `yaml:"toolProfile,omitempty"`
 	LoadMode           *string  `yaml:"load_mode,omitempty"`
 	LoadModeCamel      *string  `yaml:"loadMode,omitempty"`
 	MaxLoadedSkills    *int     `yaml:"max_loaded_skills,omitempty"`
@@ -1069,10 +1084,12 @@ type skillEntryConfig struct {
 }
 
 type toolsConfig struct {
-	EnableLocalExec      *bool `yaml:"enable_local_exec,omitempty"`
-	EnableOpenClawTools  *bool `yaml:"enable_openclaw_tools,omitempty"`
-	EnableParallelTools  *bool `yaml:"enable_parallel_tools,omitempty"`
-	RefreshToolSetsOnRun *bool `yaml:"refresh_toolsets_on_run,omitempty"`
+	EnableLocalExec           *bool   `yaml:"enable_local_exec,omitempty"`
+	EnableOpenClawTools       *bool   `yaml:"enable_openclaw_tools,omitempty"`
+	OpenClawToolingGuide      *string `yaml:"openclaw_tooling_guidance,omitempty"`
+	OpenClawToolingGuideCamel *string `yaml:"openClawToolingGuidance,omitempty"`
+	EnableParallelTools       *bool   `yaml:"enable_parallel_tools,omitempty"`
+	RefreshToolSetsOnRun      *bool   `yaml:"refresh_toolsets_on_run,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -1094,13 +1111,20 @@ type memoryConfig struct {
 }
 
 type knowledgesConfig struct {
-	Entries []knowledgeEntryConfig `yaml:"entries,omitempty"`
+	Providers []knowledgeProviderConfig `yaml:"providers,omitempty"`
+
+	// Entries is the deprecated field name (pre-v0.0.4). Kept here so
+	// that KnownFields(true) does not reject it with a confusing
+	// "field entries not found" error; instead we return a clear
+	// migration message in fileConfig.apply.
+	Entries []rawYAMLNode `yaml:"entries,omitempty"`
 }
 
-type knowledgeEntryConfig struct {
-	Name        string       `yaml:"name,omitempty"`
-	Embedder    *rawYAMLNode `yaml:"embedder,omitempty"`
-	VectorStore *rawYAMLNode `yaml:"vector_store,omitempty"`
+type knowledgeProviderConfig struct {
+	Type       string       `yaml:"type,omitempty"`
+	Name       string       `yaml:"name,omitempty"`
+	MaxResults *int         `yaml:"max_results,omitempty"`
+	Config     *rawYAMLNode `yaml:"config,omitempty"`
 }
 
 type pluginSpec struct {
@@ -1455,7 +1479,15 @@ func (cfg *fileConfig) apply(
 		}
 	}
 	if cfg.Knowledges != nil {
-		knowledges, err := convertKnowledgeConfigs(cfg.Knowledges.Entries)
+		if len(cfg.Knowledges.Entries) > 0 {
+			return fmt.Errorf(
+				"knowledges.entries is no longer supported; " +
+					"rename it to knowledges.providers and wrap " +
+					"embedder/vector_store under a 'config' key " +
+					"(see README for the new format)",
+			)
+		}
+		knowledges, err := convertKnowledgeConfigs(cfg.Knowledges.Providers)
 		if err != nil {
 			return err
 		}
@@ -1539,6 +1571,14 @@ func (cfg *fileConfig) apply(
 				cfg.Skills.Entries,
 			)
 		}
+		toolProfile := firstStringPtr(
+			cfg.Skills.ToolProfile,
+			cfg.Skills.ToolProfileCamel,
+		)
+		if toolProfile != nil &&
+			!flagWasSet(set, flagSkillsToolProfile) {
+			opts.SkillsToolProfile = strings.TrimSpace(*toolProfile)
+		}
 		loadMode := firstStringPtr(
 			cfg.Skills.LoadMode,
 			cfg.Skills.LoadModeCamel,
@@ -1586,6 +1626,10 @@ func (cfg *fileConfig) apply(
 					*cfg.Tools.EnableOpenClawTools
 			}
 		}
+		opts.OpenClawToolingGuide = firstStringPtr(
+			cfg.Tools.OpenClawToolingGuide,
+			cfg.Tools.OpenClawToolingGuideCamel,
+		)
 		if cfg.Tools.EnableParallelTools != nil &&
 			!flagWasSet(set, flagEnableParallelTools) {
 			opts.EnableParallelTools = *cfg.Tools.EnableParallelTools
@@ -1838,72 +1882,56 @@ func convertSkillConfigs(
 }
 
 func convertKnowledgeConfigs(
-	entries []knowledgeEntryConfig,
-) (map[string]*yaml.Node, error) {
-	if len(entries) == 0 {
+	providers []knowledgeProviderConfig,
+) ([]knowledgeEntry, error) {
+	if len(providers) == 0 {
 		return nil, nil
 	}
 
-	out := make(map[string]*yaml.Node, len(entries))
-	for i := range entries {
-		entry := entries[i]
-		name := strings.TrimSpace(entry.Name)
+	seen := make(map[string]bool, len(providers))
+	out := make([]knowledgeEntry, 0, len(providers))
+
+	for i, p := range providers {
+		name := strings.TrimSpace(p.Name)
 		if name == "" {
-			return nil, fmt.Errorf("knowledges.entries[%d].name is empty", i)
+			return nil, fmt.Errorf(
+				"knowledges.providers[%d].name is empty", i,
+			)
 		}
-		if _, exists := out[name]; exists {
-			return nil, fmt.Errorf("duplicate knowledge name: %s", name)
+		if seen[name] {
+			return nil, fmt.Errorf(
+				"duplicate knowledge name: %s", name,
+			)
+		}
+		seen[name] = true
+
+		typeName := strings.ToLower(strings.TrimSpace(p.Type))
+		if typeName == "" {
+			typeName = "builtin"
 		}
 
-		node := &yaml.Node{
-			Kind: yaml.MappingNode,
-			Tag:  "!!map",
+		var maxResults int
+		if p.MaxResults != nil && *p.MaxResults > 0 {
+			maxResults = *p.MaxResults
 		}
-		if entry.Embedder != nil && entry.Embedder.Node != nil {
-			node.Content = append(
-				node.Content,
-				&yaml.Node{
-					Kind:  yaml.ScalarNode,
-					Tag:   "!!str",
-					Value: "embedder",
-				},
-				cloneYAMLNode(entry.Embedder.Node),
-			)
+
+		var config *yaml.Node
+		if p.Config != nil {
+			config = p.Config.Node
 		}
-		if entry.VectorStore != nil && entry.VectorStore.Node != nil {
-			node.Content = append(
-				node.Content,
-				&yaml.Node{
-					Kind:  yaml.ScalarNode,
-					Tag:   "!!str",
-					Value: "vector_store",
-				},
-				cloneYAMLNode(entry.VectorStore.Node),
-			)
-		}
-		if len(node.Content) == 0 {
-			continue
-		}
-		out[name] = node
+
+		out = append(out, knowledgeEntry{
+			Type:       typeName,
+			Name:       name,
+			MaxResults: maxResults,
+			Config:     config,
+		})
 	}
+
 	if len(out) == 0 {
 		return nil, nil
 	}
 	return out, nil
-}
-
-func cloneYAMLNode(node *yaml.Node) *yaml.Node {
-	if node == nil {
-		return nil
-	}
-	cloned := *node
-	if len(node.Content) > 0 {
-		cloned.Content = make([]*yaml.Node, 0, len(node.Content))
-		for _, child := range node.Content {
-			cloned.Content = append(cloned.Content, cloneYAMLNode(child))
-		}
-	}
-	return &cloned
 }
 
 func applySessionSummary(
@@ -1992,8 +2020,9 @@ func flagWasSet(set map[string]struct{}, name string) bool {
 	return ok
 }
 
-func loadModeExitCode(set map[string]struct{}) int {
-	if flagWasSet(set, flagSkillsLoadMode) {
+func skillsOptionExitCode(set map[string]struct{}) int {
+	if flagWasSet(set, flagSkillsToolProfile) ||
+		flagWasSet(set, flagSkillsLoadMode) {
 		return 2
 	}
 	return 1
@@ -2003,6 +2032,11 @@ func finalizeRunOptions(opts *runOptions) error {
 	if opts == nil {
 		return nil
 	}
+	profile, err := normalizeSkillsToolProfile(opts.SkillsToolProfile)
+	if err != nil {
+		return err
+	}
+	opts.SkillsToolProfile = profile
 	mode, err := normalizeSkillsLoadMode(opts.SkillsLoadMode)
 	if err != nil {
 		return err
@@ -2052,6 +2086,23 @@ func normalizeA2AHost(raw string) string {
 		return ""
 	}
 	return ia2a.NormalizeURL(host)
+}
+
+func normalizeSkillsToolProfile(raw string) (string, error) {
+	profile := strings.ToLower(strings.TrimSpace(raw))
+	if profile == "" {
+		return defaultSkillsToolProfile, nil
+	}
+	switch profile {
+	case skillprofile.Full, skillprofile.KnowledgeOnly:
+		return profile, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid skills tool profile %q: "+
+				"want full|knowledge_only",
+			raw,
+		)
+	}
 }
 
 func normalizeSkillsLoadMode(raw string) (string, error) {

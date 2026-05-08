@@ -1223,6 +1223,21 @@ func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 	)
 }
 
+func TestRunContextPromptRequiresScheduledExecution(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(
+		t,
+		runContextPrompt,
+		"Do not return only a statement of what you will do",
+	)
+	require.Contains(
+		t,
+		runContextPrompt,
+		"perform the scheduled task and report the result",
+	)
+}
+
 func waitFor(t *testing.T, fn func() bool) {
 	t.Helper()
 

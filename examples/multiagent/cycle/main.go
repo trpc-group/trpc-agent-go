@@ -41,7 +41,7 @@ const (
 
 func main() {
 	// Parse command line flags.
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	maxIter := flag.Int("max-iterations", defaultMaxIterations, "Maximum number of iterations for the cycle")
 	flag.Parse()
 

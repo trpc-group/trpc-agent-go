@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
@@ -129,27 +130,8 @@ func NewExecCommandToolWithMemoryFileStore(
 
 func (t *execTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name: toolExecCommand,
-		Description: "Execute a host shell command. Use this for " +
-			"general local shell work. Interactive commands can " +
-			"continue with write_stdin. When a chat upload is " +
-			"available, OPENCLAW_LAST_UPLOAD_PATH, " +
-			"OPENCLAW_LAST_UPLOAD_HOST_REF, " +
-			"OPENCLAW_LAST_UPLOAD_NAME, OPENCLAW_LAST_UPLOAD_MIME, " +
-			"kind-specific OPENCLAW_LAST_*_PATH vars, " +
-			"OPENCLAW_SESSION_UPLOADS_DIR, and " +
-			"OPENCLAW_RECENT_UPLOADS_JSON point to stable " +
-			"attachment metadata, host refs, and host paths. " +
-			"Do not use this just to inspect a PDF or spreadsheet " +
-			"already in chat; prefer read_document or " +
-			"read_spreadsheet for that. " +
-			"Write derived " +
-			"outputs under OPENCLAW_SESSION_UPLOADS_DIR when " +
-			"you plan to send them back to the user. " +
-			"If the command prints lines like " +
-			"`MEDIA: /path/to/file` or " +
-			"`MEDIA_DIR: /path/to/dir`, those paths are " +
-			"returned in structured media_files/media_dirs fields.",
+		Name:        toolExecCommand,
+		Description: execToolDescription(t != nil && t.memoryStore != nil),
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"command"},
@@ -210,6 +192,9 @@ func execToolDescription(hasMemoryFile bool) string {
 	parts := []string{
 		"Execute a host shell command. Use this for general local shell work.",
 		"Interactive commands can continue with write_stdin.",
+		"If you say you will run, inspect, create, write, or verify " +
+			"something with host shell work, the same assistant " +
+			"message must call exec_command or the required tool.",
 		"Protected shell and credential paths may be blocked by policy.",
 		"Sensitive env values may be redacted from returned output.",
 		"Do not use this just to inspect a PDF or spreadsheet already " +
@@ -294,7 +279,16 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
 	tty := firstBool(in.TTY, in.PTY)
-	env := mergeExecEnv(in.Env, uploadEnvFromContext(ctx, t.uploads))
+	env := mergeExecEnv(
+		in.Env,
+		mergeExecEnv(
+			identity.EnvVarsFromContext(ctx),
+			mergeExecEnv(
+				uploadEnvFromContext(ctx, t.uploads),
+				memoryFileEnvFromContext(ctx, t.memoryStore),
+			),
+		),
+	)
 
 	res, err := t.mgr.Exec(ctx, execParams{
 		Command:    in.Command,

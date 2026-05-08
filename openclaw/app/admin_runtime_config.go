@@ -19,6 +19,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 )
 
@@ -407,6 +408,22 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					},
 				),
 				adminRuntimeSelectField(
+					"skills.tool_profile",
+					"Tool Profile",
+					"Which built-in skill tools are exposed.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("skills"),
+						adminRuntimeKey("tool_profile", "toolProfile"),
+					},
+					func(opts runOptions) string {
+						return strings.TrimSpace(
+							opts.SkillsToolProfile,
+						)
+					},
+					skillprofile.KnowledgeOnly,
+					skillprofile.Full,
+				),
+				adminRuntimeSelectField(
 					"skills.load_mode",
 					"Load Mode",
 					"How long a loaded skill stays active.",
@@ -486,6 +503,27 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					},
 					func(opts runOptions) string {
 						return strconv.FormatBool(opts.EnableOpenClawTools)
+					},
+				),
+				adminRuntimeTextField(
+					"tools.openclaw_tooling_guidance",
+					"OpenClaw Tooling Guidance",
+					"Override or disable the built-in OpenClaw tooling guidance. Leave unset to use the built-in default, or set an empty string to disable injection.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"openclaw_tooling_guidance",
+							"openClawToolingGuidance",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.OpenClawToolingGuide != nil {
+							return *opts.OpenClawToolingGuide
+						}
+						return strings.TrimSpace(
+							openClawToolingGuidance,
+						)
 					},
 				),
 				adminRuntimeBoolField(

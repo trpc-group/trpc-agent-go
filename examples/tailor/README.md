@@ -36,14 +36,14 @@ export OPENAI_API_KEY="your-api-key"  # Optional: for real API calls
 **Simple mode (recommended)**: automatic token management
 
 ```bash
-go run . -model deepseek-chat -enable-token-tailoring
+go run . -model deepseek-v4-flash -enable-token-tailoring
 ```
 
 **Advanced mode**: custom parameters
 
 ```bash
 go run . \
-  -model deepseek-chat \
+  -model deepseek-v4-flash \
   -enable-token-tailoring \
   -max-input-tokens 10000 \
   -strategy middle \
@@ -53,12 +53,12 @@ go run . \
 **Testing without API**: see tailoring statistics without making real API calls
 
 ```bash
-go run . -model deepseek-chat -enable-token-tailoring -streaming=false
+go run . -model deepseek-v4-flash -enable-token-tailoring -streaming=false
 ```
 
 Command-line flags:
 
-- `-model`: Model name to use for chat. Default: `deepseek-chat`.
+- `-model`: Model name to use for chat. Default: `deepseek-v4-flash`.
 - `-enable-token-tailoring`: Enable automatic token tailoring. Default: `false`.
 - `-max-input-tokens`: Max input tokens (0=auto from context window). Default: `0`.
 - `-counter`: Token counter type: `simple` or `tiktoken`. Default: `simple`.
@@ -77,7 +77,7 @@ Example output:
 
 ```
 ✂️  Token Tailoring Demo
-🧩 model: deepseek-chat
+🧩 model: deepseek-v4-flash
 🔧 enable-token-tailoring: true
 🔢 max-input-tokens: auto (from context window)
 🧮 counter: simple
@@ -90,37 +90,37 @@ Example output:
   /show       - display current messages (head + tail)
   /exit       - quit
 
-👤 You: /bulk 1100
-✅ Added 1100 messages. Total=1101
+👤 You: /bulk 8000
+✅ Added 8000 messages. Total=8001
 
 👤 You: /show
-📋 Current messages (total: 1101):
+📋 Current messages (total: 8001):
 [0] system: You are a helpful assistant.
 [1] user: synthetic 1: lorem ipsum lorem ipsum...
 [2] user: synthetic 2: lorem ipsum lorem ipsum...
 ...
 [9] user: synthetic 9: lorem ipsum lorem ipsum...
-... (981 messages omitted)
-[991] user: synthetic 991: lorem ipsum lorem ipsum...
+... (7981 messages omitted)
+[7991] user: synthetic 7991: lorem ipsum lorem ipsum...
 ...
-[1100] user: synthetic 1100: lorem ipsum lorem ipsum...
+[8000] user: synthetic 8000: lorem ipsum lorem ipsum...
 
 👤 You: What is token tailoring?
 🤖 Assistant: Token tailoring is a technique to manage message length to fit within a model's context window...
 
-✂️  [Tailoring] maxInputTokens=auto 📨 messages=1102→1032 🎯 tokens=135414→126804
+✂️  [Tailoring] maxInputTokens=auto 📨 messages=7247 🎯 tokens=897394
 📝 Messages (after tailoring, showing head + tail):
 [0] system: You are a helpful assistant.
 [1] user: synthetic 1: lorem ipsum lorem ipsum...
 [2] user: synthetic 2: lorem ipsum lorem ipsum...
 [3] user: synthetic 3: lorem ipsum lorem ipsum...
 [4] user: synthetic 4: lorem ipsum lorem ipsum...
-... (1022 messages omitted)
-[1027] user: synthetic 1097: lorem ipsum lorem ipsum...
-[1028] user: synthetic 1098: lorem ipsum lorem ipsum...
-[1029] user: synthetic 1099: lorem ipsum lorem ipsum...
-[1030] user: synthetic 1100: lorem ipsum lorem ipsum...
-[1031] user: What is token tailoring?
+... (7237 messages omitted)
+[7242] user: synthetic 7997: lorem ipsum lorem ipsum...
+[7243] user: synthetic 7998: lorem ipsum lorem ipsum...
+[7244] user: synthetic 7999: lorem ipsum lorem ipsum...
+[7245] user: synthetic 8000: lorem ipsum lorem ipsum...
+[7246] user: What is token tailoring?
 
 👤 You: /exit
 👋 Goodbye!
@@ -131,8 +131,8 @@ The output shows:
 - Interactive conversation with the AI assistant.
 - Token tailoring statistics with emoji indicators:
   - ✂️ Tailoring applied
-  - 📨 Message count (before → after)
-  - 🎯 Token count (before → after)
+  - 📨 Message count after tailoring
+  - 🎯 Token count after tailoring
 - The tailored messages that were sent to the model (index, role, truncated content).
 - Head+tail display format clearly shows which messages are preserved and which are omitted.
 
@@ -143,27 +143,28 @@ The output shows:
 Enable token tailoring without specifying max-input-tokens:
 
 ```bash
-go run . -model deepseek-chat -enable-token-tailoring
+go run . -model deepseek-v4-flash -enable-token-tailoring
 ```
 
 Behavior:
 
 - Automatically detects context window from model configuration.
-- Calculates optimal `maxInputTokens` by subtracting protocol overhead and output reserve.
+- Calculates optimal `maxInputTokens` by subtracting protocol overhead,
+  output reserve, and the default 10% safety margin.
 - Uses default `SimpleTokenCounter` and `MiddleOutStrategy`.
 
-For `deepseek-chat`:
+For `deepseek-v4-flash`:
 
-- Context window: 128,000 tokens
-- Max input tokens: 126,848 tokens (128,000 - 128 - 1,024)
-- Tailoring threshold: ~1,030 synthetic messages
+- Context window: 1,000,000 tokens
+- Max input tokens: 897,440 tokens (1,000,000 - 512 - 2,048 - 100,000)
+- Tailoring threshold: ~7,300 synthetic messages
 
 ### Advanced Mode (Customizable)
 
 Specify custom `max-input-tokens` for precise control:
 
 ```bash
-go run . -model deepseek-chat -enable-token-tailoring -max-input-tokens 10000
+go run . -model deepseek-v4-flash -enable-token-tailoring -max-input-tokens 10000
 ```
 
 Behavior:
@@ -327,7 +328,7 @@ Interactive commands available during the session:
 Minimal setup requires only the enable flag:
 
 ```go
-m := openai.New("deepseek-chat",
+m := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true), // Required: enable token tailoring
 )
 ```
@@ -341,7 +342,7 @@ This enables automatic mode with:
 Optionally override components:
 
 ```go
-m := openai.New("deepseek-chat",
+m := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true),             // Required: enable token tailoring
     openai.WithMaxInputTokens(10000),                  // Custom limit
     openai.WithTokenCounter(customCounter),            // Custom counter
@@ -362,7 +363,7 @@ import (
 // Simple mode with provider
 m, err := provider.Model(
     "openai",
-    "deepseek-chat",
+    "deepseek-v4-flash",
     provider.WithEnableTokenTailoring(true),
 )
 
@@ -374,7 +375,7 @@ config := &model.TokenTailoringConfig{
 }
 m, err := provider.Model(
     "openai",
-    "deepseek-chat",
+    "deepseek-v4-flash",
     provider.WithEnableTokenTailoring(true),
     provider.WithTokenTailoringConfig(config),
 )
@@ -390,9 +391,9 @@ Based on testing with different models:
 
 | Model         | Context Window | Max Input Tokens | Threshold (synthetic msgs) |
 | ------------- | -------------- | ---------------- | -------------------------- |
-| deepseek-chat | 128,000        | 126,848          | ~1,030                     |
-| gpt-4o-mini   | 128,000        | 126,848          | ~1,030                     |
-| gpt-4         | 8,192          | 7,040            | ~57                        |
+| deepseek-v4-flash | 1,000,000      | 897,440          | ~7,300                     |
+| gpt-4o-mini   | 200,000        | 177,440          | ~1,440                     |
+| gpt-4         | 8,192          | 4,813            | ~39                        |
 
 _Threshold is based on synthetic messages with ~123 tokens each._
 

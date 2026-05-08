@@ -19,11 +19,14 @@ import (
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguitypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -142,6 +145,221 @@ func TestTranslateErrorResponse(t *testing.T) {
 	assert.Equal(t, "boom", runErr.Message)
 	assert.Equal(t, "run", runErr.RunID())
 }
+
+func TestTranslateErrorResponseClosesOpenToolCallDelta(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	toolIndex := 0
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-1",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Name:      "create_document",
+					Arguments: []byte(`{"content":"draft"`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	errorRsp := &model.Response{Error: &model.ResponseError{Message: "boom"}}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: errorRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	end, ok := events[0].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+	runErr, ok := events[1].(*aguievents.RunErrorEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "boom", runErr.Message)
+	assert.Equal(t, "run", runErr.RunID())
+}
+
+func TestTranslateEventSourceMetadataDisabledByDefault(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+	rsp := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "Hello",
+			},
+		}},
+	}
+	events, err := translator.Translate(
+		context.Background(),
+		&agentevent.Event{
+			ID:           "evt-1",
+			Author:       "member-a",
+			InvocationID: "inv-1",
+			Response:     rsp,
+		},
+	)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, events)
+	for _, evt := range events {
+		assert.Nil(t, evt.GetBaseEvent().RawEvent)
+	}
+}
+
+func TestTranslateAttachesEventSourceMetadataWhenEnabled(t *testing.T) {
+	translator := newTranslatorForTest(
+		t,
+		WithEventSourceMetadataEnabled(true),
+	)
+	if translator == nil {
+		return
+	}
+	rsp := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "search",
+						Arguments: []byte(`{"q":"agent"}`),
+					},
+				}},
+			},
+		}},
+	}
+	events, err := translator.Translate(
+		context.Background(),
+		&agentevent.Event{
+			ID:                 "evt-1",
+			Author:             "member-a",
+			InvocationID:       "inv-1",
+			ParentInvocationID: "parent-1",
+			Branch:             "root.member-a",
+			Response:           rsp,
+		},
+	)
+	assert.NoError(t, err)
+	assert.Len(t, events, 3)
+
+	want := source.Metadata{
+		EventID:            "evt-1",
+		Author:             "member-a",
+		InvocationID:       "inv-1",
+		ParentInvocationID: "parent-1",
+		Branch:             "root.member-a",
+	}
+	for _, evt := range events {
+		got, ok := evt.GetBaseEvent().RawEvent.(source.Metadata)
+		assert.True(t, ok)
+		assert.Equal(t, want, got)
+	}
+
+	payload, err := json.Marshal(events[0])
+	assert.NoError(t, err)
+	assert.Contains(t, string(payload), `"rawEvent":`)
+	assert.Contains(t, string(payload), `"author":"member-a"`)
+	assert.Contains(t, string(payload), `"invocationId":"inv-1"`)
+}
+
+func TestFinalizeEventsSkipsExistingRawEvent(t *testing.T) {
+	translator := &translator{eventSourceMetadataEnabled: true}
+	existing := map[string]any{"keep": true}
+	event := aguievents.NewRunStartedEvent("thread", "run")
+	event.GetBaseEvent().RawEvent = existing
+
+	events := translator.finalizeEvents(
+		&agentevent.Event{Author: "member-a"},
+		[]aguievents.Event{event},
+	)
+	require.Len(t, events, 1)
+	assert.Equal(t, existing, events[0].GetBaseEvent().RawEvent)
+}
+
+func TestFinalizeEventsSuppressesZeroOverride(t *testing.T) {
+	translator := &translator{eventSourceMetadataEnabled: true}
+	src := agentevent.NewResponseEvent("inv-1", "agui.runner", &model.Response{})
+	require.NoError(t, source.SetEventOverride(src, source.Metadata{}))
+
+	events := translator.finalizeEvents(
+		src,
+		[]aguievents.Event{
+			aguievents.NewRunStartedEvent("thread", "run"),
+		},
+	)
+	require.Len(t, events, 1)
+	assert.Nil(t, events[0].GetBaseEvent().RawEvent)
+}
+
+func TestFinalizeEventsHandlesNilInputs(t *testing.T) {
+	var nilTranslator *translator
+	assert.Nil(t, nilTranslator.finalizeEvents(nil, nil))
+
+	translator := &translator{}
+	assert.Nil(t, translator.finalizeEvents(nil, nil))
+
+	events := []aguievents.Event{nil}
+	result := translator.finalizeEvents(
+		&agentevent.Event{Author: "member-a"},
+		events,
+	)
+	assert.Equal(t, events, result)
+
+	translator.eventSourceMetadataEnabled = true
+	events = []aguievents.Event{
+		nil,
+		stubEventWithNilBase{},
+		aguievents.NewRunStartedEvent("thread", "run"),
+	}
+	result = translator.finalizeEvents(nil, events)
+	assert.Equal(t, events, result)
+	assert.Nil(t, events[2].GetBaseEvent().RawEvent)
+
+	src := &agentevent.Event{Author: "member-a"}
+	events = []aguievents.Event{
+		nil,
+		stubEventWithNilBase{},
+		aguievents.NewRunStartedEvent("thread", "run"),
+	}
+	result = translator.finalizeEvents(src, events)
+	assert.Equal(t, events, result)
+	assert.Nil(t, events[0])
+
+	got, ok := events[2].GetBaseEvent().RawEvent.(source.Metadata)
+	require.True(t, ok)
+	assert.Equal(t, source.Metadata{Author: "member-a"}, got)
+}
+
+type stubEventWithNilBase struct{}
+
+func (stubEventWithNilBase) Type() aguievents.EventType {
+	return aguievents.EventTypeRunStarted
+}
+
+func (stubEventWithNilBase) Timestamp() *int64 { return nil }
+
+func (stubEventWithNilBase) SetTimestamp(int64) {}
+
+func (stubEventWithNilBase) ThreadID() string { return "" }
+
+func (stubEventWithNilBase) RunID() string { return "" }
+
+func (stubEventWithNilBase) Validate() error { return nil }
+
+func (stubEventWithNilBase) ToJSON() ([]byte, error) { return nil, nil }
+
+func (stubEventWithNilBase) GetBaseEvent() *aguievents.BaseEvent { return nil }
 
 func TestTextMessageEventStreamingAndCompletion(t *testing.T) {
 	translator := newTranslatorImplForTest(t)
@@ -595,6 +813,888 @@ func TestToolCallAndResultEvents(t *testing.T) {
 	assert.Equal(t, "call-1", res.ToolCallID)
 	assert.Equal(t, "done", res.Content)
 	assert.Equal(t, "event-tool-result", translator.lastMessageID)
+}
+
+func TestTranslateStreamsToolCallDeltaAndSkipsFinalDuplicate(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	toolIndex := 0
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-1",
+				Type:  "function",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Name: "create_document",
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	start, ok := events[0].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", start.ToolCallID)
+	assert.Equal(t, "create_document", start.ToolCallName)
+	assert.Equal(t, "msg-tool", *start.ParentMessageID)
+	argChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Arguments: []byte(`{"content":"Hello`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: argChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	args, ok := events[0].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", args.ToolCallID)
+	assert.Equal(t, `{"content":"Hello`, args.Delta)
+	nextArgChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Arguments: []byte(` world"}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: nextArgChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	args, ok = events[0].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", args.ToolCallID)
+	assert.Equal(t, ` world"}`, args.Delta)
+	reason := "tool_calls"
+	finishChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			FinishReason: &reason,
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finishChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	finalRsp := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{ToolCalls: []model.ToolCall{{
+				ID:       "call-1",
+				Type:     "function",
+				Function: model.FunctionDefinitionParam{Name: "create_document", Arguments: []byte(`{"content":"Hello world"}`)},
+			}}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	end, ok := events[0].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+}
+
+func TestTranslateBuffersToolCallDeltaArgsUntilStart(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	toolIndex := 0
+	argChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-1",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Arguments: []byte(`{"content":"early`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: argChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-1",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Name: "create_document",
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	start, ok := events[0].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", start.ToolCallID)
+	assert.Equal(t, "create_document", start.ToolCallName)
+	args, ok := events[1].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", args.ToolCallID)
+	assert.Equal(t, `{"content":"early`, args.Delta)
+}
+
+func TestTranslateCompletesToolCallDeltaArgsFromFinalMessage(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "create_document",
+					Arguments: []byte(`{"content":"draft`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	reason := "tool_calls"
+	finishChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			FinishReason: &reason,
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finishChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	finalRsp := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{ToolCalls: []model.ToolCall{{
+				ID:       "call-1",
+				Type:     "function",
+				Function: model.FunctionDefinitionParam{Name: "create_document", Arguments: []byte(`{"content":"draft done"}`)},
+			}}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	args, ok := events[0].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", args.ToolCallID)
+	assert.Equal(t, ` done"}`, args.Delta)
+	end, ok := events[1].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+}
+
+func TestTranslateClosesToolCallDeltaWhenFinalArgumentsDoNotExtendStreamedArgs(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "create_document",
+					Arguments: []byte(`{"content":"draft`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	finalRsp := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{ToolCalls: []model.ToolCall{{
+				ID:       "call-1",
+				Type:     "function",
+				Function: model.FunctionDefinitionParam{Name: "create_document", Arguments: []byte(`{"content":"final"}`)},
+			}}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	end, ok := events[0].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+}
+
+func TestTranslateToolCallDeltaStreamingDisabledByDefault(t *testing.T) {
+	translator := newTranslatorImplForTest(t)
+	if translator == nil {
+		return
+	}
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "create_document",
+					Arguments: []byte(`{"content":"hidden"}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	reason := "tool_calls"
+	finishChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			FinishReason: &reason,
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finishChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestTranslateSkipsToolCallDeltaWithoutIDUntilFinalMessage(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	toolIndex := 0
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				Type:  "function",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Name:      "create_document",
+					Arguments: []byte(`{"content":"draft`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	argChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Arguments: []byte(` v2"}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: argChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	reason := "tool_calls"
+	finishChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			FinishReason: &reason,
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finishChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	finalRsp := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{ToolCalls: []model.ToolCall{{
+				ID:       "auto_call_0",
+				Type:     "function",
+				Function: model.FunctionDefinitionParam{Name: "create_document", Arguments: []byte(`{"content":"draft v2"}`)},
+			}}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 3)
+	start, ok := events[0].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "auto_call_0", start.ToolCallID)
+	assert.Equal(t, "create_document", start.ToolCallName)
+	args, ok := events[1].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "auto_call_0", args.ToolCallID)
+	assert.Equal(t, `{"content":"draft v2"}`, args.Delta)
+	end, ok := events[2].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "auto_call_0", end.ToolCallID)
+	resultRsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{ToolID: "auto_call_0", Content: "stored"},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{ID: "tool-result", Response: resultRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	result, ok := events[0].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool-result", result.MessageID)
+	assert.Equal(t, "auto_call_0", result.ToolCallID)
+	assert.Equal(t, "stored", result.Content)
+}
+
+func TestTranslateToolResultClosesOpenToolCallDeltaWithoutFinalMessage(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "create_document",
+					Arguments: []byte(`{"content":"draft"}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	resultRsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{ToolID: "call-1", Content: "stored"},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{ID: "tool-result", Response: resultRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	end, ok := events[0].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+	result, ok := events[1].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", result.ToolCallID)
+	assert.Equal(t, "stored", result.Content)
+}
+
+func TestTranslateDoesNotGuessAmbiguousLateToolCallDeltaID(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	firstIndex := 0
+	secondIndex := 1
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{
+				{
+					Index: &firstIndex,
+					Function: model.FunctionDefinitionParam{
+						Name:      "first_tool",
+						Arguments: []byte(`{"first":`),
+					},
+				},
+				{
+					Index: &secondIndex,
+					Function: model.FunctionDefinitionParam{
+						Name:      "second_tool",
+						Arguments: []byte(`{"second":`),
+					},
+				},
+			}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	ambiguousIDChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID: "call-late",
+				Function: model.FunctionDefinitionParam{
+					Arguments: []byte(`1}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: ambiguousIDChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	finalRsp := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{ToolCalls: []model.ToolCall{
+				{
+					ID:       "call-1",
+					Function: model.FunctionDefinitionParam{Name: "first_tool", Arguments: []byte(`{"first":1}`)},
+				},
+				{
+					ID:       "call-2",
+					Function: model.FunctionDefinitionParam{Name: "second_tool", Arguments: []byte(`{"second":2}`)},
+				},
+			}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 6)
+	firstStart, ok := events[0].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", firstStart.ToolCallID)
+	firstArgs, ok := events[1].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", firstArgs.ToolCallID)
+	assert.Equal(t, `{"first":1}`, firstArgs.Delta)
+	firstEnd, ok := events[2].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", firstEnd.ToolCallID)
+	secondStart, ok := events[3].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", secondStart.ToolCallID)
+	secondArgs, ok := events[4].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", secondArgs.ToolCallID)
+	assert.Equal(t, `{"second":2}`, secondArgs.Delta)
+	secondEnd, ok := events[5].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", secondEnd.ToolCallID)
+}
+
+func TestTranslateDoesNotGuessAmbiguousToolCallDeltaArgsWithoutIDOrIndex(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	firstIndex := 0
+	secondIndex := 1
+	// Start two open tool calls.
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{
+				{
+					Index: &firstIndex,
+					Function: model.FunctionDefinitionParam{
+						Name:      "first_tool",
+						Arguments: []byte(`{"first":`),
+					},
+				},
+				{
+					Index: &secondIndex,
+					Function: model.FunctionDefinitionParam{
+						Name:      "second_tool",
+						Arguments: []byte(`{"second":`),
+					},
+				},
+			}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	// Drop a single ambiguous argument chunk instead of attaching it to position zero.
+	ambiguousArgChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				Function: model.FunctionDefinitionParam{
+					Arguments: []byte(`1}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: ambiguousArgChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	// Use the final message to complete both calls by deterministic position.
+	finalRsp := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{ToolCalls: []model.ToolCall{
+				{
+					ID:       "call-1",
+					Function: model.FunctionDefinitionParam{Name: "first_tool", Arguments: []byte(`{"first":1}`)},
+				},
+				{
+					ID:       "call-2",
+					Function: model.FunctionDefinitionParam{Name: "second_tool", Arguments: []byte(`{"second":2}`)},
+				},
+			}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 6)
+	firstStart, ok := events[0].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", firstStart.ToolCallID)
+	firstArgs, ok := events[1].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", firstArgs.ToolCallID)
+	assert.Equal(t, `{"first":1}`, firstArgs.Delta)
+	firstEnd, ok := events[2].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", firstEnd.ToolCallID)
+	secondStart, ok := events[3].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", secondStart.ToolCallID)
+	secondArgs, ok := events[4].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", secondArgs.ToolCallID)
+	assert.Equal(t, `{"second":2}`, secondArgs.Delta)
+	secondEnd, ok := events[5].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", secondEnd.ToolCallID)
+}
+
+func TestTranslateDoesNotAttachUnindexedToolCallDeltaToSingleOpenCall(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	toolIndex := 0
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-1",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Name:      "first_tool",
+					Arguments: []byte(`{"first":`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	ambiguousArgChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				Function: model.FunctionDefinitionParam{
+					Arguments: []byte(`"wrong"}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: ambiguousArgChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	finalRsp := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{ToolCalls: []model.ToolCall{{
+				ID:       "call-1",
+				Function: model.FunctionDefinitionParam{Name: "first_tool", Arguments: []byte(`{"first":1}`)},
+			}}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	args, ok := events[0].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", args.ToolCallID)
+	assert.Equal(t, `1}`, args.Delta)
+	end, ok := events[1].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+}
+
+func TestTranslateAttachesUnindexedToolCallDeltaByID(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	toolIndex := 0
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-1",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Name:      "first_tool",
+					Arguments: []byte(`{"first":`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	argChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Arguments: []byte(`1}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: argChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	args, ok := events[0].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", args.ToolCallID)
+	assert.Equal(t, `1}`, args.Delta)
+}
+
+func TestTranslateRunCompletionClosesOpenToolCallDelta(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name: "create_document",
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	runCompletionRsp := &model.Response{
+		ID:     "msg-run-completion",
+		Object: model.ObjectTypeRunnerCompletion,
+		Done:   true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: runCompletionRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	end, ok := events[0].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), events[1])
+}
+
+func TestTranslateDoesNotReuseClosedToolCallDeltaState(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	toolIndex := 0
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-1",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Name:      "create_document",
+					Arguments: []byte(`{"content":"first"}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	finalRsp := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{ToolCalls: []model.ToolCall{{
+				ID:       "call-1",
+				Function: model.FunctionDefinitionParam{Name: "create_document", Arguments: []byte(`{"content":"first"}`)},
+			}}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	end, ok := events[0].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+	nextChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-2",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Name:      "create_document",
+					Arguments: []byte(`{"content":"second"}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: nextChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	start, ok := events[0].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", start.ToolCallID)
+	args, ok := events[1].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", args.ToolCallID)
+	assert.Equal(t, `{"content":"second"}`, args.Delta)
+}
+
+func TestTranslateClearsUnstartedToolCallDeltaStateOnFinalMessage(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
+	if translator == nil {
+		return
+	}
+	toolIndex := 0
+	startChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-1",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Arguments: []byte(`{"content":"first"}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: startChunk})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	assert.Len(t, translator.toolCallDeltas, 1)
+	assert.Contains(t, translator.toolCallDeltasByID, "call-1")
+	finalRsp := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{ToolCalls: []model.ToolCall{{
+				ID:       "call-1",
+				Function: model.FunctionDefinitionParam{Name: "create_document", Arguments: []byte(`{"content":"first"}`)},
+			}}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 3)
+	start, ok := events[0].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", start.ToolCallID)
+	args, ok := events[1].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", args.ToolCallID)
+	assert.Equal(t, `{"content":"first"}`, args.Delta)
+	end, ok := events[2].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+	assert.Empty(t, translator.toolCallDeltas)
+	assert.Empty(t, translator.toolCallDeltasByID)
+	nextChunk := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID: "call-2",
+				Function: model.FunctionDefinitionParam{
+					Name:      "create_document",
+					Arguments: []byte(`{"content":"second"}`),
+				},
+			}}},
+		}},
+		IsPartial: true,
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: nextChunk})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	start, ok = events[0].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", start.ToolCallID)
+	args, ok = events[1].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", args.ToolCallID)
+	assert.Equal(t, `{"content":"second"}`, args.Delta)
 }
 
 func TestToolResultEventDoesNotEmitEnd(t *testing.T) {
@@ -2503,6 +3603,197 @@ func TestStreamToolResultEvent(t *testing.T) {
 	assert.Equal(t, "tool-1", toolResultEvt.ToolCallID)
 	assert.Equal(t, "World", toolResultEvt.Content)
 	assert.Equal(t, "tool", *toolResultEvt.Role)
+}
+
+func TestStreamToolResultEventAsActivityWhenEnabled(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	chunkRsp1 := &model.Response{
+		ID:        "msg-1",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "Hello", ToolID: "tool-1"},
+		}},
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{ID: "evt-1", Response: chunkRsp1})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	snapshot, ok := events[0].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool.result.stream", snapshot.ActivityType)
+	content, ok := snapshot.Content.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "tool-1", content["toolCallId"])
+	assert.Equal(t, "Hello", content["content"])
+	assert.True(t, aguitool.IsStreamingToolResultActivityEvent(snapshot))
+	chunkRsp2 := &model.Response{
+		ID:        "msg-1",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: " World", ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-2", Response: chunkRsp2})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool.result.stream", delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/content", delta.Patch[0].Path)
+	assert.Equal(t, "Hello World", delta.Patch[0].Value)
+	assert.True(t, aguitool.IsStreamingToolResultActivityEvent(delta))
+	finalRsp := &model.Response{
+		ID:     "msg-1-final",
+		Object: string(model.ObjectTypeToolResponse),
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleTool, Content: `{"done":true}`, ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-final", Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	result, ok := events[0].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "evt-final", result.MessageID)
+	assert.Equal(t, "tool-1", result.ToolCallID)
+	assert.Equal(t, `{"done":true}`, result.Content)
+	chunkRsp3 := &model.Response{
+		ID:        "msg-2",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "Reset", ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-3", Response: chunkRsp3})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	snapshot, ok = events[0].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	content, ok = snapshot.Content.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "Reset", content["content"])
+}
+
+func TestStreamToolResultActivityClosesOpenToolCallDelta(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true), WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	toolIndex := 0
+	startRsp := &model.Response{
+		ID:        "msg-tool",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				ID:    "call-1",
+				Type:  "function",
+				Index: &toolIndex,
+				Function: model.FunctionDefinitionParam{
+					Name: "create_document",
+				},
+			}}},
+		}},
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{ID: "evt-start", Response: startRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	start, ok := events[0].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", start.ToolCallID)
+	partialRsp := &model.Response{
+		ID:        "msg-tool-result",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "partial", ToolID: "call-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-partial", Response: partialRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	end, ok := events[0].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", end.ToolCallID)
+	snapshot, ok := events[1].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool.result.stream", snapshot.ActivityType)
+	content, ok := snapshot.Content.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", content["toolCallId"])
+	assert.Equal(t, "partial", content["content"])
+}
+
+func TestToolResultActivityEventSkipsEmptyInputs(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	event, ok := tr.toolResultActivityEvent("", "hello")
+	assert.False(t, ok)
+	assert.Nil(t, event)
+	event, ok = tr.toolResultActivityEvent("tool-1", "")
+	assert.False(t, ok)
+	assert.Nil(t, event)
+	assert.Empty(t, tr.streamingToolResultContent)
+}
+
+func TestClearToolResultActivityState(t *testing.T) {
+	var nilTranslator *translator
+	nilTranslator.clearToolResultActivityState(nil)
+
+	tr := &translator{
+		streamingToolResultContent: map[string]string{
+			"tool-1": "hello",
+			"tool-2": "world",
+			"tool-3": "keep",
+		},
+	}
+	tr.clearToolResultActivityState(nil)
+	assert.Equal(t, "hello", tr.streamingToolResultContent["tool-1"])
+	assert.Equal(t, "world", tr.streamingToolResultContent["tool-2"])
+	assert.Equal(t, "keep", tr.streamingToolResultContent["tool-3"])
+	tr.clearToolResultActivityState(&model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{ToolID: "tool-1"}},
+			{Delta: model.Message{ToolID: "tool-2"}},
+		},
+	})
+	assert.NotContains(t, tr.streamingToolResultContent, "tool-1")
+	assert.NotContains(t, tr.streamingToolResultContent, "tool-2")
+	assert.Equal(t, "keep", tr.streamingToolResultContent["tool-3"])
+}
+
+func TestToolResultActivityEvents(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	events, err := tr.toolResultActivityEvents(nil)
+	assert.NoError(t, err)
+	assert.Nil(t, events)
+	events, err = tr.toolResultActivityEvents(&model.Response{})
+	assert.NoError(t, err)
+	assert.Nil(t, events)
+	events, err = tr.toolResultActivityEvents(&model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{ToolID: "tool-1", Content: "Hello"}},
+			{Delta: model.Message{ToolID: "tool-1", Content: " World"}},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	_, ok := events[0].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	_, ok = events[1].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
 }
 
 func TestTranslateStreamableToolCallAndResultEvents(t *testing.T) {

@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -222,6 +223,17 @@ func runAgentAndCapture(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
 		agent.WithInvocationSession(sess),
 	)
+	return runInvocationAndCapture(t, agt, mdl, inv)
+}
+
+func runInvocationAndCapture(
+	t *testing.T,
+	agt agent.Agent,
+	mdl *captureRequestModel,
+	inv *agent.Invocation,
+) *model.Request {
+	t.Helper()
+
 	ch, err := agt.Run(context.Background(), inv)
 	require.NoError(t, err)
 	for evt := range ch {
@@ -246,6 +258,20 @@ func joinSystemMessages(req *model.Request) string {
 	var parts []string
 	for _, msg := range req.Messages {
 		if msg.Role != model.RoleSystem {
+			continue
+		}
+		parts = append(parts, msg.Content)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func joinAllMessageContent(req *model.Request) string {
+	if req == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(req.Messages))
+	for _, msg := range req.Messages {
+		if msg.Role == model.RoleUser {
 			continue
 		}
 		parts = append(parts, msg.Content)
@@ -564,6 +590,11 @@ func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
+	require.Contains(
+		t,
+		decl.Description,
+		"same assistant message must call exec_command",
+	)
 	require.NotContains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
 }
 
@@ -579,6 +610,11 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+	require.Contains(
+		t,
+		decl.Description,
+		"same assistant message must call exec_command",
+	)
 }
 
 func TestBuildOpenClawTools_IncludesConversationHistoryTool(
@@ -594,6 +630,68 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 		decl.Description,
 		"current conversation session",
 	)
+}
+
+func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_spawn"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_list"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_get"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "subagents_cancel"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_spawn"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_list"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_get"),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(bundle.tools, "sessions_cancel"),
+	)
+}
+
+func TestNewRuntime_ExposesSubagentService(t *testing.T) {
+	t.Parallel()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-enable-openclaw-tools",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+
+	require.NotNil(t, rt.SubagentService())
+}
+
+func TestRuntimeSubagentServiceNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var rt *Runtime
+	require.Nil(t, rt.SubagentService())
 }
 
 func TestNewRuntimeStores_CreatesAllStores(t *testing.T) {
@@ -1400,8 +1498,279 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 	require.NotContains(
 		t,
 		sys,
-		"Tooling and workspace guidance:",
+		"Each entry includes a path to that skill's SKILL.md on disk.",
 	)
+	// Suppressing the skill tooling guidance leaves only the overview;
+	// skill_load-capable configurations no longer inject a separate
+	// negative capability block because execution may still be available
+	// through other registered tools such as workspace_exec.
+	require.NotContains(t, sys, "Skill tool availability:")
+	require.NotContains(
+		t,
+		sys,
+		"This configuration supports skill discovery and "+
+			"knowledge loading only.",
+	)
+}
+
+func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(t, sys, "Available skills:")
+	require.Contains(
+		t,
+		sys,
+		"Each entry includes a path to that skill's SKILL.md on disk.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"you must use that skill in the same turn.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"This is a blocking requirement for matching skills.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Start with one brief user-visible preamble "+
+			"about the immediate next step, then call "+
+			"`skill_load` for that skill right away",
+	)
+	require.Contains(
+		t,
+		sys,
+		"not a pause to ask what to do next",
+	)
+	require.Contains(
+		t,
+		sys,
+		"A preamble-only skill response is invalid",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Do not stop after announcing the skill-backed "+
+			"next step",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Never say that you could read or load a matching skill later",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Never mention reading, loading, or using a matching "+
+			"skill unless you already called `skill_load` for "+
+			"it in this turn.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Do not answer a matching skill task from the short "+
+			"summary, prior knowledge, or partial memory.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"prefer creating or updating a local skill over "+
+			"treating it as a one-off answer.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"For lightweight facts, preferences, or simple "+
+			"standing rules, use memory instead.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Use platform code and tools for stable safety "+
+			"boundaries",
+	)
+	require.Contains(
+		t,
+		sys,
+		"choose a writable user-managed skill root",
+	)
+	require.Contains(t, sys, "not bundled skills unless")
+	require.Contains(
+		t,
+		sys,
+		"Keep exploring nearby runtime facts, retries, "+
+			"and recovery paths",
+	)
+	require.Contains(
+		t,
+		sys,
+		"echoer/"+skill.SkillFile,
+	)
+	require.NotContains(t, sys, "Skill tool availability:")
+	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
+	require.NotContains(t, sys, "Only describe a blocker")
+}
+
+func TestNewAgent_OpenClawPostToolPrompt_AppliedAfterToolResult(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const (
+		userRequest = "write meeting notes to iWiki"
+		toolCallID  = "call_write_iwiki"
+		toolName    = "write_iwiki"
+		toolResult  = `{"status":"created","url":"https://iwiki.example/doc"}`
+	)
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	userMsg := model.NewUserMessage(userRequest)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(userMsg))
+	sess := session.NewSession("demo", "user", "sess")
+	sess.Events = []event.Event{
+		*event.NewResponseEvent(
+			inv.InvocationID,
+			"user",
+			&model.Response{
+				Choices: []model.Choice{{
+					Message: userMsg,
+				}},
+			},
+		),
+		*event.NewResponseEvent(
+			inv.InvocationID,
+			defaultAgentName,
+			&model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							Type: "function",
+							ID:   toolCallID,
+							Function: model.FunctionDefinitionParam{
+								Name: toolName,
+								Arguments: []byte(
+									`{"title":"notes"}`,
+								),
+							},
+						}},
+					},
+				}},
+			},
+		),
+		*event.NewResponseEvent(
+			inv.InvocationID,
+			defaultAgentName,
+			&model.Response{
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						toolCallID,
+						toolName,
+						toolResult,
+					),
+				}},
+			},
+		),
+	}
+	inv.Session = sess
+
+	req := runInvocationAndCapture(t, agt, mdl, inv)
+	system := joinSystemMessages(req)
+	require.Contains(t, system, openClawPostToolPrompt)
+	require.Contains(t, system, "same assistant turn")
+	require.Contains(
+		t,
+		system,
+		"Do not answer only with what you will do next.",
+	)
+	require.Contains(t, system, "Do not claim that a document")
+	require.Contains(
+		t,
+		system,
+		"Only return a blocker when no safe next step remains.",
+	)
+	require.Contains(t, system, "return `MEDIA:` or `MEDIA_DIR:` lines")
+	require.NotContains(t, system, "WECOM_FILE")
+	require.NotContains(t, system, "WECOM_MEDIA")
+	require.Contains(t, system, "For docs and iWiki")
+	require.NotContains(t, system, "Final Answer Requirement:")
+}
+
+func TestNewAgent_OpenClawPostToolPrompt_NotAppliedWithoutToolResult(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		session.NewSession("demo", "user", "sess"),
+	)
+	system := joinSystemMessages(req)
+	require.NotContains(t, system, openClawPostToolPrompt)
+}
+
+func TestNewAgent_LocalExecKeepsExecCommandButOmitsWorkspaceExec(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	agt, _, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:         "demo",
+		SkillsRoot:      root,
+		StateDir:        t.TempDir(),
+		EnableLocalExec: true,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	names := make(map[string]bool)
+	for _, tl := range agt.Tools() {
+		if decl := tl.Declaration(); decl != nil {
+			names[decl.Name] = true
+		}
+	}
+
+	require.False(t, names["workspace_exec"])
+	require.False(t, names["workspace_write_stdin"])
+	require.False(t, names["workspace_kill_session"])
 }
 
 func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
@@ -1479,6 +1848,69 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 		t,
 		sys,
 		"For real browser automation, use browser.",
+	)
+}
+
+func TestNewAgent_OpenClawToolingGuidance_OverrideApplied(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	guide := "Use internal runtime guidance only."
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:              "demo",
+		SkillsRoot:           root,
+		StateDir:             t.TempDir(),
+		EnableOpenClawTools:  true,
+		OpenClawToolingGuide: &guide,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.Contains(t, content, guide)
+	require.NotContains(
+		t,
+		content,
+		strings.TrimSpace(openClawToolingGuidance),
+	)
+}
+
+func TestNewAgent_OpenClawToolingGuidance_EmptyDisables(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	guide := ""
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:              "demo",
+		SkillsRoot:           root,
+		StateDir:             t.TempDir(),
+		EnableOpenClawTools:  true,
+		OpenClawToolingGuide: &guide,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.NotContains(
+		t,
+		content,
+		strings.TrimSpace(openClawToolingGuidance),
 	)
 }
 
@@ -1604,6 +2036,151 @@ func TestNewAgent_SkillsToolResults_ConfigApplied(t *testing.T) {
 	sys := joinSystemMessages(req)
 	require.Contains(t, sys, "Loaded skill context:")
 	require.Contains(t, sys, "[Loaded] echoer")
+}
+
+func TestNewAgent_KnowledgeOnlyProfileHidesSkillRun(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:           "demo",
+		SkillsRoot:        root,
+		StateDir:          t.TempDir(),
+		SkillsToolProfile: skillprofile.KnowledgeOnly,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	require.NotNil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolListDocs),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolSelectDocs),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolRun),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolExec),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolWriteStdin),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolPollSession),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolKillSession),
+	)
+	require.Contains(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad).
+			Description,
+		"Before the first matching load, start with one "+
+			"brief user-visible preamble",
+	)
+	require.Contains(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad).
+			Description,
+		"same assistant message must include the required "+
+			"tool call",
+	)
+}
+
+func TestNewAgent_KnowledgeOnlyProfileUsesToolingGuidance(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:             "demo",
+		SkillsRoot:          root,
+		StateDir:            t.TempDir(),
+		SkillsToolProfile:   skillprofile.KnowledgeOnly,
+		EnableOpenClawTools: true,
+	}, nil, nil)
+	require.NoError(t, err)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolRun),
+	)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.Contains(
+		t,
+		content,
+		strings.TrimSpace(openClawToolingGuidance),
+	)
+}
+
+func TestNewAgent_FullProfileUsesToolingGuidance(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		profile string
+	}{
+		{
+			name:    "explicit full profile",
+			profile: skillprofile.Full,
+		},
+		{
+			name:    "zero-value profile defaults to knowledge-only",
+			profile: "",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := createAppTestSkill(t)
+			mdl := &captureRequestModel{}
+			agt, _, err := newAgent(mdl, agentConfig{
+				AppName:             "demo",
+				SkillsRoot:          root,
+				StateDir:            t.TempDir(),
+				SkillsToolProfile:   tc.profile,
+				EnableOpenClawTools: true,
+			}, nil, nil)
+			require.NoError(t, err)
+
+			req := runAgentAndCapture(
+				t,
+				agt,
+				mdl,
+				&session.Session{},
+			)
+			content := joinAllMessageContent(req)
+			require.Contains(
+				t,
+				content,
+				strings.TrimSpace(openClawToolingGuidance),
+			)
+			require.Contains(
+				t,
+				content,
+				artifactCompletionRule,
+			)
+		})
+	}
 }
 
 func TestRun_HTTPListenErrorPath(t *testing.T) {
@@ -1942,8 +2519,8 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			name:      "knowledges",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
-				KnowledgesConfig: map[string]*yaml.Node{
-					"docs": yamlNode(t, `
+				KnowledgesConfig: []knowledgeEntry{
+					builtinKnowledgeEntry(t, "docs", `
 vector_store:
   type: inmemory
 `),
@@ -2473,7 +3050,7 @@ func TestResolveWorkspaceSkillsRoot_CwdSkills(t *testing.T) {
 	require.Equal(t, filepath.Join(cwd, defaultSkillsDir), got)
 }
 
-func TestResolveWorkspaceSkillsRoot_RepoBundled(t *testing.T) {
+func TestResolveWorkspaceSkillsRoot_IgnoresRepoBundled(t *testing.T) {
 	cwd := t.TempDir()
 	require.NoError(t, os.MkdirAll(
 		filepath.Join(cwd, appName, defaultSkillsDir),
@@ -2481,7 +3058,7 @@ func TestResolveWorkspaceSkillsRoot_RepoBundled(t *testing.T) {
 	))
 
 	got := resolveWorkspaceSkillsRoot(cwd, "")
-	require.Equal(t, filepath.Join(cwd, appName, defaultSkillsDir), got)
+	require.Equal(t, filepath.Join(cwd, defaultSkillsDir), got)
 }
 
 func TestResolveSkillRoots_IncludesExpectedRoots(t *testing.T) {
@@ -2544,6 +3121,20 @@ func TestResolveSkillRoots_UsesInstalledBundledSkills(t *testing.T) {
 		roots,
 		filepath.Join(cwd, appName, defaultSkillsDir),
 	)
+}
+
+func TestResolveSkillRoots_SeparatesRepoBundledSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := t.TempDir()
+	stateDir := t.TempDir()
+	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
+	require.NoError(t, os.MkdirAll(repoBundled, 0o700))
+
+	roots := resolveSkillRoots(cwd, agentConfig{StateDir: stateDir})
+	require.Contains(t, roots, filepath.Join(cwd, defaultSkillsDir))
+	require.Contains(t, roots, repoBundled)
 }
 
 func TestResolveBundledSkillsRoot_RepoFallback(t *testing.T) {
@@ -3374,6 +3965,84 @@ func TestInProcGatewayClient_StreamMessage_StatusError(t *testing.T) {
 		"gwclient: status 400: invalid_request: missing user_id or from",
 		err.Error(),
 	)
+}
+
+func TestInProcGatewayClient_StreamMessageWithOptions_ProgressAfterText(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const firstDelta = "checking "
+
+	srv, err := gateway.New(&inProcGWTestRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: firstDelta},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name: "demo_tool",
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("done"),
+					}},
+					Done: true,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	stream, err := c.StreamMessageWithOptions(
+		context.Background(),
+		gwclient.MessageRequest{
+			From: "u1",
+			Text: "hi",
+		},
+		&gwclient.MessageStreamOptions{
+			ProgressAfterTextDelta: true,
+		},
+	)
+	require.NoError(t, err)
+
+	var events []gwclient.StreamEvent
+	for evt := range stream {
+		events = append(events, evt)
+	}
+	require.Len(t, events, 7)
+	require.Equal(t, gwproto.StreamEventTypeMessageDelta, events[2].Type)
+	require.Equal(t, firstDelta, events[2].Delta)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[3].Type)
+	require.Equal(t, "Running local tool", events[3].Summary)
+	require.Equal(t, "demo_tool", events[3].ToolName)
+	require.Equal(t, gwproto.StreamToolStatusRunning, events[3].ToolStatus)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[4].Type)
+	require.Equal(t, gwproto.StreamProgressStageSummarizing, events[4].Stage)
 }
 
 func TestInProcGatewayClient_NilServerFails(t *testing.T) {
@@ -4551,6 +5220,7 @@ type inProcGWTestRunner struct {
 	reply     string
 	requestID string
 	usage     *model.Usage
+	events    []*event.Event
 }
 
 func (r *inProcGWTestRunner) Run(
@@ -4560,6 +5230,15 @@ func (r *inProcGWTestRunner) Run(
 	_ model.Message,
 	_ ...agent.RunOption,
 ) (<-chan *event.Event, error) {
+	if len(r.events) > 0 {
+		ch := make(chan *event.Event, len(r.events))
+		for _, evt := range r.events {
+			ch <- evt
+		}
+		close(ch)
+		return ch, nil
+	}
+
 	reply := r.reply
 	if reply == "" {
 		reply = "ok"

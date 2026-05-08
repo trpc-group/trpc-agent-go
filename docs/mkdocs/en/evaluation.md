@@ -6,6 +6,8 @@ Unlike deterministic systems, Agent issues often appear as probabilistic deviati
 
 The core purpose of evaluation is to turn key scenarios and acceptance criteria into assets and distill them into sustainable regression signals. tRPC-Agent-Go provides out-of-the-box evaluation capabilities, supporting asset management and result persistence based on evaluation sets and metrics. It includes static evaluators and LLM Judge evaluators, and provides multi-turn evaluation, repeated runs, `Trace` evaluation mode, callbacks, context injection, and concurrent inference to support local debugging and pipeline regression at engineering scale.
 
+If you want to further automate prompt optimization on top of evaluation, continue with the [PromptIter Guide](promptiter.md). PromptIter is built on top of Evaluation and provides train/validation separation, multi-round optimization, asynchronous run management, and HTTP APIs.
+
 ## Quick Start
 
 This section provides a minimal example to help you quickly understand how to use tRPC-Agent-Go evaluation.
@@ -123,7 +125,7 @@ import (
 
 const (
 	appName   = "math-eval-app"
-	modelName = "deepseek-chat"
+	modelName = "deepseek-v4-flash"
 	streaming = true
 	evalSetID = "math-basic"
 	dataDir   = "./data"
@@ -829,9 +831,10 @@ import (
 
 // EvalMetric represents one evaluation metric.
 type EvalMetric struct {
-	MetricName string               // MetricName is the metric name and matches the evaluator name.
-	Threshold  float64              // Threshold is the threshold value.
-	Criterion  *criterion.Criterion // Criterion is the evaluation criteria.
+	MetricName    string               // MetricName is the metric instance name.
+	EvaluatorName string               // EvaluatorName is an optional evaluator implementation name.
+	Threshold     float64              // Threshold is the threshold value.
+	Criterion     *criterion.Criterion // Criterion is the evaluation criteria.
 }
 
 // Criterion represents a collection of evaluation criteria.
@@ -848,6 +851,7 @@ type Criterion struct {
 - `final_response_avg_score`: final response evaluator, does not require LLM, requires expected output.
 - `llm_final_response`: LLM final response evaluator, requires expected output.
 - `llm_hallucinations`: LLM hallucination evaluator, checks whether the final answer is supported by evidence captured during execution, and typically does not require expected output.
+- `llm_judge_template`: LLM template evaluator, uses custom prompt, variable bindings, and response scoring strategy from `criterion.llmJudge.template`.
 - `llm_rubric_critic`: LLM rubric critic evaluator, requires expected output plus LLMJudge rubrics.
 - `llm_rubric_reference_critic`: LLM rubric reference critic evaluator, requires expected output plus LLMJudge rubrics, and uses the reference answer as a quality anchor instead of an exact-match golden target.
 - `llm_rubric_response`: LLM rubric response evaluator, requires EvalSet to provide session input and LLMJudge plus rubrics.
@@ -874,17 +878,40 @@ The framework includes the following criterion types:
 
 | Criterion Type           | Applies To                              |
 |--------------------------|-----------------------------------------|
+| LengthCriterion          | Content length ranges                   |
 | TextCriterion            | Text strings                            |
 | JSONCriterion            | JSON objects                            |
+| XMLCriterion             | XML documents                           |
 | RougeCriterion           | ROUGE text scoring                      |
 | ToolTrajectoryCriterion  | Tool call trajectories                  |
 | FinalResponseCriterion   | Final response content                  |
 | LLMCriterion             | LLM-based evaluation models             |
 | Criterion                | Aggregation of multiple criteria        |
 
+##### LengthCriterion
+
+LengthCriterion validates whether string length falls within an inclusive range. Length is counted by Unicode code points, so Chinese characters, English characters, and symbols each count as one character. `min` and `max` are both optional, but at least one of them must be configured.
+
+```go
+type LengthCriterion struct {
+	Ignore bool
+	Min    *int
+	Max    *int
+}
+```
+
+Example configuration requires actual content to be between 20 and 500 characters.
+
+```json
+{
+  "min": 20,
+  "max": 500
+}
+```
+
 ##### TextCriterion
 
-TextCriterion compares two strings, commonly used for tool name comparison and final response text comparison. The structure is defined as follows.
+TextCriterion describes text-content evaluation rules. It is commonly used for tool name comparison and final response text comparison. It can constrain actual text length and can compare actual text with expected text using a configured strategy. The structure is defined as follows.
 
 ```go
 // TextCriterion represents a text matching criterion.
@@ -892,6 +919,7 @@ type TextCriterion struct {
 	Ignore          bool                                        // Ignore indicates skipping comparison.
 	CaseInsensitive bool                                        // CaseInsensitive indicates case-insensitive matching.
 	MatchStrategy   TextMatchStrategy                           // MatchStrategy is the matching strategy.
+	Length          *length.LengthCriterion                     // Length validates text length.
 	Compare         func(actual, expected string) (bool, error) // Compare is custom comparison logic.
 }
 
@@ -945,6 +973,7 @@ type JSONCriterion struct {
 	OnlyTree        map[string]any                           // OnlyTree indicates the only field tree to compare.
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy is the matching strategy.
 	NumberTolerance *float64                                 // NumberTolerance is the numeric tolerance.
+	Valid           bool                                     // Valid validates whether actual content is legal JSON.
 	Compare         func(actual, expected any) (bool, error) // Compare is custom comparison logic.
 }
 
@@ -954,7 +983,7 @@ type JSONMatchStrategy string
 
 Currently, `matchStrategy` only supports `exact`, with default `exact`.
 
-During comparison, `actual` is the actual value and `expected` is the expected value. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
+During comparison, `actual` is the actual value and `expected` is the expected value. `valid` validates whether actual is a complete and strict legal JSON document. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 
@@ -1009,6 +1038,26 @@ jsonCriterion := cjson.New(
 		return true, nil
 	}),
 )
+```
+
+##### XMLCriterion
+
+XMLCriterion validates whether a string is a legal XML document and also supports custom comparison logic injected from code. Validity checks require non-empty content, exactly one root element, properly closed tags, and no non-whitespace text outside the root element.
+
+```go
+type XMLCriterion struct {
+	Ignore  bool
+	Valid   bool
+	Compare func(actual, expected string) (bool, error)
+}
+```
+
+Example configuration validates that actual content is a legal XML document:
+
+```json
+{
+  "valid": true
+}
 ```
 
 ##### RougeCriterion
@@ -1322,7 +1371,7 @@ Assuming `A`, `B`, `C`, and `D` are tool calls, matching examples are as follows
 
 ##### FinalResponseCriterion
 
-FinalResponseCriterion compares final responses per turn. It supports text comparison, JSON structural comparison after parsing content, and ROUGE scoring. The structure is defined as follows.
+FinalResponseCriterion compares final responses per turn. It supports text comparison, JSON structural comparison after parsing content, XML validation, and ROUGE scoring. The structure is defined as follows.
 
 ```go
 import (
@@ -1330,6 +1379,7 @@ import (
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	cxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 )
 
 // FinalResponseCriterion represents a final response matching criterion.
@@ -1337,13 +1387,14 @@ type FinalResponseCriterion struct {
 	Text    *ctext.TextCriterion                                      // Text compares final response text.
 	JSON    *cjson.JSONCriterion                                      // JSON compares final response JSON.
 	Rouge   *crouge.RougeCriterion                                    // Rouge scores final response text with ROUGE.
+	XML     *cxml.XMLCriterion                                        // XML validates final response XML.
 	Compare func(actual, expected *evalset.Invocation) (bool, error) // Compare is custom comparison logic.
 }
 ```
 
-When using this criterion, you need to fill `finalResponse` on the expected side for the corresponding turn in EvalSet.
+When using this criterion, you usually need to fill `finalResponse` on the expected side for the corresponding turn in EvalSet. If only criteria that do not depend on expected output are configured, the evaluator can validate the actual final response only.
 
-`text`, `json`, and `rouge` can be configured together, and all configured sub-criteria must match. When `json` is configured, the content must be parseable as JSON.
+`text`, `json`, `rouge`, and `xml` can be configured together, and all enabled sub-criteria must match. See each Criterion section for its fields and semantics.
 
 To match by ROUGE, configure `rouge` and see RougeCriterion for details.
 
@@ -1358,6 +1409,48 @@ The following example selects `final_response_avg_score` and configures FinalRes
 			"finalResponse": {
 				"text": {
 					"matchStrategy": "contains"
+				}
+			}
+		}
+	}
+]
+```
+
+The following example validates only that the actual final response length is between 20 and 500 characters and that the content is legal JSON.
+
+```json
+[
+	{
+		"metricName": "final_response_avg_score",
+		"threshold": 1.0,
+		"criterion": {
+			"finalResponse": {
+				"text": {
+					"length": {
+						"min": 20,
+						"max": 500
+					}
+				},
+				"json": {
+					"valid": true
+				}
+			}
+		}
+	}
+]
+```
+
+The following example validates that the actual final response is legal XML.
+
+```json
+[
+	{
+		"metricName": "final_response_avg_score",
+		"threshold": 1.0,
+		"criterion": {
+			"finalResponse": {
+				"xml": {
+					"valid": true
 				}
 			}
 		}
@@ -1395,15 +1488,16 @@ finalResponseCriterion := cfinalresponse.New(
 
 ##### LLMCriterion
 
-LLMCriterion configures LLM Judge evaluators. It is suitable for evaluating semantic quality and compliance that are hard to cover with deterministic rules. It selects the judge model and sampling strategy via `judgeModel`, and uses `rubrics` to provide evaluation criteria. The structure is defined as follows.
+LLMCriterion configures LLM Judge evaluators. It is suitable for evaluating semantic quality and compliance that are hard to cover with deterministic rules. It selects the judge model and sampling strategy via `judgeModel`, uses `rubrics` to provide evaluation criteria, and can also use `template` to provide a custom prompt, variable bindings, and response scoring strategy. The structure is defined as follows.
 
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/model"
 
 // LLMCriterion represents the LLM Judge criterion.
 type LLMCriterion struct {
-	JudgeModel *JudgeModelOptions // JudgeModel is the judge model configuration.
-	Rubrics    []*Rubric          // Rubrics is the list of evaluation rubrics.
+	Rubrics    []*Rubric             // Rubrics is the list of evaluation rubrics.
+	JudgeModel *JudgeModelOptions    // JudgeModel is the judge model configuration.
+	Template   *JudgeTemplateOptions // Template is the template evaluator configuration.
 }
 
 // JudgeModelOptions represents judge model configuration.
@@ -1417,6 +1511,43 @@ type JudgeModelOptions struct {
 	NumSamples   *int                    // NumSamples is the sampling count.
 	Generation   *model.GenerationConfig // Generation is the generation config.
 }
+
+// JudgeTemplateOptions represents template evaluator configuration.
+type JudgeTemplateOptions struct {
+	Prompt                   string                     // Prompt is the judge template text.
+	ResponseScorerName       string                     // ResponseScorerName is the response scorer name.
+	VariableBindings         []*TemplateVariableBinding // VariableBindings is the variable binding list.
+	SampleAggregatorName     string                     // SampleAggregatorName is the sample aggregator name.
+	InvocationAggregatorName string                     // InvocationAggregatorName is the invocation aggregator name.
+}
+
+// TemplateVariableBinding represents one template variable binding.
+type TemplateVariableBinding struct {
+	TemplateVariable string                  // TemplateVariable is the template variable name.
+	Source           *TemplateVariableSource // Source is the variable source.
+}
+
+// TemplateVariableSource represents a template variable source.
+type TemplateVariableSource struct {
+	Scope TemplateVariableScope // Scope is the source scope.
+	Field TemplateVariableField // Field is the source field.
+}
+
+// TemplateVariableScope represents the template variable source scope.
+type TemplateVariableScope string
+
+const (
+	TemplateVariableScopeActual   TemplateVariableScope = "actual"
+	TemplateVariableScopeExpected TemplateVariableScope = "expected"
+)
+
+// TemplateVariableField represents the template variable source field.
+type TemplateVariableField string
+
+const (
+	TemplateVariableFieldUserContent   TemplateVariableField = "userContent"
+	TemplateVariableFieldFinalResponse TemplateVariableField = "finalResponse"
+)
 
 // Rubric represents one evaluation rubric.
 type Rubric struct {
@@ -1442,6 +1573,25 @@ type RubricContent struct {
 `providerName` indicates the judge model provider, which maps to the framework Model Provider. The framework creates a judge model instance based on `providerName` and `modelName`. Common values include `openai`, `anthropic`, and `gemini`. See [Provider](./model.md#provider) for details.
 
 `rubrics` split a metric into multiple clear-granularity criteria. Each rubric should be independent and directly verifiable from user input and the final answer, which improves judge stability and makes issues easier to locate. `id` is a stable identifier, and `content.text` is the rubric text used by the judge.
+
+`template` is used only by `llm_judge_template`. It keeps template-based evaluation focused on cases where the prompt changes while the evaluation orchestration stays the same. Template evaluators do not read `rubrics`; evaluation criteria should be written directly into `template.prompt`.
+
+`template.prompt` uses double-brace template syntax such as `{{question}}` and `{{answer}}`. Every placeholder must be explicitly bound in `variableBindings`. Unbound variables, unknown variables, or binding resolution failures all result in errors.
+
+`template.variableBindings` currently supports values from the current scoring turn only:
+
+- `actual.userContent`
+- `actual.finalResponse`
+- `expected.finalResponse`
+
+`expected.finalResponse` requires the current expected turn to contain `finalResponse`. If the template binds that field but the expected turn has only placeholder `userContent` and no `finalResponse`, evaluation fails directly.
+
+`template.responseScorerName` specifies how judge output is parsed. The current supported values are:
+
+- `single_score`: the judge returns `{"score": number, "reason": string}`.
+- `rubric_scores`: the judge returns `{"rubricScores": [{"id": string, "score": number, "reason": string}]}`.
+
+`template.sampleAggregatorName` and `template.invocationAggregatorName` are optional. They default to `majority_vote` and `average`. Template evaluation reuses the standard LLM Judge sampling and multi-turn aggregation flow.
 
 Below is an example metric configuration that selects `llm_rubric_response` and configures a judge model with two rubrics.
 
@@ -1476,6 +1626,61 @@ Below is an example metric configuration that selects `llm_rubric_response` and 
 			}
 		}
 	}
+]
+```
+
+Below is an example template metric configuration. It explicitly selects `llm_judge_template` via `evaluatorName`, while keeping `metricName` as the metric instance name in results.
+
+```json
+[
+  {
+    "metricName": "capital_reference_match_single_template",
+    "evaluatorName": "llm_judge_template",
+    "threshold": 1.0,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "gpt-5.2",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 1,
+          "generationConfig": {
+            "max_tokens": 256,
+            "temperature": 0,
+            "stream": false
+          }
+        },
+        "template": {
+          "prompt": "User question:\n{{question}}\n\nReference answer:\n{{reference}}\n\nCandidate answer:\n{{answer}}\n\nReturn JSON with score and reason.",
+          "responseScorerName": "single_score",
+          "variableBindings": [
+            {
+              "templateVariable": "question",
+              "source": {
+                "scope": "actual",
+                "field": "userContent"
+              }
+            },
+            {
+              "templateVariable": "answer",
+              "source": {
+                "scope": "actual",
+                "field": "finalResponse"
+              }
+            },
+            {
+              "templateVariable": "reference",
+              "source": {
+                "scope": "expected",
+                "field": "finalResponse"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
 ]
 ```
 
@@ -1636,7 +1841,7 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_metrics` (
 
 ### Evaluator
 
-Evaluator is the evaluation interface that implements the scoring logic for a single metric. During evaluation, the Evaluator corresponding to `metricName` is fetched from `Registry`, receives actual and expected traces, and returns a score and status.
+Evaluator is the evaluation interface that implements the scoring logic for a single metric. During evaluation, the corresponding Evaluator is fetched from `Registry`, receives actual and expected traces, and returns a score and status.
 
 #### Interface Definition
 
@@ -1769,6 +1974,7 @@ The framework includes the following LLM Judge evaluators:
 
 - `llm_final_response` focuses on consistency between the final answer and reference answer, typically requiring `finalResponse` on the expected side.
 - `llm_hallucinations` checks whether the final answer is supported by evidence collected during execution, and is well suited to tool-calling, RAG, and workflow scenarios.
+- `llm_judge_template` uses `criterion.llmJudge.template` to define custom judge prompts, variable bindings, and response parsing strategy, and is suitable for template-based evaluation where the prompt changes but the orchestration stays the same.
 - `llm_rubric_critic` focuses on a failure-oriented rubric review against the reference answer, requiring `finalResponse` on the expected side plus `criterion.llmJudge.rubrics`.
 - `llm_rubric_reference_critic` focuses on rubric-based review against a reference answer while allowing faithful paraphrases and non-identical wording, requiring `finalResponse` on the expected side plus `criterion.llmJudge.rubrics`.
 - `llm_rubric_response` focuses on whether the final answer satisfies evaluation rubrics, requires `criterion.llmJudge.rubrics`, and aggregates scores by rubric pass status.
@@ -1822,6 +2028,7 @@ The framework includes multiple `MessagesConstructor` implementations for differ
 
 - `messagesconstructor/finalresponse` for `llm_final_response`, organizing user input, actual final response, and expected final response as judge input.
 - `messagesconstructor/hallucination` for `llm_hallucinations`, splitting the actual final answer into sentence-level or bullet-level items and combining them with captured execution context, tool calls, and tool outputs.
+- `messagesconstructor/template` for `llm_judge_template`, rendering judge input from `template.prompt` and `template.variableBindings`.
 - `messagesconstructor/rubriccritic` for `llm_rubric_critic`, organizing user input, actual final response, expected final response, and `rubrics` as judge input, with stricter failure-oriented instructions.
 - `messagesconstructor/rubricreferencecritic` for `llm_rubric_reference_critic`, organizing user input, actual final response, expected final response, and `rubrics` as judge input, and treating the reference answer as a quality anchor rather than an exact-match target.
 - `messagesconstructor/rubricresponse` for `llm_rubric_response`, organizing user input, actual final response, and `rubrics` as judge input.
@@ -1852,6 +2059,8 @@ The framework includes multiple `ResponseScorer` implementations. Default select
 
 - `responsescorer/finalresponse` for `llm_final_response`, parsing `valid` or `invalid` from judge output and mapping to 1 or 0, while preserving `reasoning` as `reason`.
 - `responsescorer/hallucination` for `llm_hallucinations`, parsing sentence-level judgments, scoring supported or non-factual sentences as 1 and the rest as 0, and averaging across sentences for the turn score.
+- `responsescorer/singlescore` for the `single_score` mode of `llm_judge_template`, parsing `score` and `reason`.
+- `responsescorer/rubricscores` for the `rubric_scores` mode of `llm_judge_template`, parsing `rubricScores`.
 - `responsescorer/rubricresponse` for `llm_rubric_critic`, `llm_rubric_reference_critic`, `llm_rubric_response`, and `llm_rubric_knowledge_recall`, parsing verdict `yes` or `no` for each rubric, mapping each to 1 or 0, averaging as the turn score, and outputting `rubricScores`.
 
 ##### Samples Aggregator Operator
@@ -1972,7 +2181,7 @@ Example metric configuration for LLM final response:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2009,7 +2218,7 @@ Example metric configuration using `judgeModel`:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2026,6 +2235,89 @@ Example metric configuration using `judgeModel`:
 ```
 
 If you inject a judge runner with `evaluation.WithJudgeRunner(...)`, you can keep `llmJudge` as an empty object in the metric file, as shown in the full example. See [examples/evaluation/llm/hallucination](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/hallucination) for a complete runnable example. That example includes both a normal passing path and a `-force-hallucination` failing path for local validation.
+
+##### LLM Template Evaluator
+
+The LLM template evaluator uses the evaluator name `llm_judge_template` and belongs to the LLM Judge evaluator family. It is suitable for scenarios where the evaluation orchestration stays the same, but you want to reduce the number of evaluator definitions by customizing the judge prompt, variable bindings, and response parsing strategy. Unlike the `llm_rubric_*` family, template evaluators do not consume structured `rubrics`; evaluation criteria should be written directly into `criterion.llmJudge.template.prompt`.
+
+Template evaluators are typically configured with `evaluatorName: "llm_judge_template"`, while `metricName` remains the metric instance name. This allows one metric file to define multiple template metrics, such as one using `single_score` and another using `rubric_scores`, while reusing the same evaluator implementation and keeping distinct `metricName` values in results.
+
+The template evaluator runs as follows:
+
+1. `messagesconstructor/template` renders the unique judge input for the current turn from `template.prompt` and `template.variableBindings`.
+2. The judge model returns JSON that matches the structured output schema for `responseScorerName`.
+3. `responsescorer/singlescore` or `responsescorer/rubricscores` parses the judge output.
+4. Sample aggregation defaults to `majority_vote`, and multi-turn aggregation defaults to `average`. You can override them through `template.sampleAggregatorName` and `template.invocationAggregatorName`.
+
+Variable bindings currently support only:
+
+- `actual.userContent`
+- `actual.finalResponse`
+- `expected.finalResponse`
+
+Every placeholder in the template must be explicitly bound in `variableBindings`. Binding `expected.finalResponse` requires the current expected turn to contain `finalResponse`; if the template uses that field but the expected turn does not contain a final response, evaluation fails directly.
+
+The template evaluator currently supports two response parsing modes:
+
+- `single_score`: the judge returns `score` and `reason`
+- `rubric_scores`: the judge returns `rubricScores`
+
+Example template metric configuration:
+
+```json
+[
+  {
+    "metricName": "capital_reference_match_single_template",
+    "evaluatorName": "llm_judge_template",
+    "threshold": 1.0,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "gpt-5.2",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 1,
+          "generationConfig": {
+            "max_tokens": 256,
+            "temperature": 0,
+            "stream": false
+          }
+        },
+        "template": {
+          "prompt": "You are grading whether the candidate answer correctly answers the user question and matches the reference answer.\n\nUser question:\n{{question}}\n\nReference answer:\n{{reference}}\n\nCandidate answer:\n{{answer}}\n\nReturn JSON with:\n- score: 1 if the candidate answer is factually equivalent to the reference answer and correctly answers the question.\n- score: 0 otherwise.\n- reason: one concise sentence.",
+          "responseScorerName": "single_score",
+          "variableBindings": [
+            {
+              "templateVariable": "question",
+              "source": {
+                "scope": "actual",
+                "field": "userContent"
+              }
+            },
+            {
+              "templateVariable": "answer",
+              "source": {
+                "scope": "actual",
+                "field": "finalResponse"
+              }
+            },
+            {
+              "templateVariable": "reference",
+              "source": {
+                "scope": "expected",
+                "field": "finalResponse"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+]
+```
+
+See [examples/evaluation/llm/template](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/template) for the full example. It includes both `single_score` and `rubric_scores` template metrics.
 
 ##### LLM Rubric Critic Evaluator
 
@@ -2046,7 +2338,7 @@ Example metric configuration for LLM rubric critic:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2099,7 +2391,7 @@ Example metric configuration for LLM rubric reference critic:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2152,7 +2444,7 @@ Example metric configuration for LLM rubric response:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2207,7 +2499,7 @@ Example metric configuration for LLM rubric knowledge recall:
       "llmJudge": {
         "judgeModel": {
           "providerName": "openai",
-          "modelName": "deepseek-chat",
+          "modelName": "deepseek-v4-flash",
           "baseURL": "${JUDGE_MODEL_BASE_URL}",
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 3,
@@ -2237,12 +2529,13 @@ See [examples/evaluation/llm/knowledgerecall](https://github.com/trpc-group/trpc
 
 #### Evaluator Registry
 
-Registry manages evaluator registrations. Evaluation uses `metricName` to fetch the corresponding Evaluator from Registry. The framework registers the following evaluators by default:
+Registry manages evaluator registrations. Evaluation fetches the corresponding Evaluator from Registry. The framework registers the following evaluators by default:
 
 - `tool_trajectory_avg_score`: tool trajectory consistency evaluator, requires expected output.
 - `final_response_avg_score`: final response evaluator, does not require LLM, requires expected output.
 - `llm_final_response`: LLM final response evaluator, requires expected output.
 - `llm_hallucinations`: LLM hallucination evaluator, checks whether the final answer is supported by evidence captured during execution, and typically does not require expected output.
+- `llm_judge_template`: LLM template evaluator, uses custom prompt, variable bindings, and response scoring strategy from `criterion.llmJudge.template`.
 - `llm_rubric_critic`: LLM rubric critic evaluator, requires expected output and LLMJudge with rubrics.
 - `llm_rubric_reference_critic`: LLM rubric reference critic evaluator, requires expected output and LLMJudge with rubrics, and treats the reference answer as a quality anchor.
 - `llm_rubric_response`: LLM rubric response evaluator, requires EvalSet to provide session input and LLMJudge with rubrics.
@@ -2336,6 +2629,11 @@ type RubricScore struct {
 ```
 
 Overall results write each metric output into `overallEvalMetricResults`. Per-turn details are written into `evalMetricResultPerInvocation` and retain both `actualInvocation` and `expectedInvocation` traces for troubleshooting.
+
+For `llm_judge_template`, `criterion.llmJudge.template.prompt` in results has two different meanings:
+
+- `overallEvalMetricResults[].criterion.llmJudge.template.prompt` keeps the original template text and is not materialized. The overall result belongs to the entire EvalCase, and an EvalCase can contain multiple Invocations, so there is no single unique rendered prompt.
+- `evalMetricResultPerInvocation[].evalMetricResults[].criterion.llmJudge.template.prompt` stores the rendered prompt for that specific Invocation. At the per-turn level, the rendered prompt is unique and directly useful for troubleshooting judge input.
 
 Below is an example result file snippet.
 
@@ -2614,7 +2912,7 @@ The local implementation supports EvalCase-level concurrent inference. When enab
 
 The evaluation phase is handled by `Evaluate`. It takes `InferenceResult` as input, loads the corresponding EvalCase, and constructs actuals and expecteds. By default, expecteds come from EvalSet `conversation`. If a case uses `conversationScenario` without enabling `expectedRunnerEnabled`, the evaluation phase builds placeholder expecteds from the actual trace that preserve only `userContent`. When an EvalCase enables `expectedRunnerEnabled`, the evaluation phase reuses the `ExpectedInferences` that were already generated during inference. It then executes evaluators according to `EvaluateConfig.EvalMetrics`.
 
-The local implementation looks up Evaluators by `MetricName` from Registry and calls `Evaluator.Evaluate`. This operates per EvalCase, with actuals and expecteds from the same case aligned by turn.
+The local implementation looks up Evaluators from Registry and calls `Evaluator.Evaluate`. This operates per EvalCase, with actuals and expecteds from the same case aligned by turn.
 
 When `evalMode` is `trace`, inference is skipped. If `actualConversation` is configured, actual traces come from `actualConversation` and `conversation` continues to represent expected traces. If `actualConversation` is omitted, `conversation` is treated as the actual trace and the evaluation phase builds placeholder expecteds that preserve only `userContent`. When `expectedRunnerEnabled` is enabled, the evaluation phase instead reuses the `ExpectedInferences` that were already generated during inference.
 
@@ -3180,7 +3478,7 @@ See [examples/evaluation/evalsetrecorder](https://github.com/trpc-group/trpc-age
 
 ### Skills Evaluation
 
-Agent Skills are exposed as built-in tools: `skill_load` and `skill_run`, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, `skill_run` results contain volatile fields such as `stdout`, `stderr`, `duration_ms`, and inline `output_files` content. Prefer using `onlyTree` in a per-tool strategy to assert only stable fields such as `skill`, requested `output_files`, and `exit_code` and `timed_out`, letting other volatile keys be ignored.
+Agent Skills inject knowledge through `skill_load` and execute scripts through `workspace_exec`, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, `workspace_exec` results contain volatile fields such as `stdout`, `stderr`, `duration_ms`, and inline file content. Prefer using `onlyTree` in a per-tool strategy to assert only stable fields (for example `command`, `exit_code`, `timed_out`), letting other volatile keys be ignored.
 
 A minimal example is shown below.
 
@@ -3203,12 +3501,9 @@ EvalSet `tools` snippet:
     },
     {
       "id": "tool_use_2",
-      "name": "skill_run",
+      "name": "workspace_exec",
       "arguments": {
-        "skill": "write-ok",
-        "output_files": [
-          "out/ok.txt"
-        ]
+        "command": "bash skills/write-ok/scripts/run.sh"
       },
       "result": {
         "exit_code": 0,
@@ -3242,11 +3537,10 @@ Metric `toolTrajectory` snippet:
               "ignore": true
             }
           },
-          "skill_run": {
+          "workspace_exec": {
             "arguments": {
               "onlyTree": {
-                "skill": true,
-                "output_files": true
+                "command": true
               },
               "matchStrategy": "exact"
             },

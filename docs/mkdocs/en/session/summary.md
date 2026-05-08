@@ -6,7 +6,7 @@ As conversations grow, maintaining complete event history can consume significan
 
 ## Key Features
 
-- **Auto-trigger**: Automatically generates summaries based on event count, token count, or time thresholds
+- **Auto-trigger**: During summary checks, automatically generates summaries based on event count, token count, or time thresholds
 - **Incremental processing**: Only processes new events since the last summary, avoiding redundant computation
 - **LLM-driven**: Uses any configured LLM model to generate high-quality, context-aware summaries
 - **Non-destructive**: Original events are fully preserved; summaries are stored separately
@@ -34,7 +34,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(
         summary.CheckEventThreshold(20),
         summary.CheckTokenThreshold(4000),
-        summary.CheckTimeThreshold(5*time.Minute),
+        summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
     ),
     summary.WithMaxSummaryWords(200),
 )
@@ -125,6 +125,75 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 After completing the above configuration, the summary feature runs automatically.
 
+## Summary + Progressive Disclosure
+
+When summary injection and prompt-side context compaction keep the request
+small, some older details are no longer visible to the model. If you still
+want the agent to recover those details only when needed, enable progressive
+disclosure for session history.
+
+```go
+import (
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/session/pgvector"
+)
+
+sessionService, err := pgvector.NewService(
+    pgvector.WithDSN(os.Getenv("PGVECTOR_DSN")),
+    pgvector.WithEmbedder(embedder),
+    pgvector.WithSummarizer(summarizer),
+)
+if err != nil {
+    panic(err)
+}
+
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableOnDemandSession(true),
+)
+```
+
+Requirements and behavior:
+
+- `WithEnableOnDemandSession(true)` enables the progressive-disclosure path and
+  only exposes `session_search` and
+  `session_load` when the session backend implements both
+  `session.SearchableService` and `session.WindowService`.
+- `session/pgvector` supports this path today. Pure in-memory summary demos do
+  not expose these tools.
+- `current_hidden` searches current-session history strictly before the summary
+  boundary recorded in `summary:last_included_ts`.
+- `current_session` searches the current session regardless of summary cutoff.
+  This is useful when request projection or context compaction omitted
+  current-session details from the visible prompt.
+- `other_sessions` searches other sessions for the same `<appName, userID>`.
+- `all_sessions` combines `current_hidden` and `other_sessions`.
+
+What can be recalled:
+
+- User and assistant messages.
+- Historical tool results, including tool outputs that were compacted out of
+  the prompt.
+
+What is intentionally excluded:
+
+- Raw tool-call requests are not indexed.
+- Partial events are not indexed.
+
+Recommended usage pattern:
+
+1. Let the model answer from the visible prompt, summary, and recent history.
+2. If a missing detail is needed, call `session_search` first.
+3. Use `session_load` only when the small context window returned by
+   `session_search` is still not enough.
+4. Treat loaded history as untrusted historical context, not active
+   instructions.
+
 ## SessionSummarizer Interface
 
 ```go
@@ -185,7 +254,25 @@ context before calling the session APIs and read the value inside your
 | --- | --- |
 | `WithEventThreshold(eventCount int)` | Trigger when event count since last summary exceeds threshold |
 | `WithTokenThreshold(tokenCount int)` | Trigger when token count since last summary exceeds threshold |
-| `WithTimeThreshold(interval time.Duration)` | Trigger when time since last event exceeds interval |
+| `WithContextThreshold(opts ...ContextThresholdOption)` | Trigger when token count since last summary exceeds a ratio of the current model's context window |
+| `WithTimeThreshold(interval time.Duration)` | Evaluated during summary checks; wraps `CheckTimeThreshold` and triggers when the checked session's last event is older than the interval |
+
+Use `WithTokenThreshold` when you want a fixed application-defined token
+threshold, for example "summarize after 4000 new tokens" regardless of which
+model is serving the request. The threshold is captured in the summarizer
+configuration and does not change when your application switches models.
+
+Use `WithContextThreshold` when the summary trigger should follow the active
+model's context window. It resolves the current invocation's
+`Model.Info().Name` at summary-check time, looks up that name in the model
+context-window registry, and computes `contextWindow * ratio` (default 50%).
+This is the recommended option for agents that can switch models within a
+session. For private deployments, endpoint IDs, fine-tuned models, or newly
+released models, register the runtime model name first:
+
+```go
+model.RegisterModelContextWindow("my-custom-model", 32768)
+```
 
 ### Combined Conditions
 
@@ -323,7 +410,7 @@ type Checker func(sess *session.Session) bool
 | Checker | Description |
 | --- | --- |
 | `CheckEventThreshold(eventCount int)` | Returns true when the number of delta events since the last summary exceeds the threshold |
-| `CheckTimeThreshold(interval time.Duration)` | Returns true when time since last event exceeds interval |
+| `CheckTimeThreshold(interval time.Duration)` | Returns true when the checked session's last event is older than the interval |
 | `CheckTokenThreshold(tokenCount int)` | Returns true when the estimated token count of delta events since the last summary exceeds the threshold (estimated via `TokenCounter` from extracted conversation text, not `event.Response.Usage.TotalTokens`) |
 | `ChecksAll(checks []Checker)` | Combines multiple Checkers; returns true only when all return true (AND) |
 | `ChecksAny(checks []Checker)` | Combines multiple Checkers; returns true when any returns true (OR) |
@@ -541,8 +628,11 @@ The Runner automatically checks trigger conditions after each conversation compl
 
 - Event count exceeds threshold (`WithEventThreshold`)
 - Token count exceeds threshold (`WithTokenThreshold`)
-- Time since last event exceeds interval (`WithTimeThreshold`)
+- Token count exceeds the configured ratio of the active model's context window (`WithContextThreshold`)
+- On a summary check, the checked session's last event is older than the interval (`WithTimeThreshold`)
 - Custom combined conditions met (`WithChecksAny` / `WithChecksAll`)
+
+`WithTimeThreshold` is not a standalone background timer. The condition is only evaluated when a summary check runs, typically after a conversation turn completes or when you call summary APIs manually. It checks the last event of the session being evaluated; in the Runner's normal delta-summary flow, that session contains only pending events, so this effectively means the latest unsummarized event. For example, `5*time.Minute` means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."
 
 ### Manual Trigger
 
@@ -614,6 +704,24 @@ err := sessionService.CreateSessionSummary(
 ## Context Injection Mechanism
 
 The framework provides two modes for managing conversation context sent to the LLM:
+
+Before choosing a mode, distinguish the three context-reduction mechanisms:
+
+| Mechanism | Layer | What changes | Typical use |
+| --- | --- | --- | --- |
+| Summary | Session Service + prompt assembly | Uses an LLM to create a persisted summary of historical events. With `WithAddSessionSummary(true)`, the request injects that summary and appends only incremental events after the summary point | Preserve semantic continuity in long sessions while avoiding repeated full-history prompts |
+| Context compaction | Agent prompt assembly | Does not call an LLM and does not drop whole turns. It only rewrites `tool result` content during request projection, such as replacing old results with placeholders or truncating oversized results with head+tail preservation | Keep the conversation structure and active tool chain while shrinking large tool outputs |
+| Token tailoring | Model provider | Drops or keeps message rounds according to a token budget right before the provider call. The default strategy tries to preserve system messages and the latest turn, but preservation is still limited by the available budget | Final fallback to keep the request within the model context window |
+
+The normal call path is: the agent assembles the prompt, injects the summary when
+configured, and optionally compacts `tool result` content. If summary injection is
+enabled and the compacted request still approaches the context window, the flow
+may synchronously refresh the summary once and rebuild the request before the LLM
+call. Finally, model-layer token tailoring trims the message list by budget. In
+short, context compaction and token tailoring can both reduce prompt size, but
+compaction shrinks tool-output payloads inside messages, while tailoring drops
+message rounds. Summary is different again: it creates a semantic replacement for
+historical context.
 
 ### Mode 1: Enable Summary Injection (Recommended)
 
@@ -698,7 +806,18 @@ When the first history message is not a user role, the summary is a standalone u
 
 > **Tip**: For very long conversations (hundreds of turns) where you want old summaries to naturally age out (replaced by newer summaries), use `SessionSummaryInjectionUser` mode.
 
-**Optional: Prompt-side context compaction**
+#### Context Compaction Details
+
+Context compaction is not another name for summary, and it is not token
+tailoring. It only targets `tool result` content, which is the part most likely
+to grow unexpectedly. It does not summarize ordinary user/assistant messages
+with an LLM, and it does not discard complete message rounds the way token
+tailoring may.
+
+> **Naming note**: "compaction" in `WithEnableContextCompaction(true)` means
+> prompt-side tool result compaction/pruning. Semantic summaries are still
+> controlled by `WithAddSessionSummary(true)` and the configured session
+> summarizer.
 
 When `WithEnableContextCompaction(true)` is enabled, the framework adds two compaction passes before the LLM call:
 
@@ -708,7 +827,7 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 - The current request and the latest `ContextCompactionKeepRecentRequests` completed requests are never affected
 - This cleans up accumulated long tool outputs from earlier conversation turns
 
-**Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, default 8192 tokens):
+**Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, **default 0 / disabled**):
 
 - Applies to **all** tool results including the current request
 - Tool results exceeding this threshold are truncated using head+tail preservation: the beginning and end of the content are kept, with a `[...N characters truncated...]` marker in the middle
@@ -716,25 +835,38 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 
 The two passes have different roles: Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases but protects the current request too.
 
-Additionally:
-
-Pass 2 fires regardless of `EnableContextCompaction`; it only requires `ContextCompactionOversizedToolResultMaxTokens > 0`.
+Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableContextCompaction(true)` is set and (2) `ContextCompactionOversizedToolResultMaxTokens > 0` (recommended opt-in value: `8192`, exposed as the constant `processor.DefaultContextCompactionOversizedToolResultMaxTokens`). This guarantees that `EnableContextCompaction=false` always means "the framework will not modify any tool result".
 
 Additionally:
 
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
 - Model-layer token tailoring remains the final fallback
+- Context compaction uses `SimpleTokenCounter` by default. If your application
+  uses a custom counter for CJK-heavy prompts or provider-specific tokenization,
+  pass the same counter with `WithContextCompactionTokenCounter(...)` so Pass 1
+  decisions and Pass 2 truncation use the same estimate as token tailoring.
 
 ```go
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(1.6), // Example for Chinese-heavy content.
+)
+
+modelInstance := openai.New(
+    "deepseek-v4-flash",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithTokenCounter(counter),
+)
+
 agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
     llmagent.WithAddSessionSummary(true),
-    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableContextCompaction(true), // only shrinks tool results; does not generate a summary
     llmagent.WithContextCompactionThresholdRatio(0.7),
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: old tool results → placeholder
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
     llmagent.WithContextCompactionKeepRecentRequests(1),
+    llmagent.WithContextCompactionTokenCounter(counter),
 )
 ```
 
@@ -773,7 +905,7 @@ llmagent.WithMaxHistoryRuns(10)
 - No summary message added
 - Only includes the most recent `MaxHistoryRuns` conversation turns
 - `MaxHistoryRuns=0` means no limit, includes all history
-- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted during request projection; additionally, extremely large tool results in any request (including the current one) will be head+tail truncated whenever `ContextCompactionOversizedToolResultMaxTokens > 0` (this fires even without `EnableContextCompaction`)
+- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted during request projection (Pass 1). If you also explicitly set `WithContextCompactionOversizedToolResultMaxTokens(8192)` (or another positive value), extremely large tool results in any request (including the current one) will be head+tail truncated (Pass 2). Both passes require the `EnableContextCompaction=true` master switch.
 - The pre-LLM synchronous summary retry is disabled in this mode
 
 **Context structure**:
@@ -800,7 +932,7 @@ llmagent.WithMaxHistoryRuns(10)
 
 If your long sessions frequently contain large tool outputs such as search results, logs, or code scan output, enable `EnableContextCompaction=true`. Pair it with `AddSessionSummary=true` when you also want the pre-LLM synchronous summary retry.
 
-> **Tip**: If your agent uses tools like `web_fetch` that can return extremely large results in a single call, `ContextCompactionOversizedToolResultMaxTokens` is particularly valuable — it prevents a single tool result from consuming the entire context window, even when that result belongs to the current (protected) request. It fires independently of `EnableContextCompaction`.
+> **Tip**: If your agent uses tools like `web_fetch` that can return extremely large results in a single call, `ContextCompactionOversizedToolResultMaxTokens` is particularly valuable — it prevents a single tool result from consuming the entire context window, even when that result belongs to the current (protected) request. It is **disabled by default**; opt in by enabling `WithEnableContextCompaction(true)` and passing a positive threshold (recommended: `8192`).
 
 ## Summary Format Customization
 
@@ -913,6 +1045,63 @@ userSummary, found := sessionService.GetSessionSummaryText(
     ctx, sess, session.WithSummaryFilterKey("my-app/user-messages"))
 ```
 
+### Restricting Summary Targets
+
+By default, when a non-empty branch `FilterKey` triggers summarization, the
+session service refreshes both that branch summary and the full-session summary
+(`SummaryFilterKeyAllContents`). If some branches do not need summaries, you can
+reduce LLM usage with an allowlist and optionally disable the full-session
+cascade:
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(summarizer),
+    inmemory.WithSummaryFilterAllowlist(
+        "my-app/user-messages",
+        "my-app/tool-calls",
+    ),
+    inmemory.WithCascadeFullSessionSummary(false),
+)
+```
+
+Behavior notes:
+
+- `WithSummaryFilterAllowlist(...)` only controls non-empty branch summary
+  targets. It does not block `session.SummaryFilterKeyAllContents`.
+- `WithCascadeFullSessionSummary(...)` controls whether a non-empty branch
+  trigger also refreshes the full-session summary.
+- To keep only full-session summaries from branch-triggered automatic summary,
+  pass an explicit empty allowlist and leave cascade enabled:
+
+```go
+sessionService, err := mysql.NewService(
+    mysql.WithMySQLClientDSN(dsn),
+    mysql.WithSummarizer(summarizer),
+    mysql.WithSummaryFilterAllowlist(""),
+)
+```
+
+- `mysql.WithSummaryFilterAllowlist("")` and
+  `mysql.WithSummaryFilterAllowlist()` both mean "no branch keys are allowed";
+  with the default cascade behavior, the full-session summary still refreshes.
+- If you also set `mysql.WithCascadeFullSessionSummary(false)`, non-empty branch
+  triggers have no summary target and no summary is generated.
+- Allowlist matching is hierarchical and segment-aware, not a raw string prefix
+  check. Internally the framework appends the filter-key delimiter (`"/"`) to
+  both sides and then checks whether either key is an ancestor/descendant of
+  the other.
+- Examples:
+  - Allowing `my-app/tool` matches `my-app/tool` and `my-app/tool/search`.
+  - Allowing `my-app/tool/search` also matches `my-app/tool`.
+  - Allowing `my-app/tool` does not match `my-app/toolbox`.
+  - Allowing `my-app/tool` does not match `other-app/tool`.
+- `session.SummaryFilterKeyAllContents` remains available for direct
+  full-session summaries even when an allowlist is configured.
+- Leaving the allowlist unset preserves the legacy behavior and allows every
+  branch `FilterKey` to trigger summaries.
+- Passing an explicit empty allowlist blocks branch summary targets; with
+  cascade enabled, branch triggers still refresh the full-session summary.
+
 ## How It Works
 
 1. **Incremental processing**: The summarizer tracks the last summary time for each session; subsequent runs only process events after the last summary
@@ -923,7 +1112,7 @@ userSummary, found := sessionService.GetSessionSummaryText(
 
 ## Best Practices
 
-1. **Choose appropriate thresholds**: Set event/token thresholds based on the LLM's context window and conversation patterns. For GPT-4 (8K context), consider `WithTokenThreshold(4000)` to leave room for responses
+1. **Choose appropriate thresholds**: Use `WithContextThreshold` for agents whose model can change at runtime, and use `WithTokenThreshold` when you intentionally want a fixed token budget. For custom model names, register their context window before relying on context-aware triggers
 2. **Use async processing**: Always use `EnqueueSummaryJob` instead of `CreateSessionSummary` in production to avoid blocking conversation flow
 3. **Monitor queue size**: If you frequently see "queue is full" warnings, increase `WithSummaryQueueSize` or `WithAsyncSummaryNum`
 4. **Customize prompts**: Tailor summary prompts to your application needs. For example, if building a customer support Agent, focus on key issues and solutions
@@ -969,7 +1158,7 @@ func main() {
         summary.WithChecksAny(
             summary.CheckEventThreshold(20),
             summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute),
+            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
         ),
     )
 

@@ -29,10 +29,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	criterionlength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	criterionrouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+	criterionxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -73,6 +75,71 @@ func TestCloneEvalMetric_NilInput(t *testing.T) {
 	got, err := CloneEvalMetric(nil)
 	require.Error(t, err)
 	assert.Nil(t, got)
+}
+
+func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
+	src := &metric.EvalMetric{
+		MetricName:    "metric-1",
+		EvaluatorName: "llm_judge_template",
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						{
+							TemplateVariable: "question",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldUserContent,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dst, err := CloneEvalMetric(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	require.NotNil(t, dst.Criterion)
+	require.NotNil(t, dst.Criterion.LLMJudge)
+	require.NotNil(t, dst.Criterion.LLMJudge.Template)
+	dst.Criterion.LLMJudge.Template.Prompt = "changed"
+	assert.Equal(t, "Question: {{question}}", src.Criterion.LLMJudge.Template.Prompt)
+	dst.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable = "changed"
+	assert.Equal(t, "question", src.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable)
+	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope = criterionllm.TemplateVariableScopeExpected
+	assert.Equal(t, criterionllm.TemplateVariableScopeActual, src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope)
+}
+
+func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {
+	assert.Nil(t, cloneTemplateVariableBindings(nil))
+	assert.Nil(t, cloneTemplateVariableBinding(nil))
+}
+
+func TestCloneEvalMetric_PreservesNilTemplateBinding(t *testing.T) {
+	src := &metric.EvalMetric{
+		MetricName:    "metric-1",
+		EvaluatorName: "llm_judge_template",
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						nil,
+					},
+				},
+			},
+		},
+	}
+	dst, err := CloneEvalMetric(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	require.Len(t, dst.Criterion.LLMJudge.Template.VariableBindings, 1)
+	assert.Nil(t, dst.Criterion.LLMJudge.Template.VariableBindings[0])
 }
 
 func TestCloneEvalSetResult_NilInput(t *testing.T) {
@@ -266,6 +333,10 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 			FinalResponse: &finalresponse.FinalResponseCriterion{
 				Text: &text.TextCriterion{
 					CaseInsensitive: true,
+					Length: &criterionlength.LengthCriterion{
+						Min: intPtr(1),
+						Max: intPtr(10),
+					},
 				},
 				JSON: &criterionjson.JSONCriterion{
 					IgnoreTree: map[string]any{
@@ -281,6 +352,7 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 					Measure:   criterionrouge.RougeMeasureF1,
 					Threshold: criterionrouge.Score{Precision: 0.1, Recall: 0.2, F1: 0.3},
 				},
+				XML: &criterionxml.XMLCriterion{},
 			},
 			LLMJudge: &criterionllm.LLMCriterion{
 				Rubrics: []*criterionllm.Rubric{
@@ -344,6 +416,12 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 
 	dst.Criterion.FinalResponse.Rouge.RougeType = "rougeL"
 	assert.Equal(t, "rouge1", src.Criterion.FinalResponse.Rouge.RougeType)
+
+	*dst.Criterion.FinalResponse.Text.Length.Min = 2
+	assert.Equal(t, 1, *src.Criterion.FinalResponse.Text.Length.Min)
+
+	dst.Criterion.FinalResponse.XML.Ignore = true
+	assert.False(t, src.Criterion.FinalResponse.XML.Ignore)
 }
 
 func TestCloneEvalSetResult_DeepCopy(t *testing.T) {

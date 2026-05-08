@@ -113,12 +113,12 @@ type options struct {
 	// Response.Choices[].Delta.ToolCalls instead of being
 	// suppressed until the final aggregated response.
 	ShowToolCallDelta bool
-	// ReasoningContentBackfill controls whether assistant
-	// tool-call messages should replay an empty
-	// reasoning_content field when the message has no
+	// ReasoningContentBackfill controls whether assistant messages should
+	// replay an empty reasoning_content field when the message has no
 	// reasoning text.
-	ReasoningContentBackfill bool
-	accumulateChunkUsage     AccumulateChunkUsage
+	ReasoningContentBackfill    bool
+	reasoningContentBackfillSet bool
+	accumulateChunkUsage        AccumulateChunkUsage
 	// OptimizeForCache controls whether to optimize message structure for prompt caching.
 	// When enabled, system messages will be moved to the front to improve cache hit rates.
 	// OpenAI's prompt caching is automatic and doesn't require explicit cache control,
@@ -222,12 +222,12 @@ func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	}
 }
 
-// WithReasoningContentBackfill enables replay-time
-// reasoning_content backfill for assistant tool-call
-// messages that have no reasoning text.
+// WithReasoningContentBackfill enables replay-time reasoning_content backfill
+// for assistant messages that have no reasoning text.
 func WithReasoningContentBackfill(enabled bool) Option {
 	return func(opts *options) {
 		opts.ReasoningContentBackfill = enabled
+		opts.reasoningContentBackfillSet = true
 	}
 }
 
@@ -373,6 +373,9 @@ func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage
 		PromptTokensDetails: model.PromptTokensDetails{
 			CachedTokens: int(u.PromptTokensDetails.CachedTokens - delta.PromptTokensDetails.CachedTokens),
 		},
+		CompletionTokensDetails: model.CompletionTokensDetails{
+			ReasoningTokens: int(u.CompletionTokensDetails.ReasoningTokens - delta.CompletionTokensDetails.ReasoningTokens),
+		},
 	}
 }
 
@@ -385,6 +388,9 @@ func completionUsageToModelUsage(usage openai.CompletionUsage) model.Usage {
 		PromptTokensDetails: model.PromptTokensDetails{
 			CachedTokens: int(usage.PromptTokensDetails.CachedTokens),
 		},
+		CompletionTokensDetails: model.CompletionTokensDetails{
+			ReasoningTokens: int(usage.CompletionTokensDetails.ReasoningTokens),
+		},
 	}
 }
 
@@ -396,6 +402,9 @@ func modelUsageToCompletionUsage(usage model.Usage) openai.CompletionUsage {
 		TotalTokens:      int64(usage.TotalTokens),
 		PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
 			CachedTokens: int64(usage.PromptTokensDetails.CachedTokens),
+		},
+		CompletionTokensDetails: openai.CompletionUsageCompletionTokensDetails{
+			ReasoningTokens: int64(usage.CompletionTokensDetails.ReasoningTokens),
 		},
 	}
 }

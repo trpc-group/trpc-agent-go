@@ -51,6 +51,7 @@ type A2AAgent struct {
 	agentCard            *server.AgentCard      // Agent card and resolution state
 	agentURL             string                 // URL of the remote A2A agent
 	eventConverter       A2AEventConverter      // Custom A2A event converters
+	dataPartMappers      []A2ADataPartMapper    // Lightweight inbound DataPart mappers for default converter
 	a2aMessageConverter  InvocationA2AConverter // Custom A2A message converters for requests
 	extraA2AOptions      []client.Option        // Additional A2A client options
 	streamingBufSize     int                    // Buffer size for streaming responses
@@ -73,6 +74,21 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 	for _, opt := range opts {
 		opt(agent)
+	}
+
+	if len(agent.dataPartMappers) > 0 {
+		if converter, ok := agent.eventConverter.(*defaultA2AEventConverter); ok {
+			for _, mapper := range agent.dataPartMappers {
+				if mapper == nil {
+					continue
+				}
+				converter.dataPartMappers = append(converter.dataPartMappers, mapper)
+			}
+		} else {
+			log.Warn(
+				"WithA2ADataPartMapper is ignored because WithCustomEventConverter provided a custom converter",
+			)
+		}
 	}
 
 	var agentURL string

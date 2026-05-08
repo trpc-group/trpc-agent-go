@@ -59,7 +59,7 @@ func main() {
         summary.WithChecksAny( // 任一条件满足即触发摘要
             summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
             summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
-            summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
+            summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
         ),
         summary.WithMaxSummaryWords(200), // 限制摘要在 200 字以内
     )
@@ -183,7 +183,7 @@ func main() {
 
 **核心特性：**
 
-- **自动触发**：根据事件数量、token 数量或时间阈值自动生成摘要
+- **自动触发**：在执行摘要检查时，根据事件数量、token 数量或时间阈值自动生成摘要
 - **增量处理**：只处理自上次摘要以来的新事件，避免重复计算
 - **LLM 驱动**：使用配置的 LLM 模型生成高质量、上下文感知的摘要
 - **非破坏性**：原始事件完整保留，摘要单独存储
@@ -205,7 +205,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(                         // 任一条件满足即触发
         summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
         summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
-        summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
+        summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
     ),
     summary.WithMaxSummaryWords(200),              // 限制摘要在 200 字以内
 )
@@ -590,20 +590,21 @@ defer sessionService.Close()
 
 - **`WithEnableTracing(enable bool)`**：启用 OpenTelemetry 链路追踪。默认值为 `false`。启用后，`CreateSession`、`GetSession`、`AppendEvent`、`DeleteSession`、`AppendTrackEvent`、`CreateSessionSummary`、`GetSessionSummaryText` 等操作会自动创建 span。
 
-!!! note "关于 Root Span"
-    Session 的操作由 Runner 执行，发生在 Agent 的 `Run()` 调用前后。而 Agent 的 root span 是在 `agent.Run()` 内部创建的，Session span 不会自动挂载到 Agent span 下。因此，如果需要在 Langfuse 等可观测平台中看到完整的 Session span 链路，需要在调用 `runner.Run()` 之前手动创建一个 root span：
-
-    ```go
-    import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
-
-    // Create a root span before runner.Run(), so that session spans
-    // (create_session, get_session, append_event, etc.) become children
-    // of this root span via context propagation.
-    ctx, span := atrace.Tracer.Start(ctx, "my_request")
-    defer span.End()
-
-    eventChan, err := r.Run(ctx, userID, sessionID, message)
-    ```
+> **关于 Root Span**
+>
+> Session 的操作由 Runner 执行，发生在 Agent 的 `Run()` 调用前后。而 Agent 的 root span 是在 `agent.Run()` 内部创建的，Session span 不会自动挂载到 Agent span 下。因此，如果需要在 Langfuse 等可观测平台中看到完整的 Session span 链路，需要在调用 `runner.Run()` 之前手动创建一个 root span：
+>
+> ```go
+> import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+>
+> // Create a root span before runner.Run(), so that session spans
+> // (create_session, get_session, append_event, etc.) become children
+> // of this root span via context propagation.
+> ctx, span := atrace.Tracer.Start(ctx, "my_request")
+> defer span.End()
+>
+> eventChan, err := r.Run(ctx, userID, sessionID, message)
+> ```
 
 **Hook 配置：**
 
@@ -697,8 +698,9 @@ sessionService, err := redis.NewService(
 - 异步写入超时时间为 2 秒（`defaultAsyncPersistTimeout`）。
 - 调用 `Close()` 时会关闭所有 channel 并等待 worker 完成剩余任务。
 
-!!! warning "注意"
-异步持久化模式下，如果服务进程异常退出，channel 中尚未消费的事件可能会丢失。请根据业务对数据一致性的要求评估是否启用。
+> **注意**
+>
+> 异步持久化模式下，如果服务进程异常退出，channel 中尚未消费的事件可能会丢失。请根据业务对数据一致性的要求评估是否启用。
 
 ### 存储方式与版本迁移
 
@@ -710,11 +712,12 @@ Redis Session 存储有两种数据存储引擎，内部通过 `ServiceMeta` 中
 | **ZSet**    | 旧版（legacy）   | `{appName}` | 所有用户数据集中在同一 Cluster slot，大规模下有热点风险。数据结构简单，Event 直接存储完整 JSON 在 SortedSet 中。                                |
 | **HashIdx** | **新版（默认）** | `{userID}`  | 按用户散列，消除热点；数据与索引分离（Hash 存数据 + ZSet 存索引），ZSet 中只存 eventID 避免内存膨胀；Session 元数据独立存储，支持更灵活的查询。 |
 
-* !!! info "如何区分新旧模式"
-    - **HashIdx 是新模式**：Session 相关 key 以 `hashidx:` 为前缀，使用 `{userID}` 作为 hash tag，按用户维度散列到不同的 Redis Cluster slot。
-    - **ZSet 是旧模式**：Session 相关 key 使用 `{appName}` 作为 hash tag，同一应用的所有用户数据集中在同一个 slot。
-    - **AppState 是例外**：`appstate:{appName}` 在两种模式下格式完全一致（没有 `hashidx:` 前缀），因此 AppState 不受存储版本迁移影响，零迁移成本。
-    - 新创建的 session 在 `CompatModeLegacy`（默认）和 `CompatModeNone` 模式下使用 HashIdx 存储。
+> **如何区分新旧模式**
+>
+> - **HashIdx 是新模式**：Session 相关 key 以 `hashidx:` 为前缀，使用 `{userID}` 作为 hash tag，按用户维度散列到不同的 Redis Cluster slot。
+> - **ZSet 是旧模式**：Session 相关 key 使用 `{appName}` 作为 hash tag，同一应用的所有用户数据集中在同一个 slot。
+> - **AppState 是例外**：`appstate:{appName}` 在两种模式下格式完全一致（没有 `hashidx:` 前缀），因此 AppState 不受存储版本迁移影响，零迁移成本。
+> - 新创建的 session 在 `CompatModeLegacy`（默认）和 `CompatModeNone` 模式下使用 HashIdx 存储。
 
 新版本通过 **CompatMode**（兼容模式）实现从旧存储方式到新存储方式的平滑迁移，无需停服。
 
@@ -750,8 +753,9 @@ sessionService, err := redis.NewService(
 )
 ```
 
-!!! tip "何时需要阶段 1"
-    只有在**灰度发布或新旧版本混合部署**场景下才需要使用 `CompatModeTransition`。如果能够一次性将所有实例升级到新版本（例如全量发布），可以跳过阶段 1，直接使用默认的 `CompatModeLegacy` 即可。
+> **何时需要阶段 1**
+>
+> 只有在**灰度发布或新旧版本混合部署**场景下才需要使用 `CompatModeTransition`。如果能够一次性将所有实例升级到新版本（例如全量发布），可以跳过阶段 1，直接使用默认的 `CompatModeLegacy` 即可。
 
 **UserState 注意事项：** 新旧存储方式的 UserState 使用了**不同的 Redis Key**（旧：`userstate:{appName}:{userID}`，新：`hashidx:userstate:appName:{userID}`）。升级到新版本后，通过 HashIdx 创建的新 session 在合并 UserState 时**只会读取新 key**，无法读到旧 key 中的数据。
 
@@ -771,8 +775,9 @@ sessionService, err := redis.NewService(
 )
 ```
 
-!!! warning "注意"
-    此处的兼容问题仅发生在**多节点部署且同一用户的请求可能被分发到新旧版本 Session Service 实例**的场景下。如果是单节点部署，或者能通过路由策略保证同一用户始终命中同一版本实例，则无需关注此限制。
+> **注意**
+>
+> 此处的兼容问题仅发生在**多节点部署且同一用户的请求可能被分发到新旧版本 Session Service 实例**的场景下。如果是单节点部署，或者能通过路由策略保证同一用户始终命中同一版本实例，则无需关注此限制。
 
 **阶段 3：清理完成**
 
@@ -1651,7 +1656,7 @@ if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
 
 **核心特性：**
 
-- **自动触发**：根据事件数量、token 数量或时间阈值自动生成摘要
+- **自动触发**：在执行摘要检查时，根据事件数量、token 数量或时间阈值自动生成摘要
 - **增量处理**：只处理自上次摘要以来的新事件，避免重复计算
 - **LLM 驱动**：使用任何配置的 LLM 模型生成高质量、上下文感知的摘要
 - **非破坏性**：原始事件完整保留，摘要单独存储
@@ -1681,7 +1686,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(                     // 任一条件满足即触发
         summary.CheckEventThreshold(20),       // 自上次摘要后新增 20 个事件后触发
         summary.CheckTokenThreshold(4000),     // 自上次摘要后新增 4000 个 token 后触发
-        summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
+        summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
     ),
     summary.WithMaxSummaryWords(200),          // 限制摘要在 200 字以内
 )
@@ -1780,8 +1785,10 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 - 事件数量超过阈值（`WithEventThreshold`）
 - Token 数量超过阈值（`WithTokenThreshold`）
-- 距上次事件超过指定时间（`WithTimeThreshold`）
+- 在一次摘要检查中，被检查 session 的最后一个事件已超过指定时间；在默认增量摘要路径里，这通常就是最近一个待摘要事件（`WithTimeThreshold`）
 - 满足自定义组合条件（`WithChecksAny` / `WithChecksAll`）
+
+`WithTimeThreshold` 不是后台定时器。系统不会在“静默满 5 分钟”的瞬间主动生成摘要；只有在执行摘要检查时才会评估，通常发生在一轮对话结束后，或你手动调用摘要 API 时。它判断的是被检查 session 的最后一个事件；在默认增量摘要路径里，这个 session 只包含待摘要增量，所以 `5*time.Minute` 通常等价于：“到下一次摘要检查时，如果最近一个待摘要事件已经超过 5 分钟，就立即生成摘要。”
 
 #### 手动触发
 
@@ -1855,6 +1862,20 @@ err := sessionService.CreateSessionSummary(
 
 框架提供两种模式来管理发送给 LLM 的对话上下文：
 
+先区分三类上下文减载机制：
+
+| 机制 | 所在层 | 改动对象 | 典型用途 |
+| --- | --- | --- | --- |
+| Summary | Session Service + prompt assembly | 用 LLM 生成可持久化历史摘要；开启 `WithAddSessionSummary(true)` 后，请求中注入摘要，并只拼接摘要时间点之后的增量事件 | 长会话保留语义连续性 |
+| Context compaction | Agent prompt assembly | 不调用 LLM、不删整轮消息，只改写 `tool result` 内容 | 清理搜索结果、日志、网页抓取等超长工具输出 |
+| Token tailoring | Model provider | 模型调用前按 token budget 删除或保留消息轮次 | 最后一层兜底，保证请求落入 context window |
+
+调用顺序上，agent 先组装 prompt；如果启用了 `WithAddSessionSummary(true)`，
+则注入 summary；随后按需压缩 `tool result`。如果开启了摘要注入且请求仍接近
+context window，必要时再同步刷新一次 summary 并重建请求；最后由模型层
+token tailoring 裁剪消息列表。context compaction 缩小消息内部的工具输出，
+token tailoring 删减消息轮次，summary 则用新的语义摘要替代一段历史。
+
 #### 模式 1：启用摘要注入（推荐）
 
 ```go
@@ -1868,26 +1889,40 @@ llmagent.WithAddSessionSummary(true)
 - 保证完整上下文：浓缩历史 + 完整新对话
 - **`WithMaxHistoryRuns` 参数被忽略**
 
-**可选：Prompt 侧上下文压缩**
+**Context compaction 细节**
 
-当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前执行两遍压缩：
+Context compaction 不是 summary 的同义词，也不是 token tailoring。它只处理
+`tool result` 这种容易异常膨胀的内容，不会把普通 user/assistant 消息做
+LLM 摘要，也不会像 token tailoring 那样直接丢弃完整消息轮次。
+
+> **命名说明**：`WithEnableContextCompaction(true)` 中的 "compaction"
+> 指 prompt-side tool result compaction/pruning；如果需要语义摘要，仍然由
+> `WithAddSessionSummary(true)` 和会话摘要器负责。
+
+当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前执行 Pass 1 压缩；如果同时显式配置正数的 `ContextCompactionOversizedToolResultMaxTokens`，还会执行 Pass 2：
 
 - **Pass 1** — 旧 request 中超过 `ContextCompactionToolResultMaxTokens`（默认 1024 tokens）的 tool result 整体替换为占位符，保留 `ToolID` 和 `ToolName`
-- **Pass 2** — 任意 request（包括当前 request）中超过 `ContextCompactionOversizedToolResultMaxTokens`（默认 8192 tokens）的单个 tool result，使用首尾保留策略截断，中间插入 `[...N characters truncated...]` 标记。Pass 2 独立于 `EnableContextCompaction`，只要设置了值就会生效
-- 最近 `ContextCompactionKeepRecentRequests` 个已完成 request 不受 Pass 1 影响（但 Pass 2 仍会生效）
+- **Pass 2** — 任意 request（包括当前 request）中超过 `ContextCompactionOversizedToolResultMaxTokens` 的单个 tool result，使用首尾保留策略截断，中间插入 `[...N characters truncated...]` 标记。**默认值为 0（关闭）**，需要显式调用 `WithContextCompactionOversizedToolResultMaxTokens(...)` 并保持 `WithEnableContextCompaction(true)` 才会生效（推荐值 8192 tokens）
+- 最近 `ContextCompactionKeepRecentRequests` 个已完成 request 不受 Pass 1 影响（如果同时开启了 Pass 2，仍会受 Pass 2 截断）
 - 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
 - 模型层的 token tailoring 仍然作为最后兜底
+- Context compaction 默认使用 `SimpleTokenCounter`。中文内容较多或 provider
+  tokenization 特殊时，建议通过 `WithContextCompactionTokenCounter(...)`
+  传入与 token tailoring 相同的自定义 counter。
 
 ```go
+counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1.6))
+
 agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
     llmagent.WithAddSessionSummary(true),
-    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableContextCompaction(true), // 只压 tool result，不生成摘要
     llmagent.WithContextCompactionThresholdRatio(0.7),
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: 旧 tool result → 占位符
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: 任意超大 result → 首尾保留截断
     llmagent.WithContextCompactionKeepRecentRequests(1),
+    llmagent.WithContextCompactionTokenCounter(counter),
 )
 ```
 
@@ -1920,7 +1955,7 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - 不添加摘要消息
 - 只包含最近 `MaxHistoryRuns` 轮对话
 - `MaxHistoryRuns=0` 时不限制，包含所有历史
-- 如果开启 `WithEnableContextCompaction(true)`，旧 request 中超长 tool result 仍可在 request projection 阶段被压缩（Pass 1），同时任意 request 中的超大 tool result 也会被首尾保留截断（Pass 2）
+- 如果开启 `WithEnableContextCompaction(true)`，旧 request 中超长 tool result 会在 request projection 阶段被压缩（Pass 1）；如果同时显式设置 `WithContextCompactionOversizedToolResultMaxTokens(8192)`（或其他正值），任意 request 中的超大 tool result 也会被首尾保留截断（Pass 2）
 - 这个模式下不会触发 pre-LLM 的同步摘要重试
 
 **上下文结构：**
@@ -1960,27 +1995,28 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - **`WithContextThreshold(opts ...ContextThresholdOption)`**：零配置触发器，在每次评估时动态感知当前模型的 context window。根据 context window 的比例（默认 50%）自动计算 token 阈值，当用户切换模型时自动适配，无需重建 Summarizer。这是大多数场景下的推荐选项，类似 Codex CLI 和 Claude Code 的 auto-compact 行为。示例：`WithContextThreshold()` 零配置使用，或 `WithContextThreshold(summary.WithContextThresholdRatio(0.6))` 自定义比例。
 - **`WithEventThreshold(eventCount int)`**：当自上次摘要后的事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在自上次摘要后新增 20 个事件后触发。
 - **`WithTokenThreshold(tokenCount int)`**：当自上次摘要后的 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在自上次摘要后新增 4000 个 token 后触发。
-- **`WithTimeThreshold(interval time.Duration)`**：当自上次事件后经过的时间超过间隔时触发摘要。示例：`WithTimeThreshold(5*time.Minute)` 在 5 分钟无活动后触发。
+- **`WithTimeThreshold(interval time.Duration)`**：在执行摘要检查时进行判断；它包装的是 `CheckTimeThreshold`，语义上比较“被检查 session 的最后一个事件”是否已超过该间隔。在默认增量摘要路径里，这通常等价于最近一个待摘要事件。它不是后台定时器。示例：`WithTimeThreshold(5*time.Minute)` 的含义是：“到下一次摘要检查时，如果被检查 session 的最后一个事件已经超过 5 分钟，就立即生成摘要。”
 
-!!! note "Context Window 注册"
-    `WithContextThreshold` 和 Token Tailoring 都依赖框架内置的模型 context window 注册表。注册表已包含大量常见模型（OpenAI、Anthropic、Google、DeepSeek、Qwen 等），但不一定覆盖所有模型——特别是私有部署、微调变体或较新发布的模型。如果你的模型未被识别（context window 解析为 0 或回退到默认值），请在启动时手动注册：
-
-    ```go
-    import "trpc.group/trpc-go/trpc-agent-go/model"
-
-    func init() {
-        // 注册单个模型
-        model.RegisterModelContextWindow("my-custom-model", 32768)
-
-        // 或批量注册多个模型
-        model.RegisterModelContextWindows(map[string]int{
-            "my-custom-model-32k":  32768,
-            "my-custom-model-128k": 131072,
-        })
-    }
-    ```
-
-    模型名匹配不区分大小写，注册表也支持前缀匹配（例如注册 `"my-model"` 会匹配 `"my-model-v2"`）。
+> **Context Window 注册**
+>
+> `WithContextThreshold` 和 Token Tailoring 都依赖框架内置的模型 context window 注册表。注册表已包含大量常见模型（OpenAI、Anthropic、Google、DeepSeek、Qwen 等），但不一定覆盖所有模型——特别是私有部署、微调变体或较新发布的模型。如果你的模型未被识别（context window 解析为 0 或回退到默认值），请在启动时手动注册：
+>
+> ```go
+> import "trpc.group/trpc-go/trpc-agent-go/model"
+>
+> func init() {
+>     // 注册单个模型
+>     model.RegisterModelContextWindow("my-custom-model", 32768)
+>
+>     // 或批量注册多个模型
+>     model.RegisterModelContextWindows(map[string]int{
+>         "my-custom-model-32k":  32768,
+>         "my-custom-model-128k": 131072,
+>     })
+> }
+> ```
+>
+> 模型名匹配不区分大小写，注册表也支持前缀匹配（例如注册 `"my-model"` 会匹配 `"my-model-v2"`）。
 
 **组合条件：**
 
@@ -2279,7 +2315,7 @@ if found {
 
 2. **增量摘要**：新事件与先前的摘要（作为系统事件前置）组合，生成一个既包含旧上下文又包含新信息的更新摘要。
 
-3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（基于自上次摘要后的增量事件计数、token 计数、时间阈值）。如果条件未满足且 `force=false`，则跳过摘要。
+3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（基于自上次摘要后的增量事件计数、增量 token 计数，以及时间检查中“被检查 session 的最后一个事件距离当前是否已超过阈值”；在默认增量摘要路径里，这对应最近一个待摘要事件）。如果条件未满足且 `force=false`，则跳过摘要。
 
 4. **异步 Worker**：摘要任务使用基于哈希的分发策略分配到多个 worker goroutine。这确保同一会话的任务按顺序处理，而不同会话可以并行处理。
 
@@ -2366,12 +2402,51 @@ evt.FilterKey = "user-messages"
 
 **技术细节：** 框架使用前缀匹配机制（`strings.HasPrefix`）来判断事件是否应该被包含在上下文中。详见 `ContentRequestProcessor` 的过滤逻辑。
 
+#### 限制摘要目标
+
+默认情况下，当某个非空分支 `FilterKey` 触发摘要时，session service 会同时刷新该分支摘要和全量会话摘要（`SummaryFilterKeyAllContents`）。如果某些分支不需要摘要，可以通过 allowlist 控制范围，并按需关闭全量摘要级联：
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(summarizer),
+    inmemory.WithSummaryFilterAllowlist(
+        "my-app/user-messages",
+        "my-app/tool-calls",
+    ),
+    inmemory.WithCascadeFullSessionSummary(false),
+)
+```
+
+- `WithSummaryFilterAllowlist(...)` 只控制非空分支摘要目标，不会阻止 `session.SummaryFilterKeyAllContents` 这个全量摘要目标。
+- `WithCascadeFullSessionSummary(...)` 控制非空分支触发摘要时，是否同时刷新全量会话摘要。
+- 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入空 allowlist，并保持默认 cascade 开启：
+
+```go
+sessionService, err := mysql.NewService(
+    mysql.WithMySQLClientDSN(dsn),
+    mysql.WithSummarizer(summarizer),
+    mysql.WithSummaryFilterAllowlist(""),
+)
+```
+
+- `mysql.WithSummaryFilterAllowlist("")` 和 `mysql.WithSummaryFilterAllowlist()` 都表示“不允许任何 branch key”；在默认 cascade 行为下，仍然会刷新全量会话摘要。
+- 如果同时设置 `mysql.WithCascadeFullSessionSummary(false)`，非空 branch 触发时就没有任何摘要目标，因此不会生成摘要。
+- allowlist 使用带分隔符的层级匹配，不是原始字符串前缀匹配。框架内部会先给两边补上 filter key 分隔符（`"/"`），再判断两者是否处于同一条祖先/子孙层级路径上。
+- 例子：
+  - 放行 `my-app/tool` 时，会匹配 `my-app/tool` 和 `my-app/tool/search`。
+  - 放行 `my-app/tool/search` 时，也会匹配 `my-app/tool`。
+  - 放行 `my-app/tool` 时，不会匹配 `my-app/toolbox`。
+  - 放行 `my-app/tool` 时，不会匹配 `other-app/tool`。
+- 即使配置了 allowlist，`session.SummaryFilterKeyAllContents` 仍然可以被直接用于生成全量会话摘要。
+- 不配置 allowlist 时会保持兼容行为，所有分支 `FilterKey` 都可以触发摘要。
+- 显式传入空 allowlist 会阻止 branch 摘要目标；如果 cascade 开启，branch 触发时仍会刷新全量会话摘要。
+
 #### 完整示例
 
 参考以下示例查看完整的 FilterKey 使用场景：
 
 - [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook 基础用法
-- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - 按 FilterKey 生成摘要
+- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - 按 FilterKey 生成摘要、allowlist 控制与全量摘要级联开关
 
 ### 性能考虑
 

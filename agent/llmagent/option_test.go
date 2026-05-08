@@ -118,6 +118,12 @@ func TestWithContextCompactionOptions(t *testing.T) {
 	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
 	WithContextCompactionOversizedToolResultMaxTokens(-1)(opts)
 	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
+
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	WithContextCompactionTokenCounter(counter)(opts)
+	require.Same(t, counter, opts.ContextCompactionTokenCounter)
+	WithContextCompactionTokenCounter(nil)(opts)
+	require.Same(t, counter, opts.ContextCompactionTokenCounter)
 }
 
 func TestWithMessageFilterMode(t *testing.T) {
@@ -248,6 +254,81 @@ func TestWithSkillsLoadedContentInToolResults(t *testing.T) {
 
 	b := New("test-agent", WithSkillsLoadedContentInToolResults(true))
 	require.True(t, b.option.SkillsLoadedContentInToolResults)
+}
+
+func TestWithSkillsDirectoryHints(t *testing.T) {
+	a := New("test-agent")
+	require.False(t, a.option.skillsDirectoryHints)
+
+	b := New("test-agent", WithSkillsDirectoryHints(true))
+	require.True(t, b.option.skillsDirectoryHints)
+}
+
+func TestWithSkillsFilePathHints(t *testing.T) {
+	a := New("test-agent")
+	require.False(t, a.option.skillsFilePathHints)
+
+	b := New("test-agent", WithSkillsFilePathHints(true))
+	require.True(t, b.option.skillsFilePathHints)
+}
+
+func TestWithSkillLoadToolDescription(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.skillLoadToolDescription)
+
+	const description = "Load the matching skill before answering."
+
+	b := New(
+		"test-agent",
+		WithSkillLoadToolDescription(description),
+	)
+	require.NotNil(t, b.option.skillLoadToolDescription)
+	require.Equal(t, description, *b.option.skillLoadToolDescription)
+}
+
+func TestWithWorkspaceExecSurfaceEnabled(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.workspaceExecSurfaceEnabled)
+	require.True(t, workspaceExecSurfaceEnabled(&a.option))
+
+	b := New(
+		"test-agent",
+		WithWorkspaceExecSurfaceEnabled(false),
+	)
+	require.NotNil(t, b.option.workspaceExecSurfaceEnabled)
+	require.False(t, *b.option.workspaceExecSurfaceEnabled)
+}
+
+func TestWithSkillsCapabilityGuidance(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.skillsCapabilityGuidance)
+
+	b := New(
+		"test-agent",
+		WithSkillsCapabilityGuidance("Use directory bundles."),
+	)
+	require.NotNil(t, b.option.skillsCapabilityGuidance)
+	require.Equal(
+		t,
+		"Use directory bundles.",
+		*b.option.skillsCapabilityGuidance,
+	)
+}
+
+func TestWithSkillsProtocolGuidance(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.skillsProtocolGuidance)
+
+	b := New(
+		"test-agent",
+		WithSkillsProtocolGuidance("Always load SKILL.md first."),
+	)
+	require.NotNil(t, b.option.skillsProtocolGuidance)
+	require.Equal(
+		t,
+		"Always load SKILL.md first.",
+		*b.option.skillsProtocolGuidance,
+	)
 }
 
 func TestWithSkillFilter(t *testing.T) {
@@ -436,6 +517,15 @@ func TestWithPreloadSessionRecallSearchMode(t *testing.T) {
 
 	WithPreloadSessionRecallSearchMode(session.SearchMode("invalid"))(opts)
 	require.Equal(t, session.SearchModeHybrid, opts.PreloadSessionRecallSearchMode)
+}
+
+func TestWithEnableOnDemandSession(t *testing.T) {
+	opts := &Options{}
+	WithEnableOnDemandSession(true)(opts)
+	require.True(t, opts.EnableOnDemandSession)
+
+	WithEnableOnDemandSession(false)(opts)
+	require.False(t, opts.EnableOnDemandSession)
 }
 
 func TestWithSkillRunAllowedCommands_CopiesSlice(t *testing.T) {

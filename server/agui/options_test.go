@@ -94,6 +94,11 @@ func TestWithPostRunFinalizationTimeout(t *testing.T) {
 	assert.Equal(t, 2*time.Second, ro.PostRunFinalizationTimeout)
 }
 
+func TestWithHeartbeatInterval(t *testing.T) {
+	opts := newOptions(WithHeartbeatInterval(2 * time.Second))
+	assert.Equal(t, 2*time.Second, opts.heartbeatInterval)
+}
+
 func TestWithGraphNodeLifecycleActivityEnabled(t *testing.T) {
 	opts := newOptions(WithGraphNodeLifecycleActivityEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
@@ -118,10 +123,28 @@ func TestWithReasoningContentEnabled(t *testing.T) {
 	assert.True(t, ro.ReasoningContentEnabled)
 }
 
+func TestWithEventSourceMetadataEnabled(t *testing.T) {
+	opts := newOptions(WithEventSourceMetadataEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.EventSourceMetadataEnabled)
+}
+
 func TestWithToolResultInputTranslationEnabled(t *testing.T) {
 	opts := newOptions(WithToolResultInputTranslationEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
 	assert.True(t, ro.ToolResultInputTranslationEnabled)
+}
+
+func TestWithToolCallDeltaStreamingEnabled(t *testing.T) {
+	opts := newOptions(WithToolCallDeltaStreamingEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.ToolCallDeltaStreamingEnabled)
+}
+
+func TestWithStreamingToolResultActivityEnabled(t *testing.T) {
+	opts := newOptions(WithStreamingToolResultActivityEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.StreamingToolResultActivityEnabled)
 }
 
 func TestWithMessagesSnapshotFollowEnabled(t *testing.T) {
@@ -134,6 +157,12 @@ func TestWithMessagesSnapshotFollowMaxDuration(t *testing.T) {
 	opts := newOptions(WithMessagesSnapshotFollowMaxDuration(2 * time.Second))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
 	assert.Equal(t, 2*time.Second, ro.MessagesSnapshotFollowMaxDuration)
+}
+
+func TestWithMessagesSnapshotRunLifecycleEventsEnabled(t *testing.T) {
+	opts := newOptions(WithMessagesSnapshotRunLifecycleEventsEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.MessagesSnapshotRunLifecycleEventsEnabled)
 }
 
 func TestWithCancelEnabled(t *testing.T) {

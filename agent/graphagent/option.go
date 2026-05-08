@@ -41,8 +41,9 @@ const (
 	// ReasoningContentModeKeepAll keeps all reasoning_content in messages.
 	// Use this for debugging or when you need to retain thinking chains.
 	ReasoningContentModeKeepAll = processor.ReasoningContentModeKeepAll
-	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from previous
-	// request turns while keeping the current request's reasoning_content.
+	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from
+	// ordinary previous request turns while keeping the current request's
+	// reasoning_content and previous tool-call request reasoning.
 	// This is the default mode, recommended for DeepSeek thinking mode.
 	ReasoningContentModeDiscardPreviousTurns = processor.ReasoningContentModeDiscardPreviousTurns
 	// ReasoningContentModeDiscardAll discards all reasoning_content from all messages.
@@ -136,9 +137,16 @@ type Options struct {
 	ContextCompactionKeepRecentRequests int
 	// ContextCompactionOversizedToolResultMaxTokens sets the token threshold
 	// above which any tool result (including from the current request) is
-	// truncated using head+tail preservation. Fires regardless of
-	// EnableContextCompaction. 0 disables it.
+	// truncated using head+tail preservation. Like Pass 1, this also requires
+	// EnableContextCompaction=true to take effect; it will not fire when
+	// context compaction is disabled, even if a positive threshold is
+	// configured. 0 disables it regardless of EnableContextCompaction.
+	// Default is 0; the recommended value to pass when opting in is
+	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
+	// ContextCompactionTokenCounter estimates tool-result size for context
+	// compaction. When nil, SimpleTokenCounter is used.
+	ContextCompactionTokenCounter model.TokenCounter
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses default formatSummaryContent function.
 	summaryFormatter func(summary string) string
@@ -169,10 +177,15 @@ type Options struct {
 
 var (
 	defaultOptions = Options{
-		ChannelBufferSize:                             defaultChannelBufferSize,
-		ContextCompactionToolResultMaxTokens:          processor.DefaultContextCompactionToolResultMaxTokens,
-		ContextCompactionKeepRecentRequests:           processor.DefaultContextCompactionKeepRecentRequests,
-		ContextCompactionOversizedToolResultMaxTokens: processor.DefaultContextCompactionOversizedToolResultMaxTokens,
+		ChannelBufferSize:                    defaultChannelBufferSize,
+		ContextCompactionToolResultMaxTokens: processor.DefaultContextCompactionToolResultMaxTokens,
+		ContextCompactionKeepRecentRequests:  processor.DefaultContextCompactionKeepRecentRequests,
+		// Pass 2 is opt-in. Defaulting to 0 keeps EnableContextCompaction=false
+		// truly equivalent to "framework does not modify tool results". Users
+		// who want the head+tail truncation safety net should explicitly call
+		// WithContextCompactionOversizedToolResultMaxTokens (the recommended
+		// value is processor.DefaultContextCompactionOversizedToolResultMaxTokens).
+		ContextCompactionOversizedToolResultMaxTokens: 0,
 	}
 )
 
@@ -300,11 +313,27 @@ func WithContextCompactionKeepRecentRequests(n int) Option {
 
 // WithContextCompactionOversizedToolResultMaxTokens sets the token threshold
 // above which any tool result (including from the current request) is truncated
-// using head+tail preservation. Fires regardless of EnableContextCompaction.
+// using head+tail preservation. Like Pass 1, this requires
+// WithEnableContextCompaction(true) to take effect; the framework will not
+// modify tool results when context compaction is disabled, even if a positive
+// threshold is configured here. 0 disables it regardless of
+// EnableContextCompaction. The default is 0; the recommended value to pass
+// when opting in is processor.DefaultContextCompactionOversizedToolResultMaxTokens
+// (8192).
 func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 	return func(opts *Options) {
 		if tokens >= 0 {
 			opts.ContextCompactionOversizedToolResultMaxTokens = tokens
+		}
+	}
+}
+
+// WithContextCompactionTokenCounter sets the token counter used by context
+// compaction to decide whether tool results exceed configured budgets.
+func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
+	return func(opts *Options) {
+		if counter != nil {
+			opts.ContextCompactionTokenCounter = counter
 		}
 	}
 }

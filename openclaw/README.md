@@ -222,21 +222,25 @@ model:
 # This only configures the embedder and vector store. Content loading
 # can be triggered separately at runtime.
 knowledges:
-  entries:
+  providers:
     - name: "docs"
-      embedder:
-        type: "openai"
-        model: "text-embedding-3-small"
-        dimensions: 1536
-      vector_store:
-        type: "inmemory"
-        max_results: 5
+      max_results: 5
+      config:
+        embedder:
+          type: "openai"
+          model: "text-embedding-3-small"
+          dimensions: 1536
+        vector_store:
+          type: "inmemory"
 
 tools:
   # Optional; default is serial execution.
   # When enabled and the model returns multiple tool calls in one step,
   # OpenClaw executes them concurrently.
   enable_parallel_tools: true
+  # Optional: override the built-in OpenClaw tooling guidance prompt.
+  # Leave unset to use the built-in default, or set to "" to disable it.
+  openclaw_tooling_guidance: ""
   providers:
     - type: "browser"
       name: "browser-runtime"
@@ -287,21 +291,22 @@ Notes:
 
   ```yaml
   knowledges:
-    entries:
+    providers:
       - name: "trpc_agent_go"
-        embedder:
-          type: "openai"
-          model: "text-embedding-3-small"
-          base_url: "${OPENAI_BASE_URL}"
-          api_key: "${OPENAI_API_KEY}"
-          dimensions: 1536
-        vector_store:
-          type: "pgvector"
-          url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
-          table: "trpc_agent_go"
-          index_dimension: 1536
-          enable_tsvector: true
-          max_results: 5
+        max_results: 5
+        config:
+          embedder:
+            type: "openai"
+            model: "text-embedding-3-small"
+            base_url: "${OPENAI_BASE_URL}"
+            api_key: "${OPENAI_API_KEY}"
+            dimensions: 1536
+          vector_store:
+            type: "pgvector"
+            url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
+            table: "trpc_agent_go"
+            index_dimension: 1536
+            enable_tsvector: true
   ```
 
   Use identifier-safe table names such as `trpc_agent_go`; do not use raw
@@ -1056,6 +1061,24 @@ borrows a few design ideas from OpenClaw:
 - `{baseDir}` placeholder substitution for better OpenClaw skill
   compatibility.
 
+### Durable capabilities
+
+Local skills are the default place to teach OpenClaw reusable capabilities.
+When a user wants the agent to remember a workflow, connect to a tool or API,
+reuse an MCP server, follow a team process, or preserve a domain rule for
+future tasks, prefer creating or updating a skill instead of adding
+case-specific runtime logic.
+
+Use memory for lightweight facts, preferences, and simple standing rules.
+Use a skill when the remembered item needs an operational workflow, tools,
+examples, references, or recovery paths.
+
+Use application code and runtime config for stable boundaries such as
+permissions, secret handling, file access, validation, and lifecycle
+management. Use skills for the evolving context: when the capability should
+trigger, how to operate it, which examples matter, and how to recover from
+common failures.
+
 ### Bundled skills
 
 OpenClaw vendors the upstream OpenClaw skill pack under `openclaw/skills/`
@@ -1113,6 +1136,7 @@ skills:
   watch: true
   watch_bundled: false
   watch_debounce_ms: 250
+  tool_profile: "knowledge_only" # knowledge_only|full
   load_mode: "turn" # once|turn|session
   loaded_content_in_tool_results: true
   max_loaded_skills: 0
@@ -1133,6 +1157,15 @@ skills:
 OpenClaw defaults to materializing loaded skill bodies/docs into tool
 result messages. This keeps the system prompt more stable while still
 letting `SkillLoadMode` control how long loaded skill state survives.
+
+`tool_profile: "knowledge_only"` is the default. It keeps `skill_load`,
+`skill_list_docs`, and `skill_select_docs`, while hiding execution
+tools such as `skill_run`. This is useful when you want skills to
+provide guidance and supporting docs but keep actual execution on the
+normal runtime tool surface.
+
+Use `tool_profile: "full"` only when you explicitly want the built-in
+skill execution tools to be visible to the model.
 
 When `skills.watch` is enabled, changes under local filesystem skill
 roots are picked up automatically after the watch debounce fires.

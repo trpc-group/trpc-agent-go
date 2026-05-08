@@ -241,6 +241,23 @@ func WithRuntimeState(state map[string]any) RunOption {
 	}
 }
 
+// WithModelRequestExtraFields merges provider-specific top-level fields into
+// each model request created during this run. Request-level fields take
+// precedence over model-level extra fields in adapters that support merging.
+func WithModelRequestExtraFields(fields map[string]any) RunOption {
+	return func(opts *RunOptions) {
+		if len(fields) == 0 {
+			return
+		}
+		if opts.ModelRequestExtraFields == nil {
+			opts.ModelRequestExtraFields = make(map[string]any, len(fields))
+		}
+		for key, value := range fields {
+			opts.ModelRequestExtraFields[key] = value
+		}
+	}
+}
+
 // MergeRuntimeState merges runtime state into existing RunOptions state.
 //
 // When a key already exists, the new value replaces the old one.
@@ -335,6 +352,31 @@ func WithMessages(messages []model.Message) RunOption {
 func WithInjectedContextMessages(messages []model.Message) RunOption {
 	return func(opts *RunOptions) {
 		opts.InjectedContextMessages = append(opts.InjectedContextMessages, messages...)
+	}
+}
+
+// UserMessageRewriteArgs contains stable metadata for one user message rewrite.
+type UserMessageRewriteArgs struct {
+	AppName         string
+	UserID          string
+	SessionID       string
+	RequestID       string
+	OriginalMessage model.Message
+}
+
+// UserMessageRewriter rewrites one current-turn user input into an ordered
+// message sequence. The returned order is the persistence order for the turn,
+// and the last message becomes invocation.Message.
+type UserMessageRewriter func(
+	ctx context.Context,
+	args *UserMessageRewriteArgs,
+) ([]model.Message, error)
+
+// WithUserMessageRewriter rewrites the current-turn input into an ordered
+// message sequence before runner persists it into the session transcript.
+func WithUserMessageRewriter(rewriter UserMessageRewriter) RunOption {
+	return func(opts *RunOptions) {
+		opts.UserMessageRewriter = rewriter
 	}
 }
 
@@ -852,6 +894,10 @@ type RunOptions struct {
 	// session events and therefore must be provided on every run if needed.
 	InjectedContextMessages []model.Message
 
+	// UserMessageRewriter rewrites the current-turn input into an ordered
+	// message sequence before runner persists it into the session transcript.
+	UserMessageRewriter UserMessageRewriter
+
 	// Resume indicates whether this run should attempt to resume from existing
 	// session context before making a new model call. When true, flows may
 	// inspect the latest session events (for example, assistant messages with
@@ -960,6 +1006,13 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+
+	// ModelRequestExtraFields contains provider-specific top-level request body
+	// fields for model calls made during this run.
+	//
+	// Adapters that support extra fields merge these with model-level extra
+	// fields, with these request-level values taking precedence.
+	ModelRequestExtraFields map[string]any
 
 	// CodeExecutor is the code executor to use for this specific run.
 	// If set, it temporarily overrides the agent's default code executor for
@@ -1294,6 +1347,7 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 	if ch == nil || e == nil {
 		return nil
 	}
+	attachAwaitUserReplyRoute(inv, e)
 	InjectIntoEvent(inv, e)
 	var agentName, requestID string
 	if inv != nil {

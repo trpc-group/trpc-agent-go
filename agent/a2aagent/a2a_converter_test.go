@@ -12,6 +12,7 @@ package a2aagent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -993,6 +994,151 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvents_FailedStatus(
 	}
 }
 
+func TestDefaultA2AEventConverter_ConvertStreamingToEvents_MessageStructuredError(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	code := "tool_not_found"
+	events, err := converter.ConvertStreamingToEvents(
+		protocol.StreamingMessageEvent{
+			Result: &protocol.Message{
+				Kind:      protocol.KindMessage,
+				MessageID: "msg-structured-error",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.TextPart{
+						Kind: protocol.KindText,
+						Text: "Tool 'upload_to_cos' not found",
+					},
+				},
+				Metadata: map[string]any{
+					ia2a.MessageMetadataErrorCodeKey: code,
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil || events[0].Response.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if events[0].Response.Error.Code == nil || *events[0].Response.Error.Code != code {
+		t.Fatalf("code = %v, want %q", events[0].Response.Error.Code, code)
+	}
+	if events[0].Response.Done {
+		t.Fatal("expected recoverable error event")
+	}
+	if events[0].Response.IsPartial {
+		t.Fatal("expected structured error message event to be non-partial")
+	}
+	if events[0].Response.Object != model.ObjectTypeChatCompletion {
+		t.Fatalf("object = %q, want %q", events[0].Response.Object, model.ObjectTypeChatCompletion)
+	}
+	if events[0].Response.Error.Message != "Tool 'upload_to_cos' not found" {
+		t.Fatalf(
+			"message = %q, want %q",
+			events[0].Response.Error.Message,
+			"Tool 'upload_to_cos' not found",
+		)
+	}
+}
+
+func TestDefaultA2AEventConverter_ConvertStreamingToEvents_CompletedStatusStructuredError(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	code := "A2A_500"
+	metadata := ia2a.WithResponseErrorMetadata(nil, &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "runner failed",
+		Code:    &code,
+	})
+
+	events, err := converter.ConvertStreamingToEvents(
+		protocol.StreamingMessageEvent{
+			Result: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Final:     true,
+				Metadata:  metadata,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateCompleted,
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil || events[0].Response.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if events[0].Response.Error.Code == nil || *events[0].Response.Error.Code != code {
+		t.Fatalf("code = %v, want %q", events[0].Response.Error.Code, code)
+	}
+	if !events[0].Response.Done {
+		t.Fatal("expected terminal error event")
+	}
+	if events[0].Response.Object != model.ObjectTypeError {
+		t.Fatalf("object = %q, want %q", events[0].Response.Object, model.ObjectTypeError)
+	}
+}
+
+func TestDefaultA2AEventConverter_ConvertStreamingToEvents_FinalArtifactStructuredError(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	code := "A2A_500"
+	lastChunk := true
+	metadata := ia2a.WithResponseErrorMetadata(nil, &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "runner failed",
+		Code:    &code,
+	})
+
+	events, err := converter.ConvertStreamingToEvents(
+		protocol.StreamingMessageEvent{
+			Result: &protocol.TaskArtifactUpdateEvent{
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				LastChunk: &lastChunk,
+				Metadata:  metadata,
+				Artifact: protocol.Artifact{
+					ArtifactID: "artifact-error",
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil || events[0].Response.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if events[0].Response.ID != "artifact-error" {
+		t.Fatalf("id = %q, want %q", events[0].Response.ID, "artifact-error")
+	}
+	if events[0].Response.Error.Code == nil || *events[0].Response.Error.Code != code {
+		t.Fatalf("code = %v, want %q", events[0].Response.Error.Code, code)
+	}
+	if !events[0].Response.Done {
+		t.Fatal("expected terminal error event")
+	}
+	if events[0].Response.Object != model.ObjectTypeError {
+		t.Fatalf("object = %q, want %q", events[0].Response.Object, model.ObjectTypeError)
+	}
+}
+
 func TestDefaultA2AEventConverter_ConvertToEvents_FailedTask(
 	t *testing.T,
 ) {
@@ -1034,6 +1180,56 @@ func TestDefaultA2AEventConverter_ConvertToEvents_FailedTask(
 	}
 }
 
+func TestDefaultA2AEventConverter_ConvertToEvents_MessageStructuredError(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	code := "tool_not_found"
+	events, err := converter.ConvertToEvents(
+		protocol.MessageResult{
+			Result: &protocol.Message{
+				Kind:      protocol.KindMessage,
+				MessageID: "msg-structured-error",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.TextPart{
+						Kind: protocol.KindText,
+						Text: "Tool 'upload_to_cos' not found",
+					},
+				},
+				Metadata: map[string]any{
+					ia2a.MessageMetadataErrorCodeKey: code,
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil || events[0].Response.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if events[0].Response.Error.Code == nil || *events[0].Response.Error.Code != code {
+		t.Fatalf("code = %v, want %q", events[0].Response.Error.Code, code)
+	}
+	if !events[0].Response.Done {
+		t.Fatal("expected terminal error event")
+	}
+	if events[0].Response.Object != model.ObjectTypeError {
+		t.Fatalf("object = %q, want %q", events[0].Response.Object, model.ObjectTypeError)
+	}
+	if events[0].Response.Error.Message != "Tool 'upload_to_cos' not found" {
+		t.Fatalf(
+			"message = %q, want %q",
+			events[0].Response.Error.Message,
+			"Tool 'upload_to_cos' not found",
+		)
+	}
+}
+
 func TestTaskResponseError_EdgeCases(t *testing.T) {
 	if taskResponseError(nil) != nil {
 		t.Fatal("expected nil response error for nil result")
@@ -1055,6 +1251,12 @@ func TestTaskResponseError_EdgeCases(t *testing.T) {
 		textContent:   "ignored",
 	}); got != passthrough {
 		t.Fatal("expected structured response error to be reused")
+	}
+	if got := taskResponseError(&parseResult{
+		responseError: passthrough,
+		textContent:   "ignored",
+	}); got != passthrough {
+		t.Fatal("expected structured message error to be reused without task failure state")
 	}
 }
 
@@ -1639,6 +1841,380 @@ func TestProcessDataPartInto_ADKMetadataKey(t *testing.T) {
 			processDataPart(tc.dataPart, result)
 			tc.validateFunc(t, result)
 		})
+	}
+}
+
+func TestProcessDataPartWithMappers_CustomMapperHandlesUnknownType(t *testing.T) {
+	result := &parseResult{}
+	part := &protocol.DataPart{
+		Data: map[string]any{
+			"business": "payload",
+		},
+		Metadata: map[string]any{
+			"type": "biz_custom",
+		},
+	}
+
+	processDataPartWithMappers(part, result, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			if ia2a.GetDataPartType(p.Metadata) != "biz_custom" {
+				return false, nil
+			}
+			out.SetTextContent("mapped-by-custom")
+			return true, nil
+		},
+	})
+
+	if result.textContent != "mapped-by-custom" {
+		t.Fatalf("expected mapper to set text content, got %q", result.textContent)
+	}
+}
+
+func TestProcessDataPartWithMappers_ValueTypedBuiltInDataPart(t *testing.T) {
+	result := &parseResult{}
+	part := protocol.NewDataPart(map[string]any{
+		ia2a.ToolCallFieldID:   "call-1",
+		ia2a.ToolCallFieldType: "function",
+		ia2a.ToolCallFieldName: "lookup",
+		ia2a.ToolCallFieldArgs: `{"query":"value-part"}`,
+	})
+	part.Metadata = map[string]any{
+		"type": ia2a.DataPartMetadataTypeFunctionCall,
+	}
+
+	processDataPartWithMappers(part, result, nil)
+
+	if len(result.toolCalls) != 1 {
+		t.Fatalf("expected built-in handling for value DataPart, got %d tool calls", len(result.toolCalls))
+	}
+	if result.toolCalls[0].Function.Name != "lookup" {
+		t.Fatalf("unexpected tool call name: %s", result.toolCalls[0].Function.Name)
+	}
+}
+
+func TestParseA2AMessagePartsWithMappers_CustomMapperPreservesMappedText(t *testing.T) {
+	msg := &protocol.Message{
+		Parts: []protocol.Part{
+			&protocol.DataPart{
+				Data: map[string]any{"business": "payload"},
+				Metadata: map[string]any{
+					"type": "biz_custom",
+				},
+			},
+		},
+	}
+
+	result := parseA2AMessagePartsWithMappers(msg, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			if ia2a.GetDataPartType(p.Metadata) != "biz_custom" {
+				return false, nil
+			}
+			out.SetTextContent("mapped-by-custom")
+			return true, nil
+		},
+	})
+
+	if result.textContent != "mapped-by-custom" {
+		t.Fatalf("expected mapper-mapped text content, got %q", result.textContent)
+	}
+}
+
+func TestParseA2AMessagePartsWithMappers_FlushesTextAroundValueTypedCustomDataPart(t *testing.T) {
+	customPart := protocol.NewDataPart(map[string]any{"business": "payload"})
+	customPart.Metadata = map[string]any{
+		"type": "biz_custom",
+	}
+
+	msg := &protocol.Message{
+		Parts: []protocol.Part{
+			protocol.NewTextPart("prefix "),
+			customPart,
+			protocol.NewTextPart("suffix"),
+		},
+	}
+
+	result := parseA2AMessagePartsWithMappers(msg, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			if got := out.GetTextContent(); got != "prefix " {
+				t.Fatalf("expected mapper to observe prior text, got %q", got)
+			}
+			out.SetTextContent(out.GetTextContent() + "mapped ")
+			return true, nil
+		},
+	})
+
+	if result.textContent != "prefix mapped suffix" {
+		t.Fatalf("expected text from before and after mapper to be preserved, got %q", result.textContent)
+	}
+}
+
+func TestProcessDataPartWithMappers_UnmatchedMapperDoesNotApplyChanges(t *testing.T) {
+	result := &parseResult{textContent: "existing"}
+	part := &protocol.DataPart{
+		Data: map[string]any{"business": "payload"},
+		Metadata: map[string]any{
+			"type": "biz_custom",
+		},
+	}
+
+	processDataPartWithMappers(part, result, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			out.SetTextContent("should-not-apply")
+			return false, nil
+		},
+	})
+
+	if result.textContent != "existing" {
+		t.Fatalf("expected unmatched mapper changes to be ignored, got %q", result.textContent)
+	}
+}
+
+func TestProcessDataPartWithMappers_CustomMapperSetsEventExtension(t *testing.T) {
+	result := &parseResult{}
+	part := &protocol.DataPart{
+		Data: map[string]any{
+			"business": "payload",
+		},
+		Metadata: map[string]any{
+			"type": "biz_custom",
+		},
+	}
+
+	processDataPartWithMappers(part, result, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			if ia2a.GetDataPartType(p.Metadata) != "biz_custom" {
+				return false, nil
+			}
+			if err := out.SetEventExtension("trpc.a2a.biz_payload", p.Data); err != nil {
+				return false, err
+			}
+			return true, nil
+		},
+	})
+
+	evt := &event.Event{Extensions: result.extensions}
+	payload, ok, err := event.GetExtension[map[string]any](evt, "trpc.a2a.biz_payload")
+	if err != nil {
+		t.Fatalf("expected extension decode to succeed, got error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected mapped event extension to be present")
+	}
+	if payload["business"] != "payload" {
+		t.Fatalf("expected payload business field to be preserved, got %+v", payload)
+	}
+}
+
+func TestNewDataPartMappingResult(t *testing.T) {
+	mapped := newDataPartMappingResult(nil)
+	if mapped == nil {
+		t.Fatal("expected non-nil mapping result for nil parseResult")
+	}
+
+	raw := json.RawMessage(`{"trace":"source"}`)
+	result := &parseResult{
+		textContent:         "text",
+		reasoningContent:    "reasoning",
+		codeExecution:       "print('ok')",
+		codeExecutionResult: "ok",
+		extensions: map[string]json.RawMessage{
+			"payload": raw,
+		},
+	}
+
+	mapped = newDataPartMappingResult(result)
+	if mapped.GetTextContent() != "text" {
+		t.Fatalf("unexpected text content: %q", mapped.GetTextContent())
+	}
+	if mapped.GetReasoningContent() != "reasoning" {
+		t.Fatalf("unexpected reasoning content: %q", mapped.GetReasoningContent())
+	}
+	if mapped.GetCodeExecution() != "print('ok')" {
+		t.Fatalf("unexpected code execution: %q", mapped.GetCodeExecution())
+	}
+	if mapped.GetCodeExecutionResult() != "ok" {
+		t.Fatalf("unexpected code execution result: %q", mapped.GetCodeExecutionResult())
+	}
+
+	raw[0] = '['
+	if string(mapped.eventExtensions["payload"]) != `{"trace":"source"}` {
+		t.Fatalf("extension clone should not change after source mutation, got %s", mapped.eventExtensions["payload"])
+	}
+}
+
+func TestApplyDataPartMappingResult(t *testing.T) {
+	dst := &parseResult{
+		textContent:         "old text",
+		reasoningContent:    "old reasoning",
+		codeExecution:       "old code",
+		codeExecutionResult: "old result",
+	}
+	mapped := &A2ADataPartMappingResult{}
+	mapped.SetTextContent("new text")
+	mapped.SetReasoningContent("new reasoning")
+	mapped.SetCodeExecution("new code")
+	mapped.SetCodeExecutionResult("new result")
+	mapped.AppendToolCall(model.ToolCall{
+		ID:   "call-1",
+		Type: "function",
+		Function: model.FunctionDefinitionParam{
+			Name: "lookup",
+		},
+	})
+	mapped.AppendToolResponse(A2ADataPartToolResponse{
+		ID:      "resp-1",
+		Name:    "lookup",
+		Content: "ok",
+	})
+	if err := mapped.SetEventExtension("payload", map[string]any{"trace": "mapped"}); err != nil {
+		t.Fatalf("SetEventExtension() returned error: %v", err)
+	}
+
+	applyDataPartMappingResult(dst, mapped)
+	if dst.textContent != "new text" {
+		t.Fatalf("unexpected text content: %q", dst.textContent)
+	}
+	if dst.reasoningContent != "new reasoning" {
+		t.Fatalf("unexpected reasoning content: %q", dst.reasoningContent)
+	}
+	if dst.codeExecution != "new code" {
+		t.Fatalf("unexpected code execution: %q", dst.codeExecution)
+	}
+	if dst.codeExecutionResult != "new result" {
+		t.Fatalf("unexpected code execution result: %q", dst.codeExecutionResult)
+	}
+	if len(dst.toolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %d", len(dst.toolCalls))
+	}
+	if len(dst.toolResponses) != 1 {
+		t.Fatalf("expected one tool response, got %d", len(dst.toolResponses))
+	}
+	if string(dst.extensions["payload"]) != `{"trace":"mapped"}` {
+		t.Fatalf("unexpected extension payload: %s", dst.extensions["payload"])
+	}
+
+	mapped.eventExtensions["payload"][0] = '['
+	if string(dst.extensions["payload"]) != `{"trace":"mapped"}` {
+		t.Fatalf("destination extension should be cloned, got %s", dst.extensions["payload"])
+	}
+}
+
+func TestApplyDataPartMappingResult_NilInputs(t *testing.T) {
+	applyDataPartMappingResult(nil, &A2ADataPartMappingResult{})
+	applyDataPartMappingResult(&parseResult{}, nil)
+}
+
+func TestBuildEventResponse_WithMappedEventExtensions(t *testing.T) {
+	msg := &protocol.Message{
+		Parts: []protocol.Part{
+			&protocol.DataPart{
+				Data: map[string]any{
+					"trace_id": "trace-1",
+					"hint":     "mapped",
+				},
+				Metadata: map[string]any{
+					"type": "biz_custom",
+				},
+			},
+		},
+	}
+
+	result := parseA2AMessagePartsWithMappers(msg, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			if ia2a.GetDataPartType(p.Metadata) != "biz_custom" {
+				return false, nil
+			}
+			if err := out.SetEventExtension("trpc.a2a.biz_payload", p.Data); err != nil {
+				return false, err
+			}
+			return true, nil
+		},
+	})
+
+	evt := buildEventResponse(
+		false,
+		"msg-1",
+		result,
+		&agent.Invocation{InvocationID: "inv-1"},
+		"remote-agent",
+		protocol.MessageRoleAgent,
+	)
+
+	payload, ok, err := event.GetExtension[map[string]any](evt, "trpc.a2a.biz_payload")
+	if err != nil {
+		t.Fatalf("expected extension decode to succeed, got error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected mapped extension on converted event")
+	}
+	if payload["trace_id"] != "trace-1" || payload["hint"] != "mapped" {
+		t.Fatalf("unexpected extension payload: %+v", payload)
+	}
+	if evt.Response == nil || len(evt.Response.Choices) != 1 {
+		t.Fatalf("expected placeholder response to be preserved, got %+v", evt.Response)
+	}
+	if evt.Response.Choices[0].Message.Content != "" {
+		t.Fatalf("expected empty message content for extension-only event, got %q", evt.Response.Choices[0].Message.Content)
+	}
+}
+
+func TestProcessDataPartWithMappers_MapperErrorFallsThroughToNextMapper(t *testing.T) {
+	result := &parseResult{}
+	part := &protocol.DataPart{
+		Data: map[string]any{"business": "payload"},
+		Metadata: map[string]any{
+			"type": "biz_custom",
+		},
+	}
+
+	secondMapperCalled := false
+	processDataPartWithMappers(part, result, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			return false, errors.New("mapper failed")
+		},
+		nil,
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			secondMapperCalled = true
+			out.SetReasoningContent("mapped after error")
+			return true, nil
+		},
+	})
+
+	if !secondMapperCalled {
+		t.Fatal("expected second mapper to run after first mapper error")
+	}
+	if result.reasoningContent != "mapped after error" {
+		t.Fatalf("expected second mapper result to be applied, got %q", result.reasoningContent)
+	}
+}
+
+func TestProcessDataPartWithMappers_BuiltInTypeSkipsCustomMappers(t *testing.T) {
+	result := &parseResult{}
+	mapperCalled := false
+	part := &protocol.DataPart{
+		Data: map[string]any{
+			ia2a.ToolCallFieldID:   "call-1",
+			ia2a.ToolCallFieldType: "function",
+			ia2a.ToolCallFieldName: "lookup",
+			ia2a.ToolCallFieldArgs: `{"query":"test"}`,
+		},
+		Metadata: map[string]any{
+			"type": ia2a.DataPartMetadataTypeFunctionCall,
+		},
+	}
+
+	processDataPartWithMappers(part, result, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			mapperCalled = true
+			return true, nil
+		},
+	})
+
+	if mapperCalled {
+		t.Fatal("expected built-in function call handling to bypass custom mappers")
+	}
+	if len(result.toolCalls) != 1 {
+		t.Fatalf("expected built-in tool call to be recorded, got %d", len(result.toolCalls))
 	}
 }
 
@@ -2965,6 +3541,68 @@ func TestBuildStreamingResponse_WithReasoningContent(t *testing.T) {
 	}
 }
 
+func TestBuildStreamingResponse_PassesThroughStructuredMessageError(t *testing.T) {
+	code := "tool_not_found"
+	resp := buildStreamingResponse("msg-123", &parseResult{
+		textContent: "Tool 'upload_to_cos' not found",
+		responseError: &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: "Tool 'upload_to_cos' not found",
+			Code:    &code,
+		},
+		objectType: model.ObjectTypeError,
+	}, protocol.MessageRoleAgent)
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	if resp.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if resp.Error.Code == nil || *resp.Error.Code != code {
+		t.Fatalf("code = %v, want %q", resp.Error.Code, code)
+	}
+	if resp.Done {
+		t.Fatal("expected recoverable error response")
+	}
+	if resp.IsPartial {
+		t.Fatal("expected recoverable error response to be non-partial")
+	}
+	if resp.Object != model.ObjectTypeChatCompletion {
+		t.Fatalf("object = %q, want %q", resp.Object, model.ObjectTypeChatCompletion)
+	}
+	if resp.Error.Message != "Tool 'upload_to_cos' not found" {
+		t.Fatalf(
+			"message = %q, want %q",
+			resp.Error.Message,
+			"Tool 'upload_to_cos' not found",
+		)
+	}
+}
+
+func TestBuildStreamingResponse_UsesStructuredErrorMessageWhenTextMissing(t *testing.T) {
+	resp := buildStreamingResponse("msg-123", &parseResult{
+		responseError: &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: "tool invocation failed",
+		},
+	}, protocol.MessageRoleAgent)
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	if resp.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if resp.Error.Message != "tool invocation failed" {
+		t.Fatalf("message = %q, want %q", resp.Error.Message, "tool invocation failed")
+	}
+	if resp.Done {
+		t.Fatal("expected recoverable error response")
+	}
+	if resp.IsPartial {
+		t.Fatal("expected recoverable error response to be non-partial")
+	}
+}
+
 func TestBuildNonStreamingResponse_WithReasoningContent(t *testing.T) {
 	resp := buildNonStreamingResponse("msg-123", &parseResult{
 		textContent:      "Answer",
@@ -2982,6 +3620,56 @@ func TestBuildNonStreamingResponse_WithReasoningContent(t *testing.T) {
 	}
 	if msg.ReasoningContent != "Thinking..." {
 		t.Errorf("expected reasoningContent %q, got %q", "Thinking...", msg.ReasoningContent)
+	}
+}
+
+func TestBuildNonStreamingResponse_PassesThroughStructuredMessageError(t *testing.T) {
+	code := "tool_not_found"
+	resp := buildNonStreamingResponse("msg-123", &parseResult{
+		textContent: "Tool 'upload_to_cos' not found",
+		responseError: &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: "Tool 'upload_to_cos' not found",
+			Code:    &code,
+		},
+		objectType: model.ObjectTypeError,
+	}, protocol.MessageRoleAgent)
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	if resp.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if resp.Error.Code == nil || *resp.Error.Code != code {
+		t.Fatalf("code = %v, want %q", resp.Error.Code, code)
+	}
+	if resp.Object != model.ObjectTypeError {
+		t.Fatalf("object = %q, want %q", resp.Object, model.ObjectTypeError)
+	}
+	if resp.Error.Message != "Tool 'upload_to_cos' not found" {
+		t.Fatalf(
+			"message = %q, want %q",
+			resp.Error.Message,
+			"Tool 'upload_to_cos' not found",
+		)
+	}
+}
+
+func TestBuildNonStreamingResponse_UsesStructuredErrorMessageWhenTextMissing(t *testing.T) {
+	resp := buildNonStreamingResponse("msg-123", &parseResult{
+		responseError: &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: "tool invocation failed",
+		},
+	}, protocol.MessageRoleAgent)
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	if resp.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if resp.Error.Message != "tool invocation failed" {
+		t.Fatalf("message = %q, want %q", resp.Error.Message, "tool invocation failed")
 	}
 }
 

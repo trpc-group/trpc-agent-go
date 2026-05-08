@@ -125,7 +125,7 @@ cd trpc-agent-go/examples/graph/fanout
 # Run the fan-out example
 go run main.go
 
-# Default model is "deepseek-chat"; override with -model to change
+# Default model is "deepseek-v4-flash"; override with -model to change
 # (Optional) Specify model
 go run main.go -model gpt-4o-mini
 ```

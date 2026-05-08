@@ -41,11 +41,12 @@ type AsyncSummaryWorker struct {
 
 // AsyncSummaryConfig contains configuration for async summary worker.
 type AsyncSummaryConfig struct {
-	Summarizer        summary.SessionSummarizer
-	AsyncSummaryNum   int
-	SummaryQueueSize  int
-	SummaryJobTimeout time.Duration
-	CreateSummaryFunc func(context.Context, *session.Session, string, bool) error
+	Summarizer            summary.SessionSummarizer
+	AsyncSummaryNum       int
+	SummaryQueueSize      int
+	SummaryJobTimeout     time.Duration
+	SummaryDispatchPolicy SummaryDispatchPolicy
+	CreateSummaryFunc     func(context.Context, *session.Session, string, bool) error
 }
 
 func (c AsyncSummaryConfig) hasSummarizer() bool {
@@ -153,6 +154,7 @@ func (w *AsyncSummaryWorker) EnqueueJob(
 		sess,
 		filterKey,
 		force,
+		w.config.SummaryDispatchPolicy,
 		w.config.CreateSummaryFunc,
 	)
 }
@@ -202,7 +204,7 @@ func (w *AsyncSummaryWorker) processJob(job *summaryJob) {
 	}
 
 	if err := CreateSessionSummaryWithCascade(ctx, job.session, job.filterKey,
-		job.force, w.config.CreateSummaryFunc); err != nil {
+		job.force, w.config.SummaryDispatchPolicy, w.config.CreateSummaryFunc); err != nil {
 		log.WarnfContext(ctx, "summary worker failed to create session summary: %v", err)
 	}
 }

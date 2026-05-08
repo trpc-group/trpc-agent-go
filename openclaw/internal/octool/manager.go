@@ -46,6 +46,8 @@ type Manager struct {
 	maxLines int
 	jobTTL   time.Duration
 	baseEnv  map[string]string
+	policy   CommandPolicy
+	redactor OutputRedactor
 
 	clock func() time.Time
 
@@ -76,6 +78,18 @@ func WithBaseEnv(env map[string]string) Option {
 			return
 		}
 		m.baseEnv = copyEnvMap(env)
+	}
+}
+
+func WithCommandPolicy(policy CommandPolicy) Option {
+	return func(m *Manager) {
+		m.policy = policy
+	}
+}
+
+func WithOutputRedactor(redactor OutputRedactor) Option {
+	return func(m *Manager) {
+		m.redactor = redactor
 	}
 }
 
@@ -390,6 +404,148 @@ func copyEnvMap(env map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+func (m *Manager) commandRequest(
+	ctx context.Context,
+	params execParams,
+) CommandRequest {
+	req := newCommandRequest(params)
+	req.Env = m.commandEnv(
+		ctx,
+		params.Workdir,
+		params.Env,
+	)
+	return req
+}
+
+func (m *Manager) commandEnv(
+	ctx context.Context,
+	workdir string,
+	extra map[string]string,
+) map[string]string {
+	out := m.loginShellEnv(ctx, workdir)
+	if len(out) == 0 {
+		out = currentProcessEnvMap()
+	}
+	out = mergeEnvMaps(out, m.baseEnv)
+	return mergeEnvMaps(out, extra)
+}
+
+func mergeEnvMaps(
+	base map[string]string,
+	extra map[string]string,
+) map[string]string {
+	if len(base) == 0 && len(extra) == 0 {
+		return nil
+	}
+	out := copyEnvMap(base)
+	if len(out) == 0 {
+		out = make(map[string]string, len(extra))
+	}
+	for key, value := range extra {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func (m *Manager) outputRedactor(
+	req CommandRequest,
+) func(string) string {
+	if m.redactor == nil {
+		return nil
+	}
+	copied := copyCommandRequest(req)
+	return func(output string) string {
+		return m.redactor(copied, output)
+	}
+}
+
+func copyCommandRequest(req CommandRequest) CommandRequest {
+	req.Env = copyEnvMap(req.Env)
+	return req
+}
+
+func applyOutputRedactor(
+	redact func(string) string,
+	output string,
+) string {
+	if redact == nil || output == "" {
+		return output
+	}
+	return redact(output)
+}
+
+func currentProcessEnvMap() map[string]string {
+	return envListToMap(os.Environ())
+}
+
+func envListToMap(env []string) map[string]string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(env))
+	for _, pair := range env {
+		key, value, ok := splitEnvPair(pair)
+		if !ok {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func splitEnvPair(pair string) (string, string, bool) {
+	if pair == "" {
+		return "", "", false
+	}
+	idx := strings.Index(pair, "=")
+	if idx <= 0 {
+		return "", "", false
+	}
+	return pair[:idx], pair[idx+1:], true
+}
+
+func (m *Manager) loginShellEnv(
+	ctx context.Context,
+	workdir string,
+) map[string]string {
+	snapshot := m.shellEnvSnapshot
+	if snapshot == nil {
+		snapshot = snapshotLoginShellEnv
+	}
+	return snapshot(ctx, workdir)
+}
+
+func snapshotLoginShellEnv(
+	ctx context.Context,
+	workdir string,
+) map[string]string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, defaultShellEnvTimeout)
+	defer cancel()
+
+	cmd := shellCmd(ctx, shellEnvDumpCommand)
+	cmd.Dir = workdir
+
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	pairs := bytes.Split(out, []byte{0})
+	items := make([]string, 0, len(pairs))
+	for _, pair := range pairs {
+		if len(pair) == 0 {
+			continue
+		}
+		items = append(items, string(pair))
+	}
+	return envListToMap(items)
 }
 
 func waitDone(done <-chan struct{}, timeout time.Duration) {

@@ -22,6 +22,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 type mockSummarizerWithTs struct {
@@ -141,6 +143,47 @@ func (f *fakeSummarizerWithTs) Summarize(ctx context.Context, sess *session.Sess
 func (f *fakeSummarizerWithTs) SetPrompt(prompt string)  {}
 func (f *fakeSummarizerWithTs) SetModel(m model.Model)   {}
 func (f *fakeSummarizerWithTs) Metadata() map[string]any { return map[string]any{} }
+
+type thresholdSummarizer struct {
+	out     string
+	checker func(*session.Session) bool
+}
+
+func (t *thresholdSummarizer) ShouldSummarize(sess *session.Session) bool {
+	return t.checker(sess)
+}
+
+func (t *thresholdSummarizer) Summarize(context.Context, *session.Session) (string, error) {
+	return t.out, nil
+}
+
+func (t *thresholdSummarizer) SetPrompt(string)         {}
+func (t *thresholdSummarizer) SetModel(model.Model)     {}
+func (t *thresholdSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+type recordingThresholdSummarizer struct {
+	out              string
+	checker          func(*session.Session) bool
+	summarizedEvents int
+	summarizedScope  string
+}
+
+func (r *recordingThresholdSummarizer) ShouldSummarize(sess *session.Session) bool {
+	return r.checker(sess)
+}
+
+func (r *recordingThresholdSummarizer) Summarize(
+	_ context.Context,
+	sess *session.Session,
+) (string, error) {
+	r.summarizedEvents = len(sess.Events)
+	r.summarizedScope = isummaryscope.GetScopeFilterKey(sess)
+	return r.out, nil
+}
+
+func (r *recordingThresholdSummarizer) SetPrompt(string)         {}
+func (r *recordingThresholdSummarizer) SetModel(model.Model)     {}
+func (r *recordingThresholdSummarizer) Metadata() map[string]any { return map[string]any{} }
 
 func makeEvent(content string, ts time.Time, filterKey string) event.Event {
 	return event.Event{
@@ -361,6 +404,44 @@ func TestSummarizeSession_UsesLastIncludedTimestampWhenProvided(t *testing.T) {
 	require.NotNil(t, base.Summaries)
 	require.Equal(t, "sum", base.Summaries[""].Summary)
 	require.Equal(t, t2.UTC(), base.Summaries[""].UpdatedAt)
+}
+
+func TestSummarizeSession_FilteredKey_CountsScopedSubtreeForThreshold(t *testing.T) {
+	now := time.Now()
+	const (
+		appName = "app"
+		branch  = "app/take-car"
+	)
+	base := &session.Session{ID: "s1", AppName: appName, UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("root", now.Add(-4*time.Minute), appName),
+		makeEvent("branch-1", now.Add(-3*time.Minute), branch),
+		makeEvent("branch-2", now.Add(-2*time.Minute), branch+"/selector"),
+		makeEvent("branch-3", now.Add(-1*time.Minute), branch),
+	}
+
+	s := &thresholdSummarizer{
+		out: "sum",
+		checker: func(sess *session.Session) bool {
+			scopeKey := isummaryscope.GetScopeFilterKey(sess)
+			if scopeKey == "" {
+				return false
+			}
+			count := 0
+			for _, e := range sess.Events {
+				if e.FilterKey == scopeKey || e.FilterKey == scopeKey+"/selector" {
+					count++
+				}
+			}
+			return count > 2
+		},
+	}
+
+	updated, err := SummarizeSession(context.Background(), s, base, branch, false)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.NotNil(t, base.Summaries)
+	require.Equal(t, "sum", base.Summaries[branch].Summary)
 }
 
 func TestMeetsTimeCriteria(t *testing.T) {
@@ -788,6 +869,140 @@ func TestGetFilterKeyFromOptions(t *testing.T) {
 	}
 }
 
+func TestSummaryDispatchPolicy_SummaryTargets(t *testing.T) {
+	tests := []struct {
+		name      string
+		policy    SummaryDispatchPolicy
+		filterKey string
+		want      []string
+	}{
+		{
+			name:      "full session request always targets full session",
+			policy:    NewSummaryDispatchPolicy([]string{"app/billing"}, false),
+			filterKey: "",
+			want:      []string{""},
+		},
+		{
+			name:      "branch cascades to full session by default",
+			policy:    NewSummaryDispatchPolicy(nil, true),
+			filterKey: "app/billing",
+			want:      []string{"app/billing", ""},
+		},
+		{
+			name:      "branch only when cascade disabled",
+			policy:    NewSummaryDispatchPolicy(nil, false),
+			filterKey: "app/billing",
+			want:      []string{"app/billing"},
+		},
+		{
+			name:      "allowlist miss still cascades to full session",
+			policy:    NewSummaryDispatchPolicy([]string{"app/support"}, true),
+			filterKey: "app/billing",
+			want:      []string{""},
+		},
+		{
+			name:      "allowlist miss returns no targets when cascade disabled",
+			policy:    NewSummaryDispatchPolicy([]string{"app/support"}, false),
+			filterKey: "app/billing",
+			want:      nil,
+		},
+		{
+			name:      "explicit empty allowlist cascades full session only",
+			policy:    NewSummaryDispatchPolicy([]string{}, true),
+			filterKey: "app/billing",
+			want:      []string{""},
+		},
+		{
+			name:      "empty string allowlist entry cascades full session only",
+			policy:    NewSummaryDispatchPolicy([]string{""}, true),
+			filterKey: "app/billing",
+			want:      []string{""},
+		},
+		{
+			name:      "explicit empty allowlist returns no targets when cascade disabled",
+			policy:    NewSummaryDispatchPolicy([]string{}, false),
+			filterKey: "app/billing",
+			want:      nil,
+		},
+		{
+			name:      "allowlist matches hierarchical child keys",
+			policy:    NewSummaryDispatchPolicy([]string{"app/billing"}, true),
+			filterKey: "app/billing/refund",
+			want:      []string{"app/billing/refund", ""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, tt.policy.SummaryTargets(tt.filterKey))
+		})
+	}
+}
+
+func TestSummaryDispatchPolicy_AllowsFilterKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		policy    SummaryDispatchPolicy
+		filterKey string
+		want      bool
+	}{
+		{
+			name:      "full session always allowed without allowlist",
+			policy:    NewSummaryDispatchPolicy(nil, true),
+			filterKey: "",
+			want:      true,
+		},
+		{
+			name:      "full session always allowed with allowlist",
+			policy:    NewSummaryDispatchPolicy([]string{"app/billing"}, false),
+			filterKey: "",
+			want:      true,
+		},
+		{
+			name:      "non empty key allowed when allowlist disabled",
+			policy:    NewSummaryDispatchPolicy(nil, true),
+			filterKey: "app/billing",
+			want:      true,
+		},
+		{
+			name:      "non empty key allowed when explicitly listed",
+			policy:    NewSummaryDispatchPolicy([]string{"app/billing"}, true),
+			filterKey: "app/billing",
+			want:      true,
+		},
+		{
+			name:      "non empty key blocked when missing from allowlist",
+			policy:    NewSummaryDispatchPolicy([]string{"app/support"}, true),
+			filterKey: "app/billing",
+			want:      false,
+		},
+		{
+			name:      "explicit empty allowlist blocks branch summaries",
+			policy:    NewSummaryDispatchPolicy([]string{}, true),
+			filterKey: "app/billing",
+			want:      false,
+		},
+		{
+			name:      "hierarchical parent key allows child summaries",
+			policy:    NewSummaryDispatchPolicy([]string{"app/billing"}, true),
+			filterKey: "app/billing/refund",
+			want:      true,
+		},
+		{
+			name:      "hierarchical child key allows parent summaries",
+			policy:    NewSummaryDispatchPolicy([]string{"app/billing/refund"}, true),
+			filterKey: "app/billing",
+			want:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, tt.policy.AllowsFilterKey(tt.filterKey))
+		})
+	}
+}
+
 func TestCreateSessionSummaryWithCascade(t *testing.T) {
 	now := time.Now()
 	// Events with multiple filterKeys to ensure parallel calls are made.
@@ -800,6 +1015,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 		name              string
 		filterKey         string
 		force             bool
+		policy            SummaryDispatchPolicy
 		events            []event.Event
 		expectCalls       []string
 		expectError       bool
@@ -809,6 +1025,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			name:        "filterKey is empty, only call once",
 			filterKey:   "",
 			force:       false,
+			policy:      NewSummaryDispatchPolicy(nil, true),
 			events:      multiFilterKeyEvents,
 			expectCalls: []string{""},
 			expectError: false,
@@ -820,6 +1037,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			name:        "filterKey is user-messages, call twice (multiple filterKeys in session)",
 			filterKey:   "user-messages",
 			force:       false,
+			policy:      NewSummaryDispatchPolicy(nil, true),
 			events:      multiFilterKeyEvents,
 			expectCalls: []string{"user-messages", ""},
 			expectError: false,
@@ -831,6 +1049,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			name:        "first call fails, return error",
 			filterKey:   "user-messages",
 			force:       false,
+			policy:      NewSummaryDispatchPolicy(nil, true),
 			events:      multiFilterKeyEvents,
 			expectCalls: []string{"user-messages", ""},
 			expectError: true,
@@ -845,6 +1064,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			name:        "second call fails, return error",
 			filterKey:   "user-messages",
 			force:       false,
+			policy:      NewSummaryDispatchPolicy(nil, true),
 			events:      multiFilterKeyEvents,
 			expectCalls: []string{"user-messages", ""},
 			expectError: true,
@@ -852,6 +1072,54 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 				if filterKey == "" {
 					return errors.New("second call failed")
 				}
+				return nil
+			},
+		},
+		{
+			name:        "allowlist miss only creates full-session summary",
+			filterKey:   "user-messages",
+			force:       false,
+			policy:      NewSummaryDispatchPolicy([]string{"billing"}, true),
+			events:      multiFilterKeyEvents,
+			expectCalls: []string{""},
+			expectError: false,
+			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+				return nil
+			},
+		},
+		{
+			name:        "allowlist miss skips all work when cascade disabled",
+			filterKey:   "user-messages",
+			force:       false,
+			policy:      NewSummaryDispatchPolicy([]string{"billing"}, false),
+			events:      multiFilterKeyEvents,
+			expectCalls: nil,
+			expectError: false,
+			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+				return nil
+			},
+		},
+		{
+			name:        "empty string allowlist only creates full-session summary",
+			filterKey:   "user-messages",
+			force:       false,
+			policy:      NewSummaryDispatchPolicy([]string{""}, true),
+			events:      multiFilterKeyEvents,
+			expectCalls: []string{""},
+			expectError: false,
+			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+				return nil
+			},
+		},
+		{
+			name:        "cascade disabled only calls branch summary",
+			filterKey:   "user-messages",
+			force:       false,
+			policy:      NewSummaryDispatchPolicy(nil, false),
+			events:      multiFilterKeyEvents,
+			expectCalls: []string{"user-messages"},
+			expectError: false,
+			createSummaryFunc: func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
 				return nil
 			},
 		},
@@ -875,7 +1143,14 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 				return tt.createSummaryFunc(ctx, sess, filterKey, force)
 			}
 
-			err := CreateSessionSummaryWithCascade(context.Background(), sess, tt.filterKey, tt.force, mockFunc)
+			err := CreateSessionSummaryWithCascade(
+				context.Background(),
+				sess,
+				tt.filterKey,
+				tt.force,
+				tt.policy,
+				mockFunc,
+			)
 
 			if tt.expectError {
 				require.Error(t, err)
@@ -921,7 +1196,14 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 		},
 	}
 
-	err := CreateSessionSummaryWithCascade(context.Background(), sess, "user-messages", false, createFunc)
+	err := CreateSessionSummaryWithCascade(
+		context.Background(),
+		sess,
+		"user-messages",
+		false,
+		NewSummaryDispatchPolicy(nil, true),
+		createFunc,
+	)
 	require.NoError(t, err)
 
 	// Should have created both summaries.
@@ -929,6 +1211,52 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	defer mockSvc.mu.Unlock()
 	require.Equal(t, "summary-user-messages", mockSvc.summaries["user-messages"])
 	require.Equal(t, "summary-", mockSvc.summaries[""])
+}
+
+func TestCreateSessionSummaryWithCascade_FullTargetUsesTriggerFilterKeyForChecks(t *testing.T) {
+	now := time.Now()
+	const (
+		appName = "app"
+		branch  = "app/child"
+	)
+	sess := &session.Session{
+		ID:      "test-session",
+		AppName: appName,
+		UserID:  "test-user",
+		Events: []event.Event{
+			makeEvent("branch-1", now.Add(-4*time.Minute), branch),
+			makeEvent("branch-2", now.Add(-3*time.Minute), branch),
+			makeEvent("other", now.Add(-2*time.Minute), "app/other"),
+			makeEvent("branch-3", now.Add(-time.Minute), branch),
+		},
+	}
+	summarizer := &recordingThresholdSummarizer{
+		out:     "full-summary",
+		checker: summary.CheckEventThreshold(2),
+	}
+
+	err := CreateSessionSummaryWithCascade(
+		context.Background(),
+		sess,
+		branch,
+		false,
+		NewSummaryDispatchPolicy([]string{""}, true),
+		func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+			_, err := SummarizeSession(ctx, summarizer, sess, filterKey, force)
+			return err
+		},
+	)
+	require.NoError(t, err)
+
+	sess.SummariesMu.RLock()
+	fullSummary := sess.Summaries[session.SummaryFilterKeyAllContents]
+	branchSummary := sess.Summaries[branch]
+	sess.SummariesMu.RUnlock()
+	require.NotNil(t, fullSummary)
+	require.Equal(t, "full-summary", fullSummary.Summary)
+	require.Nil(t, branchSummary)
+	require.Equal(t, len(sess.Events), summarizer.summarizedEvents)
+	require.Empty(t, summarizer.summarizedScope)
 }
 
 func TestIsSingleFilterKey(t *testing.T) {
@@ -1364,7 +1692,14 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 			return nil
 		}
 
-		err := CreateSessionSummaryWithCascade(context.Background(), sess, "app/math", false, createFunc)
+		err := CreateSessionSummaryWithCascade(
+			context.Background(),
+			sess,
+			"app/math",
+			false,
+			NewSummaryDispatchPolicy(nil, true),
+			createFunc,
+		)
 		require.NoError(t, err)
 
 		// Should call createFunc twice: once for filterKey, once for full-session (persist only).
@@ -1407,7 +1742,14 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 			return nil
 		}
 
-		err := CreateSessionSummaryWithCascade(context.Background(), sess, "app/math", false, createFunc)
+		err := CreateSessionSummaryWithCascade(
+			context.Background(),
+			sess,
+			"app/math",
+			false,
+			NewSummaryDispatchPolicy(nil, true),
+			createFunc,
+		)
 		require.NoError(t, err)
 
 		// Should call createFunc twice (no optimization).
@@ -1430,7 +1772,14 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 			return errors.New("LLM error")
 		}
 
-		err := CreateSessionSummaryWithCascade(context.Background(), sess, "app/math", false, createFunc)
+		err := CreateSessionSummaryWithCascade(
+			context.Background(),
+			sess,
+			"app/math",
+			false,
+			NewSummaryDispatchPolicy(nil, true),
+			createFunc,
+		)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "LLM error")
 	})
@@ -1464,7 +1813,14 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 			return nil
 		}
 
-		err := CreateSessionSummaryWithCascade(context.Background(), sess, "app/math", false, createFunc)
+		err := CreateSessionSummaryWithCascade(
+			context.Background(),
+			sess,
+			"app/math",
+			false,
+			NewSummaryDispatchPolicy(nil, true),
+			createFunc,
+		)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "persist full-session summary failed")
 		require.Contains(t, err.Error(), "persist error")
@@ -1488,7 +1844,14 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 			return nil
 		}
 
-		err := CreateSessionSummaryWithCascade(context.Background(), sess, "", false, createFunc)
+		err := CreateSessionSummaryWithCascade(
+			context.Background(),
+			sess,
+			"",
+			false,
+			NewSummaryDispatchPolicy(nil, true),
+			createFunc,
+		)
 		require.NoError(t, err)
 		require.Equal(t, 1, callCount)
 	})

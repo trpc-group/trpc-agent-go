@@ -181,8 +181,30 @@ type Usage struct {
     // 响应中使用的总 Token 数量.
     TotalTokens int `json:"total_tokens"`
 
+    // 提示词 token 用量详情.
+    PromptTokensDetails PromptTokensDetails `json:"prompt_tokens_details"`
+
+    // 补全 token 用量详情.
+    CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+
     // 时间统计信息（可选）
     TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+}
+
+type PromptTokensDetails struct {
+    // 提示词中的缓存 token 数量.
+    CachedTokens int `json:"cached_tokens"`
+
+    // 创建缓存使用的 token 数量（Anthropic）.
+    CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+
+    // 从缓存读取的 token 数量（Anthropic）.
+    CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+    // 推理过程生成的 token 数量.
+    ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 }
 
 type TimingInfo struct {
@@ -209,6 +231,8 @@ type TimingInfo struct {
     ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 ```
+
+`CompletionTokensDetails.ReasoningTokens` 对应 OpenAI-compatible 返回中的 `completion_tokens_details.reasoning_tokens`。当模型没有使用 reasoning tokens 或服务方未上报时，该值可能为 `0`。
 
 ### Event 类型
 
@@ -363,6 +387,9 @@ evt := event.NewResponseEvent("invoke-123", "agent", response)
 
 - 子 Agent 转发事件依然是 `event.Event`，其中增量内容同样在 `choice.Delta.Content`
 - 为避免重复打印，子 Agent 最终整段文本不会再次作为转发事件出现，但会被聚合到最终的 `tool.response` 内容中，供下一轮 LLM 使用
+- 如果你只想保留内部进度、不想转发子 Agent 的 assistant 正文，可以把
+  `WithStreamInner(true)` 和
+  `WithInnerTextMode(agenttool.InnerTextModeExclude)` 搭配使用
 
 Runner 会自动针对需要完成信号的事件（`RequiresCompletion=true`）发送完成信号，使用者无需额外处理。
 

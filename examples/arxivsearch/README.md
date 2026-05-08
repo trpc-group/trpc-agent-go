@@ -21,7 +21,7 @@ The example supports the following environment variables:
 
 | Argument | Description | Default Value |
 |----------|-------------|---------------|
-| `-model` | Name of the model to use | `deepseek-chat` |
+| `-model` | Name of the model to use | `deepseek-v4-flash` |
 
 ## Features
 

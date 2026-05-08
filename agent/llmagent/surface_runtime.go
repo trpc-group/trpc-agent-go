@@ -15,12 +15,14 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
+	toolsessionrecall "trpc.group/trpc-go/trpc-agent-go/internal/session/tool/recall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolawaitreply "trpc.group/trpc-go/trpc-agent-go/tool/awaitreply"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -97,13 +99,33 @@ func (a *LLMAgent) codeExecutorForInvocation(
 func (a *LLMAgent) supportsWorkspaceExecForInvocation(
 	inv *agent.Invocation,
 ) bool {
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	options := a.option
+	a.mu.RUnlock()
+	if !workspaceExecSurfaceEnabled(&options) {
+		return false
+	}
 	return codeExecutorSupportsWorkspaceExec(a.codeExecutorForInvocation(inv))
 }
 
 func (a *LLMAgent) supportsWorkspaceExecSessionsForInvocation(
 	inv *agent.Invocation,
 ) bool {
-	return codeExecutorSupportsWorkspaceExecSessions(a.codeExecutorForInvocation(inv))
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	options := a.option
+	a.mu.RUnlock()
+	if !workspaceExecSurfaceEnabled(&options) {
+		return false
+	}
+	return codeExecutorSupportsWorkspaceExecSessions(
+		a.codeExecutorForInvocation(inv),
+	)
 }
 
 func (a *LLMAgent) skillToolFlagsForInvocation(
@@ -175,19 +197,32 @@ func (a *LLMAgent) InvocationToolSurface(
 
 	effectiveSkills := a.skillRepositoryForInvocation(inv)
 	effectiveExec := a.codeExecutorForInvocation(inv)
+	workspaceExecEnabled := workspaceExecSurfaceEnabled(&options) &&
+		codeExecutorSupportsWorkspaceExec(effectiveExec)
+	workspaceExecSessions := workspaceExecEnabled &&
+		codeExecutorSupportsWorkspaceExecSessions(effectiveExec)
 	var workspaceRegistry *codeexecutor.WorkspaceRegistry
 	if effectiveSkills != nil && effectiveExec != nil {
 		workspaceRegistry = buildWorkspaceRegistry()
-	} else if codeExecutorSupportsWorkspaceExec(effectiveExec) {
+	} else if workspaceExecEnabled {
 		workspaceRegistry = buildWorkspaceRegistry()
 	}
+	// Pass effectiveSkills so workspace_exec's loaded-skills
+	// reconcile reads the same repository that skill tools and the
+	// skills request processor use on this invocation. Without this
+	// alignment, a surface-patch repo override would be honored by
+	// the skill tools but silently ignored by the reconciler path
+	// added in this change set, causing the model context and the
+	// materialized skill working copy to drift apart.
 	allTools = appendWorkspaceExecToolWithExecutor(
 		allTools,
 		effectiveExec,
-		codeExecutorSupportsWorkspaceExec(effectiveExec),
-		codeExecutorSupportsWorkspaceExecSessions(effectiveExec),
+		workspaceExecEnabled,
+		workspaceExecSessions,
 		workspaceRegistry,
 		inv,
+		&options,
+		effectiveSkills,
 	)
 	allTools = appendSkillToolsWithRepoAndFlags(
 		allTools,
@@ -201,6 +236,12 @@ func (a *LLMAgent) InvocationToolSurface(
 			effectiveExec,
 		),
 	)
+	if toolsessionrecall.SupportsOnDemandSession(inv) {
+		allTools = appendOnDemandSessionTools(allTools, &options, inv)
+	}
+	if options.EnableAwaitUserReplyTool {
+		allTools = append(allTools, toolawaitreply.New())
+	}
 	if len(subAgents) == 0 {
 		return allTools, userToolNames
 	}

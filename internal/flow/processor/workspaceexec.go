@@ -21,7 +21,8 @@ import (
 )
 
 const (
-	workspaceExecGuidanceHeader = "Executor workspace guidance:"
+	workspaceExecGuidanceHeader       = "Workspace shell guidance:"
+	legacyWorkspaceExecGuidanceHeader = "Executor workspace guidance:"
 )
 
 type workspaceExecRequestProcessorOptions struct {
@@ -131,7 +132,7 @@ func (p *WorkspaceExecRequestProcessor) ProcessRequest(
 	idx := findSystemMessageIndex(req.Messages)
 	if idx >= 0 {
 		sys := &req.Messages[idx]
-		if !strings.Contains(sys.Content, workspaceExecGuidanceHeader) {
+		if !hasWorkspaceExecGuidance(sys.Content) {
 			if sys.Content != "" {
 				sys.Content += "\n\n" + guidance
 			} else {
@@ -154,6 +155,11 @@ func (p *WorkspaceExecRequestProcessor) ProcessRequest(
 	))
 }
 
+func hasWorkspaceExecGuidance(content string) bool {
+	return strings.Contains(content, workspaceExecGuidanceHeader) ||
+		strings.Contains(content, legacyWorkspaceExecGuidanceHeader)
+}
+
 func (p *WorkspaceExecRequestProcessor) guidanceText(
 	inv *agent.Invocation,
 ) string {
@@ -163,29 +169,39 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 	var b strings.Builder
 	b.WriteString(workspaceExecGuidanceHeader)
 	b.WriteString("\n")
-	b.WriteString("- Treat workspace_exec as the default general shell ")
-	b.WriteString("runner for shared executor-side work. It runs inside ")
-	b.WriteString("the current executor workspace, not on the agent ")
-	b.WriteString("host; workspace is its scope, not its capability ")
-	b.WriteString("limit.\n")
-	b.WriteString("- workspace_exec starts at the workspace root by ")
-	b.WriteString("default. Prefer work/, out/, and runs/ for shared ")
-	b.WriteString("executor-side work, and treat cwd as a ")
-	b.WriteString("workspace-relative path.\n")
+	b.WriteString("- workspace_exec is a shell command tool for the ")
+	b.WriteString("current workspace. Use it when shell execution is ")
+	b.WriteString("needed.\n")
+	b.WriteString("- Prefer task-specific tools when one directly fits ")
+	b.WriteString("the task. Use workspace_exec as the general shell ")
+	b.WriteString("fallback tool when no suitable specialized tool is ")
+	b.WriteString("available, when a specialized tool fails, or when ")
+	b.WriteString("the task depends on the ")
+	b.WriteString("workspace or shell environment.\n")
+	b.WriteString("- When the user explicitly asks for shell execution, ")
+	b.WriteString("workspace_exec is appropriate.\n")
+	b.WriteString("- For external information retrieval, prefer dedicated ")
+	b.WriteString("search, fetch, or API tools when available. Use ")
+	b.WriteString("workspace_exec network commands only when the task ")
+	b.WriteString("depends on the workspace or shell environment, ")
+	b.WriteString("or when dedicated tools are unavailable, fail, or ")
+	b.WriteString("cannot access the required source.\n")
+	b.WriteString("- cwd is always workspace-relative. If omitted, the ")
+	b.WriteString("command starts at the workspace root. Command paths ")
+	b.WriteString("are resolved relative to cwd.\n")
+	b.WriteString("- Choose one path base per command: either set cwd to ")
+	b.WriteString("the target directory and use paths relative to it, or ")
+	b.WriteString("leave cwd at the workspace root and use workspace-root ")
+	b.WriteString("paths. Do not combine both bases in the same path.\n")
+	b.WriteString("- Prefer work/, out/, and runs/ for shared executor-side ")
+	b.WriteString("inputs, outputs, and intermediate files.\n")
 	b.WriteString("- Conversation file inputs that are attached to the ")
 	b.WriteString("current request or visible session are staged ")
 	b.WriteString("automatically under work/inputs before ")
 	b.WriteString("workspace_exec runs.\n")
-	b.WriteString("- Network access depends on the current executor ")
-	b.WriteString("environment. If you need a network command such as ")
-	b.WriteString("curl, use a small bounded command to verify whether ")
-	b.WriteString("that environment allows it.\n")
-	b.WriteString("- When a limitation depends on the executor ")
-	b.WriteString("environment and a small bounded command can verify ")
-	b.WriteString("it, verify first before claiming the limitation. ")
-	b.WriteString("This applies to checks such as command ")
-	b.WriteString("availability, file presence, or access to a known ")
-	b.WriteString("URL.\n")
+	b.WriteString("- Network access through workspace_exec depends on the ")
+	b.WriteString("current shell environment; check it only when ")
+	b.WriteString("that environment matters to the task.\n")
 	if toolworkspaceexec.SupportsArtifactSave(inv) {
 		b.WriteString("- Use workspace_save_artifact only when you ")
 		b.WriteString("need a stable artifact reference for an already ")
@@ -193,10 +209,20 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 		b.WriteString("Intermediate files usually stay in the workspace.\n")
 	}
 	if p.hasSkillsRepo(inv) {
-		b.WriteString("- Paths under skills/ are only useful when some ")
-		b.WriteString("other tool has already placed content there. ")
-		b.WriteString("workspace_exec does not stage skills ")
-		b.WriteString("automatically.\n")
+		b.WriteString("- Skill working copies appear under skills/<name> ")
+		b.WriteString("only after skill_load <name>. Use the loaded ")
+		b.WriteString("SKILL.md as the source of truth for scripts, ")
+		b.WriteString("commands, resources, and Examples; do not infer ")
+		b.WriteString("entrypoints from the skill summary alone.\n")
+		b.WriteString("- To execute a loaded skill, prefer setting cwd to ")
+		b.WriteString("skills/<name> and running paths relative to the skill ")
+		b.WriteString("root, such as scripts/build.sh. Alternatively, leave ")
+		b.WriteString("cwd at the workspace root and use paths such as ")
+		b.WriteString("skills/<name>/scripts/build.sh. Do not mix these ")
+		b.WriteString("forms.\n")
+		b.WriteString("- Without a prior skill_load, paths under skills/ are ")
+		b.WriteString("not staged and workspace_exec will not see the skill ")
+		b.WriteString("files.\n")
 	}
 	if p.sessionToolsForInvocation(inv) {
 		b.WriteString("- When workspace_exec starts a command that keeps ")

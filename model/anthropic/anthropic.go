@@ -30,7 +30,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const functionToolType = "function"
+const (
+	functionToolType       = "function"
+	claudeMythosPreview    = "claude-mythos-preview"
+	claudeOpus47           = "claude-opus-4-7"
+	claudeOpus46           = "claude-opus-4-6"
+	claudeOpus46Alias      = "claude-4.6-opus"
+	claudeSonnet46         = "claude-sonnet-4-6"
+	claudeSonnet46Alias    = "claude-4.6-sonnet"
+	defaultThinkingDisplay = anthropic.ThinkingConfigAdaptiveDisplaySummarized
+)
 
 // Model implements the model.Model interface for Anthropic API.
 type Model struct {
@@ -61,6 +70,7 @@ type Model struct {
 	cacheMessages     bool
 	// explicitMaxTokens overrides the auto-calculated MaxTokens value sent to the API.
 	explicitMaxTokens *int
+	showToolCallDelta bool
 }
 
 // New creates a new Anthropic model adapter.
@@ -110,6 +120,7 @@ func New(name string, opts ...Option) *Model {
 		cacheTools:                 o.cacheTools,
 		cacheMessages:              o.cacheMessages,
 		explicitMaxTokens:          o.explicitMaxTokens,
+		showToolCallDelta:          o.showToolCallDelta,
 	}
 }
 
@@ -356,10 +367,75 @@ func (m *Model) buildChatRequest(
 	if len(request.Stop) > 0 {
 		chatRequest.StopSequences = append(chatRequest.StopSequences, request.Stop...)
 	}
-	if request.ThinkingEnabled != nil && *request.ThinkingEnabled && request.ThinkingTokens != nil {
-		chatRequest.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(*request.ThinkingTokens))
+	if err := m.applyThinkingConfig(chatRequest, request); err != nil {
+		return nil, err
 	}
 	return chatRequest, nil
+}
+
+func (m *Model) applyThinkingConfig(
+	chatRequest *anthropic.MessageNewParams,
+	request *model.Request,
+) error {
+	if request.ThinkingEnabled == nil {
+		return nil
+	}
+	if !*request.ThinkingEnabled {
+		if isClaudeMythosPreview(m.name) {
+			return fmt.Errorf("anthropic: thinking cannot be disabled for model %s", m.name)
+		}
+		if !supportsAdaptiveThinking(m.name) {
+			return nil
+		}
+		disabled := anthropic.NewThinkingConfigDisabledParam()
+		chatRequest.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
+		return nil
+	}
+	if supportsAdaptiveThinking(m.name) {
+		chatRequest.Thinking = newAdaptiveThinkingConfig()
+		if request.ReasoningEffort != nil {
+			chatRequest.OutputConfig.Effort = anthropic.OutputConfigEffort(*request.ReasoningEffort)
+		}
+		return nil
+	}
+	if request.ThinkingTokens == nil {
+		return nil
+	}
+	chatRequest.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(*request.ThinkingTokens))
+	return nil
+}
+
+func newAdaptiveThinkingConfig() anthropic.ThinkingConfigParamUnion {
+	return anthropic.ThinkingConfigParamUnion{
+		OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
+			Display: defaultThinkingDisplay,
+		},
+	}
+}
+
+func supportsAdaptiveThinking(modelName string) bool {
+	return modelNameMatches(
+		modelName,
+		claudeMythosPreview,
+		claudeOpus47,
+		claudeOpus46,
+		claudeOpus46Alias,
+		claudeSonnet46,
+		claudeSonnet46Alias,
+	)
+}
+
+func isClaudeMythosPreview(modelName string) bool {
+	return modelNameMatches(modelName, claudeMythosPreview)
+}
+
+func modelNameMatches(modelName string, targets ...string) bool {
+	for _, target := range targets {
+		if modelName == target || strings.HasPrefix(modelName, target+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // applyCacheControl applies independent cache control breakpoints.
@@ -569,7 +645,7 @@ loop:
 		}
 		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
 		// Build partial response.
-		response, err := buildStreamingPartialResponse(acc.Message(), chunk)
+		response, err := buildStreamingPartialResponse(acc.Message(), chunk, m.showToolCallDelta)
 		if err != nil {
 			streamErr = err
 			break
@@ -754,7 +830,8 @@ func refreshContentBlockRawJSON(block *anthropic.ContentBlockUnion) error {
 // buildStreamingPartialResponse builds a partial streaming response for a chunk.
 // Returns nil if the chunk should be skipped.
 func buildStreamingPartialResponse(acc anthropic.Message,
-	chunk anthropic.MessageStreamEventUnion) (*model.Response, error) {
+	chunk anthropic.MessageStreamEventUnion,
+	showToolCallDelta bool) (*model.Response, error) {
 	now := time.Now()
 	response := &model.Response{
 		ID:        acc.ID,
@@ -784,6 +861,17 @@ func buildStreamingPartialResponse(acc anthropic.Message,
 				return nil, nil
 			}
 			response.Choices[0].Delta.ReasoningContent = delta.Thinking
+		case anthropic.InputJSONDelta:
+			if !showToolCallDelta || delta.PartialJSON == "" {
+				return nil, nil
+			}
+			block, index, ok := streamingToolCallTarget(acc, event.Index)
+			if !ok {
+				return nil, nil
+			}
+			response.Choices[0].Delta.ToolCalls = []model.ToolCall{
+				buildStreamingToolCallDelta(block, index, delta.PartialJSON),
+			}
 		default:
 			return nil, nil
 		}
@@ -797,6 +885,41 @@ func buildStreamingPartialResponse(acc anthropic.Message,
 		return nil, nil
 	}
 	return response, nil
+}
+
+func buildStreamingToolCallDelta(
+	block anthropic.ToolUseBlock,
+	index int,
+	partialJSON string,
+) model.ToolCall {
+	return model.ToolCall{
+		Index: &index,
+		ID:    block.ID,
+		Type:  functionToolType,
+		Function: model.FunctionDefinitionParam{
+			Name:      block.Name,
+			Arguments: []byte(partialJSON),
+		},
+	}
+}
+
+func streamingToolCallTarget(acc anthropic.Message, contentBlockIndex int64) (anthropic.ToolUseBlock, int, bool) {
+	index := int(contentBlockIndex)
+	if index < 0 || index >= len(acc.Content) {
+		return anthropic.ToolUseBlock{}, 0, false
+	}
+	toolCallIndex := 0
+	for i := 0; i <= index; i++ {
+		block, ok := acc.Content[i].AsAny().(anthropic.ToolUseBlock)
+		if !ok {
+			continue
+		}
+		if i == index {
+			return block, toolCallIndex, true
+		}
+		toolCallIndex++
+	}
+	return anthropic.ToolUseBlock{}, 0, false
 }
 
 // buildStreamingFinalResponse builds a final streaming response from the accumulator.

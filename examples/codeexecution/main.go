@@ -26,7 +26,7 @@ import (
 
 func main() {
 	// Read configuration from command line flags.
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	flag.Parse()
 
 	fmt.Printf("Creating LLMAgent with configuration:\n")
@@ -64,8 +64,12 @@ You should NEVER install any package on your own like pip install ....
 	`,
 		),
 		llmagent.WithGenerationConfig(genConfig),
-		// codeexecutor.NewContainerCodeExecutor() is also available.
-		// can use llmagent.WithCodeExecutor(codeexecutor.NewContainerCodeExecutor()),
+		// A Docker-based container executor is also available in
+		// the ./container sub-example. The full error-handling and
+		// lifecycle pattern is documented there; see
+		//   examples/codeexecution/container/main.go
+		// for the recommended usage of container.New().
+		// A Jupyter kernel executor is available in the ./jupyter sub-example.
 		llmagent.WithCodeExecutor(local.New()),
 	)
 

@@ -594,6 +594,58 @@ func TestStoreUpdateMemory_WriteErrorReturnsError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestStoreSaveResolvedMemoryFileWritesContent(t *testing.T) {
+	t.Parallel()
+
+	root, err := DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("demo-app", "u1")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), dirPerm))
+	require.NoError(t, os.WriteFile(path, []byte("original"), filePerm))
+
+	err = store.SaveResolvedMemoryFile(
+		context.Background(),
+		path,
+		"updated",
+	)
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "updated", string(raw))
+}
+
+func TestStoreSaveResolvedMemoryFileValidatesInputs(t *testing.T) {
+	t.Parallel()
+
+	var nilStore *Store
+	err := nilStore.SaveResolvedMemoryFile(
+		context.Background(),
+		"/tmp/memory/MEMORY.md",
+		"updated",
+	)
+	require.Error(t, err)
+
+	root, err := DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	err = store.SaveResolvedMemoryFile(context.Background(), " ", "updated")
+	require.Error(t, err)
+
+	err = store.SaveResolvedMemoryFile(
+		context.Background(),
+		filepath.Join(root, "missing", memoryFileName),
+		"updated",
+	)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestWriteFileAtomic_EmptyPathReturnsError(t *testing.T) {
 	t.Parallel()
 

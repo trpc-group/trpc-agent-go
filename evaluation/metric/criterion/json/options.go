@@ -19,6 +19,7 @@ type options struct {
 	onlyTree        map[string]any
 	matchStrategy   JSONMatchStrategy
 	numberTolerance *float64
+	valid           bool
 	compareName     string
 	compare         CompareFunc
 }
@@ -67,6 +68,13 @@ func WithMatchStrategy(matchStrategy JSONMatchStrategy) Option {
 func WithNumberTolerance(tolerance float64) Option {
 	return func(o *options) {
 		o.numberTolerance = &tolerance
+	}
+}
+
+// WithValid sets the raw JSON validity flag.
+func WithValid(valid bool) Option {
+	return func(o *options) {
+		o.valid = valid
 	}
 }
 

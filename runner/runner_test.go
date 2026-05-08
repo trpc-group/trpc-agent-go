@@ -138,6 +138,37 @@ func (m *capturingRoleAgent) Tools() []tool.Tool {
 	return nil
 }
 
+type capturingInvocationMessagesAgent struct {
+	name              string
+	invocationMessage model.Message
+}
+
+func (m *capturingInvocationMessagesAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Captures invocation messages for testing",
+	}
+}
+
+func (m *capturingInvocationMessagesAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *capturingInvocationMessagesAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *capturingInvocationMessagesAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	m.invocationMessage = invocation.Message
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (m *capturingInvocationMessagesAgent) Tools() []tool.Tool {
+	return nil
+}
+
 type staticModel struct {
 	name    string
 	content string
@@ -1655,6 +1686,157 @@ func TestRunner_AppendsDifferentUserAfterSeed(t *testing.T) {
 	}
 }
 
+func TestRunner_AppendsSameUserWhenSeedEndsWithAssistant(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "seed-user3"
+	sessionID := "seed-session3"
+	seedHistory := []model.Message{
+		model.NewUserMessage("hello"),
+		model.NewAssistantMessage("prev reply"),
+	}
+
+	eventCh, err := runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		model.NewUserMessage("hello"),
+		agent.WithMessages(seedHistory),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+		// drain channel
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 4)
+	require.Equal(t, authorUser, sess.Events[0].Author)
+	require.Equal(t, "test-agent", sess.Events[1].Author)
+	require.Equal(t, authorUser, sess.Events[2].Author)
+	require.Equal(t, "hello", sess.Events[2].Response.Choices[0].Message.Content)
+}
+
+func TestRunner_AppendsSameUserWhenSessionAlreadyExists(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "existing-user"
+	sessionID := "existing-session"
+	message := model.NewUserMessage("hello")
+
+	eventCh, err := runner.Run(ctx, userID, sessionID, message)
+	require.NoError(t, err)
+	for range eventCh {
+		// drain channel
+	}
+
+	eventCh, err = runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		message,
+		agent.WithMessages([]model.Message{model.NewUserMessage("hello")}),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+		// drain channel
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 4)
+
+	userCount := 0
+	for _, e := range sess.Events {
+		if e.Author == authorUser {
+			userCount++
+		}
+	}
+	require.Equal(t, 2, userCount)
+	require.Equal(t, authorUser, sess.Events[2].Author)
+	require.Equal(t, "hello", sess.Events[2].Response.Choices[0].Message.Content)
+}
+
+func TestShouldAppendUserMessage_Cases(t *testing.T) {
+	require.True(t, shouldAppendUserMessage(
+		model.NewAssistantMessage("a"),
+		[]model.Message{model.NewUserMessage("u")},
+	))
+	require.True(t, shouldAppendUserMessage(
+		model.NewUserMessage("u"),
+		[]model.Message{model.NewSystemMessage("s"), model.NewAssistantMessage("a")},
+	))
+	require.False(t, shouldAppendUserMessage(
+		model.NewUserMessage("u"),
+		[]model.Message{model.NewUserMessage("u")},
+	))
+	require.True(t, shouldAppendUserMessage(
+		model.NewUserMessage("u"),
+		[]model.Message{
+			model.NewUserMessage("u"),
+			model.NewAssistantMessage("a"),
+		},
+	))
+	require.True(t, shouldAppendUserMessage(
+		model.NewUserMessage("u"),
+		[]model.Message{
+			model.NewUserMessage("u"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "lookup",
+						Arguments: []byte(`{"q":"u"}`),
+					},
+				}},
+			},
+		},
+	))
+}
+
+func TestRunner_Run_EmptyIncomingMessagePreservesSeedHistory(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "seed-user-empty"
+	sessionID := "seed-session-empty"
+	seedHistory := []model.Message{
+		model.NewUserMessage("seed"),
+	}
+
+	eventCh, err := runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		model.NewUserMessage(""),
+		agent.WithMessages(seedHistory),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	sess, err := sessionService.GetSession(
+		ctx,
+		session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotEmpty(t, sess.Events)
+	require.Equal(t, "seed", sess.Events[0].Choices[0].Message.Content)
+}
+
 // TestRunner_InvocationInjection verifies that runner correctly injects invocation into context.
 func TestRunner_InvocationInjection(t *testing.T) {
 	// Create an in-memory session service.
@@ -2006,6 +2188,27 @@ func TestWithMemoryService(t *testing.T) {
 	})
 }
 
+func TestWithSessionIngestor(t *testing.T) {
+	t.Run("sets ingestor in options", func(t *testing.T) {
+		ingestor := &mockIngestor{}
+		opts := &Options{}
+
+		option := WithSessionIngestor(ingestor)
+		option(opts)
+
+		assert.Equal(t, ingestor, opts.ingestor, "Ingestor should be set in options")
+	})
+
+	t.Run("sets nil ingestor", func(t *testing.T) {
+		opts := &Options{}
+
+		option := WithSessionIngestor(nil)
+		option(opts)
+
+		assert.Nil(t, opts.ingestor, "Ingestor should be nil")
+	})
+}
+
 func TestWithArtifactService(t *testing.T) {
 	t.Run("sets artifact service in options", func(t *testing.T) {
 		artifactService := artifactinmemory.NewService()
@@ -2077,6 +2280,81 @@ func TestRunner_GraphCompletionPropagation(t *testing.T) {
 	assert.Equal(t, "Graph execution completed",
 		runnerCompletionEvent.Response.Choices[0].Message.Content,
 		"Final message content should match")
+}
+
+func TestRunner_GraphCompletionSessionStateFiltersSnapshotKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		sessionID         string
+		visibleCompletion bool
+	}{
+		{name: "raw graph completion", sessionID: "test-session-raw"},
+		{name: "visible graph completion", sessionID: "test-session-visible", visibleCompletion: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lastResponse := []byte(`"Graph execution completed"`)
+			graphAgent := &graphCompletionMockAgent{
+				name:              "graph-agent",
+				visibleCompletion: tc.visibleCompletion,
+				stateDelta: map[string][]byte{
+					"business_key":                 []byte(`"keep"`),
+					graph.StateKeyMessages:         []byte(`[{"role":"user","content":"hi"}]`),
+					graph.StateKeyUserInput:        []byte(`"hi"`),
+					graph.StateKeyLastResponse:     lastResponse,
+					graph.StateKeyLastToolResponse: []byte(`"tool"`),
+					graph.StateKeyLastResponseID:   []byte(`"resp-1"`),
+					graph.StateKeyNodeResponses:    []byte(`{"node":"answer"}`),
+					graph.MetadataKeyCompletion:    []byte(`{"totalSteps":1}`),
+				},
+			}
+			sessionService := sessioninmemory.NewSessionService()
+			r := NewRunner("test-app", graphAgent, WithSessionService(sessionService))
+
+			eventCh, err := r.Run(
+				context.Background(),
+				"test-user",
+				tc.sessionID,
+				model.NewUserMessage("Execute graph"),
+			)
+			require.NoError(t, err)
+
+			var runnerCompletionEvent *event.Event
+			for ev := range eventCh {
+				if ev != nil && ev.Object == model.ObjectTypeRunnerCompletion {
+					runnerCompletionEvent = ev
+				}
+			}
+			require.NotNil(t, runnerCompletionEvent)
+			require.Equal(t, lastResponse, runnerCompletionEvent.StateDelta[graph.StateKeyLastResponse])
+			require.Contains(t, runnerCompletionEvent.StateDelta, graph.StateKeyMessages)
+
+			sess, err := sessionService.GetSession(context.Background(), session.Key{
+				AppName:   "test-app",
+				UserID:    "test-user",
+				SessionID: tc.sessionID,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+
+			stateValue, ok := sess.GetState("business_key")
+			require.True(t, ok)
+			require.Equal(t, []byte(`"keep"`), stateValue)
+			responseID, ok := sess.GetState(graph.StateKeyLastResponseID)
+			require.True(t, ok)
+			require.Equal(t, []byte(`"resp-1"`), responseID)
+			for _, key := range []string{
+				graph.StateKeyMessages,
+				graph.StateKeyUserInput,
+				graph.StateKeyLastResponse,
+				graph.StateKeyLastToolResponse,
+				graph.StateKeyNodeResponses,
+				graph.MetadataKeyCompletion,
+			} {
+				_, ok = sess.GetState(key)
+				require.False(t, ok, "session state should not persist graph completion key %q", key)
+			}
+		})
+	}
 }
 
 func TestRunner_DisableGraphCompletionEvent_KeepsRunnerCompletion(t *testing.T) {
@@ -3181,7 +3459,9 @@ func (m *streamModeMockAgent) Run(
 // graphCompletionMockAgent emits a graph completion event with state delta
 // and choices.
 type graphCompletionMockAgent struct {
-	name string
+	name              string
+	stateDelta        map[string][]byte
+	visibleCompletion bool
 }
 
 func (m *graphCompletionMockAgent) Info() agent.Info {
@@ -3206,6 +3486,12 @@ func (m *graphCompletionMockAgent) Run(
 	eventCh := make(chan *event.Event, 2)
 
 	// Emit a graph completion event with state delta and choices.
+	stateDelta := m.stateDelta
+	if stateDelta == nil {
+		stateDelta = map[string][]byte{
+			"final_key": []byte("final_value"),
+		}
+	}
 	graphCompletionEvent := &event.Event{
 		Response: &model.Response{
 			ID:     "graph-completion",
@@ -3221,13 +3507,20 @@ func (m *graphCompletionMockAgent) Run(
 				},
 			},
 		},
-		StateDelta: map[string][]byte{
-			"final_key": []byte("final_value"),
-		},
+		StateDelta:   stateDelta,
 		InvocationID: invocation.InvocationID,
 		Author:       m.name,
 		ID:           "graph-event-id",
 		Timestamp:    time.Now(),
+	}
+	if m.visibleCompletion {
+		visible, ok := graph.VisibleGraphCompletionEventForAuthor(
+			graphCompletionEvent,
+			m.name,
+		)
+		if ok {
+			graphCompletionEvent = visible
+		}
 	}
 
 	eventCh <- graphCompletionEvent
@@ -5375,6 +5668,209 @@ func TestRunner_Run_SeedAppendError(t *testing.T) {
 	require.Nil(t, ch)
 }
 
+func TestRunner_Run_UserMessageRewriter_RewritesCurrentTurnMessages(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	ag := &capturingInvocationMessagesAgent{name: "a"}
+	r := NewRunner("app", ag, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			require.Equal(t, "app", args.AppName)
+			require.Equal(t, "u", args.UserID)
+			require.Equal(t, "s", args.SessionID)
+			require.Equal(t, "hello", args.OriginalMessage.Content)
+			return []model.Message{
+				model.NewUserMessage("ctx"),
+				model.NewUserMessage("rewritten"),
+			}, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, model.NewUserMessage("rewritten"), ag.invocationMessage)
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 2)
+	require.Equal(t, "ctx", sess.Events[0].Choices[0].Message.Content)
+	require.Equal(t, "rewritten", sess.Events[1].Choices[0].Message.Content)
+}
+
+func TestRunner_Run_UserMessageRewriter_EmptyResultReturnsError(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return nil, nil
+		}),
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "user message rewriter returned no messages")
+	require.Nil(t, ch)
+}
+
+func TestRunner_Run_UserMessageRewriter_NormalizesEmptyRolePayloadMessages(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	ag := &capturingRoleAgent{name: "a"}
+	r := NewRunner("app", ag, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return []model.Message{{Content: "rewritten"}}, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, model.RoleUser, ag.capturedRole)
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 1)
+	require.Equal(t, model.RoleUser, sess.Events[0].Choices[0].Message.Role)
+	require.Equal(t, authorUser, sess.Events[0].Author)
+}
+
+func TestRunner_Run_UserMessageRewriter_ReplacesCurrentMessageInsideSeedHistory(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	ag := &capturingInvocationMessagesAgent{name: "a"}
+	r := NewRunner("app", ag, WithSessionService(svc))
+	seed := []model.Message{
+		model.NewUserMessage("previous"),
+		model.NewUserMessage("hello"),
+		model.NewAssistantMessage("after"),
+	}
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithMessages(seed),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return []model.Message{
+				model.NewUserMessage("ctx"),
+				model.NewUserMessage("rewritten"),
+			}, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 4)
+	require.Equal(t, "previous", sess.Events[0].Choices[0].Message.Content)
+	require.Equal(t, "ctx", sess.Events[1].Choices[0].Message.Content)
+	require.Equal(t, "rewritten", sess.Events[2].Choices[0].Message.Content)
+	require.Equal(t, "after", sess.Events[3].Choices[0].Message.Content)
+	require.Equal(t, model.NewUserMessage("rewritten"), ag.invocationMessage)
+}
+
+func TestRunner_Run_SecondRequestIncludesRewrittenTranscript(t *testing.T) {
+	modelStub := &sequentialModel{
+		name: "seq",
+		responses: []*model.Response{
+			{
+				ID:   "resp-1",
+				Done: true,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("first reply"),
+				}},
+			},
+			{
+				ID:   "resp-2",
+				Done: true,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("second reply"),
+				}},
+			},
+		},
+	}
+	ag := llmagent.New("a", llmagent.WithModel(modelStub))
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ag, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return []model.Message{
+				model.NewUserMessage("A"),
+				model.NewUserMessage("hello"),
+			}, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	ch, err = r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("again"),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return []model.Message{
+				model.NewUserMessage("B"),
+				model.NewUserMessage("again"),
+			}, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 2)
+	require.Equal(t, []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("hello"),
+		model.NewAssistantMessage("first reply"),
+		model.NewUserMessage("B"),
+		model.NewUserMessage("again"),
+	}, requests[1].messages)
+}
+
 // oneEventAgent emits a single valid event; used to cover EmitEvent error path when context is cancelled.
 type oneEventAgent struct{ name string }
 
@@ -5685,11 +6181,86 @@ func drainChannel(ch <-chan *event.Event) <-chan struct{} {
 	return done
 }
 
-func TestShouldAppendUserMessage_Cases(t *testing.T) {
-	// message role is not user -> should append
-	require.True(t, shouldAppendUserMessage(model.NewAssistantMessage("a"), []model.Message{model.NewUserMessage("u")}))
-	// seed has no user -> should append
-	require.True(t, shouldAppendUserMessage(model.NewUserMessage("u"), []model.Message{model.NewSystemMessage("s"), model.NewAssistantMessage("a")}))
+func TestMergeCurrentTurnMessagesIntoSeed_ReplacesLastUserMessageWhenItMatchesOriginal(t *testing.T) {
+	seed := []model.Message{
+		model.NewUserMessage("first"),
+		model.NewUserMessage("current"),
+		model.NewAssistantMessage("after"),
+	}
+	currentTurn := []model.Message{
+		model.NewUserMessage("ctx"),
+		model.NewUserMessage("rewritten"),
+	}
+	merged := mergeCurrentTurnMessagesIntoSeed(
+		seed,
+		model.NewUserMessage("current"),
+		currentTurn,
+	)
+	require.Equal(t, []model.Message{
+		model.NewUserMessage("first"),
+		model.NewUserMessage("ctx"),
+		model.NewUserMessage("rewritten"),
+		model.NewAssistantMessage("after"),
+	}, merged)
+}
+
+func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOnlyOlderMessageMatchesOriginal(t *testing.T) {
+	seed := []model.Message{
+		model.NewUserMessage("current"),
+		model.NewAssistantMessage("after"),
+		model.NewUserMessage("latest"),
+	}
+	currentTurn := []model.Message{
+		model.NewUserMessage("ctx"),
+		model.NewUserMessage("rewritten"),
+	}
+	merged := mergeCurrentTurnMessagesIntoSeed(
+		seed,
+		model.NewUserMessage("current"),
+		currentTurn,
+	)
+	require.Equal(t, []model.Message{
+		model.NewUserMessage("current"),
+		model.NewAssistantMessage("after"),
+		model.NewUserMessage("latest"),
+		model.NewUserMessage("ctx"),
+		model.NewUserMessage("rewritten"),
+	}, merged)
+}
+
+func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOriginalMissing(t *testing.T) {
+	seed := []model.Message{
+		model.NewUserMessage("first"),
+		model.NewAssistantMessage("after"),
+	}
+	currentTurn := []model.Message{
+		model.NewUserMessage("ctx"),
+		model.NewUserMessage("rewritten"),
+	}
+	merged := mergeCurrentTurnMessagesIntoSeed(
+		seed,
+		model.NewUserMessage("current"),
+		currentTurn,
+	)
+	require.Equal(t, []model.Message{
+		model.NewUserMessage("first"),
+		model.NewAssistantMessage("after"),
+		model.NewUserMessage("ctx"),
+		model.NewUserMessage("rewritten"),
+	}, merged)
+}
+
+func TestMergeCurrentTurnMessagesIntoSeed_PreservesSeedWhenCurrentTurnIsEmpty(t *testing.T) {
+	seed := []model.Message{
+		model.NewUserMessage("first"),
+		model.NewUserMessage("current"),
+	}
+	merged := mergeCurrentTurnMessagesIntoSeed(
+		seed,
+		model.NewUserMessage("current"),
+		nil,
+	)
+	require.Equal(t, seed, merged)
 }
 
 func TestFinalResponseIDFromStateDelta_Cases(t *testing.T) {

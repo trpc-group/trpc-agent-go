@@ -60,9 +60,9 @@ const (
 	// Use this for debugging or when you need to retain thinking chains.
 	ReasoningContentModeKeepAll = processor.ReasoningContentModeKeepAll
 	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from
-	// messages that belong to previous request turns. Messages within the current
-	// request retain their reasoning_content (for tool call scenarios).
-	// This is the default mode, recommended for DeepSeek models.
+	// ordinary previous request turns. Messages within the current request and
+	// previous requests that performed tool calls retain their reasoning_content.
+	// This is the default mode, recommended for DeepSeek thinking mode.
 	ReasoningContentModeDiscardPreviousTurns = processor.ReasoningContentModeDiscardPreviousTurns
 	// ReasoningContentModeDiscardAll discards all reasoning_content from history.
 	// Use this for maximum bandwidth savings when reasoning history is not needed.
@@ -150,11 +150,16 @@ var (
 
 		SkipSkillsFallbackOnSessionSummary: true,
 
-		EnableContextCompaction:                       false,
-		ContextCompactionThresholdRatio:               0.7,
-		ContextCompactionToolResultMaxTokens:          processor.DefaultContextCompactionToolResultMaxTokens,
-		ContextCompactionKeepRecentRequests:           processor.DefaultContextCompactionKeepRecentRequests,
-		ContextCompactionOversizedToolResultMaxTokens: processor.DefaultContextCompactionOversizedToolResultMaxTokens,
+		EnableContextCompaction:              false,
+		ContextCompactionThresholdRatio:      0.7,
+		ContextCompactionToolResultMaxTokens: processor.DefaultContextCompactionToolResultMaxTokens,
+		ContextCompactionKeepRecentRequests:  processor.DefaultContextCompactionKeepRecentRequests,
+		// Pass 2 is opt-in. Defaulting to 0 keeps EnableContextCompaction=false
+		// truly equivalent to "framework does not modify tool results". Users
+		// who want the head+tail truncation safety net should explicitly call
+		// WithContextCompactionOversizedToolResultMaxTokens (the recommended
+		// value is processor.DefaultContextCompactionOversizedToolResultMaxTokens).
+		ContextCompactionOversizedToolResultMaxTokens: 0,
 
 		skillRunRequireSkillLoaded: true,
 	}
@@ -202,11 +207,32 @@ type Options struct {
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
 	codeExecutor      codeexecutor.CodeExecutor
+	// workspaceExecSurfaceEnabled controls whether generic workspace
+	// execution tools such as workspace_exec are exposed to the model
+	// when a code executor is available.
+	//
+	// Default: true.
+	workspaceExecSurfaceEnabled *bool
 	// EnableCodeExecutionResponseProcessor controls whether the agent
 	// auto-executes fenced code blocks from model responses.
 	//
+	// This switch is independent of WithCodeExecutor: a CodeExecutor may
+	// be configured purely so that execution tools such as workspace_exec
+	// can be registered, without also opting into auto-executing fenced
+	// code in the assistant's final reply. When the skills auto-fallback
+	// injects a CodeExecutor (see applySkillsExecutorFallback in
+	// llm_agent.go) and the caller has not explicitly set this option,
+	// the fallback path force-disables it so the implicit executor only
+	// powers workspace_exec, never the fenced-code auto-exec chain.
+	//
 	// Default: true (preserves existing behavior).
 	EnableCodeExecutionResponseProcessor bool
+	// codeExecutionResponseProcessorExplicit records whether the caller
+	// explicitly set EnableCodeExecutionResponseProcessor via
+	// WithEnableCodeExecutionResponseProcessor. It is used by the skills
+	// auto-fallback to decide whether it may suppress the fenced-code
+	// auto-exec chain on behalf of the caller.
+	codeExecutionResponseProcessorExplicit bool
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
 	// ToolSets is the list of tool sets available to the agent.
@@ -215,6 +241,10 @@ type Options struct {
 	Planner planner.Planner
 	// SubAgents is the list of sub-agents available to the agent.
 	SubAgents []agent.Agent
+	// EnableAwaitUserReplyTool adds the await_user_reply framework tool.
+	// When enabled, the model can explicitly mark that the next user turn
+	// should resume at this agent.
+	EnableAwaitUserReplyTool bool
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
 	// ModelCallbacks contains callbacks for model operations.
@@ -295,9 +325,16 @@ type Options struct {
 	ContextCompactionKeepRecentRequests int
 	// ContextCompactionOversizedToolResultMaxTokens sets the token threshold
 	// above which any tool result (including from the current request) is
-	// truncated using head+tail preservation. This fires regardless of
-	// EnableContextCompaction. 0 disables it.
+	// truncated using head+tail preservation. Like Pass 1, this also requires
+	// EnableContextCompaction=true to take effect; it will not fire when
+	// context compaction is disabled, even if a positive threshold is
+	// configured. 0 disables it regardless of EnableContextCompaction.
+	// Default is 0; the recommended value to pass when opting in is
+	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
+	// ContextCompactionTokenCounter estimates tool-result size for context
+	// compaction. When nil, SimpleTokenCounter is used.
+	ContextCompactionTokenCounter model.TokenCounter
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	summaryFormatter func(summary string) string
@@ -396,8 +433,23 @@ type Options struct {
 	// allowedSkillTools, when non-nil, overrides skillToolProfile and limits
 	// the final built-in skill tool registration set to this explicit allowlist.
 	allowedSkillTools []string
+	// skillsCapabilityGuidance overrides the built-in skill capability
+	// disclosure block.
+	skillsCapabilityGuidance *string
+	// skillsProtocolGuidance overrides the full built-in skill protocol
+	// text appended after the overview.
+	skillsProtocolGuidance *string
 	// skillsToolingGuidance overrides the built-in skills guidance block.
 	skillsToolingGuidance *string
+	// skillsDirectoryHints exposes skill directory locators in prompt
+	// materialization when enabled.
+	skillsDirectoryHints bool
+	// skillsFilePathHints exposes SKILL.md file locators in prompt
+	// materialization when enabled.
+	skillsFilePathHints bool
+	// skillLoadToolDescription overrides the built-in skill_load tool
+	// description when non-nil.
+	skillLoadToolDescription *string
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
@@ -413,13 +465,24 @@ type Options struct {
 	skillRunRequireSkillLoaded bool
 	// skillRunStager overrides how skill_run materializes a skill in
 	// the workspace.
-	skillRunStager            toolskill.SkillStager
+	skillRunStager toolskill.SkillStager
+	// workspaceBootstrap declares static files and commands that
+	// must be present/executed in the workspace before user
+	// commands run. When non-empty it is converted into a Provider
+	// and attached to workspace_exec.
+	workspaceBootstrap codeexecutor.WorkspaceBootstrapSpec
+	// disableWorkspacePreparers keeps workspace_exec on the legacy
+	// StageConversationFiles-only path even when a skills repo or
+	// bootstrap spec is configured. Useful for tests and for users
+	// that want to opt out of the new reconciler.
+	disableWorkspacePreparers bool
 	messageTimelineFilterMode string
 	messageBranchFilterMode   string
 
 	// ReasoningContentMode controls how reasoning_content is handled in
 	// multi-turn conversations. This is particularly important for DeepSeek
-	// models where reasoning_content should be discarded from previous turns.
+	// models where ordinary previous-turn reasoning can be discarded, but
+	// tool-call reasoning must be replayed.
 	ReasoningContentMode string
 
 	toolFilter tool.FilterFunc
@@ -447,6 +510,10 @@ type Options struct {
 	// retrieval mode is used for query-time session recall.
 	// Default is session.SearchModeHybrid.
 	PreloadSessionRecallSearchMode session.SearchMode
+	// EnableOnDemandSession enables invocation-scoped
+	// session_search / session_load exposure and injects
+	// a small overview prompt.
+	EnableOnDemandSession bool
 
 	// postToolPromptEnabled controls whether the post-tool dynamic prompt
 	// injection is enabled. When nil (default), injection is enabled to
@@ -473,11 +540,17 @@ type SkillToolProfile string
 type SkillTool string
 
 const (
-	// SkillToolProfileFull keeps the existing behavior and registers the full
-	// built-in skill tool suite, including execution tools.
+	// SkillToolProfileFull registers the full built-in skill tool suite,
+	// including skill_run, skill_exec, and the interactive exec-session
+	// helpers. This profile is opt-in; callers that want skill-driven
+	// execution must request it explicitly. New code should prefer
+	// workspace_exec together with skill_load for script execution.
 	SkillToolProfileFull SkillToolProfile = skillprofile.Full
-	// SkillToolProfileKnowledgeOnly registers only progressive-disclosure skill
-	// tools used for knowledge injection. No execution tools are exposed.
+	// SkillToolProfileKnowledgeOnly registers only progressive-disclosure
+	// skill tools (skill_load / skill_list_docs / skill_select_docs) and
+	// omits every execution tool. This is the default profile: agents
+	// that only configure a skill repository get knowledge injection and
+	// rely on workspace_exec for running scripts.
 	SkillToolProfileKnowledgeOnly SkillToolProfile = skillprofile.KnowledgeOnly
 
 	// SkillToolLoad loads SKILL.md and optional docs into model context.
@@ -609,12 +682,40 @@ func WithCodeExecutor(ce codeexecutor.CodeExecutor) Option {
 	}
 }
 
+// WithWorkspaceExecSurfaceEnabled controls whether generic workspace
+// execution tools are exposed to the model when a code executor is
+// available.
+//
+// This does not disable the configured code executor itself; it only
+// suppresses model-visible workspace tools such as workspace_exec and
+// its session helpers.
+//
+// Default: true.
+func WithWorkspaceExecSurfaceEnabled(enable bool) Option {
+	return func(opts *Options) {
+		value := enable
+		opts.workspaceExecSurfaceEnabled = &value
+	}
+}
+
 // WithEnableCodeExecutionResponseProcessor controls whether the agent
 // auto-executes assistant replies that are exactly one runnable fenced
 // code block.
+//
+// This option is independent of WithCodeExecutor: configuring a
+// CodeExecutor only enables execution tools (for example, workspace_exec)
+// and does not by itself cause the agent to execute fenced code from
+// assistant replies. Use this option explicitly when you want to opt
+// into — or out of — the fenced-code auto-execution response processor.
+//
+// Calling this option (with either value) marks the setting as
+// explicit, which prevents the skills auto-fallback from quietly
+// disabling the processor when it injects a local CodeExecutor on
+// behalf of WithSkills.
 func WithEnableCodeExecutionResponseProcessor(enable bool) Option {
 	return func(opts *Options) {
 		opts.EnableCodeExecutionResponseProcessor = enable
+		opts.codeExecutionResponseProcessorExplicit = true
 	}
 }
 
@@ -647,6 +748,21 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 // WithSkills enables model-agnostic Agent Skills support using the
 // provided repository. The processor will inject a small overview
 // and on-demand content according to session state.
+//
+// Code executor auto-fallback: when WithSkills is configured without an
+// explicit WithCodeExecutor, the agent will auto-wire a local
+// codeexecutor so that workspace_exec is available and the zero-config
+// upgrade path keeps working. The fallback is skipped when any of the
+// following hold:
+//
+//   - an explicit executor was provided via WithCodeExecutor,
+//   - WithAllowedSkillTools was used to drive fine-grained selection, or
+//   - WithSkillToolProfile(SkillToolProfileKnowledgeOnly) was explicitly
+//     set (the documented opt-out for "no convenience execution").
+//
+// For production, prefer configuring an explicit code executor (for
+// example, a container-backed executor) rather than relying on the
+// local fallback.
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.skillsRepository = repo
@@ -666,8 +782,28 @@ func WithSkillFilter(filter skill.VisibilityFilter) Option {
 // skills are enabled via WithSkills.
 //
 // Supported profiles:
-//   - SkillToolProfileFull (default)
-//   - SkillToolProfileKnowledgeOnly
+//   - SkillToolProfileKnowledgeOnly (default): progressive-disclosure tools
+//     only (skill_load / skill_list_docs / skill_select_docs). Execution is
+//     expected to happen through workspace_exec against the writable skill
+//     working copy materialized under /skills/<name>.
+//   - SkillToolProfileFull: additionally registers skill_run, skill_exec,
+//     and the interactive exec-session helpers. This path predates
+//     workspace_exec-based execution and is kept for backward compatibility;
+//     new code should prefer the default profile.
+//
+// Explicit vs default: not calling WithSkillToolProfile(...) and calling
+// WithSkillToolProfile(SkillToolProfileKnowledgeOnly) register the same
+// built-in skill tool set, but carry different intent around the
+// convenience executor fallback documented on WithSkills:
+//
+//   - Unconfigured (default): if no WithCodeExecutor is supplied,
+//     the framework auto-falls back to a local executor so
+//     workspace_exec is still available out of the box.
+//   - Explicit SkillToolProfileKnowledgeOnly: the framework treats
+//     this as an opt-out and will NOT auto-fall back to a local
+//     executor. Pass this when you intentionally want a
+//     knowledge-only agent, or when you are wiring execution through
+//     your own user-registered tools.
 func WithSkillToolProfile(profile SkillToolProfile) Option {
 	return func(opts *Options) {
 		opts.skillToolProfile = string(profile)
@@ -678,7 +814,7 @@ func WithSkillToolProfile(profile SkillToolProfile) Option {
 // with an explicit allowlist.
 //
 // When not configured, built-in skill tools continue to follow
-// WithSkillToolProfile (default: full).
+// WithSkillToolProfile (default: knowledge_only).
 //
 // When configured with no tools, no built-in skill tools are registered.
 func WithAllowedSkillTools(tools ...SkillTool) Option {
@@ -755,6 +891,75 @@ func WithSkillsToolingGuidance(
 	}
 }
 
+// WithSkillsCapabilityGuidance overrides the capability disclosure block
+// appended to the skills overview.
+//
+// Behavior:
+//   - Not configured: use the built-in default disclosure.
+//   - Configured with empty string: omit the capability block.
+//   - Configured with non-empty string: append the provided text.
+func WithSkillsCapabilityGuidance(
+	guidance string,
+) Option {
+	return func(opts *Options) {
+		text := guidance
+		opts.skillsCapabilityGuidance = &text
+	}
+}
+
+// WithSkillsProtocolGuidance overrides the full skill protocol text
+// appended after the skills overview.
+//
+// Behavior:
+//   - Not configured: use the built-in capability/tooling guidance flow.
+//   - Configured with empty string: omit all built-in skill guidance.
+//   - Configured with non-empty string: append the provided text and skip
+//     the built-in capability/tooling guidance blocks.
+func WithSkillsProtocolGuidance(
+	guidance string,
+) Option {
+	return func(opts *Options) {
+		text := guidance
+		opts.skillsProtocolGuidance = &text
+	}
+}
+
+// WithSkillsDirectoryHints exposes skill directory locators in the skills
+// overview and in loaded skill materialization.
+//
+// Default: false.
+func WithSkillsDirectoryHints(enable bool) Option {
+	return func(opts *Options) {
+		opts.skillsDirectoryHints = enable
+	}
+}
+
+// WithSkillsFilePathHints exposes SKILL.md file locators in the skills
+// overview and in loaded skill materialization.
+//
+// Default: false.
+func WithSkillsFilePathHints(enable bool) Option {
+	return func(opts *Options) {
+		opts.skillsFilePathHints = enable
+	}
+}
+
+// WithSkillLoadToolDescription overrides the skill_load tool
+// description.
+//
+// Behavior:
+//   - Not configured: use the built-in default description.
+//   - Configured with empty string: set an empty description.
+//   - Configured with non-empty string: use the provided text.
+func WithSkillLoadToolDescription(
+	description string,
+) Option {
+	return func(opts *Options) {
+		text := description
+		opts.skillLoadToolDescription = &text
+	}
+}
+
 // WithSkillRunAllowedCommands restricts skill_run to a single,
 // allowlisted command (no shell syntax) when non-empty.
 func WithSkillRunAllowedCommands(cmds ...string) Option {
@@ -809,6 +1014,36 @@ func WithSkillRunRequireSkillLoaded(enable bool) Option {
 func WithSkillRunStager(stager toolskill.SkillStager) Option {
 	return func(opts *Options) {
 		opts.skillRunStager = stager
+	}
+}
+
+// WithWorkspaceBootstrap declares the static files and one-shot
+// commands that must be materialized in every workspace before
+// workspace_exec runs user commands. Files are applied first, then
+// commands execute in declaration order. The spec is converted into
+// reconcile work behind the scenes; idempotency and
+// skip-on-fingerprint-match are handled by the framework.
+//
+// This is currently the only public hook into workspace preparation.
+// The underlying Requirement / Provider / Reconciler abstractions
+// live in an internal package while their semantics are still being
+// refined; if a custom-provider extension point becomes necessary it
+// will be added here.
+func WithWorkspaceBootstrap(
+	spec codeexecutor.WorkspaceBootstrapSpec,
+) Option {
+	return func(opts *Options) {
+		opts.workspaceBootstrap = spec
+	}
+}
+
+// WithWorkspacePreparersDisabled keeps workspace_exec on its legacy
+// "stage conversation files only" path even when a skills repository
+// or a bootstrap spec is configured. Primarily useful for regression
+// tests that assert pre-reconciler behavior.
+func WithWorkspacePreparersDisabled(disabled bool) Option {
+	return func(opts *Options) {
+		opts.disableWorkspacePreparers = disabled
 	}
 }
 
@@ -1093,12 +1328,27 @@ func WithContextCompactionKeepRecentRequests(n int) Option {
 
 // WithContextCompactionOversizedToolResultMaxTokens sets the token threshold
 // above which any tool result (including from the current request) is truncated
-// using head+tail preservation. This fires regardless of
-// EnableContextCompaction. 0 disables it.
+// using head+tail preservation. Like Pass 1, this requires
+// WithEnableContextCompaction(true) to take effect; the framework will not
+// modify tool results when context compaction is disabled, even if a positive
+// threshold is configured here. 0 disables it regardless of
+// EnableContextCompaction. The default is 0; the recommended value to pass
+// when opting in is processor.DefaultContextCompactionOversizedToolResultMaxTokens
+// (8192).
 func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 	return func(opts *Options) {
 		if tokens >= 0 {
 			opts.ContextCompactionOversizedToolResultMaxTokens = tokens
+		}
+	}
+}
+
+// WithContextCompactionTokenCounter sets the token counter used by context
+// compaction to decide whether tool results exceed configured budgets.
+func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
+	return func(opts *Options) {
+		if counter != nil {
+			opts.ContextCompactionTokenCounter = counter
 		}
 	}
 }
@@ -1129,6 +1379,14 @@ func WithEventMessageProjector(
 ) Option {
 	return func(opts *Options) {
 		opts.EventMessageProjector = projector
+	}
+}
+
+// WithAwaitUserReplyTool controls whether the await_user_reply framework tool
+// is exposed to the model.
+func WithAwaitUserReplyTool(enabled bool) Option {
+	return func(opts *Options) {
+		opts.EnableAwaitUserReplyTool = enabled
 	}
 }
 
@@ -1183,11 +1441,13 @@ func WithMessageBranchFilterMode(mode string) Option {
 
 // WithReasoningContentMode controls how reasoning_content is handled in
 // multi-turn conversations. This is particularly important for DeepSeek models
-// where reasoning_content should be discarded from previous request turns.
+// where ordinary previous-turn reasoning_content may be omitted, but tool-call
+// reasoning_content must be replayed in later turns.
 //
 // Available modes:
 //   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from
-//     previous requests, keep for current request (default, recommended).
+//     ordinary previous requests, keep for the current request and previous
+//     requests that performed tool calls (default, recommended).
 //   - ReasoningContentModeKeepAll: Keep all reasoning_content (for debugging).
 //   - ReasoningContentModeDiscardAll: Discard all reasoning_content from history.
 func WithReasoningContentMode(mode string) Option {
@@ -1285,6 +1545,14 @@ func WithPreloadSessionRecallSearchMode(
 		default:
 			opts.PreloadSessionRecallSearchMode = session.SearchModeHybrid
 		}
+	}
+}
+
+// WithEnableOnDemandSession enables or disables invocation-scoped on-demand
+// session recall tools and their lightweight overview prompt.
+func WithEnableOnDemandSession(enable bool) Option {
+	return func(opts *Options) {
+		opts.EnableOnDemandSession = enable
 	}
 }
 

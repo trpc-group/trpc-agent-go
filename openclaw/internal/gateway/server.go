@@ -216,26 +216,30 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 	}
 
 	s := &Server{
-		basePath:         options.basePath,
-		messagesPath:     messagesPath,
-		streamPath:       streamPath,
-		statusPath:       statusPath,
-		cancelPath:       cancelPath,
-		healthPath:       options.healthPath,
-		maxBodyBytes:     options.maxBodyBytes,
-		maxPartBytes:     options.maxPartBytes,
-		partFetcher:      fetcher,
-		runner:           r,
-		managed:          managed,
-		sessionIDFunc:    sessionIDFunc,
-		allowUsers:       options.allowUsers,
-		requireMention:   options.requireMention,
-		mentionPatterns:  options.mentionPatterns,
-		lanes:            newLaneLocker(),
-		recorder:         options.recorder,
-		uploads:          options.uploads,
-		audioTranscriber: audioTranscriber,
-		personaStore:     options.personaStore,
+		basePath:          options.basePath,
+		messagesPath:      messagesPath,
+		streamPath:        streamPath,
+		statusPath:        statusPath,
+		cancelPath:        cancelPath,
+		healthPath:        options.healthPath,
+		maxBodyBytes:      options.maxBodyBytes,
+		maxPartBytes:      options.maxPartBytes,
+		partFetcher:       fetcher,
+		runner:            r,
+		managed:           managed,
+		appName:           strings.TrimSpace(options.appName),
+		sessionIDFunc:     sessionIDFunc,
+		allowUsers:        options.allowUsers,
+		requireMention:    options.requireMention,
+		mentionPatterns:   options.mentionPatterns,
+		runOptionResolver: options.runOptionResolver,
+		lanes:             newLaneLocker(),
+		canceled:          newCancelTracker(),
+		recorder:          options.recorder,
+		uploads:           options.uploads,
+		audioTranscriber:  audioTranscriber,
+		personaStore:      options.personaStore,
+		memoryFileStore:   options.memoryFileStore,
 	}
 
 	mux := http.NewServeMux()
@@ -488,12 +492,13 @@ func (s *Server) runLocked(
 		)
 	}
 
+	ctx, runOpts := s.resolveRunOptions(ctx, run)
 	events, err := s.runner.Run(
 		ctx,
-		userID,
-		sessionID,
-		msg,
-		s.runOptions(userID, sessionID, requestID)...,
+		run.userID,
+		run.sessionID,
+		run.userMsg,
+		runOpts...,
 	)
 	if err != nil {
 		if trace != nil {
@@ -580,27 +585,6 @@ func (s *Server) runOptions(
 		userID,
 		sessionID,
 		requestSystemPrompt,
-	); len(messages) > 0 {
-		runOpts = append(
-			runOpts,
-			agent.WithInjectedContextMessages(messages),
-		)
-	}
-	return runOpts
-}
-
-func (s *Server) runOptions(
-	userID string,
-	sessionID string,
-	requestID string,
-) []agent.RunOption {
-	runOpts := make([]agent.RunOption, 0, 1)
-	if requestID != "" {
-		runOpts = append(runOpts, agent.WithRequestID(requestID))
-	}
-	if messages := s.injectedContextMessages(
-		userID,
-		sessionID,
 	); len(messages) > 0 {
 		runOpts = append(
 			runOpts,

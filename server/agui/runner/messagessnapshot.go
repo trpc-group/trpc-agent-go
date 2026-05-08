@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/reduce"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -128,11 +129,23 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	if err != nil {
 		return nil, nil, fmt.Errorf("get track events: %w", err)
 	}
-	messages, err := reduce.Reduce(sessionKey.AppName, sessionKey.UserID, trackEvents.Events)
+	messages, err := reduce.Reduce(
+		sessionKey.AppName,
+		sessionKey.UserID,
+		trackEvents.Events,
+		reduce.WithRunLifecycleEvents(r.messagesSnapshotRunLifecycleEventsEnabled),
+	)
 	if err != nil {
 		err = fmt.Errorf("reduce track events: %w", err)
 	}
-	return aguievents.NewMessagesSnapshotEvent(messages), trackEvents, err
+	event := aguievents.NewMessagesSnapshotEvent(messages)
+	if r.eventSourceMetadataEnabled {
+		metadata := source.BuildSnapshotMetadata(trackEvents.Events)
+		if !metadata.IsZero() {
+			event.GetBaseEvent().RawEvent = metadata
+		}
+	}
+	return event, trackEvents, err
 }
 
 func (r *runner) messagesSnapshotFollow(

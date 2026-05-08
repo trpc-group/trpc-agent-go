@@ -25,10 +25,14 @@ import (
 )
 
 type preparedMessageRun struct {
-	userID    string
-	sessionID string
-	requestID string
-	userMsg   model.Message
+	userID              string
+	sessionID           string
+	requestID           string
+	requestSystemPrompt string
+	inbound             InboundMessage
+	userMsg             model.Message
+	streamOptions       *gwproto.MessageStreamOptions
+	extensions          map[string]json.RawMessage
 }
 
 // ProcessMessage processes a gateway message request without an HTTP hop.
@@ -85,32 +89,8 @@ func (s *Server) ProcessMessage(
 	prepared, earlyRsp, earlyStatus := s.prepareMessageRun(
 		ctx,
 		req,
+		nil,
 		trace,
-	)
-	if earlyRsp != nil {
-		rsp = *earlyRsp
-		status = earlyStatus
-		if trace != nil {
-			record := map[string]any{
-				"status":     status,
-				"session_id": rsp.SessionID,
-				"request_id": rsp.RequestID,
-				"ignored":    rsp.Ignored,
-			}
-			if rsp.Error != nil {
-				record["error"] = rsp.Error.Message
-			}
-			_ = trace.Record(debugrecorder.KindGatewayRsp, record)
-		}
-		return rsp, status
-	}
-
-	reply, resolvedRequestID, err := s.run(
-		ctx,
-		prepared.userID,
-		prepared.sessionID,
-		prepared.requestID,
-		prepared.userMsg,
 	)
 	if earlyRsp != nil {
 		rsp = *earlyRsp
@@ -199,6 +179,7 @@ func (s *Server) ProcessMessage(
 func (s *Server) prepareMessageRun(
 	ctx context.Context,
 	req gwproto.MessageRequest,
+	opts *gwproto.MessageStreamOptions,
 	trace *debugrecorder.Trace,
 ) (preparedMessageRun, *gwproto.MessageResponse, int) {
 	userMsg, mentionText, err := s.normalizeUserMessage(ctx, req)
@@ -278,11 +259,44 @@ func (s *Server) prepareMessageRun(
 	}
 
 	return preparedMessageRun{
-		userID:    userID,
-		sessionID: sessionID,
-		requestID: strings.TrimSpace(req.RequestID),
-		userMsg:   userMsg,
+		userID:              userID,
+		sessionID:           sessionID,
+		requestID:           strings.TrimSpace(req.RequestID),
+		requestSystemPrompt: strings.TrimSpace(req.RequestSystemPrompt),
+		inbound:             msg,
+		userMsg:             userMsg,
+		streamOptions:       cloneStreamOptions(opts),
+		extensions:          cloneExtensions(req.Extensions),
 	}, nil, http.StatusOK
+}
+
+func cloneStreamOptions(
+	src *gwproto.MessageStreamOptions,
+) *gwproto.MessageStreamOptions {
+	if src == nil {
+		return nil
+	}
+	cloned := *src
+	return &cloned
+}
+
+func cloneExtensions(
+	src map[string]json.RawMessage,
+) map[string]json.RawMessage {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(src))
+	for key, raw := range src {
+		if raw == nil {
+			out[key] = nil
+			continue
+		}
+		cloned := make([]byte, len(raw))
+		copy(cloned, raw)
+		out[key] = json.RawMessage(cloned)
+	}
+	return out
 }
 
 // CancelRequest cancels an in-flight run by request ID.

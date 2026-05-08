@@ -1,7 +1,8 @@
 # A2A Protocol Interaction Specification
 
-!!! note "Note"
-    This document defines the extended implementation specification for the A2A protocol within the trpc-agent-go framework. Regular users do not need to read this document when using A2A Client/Server — the framework automatically handles all protocol conversion details. You only need to refer to this specification when developing a non-trpc-agent-go A2A Client/Server that interoperates with this framework.
+> **Note**
+>
+> This document defines the extended implementation specification for the A2A protocol within the trpc-agent-go framework. Regular users do not need to read this document when using A2A Client/Server — the framework automatically handles all protocol conversion details. You only need to refer to this specification when developing a non-trpc-agent-go A2A Client/Server that interoperates with this framework.
 
 ## Background
 
@@ -24,8 +25,9 @@ However, in real-world multi-Agent orchestration scenarios, some users want to s
 
 This document defines the **interaction specification** of trpc-agent-go on top of the A2A protocol, serving as the standard reference for Client and Server implementations. This document will be updated as the A2A protocol evolves.
 
-!!! info "Future Plans"
-    To better align with the A2A specification's design philosophy, the cross-Agent transmission of execution process data such as tool calls will be designed as an independent **extension**, allowing users to decide whether to enable it through configuration. If you prefer to strictly follow A2A's black-box collaboration model without exposing internal execution details, simply disable it — only final results will be transmitted.
+> **Future Plans**
+>
+> To better align with the A2A specification's design philosophy, the cross-Agent transmission of execution process data such as tool calls will be designed as an independent **extension**, allowing users to decide whether to enable it through configuration. If you prefer to strictly follow A2A's black-box collaboration model without exposing internal execution details, simply disable it — only final results will be transmitted.
 
 > For the complete A2A protocol specification, see: https://a2a-protocol.org/latest/specification/
 >

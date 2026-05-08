@@ -334,6 +334,8 @@ func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
 	WithEnableContextCompaction(true)(opts)
 	WithContextCompactionKeepRecentRequests(2)(opts)
 	WithContextCompactionToolResultMaxTokens(2048)(opts)
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	WithContextCompactionTokenCounter(counter)(opts)
 
 	procs := buildRequestProcessors("test-agent", opts)
 	var crp *processor.ContentRequestProcessor
@@ -346,6 +348,7 @@ func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
 	require.True(t, crp.ContextCompactionConfig.Enabled)
 	require.Equal(t, 2, crp.ContextCompactionConfig.KeepRecentRequests)
 	require.Equal(t, 2048, crp.ContextCompactionConfig.ToolResultMaxTokens)
+	require.Same(t, counter, crp.ContextCompactionConfig.TokenCounter)
 }
 
 // Test that buildRequestProcessors wires PreserveSameBranch into
@@ -975,6 +978,18 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 				_ = New("test",
 					WithOutputSchema(schema),
 					WithSubAgents([]agent.Agent{sub}),
+				)
+			},
+		)
+	})
+
+	t.Run("with await_user_reply", func(t *testing.T) {
+		require.PanicsWithValue(t,
+			invalidOutputSchemaAwaitUserReply,
+			func() {
+				_ = New("test",
+					WithOutputSchema(schema),
+					WithAwaitUserReplyTool(true),
 				)
 			},
 		)

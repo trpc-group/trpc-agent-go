@@ -6,9 +6,8 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package main demonstrates an AG-UI server that keeps TOOL_CALL_* and final
-// TOOL_CALL_RESULT semantics intact while surfacing tool execution progress as
-// ACTIVITY_SNAPSHOT and ACTIVITY_DELTA events.
+// Package main demonstrates an AG-UI server that uses the built-in streamed
+// tool-result activity semantics.
 package main
 
 import (
@@ -20,14 +19,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
-	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 const appName = "agui-streamtool-demo"
 
 var (
-	modelName            = flag.String("model", "deepseek-chat", "OpenAI-compatible model name.")
+	modelName            = flag.String("model", "deepseek-v4-flash", "OpenAI-compatible model name.")
 	isStream             = flag.Bool("stream", true, "Whether to stream the model response.")
 	address              = flag.String("address", "127.0.0.1:8080", "Listen address.")
 	path                 = flag.String("path", "/agui", "HTTP path.")
@@ -53,9 +51,7 @@ func main() {
 		agui.WithMessagesSnapshotEnabled(true),
 		agui.WithMessagesSnapshotPath(*messagesSnapshotPath),
 		agui.WithSessionService(sessionService),
-		agui.WithAGUIRunnerOptions(
-			aguirunner.WithTranslatorFactory(newTranslator),
-		),
+		agui.WithStreamingToolResultActivityEnabled(true),
 	)
 	if err != nil {
 		log.Fatalf("create AG-UI server failed: %v", err)

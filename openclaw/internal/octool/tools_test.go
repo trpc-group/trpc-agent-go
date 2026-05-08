@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
 	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -87,6 +88,349 @@ func TestExecTool_UsesManagerBaseEnv(t *testing.T) {
 	res := out.(execResult)
 	require.Equal(t, "exited", res.Status)
 	require.Contains(t, strings.TrimSpace(res.Output), "ok")
+}
+
+func TestExecTool_UsesIdentityEnvFromContext(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager()
+	tool := newExecCommandTool(mgr)
+
+	ctx := identity.NewContext(context.Background(), &identity.Identity{
+		EnvVars: map[string]string{
+			"OPENCLAW_IDENTITY_ENV":   "ctx-value",
+			"OPENCLAW_CONTEXT_TARGET": "from-context",
+		},
+	})
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf '%s|%s' \"$OPENCLAW_IDENTITY_ENV\" \"$OPENCLAW_CONTEXT_TARGET\"",
+		"env": map[string]string{
+			"OPENCLAW_CONTEXT_TARGET": "explicit",
+		},
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.Contains(t, strings.TrimSpace(res.Output), "ctx-value|explicit")
+}
+
+func TestExecTool_RedactsSensitiveEnvValueOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithOutputRedactor(NewChatCommandOutputRedactor()),
+	)
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf %s 'sk-test-secret'",
+		"env": map[string]string{
+			"OPENAI_API_KEY": "sk-test-secret",
+		},
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Contains(t, res.Output, "[REDACTED:OPENAI_API_KEY]")
+	require.NotContains(t, res.Output, "sk-test-secret")
+}
+
+func TestExecTool_RedactsShortSensitiveEnvValueOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithOutputRedactor(NewChatCommandOutputRedactor()),
+	)
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf %s '12345'",
+		"env": map[string]string{
+			"DB_PASSWORD": "12345",
+		},
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Contains(t, res.Output, "[REDACTED:DB_PASSWORD]")
+	require.NotContains(t, res.Output, "12345")
+}
+
+func TestKnownSensitiveValues_InlineAssignmentOverridesEnv(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	values := knownSensitiveValues(CommandRequest{
+		Command: `export OPENAI_API_KEY='sk-inline-secret'`,
+		Env: map[string]string{
+			"OPENAI_API_KEY": "sk-env-secret",
+		},
+	})
+	require.Len(t, values, 1)
+	require.Equal(t, "OPENAI_API_KEY", values[0].Name)
+	require.Equal(t, "sk-inline-secret", values[0].Value)
+	require.False(t, values[0].AllowShort)
+}
+
+func TestKnownSensitiveValues_SkipsShortInlineValue(t *testing.T) {
+	t.Parallel()
+
+	values := knownSensitiveValues(CommandRequest{
+		Command: "export OPENAI_API_KEY=short",
+	})
+	require.Empty(t, values)
+}
+
+func TestTrimMatchingQuotes(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "value", trimMatchingQuotes(`"value"`))
+	require.Equal(t, "value", trimMatchingQuotes(`'value'`))
+	require.Equal(t, "value", trimMatchingQuotes("value"))
+	require.False(t, hasWrappedQuotes("x", '"'))
+}
+
+func TestRedactCommandOutput_EmptyOutput(t *testing.T) {
+	t.Parallel()
+
+	output := " \n"
+	require.Equal(
+		t,
+		output,
+		redactCommandOutput(CommandRequest{}, output),
+	)
+}
+
+func TestAddSensitiveEnvValues_IgnoresBlankAndSafeValues(t *testing.T) {
+	t.Parallel()
+
+	values := make(map[string]sensitiveValue)
+	addSensitiveEnvValues(values, map[string]string{
+		"OPENAI_API_KEY": "",
+		"SAFE_NAME":      "ok",
+	})
+	require.Empty(t, values)
+}
+
+func TestAddInlineSensitiveValues_IgnoresBlankAndSafeValues(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	values := make(map[string]sensitiveValue)
+	addInlineSensitiveValues(
+		values,
+		`export OPENAI_API_KEY='' SAFE_NAME=ok`,
+	)
+	require.Empty(t, values)
+}
+
+func TestRedactSensitiveValues_IgnoresEmptyTrackedValue(t *testing.T) {
+	t.Parallel()
+
+	output := redactSensitiveValues("safe", []sensitiveValue{{
+		Name:  "OPENAI_API_KEY",
+		Value: "",
+	}})
+	require.Equal(t, "safe", output)
+}
+
+func TestRedactColonLine_IgnoresSafeName(t *testing.T) {
+	t.Parallel()
+
+	redacted, ok := redactColonLine(`"SAFE_NAME": "ok"`)
+	require.False(t, ok)
+	require.Empty(t, redacted)
+}
+
+func TestExecTool_BlocksShellProfileAccess(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithCommandPolicy(NewChatCommandSafetyPolicy()),
+	)
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": "cat ~/.bashrc",
+		"yieldMs": 0,
+	})
+	_, err := tool.Call(context.Background(), args)
+	require.ErrorContains(
+		t,
+		err,
+		"shell or credential files is not allowed",
+	)
+}
+
+func TestExecTool_RedactsSensitiveKeyValueOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithOutputRedactor(NewChatCommandOutputRedactor()),
+	)
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": `printf 'OPENAI_API_KEY=sk-test-secret
+SAFE_NAME=ok
+"OPENAI_API_KEY": "sk-test-secret",
+'`,
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Contains(t, res.Output, "OPENAI_API_KEY=[REDACTED]")
+	require.Contains(t, res.Output, `OPENAI_API_KEY": "[REDACTED]"`)
+	require.Contains(t, res.Output, "SAFE_NAME=ok")
+	require.NotContains(t, res.Output, "sk-test-secret")
+}
+
+func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	stateDir := t.TempDir()
+	root, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	mgr := NewManager()
+	execTool := NewExecCommandToolWithMemoryFileStore(
+		mgr,
+		nil,
+		store,
+	).(tool.CallableTool)
+
+	sessionID := "telegram:dm:u1:s1"
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", sessionID),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf %s \"$OPENCLAW_MEMORY_FILE\"",
+		"yieldMs": 0,
+	})
+	out, err := execTool.Call(ctx, args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+
+	path, err := store.MemoryPath("app", "u1")
+	require.NoError(t, err)
+	require.Contains(t, res.Output, path)
+	require.FileExists(t, path)
+}
+
+func TestExecTool_UsesStorageScopedMemoryFileEnvFromContext(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	stateDir := t.TempDir()
+	root, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	mgr := NewManager()
+	execTool := NewExecCommandToolWithMemoryFileStore(
+		mgr,
+		nil,
+		store,
+	).(tool.CallableTool)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", "wecom:chat:room-1"),
+		),
+	)
+	ctx := agent.NewInvocationContext(
+		conversationscope.WithStorageUserID(
+			context.Background(),
+			"wecom:chat:room-1",
+		),
+		inv,
+	)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf %s \"$OPENCLAW_MEMORY_FILE\"",
+		"yieldMs": 0,
+	})
+	out, err := execTool.Call(ctx, args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+
+	path, err := store.MemoryPath("app", "wecom:chat:room-1")
+	require.NoError(t, err)
+	require.Contains(t, res.Output, path)
+	require.FileExists(t, path)
+}
+
+func TestMemoryFileEnvFromContext_EmptyScopeReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("", "u1", "telegram:dm:u1:s1"),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	require.Nil(t, memoryFileEnvFromContext(ctx, store))
+}
+
+func TestMemoryFileEnvFromContext_EnsureMemoryErrorReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	rootFile := filepath.Join(t.TempDir(), "memory-root")
+	require.NoError(t, os.WriteFile(rootFile, []byte("x"), 0o600))
+
+	root, err := memoryfile.NewStore(rootFile)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", "telegram:dm:u1:s1"),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	require.Nil(t, memoryFileEnvFromContext(ctx, root))
 }
 
 func TestAnnotateExecResult_ParsesMediaMarkers(t *testing.T) {

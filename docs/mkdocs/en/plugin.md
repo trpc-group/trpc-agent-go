@@ -152,6 +152,82 @@ runnerInstance := runner.NewRunner(
 defer runnerInstance.Close()
 ```
 
+## Tool Identity Injection
+
+Plugins can add pre-processing or post-processing to every tool call through
+`BeforeTool` and `AfterTool`. For web applications that already know the
+current user, `plugin/identity` provides a reusable identity propagation plugin:
+
+```go
+import (
+	"context"
+	"net/http"
+
+	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+	tmcp "trpc.group/trpc-go/trpc-mcp-go"
+)
+
+provider := identity.ProviderFunc(func(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+) (*identity.Identity, error) {
+	return &identity.Identity{
+		UserID: userID,
+		Headers: map[string]string{
+			"Authorization": "Bearer " + resolveAccessToken(userID),
+		},
+		EnvVars: map[string]string{
+			"USER_ACCESS_TOKEN": resolveUserAccessToken(userID),
+		},
+	}, nil
+})
+
+mcpTools := toolmcp.NewMCPToolSet(
+	toolmcp.ConnectionConfig{
+		Transport: "streamable",
+		ServerURL: "https://mcp.example.com",
+	},
+	toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+		func(ctx context.Context, req *http.Request) error {
+			headers, err := identity.HeadersFromContext(ctx)
+			if err != nil {
+				return err
+			}
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			return nil
+		},
+	)),
+)
+
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(identity.NewPlugin(provider)),
+)
+```
+
+The plugin stores the resolved identity in invocation state before the agent
+runs. Before each tool call it attaches that identity to the tool context.
+MCP HTTP transports can read `Identity.Headers` from that context via an
+`mcp.WithHTTPBeforeRequest` hook installed through `WithMCPOptions`, so every
+outgoing request picks up the current user's headers. Command-execution tools
+should read `Identity.EnvVars` from context at execution time so secrets never
+enter model-visible tool arguments. For `workspace_exec` and `skill_run`, wrap
+the executor with `codeexecutor.NewEnvInjectingCodeExecutor(exec,
+identity.EnvVarsFromContext)`.
+
+When you register that MCP ToolSet through `llmagent.WithToolSets(...)`, enable
+`llmagent.WithRefreshToolSetsOnRun(true)` if `initialize` / `tools/list` must
+also see request-scoped headers. That adds a fresh `initialize` /
+`tools/list` pass to each run, so enable it only when needed. If you need a
+fixed discovery context instead, call `toolSet.Tools(ctx)` yourself and pass
+the resulting tools via `llmagent.WithTools(...)`.
+
 ## How Plugins Execute
 
 ### Scope and propagation
@@ -198,8 +274,30 @@ Some “before” hooks can short-circuit default behavior:
 
 Some “after” hooks can override:
 
+- **AfterAgent** can return a custom response; it is APPENDED as an extra
+  terminal response event to the agent's event stream (it does not replace
+  earlier events).
 - **AfterModel** can return a custom response to replace the model response.
 - **AfterTool** can return a custom result to replace the tool result.
+
+> **Caveats for multi-agent (ChainAgent, ParallelAgent, CycleAgent, Graph agent-nodes)**
+>
+> `BeforeAgent` / `AfterAgent` fire **once per sub-agent invocation**, not
+> just once for the root Runner run. A hook that assumes "one call per
+> turn" must look at `args.Invocation.Agent` (or `AgentName`) to
+> disambiguate.
+>
+> `BeforeAgent.CustomResponse` **short-circuits the sub-agent entirely**:
+> the sub-agent's `Run` is not called, and sub-agent-emitted terminal
+> state (e.g. a graph `GraphCompletionEvent` used to populate
+> `SubgraphResult.FinalState` in an agent-node) is NOT emitted. Custom
+> `outputMapper` implementations must tolerate a nil `FinalState` when
+> short-circuit is possible.
+>
+> `AfterAgent.CustomResponse` **appends** a final response event. In a
+> graph agent-node, the appended response becomes the new
+> `StateKeyLastResponse` seen by downstream nodes. Use intentionally when
+> you want runner-scoped plugins to override sub-agent output.
 
 ### Error handling
 
@@ -502,6 +600,60 @@ defer runnerInstance.Close()
 ```
 
 Full example: [examples/plugin/messagemerger](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/messagemerger).
+
+### ErrorMessage
+
+`errormessage.New(opts...)` from `plugin/errormessage` rewrites the assistant-visible content of error events before Runner persists them into the session.
+
+When an event carries `Response.Error` but no `Choices[].Message.Content` — for example, the `stop_agent_error` event produced by `llmflow` for `agent.StopError`, or any raw `event.NewErrorEvent(...)` — Runner falls back to a generic English message: `"An error occurred during execution. Please contact the service provider."`. This plugin runs in `OnEvent` before that fallback and fills the content itself, so callers can surface a customised, localised, or tenant-specific message to end users. The structured `Response.Error` is left intact, so debugging and downstream consumers still see the original reason.
+
+The plugin only rewrites events where no valid content exists yet, so a partial assistant message produced before the failure is never overwritten.
+
+Static content:
+
+```go
+rewriter := errormessage.New(
+    errormessage.WithContent("The request was stopped. Please try again later."),
+)
+runnerInstance := runner.NewRunner(
+    "my-app",
+    agentInstance,
+    runner.WithPlugins(rewriter),
+)
+defer runnerInstance.Close()
+```
+
+Dynamic resolver (for example, friendlier copy for `stop_agent_error`):
+
+```go
+rewriter := errormessage.New(
+    errormessage.WithResolver(func(
+        _ context.Context,
+        _ *agent.Invocation,
+        e *event.Event,
+    ) (string, bool) {
+        if e == nil || e.Response == nil || e.Response.Error == nil {
+            return "", false
+        }
+        if e.Response.Error.Type == agent.ErrorTypeStopAgentError {
+            return "The request was stopped by policy. Please try again later.", true
+        }
+        return "Execution failed. Please try again later.", true
+    }),
+)
+```
+
+Returning `ok=false` or an empty string from the resolver leaves the event untouched, which means Runner's built-in fallback message still applies.
+
+Finish reason:
+
+By default the plugin sets the synthesised choice's `FinishReason` to `"error"`. Use `errormessage.WithFinishReason("stop")` or another value if your downstream protocol expects a different reason. If the original choice already has a `FinishReason`, the plugin preserves it and does not override downstream expectations.
+
+Scope:
+
+The plugin is installed via `runner.WithPlugins(...)` and runs on every event the runner processes, so it covers errors that agents emit on their event channel (for example, the `stop_agent_error` event produced by `llmflow` for `agent.StopError`, or any raw `event.NewErrorEvent(...)`). Errors returned synchronously from `agent.Run` (before any event channel is produced) are handled directly by Runner using its built-in fallback content, so this plugin does not rewrite the persisted content on that specific path.
+
+Full example: [examples/plugin/errormessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage).
 
 ### Guardrail
 
@@ -808,10 +960,10 @@ The example includes verified scenarios for:
 - A clearly unsafe request that is blocked
 - A defensive analysis request that is allowed
 
-The repository currently includes Logging, GlobalInstruction, ToolCallID, and
-Guardrail as built-in plugins. Tool Approval, Prompt Injection, and Unsafe
-Intent are currently built-in capabilities under the Guardrail plugin.
-Additional plugins can be implemented as custom plugins.
+The repository currently includes Logging, GlobalInstruction, ToolCallID,
+MessageMerger, ErrorMessage, and Guardrail as built-in plugins. Tool Approval,
+Prompt Injection, and Unsafe Intent are currently built-in capabilities under
+the Guardrail plugin. Additional plugins can be implemented as custom plugins.
 
 ## Writing Your Own Plugin
 

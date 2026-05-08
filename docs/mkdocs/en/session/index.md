@@ -60,7 +60,7 @@ func main() {
         summary.WithChecksAny(
             summary.CheckEventThreshold(20),
             summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute),
+            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; triggers if the latest unsummarized event is older than 5 minutes
         ),
         summary.WithMaxSummaryWords(200),
     )
@@ -78,10 +78,12 @@ func main() {
         llmagent.WithModel(llm),
         llmagent.WithInstruction("You are a helpful assistant"),
         llmagent.WithAddSessionSummary(true),
-        // Optional: compact oversized historical tool results before the LLM call
-        // WithAddSessionSummary(true) additionally enables one sync summary retry when needed
-        llmagent.WithEnableContextCompaction(true),
+        // Optional: shrink tool-result payloads before the LLM call; this does not generate a summary.
+        // This is separate from session summary and model token tailoring.
+        // WithAddSessionSummary(true) additionally enables one sync summary retry when needed.
+        llmagent.WithEnableContextCompaction(true), // master switch for both Pass 1 and Pass 2
         llmagent.WithContextCompactionToolResultMaxTokens(1024),  // old tool results → placeholder
+        // Pass 2 is disabled by default; opt in with a positive threshold (recommended: 8192)
         llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // any huge result → head+tail truncation
         llmagent.WithContextCompactionKeepRecentRequests(1),
         // Note: WithAddSessionSummary(true) ignores WithMaxHistoryRuns

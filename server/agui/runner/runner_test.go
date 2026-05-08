@@ -32,6 +32,7 @@ import (
 	baserunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
+	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -55,10 +56,117 @@ func TestNew(t *testing.T) {
 	assert.IsType(t, expected, trans)
 	assert.NotNil(t, runner.runOptionResolver)
 	assert.False(t, runner.toolResultInputTranslationEnabled)
+	assert.False(t, runner.toolCallDeltaStreamingEnabled)
+	assert.False(t, runner.streamingToolResultActivityEnabled)
+	assert.False(t, runner.eventSourceMetadataEnabled)
 	userID, err := runner.userIDResolver(context.Background(),
 		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NoError(t, err)
 	assert.Equal(t, "user", userID)
+}
+
+func TestRunEventSourceMetadataEnabledAttachesRawEvent(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 3)
+	agentEvents <- &agentevent.Event{
+		ID:                 "evt-tool-call",
+		Author:             "member-a",
+		InvocationID:       "inv-1",
+		ParentInvocationID: "parent-1",
+		Branch:             "root.member-a",
+		Response: &model.Response{
+			ID:     "msg-tool-call",
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:   "call-1",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "search",
+							Arguments: []byte(`{"q":"agent"}`),
+						},
+					}},
+				},
+			}},
+		},
+	}
+	agentEvents <- &agentevent.Event{
+		ID:                 "evt-tool-result",
+		Author:             "member-a",
+		InvocationID:       "inv-1",
+		ParentInvocationID: "parent-1",
+		Branch:             "root.member-a",
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  "call-1",
+					Content: "done",
+				},
+			}},
+		},
+	}
+	agentEvents <- &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+	close(agentEvents)
+
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	rr, ok := New(
+		underlying,
+		WithEventSourceMetadataEnabled(true),
+	).(*runner)
+	require.True(t, ok)
+
+	eventsCh, err := rr.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 6)
+
+	want := map[string]any{
+		"eventId":            "evt-tool-call",
+		"author":             "member-a",
+		"invocationId":       "inv-1",
+		"parentInvocationId": "parent-1",
+		"branch":             "root.member-a",
+	}
+	for _, idx := range []int{1, 2, 3} {
+		payload, marshalErr := json.Marshal(evts[idx].GetBaseEvent().RawEvent)
+		require.NoError(t, marshalErr)
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(payload, &decoded))
+		assert.Equal(t, want, decoded)
+	}
+
+	payload, err := json.Marshal(evts[1])
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(payload, &decoded))
+	assert.Equal(t, want, decoded["rawEvent"])
+
+	resultPayload, err := json.Marshal(evts[4].GetBaseEvent().RawEvent)
+	require.NoError(t, err)
+	var resultDecoded map[string]any
+	require.NoError(t, json.Unmarshal(resultPayload, &resultDecoded))
+	assert.Equal(t, "evt-tool-result", resultDecoded["eventId"])
+	assert.Equal(t, "member-a", resultDecoded["author"])
 }
 
 func TestRunEmitsGraphNodeStartActivityWhenEnabled(t *testing.T) {
@@ -863,6 +971,383 @@ func TestRunToolMessageRecordedInTrackAndForwarded(t *testing.T) {
 	assert.True(t, found)
 }
 
+func TestRunTailToolMessagesEmitAndPersistAsCurrentTurn(t *testing.T) {
+	var gotMessage model.Message
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotMessage = message
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:           "app",
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{ID: "assistant", Role: types.RoleAssistant, Content: "calling tools"},
+			{ID: "tool-msg-1", Role: types.RoleTool, Content: "result 1", Name: "search", ToolCallID: "call-1"},
+			{ID: "tool-msg-2", Role: types.RoleTool, Content: "result 2", Name: "lookup", ToolCallID: "call-2"},
+		},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 3)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	result1, ok := evts[1].(*aguievents.ToolCallResultEvent)
+	require.True(t, ok)
+	assert.Equal(t, "tool-msg-1", result1.MessageID)
+	assert.Equal(t, "call-1", result1.ToolCallID)
+	assert.Equal(t, "result 1", result1.Content)
+	result2, ok := evts[2].(*aguievents.ToolCallResultEvent)
+	require.True(t, ok)
+	assert.Equal(t, "tool-msg-2", result2.MessageID)
+	assert.Equal(t, "call-2", result2.ToolCallID)
+	assert.Equal(t, "result 2", result2.Content)
+	assert.Equal(t, model.RoleTool, gotMessage.Role)
+	assert.Equal(t, "result 2", gotMessage.Content)
+	assert.Equal(t, "call-2", gotMessage.ToolID)
+	require.NotNil(t, gotOptions.UserMessageRewriter)
+	currentTurn, err := gotOptions.UserMessageRewriter(
+		context.Background(),
+		&agent.UserMessageRewriteArgs{OriginalMessage: gotMessage},
+	)
+	require.NoError(t, err)
+	require.Len(t, currentTurn, 2)
+	assert.Equal(t, "result 1", currentTurn[0].Content)
+	assert.Equal(t, "call-1", currentTurn[0].ToolID)
+	assert.Equal(t, "search", currentTurn[0].ToolName)
+	assert.Equal(t, "result 2", currentTurn[1].Content)
+	assert.Equal(t, "call-2", currentTurn[1].ToolID)
+	assert.Equal(t, "lookup", currentTurn[1].ToolName)
+}
+
+func TestRunToolMessageKeepsCurrentTurnWithoutRewriter(t *testing.T) {
+	var gotMessage model.Message
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotMessage = message
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:           "app",
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{ID: "tool-msg-1", Role: types.RoleTool, Content: "result 1", Name: "search", ToolCallID: "call-1"},
+		},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	result, ok := evts[1].(*aguievents.ToolCallResultEvent)
+	require.True(t, ok)
+	assert.Equal(t, "tool-msg-1", result.MessageID)
+	assert.Equal(t, "call-1", result.ToolCallID)
+	assert.Equal(t, "result 1", result.Content)
+	assert.Equal(t, model.RoleTool, gotMessage.Role)
+	assert.Equal(t, "result 1", gotMessage.Content)
+	assert.Equal(t, "call-1", gotMessage.ToolID)
+	assert.Nil(t, gotOptions.UserMessageRewriter)
+}
+
+func TestRunTailToolMessagesPersistThroughBaseRunner(t *testing.T) {
+	ctx := context.Background()
+	sessionService := inmemory.NewSessionService()
+	ag := &capturingAGUIInvocationAgent{name: "agent"}
+	base := baserunner.NewRunner("app", ag, baserunner.WithSessionService(sessionService))
+	defer base.Close()
+	seedCh, err := base.Run(ctx, "user", "thread", model.NewUserMessage("seed"))
+	require.NoError(t, err)
+	for range seedCh {
+	}
+	ag.message = model.Message{}
+	ag.hasRewriter = false
+	r := &runner{
+		appName:           "app",
+		runner:            base,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{ID: "tool-msg-1", Role: types.RoleTool, Content: "result 1", Name: "search", ToolCallID: "call-1"},
+			{ID: "tool-msg-2", Role: types.RoleTool, Content: "result 2", Name: "lookup", ToolCallID: "call-2"},
+		},
+	}
+	eventsCh, err := r.Run(ctx, input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 4)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	assert.IsType(t, (*aguievents.ToolCallResultEvent)(nil), evts[1])
+	assert.IsType(t, (*aguievents.ToolCallResultEvent)(nil), evts[2])
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), evts[3])
+	assert.Equal(t, model.RoleTool, ag.message.Role)
+	assert.Equal(t, "result 2", ag.message.Content)
+	assert.Equal(t, "call-2", ag.message.ToolID)
+	assert.True(t, ag.hasRewriter)
+	sess, err := sessionService.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "thread",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	persistedEvents := sess.Events
+	require.Len(t, persistedEvents, 3)
+	seed := persistedEvents[0].Choices[0].Message
+	first := persistedEvents[1].Choices[0].Message
+	second := persistedEvents[2].Choices[0].Message
+	assert.Equal(t, model.RoleUser, seed.Role)
+	assert.Equal(t, "seed", seed.Content)
+	assert.Equal(t, "user", persistedEvents[0].Author)
+	assert.Equal(t, model.RoleTool, first.Role)
+	assert.Equal(t, "result 1", first.Content)
+	assert.Equal(t, "call-1", first.ToolID)
+	assert.Equal(t, "search", first.ToolName)
+	assert.Equal(t, "agent", persistedEvents[1].Author)
+	assert.Equal(t, model.RoleTool, second.Role)
+	assert.Equal(t, "result 2", second.Content)
+	assert.Equal(t, "call-2", second.ToolID)
+	assert.Equal(t, "lookup", second.ToolName)
+	assert.Equal(t, "agent", persistedEvents[2].Author)
+}
+
+func TestRunTailToolMessagesComposeUserMessageRewriter(t *testing.T) {
+	var called bool
+	var customRewriterCalled bool
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			called = true
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:           "app",
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			return []agent.RunOption{
+				agent.WithUserMessageRewriter(func(
+					context.Context,
+					*agent.UserMessageRewriteArgs,
+				) ([]model.Message, error) {
+					customRewriterCalled = true
+					return []model.Message{
+						model.NewUserMessage("custom"),
+						model.NewToolMessage("call-2", "lookup", "rewritten duplicate"),
+					}, nil
+				}),
+			}, nil
+		},
+		startSpan: defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{ID: "tool-msg-1", Role: types.RoleTool, Content: "result 1", Name: "search", ToolCallID: "call-1"},
+			{ID: "tool-msg-2", Role: types.RoleTool, Content: "result 2", Name: "lookup", ToolCallID: "call-2"},
+		},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 3)
+	assert.True(t, called)
+	require.NotNil(t, gotOptions.UserMessageRewriter)
+	currentTurn, err := gotOptions.UserMessageRewriter(
+		context.Background(),
+		&agent.UserMessageRewriteArgs{OriginalMessage: model.NewToolMessage("call-2", "lookup", "ignored")},
+	)
+	require.NoError(t, err)
+	require.Len(t, currentTurn, 3)
+	assert.Equal(t, model.RoleUser, currentTurn[0].Role)
+	assert.Equal(t, "custom", currentTurn[0].Content)
+	assert.Equal(t, "result 1", currentTurn[1].Content)
+	assert.Equal(t, "call-1", currentTurn[1].ToolID)
+	assert.Equal(t, "rewritten duplicate", currentTurn[2].Content)
+	assert.Equal(t, "call-2", currentTurn[2].ToolID)
+	assert.True(t, customRewriterCalled)
+}
+
+func TestRunToolMessageKeepsUserMessageRewriter(t *testing.T) {
+	var called bool
+	var customRewriterCalled bool
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			called = true
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:           "app",
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			return []agent.RunOption{
+				agent.WithUserMessageRewriter(func(
+					context.Context,
+					*agent.UserMessageRewriteArgs,
+				) ([]model.Message, error) {
+					customRewriterCalled = true
+					return []model.Message{
+						model.NewUserMessage("custom"),
+					}, nil
+				}),
+			}, nil
+		},
+		startSpan: defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{ID: "tool-msg-1", Role: types.RoleTool, Content: "result 1", Name: "search", ToolCallID: "call-1"},
+		},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.True(t, called)
+	require.NotNil(t, gotOptions.UserMessageRewriter)
+	currentTurn, err := gotOptions.UserMessageRewriter(
+		context.Background(),
+		&agent.UserMessageRewriteArgs{OriginalMessage: model.NewToolMessage("call-1", "search", "ignored")},
+	)
+	require.NoError(t, err)
+	require.Len(t, currentTurn, 1)
+	assert.Equal(t, model.RoleUser, currentTurn[0].Role)
+	assert.Equal(t, "custom", currentTurn[0].Content)
+	assert.True(t, customRewriterCalled)
+}
+
+func TestMergeToolResultRewriteMessagesKeepsNonToolMessagesWithToolID(t *testing.T) {
+	rewritten := []model.Message{
+		{Role: model.RoleUser, Content: "context", ToolID: "call-1"},
+		model.NewToolMessage("call-1", "search", "rewritten duplicate"),
+	}
+	toolResults := []model.Message{
+		model.NewToolMessage("call-1", "search", "authoritative result"),
+	}
+	got := mergeToolResultRewriteMessages(rewritten, toolResults)
+	require.Len(t, got, 2)
+	assert.Equal(t, model.RoleUser, got[0].Role)
+	assert.Equal(t, "context", got[0].Content)
+	assert.Equal(t, "call-1", got[0].ToolID)
+	assert.Equal(t, model.RoleTool, got[1].Role)
+	assert.Equal(t, "rewritten duplicate", got[1].Content)
+	assert.Equal(t, "call-1", got[1].ToolID)
+}
+
+func TestRunUserMessageKeepsUserMessageRewriter(t *testing.T) {
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:           "app",
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			return []agent.RunOption{
+				agent.WithUserMessageRewriter(func(
+					context.Context,
+					*agent.UserMessageRewriteArgs,
+				) ([]model.Message, error) {
+					return []model.Message{model.NewUserMessage("custom")}, nil
+				}),
+			}, nil
+		},
+		startSpan: defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{ID: "user-msg", Role: types.RoleUser, Content: "hello"},
+		},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, eventsCh)
+	require.NotNil(t, gotOptions.UserMessageRewriter)
+	currentTurn, err := gotOptions.UserMessageRewriter(
+		context.Background(),
+		&agent.UserMessageRewriteArgs{OriginalMessage: model.NewUserMessage("hello")},
+	)
+	require.NoError(t, err)
+	require.Len(t, currentTurn, 1)
+	assert.Equal(t, "custom", currentTurn[0].Content)
+}
+
 func TestRecordUserMessageTracksCustomEvent(t *testing.T) {
 	tracker := &recordingTracker{}
 	r := &runner{tracker: tracker}
@@ -1249,6 +1734,65 @@ func TestRunToolMessageTranslatedWhenEnabled(t *testing.T) {
 	assert.Equal(t, "calculator", seen.Response.Choices[0].Message.ToolName)
 }
 
+func TestRunTailToolMessagesTranslatedWhenEnabled(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	fakeTrans := &fakeTranslator{
+		events: [][]aguievents.Event{
+			{aguievents.NewCustomEvent("translated-tool-result-1", aguievents.WithValue("one"))},
+			{aguievents.NewCustomEvent("translated-tool-result-2", aguievents.WithValue("two"))},
+		},
+	}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(ctx context.Context, input *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		stateResolver:                     defaultStateResolver,
+		runOptionResolver:                 defaultRunOptionResolver,
+		startSpan:                         defaultStartSpan,
+		toolResultInputTranslationEnabled: true,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{ID: "assistant", Role: types.RoleAssistant, Content: "calling tools"},
+			{ID: "tool-msg-1", Role: types.RoleTool, Content: "tool result 1", Name: "calculator", ToolCallID: "call-1"},
+			{ID: "tool-msg-2", Role: types.RoleTool, Content: "tool result 2", Name: "search", ToolCallID: "call-2"},
+		},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 3)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	custom1, ok := evts[1].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Equal(t, "translated-tool-result-1", custom1.Name)
+	custom2, ok := evts[2].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Equal(t, "translated-tool-result-2", custom2.Name)
+	require.Len(t, fakeTrans.seen, 2)
+	assert.Equal(t, "tool-msg-1", fakeTrans.seen[0].ID)
+	assert.Equal(t, "tool result 1", fakeTrans.seen[0].Response.Choices[0].Message.Content)
+	assert.Equal(t, "call-1", fakeTrans.seen[0].Response.Choices[0].Message.ToolID)
+	assert.Equal(t, "calculator", fakeTrans.seen[0].Response.Choices[0].Message.ToolName)
+	assert.Equal(t, "tool-msg-2", fakeTrans.seen[1].ID)
+	assert.Equal(t, "tool result 2", fakeTrans.seen[1].Response.Choices[0].Message.Content)
+	assert.Equal(t, "call-2", fakeTrans.seen[1].Response.Choices[0].Message.ToolID)
+	assert.Equal(t, "search", fakeTrans.seen[1].Response.Choices[0].Message.ToolName)
+}
+
 func TestRunRunOptionResolverError(t *testing.T) {
 	underlying := &fakeRunner{}
 	fakeTrans := &fakeTranslator{}
@@ -1359,7 +1903,7 @@ func TestRunLastMessageContentArray(t *testing.T) {
 	assert.Equal(t, 1, underlying.calls)
 }
 
-func TestInputMessageFromRunAgentInputConvertsInputContentsFromAny(t *testing.T) {
+func TestInputMessagesFromRunAgentInputConvertsInputContentsFromAny(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		Messages: []types.Message{{
 			ID:   "msg-1",
@@ -1371,20 +1915,21 @@ func TestInputMessageFromRunAgentInputConvertsInputContentsFromAny(t *testing.T)
 		}},
 	}
 
-	gotMessage, gotID, gotUserMessage, err := inputMessageFromRunAgentInput(input)
+	got, err := inputMessagesFromRunAgentInput(input)
 	require.NoError(t, err)
-	require.NotNil(t, gotMessage)
-	assert.Equal(t, "msg-1", gotID)
-	require.NotNil(t, gotUserMessage)
+	require.NotNil(t, got)
+	require.NotNil(t, got.inputMessage)
+	assert.Equal(t, "msg-1", got.inputID)
+	require.NotNil(t, got.userMessage)
 
-	assert.Equal(t, model.RoleUser, gotMessage.Role)
-	assert.Empty(t, gotMessage.Content)
-	require.Len(t, gotMessage.ContentParts, 2)
-	assert.Equal(t, model.ContentTypeImage, gotMessage.ContentParts[0].Type)
-	require.NotNil(t, gotMessage.ContentParts[0].Image)
-	assert.Equal(t, "https://example.com/a.jpg", gotMessage.ContentParts[0].Image.URL)
+	assert.Equal(t, model.RoleUser, got.inputMessage.Role)
+	assert.Empty(t, got.inputMessage.Content)
+	require.Len(t, got.inputMessage.ContentParts, 2)
+	assert.Equal(t, model.ContentTypeImage, got.inputMessage.ContentParts[0].Type)
+	require.NotNil(t, got.inputMessage.ContentParts[0].Image)
+	assert.Equal(t, "https://example.com/a.jpg", got.inputMessage.ContentParts[0].Image.URL)
 
-	contents, ok := gotUserMessage.Content.([]types.InputContent)
+	contents, ok := got.userMessage.Content.([]types.InputContent)
 	require.True(t, ok)
 	require.Len(t, contents, 2)
 	assert.Equal(t, types.InputContentTypeBinary, contents[0].Type)
@@ -1392,6 +1937,35 @@ func TestInputMessageFromRunAgentInputConvertsInputContentsFromAny(t *testing.T)
 	assert.Equal(t, "https://example.com/a.jpg", contents[0].URL)
 	assert.Equal(t, types.InputContentTypeText, contents[1].Type)
 	assert.Equal(t, "hello", contents[1].Text)
+}
+
+func TestInputMessagesFromRunAgentInputCollectsTailToolMessages(t *testing.T) {
+	input := &adapter.RunAgentInput{
+		Messages: []types.Message{
+			{ID: "old-tool", Role: types.RoleTool, Content: "old", ToolCallID: "old-call"},
+			{ID: "assistant", Role: types.RoleAssistant, Content: "calling tools"},
+			{ID: "tool-msg-1", Role: types.RoleTool, Content: "result 1", Name: "search", ToolCallID: "call-1"},
+			{ID: "tool-msg-2", Role: types.RoleTool, Content: "result 2", Name: "lookup", ToolCallID: "call-2"},
+		},
+	}
+	got, err := inputMessagesFromRunAgentInput(input)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.inputMessage)
+	assert.Equal(t, "tool-msg-2", got.inputID)
+	assert.Nil(t, got.userMessage)
+	assert.Equal(t, model.RoleTool, got.inputMessage.Role)
+	assert.Equal(t, "result 2", got.inputMessage.Content)
+	assert.Equal(t, "call-2", got.inputMessage.ToolID)
+	require.Len(t, got.toolMessages, 2)
+	assert.Equal(t, "tool-msg-1", got.toolMessages[0].messageID)
+	assert.Equal(t, "result 1", got.toolMessages[0].message.Content)
+	assert.Equal(t, "search", got.toolMessages[0].message.ToolName)
+	assert.Equal(t, "call-1", got.toolMessages[0].message.ToolID)
+	assert.Equal(t, "tool-msg-2", got.toolMessages[1].messageID)
+	assert.Equal(t, "result 2", got.toolMessages[1].message.Content)
+	assert.Equal(t, "lookup", got.toolMessages[1].message.ToolName)
+	assert.Equal(t, "call-2", got.toolMessages[1].message.ToolID)
 }
 
 func TestRunLastMessageContentNotString(t *testing.T) {
@@ -1423,6 +1997,33 @@ func TestRunLastMessageContentNotString(t *testing.T) {
 	assert.ErrorContains(t, err, "build input message")
 	assert.ErrorContains(t, err, "last message content is not a string")
 	assert.False(t, startSpanCalled)
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunToolMessageContentNotString(t *testing.T) {
+	underlying := &fakeRunner{}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{
+			ID:         "tool-msg",
+			Role:       types.RoleTool,
+			Content:    map[string]any{"invalid": "payload"},
+			ToolCallID: "call-1",
+		}},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.Nil(t, eventsCh)
+	assert.ErrorContains(t, err, "build input message")
+	assert.ErrorContains(t, err, "tool message \"tool-msg\" content is not a string")
 	assert.Equal(t, 0, underlying.calls)
 }
 
@@ -2181,6 +2782,39 @@ func (r *recordingTracker) Flush(ctx context.Context, key session.Key) error {
 	return nil
 }
 
+type capturingAGUIInvocationAgent struct {
+	name        string
+	message     model.Message
+	hasRewriter bool
+}
+
+func (a *capturingAGUIInvocationAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *capturingAGUIInvocationAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (a *capturingAGUIInvocationAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (a *capturingAGUIInvocationAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (a *capturingAGUIInvocationAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *agentevent.Event, error) {
+	a.message = invocation.Message
+	a.hasRewriter = invocation.RunOptions.UserMessageRewriter != nil
+	ch := make(chan *agentevent.Event)
+	close(ch)
+	return ch, nil
+}
+
 type errorTracker struct {
 	appendErr error
 	flushErr  error
@@ -2449,6 +3083,142 @@ func TestRunGraphToolMetadataUsesCanonicalToolCallID(t *testing.T) {
 	require.Equal(t, canonicalToolCallID, resultID)
 }
 
+func TestRunStreamingToolResultActivityEnabledTracksOnlyFinalToolResult(t *testing.T) {
+	sessionService := inmemory.NewSessionService()
+	agentEvents := make(chan *agentevent.Event, 5)
+	agentEvents <- &agentevent.Event{
+		Response: &model.Response{
+			ID:     "msg-tool-call",
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:   "call-1",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "streamer",
+							Arguments: []byte(`{"count":2}`),
+						},
+					}},
+				},
+			}},
+		},
+	}
+	agentEvents <- &agentevent.Event{
+		ID: "tool-partial-1",
+		Response: &model.Response{
+			Object:    model.ObjectTypeToolResponse,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.Message{Role: model.RoleTool, ToolID: "call-1", Content: "Hello"},
+			}},
+		},
+	}
+	agentEvents <- &agentevent.Event{
+		ID: "tool-partial-2",
+		Response: &model.Response{
+			Object:    model.ObjectTypeToolResponse,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.Message{Role: model.RoleTool, ToolID: "call-1", Content: " World"},
+			}},
+		},
+	}
+	agentEvents <- &agentevent.Event{
+		ID: "tool-final",
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleTool, ToolID: "call-1", Content: `{"final":"done"}`},
+			}},
+		},
+	}
+	agentEvents <- &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+	close(agentEvents)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message, _ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	rr, ok := New(
+		underlying,
+		WithAppName("demo"),
+		WithSessionService(sessionService),
+		WithStreamingToolResultActivityEnabled(true),
+	).(*runner)
+	require.True(t, ok)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := rr.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 8)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	assert.IsType(t, (*aguievents.ToolCallStartEvent)(nil), evts[1])
+	assert.IsType(t, (*aguievents.ToolCallArgsEvent)(nil), evts[2])
+	assert.IsType(t, (*aguievents.ToolCallEndEvent)(nil), evts[3])
+	assert.IsType(t, (*aguievents.ActivitySnapshotEvent)(nil), evts[4])
+	assert.IsType(t, (*aguievents.ActivityDeltaEvent)(nil), evts[5])
+	assert.IsType(t, (*aguievents.ToolCallResultEvent)(nil), evts[6])
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), evts[7])
+	result, ok := evts[6].(*aguievents.ToolCallResultEvent)
+	require.True(t, ok)
+	assert.Equal(t, "call-1", result.ToolCallID)
+	assert.Equal(t, `{"final":"done"}`, result.Content)
+	trackEvents, err := rr.tracker.GetEvents(context.Background(), session.Key{
+		AppName:   "demo",
+		UserID:    "user",
+		SessionID: "thread",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, trackEvents)
+	for _, trackEvent := range trackEvents.Events {
+		evt, decodeErr := aguievents.EventFromJSON(trackEvent.Payload)
+		require.NoError(t, decodeErr)
+		assert.False(t, aguitool.IsStreamingToolResultActivityEvent(evt))
+	}
+	snapshotStream, err := rr.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "snapshot",
+	})
+	require.NoError(t, err)
+	snapshotEvents := collectEvents(t, snapshotStream)
+	require.Len(t, snapshotEvents, 3)
+	snapshot, ok := snapshotEvents[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 3)
+	assert.Equal(t, types.RoleUser, snapshot.Messages[0].Role)
+	assert.Equal(t, types.RoleAssistant, snapshot.Messages[1].Role)
+	assert.Equal(t, types.RoleTool, snapshot.Messages[2].Role)
+	assert.Equal(t, "call-1", snapshot.Messages[2].ToolCallID)
+	for _, msg := range snapshot.Messages {
+		assert.NotEqual(t, types.RoleActivity, msg.Role)
+	}
+}
+
+func TestRunStreamingToolResultActivityEnabledUsesMergedFinalToolResult(t *testing.T) {
+	outcome := runStreamingToolResultIntegrationScenario(t, []any{"Hello", " World"})
+	assertStreamingToolResultActivityOutcome(t, outcome, "Hello", "Hello World", `"Hello World"`)
+}
+
+func TestRunStreamingToolResultActivityEnabledUsesExplicitFinalResultChunk(t *testing.T) {
+	outcome := runStreamingToolResultIntegrationScenario(t, []any{
+		"line-1",
+		" line-2",
+		tool.FinalResultChunk{Result: map[string]any{"final": "done"}},
+	})
+	assertStreamingToolResultActivityOutcome(t, outcome, "line-1", "line-1 line-2", `{"final":"done"}`)
+}
+
 type toolCallIDRunnerIntegrationModel struct {
 	mu        sync.Mutex
 	responses [][]*model.Response
@@ -2503,6 +3273,232 @@ func cloneToolCallIDRunnerIntegrationMessage(message model.Message) model.Messag
 		cloned.ContentParts = append([]model.ContentPart(nil), message.ContentParts...)
 	}
 	return cloned
+}
+
+type streamingToolResultIntegrationOutcome struct {
+	runner     *runner
+	events     []aguievents.Event
+	toolCallID string
+}
+
+func runStreamingToolResultIntegrationScenario(
+	t *testing.T,
+	chunks []any,
+) streamingToolResultIntegrationOutcome {
+	t.Helper()
+	modelStub := &toolCallIDRunnerIntegrationModel{
+		responses: [][]*model.Response{
+			{{
+				ID:        "rsp-tool",
+				Object:    model.ObjectTypeChatCompletion,
+				Done:      true,
+				IsPartial: false,
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID:   "call-1",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "streamer",
+								Arguments: []byte(`{}`),
+							},
+						}},
+					},
+				}},
+			}},
+			{{
+				ID:        "rsp-final",
+				Object:    model.ObjectTypeChatCompletion,
+				Done:      true,
+				IsPartial: false,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("done"),
+				}},
+			}},
+		},
+	}
+	streamTool := function.NewStreamableFunctionTool[struct{}, string](
+		func(_ context.Context, _ struct{}) (*tool.StreamReader, error) {
+			stream := tool.NewStream(len(chunks))
+			go func() {
+				defer stream.Writer.Close()
+				for _, chunk := range chunks {
+					if stream.Writer.Send(tool.StreamChunk{Content: chunk}, nil) {
+						return
+					}
+				}
+			}()
+			return stream.Reader, nil
+		},
+		function.WithName("streamer"),
+		function.WithDescription("Streams tool output."),
+	)
+	ag := llmagent.New(
+		"assistant",
+		llmagent.WithModel(modelStub),
+		llmagent.WithTools([]tool.Tool{streamTool}),
+	)
+	underlying := baserunner.NewRunner("streaming-tool-result-agui-app", ag)
+	t.Cleanup(func() {
+		require.NoError(t, underlying.Close())
+	})
+	rr, ok := New(
+		underlying,
+		WithAppName("demo"),
+		WithSessionService(inmemory.NewSessionService()),
+		WithStreamingToolResultActivityEnabled(true),
+	).(*runner)
+	require.True(t, ok)
+	eventsCh, err := rr.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hello"}},
+	})
+	require.NoError(t, err)
+	events := collectEvents(t, eventsCh)
+	var toolCallID string
+	for _, evt := range events {
+		start, ok := evt.(*aguievents.ToolCallStartEvent)
+		if ok {
+			toolCallID = start.ToolCallID
+			break
+		}
+	}
+	require.NotEmpty(t, toolCallID)
+	return streamingToolResultIntegrationOutcome{
+		runner:     rr,
+		events:     events,
+		toolCallID: toolCallID,
+	}
+}
+
+func assertStreamingToolResultActivityOutcome(
+	t *testing.T,
+	outcome streamingToolResultIntegrationOutcome,
+	wantSnapshotContent string,
+	wantMergedActivityContent string,
+	wantFinalToolResultContent string,
+) {
+	t.Helper()
+	var (
+		toolCallStartIndex int = -1
+		toolCallArgsIndex  int = -1
+		toolCallEndIndex   int = -1
+		snapshotIndex      int = -1
+		deltaIndex         int = -1
+		resultIndex        int = -1
+		snapshotEvent      *aguievents.ActivitySnapshotEvent
+		deltaEvent         *aguievents.ActivityDeltaEvent
+		resultEvents       []*aguievents.ToolCallResultEvent
+	)
+	for i, evt := range outcome.events {
+		switch e := evt.(type) {
+		case *aguievents.ToolCallStartEvent:
+			toolCallStartIndex = i
+			assert.Equal(t, outcome.toolCallID, e.ToolCallID)
+		case *aguievents.ToolCallArgsEvent:
+			toolCallArgsIndex = i
+			assert.Equal(t, outcome.toolCallID, e.ToolCallID)
+		case *aguievents.ToolCallEndEvent:
+			toolCallEndIndex = i
+			assert.Equal(t, outcome.toolCallID, e.ToolCallID)
+		case *aguievents.ActivitySnapshotEvent:
+			snapshotIndex = i
+			snapshotEvent = e
+		case *aguievents.ActivityDeltaEvent:
+			deltaIndex = i
+			deltaEvent = e
+		case *aguievents.ToolCallResultEvent:
+			resultIndex = i
+			resultEvents = append(resultEvents, e)
+		}
+	}
+	require.Len(t, resultEvents, 1)
+	require.NotNil(t, snapshotEvent)
+	require.NotNil(t, deltaEvent)
+	assert.Greater(t, toolCallStartIndex, -1)
+	assert.Greater(t, toolCallArgsIndex, toolCallStartIndex)
+	assert.Greater(t, toolCallEndIndex, toolCallArgsIndex)
+	assert.Greater(t, snapshotIndex, toolCallEndIndex)
+	assert.Greater(t, deltaIndex, snapshotIndex)
+	assert.Greater(t, resultIndex, deltaIndex)
+	assert.Equal(t, aguitool.StreamingToolResultActivityMessageID(outcome.toolCallID), snapshotEvent.MessageID)
+	assert.Equal(t, aguitool.StreamingToolResultActivityMessageID(outcome.toolCallID), deltaEvent.MessageID)
+	assert.Equal(t, aguitool.StreamingToolResultActivityType, snapshotEvent.ActivityType)
+	assert.Equal(t, aguitool.StreamingToolResultActivityType, deltaEvent.ActivityType)
+	snapshotContent, ok := snapshotEvent.Content.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, outcome.toolCallID, snapshotContent["toolCallId"])
+	assert.Equal(t, wantSnapshotContent, snapshotContent["content"])
+	require.Len(t, deltaEvent.Patch, 1)
+	assert.Equal(t, "add", deltaEvent.Patch[0].Op)
+	assert.Equal(t, "/content", deltaEvent.Patch[0].Path)
+	assert.Equal(t, wantMergedActivityContent, deltaEvent.Patch[0].Value)
+	assert.Equal(t, outcome.toolCallID, resultEvents[0].ToolCallID)
+	assert.Equal(t, wantFinalToolResultContent, resultEvents[0].Content)
+	require.NotNil(t, outcome.runner.tracker)
+	trackEvents, err := outcome.runner.tracker.GetEvents(context.Background(), session.Key{
+		AppName:   "demo",
+		UserID:    "user",
+		SessionID: "thread",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, trackEvents)
+	toolResultCount := 0
+	for _, trackEvent := range trackEvents.Events {
+		evt, decodeErr := aguievents.EventFromJSON(trackEvent.Payload)
+		require.NoError(t, decodeErr)
+		assert.False(t, aguitool.IsStreamingToolResultActivityEvent(evt))
+		resultEvent, ok := evt.(*aguievents.ToolCallResultEvent)
+		if !ok || resultEvent.ToolCallID != outcome.toolCallID {
+			continue
+		}
+		toolResultCount++
+		assert.Equal(t, wantFinalToolResultContent, resultEvent.Content)
+	}
+	assert.Equal(t, 1, toolResultCount)
+	snapshotMessages := loadSnapshotMessages(t, outcome.runner)
+	toolMessageCount := 0
+	for _, msg := range snapshotMessages {
+		assert.NotEqual(t, types.RoleActivity, msg.Role)
+		if msg.Role != types.RoleTool || msg.ToolCallID != outcome.toolCallID {
+			continue
+		}
+		toolMessageCount++
+		assert.Equal(t, wantFinalToolResultContent, toolSnapshotContentString(t, msg))
+	}
+	assert.Equal(t, 1, toolMessageCount)
+}
+
+func loadSnapshotMessages(t *testing.T, rr *runner) []types.Message {
+	t.Helper()
+	snapshotStream, err := rr.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "snapshot",
+	})
+	require.NoError(t, err)
+	snapshotEvents := collectEvents(t, snapshotStream)
+	require.Len(t, snapshotEvents, 3)
+	snapshot, ok := snapshotEvents[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	return snapshot.Messages
+}
+
+func toolSnapshotContentString(t *testing.T, msg types.Message) string {
+	t.Helper()
+	switch content := msg.Content.(type) {
+	case string:
+		return content
+	case *string:
+		require.NotNil(t, content)
+		return *content
+	default:
+		require.FailNowf(t, "unexpected tool snapshot content type", "%T", msg.Content)
+		return ""
+	}
 }
 
 func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event {

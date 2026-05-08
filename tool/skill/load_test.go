@@ -104,8 +104,20 @@ func TestLoadTool_Declaration(t *testing.T) {
 	lt := NewLoadTool(nil)
 	d := lt.Declaration()
 	require.Equal(t, "skill_load", d.Name)
+	require.Equal(t, defaultLoadToolDescription, d.Description)
 	require.NotNil(t, d.InputSchema)
 	require.NotNil(t, d.OutputSchema)
+}
+
+func TestLoadTool_DeclarationOverride(t *testing.T) {
+	const description = "Always load the matching skill first."
+
+	lt := NewLoadToolWithOptions(
+		nil,
+		WithLoadToolDescription(description),
+	)
+	d := lt.Declaration()
+	require.Equal(t, description, d.Description)
 }
 
 func TestLoadTool_StateDelta_InvalidArgs(t *testing.T) {
