@@ -174,6 +174,12 @@ func TestWithContextCompactionOptions(t *testing.T) {
 	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
 	WithContextCompactionOversizedToolResultMaxTokens(-1)(opts)
 	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
+
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	WithContextCompactionTokenCounter(counter)(opts)
+	require.Same(t, counter, opts.ContextCompactionTokenCounter)
+	WithContextCompactionTokenCounter(nil)(opts)
+	require.Same(t, counter, opts.ContextCompactionTokenCounter)
 }
 
 func TestWithReasoningContentMode(t *testing.T) {

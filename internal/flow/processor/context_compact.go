@@ -53,6 +53,9 @@ type ContextCompactionConfig struct {
 	// fire when context compaction is turned off, even if a positive threshold
 	// is configured. 0 disables it regardless of Enabled.
 	OversizedToolResultMaxTokens int
+	// TokenCounter estimates tool-result size for compaction decisions.
+	// When nil, SimpleTokenCounter is used.
+	TokenCounter model.TokenCounter
 }
 
 // ContextCompactionStats reports how much prompt history was compacted during
@@ -73,6 +76,9 @@ func normalizeContextCompactionConfig(
 	}
 	if cfg.OversizedToolResultMaxTokens < 0 {
 		cfg.OversizedToolResultMaxTokens = 0
+	}
+	if cfg.TokenCounter == nil {
+		cfg.TokenCounter = model.NewSimpleTokenCounter()
 	}
 	return cfg
 }
@@ -111,6 +117,7 @@ func compactIncrementEvents(
 				currentKey,
 				cfg.KeepRecentRequests,
 				cfg.ToolResultMaxTokens,
+				cfg.TokenCounter,
 			)
 			compacted = passEvents
 			stats = mergeContextCompactionStats(stats, passStats)
@@ -126,6 +133,7 @@ func compactIncrementEvents(
 			ctx,
 			compacted,
 			cfg.OversizedToolResultMaxTokens,
+			cfg.TokenCounter,
 		)
 		compacted = passEvents
 		stats = mergeContextCompactionStats(stats, passStats)
@@ -140,6 +148,7 @@ func applyHistoricalToolResultPass(
 	currentKey string,
 	keepRecentRequests int,
 	maxTokens int,
+	counter model.TokenCounter,
 ) ([]event.Event, ContextCompactionStats) {
 	protectedRequestIDs := collectProtectedRequestIDs(
 		events,
@@ -154,6 +163,7 @@ func applyHistoricalToolResultPass(
 			events[i],
 			protectedRequestIDs,
 			maxTokens,
+			counter,
 		)
 		if !changed {
 			continue
@@ -170,6 +180,7 @@ func compactHistoricalToolResultEvent(
 	evt event.Event,
 	protectedRequestIDs map[string]struct{},
 	maxTokens int,
+	counter model.TokenCounter,
 ) (event.Event, bool, int, int) {
 	unitKey := compactionUnitKey(evt.RequestID, evt.InvocationID)
 	if unitKey == "" {
@@ -182,7 +193,9 @@ func compactHistoricalToolResultEvent(
 		ctx,
 		evt,
 		maxTokens,
-		compactHistoricalToolResultMessage,
+		func(ctx context.Context, msg model.Message, maxTokens int) (model.Message, bool, int) {
+			return compactHistoricalToolResultMessageWithCounter(ctx, msg, maxTokens, counter)
+		},
 	)
 }
 
@@ -190,6 +203,7 @@ func applyOversizedToolResultPass(
 	ctx context.Context,
 	events []event.Event,
 	maxTokens int,
+	counter model.TokenCounter,
 ) ([]event.Event, ContextCompactionStats) {
 	var stats ContextCompactionStats
 	for i := range events {
@@ -197,7 +211,9 @@ func applyOversizedToolResultPass(
 			ctx,
 			events[i],
 			maxTokens,
-			truncateOversizedToolResultMessage,
+			func(ctx context.Context, msg model.Message, maxTokens int) (model.Message, bool, int) {
+				return truncateOversizedToolResultMessageWithCounter(ctx, msg, maxTokens, counter)
+			},
 		)
 		if !changed {
 			continue
@@ -326,6 +342,20 @@ func truncateOversizedToolResultMessage(
 	msg model.Message,
 	maxTokens int,
 ) (model.Message, bool, int) {
+	return truncateOversizedToolResultMessageWithCounter(
+		ctx,
+		msg,
+		maxTokens,
+		model.NewSimpleTokenCounter(),
+	)
+}
+
+func truncateOversizedToolResultMessageWithCounter(
+	ctx context.Context,
+	msg model.Message,
+	maxTokens int,
+	counter model.TokenCounter,
+) (model.Message, bool, int) {
 	if msg.Role != model.RoleTool || msg.ToolID == "" || maxTokens <= 0 {
 		return msg, false, 0
 	}
@@ -335,17 +365,19 @@ func truncateOversizedToolResultMessage(
 	if msg.Content == historicalToolResultPlaceholder {
 		return msg, false, 0
 	}
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
 
-	counter := model.NewSimpleTokenCounter()
 	originalTokens, err := counter.CountTokens(ctx, msg)
 	if err != nil || originalTokens <= maxTokens {
 		return msg, false, 0
 	}
 
-	// Approximate the character budget from the token budget.
-	// SimpleTokenCounter uses ~4 chars/token, so we reverse that.
-	maxChars := maxTokens * 4
-	truncated := truncateMiddle(msg.Content, maxChars)
+	truncated, ok := truncateMiddleToTokenBudget(ctx, msg, maxTokens, counter)
+	if !ok {
+		return msg, false, 0
+	}
 
 	result := msg
 	result.Content = truncated
@@ -361,6 +393,40 @@ func truncateOversizedToolResultMessage(
 	}
 
 	return result, true, originalTokens - resultTokens
+}
+
+func truncateMiddleToTokenBudget(
+	ctx context.Context,
+	msg model.Message,
+	maxTokens int,
+	counter model.TokenCounter,
+) (string, bool) {
+	if msg.Content == "" || counter == nil || maxTokens <= 0 {
+		return "", false
+	}
+
+	runeCount := utf8.RuneCountInString(msg.Content)
+	low, high := 0, runeCount-1
+	best := ""
+	found := false
+	for low <= high {
+		mid := low + (high-low)/2
+		candidate := truncateMiddle(msg.Content, mid)
+		candidateMsg := msg
+		candidateMsg.Content = candidate
+		tokens, err := counter.CountTokens(ctx, candidateMsg)
+		if err != nil {
+			return "", false
+		}
+		if tokens <= maxTokens {
+			best = candidate
+			found = true
+			low = mid + 1
+			continue
+		}
+		high = mid - 1
+	}
+	return best, found
 }
 
 // truncateMiddle keeps the first half and last half of the content (by
@@ -396,6 +462,20 @@ func compactHistoricalToolResultMessage(
 	msg model.Message,
 	maxTokens int,
 ) (model.Message, bool, int) {
+	return compactHistoricalToolResultMessageWithCounter(
+		ctx,
+		msg,
+		maxTokens,
+		model.NewSimpleTokenCounter(),
+	)
+}
+
+func compactHistoricalToolResultMessageWithCounter(
+	ctx context.Context,
+	msg model.Message,
+	maxTokens int,
+	counter model.TokenCounter,
+) (model.Message, bool, int) {
 	if msg.Role != model.RoleTool || msg.ToolID == "" || maxTokens <= 0 {
 		return msg, false, 0
 	}
@@ -404,10 +484,9 @@ func compactHistoricalToolResultMessage(
 		return msg, false, 0
 	}
 
-	// SimpleTokenCounter is intentionally heuristic-based; Phase 1 only needs a
-	// cheap approximation to decide whether a historical tool result is worth
-	// replacing with a placeholder.
-	counter := model.NewSimpleTokenCounter()
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
 	originalTokens, err := counter.CountTokens(ctx, msg)
 	if err != nil || originalTokens <= maxTokens {
 		return msg, false, 0

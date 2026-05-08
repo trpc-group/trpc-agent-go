@@ -1564,36 +1564,46 @@ model := openai.New("deepseek-v4-flash",
 
 **Token Calculation Formula**:
 
-The framework automatically calculates "maxInputTokens" based on the model's context window:
+The framework automatically calculates `maxInputTokens` based on the model's
+context window. For OpenAI-compatible models, the automatic budget also accounts
+for request-scoped output limits and tool definitions:
 
 > **Context Window Registration**
 >
 > Both Token Tailoring and session summary `WithContextThreshold` rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with `model.RegisterModelContextWindow("my-model", 32768)` or `model.RegisterModelContextWindows(map[string]int{...})`. See the [Session Summary documentation](session/summary.md) for a full example.
 
-```
-safetyMargin = contextWindow × 10%
-calculatedMax = contextWindow - 2048 (output reserve) - 512 (protocol overhead) - safetyMargin
-ratioLimit = contextWindow × 100% (max input ratio)
-maxInputTokens = max(min(calculatedMax, ratioLimit), 1024 (minimum))
+```text
+outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
+safetyMargin = contextWindow × SafetyMarginRatio
+calculatedMax = contextWindow - outputReserve - ProtocolOverheadTokens - safetyMargin
+ratioLimit = contextWindow × MaxInputTokensRatio
+messageBudget = min(max(min(calculatedMax, ratioLimit), InputTokensFloor), calculatedMax)
+maxInputTokens = max(messageBudget - estimatedToolsTokens, 0)
 ```
 
 For example, "gpt-4o" (contextWindow = 128000):
 
-```
+```text
 safetyMargin = 128000 × 0.10 = 12800 tokens
-calculatedMax = 128000 - 2048 - 512 - 12800 = 112640 tokens
+outputReserve = max(2048, request.MaxTokens, request.ThinkingTokens)
+calculatedMax = 128000 - outputReserve - 512 - 12800
 ratioLimit = 128000 × 1.0 = 128000 tokens
-maxInputTokens = 112640 tokens (approximately 88% of context window)
+maxInputTokens = messageBudget - estimatedToolsTokens
 ```
+
+If `WithMaxInputTokens` is set explicitly, the framework keeps that value as the
+configured message budget and does not subtract the estimated `Tools` schema
+budget from it. The explicit value is still clamped to the context-safe hard
+budget after output reserves and safety margin are applied.
 
 **Default Budget Parameters**:
 
 The framework uses the following default values for token allocation (**it is recommended to keep the defaults**):
 
 - **Protocol Overhead (ProtocolOverheadTokens)**: 512 tokens - reserved for request/response formatting
-- **Output Reserve (ReserveOutputTokens)**: 2048 tokens - reserved for output generation
+- **Output Reserve (ReserveOutputTokens)**: 2048 tokens - minimum reserve for output generation; OpenAI-compatible requests reserve the larger value among this setting, `GenerationConfig.MaxTokens`, and `GenerationConfig.ThinkingTokens`
 - **Input Floor (InputTokensFloor)**: 1024 tokens - ensures proper model processing
-- **Output Floor (OutputTokensFloor)**: 256 tokens - ensures meaningful responses
+- **Output Floor (OutputTokensFloor)**: deprecated and no longer used to auto-calculate output `MaxTokens`
 - **Safety Margin Ratio (SafetyMarginRatio)**: 10% - buffer for token counting inaccuracies
 - **Max Input Ratio (MaxInputTokensRatio)**: 100% - maximum input ratio of context window
 

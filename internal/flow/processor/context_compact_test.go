@@ -393,6 +393,30 @@ func TestTruncateOversizedToolResultMessage_PreservesContentParts(t *testing.T) 
 	require.Equal(t, msg.ContentParts, compacted.ContentParts)
 }
 
+func TestTruncateOversizedToolResultMessage_UsesConfiguredCounter(t *testing.T) {
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	msg := model.NewToolMessage(
+		"tool-call-current",
+		"worker",
+		"HEAD-"+strings.Repeat("middle-", 80)+"-TAIL",
+	)
+
+	compacted, changed, savedTokens := truncateOversizedToolResultMessageWithCounter(
+		context.Background(),
+		msg,
+		80,
+		counter,
+	)
+
+	require.True(t, changed)
+	require.Greater(t, savedTokens, 0)
+	tokens, err := counter.CountTokens(context.Background(), compacted)
+	require.NoError(t, err)
+	require.LessOrEqual(t, tokens, 80)
+	require.True(t, strings.HasPrefix(compacted.Content, "HEAD-"))
+	require.True(t, strings.HasSuffix(compacted.Content, "-TAIL"))
+}
+
 func TestTruncateOversizedToolResultMessage_ContentPartsOnlyKeepsPayload(t *testing.T) {
 	partText := strings.Repeat("segment-", 400)
 	msg := model.Message{
