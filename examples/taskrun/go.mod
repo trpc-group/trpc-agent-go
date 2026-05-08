@@ -1,4 +1,4 @@
-module trpc.group/trpc-go/trpc-agent-go/examples/subagent
+module trpc.group/trpc-go/trpc-agent-go/examples/taskrun
 
 go 1.24.1
 

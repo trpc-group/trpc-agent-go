@@ -48,7 +48,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	coresubagent "trpc.group/trpc-go/trpc-agent-go/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
@@ -68,6 +67,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/subagentrun"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 )
 
 const (
@@ -625,12 +625,15 @@ func (r *Runtime) SessionService() session.Service {
 // SubagentService is the OpenClaw subagent control-plane service exposed by
 // Runtime.
 type SubagentService interface {
-	ListForUser(userID string, filter coresubagent.ListFilter) []coresubagent.Run
-	GetForUser(userID string, runID string) (*coresubagent.Run, error)
+	ListForUser(
+		userID string,
+		filter openclawsubagent.ListFilter,
+	) []openclawsubagent.Run
+	GetForUser(userID string, runID string) (*openclawsubagent.Run, error)
 	CancelForUser(
 		userID string,
 		runID string,
-	) (*coresubagent.Run, bool, error)
+	) (*openclawsubagent.Run, bool, error)
 }
 
 func (r *Runtime) SubagentService() SubagentService {
@@ -909,7 +912,8 @@ func NewRuntime(
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
-			ContextCompactionOversizedToolResultMaxTokens: opts.ContextCompactionOversizedToolResultMaxTokens,
+			ContextCompactionOversizedToolResultMaxTokens: opts.
+				ContextCompactionOversizedToolResultMaxTokens,
 			MaxHistoryRuns:   opts.MaxHistoryRuns,
 			PreloadMemory:    opts.PreloadMemory,
 			GenerationConfig: opts.GenerationConfig,
@@ -1402,7 +1406,8 @@ func run(ctx context.Context, args []string) error {
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
-			ContextCompactionOversizedToolResultMaxTokens: opts.ContextCompactionOversizedToolResultMaxTokens,
+			ContextCompactionOversizedToolResultMaxTokens: opts.
+				ContextCompactionOversizedToolResultMaxTokens,
 			MaxHistoryRuns:   opts.MaxHistoryRuns,
 			PreloadMemory:    opts.PreloadMemory,
 			GenerationConfig: opts.GenerationConfig,
@@ -2232,7 +2237,8 @@ func newAgent(
 		instruction = defaultAgentInstruction
 	}
 	if cfg.EnableOpenClawTools {
-		if guidance := buildOpenClawToolingGuidance(cfg); strings.TrimSpace(guidance) != "" {
+		guidance := buildOpenClawToolingGuidance(cfg)
+		if strings.TrimSpace(guidance) != "" {
 			instruction = strings.TrimSpace(
 				instruction + "\n\n" + guidance,
 			)
@@ -2292,7 +2298,9 @@ func newAgent(
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithEnableContextCompaction(cfg.EnableContextCompaction),
-		llmagent.WithContextCompactionOversizedToolResultMaxTokens(cfg.ContextCompactionOversizedToolResultMaxTokens),
+		llmagent.WithContextCompactionOversizedToolResultMaxTokens(
+			cfg.ContextCompactionOversizedToolResultMaxTokens,
+		),
 		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
 		llmagent.WithEventMessageProjector(

@@ -7,9 +7,12 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package subagent provides a generic runtime for dynamic background
-// agent runs.
-package subagent
+// Package taskrun defines the control-plane API for persistent background
+// task runs that execute agents through runner.Run.
+//
+// It is separate from runner.ManagedRunner, which controls only active
+// runner invocations by request ID.
+package taskrun
 
 import (
 	"context"
@@ -20,27 +23,24 @@ import (
 )
 
 const (
-	// RuntimeStateKeyRun marks the current invocation as a subagent run.
-	RuntimeStateKeyRun = "subagent.run"
-	// RuntimeStateKeyRunID stores the current subagent run id.
-	RuntimeStateKeyRunID = "subagent.run_id"
+	// RuntimeStateKeyRun marks the current invocation as a task run.
+	RuntimeStateKeyRun = "taskrun.run"
+	// RuntimeStateKeyRunID stores the current task run id.
+	RuntimeStateKeyRunID = "taskrun.run_id"
 	// RuntimeStateKeyParentSessionID stores the parent session id.
-	RuntimeStateKeyParentSessionID = "subagent.parent_session_id"
+	RuntimeStateKeyParentSessionID = "taskrun.parent_session_id"
 )
 
-const (
-	defaultStoredResultRunes  = 4000
-	defaultStoredSummaryRunes = 240
-)
+// ErrRunNotFound indicates that a task run does not exist.
+var ErrRunNotFound = errors.New("taskrun: run not found")
 
-const (
-	statusCanceledSummary = "canceled"
-)
+// ErrRunAlreadyExists indicates that a requested task run id already exists.
+var ErrRunAlreadyExists = errors.New("taskrun: run already exists")
 
-// ErrRunNotFound indicates that a subagent run does not exist.
-var ErrRunNotFound = errors.New("subagent: run not found")
+// ErrNotStarted indicates that a task run controller has not been started.
+var ErrNotStarted = errors.New("taskrun: not started")
 
-// Status describes the lifecycle state of a subagent run.
+// Status describes the lifecycle state of a task run.
 type Status string
 
 const (
@@ -56,7 +56,7 @@ const (
 	StatusCanceled Status = "canceled"
 )
 
-// Run is the persisted control-plane view of one dynamic subagent run.
+// Run is the persisted control-plane view of one delegated task run.
 type Run struct {
 	ID              string            `json:"id,omitempty"`
 	OwnerUserID     string            `json:"owner_user_id,omitempty"`
@@ -83,21 +83,38 @@ type ListFilter struct {
 	Status          Status
 }
 
-// SpawnRequest describes a new dynamic subagent run.
+// RuntimeStateKeys configures the runtime-state keys injected into the child
+// runner invocation. Zero value uses the taskrun defaults.
+type RuntimeStateKeys struct {
+	Run             string
+	RunID           string
+	ParentSessionID string
+}
+
+// SpawnRequest describes a new delegated task run.
 type SpawnRequest struct {
-	OwnerUserID             string
-	ParentSessionID         string
-	ChildSessionID          string
-	RequestID               string
-	AgentName               string
-	Task                    string
-	Timeout                 time.Duration
-	RuntimeState            map[string]any
+	// ID is optional. When empty, the controller assigns one.
+	ID              string
+	OwnerUserID     string
+	ParentSessionID string
+	ChildSessionID  string
+	RequestID       string
+	AgentName       string
+	Task            string
+	Timeout         time.Duration
+	// RuntimeState is local runner state for implementations that call
+	// runner.Run directly. It is not a cross-node serialization contract.
+	RuntimeState map[string]any
+	// RuntimeStateKeys overrides the keys injected by implementations that
+	// call runner.Run directly. Zero value uses the taskrun defaults.
+	RuntimeStateKeys RuntimeStateKeys
+	// InjectedContextMessages are local runner context messages for
+	// implementations that call runner.Run directly.
 	InjectedContextMessages []model.Message
 	Metadata                map[string]string
 }
 
-// Controller is the control-plane API exposed by a subagent runtime.
+// Controller is the control-plane API exposed by a task run runtime.
 type Controller interface {
 	Spawn(ctx context.Context, req SpawnRequest) (Run, error)
 	List(ctx context.Context, filter ListFilter) ([]Run, error)
@@ -130,39 +147,4 @@ func (s Status) IsTerminal() bool {
 	default:
 		return false
 	}
-}
-
-func (r Run) clone() Run {
-	out := r
-	if r.StartedAt != nil {
-		startedAt := *r.StartedAt
-		out.StartedAt = &startedAt
-	}
-	if r.FinishedAt != nil {
-		finishedAt := *r.FinishedAt
-		out.FinishedAt = &finishedAt
-	}
-	if r.Metadata != nil {
-		out.Metadata = make(map[string]string, len(r.Metadata))
-		for key, value := range r.Metadata {
-			out.Metadata[key] = value
-		}
-	}
-	return out
-}
-
-func cloneRuns(runs []Run) []Run {
-	out := make([]Run, 0, len(runs))
-	for _, run := range runs {
-		if run.ID == "" {
-			continue
-		}
-		out = append(out, run.clone())
-	}
-	return out
-}
-
-func cloneTime(value time.Time) *time.Time {
-	copied := value
-	return &copied
 }

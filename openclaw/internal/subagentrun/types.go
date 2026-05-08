@@ -14,12 +14,16 @@ import (
 	"strings"
 	"time"
 
-	coresubagent "trpc.group/trpc-go/trpc-agent-go/subagent"
+	"github.com/google/uuid"
+
+	coretaskrun "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
+	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 )
 
 const (
 	subagentDirName      = "subagents"
 	subagentRunsFileName = "runs.json"
+	subagentIDPrefix     = "subagent:"
 
 	metadataDeliveryChannel = "openclaw.delivery.channel"
 	metadataDeliveryTarget  = "openclaw.delivery.target"
@@ -67,7 +71,7 @@ func metadataForDelivery(target deliveryTarget) map[string]string {
 	}
 }
 
-func deliveryFromRun(run coresubagent.Run) deliveryTarget {
+func deliveryFromRun(run coretaskrun.Run) deliveryTarget {
 	return deliveryTarget{
 		Channel: strings.TrimSpace(run.Metadata[metadataDeliveryChannel]),
 		Target:  strings.TrimSpace(run.Metadata[metadataDeliveryTarget]),
@@ -79,4 +83,60 @@ func timeoutDuration(seconds int) time.Duration {
 		return 0
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func newSubagentID() string {
+	return subagentIDPrefix + uuid.NewString()
+}
+
+func subagentRuntimeStateKeys() coretaskrun.RuntimeStateKeys {
+	return coretaskrun.RuntimeStateKeys{
+		Run:             openclawsubagent.RuntimeStateKeyRun,
+		RunID:           openclawsubagent.RuntimeStateKeyRunID,
+		ParentSessionID: openclawsubagent.RuntimeStateKeyParentSessionID,
+	}
+}
+
+func projectRun(run coretaskrun.Run) openclawsubagent.Run {
+	return openclawsubagent.Run{
+		ID:              run.ID,
+		ParentSessionID: run.ParentSessionID,
+		ChildSessionID:  run.ChildSessionID,
+		Task:            run.Task,
+		Status:          openclawsubagent.Status(run.Status),
+		Summary:         run.Summary,
+		Result:          run.Result,
+		Error:           run.Error,
+		CreatedAt:       run.CreatedAt,
+		UpdatedAt:       run.UpdatedAt,
+		StartedAt:       cloneTimePtr(run.StartedAt),
+		FinishedAt:      cloneTimePtr(run.FinishedAt),
+	}
+}
+
+func projectRunPtr(run *coretaskrun.Run) *openclawsubagent.Run {
+	if run == nil {
+		return nil
+	}
+	projected := projectRun(*run)
+	return &projected
+}
+
+func projectRuns(runs []coretaskrun.Run) []openclawsubagent.Run {
+	if len(runs) == 0 {
+		return nil
+	}
+	out := make([]openclawsubagent.Run, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, projectRun(run))
+	}
+	return out
+}
+
+func cloneTimePtr(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }

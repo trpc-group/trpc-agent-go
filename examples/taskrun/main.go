@@ -7,8 +7,8 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package main demonstrates spawning a dynamic background subagent from
-// application code.
+// Package main demonstrates starting a background task run from application
+// code.
 package main
 
 import (
@@ -20,15 +20,16 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
+	"trpc.group/trpc-go/trpc-agent-go/agent/taskrun/inprocess"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	appName       = "subagent-example"
+	appName       = "taskrun-example"
 	agentName     = "reporter"
 	agentDesc     = "Creates a short deterministic task report"
 	defaultUserID = "user-123"
@@ -39,7 +40,7 @@ func main() {
 	storePath := flag.String(
 		"store",
 		"",
-		"optional JSON file used to persist subagent run state",
+		"optional JSON file used to persist task run state",
 	)
 	flag.Parse()
 
@@ -51,14 +52,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	svc, err := subagent.NewService(r, opts...)
+	svc, err := inprocess.NewService(r, opts...)
 	if err != nil {
 		log.Fatal(err)
 	}
 	svc.Start(ctx)
 	defer svc.Close()
 
-	run, err := svc.Spawn(ctx, subagent.SpawnRequest{
+	run, err := svc.Spawn(ctx, taskrun.SpawnRequest{
 		OwnerUserID:     defaultUserID,
 		ParentSessionID: parentSession,
 		Task:            "review the generated frontend screenshot",
@@ -77,16 +78,16 @@ func main() {
 	fmt.Printf("result: %s\n", final.Result)
 }
 
-func serviceOptions(path string) ([]subagent.Option, error) {
+func serviceOptions(path string) ([]inprocess.Option, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, nil
 	}
-	store, err := subagent.NewFileStore(path)
+	store, err := inprocess.NewFileStore(path)
 	if err != nil {
 		return nil, err
 	}
-	return []subagent.Option{subagent.WithStore(store)}, nil
+	return []inprocess.Option{inprocess.WithStore(store)}, nil
 }
 
 type reportAgent struct {

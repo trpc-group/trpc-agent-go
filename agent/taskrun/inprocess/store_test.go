@@ -7,7 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package subagent
+package inprocess
 
 import (
 	"context"

@@ -7,7 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package subagent
+package taskrun
 
 import (
 	"context"
@@ -18,40 +18,40 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	subagentruntime "trpc.group/trpc-go/trpc-agent-go/subagent"
 )
 
 type fakeController struct {
 	mu      sync.Mutex
 	nextID  int
-	spawned subagentruntime.SpawnRequest
-	runs    map[string]subagentruntime.Run
+	spawned taskrunruntime.SpawnRequest
+	runs    map[string]taskrunruntime.Run
 }
 
 func newFakeController() *fakeController {
 	return &fakeController{
-		runs: make(map[string]subagentruntime.Run),
+		runs: make(map[string]taskrunruntime.Run),
 	}
 }
 
 func (c *fakeController) Spawn(
 	ctx context.Context,
-	req subagentruntime.SpawnRequest,
-) (subagentruntime.Run, error) {
+	req taskrunruntime.SpawnRequest,
+) (taskrunruntime.Run, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.nextID++
 	id := fmt.Sprintf("run-%d", c.nextID)
-	run := subagentruntime.Run{
+	run := taskrunruntime.Run{
 		ID:              id,
 		OwnerUserID:     req.OwnerUserID,
 		ParentSessionID: req.ParentSessionID,
 		AgentName:       req.AgentName,
 		Task:            req.Task,
-		Status:          subagentruntime.StatusQueued,
+		Status:          taskrunruntime.StatusQueued,
 	}
 	c.spawned = req
 	c.runs[id] = run
@@ -60,12 +60,12 @@ func (c *fakeController) Spawn(
 
 func (c *fakeController) List(
 	ctx context.Context,
-	filter subagentruntime.ListFilter,
-) ([]subagentruntime.Run, error) {
+	filter taskrunruntime.ListFilter,
+) ([]taskrunruntime.Run, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	runs := make([]subagentruntime.Run, 0, len(c.runs))
+	runs := make([]taskrunruntime.Run, 0, len(c.runs))
 	for _, run := range c.runs {
 		if filter.OwnerUserID != "" && run.OwnerUserID != filter.OwnerUserID {
 			continue
@@ -82,13 +82,13 @@ func (c *fakeController) List(
 func (c *fakeController) Get(
 	ctx context.Context,
 	runID string,
-) (*subagentruntime.Run, error) {
+) (*taskrunruntime.Run, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	run, ok := c.runs[runID]
 	if !ok {
-		return nil, subagentruntime.ErrRunNotFound
+		return nil, taskrunruntime.ErrRunNotFound
 	}
 	return &run, nil
 }
@@ -96,15 +96,15 @@ func (c *fakeController) Get(
 func (c *fakeController) Cancel(
 	ctx context.Context,
 	runID string,
-) (*subagentruntime.Run, bool, error) {
+) (*taskrunruntime.Run, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	run, ok := c.runs[runID]
 	if !ok {
-		return nil, false, subagentruntime.ErrRunNotFound
+		return nil, false, taskrunruntime.ErrRunNotFound
 	}
-	run.Status = subagentruntime.StatusCanceled
+	run.Status = taskrunruntime.StatusCanceled
 	c.runs[runID] = run
 	return &run, true, nil
 }
@@ -112,15 +112,15 @@ func (c *fakeController) Cancel(
 func (c *fakeController) Wait(
 	ctx context.Context,
 	runID string,
-) (*subagentruntime.Run, error) {
+) (*taskrunruntime.Run, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	run, ok := c.runs[runID]
 	if !ok {
-		return nil, subagentruntime.ErrRunNotFound
+		return nil, taskrunruntime.ErrRunNotFound
 	}
-	run.Status = subagentruntime.StatusCompleted
+	run.Status = taskrunruntime.StatusCompleted
 	run.Result = "done"
 	c.runs[runID] = run
 	return &run, nil
@@ -145,9 +145,9 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 		[]byte(`{"task":"review","timeout_seconds":5}`),
 	)
 	require.NoError(t, err)
-	spawned := spawnedAny.(subagentruntime.Run)
+	spawned := spawnedAny.(taskrunruntime.Run)
 	require.Equal(t, "session-a", spawned.ParentSessionID)
-	require.Equal(t, subagentruntime.StatusQueued, spawned.Status)
+	require.Equal(t, taskrunruntime.StatusQueued, spawned.Status)
 
 	controller.mu.Lock()
 	require.Equal(t, "worker", controller.spawned.AgentName)
@@ -171,7 +171,7 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	getArgs := []byte(fmt.Sprintf(`{"id":%q}`, spawned.ID))
 	gotAny, err := tools.get.Call(ctx, getArgs)
 	require.NoError(t, err)
-	got := gotAny.(*subagentruntime.Run)
+	got := gotAny.(*taskrunruntime.Run)
 	require.Equal(t, spawned.ID, got.ID)
 
 	waitArgs := []byte(fmt.Sprintf(
@@ -180,13 +180,13 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	))
 	waitedAny, err := tools.wait.Call(ctx, waitArgs)
 	require.NoError(t, err)
-	waited := waitedAny.(*subagentruntime.Run)
-	require.Equal(t, subagentruntime.StatusCompleted, waited.Status)
+	waited := waitedAny.(*taskrunruntime.Run)
+	require.Equal(t, taskrunruntime.StatusCompleted, waited.Status)
 
 	canceledAny, err := tools.cancel.Call(ctx, getArgs)
 	require.NoError(t, err)
-	canceled := canceledAny.(*subagentruntime.Run)
-	require.Equal(t, subagentruntime.StatusCanceled, canceled.Status)
+	canceled := canceledAny.(*taskrunruntime.Run)
+	require.Equal(t, taskrunruntime.StatusCanceled, canceled.Status)
 }
 
 func TestToolDeclarations(t *testing.T) {
@@ -229,11 +229,11 @@ func TestToolsRejectNestedSpawnByDefault(t *testing.T) {
 	ctx := newInvocationContext(
 		"user-a",
 		"session-a",
-		map[string]any{subagentruntime.RuntimeStateKeyRun: true},
+		map[string]any{taskrunruntime.RuntimeStateKeyRun: true},
 	)
 
 	_, err := tools.spawn.Call(ctx, []byte(`{"task":"nested"}`))
-	require.ErrorContains(t, err, "nested subagent spawn is not supported")
+	require.ErrorContains(t, err, "nested task runs are not supported")
 
 	tools = NewTools(newFakeController(), WithNestedSpawns(true))
 	_, err = tools.spawn.Call(ctx, []byte(`{"task":"nested"}`))
@@ -265,7 +265,7 @@ func TestToolsRequireContextAndController(t *testing.T) {
 	require.ErrorContains(t, err, "empty run id")
 
 	_, err = tools.cancel.Call(ctx, []byte(`{"id":"missing"}`))
-	require.ErrorIs(t, err, subagentruntime.ErrRunNotFound)
+	require.ErrorIs(t, err, taskrunruntime.ErrRunNotFound)
 }
 
 func TestToolsRejectCrossOwnerAccess(t *testing.T) {
@@ -276,18 +276,18 @@ func TestToolsRejectCrossOwnerAccess(t *testing.T) {
 	ctx := newInvocationContext("user-a", "session-a", nil)
 	spawnedAny, err := tools.spawn.Call(ctx, []byte(`{"task":"review"}`))
 	require.NoError(t, err)
-	spawned := spawnedAny.(subagentruntime.Run)
+	spawned := spawnedAny.(taskrunruntime.Run)
 
 	otherCtx := newInvocationContext("user-b", "session-a", nil)
 	args := []byte(fmt.Sprintf(`{"id":%q}`, spawned.ID))
 	_, err = tools.get.Call(otherCtx, args)
-	require.ErrorIs(t, err, subagentruntime.ErrRunNotFound)
+	require.ErrorIs(t, err, taskrunruntime.ErrRunNotFound)
 
 	_, err = tools.cancel.Call(otherCtx, args)
-	require.ErrorIs(t, err, subagentruntime.ErrRunNotFound)
+	require.ErrorIs(t, err, taskrunruntime.ErrRunNotFound)
 
 	_, err = tools.wait.Call(otherCtx, args)
-	require.ErrorIs(t, err, subagentruntime.ErrRunNotFound)
+	require.ErrorIs(t, err, taskrunruntime.ErrRunNotFound)
 }
 
 func TestCurrentContextRequiresUserAndSession(t *testing.T) {

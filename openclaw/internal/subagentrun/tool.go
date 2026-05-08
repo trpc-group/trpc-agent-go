@@ -18,8 +18,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	coresubagent "trpc.group/trpc-go/trpc-agent-go/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -153,7 +153,7 @@ type runIDInput struct {
 }
 
 type listResult struct {
-	Runs []coresubagent.Run `json:"runs,omitempty"`
+	Runs []openclawsubagent.Run `json:"runs,omitempty"`
 }
 
 func (t *spawnTool) setService(svc *Service) {
@@ -284,7 +284,7 @@ func (t *listTool) Call(
 	return listResult{
 		Runs: t.svc.ListForUser(
 			userID,
-			coresubagent.ListFilter{
+			openclawsubagent.ListFilter{
 				ParentSessionID: sess.ID,
 			},
 		),
@@ -478,7 +478,7 @@ func currentContext(
 func isNestedSubagent(ctx context.Context) bool {
 	nested, ok := agent.GetRuntimeStateValueFromContext[bool](
 		ctx,
-		coresubagent.RuntimeStateKeyRun,
+		openclawsubagent.RuntimeStateKeyRun,
 	)
 	return ok && nested
 }

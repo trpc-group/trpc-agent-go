@@ -11,6 +11,7 @@ package subagentrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -20,10 +21,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	coretaskrun "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
-	coresubagent "trpc.group/trpc-go/trpc-agent-go/subagent"
+	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 )
 
 type captureRunner struct {
@@ -164,7 +166,8 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, coresubagent.StatusQueued, run.Status)
+	require.Equal(t, openclawsubagent.StatusQueued, run.Status)
+	require.True(t, strings.HasPrefix(run.ID, subagentIDPrefix))
 
 	final, err := svc.WaitForUser(
 		context.Background(),
@@ -172,10 +175,11 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 		run.ID,
 	)
 	require.NoError(t, err)
-	require.Equal(t, coresubagent.StatusCompleted, final.Status)
+	require.Equal(t, openclawsubagent.StatusCompleted, final.Status)
 	require.Equal(t, "finished delegated work", final.Result)
+	requireRunHidesInternalFields(t, *final)
 
-	runs := svc.ListForUser("telegram:user", coresubagent.ListFilter{
+	runs := svc.ListForUser("telegram:user", openclawsubagent.ListFilter{
 		ParentSessionID: "telegram:dm:100",
 	})
 	require.Len(t, runs, 1)
@@ -184,11 +188,26 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 	runner.mu.Lock()
 	require.Equal(t, "telegram:user", runner.userID)
 	require.Equal(t, "check the incident timeline", runner.message.Content)
-	require.True(t, strings.HasPrefix(runner.sessionID, "subagent:"))
+	require.True(t, strings.HasPrefix(runner.sessionID, subagentIDPrefix))
 	require.Equal(
 		t,
 		true,
-		runner.runOpts.RuntimeState[coresubagent.RuntimeStateKeyRun],
+		runner.runOpts.RuntimeState[openclawsubagent.RuntimeStateKeyRun],
+	)
+	require.Equal(
+		t,
+		run.ID,
+		runner.runOpts.RuntimeState[openclawsubagent.RuntimeStateKeyRunID],
+	)
+	require.NotContains(
+		t,
+		runner.runOpts.RuntimeState,
+		coretaskrun.RuntimeStateKeyRun,
+	)
+	require.NotContains(
+		t,
+		runner.runOpts.RuntimeState,
+		coretaskrun.RuntimeStateKeyRunID,
 	)
 	require.Equal(
 		t,
@@ -209,6 +228,18 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 			strings.Contains(text, notificationPrefixCompleted) &&
 			strings.Contains(text, run.ID)
 	}, time.Second, 10*time.Millisecond)
+}
+
+func requireRunHidesInternalFields(t *testing.T, run openclawsubagent.Run) {
+	t.Helper()
+
+	data, err := json.Marshal(run)
+	require.NoError(t, err)
+	payload := string(data)
+	require.NotContains(t, payload, "owner_user_id")
+	require.NotContains(t, payload, "request_id")
+	require.NotContains(t, payload, "agent_name")
+	require.NotContains(t, payload, "metadata")
 }
 
 func TestServiceCancelForUser(t *testing.T) {
@@ -246,11 +277,11 @@ func TestServiceCancelForUser(t *testing.T) {
 	canceled, changed, err := svc.CancelForUser("user-a", run.ID)
 	require.NoError(t, err)
 	require.True(t, changed)
-	require.Equal(t, coresubagent.StatusCanceled, canceled.Status)
+	require.Equal(t, openclawsubagent.StatusCanceled, canceled.Status)
 
 	final, err := svc.WaitForUser(context.Background(), "user-a", run.ID)
 	require.NoError(t, err)
-	require.Equal(t, coresubagent.StatusCanceled, final.Status)
+	require.Equal(t, openclawsubagent.StatusCanceled, final.Status)
 
 	_, text := sender.snapshot()
 	require.Empty(t, text)
@@ -287,10 +318,13 @@ func TestServiceListScopesByOwnerAndParent(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		return len(svc.ListForUser("user-a", coresubagent.ListFilter{})) == 2
+		return len(svc.ListForUser(
+			"user-a",
+			openclawsubagent.ListFilter{},
+		)) == 2
 	}, time.Second, 10*time.Millisecond)
 
-	filtered := svc.ListForUser("user-a", coresubagent.ListFilter{
+	filtered := svc.ListForUser("user-a", openclawsubagent.ListFilter{
 		ParentSessionID: "parent-a",
 	})
 	require.Len(t, filtered, 1)
@@ -311,18 +345,39 @@ func TestServiceValidatesInputAndPropagatesErrors(t *testing.T) {
 	nilSvc.Start(context.Background())
 	_, err = nilSvc.Spawn(context.Background(), SpawnRequest{})
 	require.ErrorContains(t, err, "nil service")
-	require.Nil(t, nilSvc.ListForUser("user-a", coresubagent.ListFilter{}))
+	require.Nil(
+		t,
+		nilSvc.ListForUser("user-a", openclawsubagent.ListFilter{}),
+	)
 
 	svc, err := NewService(t.TempDir(), &captureRunner{reply: "ok"}, nil)
 	require.NoError(t, err)
 	_, err = svc.Spawn(context.Background(), SpawnRequest{})
-	require.ErrorContains(t, err, "not started")
+	require.ErrorIs(t, err, openclawsubagent.ErrNotStarted)
 	svc.Start(context.Background())
 
+	_, err = svc.Spawn(context.Background(), SpawnRequest{
+		ParentSessionID: "session-a",
+		Task:            "task",
+	})
+	require.ErrorContains(t, err, "subagent: empty owner")
+
+	_, err = svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID: "user-a",
+		Task:        "task",
+	})
+	require.ErrorContains(t, err, "subagent: empty parent session id")
+
+	_, err = svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "session-a",
+	})
+	require.ErrorContains(t, err, "subagent: empty task")
+
 	_, err = svc.GetForUser("user-a", "missing")
-	require.ErrorIs(t, err, coresubagent.ErrRunNotFound)
+	require.ErrorIs(t, err, openclawsubagent.ErrRunNotFound)
 	_, _, err = svc.CancelForUser("user-a", "missing")
-	require.ErrorIs(t, err, coresubagent.ErrRunNotFound)
+	require.ErrorIs(t, err, openclawsubagent.ErrRunNotFound)
 }
 
 func TestServiceFailureNotification(t *testing.T) {
@@ -353,7 +408,7 @@ func TestServiceFailureNotification(t *testing.T) {
 
 	final, err := svc.WaitForUser(context.Background(), "user-a", run.ID)
 	require.NoError(t, err)
-	require.Equal(t, coresubagent.StatusFailed, final.Status)
+	require.Equal(t, openclawsubagent.StatusFailed, final.Status)
 	require.Contains(t, final.Error, "runner boom")
 
 	require.Eventually(t, func() bool {
@@ -365,9 +420,9 @@ func TestServiceFailureNotification(t *testing.T) {
 func TestFormatNotification(t *testing.T) {
 	t.Parallel()
 
-	run := coresubagent.Run{
+	run := coretaskrun.Run{
 		ID:      "run-1",
-		Status:  coresubagent.StatusCompleted,
+		Status:  coretaskrun.StatusCompleted,
 		Result:  "full result",
 		Summary: "summary only",
 	}
@@ -375,10 +430,10 @@ func TestFormatNotification(t *testing.T) {
 	require.Contains(t, formatNotification(run), "full result")
 	require.NotContains(t, formatNotification(run), "summary only")
 
-	run.Status = coresubagent.StatusFailed
+	run.Status = coretaskrun.StatusFailed
 	run.Summary = "boom"
 	require.Contains(t, formatNotification(run), notificationPrefixFailed)
 
-	run.Status = coresubagent.StatusCanceled
+	run.Status = coretaskrun.StatusCanceled
 	require.Empty(t, formatNotification(run))
 }

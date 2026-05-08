@@ -7,7 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package subagent
+package inprocess
 
 import (
 	"context"
@@ -34,7 +34,7 @@ const (
 	errInterruptedByRestart = "interrupted by previous runtime restart"
 )
 
-// Store persists subagent runs.
+// Store persists task runs.
 type Store interface {
 	Load(ctx context.Context) ([]Run, error)
 	Save(ctx context.Context, runs []Run) error
@@ -88,7 +88,7 @@ type FileStore struct {
 func NewFileStore(path string) (*FileStore, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return nil, fmt.Errorf("subagent: empty store path")
+		return nil, fmt.Errorf("taskrun: empty store path")
 	}
 	return &FileStore{path: filepath.Clean(path)}, nil
 }
@@ -115,7 +115,7 @@ func (s *FileStore) Load(ctx context.Context) ([]Run, error) {
 	}
 	if file.Version != 0 && file.Version != storeVersion {
 		return nil, fmt.Errorf(
-			"subagent: unsupported store version: %d",
+			"taskrun: unsupported store version: %d",
 			file.Version,
 		)
 	}

@@ -7,7 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package subagent
+package inprocess
 
 import (
 	"context"
@@ -21,14 +21,15 @@ import (
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 const (
-	childSessionPrefix = "subagent:"
-	requestIDPrefix    = "subagent:"
+	childSessionPrefix = "taskrun:"
+	requestIDPrefix    = "taskrun:"
 )
 
 // Option configures a Service.
@@ -62,7 +63,7 @@ func WithClock(clock func() time.Time) Option {
 	}
 }
 
-// Service manages dynamic background agent runs.
+// Service manages persistent background task runs.
 type Service struct {
 	runner   runner.Runner
 	store    Store
@@ -87,10 +88,12 @@ type runningRun struct {
 	cancelRequested bool
 }
 
-// NewService creates a subagent service.
+var _ taskrun.Controller = (*Service)(nil)
+
+// NewService creates a taskrun service.
 func NewService(r runner.Runner, opts ...Option) (*Service, error) {
 	if r == nil {
-		return nil, fmt.Errorf("subagent: nil runner")
+		return nil, fmt.Errorf("taskrun: nil runner")
 	}
 	options := Options{
 		Store: NewMemoryStore(),
@@ -122,7 +125,7 @@ func NewService(r runner.Runner, opts ...Option) (*Service, error) {
 		waiters:  make(map[string][]chan struct{}),
 	}
 	for _, run := range loaded {
-		copied := run.clone()
+		copied := cloneRun(run)
 		if copied.ID == "" {
 			continue
 		}
@@ -168,18 +171,22 @@ func (s *Service) Spawn(
 	req SpawnRequest,
 ) (Run, error) {
 	if s == nil {
-		return Run{}, fmt.Errorf("subagent: nil service")
+		return Run{}, fmt.Errorf("taskrun: nil service")
 	}
 	if s.baseCtx == nil {
-		return Run{}, fmt.Errorf("subagent: not started")
+		return Run{}, ErrNotStarted
 	}
 	if err := validateSpawnRequest(req); err != nil {
 		return Run{}, err
 	}
 
 	now := s.clock()
+	runID := strings.TrimSpace(req.ID)
+	if runID == "" {
+		runID = uuid.NewString()
+	}
 	run := Run{
-		ID:              uuid.NewString(),
+		ID:              runID,
 		OwnerUserID:     strings.TrimSpace(req.OwnerUserID),
 		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
 		AgentName:       strings.TrimSpace(req.AgentName),
@@ -190,6 +197,10 @@ func (s *Service) Spawn(
 		UpdatedAt:       now,
 	}
 	s.mu.Lock()
+	if s.runs[run.ID] != nil {
+		s.mu.Unlock()
+		return Run{}, ErrRunAlreadyExists
+	}
 	s.runs[run.ID] = runPtr(run)
 	s.mu.Unlock()
 	if err := s.persist(ctx); err != nil {
@@ -199,7 +210,7 @@ func (s *Service) Spawn(
 		return Run{}, err
 	}
 
-	view := run.clone()
+	view := cloneRun(run)
 	s.notify(ctx, view)
 	spawn := cloneSpawnRequest(req)
 	s.wg.Add(1)
@@ -229,7 +240,7 @@ func (s *Service) List(
 		if item == nil || !matchesFilter(*item, filter) {
 			continue
 		}
-		runs = append(runs, item.clone())
+		runs = append(runs, cloneRun(*item))
 	}
 	sort.Slice(runs, func(i int, j int) bool {
 		return runs[i].UpdatedAt.After(runs[j].UpdatedAt)
@@ -252,7 +263,7 @@ func (s *Service) Get(ctx context.Context, runID string) (*Run, error) {
 	if run == nil {
 		return nil, ErrRunNotFound
 	}
-	view := run.clone()
+	view := cloneRun(*run)
 	return &view, nil
 }
 
@@ -297,7 +308,7 @@ func (s *Service) Wait(ctx context.Context, runID string) (*Run, error) {
 			return nil, ErrRunNotFound
 		}
 		if run.Status.IsTerminal() {
-			view := run.clone()
+			view := cloneRun(*run)
 			s.mu.Unlock()
 			return &view, nil
 		}
@@ -316,13 +327,13 @@ func (s *Service) Wait(ctx context.Context, runID string) (*Run, error) {
 
 func validateSpawnRequest(req SpawnRequest) error {
 	if strings.TrimSpace(req.OwnerUserID) == "" {
-		return fmt.Errorf("subagent: empty owner")
+		return fmt.Errorf("taskrun: empty owner")
 	}
 	if strings.TrimSpace(req.ParentSessionID) == "" {
-		return fmt.Errorf("subagent: empty parent session id")
+		return fmt.Errorf("taskrun: empty parent session id")
 	}
 	if strings.TrimSpace(req.Task) == "" {
-		return fmt.Errorf("subagent: empty task")
+		return fmt.Errorf("taskrun: empty task")
 	}
 	return nil
 }
@@ -358,7 +369,7 @@ func (s *Service) markRunning(
 	if run.Status == StatusCanceled {
 		s.mu.Unlock()
 		return nil, nil, nil, fmt.Errorf(
-			"subagent: run canceled before start",
+			"taskrun: run canceled before start",
 		)
 	}
 
@@ -393,7 +404,7 @@ func (s *Service) markRunning(
 	run.Summary = ""
 	run.Result = ""
 	s.running[run.ID] = &runningRun{cancel: cancel}
-	view := run.clone()
+	view := cloneRun(*run)
 	s.mu.Unlock()
 
 	if err := s.persist(context.Background()); err != nil {
@@ -412,11 +423,15 @@ func (s *Service) runChild(
 	result *replyAccumulator,
 ) error {
 	if run == nil {
-		return fmt.Errorf("subagent: nil run")
+		return fmt.Errorf("taskrun: nil run")
 	}
 	runOpts := []agent.RunOption{
 		agent.WithRequestID(run.RequestID),
-		agent.WithRuntimeState(runtimeStateForRun(run, req.RuntimeState)),
+		agent.WithRuntimeState(runtimeStateForRun(
+			run,
+			req.RuntimeState,
+			req.RuntimeStateKeys,
+		)),
 	}
 	if len(req.InjectedContextMessages) > 0 {
 		runOpts = append(
@@ -444,7 +459,11 @@ func (s *Service) runChild(
 	return result.err
 }
 
-func runtimeStateForRun(run *Run, extra map[string]any) map[string]any {
+func runtimeStateForRun(
+	run *Run,
+	extra map[string]any,
+	keys RuntimeStateKeys,
+) map[string]any {
 	state := make(map[string]any, len(extra)+3)
 	for key, value := range extra {
 		state[key] = value
@@ -452,10 +471,28 @@ func runtimeStateForRun(run *Run, extra map[string]any) map[string]any {
 	if run == nil {
 		return state
 	}
-	state[RuntimeStateKeyRun] = true
-	state[RuntimeStateKeyRunID] = run.ID
-	state[RuntimeStateKeyParentSessionID] = run.ParentSessionID
+	keys = normalizeRuntimeStateKeys(keys)
+	if keys.Run != "" {
+		state[keys.Run] = true
+	}
+	if keys.RunID != "" {
+		state[keys.RunID] = run.ID
+	}
+	if keys.ParentSessionID != "" {
+		state[keys.ParentSessionID] = run.ParentSessionID
+	}
 	return state
+}
+
+func normalizeRuntimeStateKeys(keys RuntimeStateKeys) RuntimeStateKeys {
+	if keys.Run != "" || keys.RunID != "" || keys.ParentSessionID != "" {
+		return keys
+	}
+	return RuntimeStateKeys{
+		Run:             RuntimeStateKeyRun,
+		RunID:           RuntimeStateKeyRunID,
+		ParentSessionID: RuntimeStateKeyParentSessionID,
+	}
 }
 
 func (s *Service) finishRun(
@@ -495,11 +532,11 @@ func (s *Service) finishRun(
 		run.Error = ""
 		run.Summary = summarizeText(output, defaultStoredSummaryRunes)
 	}
-	view := run.clone()
+	view := cloneRun(*run)
 	s.mu.Unlock()
 
 	if err := s.persist(context.Background()); err != nil {
-		log.Warnf("subagent: persist run %s failed: %v", runID, err)
+		log.Warnf("taskrun: persist run %s failed: %v", runID, err)
 	}
 	s.notify(context.Background(), view)
 	s.wake(runID)
@@ -514,7 +551,7 @@ func (s *Service) markCanceled(runID string) (*Run, bool, error) {
 		return nil, false, ErrRunNotFound
 	}
 	if run.Status.IsTerminal() {
-		view := run.clone()
+		view := cloneRun(*run)
 		return &view, false, nil
 	}
 
@@ -530,7 +567,7 @@ func (s *Service) markCanceled(runID string) (*Run, bool, error) {
 			running.cancel()
 		}
 	}
-	view := run.clone()
+	view := cloneRun(*run)
 	return &view, true, nil
 }
 
@@ -581,7 +618,7 @@ func (s *Service) persist(ctx context.Context) error {
 		if item == nil || item.ID == "" {
 			continue
 		}
-		runs = append(runs, item.clone())
+		runs = append(runs, cloneRun(*item))
 	}
 	s.mu.Unlock()
 	return s.store.Save(ctx, runs)

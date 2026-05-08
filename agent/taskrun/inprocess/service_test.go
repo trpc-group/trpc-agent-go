@@ -7,7 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package subagent
+package inprocess
 
 import (
 	"context"
@@ -229,6 +229,49 @@ func TestServiceSpawnCompletesRun(t *testing.T) {
 	require.Contains(t, observer.statuses(), StatusCompleted)
 }
 
+func TestServiceCustomRuntimeStateKeys(t *testing.T) {
+	t.Parallel()
+
+	runner := &captureRunner{reply: "ok"}
+	svc, err := NewService(runner)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "custom runtime keys",
+		RuntimeStateKeys: RuntimeStateKeys{
+			Run:             "product.run",
+			RunID:           "product.run_id",
+			ParentSessionID: "product.parent_session_id",
+		},
+	})
+	require.NoError(t, err)
+	_, err = svc.Wait(context.Background(), run.ID)
+	require.NoError(t, err)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, true, runner.runOpts.RuntimeState["product.run"])
+	require.Equal(t, run.ID, runner.runOpts.RuntimeState["product.run_id"])
+	require.Equal(
+		t,
+		"parent-a",
+		runner.runOpts.RuntimeState["product.parent_session_id"],
+	)
+	require.NotContains(t, runner.runOpts.RuntimeState, RuntimeStateKeyRun)
+	require.NotContains(t, runner.runOpts.RuntimeState, RuntimeStateKeyRunID)
+	require.NotContains(
+		t,
+		runner.runOpts.RuntimeState,
+		RuntimeStateKeyParentSessionID,
+	)
+}
+
 func TestServiceOptionsNilAndContextBranches(t *testing.T) {
 	t.Parallel()
 
@@ -319,7 +362,7 @@ func TestServiceCancelAndWait(t *testing.T) {
 	select {
 	case <-runner.started:
 	case <-time.After(time.Second):
-		t.Fatal("subagent run did not start in time")
+		t.Fatal("task run did not start in time")
 	}
 
 	canceled, changed, err := svc.Cancel(context.Background(), run.ID)
@@ -338,7 +381,7 @@ func TestServiceScopesAndErrors(t *testing.T) {
 	svc, err := NewService(&captureRunner{reply: "ok"})
 	require.NoError(t, err)
 	_, err = svc.Spawn(context.Background(), SpawnRequest{})
-	require.ErrorContains(t, err, "not started")
+	require.ErrorIs(t, err, ErrNotStarted)
 
 	svc.Start(context.Background())
 	_, err = svc.Spawn(context.Background(), SpawnRequest{
@@ -377,6 +420,14 @@ func TestServiceScopesAndErrors(t *testing.T) {
 		Task:            "third",
 	})
 	require.NoError(t, err)
+
+	_, err = svc.Spawn(context.Background(), SpawnRequest{
+		ID:              first.ID,
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "duplicate",
+	})
+	require.ErrorIs(t, err, ErrRunAlreadyExists)
 
 	require.Eventually(t, func() bool {
 		runs, listErr := svc.List(context.Background(), ListFilter{

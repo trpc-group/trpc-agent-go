@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	coresubagent "trpc.group/trpc-go/trpc-agent-go/subagent"
 )
 
 func TestToolsSpawnListGetCancelWait(t *testing.T) {
@@ -49,9 +49,9 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	spawned := spawnedAny.(coresubagent.Run)
+	spawned := spawnedAny.(openclawsubagent.Run)
 	require.Equal(t, "telegram:dm:321", spawned.ParentSessionID)
-	require.Equal(t, coresubagent.StatusQueued, spawned.Status)
+	require.Equal(t, openclawsubagent.StatusQueued, spawned.Status)
 
 	select {
 	case <-runner.started:
@@ -68,18 +68,18 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	getArgs := []byte(fmt.Sprintf(`{"id":%q}`, spawned.ID))
 	gotAny, err := tools.get.Call(ctx, getArgs)
 	require.NoError(t, err)
-	got := gotAny.(*coresubagent.Run)
+	got := gotAny.(*openclawsubagent.Run)
 	require.Equal(t, spawned.ID, got.ID)
 
 	canceledAny, err := tools.cancel.Call(ctx, getArgs)
 	require.NoError(t, err)
-	canceled := canceledAny.(*coresubagent.Run)
-	require.Equal(t, coresubagent.StatusCanceled, canceled.Status)
+	canceled := canceledAny.(*openclawsubagent.Run)
+	require.Equal(t, openclawsubagent.StatusCanceled, canceled.Status)
 
 	waitedAny, err := tools.wait.Call(ctx, getArgs)
 	require.NoError(t, err)
-	waited := waitedAny.(*coresubagent.Run)
-	require.Equal(t, coresubagent.StatusCanceled, waited.Status)
+	waited := waitedAny.(*openclawsubagent.Run)
+	require.Equal(t, openclawsubagent.StatusCanceled, waited.Status)
 }
 
 func TestSpawnToolRejectsNestedSubagent(t *testing.T) {
@@ -97,7 +97,7 @@ func TestSpawnToolRejectsNestedSubagent(t *testing.T) {
 	ctx := newInvocationContext(
 		"user-a",
 		"session-a",
-		map[string]any{coresubagent.RuntimeStateKeyRun: true},
+		map[string]any{openclawsubagent.RuntimeStateKeyRun: true},
 	)
 
 	_, err = tools.spawn.Call(ctx, []byte(`{"task":"nested"}`))
@@ -174,7 +174,7 @@ func TestToolErrorPaths(t *testing.T) {
 	require.ErrorContains(t, err, "empty run id")
 
 	_, err = tools.cancel.Call(ctx, []byte(`{"id":"missing"}`))
-	require.ErrorIs(t, err, coresubagent.ErrRunNotFound)
+	require.ErrorIs(t, err, openclawsubagent.ErrRunNotFound)
 
 	badCtx := newInvocationContext("user-a", "session-a", nil)
 	_, err = tools.spawn.Call(badCtx, []byte(`{"task":"demo"}`))

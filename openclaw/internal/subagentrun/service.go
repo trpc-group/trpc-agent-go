@@ -11,19 +11,22 @@ package subagentrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
+	coretaskrun "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
+	taskruninprocess "trpc.group/trpc-go/trpc-agent-go/agent/taskrun/inprocess"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	coresubagent "trpc.group/trpc-go/trpc-agent-go/subagent"
 )
 
 type Service struct {
-	core   *coresubagent.Service
+	core   *taskruninprocess.Service
 	router *outbound.Router
 
 	mu      sync.RWMutex
@@ -42,15 +45,15 @@ func NewService(
 		return nil, fmt.Errorf("subagent: nil runner")
 	}
 
-	store, err := coresubagent.NewFileStore(subagentStorePath(stateDir))
+	store, err := taskruninprocess.NewFileStore(subagentStorePath(stateDir))
 	if err != nil {
 		return nil, err
 	}
 	svc := &Service{router: router}
-	core, err := coresubagent.NewService(
+	core, err := taskruninprocess.NewService(
 		r,
-		coresubagent.WithStore(store),
-		coresubagent.WithObserver(svc),
+		taskruninprocess.WithStore(store),
+		taskruninprocess.WithObserver(svc),
 	)
 	if err != nil {
 		return nil, err
@@ -66,10 +69,10 @@ func (s *Service) Start(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	s.core.Start(ctx)
 	s.mu.Lock()
 	s.baseCtx = ctx
 	s.mu.Unlock()
-	s.core.Start(ctx)
 }
 
 func (s *Service) Close() error {
@@ -82,10 +85,18 @@ func (s *Service) Close() error {
 func (s *Service) Spawn(
 	ctx context.Context,
 	req SpawnRequest,
-) (coresubagent.Run, error) {
+) (openclawsubagent.Run, error) {
 	if s == nil || s.core == nil {
-		return coresubagent.Run{}, fmt.Errorf("subagent: nil service")
+		return openclawsubagent.Run{}, fmt.Errorf("subagent: nil service")
 	}
+	if !s.started() {
+		return openclawsubagent.Run{}, openclawsubagent.ErrNotStarted
+	}
+	if err := validateSpawnRequest(req); err != nil {
+		return openclawsubagent.Run{}, err
+	}
+
+	runID := newSubagentID()
 	runtimeState := map[string]any{}
 	if req.Delivery.Channel != "" && req.Delivery.Target != "" {
 		targetState := outbound.RuntimeStateForTarget(
@@ -98,77 +109,96 @@ func (s *Service) Spawn(
 			runtimeState[key] = value
 		}
 	}
-	return s.core.Spawn(ctx, coresubagent.SpawnRequest{
-		OwnerUserID:     req.OwnerUserID,
-		ParentSessionID: req.ParentSessionID,
-		Task:            req.Task,
-		Timeout:         timeoutDuration(req.TimeoutSeconds),
-		RuntimeState:    runtimeState,
+	run, err := s.core.Spawn(ctx, coretaskrun.SpawnRequest{
+		ID:               runID,
+		OwnerUserID:      req.OwnerUserID,
+		ParentSessionID:  req.ParentSessionID,
+		ChildSessionID:   runID,
+		RequestID:        runID,
+		Task:             req.Task,
+		Timeout:          timeoutDuration(req.TimeoutSeconds),
+		RuntimeState:     runtimeState,
+		RuntimeStateKeys: subagentRuntimeStateKeys(),
 		InjectedContextMessages: []model.Message{
 			model.NewSystemMessage(subagentRunPrompt),
 		},
 		Metadata: metadataForDelivery(req.Delivery),
 	})
+	if err != nil {
+		return openclawsubagent.Run{}, translateCoreError(err)
+	}
+	return projectRun(run), nil
 }
 
 func (s *Service) ListForUser(
 	userID string,
-	filter coresubagent.ListFilter,
-) []coresubagent.Run {
+	filter openclawsubagent.ListFilter,
+) []openclawsubagent.Run {
 	if s == nil || s.core == nil {
 		return nil
 	}
-	filter.OwnerUserID = strings.TrimSpace(userID)
-	runs, err := s.core.List(context.Background(), filter)
+	runs, err := s.core.List(context.Background(), coretaskrun.ListFilter{
+		OwnerUserID:     strings.TrimSpace(userID),
+		ParentSessionID: strings.TrimSpace(filter.ParentSessionID),
+		Status:          coretaskrun.Status(filter.Status),
+	})
 	if err != nil {
 		return nil
 	}
-	return runs
+	return projectRuns(runs)
 }
 
 func (s *Service) GetForUser(
 	userID string,
 	runID string,
-) (*coresubagent.Run, error) {
+) (*openclawsubagent.Run, error) {
 	run, err := s.runForUser(context.Background(), userID, runID)
 	if err != nil {
 		return nil, err
 	}
-	return run, nil
+	return projectRunPtr(run), nil
 }
 
 func (s *Service) CancelForUser(
 	userID string,
 	runID string,
-) (*coresubagent.Run, bool, error) {
+) (*openclawsubagent.Run, bool, error) {
 	run, err := s.runForUser(context.Background(), userID, runID)
 	if err != nil {
 		return nil, false, err
 	}
-	return s.core.Cancel(context.Background(), run.ID)
+	canceled, changed, err := s.core.Cancel(context.Background(), run.ID)
+	if errors.Is(err, coretaskrun.ErrRunNotFound) {
+		return nil, false, openclawsubagent.ErrRunNotFound
+	}
+	return projectRunPtr(canceled), changed, err
 }
 
 func (s *Service) WaitForUser(
 	ctx context.Context,
 	userID string,
 	runID string,
-) (*coresubagent.Run, error) {
+) (*openclawsubagent.Run, error) {
 	run, err := s.runForUser(ctx, userID, runID)
 	if err != nil {
 		return nil, err
 	}
-	return s.core.Wait(ctx, run.ID)
+	final, err := s.core.Wait(ctx, run.ID)
+	if errors.Is(err, coretaskrun.ErrRunNotFound) {
+		return nil, openclawsubagent.ErrRunNotFound
+	}
+	return projectRunPtr(final), err
 }
 
-func (s *Service) OnRunUpdate(ctx context.Context, run coresubagent.Run) {
+func (s *Service) OnRunUpdate(ctx context.Context, run coretaskrun.Run) {
 	if s == nil || !run.Status.IsTerminal() ||
-		run.Status == coresubagent.StatusCanceled {
+		run.Status == coretaskrun.StatusCanceled {
 		return
 	}
 	s.notifyCompletion(run)
 }
 
-func (s *Service) notifyCompletion(run coresubagent.Run) {
+func (s *Service) notifyCompletion(run coretaskrun.Run) {
 	if s == nil || s.router == nil {
 		return
 	}
@@ -210,12 +240,18 @@ func (s *Service) notificationContext() context.Context {
 	return context.Background()
 }
 
-func formatNotification(run coresubagent.Run) string {
+func (s *Service) started() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.baseCtx != nil
+}
+
+func formatNotification(run coretaskrun.Run) string {
 	var prefix string
 	switch run.Status {
-	case coresubagent.StatusCompleted:
+	case coretaskrun.StatusCompleted:
 		prefix = notificationPrefixCompleted
-	case coresubagent.StatusFailed:
+	case coretaskrun.StatusFailed:
 		prefix = notificationPrefixFailed
 	default:
 		return ""
@@ -230,8 +266,8 @@ func formatNotification(run coresubagent.Run) string {
 	return strings.Join(lines, "\n")
 }
 
-func notificationDetail(run coresubagent.Run) string {
-	if run.Status == coresubagent.StatusCompleted {
+func notificationDetail(run coretaskrun.Run) string {
+	if run.Status == coretaskrun.StatusCompleted {
 		result := strings.TrimSpace(run.Result)
 		if result != "" {
 			return result
@@ -247,16 +283,47 @@ func (s *Service) runForUser(
 	ctx context.Context,
 	userID string,
 	runID string,
-) (*coresubagent.Run, error) {
+) (*coretaskrun.Run, error) {
 	if s == nil || s.core == nil {
-		return nil, coresubagent.ErrRunNotFound
+		return nil, openclawsubagent.ErrRunNotFound
 	}
 	run, err := s.core.Get(ctx, strings.TrimSpace(runID))
+	if errors.Is(err, coretaskrun.ErrRunNotFound) {
+		return nil, openclawsubagent.ErrRunNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(run.OwnerUserID) != strings.TrimSpace(userID) {
-		return nil, coresubagent.ErrRunNotFound
+		return nil, openclawsubagent.ErrRunNotFound
 	}
 	return run, nil
+}
+
+func validateSpawnRequest(req SpawnRequest) error {
+	if strings.TrimSpace(req.OwnerUserID) == "" {
+		return fmt.Errorf("subagent: empty owner")
+	}
+	if strings.TrimSpace(req.ParentSessionID) == "" {
+		return fmt.Errorf("subagent: empty parent session id")
+	}
+	if strings.TrimSpace(req.Task) == "" {
+		return fmt.Errorf("subagent: empty task")
+	}
+	return nil
+}
+
+func translateCoreError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, coretaskrun.ErrRunNotFound):
+		return openclawsubagent.ErrRunNotFound
+	case errors.Is(err, coretaskrun.ErrRunAlreadyExists):
+		return openclawsubagent.ErrRunAlreadyExists
+	case errors.Is(err, coretaskrun.ErrNotStarted):
+		return openclawsubagent.ErrNotStarted
+	default:
+		return err
+	}
 }

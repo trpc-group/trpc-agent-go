@@ -7,9 +7,8 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package subagent provides tools for controlling dynamic background
-// subagent runs.
-package subagent
+// Package taskrun provides tools for controlling background task runs.
+package taskrun
 
 import (
 	"context"
@@ -19,17 +18,17 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	subagentruntime "trpc.group/trpc-go/trpc-agent-go/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	toolSpawn  = "subagents_spawn"
-	toolList   = "subagents_list"
-	toolGet    = "subagents_get"
-	toolCancel = "subagents_cancel"
-	toolWait   = "subagents_wait"
+	toolSpawn  = "start_task_run"
+	toolList   = "list_task_runs"
+	toolGet    = "get_task_run"
+	toolCancel = "cancel_task_run"
+	toolWait   = "wait_task_run"
 
 	argAgentName      = "agent_name"
 	argID             = "id"
@@ -77,14 +76,14 @@ func WithInjectedContextMessages(messages []model.Message) Option {
 	}
 }
 
-// WithNestedSpawns allows a subagent to spawn additional subagents.
+// WithNestedSpawns allows a task run to spawn additional task runs.
 func WithNestedSpawns(enabled bool) Option {
 	return func(opts *options) {
 		opts.allowNested = enabled
 	}
 }
 
-// Tools contains all subagent control tools.
+// Tools contains all task run control tools.
 type Tools struct {
 	state *toolState
 
@@ -96,13 +95,13 @@ type Tools struct {
 }
 
 type toolState struct {
-	controller subagentruntime.Controller
+	controller taskrunruntime.Controller
 	options    options
 }
 
-// NewTools creates subagent control tools.
+// NewTools creates task run control tools.
 func NewTools(
-	controller subagentruntime.Controller,
+	controller taskrunruntime.Controller,
 	opts ...Option,
 ) Tools {
 	options := options{}
@@ -127,7 +126,7 @@ func NewTools(
 }
 
 // SetController updates the controller used by all tools.
-func (t *Tools) SetController(controller subagentruntime.Controller) {
+func (t *Tools) SetController(controller taskrunruntime.Controller) {
 	if t == nil {
 		return
 	}
@@ -183,13 +182,13 @@ type runIDInput struct {
 }
 
 type listResult struct {
-	Runs []subagentruntime.Run `json:"runs,omitempty"`
+	Runs []taskrunruntime.Run `json:"runs,omitempty"`
 }
 
 func (t *spawnTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolSpawn,
-		Description: "Spawn one dynamic background subagent for " +
+		Description: "Start one background task run for " +
 			"the current session. It returns immediately with " +
 			"a run id.",
 		InputSchema: &tool.Schema{
@@ -199,7 +198,7 @@ func (t *spawnTool) Declaration() *tool.Declaration {
 				argTask: {
 					Type: schemaTypeString,
 					Description: "Delegated task for the " +
-						"background subagent.",
+						"background run.",
 				},
 				argAgentName: {
 					Type: schemaTypeString,
@@ -224,9 +223,9 @@ func (t *spawnTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	if !state.options.allowNested && isNestedSubagent(ctx) {
+	if !state.options.allowNested && isNestedTaskRun(ctx) {
 		return nil, fmt.Errorf(
-			"subagent: nested subagent spawn is not supported",
+			"taskrun: nested task runs are not supported",
 		)
 	}
 
@@ -242,7 +241,7 @@ func (t *spawnTool) Call(
 	if agentName == "" {
 		agentName = state.options.defaultAgentName
 	}
-	run, err := state.controller.Spawn(ctx, subagentruntime.SpawnRequest{
+	run, err := state.controller.Spawn(ctx, taskrunruntime.SpawnRequest{
 		OwnerUserID:             userID,
 		ParentSessionID:         sessionID,
 		AgentName:               agentName,
@@ -260,7 +259,7 @@ func (t *spawnTool) Call(
 func (t *listTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolList,
-		Description: "List dynamic background subagents created " +
+		Description: "List background task runs created " +
 			"from the current session.",
 		InputSchema: &tool.Schema{
 			Type: schemaTypeObject,
@@ -283,7 +282,7 @@ func (t *listTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	runs, err := state.controller.List(ctx, subagentruntime.ListFilter{
+	runs, err := state.controller.List(ctx, taskrunruntime.ListFilter{
 		OwnerUserID:     userID,
 		ParentSessionID: sessionID,
 	})
@@ -297,7 +296,7 @@ func (t *getTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolGet,
 		Description: "Get the latest status and result for one " +
-			"dynamic background subagent run.",
+			"background task run.",
 		InputSchema: runIDSchema(),
 	}
 }
@@ -319,7 +318,7 @@ func (t *getTool) Call(
 		return nil, err
 	}
 	if !sameOwner(run, userID) {
-		return nil, subagentruntime.ErrRunNotFound
+		return nil, taskrunruntime.ErrRunNotFound
 	}
 	return run, nil
 }
@@ -327,7 +326,7 @@ func (t *getTool) Call(
 func (t *cancelTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolCancel,
-		Description: "Cancel one dynamic background subagent run. " +
+		Description: "Cancel one background task run. " +
 			"This is best-effort.",
 		InputSchema: runIDSchema(),
 	}
@@ -350,7 +349,7 @@ func (t *cancelTool) Call(
 		return nil, err
 	}
 	if !sameOwner(run, userID) {
-		return nil, subagentruntime.ErrRunNotFound
+		return nil, taskrunruntime.ErrRunNotFound
 	}
 	canceled, _, err := state.controller.Cancel(ctx, runID)
 	if err != nil {
@@ -362,8 +361,8 @@ func (t *cancelTool) Call(
 func (t *waitTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolWait,
-		Description: "Wait until one dynamic background subagent " +
-			"run reaches a terminal status.",
+		Description: "Wait until one background task run " +
+			"reaches a terminal status.",
 		InputSchema: waitSchema(),
 	}
 }
@@ -385,7 +384,7 @@ func (t *waitTool) Call(
 		return nil, err
 	}
 	if !sameOwner(run, userID) {
-		return nil, subagentruntime.ErrRunNotFound
+		return nil, taskrunruntime.ErrRunNotFound
 	}
 	waitCtx := ctx
 	var cancel context.CancelFunc
@@ -406,7 +405,7 @@ func runIDSchema() *tool.Schema {
 		Properties: map[string]*tool.Schema{
 			argID: {
 				Type:        schemaTypeString,
-				Description: "Subagent run id returned by spawn.",
+				Description: "Task run id returned by start.",
 			},
 		},
 	}
@@ -423,7 +422,7 @@ func waitSchema() *tool.Schema {
 
 func requireTools(state *toolState) (*toolState, error) {
 	if state == nil || state.controller == nil {
-		return nil, fmt.Errorf("subagent: controller unavailable")
+		return nil, fmt.Errorf("taskrun: controller unavailable")
 	}
 	return state, nil
 }
@@ -451,7 +450,7 @@ func decodeRunIDArgs(
 	}
 	runID := strings.TrimSpace(in.ID)
 	if runID == "" {
-		return "", "", fmt.Errorf("subagent: empty run id")
+		return "", "", fmt.Errorf("taskrun: empty run id")
 	}
 	return runID, userID, nil
 }
@@ -470,7 +469,7 @@ func decodeWaitArgs(
 	}
 	in.ID = strings.TrimSpace(in.ID)
 	if in.ID == "" {
-		return runIDInput{}, "", fmt.Errorf("subagent: empty run id")
+		return runIDInput{}, "", fmt.Errorf("taskrun: empty run id")
 	}
 	return in, userID, nil
 }
@@ -479,33 +478,33 @@ func currentContext(ctx context.Context) (string, string, error) {
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil {
 		return "", "", fmt.Errorf(
-			"subagent: current session context is unavailable",
+			"taskrun: current session context is unavailable",
 		)
 	}
 	userID := strings.TrimSpace(inv.Session.UserID)
 	if userID == "" {
 		return "", "", fmt.Errorf(
-			"subagent: current user id is unavailable",
+			"taskrun: current user id is unavailable",
 		)
 	}
 	sessionID := strings.TrimSpace(inv.Session.ID)
 	if sessionID == "" {
 		return "", "", fmt.Errorf(
-			"subagent: current session id is unavailable",
+			"taskrun: current session id is unavailable",
 		)
 	}
 	return userID, sessionID, nil
 }
 
-func isNestedSubagent(ctx context.Context) bool {
+func isNestedTaskRun(ctx context.Context) bool {
 	nested, ok := agent.GetRuntimeStateValueFromContext[bool](
 		ctx,
-		subagentruntime.RuntimeStateKeyRun,
+		taskrunruntime.RuntimeStateKeyRun,
 	)
 	return ok && nested
 }
 
-func sameOwner(run *subagentruntime.Run, userID string) bool {
+func sameOwner(run *taskrunruntime.Run, userID string) bool {
 	return run != nil &&
 		strings.TrimSpace(run.OwnerUserID) == strings.TrimSpace(userID)
 }
