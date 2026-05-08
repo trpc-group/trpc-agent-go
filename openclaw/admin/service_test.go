@@ -628,7 +628,9 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Contains(t, body, "openclaw.admin.pendingScroll")
 	require.Contains(t, body, "window.sessionStorage")
 	require.Contains(t, body, "window.scrollTo(0, pageTop)")
-	require.Contains(t, body, `window.addEventListener("pagehide"`)
+	require.Contains(t, body, "targetURL.pathname")
+	require.Contains(t, body, "value.targetPath")
+	require.NotContains(t, body, `window.addEventListener("pagehide"`)
 	require.NotContains(t, body, "scrollIntoView")
 	require.NotContains(t, body, `http-equiv="refresh"`)
 }

@@ -6801,16 +6801,23 @@ const adminPageHTML = `<!doctype html>
           if (Date.now() - value.savedAt > pendingScrollMaxAgeMS) {
             return null;
           }
+          if (
+            typeof value.targetPath === "string" &&
+            value.targetPath !== window.location.pathname
+          ) {
+            return null;
+          }
           return value;
         } catch (err) {
           return null;
         }
       }
 
-      function savePendingScroll() {
+      function savePendingScroll(targetPath) {
         try {
           window.sessionStorage.setItem(pendingScrollKey, JSON.stringify({
             savedAt: Date.now(),
+            targetPath: targetPath,
             pageTop: window.scrollY || 0,
             sidebarTop: sidebar ? sidebar.scrollTop : 0
           }));
@@ -6861,10 +6868,10 @@ const adminPageHTML = `<!doctype html>
           ) {
             return;
           }
-          savePendingScroll();
+          const targetURL = new URL(link.href, window.location.href);
+          savePendingScroll(targetURL.pathname);
         });
       });
-      window.addEventListener("pagehide", savePendingScroll);
 
       const pendingScroll = readPendingScroll();
       if (pendingScroll) {
