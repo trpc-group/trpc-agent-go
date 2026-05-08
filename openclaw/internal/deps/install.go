@@ -22,19 +22,31 @@ import (
 )
 
 const (
-	stepKindSystem = "system"
-	stepKindPython = "python"
-	stepKindVenv   = "venv"
+	stepKindSystem   = "system"
+	stepKindPython   = "python"
+	stepKindVenv     = "venv"
+	stepKindDownload = "download"
+	stepKindCommand  = "command"
 
 	venvFlagSystemSitePackages = "--system-site-packages"
+
+	// envGoBin is merged into command-step environments for managed-tool lookup.
+	envGoBin = "GOBIN"
 )
 
 type Step struct {
-	Label        string   `json:"label"`
-	Kind         string   `json:"kind"`
-	Command      []string `json:"command"`
-	CommandLine  string   `json:"command_line"`
-	RequiresRoot bool     `json:"requires_root,omitempty"`
+	Label        string            `json:"label"`
+	Kind         string            `json:"kind"`
+	Command      []string          `json:"command"`
+	CommandLine  string            `json:"command_line"`
+	RequiresRoot bool              `json:"requires_root,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	// Download steps (Kind == stepKindDownload); Command is unused.
+	URL             string `json:"url,omitempty"`
+	TargetPath      string `json:"target_path,omitempty"`
+	Archive         string `json:"archive,omitempty"`
+	Extract         bool   `json:"extract,omitempty"`
+	StripComponents int    `json:"strip_components,omitempty"`
 }
 
 type Plan struct {

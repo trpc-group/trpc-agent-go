@@ -50,6 +50,7 @@ import (
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"

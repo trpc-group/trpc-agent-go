@@ -2676,6 +2676,56 @@ type openClawToolsBundle struct {
 	deps          *deps.Report
 }
 
+type runtimeStores struct {
+	uploads     *uploads.Store
+	personas    *persona.Store
+	memoryFiles *memoryfile.Store
+}
+
+func newRuntimeStores(stateDir string) (runtimeStores, error) {
+	stateDir = strings.TrimSpace(stateDir)
+	if stateDir == "" {
+		return runtimeStores{}, fmt.Errorf("state dir is required")
+	}
+	uploadStore, err := uploads.NewStore(stateDir)
+	if err != nil {
+		return runtimeStores{}, fmt.Errorf("create upload store: %w", err)
+	}
+
+	personaPath, err := persona.DefaultStorePath(stateDir)
+	if err != nil {
+		return runtimeStores{}, fmt.Errorf(
+			"create persona store path: %w",
+			err,
+		)
+	}
+	personaStore, err := persona.NewStore(personaPath)
+	if err != nil {
+		return runtimeStores{}, fmt.Errorf("create persona store: %w", err)
+	}
+
+	memoryRoot, err := memoryfile.DefaultRoot(stateDir)
+	if err != nil {
+		return runtimeStores{}, fmt.Errorf(
+			"create memory root: %w",
+			err,
+		)
+	}
+	memoryStore, err := memoryfile.NewStore(memoryRoot)
+	if err != nil {
+		return runtimeStores{}, fmt.Errorf(
+			"create memory store: %w",
+			err,
+		)
+	}
+
+	return runtimeStores{
+		uploads:     uploadStore,
+		personas:    personaStore,
+		memoryFiles: memoryStore,
+	}, nil
+}
+
 func buildOpenClawTools(
 	enabled bool,
 	stateDir string,
@@ -2700,14 +2750,6 @@ func buildOpenClawTools(
 			depsReport = &report
 		}
 	}
-	var depsReport *deps.Report
-	if sources, err := deps.SourcesForProfiles(deps.DefaultProfiles()); err ==
-		nil {
-		report, err := deps.InspectStartup(stateDir, sources)
-		if err == nil {
-			depsReport = &report
-		}
-	}
 
 	execTool := octool.NewExecCommandTool(mgr, uploadStore)
 	if memoryFileStore != nil {
@@ -2720,7 +2762,8 @@ func buildOpenClawTools(
 	tools := []tool.Tool{
 		octool.NewReadDocumentTool(uploadStore),
 		octool.NewReadSpreadsheetTool(uploadStore),
-		octool.NewExecCommandTool(mgr, uploadStore),
+		execTool,
+		conversationtool.NewTool(),
 		octool.NewWriteStdinTool(mgr),
 		octool.NewKillSessionTool(mgr),
 		outbound.NewTool(router),

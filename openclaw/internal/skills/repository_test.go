@@ -24,6 +24,54 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 )
 
+var (
+	supportedOpenClawMetaFields = map[string]struct{}{
+		"emoji":      {},
+		"homepage":   {},
+		"install":    {},
+		"os":         {},
+		"primaryEnv": {},
+		"requires":   {},
+		"skillKey":   {},
+	}
+	supportedOpenClawRequireFields = map[string]struct{}{
+		"anyBins": {},
+		"bins":    {},
+		"config":  {},
+		"env":     {},
+		"python":  {},
+	}
+	supportedOpenClawInstallFields = map[string]struct{}{
+		"archive":         {},
+		"bins":            {},
+		"extract":         {},
+		"formula":         {},
+		"id":              {},
+		"kind":            {},
+		"label":           {},
+		"module":          {},
+		"os":              {},
+		"package":         {},
+		"packages":        {},
+		"stripComponents": {},
+		"tap":             {},
+		"targetDir":       {},
+		"url":             {},
+	}
+	supportedOpenClawInstallKinds = map[string]struct{}{
+		deps.InstallKindAPT:      {},
+		deps.InstallKindBrew:     {},
+		deps.InstallKindDNF:      {},
+		deps.InstallKindDownload: {},
+		deps.InstallKindGo:       {},
+		deps.InstallKindNode:     {},
+		deps.InstallKindNPM:      {},
+		deps.InstallKindPIP:      {},
+		deps.InstallKindUV:       {},
+		deps.InstallKindYUM:      {},
+	}
+)
+
 func TestParseFrontMatter_OpenClawMetadata(t *testing.T) {
 	content := `---
 name: coding-agent

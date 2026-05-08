@@ -279,3 +279,17 @@ func TestInstallHelpers(t *testing.T) {
 		}),
 	)
 }
+
+func writeTestCommand(
+	t *testing.T,
+	dir string,
+	name string,
+	body string,
+) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	script := "#!/bin/sh\nset -eu\n" + body + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	return path
+}

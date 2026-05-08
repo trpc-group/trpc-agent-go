@@ -34,6 +34,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+func mustLookPath(t *testing.T, name string) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	require.NoError(t, err, "%s must be on PATH for this test", name)
+	return path
+}
+
 func TestNewToolSet_DefaultTools(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -2025,8 +2032,9 @@ func TestRunLocalRipgrepReturnsFalseWhenRipgrepIsUnavailable(t *testing.T) {
 
 func TestRunLocalRipgrepRejectsPathsOutsideBaseDir(t *testing.T) {
 	t.Parallel()
+	trueExe := mustLookPath(t, "true")
 	restore := withRipgrepForTest(func(string) (string, error) {
-		return "/bin/true", nil
+		return trueExe, nil
 	})
 	defer restore()
 	_, ok, err := runLocalRipgrep(context.Background(), t.TempDir(), grepInput{
@@ -2077,7 +2085,7 @@ func TestBashAndProcessHelpersCoverTimeoutAndExitState(t *testing.T) {
 	require.Equal(t, 50, bashTimeout(nil))
 	require.Equal(t, defaultBashTimeoutMs, bashTimeout(intPtr(0)))
 	require.Equal(t, maxBashTimeoutMs, bashTimeout(intPtr(maxBashTimeoutMs+1)))
-	proc, err := os.StartProcess("/bin/true", []string{"true"}, &os.ProcAttr{
+	proc, err := os.StartProcess(mustLookPath(t, "true"), []string{"true"}, &os.ProcAttr{
 		Env:   processEnv(nil),
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	})
@@ -2121,7 +2129,7 @@ func TestRunCapturedProcessAndWaitForProcess(t *testing.T) {
 	require.Equal(t, "VALUE", string(result.Stdout))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	proc, err := os.StartProcess("/bin/sleep", []string{"sleep", "1"}, &os.ProcAttr{
+	proc, err := os.StartProcess(mustLookPath(t, "sleep"), []string{"sleep", "1"}, &os.ProcAttr{
 		Dir:   dir,
 		Env:   processEnv(nil),
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
@@ -2177,7 +2185,7 @@ func TestTaskStopAcceptsShellIDAndPropagatesKillErrors(t *testing.T) {
 	require.True(t, ok)
 	_, err = callToolRaw(callable, taskStopInput{ShellID: "missing"})
 	require.EqualError(t, err, "No task found with ID: missing")
-	proc, err := os.StartProcess("/bin/true", []string{"true"}, &os.ProcAttr{
+	proc, err := os.StartProcess(mustLookPath(t, "true"), []string{"true"}, &os.ProcAttr{
 		Env:   processEnv(nil),
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	})

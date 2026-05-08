@@ -839,7 +839,7 @@ func Test_buildChatRequest_AdaptiveThinkingModels(t *testing.T) {
 					ReasoningEffort: &effort,
 				},
 			}
-			chatReq, err := m.buildChatRequest(req)
+			chatReq, err := m.buildChatRequest(req, false)
 			require.NoError(t, err)
 			require.NotNil(t, chatReq.Thinking.OfAdaptive)
 			assert.Nil(t, chatReq.Thinking.OfEnabled)
@@ -870,7 +870,7 @@ func Test_buildChatRequest_DisabledThinking(t *testing.T) {
 					ThinkingEnabled: &thinking,
 				},
 			}
-			chatReq, err := m.buildChatRequest(req)
+			chatReq, err := m.buildChatRequest(req, false)
 			require.NoError(t, err)
 			require.NotNil(t, chatReq.Thinking.OfDisabled)
 			assert.Nil(t, chatReq.Thinking.OfAdaptive)
@@ -892,7 +892,7 @@ func Test_buildChatRequest_LegacyDisabledThinkingLeavesThinkingUnset(t *testing.
 			ThinkingEnabled: &thinking,
 		},
 	}
-	chatReq, err := m.buildChatRequest(req)
+	chatReq, err := m.buildChatRequest(req, false)
 	require.NoError(t, err)
 	assert.Nil(t, chatReq.Thinking.OfAdaptive)
 	assert.Nil(t, chatReq.Thinking.OfEnabled)
@@ -910,7 +910,7 @@ func Test_buildChatRequest_MythosDisabledThinkingReturnsError(t *testing.T) {
 			ThinkingEnabled: &thinking,
 		},
 	}
-	chatReq, err := m.buildChatRequest(req)
+	chatReq, err := m.buildChatRequest(req, false)
 	require.Error(t, err)
 	assert.Nil(t, chatReq)
 	assert.Contains(t, err.Error(), "thinking cannot be disabled")
@@ -923,7 +923,7 @@ func Test_buildChatRequest_NilThinkingEnabledLeavesThinkingUnset(t *testing.T) {
 			req := &model.Request{
 				Messages: []model.Message{model.NewUserMessage("u")},
 			}
-			chatReq, err := m.buildChatRequest(req)
+			chatReq, err := m.buildChatRequest(req, false)
 			require.NoError(t, err)
 			assert.Nil(t, chatReq.Thinking.OfAdaptive)
 			assert.Nil(t, chatReq.Thinking.OfEnabled)
@@ -945,7 +945,7 @@ func Test_buildChatRequest_LegacyThinkingUsesBudgetTokens(t *testing.T) {
 			ThinkingTokens:  &thinkingTokens,
 		},
 	}
-	chatReq, err := m.buildChatRequest(req)
+	chatReq, err := m.buildChatRequest(req, false)
 	require.NoError(t, err)
 	require.NotNil(t, chatReq.Thinking.OfEnabled)
 	assert.Nil(t, chatReq.Thinking.OfAdaptive)

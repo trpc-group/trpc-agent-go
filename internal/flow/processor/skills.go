@@ -1225,7 +1225,24 @@ func skillFileText(
 	return filepath.ToSlash(path)
 }
 
+// canonicalPathForRel resolves symlinks in path segments (e.g. macOS /var →
+// /private/var) so skill roots from RootedRepository match paths returned by
+// the skill package for relativeSkillPath.
+func canonicalPathForRel(p string) string {
+	p = filepath.Clean(strings.TrimSpace(p))
+	if p == "" {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return p
+	}
+	return filepath.Clean(resolved)
+}
+
 func relativeSkillPath(root string, path string) (string, bool) {
+	root = canonicalPathForRel(root)
+	path = canonicalPathForRel(path)
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return "", false

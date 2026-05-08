@@ -122,7 +122,8 @@ func TestWatchService_RefreshesWhenNestedFileChanges(t *testing.T) {
 		status := watch.Status()
 		return status != nil &&
 			status.Generation >= 1 &&
-			status.LastChangedPath == guidePath
+			normalizeWatchPath(status.LastChangedPath) ==
+				normalizeWatchPath(guidePath)
 	}, time.Second, 10*time.Millisecond)
 }
 
@@ -183,7 +184,7 @@ func TestWatchService_ManualRefreshUpdatesStatus(t *testing.T) {
 	require.NotNil(t, status)
 	require.Equal(t, watchRefreshReasonManual, status.LastRefreshReason)
 	require.NotNil(t, status.LastRefreshAt)
-	require.Equal(t, filepath.Clean(root), status.Roots[0])
+	require.Equal(t, normalizeWatchPath(root), status.Roots[0])
 	require.GreaterOrEqual(t, status.Generation, int64(1))
 }
 
@@ -209,12 +210,13 @@ func TestWatchService_HelperFunctions(t *testing.T) {
 		normalizeWatchPath("https://example.com/skills"),
 	)
 	require.Equal(t, "", normalizeWatchPath(remoteURL))
-	require.Equal(t, localRoot, normalizeWatchPath(fileURL))
-	require.Equal(t, localRoot, normalizeWatchPath(linkRoot))
+	lr := normalizeWatchPath(localRoot)
+	require.Equal(t, lr, normalizeWatchPath(fileURL))
+	require.Equal(t, lr, normalizeWatchPath(linkRoot))
 
 	require.Equal(
 		t,
-		[]string{localRoot},
+		[]string{lr},
 		normalizeWatchRoots(
 			[]string{
 				" ",
@@ -231,7 +233,7 @@ func TestWatchService_HelperFunctions(t *testing.T) {
 	)
 	require.Equal(
 		t,
-		[]string{bundledRoot},
+		[]string{normalizeWatchPath(bundledRoot)},
 		normalizeWatchRoots(
 			[]string{bundledRoot},
 			WatchConfig{
@@ -242,7 +244,11 @@ func TestWatchService_HelperFunctions(t *testing.T) {
 	)
 
 	missingRoot := filepath.Join(root, "missing", "skills")
-	require.Equal(t, root, nearestExistingWatchParent(missingRoot))
+	require.Equal(
+		t,
+		normalizeWatchPath(root),
+		normalizeWatchPath(nearestExistingWatchParent(missingRoot)),
+	)
 	require.Equal(t, "", nearestExistingWatchParent(""))
 	require.Equal(
 		t,

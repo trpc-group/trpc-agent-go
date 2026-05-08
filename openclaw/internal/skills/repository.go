@@ -140,8 +140,52 @@ func NewRepository(roots []string, opts ...Option) (*Repository, error) {
 		}
 	}
 
-	r.indexLocked()
+	r.index()
 	return r, nil
+}
+
+// Refresh rescans the backing filesystem repository and rebuilds the
+// OpenClaw skill eligibility index.
+func (r *Repository) Refresh() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.base == nil {
+		r.index()
+		return nil
+	}
+	if refr, ok := r.base.(skill.RefreshableRepository); ok {
+		if err := refr.Refresh(); err != nil {
+			return err
+		}
+	}
+	r.index()
+	return nil
+}
+
+// SetSkillEnabled updates per-skill config for a logical skill key and
+// reindexes eligibility.
+func (r *Repository) SetSkillEnabled(configKey string, enabled bool) error {
+	if r == nil {
+		return fmt.Errorf("skills repository is not available")
+	}
+	key := strings.TrimSpace(configKey)
+	if key == "" {
+		return fmt.Errorf("skill config key is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.skillConfigs == nil {
+		r.skillConfigs = map[string]SkillConfig{}
+	}
+	cfg := r.skillConfigs[key]
+	value := enabled
+	cfg.Enabled = &value
+	r.skillConfigs[key] = cfg
+	r.index()
+	return nil
 }
 
 func (r *Repository) Summaries() []skill.Summary {

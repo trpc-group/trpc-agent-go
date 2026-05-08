@@ -27,12 +27,16 @@ const (
 )
 
 const (
-	InstallKindAPT  = "apt"
-	InstallKindBrew = "brew"
-	InstallKindDNF  = "dnf"
-	InstallKindPIP  = "pip"
-	InstallKindUV   = "uv"
-	InstallKindYUM  = "yum"
+	InstallKindAPT      = "apt"
+	InstallKindBrew     = "brew"
+	InstallKindDNF      = "dnf"
+	InstallKindDownload = "download"
+	InstallKindGo       = "go"
+	InstallKindNode     = "node"
+	InstallKindNPM      = "npm"
+	InstallKindPIP      = "pip"
+	InstallKindUV       = "uv"
+	InstallKindYUM      = "yum"
 )
 
 type PythonPackage struct {
@@ -53,10 +57,17 @@ type InstallAction struct {
 	ID       string   `yaml:"id,omitempty" json:"id,omitempty"`
 	Kind     string   `yaml:"kind,omitempty" json:"kind,omitempty"`
 	Formula  string   `yaml:"formula,omitempty" json:"formula,omitempty"`
+	Module   string   `yaml:"module,omitempty" json:"module,omitempty"`
 	Package  string   `yaml:"package,omitempty" json:"package,omitempty"`
 	Packages []string `yaml:"packages,omitempty" json:"packages,omitempty"`
 	Bins     []string `yaml:"bins,omitempty" json:"bins,omitempty"`
 	Label    string   `yaml:"label,omitempty" json:"label,omitempty"`
+	// Download-style install steps (Kind == "download").
+	URL             string `yaml:"url,omitempty" json:"url,omitempty"`
+	TargetDir       string `yaml:"targetDir,omitempty" json:"target_dir,omitempty"`
+	Archive         string `yaml:"archive,omitempty" json:"archive,omitempty"`
+	Extract         bool   `yaml:"extract,omitempty" json:"extract,omitempty"`
+	StripComponents int    `yaml:"stripComponents,omitempty" json:"strip_components,omitempty"`
 }
 
 type Source struct {
@@ -479,13 +490,19 @@ func normalizeInstallActions(
 	seen := map[string]struct{}{}
 	for _, raw := range actions {
 		action := InstallAction{
-			ID:       strings.TrimSpace(raw.ID),
-			Kind:     strings.ToLower(strings.TrimSpace(raw.Kind)),
-			Formula:  strings.TrimSpace(raw.Formula),
-			Package:  strings.TrimSpace(raw.Package),
-			Packages: normalizeStrings(raw.Packages),
-			Bins:     normalizeStrings(raw.Bins),
-			Label:    strings.TrimSpace(raw.Label),
+			ID:              strings.TrimSpace(raw.ID),
+			Kind:            strings.ToLower(strings.TrimSpace(raw.Kind)),
+			Formula:         strings.TrimSpace(raw.Formula),
+			Module:          strings.TrimSpace(raw.Module),
+			Package:         strings.TrimSpace(raw.Package),
+			Packages:        normalizeStrings(raw.Packages),
+			Bins:            normalizeStrings(raw.Bins),
+			Label:           strings.TrimSpace(raw.Label),
+			URL:             strings.TrimSpace(raw.URL),
+			TargetDir:       strings.TrimSpace(raw.TargetDir),
+			Archive:         strings.TrimSpace(raw.Archive),
+			Extract:         raw.Extract,
+			StripComponents: raw.StripComponents,
 		}
 		if action.Kind == "" {
 			continue
