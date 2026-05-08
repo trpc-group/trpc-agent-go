@@ -1283,17 +1283,6 @@ func (p *ContentRequestProcessor) projectEventMessage(
 	return p.EventMessageProjector(inv, evt, msg)
 }
 
-func isEmptyAssistantMessage(msg model.Message) bool {
-	if msg.Role != model.RoleAssistant {
-		return false
-	}
-	return msg.Content == "" &&
-		len(msg.ContentParts) == 0 &&
-		len(msg.ToolCalls) == 0 &&
-		msg.ReasoningContent == "" &&
-		msg.ReasoningSignature == ""
-}
-
 // getCurrentInvocationMessages gets messages only from the current invocation.
 // This is used when include_contents=none to preserve tool call history within
 // the current ReAct loop while isolating from parent/other branch history.
