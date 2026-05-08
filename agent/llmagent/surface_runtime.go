@@ -15,6 +15,7 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
+	toolsessionrecall "trpc.group/trpc-go/trpc-agent-go/internal/session/tool/recall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -235,6 +236,9 @@ func (a *LLMAgent) InvocationToolSurface(
 			effectiveExec,
 		),
 	)
+	if toolsessionrecall.SupportsOnDemandSession(inv) {
+		allTools = appendOnDemandSessionTools(allTools, &options, inv)
+	}
 	if options.EnableAwaitUserReplyTool {
 		allTools = append(allTools, toolawaitreply.New())
 	}

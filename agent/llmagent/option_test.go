@@ -519,6 +519,15 @@ func TestWithPreloadSessionRecallSearchMode(t *testing.T) {
 	require.Equal(t, session.SearchModeHybrid, opts.PreloadSessionRecallSearchMode)
 }
 
+func TestWithEnableOnDemandSession(t *testing.T) {
+	opts := &Options{}
+	WithEnableOnDemandSession(true)(opts)
+	require.True(t, opts.EnableOnDemandSession)
+
+	WithEnableOnDemandSession(false)(opts)
+	require.False(t, opts.EnableOnDemandSession)
+}
+
 func TestWithSkillRunAllowedCommands_CopiesSlice(t *testing.T) {
 	in := []string{"echo", "ls"}
 	opts := &Options{}

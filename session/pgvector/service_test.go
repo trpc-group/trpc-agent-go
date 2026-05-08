@@ -501,15 +501,17 @@ func TestExtractEventText_ToolMessage(t *testing.T) {
 		Response: &model.Response{
 			Choices: []model.Choice{
 				{Message: model.Message{
-					Role:    model.RoleTool,
-					Content: "tool output",
+					Role:     model.RoleTool,
+					ToolID:   "tool-123",
+					ToolName: "web_fetch",
+					Content:  "tool output",
 				}},
 			},
 		},
 	}
 	text, role := extractEventText(evt)
-	assert.Empty(t, text)
-	assert.Empty(t, role)
+	assert.Equal(t, "web_fetch: tool output", text)
+	assert.Equal(t, model.RoleTool, role)
 }
 
 func TestExtractEventText_ToolIDMessage(t *testing.T) {
@@ -525,8 +527,8 @@ func TestExtractEventText_ToolIDMessage(t *testing.T) {
 		},
 	}
 	text, role := extractEventText(evt)
-	assert.Empty(t, text)
-	assert.Empty(t, role)
+	assert.Equal(t, "response with tool", text)
+	assert.Equal(t, model.RoleTool, role)
 }
 
 func TestExtractEventText_ToolCallsMessage(t *testing.T) {
