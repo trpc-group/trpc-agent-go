@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
+	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -57,7 +58,7 @@ var (
 	)
 	flagExec = flag.String(
 		"executor", "local",
-		"workspace executor: local|container",
+		"workspace executor: local|container|e2b",
 	)
 	flagTrustedLocal = flag.Bool(
 		"trusted-local",
@@ -178,6 +179,12 @@ func (c *skillChat) setup(_ context.Context) error {
 	var we codeexecutor.CodeExecutor
 	execUsed := "local"
 	switch strings.ToLower(strings.TrimSpace(*flagExec)) {
+	case "e2b":
+		we, err = e2bexec.New()
+		if err != nil {
+			return fmt.Errorf("e2b executor: %w", err)
+		}
+		execUsed = "e2b"
 	case "container":
 		// Bind the skills root read-only into the container to
 		// enable fast in-container copy when staging directories.
