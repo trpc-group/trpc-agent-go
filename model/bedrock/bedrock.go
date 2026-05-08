@@ -41,13 +41,6 @@ type BedrockClient interface {
 	ConverseStream(ctx context.Context, params *bedrockruntime.ConverseStreamInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
 }
 
-// StreamReader defines the stream event reader interface, decoupling stream processing logic for testing.
-type StreamReader interface {
-	Events() <-chan types.ConverseStreamOutput
-	Close() error
-	Err() error
-}
-
 // Model implements the model.Model interface for AWS Bedrock.
 type Model struct {
 	client            BedrockClient
@@ -173,10 +166,10 @@ func (m *Model) handleStreamingResponse(
 }
 
 // processStreamEvents processes stream events and sends responses to responseChan.
-// This method accepts a StreamReader interface, allowing mock injection during testing.
+// This method accepts a bedrockruntime.ConverseStreamOutputReader interface, allowing mock injection during testing.
 func (m *Model) processStreamEvents(
 	ctx context.Context,
-	stream StreamReader,
+	stream bedrockruntime.ConverseStreamOutputReader,
 	responseChan chan<- *model.Response,
 ) {
 	// Variables for accumulating tool call information

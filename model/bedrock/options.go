@@ -19,15 +19,15 @@ const (
 	defaultChannelBufferSize = 256
 )
 
-// options 包含创建 Bedrock 模型的配置选项。
+// options contains configuration options for creating a Bedrock model.
 type options struct {
-	// AWS 配置，用于创建 Bedrock 客户端
+	// awsConfig is the AWS configuration used to create the Bedrock client.
 	awsConfig aws.Config
-	// Bedrock 客户端选项
+	// bedrockOptions is the list of Bedrock client options.
 	bedrockOptions []func(*bedrockruntime.Options)
-	// 自定义 Bedrock 客户端（用于测试或自定义场景）
+	// client is a custom Bedrock client for testing or custom scenarios.
 	client BedrockClient
-	// 响应通道缓冲区大小
+	// channelBufferSize is the buffer size of the response channel.
 	channelBufferSize int
 }
 
@@ -35,13 +35,13 @@ var defaultOptions = options{
 	channelBufferSize: defaultChannelBufferSize,
 }
 
-// Option 是配置 Bedrock 模型的函数类型。
+// Option is a function type for configuring the Bedrock model.
 type Option func(*options)
 
-// WithAWSConfig 设置 AWS 配置，用于创建 Bedrock Runtime 客户端。
-// 通常通过 config.LoadDefaultConfig(ctx) 获取。
+// WithAWSConfig sets the AWS configuration used to create the Bedrock Runtime client.
+// Typically obtained via config.LoadDefaultConfig(ctx).
 //
-// 示例:
+// Example:
 //
 //	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
 //	if err != nil {
@@ -56,10 +56,10 @@ func WithAWSConfig(cfg aws.Config) Option {
 	}
 }
 
-// WithBedrockOptions 设置 Bedrock 客户端的额外选项。
-// 这些选项会在创建 Bedrock Runtime 客户端时传入。
+// WithBedrockOptions sets additional options for the Bedrock client.
+// These options are passed when creating the Bedrock Runtime client.
 //
-// 示例:
+// Example:
 //
 //	m := bedrock.New("anthropic.claude-3-sonnet-20240229-v1:0",
 //	    bedrock.WithAWSConfig(cfg),
@@ -73,16 +73,16 @@ func WithBedrockOptions(opts ...func(*bedrockruntime.Options)) Option {
 	}
 }
 
-// WithClient 设置自定义的 Bedrock 客户端。
-// 当提供自定义客户端时，WithAWSConfig 和 WithBedrockOptions 将被忽略。
-// 主要用于测试和 mock 场景。
+// WithClient sets a custom Bedrock client.
+// When a custom client is provided, WithAWSConfig and WithBedrockOptions are ignored.
+// Primarily used for testing and mock scenarios.
 func WithClient(client BedrockClient) Option {
 	return func(o *options) {
 		o.client = client
 	}
 }
 
-// WithChannelBufferSize 设置响应通道的缓冲区大小，默认为 256。
+// WithChannelBufferSize sets the buffer size of the response channel, defaults to 256.
 func WithChannelBufferSize(size int) Option {
 	return func(o *options) {
 		if size <= 0 {
