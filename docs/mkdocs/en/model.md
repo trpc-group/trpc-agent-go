@@ -1974,6 +1974,9 @@ The Anthropic Model supports multimodal content in `user` messages when the cont
 
 ```go
 import (
+    "context"
+    "os"
+
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 )
