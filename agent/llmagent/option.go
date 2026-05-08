@@ -510,6 +510,10 @@ type Options struct {
 	// retrieval mode is used for query-time session recall.
 	// Default is session.SearchModeHybrid.
 	PreloadSessionRecallSearchMode session.SearchMode
+	// EnableOnDemandSession enables invocation-scoped
+	// session_search / session_load exposure and injects
+	// a small overview prompt.
+	EnableOnDemandSession bool
 
 	// postToolPromptEnabled controls whether the post-tool dynamic prompt
 	// injection is enabled. When nil (default), injection is enabled to
@@ -1541,6 +1545,14 @@ func WithPreloadSessionRecallSearchMode(
 		default:
 			opts.PreloadSessionRecallSearchMode = session.SearchModeHybrid
 		}
+	}
+}
+
+// WithEnableOnDemandSession enables or disables invocation-scoped on-demand
+// session recall tools and their lightweight overview prompt.
+func WithEnableOnDemandSession(enable bool) Option {
+	return func(opts *Options) {
+		opts.EnableOnDemandSession = enable
 	}
 }
 

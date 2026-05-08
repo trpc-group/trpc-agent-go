@@ -130,6 +130,72 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 完成以上配置后，摘要功能即可自动运行。
 
+## 摘要 + 渐进式披露
+
+当摘要注入和 prompt 侧的上下文压缩一起工作时，旧细节可能不再直接出现在
+模型可见的请求里。如果你希望 Agent 只在需要时再把这些细节取回来，可以启用
+会话历史的渐进式披露。
+
+```go
+import (
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/session/pgvector"
+)
+
+// embedder := ...（例如 OpenAI / Gemini embedder；详见嵌入器配置文档）
+sessionService, err := pgvector.NewService(
+    pgvector.WithDSN(os.Getenv("PGVECTOR_DSN")),
+    pgvector.WithEmbedder(embedder),
+    pgvector.WithSummarizer(summarizer),
+)
+if err != nil {
+    panic(err)
+}
+
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableOnDemandSession(true),
+)
+```
+
+启用条件与行为：
+
+- 只有在 Session 后端同时实现了 `session.SearchableService` 和
+  `session.WindowService` 时，`WithEnableOnDemandSession(true)` 才会启用
+  这条渐进式披露链路，并暴露
+  `session_search` 和 `session_load`。
+- 当前 `session/pgvector` 支持这条链路；纯内存摘要示例不会暴露这两个工具。
+- `current_hidden` 会严格搜索当前 session 中、位于 `summary:last_included_ts`
+  之前的历史内容。`summary:last_included_ts` 是摘要中记录的
+  `last_included_ts` 时间戳，表示该摘要覆盖到的最后一个事件时间。
+- `current_session` 会搜索整个当前 session，不受 summary cutoff 限制。
+  当请求投影或 context compaction 把当前 session 的细节裁掉时，这个 scope
+  最有用。
+- `other_sessions` 会搜索同一 `<appName, userID>` 下的其他 session。
+- `all_sessions` 会合并 `current_hidden` 和 `other_sessions`。
+
+当前可召回的内容：
+
+- 用户消息和助手消息。
+- 历史 tool result，包括那些因为上下文压缩而没有直接出现在 prompt 里的工具输出。
+
+当前不会索引的内容：
+
+- 原始 tool call 请求本身不会被索引。
+- partial event 不会被索引。
+
+推荐使用方式：
+
+1. 先让模型基于当前可见 prompt、summary 和最近历史正常回答。
+2. 如果缺少旧细节，再先调用 `session_search`。
+3. 只有当 `session_search` 返回的小窗口仍然不够时，再调用 `session_load`。
+4. 取回的内容应视为历史上下文，而不是当前轮的主动指令。
+
 ## SessionSummarizer 接口
 
 ```go
