@@ -1852,6 +1852,63 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 	)
 }
 
+func TestNewAgent_BrowserToolingGuidance_OmittedForDeferredProviderBrowser(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	typeName := strings.ReplaceAll(
+		t.Name(),
+		"/",
+		"_",
+	)
+	require.NoError(t, registry.RegisterToolProvider(
+		typeName,
+		func(
+			_ registry.ToolProviderDeps,
+			spec registry.PluginSpec,
+		) ([]tool.Tool, error) {
+			return []tool.Tool{stubTool{name: "browser"}}, nil
+		},
+	))
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("{}"), &node))
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+		ToolProviders: []pluginSpec{{
+			Type:   typeName,
+			Config: &node,
+		}},
+		ToolSearch: toolSearchRuntimeOptions{
+			Enabled: true,
+		},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.NotContains(
+		t,
+		sys,
+		"For real browser automation, use browser.",
+	)
+	_, ok := req.Tools["browser"]
+	require.False(t, ok)
+	_, ok = req.Tools["tool_search"]
+	require.True(t, ok)
+}
+
 func TestNewAgent_OpenClawToolingGuidance_OverrideApplied(
 	t *testing.T,
 ) {
@@ -2513,6 +2570,16 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
 				ToolSets: []pluginSpec{{Type: "x"}},
+			},
+			wantErr: true,
+		},
+		{
+			name:      "tools.tool_search",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				ToolSearch: toolSearchRuntimeOptions{
+					Enabled: true,
+				},
 			},
 			wantErr: true,
 		},

@@ -205,6 +205,28 @@ func (t *resultWithErrorTool) Call(_ context.Context, _ []byte) (any, error) {
 	return t.result, t.err
 }
 
+type stateDeltaBlockingTool struct {
+	blockingTool
+	completedCh chan<- string
+	delta       map[string][]byte
+}
+
+func (t *stateDeltaBlockingTool) Call(ctx context.Context, args []byte) (any, error) {
+	result, err := t.blockingTool.Call(ctx, args)
+	if err == nil && t.completedCh != nil {
+		t.completedCh <- t.name
+	}
+	return result, err
+}
+
+func (t *stateDeltaBlockingTool) StateDelta(
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	return t.delta
+}
+
 // helper to build tool calls with fixed IDs and names.
 func makeToolCalls(names ...string) []model.ToolCall {
 	calls := make([]model.ToolCall, 0, len(names))
@@ -350,6 +372,87 @@ func TestProcessToolCalls_SerialVsParallel(t *testing.T) {
 			t.Fatalf("order not preserved: %s then %s", msgs[0].ToolName, msgs[1].ToolName)
 		}
 	})
+}
+
+func TestProcessToolCallsWithStateDelta_ParallelMergesInToolCallOrder(t *testing.T) {
+	started := make(chan string, 2)
+	completed := make(chan string, 2)
+	allowA := make(chan struct{})
+	allowB := make(chan struct{})
+
+	tools := map[string]tool.Tool{
+		"A": &stateDeltaBlockingTool{
+			blockingTool: blockingTool{
+				name:      "A",
+				startedCh: started,
+				proceedCh: allowA,
+				result:    map[string]string{"tool": "A"},
+			},
+			completedCh: completed,
+			delta: map[string][]byte{
+				"shared": []byte(`"A"`),
+			},
+		},
+		"B": &stateDeltaBlockingTool{
+			blockingTool: blockingTool{
+				name:      "B",
+				startedCh: started,
+				proceedCh: allowB,
+				result:    map[string]string{"tool": "B"},
+			},
+			completedCh: completed,
+			delta: map[string][]byte{
+				"shared": []byte(`"B"`),
+			},
+		},
+	}
+
+	done := make(chan struct {
+		msgs  []model.Message
+		delta map[string][]byte
+		err   error
+	}, 1)
+	go func() {
+		msgs, delta, err := processToolCallsWithStateDelta(
+			context.Background(),
+			toolCallsConfig{
+				ToolCalls:      makeToolCalls("A", "B"),
+				Tools:          tools,
+				InvocationID:   "inv",
+				State:          State{},
+				EnableParallel: true,
+			},
+		)
+		done <- struct {
+			msgs  []model.Message
+			delta map[string][]byte
+			err   error
+		}{msgs: msgs, delta: delta, err: err}
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("timeout waiting for tool starts")
+		}
+	}
+
+	close(allowB)
+	select {
+	case got := <-completed:
+		require.Equal(t, "B", got)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for B to complete")
+	}
+	close(allowA)
+
+	result := <-done
+	require.NoError(t, result.err)
+	require.Len(t, result.msgs, 2)
+	require.Equal(t, "A", result.msgs[0].ToolName)
+	require.Equal(t, "B", result.msgs[1].ToolName)
+	require.Equal(t, []byte(`"B"`), result.delta["shared"])
 }
 
 func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
@@ -3184,6 +3287,22 @@ func (r *retryToolResult) RetryResultError() bool {
 	return r.Fail
 }
 
+type runtimeToolSet struct {
+	name    string
+	tools   []tool.Tool
+	dynamic bool
+}
+
+func (s *runtimeToolSet) Tools(context.Context) []tool.Tool {
+	return append([]tool.Tool(nil), s.tools...)
+}
+
+func (s *runtimeToolSet) Close() error { return nil }
+
+func (s *runtimeToolSet) Name() string { return s.name }
+
+func (s *runtimeToolSet) StepDynamic() bool { return s.dynamic }
+
 type countingToolSet struct {
 	name  string
 	calls int
@@ -3606,6 +3725,40 @@ func TestModelDeltaAndMessageFromResponse(t *testing.T) {
 			Message: model.NewAssistantMessage("m"),
 		}},
 	}))
+}
+
+func TestResolveToolsNodeRuntimeTools_PreservesStaticAndStepToolSets(t *testing.T) {
+	baseTools := map[string]tool.Tool{
+		"base": &simpleTool{name: "base"},
+	}
+	staticSet := &runtimeToolSet{
+		name:  "static",
+		tools: []tool.Tool{&simpleTool{name: "static"}},
+	}
+	stepSet := &runtimeToolSet{
+		name:    "dynamic",
+		tools:   []tool.Tool{&simpleTool{name: "dynamic"}},
+		dynamic: true,
+	}
+
+	staticTools := mergeToolsWithToolSets(
+		context.Background(),
+		baseTools,
+		[]tool.ToolSet{staticSet},
+	)
+	effective := resolveToolsNodeRuntimeTools(
+		context.Background(),
+		State{},
+		&Node{
+			toolSets: []tool.ToolSet{staticSet, stepSet},
+		},
+		baseTools,
+		staticTools,
+	)
+
+	require.Contains(t, effective, "base")
+	require.Contains(t, effective, "static_static")
+	require.Contains(t, effective, "dynamic_dynamic")
 }
 
 func TestNewToolsNodeFunc_StaticToolSets(t *testing.T) {

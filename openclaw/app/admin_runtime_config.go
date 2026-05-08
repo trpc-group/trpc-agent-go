@@ -550,6 +550,19 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 						return strconv.FormatBool(opts.RefreshToolSetsOnRun)
 					},
 				),
+				adminRuntimeBoolField(
+					"tools.tool_search.enabled",
+					"Runtime Tool Search",
+					"Wrap configured providers and toolsets in a deferred runtime tool-search surface.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey("tool_search"),
+						adminRuntimeKey("enabled"),
+					},
+					func(opts runOptions) string {
+						return strconv.FormatBool(opts.ToolSearch.Enabled)
+					},
+				),
 			},
 		},
 		{

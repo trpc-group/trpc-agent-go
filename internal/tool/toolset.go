@@ -65,6 +65,12 @@ func (s *NamedToolSet) Name() string {
 	return s.toolSet.Name()
 }
 
+// StepDynamic forwards the optional step-dynamic marker from the
+// underlying ToolSet when present.
+func (s *NamedToolSet) StepDynamic() bool {
+	return IsStepDynamicToolSet(s.toolSet)
+}
+
 // NamedTool wraps an original tool with a prefixed name to avoid conflicts.
 type NamedTool struct {
 	original tool.Tool
@@ -90,6 +96,21 @@ func (t *NamedTool) Declaration() *tool.Declaration {
 // Original returns the underlying Tool instance wrapped by the NamedTool.
 func (t *NamedTool) Original() tool.Tool {
 	return t.original
+}
+
+// UnwrapNamedTool returns the innermost non-NamedTool wrapped by t.
+// NamedTool always implements both CallableTool and StreamableTool via
+// delegation, so runtime capability checks must inspect the original tool
+// chain instead of stopping after one wrapper.
+func UnwrapNamedTool(t tool.Tool) tool.Tool {
+	current := t
+	for {
+		named, ok := current.(*NamedTool)
+		if !ok || named == nil || named.original == nil {
+			return current
+		}
+		current = named.original
+	}
 }
 
 // Call delegates to the original tool's Call method.

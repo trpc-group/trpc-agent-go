@@ -110,6 +110,17 @@ func TestNamedTool_OriginalAndCloseAndName(t *testing.T) {
 	require.True(t, base.closed, "underlying Close() not called")
 }
 
+func TestUnwrapNamedTool_Recursive(t *testing.T) {
+	leaf := &simpleTool{name: "copy", desc: "copy file"}
+	inner := &NamedTool{original: leaf, name: "inner"}
+	outer := &NamedTool{original: inner, name: "outer"}
+
+	require.Same(t, leaf, UnwrapNamedTool(outer))
+	require.Same(t, leaf, UnwrapNamedTool(inner))
+	require.Same(t, leaf, UnwrapNamedTool(leaf))
+	require.Nil(t, UnwrapNamedTool(nil))
+}
+
 func TestNamedTool_CallAndStreamableCall(t *testing.T) {
 	// Positive path via NamedToolSet wrapper.
 	f := &fakeTool{decl: &tool.Declaration{Name: "sum"}, callResult: 42}

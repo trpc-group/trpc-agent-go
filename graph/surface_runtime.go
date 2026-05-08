@@ -9,6 +9,8 @@
 package graph
 
 import (
+	"context"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
@@ -24,6 +26,16 @@ func graphInvocationFromState(state State) *agent.Invocation {
 		}
 	}
 	return nil
+}
+
+func withGraphInvocationContext(ctx context.Context, state State) context.Context {
+	if invocation, ok := agent.InvocationFromContext(ctx); ok && invocation != nil {
+		return ctx
+	}
+	if invocation := graphInvocationFromState(state); invocation != nil {
+		return agent.NewInvocationContext(ctx, invocation)
+	}
+	return ctx
 }
 
 func graphSurfacePatch(

@@ -29,6 +29,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/invocationcarrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -269,6 +270,10 @@ func (e *Executor) Execute(
 	if invocation == nil {
 		return nil, errors.New("invocation is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = agent.NewInvocationContext(ctx, invocation)
 	agent.GetOrCreateStreamHub(invocation)
 
 	eventChanSize := e.channelBufferSize
@@ -2642,7 +2647,8 @@ func (e *Executor) taskInvocationContext(
 		invocationOpts = append(invocationOpts, agent.WithInvocationTraceNodeID(traceNodeID))
 	}
 	taskInvocation := invocation.Clone(invocationOpts...)
-	taskCtx := agent.NewInvocationContext(ctx, taskInvocation)
+	var taskCtx context.Context = agent.NewInvocationContext(ctx, taskInvocation)
+	taskCtx = invocationcarrier.WithInvocationStateCarrier(taskCtx, invocation)
 	return taskInvocation, taskCtx
 }
 
@@ -3802,7 +3808,6 @@ func (e *Executor) executeNodeFunction(
 	if node.modelCallbacks != nil {
 		input[StateKeyModelCallbacks] = node.modelCallbacks
 	}
-
 	return node.Function(ctx, input)
 }
 

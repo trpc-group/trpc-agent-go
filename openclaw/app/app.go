@@ -50,6 +50,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	runtimetoolsearch "trpc.group/trpc-go/trpc-agent-go/tool/toolsearch"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
@@ -1032,6 +1033,7 @@ func NewRuntime(
 			ToolSets:      opts.ToolSets,
 
 			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
+			ToolSearch:           opts.ToolSearch,
 		}
 		ag, skillsRepo, err = newAgent(
 			mdl,
@@ -1524,6 +1526,7 @@ func run(ctx context.Context, args []string) error {
 			ToolSets:      opts.ToolSets,
 
 			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
+			ToolSearch:           opts.ToolSearch,
 		}
 		ag, skillsRepo, err = newAgent(
 			mdl,
@@ -2168,6 +2171,17 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support tools.toolsets",
 		)
 	}
+	if opts.ToolSearch.Enabled ||
+		opts.ToolSearch.MaxResults != 0 ||
+		len(opts.ToolSearch.AlwaysInclude) > 0 ||
+		strings.TrimSpace(opts.ToolSearch.SearchToolName) != "" ||
+		opts.ToolSearch.PersistLoadedTools ||
+		opts.ToolSearch.CatalogCacheTTL != 0 ||
+		strings.TrimSpace(opts.ToolSearch.StateNamespace) != "" {
+		return errors.New(
+			"claude-code agent does not support tool_search",
+		)
+	}
 	if len(opts.KnowledgesConfig) > 0 {
 		return errors.New(
 			"claude-code agent does not support knowledges",
@@ -2348,8 +2362,9 @@ func newAgent(
 		tools = append(tools, knowledgeTools.tools...)
 	}
 	tools = append(tools, ocskills.NewListTool(repo))
+	var providerTools []tool.Tool
 	if len(cfg.ToolProviders) > 0 {
-		extra, err := toolsFromProviders(
+		providerTools, err = toolsFromProviders(
 			mdl,
 			cfg.AppName,
 			cfg.StateDir,
@@ -2358,7 +2373,22 @@ func newAgent(
 		if err != nil {
 			return nil, nil, err
 		}
-		tools = append(tools, extra...)
+	}
+
+	effectiveToolSets := append([]tool.ToolSet(nil), toolSets...)
+	if cfg.ToolSearch.Enabled &&
+		(len(providerTools) > 0 || len(effectiveToolSets) > 0) {
+		deferredSet, err := buildOpenClawDeferredToolSet(
+			cfg.ToolSearch,
+			providerTools,
+			effectiveToolSets,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		effectiveToolSets = []tool.ToolSet{deferredSet}
+	} else if len(providerTools) > 0 {
+		tools = append(tools, providerTools...)
 	}
 	if hasToolNamed(tools, ocbrowser.ToolName) {
 		instruction = strings.TrimSpace(
@@ -2419,8 +2449,8 @@ func newAgent(
 	if len(tools) > 0 {
 		opts = append(opts, llmagent.WithTools(tools))
 	}
-	if len(toolSets) > 0 {
-		opts = append(opts, llmagent.WithToolSets(toolSets))
+	if len(effectiveToolSets) > 0 {
+		opts = append(opts, llmagent.WithToolSets(effectiveToolSets))
 	}
 	if cfg.RefreshToolSetsOnRun {
 		opts = append(opts, llmagent.WithRefreshToolSetsOnRun(true))
@@ -2467,6 +2497,56 @@ func hasToolNamed(tools []tool.Tool, name string) bool {
 		}
 	}
 	return false
+}
+
+func buildOpenClawDeferredToolSet(
+	cfg toolSearchRuntimeOptions,
+	providerTools []tool.Tool,
+	toolSets []tool.ToolSet,
+) (tool.ToolSet, error) {
+	opts := make([]runtimetoolsearch.Option, 0, 8)
+	if len(providerTools) > 0 {
+		opts = append(opts, runtimetoolsearch.WithTools(providerTools...))
+	}
+	if len(toolSets) > 0 {
+		opts = append(opts, runtimetoolsearch.WithToolSets(toolSets...))
+	}
+	opts = append(opts, runtimetoolsearch.WithManageToolSetClosers(false))
+	if cfg.MaxResults > 0 {
+		opts = append(opts, runtimetoolsearch.WithMaxResults(cfg.MaxResults))
+	}
+	if len(cfg.AlwaysInclude) > 0 {
+		opts = append(
+			opts,
+			runtimetoolsearch.WithAlwaysInclude(cfg.AlwaysInclude...),
+		)
+	}
+	if cfg.SearchToolName != "" {
+		opts = append(
+			opts,
+			runtimetoolsearch.WithSearchToolName(cfg.SearchToolName),
+		)
+	}
+	if cfg.PersistLoadedTools {
+		opts = append(opts, runtimetoolsearch.WithPersistLoadedTools(true))
+	}
+	if cfg.CatalogCacheTTL > 0 {
+		opts = append(
+			opts,
+			runtimetoolsearch.WithCatalogRefreshPolicy(
+				runtimetoolsearch.CatalogRefreshPolicy{
+					TTL: cfg.CatalogCacheTTL,
+				},
+			),
+		)
+	}
+	if cfg.StateNamespace != "" {
+		opts = append(
+			opts,
+			runtimetoolsearch.WithStateNamespace(cfg.StateNamespace),
+		)
+	}
+	return runtimetoolsearch.NewDeferredToolSet(opts...)
 }
 
 func toolsFromProviders(
@@ -2665,6 +2745,7 @@ type agentConfig struct {
 	ToolSets []pluginSpec
 
 	RefreshToolSetsOnRun bool
+	ToolSearch           toolSearchRuntimeOptions
 }
 
 type openClawToolsBundle struct {

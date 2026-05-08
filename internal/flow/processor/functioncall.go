@@ -770,10 +770,7 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 	if tl == nil || choice == nil || ev == nil {
 		return
 	}
-	original := tl
-	if nameTool, ok := tl.(*itool.NamedTool); ok {
-		original = nameTool.Original()
-	}
+	original := itool.UnwrapNamedTool(tl)
 	b := []byte(choice.Message.Content)
 	toolCallID := choice.Message.ToolID
 
@@ -1594,6 +1591,10 @@ func afterCallbackReplacedResult(toolErr error, toolResult any) bool {
 // isStreamable returns true if the tool supports streaming and its stream
 // preference is enabled.
 func isStreamable(t tool.Tool) bool {
+	t = itool.UnwrapNamedTool(t)
+	if t == nil {
+		return false
+	}
 	// Check if the tool has a stream preference and if it is enabled.
 	if pref, ok := t.(streamInnerPreference); ok && !pref.StreamInner() {
 		return false
@@ -1610,22 +1611,18 @@ func (f *FunctionCallResponseProcessor) executeTool(
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
 ) (context.Context, any, bool, error) {
-	// originalTool refers to the actual underlying tool used to determine
-	// whether streaming is supported. If tl is a NamedTool, use its
-	// inner original tool instead of the wrapper itself.
-	originalTool := tl
-	if nameTool, ok := tl.(*itool.NamedTool); ok {
-		originalTool = nameTool.Original()
-	}
+	// NamedTool wrappers always expose delegated call methods, so capability
+	// checks must inspect the fully unwrapped tool chain.
+	originalTool := itool.UnwrapNamedTool(tl)
 	// Prefer streaming execution if the tool supports it.
-	if isStreamable(originalTool) {
-		// Safe to cast since isStreamable checks for StreamableTool.
+	if streamable, ok := originalTool.(tool.StreamableTool); ok &&
+		isStreamable(originalTool) {
 		return f.executeStreamableTool(
-			ctx, invocation, toolCall, tl.(tool.StreamableTool), eventChan,
+			ctx, invocation, toolCall, streamable, eventChan,
 		)
 	}
 	// Fallback to callable tool execution if supported.
-	if callable, ok := tl.(tool.CallableTool); ok {
+	if callable, ok := originalTool.(tool.CallableTool); ok {
 		ctx, result, err := f.executeCallableTool(ctx, toolCall, callable)
 		return ctx, result, false, err
 	}
@@ -1726,10 +1723,7 @@ func shouldRequestStructuredStreamErrors(tl tool.StreamableTool) bool {
 	if tl == nil {
 		return false
 	}
-	candidate := any(tl)
-	if namedTool, ok := tl.(*itool.NamedTool); ok {
-		candidate = namedTool.Original()
-	}
+	candidate := any(itool.UnwrapNamedTool(tl))
 	pref, ok := candidate.(structuredStreamErrorOptIn)
 	return ok && pref.TRPCAgentGoStructuredStreamErrorsOptIn()
 }
@@ -1738,10 +1732,7 @@ func innerTextModeForTool(tl tool.StreamableTool) tool.InnerTextMode {
 	if tl == nil {
 		return tool.InnerTextModeInclude
 	}
-	candidate := any(tl)
-	if namedTool, ok := tl.(*itool.NamedTool); ok {
-		candidate = namedTool.Original()
-	}
+	candidate := any(itool.UnwrapNamedTool(tl))
 	pref, ok := candidate.(innerTextModePreference)
 	if !ok {
 		return tool.InnerTextModeInclude
