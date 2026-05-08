@@ -6836,15 +6836,25 @@ const adminPageHTML = `<!doctype html>
       }
 
       function revealActiveLink() {
-        if (!sidebar || sidebar.scrollHeight <= sidebar.clientHeight) {
-          return;
-        }
-        const activeLink = sidebar.querySelector(".sidebar-link.active");
+        const activeLink = sidebar &&
+          sidebar.querySelector(".sidebar-link.active");
         if (!activeLink) {
           return;
         }
-        const sidebarRect = sidebar.getBoundingClientRect();
         const activeRect = activeLink.getBoundingClientRect();
+        if (sidebar.scrollHeight <= sidebar.clientHeight) {
+          const topEdge = viewportPadding;
+          const bottomEdge = window.innerHeight - viewportPadding;
+          if (activeRect.top < topEdge) {
+            window.scrollBy(0, activeRect.top - topEdge);
+            return;
+          }
+          if (activeRect.bottom > bottomEdge) {
+            window.scrollBy(0, activeRect.bottom - bottomEdge);
+          }
+          return;
+        }
+        const sidebarRect = sidebar.getBoundingClientRect();
         const topEdge = sidebarRect.top + viewportPadding;
         const bottomEdge = sidebarRect.bottom - viewportPadding;
         if (activeRect.top < topEdge) {
