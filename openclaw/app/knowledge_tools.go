@@ -145,8 +145,9 @@ func buildKnowledgeTools(
 		}
 		return &knowledgeToolsBundle{
 			tools: []tool.Tool{
-				knowledgetool.NewKnowledgeSearchTool(
+				knowledgetool.NewAgenticFilterSearchTool(
 					entry.kb,
+					nil,
 					toolOpts...,
 				),
 			},
