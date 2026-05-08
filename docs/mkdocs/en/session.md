@@ -1824,8 +1824,13 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds prompt-s
 - The latest `ContextCompactionKeepRecentRequests` completed requests are exempt from Pass 1 (but if Pass 2 is opted into, they remain subject to Pass 2 truncation).
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model.
 - Model-layer token tailoring remains the final fallback.
+- Context compaction uses `SimpleTokenCounter` by default. For CJK-heavy
+  workloads or provider-specific tokenization, pass the same custom counter
+  used by token tailoring via `WithContextCompactionTokenCounter(...)`.
 
 ```go
+counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1.6))
+
 llmAgent := llmagent.New(
     "my-agent",
     llmagent.WithModel(summaryModel),
@@ -1835,6 +1840,7 @@ llmAgent := llmagent.New(
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: old tool results → placeholder
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
     llmagent.WithContextCompactionKeepRecentRequests(1),
+    llmagent.WithContextCompactionTokenCounter(counter),
 )
 ```
 

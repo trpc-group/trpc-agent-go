@@ -772,8 +772,22 @@ Additionally:
 
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
 - Model-layer token tailoring remains the final fallback
+- Context compaction uses `SimpleTokenCounter` by default. If your application
+  uses a custom counter for CJK-heavy prompts or provider-specific tokenization,
+  pass the same counter with `WithContextCompactionTokenCounter(...)` so Pass 1
+  decisions and Pass 2 truncation use the same estimate as token tailoring.
 
 ```go
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(1.6), // Example for Chinese-heavy content.
+)
+
+modelInstance := openai.New(
+    "deepseek-v4-flash",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithTokenCounter(counter),
+)
+
 agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
@@ -783,6 +797,7 @@ agent := llmagent.New(
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: old tool results → placeholder
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
     llmagent.WithContextCompactionKeepRecentRequests(1),
+    llmagent.WithContextCompactionTokenCounter(counter),
 )
 ```
 

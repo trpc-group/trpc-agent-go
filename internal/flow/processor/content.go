@@ -393,6 +393,17 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) ContentOption
 	}
 }
 
+// WithContextCompactionTokenCounter sets the token counter used by context
+// compaction for deciding whether tool results exceed configured budgets.
+func WithContextCompactionTokenCounter(counter model.TokenCounter) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		if counter == nil {
+			return
+		}
+		p.ContextCompactionConfig.TokenCounter = counter
+	}
+}
+
 // WithFewShotResolver sets an invocation-aware few-shot resolver.
 func WithFewShotResolver(
 	resolver func(*agent.Invocation) [][]model.Message,
@@ -1445,10 +1456,11 @@ func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 
 	var cloned bool
 	for i := range messages {
-		msg, truncated, _ := truncateOversizedToolResultMessage(
+		msg, truncated, _ := truncateOversizedToolResultMessageWithCounter(
 			context.Background(),
 			messages[i],
 			p.ContextCompactionConfig.OversizedToolResultMaxTokens,
+			p.ContextCompactionConfig.TokenCounter,
 		)
 		if !truncated {
 			continue
