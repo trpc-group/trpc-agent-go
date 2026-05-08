@@ -96,7 +96,7 @@ ON CONFLICT(app_name, user_id, session_id, filter_key) DO UPDATE SET
 	if err != nil {
 		return fmt.Errorf("upsert summary: %w", err)
 	}
-	return nil
+	return isummary.ClearToolSearchSessionMirror(ctx, s, key, sess)
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.

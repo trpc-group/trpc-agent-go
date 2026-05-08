@@ -29,7 +29,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const invocationStateKeyPrefix = "__deferred_toolset_state__:"
+const (
+	invocationStateKeyPrefix = "__deferred_toolset_state__:"
+
+	// SessionStateKeyPrefix prefixes session-state keys used to persist
+	// deferred tool-search loaded-tool mirrors.
+	SessionStateKeyPrefix = "toolsearch:"
+)
 
 type loadedState struct {
 	CatalogFingerprint string   `json:"catalog_fingerprint,omitempty"`
@@ -224,6 +230,33 @@ func (d *DeferredToolSet) LoadedToolNames(ctx context.Context) []string {
 	snapshot := d.catalogSnapshot(ctx)
 	state := d.loadState(ctx, snapshot)
 	return append([]string(nil), state.LoadedTools...)
+}
+
+// ClearSessionLoadedTools clears only the persisted session mirror for loaded
+// tools. It intentionally leaves invocation state untouched so the current
+// model/tool loop can continue using tools that were already loaded.
+func (d *DeferredToolSet) ClearSessionLoadedTools(ctx context.Context) bool {
+	if d == nil || d.stateScope != StateScopeSession {
+		return false
+	}
+	inv := stateCarrierInvocation(ctx)
+	if inv == nil || inv.Session == nil {
+		return false
+	}
+	key := d.sessionStateKey()
+	if raw, ok := inv.Session.GetState(key); !ok || len(raw) == 0 {
+		return false
+	}
+	inv.Session.SetState(key, nil)
+	return true
+}
+
+// SessionStateKey returns the session-state key used for the loaded-tool mirror.
+func (d *DeferredToolSet) SessionStateKey() string {
+	if d == nil {
+		return ""
+	}
+	return d.sessionStateKey()
 }
 
 func (d *DeferredToolSet) catalogSnapshot(ctx context.Context) *catalogSnapshot {
@@ -444,6 +477,7 @@ func (d *DeferredToolSet) loadState(
 	snapshot *catalogSnapshot,
 ) loadedState {
 	state := loadedState{CatalogFingerprint: snapshot.Fingerprint}
+	loadedFromSession := false
 	if inv := stateCarrierInvocation(ctx); inv != nil {
 		if v, ok := agent.GetStateValue[loadedState](inv, d.invocationStateKey()); ok {
 			state = v
@@ -451,13 +485,15 @@ func (d *DeferredToolSet) loadState(
 	}
 	if len(state.LoadedTools) == 0 {
 		if inv := stateCarrierInvocation(ctx); inv != nil && inv.Session != nil {
-			state = d.loadSessionMirror(inv, state)
+			state, loadedFromSession = d.loadSessionMirror(inv, state)
 		}
 	}
 	state = d.normalizeLoadedState(snapshot, state)
 	if inv := stateCarrierInvocation(ctx); inv != nil {
 		inv.SetState(d.invocationStateKey(), state)
-		d.storeSessionMirror(inv, state)
+		if loadedFromSession {
+			d.storeSessionMirror(inv, state)
+		}
 	}
 	return state
 }
@@ -535,25 +571,25 @@ func (d *DeferredToolSet) invocationStateKey() string {
 }
 
 func (d *DeferredToolSet) sessionStateKey() string {
-	return "toolsearch:" + d.stateNamespace
+	return SessionStateKeyPrefix + d.stateNamespace
 }
 
 func (d *DeferredToolSet) loadSessionMirror(
 	inv *agent.Invocation,
 	fallback loadedState,
-) loadedState {
+) (loadedState, bool) {
 	if inv == nil || inv.Session == nil || d.stateScope != StateScopeSession {
-		return fallback
+		return fallback, false
 	}
 	raw, ok := inv.Session.GetState(d.sessionStateKey())
 	if !ok || len(raw) == 0 {
-		return fallback
+		return fallback, false
 	}
 	var stored loadedState
 	if err := json.Unmarshal(raw, &stored); err == nil {
-		return stored
+		return stored, true
 	}
-	return fallback
+	return fallback, false
 }
 
 func (d *DeferredToolSet) storeSessionMirror(

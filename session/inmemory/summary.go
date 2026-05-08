@@ -59,7 +59,10 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return fmt.Errorf("session not found: %s", key.SessionID)
 	}
 
-	return s.writeSummaryUnderLock(app, key, filterKey, sum)
+	if err := s.writeSummaryUnderLock(app, key, filterKey, sum); err != nil {
+		return err
+	}
+	return isummary.ClearToolSearchSessionMirror(ctx, s, key, sess)
 }
 
 // writeSummaryUnderLock writes a summary for a filterKey under app lock and refreshes TTL.

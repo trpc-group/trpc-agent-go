@@ -34,6 +34,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
@@ -88,6 +90,20 @@ const (
 		"be visible from session state. Do not call tool_search. Call " +
 		"weather_lookup exactly once for Guangzhou, then answer in one short " +
 		"sentence and stop."
+
+	SummarySyncCleanupPrompt = "Call tool_search exactly once to find the " +
+		"weather tool for Shenzhen. Then call weather_lookup exactly once for " +
+		"Shenzhen, even if an intra-run summary has happened. Then answer in one " +
+		"short sentence and stop."
+
+	SummaryAsyncCleanupFirstPrompt = "First turn: call tool_search exactly once " +
+		"to find the weather tool for Shenzhen. Then call weather_lookup exactly " +
+		"once for Shenzhen. Then answer in one short sentence and stop."
+
+	SummaryAsyncCleanupSecondPrompt = "Second turn: if weather_lookup is not " +
+		"visible, call tool_search exactly once to find it again. Then call " +
+		"weather_lookup exactly once for Guangzhou. Then answer in one short " +
+		"sentence and stop."
 )
 
 // RunConfig controls one example or smoke-test execution.
@@ -127,6 +143,16 @@ type loggingModel struct {
 	step      int
 	summaries []RequestSummary
 }
+
+type staticSummarySummarizer struct{}
+
+func (staticSummarySummarizer) ShouldSummarize(*session.Session) bool { return true }
+func (staticSummarySummarizer) Summarize(context.Context, *session.Session) (string, error) {
+	return "deferred tool-search summary cleanup smoke summary", nil
+}
+func (staticSummarySummarizer) SetPrompt(string)         {}
+func (staticSummarySummarizer) SetModel(model.Model)     {}
+func (staticSummarySummarizer) Metadata() map[string]any { return nil }
 
 type staticToolSet struct {
 	name  string
@@ -431,6 +457,165 @@ func RunSessionPersistence(ctx context.Context, cfg RunConfig) (RunResult, error
 	return result, nil
 }
 
+// RunSummarySyncCleanup demonstrates that sync summary clears only the session
+// mirror while the current invocation can keep using already-loaded tools.
+func RunSummarySyncCleanup(ctx context.Context, cfg RunConfig) (RunResult, error) {
+	cfg = normalizeRunConfig(cfg)
+	deferred, err := runtimetoolsearch.NewDeferredToolSet(
+		runtimetoolsearch.WithStateNamespace("examples/summary-sync-cleanup"),
+		runtimetoolsearch.WithStateScope(runtimetoolsearch.StateScopeSession),
+		runtimetoolsearch.WithTools(
+			newWeatherTool("weather_lookup", "Look up the current weather for one city."),
+			newStockTool("stock_quote", "Look up one stock quote."),
+		),
+		runtimetoolsearch.WithMaxResults(1),
+	)
+	if err != nil {
+		return RunResult{}, err
+	}
+
+	modelWrapper := newLoggingModel(openai.New(cfg.ModelName), cfg.Output, []*runtimetoolsearch.DeferredToolSet{deferred})
+	llm := llmagent.New(
+		"deferred-summary-sync-cleanup",
+		llmagent.WithModel(modelWrapper),
+		llmagent.WithInstruction(RuntimeSearchInstruction),
+		llmagent.WithGenerationConfig(defaultGenerationConfig()),
+		llmagent.WithMaxToolIterations(6),
+		llmagent.WithToolSets([]tool.ToolSet{deferred}),
+		llmagent.WithSyncSummaryIntraRun(true),
+	)
+
+	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+	defer cancel()
+
+	svc := newSummarySessionService(cfg.ModelName)
+	defer svc.Close()
+	appName := "examples-deferredtoolset-summary-sync"
+	sessionID := "summary-sync-demo"
+	rr := runner.NewRunner(appName, llm, runner.WithSessionService(svc))
+	defer rr.Close()
+
+	fmt.Fprintln(cfg.Output, "[summary sync] load weather_lookup, then continue after intra-run summary")
+	finalText, toolCalls, err := runAgentTurn(
+		runCtx,
+		cfg.Output,
+		rr,
+		sessionID,
+		SummarySyncCleanupPrompt,
+	)
+	if err != nil {
+		return RunResult{}, err
+	}
+
+	result := RunResult{
+		FinalText:      finalText,
+		Requests:       modelWrapper.Summaries(),
+		TurnFinalTexts: []string{finalText},
+		TurnToolCalls:  [][]string{toolCalls},
+	}
+	if err := waitForSessionMirrorCleared(
+		runCtx,
+		svc,
+		appName,
+		sessionID,
+		deferred.SessionStateKey(),
+	); err != nil {
+		return result, err
+	}
+	if err := validateSummarySyncCleanupResult(result); err != nil {
+		return result, fmt.Errorf("sync summary cleanup smoke check failed: %w", err)
+	}
+	return result, nil
+}
+
+// RunSummaryAsyncCleanup demonstrates that async summary clears the session
+// mirror before the next user turn rehydrates deferred tools.
+func RunSummaryAsyncCleanup(ctx context.Context, cfg RunConfig) (RunResult, error) {
+	cfg = normalizeRunConfig(cfg)
+	deferred, err := runtimetoolsearch.NewDeferredToolSet(
+		runtimetoolsearch.WithStateNamespace("examples/summary-async-cleanup"),
+		runtimetoolsearch.WithStateScope(runtimetoolsearch.StateScopeSession),
+		runtimetoolsearch.WithTools(
+			newWeatherTool("weather_lookup", "Look up the current weather for one city."),
+			newStockTool("stock_quote", "Look up one stock quote."),
+		),
+		runtimetoolsearch.WithMaxResults(1),
+	)
+	if err != nil {
+		return RunResult{}, err
+	}
+
+	modelWrapper := newLoggingModel(openai.New(cfg.ModelName), cfg.Output, []*runtimetoolsearch.DeferredToolSet{deferred})
+	llm := llmagent.New(
+		"deferred-summary-async-cleanup",
+		llmagent.WithModel(modelWrapper),
+		llmagent.WithInstruction(RuntimeSearchInstruction),
+		llmagent.WithGenerationConfig(defaultGenerationConfig()),
+		llmagent.WithMaxToolIterations(6),
+		llmagent.WithToolSets([]tool.ToolSet{deferred}),
+	)
+
+	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+	defer cancel()
+
+	svc := newSummarySessionService(cfg.ModelName)
+	defer svc.Close()
+	appName := "examples-deferredtoolset-summary-async"
+	sessionID := "summary-async-demo"
+	rr := runner.NewRunner(appName, llm, runner.WithSessionService(svc))
+	defer rr.Close()
+
+	fmt.Fprintln(cfg.Output, "[summary async turn 1] load weather_lookup into session state")
+	firstFinal, firstToolCalls, err := runAgentTurn(
+		runCtx,
+		cfg.Output,
+		rr,
+		sessionID,
+		SummaryAsyncCleanupFirstPrompt,
+	)
+	if err != nil {
+		return RunResult{}, err
+	}
+	firstRequests := modelWrapper.Summaries()
+
+	if err := waitForSessionMirrorCleared(
+		runCtx,
+		svc,
+		appName,
+		sessionID,
+		deferred.SessionStateKey(),
+	); err != nil {
+		return RunResult{}, err
+	}
+
+	fmt.Fprintln(cfg.Output, "[summary async turn 2] summary cleanup should require tool_search again")
+	secondFinal, secondToolCalls, err := runAgentTurn(
+		runCtx,
+		cfg.Output,
+		rr,
+		sessionID,
+		SummaryAsyncCleanupSecondPrompt,
+	)
+	if err != nil {
+		return RunResult{}, err
+	}
+	allRequests := modelWrapper.Summaries()
+	secondRequests := append([]RequestSummary(nil), allRequests[len(firstRequests):]...)
+
+	result := RunResult{
+		FinalText:          secondFinal,
+		Requests:           allRequests,
+		FirstTurnRequests:  firstRequests,
+		SecondTurnRequests: secondRequests,
+		TurnFinalTexts:     []string{firstFinal, secondFinal},
+		TurnToolCalls:      [][]string{firstToolCalls, secondToolCalls},
+	}
+	if err := validateSummaryAsyncCleanupResult(result); err != nil {
+		return result, fmt.Errorf("async summary cleanup smoke check failed: %w", err)
+	}
+	return result, nil
+}
+
 func runLLMAgent(
 	ctx context.Context,
 	cfg RunConfig,
@@ -530,6 +715,43 @@ func defaultGenerationConfig() model.GenerationConfig {
 		MaxTokens:   intPtr(512),
 		Temperature: floatPtr(0),
 		Stream:      false,
+	}
+}
+
+func newSummarySessionService(_ string) *sessioninmemory.SessionService {
+	return sessioninmemory.NewSessionService(
+		sessioninmemory.WithSummarizer(staticSummarySummarizer{}),
+	)
+}
+
+func waitForSessionMirrorCleared(
+	ctx context.Context,
+	svc session.Service,
+	appName string,
+	sessionID string,
+	stateKey string,
+) error {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for summary cleanup: %w", ctx.Err())
+		case <-ticker.C:
+			sess, err := svc.GetSession(ctx, session.Key{
+				AppName:   appName,
+				UserID:    "demo-user",
+				SessionID: sessionID,
+			})
+			if err != nil || sess == nil || len(sess.Summaries) == 0 {
+				continue
+			}
+			raw, ok := sess.GetState(stateKey)
+			if !ok || len(raw) == 0 {
+				return nil
+			}
+		}
 	}
 }
 
@@ -829,6 +1051,60 @@ func validateSessionPersistenceResult(result RunResult) error {
 	}
 	if !containsName(result.TurnToolCalls[1], "weather_lookup") {
 		return fmt.Errorf("second turn did not call weather_lookup")
+	}
+	return nil
+}
+
+func validateSummarySyncCleanupResult(result RunResult) error {
+	if len(result.Requests) < 2 {
+		return fmt.Errorf("sync cleanup run produced fewer than two model requests")
+	}
+	if len(result.TurnToolCalls) == 0 {
+		return fmt.Errorf("missing sync cleanup tool-call trace")
+	}
+	if !containsName(result.TurnToolCalls[0], "tool_search") {
+		return fmt.Errorf("sync cleanup run did not call tool_search")
+	}
+	if !containsName(result.TurnToolCalls[0], "weather_lookup") {
+		return fmt.Errorf("sync cleanup run did not call weather_lookup")
+	}
+	if containsName(result.Requests[0].ToolNames, "weather_lookup") {
+		return fmt.Errorf("weather_lookup was visible before tool_search")
+	}
+	if !containsName(result.Requests[1].ToolNames, "weather_lookup") {
+		return fmt.Errorf("weather_lookup was not visible after tool_search")
+	}
+	last := result.Requests[len(result.Requests)-1]
+	if !containsName(last.LoadedTools, "weather_lookup") {
+		return fmt.Errorf("current invocation lost weather_lookup after sync summary cleanup")
+	}
+	return nil
+}
+
+func validateSummaryAsyncCleanupResult(result RunResult) error {
+	if len(result.FirstTurnRequests) == 0 {
+		return fmt.Errorf("first turn produced no model requests")
+	}
+	if len(result.SecondTurnRequests) == 0 {
+		return fmt.Errorf("second turn produced no model requests")
+	}
+	if len(result.TurnToolCalls) < 2 {
+		return fmt.Errorf("missing async cleanup tool-call trace")
+	}
+	if !containsName(result.TurnToolCalls[0], "tool_search") ||
+		!containsName(result.TurnToolCalls[0], "weather_lookup") {
+		return fmt.Errorf("first turn did not load and call weather_lookup")
+	}
+	secondInitial := result.SecondTurnRequests[0]
+	if containsName(secondInitial.ToolNames, "weather_lookup") ||
+		containsName(secondInitial.LoadedTools, "weather_lookup") {
+		return fmt.Errorf("second turn rehydrated weather_lookup despite summary cleanup")
+	}
+	if !containsName(result.TurnToolCalls[1], "tool_search") {
+		return fmt.Errorf("second turn did not call tool_search after summary cleanup")
+	}
+	if !containsName(result.TurnToolCalls[1], "weather_lookup") {
+		return fmt.Errorf("second turn did not call weather_lookup after reloading it")
 	}
 	return nil
 }

@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
@@ -63,6 +64,16 @@ type scriptedCaptureModel struct {
 	responses []model.Message
 	summaries []requestSummary
 }
+
+type toolSearchSummarySummarizer struct{}
+
+func (toolSearchSummarySummarizer) ShouldSummarize(*session.Session) bool { return true }
+func (toolSearchSummarySummarizer) Summarize(context.Context, *session.Session) (string, error) {
+	return "summary", nil
+}
+func (toolSearchSummarySummarizer) SetPrompt(string)         {}
+func (toolSearchSummarySummarizer) SetModel(model.Model)     {}
+func (toolSearchSummarySummarizer) Metadata() map[string]any { return nil }
 
 func (m *scriptedCaptureModel) Info() model.Info {
 	return model.Info{Name: m.name}
@@ -367,6 +378,57 @@ func TestDeferredToolSet_InvocationScopeDoesNotPersistToSession(t *testing.T) {
 	)
 }
 
+func TestDeferredToolSet_ClearSessionLoadedTools_PreservesInvocation(t *testing.T) {
+	weather := newWeatherTool("weather_lookup", "Look up the weather for one city.")
+	currentTime := newStaticStringTool("current_time", "Return current time.")
+	set, err := NewDeferredToolSet(
+		WithTools(weather, currentTime),
+		WithAlwaysInclude("current_time"),
+		WithPersistLoadedTools(true),
+		WithMaxResults(1),
+	)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "session-1"}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	search := lookupTool(t, set.Tools(ctx), "tool_search")
+	_, err = search.(tool.CallableTool).Call(ctx, []byte(`{"query":"weather","limit":1}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"weather_lookup"}, set.LoadedToolNames(ctx))
+
+	raw, ok := inv.Session.GetState(set.sessionStateKey())
+	require.True(t, ok)
+	require.NotEmpty(t, raw)
+
+	require.True(t, set.ClearSessionLoadedTools(ctx))
+	raw, ok = inv.Session.GetState(set.sessionStateKey())
+	require.True(t, ok)
+	require.Empty(t, raw)
+
+	// The current invocation keeps its loaded tools so the active tool loop is
+	// not disrupted by summary-driven session cleanup.
+	require.Equal(t, []string{"weather_lookup"}, set.LoadedToolNames(ctx))
+	require.Equal(
+		t,
+		[]string{"current_time", "tool_search", "weather_lookup"},
+		toolNames(set.Tools(ctx)),
+	)
+
+	nextInv := agent.NewInvocation(
+		agent.WithInvocationSession(inv.Session),
+	)
+	nextCtx := agent.NewInvocationContext(context.Background(), nextInv)
+	require.Empty(t, set.LoadedToolNames(nextCtx))
+	require.Equal(
+		t,
+		[]string{"current_time", "tool_search"},
+		toolNames(set.Tools(nextCtx)),
+	)
+}
+
 func TestSearchTool_StateDeltaFallsBackToSearchOutput(t *testing.T) {
 	weather := newWeatherTool("weather_lookup", "Look up the weather for one city.")
 	set, err := NewDeferredToolSet(
@@ -389,6 +451,88 @@ func TestSearchTool_StateDeltaFallsBackToSearchOutput(t *testing.T) {
 	var state loadedState
 	require.NoError(t, json.Unmarshal(delta[set.sessionStateKey()], &state))
 	require.Equal(t, []string{"weather_lookup"}, state.LoadedTools)
+}
+
+func TestDeferredToolSet_SyncSummaryClearsOnlySessionMirror(t *testing.T) {
+	deferred, err := NewDeferredToolSet(
+		WithTools(newWeatherTool("weather_lookup", "Look up weather for a city.")),
+		WithPersistLoadedTools(true),
+		WithMaxResults(1),
+	)
+	require.NoError(t, err)
+
+	modelStub := &scriptedCaptureModel{
+		t:        t,
+		name:     "runtime-tool-search-sync-summary",
+		deferred: deferred,
+		responses: []model.Message{
+			assistantToolCallMessage(
+				"search-1",
+				"tool_search",
+				`{"query":"weather in shenzhen","limit":1}`,
+			),
+			assistantToolCallMessage(
+				"weather-1",
+				"weather_lookup",
+				`{"location":"Shenzhen"}`,
+			),
+			model.NewAssistantMessage("done"),
+		},
+	}
+	agt := llmagent.New(
+		"runtime-tool-search-sync-summary",
+		llmagent.WithModel(modelStub),
+		llmagent.WithInstruction("use tool_search when the visible tools are not sufficient"),
+		llmagent.WithToolSets([]tool.ToolSet{deferred}),
+		llmagent.WithMaxToolIterations(4),
+		llmagent.WithSyncSummaryIntraRun(true),
+	)
+	svc := sessioninmemory.NewSessionService(
+		sessioninmemory.WithSummarizer(toolSearchSummarySummarizer{}),
+	)
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	rr := runner.NewRunner(
+		"toolsearch-sync-summary-clear-test",
+		agt,
+		runner.WithSessionService(svc),
+	)
+	defer rr.Close()
+
+	events, err := rr.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("weather in shenzhen"),
+	)
+	require.NoError(t, err)
+	finalText, errMsg := collectFinalAssistantTextAndError(events)
+	require.Empty(t, errMsg)
+	require.Equal(t, "done", finalText)
+
+	require.Len(t, modelStub.summaries, 3)
+	require.Equal(t, []string{"tool_search"}, modelStub.summaries[0].ToolNames)
+	require.Equal(
+		t,
+		[]string{"tool_search", "weather_lookup"},
+		modelStub.summaries[1].ToolNames,
+	)
+	require.Equal(
+		t,
+		[]string{"tool_search", "weather_lookup"},
+		modelStub.summaries[2].ToolNames,
+	)
+	require.Equal(t, []string{"weather_lookup"}, modelStub.summaries[1].LoadedTools)
+	require.Equal(t, []string{"weather_lookup"}, modelStub.summaries[2].LoadedTools)
+
+	sess, err := svc.GetSession(context.Background(), session.Key{
+		AppName:   "toolsearch-sync-summary-clear-test",
+		UserID:    "user-1",
+		SessionID: "session-1",
+	})
+	require.NoError(t, err)
+	raw, ok := sess.GetState(deferred.sessionStateKey())
+	require.True(t, ok)
+	require.Empty(t, raw)
 }
 
 func TestDeferredToolSet_CatalogSnapshot_TTLZeroDisablesCaching(t *testing.T) {

@@ -111,6 +111,40 @@ func TestMemoryService_CreateSessionSummary_UpdateAndPersist(t *testing.T) {
 	require.Equal(t, "summary-text", text)
 }
 
+func TestMemoryService_CreateSessionSummary_ClearsToolSearchSessionMirror(t *testing.T) {
+	s := NewSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-toolsearch-clear"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{
+		"toolsearch:demo": []byte(`{"loaded_tools":["weather_lookup"]}`),
+		"other":           []byte("keep"),
+	})
+	require.NoError(t, err)
+
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	s.opts.summarizer = &fakeSummarizer{allow: true, out: "summary-text"}
+	sessWithEvents, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sessWithEvents)
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sessWithEvents, "", false))
+
+	raw, ok := sessWithEvents.GetState("toolsearch:demo")
+	require.True(t, ok)
+	require.Empty(t, raw)
+
+	got, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	raw, ok = got.GetState("toolsearch:demo")
+	require.True(t, ok)
+	require.Empty(t, raw)
+	other, ok := got.GetState("other")
+	require.True(t, ok)
+	require.Equal(t, []byte("keep"), other)
+}
+
 func TestMemoryService_EnqueueSummaryJob_AsyncEnabled(t *testing.T) {
 	// Create service with async summary enabled
 	s := NewSessionService(
@@ -145,6 +179,39 @@ func TestMemoryService_EnqueueSummaryJob_AsyncEnabled(t *testing.T) {
 	sum, ok := got.Summaries[""]
 	require.True(t, ok)
 	require.Equal(t, "async-summary", sum.Summary)
+}
+
+func TestMemoryService_EnqueueSummaryJob_ClearsToolSearchSessionMirror(t *testing.T) {
+	s := NewSessionService(
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "async-summary"}),
+	)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-async-clear"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{
+		"toolsearch:demo": []byte(`{"loaded_tools":["weather_lookup"]}`),
+	})
+	require.NoError(t, err)
+
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	require.NoError(t, s.EnqueueSummaryJob(context.Background(), sess, "", false))
+	require.Eventually(t, func() bool {
+		got, err := s.GetSession(context.Background(), key)
+		if err != nil {
+			return false
+		}
+		if got.Summaries[""] == nil {
+			return false
+		}
+		raw, ok := got.GetState("toolsearch:demo")
+		return ok && len(raw) == 0
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestMemoryService_EnqueueSummaryJob_AsyncEnabled_Default(t *testing.T) {

@@ -64,10 +64,16 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	switch ver := getSessionVersion(sess); ver {
 	case util.StorageTypeHashIdx:
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeHashIdx)
-		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		if err := s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
+			return err
+		}
+		return isummary.ClearToolSearchSessionMirror(ctx, s, key, sess)
 	case util.StorageTypeZset:
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeZset)
-		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		if err := s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
+			return err
+		}
+		return isummary.ClearToolSearchSessionMirror(ctx, s, key, sess)
 	}
 
 	// Slow path: check which storage has the session
@@ -78,11 +84,17 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 
 	if s.compatEnabled() && zsetExists {
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeZset)
-		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		if err := s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
+			return err
+		}
+		return isummary.ClearToolSearchSessionMirror(ctx, s, key, sess)
 	}
 	if hashidxExists {
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeHashIdx)
-		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		if err := s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
+			return err
+		}
+		return isummary.ClearToolSearchSessionMirror(ctx, s, key, sess)
 	}
 
 	log.WarnfContext(ctx, "session not found when creating summary: %s/%s/%s", key.AppName, key.UserID, key.SessionID)

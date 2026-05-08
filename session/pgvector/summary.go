@@ -99,7 +99,7 @@ func (s *Service) CreateSessionSummary(
 			"upsert summary failed: %w", err,
 		)
 	}
-	return nil
+	return isummary.ClearToolSearchSessionMirror(ctx, s, key, sess)
 }
 
 // EnqueueSummaryJob enqueues a summary job for

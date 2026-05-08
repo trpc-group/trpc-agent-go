@@ -84,7 +84,7 @@ func (s *Service) CreateSessionSummary(
 		return fmt.Errorf("upsert summary failed: %w", err)
 	}
 
-	return nil
+	return isummary.ClearToolSearchSessionMirror(ctx, s, key, sess)
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
