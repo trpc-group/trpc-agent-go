@@ -77,14 +77,14 @@ func contentPartFromBinaryInput(part types.InputContent) (*model.ContentPart, er
 			return &model.ContentPart{
 				Type: model.ContentTypeImage,
 				Image: &model.Image{
-					URL: part.URL,
+					URL:    part.URL,
+					Format: mimeType,
 				},
 			}, nil
 		}
-		text := part.URL
 		return &model.ContentPart{
-			Type: model.ContentTypeText,
-			Text: &text,
+			Type: model.ContentTypeFile,
+			File: fileFromBinaryURL(part, mimeType),
 		}, nil
 	}
 	if part.Data != "" {
@@ -124,6 +124,14 @@ func contentPartFromBinaryInput(part types.InputContent) (*model.ContentPart, er
 		Type: model.ContentTypeFile,
 		File: fileFromBinaryID(part),
 	}, nil
+}
+
+func fileFromBinaryURL(part types.InputContent, mimeType string) *model.File {
+	return &model.File{
+		Name:     strings.TrimSpace(part.Filename),
+		URL:      strings.TrimSpace(part.URL),
+		MimeType: mimeType,
+	}
 }
 
 func fileFromBinaryID(part types.InputContent) *model.File {

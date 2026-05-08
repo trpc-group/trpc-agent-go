@@ -110,6 +110,18 @@ func (m *Message) AddFileData(name string, data []byte, mimetype string) {
 	})
 }
 
+// AddFileURL adds a URL-based file to the message.
+func (m *Message) AddFileURL(name, url, mimetype string) {
+	m.ContentParts = append(m.ContentParts, ContentPart{
+		Type: ContentTypeFile,
+		File: &File{
+			Name:     name,
+			URL:      url,
+			MimeType: mimetype,
+		},
+	})
+}
+
 // AddFileID adds a file ID to the message.
 // The file id can be obtained from the response of the upload file API.
 func (m *Message) AddFileID(fileID string) {
@@ -263,12 +275,37 @@ type ContentPart struct {
 type File struct {
 	// Name is the name of the file, used when passing the file to the model as a string.
 	Name string `json:"filename"`
+	// URL is the URL of the file.
+	URL string `json:"url,omitempty"`
 	// Data is the raw file data, used when passing the file to the model as a string.
 	Data []byte `json:"data"`
 	// FileID is the ID of an uploaded file to use as input.
 	FileID string `json:"file_id"`
 	// MimeType is the format of the file data.
 	MimeType string `json:"format,omitempty"`
+}
+
+// FileURLText returns a textual representation for providers that cannot accept URL-based files.
+func FileURLText(file *File) string {
+	if file == nil {
+		return ""
+	}
+	fileURL := strings.TrimSpace(file.URL)
+	if fileURL == "" {
+		return ""
+	}
+	name := strings.TrimSpace(file.Name)
+	mimeType := strings.TrimSpace(file.MimeType)
+	if name != "" && mimeType != "" {
+		return fmt.Sprintf("File URL: %s (%s): %s", name, mimeType, fileURL)
+	}
+	if name != "" {
+		return fmt.Sprintf("File URL: %s: %s", name, fileURL)
+	}
+	if mimeType != "" {
+		return fmt.Sprintf("File URL (%s): %s", mimeType, fileURL)
+	}
+	return "File URL: " + fileURL
 }
 
 // Image represents an image data for vision models.

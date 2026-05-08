@@ -560,6 +560,26 @@ func Test_convertUserMessage_ImageURL(t *testing.T) {
 	assert.Equal(t, "https://example.com/image.png", out.Content[1].OfImage.Source.OfURL.URL)
 }
 
+func Test_convertUserMessage_ImageURLUnsupportedFormatFallbackText(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL:    "https://example.com/icon.svg",
+					Format: "image/svg+xml",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfText)
+	assert.Equal(t, "Image URL (image/svg+xml): https://example.com/icon.svg", out.Content[0].OfText.Text)
+}
+
 func Test_convertUserMessage_ImageData(t *testing.T) {
 	data := []byte("image-bytes")
 	msg := model.Message{
@@ -605,6 +625,71 @@ func Test_convertUserMessage_FilePDFData(t *testing.T) {
 	require.NotNil(t, out.Content[0].OfDocument.Source.OfBase64)
 	assert.Equal(t, base64.StdEncoding.EncodeToString(data), out.Content[0].OfDocument.Source.OfBase64.Data)
 	assert.Equal(t, "report.pdf", out.Content[0].OfDocument.Title.Value)
+}
+
+func Test_convertUserMessage_FileDataWithURLUsesData(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Data: []byte("hello"),
+					URL:  "https://example.com/report.pdf",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfDocument)
+	require.NotNil(t, out.Content[0].OfDocument.Source.OfText)
+	assert.Equal(t, "hello", out.Content[0].OfDocument.Source.OfText.Data)
+}
+
+func Test_convertUserMessage_FilePDFURL(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "report.pdf",
+					URL:      "https://example.com/report.pdf?sign=1",
+					MimeType: "application/pdf",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfDocument)
+	require.NotNil(t, out.Content[0].OfDocument.Source.OfURL)
+	assert.Equal(t, "https://example.com/report.pdf?sign=1", out.Content[0].OfDocument.Source.OfURL.URL)
+	assert.Equal(t, "report.pdf", out.Content[0].OfDocument.Title.Value)
+}
+
+func Test_convertUserMessage_FileURLFallbackText(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "data.json",
+					URL:      "https://example.com/data.json",
+					MimeType: "application/json",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfText)
+	assert.Equal(t, "File URL: data.json (application/json): https://example.com/data.json", out.Content[0].OfText.Text)
 }
 
 func Test_convertUserMessage_FileImageData(t *testing.T) {

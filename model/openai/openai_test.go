@@ -8247,6 +8247,97 @@ func TestAppendUserContentParts_SkipsInternalFiles(t *testing.T) {
 	require.Empty(t, dst)
 }
 
+func TestConvertContentPart_FileURLFallsBackToText(t *testing.T) {
+	m := &Model{}
+	part := model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:     "report.pdf",
+			URL:      "https://example.com/report.pdf",
+			MimeType: "application/pdf",
+		},
+	}
+	got := m.convertContentPart(part)
+	require.NotNil(t, got)
+	require.NotNil(t, got.OfText)
+	require.Nil(t, got.OfFile)
+	require.Equal(t, "File URL: report.pdf (application/pdf): https://example.com/report.pdf", got.OfText.Text)
+}
+
+func TestAppendUserContentParts_FileURLPreservedForTextOnlyVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{textOnlyMessageContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Len(t, dst, 1)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, "File URL: report.pdf (application/pdf): https://example.com/report.pdf", dst[0].OfText.Text)
+}
+
+func TestAppendUserContentParts_FileURLWithDataSkippedForTextOnlyVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{textOnlyMessageContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				Data:     []byte("pdf"),
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Empty(t, dst)
+}
+
+func TestAppendUserContentParts_FileURLPreservedForSkipFileTypeVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{skipFileTypeInContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Len(t, dst, 1)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, "File URL: report.pdf (application/pdf): https://example.com/report.pdf", dst[0].OfText.Text)
+}
+
+func TestAppendUserContentParts_FileURLWithDataSkippedForSkipFileTypeVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{skipFileTypeInContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				Data:     []byte("pdf"),
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Empty(t, dst)
+}
+
 // TestChatRequestCallbackSynchronous verifies that
 // chatRequestCallback is invoked synchronously inside
 // GenerateContent, before the response goroutine starts.

@@ -1969,8 +1969,8 @@ request := &model.Request{
 The Anthropic Model supports multimodal content in `user` messages when the content can be represented by Claude Messages API blocks:
 
 - Images: `ContentTypeImage`, using either an image URL or raw image data. Supported formats are `jpeg`, `png`, `gif`, and `webp`.
-- Files: `ContentTypeFile`, using raw data for images, PDFs (`application/pdf`), and plain text (`text/plain`).
-- Unsupported: `ContentTypeAudio`, `FileID`, Office documents, JSON, CSV, and other general file types. Unsupported content returns an error.
+- Files: `ContentTypeFile`, using raw data for images, PDFs (`application/pdf`), and plain text (`text/plain`). PDF files can also use a normal URL through `File.URL`; other file URLs are preserved as text.
+- Unsupported: `ContentTypeAudio`, `FileID`, Office documents, JSON, CSV, and other general file data types. Unsupported file data returns an error.
 
 ```go
 import (
@@ -1984,7 +1984,6 @@ import (
 func main() {
     llm := anthropic.New("claude-sonnet-4-6")
     imageData, _ := os.ReadFile("diagram.png")
-    pdfData, _ := os.ReadFile("report.pdf")
     request := &model.Request{
         Messages: []model.Message{
             model.NewSystemMessage("You are a professional document and image analysis assistant."),
@@ -2003,7 +2002,7 @@ func main() {
                         Type: model.ContentTypeFile,
                         File: &model.File{
                             Name:     "report.pdf",
-                            Data:     pdfData,
+                            URL:      "https://example.com/report.pdf",
                             MimeType: "application/pdf",
                         },
                     },

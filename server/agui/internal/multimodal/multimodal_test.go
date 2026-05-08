@@ -87,18 +87,72 @@ func TestUserMessageFromInputContentsTextAndImageURL(t *testing.T) {
 	require.NotNil(t, msg.ContentParts[1].Image)
 	assert.Equal(t, "https://example.com/a.jpg", msg.ContentParts[1].Image.URL)
 	assert.Empty(t, msg.ContentParts[1].Image.Detail)
-	assert.Empty(t, msg.ContentParts[1].Image.Format)
+	assert.Equal(t, "image/jpeg", msg.ContentParts[1].Image.Format)
 }
 
-func TestUserMessageFromInputContentsBinaryURLNonImageFallsBackToText(t *testing.T) {
+func TestUserMessageFromInputContentsBinaryURLFile(t *testing.T) {
 	msg, err := UserMessageFromInputContents([]types.InputContent{
-		{Type: types.InputContentTypeBinary, MimeType: "application/pdf", URL: "https://example.com/a.pdf"},
+		{
+			Type:     types.InputContentTypeBinary,
+			MimeType: " Application/PDF ",
+			Filename: "demo.pdf",
+			URL:      "https://example.com/a.pdf",
+		},
 	})
 	require.NoError(t, err)
 	require.Len(t, msg.ContentParts, 1)
-	assert.Equal(t, model.ContentTypeText, msg.ContentParts[0].Type)
-	require.NotNil(t, msg.ContentParts[0].Text)
-	assert.Equal(t, "https://example.com/a.pdf", *msg.ContentParts[0].Text)
+	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].File)
+	assert.Equal(t, "demo.pdf", msg.ContentParts[0].File.Name)
+	assert.Equal(t, "https://example.com/a.pdf", msg.ContentParts[0].File.URL)
+	assert.Equal(t, "application/pdf", msg.ContentParts[0].File.MimeType)
+}
+
+func TestUserMessageFromInputContentsBinaryURLFileKeepsNonPDFMimeType(t *testing.T) {
+	msg, err := UserMessageFromInputContents([]types.InputContent{
+		{
+			Type:     types.InputContentTypeBinary,
+			MimeType: "application/json",
+			Filename: "data.json",
+			URL:      "https://example.com/data.json",
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].File)
+	assert.Equal(t, "data.json", msg.ContentParts[0].File.Name)
+	assert.Equal(t, "https://example.com/data.json", msg.ContentParts[0].File.URL)
+	assert.Equal(t, "application/json", msg.ContentParts[0].File.MimeType)
+}
+
+func TestUserMessageFromInputContentsBinaryURLFileDoesNotInferNameFromURLPath(t *testing.T) {
+	msg, err := UserMessageFromInputContents([]types.InputContent{
+		{
+			Type: types.InputContentTypeBinary,
+			URL:  "https://example.com/files/report.pdf?sign=1",
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].File)
+	assert.Empty(t, msg.ContentParts[0].File.Name)
+	assert.Equal(t, "https://example.com/files/report.pdf?sign=1", msg.ContentParts[0].File.URL)
+	assert.Empty(t, msg.ContentParts[0].File.MimeType)
+}
+
+func TestUserMessageFromInputContentsBinaryURLFileWithoutNameOrMimeType(t *testing.T) {
+	msg, err := UserMessageFromInputContents([]types.InputContent{
+		{Type: types.InputContentTypeBinary, URL: "https://example.com"},
+	})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].File)
+	assert.Empty(t, msg.ContentParts[0].File.Name)
+	assert.Equal(t, "https://example.com", msg.ContentParts[0].File.URL)
+	assert.Empty(t, msg.ContentParts[0].File.MimeType)
 }
 
 func TestUserMessageFromInputContentsBinaryDataAudio(t *testing.T) {

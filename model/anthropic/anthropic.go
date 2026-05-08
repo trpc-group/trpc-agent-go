@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1137,8 +1138,11 @@ func convertImageContentPart(image *model.Image) (anthropic.ContentBlockParamUni
 	if image == nil {
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("image payload is nil")
 	}
-	if strings.TrimSpace(image.URL) != "" {
-		return anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: image.URL}), nil
+	if imageURL := strings.TrimSpace(image.URL); imageURL != "" {
+		if imageURLMediaTypeUnsupported(image) {
+			return anthropic.NewTextBlock(imageURLText(image)), nil
+		}
+		return anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: imageURL}), nil
 	}
 	if len(image.Data) == 0 {
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("image data is empty")
@@ -1150,6 +1154,27 @@ func convertImageContentPart(image *model.Image) (anthropic.ContentBlockParamUni
 	return anthropic.NewImageBlockBase64(mediaType, base64.StdEncoding.EncodeToString(image.Data)), nil
 }
 
+func imageURLMediaTypeUnsupported(image *model.Image) bool {
+	mediaType := normalizeMediaType(image.Format)
+	if mediaType == "" {
+		mediaType = mediaTypeFromURL(image.URL)
+	}
+	if mediaType == "" {
+		return false
+	}
+	_, err := normalizeImageMediaType(mediaType)
+	return err != nil
+}
+
+func imageURLText(image *model.Image) string {
+	imageURL := strings.TrimSpace(image.URL)
+	format := strings.TrimSpace(image.Format)
+	if format == "" {
+		return "Image URL: " + imageURL
+	}
+	return fmt.Sprintf("Image URL (%s): %s", format, imageURL)
+}
+
 func convertFileContentPart(file *model.File) (anthropic.ContentBlockParamUnion, error) {
 	if file == nil {
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file payload is nil")
@@ -1157,27 +1182,40 @@ func convertFileContentPart(file *model.File) (anthropic.ContentBlockParamUnion,
 	if file.FileID != "" {
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file_id content is not supported")
 	}
-	if len(file.Data) == 0 {
-		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file data is empty")
+	if len(file.Data) > 0 {
+		mediaType := fileMediaType(file)
+		if imageType, err := normalizeImageMediaType(mediaType); err == nil {
+			return anthropic.NewImageBlockBase64(imageType, base64.StdEncoding.EncodeToString(file.Data)), nil
+		}
+		switch mediaType {
+		case "application/pdf":
+			block := anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
+				Data: base64.StdEncoding.EncodeToString(file.Data),
+			})
+			return applyDocumentTitle(block, file.Name), nil
+		case "text/plain":
+			block := anthropic.NewDocumentBlock(anthropic.PlainTextSourceParam{
+				Data: string(file.Data),
+			})
+			return applyDocumentTitle(block, file.Name), nil
+		default:
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unsupported file media type %q", mediaType)
+		}
 	}
-	mediaType := fileMediaType(file)
-	if imageType, err := normalizeImageMediaType(mediaType); err == nil {
-		return anthropic.NewImageBlockBase64(imageType, base64.StdEncoding.EncodeToString(file.Data)), nil
+	if fileURL := strings.TrimSpace(file.URL); fileURL != "" {
+		mediaType := fileURLMediaType(file)
+		if _, err := normalizeImageMediaType(mediaType); err == nil {
+			return anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: fileURL}), nil
+		}
+		if mediaType == "application/pdf" {
+			block := anthropic.NewDocumentBlock(anthropic.URLPDFSourceParam{
+				URL: fileURL,
+			})
+			return applyDocumentTitle(block, file.Name), nil
+		}
+		return anthropic.NewTextBlock(model.FileURLText(file)), nil
 	}
-	switch mediaType {
-	case "application/pdf":
-		block := anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
-			Data: base64.StdEncoding.EncodeToString(file.Data),
-		})
-		return applyDocumentTitle(block, file.Name), nil
-	case "text/plain":
-		block := anthropic.NewDocumentBlock(anthropic.PlainTextSourceParam{
-			Data: string(file.Data),
-		})
-		return applyDocumentTitle(block, file.Name), nil
-	default:
-		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unsupported file media type %q", mediaType)
-	}
+	return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file data is empty")
 }
 
 func applyDocumentTitle(block anthropic.ContentBlockParamUnion, name string) anthropic.ContentBlockParamUnion {
@@ -1227,6 +1265,24 @@ func fileMediaType(file *model.File) string {
 		return normalizeMediaType(http.DetectContentType(file.Data))
 	}
 	return ""
+}
+
+func fileURLMediaType(file *model.File) string {
+	if mediaType := normalizeMediaType(file.MimeType); mediaType != "" {
+		return mediaType
+	}
+	if mediaType := mediaTypeFromName(file.Name); mediaType != "" {
+		return mediaType
+	}
+	return mediaTypeFromURL(file.URL)
+}
+
+func mediaTypeFromURL(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	return mediaTypeFromName(u.Path)
 }
 
 func mediaTypeFromName(name string) string {

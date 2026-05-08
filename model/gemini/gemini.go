@@ -834,6 +834,14 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		if part.File == nil {
 			return nil
 		}
+		if len(part.File.Data) == 0 {
+			if text := model.FileURLText(part.File); text != "" {
+				return &genai.Part{
+					Text: text,
+				}
+			}
+			return genai.NewPartFromBytes(part.File.Data, part.File.MimeType)
+		}
 		return genai.NewPartFromBytes(part.File.Data, part.File.MimeType)
 	}
 	return nil
