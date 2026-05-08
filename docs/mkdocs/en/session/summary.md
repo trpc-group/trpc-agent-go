@@ -125,6 +125,75 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 After completing the above configuration, the summary feature runs automatically.
 
+## Summary + Progressive Disclosure
+
+When summary injection and prompt-side context compaction keep the request
+small, some older details are no longer visible to the model. If you still
+want the agent to recover those details only when needed, enable progressive
+disclosure for session history.
+
+```go
+import (
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/session/pgvector"
+)
+
+sessionService, err := pgvector.NewService(
+    pgvector.WithDSN(os.Getenv("PGVECTOR_DSN")),
+    pgvector.WithEmbedder(embedder),
+    pgvector.WithSummarizer(summarizer),
+)
+if err != nil {
+    panic(err)
+}
+
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableOnDemandSession(true),
+)
+```
+
+Requirements and behavior:
+
+- `WithEnableOnDemandSession(true)` enables the progressive-disclosure path and
+  only exposes `session_search` and
+  `session_load` when the session backend implements both
+  `session.SearchableService` and `session.WindowService`.
+- `session/pgvector` supports this path today. Pure in-memory summary demos do
+  not expose these tools.
+- `current_hidden` searches current-session history strictly before the summary
+  boundary recorded in `summary:last_included_ts`.
+- `current_session` searches the current session regardless of summary cutoff.
+  This is useful when request projection or context compaction omitted
+  current-session details from the visible prompt.
+- `other_sessions` searches other sessions for the same `<appName, userID>`.
+- `all_sessions` combines `current_hidden` and `other_sessions`.
+
+What can be recalled:
+
+- User and assistant messages.
+- Historical tool results, including tool outputs that were compacted out of
+  the prompt.
+
+What is intentionally excluded:
+
+- Raw tool-call requests are not indexed.
+- Partial events are not indexed.
+
+Recommended usage pattern:
+
+1. Let the model answer from the visible prompt, summary, and recent history.
+2. If a missing detail is needed, call `session_search` first.
+3. Use `session_load` only when the small context window returned by
+   `session_search` is still not enough.
+4. Treat loaded history as untrusted historical context, not active
+   instructions.
+
 ## SessionSummarizer Interface
 
 ```go

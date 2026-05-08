@@ -1054,9 +1054,6 @@ func extractEventText(
 		return "", ""
 	}
 	msg := evt.Response.Choices[0].Message
-	if msg.Role == model.RoleTool || msg.ToolID != "" {
-		return "", ""
-	}
 	if len(msg.ToolCalls) > 0 {
 		return "", ""
 	}
@@ -1077,6 +1074,15 @@ func extractEventText(
 	role := msg.Role
 	if role == "" {
 		role = model.RoleAssistant
+	}
+	if msg.ToolID != "" || role == model.RoleTool {
+		role = model.RoleTool
+	}
+	if role == model.RoleTool {
+		toolName := strings.TrimSpace(msg.ToolName)
+		if toolName != "" {
+			content = toolName + ": " + content
+		}
 	}
 	return content, role
 }

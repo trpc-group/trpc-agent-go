@@ -18,6 +18,38 @@ This example demonstrates LLM-driven session summarization integrated with the f
 - Backend-specific persistence:
   - Summary text is stored in `sess.Summaries[filterKey]` for both backends.
 
+## Summary + Progressive Disclosure
+
+This example uses `inmemory`, so it demonstrates summary generation and summary
+injection only. It does **not** surface `session_search` / `session_load`.
+
+If you want the model to recover hidden details on demand after summary or
+context compaction, switch to a backend that supports both search and anchor
+window loading, such as `session/pgvector`, and enable the progressive-
+disclosure path:
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(llm),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableOnDemandSession(true),
+)
+```
+
+Practical scope choices:
+
+- `current_hidden`: for details hidden behind the current summary boundary
+- `current_session`: for current-session details or tool results hidden by
+  request projection / context compaction
+- `other_sessions`: for recalling another session of the same user
+
+Current recall behavior:
+
+- searchable/loadable: user messages, assistant messages, tool results
+- not indexed: raw tool-call requests, partial events
+
 ## Prerequisites
 
 - Go 1.21 or later.
