@@ -655,6 +655,8 @@ func TestContextProfile(t *testing.T) {
 func TestTraceFields(t *testing.T) {
 	t.Parallel()
 
+	require.Nil(t, TraceFields(Profile{}))
+
 	fields := TraceFields(Profile{
 		ID:      testProfileRetail,
 		Version: "v1",
@@ -675,9 +677,14 @@ func TestTraceFields(t *testing.T) {
 		Knowledge: KnowledgePolicy{
 			Indexes: []string{"retail-index"},
 		},
+		Skills: SkillPolicy{
+			Roots: []string{"/workspace/retail/skills"},
+		},
 		Isolation: IsolationPolicy{
-			Mode:       IsolationModeService,
-			AgentCache: true,
+			Mode:         IsolationModeService,
+			ServiceMode:  "sidecar",
+			AgentCache:   true,
+			ToolSetCache: true,
 		},
 	})
 
@@ -689,7 +696,10 @@ func TestTraceFields(t *testing.T) {
 	require.Equal(t, 1, fields["workspace_allowed_root_count"])
 	require.Equal(t, true, fields["has_workspace_workdir"])
 	require.Equal(t, string(IsolationModeService), fields["isolation_mode"])
+	require.Equal(t, "sidecar", fields["service_mode"])
 	require.Equal(t, true, fields["agent_cache"])
+	require.Equal(t, true, fields["toolset_cache"])
+	require.Equal(t, 1, fields["skill_root_count"])
 	require.NotContains(t, fields, "workspace_workdir")
 	require.NotContains(t, fields, "workspace_allowed_roots")
 }

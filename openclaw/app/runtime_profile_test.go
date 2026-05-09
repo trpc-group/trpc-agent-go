@@ -28,6 +28,22 @@ const (
 	testRuntimeProfileTenant = "tenant-a"
 )
 
+type failingRuntimeProfileCatalog struct {
+	err error
+}
+
+func (c failingRuntimeProfileCatalog) ProfileIDs(
+	context.Context,
+) ([]string, error) {
+	return nil, c.err
+}
+
+func (c failingRuntimeProfileCatalog) AppNames(
+	context.Context,
+) ([]string, error) {
+	return nil, c.err
+}
+
 func TestBuildRuntimeProfileRunOptionResolver(t *testing.T) {
 	t.Parallel()
 
@@ -325,6 +341,20 @@ func TestRuntimeProfileResolverFromInjectedResolver(t *testing.T) {
 	require.Equal(t, injectedProfileID, profile.ID)
 }
 
+func TestBuildRuntimeOptionsIgnoresNilRuntimeProfileInputs(t *testing.T) {
+	t.Parallel()
+
+	runtimeOpts := buildRuntimeOptions([]RuntimeOption{
+		nil,
+		WithRuntimeProfileResolver(nil, true),
+		WithRuntimeProfileCatalog(nil),
+	})
+
+	require.Nil(t, runtimeOpts.runtimeProfileResolver)
+	require.Nil(t, runtimeOpts.runtimeProfileCatalog)
+	require.False(t, runtimeOpts.runtimeProfileRequired)
+}
+
 func TestRuntimeProfileResolverFromInjectedStore(t *testing.T) {
 	t.Parallel()
 
@@ -398,6 +428,60 @@ func TestRuntimeProfileResolverFromInjectedCatalog(t *testing.T) {
 	appNames, err := gotCatalog.AppNames(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, []string{"yaml-app", "retail-app"}, appNames)
+}
+
+func TestRuntimeProfileCatalogsProfileIDs(t *testing.T) {
+	t.Parallel()
+
+	catalogs := runtimeProfileCatalogs{
+		runtimeprofile.StaticStore{Config: runtimeprofile.Config{
+			Profiles: map[string]runtimeprofile.Profile{
+				"retail": {
+					AppName: "retail-app",
+				},
+			},
+		}},
+		runtimeprofile.StaticStore{Config: runtimeprofile.Config{
+			Profiles: map[string]runtimeprofile.Profile{
+				"retail-alias": {
+					ID:      "retail",
+					AppName: "retail-app",
+				},
+				"support": {
+					AppName: "support-app",
+				},
+			},
+		}},
+	}
+
+	ids, err := catalogs.ProfileIDs(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"retail", "support"}, ids)
+
+	appNames, err := catalogs.AppNames(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"retail-app", "support-app"}, appNames)
+
+	got := appendUniqueRuntimeProfileCatalogValues(
+		[]string{"base"},
+		" ",
+		"base",
+		"next",
+	)
+	require.Equal(t, []string{"base", "next"}, got)
+}
+
+func TestRuntimeProfileCatalogsReturnProfileIDErrors(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("catalog down")
+	catalogs := runtimeProfileCatalogs{
+		failingRuntimeProfileCatalog{err: wantErr},
+	}
+
+	ids, err := catalogs.ProfileIDs(context.Background())
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, ids)
 }
 
 func TestValidateRuntimeProfiles(t *testing.T) {

@@ -92,6 +92,27 @@ func TestProfilePolicyHelpers(t *testing.T) {
 	))
 }
 
+func TestProfilePolicyHelpersWithoutProfile(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	workspace, ok := WorkspaceFromContext(ctx)
+	require.False(t, ok)
+	require.Empty(t, workspace)
+
+	policy, ok := CredentialPolicyFromContext(ctx)
+	require.False(t, ok)
+	require.Empty(t, policy)
+
+	workdir, err := ResolveWorkdir(ctx, " /tmp/work ")
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/work", workdir)
+
+	require.NoError(t, CheckCredentialRef(ctx, "secret://retail/crm"))
+	require.NoError(t, CheckCredentialRef(ctx, " "))
+}
+
 func TestSkillVisibilityFilterRoots(t *testing.T) {
 	t.Parallel()
 
