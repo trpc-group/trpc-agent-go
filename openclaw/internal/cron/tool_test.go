@@ -104,6 +104,7 @@ func TestToolAddCapturesRuntimeProfile(t *testing.T) {
 
 	job, ok := result.(*Job)
 	require.True(t, ok)
+	require.NotNil(t, job.Profile)
 	require.Equal(t, "retail", job.Profile.ID)
 	require.Equal(t, "v2", job.Profile.Version)
 	require.Equal(t, "retail-app", job.Profile.AppName)

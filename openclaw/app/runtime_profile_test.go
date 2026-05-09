@@ -378,6 +378,8 @@ func TestRuntimeProfileResolverFromInjectedStore(t *testing.T) {
 	)
 
 	require.False(t, required)
+	require.NotNil(t, runtimeOpts.runtimeProfileResolver)
+	require.NotNil(t, runtimeOpts.runtimeProfileCatalog)
 	require.NotNil(t, catalog)
 	profile, err := resolver.Resolve(
 		context.Background(),

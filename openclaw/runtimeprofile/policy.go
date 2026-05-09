@@ -47,14 +47,24 @@ func ResolveWorkdir(ctx context.Context, requested string) (string, error) {
 		return strings.TrimSpace(requested), nil
 	}
 	policy := profile.Workspace
+	allowedRoots := cleanStrings(policy.AllowedRoots)
+	base := strings.TrimSpace(policy.Workdir)
 	workdir := strings.TrimSpace(requested)
 	if workdir == "" {
-		workdir = strings.TrimSpace(policy.Workdir)
+		workdir = base
+	} else if !filepath.IsAbs(workdir) && base != "" {
+		workdir = filepath.Join(base, workdir)
 	}
-	if workdir == "" || len(cleanStrings(policy.AllowedRoots)) == 0 {
+	if workdir != "" {
+		workdir = filepath.Clean(workdir)
+	}
+	if len(allowedRoots) == 0 {
 		return workdir, nil
 	}
-	allowed, err := isPathAllowed(workdir, policy.AllowedRoots)
+	if workdir == "" || !filepath.IsAbs(workdir) {
+		return "", ErrWorkspaceDenied
+	}
+	allowed, err := isPathAllowed(workdir, allowedRoots)
 	if err != nil {
 		return "", err
 	}

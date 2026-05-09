@@ -66,7 +66,22 @@ func TestProfilePolicyHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, allowed, workdir)
 
+	child := filepath.Join(allowed, "child")
+	workdir, err = ResolveWorkdir(ctx, "child")
+	require.NoError(t, err)
+	require.Equal(t, child, workdir)
+
 	_, err = ResolveWorkdir(ctx, denied)
+	require.ErrorIs(t, err, ErrWorkspaceDenied)
+
+	noBaseCtx := WithProfile(context.Background(), Profile{
+		Workspace: WorkspacePolicy{
+			AllowedRoots: []string{allowed},
+		},
+	})
+	_, err = ResolveWorkdir(noBaseCtx, "relative")
+	require.ErrorIs(t, err, ErrWorkspaceDenied)
+	_, err = ResolveWorkdir(noBaseCtx, "")
 	require.ErrorIs(t, err, ErrWorkspaceDenied)
 
 	policy, ok := CredentialPolicyFromContext(ctx)
@@ -107,7 +122,7 @@ func TestProfilePolicyHelpersWithoutProfile(t *testing.T) {
 
 	workdir, err := ResolveWorkdir(ctx, " /tmp/work ")
 	require.NoError(t, err)
-	require.Equal(t, "/tmp/work", workdir)
+	require.Equal(t, filepath.Clean("/tmp/work"), filepath.Clean(workdir))
 
 	require.NoError(t, CheckCredentialRef(ctx, "secret://retail/crm"))
 	require.NoError(t, CheckCredentialRef(ctx, " "))

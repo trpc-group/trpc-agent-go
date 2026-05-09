@@ -4126,6 +4126,8 @@ func TestServiceDebugEndpoints(t *testing.T) {
 	require.Equal(t, "v2", snap.Debug.RecentTraces[0].ProfileVersion)
 	require.Equal(t, "retail-app", snap.Debug.RecentTraces[0].ProfileAppName)
 	require.Equal(t, "retail", snap.Debug.Sessions[0].ProfileID)
+	require.Equal(t, "v2", snap.Debug.Sessions[0].ProfileVersion)
+	require.Equal(t, "retail-app", snap.Debug.Sessions[0].ProfileAppName)
 
 	sessionsRR := httptest.NewRecorder()
 	sessionsReq := httptest.NewRequest(

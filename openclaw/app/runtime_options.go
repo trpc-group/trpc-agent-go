@@ -56,10 +56,15 @@ func WithRuntimeProfileStore(
 	store runtimeprofile.Store,
 	required bool,
 ) RuntimeOption {
-	return WithRuntimeProfileResolver(
-		runtimeprofile.NewCachedResolver(store),
-		required,
-	)
+	return func(opts *runtimeOptions) {
+		resolver := runtimeprofile.NewCachedResolver(store)
+		if resolver == nil {
+			return
+		}
+		opts.runtimeProfileResolver = resolver
+		opts.runtimeProfileCatalog = resolver
+		opts.runtimeProfileRequired = required
+	}
 }
 
 func buildRuntimeOptions(options []RuntimeOption) runtimeOptions {

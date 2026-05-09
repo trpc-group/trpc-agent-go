@@ -298,12 +298,24 @@ func (c *inProcGatewayClient) ForgetUser(
 
 	if c.memories != nil {
 		for _, currentAppName := range appNames {
-			userKey := memory.UserKey{
-				AppName: currentAppName,
-				UserID:  userID,
+			storageUserIDs := appStorageUserIDs[currentAppName]
+			if len(storageUserIDs) == 0 {
+				storageUserIDs = []string{userID}
 			}
-			if err := c.memories.ClearMemories(ctx, userKey); err != nil {
-				return fmt.Errorf("forget: clear memories: %w", err)
+			for _, storageUserID := range storageUserIDs {
+				userKey := memory.UserKey{
+					AppName: currentAppName,
+					UserID:  storageUserID,
+				}
+				if err := c.memories.ClearMemories(
+					ctx,
+					userKey,
+				); err != nil {
+					return fmt.Errorf(
+						"forget: clear memories: %w",
+						err,
+					)
+				}
 			}
 		}
 	}
@@ -661,13 +673,15 @@ func traceRuntimeProfileAppName(traceDir string) string {
 		}
 		var event traceRuntimeProfileEvent
 		if err := json.Unmarshal(line, &event); err != nil {
-			return ""
+			continue
 		}
 		if event.Kind != debugrecorder.KindRuntimeProfile {
 			continue
 		}
 		appName, _ := event.Payload["profile_app_name"].(string)
-		return strings.TrimSpace(appName)
+		if appName = strings.TrimSpace(appName); appName != "" {
+			return appName
+		}
 	}
 	return ""
 }

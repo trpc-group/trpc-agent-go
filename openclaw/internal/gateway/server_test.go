@@ -3035,8 +3035,9 @@ func TestServer_StreamMessage_RunError(t *testing.T) {
 func TestServer_StreamMessage_RunOptionResolverError(t *testing.T) {
 	t.Parallel()
 
+	runner := &stubRunner{}
 	srv, err := New(
-		&staticRunner{},
+		runner,
 		WithRunOptionResolver(func(
 			context.Context,
 			RunOptionInput,
@@ -3078,6 +3079,7 @@ func TestServer_StreamMessage_RunOptionResolverError(t *testing.T) {
 	)
 	require.NotNil(t, events[2].Error)
 	require.Equal(t, "profile denied", events[2].Error.Message)
+	require.Equal(t, 0, runner.Calls())
 }
 
 func TestServer_StreamMessage_ThoughtEvents(t *testing.T) {

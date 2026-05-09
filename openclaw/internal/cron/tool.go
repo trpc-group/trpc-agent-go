@@ -354,7 +354,8 @@ func (t *Tool) add(
 		job.Enabled = *in.Enabled
 	}
 	if profile, ok := runtimeprofile.ProfileFromContext(ctx); ok {
-		job.Profile = runtimeProfileRefFromProfile(profile)
+		ref := runtimeProfileRefFromProfile(profile)
+		job.Profile = &ref
 	}
 	delivery, err := resolveDelivery(
 		ctx,

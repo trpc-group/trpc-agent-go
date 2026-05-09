@@ -645,9 +645,12 @@ func (s *Service) resolveRuntimeProfile(
 }
 
 func checkRuntimeProfileVersion(
-	ref RuntimeProfileRef,
+	ref *RuntimeProfileRef,
 	profile runtimeprofile.Profile,
 ) error {
+	if ref == nil {
+		return nil
+	}
 	want := strings.TrimSpace(ref.Version)
 	if want == "" {
 		return nil

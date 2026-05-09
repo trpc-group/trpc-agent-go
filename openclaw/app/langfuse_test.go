@@ -394,11 +394,15 @@ func TestBuildLangfuseRunOptionResolver_UsesRuntimeProfile(
 	for _, opt := range runOpts {
 		opt(opts)
 	}
-	require.Equal(
-		t,
-		"wecom req-1",
-		opts.SpanAttributes[0].Value.AsString(),
-	)
+	foundTraceName := false
+	for _, attr := range opts.SpanAttributes {
+		if string(attr.Key) != langfuseTraceNameKey {
+			continue
+		}
+		require.Equal(t, "wecom req-1", attr.Value.AsString())
+		foundTraceName = true
+	}
+	require.True(t, foundTraceName)
 }
 
 func TestBuildLangfuseRunOptionResolver_InvalidSpanContext(

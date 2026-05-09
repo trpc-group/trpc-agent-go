@@ -115,7 +115,7 @@ type Job struct {
 	UserID     string                  `json:"user_id"`
 	TimeoutSec int                     `json:"timeout_sec,omitempty"`
 	Delivery   outbound.DeliveryTarget `json:"delivery,omitempty"`
-	Profile    RuntimeProfileRef       `json:"profile,omitempty"`
+	Profile    *RuntimeProfileRef      `json:"profile,omitempty"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
@@ -137,7 +137,10 @@ func runtimeProfileRefFromProfile(
 	}
 }
 
-func (r RuntimeProfileRef) profile() runtimeprofile.Profile {
+func (r *RuntimeProfileRef) profile() runtimeprofile.Profile {
+	if r == nil {
+		return runtimeprofile.Profile{}
+	}
 	return runtimeprofile.Profile{
 		ID:      strings.TrimSpace(r.ID),
 		Version: strings.TrimSpace(r.Version),
@@ -145,7 +148,7 @@ func (r RuntimeProfileRef) profile() runtimeprofile.Profile {
 	}
 }
 
-func (r RuntimeProfileRef) hasProfile() bool {
+func (r *RuntimeProfileRef) hasProfile() bool {
 	return runtimeprofile.HasProfile(r.profile())
 }
 
@@ -165,6 +168,10 @@ func (j *Job) clone() *Job {
 	if j.Policy.EndsAt != nil {
 		endsAt := *j.Policy.EndsAt
 		out.Policy.EndsAt = &endsAt
+	}
+	if j.Profile != nil {
+		profile := *j.Profile
+		out.Profile = &profile
 	}
 	return &out
 }

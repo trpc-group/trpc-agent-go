@@ -4605,6 +4605,13 @@ func TestInProcGatewayClient_ForgetUser_DeletesRuntimeProfileAppState(
 		nil,
 	)
 	require.NoError(t, err)
+	err = memSvc.AddMemory(
+		ctx,
+		memory.UserKey{AppName: profileApp, UserID: storageUser},
+		"remember profile scope",
+		nil,
+	)
+	require.NoError(t, err)
 
 	mode, err := debugrecorder.ParseMode("safe")
 	require.NoError(t, err)
@@ -4703,6 +4710,13 @@ func TestInProcGatewayClient_ForgetUser_DeletesRuntimeProfileAppState(
 	memories, err := memSvc.ReadMemories(
 		ctx,
 		memory.UserKey{AppName: profileApp, UserID: userID},
+		10,
+	)
+	require.NoError(t, err)
+	require.Empty(t, memories)
+	memories, err = memSvc.ReadMemories(
+		ctx,
+		memory.UserKey{AppName: profileApp, UserID: storageUser},
 		10,
 	)
 	require.NoError(t, err)
@@ -5468,6 +5482,11 @@ func TestDeleteDebugTraces_MissingDirNoError(t *testing.T) {
 func TestDeleteDebugTraces_UsesRuntimeProfileEvent(t *testing.T) {
 	t.Parallel()
 
+	const (
+		debugEventsFileName   = "events.jsonl"
+		malformedEventContent = "{bad-json\n"
+	)
+
 	rec, err := debugrecorder.New(t.TempDir(), "")
 	require.NoError(t, err)
 
@@ -5481,10 +5500,25 @@ func TestDeleteDebugTraces_UsesRuntimeProfileEvent(t *testing.T) {
 	require.NoError(t, trace.Record(
 		debugrecorder.KindRuntimeProfile,
 		runtimeprofile.TraceFields(runtimeprofile.Profile{
+			AppName: " ",
+		}),
+	))
+	require.NoError(t, trace.Record(
+		debugrecorder.KindRuntimeProfile,
+		runtimeprofile.TraceFields(runtimeprofile.Profile{
 			AppName: "profile-app",
 		}),
 	))
 	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
+
+	raw, err := debugrecorder.ReadEventsFile(traceDir)
+	require.NoError(t, err)
+	rawPath := filepath.Join(traceDir, debugEventsFileName)
+	require.NoError(t, os.WriteFile(
+		rawPath,
+		append([]byte(malformedEventContent), raw...),
+		0o600,
+	))
 
 	err = deleteDebugTraces(
 		context.Background(),

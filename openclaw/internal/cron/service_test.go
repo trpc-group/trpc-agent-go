@@ -11,6 +11,7 @@ package cron
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -314,7 +315,7 @@ func TestServiceRunNowAppliesRuntimeProfile(t *testing.T) {
 		},
 		Message: "collect system resources",
 		UserID:  "telegram:user",
-		Profile: RuntimeProfileRef{
+		Profile: &RuntimeProfileRef{
 			ID: "retail",
 		},
 	})
@@ -344,6 +345,14 @@ func TestServiceRunNowAppliesRuntimeProfile(t *testing.T) {
 	)
 }
 
+func TestJobProfileJSONOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(Job{ID: "job-1"})
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), `"profile"`)
+}
+
 func TestServiceRunNowFailsClosedForMissingRuntimeProfile(
 	t *testing.T,
 ) {
@@ -363,7 +372,7 @@ func TestServiceRunNowFailsClosedForMissingRuntimeProfile(
 		},
 		Message: "collect system resources",
 		UserID:  "telegram:user",
-		Profile: RuntimeProfileRef{
+		Profile: &RuntimeProfileRef{
 			ID:      "retail",
 			Version: "v1",
 		},
@@ -414,7 +423,7 @@ func TestServiceRunNowFailsOnRuntimeProfileVersionMismatch(
 		},
 		Message: "collect system resources",
 		UserID:  "telegram:user",
-		Profile: RuntimeProfileRef{
+		Profile: &RuntimeProfileRef{
 			ID:      "retail",
 			Version: "v1",
 		},

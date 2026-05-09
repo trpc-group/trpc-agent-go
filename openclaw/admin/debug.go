@@ -297,7 +297,7 @@ func enrichDebugTraceProfile(traceAbs string, out *debugTraceView) {
 		}
 		var rec debugRuntimeProfileRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
-			return
+			continue
 		}
 		if rec.Kind != debugrecorder.KindRuntimeProfile {
 			continue
