@@ -3269,7 +3269,7 @@ func TestBuildAgentInvocationWithStateAndScope_PropagatesExecutionTraceMetadata(
 	require.Equal(t, "parent/delegate", agent.InvocationTraceNodeID(inv))
 	require.Equal(
 		t,
-		"parent/delegate/child",
+		"parent/delegate",
 		agent.InvocationSurfaceRootNodeID(inv),
 	)
 	require.Equal(t, []string{rootStepID}, agent.NextExecutionTracePredecessors(inv))
@@ -3301,7 +3301,7 @@ func TestBuildAgentInvocationWithStateAndScope_PreservesMountedSurfaceRoot(
 	require.Equal(t, "trace-parent/delegate", agent.InvocationTraceNodeID(inv))
 	require.Equal(
 		t,
-		"workflow/parent/delegate/child",
+		"workflow/parent/delegate",
 		agent.InvocationSurfaceRootNodeID(inv),
 	)
 }
