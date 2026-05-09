@@ -60,6 +60,7 @@ import (
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	langfuseobs "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 )
 
@@ -210,6 +211,20 @@ func createAppTestSkill(t *testing.T) string {
 		0o600,
 	))
 	return root
+}
+
+func createNamedAppTestSkill(t *testing.T, root string, name string) {
+	t.Helper()
+
+	dir := filepath.Join(root, name)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	data := "---\nname: " + name + "\n" +
+		"description: " + name + " skill\n---\nbody\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "SKILL.md"),
+		[]byte(data),
+		0o600,
+	))
 }
 
 func runAgentAndCapture(
@@ -1628,6 +1643,99 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.NotContains(t, sys, "Skill tool availability:")
 	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
 	require.NotContains(t, sys, "Only describe a blocker")
+}
+
+func TestNewAgent_RuntimeProfileSkillFilter(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	createNamedAppTestSkill(t, root, "alpha")
+	createNamedAppTestSkill(t, root, "beta")
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	ctx := runtimeprofile.WithProfile(
+		context.Background(),
+		runtimeprofile.Profile{
+			Skills: runtimeprofile.SkillPolicy{
+				Include: []string{"alpha"},
+			},
+		},
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	ch, err := agt.Run(ctx, inv)
+	require.NoError(t, err)
+	for evt := range ch {
+		if evt == nil || !evt.RequiresCompletion {
+			continue
+		}
+		key := agent.GetAppendEventNoticeKey(evt.ID)
+		require.NotNil(
+			t,
+			inv.AddNoticeChannel(context.Background(), key),
+		)
+		require.NoError(t, inv.NotifyCompletion(context.Background(), key))
+	}
+
+	sys := joinSystemMessages(mdl.got)
+	require.Contains(t, sys, "alpha")
+	require.NotContains(t, sys, "beta")
+}
+
+func TestNewAgent_RuntimeProfileSkillRoots(t *testing.T) {
+	t.Parallel()
+
+	alphaRoot := t.TempDir()
+	betaRoot := t.TempDir()
+	createNamedAppTestSkill(t, alphaRoot, "alpha")
+	createNamedAppTestSkill(t, betaRoot, "beta")
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:            "demo",
+		SkillsRoot:         alphaRoot,
+		SkillsExtraDirs:    []string{betaRoot},
+		StateDir:           t.TempDir(),
+		SkillsAllowBundled: []string{"none"},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	ctx := runtimeprofile.WithProfile(
+		context.Background(),
+		runtimeprofile.Profile{
+			Skills: runtimeprofile.SkillPolicy{
+				Roots: []string{alphaRoot},
+			},
+		},
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	ch, err := agt.Run(ctx, inv)
+	require.NoError(t, err)
+	for evt := range ch {
+		if evt == nil || !evt.RequiresCompletion {
+			continue
+		}
+		key := agent.GetAppendEventNoticeKey(evt.ID)
+		require.NotNil(
+			t,
+			inv.AddNoticeChannel(context.Background(), key),
+		)
+		require.NoError(t, inv.NotifyCompletion(context.Background(), key))
+	}
+
+	sys := joinSystemMessages(mdl.got)
+	require.Contains(t, sys, "alpha")
+	require.NotContains(t, sys, "beta")
 }
 
 func TestNewAgent_OpenClawPostToolPrompt_AppliedAfterToolResult(
@@ -5278,6 +5386,40 @@ func TestDeleteDebugTraces_MissingDirNoError(t *testing.T) {
 		"u1",
 	)
 	require.NoError(t, err)
+}
+
+func TestDeleteDebugTraces_UsesRuntimeProfileEvent(t *testing.T) {
+	t.Parallel()
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "s1",
+	})
+	require.NoError(t, err)
+	traceDir := trace.Dir()
+	require.NoError(t, trace.Record(
+		debugrecorder.KindRuntimeProfile,
+		runtimeprofile.TraceFields(runtimeprofile.Profile{
+			AppName: "profile-app",
+		}),
+	))
+	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
+
+	err = deleteDebugTraces(
+		context.Background(),
+		rec.Dir(),
+		"telegram",
+		"profile-app",
+		"u1",
+	)
+	require.NoError(t, err)
+
+	_, err = os.Stat(traceDir)
+	require.True(t, errors.Is(err, os.ErrNotExist))
 }
 
 func TestDeleteDebugTraces_IgnoresBadMeta(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 const (
@@ -82,6 +83,14 @@ type ExecutionStats struct {
 	DeliveryFailureCount int `json:"delivery_failure_count,omitempty"`
 }
 
+// RuntimeProfileRef stores the profile identity captured when a job is
+// created. It deliberately stores metadata, not secrets or full policy blobs.
+type RuntimeProfileRef struct {
+	ID      string `json:"id,omitempty"`
+	Version string `json:"version,omitempty"`
+	AppName string `json:"app_name,omitempty"`
+}
+
 type scheduledRunTemplateData struct {
 	Cron cronRunTemplateData
 }
@@ -106,6 +115,7 @@ type Job struct {
 	UserID     string                  `json:"user_id"`
 	TimeoutSec int                     `json:"timeout_sec,omitempty"`
 	Delivery   outbound.DeliveryTarget `json:"delivery,omitempty"`
+	Profile    RuntimeProfileRef       `json:"profile,omitempty"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
@@ -115,6 +125,28 @@ type Job struct {
 	LastStatus string `json:"last_status,omitempty"`
 	LastError  string `json:"last_error,omitempty"`
 	LastOutput string `json:"last_output,omitempty"`
+}
+
+func runtimeProfileRefFromProfile(
+	profile runtimeprofile.Profile,
+) RuntimeProfileRef {
+	return RuntimeProfileRef{
+		ID:      strings.TrimSpace(profile.ID),
+		Version: strings.TrimSpace(profile.Version),
+		AppName: strings.TrimSpace(profile.AppName),
+	}
+}
+
+func (r RuntimeProfileRef) profile() runtimeprofile.Profile {
+	return runtimeprofile.Profile{
+		ID:      strings.TrimSpace(r.ID),
+		Version: strings.TrimSpace(r.Version),
+		AppName: strings.TrimSpace(r.AppName),
+	}
+}
+
+func (r RuntimeProfileRef) hasProfile() bool {
+	return runtimeprofile.HasProfile(r.profile())
 }
 
 func (j *Job) clone() *Job {

@@ -32,13 +32,13 @@ func buildConversationRunOptionResolver(
 	return func(
 		ctx context.Context,
 		input gateway.RunOptionInput,
-	) (context.Context, []agent.RunOption) {
+	) (context.Context, []agent.RunOption, error) {
 		annotation, ok, err := conversation.
 			AnnotationFromRequestExtensions(
 				input.Extensions,
 			)
 		if err != nil || !ok {
-			return ctx, nil
+			return ctx, nil, nil
 		}
 		if storageUserID := strings.TrimSpace(
 			annotation.StorageUserID,
@@ -95,6 +95,6 @@ func buildConversationRunOptionResolver(
 				agent.MergeRuntimeState(runtimeState),
 			)
 		}
-		return ctx, runOpts
+		return ctx, runOpts, nil
 	}
 }

@@ -13,11 +13,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -107,6 +110,114 @@ func TestMapResolverUsesMapKeyAndExplicitID(t *testing.T) {
 	require.Equal(t, profileAlias, profile.ID)
 }
 
+func TestMapResolverFallbackToDefault(t *testing.T) {
+	t.Parallel()
+
+	resolver := NewMapResolver(Config{
+		Default:           testProfileDefault,
+		FallbackToDefault: true,
+		Profiles: map[string]Profile{
+			testProfileDefault: {
+				AppName: "default-app",
+			},
+		},
+	})
+
+	profile, err := resolver.Resolve(context.Background(), Request{
+		ProfileID: "missing",
+	})
+	require.NoError(t, err)
+	require.Equal(t, testProfileDefault, profile.ID)
+	require.Equal(t, "default-app", profile.AppName)
+}
+
+func TestValidateConfig(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, ValidateConfig(Config{}))
+	require.NoError(t, ValidateConfig(Config{
+		Default: testProfileDefault,
+		Profiles: map[string]Profile{
+			testProfileDefault: {},
+		},
+	}))
+	require.NoError(t, ValidateConfig(Config{
+		Default: testProfileRetail,
+		Profiles: map[string]Profile{
+			"retail-key": {
+				ID: testProfileRetail,
+			},
+		},
+	}))
+
+	err := ValidateConfig(Config{Required: true})
+	require.ErrorIs(t, err, ErrConfigInvalid)
+	require.Contains(t, err.Error(), "required profiles are empty")
+
+	err = ValidateConfig(Config{
+		Default: "missing",
+		Profiles: map[string]Profile{
+			testProfileDefault: {},
+		},
+	})
+	require.ErrorIs(t, err, ErrConfigInvalid)
+	require.Contains(t, err.Error(), "default profile")
+
+	err = ValidateConfig(Config{
+		FallbackToDefault: true,
+		Profiles: map[string]Profile{
+			testProfileDefault: {},
+		},
+	})
+	require.ErrorIs(t, err, ErrConfigInvalid)
+	require.Contains(t, err.Error(), "fallback needs default")
+
+	err = ValidateConfig(Config{
+		Profiles: map[string]Profile{
+			"retail-a": {ID: testProfileRetail},
+			"retail-b": {ID: testProfileRetail},
+		},
+	})
+	require.ErrorIs(t, err, ErrConfigInvalid)
+	require.Contains(t, err.Error(), "duplicate profile id")
+
+	err = ValidateConfig(Config{
+		Profiles: map[string]Profile{
+			testProfileRetail: {
+				Isolation: IsolationPolicy{Mode: "bad"},
+			},
+		},
+	})
+	require.ErrorIs(t, err, ErrConfigInvalid)
+	require.Contains(t, err.Error(), "unsupported isolation mode")
+
+	err = ValidateConfig(Config{
+		Profiles: map[string]Profile{
+			testProfileRetail: {
+				Isolation: IsolationPolicy{
+					Mode:       IsolationModeShared,
+					AgentCache: true,
+				},
+			},
+		},
+	})
+	require.ErrorIs(t, err, ErrConfigInvalid)
+	require.Contains(t, err.Error(), "shared isolation")
+
+	err = ValidateConfig(Config{
+		Profiles: map[string]Profile{
+			testProfileRetail: {
+				Isolation: IsolationPolicy{
+					Mode:        IsolationModeProfileCache,
+					ServiceMode: "sidecar",
+				},
+			},
+		},
+	})
+	require.ErrorIs(t, err, ErrConfigInvalid)
+	require.Contains(t, err.Error(), "profile_cache isolation")
+}
+
 func TestMapResolverEdgeCases(t *testing.T) {
 	t.Parallel()
 
@@ -164,9 +275,32 @@ func TestRunOptionsAppliesProfile(t *testing.T) {
 			Exclude:          []string{testToolBlocked},
 			ExecutionInclude: []string{testToolExecute},
 			ExecutionExclude: []string{testToolBlocked},
+			ToolSets:         []string{"mcp-retail"},
+			CredentialRefs: map[string]string{
+				"crm": "secret://retail/crm",
+			},
 		},
 		Knowledge: KnowledgePolicy{
-			Filter: sourceFilter,
+			Indexes: []string{"retail-index"},
+			Filter:  sourceFilter,
+		},
+		Workspace: WorkspacePolicy{
+			Workdir:      "/workspace/retail",
+			AllowedRoots: []string{"/workspace/retail"},
+		},
+		Credentials: CredentialPolicy{
+			AllowedRefs: []string{"secret://retail/crm"},
+		},
+		Skills: SkillPolicy{
+			Include: []string{"crm"},
+			Exclude: []string{"internal"},
+			Roots:   []string{"/skills/retail"},
+		},
+		Isolation: IsolationPolicy{
+			Mode:         IsolationModeService,
+			AgentCache:   true,
+			ToolSetCache: true,
+			ServiceMode:  "sidecar",
 		},
 		State:      sourceState,
 		ExtraModel: sourceExtraModel,
@@ -193,6 +327,71 @@ func TestRunOptionsAppliesProfile(t *testing.T) {
 		t,
 		"2026-05-09",
 		runOpts.RuntimeState[RuntimeStateProfileVersion],
+	)
+	require.Equal(
+		t,
+		"/workspace/retail",
+		runOpts.RuntimeState[RuntimeStateWorkspaceWorkdir],
+	)
+	require.Equal(
+		t,
+		[]string{"/workspace/retail"},
+		runOpts.RuntimeState[RuntimeStateWorkspaceAllowedRoots],
+	)
+	require.Equal(
+		t,
+		[]string{"secret://retail/crm"},
+		runOpts.RuntimeState[RuntimeStateCredentialAllowedRefs],
+	)
+	require.Equal(
+		t,
+		[]string{"crm"},
+		runOpts.RuntimeState[RuntimeStateSkillInclude],
+	)
+	require.Equal(
+		t,
+		[]string{"internal"},
+		runOpts.RuntimeState[RuntimeStateSkillExclude],
+	)
+	require.Equal(
+		t,
+		[]string{"/skills/retail"},
+		runOpts.RuntimeState[RuntimeStateSkillRoots],
+	)
+	require.Equal(
+		t,
+		[]string{"retail-index"},
+		runOpts.RuntimeState[RuntimeStateKnowledgeIndexes],
+	)
+	require.Equal(
+		t,
+		[]string{"mcp-retail"},
+		runOpts.RuntimeState[RuntimeStateToolSets],
+	)
+	require.Equal(
+		t,
+		map[string]string{"crm": "secret://retail/crm"},
+		runOpts.RuntimeState[RuntimeStateToolCredentialRefs],
+	)
+	require.Equal(
+		t,
+		string(IsolationModeService),
+		runOpts.RuntimeState[RuntimeStateIsolationMode],
+	)
+	require.Equal(
+		t,
+		true,
+		runOpts.RuntimeState[RuntimeStateIsolationAgentCache],
+	)
+	require.Equal(
+		t,
+		true,
+		runOpts.RuntimeState[RuntimeStateIsolationToolSetCache],
+	)
+	require.Equal(
+		t,
+		"sidecar",
+		runOpts.RuntimeState[RuntimeStateIsolationServiceMode],
 	)
 
 	sourceFilter["tenant"] = "changed"
@@ -354,6 +553,109 @@ func TestContextProfile(t *testing.T) {
 		context.Background(),
 		" fallback ",
 	))
+}
+
+func TestProfilePolicyHelpers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	allowed := filepath.Join(root, "tenant")
+	require.NoError(t, os.MkdirAll(allowed, 0o755))
+	denied := filepath.Join(root, "other")
+	require.NoError(t, os.MkdirAll(denied, 0o755))
+
+	ctx := WithProfile(context.Background(), Profile{
+		Workspace: WorkspacePolicy{
+			Workdir:      allowed,
+			AllowedRoots: []string{allowed},
+		},
+		Credentials: CredentialPolicy{
+			AllowedRefs: []string{"secret://retail/crm"},
+		},
+		Skills: SkillPolicy{
+			Include: []string{"crm"},
+			Exclude: []string{"draft"},
+		},
+	})
+
+	workspace, ok := WorkspaceFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, allowed, workspace.Workdir)
+
+	workdir, err := ResolveWorkdir(ctx, "")
+	require.NoError(t, err)
+	require.Equal(t, allowed, workdir)
+
+	workdir, err = ResolveWorkdir(ctx, allowed)
+	require.NoError(t, err)
+	require.Equal(t, allowed, workdir)
+
+	_, err = ResolveWorkdir(ctx, denied)
+	require.ErrorIs(t, err, ErrWorkspaceDenied)
+
+	policy, ok := CredentialPolicyFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, []string{"secret://retail/crm"}, policy.AllowedRefs)
+
+	require.NoError(t, CheckCredentialRef(ctx, "secret://retail/crm"))
+	err = CheckCredentialRef(ctx, "secret://other/crm")
+	require.ErrorIs(t, err, ErrCredentialDenied)
+
+	require.True(t, SkillVisibilityFilter(ctx, skill.Summary{Name: "crm"}))
+	require.False(t, SkillVisibilityFilter(
+		ctx,
+		skill.Summary{Name: "draft"},
+	))
+	require.False(t, SkillVisibilityFilter(
+		ctx,
+		skill.Summary{Name: "other"},
+	))
+	require.True(t, SkillVisibilityFilter(
+		context.Background(),
+		skill.Summary{Name: "other"},
+	))
+}
+
+func TestTraceFields(t *testing.T) {
+	t.Parallel()
+
+	fields := TraceFields(Profile{
+		ID:      testProfileRetail,
+		Version: "v1",
+		AppName: "retail-app",
+		Workspace: WorkspacePolicy{
+			Workdir:      "/workspace/retail",
+			AllowedRoots: []string{"/workspace/retail"},
+		},
+		Credentials: CredentialPolicy{
+			AllowedRefs: []string{"secret://retail/crm"},
+		},
+		Tools: ToolPolicy{
+			ToolSets: []string{"crm"},
+			CredentialRefs: map[string]string{
+				"crm": "secret://retail/crm",
+			},
+		},
+		Knowledge: KnowledgePolicy{
+			Indexes: []string{"retail-index"},
+		},
+		Isolation: IsolationPolicy{
+			Mode:       IsolationModeService,
+			AgentCache: true,
+		},
+	})
+
+	require.Equal(t, testProfileRetail, fields["profile_id"])
+	require.Equal(t, "v1", fields["profile_version"])
+	require.Equal(t, "retail-app", fields["profile_app_name"])
+	require.Equal(t, 1, fields["credential_ref_count"])
+	require.Equal(t, 1, fields["tool_credential_ref_count"])
+	require.Equal(t, 1, fields["workspace_allowed_root_count"])
+	require.Equal(t, true, fields["has_workspace_workdir"])
+	require.Equal(t, string(IsolationModeService), fields["isolation_mode"])
+	require.Equal(t, true, fields["agent_cache"])
+	require.NotContains(t, fields, "workspace_workdir")
+	require.NotContains(t, fields, "workspace_allowed_roots")
 }
 
 func TestResolverFuncNil(t *testing.T) {

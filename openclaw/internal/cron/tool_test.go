@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -61,6 +62,51 @@ func TestToolAddSupportsAliasesAndCurrentChat(t *testing.T) {
 	require.Equal(t, "1m", job.Schedule.Every)
 	require.Equal(t, "telegram", job.Delivery.Channel)
 	require.Equal(t, "12345", job.Delivery.Target)
+}
+
+func TestToolAddCapturesRuntimeProfile(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		nil,
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	invCtx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+	ctx := runtimeprofile.WithProfile(invCtx, runtimeprofile.Profile{
+		ID:      "retail",
+		Version: "v2",
+		AppName: "retail-app",
+	})
+
+	args, err := json.Marshal(map[string]any{
+		"action":        "add",
+		"task":          "collect system resources",
+		"schedule_kind": "every",
+		"interval":      "1m",
+		"headless":      true,
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	require.Equal(t, "retail", job.Profile.ID)
+	require.Equal(t, "v2", job.Profile.Version)
+	require.Equal(t, "retail-app", job.Profile.AppName)
 }
 
 func TestToolAddSupportsExecutionPolicyAndHeadless(t *testing.T) {

@@ -94,6 +94,8 @@ func TestParseRunOptions_RuntimeProfilesConfig(t *testing.T) {
 	cfgPath := writeTempConfig(t, `
 runtime_profiles:
   default: retail
+  required: true
+  fallback_to_default: true
   profiles:
     retail:
       app_name: retail-app
@@ -105,9 +107,27 @@ runtime_profiles:
       tools:
         include: ["knowledge_search", "order_lookup"]
         execution_exclude: ["dangerous_tool"]
+        toolsets: ["crm"]
+        credential_refs:
+          crm: "secret://retail/crm"
       knowledge:
+        indexes: ["retail-index"]
         filter:
           tenant: retail
+      workspace:
+        workdir: "/workspace/retail"
+        allowed_roots: ["/workspace/retail"]
+      credentials:
+        allowed_refs: ["secret://retail/crm"]
+      skills:
+        include: ["crm"]
+        exclude: ["draft"]
+        roots: ["/skills/retail"]
+      isolation:
+        mode: "service"
+        agent_cache: true
+        toolset_cache: true
+        service_mode: "sidecar"
       runtime_state:
         plan: vip
       model_request_extra:
@@ -118,6 +138,8 @@ runtime_profiles:
 	require.NoError(t, err)
 	require.NotNil(t, opts.RuntimeProfiles)
 	require.Equal(t, "retail", opts.RuntimeProfiles.Default)
+	require.True(t, opts.RuntimeProfiles.Required)
+	require.True(t, opts.RuntimeProfiles.FallbackToDefault)
 
 	profile := opts.RuntimeProfiles.Profiles["retail"]
 	require.Equal(t, "retail-app", profile.AppName)
@@ -132,7 +154,36 @@ runtime_profiles:
 	require.Equal(t, []string{
 		"dangerous_tool",
 	}, profile.Tools.ExecutionExclude)
+	require.Equal(t, []string{"crm"}, profile.Tools.ToolSets)
+	require.Equal(
+		t,
+		map[string]string{"crm": "secret://retail/crm"},
+		profile.Tools.CredentialRefs,
+	)
+	require.Equal(t, []string{"retail-index"}, profile.Knowledge.Indexes)
 	require.Equal(t, "retail", profile.Knowledge.Filter["tenant"])
+	require.Equal(t, "/workspace/retail", profile.Workspace.Workdir)
+	require.Equal(
+		t,
+		[]string{"/workspace/retail"},
+		profile.Workspace.AllowedRoots,
+	)
+	require.Equal(
+		t,
+		[]string{"secret://retail/crm"},
+		profile.Credentials.AllowedRefs,
+	)
+	require.Equal(t, []string{"crm"}, profile.Skills.Include)
+	require.Equal(t, []string{"draft"}, profile.Skills.Exclude)
+	require.Equal(t, []string{"/skills/retail"}, profile.Skills.Roots)
+	require.Equal(
+		t,
+		runtimeprofile.IsolationModeService,
+		profile.Isolation.Mode,
+	)
+	require.True(t, profile.Isolation.AgentCache)
+	require.True(t, profile.Isolation.ToolSetCache)
+	require.Equal(t, "sidecar", profile.Isolation.ServiceMode)
 	require.Equal(t, "vip", profile.State["plan"])
 	require.Equal(t, "medium", profile.ExtraModel["reasoning_effort"])
 

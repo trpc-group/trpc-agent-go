@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	langfuseobs "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 )
 
@@ -213,7 +214,7 @@ func TestBuildLangfuseRunOptionResolver_SetsTraceID(t *testing.T) {
 	resolver := buildLangfuseRunOptionResolver(runOptions{
 		AppName: "openclaw",
 	})
-	ctx, runOpts := resolver(context.Background(), gateway.RunOptionInput{
+	ctx, runOpts, err := resolver(context.Background(), gateway.RunOptionInput{
 		Inbound: gateway.InboundMessage{
 			Channel:   "wecom",
 			MessageID: "msg-1",
@@ -223,6 +224,7 @@ func TestBuildLangfuseRunOptionResolver_SetsTraceID(t *testing.T) {
 		RequestID: "req-1",
 		Trace:     trace,
 	})
+	require.NoError(t, err)
 
 	bag := baggage.FromContext(ctx)
 	require.Equal(t, "u1", bag.Member(langfuseUserIDKey).Value())
@@ -329,7 +331,7 @@ func TestBuildLangfuseRunOptionResolver_WithoutTraceSkipsCallback(
 		AppName: "openclaw",
 	})
 
-	ctx, runOpts := resolver(context.Background(), gateway.RunOptionInput{
+	ctx, runOpts, err := resolver(context.Background(), gateway.RunOptionInput{
 		Inbound: gateway.InboundMessage{
 			Channel: "wecom",
 		},
@@ -337,6 +339,7 @@ func TestBuildLangfuseRunOptionResolver_WithoutTraceSkipsCallback(
 		SessionID: "s1",
 		RequestID: "req-1",
 	})
+	require.NoError(t, err)
 
 	require.NotNil(t, ctx)
 
@@ -346,6 +349,56 @@ func TestBuildLangfuseRunOptionResolver_WithoutTraceSkipsCallback(
 	}
 	require.Len(t, opts.SpanAttributes, 1)
 	require.Empty(t, opts.TraceStartedCallbacks)
+}
+
+func TestBuildLangfuseRunOptionResolver_UsesRuntimeProfile(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	resolver := buildLangfuseRunOptionResolver(runOptions{
+		AppName: "openclaw",
+	})
+	ctx := runtimeprofile.WithProfile(
+		context.Background(),
+		runtimeprofile.Profile{
+			ID:      "retail",
+			Version: "v2",
+			AppName: "retail-app",
+		},
+	)
+	ctx, runOpts, err := resolver(ctx, gateway.RunOptionInput{
+		Inbound: gateway.InboundMessage{
+			Channel: "wecom",
+		},
+		UserID:    "u1",
+		SessionID: "s1",
+		RequestID: "req-1",
+	})
+	require.NoError(t, err)
+
+	bag := baggage.FromContext(ctx)
+	require.Equal(
+		t,
+		"retail-app",
+		bag.Member(langfuseMetadataAppName).Value(),
+	)
+	require.Equal(t, "retail", bag.Member(
+		langfuseMetadataProfileID,
+	).Value())
+	require.Equal(t, "v2", bag.Member(
+		langfuseMetadataProfileVersion,
+	).Value())
+
+	opts := &agent.RunOptions{}
+	for _, opt := range runOpts {
+		opt(opts)
+	}
+	require.Equal(
+		t,
+		"wecom req-1",
+		opts.SpanAttributes[0].Value.AsString(),
+	)
 }
 
 func TestBuildLangfuseRunOptionResolver_InvalidSpanContext(
@@ -369,7 +422,7 @@ func TestBuildLangfuseRunOptionResolver_InvalidSpanContext(
 	resolver := buildLangfuseRunOptionResolver(runOptions{
 		AppName: "openclaw",
 	})
-	_, runOpts := resolver(context.Background(), gateway.RunOptionInput{
+	_, runOpts, err := resolver(context.Background(), gateway.RunOptionInput{
 		Inbound: gateway.InboundMessage{
 			Channel: "wecom",
 		},
@@ -377,6 +430,7 @@ func TestBuildLangfuseRunOptionResolver_InvalidSpanContext(
 		RequestID: "req-1",
 		Trace:     trace,
 	})
+	require.NoError(t, err)
 
 	opts := &agent.RunOptions{}
 	for _, opt := range runOpts {

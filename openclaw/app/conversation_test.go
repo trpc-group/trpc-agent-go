@@ -62,11 +62,12 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 		Extensions: extensions,
 	}
 
-	_, deliveryOpts := buildDeliveryRunOptionResolver()(
+	_, deliveryOpts, err := buildDeliveryRunOptionResolver()(
 		context.Background(),
 		input,
 	)
-	ctx, conversationOpts := buildConversationRunOptionResolver(
+	require.NoError(t, err)
+	ctx, conversationOpts, err := buildConversationRunOptionResolver(
 		"demo-app",
 		nil,
 		conversation.HistoryOptions{},
@@ -74,6 +75,7 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 		context.Background(),
 		input,
 	)
+	require.NoError(t, err)
 
 	cfg := agent.RunOptions{}
 	for _, opt := range deliveryOpts {
@@ -191,7 +193,7 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 	)
 	require.NoError(t, err)
 
-	ctx, runOpts := buildConversationRunOptionResolver(
+	ctx, runOpts, err := buildConversationRunOptionResolver(
 		"demo-app",
 		sessSvc,
 		conversation.HistoryOptions{},
@@ -203,6 +205,7 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 			Extensions: extensions,
 		},
 	)
+	require.NoError(t, err)
 	require.Equal(
 		t,
 		"chat-scope",
@@ -274,7 +277,7 @@ func TestBuildConversationRunOptionResolverUsesProfileAppName(
 		context.Background(),
 		runtimeprofile.Profile{AppName: "profile-app"},
 	)
-	_, runOpts := buildConversationRunOptionResolver(
+	_, runOpts, err := buildConversationRunOptionResolver(
 		"demo-app",
 		sessSvc,
 		conversation.HistoryOptions{},
@@ -286,6 +289,7 @@ func TestBuildConversationRunOptionResolverUsesProfileAppName(
 			Extensions: extensions,
 		},
 	)
+	require.NoError(t, err)
 
 	cfg := agent.RunOptions{}
 	for _, opt := range runOpts {
@@ -305,7 +309,7 @@ func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 	t.Run("invalid extension is ignored", func(t *testing.T) {
 		t.Parallel()
 
-		_, runOpts := buildConversationRunOptionResolver(
+		_, runOpts, err := buildConversationRunOptionResolver(
 			"demo-app",
 			nil,
 			conversation.HistoryOptions{},
@@ -317,6 +321,7 @@ func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 				},
 			},
 		)
+		require.NoError(t, err)
 		require.Nil(t, runOpts)
 	})
 
@@ -335,7 +340,7 @@ func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		_, runOpts := buildConversationRunOptionResolver(
+		_, runOpts, err := buildConversationRunOptionResolver(
 			"demo-app",
 			nil,
 			conversation.HistoryOptions{},
@@ -343,6 +348,7 @@ func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 			context.Background(),
 			gateway.RunOptionInput{Extensions: extensions},
 		)
+		require.NoError(t, err)
 		require.Len(t, runOpts, 1)
 
 		cfg := agent.RunOptions{}

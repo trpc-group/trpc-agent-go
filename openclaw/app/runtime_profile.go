@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
@@ -23,10 +24,13 @@ import (
 const unsupportedRuntimeProfileAgentFmt = "runtime_profiles.profiles.%s." +
 	"agent_name: unsupported agent name %q; OpenClaw currently supports %q"
 
+const runtimeProfileRequiredFmt = "runtime profile resolution failed: %w"
+
 const unknownRuntimeProfileID = "unknown"
 
 func buildRuntimeProfileRunOptionResolver(
 	resolver runtimeprofile.Resolver,
+	required bool,
 ) gateway.RunOptionResolver {
 	if resolver == nil {
 		return nil
@@ -34,21 +38,34 @@ func buildRuntimeProfileRunOptionResolver(
 	return func(
 		ctx context.Context,
 		input gateway.RunOptionInput,
-	) (context.Context, []agent.RunOption) {
-		req := runtimeProfileRequest(input)
+	) (context.Context, []agent.RunOption, error) {
+		req, explicit, err := runtimeProfileRequest(input)
+		if err != nil {
+			return ctx, nil, fmt.Errorf(runtimeProfileRequiredFmt, err)
+		}
 		profile, err := resolver.Resolve(ctx, req)
 		if err != nil {
-			if errors.Is(err, runtimeprofile.ErrProfileNotFound) {
-				return ctx, nil
+			if errors.Is(err, runtimeprofile.ErrProfileNotFound) &&
+				!required && !explicit {
+				return ctx, nil, nil
 			}
-			return ctx, nil
+			return ctx, nil, fmt.Errorf(runtimeProfileRequiredFmt, err)
 		}
-		runOpts := runtimeprofile.RunOptions(profile)
-		if len(runOpts) == 0 {
-			return ctx, nil
+		if !runtimeprofile.HasProfile(profile) {
+			if required {
+				return ctx, nil, fmt.Errorf(
+					runtimeProfileRequiredFmt,
+					runtimeprofile.ErrProfileNotFound,
+				)
+			}
+			return ctx, nil, nil
 		}
 		ctx = runtimeprofile.WithProfile(ctx, profile)
-		return ctx, runOpts
+		runOpts := runtimeprofile.RunOptions(profile)
+		if len(runOpts) == 0 {
+			return ctx, nil, nil
+		}
+		return ctx, runOpts, nil
 	}
 }
 
@@ -56,20 +73,50 @@ func appendRuntimeProfileGatewayOption(
 	opts []gateway.Option,
 	cfg *runtimeprofile.Config,
 ) []gateway.Option {
-	if cfg == nil {
-		return opts
-	}
-	resolver := runtimeprofile.NewMapResolver(*cfg)
+	resolver := newRuntimeProfileResolver(cfg)
 	if resolver == nil {
 		return opts
 	}
-	runOptionResolver := buildRuntimeProfileRunOptionResolver(resolver)
+	runOptionResolver := buildRuntimeProfileRunOptionResolver(
+		resolver,
+		cfg.Required,
+	)
 	return append(opts, gateway.WithRunOptionResolver(runOptionResolver))
+}
+
+func newRuntimeProfileResolver(
+	cfg *runtimeprofile.Config,
+) runtimeprofile.Resolver {
+	if cfg == nil {
+		return nil
+	}
+	if err := runtimeprofile.ValidateConfig(*cfg); err != nil {
+		return nil
+	}
+	if runtimeprofile.NewMapResolver(*cfg) == nil {
+		return nil
+	}
+	return runtimeprofile.NewCachedResolver(
+		runtimeprofile.StaticStore{Config: *cfg},
+	)
+}
+
+func runtimeProfileCronOptions(
+	cfg *runtimeprofile.Config,
+) []cron.Option {
+	resolver := newRuntimeProfileResolver(cfg)
+	if resolver == nil {
+		return nil
+	}
+	return []cron.Option{cron.WithRuntimeProfileResolver(resolver)}
 }
 
 func validateRuntimeProfiles(cfg *runtimeprofile.Config) error {
 	if cfg == nil {
 		return nil
+	}
+	if err := runtimeprofile.ValidateConfig(*cfg); err != nil {
+		return err
 	}
 	for key, profile := range cfg.Profiles {
 		agentName := strings.TrimSpace(profile.AgentName)
@@ -129,17 +176,27 @@ func appendUniqueAppNames(base []string, extra ...string) []string {
 
 func runtimeProfileRequest(
 	input gateway.RunOptionInput,
-) runtimeprofile.Request {
+) (runtimeprofile.Request, bool, error) {
 	ext, ok, err := runtimeprofile.ExtensionFromRequestExtensions(
 		input.Extensions,
 	)
-	if err != nil || !ok {
-		ext = runtimeprofile.Extension{}
+	if err != nil {
+		return runtimeProfileBaseRequest(input), false, err
 	}
+	req := runtimeProfileBaseRequest(input)
+	if !ok {
+		return req, false, nil
+	}
+	req.ProfileID = ext.ProfileID
+	req.TenantID = ext.TenantID
+	return req, true, nil
+}
+
+func runtimeProfileBaseRequest(
+	input gateway.RunOptionInput,
+) runtimeprofile.Request {
 	return runtimeprofile.Request{
 		Channel:    input.Inbound.Channel,
-		ProfileID:  ext.ProfileID,
-		TenantID:   ext.TenantID,
 		UserID:     input.UserID,
 		SessionID:  input.SessionID,
 		RequestID:  input.RequestID,

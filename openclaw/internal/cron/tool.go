@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -351,6 +352,9 @@ func (t *Tool) add(
 	}
 	if in.Enabled != nil {
 		job.Enabled = *in.Enabled
+	}
+	if profile, ok := runtimeprofile.ProfileFromContext(ctx); ok {
+		job.Profile = runtimeProfileRefFromProfile(profile)
 	}
 	delivery, err := resolveDelivery(
 		ctx,

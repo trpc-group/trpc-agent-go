@@ -66,6 +66,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/subagentrun"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 const (
@@ -1102,6 +1103,10 @@ func NewRuntime(
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
+	gwOpts = appendRuntimeProfileGatewayOption(
+		gwOpts,
+		opts.RuntimeProfiles,
+	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
 			gwOpts,
@@ -1110,10 +1115,6 @@ func NewRuntime(
 			),
 		)
 	}
-	gwOpts = appendRuntimeProfileGatewayOption(
-		gwOpts,
-		opts.RuntimeProfiles,
-	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1205,6 +1206,7 @@ func NewRuntime(
 			resolvedStateDir,
 			cronRunner,
 			openClawTools.router,
+			runtimeProfileCronOptions(opts.RuntimeProfiles)...,
 		)
 		if err != nil {
 			if cronRunner != nil {
@@ -1593,6 +1595,10 @@ func run(ctx context.Context, args []string) error {
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
+	gwOpts = appendRuntimeProfileGatewayOption(
+		gwOpts,
+		opts.RuntimeProfiles,
+	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
 			gwOpts,
@@ -1601,10 +1607,6 @@ func run(ctx context.Context, args []string) error {
 			),
 		)
 	}
-	gwOpts = appendRuntimeProfileGatewayOption(
-		gwOpts,
-		opts.RuntimeProfiles,
-	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1717,6 +1719,7 @@ func run(ctx context.Context, args []string) error {
 			resolvedStateDir,
 			cronRunner,
 			openClawTools.router,
+			runtimeProfileCronOptions(opts.RuntimeProfiles)...,
 		)
 		if err != nil {
 			if cronRunner != nil {
@@ -2396,6 +2399,9 @@ func newAgent(
 		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
 		llmagent.WithPostToolPrompt(openClawPostToolPrompt),
+		llmagent.WithSkillFilter(
+			runtimeprofile.SkillVisibilityFilterForRepository(repo),
+		),
 	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(

@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -66,9 +67,10 @@ const (
 
 // Service runs and persists scheduled jobs.
 type Service struct {
-	path   string
-	runner runner.Runner
-	router *outbound.Router
+	path     string
+	runner   runner.Runner
+	router   *outbound.Router
+	profiles runtimeprofile.Resolver
 
 	tickInterval time.Duration
 	clock        func() time.Time
@@ -119,6 +121,13 @@ func WithClock(fn func() time.Time) Option {
 		if fn != nil {
 			s.clock = fn
 		}
+	}
+}
+
+// WithRuntimeProfileResolver resolves captured scheduled-job profile refs.
+func WithRuntimeProfileResolver(resolver runtimeprofile.Resolver) Option {
+	return func(s *Service) {
+		s.profiles = resolver
 	}
 }
 
@@ -538,6 +547,24 @@ func (s *Service) executeJob(
 
 	sessionID := freshRunSessionID(job.ID, now)
 	s.setRunMetadata(job.ID, runToken, sessionID, requestID)
+	profile, err := s.resolveRuntimeProfile(runCtx, job)
+	if err != nil {
+		s.finishRun(
+			job.ID,
+			runToken,
+			scheduledAt,
+			now,
+			"",
+			err,
+			nil,
+			reschedule,
+		)
+		return
+	}
+	if runtimeprofile.HasProfile(profile) {
+		runCtx = runtimeprofile.WithProfile(runCtx, profile)
+		runOpts = append(runOpts, runtimeprofile.RunOptions(profile)...)
+	}
 	events, err := s.runner.Run(
 		runCtx,
 		job.UserID,
@@ -583,6 +610,57 @@ func (s *Service) executeJob(
 		err,
 		deliveryErr,
 		reschedule,
+	)
+}
+
+func (s *Service) resolveRuntimeProfile(
+	ctx context.Context,
+	job *Job,
+) (runtimeprofile.Profile, error) {
+	if job == nil || !job.Profile.hasProfile() {
+		return runtimeprofile.Profile{}, nil
+	}
+	if strings.TrimSpace(job.Profile.ID) == "" {
+		return job.Profile.profile(), nil
+	}
+	if s == nil || s.profiles == nil {
+		return runtimeprofile.Profile{}, fmt.Errorf(
+			"cron: runtime profile resolver is not configured",
+		)
+	}
+	profile, err := s.profiles.Resolve(ctx, runtimeprofile.Request{
+		ProfileID: job.Profile.ID,
+		UserID:    job.UserID,
+	})
+	if err != nil {
+		return runtimeprofile.Profile{}, err
+	}
+	if !runtimeprofile.HasProfile(profile) {
+		return runtimeprofile.Profile{}, runtimeprofile.ErrProfileNotFound
+	}
+	if err := checkRuntimeProfileVersion(job.Profile, profile); err != nil {
+		return runtimeprofile.Profile{}, err
+	}
+	return profile, nil
+}
+
+func checkRuntimeProfileVersion(
+	ref RuntimeProfileRef,
+	profile runtimeprofile.Profile,
+) error {
+	want := strings.TrimSpace(ref.Version)
+	if want == "" {
+		return nil
+	}
+	got := strings.TrimSpace(profile.Version)
+	if got == want {
+		return nil
+	}
+	return fmt.Errorf(
+		"cron: runtime profile version mismatch for %s: want %s, got %s",
+		strings.TrimSpace(ref.ID),
+		want,
+		got,
 	)
 }
 

@@ -57,9 +57,10 @@ func TestBuildRuntimeProfileRunOptionResolver(t *testing.T) {
 				},
 			}, nil
 		}),
+		false,
 	)
 
-	ctx, runOpts := resolver(context.Background(), gateway.RunOptionInput{
+	ctx, runOpts, err := resolver(context.Background(), gateway.RunOptionInput{
 		Inbound: gateway.InboundMessage{
 			Channel: "wecom",
 		},
@@ -71,6 +72,7 @@ func TestBuildRuntimeProfileRunOptionResolver(t *testing.T) {
 			runtimeprofile.ExtensionKey: rawExtension,
 		},
 	})
+	require.NoError(t, err)
 
 	profile, ok := runtimeprofile.ProfileFromContext(ctx)
 	require.True(t, ok)
@@ -92,11 +94,11 @@ func TestBuildRuntimeProfileRunOptionResolverSkipsErrors(t *testing.T) {
 	t.Run("nil resolver", func(t *testing.T) {
 		t.Parallel()
 
-		resolver := buildRuntimeProfileRunOptionResolver(nil)
+		resolver := buildRuntimeProfileRunOptionResolver(nil, false)
 		require.Nil(t, resolver)
 	})
 
-	t.Run("lookup error", func(t *testing.T) {
+	t.Run("lookup error fails closed", func(t *testing.T) {
 		t.Parallel()
 
 		resolver := buildRuntimeProfileRunOptionResolver(
@@ -108,9 +110,14 @@ func TestBuildRuntimeProfileRunOptionResolverSkipsErrors(t *testing.T) {
 					"lookup failed",
 				)
 			}),
+			false,
 		)
 
-		ctx, runOpts := resolver(context.Background(), gateway.RunOptionInput{})
+		ctx, runOpts, err := resolver(
+			context.Background(),
+			gateway.RunOptionInput{},
+		)
+		require.Error(t, err)
 		_, ok := runtimeprofile.ProfileFromContext(ctx)
 		require.False(t, ok)
 		require.Empty(t, runOpts)
@@ -127,9 +134,14 @@ func TestBuildRuntimeProfileRunOptionResolverSkipsErrors(t *testing.T) {
 				return runtimeprofile.Profile{},
 					runtimeprofile.ErrProfileNotFound
 			}),
+			false,
 		)
 
-		ctx, runOpts := resolver(context.Background(), gateway.RunOptionInput{})
+		ctx, runOpts, err := resolver(
+			context.Background(),
+			gateway.RunOptionInput{},
+		)
+		require.NoError(t, err)
 		_, ok := runtimeprofile.ProfileFromContext(ctx)
 		require.False(t, ok)
 		require.Empty(t, runOpts)
@@ -145,13 +157,97 @@ func TestBuildRuntimeProfileRunOptionResolverSkipsErrors(t *testing.T) {
 			) (runtimeprofile.Profile, error) {
 				return runtimeprofile.Profile{}, nil
 			}),
+			false,
 		)
 
-		ctx, runOpts := resolver(context.Background(), gateway.RunOptionInput{})
+		ctx, runOpts, err := resolver(
+			context.Background(),
+			gateway.RunOptionInput{},
+		)
+		require.NoError(t, err)
 		_, ok := runtimeprofile.ProfileFromContext(ctx)
 		require.False(t, ok)
 		require.Empty(t, runOpts)
 	})
+}
+
+func TestBuildRuntimeProfileRunOptionResolverExplicitMissingProfile(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rawExtension, err := json.Marshal(runtimeprofile.Extension{
+		ProfileID: testRuntimeProfileID,
+	})
+	require.NoError(t, err)
+
+	resolver := buildRuntimeProfileRunOptionResolver(
+		runtimeprofile.ResolverFunc(func(
+			context.Context,
+			runtimeprofile.Request,
+		) (runtimeprofile.Profile, error) {
+			return runtimeprofile.Profile{},
+				runtimeprofile.ErrProfileNotFound
+		}),
+		false,
+	)
+
+	_, _, err = resolver(context.Background(), gateway.RunOptionInput{
+		Extensions: map[string]json.RawMessage{
+			runtimeprofile.ExtensionKey: rawExtension,
+		},
+	})
+	require.ErrorIs(t, err, runtimeprofile.ErrProfileNotFound)
+}
+
+func TestBuildRuntimeProfileRunOptionResolverRequired(t *testing.T) {
+	t.Parallel()
+
+	resolver := buildRuntimeProfileRunOptionResolver(
+		runtimeprofile.ResolverFunc(func(
+			context.Context,
+			runtimeprofile.Request,
+		) (runtimeprofile.Profile, error) {
+			return runtimeprofile.Profile{},
+				runtimeprofile.ErrProfileNotFound
+		}),
+		true,
+	)
+
+	_, _, err := resolver(context.Background(), gateway.RunOptionInput{})
+	require.Error(t, err)
+	require.ErrorIs(t, err, runtimeprofile.ErrProfileNotFound)
+}
+
+func TestBuildRuntimeProfileRunOptionResolverContextOnlyProfile(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	resolver := buildRuntimeProfileRunOptionResolver(
+		runtimeprofile.ResolverFunc(func(
+			context.Context,
+			runtimeprofile.Request,
+		) (runtimeprofile.Profile, error) {
+			return runtimeprofile.Profile{
+				ID: testRuntimeProfileID,
+				Workspace: runtimeprofile.WorkspacePolicy{
+					Workdir: "/tmp/retail",
+				},
+			}, nil
+		}),
+		false,
+	)
+
+	ctx, runOpts, err := resolver(
+		context.Background(),
+		gateway.RunOptionInput{},
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, runOpts)
+	profile, ok := runtimeprofile.ProfileFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, testRuntimeProfileID, profile.ID)
 }
 
 func TestAppendRuntimeProfileGatewayOption(t *testing.T) {
@@ -171,6 +267,7 @@ func TestAppendRuntimeProfileGatewayOption(t *testing.T) {
 		},
 	}
 	require.Len(t, appendRuntimeProfileGatewayOption(nil, &cfg), 1)
+	require.Len(t, runtimeProfileCronOptions(&cfg), 1)
 }
 
 func TestValidateRuntimeProfiles(t *testing.T) {
@@ -195,6 +292,34 @@ func TestValidateRuntimeProfiles(t *testing.T) {
 	require.Contains(t, err.Error(), "runtime_profiles.profiles.retail")
 	require.Contains(t, err.Error(), "sales-agent")
 	require.Contains(t, err.Error(), defaultAgentName)
+
+	cfg = runtimeprofile.Config{
+		Default: "missing",
+		Profiles: map[string]runtimeprofile.Profile{
+			testRuntimeProfileID: {},
+		},
+	}
+	err = validateRuntimeProfiles(&cfg)
+	require.ErrorIs(t, err, runtimeprofile.ErrConfigInvalid)
+
+	cfg = runtimeprofile.Config{
+		Profiles: map[string]runtimeprofile.Profile{
+			"a": {ID: testRuntimeProfileID},
+			"b": {ID: testRuntimeProfileID},
+		},
+	}
+	err = validateRuntimeProfiles(&cfg)
+	require.ErrorIs(t, err, runtimeprofile.ErrConfigInvalid)
+
+	cfg = runtimeprofile.Config{
+		Profiles: map[string]runtimeprofile.Profile{
+			testRuntimeProfileID: {
+				Isolation: runtimeprofile.IsolationPolicy{Mode: "bad"},
+			},
+		},
+	}
+	err = validateRuntimeProfiles(&cfg)
+	require.ErrorIs(t, err, runtimeprofile.ErrConfigInvalid)
 
 	require.Equal(
 		t,
@@ -239,16 +364,18 @@ func TestRuntimeProfileAppNames(t *testing.T) {
 	}, got)
 }
 
-func TestRuntimeProfileRequestIgnoresMalformedExtension(t *testing.T) {
+func TestRuntimeProfileRequestReturnsMalformedExtension(t *testing.T) {
 	t.Parallel()
 
-	req := runtimeProfileRequest(gateway.RunOptionInput{
+	req, explicit, err := runtimeProfileRequest(gateway.RunOptionInput{
 		UserID:    "user-a",
 		SessionID: "session-a",
 		Extensions: map[string]json.RawMessage{
 			runtimeprofile.ExtensionKey: json.RawMessage("{"),
 		},
 	})
+	require.Error(t, err)
+	require.False(t, explicit)
 	require.Equal(t, "user-a", req.UserID)
 	require.Equal(t, "session-a", req.SessionID)
 	require.Empty(t, req.ProfileID)

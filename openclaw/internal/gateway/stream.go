@@ -302,7 +302,24 @@ func (s *Server) streamLocked(
 		}
 	}
 
-	ctx, runOpts := s.resolveRunOptions(ctx, run)
+	ctx, runOpts, err := s.resolveRunOptions(ctx, run)
+	if err != nil {
+		apiErr := gwproto.APIError{
+			Type:    errTypeInternal,
+			Message: err.Error(),
+		}
+		_ = sendStreamEvent(ctx, out, gwproto.StreamEvent{
+			Type:      gwproto.StreamEventTypeRunError,
+			SessionID: run.sessionID,
+			RequestID: run.requestID,
+			Error:     &apiErr,
+		})
+		return streamOutcome{
+			status: traceStatusError,
+			errMsg: err.Error(),
+		}
+	}
+	recordRuntimeProfile(debugrecorder.TraceFromContext(ctx), ctx)
 	events, err := s.runner.Run(
 		ctx,
 		run.userID,

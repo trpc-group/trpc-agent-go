@@ -11,6 +11,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -605,6 +606,45 @@ type traceMeta struct {
 	Start debugrecorder.TraceStart `json:"start"`
 }
 
+type traceRuntimeProfileEvent struct {
+	Kind    string         `json:"kind"`
+	Payload map[string]any `json:"payload,omitempty"`
+}
+
+func debugTraceMatchesApp(
+	traceDir string,
+	metaAppName string,
+	appName string,
+) bool {
+	if strings.TrimSpace(metaAppName) == appName {
+		return true
+	}
+	return traceRuntimeProfileAppName(traceDir) == appName
+}
+
+func traceRuntimeProfileAppName(traceDir string) string {
+	raw, err := debugrecorder.ReadEventsFile(traceDir)
+	if err != nil {
+		return ""
+	}
+	for _, line := range bytes.Split(raw, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var event traceRuntimeProfileEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			return ""
+		}
+		if event.Kind != debugrecorder.KindRuntimeProfile {
+			continue
+		}
+		appName, _ := event.Payload["profile_app_name"].(string)
+		return strings.TrimSpace(appName)
+	}
+	return ""
+}
+
 func deleteDebugTraces(
 	ctx context.Context,
 	debugDir string,
@@ -655,9 +695,6 @@ func deleteDebugTraces(
 				return nil
 			}
 
-			if strings.TrimSpace(meta.Start.AppName) != appName {
-				return nil
-			}
 			if strings.TrimSpace(meta.Start.Channel) != channel {
 				return nil
 			}
@@ -667,6 +704,13 @@ func deleteDebugTraces(
 
 			dir := filepath.Dir(path)
 			if filepath.Clean(dir) == filepath.Clean(debugDir) {
+				return nil
+			}
+			if !debugTraceMatchesApp(
+				dir,
+				meta.Start.AppName,
+				appName,
+			) {
 				return nil
 			}
 			dirs = append(dirs, dir)
