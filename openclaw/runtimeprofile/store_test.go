@@ -161,4 +161,46 @@ func TestProfileCatalog(t *testing.T) {
 		"retail-app",
 		"support-app",
 	}, appNames)
+
+	ids, err = resolver.ProfileIDs(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		testProfileRetail,
+		"support",
+		"support-alias",
+	}, ids)
+}
+
+func TestCachedResolverCatalogErrorsAndNilBranches(t *testing.T) {
+	t.Parallel()
+
+	var nilStoreFunc StoreFunc
+	cfg, err := nilStoreFunc.Load(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, cfg)
+
+	require.Nil(t, NewCachedResolver(nil))
+
+	var nilResolver *CachedResolver
+	require.NoError(t, nilResolver.Reload(context.Background()))
+	nilResolver.Invalidate()
+
+	ids, err := nilResolver.ProfileIDs(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, ids)
+
+	appNames, err := nilResolver.AppNames(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, appNames)
+
+	wantErr := errors.New("catalog down")
+	resolver := NewCachedResolver(StoreFunc(func(context.Context) (
+		Config,
+		error,
+	) {
+		return Config{}, wantErr
+	}))
+	ids, err = resolver.ProfileIDs(context.Background())
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, ids)
 }

@@ -3032,6 +3032,54 @@ func TestServer_StreamMessage_RunError(t *testing.T) {
 	require.Equal(t, "boom", events[2].Error.Message)
 }
 
+func TestServer_StreamMessage_RunOptionResolverError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(
+		&staticRunner{},
+		WithRunOptionResolver(func(
+			context.Context,
+			RunOptionInput,
+		) (context.Context, []agent.RunOption, error) {
+			return nil, nil, errors.New("profile denied")
+		}),
+	)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 3)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunError,
+		events[2].Type,
+	)
+	require.NotNil(t, events[2].Error)
+	require.Equal(t, "profile denied", events[2].Error.Message)
+}
+
 func TestServer_StreamMessage_ThoughtEvents(t *testing.T) {
 	t.Parallel()
 

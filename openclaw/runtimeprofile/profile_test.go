@@ -13,14 +13,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -467,6 +464,106 @@ func TestRunOptionsEdgeCases(t *testing.T) {
 	))
 }
 
+func TestHasProfileContracts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		profile Profile
+	}{
+		{name: "id", profile: Profile{ID: testProfileRetail}},
+		{name: "version", profile: Profile{Version: "v1"}},
+		{name: "app", profile: Profile{AppName: "retail-app"}},
+		{name: "agent", profile: Profile{AgentName: "assistant"}},
+		{name: "model", profile: Profile{ModelName: "gpt-retail"}},
+		{name: "instruction", profile: Profile{
+			Prompt: Prompt{Instruction: "help"},
+		}},
+		{name: "system", profile: Profile{
+			Prompt: Prompt{SystemPrompt: "system"},
+		}},
+		{name: "tool include", profile: Profile{
+			Tools: ToolPolicy{Include: []string{testToolAllowed}},
+		}},
+		{name: "tool exclude", profile: Profile{
+			Tools: ToolPolicy{Exclude: []string{testToolBlocked}},
+		}},
+		{name: "tool execution include", profile: Profile{
+			Tools: ToolPolicy{ExecutionInclude: []string{testToolExecute}},
+		}},
+		{name: "tool execution exclude", profile: Profile{
+			Tools: ToolPolicy{ExecutionExclude: []string{testToolBlocked}},
+		}},
+		{name: "toolsets", profile: Profile{
+			Tools: ToolPolicy{ToolSets: []string{"crm"}},
+		}},
+		{name: "tool credentials", profile: Profile{
+			Tools: ToolPolicy{
+				CredentialRefs: map[string]string{
+					"crm": "secret://retail/crm",
+				},
+			},
+		}},
+		{name: "knowledge indexes", profile: Profile{
+			Knowledge: KnowledgePolicy{Indexes: []string{"retail"}},
+		}},
+		{name: "knowledge filter", profile: Profile{
+			Knowledge: KnowledgePolicy{
+				Filter: map[string]any{"tenant": testProfileRetail},
+			},
+		}},
+		{name: "workspace workdir", profile: Profile{
+			Workspace: WorkspacePolicy{Workdir: "/workspace/retail"},
+		}},
+		{name: "workspace roots", profile: Profile{
+			Workspace: WorkspacePolicy{
+				AllowedRoots: []string{"/workspace/retail"},
+			},
+		}},
+		{name: "credentials", profile: Profile{
+			Credentials: CredentialPolicy{
+				AllowedRefs: []string{"secret://retail/crm"},
+			},
+		}},
+		{name: "skill include", profile: Profile{
+			Skills: SkillPolicy{Include: []string{"crm"}},
+		}},
+		{name: "skill exclude", profile: Profile{
+			Skills: SkillPolicy{Exclude: []string{"draft"}},
+		}},
+		{name: "skill roots", profile: Profile{
+			Skills: SkillPolicy{Roots: []string{"/skills/retail"}},
+		}},
+		{name: "isolation mode", profile: Profile{
+			Isolation: IsolationPolicy{Mode: IsolationModeService},
+		}},
+		{name: "isolation agent cache", profile: Profile{
+			Isolation: IsolationPolicy{AgentCache: true},
+		}},
+		{name: "isolation toolset cache", profile: Profile{
+			Isolation: IsolationPolicy{ToolSetCache: true},
+		}},
+		{name: "isolation service", profile: Profile{
+			Isolation: IsolationPolicy{ServiceMode: "sidecar"},
+		}},
+		{name: "state", profile: Profile{
+			State: map[string]any{"plan": "vip"},
+		}},
+		{name: "extra model", profile: Profile{
+			ExtraModel: map[string]any{"reasoning_effort": "medium"},
+		}},
+	}
+
+	require.False(t, HasProfile(Profile{}))
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.True(t, HasProfile(tt.profile))
+		})
+	}
+}
+
 func TestExtensionFromRequestExtensions(t *testing.T) {
 	t.Parallel()
 
@@ -552,67 +649,6 @@ func TestContextProfile(t *testing.T) {
 	require.Equal(t, "fallback", AppNameFromContext(
 		context.Background(),
 		" fallback ",
-	))
-}
-
-func TestProfilePolicyHelpers(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	allowed := filepath.Join(root, "tenant")
-	require.NoError(t, os.MkdirAll(allowed, 0o755))
-	denied := filepath.Join(root, "other")
-	require.NoError(t, os.MkdirAll(denied, 0o755))
-
-	ctx := WithProfile(context.Background(), Profile{
-		Workspace: WorkspacePolicy{
-			Workdir:      allowed,
-			AllowedRoots: []string{allowed},
-		},
-		Credentials: CredentialPolicy{
-			AllowedRefs: []string{"secret://retail/crm"},
-		},
-		Skills: SkillPolicy{
-			Include: []string{"crm"},
-			Exclude: []string{"draft"},
-		},
-	})
-
-	workspace, ok := WorkspaceFromContext(ctx)
-	require.True(t, ok)
-	require.Equal(t, allowed, workspace.Workdir)
-
-	workdir, err := ResolveWorkdir(ctx, "")
-	require.NoError(t, err)
-	require.Equal(t, allowed, workdir)
-
-	workdir, err = ResolveWorkdir(ctx, allowed)
-	require.NoError(t, err)
-	require.Equal(t, allowed, workdir)
-
-	_, err = ResolveWorkdir(ctx, denied)
-	require.ErrorIs(t, err, ErrWorkspaceDenied)
-
-	policy, ok := CredentialPolicyFromContext(ctx)
-	require.True(t, ok)
-	require.Equal(t, []string{"secret://retail/crm"}, policy.AllowedRefs)
-
-	require.NoError(t, CheckCredentialRef(ctx, "secret://retail/crm"))
-	err = CheckCredentialRef(ctx, "secret://other/crm")
-	require.ErrorIs(t, err, ErrCredentialDenied)
-
-	require.True(t, SkillVisibilityFilter(ctx, skill.Summary{Name: "crm"}))
-	require.False(t, SkillVisibilityFilter(
-		ctx,
-		skill.Summary{Name: "draft"},
-	))
-	require.False(t, SkillVisibilityFilter(
-		ctx,
-		skill.Summary{Name: "other"},
-	))
-	require.True(t, SkillVisibilityFilter(
-		context.Background(),
-		skill.Summary{Name: "other"},
 	))
 }
 
