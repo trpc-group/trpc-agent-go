@@ -1948,11 +1948,12 @@ request := &model.Request{
 
 ### 多模态输入
 
-Anthropic Model 支持在 `user` 消息中传入 Claude Messages API 可识别的多模态内容：
+Anthropic Model 支持在 `user` 消息中传入图片和文件：
 
-- 图片：`ContentTypeImage`，支持 URL 或原始图片数据，图片格式支持 `jpeg`、`png`、`gif`、`webp`。
-- 文件：`ContentTypeFile`，支持原始数据形式的图片、PDF（`application/pdf`）和纯文本（`text/plain`）。PDF 文件也可以通过 `File.URL` 使用普通 URL；其他文件 URL 会保留为文本。
-- 不支持：`ContentTypeAudio`、`FileID`、Office 文档、JSON、CSV 等普通文件数据类型。传入不支持的文件数据会返回错误。
+- 图片：可以使用 URL 或原始数据，支持 `image/jpeg`、`image/png`、`image/gif`、`image/webp`，会作为 Anthropic image block 发送。
+- PDF：可以使用 URL 或原始数据，使用 `application/pdf`，会作为 Anthropic document block 发送。
+- 文本内容：只能使用原始数据，使用 `text/plain` 会作为 Anthropic document block 发送；使用 `text/csv`、`text/html` 等文本型 MIME type 会作为 Anthropic text block 发送。
+- 其他格式：Office 文档、JSON 等不会自动解析，请先转换为文本或 PDF。音频和 `FileID` 不支持。非 PDF 文件 URL 只会作为 URL 文本发送。
 
 ```go
 import (

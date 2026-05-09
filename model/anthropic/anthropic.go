@@ -1199,6 +1199,9 @@ func convertFileContentPart(file *model.File) (anthropic.ContentBlockParamUnion,
 			})
 			return applyDocumentTitle(block, file.Name), nil
 		default:
+			if isTextLikeFileMediaType(mediaType) {
+				return anthropic.NewTextBlock(fileDataText(file, mediaType)), nil
+			}
 			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unsupported file media type %q", mediaType)
 		}
 	}
@@ -1213,6 +1216,25 @@ func convertFileContentPart(file *model.File) (anthropic.ContentBlockParamUnion,
 		return anthropic.NewTextBlock(model.FileURLText(file)), nil
 	}
 	return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file data is empty")
+}
+
+func isTextLikeFileMediaType(mediaType string) bool {
+	return mediaType != "" && strings.HasPrefix(mediaType, "text/")
+}
+
+func fileDataText(file *model.File, mediaType string) string {
+	data := string(file.Data)
+	name := strings.TrimSpace(file.Name)
+	if name != "" && mediaType != "" {
+		return fmt.Sprintf("File: %s (%s)\n\n%s", name, mediaType, data)
+	}
+	if name != "" {
+		return fmt.Sprintf("File: %s\n\n%s", name, data)
+	}
+	if mediaType != "" {
+		return fmt.Sprintf("File (%s)\n\n%s", mediaType, data)
+	}
+	return data
 }
 
 func applyDocumentTitle(block anthropic.ContentBlockParamUnion, name string) anthropic.ContentBlockParamUnion {

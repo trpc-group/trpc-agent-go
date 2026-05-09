@@ -891,6 +891,51 @@ func Test_convertUserMessage_FileTextData(t *testing.T) {
 	assert.Equal(t, "notes.txt", out.Content[0].OfDocument.Title.Value)
 }
 
+func Test_convertUserMessage_FileTextLikeDataFallbackText(t *testing.T) {
+	tests := []struct {
+		name     string
+		file     *model.File
+		wantText string
+	}{
+		{
+			name: "CSV",
+			file: &model.File{
+				Name:     "data.csv",
+				Data:     []byte("name,age\nAlice,30\n"),
+				MimeType: "text/csv",
+			},
+			wantText: "File: data.csv (text/csv)\n\nname,age\nAlice,30\n",
+		},
+		{
+			name: "HTML",
+			file: &model.File{
+				Name:     "page.html",
+				Data:     []byte("<h1>Hello</h1>"),
+				MimeType: "text/html",
+			},
+			wantText: "File: page.html (text/html)\n\n<h1>Hello</h1>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeFile,
+						File: tt.file,
+					},
+				},
+			}
+			out, err := convertUserMessage(msg)
+			require.NoError(t, err)
+			require.Len(t, out.Content, 1)
+			require.NotNil(t, out.Content[0].OfText)
+			assert.Equal(t, tt.wantText, out.Content[0].OfText.Text)
+		})
+	}
+}
+
 func Test_convertMessages_ImageOnlyUserPreserved(t *testing.T) {
 	msgs := []model.Message{
 		{
