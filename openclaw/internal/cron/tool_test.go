@@ -156,6 +156,19 @@ func TestToolAddRejectsAnonymousRuntimeProfile(t *testing.T) {
 	_, err = tool.Call(ctx, args)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), errProfileIDRequired)
+
+	ctxWhitespace := runtimeprofile.WithProfile(
+		invCtx,
+		runtimeprofile.Profile{
+			ID: "   ",
+			Prompt: runtimeprofile.Prompt{
+				Instruction: "tenant instruction",
+			},
+		},
+	)
+	_, err = tool.Call(ctxWhitespace, args)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errProfileIDRequired)
 }
 
 func TestToolAddSupportsExecutionPolicyAndHeadless(t *testing.T) {
