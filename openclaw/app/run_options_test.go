@@ -23,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 func TestMain(m *testing.M) {
@@ -85,6 +86,76 @@ a2a:
 	require.True(t, opts.A2AAdvertiseTools)
 	require.Equal(t, "openclaw-sandbox", opts.A2AName)
 	require.Equal(t, "sandbox subagent", opts.A2ADescription)
+}
+
+func TestParseRunOptions_RuntimeProfilesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+runtime_profiles:
+  default: retail
+  profiles:
+    retail:
+      app_name: retail-app
+      agent_name: assistant
+      model_name: gpt-retail
+      prompt:
+        instruction: "help retail customers"
+        system_prompt: "stay concise"
+      tools:
+        include: ["knowledge_search", "order_lookup"]
+        execution_exclude: ["dangerous_tool"]
+      knowledge:
+        filter:
+          tenant: retail
+      runtime_state:
+        plan: vip
+      model_request_extra:
+        reasoning_effort: medium
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.RuntimeProfiles)
+	require.Equal(t, "retail", opts.RuntimeProfiles.Default)
+
+	profile := opts.RuntimeProfiles.Profiles["retail"]
+	require.Equal(t, "retail-app", profile.AppName)
+	require.Equal(t, "assistant", profile.AgentName)
+	require.Equal(t, "gpt-retail", profile.ModelName)
+	require.Equal(t, "help retail customers", profile.Prompt.Instruction)
+	require.Equal(t, "stay concise", profile.Prompt.SystemPrompt)
+	require.Equal(t, []string{
+		"knowledge_search",
+		"order_lookup",
+	}, profile.Tools.Include)
+	require.Equal(t, []string{
+		"dangerous_tool",
+	}, profile.Tools.ExecutionExclude)
+	require.Equal(t, "retail", profile.Knowledge.Filter["tenant"])
+	require.Equal(t, "vip", profile.State["plan"])
+	require.Equal(t, "medium", profile.ExtraModel["reasoning_effort"])
+
+	resolver := runtimeprofile.NewMapResolver(*opts.RuntimeProfiles)
+	require.NotNil(t, resolver)
+}
+
+func TestParseRunOptions_RuntimeProfilesRejectUnsupportedAgent(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+runtime_profiles:
+  profiles:
+    retail:
+      agent_name: sales-agent
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "runtime_profiles.profiles.retail")
+	require.Contains(t, err.Error(), "sales-agent")
 }
 
 func TestParseRunOptions_MemoryBackendFileFromConfig(t *testing.T) {

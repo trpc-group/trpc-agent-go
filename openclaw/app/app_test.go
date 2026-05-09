@@ -4433,6 +4433,185 @@ func TestInProcGatewayClient_ForgetUser_ClearsIndexedStorageScopes(
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestInProcGatewayClient_ForgetUser_DeletesRuntimeProfileAppState(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	ctx := context.Background()
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	sessSvc := sessioninmemory.NewSessionService()
+	memSvc := meminmemory.NewMemoryService()
+	stateDir := t.TempDir()
+	uploadStore, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	const (
+		channelName  = "demo"
+		profileApp   = "retail-app"
+		otherApp     = "other-app"
+		userID       = "u1"
+		storageUser  = "profile-scope"
+		sessionID    = "demo:thread:room-1"
+		userSession  = "dm:profile"
+		uploadName   = "profile.txt"
+		uploadBody   = "profile upload"
+		otherContent = "keep"
+	)
+	require.NoError(
+		t,
+		conversationscope.RememberIndexedStorageUser(
+			ctx,
+			sessSvc,
+			profileApp,
+			userID,
+			storageUser,
+		),
+	)
+	_, err = sessSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   profileApp,
+			UserID:    userID,
+			SessionID: userSession,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	_, err = sessSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   profileApp,
+			UserID:    storageUser,
+			SessionID: sessionID,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	err = memSvc.AddMemory(
+		ctx,
+		memory.UserKey{AppName: profileApp, UserID: userID},
+		"remember profile",
+		nil,
+	)
+	require.NoError(t, err)
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+	rec, err := debugrecorder.New(stateDir, mode)
+	require.NoError(t, err)
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		AppName:   profileApp,
+		Channel:   channelName,
+		UserID:    userID,
+		SessionID: userSession,
+	})
+	require.NoError(t, err)
+	traceDir := trace.Dir()
+	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
+
+	saved, err := uploadStore.Save(
+		ctx,
+		uploads.Scope{
+			Channel:   channelName,
+			UserID:    storageUser,
+			SessionID: sessionID,
+		},
+		uploadName,
+		[]byte(uploadBody),
+	)
+	require.NoError(t, err)
+
+	memoryRoot, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(memoryRoot)
+	require.NoError(t, err)
+	profileMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		profileApp,
+		userID,
+	)
+	require.NoError(t, err)
+	profileStorageMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		profileApp,
+		storageUser,
+	)
+	require.NoError(t, err)
+	otherMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		otherApp,
+		userID,
+	)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		otherMemoryPath,
+		[]byte(otherContent),
+		0o600,
+	))
+
+	c := newInProcGatewayClient(
+		srv,
+		appName,
+		sessSvc,
+		memSvc,
+		stateDir,
+		uploadStore,
+	)
+	c.SetMemoryFileStore(memoryStore)
+	c.SetRuntimeProfileAppNames([]string{
+		" ",
+		profileApp,
+		profileApp,
+	})
+
+	require.NoError(t, c.ForgetUser(ctx, channelName, userID))
+
+	userSessions, err := sessSvc.ListSessions(ctx, session.UserKey{
+		AppName: profileApp,
+		UserID:  userID,
+	})
+	require.NoError(t, err)
+	require.Empty(t, userSessions)
+
+	storageSessions, err := sessSvc.ListSessions(ctx, session.UserKey{
+		AppName: profileApp,
+		UserID:  storageUser,
+	})
+	require.NoError(t, err)
+	require.Empty(t, storageSessions)
+
+	indexedStorageUsers, err := conversationscope.ListIndexedStorageUsers(
+		ctx,
+		sessSvc,
+		profileApp,
+		userID,
+	)
+	require.NoError(t, err)
+	require.Empty(t, indexedStorageUsers)
+
+	memories, err := memSvc.ReadMemories(
+		ctx,
+		memory.UserKey{AppName: profileApp, UserID: userID},
+		10,
+	)
+	require.NoError(t, err)
+	require.Empty(t, memories)
+
+	_, err = os.Stat(traceDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(saved.Path)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(profileMemoryPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(profileStorageMemoryPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(otherMemoryPath)
+	require.NoError(t, err)
+}
+
 func TestInProcGatewayClient_ForgetUser_ValidationErrors(t *testing.T) {
 	t.Parallel()
 

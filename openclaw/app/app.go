@@ -1110,6 +1110,10 @@ func NewRuntime(
 			),
 		)
 	}
+	gwOpts = appendRuntimeProfileGatewayOption(
+		gwOpts,
+		opts.RuntimeProfiles,
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1162,6 +1166,7 @@ func NewRuntime(
 	)
 	gw.SetPersonaStore(stores.personas)
 	gw.SetMemoryFileStore(fileMemoryStore)
+	gw.SetRuntimeProfileAppNames(runtimeProfileAppNames(opts.RuntimeProfiles))
 
 	if len(opts.Channels) > 0 {
 		extra, err := channelsFromRegistry(
@@ -1596,6 +1601,10 @@ func run(ctx context.Context, args []string) error {
 			),
 		)
 	}
+	gwOpts = appendRuntimeProfileGatewayOption(
+		gwOpts,
+		opts.RuntimeProfiles,
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1630,6 +1639,7 @@ func run(ctx context.Context, args []string) error {
 	)
 	gw.SetPersonaStore(stores.personas)
 	gw.SetMemoryFileStore(fileMemoryStore)
+	gw.SetRuntimeProfileAppNames(runtimeProfileAppNames(opts.RuntimeProfiles))
 
 	a2aSurface, err := newA2ASurface(ag, r, opts)
 	if err != nil {

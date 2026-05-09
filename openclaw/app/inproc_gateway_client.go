@@ -62,6 +62,7 @@ type inProcGatewayClient struct {
 	uploads         *uploads.Store
 	personas        *persona.Store
 	memoryFileStore *memoryfile.Store
+	profileAppNames []string
 }
 
 func newInProcGatewayClient(
@@ -105,6 +106,13 @@ func (c *inProcGatewayClient) SetMemoryFileStore(store *memoryfile.Store) {
 		return
 	}
 	c.memoryFileStore = store
+}
+
+func (c *inProcGatewayClient) SetRuntimeProfileAppNames(appNames []string) {
+	if c == nil {
+		return
+	}
+	c.profileAppNames = appendUniqueAppNames(nil, appNames...)
 }
 
 func (c *inProcGatewayClient) SendMessage(
@@ -207,59 +215,86 @@ func (c *inProcGatewayClient) ForgetUser(
 		}
 	}
 
-	storageUserIDs := []string{userID}
-	var indexedStorageUsers []string
-	var err error
+	appNames := c.forgetAppNames()
+	allStorageUserIDs := []string{userID}
+	appStorageUserIDs := make(map[string][]string, len(appNames))
+	appIndexedStorageUsers := make(map[string][]string, len(appNames))
 	if c.sessions != nil {
-		indexedStorageUsers, err = conversationscope.ListIndexedStorageUsers(
-			ctx,
-			c.sessions,
-			appName,
-			userID,
-		)
-		if err != nil {
-			return fmt.Errorf("forget: list storage scopes: %w", err)
-		}
-		storageUserIDs = appendUniqueUserIDs(
-			storageUserIDs,
-			indexedStorageUsers...,
-		)
-		for _, storageUserID := range storageUserIDs {
-			sessions, err := c.sessions.ListSessions(
-				ctx,
-				session.UserKey{AppName: appName, UserID: storageUserID},
-			)
+		for _, currentAppName := range appNames {
+			indexedStorageUsers, err :=
+				conversationscope.ListIndexedStorageUsers(
+					ctx,
+					c.sessions,
+					currentAppName,
+					userID,
+				)
 			if err != nil {
-				return fmt.Errorf("forget: list sessions: %w", err)
+				return fmt.Errorf(
+					"forget: list storage scopes: %w",
+					err,
+				)
 			}
-			for _, sess := range sessions {
-				if sess == nil || strings.TrimSpace(sess.ID) == "" {
-					continue
+			appIndexedStorageUsers[currentAppName] = indexedStorageUsers
+			storageUserIDs := appendUniqueUserIDs(
+				[]string{userID},
+				indexedStorageUsers...,
+			)
+			appStorageUserIDs[currentAppName] = storageUserIDs
+			allStorageUserIDs = appendUniqueUserIDs(
+				allStorageUserIDs,
+				indexedStorageUsers...,
+			)
+			for _, storageUserID := range storageUserIDs {
+				sessions, err := c.sessions.ListSessions(
+					ctx,
+					session.UserKey{
+						AppName: currentAppName,
+						UserID:  storageUserID,
+					},
+				)
+				if err != nil {
+					return fmt.Errorf("forget: list sessions: %w", err)
 				}
-				if cron.IsRunSessionID(sess.ID) {
-					continue
-				}
-				key := session.Key{
-					AppName:   appName,
-					UserID:    storageUserID,
-					SessionID: sess.ID,
-				}
-				if err := c.sessions.DeleteSession(ctx, key); err != nil {
-					return fmt.Errorf("forget: delete session: %w", err)
+				for _, sess := range sessions {
+					if sess == nil || strings.TrimSpace(sess.ID) == "" {
+						continue
+					}
+					if cron.IsRunSessionID(sess.ID) {
+						continue
+					}
+					key := session.Key{
+						AppName:   currentAppName,
+						UserID:    storageUserID,
+						SessionID: sess.ID,
+					}
+					if err := c.sessions.DeleteSession(
+						ctx,
+						key,
+					); err != nil {
+						return fmt.Errorf(
+							"forget: delete session: %w",
+							err,
+						)
+					}
 				}
 			}
 		}
 	}
 
 	if c.memories != nil {
-		userKey := memory.UserKey{AppName: appName, UserID: userID}
-		if err := c.memories.ClearMemories(ctx, userKey); err != nil {
-			return fmt.Errorf("forget: clear memories: %w", err)
+		for _, currentAppName := range appNames {
+			userKey := memory.UserKey{
+				AppName: currentAppName,
+				UserID:  userID,
+			}
+			if err := c.memories.ClearMemories(ctx, userKey); err != nil {
+				return fmt.Errorf("forget: clear memories: %w", err)
+			}
 		}
 	}
 
 	if c.uploads != nil {
-		for _, storageUserID := range storageUserIDs {
+		for _, storageUserID := range allStorageUserIDs {
 			if err := c.uploads.DeleteUser(
 				ctx,
 				channel,
@@ -275,40 +310,62 @@ func (c *inProcGatewayClient) ForgetUser(
 		}
 	}
 	if c.memoryFileStore != nil {
-		for _, storageUserID := range storageUserIDs {
-			if err := c.memoryFileStore.DeleteUser(ctx, appName, storageUserID); err != nil {
-				return fmt.Errorf("forget: delete user memory files: %w", err)
+		for _, currentAppName := range appNames {
+			storageUserIDs := appStorageUserIDs[currentAppName]
+			if len(storageUserIDs) == 0 {
+				storageUserIDs = []string{userID}
+			}
+			for _, storageUserID := range storageUserIDs {
+				if err := c.memoryFileStore.DeleteUser(
+					ctx,
+					currentAppName,
+					storageUserID,
+				); err != nil {
+					return fmt.Errorf(
+						"forget: delete user memory files: %w",
+						err,
+					)
+				}
 			}
 		}
 	}
 	if c.sessions != nil {
-		for _, storageUserID := range indexedStorageUsers {
-			if err := conversationscope.DeleteIndexedStorageUser(
-				ctx,
-				c.sessions,
-				appName,
-				userID,
-				storageUserID,
-			); err != nil {
-				return fmt.Errorf(
-					"forget: delete storage scope index: %w",
-					err,
-				)
+		for _, currentAppName := range appNames {
+			indexedStorageUsers := appIndexedStorageUsers[currentAppName]
+			for _, storageUserID := range indexedStorageUsers {
+				if err := conversationscope.DeleteIndexedStorageUser(
+					ctx,
+					c.sessions,
+					currentAppName,
+					userID,
+					storageUserID,
+				); err != nil {
+					return fmt.Errorf(
+						"forget: delete storage scope index: %w",
+						err,
+					)
+				}
 			}
 		}
 	}
 
-	if err := deleteDebugTraces(
-		ctx,
-		c.debugDir,
-		channel,
-		appName,
-		userID,
-	); err != nil {
-		return fmt.Errorf("forget: delete debug traces: %w", err)
+	for _, currentAppName := range appNames {
+		if err := deleteDebugTraces(
+			ctx,
+			c.debugDir,
+			channel,
+			currentAppName,
+			userID,
+		); err != nil {
+			return fmt.Errorf("forget: delete debug traces: %w", err)
+		}
 	}
 
 	return nil
+}
+
+func (c *inProcGatewayClient) forgetAppNames() []string {
+	return appendUniqueAppNames([]string{c.appName}, c.profileAppNames...)
 }
 
 func appendUniqueUserIDs(

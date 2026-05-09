@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -57,10 +58,14 @@ func buildConversationRunOptionResolver(
 			runtimeState[graph.CfgKeyIncludeContents] =
 				includeContentsNone
 			if sessionSvc != nil {
+				resolvedAppName := runtimeprofile.AppNameFromContext(
+					ctx,
+					appName,
+				)
 				sess, err := sessionSvc.GetSession(
 					ctx,
 					session.Key{
-						AppName:   appName,
+						AppName:   resolvedAppName,
 						UserID:    input.UserID,
 						SessionID: input.SessionID,
 					},
