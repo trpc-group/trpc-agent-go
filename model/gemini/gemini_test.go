@@ -279,6 +279,32 @@ func TestModel_convertMessages(t *testing.T) {
 				}, genai.RoleUser),
 			},
 		},
+		{
+			name: "empty file without URL",
+			fields: fields{
+				m: &Model{},
+			},
+			args: args{
+				messages: []model.Message{
+					{
+						Role: model.RoleUser,
+						ContentParts: []model.ContentPart{
+							{
+								Type: model.ContentTypeFile,
+								File: &model.File{
+									MimeType: "application/pdf",
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []*genai.Content{
+				genai.NewContentFromParts([]*genai.Part{
+					genai.NewPartFromBytes(nil, "application/pdf"),
+				}, genai.RoleUser),
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

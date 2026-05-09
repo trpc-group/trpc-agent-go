@@ -524,6 +524,7 @@ func Test_convertUserMessage_OnlyTextParts(t *testing.T) {
 		Role:    model.RoleUser,
 		Content: "",
 		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText},
 			{Type: model.ContentTypeText, Text: &a},
 			{Type: model.ContentTypeText, Text: &b},
 		},
@@ -535,6 +536,54 @@ func Test_convertUserMessage_OnlyTextParts(t *testing.T) {
 	assert.Equal(t, a, out.Content[0].OfText.Text)
 	assert.NotNil(t, out.Content[1].OfText)
 	assert.Equal(t, b, out.Content[1].OfText.Text)
+}
+
+func Test_convertMessages_MultimodalErrorPropagation(t *testing.T) {
+	tests := []struct {
+		name    string
+		message model.Message
+		want    string
+	}{
+		{
+			name: "system",
+			message: model.Message{
+				Role:         model.RoleSystem,
+				ContentParts: []model.ContentPart{{Type: model.ContentTypeImage}},
+			},
+			want: "system content part 0",
+		},
+		{
+			name: "assistant",
+			message: model.Message{
+				Role:         model.RoleAssistant,
+				ContentParts: []model.ContentPart{{Type: model.ContentTypeImage}},
+			},
+			want: "assistant content part 0",
+		},
+		{
+			name: "user",
+			message: model.Message{
+				Role:         model.RoleUser,
+				ContentParts: []model.ContentPart{{Type: model.ContentTypeImage}},
+			},
+			want: "convert user content part 0",
+		},
+		{
+			name: "default role",
+			message: model.Message{
+				Role:         model.Role("custom"),
+				ContentParts: []model.ContentPart{{Type: model.ContentTypeImage}},
+			},
+			want: "convert user content part 0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := convertMessages([]model.Message{tt.message})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
 }
 
 func Test_convertUserMessage_ImageURL(t *testing.T) {
@@ -560,6 +609,26 @@ func Test_convertUserMessage_ImageURL(t *testing.T) {
 	assert.Equal(t, "https://example.com/image.png", out.Content[1].OfImage.Source.OfURL.URL)
 }
 
+func Test_convertUserMessage_ImageURLWithoutMediaType(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL: "https://example.com/image",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfImage)
+	require.NotNil(t, out.Content[0].OfImage.Source.OfURL)
+	assert.Equal(t, "https://example.com/image", out.Content[0].OfImage.Source.OfURL.URL)
+}
+
 func Test_convertUserMessage_ImageURLUnsupportedFormatFallbackText(t *testing.T) {
 	msg := model.Message{
 		Role: model.RoleUser,
@@ -580,6 +649,25 @@ func Test_convertUserMessage_ImageURLUnsupportedFormatFallbackText(t *testing.T)
 	assert.Equal(t, "Image URL (image/svg+xml): https://example.com/icon.svg", out.Content[0].OfText.Text)
 }
 
+func Test_convertUserMessage_ImageURLUnsupportedExtensionFallbackText(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL: "https://example.com/icon.svg",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfText)
+	assert.Equal(t, "Image URL: https://example.com/icon.svg", out.Content[0].OfText.Text)
+}
+
 func Test_convertUserMessage_ImageData(t *testing.T) {
 	data := []byte("image-bytes")
 	msg := model.Message{
@@ -590,6 +678,28 @@ func Test_convertUserMessage_ImageData(t *testing.T) {
 				Image: &model.Image{
 					Data:   data,
 					Format: "png",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfImage)
+	require.NotNil(t, out.Content[0].OfImage.Source.OfBase64)
+	assert.Equal(t, "image/png", string(out.Content[0].OfImage.Source.OfBase64.MediaType))
+	assert.Equal(t, base64.StdEncoding.EncodeToString(data), out.Content[0].OfImage.Source.OfBase64.Data)
+}
+
+func Test_convertUserMessage_ImageDataDetectsMediaType(t *testing.T) {
+	data := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0, 'I', 'H', 'D', 'R'}
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data: data,
 				},
 			},
 		},
@@ -668,6 +778,28 @@ func Test_convertUserMessage_FilePDFURL(t *testing.T) {
 	require.NotNil(t, out.Content[0].OfDocument)
 	require.NotNil(t, out.Content[0].OfDocument.Source.OfURL)
 	assert.Equal(t, "https://example.com/report.pdf?sign=1", out.Content[0].OfDocument.Source.OfURL.URL)
+	assert.Equal(t, "report.pdf", out.Content[0].OfDocument.Title.Value)
+}
+
+func Test_convertUserMessage_FilePDFURLByName(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name: "report.pdf",
+					URL:  "https://example.com/download?sign=1",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfDocument)
+	require.NotNil(t, out.Content[0].OfDocument.Source.OfURL)
+	assert.Equal(t, "https://example.com/download?sign=1", out.Content[0].OfDocument.Source.OfURL.URL)
 	assert.Equal(t, "report.pdf", out.Content[0].OfDocument.Title.Value)
 }
 
@@ -806,6 +938,26 @@ func Test_convertUserMessage_UnsupportedMultimodalParts(t *testing.T) {
 			name: "unsupported file media type",
 			part: model.ContentPart{Type: model.ContentTypeFile, File: &model.File{Name: "data.json", Data: []byte("{}"), MimeType: "application/json"}},
 			want: "unsupported file media type",
+		},
+		{
+			name: "unknown content type",
+			part: model.ContentPart{Type: model.ContentType("unknown")},
+			want: "unsupported content type",
+		},
+		{
+			name: "empty image data",
+			part: model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{}},
+			want: "image data is empty",
+		},
+		{
+			name: "nil file",
+			part: model.ContentPart{Type: model.ContentTypeFile},
+			want: "file payload is nil",
+		},
+		{
+			name: "empty file",
+			part: model.ContentPart{Type: model.ContentTypeFile, File: &model.File{}},
+			want: "file data is empty",
 		},
 	}
 	for _, tt := range tests {

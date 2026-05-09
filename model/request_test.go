@@ -600,6 +600,16 @@ func TestFileURLText(t *testing.T) {
 			want: "File URL: report.pdf (application/pdf): https://example.com/report.pdf",
 		},
 		{
+			name: "name only",
+			file: &File{Name: "report.pdf", URL: "https://example.com/report.pdf"},
+			want: "File URL: report.pdf: https://example.com/report.pdf",
+		},
+		{
+			name: "MIME only",
+			file: &File{URL: "https://example.com/report.pdf", MimeType: "application/pdf"},
+			want: "File URL (application/pdf): https://example.com/report.pdf",
+		},
+		{
 			name: "URL only",
 			file: &File{URL: "https://example.com/report.pdf"},
 			want: "File URL: https://example.com/report.pdf",

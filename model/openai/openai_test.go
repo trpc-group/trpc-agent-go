@@ -8338,6 +8338,21 @@ func TestAppendUserContentParts_FileURLWithDataSkippedForSkipFileTypeVariant(t *
 	require.Empty(t, dst)
 }
 
+func TestOmittedContentHint_FileURLFallbackNotCounted(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{textOnlyMessageContent: true}}
+	got := m.omittedContentHint([]model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Empty(t, got)
+}
+
 // TestChatRequestCallbackSynchronous verifies that
 // chatRequestCallback is invoked synchronously inside
 // GenerateContent, before the response goroutine starts.
