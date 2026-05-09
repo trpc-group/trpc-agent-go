@@ -4720,6 +4720,54 @@ func TestInProcGatewayClient_ForgetUser_DeletesRuntimeProfileAppState(
 	require.NoError(t, err)
 }
 
+func TestInProcGatewayClient_ForgetUser_UsesRuntimeProfileCatalog(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	ctx := context.Background()
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	sessSvc := sessioninmemory.NewSessionService()
+	const (
+		channelName = "demo"
+		profileApp  = "catalog-app"
+		userID      = "u1"
+		sessionID   = "dm:catalog"
+	)
+	_, err = sessSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   profileApp,
+			UserID:    userID,
+			SessionID: sessionID,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, sessSvc, nil, "")
+	c.SetRuntimeProfileCatalog(runtimeprofile.StaticStore{
+		Config: runtimeprofile.Config{
+			Profiles: map[string]runtimeprofile.Profile{
+				"catalog": {
+					AppName: profileApp,
+				},
+			},
+		},
+	})
+
+	require.NoError(t, c.ForgetUser(ctx, channelName, userID))
+
+	sessions, err := sessSvc.ListSessions(ctx, session.UserKey{
+		AppName: profileApp,
+		UserID:  userID,
+	})
+	require.NoError(t, err)
+	require.Empty(t, sessions)
+}
+
 func TestInProcGatewayClient_ForgetUser_ValidationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -5207,6 +5255,35 @@ func TestInProcGatewayClient_ForgetUser_ListSessionsError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "forget: list sessions")
 	require.Contains(t, err.Error(), "list boom")
+}
+
+func TestInProcGatewayClient_ForgetUser_RuntimeProfileCatalogError(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	wantErr := errors.New("catalog boom")
+	c := newInProcGatewayClient(
+		srv,
+		appName,
+		sessioninmemory.NewSessionService(),
+		nil,
+		"",
+	)
+	c.SetRuntimeProfileCatalog(runtimeprofile.NewCachedResolver(
+		runtimeprofile.StoreFunc(func(
+			context.Context,
+		) (runtimeprofile.Config, error) {
+			return runtimeprofile.Config{}, wantErr
+		}),
+	))
+
+	err = c.ForgetUser(context.Background(), "telegram", "u1")
+	require.ErrorIs(t, err, wantErr)
+	require.Contains(t, err.Error(), "forget: list runtime profile app names")
 }
 
 func TestInProcGatewayClient_ForgetUser_DeleteSessionError(t *testing.T) {

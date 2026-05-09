@@ -253,10 +253,80 @@ func TestBuildRuntimeProfileRunOptionResolverContextOnlyProfile(
 func TestAppendRuntimeProfileGatewayOption(t *testing.T) {
 	t.Parallel()
 
-	require.Empty(t, appendRuntimeProfileGatewayOption(nil, nil))
+	require.Empty(t, appendRuntimeProfileGatewayOption(nil, nil, false))
+	require.Empty(t, runtimeProfileCronOptions(nil))
 
 	emptyCfg := runtimeprofile.Config{}
-	require.Empty(t, appendRuntimeProfileGatewayOption(nil, &emptyCfg))
+	resolver, catalog, required := runtimeProfileResolverFromOptions(
+		&emptyCfg,
+		runtimeOptions{},
+	)
+	require.Nil(t, resolver)
+	require.Nil(t, catalog)
+	require.False(t, required)
+
+	cfg := runtimeprofile.Config{
+		Required: true,
+		Default:  testRuntimeProfileID,
+		Profiles: map[string]runtimeprofile.Profile{
+			testRuntimeProfileID: {
+				AppName: "retail-app",
+			},
+		},
+	}
+	resolver, catalog, required = runtimeProfileResolverFromOptions(
+		&cfg,
+		runtimeOptions{},
+	)
+	require.NotNil(t, resolver)
+	require.NotNil(t, catalog)
+	require.True(t, required)
+	require.Len(
+		t,
+		appendRuntimeProfileGatewayOption(nil, resolver, required),
+		1,
+	)
+	require.Len(t, runtimeProfileCronOptions(resolver), 1)
+}
+
+func TestRuntimeProfileResolverFromInjectedResolver(t *testing.T) {
+	t.Parallel()
+
+	const injectedProfileID = "injected"
+	injected := runtimeprofile.ResolverFunc(func(
+		context.Context,
+		runtimeprofile.Request,
+	) (runtimeprofile.Profile, error) {
+		return runtimeprofile.Profile{ID: injectedProfileID}, nil
+	})
+	cfg := runtimeprofile.Config{
+		Default: testRuntimeProfileID,
+		Profiles: map[string]runtimeprofile.Profile{
+			testRuntimeProfileID: {},
+		},
+	}
+
+	runtimeOpts := buildRuntimeOptions([]RuntimeOption{
+		nil,
+		WithRuntimeProfileResolver(injected, true),
+	})
+	resolver, catalog, required := runtimeProfileResolverFromOptions(
+		&cfg,
+		runtimeOpts,
+	)
+
+	require.True(t, required)
+	require.Nil(t, catalog)
+	profile, err := resolver.Resolve(
+		context.Background(),
+		runtimeprofile.Request{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, injectedProfileID, profile.ID)
+}
+
+func TestRuntimeProfileResolverFromInjectedStore(t *testing.T) {
+	t.Parallel()
 
 	cfg := runtimeprofile.Config{
 		Default: testRuntimeProfileID,
@@ -266,8 +336,52 @@ func TestAppendRuntimeProfileGatewayOption(t *testing.T) {
 			},
 		},
 	}
-	require.Len(t, appendRuntimeProfileGatewayOption(nil, &cfg), 1)
-	require.Len(t, runtimeProfileCronOptions(&cfg), 1)
+	runtimeOpts := buildRuntimeOptions([]RuntimeOption{
+		WithRuntimeProfileStore(
+			runtimeprofile.StaticStore{Config: cfg},
+			false,
+		),
+	})
+	resolver, catalog, required := runtimeProfileResolverFromOptions(
+		nil,
+		runtimeOpts,
+	)
+
+	require.False(t, required)
+	require.NotNil(t, catalog)
+	profile, err := resolver.Resolve(
+		context.Background(),
+		runtimeprofile.Request{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, testRuntimeProfileID, profile.ID)
+	require.Equal(t, "retail-app", profile.AppName)
+}
+
+func TestRuntimeProfileResolverFromInjectedCatalog(t *testing.T) {
+	t.Parallel()
+
+	catalog := runtimeprofile.StaticStore{Config: runtimeprofile.Config{
+		Profiles: map[string]runtimeprofile.Profile{
+			testRuntimeProfileID: {
+				AppName: "retail-app",
+			},
+		},
+	}}
+	runtimeOpts := buildRuntimeOptions([]RuntimeOption{
+		WithRuntimeProfileCatalog(catalog),
+	})
+	resolver, gotCatalog, required := runtimeProfileResolverFromOptions(
+		nil,
+		runtimeOpts,
+	)
+
+	require.Nil(t, resolver)
+	require.False(t, required)
+	require.NotNil(t, gotCatalog)
+	appNames, err := gotCatalog.AppNames(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"retail-app"}, appNames)
 }
 
 func TestValidateRuntimeProfiles(t *testing.T) {

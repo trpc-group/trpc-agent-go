@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -63,6 +64,7 @@ type inProcGatewayClient struct {
 	uploads         *uploads.Store
 	personas        *persona.Store
 	memoryFileStore *memoryfile.Store
+	profileCatalog  runtimeprofile.Catalog
 	profileAppNames []string
 }
 
@@ -114,6 +116,15 @@ func (c *inProcGatewayClient) SetRuntimeProfileAppNames(appNames []string) {
 		return
 	}
 	c.profileAppNames = appendUniqueAppNames(nil, appNames...)
+}
+
+func (c *inProcGatewayClient) SetRuntimeProfileCatalog(
+	catalog runtimeprofile.Catalog,
+) {
+	if c == nil {
+		return
+	}
+	c.profileCatalog = catalog
 }
 
 func (c *inProcGatewayClient) SendMessage(
@@ -216,7 +227,10 @@ func (c *inProcGatewayClient) ForgetUser(
 		}
 	}
 
-	appNames := c.forgetAppNames()
+	appNames, err := c.forgetAppNames(ctx)
+	if err != nil {
+		return err
+	}
 	allStorageUserIDs := []string{userID}
 	appStorageUserIDs := make(map[string][]string, len(appNames))
 	appIndexedStorageUsers := make(map[string][]string, len(appNames))
@@ -365,8 +379,21 @@ func (c *inProcGatewayClient) ForgetUser(
 	return nil
 }
 
-func (c *inProcGatewayClient) forgetAppNames() []string {
-	return appendUniqueAppNames([]string{c.appName}, c.profileAppNames...)
+func (c *inProcGatewayClient) forgetAppNames(
+	ctx context.Context,
+) ([]string, error) {
+	appNames := appendUniqueAppNames([]string{c.appName}, c.profileAppNames...)
+	if c.profileCatalog == nil {
+		return appNames, nil
+	}
+	catalogAppNames, err := c.profileCatalog.AppNames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"forget: list runtime profile app names: %w",
+			err,
+		)
+	}
+	return appendUniqueAppNames(appNames, catalogAppNames...), nil
 }
 
 func appendUniqueUserIDs(

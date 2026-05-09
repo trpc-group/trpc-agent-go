@@ -71,15 +71,15 @@ func buildRuntimeProfileRunOptionResolver(
 
 func appendRuntimeProfileGatewayOption(
 	opts []gateway.Option,
-	cfg *runtimeprofile.Config,
+	resolver runtimeprofile.Resolver,
+	required bool,
 ) []gateway.Option {
-	resolver := newRuntimeProfileResolver(cfg)
 	if resolver == nil {
 		return opts
 	}
 	runOptionResolver := buildRuntimeProfileRunOptionResolver(
 		resolver,
-		cfg.Required,
+		required,
 	)
 	return append(opts, gateway.WithRunOptionResolver(runOptionResolver))
 }
@@ -102,13 +102,36 @@ func newRuntimeProfileResolver(
 }
 
 func runtimeProfileCronOptions(
-	cfg *runtimeprofile.Config,
+	resolver runtimeprofile.Resolver,
 ) []cron.Option {
-	resolver := newRuntimeProfileResolver(cfg)
 	if resolver == nil {
 		return nil
 	}
 	return []cron.Option{cron.WithRuntimeProfileResolver(resolver)}
+}
+
+func runtimeProfileResolverFromOptions(
+	cfg *runtimeprofile.Config,
+	runtimeOpts runtimeOptions,
+) (runtimeprofile.Resolver, runtimeprofile.Catalog, bool) {
+	if runtimeOpts.runtimeProfileResolver != nil {
+		return runtimeOpts.runtimeProfileResolver,
+			runtimeOpts.runtimeProfileCatalog,
+			runtimeOpts.runtimeProfileRequired
+	}
+	if runtimeOpts.runtimeProfileCatalog != nil {
+		return nil, runtimeOpts.runtimeProfileCatalog, false
+	}
+	resolver := newRuntimeProfileResolver(cfg)
+	catalog, _ := resolver.(runtimeprofile.Catalog)
+	return resolver, catalog, runtimeProfileRequired(cfg)
+}
+
+func runtimeProfileRequired(cfg *runtimeprofile.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return cfg.Required
 }
 
 func validateRuntimeProfiles(cfg *runtimeprofile.Config) error {
