@@ -1327,9 +1327,9 @@ type fakeModelWithContextWindow struct {
 	window int
 }
 
-func (m *fakeModelWithContextWindow) ContextWindow() (int, bool) {
-	if m.window <= 0 {
-		return 0, false
+func (m *fakeModelWithContextWindow) Info() model.Info {
+	return model.Info{
+		Name:          m.name,
+		ContextWindow: m.window,
 	}
-	return m.window, true
 }

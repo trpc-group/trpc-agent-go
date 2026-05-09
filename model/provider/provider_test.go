@@ -500,13 +500,7 @@ func TestModelWithAllOptions(t *testing.T) {
 func assertContextWindow(t *testing.T, m model.Model, want int) {
 	t.Helper()
 
-	contextWindowProvider, ok := m.(model.ContextWindowProvider)
-	if !assert.True(t, ok) {
-		return
-	}
-	window, ok := contextWindowProvider.ContextWindow()
-	assert.True(t, ok)
-	assert.Equal(t, want, window)
+	assert.Equal(t, want, m.Info().ContextWindow)
 }
 
 func readStringField(obj any, name string) string {

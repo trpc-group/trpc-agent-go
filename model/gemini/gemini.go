@@ -93,16 +93,9 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 // Info implements the model.Model interface.
 func (m *Model) Info() model.Info {
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
 	}
-}
-
-// ContextWindow returns the configured model context window.
-func (m *Model) ContextWindow() (int, bool) {
-	if m.contextWindow <= 0 {
-		return 0, false
-	}
-	return m.contextWindow, true
 }
 
 func (m *Model) runChatRequestCallback(

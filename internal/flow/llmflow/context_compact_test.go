@@ -172,7 +172,10 @@ type compactingModel struct {
 }
 
 func (m *compactingModel) Info() model.Info {
-	return model.Info{Name: m.name}
+	return model.Info{
+		Name:          m.name,
+		ContextWindow: m.window,
+	}
 }
 
 func (m *compactingModel) GenerateContent(
@@ -182,13 +185,6 @@ func (m *compactingModel) GenerateContent(
 	ch := make(chan *model.Response)
 	close(ch)
 	return ch, nil
-}
-
-func (m *compactingModel) ContextWindow() (int, bool) {
-	if m.window <= 0 {
-		return 0, false
-	}
-	return m.window, true
 }
 
 type toolsCheckingTailRequestProcessor struct {

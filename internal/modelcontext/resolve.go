@@ -12,16 +12,15 @@ package modelcontext
 
 import "trpc.group/trpc-go/trpc-agent-go/model"
 
-// ResolveContextWindow resolves a model's context window from instance
-// configuration first, then from the process-wide model-name registry.
+// ResolveContextWindow resolves a model's context window from Info first,
+// then from the process-wide model-name registry.
 func ResolveContextWindow(m model.Model) (int, bool) {
 	if m == nil {
 		return 0, false
 	}
-	if provider, ok := m.(model.ContextWindowProvider); ok {
-		if window, ok := provider.ContextWindow(); ok && window > 0 {
-			return window, true
-		}
+	info := m.Info()
+	if info.ContextWindow > 0 {
+		return info.ContextWindow, true
 	}
-	return model.LookupModelContextWindow(m.Info().Name)
+	return model.LookupModelContextWindow(info.Name)
 }

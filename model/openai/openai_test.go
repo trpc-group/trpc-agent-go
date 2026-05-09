@@ -649,14 +649,10 @@ func TestOptions_Validation(t *testing.T) {
 
 func TestWithContextWindow(t *testing.T) {
 	m := New("test-model", WithContextWindow(204800))
-	window, ok := m.ContextWindow()
-	require.True(t, ok)
-	require.Equal(t, 204800, window)
+	require.Equal(t, 204800, m.Info().ContextWindow)
 
 	m = New("test-model", WithContextWindow(0))
-	window, ok = m.ContextWindow()
-	require.False(t, ok)
-	require.Zero(t, window)
+	require.Zero(t, m.Info().ContextWindow)
 }
 
 // stubTool implements tool.Tool for testing purposes.

@@ -56,14 +56,6 @@ type Model interface {
 	Info() Info
 }
 
-// ContextWindowProvider is an optional extension for models that can report
-// their context window size in tokens.
-type ContextWindowProvider interface {
-	// ContextWindow returns the model context window in tokens.
-	// ok=false means the window is unknown for this model instance.
-	ContextWindow() (tokens int, ok bool)
-}
-
 // Seq is a callback-based sequence that yields values.
 type Seq[T any] func(yield func(T) bool)
 
@@ -78,5 +70,9 @@ type IterModel interface {
 
 // Info contains basic information about a Model.
 type Info struct {
+	// Name is the model identifier used by providers and registry lookup.
 	Name string
+	// ContextWindow is the model context window in tokens.
+	// A non-positive value means the window is unknown for this model instance.
+	ContextWindow int
 }

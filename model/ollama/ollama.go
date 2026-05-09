@@ -154,18 +154,14 @@ func New(name string, opts ...Option) *Model {
 
 // Info returns the model information.
 func (m *Model) Info() model.Info {
+	contextWindow := 0
+	if m.contextWindowConfigured || m.contextWindowDiscovered {
+		contextWindow = m.contextWindow
+	}
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: contextWindow,
 	}
-}
-
-// ContextWindow returns the configured or discovered model context window.
-func (m *Model) ContextWindow() (int, bool) {
-	if m.contextWindow <= 0 ||
-		(!m.contextWindowConfigured && !m.contextWindowDiscovered) {
-		return 0, false
-	}
-	return m.contextWindow, true
 }
 
 func (m *Model) runChatRequestCallback(

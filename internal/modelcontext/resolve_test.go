@@ -52,12 +52,8 @@ func (m contextWindowTestModel) GenerateContent(
 }
 
 func (m contextWindowTestModel) Info() model.Info {
-	return model.Info{Name: m.name}
-}
-
-func (m contextWindowTestModel) ContextWindow() (int, bool) {
-	if m.window <= 0 {
-		return 0, false
+	return model.Info{
+		Name:          m.name,
+		ContextWindow: m.window,
 	}
-	return m.window, true
 }

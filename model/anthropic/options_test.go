@@ -21,14 +21,10 @@ import (
 
 func TestWithContextWindow(t *testing.T) {
 	m := New("claude-test", WithContextWindow(204800))
-	window, ok := m.ContextWindow()
-	require.True(t, ok)
-	require.Equal(t, 204800, window)
+	require.Equal(t, 204800, m.Info().ContextWindow)
 
 	m = New("claude-test", WithContextWindow(0))
-	window, ok = m.ContextWindow()
-	require.False(t, ok)
-	require.Zero(t, window)
+	require.Zero(t, m.Info().ContextWindow)
 }
 
 func TestWithTokenTailoringConfig(t *testing.T) {

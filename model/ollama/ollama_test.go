@@ -74,9 +74,7 @@ func TestNew_DoesNotPersistRegistryFallbackOnShowError(t *testing.T) {
 	m := New("gpt-4", WithHost(srv.URL))
 	assert.Zero(t, m.contextWindow)
 
-	window, ok := m.ContextWindow()
-	assert.False(t, ok)
-	assert.Zero(t, window)
+	assert.Zero(t, m.Info().ContextWindow)
 }
 
 func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
