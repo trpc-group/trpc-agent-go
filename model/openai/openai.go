@@ -33,6 +33,7 @@ import (
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modeltelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -238,6 +239,7 @@ type Model struct {
 	chatResponseCallback       ChatResponseCallbackFunc
 	chatChunkCallback          ChatChunkCallbackFunc
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	chatTelemetry              bool
 	extraFields                map[string]any
 	variant                    Variant
 	variantConfig              variantConfig
@@ -321,6 +323,7 @@ func New(name string, opts ...Option) *Model {
 		chatResponseCallback:       o.ChatResponseCallback,
 		chatChunkCallback:          o.ChatChunkCallback,
 		chatStreamCompleteCallback: o.ChatStreamCompleteCallback,
+		chatTelemetry:              o.ChatTelemetry,
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
 		variantConfig:              variantConfigs[o.Variant],
@@ -463,10 +466,21 @@ func (m *Model) GenerateContent(
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
+		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
+		defer reporter.End()
+		emit := func(resp *model.Response) bool {
+			select {
+			case responseChan <- resp:
+				reporter.TrackResponse(resp)
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 		if request.Stream {
-			m.handleStreamingResponse(ctx, *chatRequest, responseChan, opts...)
+			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
 		} else {
-			m.handleNonStreamingResponse(ctx, *chatRequest, responseChan, opts...)
+			m.handleNonStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
 		}
 	}()
 	return responseChan, nil
@@ -482,12 +496,15 @@ func (m *Model) GenerateContentIter(
 		return nil, err
 	}
 	return func(yield func(*model.Response) bool) {
+		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
+		defer reporter.End()
 		m.runChatRequestCallback(ctx, chatRequest)
 		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
 				return false
 			}
+			reporter.TrackResponse(resp)
 			return yield(resp)
 		}
 		if request.Stream {
