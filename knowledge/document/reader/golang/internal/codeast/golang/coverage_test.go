@@ -2394,10 +2394,10 @@ func Do() fmt.Stringer { return nil }
 		t.Fatal(err)
 	}
 	pkg := &parsedPackage{
-		ID:   "demo",
-		Name: "demo",
+		ID:     "demo",
+		Name:   "demo",
 		Syntax: []*ast.File{fileNode},
-		Fset: fset,
+		Fset:   fset,
 		Imports: map[string]*parsedImport{
 			"fmt": {Name: "fmt", PkgPath: "fmt"},
 		},

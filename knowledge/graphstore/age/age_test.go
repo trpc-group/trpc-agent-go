@@ -26,8 +26,8 @@ import (
 
 // mockPostgresClient implements postgres.Client for testing.
 type mockPostgresClient struct {
-	execFn func(ctx context.Context, query string, args ...any) (sql.Result, error)
-	txFn   func(ctx context.Context, fn postgres.TxFunc) error
+	execFn  func(ctx context.Context, query string, args ...any) (sql.Result, error)
+	txFn    func(ctx context.Context, fn postgres.TxFunc) error
 	closeFn func() error
 }
 

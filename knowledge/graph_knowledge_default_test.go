@@ -1163,16 +1163,16 @@ func TestBuiltinGraphKnowledge_LoadGraphSourceWithProgress(t *testing.T) {
 	nodes := make([]*graph.Node, 5)
 	for i := range nodes {
 		nodes[i] = &graph.Node{
-			ID:      fmt.Sprintf("pn-%d", i),
-			Name:    fmt.Sprintf("PN%d", i),
+			ID:      fmt.Sprintf("node-%d", i),
+			Name:    fmt.Sprintf("Node%d", i),
 			Content: "content",
 		}
 	}
 	edges := make([]*graph.Edge, 3)
 	for i := range edges {
 		edges[i] = &graph.Edge{
-			FromID: fmt.Sprintf("pn-%d", i),
-			ToID:   fmt.Sprintf("pn-%d", i+1),
+			FromID: fmt.Sprintf("node-%d", i),
+			ToID:   fmt.Sprintf("node-%d", i+1),
 			Type:   "CALLS",
 		}
 	}
