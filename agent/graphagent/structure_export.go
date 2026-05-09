@@ -91,20 +91,27 @@ func (ga *GraphAgent) Export(
 		if err != nil {
 			return nil, err
 		}
-		mountPath := istructure.JoinNodeID(nodePath, childAgent.Info().Name)
-		rebased, err := istructure.RebaseSnapshot(childSnapshot, mountPath)
+		rebased, err := istructure.RebaseSnapshot(childSnapshot, nodePath)
 		if err != nil {
 			return nil, err
 		}
-		snapshot.Nodes = append(snapshot.Nodes, rebased.Nodes...)
-		snapshot.Edges = append(snapshot.Edges, rebased.Edges...)
-		snapshot.Surfaces = append(snapshot.Surfaces, rebased.Surfaces...)
-		snapshot.Edges = append(snapshot.Edges, structure.Edge{
-			FromNodeID: nodePath,
-			ToNodeID:   rebased.EntryNodeID,
-		})
+		appendAgentNodeChildSnapshot(snapshot, rebased)
 	}
 	return snapshot, nil
+}
+
+func appendAgentNodeChildSnapshot(
+	snapshot *structure.Snapshot,
+	rebased *structure.Snapshot,
+) {
+	for _, childNode := range rebased.Nodes {
+		if childNode.NodeID == rebased.EntryNodeID {
+			continue
+		}
+		snapshot.Nodes = append(snapshot.Nodes, childNode)
+	}
+	snapshot.Edges = append(snapshot.Edges, rebased.Edges...)
+	snapshot.Surfaces = append(snapshot.Surfaces, rebased.Surfaces...)
 }
 
 func nodeKindFromGraphNodeType(nodeType graph.NodeType) structure.NodeKind {

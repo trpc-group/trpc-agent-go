@@ -728,9 +728,11 @@ func TestCycleAgent_CreateSubAgentInvoke(t *testing.T) {
 	base := agent.NewInvocation(agent.WithInvocationAgent(parent))
 	child := &noopAgent{name: "child"}
 
-	inv := parent.createSubAgentInvocation(child, base, "", nil)
+	inv := parent.createSubAgentInvocation(child, base, "parent/child", "surface/child", nil)
 
 	require.Equal(t, "child", inv.AgentName)
+	require.Equal(t, "parent/child", agent.InvocationTraceNodeID(inv))
+	require.Equal(t, "surface/child", agent.InvocationSurfaceRootNodeID(inv))
 	// Branch should stay unchanged when base.Branch non-empty.
 	require.Equal(t, "parent"+agent.BranchDelimiter+"child", inv.Branch)
 	// Ensure TransferInfo cleared.

@@ -60,13 +60,20 @@ func (a *ChainAgent) createSubAgentInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 	nodeID string,
+	surfaceRootNodeID string,
 	entryPredecessors []string,
 ) *agent.Invocation {
-	return baseInvocation.Clone(
+	opts := []agent.InvocationOptions{
 		agent.WithInvocationAgent(subAgent),
 		agent.WithInvocationTraceNodeID(nodeID),
 		agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors),
-	)
+	}
+	if surfaceRootNodeID != "" {
+		opts = append(opts, func(inv *agent.Invocation) {
+			agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
+		})
+	}
+	return baseInvocation.Clone(opts...)
 }
 
 // Run implements the agent.Agent interface.
@@ -210,6 +217,7 @@ func (a *ChainAgent) executeSubAgents(
 	tokenUsage := &itelemetry.TokenUsage{}
 	var fullRespEvent *event.Event
 	pathAllocator := istructure.NewPathAllocator(agent.InvocationTraceNodeID(invocation))
+	surfacePathAllocator := istructure.NewPathAllocator(agent.InvocationSurfaceRootNodeID(invocation))
 	predecessors := agent.NextExecutionTracePredecessors(invocation)
 	visibleCtx := graph.WithoutGraphCompletionCapture(ctx)
 	for _, subAgent := range a.subAgents {
@@ -218,6 +226,7 @@ func (a *ChainAgent) executeSubAgents(
 			subAgent,
 			invocation,
 			pathAllocator.Next(subAgent.Info().Name),
+			surfacePathAllocator.Next(subAgent.Info().Name),
 			predecessors,
 		)
 

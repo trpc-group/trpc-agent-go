@@ -213,7 +213,7 @@ func TestExport_GraphAgent_ToolNodeSurface(t *testing.T) {
 	})
 }
 
-func TestExport_GraphAgent_AgentNodeRecursesIntoChild(t *testing.T) {
+func TestExport_GraphAgent_AgentNodeMergesChildRootSurfaces(t *testing.T) {
 	compiled := graph.NewStateGraph(graph.NewStateSchema()).
 		AddAgentNode("researcher").
 		SetEntryPoint("researcher").
@@ -222,7 +222,6 @@ func TestExport_GraphAgent_AgentNodeRecursesIntoChild(t *testing.T) {
 	child := llmagent.New("researcher")
 	ag, err := New("assistant", compiled, WithSubAgents([]agent.Agent{child}))
 	require.NoError(t, err)
-
 	snapshot, err := structure.Export(context.Background(), ag)
 	require.NoError(t, err)
 	assertGraphSnapshotEqual(t, snapshot, &structure.Snapshot{
@@ -230,24 +229,83 @@ func TestExport_GraphAgent_AgentNodeRecursesIntoChild(t *testing.T) {
 		Nodes: []structure.Node{
 			{NodeID: "assistant", Kind: structure.NodeKindAgent, Name: "assistant"},
 			{NodeID: "assistant/researcher", Kind: structure.NodeKindAgent, Name: "researcher"},
-			{NodeID: "assistant/researcher/researcher", Kind: structure.NodeKindLLM, Name: "researcher"},
 		},
 		Edges: []structure.Edge{
 			{FromNodeID: "assistant", ToNodeID: "assistant/researcher"},
-			{FromNodeID: "assistant/researcher", ToNodeID: "assistant/researcher/researcher"},
 		},
 		Surfaces: []structure.Surface{
 			{
-				SurfaceID: "assistant/researcher/researcher#global_instruction",
-				NodeID:    "assistant/researcher/researcher",
+				SurfaceID: "assistant/researcher#global_instruction",
+				NodeID:    "assistant/researcher",
 				Type:      structure.SurfaceTypeGlobalInstruction,
 				Value:     structure.SurfaceValue{Text: stringPtr("")},
 			},
 			{
-				SurfaceID: "assistant/researcher/researcher#instruction",
-				NodeID:    "assistant/researcher/researcher",
+				SurfaceID: "assistant/researcher#instruction",
+				NodeID:    "assistant/researcher",
 				Type:      structure.SurfaceTypeInstruction,
 				Value:     structure.SurfaceValue{Text: stringPtr("")},
+			},
+		},
+	})
+}
+
+func TestExport_GraphAgent_AgentNodeMountsChildGraphInternals(t *testing.T) {
+	childCompiled := graph.NewStateGraph(graph.NewStateSchema()).
+		AddLLMNode("plan", &structureMockModel{name: "plan-model"}, "plan", nil).
+		AddLLMNode("write", &structureMockModel{name: "write-model"}, "write", nil).
+		SetEntryPoint("plan").
+		AddEdge("plan", "write").
+		SetFinishPoint("write").
+		MustCompile()
+	child, err := New("research_flow", childCompiled)
+	require.NoError(t, err)
+	compiled := graph.NewStateGraph(graph.NewStateSchema()).
+		AddAgentNode("research_flow").
+		SetEntryPoint("research_flow").
+		SetFinishPoint("research_flow").
+		MustCompile()
+	ag, err := New("assistant", compiled, WithSubAgents([]agent.Agent{child}))
+	require.NoError(t, err)
+	snapshot, err := structure.Export(context.Background(), ag)
+	require.NoError(t, err)
+	assertGraphSnapshotEqual(t, snapshot, &structure.Snapshot{
+		EntryNodeID: "assistant",
+		Nodes: []structure.Node{
+			{NodeID: "assistant", Kind: structure.NodeKindAgent, Name: "assistant"},
+			{NodeID: "assistant/research_flow", Kind: structure.NodeKindAgent, Name: "research_flow"},
+			{NodeID: "assistant/research_flow/plan", Kind: structure.NodeKindLLM, Name: "plan"},
+			{NodeID: "assistant/research_flow/write", Kind: structure.NodeKindLLM, Name: "write"},
+		},
+		Edges: []structure.Edge{
+			{FromNodeID: "assistant", ToNodeID: "assistant/research_flow"},
+			{FromNodeID: "assistant/research_flow", ToNodeID: "assistant/research_flow/plan"},
+			{FromNodeID: "assistant/research_flow/plan", ToNodeID: "assistant/research_flow/write"},
+		},
+		Surfaces: []structure.Surface{
+			{
+				SurfaceID: "assistant/research_flow/plan#instruction",
+				NodeID:    "assistant/research_flow/plan",
+				Type:      structure.SurfaceTypeInstruction,
+				Value:     structure.SurfaceValue{Text: stringPtr("plan")},
+			},
+			{
+				SurfaceID: "assistant/research_flow/plan#model",
+				NodeID:    "assistant/research_flow/plan",
+				Type:      structure.SurfaceTypeModel,
+				Value:     structure.SurfaceValue{Model: &structure.ModelRef{Name: "plan-model"}},
+			},
+			{
+				SurfaceID: "assistant/research_flow/write#instruction",
+				NodeID:    "assistant/research_flow/write",
+				Type:      structure.SurfaceTypeInstruction,
+				Value:     structure.SurfaceValue{Text: stringPtr("write")},
+			},
+			{
+				SurfaceID: "assistant/research_flow/write#model",
+				NodeID:    "assistant/research_flow/write",
+				Type:      structure.SurfaceTypeModel,
+				Value:     structure.SurfaceValue{Model: &structure.ModelRef{Name: "write-model"}},
 			},
 		},
 	})

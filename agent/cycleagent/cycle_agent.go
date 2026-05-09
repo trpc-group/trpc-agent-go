@@ -60,13 +60,20 @@ func (a *CycleAgent) createSubAgentInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 	nodeID string,
+	surfaceRootNodeID string,
 	entryPredecessors []string,
 ) *agent.Invocation {
-	return baseInvocation.Clone(
+	opts := []agent.InvocationOptions{
 		agent.WithInvocationAgent(subAgent),
 		agent.WithInvocationTraceNodeID(nodeID),
 		agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors),
-	)
+	}
+	if surfaceRootNodeID != "" {
+		opts = append(opts, func(inv *agent.Invocation) {
+			agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
+		})
+	}
+	return baseInvocation.Clone(opts...)
 }
 
 // shouldEscalate checks if an event indicates escalation using injectable logic.
@@ -169,12 +176,19 @@ func (a *CycleAgent) runSubAgent(
 	subAgent agent.Agent,
 	invocation *agent.Invocation,
 	nodeID string,
+	surfaceRootNodeID string,
 	entryPredecessors []string,
 	eventChan chan<- *event.Event,
 	fullRespEvent **event.Event,
 ) (*agent.Invocation, bool) {
 	// Create a proper invocation for the sub-agent with correct attribution.
-	subInvocation := a.createSubAgentInvocation(subAgent, invocation, nodeID, entryPredecessors)
+	subInvocation := a.createSubAgentInvocation(
+		subAgent,
+		invocation,
+		nodeID,
+		surfaceRootNodeID,
+		entryPredecessors,
+	)
 
 	// Reset invocation information in context
 	subAgentCtx := graph.WithGraphCompletionCapture(
@@ -257,6 +271,7 @@ func (a *CycleAgent) runSubAgentsLoop(
 	fullRespEvent **event.Event,
 ) ([]string, bool) {
 	pathAllocator := istructure.NewPathAllocator(agent.InvocationTraceNodeID(invocation))
+	surfacePathAllocator := istructure.NewPathAllocator(agent.InvocationSurfaceRootNodeID(invocation))
 	currentPredecessors := entryPredecessors
 	for _, subAgent := range a.subAgents {
 		// Check if context was cancelled.
@@ -270,6 +285,7 @@ func (a *CycleAgent) runSubAgentsLoop(
 			subAgent,
 			invocation,
 			pathAllocator.Next(subAgent.Info().Name),
+			surfacePathAllocator.Next(subAgent.Info().Name),
 			currentPredecessors,
 			eventChan,
 			fullRespEvent,

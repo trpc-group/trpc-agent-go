@@ -3577,7 +3577,7 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		if traceNodeID := buildAgentNodeTraceNodeID(parentInvocation, nodeID); traceNodeID != "" {
 			invocationOpts = append(invocationOpts, agent.WithInvocationTraceNodeID(traceNodeID))
 		}
-		if surfaceRootNodeID := buildAgentNodeSurfaceRoot(parentInvocation, nodeID, targetAgent); surfaceRootNodeID != "" {
+		if surfaceRootNodeID := buildAgentNodeSurfaceRoot(parentInvocation, nodeID); surfaceRootNodeID != "" {
 			invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
 				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
 			})
@@ -3649,7 +3649,6 @@ func buildAgentNodeTraceNodeID(
 func buildAgentNodeSurfaceRoot(
 	parentInvocation *agent.Invocation,
 	nodeID string,
-	targetAgent agent.Agent,
 ) string {
 	if parentInvocation == nil {
 		return ""
@@ -3658,10 +3657,7 @@ func buildAgentNodeSurfaceRoot(
 	if nodeID != "" {
 		baseNodeID = istructure.JoinNodeID(baseNodeID, nodeID)
 	}
-	if targetAgent == nil || targetAgent.Info().Name == "" {
-		return baseNodeID
-	}
-	return istructure.JoinNodeID(baseNodeID, targetAgent.Info().Name)
+	return baseNodeID
 }
 
 const (
