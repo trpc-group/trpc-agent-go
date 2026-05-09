@@ -345,6 +345,66 @@ func TestServiceRunNowAppliesRuntimeProfile(t *testing.T) {
 	)
 }
 
+func TestServiceRunNowResolvesRuntimeProfileWithRequestMetadata(
+	t *testing.T,
+) {
+	runner := &stubRunner{reply: "ok"}
+	requests := make(chan runtimeprofile.Request, 1)
+	resolver := runtimeprofile.ResolverFunc(func(
+		ctx context.Context,
+		req runtimeprofile.Request,
+	) (runtimeprofile.Profile, error) {
+		requests <- req
+		return runtimeprofile.Profile{
+			ID:      req.ProfileID,
+			AppName: "retail-app",
+		}, nil
+	})
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		nil,
+		WithRuntimeProfileResolver(resolver),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Profile: &RuntimeProfileRef{
+			ID:        "retail",
+			Channel:   "wecom",
+			TenantID:  "tenant-a",
+			SessionID: "session-a",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	var got runtimeprofile.Request
+	select {
+	case got = <-requests:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime profile request was not observed")
+	}
+	require.Equal(t, "retail", got.ProfileID)
+	require.Equal(t, "wecom", got.Channel)
+	require.Equal(t, "tenant-a", got.TenantID)
+	require.Equal(t, "telegram:user", got.UserID)
+	require.Equal(t, "session-a", got.SessionID)
+}
+
 func TestJobProfileJSONOmittedWhenEmpty(t *testing.T) {
 	t.Parallel()
 

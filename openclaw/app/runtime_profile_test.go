@@ -44,6 +44,22 @@ func (c failingRuntimeProfileCatalog) AppNames(
 	return nil, c.err
 }
 
+type countingRuntimeProfileStore struct {
+	loads int
+	cfg   runtimeprofile.Config
+	err   error
+}
+
+func (s *countingRuntimeProfileStore) Load(
+	context.Context,
+) (runtimeprofile.Config, error) {
+	s.loads++
+	if s.loads > 1 && s.err != nil {
+		return runtimeprofile.Config{}, s.err
+	}
+	return s.cfg, nil
+}
+
 func TestBuildRuntimeProfileRunOptionResolver(t *testing.T) {
 	t.Parallel()
 
@@ -93,6 +109,12 @@ func TestBuildRuntimeProfileRunOptionResolver(t *testing.T) {
 	profile, ok := runtimeprofile.ProfileFromContext(ctx)
 	require.True(t, ok)
 	require.Equal(t, testRuntimeProfileID, profile.ID)
+
+	req, ok := runtimeprofile.RequestFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, "wecom", req.Channel)
+	require.Equal(t, testRuntimeProfileTenant, req.TenantID)
+	require.Equal(t, "session-a", req.SessionID)
 
 	opts := agent.NewRunOptions(runOpts...)
 	require.Equal(t, "retail-app", opts.AppName)
@@ -388,6 +410,31 @@ func TestRuntimeProfileResolverFromInjectedStore(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, testRuntimeProfileID, profile.ID)
 	require.Equal(t, "retail-app", profile.AppName)
+}
+
+func TestRuntimeProfileCatalogFromStoreIsDeduplicated(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("duplicate catalog load")
+	store := &countingRuntimeProfileStore{
+		cfg: runtimeprofile.Config{
+			Profiles: map[string]runtimeprofile.Profile{
+				testRuntimeProfileID: {
+					AppName: "retail-app",
+				},
+			},
+		},
+		err: wantErr,
+	}
+	runtimeOpts := buildRuntimeOptions([]RuntimeOption{
+		WithRuntimeProfileStore(store, false),
+	})
+	_, catalog, _ := runtimeProfileResolverFromOptions(nil, runtimeOpts)
+
+	appNames, err := catalog.AppNames(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"retail-app"}, appNames)
+	require.Equal(t, 1, store.loads)
 }
 
 func TestRuntimeProfileResolverFromInjectedCatalog(t *testing.T) {

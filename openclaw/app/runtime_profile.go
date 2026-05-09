@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -60,6 +61,7 @@ func buildRuntimeProfileRunOptionResolver(
 			}
 			return ctx, nil, nil
 		}
+		ctx = runtimeprofile.WithRequest(ctx, req)
 		ctx = runtimeprofile.WithProfile(ctx, profile)
 		runOpts := runtimeprofile.RunOptions(profile)
 		if len(runOpts) == 0 {
@@ -168,12 +170,8 @@ func runtimeProfileCatalogFromOptions(
 	injected runtimeprofile.Catalog,
 ) runtimeprofile.Catalog {
 	catalogs := make([]runtimeprofile.Catalog, 0, 2)
-	if catalog, ok := resolver.(runtimeprofile.Catalog); ok && catalog != nil {
-		catalogs = append(catalogs, catalog)
-	}
-	if injected != nil {
-		catalogs = append(catalogs, injected)
-	}
+	catalogs = appendRuntimeProfileCatalog(catalogs, resolver)
+	catalogs = appendRuntimeProfileCatalog(catalogs, injected)
 	switch len(catalogs) {
 	case 0:
 		return nil
@@ -182,6 +180,45 @@ func runtimeProfileCatalogFromOptions(
 	default:
 		return runtimeProfileCatalogs(catalogs)
 	}
+}
+
+func appendRuntimeProfileCatalog(
+	catalogs []runtimeprofile.Catalog,
+	value any,
+) []runtimeprofile.Catalog {
+	catalog, ok := value.(runtimeprofile.Catalog)
+	if !ok || catalog == nil {
+		return catalogs
+	}
+	id, ok := runtimeProfileCatalogIdentity(catalog)
+	if !ok {
+		return append(catalogs, catalog)
+	}
+	for _, existing := range catalogs {
+		existingID, ok := runtimeProfileCatalogIdentity(existing)
+		if ok && existingID == id {
+			return catalogs
+		}
+	}
+	return append(catalogs, catalog)
+}
+
+type runtimeProfileCatalogID struct {
+	typ reflect.Type
+	ptr uintptr
+}
+
+func runtimeProfileCatalogIdentity(
+	catalog runtimeprofile.Catalog,
+) (runtimeProfileCatalogID, bool) {
+	value := reflect.ValueOf(catalog)
+	if !value.IsValid() || value.Kind() != reflect.Ptr || value.IsNil() {
+		return runtimeProfileCatalogID{}, false
+	}
+	return runtimeProfileCatalogID{
+		typ: value.Type(),
+		ptr: value.Pointer(),
+	}, true
 }
 
 func appendUniqueRuntimeProfileCatalogValues(

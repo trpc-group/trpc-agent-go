@@ -84,11 +84,16 @@ type ExecutionStats struct {
 }
 
 // RuntimeProfileRef stores the profile identity captured when a job is
-// created. It deliberately stores metadata, not secrets or full policy blobs.
+// created. Scheduled jobs persist selector metadata, not secrets or full
+// policy blobs, so profile IDs must remain resolvable by the configured
+// resolver when the job runs later.
 type RuntimeProfileRef struct {
-	ID      string `json:"id,omitempty"`
-	Version string `json:"version,omitempty"`
-	AppName string `json:"app_name,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Version   string `json:"version,omitempty"`
+	AppName   string `json:"app_name,omitempty"`
+	Channel   string `json:"channel,omitempty"`
+	TenantID  string `json:"tenant_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 type scheduledRunTemplateData struct {

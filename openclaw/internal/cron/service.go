@@ -628,10 +628,17 @@ func (s *Service) resolveRuntimeProfile(
 			"cron: runtime profile resolver is not configured",
 		)
 	}
-	profile, err := s.profiles.Resolve(ctx, runtimeprofile.Request{
+	req := runtimeprofile.Request{
+		Channel:   job.Profile.Channel,
 		ProfileID: job.Profile.ID,
+		TenantID:  job.Profile.TenantID,
 		UserID:    job.UserID,
-	})
+		SessionID: job.Profile.SessionID,
+	}
+	if strings.TrimSpace(req.Channel) == "" {
+		req.Channel = job.Delivery.Channel
+	}
+	profile, err := s.profiles.Resolve(ctx, req)
 	if err != nil {
 		return runtimeprofile.Profile{}, err
 	}

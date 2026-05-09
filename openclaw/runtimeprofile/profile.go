@@ -85,6 +85,8 @@ var ErrCredentialDenied = errors.New("runtime profile credential denied")
 
 type contextKey struct{}
 
+type requestContextKey struct{}
+
 // Config describes static runtime profiles.
 type Config struct {
 	Default           string             `yaml:"default,omitempty"`
@@ -317,6 +319,26 @@ func (f ResolverFunc) Resolve(
 	return f(ctx, req)
 }
 
+// WithRequest stores the profile selection request on the context.
+func WithRequest(ctx context.Context, req Request) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	return context.WithValue(ctx, requestContextKey{}, cloneRequest(req))
+}
+
+// RequestFromContext returns the profile selection request stored on ctx.
+func RequestFromContext(ctx context.Context) (Request, bool) {
+	if ctx == nil {
+		return Request{}, false
+	}
+	req, ok := ctx.Value(requestContextKey{}).(Request)
+	if !ok {
+		return Request{}, false
+	}
+	return cloneRequest(req), true
+}
+
 // WithProfile stores the resolved profile on the context.
 func WithProfile(ctx context.Context, profile Profile) context.Context {
 	if ctx == nil {
@@ -335,6 +357,28 @@ func ProfileFromContext(ctx context.Context) (Profile, bool) {
 		return Profile{}, false
 	}
 	return cloneProfile(profile), true
+}
+
+func cloneRequest(req Request) Request {
+	req.Channel = strings.TrimSpace(req.Channel)
+	req.ProfileID = strings.TrimSpace(req.ProfileID)
+	req.TenantID = strings.TrimSpace(req.TenantID)
+	req.UserID = strings.TrimSpace(req.UserID)
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	req.RequestID = strings.TrimSpace(req.RequestID)
+	if len(req.Extensions) == 0 {
+		req.Extensions = nil
+		return req
+	}
+	extensions := make(map[string]json.RawMessage, len(req.Extensions))
+	for key, raw := range req.Extensions {
+		extensions[strings.TrimSpace(key)] = append(
+			json.RawMessage(nil),
+			raw...,
+		)
+	}
+	req.Extensions = extensions
+	return req
 }
 
 // AppNameFromContext returns the profile app name or the provided fallback.

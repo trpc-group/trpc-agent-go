@@ -37,6 +37,7 @@ const (
 
 const (
 	errJobIDRequired      = "job_id is required"
+	errProfileIDRequired  = "cron: runtime profile id is required"
 	errHeadlessWithTarget = "cron: headless jobs cannot set " +
 		"channel or target"
 	errDeliveryTargetUnavailable = "cron: current chat delivery " +
@@ -355,6 +356,14 @@ func (t *Tool) add(
 	}
 	if profile, ok := runtimeprofile.ProfileFromContext(ctx); ok {
 		ref := runtimeProfileRefFromProfile(profile)
+		if strings.TrimSpace(ref.ID) == "" {
+			return nil, fmt.Errorf(errProfileIDRequired)
+		}
+		if req, ok := runtimeprofile.RequestFromContext(ctx); ok {
+			ref.Channel = req.Channel
+			ref.TenantID = req.TenantID
+			ref.SessionID = req.SessionID
+		}
 		job.Profile = &ref
 	}
 	delivery, err := resolveDelivery(

@@ -89,6 +89,11 @@ func TestToolAddCapturesRuntimeProfile(t *testing.T) {
 		Version: "v2",
 		AppName: "retail-app",
 	})
+	ctx = runtimeprofile.WithRequest(ctx, runtimeprofile.Request{
+		Channel:   "wecom",
+		TenantID:  "tenant-a",
+		SessionID: "session-a",
+	})
 
 	args, err := json.Marshal(map[string]any{
 		"action":        "add",
@@ -108,6 +113,49 @@ func TestToolAddCapturesRuntimeProfile(t *testing.T) {
 	require.Equal(t, "retail", job.Profile.ID)
 	require.Equal(t, "v2", job.Profile.Version)
 	require.Equal(t, "retail-app", job.Profile.AppName)
+	require.Equal(t, "wecom", job.Profile.Channel)
+	require.Equal(t, "tenant-a", job.Profile.TenantID)
+	require.Equal(t, "session-a", job.Profile.SessionID)
+}
+
+func TestToolAddRejectsAnonymousRuntimeProfile(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		nil,
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	invCtx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+	ctx := runtimeprofile.WithProfile(invCtx, runtimeprofile.Profile{
+		Prompt: runtimeprofile.Prompt{
+			Instruction: "tenant instruction",
+		},
+	})
+
+	args, err := json.Marshal(map[string]any{
+		"action":        "add",
+		"task":          "collect system resources",
+		"schedule_kind": "every",
+		"interval":      "1m",
+		"headless":      true,
+	})
+	require.NoError(t, err)
+
+	_, err = tool.Call(ctx, args)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errProfileIDRequired)
 }
 
 func TestToolAddSupportsExecutionPolicyAndHeadless(t *testing.T) {

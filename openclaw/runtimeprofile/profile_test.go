@@ -652,6 +652,45 @@ func TestContextProfile(t *testing.T) {
 	))
 }
 
+func TestContextRequest(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, WithRequest(nil, Request{}))
+
+	_, ok := RequestFromContext(nil)
+	require.False(t, ok)
+	_, ok = RequestFromContext(context.Background())
+	require.False(t, ok)
+
+	raw := json.RawMessage(`{"profile_id":"retail"}`)
+	ctx := WithRequest(context.Background(), Request{
+		Channel:   " wecom ",
+		ProfileID: " retail ",
+		TenantID:  " tenant-a ",
+		UserID:    " user-a ",
+		SessionID: " session-a ",
+		RequestID: " request-a ",
+		Extensions: map[string]json.RawMessage{
+			ExtensionKey: raw,
+		},
+	})
+
+	req, ok := RequestFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, "wecom", req.Channel)
+	require.Equal(t, testProfileRetail, req.ProfileID)
+	require.Equal(t, "tenant-a", req.TenantID)
+	require.Equal(t, "user-a", req.UserID)
+	require.Equal(t, "session-a", req.SessionID)
+	require.Equal(t, "request-a", req.RequestID)
+	require.Equal(t, raw, req.Extensions[ExtensionKey])
+
+	req.Extensions[ExtensionKey][0] = '['
+	req, ok = RequestFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, raw, req.Extensions[ExtensionKey])
+}
+
 func TestTraceFields(t *testing.T) {
 	t.Parallel()
 
