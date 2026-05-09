@@ -73,11 +73,18 @@ func (r *Resolver) CreateWorkspace(
 	sid := name
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 		if inv.Session != nil && inv.Session.ID != "" {
-			sid = inv.Session.ID
+			sid = workspaceSessionKey(inv.Session.AppName, inv.Session.UserID, inv.Session.ID)
 		}
 		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
 	return reg.Acquire(ctx, eng.Manager(), sid)
+}
+
+func workspaceSessionKey(appName, userID, sessionID string) string {
+	if appName != "" && userID != "" && sessionID != "" {
+		return appName + "/" + userID + "/" + sessionID
+	}
+	return sessionID
 }
 
 // withWorkspaceArtifactContext mirrors internal/workspaceinput.withArtifactContext:

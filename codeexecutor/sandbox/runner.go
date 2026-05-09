@@ -1,0 +1,167 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package sandbox
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+)
+
+// RunProgram executes a command in the workspace under the active sandbox
+// policy.
+func (r *Runtime) RunProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	if spec.Cmd == "" {
+		return codeexecutor.RunResult{}, deniedf(
+			ErrPolicyViolation, "run", "", "empty command",
+		)
+	}
+	profile := applyAdditionalPermissions(
+		normalizeProfile(r.profile),
+		additionalPermissionsFromContext(ctx),
+	)
+	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	for _, dir := range []string{"home", "tmp"} {
+		if err := ensureDir(filepath.Join(ws.Path, dir)); err != nil {
+			return codeexecutor.RunResult{}, err
+		}
+	}
+	cwdRel := spec.Cwd
+	if cwdRel == "" {
+		cwdRel = codeexecutor.DirWork
+	}
+	if err := r.checkRead(profile, ws, cwdRel); err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	cwd, _, err := r.resolveWorkspacePath(ws, cwdRel)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	if _, err := os.Stat(cwd); err != nil {
+		if !os.IsNotExist(err) {
+			return codeexecutor.RunResult{}, err
+		}
+		if err := r.checkWrite(profile, ws, cwdRel); err != nil {
+			return codeexecutor.RunResult{}, err
+		}
+	}
+	if err := ensureDir(cwd); err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	timeout := spec.Timeout
+	if timeout <= 0 {
+		timeout = r.defaultTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if r.sessionPolicy.MutatingCommandsSerial {
+		lock := r.runLock(ws)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+	start := time.Now()
+	env := r.buildEnvironment(ws, spec)
+	cmd, backendName, err := r.commandForProfile(runCtx, profile, ws, cwd, env, spec)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	stdout := newLimitedBuffer(r.outputMaxBytes)
+	stderr := newLimitedBuffer(r.outputMaxBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if spec.Stdin != "" {
+		cmd.Stdin = strings.NewReader(spec.Stdin)
+	} else {
+		cmd.Stdin = nil
+	}
+	setupProcess(cmd)
+	cmd.Cancel = func() error {
+		return killProcessGroup(cmd)
+	}
+	cmd.WaitDelay = 2 * time.Second
+	err = cmd.Start()
+	if err != nil {
+		return codeexecutor.RunResult{}, backendError(ErrSetupFailed, backendName, err)
+	}
+	waitErr := cmd.Wait()
+	duration := time.Since(start)
+	timedOut := runCtx.Err() == context.DeadlineExceeded
+	if timedOut {
+		killProcessGroup(cmd)
+	}
+	exitCode := 0
+	if waitErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else if timedOut {
+			exitCode = -1
+		} else {
+			return codeexecutor.RunResult{}, waitErr
+		}
+	}
+	result := codeexecutor.RunResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: exitCode,
+		Duration: duration,
+		TimedOut: timedOut,
+	}
+	if timedOut {
+		return result, &SandboxError{
+			Kind:    ErrTimeout,
+			Op:      "run",
+			Backend: backendName,
+			Err:     context.DeadlineExceeded,
+		}
+	}
+	return result, nil
+}
+
+func (r *Runtime) commandForProfile(
+	ctx context.Context,
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	cwd string,
+	env []string,
+	spec codeexecutor.RunProgramSpec,
+) (*exec.Cmd, string, error) {
+	switch profile.Enforcement() {
+	case EnforcementDisabled:
+		cmd := exec.CommandContext(ctx, spec.Cmd, spec.Args...)
+		cmd.Dir = cwd
+		cmd.Env = env
+		return cmd, "disabled", nil
+	case EnforcementExternal:
+		return nil, "external", backendError(
+			ErrUnsupportedBackend,
+			"external",
+			errors.New("external sandbox profile cannot be executed by local sandbox runtime"),
+		)
+	default:
+		return r.osSandboxCommand(ctx, profile, ws, cwd, env, spec)
+	}
+}
+
+func ensureDir(path string) error {
+	return os.MkdirAll(path, 0o755)
+}
