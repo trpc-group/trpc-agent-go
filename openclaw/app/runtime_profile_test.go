@@ -361,9 +361,18 @@ func TestRuntimeProfileResolverFromInjectedStore(t *testing.T) {
 func TestRuntimeProfileResolverFromInjectedCatalog(t *testing.T) {
 	t.Parallel()
 
-	catalog := runtimeprofile.StaticStore{Config: runtimeprofile.Config{
+	cfg := runtimeprofile.Config{
+		Required: true,
+		Default:  testRuntimeProfileID,
 		Profiles: map[string]runtimeprofile.Profile{
 			testRuntimeProfileID: {
+				AppName: "yaml-app",
+			},
+		},
+	}
+	catalog := runtimeprofile.StaticStore{Config: runtimeprofile.Config{
+		Profiles: map[string]runtimeprofile.Profile{
+			"retail": {
 				AppName: "retail-app",
 			},
 		},
@@ -372,16 +381,23 @@ func TestRuntimeProfileResolverFromInjectedCatalog(t *testing.T) {
 		WithRuntimeProfileCatalog(catalog),
 	})
 	resolver, gotCatalog, required := runtimeProfileResolverFromOptions(
-		nil,
+		&cfg,
 		runtimeOpts,
 	)
 
-	require.Nil(t, resolver)
-	require.False(t, required)
+	require.NotNil(t, resolver)
+	require.True(t, required)
 	require.NotNil(t, gotCatalog)
+	profile, err := resolver.Resolve(
+		context.Background(),
+		runtimeprofile.Request{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, testRuntimeProfileID, profile.ID)
+
 	appNames, err := gotCatalog.AppNames(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []string{"retail-app"}, appNames)
+	require.Equal(t, []string{"yaml-app", "retail-app"}, appNames)
 }
 
 func TestValidateRuntimeProfiles(t *testing.T) {

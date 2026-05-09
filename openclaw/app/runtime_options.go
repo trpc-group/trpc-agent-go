@@ -32,9 +32,6 @@ func WithRuntimeProfileResolver(
 			return
 		}
 		opts.runtimeProfileResolver = resolver
-		if catalog, ok := resolver.(runtimeprofile.Catalog); ok {
-			opts.runtimeProfileCatalog = catalog
-		}
 		opts.runtimeProfileRequired = required
 	}
 }

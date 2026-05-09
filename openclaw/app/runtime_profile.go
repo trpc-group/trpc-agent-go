@@ -114,17 +114,94 @@ func runtimeProfileResolverFromOptions(
 	cfg *runtimeprofile.Config,
 	runtimeOpts runtimeOptions,
 ) (runtimeprofile.Resolver, runtimeprofile.Catalog, bool) {
+	var (
+		resolver runtimeprofile.Resolver
+		required bool
+	)
 	if runtimeOpts.runtimeProfileResolver != nil {
-		return runtimeOpts.runtimeProfileResolver,
+		resolver = runtimeOpts.runtimeProfileResolver
+		required = runtimeOpts.runtimeProfileRequired
+	} else {
+		resolver = newRuntimeProfileResolver(cfg)
+		required = runtimeProfileRequired(cfg)
+	}
+	return resolver,
+		runtimeProfileCatalogFromOptions(
+			resolver,
 			runtimeOpts.runtimeProfileCatalog,
-			runtimeOpts.runtimeProfileRequired
+		),
+		required
+}
+
+type runtimeProfileCatalogs []runtimeprofile.Catalog
+
+func (c runtimeProfileCatalogs) ProfileIDs(
+	ctx context.Context,
+) ([]string, error) {
+	var out []string
+	for _, catalog := range c {
+		values, err := catalog.ProfileIDs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out = appendUniqueRuntimeProfileCatalogValues(out, values...)
 	}
-	if runtimeOpts.runtimeProfileCatalog != nil {
-		return nil, runtimeOpts.runtimeProfileCatalog, false
+	return out, nil
+}
+
+func (c runtimeProfileCatalogs) AppNames(
+	ctx context.Context,
+) ([]string, error) {
+	var out []string
+	for _, catalog := range c {
+		values, err := catalog.AppNames(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out = appendUniqueRuntimeProfileCatalogValues(out, values...)
 	}
-	resolver := newRuntimeProfileResolver(cfg)
-	catalog, _ := resolver.(runtimeprofile.Catalog)
-	return resolver, catalog, runtimeProfileRequired(cfg)
+	return out, nil
+}
+
+func runtimeProfileCatalogFromOptions(
+	resolver runtimeprofile.Resolver,
+	injected runtimeprofile.Catalog,
+) runtimeprofile.Catalog {
+	catalogs := make([]runtimeprofile.Catalog, 0, 2)
+	if catalog, ok := resolver.(runtimeprofile.Catalog); ok && catalog != nil {
+		catalogs = append(catalogs, catalog)
+	}
+	if injected != nil {
+		catalogs = append(catalogs, injected)
+	}
+	switch len(catalogs) {
+	case 0:
+		return nil
+	case 1:
+		return catalogs[0]
+	default:
+		return runtimeProfileCatalogs(catalogs)
+	}
+}
+
+func appendUniqueRuntimeProfileCatalogValues(
+	base []string,
+	extra ...string,
+) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, value := range append(base, extra...) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func runtimeProfileRequired(cfg *runtimeprofile.Config) bool {
