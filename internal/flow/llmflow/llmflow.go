@@ -930,6 +930,7 @@ func (f *Flow) maybeCompactContextBeforeLLM(
 		invocation,
 		req,
 		f.contextCompactionThresholdRatio,
+		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	) {
 		return req
 	}
@@ -1224,12 +1225,15 @@ func shouldSyncCompactContext(
 	inv *agent.Invocation,
 	req *model.Request,
 	ratio float64,
+	counter model.TokenCounter,
 ) bool {
 	if inv == nil || inv.Model == nil || req == nil || len(req.Messages) == 0 {
 		return false
 	}
 
-	counter := model.NewSimpleTokenCounter()
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
 	tokens, err := counter.CountTokensRange(ctx, req.Messages, 0, len(req.Messages))
 	if err != nil {
 		return false

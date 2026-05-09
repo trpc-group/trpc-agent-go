@@ -1136,16 +1136,40 @@ func TestShouldSyncCompactContext(t *testing.T) {
 
 	require.False(t, shouldSyncCompactContext(context.Background(), nil, &model.Request{
 		Messages: []model.Message{model.NewUserMessage("hello")},
-	}, 0.5))
-	require.False(t, shouldSyncCompactContext(context.Background(), inv, nil, 0.5))
-	require.False(t, shouldSyncCompactContext(context.Background(), inv, &model.Request{}, 0.5))
+	}, 0.5, nil))
+	require.False(t, shouldSyncCompactContext(context.Background(), inv, nil, 0.5, nil))
+	require.False(t, shouldSyncCompactContext(context.Background(), inv, &model.Request{}, 0.5, nil))
 
 	require.False(t, shouldSyncCompactContext(context.Background(), inv, &model.Request{
 		Messages: []model.Message{model.NewUserMessage(strings.Repeat("a", 100))},
-	}, 0.5))
+	}, 0.5, nil))
 	require.True(t, shouldSyncCompactContext(context.Background(), inv, &model.Request{
 		Messages: []model.Message{model.NewUserMessage(strings.Repeat("a", 5000))},
-	}, 0.5))
+	}, 0.5, nil))
+
+	customCounterInv := agent.NewInvocation(
+		agent.WithInvocationModel(&compactingModel{
+			name:   "compact-threshold-custom-counter",
+			window: 10000,
+		}),
+	)
+	customCounterReq := &model.Request{
+		Messages: []model.Message{model.NewUserMessage(strings.Repeat("a", 12000))},
+	}
+	require.False(t, shouldSyncCompactContext(
+		context.Background(),
+		customCounterInv,
+		customCounterReq,
+		0.5,
+		nil,
+	))
+	require.True(t, shouldSyncCompactContext(
+		context.Background(),
+		customCounterInv,
+		customCounterReq,
+		0.5,
+		model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1)),
+	))
 }
 
 func TestCloneRequestForContextCompaction_DeepCopiesMutableFields(t *testing.T) {
