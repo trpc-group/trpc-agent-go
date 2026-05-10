@@ -96,9 +96,51 @@ The goal of this section is simple: start from the repository's
 existing configuration, run a real message entry point, and build an
 intuitive understanding of the end-to-end runtime path.
 
-### Environment Preparation
+### Path A: Install the prebuilt release
 
-If you want to run `openclaw` from source, prepare the following:
+If you want the shortest path, do not start with `go run`. Install the
+published binary first:
+
+```bash
+curl -fsSL \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
+  | bash
+```
+
+The default install profile is `stdin`, and that profile uses the
+built-in `mock` model. So the very first launch does not need model
+credentials or Telegram credentials.
+
+The installer keeps the GitHub build's config and state under
+`~/.trpc-agent-go-github/openclaw` by default.
+
+If `openclaw` is not found after install, run the PATH commands printed
+by the installer. For bash, the persistent form is:
+
+```bash
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
+```
+
+Then start OpenClaw:
+
+```bash
+openclaw
+```
+
+At that point, you should already be in the local terminal chat mode.
+Try a small input such as `hello`. Use `/help` to inspect the basic
+commands, and `/quit` or `/exit` to stop.
+
+This route is the best choice when your immediate goal is "download a
+working binary and verify that the runtime starts cleanly." Once that is
+stable, move on to a real model or a real message channel.
+
+### Path B: Run from source
+
+If you want to develop or modify OpenClaw itself, run it from source.
+Prepare the following:
 
 - A Go development environment
 - The tRPC-Agent-Go repository
@@ -572,14 +614,14 @@ session:
   summary:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/sessions.sqlite"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/sessions.sqlite"
 
 memory:
   backend: "sqlite"
   auto:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/memories.db"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/memories.db"
 ```
 
 The meaning of this split is simple:
@@ -878,6 +920,41 @@ activation against those keys. In practice, when a Skill does not take
 effect, the more common reason is not "the Skill failed to load," but
 "its required config, environment variables, or binaries are not
 available yet."
+
+OpenClaw now also has a host-dependency inspection and bootstrap flow
+for Skills and file-tool profiles. In other words, `metadata.openclaw`
+is not only used to decide whether a Skill should load, but can also
+describe what the host is expected to provide:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw inspect deps -skill nano-pdf
+go run ./cmd/openclaw bootstrap deps -skill nano-pdf -apply
+```
+
+This is useful when the issue is no longer "why was the Skill skipped,"
+but "what exactly do I need to install on this machine so the Skill can
+run end-to-end."
+
+At the moment, official OpenClaw Skill metadata can describe:
+
+- package-manager installs
+- Go module or binary installs
+- npm installs
+- managed-Python installs in the OpenClaw state directory
+- asset downloads
+
+There are two practical details worth remembering:
+
+- `inspect deps` and `bootstrap deps` can work from built-in dependency
+  profiles, specific Skills, or both.
+- An explicit `-skill ...` selection only plans the named Skills. It no
+  longer pulls in the default file-tool profiles automatically.
+
+`bootstrap deps --apply` is best-effort. User-space installs and
+downloads run first, while root-only system-package steps are reported
+as deferred rather than aborting the whole run. Downloaded assets are
+stored under `<state_dir>/tools/<skill>/...`.
 
 ## Best Practices
 

@@ -18,7 +18,49 @@ Detailed guide:
 [OpenClaw Runtime guide (English)](../docs/mkdocs/en/openclaw-runtime.md)
 | [OpenClaw Runtime 指南（中文）](../docs/mkdocs/zh/openclaw-runtime.md)
 
-## Quick start
+## Install a prebuilt release
+
+If you want the shortest path from "nothing installed" to "OpenClaw is
+running", use the public install script:
+
+```bash
+curl -fsSL \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
+  | bash
+```
+
+The installer uses the `stdin` profile by default, and that profile uses
+the built-in `mock` model. That means the first run works without model
+credentials or Telegram credentials.
+
+The installer keeps the GitHub build's config and state under
+`~/.trpc-agent-go-github/openclaw` by default.
+
+If `openclaw` is not found after install, run the PATH commands printed
+by the installer. For bash, the persistent form is:
+
+```bash
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
+```
+
+Then start OpenClaw:
+
+```bash
+openclaw
+```
+
+You should see the local terminal channel start immediately. Type a short
+message such as `hello`, then use `/quit` or `/exit` to stop.
+
+More details:
+[INSTALL.md](./INSTALL.md)
+| [INSTALL.zh_CN.md](./INSTALL.zh_CN.md)
+| [RELEASE.md](./RELEASE.md)
+| [RELEASE.zh_CN.md](./RELEASE.zh_CN.md)
+
+## Run from source
 
 Run with a mock model (no external model credentials needed):
 
@@ -785,6 +827,14 @@ print a suggested `bootstrap deps` command when optional file tools are
 missing, but installation is always explicit. The managed Python environment
 is created with access to the current system site-packages, so existing
 packages such as `pandas` remain visible after bootstrap.
+
+Official OpenClaw skill metadata can currently describe package-manager,
+Go, npm, managed-Python, and asset download install actions. Explicit
+`-skill ...` runs only plan the selected skills and no longer pull in the
+default dependency profiles automatically. `bootstrap deps --apply` is
+best-effort: user-space installs and downloads run first, while root-only
+steps are reported as deferred instead of aborting the entire run. Download
+actions store assets under `<state_dir>/tools/<skill>/...`.
 
 ### 5) Send a message
 

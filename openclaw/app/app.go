@@ -246,11 +246,10 @@ const (
 		"prior knowledge, or partial memory when a matching " +
 		"skill exists. Load `SKILL.md` first, then load " +
 		"only the extra docs you still need."
-	openClawToolingGuidance = "For general local shell work, use " +
-		"read_document or read_spreadsheet first for common PDF, " +
-		"DOCX, text, CSV, and spreadsheet uploads already in the " +
-		"chat. Only fall back to exec_command when those tools " +
-		"cannot satisfy the task. " +
+	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
+		"and spreadsheet uploads already in the chat, prefer " +
+		"read_document or read_spreadsheet before falling back " +
+		"to exec_command. " +
 		"For questions about the active chat history, recent " +
 		"turns, or who said something in the current session, use " +
 		"conversation_history before searching long-term memory. " +
@@ -1810,6 +1809,7 @@ func run(ctx context.Context, args []string) error {
 	))
 	logStartupLines(browserServerSup.startupLines())
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
+	logStartupLines(a2aStartupLines(a2aSurface))
 	logStartupLines(toolDepsStartupLines(openClawTools.deps))
 	go func() {
 		//nolint:gosec
@@ -2683,10 +2683,6 @@ type runtimeStores struct {
 }
 
 func newRuntimeStores(stateDir string) (runtimeStores, error) {
-	stateDir = strings.TrimSpace(stateDir)
-	if stateDir == "" {
-		return runtimeStores{}, fmt.Errorf("state dir is required")
-	}
 	uploadStore, err := uploads.NewStore(stateDir)
 	if err != nil {
 		return runtimeStores{}, fmt.Errorf("create upload store: %w", err)
@@ -2738,6 +2734,12 @@ func buildOpenClawTools(
 
 	mgr := octool.NewManager(
 		octool.WithBaseEnv(deps.ToolEnv(stateDir)),
+		octool.WithCommandPolicy(
+			octool.NewChatCommandSafetyPolicy(),
+		),
+		octool.WithOutputRedactor(
+			octool.NewChatCommandOutputRedactor(),
+		),
 	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
@@ -2760,10 +2762,10 @@ func buildOpenClawTools(
 		)
 	}
 	tools := []tool.Tool{
+		conversationtool.NewTool(),
 		octool.NewReadDocumentTool(uploadStore),
 		octool.NewReadSpreadsheetTool(uploadStore),
 		execTool,
-		conversationtool.NewTool(),
 		octool.NewWriteStdinTool(mgr),
 		octool.NewKillSessionTool(mgr),
 		outbound.NewTool(router),

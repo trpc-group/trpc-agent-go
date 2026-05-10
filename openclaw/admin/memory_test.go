@@ -603,9 +603,7 @@ func TestSaveMemoryFileUsesStoreSaver(t *testing.T) {
 		),
 	)
 	require.Equal(t, 1, store.saveCount)
-	canonicalPath, err := filepath.EvalSymlinks(path)
-	require.NoError(t, err)
-	require.Equal(t, canonicalPath, store.savedPath)
+	require.Equal(t, path, store.savedPath)
 	require.Equal(t, next, store.savedContent)
 }
 

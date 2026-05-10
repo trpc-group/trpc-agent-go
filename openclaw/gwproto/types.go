@@ -107,12 +107,22 @@ const (
 	StreamEventTypeRunIgnored StreamEventType = "run.ignored"
 	// StreamEventTypeMessageDelta carries an incremental text delta.
 	StreamEventTypeMessageDelta StreamEventType = "message.delta"
+	// StreamEventTypePublicDelta carries an incremental public progress delta.
+	StreamEventTypePublicDelta StreamEventType = "public.delta"
+	// StreamEventTypeThoughtDelta carries an incremental thought delta.
+	StreamEventTypeThoughtDelta StreamEventType = "thought.delta"
+	// StreamEventTypePublicCompleted carries the latest public progress text.
+	StreamEventTypePublicCompleted StreamEventType = "public.completed"
+	// StreamEventTypeThoughtCompleted carries the final thought text.
+	StreamEventTypeThoughtCompleted StreamEventType = "thought.completed"
 	// StreamEventTypeMessageCompleted carries the final reply text.
 	StreamEventTypeMessageCompleted StreamEventType = "message.completed"
 	// StreamEventTypeRunProgress carries a high-level run status update.
 	StreamEventTypeRunProgress StreamEventType = "run.progress"
 	// StreamEventTypeRunCompleted marks successful stream completion.
 	StreamEventTypeRunCompleted StreamEventType = "run.completed"
+	// StreamEventTypeRunCanceled marks a request canceled by the client.
+	StreamEventTypeRunCanceled StreamEventType = "run.canceled"
 	// StreamEventTypeRunError marks a terminal stream error.
 	StreamEventTypeRunError StreamEventType = "run.error"
 

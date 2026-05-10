@@ -29,19 +29,6 @@ func resolveAgentPrompts(opts runOptions) (resolvedAgentPrompts, error) {
 	if err != nil {
 		return resolvedAgentPrompts{}, err
 	}
-	// Getwd can still return a path after the directory is deleted (orphaned
-	// cwd); treat that as unusable for project-doc discovery.
-	if fi, statErr := os.Stat(cwd); statErr != nil {
-		return resolvedAgentPrompts{}, fmt.Errorf(
-			"stat working directory: %w",
-			statErr,
-		)
-	} else if !fi.IsDir() {
-		return resolvedAgentPrompts{}, fmt.Errorf(
-			"working directory is not a directory: %s",
-			cwd,
-		)
-	}
 	return resolveAgentPromptsForDir(opts, cwd)
 }
 

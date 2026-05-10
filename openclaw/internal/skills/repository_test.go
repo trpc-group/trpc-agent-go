@@ -135,10 +135,12 @@ metadata:
         "install":
           [
             {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "poppler",
+              "id": "go",
+              "kind": "go",
+              "module": "example.com/tool@latest",
               "bins": ["pdftotext"],
+              "os": ["linux", "win32"],
+              "targetDir": "runtime",
             },
           ],
       },
@@ -156,8 +158,10 @@ metadata:
 	require.Len(t, meta.Requires.Python, 1)
 	require.Equal(t, "pypdf", meta.Requires.Python[0].Module)
 	require.Len(t, meta.Install, 1)
-	require.Equal(t, "brew", meta.Install[0].Kind)
-	require.Equal(t, "poppler", meta.Install[0].Formula)
+	require.Equal(t, "go", meta.Install[0].Kind)
+	require.Equal(t, "example.com/tool@latest", meta.Install[0].Module)
+	require.Equal(t, []string{"linux", "win32"}, meta.Install[0].OS)
+	require.Equal(t, "runtime", meta.Install[0].TargetDir)
 }
 
 func TestParseFrontMatter_NoFrontMatter(t *testing.T) {

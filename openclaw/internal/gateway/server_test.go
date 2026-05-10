@@ -2771,6 +2771,97 @@ func TestReplyAccumulator_IgnoresNilAndUnsupported(t *testing.T) {
 	acc.consumeDelta(nil)
 }
 
+func TestReplyAccumulator_CapturesUsage(t *testing.T) {
+	t.Parallel()
+
+	acc := newReplyAccumulator()
+	acc.Consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("final")},
+			},
+			Usage: &model.Usage{
+				PromptTokens:     12000,
+				CompletionTokens: 345,
+				TotalTokens:      12345,
+			},
+		},
+		RequestID: "req-1",
+	})
+
+	require.NotNil(t, acc.Usage)
+	require.Equal(t, 12000, acc.Usage.PromptTokens)
+	require.Equal(t, 345, acc.Usage.CompletionTokens)
+	require.Equal(t, 12345, acc.Usage.TotalTokens)
+}
+
+func TestReplyAccumulator_AggregatesUsageAcrossResponses(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	acc := newReplyAccumulator()
+	acc.Consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{{ID: "call-1"}},
+					},
+				},
+			},
+			Usage: &model.Usage{
+				PromptTokens:     100,
+				CompletionTokens: 50,
+				TotalTokens:      150,
+			},
+		},
+		RequestID: "req-1",
+	})
+	acc.Consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("final")},
+			},
+			Usage: &model.Usage{
+				PromptTokens:     200,
+				CompletionTokens: 30,
+				TotalTokens:      230,
+			},
+		},
+		RequestID: "req-1",
+	})
+
+	require.Equal(t, "final", acc.Text)
+	require.NotNil(t, acc.Usage)
+	require.Equal(t, 300, acc.Usage.PromptTokens)
+	require.Equal(t, 80, acc.Usage.CompletionTokens)
+	require.Equal(t, 380, acc.Usage.TotalTokens)
+}
+
+func TestReplyAccumulator_IgnoresUsageWithoutTokenCounts(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	acc := newReplyAccumulator()
+	acc.Consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("final")},
+			},
+			Usage: &model.Usage{},
+		},
+		RequestID: "req-1",
+	})
+
+	require.Nil(t, acc.Usage)
+}
+
 func TestServer_StreamMessage_Success(t *testing.T) {
 	t.Parallel()
 
@@ -2794,6 +2885,12 @@ func TestServer_StreamMessage_Success(t *testing.T) {
 						{
 							Delta: model.Message{Content: " me"},
 						},
+					},
+					Done: true,
+					Usage: &model.Usage{
+						PromptTokens:     12000,
+						CompletionTokens: 345,
+						TotalTokens:      12345,
 					},
 				},
 			},
@@ -2850,12 +2947,16 @@ func TestServer_StreamMessage_Success(t *testing.T) {
 		events[4].Type,
 	)
 	require.Equal(t, "help me", events[4].Reply)
+	require.NotNil(t, events[4].Usage)
+	require.Equal(t, 12345, events[4].Usage.TotalTokens)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeRunCompleted,
 		events[5].Type,
 	)
 	require.Equal(t, "req-1", events[5].RequestID)
+	require.NotNil(t, events[5].Usage)
+	require.Equal(t, 12345, events[5].Usage.TotalTokens)
 }
 
 func TestServer_StreamMessage_RunError(t *testing.T) {
@@ -2903,12 +3004,699 @@ func TestServer_StreamMessage_RunError(t *testing.T) {
 	require.Equal(t, "boom", events[2].Error.Message)
 }
 
+func TestServer_StreamMessage_ThoughtEvents(t *testing.T) {
+	t.Parallel()
+
+	const (
+		thoughtText = "plan first"
+		replyText   = "done"
+		requestID   = "req-1"
+	)
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							ReasoningContent: "plan ",
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							ReasoningContent: "first",
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content:          replyText,
+							ReasoningContent: thoughtText,
+						},
+					}},
+					Done: true,
+				},
+				RequestID: requestID,
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content:          replyText,
+							ReasoningContent: thoughtText,
+						},
+					}},
+					Done: true,
+				},
+				RequestID: requestID,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 8)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeThoughtDelta,
+		events[2].Type,
+	)
+	require.Equal(t, "plan ", events[2].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeThoughtDelta,
+		events[3].Type,
+	)
+	require.Equal(t, "first", events[3].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeThoughtCompleted,
+		events[4].Type,
+	)
+	require.Equal(t, thoughtText, events[4].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[5].Type,
+	)
+	require.Equal(t, replyText, events[5].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[6].Type,
+	)
+	require.Equal(t, replyText, events[6].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[7].Type,
+	)
+}
+
+func TestServer_StreamMessage_PublicProgressEvents(t *testing.T) {
+	t.Parallel()
+
+	const (
+		publicText = "我先确认一下文件内容"
+		replyText  = "done"
+		requestID  = "req-1"
+	)
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: publicText,
+							ToolCalls: []model.ToolCall{{
+								ID: "call-1",
+							}},
+						},
+					}},
+					Done: true,
+				},
+				RequestID: requestID,
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage(replyText),
+					}},
+					Done: true,
+				},
+				RequestID: requestID,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 6)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypePublicCompleted,
+		events[2].Type,
+	)
+	require.Equal(t, publicText, events[2].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[3].Type,
+	)
+	require.Equal(t, replyText, events[3].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[4].Type,
+	)
+	require.Equal(t, replyText, events[4].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[5].Type,
+	)
+}
+
+func TestServer_StreamMessage_PublicDeltaAndCompletedEvents(t *testing.T) {
+	t.Parallel()
+
+	const (
+		publicText = "let me check"
+		replyText  = "done"
+		requestID  = "req-1"
+	)
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Content: publicText,
+							ToolCalls: []model.ToolCall{{
+								ID: "call-1",
+							}},
+						},
+					}},
+				},
+				RequestID: requestID,
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: publicText,
+							ToolCalls: []model.ToolCall{{
+								ID: "call-1",
+							}},
+						},
+					}},
+					Done: true,
+				},
+				RequestID: requestID,
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage(replyText),
+					}},
+					Done: true,
+				},
+				RequestID: requestID,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 7)
+	require.Equal(t, gwproto.StreamEventTypeRunStarted, events[0].Type)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[1].Type)
+	require.Equal(t, gwproto.StreamEventTypePublicDelta, events[2].Type)
+	require.Equal(t, publicText, events[2].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypePublicCompleted,
+		events[3].Type,
+	)
+	require.Equal(t, publicText, events[3].Reply)
+	require.Equal(t, gwproto.StreamEventTypeMessageDelta, events[4].Type)
+	require.Equal(t, replyText, events[4].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[5].Type,
+	)
+	require.Equal(t, replyText, events[5].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[6].Type,
+	)
+}
+
+func TestServer_StreamMessage_ThoughtEventsFromRunnerCompletion(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const (
+		thoughtText = "plan first"
+		replyText   = "done"
+		requestID   = "req-1"
+	)
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							ReasoningContent: "plan ",
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							ReasoningContent: "first",
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Content: replyText,
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content:          replyText,
+							ReasoningContent: thoughtText,
+						},
+					}},
+					Done: true,
+				},
+				RequestID: requestID,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 8)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeThoughtDelta,
+		events[2].Type,
+	)
+	require.Equal(t, "plan ", events[2].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeThoughtDelta,
+		events[3].Type,
+	)
+	require.Equal(t, "first", events[3].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[4].Type,
+	)
+	require.Equal(t, replyText, events[4].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeThoughtCompleted,
+		events[5].Type,
+	)
+	require.Equal(t, thoughtText, events[5].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[6].Type,
+	)
+	require.Equal(t, replyText, events[6].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[7].Type,
+	)
+}
+
+func TestStreamThoughtCompleted(t *testing.T) {
+	t.Parallel()
+
+	const thoughtText = "plan first"
+
+	tests := []struct {
+		name string
+		evt  *event.Event
+		want string
+	}{
+		{
+			name: "nil event",
+			want: "",
+		},
+		{
+			name: "nil response",
+			evt:  &event.Event{},
+			want: "",
+		},
+		{
+			name: "non terminal event",
+			evt: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							ReasoningContent: thoughtText,
+						},
+					}},
+				},
+			},
+			want: "",
+		},
+		{
+			name: "chat completion",
+			evt: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ReasoningContent: thoughtText,
+						},
+					}},
+				},
+			},
+			want: thoughtText,
+		},
+		{
+			name: "runner completion",
+			evt: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ReasoningContent: thoughtText,
+						},
+					}},
+					Done: true,
+				},
+			},
+			want: thoughtText,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, streamThoughtCompleted(tt.evt))
+		})
+	}
+}
+
+func TestShouldSendThoughtCompleted(t *testing.T) {
+	t.Parallel()
+
+	const thoughtText = "plan first"
+
+	tests := []struct {
+		name            string
+		evt             *event.Event
+		thoughtReply    string
+		pendingThought  bool
+		lastThoughtDone string
+		want            bool
+	}{
+		{
+			name:         "empty thought",
+			evt:          &event.Event{},
+			thoughtReply: "",
+			want:         false,
+		},
+		{
+			name: "chat completion",
+			evt: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+				},
+			},
+			thoughtReply: thoughtText,
+			want:         true,
+		},
+		{
+			name: "runner completion with pending thought",
+			evt: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Done:   true,
+				},
+			},
+			thoughtReply:   thoughtText,
+			pendingThought: true,
+			want:           true,
+		},
+		{
+			name: "runner completion deduplicates same reply",
+			evt: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Done:   true,
+				},
+			},
+			thoughtReply:    thoughtText,
+			lastThoughtDone: thoughtText,
+			want:            false,
+		},
+		{
+			name: "non completion event",
+			evt: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+				},
+			},
+			thoughtReply: thoughtText,
+			want:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				tt.want,
+				shouldSendThoughtCompleted(
+					tt.evt,
+					tt.thoughtReply,
+					tt.pendingThought,
+					tt.lastThoughtDone,
+				),
+			)
+		})
+	}
+}
+
+func TestStreamPublicHelpers(t *testing.T) {
+	t.Parallel()
+
+	const (
+		publicText  = "let me check"
+		thoughtText = "plan first"
+	)
+
+	publicChunkEvt := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					Content: publicText,
+					ToolCalls: []model.ToolCall{{
+						ID: "call-1",
+					}},
+				},
+			}},
+		},
+	}
+	publicFullEvt := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: publicText,
+					ToolCalls: []model.ToolCall{{
+						ID: "call-1",
+					}},
+				},
+			}},
+		},
+	}
+	thoughtFullEvt := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					ReasoningContent: thoughtText,
+				},
+			}},
+		},
+	}
+
+	require.Empty(t, streamPublicDelta(nil))
+	require.Empty(t, streamPublicDelta(publicFullEvt))
+	require.Equal(t, publicText, streamPublicDelta(publicChunkEvt))
+	require.Empty(t, streamPublicCompleted(nil))
+	require.Empty(t, streamPublicCompleted(publicChunkEvt))
+	require.Equal(
+		t,
+		publicText,
+		streamPublicCompleted(publicFullEvt),
+	)
+
+	require.False(t, shouldSendPublicCompleted(nil, publicText, ""))
+	require.False(
+		t,
+		shouldSendPublicCompleted(publicChunkEvt, publicText, ""),
+	)
+	require.False(
+		t,
+		shouldSendPublicCompleted(
+			publicFullEvt,
+			publicText,
+			publicText,
+		),
+	)
+	require.True(
+		t,
+		shouldSendPublicCompleted(publicFullEvt, publicText, ""),
+	)
+
+	require.Empty(t, streamThoughtDelta(nil))
+	require.Empty(t, streamThoughtDelta(publicFullEvt))
+	require.Empty(t, fullPublicFromResponse(nil))
+	require.Empty(t, fullPublicFromResponse(&model.Response{}))
+	require.Empty(t, fullPublicFromResponse(&model.Response{
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage(publicText)},
+		},
+	}))
+	require.Empty(t, fullThoughtFromResponse(nil))
+	require.Empty(t, fullThoughtFromResponse(&model.Response{}))
+	require.Equal(
+		t,
+		thoughtText,
+		fullThoughtFromResponse(thoughtFullEvt.Response),
+	)
+	require.Equal(t, publicText, deltaPublicFromResponse(&model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Content: publicText,
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+				}},
+			},
+		}},
+	}))
+	require.Empty(t, deltaThoughtFromResponse(&model.Response{}))
+}
+
 func TestServer_StreamMessage_EarlyResponses(t *testing.T) {
 	t.Parallel()
 
 	var nilSrv *Server
 	stream, apiErr, status := nilSrv.StreamMessage(
-		nil,
+		context.TODO(),
 		gwproto.MessageRequest{},
 	)
 	require.Nil(t, stream)
@@ -3446,7 +4234,7 @@ func TestToolCallProgressSummaries(t *testing.T) {
 	update, ok = progressFromToolCall(model.ToolCall{
 		Function: model.FunctionDefinitionParam{
 			Name:      streamToolExecCommand,
-			Arguments: []byte(`{}`),
+			Arguments: []byte(`{"command":"go test ./..."}`),
 		},
 	})
 	require.True(t, ok)
@@ -3455,7 +4243,25 @@ func TestToolCallProgressSummaries(t *testing.T) {
 		gwproto.StreamProgressStageRunningTool,
 		update.stage,
 	)
-	require.Equal(t, progressSummaryTool, update.summary)
+	require.Equal(t, progressSummaryGoTest, update.summary)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name:      streamToolExecCommand,
+			Arguments: []byte(`{"command":"git status"}`),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryGit, update.summary)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name:      streamToolExecCommand,
+			Arguments: []byte(`{"command":"rg TODO ."}`),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryInspect, update.summary)
 
 	update, ok = progressFromToolCall(model.ToolCall{
 		Function: model.FunctionDefinitionParam{
@@ -3551,7 +4357,7 @@ func TestSendProgressUpdateAndHelpers(t *testing.T) {
 		),
 	)
 	require.Len(t, collected, 2)
-	require.Equal(t, "stream canceled", contextErrMessage(nil))
+	require.Equal(t, "stream canceled", contextErrMessage(context.Background()))
 	require.Equal(
 		t,
 		context.Canceled.Error(),
@@ -3589,6 +4395,22 @@ func TestStreamResponseHelpers(t *testing.T) {
 	}
 	require.Equal(t, "ab", streamDeltaText(deltaEvt, false))
 
+	publicEvt := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					Content: "plan",
+					ToolCalls: []model.ToolCall{{
+						ID: "call-1",
+					}},
+				},
+			}},
+		},
+	}
+	require.Empty(t, streamDeltaText(publicEvt, false))
+	require.Equal(t, "plan", streamPublicDelta(publicEvt))
+
 	fullEvt := &event.Event{
 		Response: &model.Response{
 			Object: model.ObjectTypeChatCompletion,
@@ -3600,6 +4422,27 @@ func TestStreamResponseHelpers(t *testing.T) {
 	require.Equal(t, "full", streamDeltaText(fullEvt, false))
 	require.Empty(t, streamDeltaText(fullEvt, true))
 	require.Empty(t, streamDeltaText(nil, false))
+
+	publicFullEvt := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "let me check",
+					ToolCalls: []model.ToolCall{{
+						ID: "call-1",
+					}},
+				},
+			}},
+		},
+	}
+	require.Empty(t, streamDeltaText(publicFullEvt, false))
+	require.Equal(
+		t,
+		"let me check",
+		streamPublicCompleted(publicFullEvt),
+	)
 
 	require.Equal(
 		t,
@@ -3634,7 +4477,49 @@ func TestStreamResponseHelpers(t *testing.T) {
 			{Message: model.NewAssistantMessage("x")},
 		},
 	}))
+	require.Empty(t, fullTextFromResponse(&model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "public",
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+				}},
+			},
+		}},
+	}))
+	require.Equal(t, "public", fullPublicFromResponse(&model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "public",
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+				}},
+			},
+		}},
+	}))
 	require.Empty(t, deltaTextFromResponse(nil))
+	require.Empty(t, deltaTextFromResponse(&model.Response{
+		Choices: []model.Choice{{
+			Delta: model.Message{
+				Content: "public",
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+				}},
+			},
+		}},
+	}))
+	require.Equal(t, "public", deltaPublicFromResponse(&model.Response{
+		Choices: []model.Choice{{
+			Delta: model.Message{
+				Content: "public",
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+				}},
+			},
+		}},
+	}))
 }
 
 func TestServer_HandleMessagesStream_Success(t *testing.T) {
@@ -3803,6 +4688,44 @@ func TestServer_StreamMessage_EmptyReplyFallback(t *testing.T) {
 		gwproto.StreamEventTypeRunCompleted,
 		events[3].Type,
 	)
+}
+
+func TestServer_StreamMessage_CanceledRequest(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{})
+	require.NoError(t, err)
+	srv.canceled.Mark("req-1")
+
+	stream, apiErr, status := srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From:      "u1",
+			Text:      "hello",
+			RequestID: "req-1",
+		},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 3)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCanceled,
+		events[2].Type,
+	)
+	require.Empty(t, events[2].Reply)
 }
 
 func TestServer_StreamMessage_DebugRecorderPaths(t *testing.T) {
@@ -3997,6 +4920,117 @@ func TestServer_StreamLocked_SendFailures(t *testing.T) {
 					Choices: []model.Choice{{
 						Delta: model.Message{Content: "ok"},
 					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 2)
+		cancelWhenChannelLen(t, out, 2, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("public delta", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Content: "checking",
+							ToolCalls: []model.ToolCall{{
+								ID: "call-1",
+							}},
+						},
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 2)
+		cancelWhenChannelLen(t, out, 2, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("public completed", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "checking",
+							ToolCalls: []model.ToolCall{{
+								ID: "call-1",
+							}},
+						},
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 2)
+		cancelWhenChannelLen(t, out, 2, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("thought delta", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							ReasoningContent: "plan",
+						},
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 2)
+		cancelWhenChannelLen(t, out, 2, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("thought completed", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ReasoningContent: "plan",
+						},
+					}},
+					Done: true,
 				},
 			}},
 		})
@@ -4223,16 +5257,21 @@ func TestNewOptions_ExplicitStreamAndStores(t *testing.T) {
 	t.Parallel()
 
 	store := &persona.Store{}
+	memoryStore := &memoryfile.Store{}
 	transcriber := &stubAudioTranscriber{}
 
 	o := newOptions(
+		WithAppName(" demo-app "),
 		WithMessagesStreamPath(" /custom/stream "),
 		WithPersonaStore(store),
+		WithMemoryFileStore(memoryStore),
 		WithAudioTranscriber(transcriber),
 	)
 
+	require.Equal(t, "demo-app", o.appName)
 	require.Equal(t, " /custom/stream ", o.streamPath)
 	require.Same(t, store, o.personaStore)
+	require.Same(t, memoryStore, o.memoryFileStore)
 	require.Same(t, transcriber, o.audioTranscriber)
 }
 

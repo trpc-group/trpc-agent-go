@@ -130,8 +130,10 @@ func NewExecCommandToolWithMemoryFileStore(
 
 func (t *execTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name:        toolExecCommand,
-		Description: execToolDescription(t != nil && t.memoryStore != nil),
+		Name: toolExecCommand,
+		Description: execToolDescription(
+			t != nil && t.memoryStore != nil,
+		),
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"command"},

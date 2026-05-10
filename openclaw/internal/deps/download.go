@@ -26,20 +26,10 @@ import (
 	"time"
 )
 
-const (
-	downloadHTTPTimeout = 30 * time.Minute
-	defaultToolsDir     = "tools"
-)
+const downloadHTTPTimeout = 30 * time.Minute
 
 var downloadHTTPClient = &http.Client{
 	Timeout: downloadHTTPTimeout,
-}
-
-func actionLabel(action InstallAction, fallback string) string {
-	if s := strings.TrimSpace(action.Label); s != "" {
-		return s
-	}
-	return fallback
 }
 
 func downloadInstallStep(

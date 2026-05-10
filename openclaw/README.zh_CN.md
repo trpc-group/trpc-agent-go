@@ -16,6 +16,42 @@
 [OpenClaw Runtime Guide (English)](../docs/mkdocs/en/openclaw-runtime.md)
 | [OpenClaw Runtime 指南（中文）](../docs/mkdocs/zh/openclaw-runtime.md)
 
+## 安装预编译 release
+
+如果你想直接拿到可运行的二进制，而不是通过 `go run`，可以使用公网安装
+脚本：
+
+```bash
+curl -fsSL \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
+  | bash
+```
+
+默认安装 profile 是 `stdin`，因此第一次运行不需要模型凭据。
+安装脚本默认会把 GitHub 版本的配置和状态目录写到
+`~/.trpc-agent-go-github/openclaw`。
+
+如果安装后还找不到 `openclaw`，直接执行安装脚本输出里的 PATH 命令。
+对于 bash，持久化写法如下：
+
+```bash
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
+```
+
+然后直接启动：
+
+```bash
+openclaw
+```
+
+更多说明：
+[INSTALL.md](./INSTALL.md)
+| [INSTALL.zh_CN.md](./INSTALL.zh_CN.md)
+| [RELEASE.md](./RELEASE.md)
+| [RELEASE.zh_CN.md](./RELEASE.zh_CN.md)
+
 ## 快速开始
 
 使用 mock 模型运行（无需外部模型凭据）：

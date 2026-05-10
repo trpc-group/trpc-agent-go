@@ -81,9 +81,50 @@ tRPC-Agent-Go 中的 `openclaw` 正是在这个背景下出现的。
 本节目标很明确：从 GitHub 仓库里的现成配置出发，
 把一个真实消息入口跑起来，并建立对整条运行链路的直观认识。
 
-### 环境准备
+### 路径 A：先安装预编译 release
 
-如果你打算从源码运行 `openclaw`，先准备下面几项：
+如果你的目标是尽快跑起来，不要一上来就 `go run`。先安装已经发布的
+二进制：
+
+```bash
+curl -fsSL \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
+  | bash
+```
+
+默认安装 profile 是 `stdin`，而这个 profile 使用的是内置 `mock`
+模型。所以第一次启动时既不需要模型密钥，也不需要 Telegram
+这类消息入口凭据。
+
+安装脚本默认会把 GitHub 版本的配置和状态目录写到
+`~/.trpc-agent-go-github/openclaw`。
+
+如果安装后还找不到 `openclaw`，直接执行安装脚本输出里的 PATH 命令。
+对于 bash，持久化写法如下：
+
+```bash
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
+```
+
+然后直接启动 OpenClaw：
+
+```bash
+openclaw
+```
+
+启动后你就已经进入本地终端聊天模式了。先发一条 `hello`
+这样的简单消息即可。你也可以先用 `/help` 看基础命令，
+最后再用 `/quit` 或 `/exit` 退出。
+
+如果你当前最关心的是“先拿到一个能启动、能验证链路的可运行二进制”，
+这条路径最合适。等它稳定以后，再继续接真实模型或真实消息渠道。
+
+### 路径 B：从源码运行
+
+如果你的目标是开发或修改 OpenClaw 本身，再按源码方式运行。
+先准备下面几项：
 
 - Go 开发环境
 - tRPC-Agent-Go 仓库代码
@@ -241,26 +282,26 @@ curl -sS 'http://127.0.0.1:8080/healthz'
 
 例如，上传 PDF 后可以直接提取指定内容：
 
-<img src="../assets/img/openclaw-runtime/telegram-pdf-text-extraction.png" alt="提取 PDF 文字" style="display: block; margin: 20px auto; max-width: 100%; max-height: 700px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-pdf-text-extraction.png" alt="提取 PDF 文字" style="display: block; margin: 20px auto; max-width: 100%; max-height: 700px;" />
 
 也可以把一个 PDF 拆分为多个页面后再回传新文件：
 
-<img src="../assets/img/openclaw-runtime/telegram-pdf-splitting.png" alt="拆分 PDF" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-pdf-splitting.png" alt="拆分 PDF" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
 
 语音输入同样可以驱动文档处理。下面这个例子中，
 用户通过语音要求把指定页面合并成一个 PDF：
 
-<img src="../assets/img/openclaw-runtime/telegram-voice-pdf-merge.jpg" alt="通过语音合并 PDF" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-voice-pdf-merge.jpg" alt="通过语音合并 PDF" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
 
 系统也可以基于输入材料直接生成汇报用 Word 文档：
 
-<img src="../assets/img/openclaw-runtime/telegram-voice-word-generation.jpg" alt="通过语音生成 Word 文档" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-voice-word-generation.jpg" alt="通过语音生成 Word 文档" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
 
 Excel 处理也沿用同一条链路。下面这个例子里，
 用户通过语音要求保留第一行并删除其余行，
 处理后的表格文件会直接回传：
 
-<img src="../assets/img/openclaw-runtime/telegram-voice-excel-edit.jpg" alt="通过语音操作 Excel" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-voice-excel-edit.jpg" alt="通过语音操作 Excel" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 这组能力说明的是，同一套 Runtime 可以同时承接文件输入、
 多模态理解、工具执行和文件输出，而不必为不同文件类型
@@ -270,21 +311,21 @@ Excel 处理也沿用同一条链路。下面这个例子里，
 
 在图像理解场景下，图片可以直接作为多模态输入进入模型能力：
 
-<img src="../assets/img/openclaw-runtime/telegram-image-understanding.png" alt="图片识别" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-image-understanding.png" alt="图片识别" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
 
 视频场景则通常要经过“先处理媒体，再交给模型”的链路。
 例如下面这个例子中，用户要求提取视频第一帧并回发图片：
 
-<img src="../assets/img/openclaw-runtime/telegram-video-frame-extraction.jpg" alt="视频处理" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-video-frame-extraction.jpg" alt="视频处理" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 在视频 OCR 场景中，系统可以先定位目标帧，再继续做文字识别。
 下面这个例子先提取出最后一帧：
 
-<img src="../assets/img/openclaw-runtime/telegram-video-ocr-step-1.jpg" alt="视频提取文字 1" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-video-ocr-step-1.jpg" alt="视频提取文字 1" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 确认目标帧后，再返回识别出的文字内容：
 
-<img src="../assets/img/openclaw-runtime/telegram-video-ocr-step-2.jpg" alt="视频提取文字 2" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-video-ocr-step-2.jpg" alt="视频提取文字 2" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 这部分展示的重点不是某一个具体工具，
 而是多模态输入在进入 Gateway 后，
@@ -298,19 +339,19 @@ Excel 处理也沿用同一条链路。下面这个例子里，
 例如下面这个例子中，系统先做天气查询，
 再把当前聊天记录写入 Apple 备忘录：
 
-<img src="../assets/img/openclaw-runtime/telegram-skill-apple-notes.png" alt="使用 Skill 与新建备忘录" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-skill-apple-notes.png" alt="使用 Skill 与新建备忘录" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
 
 对应的备忘录结果如下：
 
-<img src="../assets/img/openclaw-runtime/apple-notes-result.png" alt="Apple 备忘录创建成功" style="display: block; margin: 20px auto; max-width: 100%; max-height: 240px;" />
+<img src="../../assets/img/openclaw-runtime/apple-notes-result.png" alt="Apple 备忘录创建成功" style="display: block; margin: 20px auto; max-width: 100%; max-height: 240px;" />
 
 类似地，也可以在会话中直接创建提醒事项：
 
-<img src="../assets/img/openclaw-runtime/create-reminder.png" alt="创建提醒事项" style="display: block; margin: 20px auto; max-width: 100%; max-height: 360px;" />
+<img src="../../assets/img/openclaw-runtime/create-reminder.png" alt="创建提醒事项" style="display: block; margin: 20px auto; max-width: 100%; max-height: 360px;" />
 
 对应结果如下：
 
-<img src="../assets/img/openclaw-runtime/reminder-result.png" alt="提醒事项创建成功" style="display: block; margin: 20px auto; max-width: 100%; max-height: 320px;" />
+<img src="../../assets/img/openclaw-runtime/reminder-result.png" alt="提醒事项创建成功" style="display: block; margin: 20px auto; max-width: 100%; max-height: 320px;" />
 
 这类场景说明，运行时中的“动作”不必局限在文本输出，
 Agent 可以真正把工具和系统能力组织成一条可执行链路。
@@ -321,13 +362,13 @@ Agent 可以真正把工具和系统能力组织成一条可执行链路。
 下面这个例子中，用户先查看并清理当前任务，
 再要求系统每分钟回报一次本机 CPU 使用率：
 
-<img src="../assets/img/openclaw-runtime/scheduled-tasks.png" alt="定时任务" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
+<img src="../../assets/img/openclaw-runtime/scheduled-tasks.png" alt="定时任务" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
 
 除了会话内命令，当前实现还提供本地 Admin UI，
 用于查看实例信息、Gateway 路由、任务、执行会话、
 上传文件和调试痕迹：
 
-<img src="../assets/img/openclaw-runtime/admin-ui.png" alt="Admin UI" style="display: block; margin: 20px auto; max-width: 100%; max-height: 520px;" />
+<img src="../../assets/img/openclaw-runtime/admin-ui.png" alt="Admin UI" style="display: block; margin: 20px auto; max-width: 100%; max-height: 520px;" />
 
 这一部分对应的是运行时配套能力。
 它不直接决定模型是否聪明，但直接决定系统是否可维护、
@@ -530,14 +571,14 @@ session:
   summary:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/sessions.sqlite"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/sessions.sqlite"
 
 memory:
   backend: "sqlite"
   auto:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/memories.db"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/memories.db"
 ```
 
 这段配置要表达的意思很简单：
@@ -831,6 +872,41 @@ go run ./cmd/openclaw inspect config-keys -config ./openclaw.yaml
 当一个 Skill 没有生效时，更常见的原因并不是
 “Skill 没加载”，而是它依赖的 config、env 或 bin
 还没有满足。
+
+现在 OpenClaw 还补上了一套面向 Skills 和文件工具档位的
+宿主机依赖检查与引导安装流程。也就是说，
+`metadata.openclaw` 不仅能决定一个 Skill 要不要加载，
+还可以描述这台机器应该准备哪些依赖：
+
+```bash
+cd openclaw
+go run ./cmd/openclaw inspect deps -skill nano-pdf
+go run ./cmd/openclaw bootstrap deps -skill nano-pdf -apply
+```
+
+这在排查问题时很重要，因为很多时候真正的问题已经不是
+“为什么 Skill 被跳过了”，而是
+“为了让这个 Skill 能完整跑起来，这台机器到底还缺什么”。
+
+目前，官方 OpenClaw Skill 元数据已经可以描述：
+
+- 包管理器安装
+- Go 模块或二进制安装
+- npm 安装
+- 在 OpenClaw state 目录下创建的托管 Python 环境安装
+- 资源下载
+
+有两个实践细节尤其需要记住：
+
+- `inspect deps` 和 `bootstrap deps` 可以同时基于内置依赖档位、
+  指定 Skill，或者两者的组合来规划。
+- 显式传 `-skill ...` 时，只会规划你点名的 Skill，
+  不会再自动把默认文件工具档位一起带上。
+
+`bootstrap deps --apply` 采用 best-effort 语义：
+优先执行用户态安装和下载；需要 root 权限的系统包步骤不会让整次
+执行直接失败，而是以 deferred 形式报告出来。下载的资源会落到
+`<state_dir>/tools/<skill>/...`。
 
 ## 最佳实践
 

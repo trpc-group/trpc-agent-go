@@ -563,9 +563,11 @@ func TestCreateSubAgentInvocation(t *testing.T) {
 	require.Equal(t, "root", base.GetEventFilterKey())
 
 	sub := &mockMinimalAgent{name: "child"}
-	inv := parent.createSubAgentInvocation(sub, base, "", nil)
+	inv := parent.createSubAgentInvocation(sub, base, "parent/child", "surface/child", nil)
 
 	require.Equal(t, "child", inv.AgentName)
+	require.Equal(t, "parent/child", agent.InvocationTraceNodeID(inv))
+	require.Equal(t, "surface/child", agent.InvocationSurfaceRootNodeID(inv))
 	require.Equal(t, "root", base.GetEventFilterKey())
 	// Ensure original invocation not mutated.
 	require.Equal(t, "parent"+agent.BranchDelimiter+"child", inv.Branch)

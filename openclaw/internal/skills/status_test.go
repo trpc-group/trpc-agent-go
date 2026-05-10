@@ -18,10 +18,7 @@ import (
 )
 
 func TestBuildStatus_ReportsMissingRequirements(t *testing.T) {
-	// Hermetic: developers often have OPENAI_API_KEY set; this skill must still
-	// report it as missing when not configured via skill config / primary env binding.
-	// Cannot use t.Parallel with t.Setenv (Go testing restriction).
-	t.Setenv("OPENAI_API_KEY", "")
+	t.Parallel()
 
 	root := t.TempDir()
 	writeSkill(t, root, "weather-probe", `---

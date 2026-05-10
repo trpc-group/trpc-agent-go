@@ -12,6 +12,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -25,13 +26,19 @@ import (
 )
 
 const (
-	traceStatusOK      = "ok"
-	traceStatusIgnored = "ignored"
-	traceStatusError   = "error"
+	traceStatusOK       = "ok"
+	traceStatusIgnored  = "ignored"
+	traceStatusError    = "error"
+	traceStatusCanceled = "canceled"
 
 	streamToolExecCommand    = "exec_command"
 	streamToolReadDocument   = "read_document"
 	streamToolReadSheet      = "read_spreadsheet"
+	streamToolReadFile       = "fs_read_file"
+	streamToolSaveFile       = "fs_save_file"
+	streamToolListDir        = "fs_list_dir"
+	streamToolSearch         = "fs_search"
+	streamToolApplyPatch     = "apply_patch"
 	progressSummaryPrepare   = "Preparing request"
 	progressSummaryDoc       = "Reading document"
 	progressSummarySheet     = "Reading spreadsheet"
@@ -322,6 +329,9 @@ func (s *Server) streamLocked(
 
 	result := newReplyAccumulator()
 	sentText := false
+	lastPublicCompleted := ""
+	pendingThought := false
+	lastThoughtCompleted := ""
 	for evt := range events {
 		if trace != nil && evt != nil {
 			_ = trace.Record(debugrecorder.KindRunnerEvent, evt)
@@ -364,6 +374,87 @@ func (s *Server) streamLocked(
 		}
 
 		result.Consume(evt)
+		publicDelta := streamPublicDelta(evt)
+		if publicDelta != "" {
+			if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypePublicDelta,
+				SessionID: run.sessionID,
+				RequestID: resolvedStreamRequestID(
+					result.RequestID,
+					run.requestID,
+				),
+				Delta: publicDelta,
+			}) {
+				return streamOutcome{
+					status: traceStatusError,
+					errMsg: contextErrMessage(ctx),
+				}
+			}
+		}
+		publicReply := streamPublicCompleted(evt)
+		if shouldSendPublicCompleted(
+			evt,
+			publicReply,
+			lastPublicCompleted,
+		) {
+			if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypePublicCompleted,
+				SessionID: run.sessionID,
+				RequestID: resolvedStreamRequestID(
+					result.RequestID,
+					run.requestID,
+				),
+				Reply: publicReply,
+			}) {
+				return streamOutcome{
+					status: traceStatusError,
+					errMsg: contextErrMessage(ctx),
+				}
+			}
+			lastPublicCompleted = publicReply
+		}
+		thoughtDelta := streamThoughtDelta(evt)
+		if thoughtDelta != "" {
+			if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypeThoughtDelta,
+				SessionID: run.sessionID,
+				RequestID: resolvedStreamRequestID(
+					result.RequestID,
+					run.requestID,
+				),
+				Delta: thoughtDelta,
+			}) {
+				return streamOutcome{
+					status: traceStatusError,
+					errMsg: contextErrMessage(ctx),
+				}
+			}
+			pendingThought = true
+		}
+		thoughtReply := streamThoughtCompleted(evt)
+		if shouldSendThoughtCompleted(
+			evt,
+			thoughtReply,
+			pendingThought,
+			lastThoughtCompleted,
+		) {
+			if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypeThoughtCompleted,
+				SessionID: run.sessionID,
+				RequestID: resolvedStreamRequestID(
+					result.RequestID,
+					run.requestID,
+				),
+				Reply: thoughtReply,
+			}) {
+				return streamOutcome{
+					status: traceStatusError,
+					errMsg: contextErrMessage(ctx),
+				}
+			}
+			lastThoughtCompleted = thoughtReply
+			pendingThought = false
+		}
 		delta := streamDeltaText(evt, sentText)
 		if delta == "" {
 			continue
@@ -386,6 +477,21 @@ func (s *Server) streamLocked(
 	}
 
 	if result.Error != nil {
+		if errors.Is(result.Error, context.Canceled) {
+			requestID := resolvedStreamRequestID(
+				result.RequestID,
+				run.requestID,
+			)
+			_ = sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypeRunCanceled,
+				SessionID: run.sessionID,
+				RequestID: requestID,
+			})
+			return streamOutcome{
+				status: traceStatusCanceled,
+				errMsg: context.Canceled.Error(),
+			}
+		}
 		apiErr := gwproto.APIError{
 			Type:    errTypeInternal,
 			Message: result.Error.Error(),
@@ -405,19 +511,37 @@ func (s *Server) streamLocked(
 		}
 	}
 
-	reply := strings.TrimSpace(result.Text)
-	if reply == "" {
-		reply = emptyReplyFallbackText
-	}
 	requestID := resolvedStreamRequestID(
 		result.RequestID,
 		run.requestID,
 	)
+	if s.canceled != nil && s.canceled.Take(requestID) {
+		if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+			Type:      gwproto.StreamEventTypeRunCanceled,
+			SessionID: run.sessionID,
+			RequestID: requestID,
+		}) {
+			return streamOutcome{
+				status: traceStatusError,
+				errMsg: contextErrMessage(ctx),
+			}
+		}
+		return streamOutcome{
+			status: traceStatusCanceled,
+			errMsg: runCanceledMessage,
+		}
+	}
+
+	reply := strings.TrimSpace(result.Text)
+	if reply == "" {
+		reply = emptyReplyFallbackText
+	}
 	if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
 		Type:      gwproto.StreamEventTypeMessageCompleted,
 		SessionID: run.sessionID,
 		RequestID: requestID,
 		Reply:     reply,
+		Usage:     cloneGatewayUsage(result.Usage),
 	}) {
 		return streamOutcome{
 			status: traceStatusError,
@@ -428,6 +552,7 @@ func (s *Server) streamLocked(
 		Type:      gwproto.StreamEventTypeRunCompleted,
 		SessionID: run.sessionID,
 		RequestID: requestID,
+		Usage:     cloneGatewayUsage(result.Usage),
 	}) {
 		return streamOutcome{
 			status: traceStatusError,
@@ -774,6 +899,84 @@ func streamDeltaText(
 	}
 }
 
+func streamPublicDelta(evt *event.Event) string {
+	if evt == nil || evt.Response == nil {
+		return ""
+	}
+	if evt.Object != model.ObjectTypeChatCompletionChunk {
+		return ""
+	}
+	return deltaPublicFromResponse(evt.Response)
+}
+
+func streamPublicCompleted(evt *event.Event) string {
+	if evt == nil || evt.Response == nil {
+		return ""
+	}
+	if evt.Object != model.ObjectTypeChatCompletion {
+		return ""
+	}
+	return fullPublicFromResponse(evt.Response)
+}
+
+func shouldSendPublicCompleted(
+	evt *event.Event,
+	publicReply string,
+	lastPublicCompleted string,
+) bool {
+	if evt == nil || publicReply == "" {
+		return false
+	}
+	if evt.Object != model.ObjectTypeChatCompletion {
+		return false
+	}
+	return publicReply != lastPublicCompleted
+}
+
+func streamThoughtDelta(evt *event.Event) string {
+	if evt == nil || evt.Response == nil {
+		return ""
+	}
+	if evt.Object != model.ObjectTypeChatCompletionChunk {
+		return ""
+	}
+	return deltaThoughtFromResponse(evt.Response)
+}
+
+func streamThoughtCompleted(evt *event.Event) string {
+	if evt == nil || evt.Response == nil {
+		return ""
+	}
+	if evt.Object == model.ObjectTypeChatCompletion {
+		return fullThoughtFromResponse(evt.Response)
+	}
+	if !evt.IsRunnerCompletion() {
+		return ""
+	}
+	return fullThoughtFromResponse(evt.Response)
+}
+
+func shouldSendThoughtCompleted(
+	evt *event.Event,
+	thoughtReply string,
+	pendingThought bool,
+	lastThoughtCompleted string,
+) bool {
+	if evt == nil || thoughtReply == "" {
+		return false
+	}
+	if evt.Object == model.ObjectTypeChatCompletion {
+		return true
+	}
+	if !evt.IsRunnerCompletion() {
+		return false
+	}
+	if pendingThought {
+		return true
+	}
+	return thoughtReply != lastThoughtCompleted
+}
+
 func fullTextFromResponse(rsp *model.Response) string {
 	if responseHasPublicContent(rsp) {
 		return ""
@@ -782,6 +985,23 @@ func fullTextFromResponse(rsp *model.Response) string {
 		return ""
 	}
 	return rsp.Choices[0].Message.Content
+}
+
+func fullPublicFromResponse(rsp *model.Response) string {
+	if !responseHasPublicContent(rsp) {
+		return ""
+	}
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return ""
+	}
+	return rsp.Choices[0].Message.Content
+}
+
+func fullThoughtFromResponse(rsp *model.Response) string {
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return ""
+	}
+	return rsp.Choices[0].Message.ReasoningContent
 }
 
 func deltaTextFromResponse(rsp *model.Response) string {
@@ -797,6 +1017,43 @@ func deltaTextFromResponse(rsp *model.Response) string {
 			continue
 		}
 		builder.WriteString(choice.Delta.Content)
+	}
+	return builder.String()
+}
+
+func deltaPublicFromResponse(rsp *model.Response) string {
+	if !responseHasPublicContent(rsp) {
+		return ""
+	}
+	if rsp == nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, choice := range rsp.Choices {
+		if choice.Delta.Content == "" {
+			continue
+		}
+		builder.WriteString(choice.Delta.Content)
+	}
+	if builder.Len() != 0 {
+		return builder.String()
+	}
+	if len(rsp.Choices) == 0 {
+		return ""
+	}
+	return rsp.Choices[0].Message.Content
+}
+
+func deltaThoughtFromResponse(rsp *model.Response) string {
+	if rsp == nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, choice := range rsp.Choices {
+		if choice.Delta.ReasoningContent == "" {
+			continue
+		}
+		builder.WriteString(choice.Delta.ReasoningContent)
 	}
 	return builder.String()
 }

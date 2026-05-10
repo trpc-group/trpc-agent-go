@@ -12,6 +12,7 @@ package deps
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -184,8 +185,15 @@ func ManagedPythonRoot(stateDir string) string {
 	return filepath.Join(root, defaultPythonEnvDir)
 }
 
+// ManagedToolPrefix returns the shared install prefix used for managed
+// tool binaries. Python, npm, and other managed CLIs intentionally
+// share this prefix so one PATH entry can expose all managed tools.
+func ManagedToolPrefix(stateDir string) string {
+	return ManagedPythonRoot(stateDir)
+}
+
 func ManagedBinDir(stateDir string) string {
-	root := ManagedPythonRoot(stateDir)
+	root := ManagedToolPrefix(stateDir)
 	if root == "" {
 		return ""
 	}
@@ -316,7 +324,18 @@ func CheckPythonPackages(
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(python.Path, "-c", script, string(rawMods))
+	cmd, err := pythonExecCommand(
+		python.Path,
+		"-c",
+		script,
+		string(rawMods),
+	)
+	if err != nil {
+		return out, fmt.Errorf(
+			"build python package check command: %w",
+			err,
+		)
+	}
 	outBytes, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, nil
@@ -346,7 +365,7 @@ func inspectSource(
 	var missing Missing
 
 	for _, name := range source.Requires.Bins {
-		status := checkBin(name)
+		status := checkBin(toolchain, name)
 		report.Bins = append(report.Bins, status)
 		if !status.Found {
 			missing.Bins = append(missing.Bins, status.Name)
@@ -358,7 +377,7 @@ func inspectSource(
 			Names: append([]string(nil), source.Requires.AnyBins...),
 		}
 		for _, name := range source.Requires.AnyBins {
-			status := checkBin(name)
+			status := checkBin(toolchain, name)
 			if status.Found {
 				any.Found = append(any.Found, status)
 			}
@@ -395,11 +414,20 @@ func inspectSource(
 	return report, normalizeMissing(missing), nil
 }
 
-func checkBin(name string) BinStatus {
+func checkBin(toolchain Toolchain, name string) BinStatus {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return BinStatus{}
 	}
+
+	if path, ok := lookupManagedBin(toolchain, name); ok {
+		return BinStatus{
+			Name:  name,
+			Found: true,
+			Path:  path,
+		}
+	}
+
 	path, err := exec.LookPath(name)
 	if err != nil {
 		return BinStatus{Name: name}
@@ -409,6 +437,47 @@ func checkBin(name string) BinStatus {
 		Found: true,
 		Path:  path,
 	}
+}
+
+func lookupManagedBin(
+	toolchain Toolchain,
+	name string,
+) (string, bool) {
+	binDir := strings.TrimSpace(toolchain.BinDir)
+	if binDir == "" {
+		return "", false
+	}
+
+	for _, candidate := range managedBinCandidates(name) {
+		path := filepath.Join(binDir, candidate)
+		if !fileExists(path) {
+			continue
+		}
+		spec, err := validateExecutablePath(path)
+		if err != nil {
+			continue
+		}
+		return spec.path, true
+	}
+	return "", false
+}
+
+func managedBinCandidates(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	if runtime.GOOS != "windows" {
+		return []string{name}
+	}
+	out := []string{name}
+	for _, ext := range []string{".exe", ".cmd", ".bat"} {
+		if strings.HasSuffix(strings.ToLower(name), ext) {
+			return out
+		}
+		out = append(out, name+ext)
+	}
+	return out
 }
 
 func mergeMissing(left, right Missing) Missing {
@@ -448,7 +517,11 @@ func HasMissing(report Report) bool {
 
 func pythonVersion(path string) string {
 	script := "import sys; print(sys.version.split()[0])"
-	out, err := exec.Command(path, "-c", script).CombinedOutput()
+	cmd, err := pythonExecCommand(path, "-c", script)
+	if err != nil {
+		return ""
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
 	}
