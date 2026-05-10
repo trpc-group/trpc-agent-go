@@ -11,6 +11,7 @@ package llmagent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -53,6 +55,111 @@ func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 		trace.Tracer = originalTracer
 	})
 	return recorder
+}
+
+func spanName(sp oteltrace.Span) string {
+	if n, ok := sp.(interface{ Name() string }); ok {
+		return n.Name()
+	}
+	return ""
+}
+
+func TestResolveOrCreateInvokeAgentSpan_DisableTracing(t *testing.T) {
+	t.Parallel()
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{DisableTracing: true},
+	}
+	base := context.Background()
+	ctx, sp, owns := resolveOrCreateInvokeAgentSpan(base, inv, "any")
+	require.False(t, owns)
+	require.False(t, sp.IsRecording())
+	require.Equal(t, base, ctx)
+}
+
+func TestResolveOrCreateInvokeAgentSpan_ReusesRecordingParentInvokeAgentSpan(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	parentCtx, parent := trace.Tracer.Start(
+		context.Background(),
+		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, "worker"),
+	)
+	inv := &agent.Invocation{InvocationID: "inv-1"}
+	outCtx, sp, owns := resolveOrCreateInvokeAgentSpan(parentCtx, inv, "worker")
+	require.False(t, owns)
+	require.Equal(t, parent, sp)
+	require.Equal(t, parentCtx, outCtx)
+	require.Len(t, recorder.Started(), 1, "reuse must not start a nested invoke_agent span")
+}
+
+func TestResolveOrCreateInvokeAgentSpan_CreatesChildWhenParentNameDoesNotMatch(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	parentCtx, _ := trace.Tracer.Start(context.Background(), "some_other_operation")
+	inv := &agent.Invocation{InvocationID: "inv-2"}
+	_, sp, owns := resolveOrCreateInvokeAgentSpan(parentCtx, inv, "myagent")
+	require.True(t, owns)
+	require.True(t, sp.IsRecording())
+	require.Len(t, recorder.Started(), 2)
+	want := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, "myagent")
+	require.Equal(t, want, spanName(sp))
+}
+
+func TestResolveOrCreateInvokeAgentSpan_CreatesWhenParentInvokeAgentSpanEnded(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	parentCtx, parent := trace.Tracer.Start(
+		context.Background(),
+		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, "worker"),
+	)
+	parent.End()
+	require.Len(t, recorder.Ended(), 1)
+
+	inv := &agent.Invocation{InvocationID: "inv-3"}
+	_, sp, owns := resolveOrCreateInvokeAgentSpan(parentCtx, inv, "worker")
+	require.True(t, owns)
+	require.True(t, sp.IsRecording())
+	require.Len(t, recorder.Started(), 2)
+}
+
+func TestResolveOrCreateInvokeAgentSpan_CreatesWhenNoParentSpan(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	inv := &agent.Invocation{InvocationID: "inv-4"}
+	_, sp, owns := resolveOrCreateInvokeAgentSpan(context.Background(), inv, "solo")
+	require.True(t, owns)
+	require.True(t, sp.IsRecording())
+	require.Len(t, recorder.Started(), 1)
+	require.Equal(
+		t,
+		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, "solo"),
+		spanName(sp),
+	)
+}
+
+func TestLLMAgent_Run_ReusesParentInvokeAgentSpan_DoesNotEndParent(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	ctx, _ := trace.Tracer.Start(
+		context.Background(),
+		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, "agent"),
+	)
+	a := New("agent")
+	a.flow = &mockFlow{done: true}
+	events, err := a.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "agent"})
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Empty(t, recorder.Ended(),
+		"reused parent invoke_agent span must not be ended by LLMAgent.Run")
+}
+
+func TestLLMAgent_Run_WithoutParentEndsOwnedInvokeAgentSpan(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	a := New("agent")
+	a.flow = &mockFlow{done: true}
+	events, err := a.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "agent"})
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Len(t, recorder.Ended(), 1)
+	ended := recorder.Ended()[0]
+	want := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, "agent")
+	require.Equal(t, want, ended.Name())
 }
 
 func TestFinalizeWrappedTelemetry_MarksSpanFromFallbackErrorType(t *testing.T) {

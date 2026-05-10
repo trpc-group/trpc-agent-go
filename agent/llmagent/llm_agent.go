@@ -15,11 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -33,13 +35,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
-	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolawaitreply "trpc.group/trpc-go/trpc-agent-go/tool/awaitreply"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
@@ -1175,20 +1177,18 @@ func codeExecutorSupportsWorkspaceExecSessions(
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
-	ctx, span, startedSpan := itrace.StartSpan(
-		ctx,
-		invocation,
-		fmt.Sprintf(
-			"%s %s",
-			itelemetry.OperationInvokeAgent,
-			invocation.AgentName,
-		),
-	)
+
+	// If the parent context already carries an invoke_agent span (e.g. from
+	// NewAgentNodeFunc in graph execution), enrich that span instead of
+	// creating a redundant nested span that may flush out of order and produce
+	// broken parent links in backends like Langfuse.
+	ctx, span, ownsSpan := resolveOrCreateInvokeAgentSpan(ctx, invocation, a.name)
+
 	effectiveGenConfig := a.genConfig
 	effectiveGenConfig.Stream = iagent.ResolveInvokeAgentStream(invocation, &effectiveGenConfig)
 	promptText := a.systemPromptForInvocation(invocation) +
 		a.instructionForInvocation(invocation)
-	if startedSpan {
+	if span.IsRecording() {
 		itelemetry.TraceBeforeInvokeAgent(
 			span,
 			invocation,
@@ -1208,20 +1208,47 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		// Check if this is a custom response error (early return)
 		var customErr *haveCustomResponseError
 		if errors.As(err, &customErr) {
-			if startedSpan {
+			if ownsSpan {
 				span.End()
 			}
 			return customErr.EventChan, nil
 		}
 		// Handle actual errors
-		if startedSpan {
-			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
+		span.SetStatus(codes.Error, err.Error())
+		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
+		if ownsSpan {
 			span.End()
 		}
 		return nil, err
 	}
-	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker, startedSpan), nil
+	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker, ownsSpan), nil
+}
+
+// resolveOrCreateInvokeAgentSpan returns the span to use for this Run. When the
+// context already has a recording parent span whose name starts with
+// OperationInvokeAgent, that span is reused and ownsSpan is false (caller must
+// not End it). Otherwise a new child span is started and ownsSpan is true.
+func resolveOrCreateInvokeAgentSpan(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	agentName string,
+) (context.Context, sdktrace.Span, bool) {
+	if invocation != nil && invocation.RunOptions.DisableTracing {
+		return ctx, noop.Span{}, false
+	}
+	parentSpan := sdktrace.SpanFromContext(ctx)
+	if parentSpan.SpanContext().IsValid() && parentSpan.IsRecording() {
+		if namer, ok := parentSpan.(interface{ Name() string }); ok {
+			if strings.HasPrefix(namer.Name(), itelemetry.OperationInvokeAgent+" ") {
+				return ctx, parentSpan, false
+			}
+		}
+	}
+	ctx, span := teletrace.Tracer.Start(
+		ctx,
+		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName),
+	)
+	return ctx, span, true
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.
@@ -1328,7 +1355,7 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 	originalChan <-chan *event.Event,
 	span sdktrace.Span,
 	tracker *itelemetry.InvokeAgentTracker,
-	startedSpan bool,
+	ownsSpan bool,
 ) <-chan *event.Event {
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
@@ -1344,7 +1371,7 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 				fullRespEvent,
 				responseErrorType,
 				tokenUsage,
-				startedSpan,
+				ownsSpan,
 				wrappedChan,
 			)
 		}()
@@ -1377,11 +1404,11 @@ func finalizeWrappedTelemetry(
 	fullRespEvent *event.Event,
 	responseErrorType string,
 	tokenUsage *itelemetry.TokenUsage,
-	startedSpan bool,
+	ownsSpan bool,
 	wrappedChan chan *event.Event,
 ) {
 	responseErrorType = resolveWrappedResponseErrorType(fullRespEvent, responseErrorType)
-	if startedSpan {
+	if span.IsRecording() {
 		if fullRespEvent != nil {
 			itelemetry.TraceAfterInvokeAgent(
 				span,
@@ -1399,7 +1426,7 @@ func finalizeWrappedTelemetry(
 	}
 	tracker.SetResponseErrorType(responseErrorType)
 	tracker.RecordMetrics()()
-	if startedSpan {
+	if ownsSpan {
 		span.End()
 	}
 	close(wrappedChan)
