@@ -1905,25 +1905,10 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	events []event.Event,
 ) []event.Event {
-	functionCallIDToResponseEventIndex := make(map[string]int)
-
-	// Map function response IDs to event indices.
-	for i, evt := range events {
-		// Create a local copy to avoid implicit memory aliasing.
-		// This bug is fixed in go 1.22.
-		// See: https://tip.golang.org/doc/go1.22#language
-		evt := evt
-
-		if evt.IsToolResultResponse() {
-			responseIDs := evt.GetToolResultIDs()
-			for _, responseID := range responseIDs {
-				functionCallIDToResponseEventIndex[responseID] = i
-			}
-		}
-	}
+	responseEventIndicesByCallEvent := toolResponseIndicesByCallEvent(events)
 
 	var resultEvents []event.Event
-	for _, evt := range events {
+	for i, evt := range events {
 		// Create a local copy to avoid implicit memory aliasing.
 		// This bug is fixed in go 1.22.
 		// See: https://tip.golang.org/doc/go1.22#language
@@ -1934,12 +1919,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 			continue
 		} else if evt.IsToolCallResponse() {
 			functionCallIDs := evt.GetToolCallIDs()
-			var responseEventIndices []int
-			for _, callID := range functionCallIDs {
-				if idx, exists := functionCallIDToResponseEventIndex[callID]; exists {
-					responseEventIndices = append(responseEventIndices, idx)
-				}
-			}
+			responseEventIndices := responseEventIndicesByCallEvent[i]
 			// When tools run in parallel they commonly return all results inside one response event.
 			// If we pushed the same event once per tool ID, the LLM would see duplicated tool
 			// messages and reject the request. Keep only the first occurrence of each event index
@@ -1979,6 +1959,47 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	return resultEvents
 }
 
+type pendingToolCallRound struct {
+	eventIndex int
+	pendingIDs map[string]struct{}
+}
+
+func toolResponseIndicesByCallEvent(events []event.Event) map[int][]int {
+	responseEventIndicesByCallEvent := make(map[int][]int)
+	var pendingCallRounds []pendingToolCallRound
+	for i, evt := range events {
+		evt := evt
+		if evt.IsToolCallResponse() {
+			ids := evt.GetToolCallIDs()
+			if len(ids) == 0 {
+				continue
+			}
+			pendingCallRounds = append(pendingCallRounds, pendingToolCallRound{
+				eventIndex: i,
+				pendingIDs: toStringSet(ids),
+			})
+			continue
+		}
+		if !evt.IsToolResultResponse() {
+			continue
+		}
+		for _, responseID := range evt.GetToolResultIDs() {
+			for j := len(pendingCallRounds) - 1; j >= 0; j-- {
+				if _, ok := pendingCallRounds[j].pendingIDs[responseID]; !ok {
+					continue
+				}
+				delete(pendingCallRounds[j].pendingIDs, responseID)
+				responseEventIndicesByCallEvent[pendingCallRounds[j].eventIndex] = append(
+					responseEventIndicesByCallEvent[pendingCallRounds[j].eventIndex],
+					i,
+				)
+				break
+			}
+		}
+	}
+	return responseEventIndicesByCallEvent
+}
+
 // mergeFunctionResponseEvents merges a list of function_response events into one event.
 func (p *ContentRequestProcessor) mergeFunctionResponseEvents(
 	functionResponseEvents []event.Event,
@@ -2011,6 +2032,14 @@ func toMap(ids []string) map[string]bool {
 	m := make(map[string]bool)
 	for _, id := range ids {
 		m[id] = true
+	}
+	return m
+}
+
+func toStringSet(ids []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		m[id] = struct{}{}
 	}
 	return m
 }
