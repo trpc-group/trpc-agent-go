@@ -1964,6 +1964,8 @@ type pendingToolCallRound struct {
 	pendingIDs map[string]struct{}
 }
 
+// toolResponseIndicesByCallEvent matches tool-result events to the nearest
+// preceding tool-call round that is still waiting for the result ID.
 func toolResponseIndicesByCallEvent(events []event.Event) map[int][]int {
 	responseEventIndicesByCallEvent := make(map[int][]int)
 	var pendingCallRounds []pendingToolCallRound
@@ -2036,6 +2038,7 @@ func toMap(ids []string) map[string]bool {
 	return m
 }
 
+// toStringSet converts IDs to a set for membership checks.
 func toStringSet(ids []string) map[string]struct{} {
 	m := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
