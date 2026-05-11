@@ -33,6 +33,7 @@ import (
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modeltelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -238,6 +239,7 @@ type Model struct {
 	chatResponseCallback       ChatResponseCallbackFunc
 	chatChunkCallback          ChatChunkCallbackFunc
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	chatTelemetry              bool
 	extraFields                map[string]any
 	variant                    Variant
 	variantConfig              variantConfig
@@ -321,6 +323,7 @@ func New(name string, opts ...Option) *Model {
 		chatResponseCallback:       o.ChatResponseCallback,
 		chatChunkCallback:          o.ChatChunkCallback,
 		chatStreamCompleteCallback: o.ChatStreamCompleteCallback,
+		chatTelemetry:              o.ChatTelemetry,
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
 		variantConfig:              variantConfigs[o.Variant],
@@ -455,6 +458,7 @@ func (m *Model) GenerateContent(
 	if err != nil {
 		return nil, err
 	}
+	reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
@@ -463,10 +467,20 @@ func (m *Model) GenerateContent(
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
+		defer reporter.End()
+		emit := func(resp *model.Response) bool {
+			reporter.TrackResponse(resp)
+			select {
+			case responseChan <- resp:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 		if request.Stream {
-			m.handleStreamingResponse(ctx, *chatRequest, responseChan, opts...)
+			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
 		} else {
-			m.handleNonStreamingResponse(ctx, *chatRequest, responseChan, opts...)
+			m.handleNonStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
 		}
 	}()
 	return responseChan, nil
@@ -482,12 +496,15 @@ func (m *Model) GenerateContentIter(
 		return nil, err
 	}
 	return func(yield func(*model.Response) bool) {
+		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
+		defer reporter.End()
 		m.runChatRequestCallback(ctx, chatRequest)
 		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
 				return false
 			}
+			reporter.TrackResponse(resp)
 			return yield(resp)
 		}
 		if request.Stream {
@@ -1367,24 +1384,6 @@ func buildToolDescription(declaration *tool.Declaration) string {
 	}
 	desc += "\nOutput schema: " + string(schemaJSON)
 	return desc
-}
-
-// handleStreamingResponse handles streaming chat completion responses.
-func (m *Model) handleStreamingResponse(
-	ctx context.Context,
-	chatRequest openai.ChatCompletionNewParams,
-	responseChan chan<- *model.Response,
-	opts ...openaiopt.RequestOption,
-) {
-	emitter := func(resp *model.Response) bool {
-		select {
-		case responseChan <- resp:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
-	m.handleStreamingResponseWithEmitter(ctx, chatRequest, emitter, opts...)
 }
 
 // responseEmitter emits a response and returns false to stop streaming.
@@ -2387,23 +2386,6 @@ func (m *Model) createFinalResponse(
 	}
 
 	return finalResponse
-}
-
-// handleNonStreamingResponse handles non-streaming chat completion responses.
-func (m *Model) handleNonStreamingResponse(
-	ctx context.Context,
-	chatRequest openai.ChatCompletionNewParams,
-	responseChan chan<- *model.Response,
-	opts ...openaiopt.RequestOption,
-) {
-	m.handleNonStreamingResponseWithEmitter(ctx, chatRequest, func(resp *model.Response) bool {
-		select {
-		case responseChan <- resp:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}, opts...)
 }
 
 // handleNonStreamingResponseWithEmitter handles non-streaming chat completion responses.
