@@ -1554,7 +1554,7 @@ model := openai.New("deepseek-v4-flash",
 
 > **Context Window 注册**
 >
-> Token 裁剪和会话摘要的 `WithContextThreshold` 都依赖框架内置的模型 context window 注册表。注册表已覆盖大量常见模型，但不一定包含所有模型——特别是私有部署或较新发布的模型。如果你的模型未被识别，请在启动时调用 `model.RegisterModelContextWindow("my-model", 32768)` 或 `model.RegisterModelContextWindows(map[string]int{...})` 手动注册。完整示例参见[会话摘要文档](session/summary.md)。
+> Token 裁剪和会话摘要的 `WithContextThreshold` 都需要模型 context window。内置模型名会自动解析。对于私有部署、租户自定义模型或 endpoint ID，优先使用模型实例配置，例如 `openai.WithContextWindow(32768)` 或统一入口的 `provider.WithContextWindow(32768)`；对于单次运行覆盖，使用 `agent.WithModelContextWindow(32768)`。只有当模型名在当前进程中有稳定全局含义时，才使用 `model.RegisterModelContextWindow("my-model", 32768)`。完整示例参见[会话摘要文档](session/summary.md)。
 
 ```text
 outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
@@ -2538,7 +2538,7 @@ if err != nil {
 }
 ```
 
-`hedge.New(...)` 同样返回普通的 `model.Model`，可以直接传给 `llmagent.WithModel(...)` 等接受 `model.Model` 的位置使用。上面这段代码使用包默认 delay；如果要显式控制补发时序，可继续使用 `WithDelay(...)` 或 `WithDelays(...)`。完整示例见 [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge)。
+`hedge.New(...)` 同样返回普通的 `model.Model`，可以直接传给 `llmagent.WithModel(...)` 等接受 `model.Model` 的位置使用。上面这段代码使用包默认 delay；如果要显式控制补发时序，可继续使用 `WithDelay(...)` 或 `WithDelays(...)`。如果 hedge wrapper 会配合 context-threshold summary 或 token tailoring 使用，且候选模型的 context window 不同或未知，可以通过 `hedge.WithContextWindow(...)` 显式设置稳定的 wrapper window；否则只有当所有候选都暴露相同正数窗口时，wrapper 才会自动透传该共享窗口。完整示例见 [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge)。
 
 **调度与提交规则：**
 

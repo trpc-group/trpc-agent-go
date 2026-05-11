@@ -263,12 +263,47 @@ model is serving the request. The threshold is captured in the summarizer
 configuration and does not change when your application switches models.
 
 Use `WithContextThreshold` when the summary trigger should follow the active
-model's context window. It resolves the current invocation's
-`Model.Info().Name` at summary-check time, looks up that name in the model
-context-window registry, and computes `contextWindow * ratio` (default 50%).
-This is the recommended option for agents that can switch models within a
-session. For private deployments, endpoint IDs, fine-tuned models, or newly
-released models, register the runtime model name first:
+model's context window. This is the recommended option for agents that can
+switch models within a session. At summary-check time, the framework resolves
+the context window in this order:
+
+1. Per-run override from `agent.WithModelContextWindow(tokens)`
+2. Model instance configuration from providers such as `openai.WithContextWindow(tokens)` or `provider.WithContextWindow(tokens)`
+3. Process-wide model-name registry from `model.RegisterModelContextWindow(name, tokens)`
+
+The threshold is then computed as `contextWindow * ratio` (default 50%). For
+private deployments, endpoint IDs, fine-tuned models, newly released models, or
+multi-tenant custom model configuration, prefer the instance or per-run option
+so different users do not overwrite a process-wide registry entry:
+
+```go
+modelInstance := openai.New(
+    "my-custom-model",
+    openai.WithAPIKey(apiKey),
+    openai.WithBaseURL(apiURI),
+    openai.WithContextWindow(204800),
+)
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithModel(modelInstance),
+)
+
+eventChan, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithModelName("my-custom-model"),
+    agent.WithModelContextWindow(204800),
+)
+```
+
+Use global registration only when the model name has a stable process-wide
+meaning:
 
 ```go
 model.RegisterModelContextWindow("my-custom-model", 32768)
@@ -1112,7 +1147,7 @@ sessionService, err := mysql.NewService(
 
 ## Best Practices
 
-1. **Choose appropriate thresholds**: Use `WithContextThreshold` for agents whose model can change at runtime, and use `WithTokenThreshold` when you intentionally want a fixed token budget. For custom model names, register their context window before relying on context-aware triggers
+1. **Choose appropriate thresholds**: Use `WithContextThreshold` for agents whose model can change at runtime, and use `WithTokenThreshold` when you intentionally want a fixed token budget. For custom or tenant-provided models, prefer per-model `WithContextWindow` or per-run `agent.WithModelContextWindow`; use global registration only for stable process-wide model names
 2. **Use async processing**: Always use `EnqueueSummaryJob` instead of `CreateSessionSummary` in production to avoid blocking conversation flow
 3. **Monitor queue size**: If you frequently see "queue is full" warnings, increase `WithSummaryQueueSize` or `WithAsyncSummaryNum`
 4. **Customize prompts**: Tailor summary prompts to your application needs. For example, if building a customer support Agent, focus on key issues and solutions

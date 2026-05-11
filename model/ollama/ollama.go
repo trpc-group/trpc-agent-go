@@ -38,6 +38,8 @@ type Model struct {
 	name                       string
 	host                       string
 	contextWindow              int
+	contextWindowConfigured    bool
+	contextWindowDiscovered    bool
 	httpClient                 *http.Client
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
@@ -124,6 +126,8 @@ func New(name string, opts ...Option) *Model {
 		tokenCounter:               o.tokenCounter,
 		tailoringStrategy:          o.tailoringStrategy,
 		maxInputTokens:             o.maxInputTokens,
+		contextWindow:              o.contextWindow,
+		contextWindowConfigured:    o.contextWindowConfigured,
 		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
 		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
 		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
@@ -133,22 +137,30 @@ func New(name string, opts ...Option) *Model {
 		options:                    o.options,
 		keepAlive:                  o.keepAlive,
 	}
-	m.contextWindow, err = m.getContextWindow()
-	if err != nil {
-		log.Warnf(
-			"failed to get context window for %s: %v",
-			m.name,
-			err,
-		)
-		m.contextWindow = imodel.ResolveContextWindow(m.name)
+	if m.contextWindow <= 0 {
+		m.contextWindow, err = m.getContextWindow()
+		if err != nil {
+			log.Warnf(
+				"failed to get context window for %s: %v",
+				m.name,
+				err,
+			)
+		} else if m.contextWindow > 0 {
+			m.contextWindowDiscovered = true
+		}
 	}
 	return m
 }
 
 // Info returns the model information.
 func (m *Model) Info() model.Info {
+	contextWindow := 0
+	if m.contextWindowConfigured || m.contextWindowDiscovered {
+		contextWindow = m.contextWindow
+	}
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: contextWindow,
 	}
 }
 
@@ -245,7 +257,11 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	maxInputTokens := m.maxInputTokens
 	if maxInputTokens <= 0 {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
+		contextWindow := m.contextWindow
+		if contextWindow <= 0 ||
+			(!m.contextWindowConfigured && !m.contextWindowDiscovered) {
+			contextWindow = imodel.ResolveContextWindow(m.name)
+		}
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(

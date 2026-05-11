@@ -73,6 +73,8 @@ type options struct {
 	tailoringStrategy model.TailoringStrategy
 	// maxInputTokens is the max input tokens for token tailoring.
 	maxInputTokens int
+	// contextWindow is the model context window size in tokens.
+	contextWindow int
 	// tokenTailoringConfig allows customization of token tailoring parameters.
 	tokenTailoringConfig *model.TokenTailoringConfig
 	// geminiClientConfig for building gemini client.
@@ -157,6 +159,16 @@ func WithEnableTokenTailoring(enabled bool) Option {
 func WithMaxInputTokens(limit int) Option {
 	return func(opts *options) {
 		opts.maxInputTokens = limit
+	}
+}
+
+// WithContextWindow sets the model context window size in tokens for this
+// model instance.
+func WithContextWindow(tokens int) Option {
+	return func(opts *options) {
+		if tokens > 0 {
+			opts.contextWindow = tokens
+		}
 	}
 }
 

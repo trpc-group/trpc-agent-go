@@ -363,6 +363,7 @@ func TestModelWithAllOptions(t *testing.T) {
 		WithChannelBufferSize(128),
 		WithEnableTokenTailoring(true),
 		WithMaxInputTokens(2048),
+		WithContextWindow(123456),
 		WithTokenCounter(counter),
 		WithTailoringStrategy(strategy),
 		WithTokenTailoringConfig(config),
@@ -370,6 +371,7 @@ func TestModelWithAllOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, modelInstance)
 	assert.Equal(t, "gpt-4", modelInstance.Info().Name)
+	assertContextWindow(t, modelInstance, 123456)
 
 	modelInstance, err = Model(
 		"anthropic",
@@ -379,6 +381,7 @@ func TestModelWithAllOptions(t *testing.T) {
 		WithChannelBufferSize(128),
 		WithEnableTokenTailoring(true),
 		WithMaxInputTokens(2048),
+		WithContextWindow(123456),
 		WithTokenCounter(counter),
 		WithTailoringStrategy(strategy),
 		WithTokenTailoringConfig(config),
@@ -386,6 +389,7 @@ func TestModelWithAllOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, modelInstance)
 	assert.Equal(t, "claude", modelInstance.Info().Name)
+	assertContextWindow(t, modelInstance, 123456)
 
 	modelInstance, err = Model(
 		"gemini",
@@ -393,6 +397,7 @@ func TestModelWithAllOptions(t *testing.T) {
 		WithChannelBufferSize(128),
 		WithEnableTokenTailoring(true),
 		WithMaxInputTokens(2048),
+		WithContextWindow(123456),
 		WithTokenCounter(counter),
 		WithTailoringStrategy(strategy),
 		WithTokenTailoringConfig(config),
@@ -437,6 +442,7 @@ func TestModelWithAllOptions(t *testing.T) {
 		return
 	}
 	assert.Equal(t, "gemini-pro", modelInstance.Info().Name)
+	assertContextWindow(t, modelInstance, 123456)
 
 	modelInstance, err = Model(
 		"ollama",
@@ -445,6 +451,7 @@ func TestModelWithAllOptions(t *testing.T) {
 		WithChannelBufferSize(128),
 		WithEnableTokenTailoring(true),
 		WithMaxInputTokens(2048),
+		WithContextWindow(123456),
 		WithTokenCounter(counter),
 		WithTailoringStrategy(strategy),
 		WithTokenTailoringConfig(config),
@@ -461,6 +468,7 @@ func TestModelWithAllOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, modelInstance)
 	assert.Equal(t, "llama3.2:latest", modelInstance.Info().Name)
+	assertContextWindow(t, modelInstance, 123456)
 
 	modelInstance, err = Model(
 		"hunyuan",
@@ -469,6 +477,7 @@ func TestModelWithAllOptions(t *testing.T) {
 		WithChannelBufferSize(128),
 		WithEnableTokenTailoring(true),
 		WithMaxInputTokens(2048),
+		WithContextWindow(123456),
 		WithTokenCounter(counter),
 		WithTailoringStrategy(strategy),
 		WithTokenTailoringConfig(config),
@@ -485,6 +494,13 @@ func TestModelWithAllOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, modelInstance)
 	assert.Equal(t, "hunyuan-t1-latest", modelInstance.Info().Name)
+	assertContextWindow(t, modelInstance, 123456)
+}
+
+func assertContextWindow(t *testing.T, m model.Model, want int) {
+	t.Helper()
+
+	assert.Equal(t, want, m.Info().ContextWindow)
 }
 
 func readStringField(obj any, name string) string {

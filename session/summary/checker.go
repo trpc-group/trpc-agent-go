@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -382,6 +383,10 @@ type contextThresholdOptions struct {
 	// Default: 8192.
 	fallbackContextWindow int
 
+	// fallbackContextWindowSet reports whether fallbackContextWindow was
+	// configured explicitly by the user.
+	fallbackContextWindowSet bool
+
 	// minTokenThreshold is the absolute minimum token count before
 	// summarization can trigger, regardless of ratio.
 	// Default: 2000.
@@ -405,6 +410,7 @@ func WithContextThresholdFallbackWindow(tokens int) ContextThresholdOption {
 	return func(o *contextThresholdOptions) {
 		if tokens > 0 {
 			o.fallbackContextWindow = tokens
+			o.fallbackContextWindowSet = true
 		}
 	}
 }
@@ -460,15 +466,20 @@ func CheckContextThreshold(opts ...ContextThresholdOption) ContextChecker {
 
 // resolveContextWindowFromCtx attempts to determine the model's context
 // window from the current request context. It tries, in order:
-//  1. invocation.Model from ctx → model registry lookup by name
-//  2. user-configured fallback
-//  3. framework default (8192)
+//  1. per-run model context window override
+//  2. invocation.Model from ctx -> model instance configuration, then registry
+//  3. user-configured fallback
+//  4. framework default (8192)
 func resolveContextWindowFromCtx(ctx context.Context, fallback int) int {
 	if ctx != nil {
 		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+			if w, ok := agent.ModelContextWindowFromRunOptions(
+				&inv.RunOptions,
+			); ok {
+				return w
+			}
 			if inv.Model != nil {
-				name := inv.Model.Info().Name
-				if w, ok := model.LookupModelContextWindow(name); ok {
+				if w, ok := modelcontext.ResolveContextWindow(inv.Model); ok {
 					return w
 				}
 			}
