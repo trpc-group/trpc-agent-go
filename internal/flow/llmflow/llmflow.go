@@ -82,10 +82,21 @@ func InvocationHasFilteredUserTools(invocation *agent.Invocation) (bool, bool) {
 type Options struct {
 	ChannelBufferSize               int // Buffer size for event channels (default: 256).
 	ModelCallbacks                  *model.Callbacks
+	BaseModelResolver               BaseModelResolver
+	ModelSelector                   agent.ModelSelector
 	SyncSummaryIntraRun             bool
 	EnableContextCompaction         bool
 	ContextCompactionThresholdRatio float64
 }
+
+// ModelBaseResolution describes the base model for one LLM call.
+type ModelBaseResolution struct {
+	Model              model.Model
+	AllowAgentSelector bool
+}
+
+// BaseModelResolver resolves the base model before one LLM call.
+type BaseModelResolver func(inv *agent.Invocation) ModelBaseResolution
 
 // Flow provides the basic flow implementation.
 type Flow struct {
@@ -93,6 +104,8 @@ type Flow struct {
 	responseProcessors              []flow.ResponseProcessor
 	channelBufferSize               int
 	modelCallbacks                  *model.Callbacks
+	baseModelResolver               BaseModelResolver
+	modelSelector                   agent.ModelSelector
 	syncSummaryIntraRun             bool
 	enableContextCompaction         bool
 	contextCompactionThresholdRatio float64
@@ -133,6 +146,8 @@ func New(
 		responseProcessors:      responseProcessors,
 		channelBufferSize:       opts.ChannelBufferSize,
 		modelCallbacks:          opts.ModelCallbacks,
+		baseModelResolver:       opts.BaseModelResolver,
+		modelSelector:           opts.ModelSelector,
 		syncSummaryIntraRun:     opts.SyncSummaryIntraRun,
 		enableContextCompaction: opts.EnableContextCompaction,
 		contextCompactionThresholdRatio: normalizeContextCompactionThresholdRatio(
@@ -473,6 +488,59 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	return nil
 }
 
+func (f *Flow) selectModelForStep(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (model.Model, error) {
+	if invocation == nil {
+		return nil, nil
+	}
+	if invocation.RunOptions.ModelSelector == nil && f.modelSelector == nil {
+		return invocation.Model, nil
+	}
+	resolution := ModelBaseResolution{
+		Model:              invocation.Model,
+		AllowAgentSelector: true,
+	}
+	if f.baseModelResolver != nil {
+		resolution = f.baseModelResolver(invocation)
+	}
+	baseModel := resolution.Model
+	invocation.Model = baseModel
+	selector := invocation.RunOptions.ModelSelector
+	if selector == nil && resolution.AllowAgentSelector {
+		selector = f.modelSelector
+	}
+	if selector == nil {
+		return baseModel, nil
+	}
+	selected, err := runModelSelector(ctx, selector, invocation)
+	if err != nil {
+		invocation.Model = baseModel
+		return baseModel, fmt.Errorf("model selector failed: %w", err)
+	}
+	if selected == nil {
+		invocation.Model = baseModel
+		return baseModel, nil
+	}
+	invocation.Model = selected
+	return selected, nil
+}
+
+func runModelSelector(
+	ctx context.Context,
+	selector agent.ModelSelector,
+	invocation *agent.Invocation,
+) (selected model.Model, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("model selector panic: %v\n%s", r, debug.Stack())
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return selector(ctx, invocation)
+}
+
 // runOneStep executes one step of the flow (one LLM call cycle).
 // Returns the last event generated, or nil if no events.
 func (f *Flow) runOneStep(
@@ -484,6 +552,10 @@ func (f *Flow) runOneStep(
 	// Initialize empty LLM request.
 	llmRequest := &model.Request{
 		Tools: make(map[string]tool.Tool), // Initialize tools map
+	}
+	callModel, err := f.selectModelForStep(ctx, invocation)
+	if err != nil {
+		return nil, err
 	}
 	// 1. Preprocess (prepare request).
 	rebuildPlan := f.preprocess(ctx, invocation, llmRequest, eventChan)
@@ -499,6 +571,7 @@ func (f *Flow) runOneStep(
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
+	observabilityInvocation := invocationViewForModel(invocation, callModel)
 	stepID := agent.StartExecutionTraceStep(
 		invocation,
 		agent.InvocationTraceNodeID(invocation),
@@ -508,21 +581,30 @@ func (f *Flow) runOneStep(
 	agent.SetExecutionTraceStepAppliedSurfaceIDs(invocation, stepID)
 	var span oteltrace.Span
 	var modelName string
-	if invocation.Model != nil {
-		modelName = invocation.Model.Info().Name
+	if callModel != nil {
+		modelName = callModel.Info().Name
 	}
 	_, span, startedSpan := itrace.StartSpan(ctx, invocation, itelemetry.NewChatSpanName(modelName))
 	if startedSpan {
 		defer span.End()
 	}
 	// 2. Call LLM (get response sequence).
-	ctx, responseSeq, err := f.callLLM(ctx, invocation, llmRequest)
+	ctx, responseSeq, err := f.callLLM(ctx, invocation, llmRequest, callModel)
 	if err != nil {
 		agent.FinishExecutionTraceStep(invocation, stepID, nil, err)
 		return nil, err
 	}
 	// 3. Process streaming responses.
-	lastEvent, err = f.processStreamingResponses(ctx, invocation, llmRequest, responseSeq, eventChan, span, startedSpan)
+	lastEvent, err = f.processStreamingResponses(
+		ctx,
+		invocation,
+		observabilityInvocation,
+		llmRequest,
+		responseSeq,
+		eventChan,
+		span,
+		startedSpan,
+	)
 	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
 	return lastEvent, err
 }
@@ -531,6 +613,7 @@ func (f *Flow) runOneStep(
 func (f *Flow) processStreamingResponses(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	observabilityInvocation *agent.Invocation,
 	llmRequest *model.Request,
 	responseSeq model.Seq[*model.Response],
 	eventChan chan<- *event.Event,
@@ -538,7 +621,10 @@ func (f *Flow) processStreamingResponses(
 	startedSpan bool,
 ) (lastEvent *event.Event, err error) {
 	currentInvocation := invocationFromContextOrDefault(ctx, invocation)
-	metricsInvocation := invocation
+	metricsInvocation := observabilityInvocation
+	if metricsInvocation == nil {
+		metricsInvocation = invocation
+	}
 	if metricsInvocation == nil {
 		metricsInvocation = currentInvocation
 	}
@@ -565,7 +651,13 @@ func (f *Flow) processStreamingResponses(
 		)
 		timingInfo = responseUsageTimingInfo(currentInvocation)
 		if tracker != nil {
-			tracker.SetInvocationState(currentInvocation, timingInfo)
+			tracker.SetInvocationState(
+				metricsInvocationForCurrent(
+					currentInvocation,
+					observabilityInvocation,
+				),
+				timingInfo,
+			)
 		}
 		trackModelResponseTelemetry(
 			response,
@@ -605,7 +697,13 @@ func (f *Flow) processStreamingResponses(
 		)
 		timingInfo = responseUsageTimingInfo(currentInvocation)
 		if tracker != nil {
-			tracker.SetInvocationState(currentInvocation, timingInfo)
+			tracker.SetInvocationState(
+				metricsInvocationForCurrent(
+					currentInvocation,
+					observabilityInvocation,
+				),
+				timingInfo,
+			)
 		}
 		if !responseReplaced {
 			callbackTimingAttachment.RestoreIfTimingInfoChanged(timingInfo)
@@ -650,7 +748,7 @@ func (f *Flow) processStreamingResponses(
 		}
 		if startedSpan {
 			itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
-				Invocation:       eventInvocation,
+				Invocation:       observabilityInvocationForCurrent(eventInvocation, observabilityInvocation),
 				Request:          llmRequest,
 				Response:         response,
 				EventID:          llmResponseEvent.ID,
@@ -738,6 +836,42 @@ func invocationFromContextOrDefault(
 		return updatedInvocation
 	}
 	return invocation
+}
+
+func invocationViewForModel(
+	invocation *agent.Invocation,
+	callModel model.Model,
+) *agent.Invocation {
+	if invocation == nil {
+		return nil
+	}
+	return invocation.View(agent.WithInvocationModel(callModel))
+}
+
+func metricsInvocationForCurrent(
+	current *agent.Invocation,
+	base *agent.Invocation,
+) *agent.Invocation {
+	if base == nil {
+		return current
+	}
+	return observabilityInvocationForCurrent(current, base)
+}
+
+func observabilityInvocationForCurrent(
+	current *agent.Invocation,
+	base *agent.Invocation,
+) *agent.Invocation {
+	if base == nil {
+		return current
+	}
+	if current == nil || current.Session == nil {
+		return base
+	}
+	return base.View(
+		agent.WithInvocationSession(current.Session),
+		agent.WithInvocationModel(base.Model),
+	)
 }
 
 func trackModelResponseTelemetry(
@@ -1422,8 +1556,9 @@ func (f *Flow) callLLM(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
+	callModel model.Model,
 ) (context.Context, model.Seq[*model.Response], error) {
-	if invocation.Model == nil {
+	if callModel == nil {
 		return ctx, nil, errors.New("no model available for LLM call")
 	}
 	log.DebugfContext(
@@ -1447,7 +1582,7 @@ func (f *Flow) callLLM(
 			yield(customResp)
 		}, nil
 	}
-	seq, err := f.generateContentSeq(ctx, invocation, llmRequest)
+	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
 		return ctx, nil, err
 	}
@@ -1561,8 +1696,9 @@ func (f *Flow) generateContentSeq(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
+	callModel model.Model,
 ) (model.Seq[*model.Response], error) {
-	if iterModel, ok := invocation.Model.(model.IterModel); ok {
+	if iterModel, ok := callModel.(model.IterModel); ok {
 		seq, err := iterModel.GenerateContentIter(ctx, llmRequest)
 		if err != nil {
 			log.ErrorfContext(
@@ -1579,7 +1715,7 @@ func (f *Flow) generateContentSeq(
 		return normalizeResponseIDs(seq), nil
 	}
 
-	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
+	responseChan, err := callModel.GenerateContent(ctx, llmRequest)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,

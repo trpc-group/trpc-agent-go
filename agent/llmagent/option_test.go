@@ -356,6 +356,19 @@ func TestNew_DefaultGenerationConfigKeepsLegacyNonStreaming(t *testing.T) {
 	require.False(t, a.genConfig.Stream)
 }
 
+func TestWithModelSelector(t *testing.T) {
+	selector := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+		return inv.Model, nil
+	}
+	a := New("test-agent", WithModelSelector(selector))
+	require.NotNil(t, a.modelSelector)
+	got, err := a.modelSelector(context.Background(), &agent.Invocation{
+		Model: newDummyModel(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+}
+
 func TestLLMAgent_Run_DefaultGenerationConfigUsesPublicStreamingBehavior(
 	t *testing.T,
 ) {

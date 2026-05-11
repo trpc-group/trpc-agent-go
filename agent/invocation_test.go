@@ -1096,6 +1096,18 @@ func TestWithModelContextWindow(t *testing.T) {
 	require.Zero(t, window)
 }
 
+func TestWithModelSelector(t *testing.T) {
+	selector := func(ctx context.Context, inv *Invocation) (model.Model, error) {
+		return inv.Model, nil
+	}
+	opts := &RunOptions{}
+	WithModelSelector(selector)(opts)
+	require.NotNil(t, opts.ModelSelector)
+	got, err := opts.ModelSelector(context.Background(), &Invocation{Model: &mockModel{name: "selector-model"}})
+	require.NoError(t, err)
+	require.Equal(t, "selector-model", got.Info().Name)
+}
+
 func TestWithInstruction(t *testing.T) {
 	opts := &RunOptions{}
 	WithInstruction(testRunInstruction)(opts)

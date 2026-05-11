@@ -20,6 +20,7 @@ import (
 	"io"
 	"maps"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -627,12 +628,6 @@ func (sg *StateGraph) AddLLMNode(
 
 	workflowName := "execute_function_node " + id
 	workflowSpanName := itelemetry.NewWorkflowSpanName(workflowName)
-	modelName := ""
-	if runner.llmModel != nil {
-		modelName = runner.llmModel.Info().Name
-	}
-	chatSpanName := itelemetry.NewChatSpanName(modelName)
-
 	node.Function = func(ctx context.Context, state State) (any, error) {
 		ctx, wfSpan, startedWorkflowSpan := startNodeSpan(
 			ctx,
@@ -656,20 +651,11 @@ func (sg *StateGraph) AddLLMNode(
 				wfSpan.End()
 			}
 		}()
-
-		ctx, span, startedSpan := startNodeSpan(ctx, chatSpanName)
-		defer func() {
-			if startedSpan && span != nil {
-				span.End()
-			}
-		}()
-		result, err := runner.execute(ctx, state, span)
+		result, err := runner.execute(ctx, state, noop.Span{})
 		if recordWorkflow {
 			workflow.Response = result
 		}
 		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
 			wrapped := fmt.Errorf("failed to run model: %w", err)
 			if recordWorkflow {
 				workflow.Error = wrapped
@@ -1194,14 +1180,8 @@ func NewLLMNodeFunc(
 		opt(runner)
 	}
 	return func(ctx context.Context, state State) (any, error) {
-		_, span, startedSpan := startNodeSpan(ctx, itelemetry.NewChatSpanName(llmModel.Info().Name))
-		if startedSpan {
-			defer span.End()
-		}
-		result, err := runner.execute(ctx, state, span)
+		result, err := runner.execute(ctx, state, noop.Span{})
 		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
 			return nil, fmt.Errorf("failed to run model: %w", err)
 		}
 		return result, nil
@@ -1415,6 +1395,60 @@ func extractModelResponseSummary(result any) (string, string) {
 	return finalResponse.Choices[0].Message.Content, finalResponse.ID
 }
 
+func selectGraphNodeModel(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	nodeID string,
+	baseModel model.Model,
+) (model.Model, *agent.Invocation, error) {
+	if invocation == nil || invocation.RunOptions.ModelSelector == nil {
+		return baseModel, invocation, nil
+	}
+	selectorInvocation := graphModelInvocationView(invocation, nodeID, baseModel)
+	selected, err := runGraphModelSelector(ctx, invocation.RunOptions.ModelSelector, selectorInvocation)
+	if err != nil {
+		return baseModel, selectorInvocation, fmt.Errorf("model selector failed: %w", err)
+	}
+	callModel := baseModel
+	if selected != nil {
+		callModel = selected
+	}
+	selectorInvocation.Model = callModel
+	if nodeID != "" {
+		selectorInvocation.SetState(StateKeyCurrentNodeID, nodeID)
+	}
+	return callModel, selectorInvocation, nil
+}
+
+func graphModelInvocationView(
+	invocation *agent.Invocation,
+	nodeID string,
+	callModel model.Model,
+) *agent.Invocation {
+	if invocation == nil {
+		return nil
+	}
+	view := invocation.View(agent.WithInvocationModel(callModel))
+	if nodeID != "" {
+		view.SetState(StateKeyCurrentNodeID, nodeID)
+	}
+	return view
+}
+
+func runGraphModelSelector(
+	ctx context.Context,
+	selector agent.ModelSelector,
+	invocation *agent.Invocation,
+) (selected model.Model, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("model selector panic: %v\n%s", r, debug.Stack())
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return selector(ctx, invocation)
+}
+
 func (r *llmRunner) executeModel(
 	ctx context.Context,
 	state State,
@@ -1423,16 +1457,45 @@ func (r *llmRunner) executeModel(
 	instructionUsed string,
 ) (any, error) {
 	tools := r.tools
-	if r.refreshToolSetsOnRun && len(r.toolSets) > 0 {
-		tools = mergeToolsWithToolSets(ctx, tools, r.toolSets)
-	}
 	nodeID := r.nodeID
 	if v, ok := state[StateKeyCurrentNodeID].(string); ok && v != "" {
 		nodeID = v
 	}
-	invocation := invocationFromContextOrDefault(ctx, nil)
-	effectiveModel := graphPatchedModel(invocation, nodeID, r.llmModel)
-	if patch, ok := graphSurfacePatch(invocation, nodeID); ok {
+	rootInvocation := invocationFromContextOrDefault(ctx, nil)
+	if rootInvocation == nil {
+		stateInvocation := graphInvocationFromState(state)
+		if stateInvocation != nil && stateInvocation.RunOptions.ModelSelector != nil {
+			rootInvocation = stateInvocation
+		}
+	}
+	baseModel := graphPatchedModel(rootInvocation, nodeID, r.llmModel)
+	callModel, callInvocation, err := selectGraphNodeModel(
+		ctx,
+		rootInvocation,
+		nodeID,
+		baseModel,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if callModel == nil {
+		return nil, errors.New("no model available for LLM call")
+	}
+	if callInvocation != nil {
+		ctx = agent.NewInvocationContext(ctx, callInvocation)
+	}
+	ctx, span, startedSpan := startNodeSpanForInvocation(
+		ctx,
+		callInvocation,
+		itelemetry.NewChatSpanName(callModel.Info().Name),
+	)
+	if startedSpan {
+		defer span.End()
+	}
+	if r.refreshToolSetsOnRun && len(r.toolSets) > 0 {
+		tools = mergeToolsWithToolSets(ctx, tools, r.toolSets)
+	}
+	if patch, ok := graphSurfacePatch(rootInvocation, nodeID); ok {
 		if patchedTools, ok := patch.Tools(); ok {
 			tools = toolSliceToMap(patchedTools)
 		}
@@ -1444,7 +1507,7 @@ func (r *llmRunner) executeModel(
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
 	request.Messages = toolcall.SanitizeMessagesWithTools(request.Messages, request.Tools)
-	applyInvocationRequestOverrides(request, invocation, nodeID)
+	applyInvocationRequestOverrides(request, callInvocation, nodeID)
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 	emittedModelStartEvent := false
@@ -1466,10 +1529,10 @@ func (r *llmRunner) executeModel(
 		modelEventInvocationID   string
 		startTime                time.Time
 	)
-	ctx, invocation, result, err := executeModelAndProcessResponsesWithContext(ctx, modelExecutionConfig{
-		Invocation:     invocation,
+	ctx, updatedInvocation, result, err := executeModelAndProcessResponsesWithContext(ctx, modelExecutionConfig{
+		Invocation:     callInvocation,
 		ModelCallbacks: modelCallbacks,
-		LLMModel:       effectiveModel,
+		LLMModel:       callModel,
 		Request:        request,
 		EventChan:      eventChan,
 		InvocationID:   invocationID,
@@ -1480,11 +1543,11 @@ func (r *llmRunner) executeModel(
 		NodeID:         nodeID,
 		DeltaStream:    streamWriter,
 		BeforeGenerate: func(modelCtx context.Context) {
-			modelInvocation := invocationFromContextOrDefault(modelCtx, invocation)
+			modelInvocation := invocationFromContextOrDefault(modelCtx, callInvocation)
 			if shouldDisableModelExecutionEvents(modelInvocation) {
 				return
 			}
-			modelEventBaseInvocation = invocation
+			modelEventBaseInvocation = callInvocation
 			if modelEventBaseInvocation == nil {
 				modelEventBaseInvocation = modelInvocation
 			}
@@ -1497,7 +1560,7 @@ func (r *llmRunner) executeModel(
 			// so events accurately reflect both instruction and user input.
 			modelInput = extractModelInput(state, instructionUsed, r.userInputKey)
 			startTime = time.Now()
-			modelName = getModelName(effectiveModel)
+			modelName = getModelName(callModel)
 			emitModelStartEvent(
 				modelCtx,
 				modelEventBaseInvocation,
@@ -1512,6 +1575,9 @@ func (r *llmRunner) executeModel(
 			emittedModelStartEvent = true
 		},
 	})
+	if updatedInvocation != nil {
+		callInvocation = updatedInvocation
+	}
 	endTime := time.Now()
 
 	if streamWriter != nil {
@@ -4821,9 +4887,10 @@ func executeModelAndProcessResponsesWithContext(
 		config.BeforeGenerate,
 	)
 	if err != nil {
-		config.Span.RecordError(err)
-		config.Span.SetStatus(codes.Error, err.Error())
-		return ctx, invocation, nil, fmt.Errorf("failed to run model: %w", err)
+		wrappedErr := fmt.Errorf("failed to run model: %w", err)
+		config.Span.RecordError(wrappedErr)
+		config.Span.SetStatus(codes.Error, wrappedErr.Error())
+		return ctx, invocation, nil, wrappedErr
 	}
 	invocation = invocationFromContextOrDefault(ctx, invocation)
 	if invocation == nil {
