@@ -1386,24 +1386,6 @@ func buildToolDescription(declaration *tool.Declaration) string {
 	return desc
 }
 
-// handleStreamingResponse handles streaming chat completion responses.
-func (m *Model) handleStreamingResponse(
-	ctx context.Context,
-	chatRequest openai.ChatCompletionNewParams,
-	responseChan chan<- *model.Response,
-	opts ...openaiopt.RequestOption,
-) {
-	emitter := func(resp *model.Response) bool {
-		select {
-		case responseChan <- resp:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
-	m.handleStreamingResponseWithEmitter(ctx, chatRequest, emitter, opts...)
-}
-
 // responseEmitter emits a response and returns false to stop streaming.
 type responseEmitter func(*model.Response) bool
 
