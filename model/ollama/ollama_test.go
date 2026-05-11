@@ -439,7 +439,7 @@ func Test_convertMessage(t *testing.T) {
 // Test_convertTools tests tool conversion.
 func Test_convertTools(t *testing.T) {
 	toolsMap := map[string]tool.Tool{
-		"get_weather": stubTool{
+		"b-key": stubTool{
 			decl: &tool.Declaration{
 				Name:        "get_weather",
 				Description: "Get weather info",
@@ -451,12 +451,21 @@ func Test_convertTools(t *testing.T) {
 				},
 			},
 		},
+		"a-key": stubTool{
+			decl: &tool.Declaration{
+				Name:        "search_city",
+				Description: "Search city info",
+			},
+		},
+		"c-key": stubTool{},
+		"skip":  nil,
 	}
 
 	result := convertTools(toolsMap)
-	assert.Equal(t, 1, len(result))
+	assert.Equal(t, 2, len(result))
 	assert.Equal(t, functionToolType, result[0].Type)
-	assert.Equal(t, "get_weather", result[0].Function.Name)
+	assert.Equal(t, "search_city", result[0].Function.Name)
+	assert.Equal(t, "get_weather", result[1].Function.Name)
 }
 
 // Test_buildToolDescription tests tool description building.
