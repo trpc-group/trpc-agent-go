@@ -15,13 +15,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"google.golang.org/genai"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -736,11 +735,8 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 	if len(tools) == 0 {
 		return nil
 	}
-	// Sort keys for deterministic declaration order across runs.
-	keys := slices.Sorted(maps.Keys(tools))
 	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
-	for _, k := range keys {
-		t := tools[k]
+	for _, t := range toolorder.SortedTools(tools) {
 		decl := t.Declaration()
 		funcDeclaration := &genai.FunctionDeclaration{
 			Description: decl.Description,

@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/hunyuan/internal/hunyuan"
@@ -615,7 +616,7 @@ func convertMessage(msg model.Message) (*hunyuan.ChatCompletionMessageParam, err
 // convertTools converts our tool declarations to Hunyuan tool parameters.
 func convertTools(tools map[string]tool.Tool) []*hunyuan.ChatCompletionMessageTool {
 	var result []*hunyuan.ChatCompletionMessageTool
-	for _, tl := range tools {
+	for _, tl := range toolorder.SortedTools(tools) {
 		decl := tl.Declaration()
 
 		schemaBytes, err := json.Marshal(decl.InputSchema)

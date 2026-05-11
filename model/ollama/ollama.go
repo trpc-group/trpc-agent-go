@@ -26,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ollama/ollama/api"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -661,7 +662,7 @@ func convertMessage(msg model.Message) (api.Message, error) {
 // convertTools converts our tool declarations to Ollama tool parameters.
 func convertTools(tools map[string]tool.Tool) []api.Tool {
 	var result []api.Tool
-	for _, tl := range tools {
+	for _, tl := range toolorder.SortedTools(tools) {
 		properties := api.NewToolPropertiesMap()
 		var required []string
 

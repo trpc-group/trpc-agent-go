@@ -952,12 +952,36 @@ func TestBuildRequestAttributes_ToolDefinitions(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(toolAttr.Value.AsString()), &defs))
 	require.Len(t, defs, 2)
 
-	names := map[string]struct{}{}
-	for _, d := range defs {
-		names[d.Name] = struct{}{}
+	require.Equal(t, "alpha", defs[0].Name)
+	require.Equal(t, "beta", defs[1].Name)
+}
+
+func TestBuildRequestAttributes_ToolDefinitionsStableAcrossCalls(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+		Tools: map[string]tool.Tool{
+			"gamma": testTool{decl: &tool.Declaration{Name: "gamma", Description: "third"}},
+			"alpha": testTool{decl: &tool.Declaration{Name: "alpha", Description: "first"}},
+			"delta": testTool{decl: &tool.Declaration{Name: "delta", Description: "fourth"}},
+			"beta":  testTool{decl: &tool.Declaration{Name: "beta", Description: "second"}},
+		},
 	}
-	require.Contains(t, names, "alpha")
-	require.Contains(t, names, "beta")
+
+	expected := toolDefinitionsAttributeValue(t, buildRequestAttributes(req))
+	for i := 0; i < 100; i++ {
+		require.Equal(t, expected, toolDefinitionsAttributeValue(t, buildRequestAttributes(req)))
+	}
+}
+
+func toolDefinitionsAttributeValue(t *testing.T, attrs []attribute.KeyValue) string {
+	t.Helper()
+	for i := range attrs {
+		if string(attrs[i].Key) == semconvtrace.KeyGenAIRequestToolDefinitions {
+			return attrs[i].Value.AsString()
+		}
+	}
+	require.Fail(t, "expected tool definitions attribute")
+	return ""
 }
 
 type testTool struct{ decl *tool.Declaration }
