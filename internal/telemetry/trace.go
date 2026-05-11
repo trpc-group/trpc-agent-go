@@ -306,43 +306,67 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		attribute.String(semconvtrace.KeyGenAISystemInstructions, instructions),
 	}
 	if invoke != nil {
-		if len(invoke.RunOptions.SpanAttributes) > 0 {
-			span.SetAttributes(invoke.RunOptions.SpanAttributes...)
-		}
-		if invoke.GetParentInvocation() == nil &&
-			len(invoke.RunOptions.TraceStartedCallbacks) > 0 {
-			spanContext := span.SpanContext()
-			for _, callback := range invoke.RunOptions.TraceStartedCallbacks {
-				if callback == nil {
-					continue
-				}
-				callback(spanContext)
-			}
-		}
-		if bts, err := marshalTelemetryMessages([]model.Message{invoke.Message}); err == nil {
-			span.SetAttributes(
-				attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
-			)
-		} else {
-			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
-		}
-		agentName, agentID := resolveInvocationAgentIdentity(invoke)
-		if agentName != "" {
-			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, agentName))
-		}
-		if agentID != "" {
-			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentID, agentID))
-		}
-		attrs = append(attrs, attribute.String(semconvtrace.KeyInvocationID, invoke.InvocationID))
-
-		if invoke.Session != nil {
-			attrs = append(attrs,
-				attribute.String(semconvtrace.KeyRunnerUserID, invoke.Session.UserID),
-				attribute.String(semconvtrace.KeyGenAIConversationID, invoke.Session.ID),
-			)
-		}
+		traceBeforeInvokeAgentInvocation(span, invoke)
+		attrs = append(attrs, beforeInvokeAgentAttributes(invoke)...)
 	}
 	span.SetAttributes(attrs...)
+	setInvokeAgentGenerationConfigAttributes(span, genConfig)
+}
+
+func traceBeforeInvokeAgentInvocation(span trace.Span, invoke *agent.Invocation) {
+	if len(invoke.RunOptions.SpanAttributes) > 0 {
+		span.SetAttributes(invoke.RunOptions.SpanAttributes...)
+	}
+	if invoke.GetParentInvocation() == nil &&
+		len(invoke.RunOptions.TraceStartedCallbacks) > 0 {
+		spanContext := span.SpanContext()
+		for _, callback := range invoke.RunOptions.TraceStartedCallbacks {
+			if callback == nil {
+				continue
+			}
+			callback(spanContext)
+		}
+	}
+	setInvokeAgentInputMessageAttributes(span, invoke.Message)
+}
+
+func setInvokeAgentInputMessageAttributes(span trace.Span, msg model.Message) {
+	if bts, err := marshalTelemetryMessages([]model.Message{msg}); err == nil {
+		span.SetAttributes(
+			attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
+		)
+	} else {
+		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
+	}
+	if bts, err := marshalOTelTelemetryMessages([]model.Message{msg}); err == nil {
+		span.SetAttributes(
+			attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, string(bts)),
+		)
+	} else {
+		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>"))
+	}
+}
+
+func beforeInvokeAgentAttributes(invoke *agent.Invocation) []attribute.KeyValue {
+	var attrs []attribute.KeyValue
+	agentName, agentID := resolveInvocationAgentIdentity(invoke)
+	if agentName != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, agentName))
+	}
+	if agentID != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentID, agentID))
+	}
+	attrs = append(attrs, attribute.String(semconvtrace.KeyInvocationID, invoke.InvocationID))
+	if invoke.Session != nil {
+		attrs = append(attrs,
+			attribute.String(semconvtrace.KeyRunnerUserID, invoke.Session.UserID),
+			attribute.String(semconvtrace.KeyGenAIConversationID, invoke.Session.ID),
+		)
+	}
+	return attrs
+}
+
+func setInvokeAgentGenerationConfigAttributes(span trace.Span, genConfig *model.GenerationConfig) {
 	if genConfig != nil {
 		span.SetAttributes(attribute.Bool(semconvtrace.KeyGenAIRequestIsStream, genConfig.Stream))
 		if len(genConfig.Stop) > 0 {
@@ -405,6 +429,11 @@ func TraceAfterInvokeAgent(
 		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			span.SetAttributes(
 				attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)),
+			)
+		}
+		if bts, err := marshalOTelTelemetryChoices(rsp.Choices); err == nil {
+			span.SetAttributes(
+				attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, string(bts)),
 			)
 		}
 		var finishReasons []string
@@ -581,6 +610,11 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
 	}
+	if bts, err := marshalOTelTelemetryMessages(req.Messages); err == nil {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, string(bts)))
+	} else {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>"))
+	}
 
 	return attrs
 }
@@ -626,6 +660,9 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 	if len(rsp.Choices) > 0 {
 		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)))
+		}
+		if bts, err := marshalOTelTelemetryChoices(rsp.Choices); err == nil {
+			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, string(bts)))
 		}
 
 		// Extract finish reasons
