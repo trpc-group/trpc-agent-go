@@ -1449,6 +1449,77 @@ func runGraphModelSelector(
 	return selector(ctx, invocation)
 }
 
+type graphModelCall struct {
+	ctx            context.Context
+	tools          map[string]tool.Tool
+	nodeID         string
+	callInvocation *agent.Invocation
+	callModel      model.Model
+	span           oteltrace.Span
+	startedSpan    bool
+}
+
+func (r *llmRunner) prepareModelCall(
+	ctx context.Context,
+	state State,
+	span oteltrace.Span,
+) (graphModelCall, error) {
+	call := graphModelCall{
+		ctx:    ctx,
+		tools:  r.tools,
+		nodeID: r.nodeID,
+		span:   span,
+	}
+	if v, ok := state[StateKeyCurrentNodeID].(string); ok && v != "" {
+		call.nodeID = v
+	}
+	rootInvocation := rootInvocationForGraphModelCall(ctx, state)
+	baseModel := graphPatchedModel(rootInvocation, call.nodeID, r.llmModel)
+	callModel, callInvocation, err := selectGraphNodeModel(
+		ctx,
+		rootInvocation,
+		call.nodeID,
+		baseModel,
+	)
+	if err != nil {
+		return call, err
+	}
+	if callModel == nil {
+		return call, errors.New("no model available for LLM call")
+	}
+	call.callModel = callModel
+	call.callInvocation = callInvocation
+	if call.callInvocation != nil {
+		call.ctx = agent.NewInvocationContext(call.ctx, call.callInvocation)
+	}
+	call.ctx, call.span, call.startedSpan = startNodeSpanForInvocation(
+		call.ctx,
+		call.callInvocation,
+		itelemetry.NewChatSpanName(call.callModel.Info().Name),
+	)
+	if r.refreshToolSetsOnRun && len(r.toolSets) > 0 {
+		call.tools = mergeToolsWithToolSets(call.ctx, call.tools, r.toolSets)
+	}
+	if patch, ok := graphSurfacePatch(rootInvocation, call.nodeID); ok {
+		if patchedTools, ok := patch.Tools(); ok {
+			call.tools = toolSliceToMap(patchedTools)
+		}
+	}
+	return call, nil
+}
+
+func rootInvocationForGraphModelCall(ctx context.Context, state State) *agent.Invocation {
+	rootInvocation := invocationFromContextOrDefault(ctx, nil)
+	if rootInvocation != nil {
+		return rootInvocation
+	}
+	stateInvocation := graphInvocationFromState(state)
+	if stateInvocation != nil && stateInvocation.RunOptions.ModelSelector != nil {
+		return stateInvocation
+	}
+	return nil
+}
+
 func (r *llmRunner) executeModel(
 	ctx context.Context,
 	state State,
@@ -1456,49 +1527,18 @@ func (r *llmRunner) executeModel(
 	span oteltrace.Span,
 	instructionUsed string,
 ) (any, error) {
-	tools := r.tools
-	nodeID := r.nodeID
-	if v, ok := state[StateKeyCurrentNodeID].(string); ok && v != "" {
-		nodeID = v
-	}
-	rootInvocation := invocationFromContextOrDefault(ctx, nil)
-	if rootInvocation == nil {
-		stateInvocation := graphInvocationFromState(state)
-		if stateInvocation != nil && stateInvocation.RunOptions.ModelSelector != nil {
-			rootInvocation = stateInvocation
-		}
-	}
-	baseModel := graphPatchedModel(rootInvocation, nodeID, r.llmModel)
-	callModel, callInvocation, err := selectGraphNodeModel(
-		ctx,
-		rootInvocation,
-		nodeID,
-		baseModel,
-	)
+	call, err := r.prepareModelCall(ctx, state, span)
 	if err != nil {
 		return nil, err
 	}
-	if callModel == nil {
-		return nil, errors.New("no model available for LLM call")
-	}
-	if callInvocation != nil {
-		ctx = agent.NewInvocationContext(ctx, callInvocation)
-	}
-	ctx, span, startedSpan := startNodeSpanForInvocation(
-		ctx,
-		callInvocation,
-		itelemetry.NewChatSpanName(callModel.Info().Name),
-	)
-	if startedSpan {
+	ctx = call.ctx
+	tools := call.tools
+	nodeID := call.nodeID
+	callInvocation := call.callInvocation
+	callModel := call.callModel
+	span = call.span
+	if call.startedSpan {
 		defer span.End()
-	}
-	if r.refreshToolSetsOnRun && len(r.toolSets) > 0 {
-		tools = mergeToolsWithToolSets(ctx, tools, r.toolSets)
-	}
-	if patch, ok := graphSurfacePatch(rootInvocation, nodeID); ok {
-		if patchedTools, ok := patch.Tools(); ok {
-			tools = toolSliceToMap(patchedTools)
-		}
 	}
 	request := &model.Request{
 		Messages:         messages,
