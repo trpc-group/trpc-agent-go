@@ -734,6 +734,75 @@ Special thanks to Tencent's business units including **Tencent Yuanbao**, **Tenc
 
 Inspired by amazing frameworks like **ADK**, **Agno**, **CrewAI**, **AutoGen**, and many others. Standing on the shoulders of giants!
 
+## FAQ
+
+### What is tRPC-Agent-Go?
+
+tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems. It transforms how you create AI applications by providing autonomous agents that think, remember, collaborate, and act with unprecedented ease.
+
+### How does tRPC-Agent-Go differ from LangChain?
+
+- **tRPC-Agent-Go**: Go-native framework, high performance, production-ready with telemetry/tracing, GraphAgent (type-safe workflows), Agent Skills (SKILL.md), built-in memory service
+- **LangChain**: Python-first, broader ecosystem, more third-party integrations
+
+### What is GraphAgent?
+
+GraphAgent provides type-safe graph workflows with multi-conditional routing, functionally equivalent to LangGraph but for Go:
+- Chain-based workflows
+- Parallel execution
+- Conditional routing
+- Type-safe state management
+
+### How do I install tRPC-Agent-Go?
+
+```bash
+go get trpc.group/trpc-go/trpc-agent-go
+```
+
+### What LLM providers are supported?
+
+tRPC-Agent-Go supports multiple LLM providers:
+- OpenAI
+- Anthropic
+- Azure OpenAI
+- Local models
+- Custom providers via model interface
+
+### What is the memory system?
+
+The memory system provides:
+- Persistent memory with search
+- Long-term state management
+- Contextual awareness across sessions
+- Memory service managed at runner level
+
+### What are Agent Skills?
+
+Agent Skills are reusable workflows defined in `SKILL.md` files:
+- Safe execution environment
+- Reusable across agents
+- Human-readable workflow definitions
+
+### What is AG-UI?
+
+AG-UI (Agent-User Interaction) provides:
+- UI integration for agents
+- User interaction capabilities
+- Visual workflow management
+
+### What is A2A?
+
+A2A (Agent-to-Agent) provides:
+- Agent interoperability
+- Communication between agents
+- Multi-agent collaboration protocols
+
+### How do I get help?
+
+- **Documentation**: https://trpc-group.github.io/trpc-agent-go/
+- **Go Reference**: https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go
+- **GitHub Issues**: https://github.com/trpc-group/trpc-agent-go/issues
+
 ---
 
 ## Star History
