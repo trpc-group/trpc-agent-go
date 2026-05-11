@@ -212,6 +212,11 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  2097152,
 		},
 		{
+			name:      "exact match - Gemini 3 Pro official preview ID",
+			modelName: "gemini-3-pro-preview",
+			expected:  1048576,
+		},
+		{
 			name:      "longest prefix match - GPT-5.4 snapshot",
 			modelName: "gpt-5.4-2026-03-05",
 			expected:  1050000,
