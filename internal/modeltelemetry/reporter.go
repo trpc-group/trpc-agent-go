@@ -25,6 +25,7 @@ import (
 
 // Reporter records chat trace and metrics for one direct model call.
 type Reporter struct {
+	ctx          context.Context
 	invocation   *agent.Invocation
 	request      *model.Request
 	span         oteltrace.Span
@@ -55,6 +56,7 @@ func StartChat(
 	}
 	ctx, span, startedSpan := itrace.StartSpan(ctx, invocation, itelemetry.NewChatSpanName(modelName))
 	reporter := &Reporter{
+		ctx:         ctx,
 		invocation:  invocation,
 		request:     request,
 		span:        span,
@@ -119,6 +121,9 @@ func (r *Reporter) End() {
 		return
 	}
 	r.ended = true
+	if r.err == nil && r.ctx != nil {
+		r.err = r.ctx.Err()
+	}
 	if r.recordMetric != nil {
 		r.recordMetric()
 	}
