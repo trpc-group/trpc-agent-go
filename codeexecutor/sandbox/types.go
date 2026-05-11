@@ -87,14 +87,22 @@ const (
 type SpecialPath string
 
 const (
-	SpecialRoot      SpecialPath = "root"
+	// SpecialRoot matches the whole sandbox workspace.
+	SpecialRoot SpecialPath = "root"
+	// SpecialWorkspace matches the session workspace directory.
 	SpecialWorkspace SpecialPath = "workspace"
-	SpecialWork      SpecialPath = "work"
-	SpecialHome      SpecialPath = "home"
-	SpecialTmp       SpecialPath = "tmp"
-	SpecialRuns      SpecialPath = "runs"
-	SpecialOut       SpecialPath = "out"
-	SpecialSkills    SpecialPath = "skills"
+	// SpecialWork matches the workspace work directory.
+	SpecialWork SpecialPath = "work"
+	// SpecialHome matches the workspace home directory.
+	SpecialHome SpecialPath = "home"
+	// SpecialTmp matches the workspace tmp directory.
+	SpecialTmp SpecialPath = "tmp"
+	// SpecialRuns matches the workspace runs directory.
+	SpecialRuns SpecialPath = "runs"
+	// SpecialOut matches the workspace output directory.
+	SpecialOut SpecialPath = "out"
+	// SpecialSkills matches the workspace skills directory.
+	SpecialSkills SpecialPath = "skills"
 )
 
 // FileSystemRule declares one filesystem grant or denial.

@@ -28,50 +28,11 @@ func (r *Runtime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
-	if spec.Cmd == "" {
-		return codeexecutor.RunResult{}, deniedf(
-			ErrPolicyViolation, "run", "", "empty command",
-		)
-	}
-	profile := applyAdditionalPermissions(
-		normalizeProfile(r.profile),
-		additionalPermissionsFromContext(ctx),
-	)
-	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
-		return codeexecutor.RunResult{}, err
-	}
-	for _, dir := range []string{"home", "tmp"} {
-		if err := ensureDir(filepath.Join(ws.Path, dir)); err != nil {
-			return codeexecutor.RunResult{}, err
-		}
-	}
-	cwdRel := spec.Cwd
-	if cwdRel == "" {
-		cwdRel = codeexecutor.DirWork
-	}
-	if err := r.checkRead(profile, ws, cwdRel); err != nil {
-		return codeexecutor.RunResult{}, err
-	}
-	cwd, _, err := r.resolveWorkspacePath(ws, cwdRel)
+	prep, err := r.prepareRun(ctx, ws, spec)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
-	if _, err := os.Stat(cwd); err != nil {
-		if !os.IsNotExist(err) {
-			return codeexecutor.RunResult{}, err
-		}
-		if err := r.checkWrite(profile, ws, cwdRel); err != nil {
-			return codeexecutor.RunResult{}, err
-		}
-	}
-	if err := ensureDir(cwd); err != nil {
-		return codeexecutor.RunResult{}, err
-	}
-	timeout := spec.Timeout
-	if timeout <= 0 {
-		timeout = r.defaultTimeout
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	runCtx, cancel := context.WithTimeout(ctx, prep.timeout)
 	defer cancel()
 	if r.sessionPolicy.MutatingCommandsSerial {
 		lock := r.runLock(ws)
@@ -80,7 +41,7 @@ func (r *Runtime) RunProgram(
 	}
 	start := time.Now()
 	env := r.buildEnvironment(ws, spec)
-	cmd, backendName, err := r.commandForProfile(runCtx, profile, ws, cwd, env, spec)
+	cmd, backendName, err := r.commandForProfile(runCtx, prep.profile, ws, prep.cwd, env, spec)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
@@ -108,16 +69,9 @@ func (r *Runtime) RunProgram(
 	if timedOut {
 		killProcessGroup(cmd)
 	}
-	exitCode := 0
-	if waitErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		} else if timedOut {
-			exitCode = -1
-		} else {
-			return codeexecutor.RunResult{}, waitErr
-		}
+	exitCode, err := exitCodeFromWait(waitErr, timedOut)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
 	}
 	result := codeexecutor.RunResult{
 		Stdout:   stdout.String(),
@@ -135,6 +89,86 @@ func (r *Runtime) RunProgram(
 		}
 	}
 	return result, nil
+}
+
+type runPreparation struct {
+	profile PermissionProfile
+	cwd     string
+	timeout time.Duration
+}
+
+func (r *Runtime) prepareRun(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (runPreparation, error) {
+	if spec.Cmd == "" {
+		return runPreparation{}, deniedf(
+			ErrPolicyViolation, "run", "", "empty command",
+		)
+	}
+	profile := applyAdditionalPermissions(
+		normalizeProfile(r.profile),
+		additionalPermissionsFromContext(ctx),
+	)
+	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+		return runPreparation{}, err
+	}
+	for _, dir := range []string{"home", "tmp"} {
+		if err := ensureDir(filepath.Join(ws.Path, dir)); err != nil {
+			return runPreparation{}, err
+		}
+	}
+	cwdRel := spec.Cwd
+	if cwdRel == "" {
+		cwdRel = codeexecutor.DirWork
+	}
+	if err := r.checkRead(profile, ws, cwdRel); err != nil {
+		return runPreparation{}, err
+	}
+	cwd, _, err := r.resolveWorkspacePath(ws, cwdRel)
+	if err != nil {
+		return runPreparation{}, err
+	}
+	if err := r.ensureRunCwd(profile, ws, cwdRel, cwd); err != nil {
+		return runPreparation{}, err
+	}
+	timeout := spec.Timeout
+	if timeout <= 0 {
+		timeout = r.defaultTimeout
+	}
+	return runPreparation{profile: profile, cwd: cwd, timeout: timeout}, nil
+}
+
+func (r *Runtime) ensureRunCwd(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	cwdRel string,
+	cwd string,
+) error {
+	if _, err := os.Stat(cwd); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := r.checkWrite(profile, ws, cwdRel); err != nil {
+			return err
+		}
+	}
+	return ensureDir(cwd)
+}
+
+func exitCodeFromWait(waitErr error, timedOut bool) (int, error) {
+	if waitErr == nil {
+		return 0, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(waitErr, &exitErr) {
+		return exitErr.ExitCode(), nil
+	}
+	if timedOut {
+		return -1, nil
+	}
+	return 0, waitErr
 }
 
 func (r *Runtime) commandForProfile(
