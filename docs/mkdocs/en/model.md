@@ -2553,7 +2553,7 @@ if err != nil {
 }
 ```
 
-`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
+`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. If the hedge wrapper is used with context-threshold summary or token tailoring and the candidates have different or unknown context windows, set a stable wrapper window with `hedge.WithContextWindow(...)`; otherwise the wrapper reports the shared candidate window only when all candidates expose the same positive value. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
 
 **Scheduling And Commit Rules**:
 

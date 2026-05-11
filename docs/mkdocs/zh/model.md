@@ -2538,7 +2538,7 @@ if err != nil {
 }
 ```
 
-`hedge.New(...)` 同样返回普通的 `model.Model`，可以直接传给 `llmagent.WithModel(...)` 等接受 `model.Model` 的位置使用。上面这段代码使用包默认 delay；如果要显式控制补发时序，可继续使用 `WithDelay(...)` 或 `WithDelays(...)`。完整示例见 [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge)。
+`hedge.New(...)` 同样返回普通的 `model.Model`，可以直接传给 `llmagent.WithModel(...)` 等接受 `model.Model` 的位置使用。上面这段代码使用包默认 delay；如果要显式控制补发时序，可继续使用 `WithDelay(...)` 或 `WithDelays(...)`。如果 hedge wrapper 会配合 context-threshold summary 或 token tailoring 使用，且候选模型的 context window 不同或未知，可以通过 `hedge.WithContextWindow(...)` 显式设置稳定的 wrapper window；否则只有当所有候选都暴露相同正数窗口时，wrapper 才会自动透传该共享窗口。完整示例见 [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge)。
 
 **调度与提交规则：**
 
