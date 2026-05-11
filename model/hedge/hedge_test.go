@@ -110,6 +110,24 @@ func TestInfoContextWindow(t *testing.T) {
 			want: 32768,
 		},
 		{
+			name: "ignores zero wrapper context window",
+			candidates: []model.Model{
+				&scriptedIterModel{name: "primary", contextWindow: 32768},
+				&scriptedIterModel{name: "backup", contextWindow: 32768},
+			},
+			options: []Option{WithContextWindow(0)},
+			want:    32768,
+		},
+		{
+			name: "ignores negative wrapper context window",
+			candidates: []model.Model{
+				&scriptedIterModel{name: "primary", contextWindow: 32768},
+				&scriptedIterModel{name: "backup", contextWindow: 32768},
+			},
+			options: []Option{WithContextWindow(-1)},
+			want:    32768,
+		},
+		{
 			name: "keeps unknown for mismatched candidate context windows",
 			candidates: []model.Model{
 				&scriptedIterModel{name: "primary", contextWindow: 32768},
