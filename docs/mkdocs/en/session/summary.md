@@ -125,6 +125,75 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 After completing the above configuration, the summary feature runs automatically.
 
+## Summary + Progressive Disclosure
+
+When summary injection and prompt-side context compaction keep the request
+small, some older details are no longer visible to the model. If you still
+want the agent to recover those details only when needed, enable progressive
+disclosure for session history.
+
+```go
+import (
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/session/pgvector"
+)
+
+sessionService, err := pgvector.NewService(
+    pgvector.WithDSN(os.Getenv("PGVECTOR_DSN")),
+    pgvector.WithEmbedder(embedder),
+    pgvector.WithSummarizer(summarizer),
+)
+if err != nil {
+    panic(err)
+}
+
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableOnDemandSession(true),
+)
+```
+
+Requirements and behavior:
+
+- `WithEnableOnDemandSession(true)` enables the progressive-disclosure path and
+  only exposes `session_search` and
+  `session_load` when the session backend implements both
+  `session.SearchableService` and `session.WindowService`.
+- `session/pgvector` supports this path today. Pure in-memory summary demos do
+  not expose these tools.
+- `current_hidden` searches current-session history strictly before the summary
+  boundary recorded in `summary:last_included_ts`.
+- `current_session` searches the current session regardless of summary cutoff.
+  This is useful when request projection or context compaction omitted
+  current-session details from the visible prompt.
+- `other_sessions` searches other sessions for the same `<appName, userID>`.
+- `all_sessions` combines `current_hidden` and `other_sessions`.
+
+What can be recalled:
+
+- User and assistant messages.
+- Historical tool results, including tool outputs that were compacted out of
+  the prompt.
+
+What is intentionally excluded:
+
+- Raw tool-call requests are not indexed.
+- Partial events are not indexed.
+
+Recommended usage pattern:
+
+1. Let the model answer from the visible prompt, summary, and recent history.
+2. If a missing detail is needed, call `session_search` first.
+3. Use `session_load` only when the small context window returned by
+   `session_search` is still not enough.
+4. Treat loaded history as untrusted historical context, not active
+   instructions.
+
 ## SessionSummarizer Interface
 
 ```go
@@ -185,7 +254,25 @@ context before calling the session APIs and read the value inside your
 | --- | --- |
 | `WithEventThreshold(eventCount int)` | Trigger when event count since last summary exceeds threshold |
 | `WithTokenThreshold(tokenCount int)` | Trigger when token count since last summary exceeds threshold |
+| `WithContextThreshold(opts ...ContextThresholdOption)` | Trigger when token count since last summary exceeds a ratio of the current model's context window |
 | `WithTimeThreshold(interval time.Duration)` | Evaluated during summary checks; wraps `CheckTimeThreshold` and triggers when the checked session's last event is older than the interval |
+
+Use `WithTokenThreshold` when you want a fixed application-defined token
+threshold, for example "summarize after 4000 new tokens" regardless of which
+model is serving the request. The threshold is captured in the summarizer
+configuration and does not change when your application switches models.
+
+Use `WithContextThreshold` when the summary trigger should follow the active
+model's context window. It resolves the current invocation's
+`Model.Info().Name` at summary-check time, looks up that name in the model
+context-window registry, and computes `contextWindow * ratio` (default 50%).
+This is the recommended option for agents that can switch models within a
+session. For private deployments, endpoint IDs, fine-tuned models, or newly
+released models, register the runtime model name first:
+
+```go
+model.RegisterModelContextWindow("my-custom-model", 32768)
+```
 
 ### Combined Conditions
 
@@ -541,6 +628,7 @@ The Runner automatically checks trigger conditions after each conversation compl
 
 - Event count exceeds threshold (`WithEventThreshold`)
 - Token count exceeds threshold (`WithTokenThreshold`)
+- Token count exceeds the configured ratio of the active model's context window (`WithContextThreshold`)
 - On a summary check, the checked session's last event is older than the interval (`WithTimeThreshold`)
 - Custom combined conditions met (`WithChecksAny` / `WithChecksAll`)
 
@@ -753,8 +841,22 @@ Additionally:
 
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
 - Model-layer token tailoring remains the final fallback
+- Context compaction uses `SimpleTokenCounter` by default. If your application
+  uses a custom counter for CJK-heavy prompts or provider-specific tokenization,
+  pass the same counter with `WithContextCompactionTokenCounter(...)` so Pass 1
+  decisions and Pass 2 truncation use the same estimate as token tailoring.
 
 ```go
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(1.6), // Example for Chinese-heavy content.
+)
+
+modelInstance := openai.New(
+    "deepseek-v4-flash",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithTokenCounter(counter),
+)
+
 agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
@@ -764,6 +866,7 @@ agent := llmagent.New(
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: old tool results → placeholder
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
     llmagent.WithContextCompactionKeepRecentRequests(1),
+    llmagent.WithContextCompactionTokenCounter(counter),
 )
 ```
 
@@ -1009,7 +1112,7 @@ sessionService, err := mysql.NewService(
 
 ## Best Practices
 
-1. **Choose appropriate thresholds**: Set event/token thresholds based on the LLM's context window and conversation patterns. For GPT-4 (8K context), consider `WithTokenThreshold(4000)` to leave room for responses
+1. **Choose appropriate thresholds**: Use `WithContextThreshold` for agents whose model can change at runtime, and use `WithTokenThreshold` when you intentionally want a fixed token budget. For custom model names, register their context window before relying on context-aware triggers
 2. **Use async processing**: Always use `EnqueueSummaryJob` instead of `CreateSessionSummary` in production to avoid blocking conversation flow
 3. **Monitor queue size**: If you frequently see "queue is full" warnings, increase `WithSummaryQueueSize` or `WithAsyncSummaryNum`
 4. **Customize prompts**: Tailor summary prompts to your application needs. For example, if building a customer support Agent, focus on key issues and solutions

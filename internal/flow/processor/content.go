@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -389,6 +390,17 @@ func WithContextCompactionToolResultMaxTokens(tokens int) ContentOption {
 func WithContextCompactionOversizedToolResultMaxTokens(tokens int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ContextCompactionConfig.OversizedToolResultMaxTokens = tokens
+	}
+}
+
+// WithContextCompactionTokenCounter sets the token counter used by context
+// compaction for deciding whether tool results exceed configured budgets.
+func WithContextCompactionTokenCounter(counter model.TokenCounter) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		if counter == nil {
+			return
+		}
+		p.ContextCompactionConfig.TokenCounter = counter
 	}
 }
 
@@ -924,7 +936,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 					requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
 				)
 				msg = p.projectEventMessage(inv, evt, msg)
-				if isEmptyAssistantMessage(msg) {
+				if message.IsEmptyAssistantMessage(msg) {
 					continue
 				}
 				messages = append(messages, msg)
@@ -1255,6 +1267,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	case ReasoningContentModeDiscardAll:
 		// Discard all reasoning_content.
 		msg.ReasoningContent = ""
+		msg.ReasoningSignature = ""
 	case ReasoningContentModeKeepAll:
 		// Keep all reasoning_content: do nothing.
 	default:
@@ -1264,6 +1277,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 		// reasoning_content for provider replay requirements.
 		if messageRequestID != currentRequestID && !requestHasToolCalls {
 			msg.ReasoningContent = ""
+			msg.ReasoningSignature = ""
 		}
 	}
 	return msg
@@ -1278,16 +1292,6 @@ func (p *ContentRequestProcessor) projectEventMessage(
 		return msg
 	}
 	return p.EventMessageProjector(inv, evt, msg)
-}
-
-func isEmptyAssistantMessage(msg model.Message) bool {
-	if msg.Role != model.RoleAssistant {
-		return false
-	}
-	return msg.Content == "" &&
-		len(msg.ContentParts) == 0 &&
-		len(msg.ToolCalls) == 0 &&
-		msg.ReasoningContent == ""
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.
@@ -1414,7 +1418,7 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 			requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
 		)
 		msg = p.projectEventMessage(inv, evt, msg)
-		if isEmptyAssistantMessage(msg) {
+		if message.IsEmptyAssistantMessage(msg) {
 			continue
 		}
 		messages = append(messages, msg)
@@ -1454,10 +1458,11 @@ func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 
 	var cloned bool
 	for i := range messages {
-		msg, truncated, _ := truncateOversizedToolResultMessage(
+		msg, truncated, _ := truncateOversizedToolResultMessageWithCounter(
 			context.Background(),
 			messages[i],
 			p.ContextCompactionConfig.OversizedToolResultMaxTokens,
+			p.ContextCompactionConfig.TokenCounter,
 		)
 		if !truncated {
 			continue

@@ -63,6 +63,9 @@ const (
 	// VariantHunyuan is the Hunyuan variant with specific file handling.
 	VariantHunyuan Variant = "hunyuan"
 	// VariantDeepSeek is the DeepSeek variant with specific base_url handling.
+	// It backfills empty reasoning_content for assistant history messages by
+	// default, including when inferred from the default DeepSeek base URL. Use
+	// WithReasoningContentBackfill(false) to disable this behavior.
 	VariantDeepSeek Variant = "deepseek"
 	// VariantQwen is the Qwen variant with specific base_url handling.
 	VariantQwen Variant = "qwen"
@@ -119,6 +122,9 @@ type variantConfig struct {
 	// defaultOptimizeForCache controls the default value for cache optimization
 	// when WithOptimizeForCache is not explicitly set.
 	defaultOptimizeForCache bool
+	// defaultReasoningContentBackfill controls replay-time empty
+	// reasoning_content backfill for assistant messages.
+	defaultReasoningContentBackfill bool
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -152,8 +158,9 @@ var variantConfigs = map[Variant]variantConfig{
 		defaultBaseURL:            defaultDeepSeekBaseURL,
 		// DeepSeek v3.2+ (incl. v4-pro / v4-flash) uses
 		// {"thinking": {"type": "enabled"/"disabled"}} format.
-		thinkingEnabledKey:     "thinking",
-		thinkingValueConvertor: deepSeekThinkingValueConvertor,
+		thinkingEnabledKey:              "thinking",
+		thinkingValueConvertor:          deepSeekThinkingValueConvertor,
+		defaultReasoningContentBackfill: true,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
@@ -268,6 +275,9 @@ func New(name string, opts ...Option) *Model {
 	cfg, cfgOK := variantConfigs[o.Variant]
 	if !o.optimizeForCacheSet {
 		o.OptimizeForCache = cfgOK && cfg.defaultOptimizeForCache
+	}
+	if !o.reasoningContentBackfillSet {
+		o.ReasoningContentBackfill = cfgOK && cfg.defaultReasoningContentBackfill
 	}
 
 	// Set default API key and base URL if not specified.
@@ -524,31 +534,57 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	// Determine max input tokens using priority: user config > auto calculation > default.
 	maxInputTokens := m.maxInputTokens
-	if maxInputTokens <= 0 {
+	outputReserveTokens := m.effectiveOutputReserveTokens(request)
+	contextWindow := imodel.ResolveContextWindow(m.name)
+	autoBudget := maxInputTokens <= 0
+	if autoBudget {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
 				contextWindow,
 				m.protocolOverheadTokens,
-				m.reserveOutputTokens,
+				outputReserveTokens,
 				m.inputTokensFloor,
 				m.safetyMarginRatio,
 				m.maxInputTokensRatio,
 			)
 		} else {
 			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
+			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
+				contextWindow,
+				imodel.DefaultProtocolOverheadTokens,
+				outputReserveTokens,
+				imodel.DefaultInputTokensFloor,
+				imodel.DefaultSafetyMarginRatio,
+				imodel.DefaultMaxInputTokensRatio,
+			)
 		}
+	}
+
+	maxInputTokens = min(maxInputTokens, m.hardInputBudget(contextWindow, outputReserveTokens))
+	if autoBudget {
 		log.DebugfContext(
 			ctx,
 			"auto-calculated max input tokens: model=%s, "+
-				"contextWindow=%d, maxInputTokens=%d",
+				"contextWindow=%d, reserveOutputTokens=%d, maxInputTokens=%d",
 			m.name,
 			contextWindow,
+			outputReserveTokens,
 			maxInputTokens,
 		)
+		toolsTokens := m.estimateToolsTokens(ctx, request.Tools)
+		if toolsTokens > 0 {
+			maxInputTokens = max(maxInputTokens-toolsTokens, 0)
+			log.DebugfContext(
+				ctx,
+				"adjusted max input tokens after tools budget: model=%s, "+
+					"toolsTokens=%d, maxInputTokens=%d",
+				m.name,
+				toolsTokens,
+				maxInputTokens,
+			)
+		}
 	}
 
 	// Apply token tailoring.
@@ -563,6 +599,63 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	}
 
 	request.Messages = tailored
+}
+
+func (m *Model) effectiveOutputReserveTokens(request *model.Request) int {
+	reserve := m.reserveOutputTokens
+	if reserve <= 0 {
+		reserve = imodel.DefaultReserveOutputTokens
+	}
+	if request == nil {
+		return reserve
+	}
+	if request.MaxTokens != nil && *request.MaxTokens > reserve {
+		reserve = *request.MaxTokens
+	}
+	if request.ThinkingTokens != nil && *request.ThinkingTokens > reserve {
+		reserve = *request.ThinkingTokens
+	}
+	return reserve
+}
+
+func (m *Model) hardInputBudget(contextWindow, outputReserveTokens int) int {
+	protocolOverheadTokens := m.protocolOverheadTokens
+	if protocolOverheadTokens <= 0 {
+		protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
+	}
+	safetyMarginRatio := m.safetyMarginRatio
+	if safetyMarginRatio <= 0 {
+		safetyMarginRatio = imodel.DefaultSafetyMarginRatio
+	}
+	safetyMargin := int(float64(contextWindow) * safetyMarginRatio)
+	return max(contextWindow-outputReserveTokens-protocolOverheadTokens-safetyMargin, 0)
+}
+
+func (m *Model) estimateToolsTokens(
+	ctx context.Context,
+	tools map[string]tool.Tool,
+) int {
+	if len(tools) == 0 || m.tokenCounter == nil {
+		return 0
+	}
+	converted := m.convertTools(tools)
+	if len(converted) == 0 {
+		return 0
+	}
+	raw, err := json.Marshal(converted)
+	if err != nil {
+		log.WarnContext(ctx, "failed to marshal tools for token tailoring", err)
+		return 0
+	}
+	tokens, err := m.tokenCounter.CountTokens(ctx, model.Message{
+		Role:    model.RoleSystem,
+		Content: string(raw),
+	})
+	if err != nil {
+		log.WarnContext(ctx, "failed to count tools tokens for token tailoring", err)
+		return 0
+	}
+	return tokens
 }
 
 // buildChatRequest converts our Request to OpenAI request params and options.
@@ -629,8 +722,12 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
 	opts := m.buildThinkingOption(request)
-	// Add extra fields to the request
+	// Add model-level extra fields to the request.
 	for key, value := range m.extraFields {
+		opts = append(opts, openaiopt.WithJSONSet(key, value))
+	}
+	// Add request-level extra fields after model-level fields so they take precedence.
+	for key, value := range request.ExtraFields {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
 
@@ -673,15 +770,16 @@ func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestO
 }
 
 // shouldBackfillReasoningContent reports whether replay should emit
-// model.ReasoningContentKey as an empty string for assistant tool-call
-// messages. Some providers require the key to be present during tool-call
-// replay even when no reasoning text was returned.
+// model.ReasoningContentKey as an empty string for assistant messages. Some
+// providers require the key to be present for every assistant message in
+// thinking mode even when no reasoning text was returned.
 func (m *Model) shouldBackfillReasoningContent(
 	msg model.Message,
 ) bool {
 	return m.reasoningContentBackfill &&
+		msg.Role == model.RoleAssistant &&
 		msg.ReasoningContent == "" &&
-		len(msg.ToolCalls) > 0
+		(msg.Content != "" || len(msg.ContentParts) > 0 || len(msg.ToolCalls) > 0)
 }
 
 // convertMessages converts our Message format to OpenAI's format.
@@ -713,8 +811,8 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 				Content:   m.convertAssistantMessageContent(msg),
 				ToolCalls: m.convertToolCalls(msg.ToolCalls),
 			}
-			// Pass reasoning_content to API if present (required by DeepSeek for
-			// tool-call replay across current and later request turns).
+			// Pass reasoning_content to API if present, or when provider replay
+			// requires the field for assistant history in thinking mode.
 			if msg.ReasoningContent != "" ||
 				m.shouldBackfillReasoningContent(msg) {
 				assistantMsg.SetExtraFields(map[string]any{

@@ -1431,6 +1431,47 @@ func TestExecuteModelAndProcessResponses_UsesUpdatedInvocationForMetricsMetadata
 	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoAppName, updatedInvocation.Session.AppName))
 }
 
+func TestExecuteModelAndProcessResponses_AttachesTimingInfoBeforeAfterModelCallbacks(t *testing.T) {
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-callback-timing"),
+	)
+	response := &model.Response{
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage("done")},
+		},
+	}
+	var callbackTimingInfo *model.TimingInfo
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			require.NotNil(t, args.Response)
+			require.NotNil(t, args.Response.Usage)
+			require.NotNil(t, args.Response.Usage.TimingInfo)
+			require.NotZero(t, args.Response.Usage.TimingInfo.FirstTokenDuration)
+			callbackTimingInfo = args.Response.Usage.TimingInfo
+			return &model.AfterModelResult{}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel: &multiResponseModel{
+				responses: []*model.Response{response},
+				delay:     time.Millisecond,
+			},
+			Request:      &model.Request{},
+			InvocationID: baseInvocation.InvocationID,
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, response.Usage)
+	require.Same(t, callbackTimingInfo, response.Usage.TimingInfo)
+}
+
 func TestExecuteModelAndProcessResponses_UsesUpdatedInvocationForResponseUsageTimingOnSingleChunk(t *testing.T) {
 	baseInvocation := agent.NewInvocation(
 		agent.WithInvocationID("inv-base-single-usage"),
@@ -3228,7 +3269,7 @@ func TestBuildAgentInvocationWithStateAndScope_PropagatesExecutionTraceMetadata(
 	require.Equal(t, "parent/delegate", agent.InvocationTraceNodeID(inv))
 	require.Equal(
 		t,
-		"parent/delegate/child",
+		"parent/delegate",
 		agent.InvocationSurfaceRootNodeID(inv),
 	)
 	require.Equal(t, []string{rootStepID}, agent.NextExecutionTracePredecessors(inv))
@@ -3260,7 +3301,7 @@ func TestBuildAgentInvocationWithStateAndScope_PreservesMountedSurfaceRoot(
 	require.Equal(t, "trace-parent/delegate", agent.InvocationTraceNodeID(inv))
 	require.Equal(
 		t,
-		"workflow/parent/delegate/child",
+		"workflow/parent/delegate",
 		agent.InvocationSurfaceRootNodeID(inv),
 	)
 }

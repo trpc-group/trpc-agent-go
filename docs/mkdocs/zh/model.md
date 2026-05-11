@@ -207,16 +207,21 @@ type GenerationConfig struct {
 
     // 推理努力程度。可选值取决于服务方：
     //   - OpenAI o-series："low"、"medium"、"high"
+    //   - Anthropic adaptive thinking："low"、"medium"、"high"、"max"，
+    //     以及支持该值的模型上的 "xhigh"
     //   - DeepSeek v4（deepseek-v4-pro / deepseek-v4-flash）："high"、"max"
     //     （服务端为兼容旧配置，会把 "low"/"medium" 映射为 "high"，
     //     "xhigh" 映射为 "max"）
+    // OpenAI-compatible 服务会将该字段透传给所选后端模型，
+    // 请使用该后端模型支持的取值。
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
     // 是否启用思考模式
-    ThinkingEnabled *bool `json:"-"`
+    // nil 表示不发送思考开关字段，由服务方默认值决定。
+    ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
 
     // 思考模式的最大令牌数
-    ThinkingTokens *int `json:"-"`
+    ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 ```
 
@@ -255,7 +260,29 @@ type ResponseError struct {
     Param   string    `json:"param,omitempty"`
     Code    string    `json:"code,omitempty"`
 }
+
+// Usage 表示 token 用量信息
+type Usage struct {
+    PromptTokens            int                     `json:"prompt_tokens"`
+    CompletionTokens        int                     `json:"completion_tokens"`
+    TotalTokens             int                     `json:"total_tokens"`
+    PromptTokensDetails     PromptTokensDetails     `json:"prompt_tokens_details"`
+    CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+    TimingInfo              *TimingInfo             `json:"timing_info,omitempty"`
+}
+
+type PromptTokensDetails struct {
+    CachedTokens        int `json:"cached_tokens"`
+    CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+    CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+    ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+}
 ```
+
+对于 OpenAI-compatible 服务，返回中的 `completion_tokens_details.reasoning_tokens` 会映射到 `Usage.CompletionTokensDetails.ReasoningTokens`。当服务方没有消耗或没有上报 reasoning tokens 时，该值可能为 `0`；如果希望 reasoning 模型进入推理行为，请按模型能力设置 `ReasoningEffort` 和/或 `ThinkingEnabled`。
 
 ## OpenAI Model
 
@@ -531,20 +558,57 @@ model := oaimodel.New("deepseek-v4-flash",
 )
 ```
 
-**回调中 `SetExtraFields` 与 `WithExtraFields` 的区别**：
+**请求体自定义方式的区别**：
 
-| 维度 | `WithExtraFields` | 回调中 `SetExtraFields` |
-| --- | --- | --- |
-| 设置时机 | 创建模型时一次性设置 | 每次请求发送前调用 |
-| 动态性 | 仅支持静态值 | 可基于 `ctx` 或运行时状态动态设置 |
-| 实现机制 | 通过 `openaiopt.WithJSONSet`（RequestOption 层）注入 | 设置在 `ChatCompletionNewParams` 结构体上（序列化层） |
-| 同名 key 冲突 | `WithExtraFields` 优先（后执行，覆盖同名 key） | 如果存在同名 key，会被 `WithExtraFields` 覆盖 |
+| 维度 | `WithExtraFields` | `agent.WithModelRequestExtraFields` | 回调中 `SetExtraFields` |
+| --- | --- | --- | --- |
+| 设置时机 | 创建模型时一次性设置 | 单次 `runner.Run(...)` 调用时设置 | 每次模型请求发送前调用 |
+| 动态性 | 仅支持静态值 | 适合运行时已知的动态值 | 可基于 `ctx` 或运行时状态动态设置 |
+| 实现机制 | 通过 `openaiopt.WithJSONSet`（RequestOption 层）注入 | 写入 `model.Request.ExtraFields`，再由支持的 adapter 注入 | 设置在 `ChatCompletionNewParams` 结构体上（序列化层） |
+| 同名 key 冲突 | 会被请求级 extra fields 覆盖 | 优先级高于模型级 extra fields | 如果存在同名 key，会被 RequestOption 层的 extra fields 覆盖 |
 
-当两者使用**不同的 key** 时，所有字段都会出现在最终的 JSON body 中，
-互不干扰。当两者设置了**相同的 key** 时，`WithExtraFields` 优先生效，
-因为 `WithJSONSet` 在结构体序列化之后才应用。
+当多种方式使用**不同的 key** 时，所有字段都会出现在最终的 JSON body 中，
+互不干扰。当它们设置了**相同的 key** 时，在 OpenAI 兼容 adapter 中，
+通过 `agent.WithModelRequestExtraFields` 传入的请求级 extra fields 优先生效。
 
-对于大多数需要按请求动态定制的场景，推荐在回调中使用 `SetExtraFields`。
+##### 从 Runner 传递请求级 extra fields
+
+如果某个供应商的顶层请求体字段需要随每次 `runner.Run(...)` 动态变化，
+可以使用 `agent.WithModelRequestExtraFields`。例如 OpenAI 兼容接口中的
+`prompt_cache_key`：
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+func runOnce(ctx context.Context, r runner.Runner, cacheKey string) error {
+    events, err := r.Run(
+        ctx,
+        "user-001",
+        "session-001",
+        model.NewUserMessage("Hello"),
+        agent.WithModelRequestExtraFields(map[string]any{
+            "prompt_cache_key": cacheKey,
+        }),
+    )
+    if err != nil {
+        return err
+    }
+    for range events {
+    }
+    return nil
+}
+```
+
+该选项会作用于本次运行中创建的每一次模型调用，包括普通 LLM Agent、
+Graph LLM 节点，以及经由 failover 或 hedge model 路由的请求。内置 OpenAI
+和 HuggingFace/OpenAI 兼容 adapter 会把这些字段合并到顶层 JSON 请求体中。
+其他供应商 adapter 默认不会使用该字段，除非后续显式增加对应的供应商映射。
 
 #### 2. 模型切换（Model Switching）
 
@@ -1485,36 +1549,44 @@ model := openai.New("deepseek-v4-flash",
 
 **Token 计算公式**：
 
-框架会根据模型的上下文窗口自动计算 "maxInputTokens"：
+框架会根据模型的上下文窗口自动计算 `maxInputTokens`。对 OpenAI-compatible
+模型，自动预算还会考虑本次请求的输出上限和工具定义：
 
 > **Context Window 注册**
 >
 > Token 裁剪和会话摘要的 `WithContextThreshold` 都依赖框架内置的模型 context window 注册表。注册表已覆盖大量常见模型，但不一定包含所有模型——特别是私有部署或较新发布的模型。如果你的模型未被识别，请在启动时调用 `model.RegisterModelContextWindow("my-model", 32768)` 或 `model.RegisterModelContextWindows(map[string]int{...})` 手动注册。完整示例参见[会话摘要文档](session/summary.md)。
 
-```
-safetyMargin = contextWindow × 10%
-calculatedMax = contextWindow - 2048（输出预留）- 512（协议开销）- safetyMargin
-ratioLimit = contextWindow × 100%（最大输入比例）
-maxInputTokens = max(min(calculatedMax, ratioLimit), 1024（最小值）)
+```text
+outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
+safetyMargin = contextWindow × SafetyMarginRatio
+calculatedMax = contextWindow - outputReserve - ProtocolOverheadTokens - safetyMargin
+ratioLimit = contextWindow × MaxInputTokensRatio
+messageBudget = min(max(min(calculatedMax, ratioLimit), InputTokensFloor), calculatedMax)
+maxInputTokens = max(messageBudget - estimatedToolsTokens, 0)
 ```
 
 例如 "gpt-4o"（contextWindow = 128000）：
 
-```
+```text
 safetyMargin = 128000 × 0.10 = 12800 tokens
-calculatedMax = 128000 - 2048 - 512 - 12800 = 112640 tokens
+outputReserve = max(2048, request.MaxTokens, request.ThinkingTokens)
+calculatedMax = 128000 - outputReserve - 512 - 12800
 ratioLimit = 128000 × 1.0 = 128000 tokens
-maxInputTokens = 112640 tokens（约占 context window 的 88%）
+maxInputTokens = messageBudget - estimatedToolsTokens
 ```
+
+如果显式设置了 `WithMaxInputTokens`，框架会保留该值作为配置的 messages 预算，
+不会再从中扣除估算的 `Tools` schema 预算。该显式值仍会在应用输出预留和安全边际
+后，被限制在 context-safe 的硬预算内。
 
 **默认预算参数**：
 
 框架使用以下默认值进行 token 分配（**建议保留默认值**）：
 
 - **协议开销（ProtocolOverheadTokens）**: 512 tokens - 用于请求/响应格式化
-- **输出预留（ReserveOutputTokens）**: 2048 tokens - 为输出生成预留
+- **输出预留（ReserveOutputTokens）**: 2048 tokens - 输出生成的最小预留；OpenAI-compatible 请求会在该值、`GenerationConfig.MaxTokens`、`GenerationConfig.ThinkingTokens` 中取最大值
 - **输入最小值（InputTokensFloor）**: 1024 tokens - 确保模型正常处理
-- **输出最小值（OutputTokensFloor）**: 256 tokens - 确保有意义的响应
+- **输出最小值（OutputTokensFloor）**: 已废弃，不再用于自动计算输出 `MaxTokens`
 - **安全边际比例（SafetyMarginRatio）**: 10% - token 计数不准确的缓冲
 - **最大输入比例（MaxInputTokensRatio）**: 100% - 上下文窗口的最大输入比例
 

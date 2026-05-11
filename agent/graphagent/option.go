@@ -144,6 +144,9 @@ type Options struct {
 	// Default is 0; the recommended value to pass when opting in is
 	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
+	// ContextCompactionTokenCounter estimates tool-result size for context
+	// compaction. When nil, SimpleTokenCounter is used.
+	ContextCompactionTokenCounter model.TokenCounter
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses default formatSummaryContent function.
 	summaryFormatter func(summary string) string
@@ -321,6 +324,16 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 	return func(opts *Options) {
 		if tokens >= 0 {
 			opts.ContextCompactionOversizedToolResultMaxTokens = tokens
+		}
+	}
+}
+
+// WithContextCompactionTokenCounter sets the token counter used by context
+// compaction to decide whether tool results exceed configured budgets.
+func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
+	return func(opts *Options) {
+		if counter != nil {
+			opts.ContextCompactionTokenCounter = counter
 		}
 	}
 }

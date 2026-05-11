@@ -27,9 +27,10 @@ func TestWithNumberTolerance(t *testing.T) {
 }
 
 func TestWithIgnoreAndMatchStrategy(t *testing.T) {
-	opts := newOptions(WithIgnore(true), WithMatchStrategy(JSONMatchStrategyExact))
+	opts := newOptions(WithIgnore(true), WithMatchStrategy(JSONMatchStrategyExact), WithValid(true))
 	assert.True(t, opts.ignore)
 	assert.Equal(t, JSONMatchStrategyExact, opts.matchStrategy)
+	assert.True(t, opts.valid)
 }
 
 func TestWithIgnoreTreeAndCompare(t *testing.T) {

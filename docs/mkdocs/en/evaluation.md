@@ -878,17 +878,40 @@ The framework includes the following criterion types:
 
 | Criterion Type           | Applies To                              |
 |--------------------------|-----------------------------------------|
+| LengthCriterion          | Content length ranges                   |
 | TextCriterion            | Text strings                            |
 | JSONCriterion            | JSON objects                            |
+| XMLCriterion             | XML documents                           |
 | RougeCriterion           | ROUGE text scoring                      |
 | ToolTrajectoryCriterion  | Tool call trajectories                  |
 | FinalResponseCriterion   | Final response content                  |
 | LLMCriterion             | LLM-based evaluation models             |
 | Criterion                | Aggregation of multiple criteria        |
 
+##### LengthCriterion
+
+LengthCriterion validates whether string length falls within an inclusive range. Length is counted by Unicode code points, so Chinese characters, English characters, and symbols each count as one character. `min` and `max` are both optional, but at least one of them must be configured.
+
+```go
+type LengthCriterion struct {
+	Ignore bool
+	Min    *int
+	Max    *int
+}
+```
+
+Example configuration requires actual content to be between 20 and 500 characters.
+
+```json
+{
+  "min": 20,
+  "max": 500
+}
+```
+
 ##### TextCriterion
 
-TextCriterion compares two strings, commonly used for tool name comparison and final response text comparison. The structure is defined as follows.
+TextCriterion describes text-content evaluation rules. It is commonly used for tool name comparison and final response text comparison. It can constrain actual text length and can compare actual text with expected text using a configured strategy. The structure is defined as follows.
 
 ```go
 // TextCriterion represents a text matching criterion.
@@ -896,6 +919,7 @@ type TextCriterion struct {
 	Ignore          bool                                        // Ignore indicates skipping comparison.
 	CaseInsensitive bool                                        // CaseInsensitive indicates case-insensitive matching.
 	MatchStrategy   TextMatchStrategy                           // MatchStrategy is the matching strategy.
+	Length          *length.LengthCriterion                     // Length validates text length.
 	Compare         func(actual, expected string) (bool, error) // Compare is custom comparison logic.
 }
 
@@ -949,6 +973,7 @@ type JSONCriterion struct {
 	OnlyTree        map[string]any                           // OnlyTree indicates the only field tree to compare.
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy is the matching strategy.
 	NumberTolerance *float64                                 // NumberTolerance is the numeric tolerance.
+	Valid           bool                                     // Valid validates whether actual content is legal JSON.
 	Compare         func(actual, expected any) (bool, error) // Compare is custom comparison logic.
 }
 
@@ -958,7 +983,7 @@ type JSONMatchStrategy string
 
 Currently, `matchStrategy` only supports `exact`, with default `exact`.
 
-During comparison, `actual` is the actual value and `expected` is the expected value. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
+During comparison, `actual` is the actual value and `expected` is the expected value. `valid` validates whether actual is a complete and strict legal JSON document. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 
@@ -1013,6 +1038,26 @@ jsonCriterion := cjson.New(
 		return true, nil
 	}),
 )
+```
+
+##### XMLCriterion
+
+XMLCriterion validates whether a string is a legal XML document and also supports custom comparison logic injected from code. Validity checks require non-empty content, exactly one root element, properly closed tags, and no non-whitespace text outside the root element.
+
+```go
+type XMLCriterion struct {
+	Ignore  bool
+	Valid   bool
+	Compare func(actual, expected string) (bool, error)
+}
+```
+
+Example configuration validates that actual content is a legal XML document:
+
+```json
+{
+  "valid": true
+}
 ```
 
 ##### RougeCriterion
@@ -1326,7 +1371,7 @@ Assuming `A`, `B`, `C`, and `D` are tool calls, matching examples are as follows
 
 ##### FinalResponseCriterion
 
-FinalResponseCriterion compares final responses per turn. It supports text comparison, JSON structural comparison after parsing content, and ROUGE scoring. The structure is defined as follows.
+FinalResponseCriterion compares final responses per turn. It supports text comparison, JSON structural comparison after parsing content, XML validation, and ROUGE scoring. The structure is defined as follows.
 
 ```go
 import (
@@ -1334,6 +1379,7 @@ import (
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	cxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 )
 
 // FinalResponseCriterion represents a final response matching criterion.
@@ -1341,13 +1387,14 @@ type FinalResponseCriterion struct {
 	Text    *ctext.TextCriterion                                      // Text compares final response text.
 	JSON    *cjson.JSONCriterion                                      // JSON compares final response JSON.
 	Rouge   *crouge.RougeCriterion                                    // Rouge scores final response text with ROUGE.
+	XML     *cxml.XMLCriterion                                        // XML validates final response XML.
 	Compare func(actual, expected *evalset.Invocation) (bool, error) // Compare is custom comparison logic.
 }
 ```
 
-When using this criterion, you need to fill `finalResponse` on the expected side for the corresponding turn in EvalSet.
+When using this criterion, you usually need to fill `finalResponse` on the expected side for the corresponding turn in EvalSet. If only criteria that do not depend on expected output are configured, the evaluator can validate the actual final response only.
 
-`text`, `json`, and `rouge` can be configured together, and all configured sub-criteria must match. When `json` is configured, the content must be parseable as JSON.
+`text`, `json`, `rouge`, and `xml` can be configured together, and all enabled sub-criteria must match. See each Criterion section for its fields and semantics.
 
 To match by ROUGE, configure `rouge` and see RougeCriterion for details.
 
@@ -1362,6 +1409,48 @@ The following example selects `final_response_avg_score` and configures FinalRes
 			"finalResponse": {
 				"text": {
 					"matchStrategy": "contains"
+				}
+			}
+		}
+	}
+]
+```
+
+The following example validates only that the actual final response length is between 20 and 500 characters and that the content is legal JSON.
+
+```json
+[
+	{
+		"metricName": "final_response_avg_score",
+		"threshold": 1.0,
+		"criterion": {
+			"finalResponse": {
+				"text": {
+					"length": {
+						"min": 20,
+						"max": 500
+					}
+				},
+				"json": {
+					"valid": true
+				}
+			}
+		}
+	}
+]
+```
+
+The following example validates that the actual final response is legal XML.
+
+```json
+[
+	{
+		"metricName": "final_response_avg_score",
+		"threshold": 1.0,
+		"criterion": {
+			"finalResponse": {
+				"xml": {
+					"valid": true
 				}
 			}
 		}

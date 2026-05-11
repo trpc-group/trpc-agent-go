@@ -470,6 +470,67 @@ func TestModel_GenerateContentIter_Streaming(t *testing.T) {
 	require.True(t, sawHello)
 }
 
+func TestModel_StreamingSkipsProviderSpecificNonJSONEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		chunks := []string{
+			`: keep-alive`,
+			`data: : OPENROUTER PROCESSING`,
+			"event: ping\n" + `data: provider progress`,
+			`data: {"id":"provider-events","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+			`data: : keep-alive`,
+			`data: {"id":"provider-events","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}`,
+			`data: {"id":"provider-events","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hi"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	responseChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var final *model.Response
+	for resp := range responseChan {
+		require.Nil(t, resp.Error)
+		if resp.Done {
+			final = resp
+			continue
+		}
+	}
+
+	require.NotNil(t, final)
+	require.True(t, final.Done)
+	require.NotEmpty(t, final.Choices)
+	require.Equal(t, "hello world", final.Choices[0].Message.Content)
+}
+
 func TestModel_GenerateContentIter_StreamingContextCancellationRunsCallback(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
@@ -803,7 +864,134 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 			)
 		})
 
-	t.Run("assistant message without tool calls is not backfilled",
+	t.Run("deepseek backfills assistant tool call by default",
+		func(t *testing.T) {
+			msgs := []model.Message{
+				{
+					Role:    model.RoleAssistant,
+					Content: "Calling a tool.",
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-deepseek-default",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "calculator",
+								Arguments: []byte(`{"expression":"2+2"}`),
+							},
+						},
+					},
+				},
+			}
+
+			converted := New(
+				"deepseek-v4-pro",
+				WithVariant(VariantDeepSeek),
+			).convertMessages(msgs)
+			require.Len(t, converted, 1)
+			require.NotNil(t, converted[0].OfAssistant)
+
+			data, err := json.Marshal(converted[0].OfAssistant)
+			require.NoError(t, err)
+
+			var parsed map[string]any
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
+				t,
+				ok,
+				"DeepSeek should backfill reasoning_content by default",
+			)
+			assert.Equal(t, "", reasoningValue)
+		})
+
+	t.Run("deepseek backfill can be explicitly disabled",
+		func(t *testing.T) {
+			msgs := []model.Message{
+				{
+					Role:    model.RoleAssistant,
+					Content: "Calling a tool.",
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-deepseek-disabled",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "calculator",
+								Arguments: []byte(`{"expression":"2+2"}`),
+							},
+						},
+					},
+				},
+			}
+
+			converted := New(
+				"deepseek-v4-pro",
+				WithVariant(VariantDeepSeek),
+				WithReasoningContentBackfill(false),
+			).convertMessages(msgs)
+			require.Len(t, converted, 1)
+			require.NotNil(t, converted[0].OfAssistant)
+
+			data, err := json.Marshal(converted[0].OfAssistant)
+			require.NoError(t, err)
+
+			var parsed map[string]any
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			_, ok := parsed[model.ReasoningContentKey]
+			assert.False(
+				t,
+				ok,
+				"explicit false should disable DeepSeek reasoning_content backfill",
+			)
+		})
+
+	t.Run("deepseek inferred from base URL backfills by default",
+		func(t *testing.T) {
+			msgs := []model.Message{
+				{
+					Role:    model.RoleAssistant,
+					Content: "Calling a tool.",
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-deepseek-inferred",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "calculator",
+								Arguments: []byte(`{"expression":"2+2"}`),
+							},
+						},
+					},
+				},
+			}
+
+			converted := New(
+				"deepseek-v4-pro",
+				WithBaseURL(defaultDeepSeekBaseURL),
+			).convertMessages(msgs)
+			require.Len(t, converted, 1)
+			require.NotNil(t, converted[0].OfAssistant)
+
+			data, err := json.Marshal(converted[0].OfAssistant)
+			require.NoError(t, err)
+
+			var parsed map[string]any
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
+				t,
+				ok,
+				"DeepSeek inferred from base URL should backfill "+
+					"reasoning_content by default",
+			)
+			assert.Equal(t, "", reasoningValue)
+		})
+
+	t.Run("assistant message without tool calls backfills empty reasoning_content",
 		func(t *testing.T) {
 			msgs := []model.Message{
 				{
@@ -826,12 +1014,14 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 			err = json.Unmarshal(data, &parsed)
 			require.NoError(t, err)
 
-			_, ok := parsed[model.ReasoningContentKey]
-			assert.False(
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
 				t,
 				ok,
-				"reasoning_content should stay absent without tool calls",
+				"reasoning_content should be present when backfill "+
+					"is enabled",
 			)
+			assert.Equal(t, "", reasoningValue)
 		})
 
 	t.Run("assistant message with tool calls and reasoning_content", func(t *testing.T) {
@@ -1809,6 +1999,21 @@ func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Mes
 	return append([]model.Message{messages[0]}, messages[2:]...), nil
 }
 
+type captureMaxTokensStrategy struct {
+	maxTokens int
+	called    bool
+}
+
+func (s *captureMaxTokensStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	s.maxTokens = maxTokens
+	s.called = true
+	return messages, nil
+}
+
 // TestWithTokenTailoring ensures messages are tailored before request is built.
 func TestWithTokenTailoring(t *testing.T) {
 	// Capture the built OpenAI request to check messages count reflects tailoring.
@@ -1840,6 +2045,169 @@ func TestWithTokenTailoring(t *testing.T) {
 	require.NotNil(t, captured, "expected request callback to capture request")
 	// After tailoring, OpenAI messages should be 1 user message (system omitted in this test).
 	require.Len(t, captured.Messages, 1, "expected 1 message after tailoring, got %d", len(captured.Messages))
+}
+
+func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(strategy),
+	)
+	maxCompletionTokens := 65536
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &maxCompletionTokens,
+		},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	contextWindow := imodel.ResolveContextWindow("gpt-4o-mini")
+	want := imodel.CalculateMaxInputTokensWithParams(
+		contextWindow,
+		imodel.DefaultProtocolOverheadTokens,
+		maxCompletionTokens,
+		imodel.DefaultInputTokensFloor,
+		imodel.DefaultSafetyMarginRatio,
+		imodel.DefaultMaxInputTokensRatio,
+	)
+	require.Equal(t, want, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_ClampsFloorToAvailableBudget(t *testing.T) {
+	modelName := strings.ToLower("token-tailoring-small-context-" +
+		strings.ReplaceAll(t.Name(), "/", "-"))
+	model.RegisterModelContextWindow(modelName, 4096)
+	t.Cleanup(func() {
+		imodel.ModelMutex.Lock()
+		defer imodel.ModelMutex.Unlock()
+		delete(imodel.ModelContextWindows, modelName)
+	})
+	strategy := &captureMaxTokensStrategy{}
+	m := New(modelName,
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(strategy),
+	)
+	maxCompletionTokens := 65536
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &maxCompletionTokens,
+		},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.True(t, strategy.called)
+	require.Zero(t, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_SubtractsToolsBudgetForAutoLimit(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		Tools: map[string]tool.Tool{
+			"search": stubTool{decl: &tool.Declaration{
+				Name:        "search",
+				Description: strings.Repeat("tool description ", 10),
+				InputSchema: &tool.Schema{
+					Type: "object",
+					Properties: map[string]*tool.Schema{
+						"query": {
+							Type:        "string",
+							Description: strings.Repeat("query description ", 10),
+						},
+					},
+				},
+			}},
+		},
+	}
+	toolsTokens := m.estimateToolsTokens(context.Background(), req.Tools)
+	require.Greater(t, toolsTokens, 0)
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	contextWindow := imodel.ResolveContextWindow("gpt-4o-mini")
+	want := imodel.CalculateMaxInputTokensWithParams(
+		contextWindow,
+		imodel.DefaultProtocolOverheadTokens,
+		imodel.DefaultReserveOutputTokens,
+		imodel.DefaultInputTokensFloor,
+		imodel.DefaultSafetyMarginRatio,
+		imodel.DefaultMaxInputTokensRatio,
+	)
+	want = min(want, m.hardInputBudget(contextWindow, imodel.DefaultReserveOutputTokens))
+	require.Equal(t, max(want-toolsTokens, 0), strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_KeepsExplicitLimitBeforeToolsBudget(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(512),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		Tools: map[string]tool.Tool{
+			"search": stubTool{decl: &tool.Declaration{
+				Name:        "search",
+				Description: strings.Repeat("tool description ", 10),
+				InputSchema: &tool.Schema{
+					Type: "object",
+					Properties: map[string]*tool.Schema{
+						"query": {
+							Type:        "string",
+							Description: strings.Repeat("query description ", 10),
+						},
+					},
+				},
+			}},
+		},
+	}
+	require.Greater(t, m.estimateToolsTokens(context.Background(), req.Tools), 0)
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.True(t, strategy.called)
+	require.Equal(t, 512, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_ClampsExplicitLimitToHardBudget(t *testing.T) {
+	modelName := strings.ToLower("token-tailoring-explicit-small-context-" +
+		strings.ReplaceAll(t.Name(), "/", "-"))
+	model.RegisterModelContextWindow(modelName, 4096)
+	t.Cleanup(func() {
+		imodel.ModelMutex.Lock()
+		defer imodel.ModelMutex.Unlock()
+		delete(imodel.ModelContextWindows, modelName)
+	})
+	strategy := &captureMaxTokensStrategy{}
+	m := New(modelName,
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(8192),
+		WithTailoringStrategy(strategy),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.True(t, strategy.called)
+	require.Equal(t,
+		m.hardInputBudget(4096, imodel.DefaultReserveOutputTokens),
+		strategy.maxTokens,
+	)
 }
 
 // TestWithEnableTokenTailoring_SimpleMode tests the simple mode of token tailoring.
@@ -4377,12 +4745,60 @@ func TestBuildChatRequest_WithExtraFields(t *testing.T) {
 			model.NewUserMessage("test"),
 		},
 		GenerationConfig: model.GenerationConfig{},
+		ExtraFields: map[string]any{
+			"prompt_cache_key": "cache-1",
+		},
 	}
 
 	chatReq, reqOpts := m.buildChatRequest(req)
 	assert.Equal(t, "gpt-3.5-turbo", chatReq.Model, "expected model to be gpt-3.5-turbo")
-	// Extra fields should be included in reqOpts
-	assert.NotEmpty(t, reqOpts, "expected request options to be present")
+	// Extra fields should be included in reqOpts.
+	assert.Len(t, reqOpts, 3, "expected model and request extra fields to be present")
+}
+
+func TestModel_GenerateContent_RequestExtraFieldsOverrideModelExtraFields(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-3.5-turbo",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithExtraFields(map[string]any{
+			"model_field":      "model_value",
+			"prompt_cache_key": "model-cache",
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		ExtraFields: map[string]any{
+			"prompt_cache_key": "request-cache",
+		},
+	}
+
+	responseChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	require.NotNil(t, captured)
+	assert.Equal(t, "model_value", captured["model_field"])
+	assert.Equal(t, "request-cache", captured["prompt_cache_key"])
 }
 
 // TestNew_WithAllOptions tests creating a model with all available options.

@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	defaultMaxResults = 10
-	defaultMinScore   = 0.0
+	defaultMaxResults        = 10
+	defaultMinScore          = 0.0
+	agenticFilterPromptIntro = "You are a helpful assistant that can search for relevant information in the knowledge base."
 )
 
 // KnowledgeSearchRequest represents the input for the knowledge search tool.
@@ -52,13 +53,21 @@ type DocumentResult struct {
 // Option is a function that configures the knowledge search tool.
 type Option func(*options)
 
+// ResultPostProcessor post-processes the search response before it is returned
+// to the LLM. It receives the current invocation context and the raw response,
+// and may mutate the response (e.g. filter out duplicate documents) or rewrite
+// the Message field. Implementations must be safe for concurrent use.
+type ResultPostProcessor func(ctx context.Context, resp *KnowledgeSearchResponse) *KnowledgeSearchResponse
+
 type options struct {
-	toolName          string
-	toolDescription   string
-	staticFilter      map[string]any
-	conditionedFilter *searchfilter.UniversalFilterCondition
-	maxResults        int
-	minScore          float64
+	toolName            string
+	toolDescription     string
+	staticFilter        map[string]any
+	conditionedFilter   *searchfilter.UniversalFilterCondition
+	maxResults          int
+	minScore            float64
+	excludeMetadataKeys map[string]struct{}
+	postProcessor       ResultPostProcessor
 }
 
 // WithToolName sets the name of the knowledge search tool.
@@ -110,6 +119,47 @@ func WithMinScore(minScore float64) Option {
 	}
 }
 
+// WithExcludeMetadataKeys excludes the specified metadata keys from each
+// returned document before the result is handed to the LLM. This is useful
+// when certain metadata fields are verbose or low-value for the model
+// (e.g. import lists, raw language tag, chunk index).
+//
+// Semantics: this option is additive. Multiple calls to WithExcludeMetadataKeys
+// accumulate into a single exclusion set on the underlying options, rather
+// than replacing the previously-configured keys. Empty or duplicate keys are
+// ignored. This makes it safe for higher-level helpers (for example, the code
+// search tool constructor) to pass a default exclusion list and still let
+// callers extend it.
+func WithExcludeMetadataKeys(keys ...string) Option {
+	return func(opts *options) {
+		if len(keys) == 0 {
+			return
+		}
+		if opts.excludeMetadataKeys == nil {
+			opts.excludeMetadataKeys = make(map[string]struct{}, len(keys))
+		}
+		for _, k := range keys {
+			if k == "" {
+				continue
+			}
+			opts.excludeMetadataKeys[k] = struct{}{}
+		}
+	}
+}
+
+// WithResultPostProcessor registers a post-processor that is invoked right
+// before the knowledge search response is returned to the LLM. Typical use
+// cases include cross-call deduplication and result rewriting. Passing nil is
+// a no-op.
+func WithResultPostProcessor(p ResultPostProcessor) Option {
+	return func(opts *options) {
+		if p == nil {
+			return
+		}
+		opts.postProcessor = p
+	}
+}
+
 // NewKnowledgeSearchTool creates a function tool for knowledge search using
 // the Knowledge interface.
 // This tool allows agents to search for relevant information in the knowledge base.
@@ -156,7 +206,11 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
 
-		return convertSearchResults(result)
+		resp, err := convertSearchResults(result, opt.excludeMetadataKeys)
+		if err != nil {
+			return nil, err
+		}
+		return applyPostProcessor(ctx, resp, opt.postProcessor), nil
 	}
 
 	toolName := opt.toolName
@@ -178,7 +232,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 // KnowledgeSearchRequestWithFilter represents the input with filter for the knowledge search tool.
 type KnowledgeSearchRequestWithFilter struct {
 	Query  string                                 `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
-	Filter *searchfilter.UniversalFilterCondition `json:"filter,omitempty" description:"Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."`
+	Filter *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."`
 }
 
 // NewAgenticFilterSearchTool creates a knowledge search tool with dynamic agent-controlled filtering.
@@ -240,7 +294,11 @@ func NewAgenticFilterSearchTool(
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
 
-		return convertSearchResults(result)
+		resp, err := convertSearchResults(result, opt.excludeMetadataKeys)
+		if err != nil {
+			return nil, err
+		}
+		return applyPostProcessor(ctx, resp, opt.postProcessor), nil
 	}
 
 	toolName := opt.toolName
@@ -248,12 +306,7 @@ func NewAgenticFilterSearchTool(
 		toolName = "knowledge_search_with_agentic_filter"
 	}
 	filterInfo := generateAgenticFilterPrompt(agenticFilterInfo)
-	description := ""
-	if opt.toolDescription == "" {
-		description = filterInfo
-	} else {
-		description = fmt.Sprintf("tool description:%s, filter info:%s", opt.toolDescription, filterInfo)
-	}
+	description := composeAgenticToolDescription(opt.toolDescription, filterInfo)
 	return function.NewFunctionTool(
 		searchFunc,
 		function.WithName(toolName),
@@ -261,8 +314,41 @@ func NewAgenticFilterSearchTool(
 	)
 }
 
+func composeAgenticToolDescription(toolDescription, filterInfo string) string {
+	toolDescription = strings.TrimSpace(toolDescription)
+	filterInfo = strings.TrimSpace(filterInfo)
+
+	switch {
+	case toolDescription == "":
+		return filterInfo
+	case filterInfo == "":
+		return toolDescription
+	}
+
+	filterAppendix := strings.TrimSpace(strings.TrimPrefix(filterInfo, agenticFilterPromptIntro))
+	if filterAppendix == "" {
+		return toolDescription
+	}
+
+	return fmt.Sprintf("%s\n\n== FILTER GUIDANCE ==\n\n%s", toolDescription, filterAppendix)
+}
+
+// applyPostProcessor runs the optional ResultPostProcessor on resp. Passing a
+// nil processor returns resp unchanged, so callers can always write
+// `return applyPostProcessor(ctx, resp, opt.postProcessor), nil` without an
+// extra nil check.
+func applyPostProcessor(ctx context.Context, resp *KnowledgeSearchResponse, p ResultPostProcessor) *KnowledgeSearchResponse {
+	if p == nil {
+		return resp
+	}
+	return p(ctx, resp)
+}
+
 // convertSearchResults converts knowledge.SearchResult to KnowledgeSearchResponse.
-func convertSearchResults(result *knowledge.SearchResult) (*KnowledgeSearchResponse, error) {
+func convertSearchResults(
+	result *knowledge.SearchResult,
+	excludeKeys map[string]struct{},
+) (*KnowledgeSearchResponse, error) {
 	if result == nil || len(result.Documents) == 0 {
 		return nil, errors.New("no relevant information found")
 	}
@@ -271,7 +357,7 @@ func convertSearchResults(result *knowledge.SearchResult) (*KnowledgeSearchRespo
 	for _, doc := range result.Documents {
 		documents = append(documents, &DocumentResult{
 			Text:     doc.Document.Content,
-			Metadata: filterMetadata(doc.Document.Metadata),
+			Metadata: filterMetadata(doc.Document.Metadata, excludeKeys),
 			Score:    doc.Score,
 		})
 	}
@@ -337,12 +423,16 @@ func mergeFilterConditions(
 }
 
 // filterMetadata removes internal metadata keys with MetaPrefix from the metadata map.
-func filterMetadata(metadata map[string]any) map[string]any {
+// Keys present in excludeKeys are additionally stripped, regardless of prefix.
+func filterMetadata(metadata map[string]any, excludeKeys map[string]struct{}) map[string]any {
 	if metadata == nil {
 		return nil
 	}
 	filtered := make(map[string]any)
 	for k, v := range metadata {
+		if _, excluded := excludeKeys[k]; excluded {
+			continue
+		}
 		if !strings.HasPrefix(k, source.MetaPrefix) ||
 			k == source.MetaChunkIndex ||
 			k == source.MetaMarkdownHeaderPath ||
@@ -356,7 +446,7 @@ func filterMetadata(metadata map[string]any) map[string]any {
 
 func generateAgenticFilterPrompt(agenticFilterInfo map[string][]any) string {
 	if len(agenticFilterInfo) == 0 {
-		return "You are a helpful assistant that can search for relevant information in the knowledge base."
+		return agenticFilterPromptIntro
 	}
 
 	// Build list of valid filter keys
@@ -368,7 +458,7 @@ func generateAgenticFilterPrompt(agenticFilterInfo map[string][]any) string {
 
 	var b strings.Builder
 
-	fmt.Fprintf(&b, `You are a helpful assistant that can search for relevant information in the knowledge base. Available filters: %s.
+	fmt.Fprintf(&b, `%s Available filters: %s.
 
 Filter Usage:
 - Query: Can be empty when using only metadata filters
@@ -385,7 +475,7 @@ Filter Examples (use double quotes for JSON):
 Note: For logical operators (and/or), use "value" field to specify an array of sub-conditions.
 
 Available Filter Values:
-`, keysStr)
+`, agenticFilterPromptIntro, keysStr)
 
 	// Separate keys with and without predefined values
 	var keysWithValues []string

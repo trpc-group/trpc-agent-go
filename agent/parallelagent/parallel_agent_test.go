@@ -204,7 +204,13 @@ func TestParallelAgent_BranchInvoke(t *testing.T) {
 	)
 
 	subAgent := &mockAgent{name: "agent-1", eventCount: 1}
-	branchInvocation := parallelAgent.createBranchInvocation(subAgent, baseInvocation, "", nil)
+	branchInvocation := parallelAgent.createBranchInvocation(
+		subAgent,
+		baseInvocation,
+		"test-parallel/agent-1",
+		"surface/agent-1",
+		nil,
+	)
 
 	require.Equal(t, "test-parallel", baseInvocation.GetEventFilterKey())
 	// Verify branch has different ID.
@@ -212,6 +218,8 @@ func TestParallelAgent_BranchInvoke(t *testing.T) {
 	// Verify agent is set.
 	require.NotNil(t, branchInvocation.Agent)
 	require.Equal(t, subAgent.Info().Name, branchInvocation.Agent.Info().Name)
+	require.Equal(t, "test-parallel/agent-1", agent.InvocationTraceNodeID(branchInvocation))
+	require.Equal(t, "surface/agent-1", agent.InvocationSurfaceRootNodeID(branchInvocation))
 	require.Equal(t, "test-parallel/agent-1", branchInvocation.GetEventFilterKey())
 }
 

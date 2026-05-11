@@ -17,10 +17,20 @@ import (
 // Option represents a functional option for configuring repository sources.
 type Option func(*Source)
 
-// WithRepository sets structured repository descriptors explicitly.
-func WithRepository(repositories ...Repository) Option {
+// WithRepository sets the single repository handled by this Source.
+//
+// Calling WithRepository more than once keeps the first repository value in
+// Source.repository, leaves Source.hasRepository set, and records the duplicate
+// configuration in Source.multiRepoError. The deferred error is surfaced by
+// Source.ReadDocuments rather than by the option itself.
+func WithRepository(repository Repository) Option {
 	return func(s *Source) {
-		s.repositories = append([]Repository(nil), repositories...)
+		if s.hasRepository {
+			s.multiRepoError = true
+			return
+		}
+		s.repository = repository
+		s.hasRepository = true
 	}
 }
 
@@ -47,62 +57,6 @@ func WithMetadataValue(key string, value any) Option {
 			s.metadata = make(map[string]any)
 		}
 		s.metadata[key] = value
-	}
-}
-
-// WithBranch sets the git branch to checkout when using a git URL.
-func WithBranch(branch string) Option {
-	return func(s *Source) {
-		s.branch = branch
-	}
-}
-
-// WithTag sets the git tag to checkout when using a git URL.
-func WithTag(tag string) Option {
-	return func(s *Source) {
-		s.tag = tag
-	}
-}
-
-// WithCommit sets the git commit to checkout when using a git URL.
-func WithCommit(commit string) Option {
-	return func(s *Source) {
-		s.commit = commit
-	}
-}
-
-// WithRepoName sets the logical repository name.
-func WithRepoName(name string) Option {
-	return func(s *Source) {
-		s.repoName = name
-	}
-}
-
-// WithRepoURL sets the logical repository URL.
-func WithRepoURL(repoURL string) Option {
-	return func(s *Source) {
-		s.repoURL = repoURL
-	}
-}
-
-// WithDirs sets local repository directories explicitly.
-func WithDirs(dirs ...string) Option {
-	return func(s *Source) {
-		s.dirs = append([]string(nil), dirs...)
-	}
-}
-
-// WithRepoURLs sets remote Git repository URLs explicitly.
-func WithRepoURLs(urls ...string) Option {
-	return func(s *Source) {
-		s.repoURLs = append([]string(nil), urls...)
-	}
-}
-
-// WithSubdir limits processing to a subdirectory under the repository root.
-func WithSubdir(subdir string) Option {
-	return func(s *Source) {
-		s.subdir = subdir
 	}
 }
 

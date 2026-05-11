@@ -14,18 +14,26 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	criterionlength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
 )
 
 func TestTextCriterionJSONRoundTrip(t *testing.T) {
 	criterion := New(
 		WithIgnore(true),
 		WithCaseInsensitive(true),
+		WithLengthCriterion(criterionlength.New(criterionlength.WithMin(1), criterionlength.WithMax(10))),
 		WithMatchStrategy(TextMatchStrategyRegex),
 		WithCompareName("trim_equal"),
 	)
 	data, err := json.Marshal(criterion)
 	assert.NoError(t, err)
-	assert.JSONEq(t, `{"ignore":true,"caseInsensitive":true,"matchStrategy":"regex","compareName":"trim_equal"}`, string(data))
+	assert.JSONEq(t, `{
+		"ignore": true,
+		"caseInsensitive": true,
+		"length": {"min": 1, "max": 10},
+		"matchStrategy": "regex",
+		"compareName": "trim_equal"
+	}`, string(data))
 
 	var decoded TextCriterion
 	err = json.Unmarshal(data, &decoded)
@@ -34,6 +42,10 @@ func TestTextCriterionJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, criterion.CaseInsensitive, decoded.CaseInsensitive)
 	assert.Equal(t, criterion.MatchStrategy, decoded.MatchStrategy)
 	assert.Equal(t, criterion.CompareName, decoded.CompareName)
+	if assert.NotNil(t, decoded.Length) {
+		assert.Equal(t, 1, *decoded.Length.Min)
+		assert.Equal(t, 10, *decoded.Length.Max)
+	}
 }
 
 func TestTextCriterionMatchStrategies(t *testing.T) {
@@ -53,6 +65,40 @@ func TestTextCriterionIgnore(t *testing.T) {
 	ok, err := criterion.Match("anything", "value")
 	assert.NoError(t, err)
 	assert.True(t, ok)
+}
+
+func TestTextCriterionLengthWithDefaultExact(t *testing.T) {
+	criterion := &TextCriterion{
+		Length: &criterionlength.LengthCriterion{Min: intPtr(2), Max: intPtr(4)},
+	}
+
+	ok, err := criterion.Match("你好", "你好")
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
+	ok, err = criterion.Match("你好", "")
+	assert.False(t, ok)
+	assert.Error(t, err)
+
+	ok, err = criterion.Match("a", "")
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "length mismatch")
+}
+
+func TestTextCriterionLengthAndMatchStrategy(t *testing.T) {
+	criterion := &TextCriterion{
+		Length:        &criterionlength.LengthCriterion{Max: intPtr(10)},
+		MatchStrategy: TextMatchStrategyContains,
+	}
+
+	ok, err := criterion.Match("hello world", "hello")
+	assert.False(t, ok)
+	assert.Error(t, err)
+
+	ok, err = criterion.Match("hello", "ell")
+	assert.True(t, ok)
+	assert.NoError(t, err)
 }
 
 func TestTextCriterionRegexInvalid(t *testing.T) {
@@ -112,4 +158,8 @@ func TestTextCriterionAllBranches(t *testing.T) {
 	ok, err = regex.Match("xyz", "abc[0-9]+")
 	assert.False(t, ok)
 	assert.Error(t, err)
+}
+
+func intPtr(v int) *int {
+	return &v
 }
