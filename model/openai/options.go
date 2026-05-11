@@ -83,6 +83,8 @@ type options struct {
 	ChatChunkCallback ChatChunkCallbackFunc
 	// Callback for the chat stream completion.
 	ChatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	// ChatTelemetry enables opt-in telemetry for direct model usage.
+	ChatTelemetry bool
 	// Options for the OpenAI client.
 	OpenAIOptions []openaiopt.RequestOption
 	// Extra fields to be added to the HTTP request body.
@@ -219,6 +221,19 @@ func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatStreamCompleteCallback = fn
+	}
+}
+
+// WithChatTelemetry enables chat trace and metric reporting for direct
+// model/openai usage.
+//
+// This option is intended for users who call Model.GenerateContent or
+// Model.GenerateContentIter directly. The recommended runner + agent path
+// already reports chat telemetry from llmflow. Reusing a model with this
+// option enabled inside runner + agent may report duplicate chat telemetry.
+func WithChatTelemetry(enabled bool) Option {
+	return func(opts *options) {
+		opts.ChatTelemetry = enabled
 	}
 }
 

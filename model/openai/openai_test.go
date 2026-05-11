@@ -29,9 +29,18 @@ import (
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	semconvmetrics "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+	telemetrytrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/stretchr/testify/assert"
@@ -468,6 +477,257 @@ func TestModel_GenerateContentIter_Streaming(t *testing.T) {
 		}
 	}
 	require.True(t, sawHello)
+}
+
+func TestModel_ChatTelemetry_DefaultDisabledAndExplicitFalse(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		opts []Option
+	}{
+		{name: "default disabled"},
+		{name: "explicit false", opts: []Option{WithChatTelemetry(false)}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := useOpenAIChatTelemetrySpanRecorder(t)
+			server := newOpenAIChatTelemetryNonStreamingServer(t)
+			defer server.Close()
+
+			opts := []Option{WithBaseURL(server.URL), WithAPIKey("test-key")}
+			opts = append(opts, tt.opts...)
+			m := New("gpt-3.5-turbo", opts...)
+
+			ch, err := m.GenerateContent(context.Background(), &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+			})
+			require.NoError(t, err)
+			for range ch {
+			}
+
+			require.Empty(t, recorder.Ended())
+		})
+	}
+}
+
+func TestModel_ChatTelemetry_OptInNonStreamingTraceAndMetrics(t *testing.T) {
+	recorder := useOpenAIChatTelemetrySpanRecorder(t)
+	reader := useOpenAIChatTelemetryMeter(t)
+	server := newOpenAIChatTelemetryNonStreamingServer(t)
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatTelemetry(true),
+	)
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	})
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, itelemetry.NewChatSpanName("gpt-3.5-turbo"), spans[0].Name())
+	attrs := spanAttributes(spans[0].Attributes())
+	require.Equal(t, itelemetry.OperationChat, attrs[semconvtrace.KeyGenAIOperationName].AsString())
+	require.Equal(t, "gpt-3.5-turbo", attrs[semconvtrace.KeyGenAIRequestModel].AsString())
+	require.Equal(t, "telemetry-non-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
+	require.Equal(t, int64(3), attrs[semconvtrace.KeyGenAIUsageInputTokens].AsInt64())
+	require.Equal(t, int64(2), attrs[semconvtrace.KeyGenAIUsageOutputTokens].AsInt64())
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.True(t, metricContainsRequestCount(rm))
+}
+
+func TestModel_ChatTelemetry_OptInStreamingTrace(t *testing.T) {
+	recorder := useOpenAIChatTelemetrySpanRecorder(t)
+	server := newOpenAIChatTelemetryStreamingServer(t)
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatTelemetry(true),
+	)
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	})
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, itelemetry.NewChatSpanName("gpt-3.5-turbo"), spans[0].Name())
+	attrs := spanAttributes(spans[0].Attributes())
+	require.Equal(t, itelemetry.OperationChat, attrs[semconvtrace.KeyGenAIOperationName].AsString())
+	require.Equal(t, "gpt-3.5-turbo", attrs[semconvtrace.KeyGenAIRequestModel].AsString())
+	require.Equal(t, "telemetry-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
+	require.True(t, attrs[semconvtrace.KeyGenAIRequestIsStream].AsBool())
+}
+
+func TestModel_ChatTelemetry_OptInGenerateContentIterTrace(t *testing.T) {
+	recorder := useOpenAIChatTelemetrySpanRecorder(t)
+	server := newOpenAIChatTelemetryNonStreamingServer(t)
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatTelemetry(true),
+	)
+	seq, err := m.GenerateContentIter(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+	})
+	require.NoError(t, err)
+	seq(func(resp *model.Response) bool {
+		return true
+	})
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, itelemetry.NewChatSpanName("gpt-3.5-turbo"), spans[0].Name())
+	attrs := spanAttributes(spans[0].Attributes())
+	require.Equal(t, itelemetry.OperationChat, attrs[semconvtrace.KeyGenAIOperationName].AsString())
+	require.Equal(t, "telemetry-non-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
+}
+
+func newOpenAIChatTelemetryNonStreamingServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "telemetry-non-stream",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "gpt-3.5-turbo",
+			"choices": [
+				{
+					"index": 0,
+					"message": {"role": "assistant", "content": "ok"},
+					"finish_reason": "stop"
+				}
+			],
+			"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+		}`)
+	}))
+}
+
+func newOpenAIChatTelemetryStreamingServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunks := []string{
+			`data: {"id":"telemetry-stream","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+			`data: {"id":"telemetry-stream","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+}
+
+func useOpenAIChatTelemetrySpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	originalProvider := telemetrytrace.TracerProvider
+	originalTracer := telemetrytrace.Tracer
+	telemetrytrace.TracerProvider = provider
+	telemetrytrace.Tracer = provider.Tracer(itelemetry.InstrumentName)
+	t.Cleanup(func() {
+		telemetrytrace.TracerProvider = originalProvider
+		telemetrytrace.Tracer = originalTracer
+		_ = provider.Shutdown(context.Background())
+	})
+	return recorder
+}
+
+func useOpenAIChatTelemetryMeter(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalChatMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	originalTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	originalOperationDuration := itelemetry.ChatMetricGenAIClientOperationDuration
+	originalServerTTFT := itelemetry.ChatMetricGenAIServerTimeToFirstToken
+	originalClientTTFT := itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken
+	originalTimePerToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
+	originalTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
+	t.Cleanup(func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalChatMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+		itelemetry.ChatMetricGenAIClientTokenUsage = originalTokenUsage
+		itelemetry.ChatMetricGenAIClientOperationDuration = originalOperationDuration
+		itelemetry.ChatMetricGenAIServerTimeToFirstToken = originalServerTTFT
+		itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = originalClientTTFT
+		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = originalTimePerToken
+		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = originalTokenPerTime
+		_ = provider.Shutdown(context.Background())
+	})
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter(semconvmetrics.MetricTRPCAgentGoClientRequestCnt)
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	itelemetry.ChatMetricGenAIClientTokenUsage = nil
+	itelemetry.ChatMetricGenAIClientOperationDuration = nil
+	itelemetry.ChatMetricGenAIServerTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = nil
+	return reader
+}
+
+func spanAttributes(attrs []attribute.KeyValue) map[string]attribute.Value {
+	out := make(map[string]attribute.Value, len(attrs))
+	for _, attr := range attrs {
+		out[string(attr.Key)] = attr.Value
+	}
+	return out
+}
+
+func metricContainsRequestCount(rm metricdata.ResourceMetrics) bool {
+	for _, sm := range rm.ScopeMetrics {
+		for _, metric := range sm.Metrics {
+			if metric.Name != semconvmetrics.MetricTRPCAgentGoClientRequestCnt {
+				continue
+			}
+			sum, ok := metric.Data.(metricdata.Sum[int64])
+			if !ok {
+				return false
+			}
+			for _, point := range sum.DataPoints {
+				if point.Value == 1 {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func TestModel_StreamingSkipsProviderSpecificNonJSONEvents(t *testing.T) {
