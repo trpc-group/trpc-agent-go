@@ -121,6 +121,9 @@ func openaiProvider(opts *Options) (model.Model, error) {
 	if opts.MaxInputTokens != nil {
 		res = append(res, openai.WithMaxInputTokens(*opts.MaxInputTokens))
 	}
+	if opts.ContextWindow != nil {
+		res = append(res, openai.WithContextWindow(*opts.ContextWindow))
+	}
 	if opts.TokenCounter != nil {
 		res = append(res, openai.WithTokenCounter(opts.TokenCounter))
 	}
@@ -179,6 +182,9 @@ func anthropicProvider(opts *Options) (model.Model, error) {
 	if opts.MaxInputTokens != nil {
 		res = append(res, anthropic.WithMaxInputTokens(*opts.MaxInputTokens))
 	}
+	if opts.ContextWindow != nil {
+		res = append(res, anthropic.WithContextWindow(*opts.ContextWindow))
+	}
 	if opts.TokenCounter != nil {
 		res = append(res, anthropic.WithTokenCounter(opts.TokenCounter))
 	}
@@ -217,6 +223,9 @@ func geminiProvider(opts *Options) (model.Model, error) {
 	}
 	if opts.MaxInputTokens != nil {
 		res = append(res, gemini.WithMaxInputTokens(*opts.MaxInputTokens))
+	}
+	if opts.ContextWindow != nil {
+		res = append(res, gemini.WithContextWindow(*opts.ContextWindow))
 	}
 	if opts.TokenCounter != nil {
 		res = append(res, gemini.WithTokenCounter(opts.TokenCounter))
@@ -260,6 +269,9 @@ func ollamaProvider(opts *Options) (model.Model, error) {
 	if opts.MaxInputTokens != nil {
 		res = append(res, ollama.WithMaxInputTokens(*opts.MaxInputTokens))
 	}
+	if opts.ContextWindow != nil {
+		res = append(res, ollama.WithContextWindow(*opts.ContextWindow))
+	}
 	if opts.TokenCounter != nil {
 		res = append(res, ollama.WithTokenCounter(opts.TokenCounter))
 	}
@@ -301,6 +313,9 @@ func hunyuanProvider(opts *Options) (model.Model, error) {
 	}
 	if opts.MaxInputTokens != nil {
 		res = append(res, hunyuan.WithMaxInputTokens(*opts.MaxInputTokens))
+	}
+	if opts.ContextWindow != nil {
+		res = append(res, hunyuan.WithContextWindow(*opts.ContextWindow))
 	}
 	if opts.TokenCounter != nil {
 		res = append(res, hunyuan.WithTokenCounter(opts.TokenCounter))

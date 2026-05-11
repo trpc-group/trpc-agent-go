@@ -85,11 +85,11 @@ func (s *tolerantEventStreamDecoder) Next() bool {
 		case "data":
 			_, s.err = data.Write(value)
 			if s.err != nil {
-				break
+				return false
 			}
 			_, s.err = data.WriteRune('\n')
 			if s.err != nil {
-				break
+				return false
 			}
 		}
 	}

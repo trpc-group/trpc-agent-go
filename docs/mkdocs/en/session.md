@@ -1900,24 +1900,26 @@ Configure the summarizer behavior with the following options:
 - **`WithTokenThreshold(tokenCount int)`**: Trigger summarization when the new token count since last summary exceeds the threshold. Example: `WithTokenThreshold(4000)` triggers when 4000+ new tokens have been added since last summary.
 - **`WithTimeThreshold(interval time.Duration)`**: Evaluate the condition when a summary check runs; it wraps `CheckTimeThreshold` and triggers when the last event in the checked session is older than the interval. In the normal delta-summary path, that checked session contains only unsummarized events, so this effectively means the latest unsummarized event. This is not a standalone background timer. Example: `WithTimeThreshold(5*time.Minute)` means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."
 
-> **Context Window Registration**
+> **Context Window Configuration**
 >
-> `WithContextThreshold` and Token Tailoring both rely on the framework's built-in model context window registry. The registry includes many popular models (OpenAI, Anthropic, Google, DeepSeek, Qwen, etc.), but may not cover every model — especially private deployments, fine-tuned variants, or newer releases. If your model is not recognized (context window resolves to 0 or falls back to the default), register it manually at startup:
+> `WithContextThreshold` and Token Tailoring both need a model context window. Built-in model names are resolved automatically. For private deployments, fine-tuned variants, tenant-provided models, or endpoint IDs, prefer model-instance or per-run configuration so different users do not overwrite a process-wide registry entry:
 >
 > ```go
-> import "trpc.group/trpc-go/trpc-agent-go/model"
+> modelInstance := openai.New(
+>     "my-custom-model",
+>     openai.WithContextWindow(32768),
+> )
 >
-> func init() {
->     // Register a single model.
->     model.RegisterModelContextWindow("my-custom-model", 32768)
->
->     // Or register multiple models at once.
->     model.RegisterModelContextWindows(map[string]int{
->         "my-custom-model-32k": 32768,
->         "my-custom-model-128k": 131072,
->     })
-> }
+> eventChan, err := r.Run(
+>     ctx,
+>     userID,
+>     sessionID,
+>     userMessage,
+>     agent.WithModelContextWindow(32768),
+> )
 > ```
+>
+> Use `model.RegisterModelContextWindow` or `model.RegisterModelContextWindows` only when the model names have stable process-wide meanings.
 >
 > Model names are matched case-insensitively, and the registry also supports prefix matching (e.g., registering `"my-model"` will match `"my-model-v2"`).
 

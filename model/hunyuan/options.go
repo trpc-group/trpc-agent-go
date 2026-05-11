@@ -126,6 +126,17 @@ func WithMaxInputTokens(limit int) Option {
 	}
 }
 
+// WithContextWindow sets the model context window size in tokens for this
+// model instance.
+func WithContextWindow(tokens int) Option {
+	return func(opts *options) {
+		if tokens > 0 {
+			opts.contextWindow = tokens
+			opts.contextWindowConfigured = true
+		}
+	}
+}
+
 // WithTokenCounter sets the TokenCounter used for token tailoring.
 func WithTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *options) {

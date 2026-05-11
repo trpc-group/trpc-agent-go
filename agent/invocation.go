@@ -616,6 +616,26 @@ func WithModelName(name string) RunOption {
 	}
 }
 
+// WithModelContextWindow sets the model context window for this specific run.
+// This is useful for user-defined or private models whose names should not be
+// registered in the process-wide model registry.
+func WithModelContextWindow(tokens int) RunOption {
+	return func(opts *RunOptions) {
+		if tokens > 0 {
+			opts.ModelContextWindow = tokens
+		}
+	}
+}
+
+// ModelContextWindowFromRunOptions returns the context window configured by
+// WithModelContextWindow.
+func ModelContextWindowFromRunOptions(opts *RunOptions) (int, bool) {
+	if opts == nil || opts.ModelContextWindow <= 0 {
+		return 0, false
+	}
+	return opts.ModelContextWindow, true
+}
+
 // WithCodeExecutor sets the code executor for this specific run.
 // If set, it temporarily overrides the agent's default code executor for this
 // request only.
@@ -1009,6 +1029,11 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+
+	// ModelContextWindow is the model context window for this specific run.
+	// If set, it takes precedence over model instance configuration and the
+	// process-wide model registry.
+	ModelContextWindow int
 
 	// ModelRequestExtraFields contains provider-specific top-level request body
 	// fields for model calls made during this run.

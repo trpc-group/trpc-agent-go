@@ -26,6 +26,7 @@ import (
 type hedgeModel struct {
 	candidates    []model.Model
 	name          string
+	contextWindow int
 	launchOffsets []time.Duration
 }
 
@@ -80,16 +81,24 @@ func New(opt ...Option) (model.Model, error) {
 	if name == "" {
 		name = candidates[0].Info().Name
 	}
+	contextWindow := opts.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = stableCandidateContextWindow(candidates)
+	}
 	return &hedgeModel{
 		candidates:    candidates,
 		name:          name,
+		contextWindow: contextWindow,
 		launchOffsets: launchOffsets,
 	}, nil
 }
 
 // Info returns the logical hedge model info.
 func (m *hedgeModel) Info() model.Info {
-	return model.Info{Name: m.name}
+	return model.Info{
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
+	}
 }
 
 // GenerateContent implements the model.Model interface.
@@ -117,6 +126,24 @@ func (m *hedgeModel) GenerateContent(
 		})
 	}()
 	return responseChan, nil
+}
+
+func stableCandidateContextWindow(candidates []model.Model) int {
+	contextWindow := 0
+	for _, candidate := range candidates {
+		window := candidate.Info().ContextWindow
+		if window <= 0 {
+			return 0
+		}
+		if contextWindow == 0 {
+			contextWindow = window
+			continue
+		}
+		if contextWindow != window {
+			return 0
+		}
+	}
+	return contextWindow
 }
 
 // GenerateContentIter implements the model.IterModel interface.

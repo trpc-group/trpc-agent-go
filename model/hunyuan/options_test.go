@@ -18,6 +18,21 @@ import (
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 )
 
+func TestWithContextWindow(t *testing.T) {
+	m := New("hunyuan-test", WithContextWindow(204800))
+	require.Equal(t, 204800, m.Info().ContextWindow)
+
+	m = &Model{}
+	require.Zero(t, m.Info().ContextWindow)
+
+	m = New("hunyuan-test")
+	require.Zero(t, m.Info().ContextWindow)
+
+	opts := &options{}
+	WithContextWindow(0)(opts)
+	require.Zero(t, opts.contextWindow)
+}
+
 func TestWithTokenTailoringConfig(t *testing.T) {
 	tests := []struct {
 		name        string

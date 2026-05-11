@@ -394,7 +394,7 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) ContentOption
 }
 
 // WithContextCompactionTokenCounter sets the token counter used by context
-// compaction for deciding whether tool results exceed configured budgets.
+// compaction for request thresholds and tool-result budgets.
 func WithContextCompactionTokenCounter(counter model.TokenCounter) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		if counter == nil {

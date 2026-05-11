@@ -39,6 +39,7 @@ type Options struct {
 	ExtraFields          map[string]any              // ExtraFields are serialized into provider-specific request payloads.
 	EnableTokenTailoring *bool                       // EnableTokenTailoring toggles automatic token tailoring.
 	MaxInputTokens       *int                        // MaxInputTokens sets the maximum input tokens for token tailoring.
+	ContextWindow        *int                        // ContextWindow sets the model context window size in tokens.
 	TokenCounter         model.TokenCounter          // TokenCounter provides a custom token counting implementation.
 	TailoringStrategy    model.TailoringStrategy     // TailoringStrategy defines the strategy for token tailoring.
 	TokenTailoringConfig *model.TokenTailoringConfig // TokenTailoringConfig customizes token tailoring budget parameters for all providers.
@@ -237,6 +238,16 @@ func WithEnableTokenTailoring(enabled bool) Option {
 func WithMaxInputTokens(limit int) Option {
 	return func(o *Options) {
 		o.MaxInputTokens = &limit
+	}
+}
+
+// WithContextWindow sets the model context window size in tokens for the
+// constructed model instance.
+func WithContextWindow(tokens int) Option {
+	return func(o *Options) {
+		if tokens > 0 {
+			o.ContextWindow = &tokens
+		}
 	}
 }
 
