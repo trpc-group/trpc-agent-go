@@ -458,6 +458,7 @@ func (m *Model) GenerateContent(
 	if err != nil {
 		return nil, err
 	}
+	reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
@@ -466,12 +467,11 @@ func (m *Model) GenerateContent(
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
-		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 		defer reporter.End()
 		emit := func(resp *model.Response) bool {
+			reporter.TrackResponse(resp)
 			select {
 			case responseChan <- resp:
-				reporter.TrackResponse(resp)
 				return true
 			case <-ctx.Done():
 				return false
@@ -2386,23 +2386,6 @@ func (m *Model) createFinalResponse(
 	}
 
 	return finalResponse
-}
-
-// handleNonStreamingResponse handles non-streaming chat completion responses.
-func (m *Model) handleNonStreamingResponse(
-	ctx context.Context,
-	chatRequest openai.ChatCompletionNewParams,
-	responseChan chan<- *model.Response,
-	opts ...openaiopt.RequestOption,
-) {
-	m.handleNonStreamingResponseWithEmitter(ctx, chatRequest, func(resp *model.Response) bool {
-		select {
-		case responseChan <- resp:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}, opts...)
 }
 
 // handleNonStreamingResponseWithEmitter handles non-streaming chat completion responses.

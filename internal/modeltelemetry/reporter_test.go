@@ -13,11 +13,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -25,8 +27,6 @@ import (
 	semconvmetrics "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	telemetrytrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
-
-	"github.com/stretchr/testify/require"
 )
 
 type testModel struct {
