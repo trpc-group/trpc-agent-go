@@ -36,6 +36,20 @@ func (s stubTool) Call(_ context.Context, _ []byte) (any, error) { return nil, n
 // Declaration returns the tool declaration.
 func (s stubTool) Declaration() *tool.Declaration { return s.decl }
 
+func TestConvertToolsSortsByKeyAndSkipsInvalidTools(t *testing.T) {
+	toolsMap := map[string]tool.Tool{
+		"b-key": stubTool{decl: &tool.Declaration{Name: "alpha"}},
+		"a-key": stubTool{decl: &tool.Declaration{Name: "zeta"}},
+		"c-key": stubTool{},
+		"skip":  nil,
+	}
+
+	result := convertTools(toolsMap)
+	require.Len(t, result, 2)
+	require.Equal(t, "zeta", result[0].Function.Name)
+	require.Equal(t, "alpha", result[1].Function.Name)
+}
+
 // testStubCounter is a stub TokenCounter for testing token tailoring.
 type testStubCounter struct{}
 

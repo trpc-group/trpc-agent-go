@@ -24,6 +24,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
@@ -588,13 +589,8 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	// Add tool definitions as best-effort structured array (JSON string fallback)
 	if len(req.Tools) > 0 {
 		definitions := make([]*tool.Declaration, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			if t == nil {
-				continue
-			}
-			if decl := t.Declaration(); decl != nil {
-				definitions = append(definitions, decl)
-			}
+		for _, t := range toolorder.SortedTools(req.Tools) {
+			definitions = append(definitions, t.Declaration())
 		}
 
 		if len(definitions) > 0 {
