@@ -42,6 +42,7 @@ type Model struct {
 	extraFields                map[string]any
 	enableTokenTailoring       bool
 	maxInputTokens             int
+	contextWindow              int
 	tokenCounter               model.TokenCounter
 	tailoringStrategy          model.TailoringStrategy
 	tokenTailoringConfig       *model.TokenTailoringConfig
@@ -102,6 +103,7 @@ func New(modelName string, opts ...Option) (*Model, error) {
 		extraFields:                options.ExtraFields,
 		enableTokenTailoring:       options.EnableTokenTailoring || options.MaxInputTokens > 0,
 		maxInputTokens:             options.MaxInputTokens,
+		contextWindow:              options.ContextWindow,
 		tokenCounter:               options.TokenCounter,
 		tailoringStrategy:          tailoringStrategy,
 		tokenTailoringConfig:       options.TokenTailoringConfig,
@@ -193,7 +195,8 @@ func (m *Model) runChatStreamCompleteCallback(
 // Info returns basic information about the model.
 func (m *Model) Info() model.Info {
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
 	}
 }
 
@@ -450,7 +453,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	maxInputTokens := m.maxInputTokens
 	if maxInputTokens <= 0 {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
+		contextWindow := m.contextWindow
+		if contextWindow <= 0 {
+			contextWindow = imodel.ResolveContextWindow(m.name)
+		}
 		if m.tokenTailoringConfig != nil &&
 			(m.tokenTailoringConfig.ProtocolOverheadTokens > 0 ||
 				m.tokenTailoringConfig.ReserveOutputTokens > 0) {

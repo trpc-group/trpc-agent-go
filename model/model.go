@@ -70,5 +70,9 @@ type IterModel interface {
 
 // Info contains basic information about a Model.
 type Info struct {
+	// Name is the model identifier used by providers and registry lookup.
 	Name string
+	// ContextWindow is the model context window in tokens.
+	// A non-positive value means the window is unknown for this model instance.
+	ContextWindow int
 }

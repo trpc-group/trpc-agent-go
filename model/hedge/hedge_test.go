@@ -85,6 +85,77 @@ func TestInfoUsesConfiguredName(t *testing.T) {
 	assert.Equal(t, "hedge-model", llm.Info().Name)
 }
 
+func TestInfoContextWindow(t *testing.T) {
+	tests := []struct {
+		name       string
+		candidates []model.Model
+		options    []Option
+		want       int
+	}{
+		{
+			name: "uses explicit wrapper context window",
+			candidates: []model.Model{
+				&scriptedIterModel{name: "primary", contextWindow: 32768},
+				&scriptedIterModel{name: "backup", contextWindow: 65536},
+			},
+			options: []Option{WithContextWindow(204800)},
+			want:    204800,
+		},
+		{
+			name: "infers matching candidate context window",
+			candidates: []model.Model{
+				&scriptedIterModel{name: "primary", contextWindow: 32768},
+				&scriptedIterModel{name: "backup", contextWindow: 32768},
+			},
+			want: 32768,
+		},
+		{
+			name: "ignores zero wrapper context window",
+			candidates: []model.Model{
+				&scriptedIterModel{name: "primary", contextWindow: 32768},
+				&scriptedIterModel{name: "backup", contextWindow: 32768},
+			},
+			options: []Option{WithContextWindow(0)},
+			want:    32768,
+		},
+		{
+			name: "ignores negative wrapper context window",
+			candidates: []model.Model{
+				&scriptedIterModel{name: "primary", contextWindow: 32768},
+				&scriptedIterModel{name: "backup", contextWindow: 32768},
+			},
+			options: []Option{WithContextWindow(-1)},
+			want:    32768,
+		},
+		{
+			name: "keeps unknown for mismatched candidate context windows",
+			candidates: []model.Model{
+				&scriptedIterModel{name: "primary", contextWindow: 32768},
+				&scriptedIterModel{name: "backup", contextWindow: 65536},
+			},
+			want: 0,
+		},
+		{
+			name: "keeps unknown when any candidate context window is unknown",
+			candidates: []model.Model{
+				&scriptedIterModel{name: "primary", contextWindow: 32768},
+				&scriptedIterModel{name: "backup"},
+			},
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := []Option{WithCandidates(tt.candidates...)}
+			opts = append(opts, tt.options...)
+			llm, err := New(opts...)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, llm.Info().ContextWindow)
+		})
+	}
+}
+
 func TestCloneRequestDeepCopiesSerializableFields(t *testing.T) {
 	maxTokens := 128
 	toolImpl := &stubTool{name: "lookup"}
@@ -651,6 +722,7 @@ func TestAdvanceProcessesQueuedWinnerBeforeLaunchingDueCandidates(t *testing.T) 
 
 type scriptedIterModel struct {
 	name                string
+	contextWindow       int
 	startupErr          error
 	responses           []*model.Response
 	responsesForRequest func(*model.Request) []*model.Response
@@ -707,7 +779,10 @@ func (m *scriptedIterModel) GenerateContentIter(
 }
 
 func (m *scriptedIterModel) Info() model.Info {
-	return model.Info{Name: m.name}
+	return model.Info{
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
+	}
 }
 
 type nilIterModel struct {
