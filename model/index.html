@@ -6592,7 +6592,7 @@ context window. For OpenAI-compatible models, the automatic budget also accounts
 for request-scoped output limits and tool definitions:</p>
 <blockquote>
 <p><strong>Context Window Registration</strong></p>
-<p>Both Token Tailoring and session summary <code>WithContextThreshold</code> rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with <code>model.RegisterModelContextWindow("my-model", 32768)</code> or <code>model.RegisterModelContextWindows(map[string]int{...})</code>. See the <a href="../session/summary/">Session Summary documentation</a> for a full example.</p>
+<p>Token Tailoring and session summary <code>WithContextThreshold</code> both need a model context window. Built-in model names are resolved automatically. For private deployments, tenant-provided models, or endpoint IDs, prefer model-instance configuration such as <code>openai.WithContextWindow(32768)</code> or the unified <code>provider.WithContextWindow(32768)</code>. For one-off runs, use <code>agent.WithModelContextWindow(32768)</code>. Use <code>model.RegisterModelContextWindow("my-model", 32768)</code> only when the name has a stable process-wide meaning. See the <a href="../session/summary/">Session Summary documentation</a> for a full example.</p>
 </blockquote>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1">1</a></span>
 <span class="normal"><a href="#__codelineno-48-2">2</a></span>
@@ -7995,7 +7995,7 @@ to preserve the default clean text-streaming behavior.</p>
 </span><span id="__span-81-20"><a id="__codelineno-81-20" name="__codelineno-81-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
 </span><span id="__span-81-21"><a id="__codelineno-81-21" name="__codelineno-81-21"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><code>hedge.New(...)</code> also returns a regular <code>model.Model</code>, so it can be passed directly to places that accept <code>model.Model</code>, such as <code>llmagent.WithModel(...)</code>. This quick start uses the package default delay. Use <code>WithDelay(...)</code> or <code>WithDelays(...)</code> when you need explicit launch scheduling. For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge">examples/model/hedge</a>.</p>
+<p><code>hedge.New(...)</code> also returns a regular <code>model.Model</code>, so it can be passed directly to places that accept <code>model.Model</code>, such as <code>llmagent.WithModel(...)</code>. This quick start uses the package default delay. Use <code>WithDelay(...)</code> or <code>WithDelays(...)</code> when you need explicit launch scheduling. If the hedge wrapper is used with context-threshold summary or token tailoring and the candidates have different or unknown context windows, set a stable wrapper window with <code>hedge.WithContextWindow(...)</code>; otherwise the wrapper reports the shared candidate window only when all candidates expose the same positive value. For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge">examples/model/hedge</a>.</p>
 <p><strong>Scheduling And Commit Rules</strong>:</p>
 <ul>
 <li>The first candidate always starts immediately when the request begins.</li>
@@ -8072,7 +8072,7 @@ to preserve the default clean text-streaming behavior.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 8, 2026 06:31:19 UTC">2026-05-08 06:31:19</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 11, 2026 08:28:08 UTC">2026-05-11 08:28:08</span>
   </span>
 
     
