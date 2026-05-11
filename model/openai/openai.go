@@ -32,6 +32,7 @@ import (
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modeltelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -238,6 +239,7 @@ type Model struct {
 	chatResponseCallback       ChatResponseCallbackFunc
 	chatChunkCallback          ChatChunkCallbackFunc
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	chatTelemetry              bool
 	extraFields                map[string]any
 	variant                    Variant
 	variantConfig              variantConfig
@@ -247,6 +249,7 @@ type Model struct {
 	batchBaseURL               string
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
+	contextWindow              int                     // Context window for this model instance.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
@@ -321,6 +324,7 @@ func New(name string, opts ...Option) *Model {
 		chatResponseCallback:       o.ChatResponseCallback,
 		chatChunkCallback:          o.ChatChunkCallback,
 		chatStreamCompleteCallback: o.ChatStreamCompleteCallback,
+		chatTelemetry:              o.ChatTelemetry,
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
 		variantConfig:              variantConfigs[o.Variant],
@@ -329,6 +333,7 @@ func New(name string, opts ...Option) *Model {
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
 		enableTokenTailoring:       o.EnableTokenTailoring,
+		contextWindow:              o.ContextWindow,
 		tokenCounter:               o.TokenCounter,
 		tailoringStrategy:          o.TailoringStrategy,
 		maxInputTokens:             o.MaxInputTokens,
@@ -366,7 +371,8 @@ func isDeepSeekBaseURL(raw string) bool {
 // Info implements the model.Model interface.
 func (m *Model) Info() model.Info {
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
 	}
 }
 
@@ -455,6 +461,7 @@ func (m *Model) GenerateContent(
 	if err != nil {
 		return nil, err
 	}
+	reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
@@ -463,10 +470,20 @@ func (m *Model) GenerateContent(
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
+		defer reporter.End()
+		emit := func(resp *model.Response) bool {
+			reporter.TrackResponse(resp)
+			select {
+			case responseChan <- resp:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 		if request.Stream {
-			m.handleStreamingResponse(ctx, *chatRequest, responseChan, opts...)
+			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
 		} else {
-			m.handleNonStreamingResponse(ctx, *chatRequest, responseChan, opts...)
+			m.handleNonStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
 		}
 	}()
 	return responseChan, nil
@@ -482,12 +499,15 @@ func (m *Model) GenerateContentIter(
 		return nil, err
 	}
 	return func(yield func(*model.Response) bool) {
+		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
+		defer reporter.End()
 		m.runChatRequestCallback(ctx, chatRequest)
 		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
 				return false
 			}
+			reporter.TrackResponse(resp)
 			return yield(resp)
 		}
 		if request.Stream {
@@ -534,31 +554,60 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	// Determine max input tokens using priority: user config > auto calculation > default.
 	maxInputTokens := m.maxInputTokens
-	if maxInputTokens <= 0 {
+	outputReserveTokens := m.effectiveOutputReserveTokens(request)
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	autoBudget := maxInputTokens <= 0
+	if autoBudget {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
 				contextWindow,
 				m.protocolOverheadTokens,
-				m.reserveOutputTokens,
+				outputReserveTokens,
 				m.inputTokensFloor,
 				m.safetyMarginRatio,
 				m.maxInputTokensRatio,
 			)
 		} else {
 			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
+			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
+				contextWindow,
+				imodel.DefaultProtocolOverheadTokens,
+				outputReserveTokens,
+				imodel.DefaultInputTokensFloor,
+				imodel.DefaultSafetyMarginRatio,
+				imodel.DefaultMaxInputTokensRatio,
+			)
 		}
+	}
+
+	maxInputTokens = min(maxInputTokens, m.hardInputBudget(contextWindow, outputReserveTokens))
+	if autoBudget {
 		log.DebugfContext(
 			ctx,
 			"auto-calculated max input tokens: model=%s, "+
-				"contextWindow=%d, maxInputTokens=%d",
+				"contextWindow=%d, reserveOutputTokens=%d, maxInputTokens=%d",
 			m.name,
 			contextWindow,
+			outputReserveTokens,
 			maxInputTokens,
 		)
+		toolsTokens := m.estimateToolsTokens(ctx, request.Tools)
+		if toolsTokens > 0 {
+			maxInputTokens = max(maxInputTokens-toolsTokens, 0)
+			log.DebugfContext(
+				ctx,
+				"adjusted max input tokens after tools budget: model=%s, "+
+					"toolsTokens=%d, maxInputTokens=%d",
+				m.name,
+				toolsTokens,
+				maxInputTokens,
+			)
+		}
 	}
 
 	// Apply token tailoring.
@@ -573,6 +622,63 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	}
 
 	request.Messages = tailored
+}
+
+func (m *Model) effectiveOutputReserveTokens(request *model.Request) int {
+	reserve := m.reserveOutputTokens
+	if reserve <= 0 {
+		reserve = imodel.DefaultReserveOutputTokens
+	}
+	if request == nil {
+		return reserve
+	}
+	if request.MaxTokens != nil && *request.MaxTokens > reserve {
+		reserve = *request.MaxTokens
+	}
+	if request.ThinkingTokens != nil && *request.ThinkingTokens > reserve {
+		reserve = *request.ThinkingTokens
+	}
+	return reserve
+}
+
+func (m *Model) hardInputBudget(contextWindow, outputReserveTokens int) int {
+	protocolOverheadTokens := m.protocolOverheadTokens
+	if protocolOverheadTokens <= 0 {
+		protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
+	}
+	safetyMarginRatio := m.safetyMarginRatio
+	if safetyMarginRatio <= 0 {
+		safetyMarginRatio = imodel.DefaultSafetyMarginRatio
+	}
+	safetyMargin := int(float64(contextWindow) * safetyMarginRatio)
+	return max(contextWindow-outputReserveTokens-protocolOverheadTokens-safetyMargin, 0)
+}
+
+func (m *Model) estimateToolsTokens(
+	ctx context.Context,
+	tools map[string]tool.Tool,
+) int {
+	if len(tools) == 0 || m.tokenCounter == nil {
+		return 0
+	}
+	converted := m.convertTools(tools)
+	if len(converted) == 0 {
+		return 0
+	}
+	raw, err := json.Marshal(converted)
+	if err != nil {
+		log.WarnContext(ctx, "failed to marshal tools for token tailoring", err)
+		return 0
+	}
+	tokens, err := m.tokenCounter.CountTokens(ctx, model.Message{
+		Role:    model.RoleSystem,
+		Content: string(raw),
+	})
+	if err != nil {
+		log.WarnContext(ctx, "failed to count tools tokens for token tailoring", err)
+		return 0
+	}
+	return tokens
 }
 
 // buildChatRequest converts our Request to OpenAI request params and options.
@@ -1275,24 +1381,6 @@ func buildToolDescription(declaration *tool.Declaration) string {
 	}
 	desc += "\nOutput schema: " + string(schemaJSON)
 	return desc
-}
-
-// handleStreamingResponse handles streaming chat completion responses.
-func (m *Model) handleStreamingResponse(
-	ctx context.Context,
-	chatRequest openai.ChatCompletionNewParams,
-	responseChan chan<- *model.Response,
-	opts ...openaiopt.RequestOption,
-) {
-	emitter := func(resp *model.Response) bool {
-		select {
-		case responseChan <- resp:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
-	m.handleStreamingResponseWithEmitter(ctx, chatRequest, emitter, opts...)
 }
 
 // responseEmitter emits a response and returns false to stop streaming.
@@ -2295,23 +2383,6 @@ func (m *Model) createFinalResponse(
 	}
 
 	return finalResponse
-}
-
-// handleNonStreamingResponse handles non-streaming chat completion responses.
-func (m *Model) handleNonStreamingResponse(
-	ctx context.Context,
-	chatRequest openai.ChatCompletionNewParams,
-	responseChan chan<- *model.Response,
-	opts ...openaiopt.RequestOption,
-) {
-	m.handleNonStreamingResponseWithEmitter(ctx, chatRequest, func(resp *model.Response) bool {
-		select {
-		case responseChan <- resp:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}, opts...)
 }
 
 // handleNonStreamingResponseWithEmitter handles non-streaming chat completion responses.

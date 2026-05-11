@@ -38,6 +38,7 @@ type Model struct {
 	client                     *hunyuan.Client
 	name                       string
 	contextWindow              int
+	contextWindowConfigured    bool
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
 	chatResponseCallback       ChatResponseCallbackFunc
@@ -114,6 +115,9 @@ type options struct {
 	tailoringStrategy model.TailoringStrategy
 	// maxInputTokens is the max input tokens for token tailoring.
 	maxInputTokens int
+	// contextWindow is the model context window size in tokens.
+	contextWindow           int
+	contextWindowConfigured bool
 	// tokenTailoringConfig allows customization of token tailoring parameters.
 	tokenTailoringConfig *model.TokenTailoringConfig
 }
@@ -163,6 +167,8 @@ func New(name string, opts ...Option) *Model {
 		tokenCounter:               o.tokenCounter,
 		tailoringStrategy:          o.tailoringStrategy,
 		maxInputTokens:             o.maxInputTokens,
+		contextWindow:              o.contextWindow,
+		contextWindowConfigured:    o.contextWindowConfigured,
 		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
 		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
 		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
@@ -170,16 +176,18 @@ func New(name string, opts ...Option) *Model {
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
 	}
 
-	// Resolve context window for the model.
-	m.contextWindow = imodel.ResolveContextWindow(m.name)
-
 	return m
 }
 
 // Info returns the model information.
 func (m *Model) Info() model.Info {
+	contextWindow := 0
+	if m.contextWindowConfigured {
+		contextWindow = m.contextWindow
+	}
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: contextWindow,
 	}
 }
 
@@ -275,7 +283,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	maxInputTokens := m.maxInputTokens
 	if maxInputTokens <= 0 {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
+		contextWindow := m.contextWindow
+		if contextWindow <= 0 {
+			contextWindow = imodel.ResolveContextWindow(m.name)
+		}
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(

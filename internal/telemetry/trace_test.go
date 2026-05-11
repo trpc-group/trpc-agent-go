@@ -1211,6 +1211,16 @@ func TestTraceBeforeAfterInvokeAgent_NormalizesToolResponseMessageFields(t *test
 	require.Contains(t, beforeJSON, `"name":"search"`)
 	require.NotContains(t, beforeJSON, `"tool_id"`)
 	require.NotContains(t, beforeJSON, `"tool_name"`)
+	beforeOTelJSON, ok := attrStringValue(beforeSpan.attrs, semconvtrace.KeyGenAIInputMessagesOTel)
+	require.True(t, ok)
+	var beforeOTel []OTelInputMessage
+	require.NoError(t, json.Unmarshal([]byte(beforeOTelJSON), &beforeOTel))
+	require.Len(t, beforeOTel, 1)
+	require.Equal(t, model.RoleTool, beforeOTel[0].Role)
+	require.Len(t, beforeOTel[0].Parts, 1)
+	require.Equal(t, otelPartTypeToolCallResponse, beforeOTel[0].Parts[0].Type)
+	require.Equal(t, "call-before", beforeOTel[0].Parts[0].ID)
+	require.JSONEq(t, `"ok"`, string(beforeOTel[0].Parts[0].Response))
 
 	afterSpan := newRecordingSpan()
 	rsp := &model.Response{
@@ -1233,6 +1243,16 @@ func TestTraceBeforeAfterInvokeAgent_NormalizesToolResponseMessageFields(t *test
 	require.Contains(t, afterJSON, `"name":"search"`)
 	require.NotContains(t, afterJSON, `"tool_id"`)
 	require.NotContains(t, afterJSON, `"tool_name"`)
+	afterOTelJSON, ok := attrStringValue(afterSpan.attrs, semconvtrace.KeyGenAIOutputMessagesOTel)
+	require.True(t, ok)
+	var afterOTel []OTelOutputMessage
+	require.NoError(t, json.Unmarshal([]byte(afterOTelJSON), &afterOTel))
+	require.Len(t, afterOTel, 1)
+	require.Equal(t, model.RoleTool, afterOTel[0].Role)
+	require.Len(t, afterOTel[0].Parts, 1)
+	require.Equal(t, otelPartTypeToolCallResponse, afterOTel[0].Parts[0].Type)
+	require.Equal(t, "call-after", afterOTel[0].Parts[0].ID)
+	require.JSONEq(t, `"ok"`, string(afterOTel[0].Parts[0].Response))
 }
 
 func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
@@ -1244,14 +1264,22 @@ func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
 	require.NotNil(t, attrs)
 
 	// Verify LLM request attribute is set
-	found := false
+	foundRequest := false
+	foundLegacyMessages := false
+	foundOTelMessages := false
 	for _, attr := range attrs {
-		if string(attr.Key) == semconvtrace.KeyLLMRequest {
-			found = true
-			break
+		switch string(attr.Key) {
+		case semconvtrace.KeyLLMRequest:
+			foundRequest = true
+		case semconvtrace.KeyGenAIInputMessages:
+			foundLegacyMessages = true
+		case semconvtrace.KeyGenAIInputMessagesOTel:
+			foundOTelMessages = true
 		}
 	}
-	require.True(t, found)
+	require.True(t, foundRequest)
+	require.True(t, foundLegacyMessages)
+	require.True(t, foundOTelMessages)
 }
 
 func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {
@@ -1265,14 +1293,22 @@ func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {
 	require.NotNil(t, attrs)
 
 	// Verify LLM response attribute is set
-	found := false
+	foundResponse := false
+	foundLegacyMessages := false
+	foundOTelMessages := false
 	for _, attr := range attrs {
-		if string(attr.Key) == semconvtrace.KeyLLMResponse {
-			found = true
-			break
+		switch string(attr.Key) {
+		case semconvtrace.KeyLLMResponse:
+			foundResponse = true
+		case semconvtrace.KeyGenAIOutputMessages:
+			foundLegacyMessages = true
+		case semconvtrace.KeyGenAIOutputMessagesOTel:
+			foundOTelMessages = true
 		}
 	}
-	require.True(t, found)
+	require.True(t, foundResponse)
+	require.True(t, foundLegacyMessages)
+	require.True(t, foundOTelMessages)
 }
 
 func TestTrace_AdditionalBranches(t *testing.T) {

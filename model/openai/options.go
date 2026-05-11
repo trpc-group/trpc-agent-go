@@ -83,6 +83,8 @@ type options struct {
 	ChatChunkCallback ChatChunkCallbackFunc
 	// Callback for the chat stream completion.
 	ChatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	// ChatTelemetry enables opt-in telemetry for direct model usage.
+	ChatTelemetry bool
 	// Options for the OpenAI client.
 	OpenAIOptions []openaiopt.RequestOption
 	// Extra fields to be added to the HTTP request body.
@@ -105,6 +107,8 @@ type options struct {
 	TailoringStrategy model.TailoringStrategy
 	// MaxInputTokens is the max input tokens for token tailoring.
 	MaxInputTokens int
+	// ContextWindow is the model context window size in tokens.
+	ContextWindow int
 	// TokenTailoringConfig allows customization of token tailoring parameters.
 	TokenTailoringConfig *model.TokenTailoringConfig
 	// ShowToolCallDelta controls whether to expose tool call
@@ -219,6 +223,19 @@ func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatStreamCompleteCallback = fn
+	}
+}
+
+// WithChatTelemetry enables chat trace and metric reporting for direct
+// model/openai usage.
+//
+// This option is intended for users who call Model.GenerateContent or
+// Model.GenerateContentIter directly. The recommended runner + agent path
+// already reports chat telemetry from llmflow. Reusing a model with this
+// option enabled inside runner + agent may report duplicate chat telemetry.
+func WithChatTelemetry(enabled bool) Option {
+	return func(opts *options) {
+		opts.ChatTelemetry = enabled
 	}
 }
 
@@ -351,6 +368,16 @@ func WithEnableTokenTailoring(enabled bool) Option {
 func WithMaxInputTokens(limit int) Option {
 	return func(opts *options) {
 		opts.MaxInputTokens = limit
+	}
+}
+
+// WithContextWindow sets the model context window size in tokens for this
+// model instance.
+func WithContextWindow(tokens int) Option {
+	return func(opts *options) {
+		if tokens > 0 {
+			opts.ContextWindow = tokens
+		}
 	}
 }
 

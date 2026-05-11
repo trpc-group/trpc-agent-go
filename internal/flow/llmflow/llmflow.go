@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -929,6 +930,7 @@ func (f *Flow) maybeCompactContextBeforeLLM(
 		invocation,
 		req,
 		f.contextCompactionThresholdRatio,
+		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	) {
 		return req
 	}
@@ -1223,12 +1225,15 @@ func shouldSyncCompactContext(
 	inv *agent.Invocation,
 	req *model.Request,
 	ratio float64,
+	counter model.TokenCounter,
 ) bool {
 	if inv == nil || inv.Model == nil || req == nil || len(req.Messages) == 0 {
 		return false
 	}
 
-	counter := model.NewSimpleTokenCounter()
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
 	tokens, err := counter.CountTokensRange(ctx, req.Messages, 0, len(req.Messages))
 	if err != nil {
 		return false
@@ -1240,10 +1245,20 @@ func shouldSyncCompactContext(
 
 func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
 	contextWindow := contextCompactionFallbackWindow
-	if inv != nil && inv.Model != nil {
-		if window, ok := model.LookupModelContextWindow(inv.Model.Info().Name); ok {
+	if inv != nil {
+		if window, ok := agent.ModelContextWindowFromRunOptions(
+			&inv.RunOptions,
+		); ok {
 			contextWindow = window
+		} else if inv.Model != nil {
+			if window, ok := modelcontext.ResolveContextWindow(inv.Model); ok {
+				contextWindow = window
+			}
 		}
+	}
+
+	if contextWindow <= 0 {
+		contextWindow = contextCompactionFallbackWindow
 	}
 
 	threshold := int(float64(contextWindow) * normalizeContextCompactionThresholdRatio(ratio))

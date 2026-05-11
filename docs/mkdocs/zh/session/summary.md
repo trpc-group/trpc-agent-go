@@ -130,6 +130,72 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 完成以上配置后，摘要功能即可自动运行。
 
+## 摘要 + 渐进式披露
+
+当摘要注入和 prompt 侧的上下文压缩一起工作时，旧细节可能不再直接出现在
+模型可见的请求里。如果你希望 Agent 只在需要时再把这些细节取回来，可以启用
+会话历史的渐进式披露。
+
+```go
+import (
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/session/pgvector"
+)
+
+// embedder := ...（例如 OpenAI / Gemini embedder；详见嵌入器配置文档）
+sessionService, err := pgvector.NewService(
+    pgvector.WithDSN(os.Getenv("PGVECTOR_DSN")),
+    pgvector.WithEmbedder(embedder),
+    pgvector.WithSummarizer(summarizer),
+)
+if err != nil {
+    panic(err)
+}
+
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableOnDemandSession(true),
+)
+```
+
+启用条件与行为：
+
+- 只有在 Session 后端同时实现了 `session.SearchableService` 和
+  `session.WindowService` 时，`WithEnableOnDemandSession(true)` 才会启用
+  这条渐进式披露链路，并暴露
+  `session_search` 和 `session_load`。
+- 当前 `session/pgvector` 支持这条链路；纯内存摘要示例不会暴露这两个工具。
+- `current_hidden` 会严格搜索当前 session 中、位于 `summary:last_included_ts`
+  之前的历史内容。`summary:last_included_ts` 是摘要中记录的
+  `last_included_ts` 时间戳，表示该摘要覆盖到的最后一个事件时间。
+- `current_session` 会搜索整个当前 session，不受 summary cutoff 限制。
+  当请求投影或 context compaction 把当前 session 的细节裁掉时，这个 scope
+  最有用。
+- `other_sessions` 会搜索同一 `<appName, userID>` 下的其他 session。
+- `all_sessions` 会合并 `current_hidden` 和 `other_sessions`。
+
+当前可召回的内容：
+
+- 用户消息和助手消息。
+- 历史 tool result，包括那些因为上下文压缩而没有直接出现在 prompt 里的工具输出。
+
+当前不会索引的内容：
+
+- 原始 tool call 请求本身不会被索引。
+- partial event 不会被索引。
+
+推荐使用方式：
+
+1. 先让模型基于当前可见 prompt、summary 和最近历史正常回答。
+2. 如果缺少旧细节，再先调用 `session_search`。
+3. 只有当 `session_search` 返回的小窗口仍然不够时，再调用 `session_load`。
+4. 取回的内容应视为历史上下文，而不是当前轮的主动指令。
+
 ## SessionSummarizer 接口
 
 ```go
@@ -197,11 +263,44 @@ summarizer := summary.NewSummarizer(
 应用切换模型时不会自动变化。
 
 如果摘要触发条件应该跟随当前模型的 context window，使用
-`WithContextThreshold`。它会在每次摘要检查时读取当前 invocation 的
-`Model.Info().Name`，从模型 context-window 注册表查窗口大小，并按
-`contextWindow * ratio` 计算阈值（默认 50%）。对于会在同一 session 中切换模型的
-agent，这是更推荐的配置。私有部署、endpoint ID、微调模型或新模型如果不在内置
-注册表中，需要先注册运行时模型名：
+`WithContextThreshold`。对于会在同一 session 中切换模型的 agent，这是更推荐的配置。
+每次摘要检查时，框架会按以下顺序解析 context window：
+
+1. 单次运行覆盖值：`agent.WithModelContextWindow(tokens)`
+2. 模型实例配置：例如 `openai.WithContextWindow(tokens)` 或 `provider.WithContextWindow(tokens)`
+3. 进程级模型名注册表：`model.RegisterModelContextWindow(name, tokens)`
+
+然后按 `contextWindow * ratio` 计算阈值（默认 50%）。对于私有部署、endpoint ID、
+微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
+避免不同用户覆盖同一个进程级注册表：
+
+```go
+modelInstance := openai.New(
+    "my-custom-model",
+    openai.WithAPIKey(apiKey),
+    openai.WithBaseURL(apiURI),
+    openai.WithContextWindow(204800),
+)
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithModel(modelInstance),
+)
+
+eventChan, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithModelName("my-custom-model"),
+    agent.WithModelContextWindow(204800),
+)
+```
+
+只有当模型名在当前进程中有稳定的全局含义时，才建议使用全局注册：
 
 ```go
 model.RegisterModelContextWindow("my-custom-model", 32768)
@@ -768,8 +867,22 @@ Pass 2 默认是关闭的（`0`），需要满足两个条件才会生效：(1) 
 
 - 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
 - 模型层的 token tailoring 仍然作为最后兜底
+- Context compaction 默认使用 `SimpleTokenCounter` 估算 token。如果业务使用了针对中文
+  或特定 provider 的自定义 counter，建议同时通过
+  `WithContextCompactionTokenCounter(...)` 传入同一个 counter，让 Pass 1 判断和
+  Pass 2 截断与模型层 token tailoring 使用一致的估算口径。
 
 ```go
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(1.6), // 中文内容较多时的示例值
+)
+
+modelInstance := openai.New(
+    "deepseek-v4-flash",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithTokenCounter(counter),
+)
+
 agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
@@ -779,6 +892,7 @@ agent := llmagent.New(
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: 旧 tool result → 占位符
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: 任意超大 result → 首尾保留截断
     llmagent.WithContextCompactionKeepRecentRequests(1),
+    llmagent.WithContextCompactionTokenCounter(counter),
 )
 ```
 
@@ -1021,7 +1135,7 @@ sessionService, err := mysql.NewService(
 
 ## 最佳实践
 
-1. **选择合适的阈值**：如果 agent 运行时可能切换模型，优先使用 `WithContextThreshold`；如果你明确需要固定 token 预算，再使用 `WithTokenThreshold`。自定义模型名需要先注册 context window，才能依赖模型窗口感知的触发条件
+1. **选择合适的阈值**：如果 agent 运行时可能切换模型，优先使用 `WithContextThreshold`；如果你明确需要固定 token 预算，再使用 `WithTokenThreshold`。对于自定义模型或租户提供的模型，优先使用模型级 `WithContextWindow` 或单次运行的 `agent.WithModelContextWindow`；只有稳定的进程级模型名才使用全局注册
 2. **使用异步处理**：在生产环境中始终使用 `EnqueueSummaryJob` 而不是 `CreateSessionSummary`，以避免阻塞对话流程
 3. **监控队列大小**：如果频繁看到"queue is full"警告，请增加 `WithSummaryQueueSize` 或 `WithAsyncSummaryNum`
 4. **自定义提示词**：根据应用需求定制摘要提示词。例如，如果你正在构建客户支持 Agent，应关注关键问题和解决方案

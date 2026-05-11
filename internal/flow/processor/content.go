@@ -393,6 +393,17 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) ContentOption
 	}
 }
 
+// WithContextCompactionTokenCounter sets the token counter used by context
+// compaction for request thresholds and tool-result budgets.
+func WithContextCompactionTokenCounter(counter model.TokenCounter) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		if counter == nil {
+			return
+		}
+		p.ContextCompactionConfig.TokenCounter = counter
+	}
+}
+
 // WithFewShotResolver sets an invocation-aware few-shot resolver.
 func WithFewShotResolver(
 	resolver func(*agent.Invocation) [][]model.Message,
@@ -1256,6 +1267,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	case ReasoningContentModeDiscardAll:
 		// Discard all reasoning_content.
 		msg.ReasoningContent = ""
+		msg.ReasoningSignature = ""
 	case ReasoningContentModeKeepAll:
 		// Keep all reasoning_content: do nothing.
 	default:
@@ -1265,6 +1277,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 		// reasoning_content for provider replay requirements.
 		if messageRequestID != currentRequestID && !requestHasToolCalls {
 			msg.ReasoningContent = ""
+			msg.ReasoningSignature = ""
 		}
 	}
 	return msg
@@ -1445,10 +1458,11 @@ func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 
 	var cloned bool
 	for i := range messages {
-		msg, truncated, _ := truncateOversizedToolResultMessage(
+		msg, truncated, _ := truncateOversizedToolResultMessageWithCounter(
 			context.Background(),
 			messages[i],
 			p.ContextCompactionConfig.OversizedToolResultMaxTokens,
+			p.ContextCompactionConfig.TokenCounter,
 		)
 		if !truncated {
 			continue
