@@ -362,11 +362,12 @@ func TestWithModelSelector(t *testing.T) {
 	}
 	a := New("test-agent", WithModelSelector(selector))
 	require.NotNil(t, a.modelSelector)
+	expected := newDummyModel()
 	got, err := a.modelSelector(context.Background(), &agent.Invocation{
-		Model: newDummyModel(),
+		Model: expected,
 	})
 	require.NoError(t, err)
-	require.NotNil(t, got)
+	require.Same(t, expected, got)
 }
 
 func TestLLMAgent_Run_DefaultGenerationConfigUsesPublicStreamingBehavior(

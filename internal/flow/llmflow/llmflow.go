@@ -495,9 +495,6 @@ func (f *Flow) selectModelForStep(
 	if invocation == nil {
 		return nil, nil
 	}
-	if invocation.RunOptions.ModelSelector == nil && f.modelSelector == nil {
-		return invocation.Model, nil
-	}
 	resolution := ModelBaseResolution{
 		Model:              invocation.Model,
 		AllowAgentSelector: true,
@@ -506,7 +503,6 @@ func (f *Flow) selectModelForStep(
 		resolution = f.baseModelResolver(invocation)
 	}
 	baseModel := resolution.Model
-	invocation.Model = baseModel
 	selector := invocation.RunOptions.ModelSelector
 	if selector == nil && resolution.AllowAgentSelector {
 		selector = f.modelSelector
@@ -514,16 +510,16 @@ func (f *Flow) selectModelForStep(
 	if selector == nil {
 		return baseModel, nil
 	}
+	originalModel := invocation.Model
+	invocation.Model = baseModel
 	selected, err := runModelSelector(ctx, selector, invocation)
+	invocation.Model = originalModel
 	if err != nil {
-		invocation.Model = baseModel
 		return baseModel, fmt.Errorf("model selector failed: %w", err)
 	}
 	if selected == nil {
-		invocation.Model = baseModel
 		return baseModel, nil
 	}
-	invocation.Model = selected
 	return selected, nil
 }
 
@@ -556,6 +552,13 @@ func (f *Flow) runOneStep(
 	callModel, err := f.selectModelForStep(ctx, invocation)
 	if err != nil {
 		return nil, err
+	}
+	if invocation != nil {
+		originalModel := invocation.Model
+		invocation.Model = callModel
+		defer func() {
+			invocation.Model = originalModel
+		}()
 	}
 	// 1. Preprocess (prepare request).
 	rebuildPlan := f.preprocess(ctx, invocation, llmRequest, eventChan)

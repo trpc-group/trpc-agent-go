@@ -737,8 +737,9 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 // 创建 Agent 时预注册多个模型.
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
-        "smart": openai.New("gpt-4o"),
-        "fast":  openai.New("gpt-4o-mini"),
+        "smart":  openai.New("gpt-4o"),
+        "fast":   openai.New("gpt-4o-mini"),
+        "vision": openai.New("gpt-4o"),
     }),
     llmagent.WithModel(openai.New("gpt-4o-mini")), // 默认模型.
 )
@@ -2629,6 +2630,6 @@ a := llmagent.New(
 注意事项：
 
 - 同时配置时，`agent.WithModelSelector(...)` 优先于 `llmagent.WithModelSelector(...)`。
-- selector 返回 `nil, nil` 表示不切换模型；返回 error 会终止本次 LLM 调用。
+- selector 返回 `nil, nil` 表示不切换模型，并保留当前 `inv.Model`；返回 error 会终止本次 LLM 调用。
 
 完整示例见 [examples/model/selector](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/selector)。

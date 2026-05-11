@@ -2252,11 +2252,12 @@ func TestLLMAgent_RunWithModelName_NotFound(t *testing.T) {
 
 func TestLLMAgent_BaseModelForInvocation_MissingModelNameSuppressesAgentSelector(t *testing.T) {
 	defaultModel := &mockModelWithResponse{}
+	selectorModel := &mockModelWithResponse{}
 	llmAgent := New(
 		"test-agent",
 		WithModel(defaultModel),
 		WithModelSelector(func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
-			return &mockModelWithResponse{}, nil
+			return selectorModel, nil
 		}),
 	)
 	inv := &agent.Invocation{
@@ -2268,7 +2269,8 @@ func TestLLMAgent_BaseModelForInvocation_MissingModelNameSuppressesAgentSelector
 		},
 	}
 	resolution := llmAgent.resolveFlowBaseModel(inv)
-	require.Equal(t, defaultModel, resolution.Model)
+	require.Same(t, defaultModel, resolution.Model)
+	require.NotSame(t, selectorModel, resolution.Model)
 	require.False(t, resolution.AllowAgentSelector)
 }
 

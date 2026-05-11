@@ -1514,7 +1514,7 @@ func rootInvocationForGraphModelCall(ctx context.Context, state State) *agent.In
 		return rootInvocation
 	}
 	stateInvocation := graphInvocationFromState(state)
-	if stateInvocation != nil && stateInvocation.RunOptions.ModelSelector != nil {
+	if stateInvocation != nil {
 		return stateInvocation
 	}
 	return nil
@@ -1617,6 +1617,13 @@ func (r *llmRunner) executeModel(
 	})
 	if updatedInvocation != nil {
 		callInvocation = updatedInvocation
+		modelEventInvocation = updatedInvocation
+		if modelEventBaseInvocation == nil {
+			modelEventBaseInvocation = updatedInvocation
+		}
+		if updatedInvocation.InvocationID != "" {
+			modelEventInvocationID = updatedInvocation.InvocationID
+		}
 	}
 	endTime := time.Now()
 

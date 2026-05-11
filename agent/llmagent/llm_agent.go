@@ -1288,11 +1288,11 @@ func (a *LLMAgent) resolveFlowBaseModel(inv *agent.Invocation) llmflow.ModelBase
 }
 
 func (a *LLMAgent) resolveBaseModel(inv *agent.Invocation) baseModelResolution {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
 	if patchedModel, ok := a.modelSurfaceForInvocation(inv); ok {
 		return baseModelResolution{Model: patchedModel}
 	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	if inv != nil && inv.RunOptions.Model != nil {
 		return baseModelResolution{Model: inv.RunOptions.Model}
 	}

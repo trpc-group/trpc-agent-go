@@ -12,6 +12,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -34,8 +36,9 @@ func run(ctx context.Context, cfg appConfig) error {
 	if err := cfg.validate(); err != nil {
 		return err
 	}
-	toolCallModel := openai.New(cfg.toolCallModelName)
-	finalModel := openai.New(cfg.finalModelName)
+	modelOptions := openAIModelOptions()
+	toolCallModel := openai.New(cfg.toolCallModelName, modelOptions...)
+	finalModel := openai.New(cfg.finalModelName, modelOptions...)
 	modelSelector := selectByToolState(toolCallModel, finalModel)
 	r := newRunner(toolCallModel)
 	defer r.Close()
@@ -61,6 +64,14 @@ func newRunner(baseModel model.Model) runner.Runner {
 		llmagent.WithTools(calculatorTools()),
 	)
 	return runner.NewRunner(appName, agentInstance)
+}
+
+func openAIModelOptions() []openai.Option {
+	baseURL := strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))
+	if baseURL == "" {
+		return nil
+	}
+	return []openai.Option{openai.WithBaseURL(baseURL)}
 }
 
 func selectByToolState(toolCallModel, finalModel model.Model) agent.ModelSelector {

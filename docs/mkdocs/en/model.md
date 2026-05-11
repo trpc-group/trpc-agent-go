@@ -743,8 +743,9 @@ Use `agent.WithModelName` to specify a pre-registered model name for a single re
 // Pre-register multiple models when creating the Agent.
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
-        "smart": openai.New("gpt-4o"),
-        "fast":  openai.New("gpt-4o-mini"),
+        "smart":  openai.New("gpt-4o"),
+        "fast":   openai.New("gpt-4o-mini"),
+        "vision": openai.New("gpt-4o"),
     }),
     llmagent.WithModel(openai.New("gpt-4o-mini")), // Default model.
 )
@@ -2641,6 +2642,6 @@ a := llmagent.New(
 Notes:
 
 - When both are configured, `agent.WithModelSelector(...)` takes precedence over `llmagent.WithModelSelector(...)`.
-- If selector returns `nil, nil`, the model is not switched; returning an error terminates the current LLM call.
+- If selector returns `nil, nil`, the model is not switched and the current `inv.Model` is kept; returning an error terminates the current LLM call.
 
 For a complete example, see [examples/model/selector](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/selector).

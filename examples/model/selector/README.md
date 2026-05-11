@@ -11,10 +11,7 @@ The run is built to produce two framework-managed LLM calls:
 2. After the tool result is available, the second LLM call uses
    `-final-model` and writes the final answer.
 
-The OpenAI adapter reads endpoint and API key from environment variables. The
-tool marks the invocation state after it runs, and the selector reads that
-state on the next LLM call. This keeps the routing logic explicit and
-application-owned.
+The example reads `OPENAI_BASE_URL` from the environment when present, and the OpenAI adapter reads the API key from environment variables. The tool marks the invocation state after it runs, and the selector reads that state on the next LLM call. This keeps the routing logic explicit and application-owned.
 
 ## Prerequisites
 
@@ -72,6 +69,4 @@ events, err := r.Run(
 )
 ```
 
-`ModelSelector` returns a `model.Model`, not just a model name. This example
-uses the provider configuration loaded by the OpenAI adapter and only switches
-the selected model name.
+`ModelSelector` returns a `model.Model`, not just a model name. In this example, both candidates share the same OpenAI-compatible endpoint and credentials, so the returned models only differ in the model identifier.

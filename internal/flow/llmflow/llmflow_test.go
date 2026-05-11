@@ -3196,7 +3196,7 @@ func TestFlow_RunOneStep_ModelSelectorSelectsBeforePreprocess(t *testing.T) {
 	require.Equal(t, "selected", processor.modelName)
 	require.False(t, baseModel.Called())
 	require.True(t, selectedModel.Called())
-	require.Equal(t, selectedModel, inv.Model)
+	require.Nil(t, inv.Model)
 }
 
 func TestFlow_SelectModelForStep_RunLevelNilSuppressesAgentSelector(t *testing.T) {
@@ -3228,12 +3228,12 @@ func TestFlow_SelectModelForStep_RunLevelNilSuppressesAgentSelector(t *testing.T
 	)
 	got, err := f.selectModelForStep(context.Background(), inv)
 	require.NoError(t, err)
-	require.Equal(t, baseModel, got)
-	require.Equal(t, baseModel, inv.Model)
+	require.Same(t, baseModel, got)
+	require.Nil(t, inv.Model)
 	require.False(t, agentSelectorCalled)
 }
 
-func TestFlow_SelectModelForStep_NoSelectorKeepsInvocationModel(t *testing.T) {
+func TestFlow_SelectModelForStep_NoSelectorUsesBaseModelResolver(t *testing.T) {
 	currentModel := &namedFlowModel{name: "current"}
 	resolvedModel := &namedFlowModel{name: "resolved"}
 	resolverCalled := false
@@ -3253,9 +3253,9 @@ func TestFlow_SelectModelForStep_NoSelectorKeepsInvocationModel(t *testing.T) {
 	inv := agent.NewInvocation(agent.WithInvocationModel(currentModel))
 	got, err := f.selectModelForStep(context.Background(), inv)
 	require.NoError(t, err)
-	require.Equal(t, currentModel, got)
-	require.Equal(t, currentModel, inv.Model)
-	require.False(t, resolverCalled)
+	require.Same(t, resolvedModel, got)
+	require.Same(t, currentModel, inv.Model)
+	require.True(t, resolverCalled)
 }
 
 func TestFlow_CallLLM_BeforeModelCannotReplaceCallModel(t *testing.T) {
