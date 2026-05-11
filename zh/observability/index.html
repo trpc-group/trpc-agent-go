@@ -14,7 +14,7 @@
         <link rel="prev" href="../openclaw-runtime/">
       
       
-        <link rel="next" href="../ecosystem/">
+        <link rel="next" href="../telemetry-multimodal/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>可观测 - tRPC-Agent-Go</title>
+        <title>概览 - tRPC-Agent-Go</title>
       
     
     
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              可观测
+              概览
             
           </span>
         </div>
@@ -333,17 +333,18 @@
     
   
   
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="./" class="md-tabs__link">
-        
-  
-  
     
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
   
   可观测
 
-      </a>
-    </li>
+        </a>
+      </li>
+    
   
 
       
@@ -2023,6 +2024,52 @@
   
   
   
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    可观测
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            可观测
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
     <li class="md-nav__item md-nav__item--active">
       
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
@@ -2036,7 +2083,7 @@
   
   
   <span class="md-ellipsis">
-    可观测
+    概览
     
   </span>
   
@@ -2049,7 +2096,7 @@
   
   
   <span class="md-ellipsis">
-    可观测
+    概览
     
   </span>
   
@@ -2284,6 +2331,37 @@
     </ul>
   
 </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry-multimodal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    多模态遥测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
       
     </li>
   
@@ -2647,6 +2725,7 @@
 <div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>go<span class="w"> </span>run<span class="w"> </span>.
 </span></code></pre></div></td></tr></table></div>
 <p>你可以在 Langfuse 控制台查看链路追踪数据。</p>
+<p>消息 payload 的兼容策略以及推荐使用的 OTel <code>role + parts</code> 字段，见 <a href="../telemetry-multimodal/">多模态遥测消息</a>。</p>
 <h5 id="_4">接入代码说明</h5>
 <p>Langfuse 支持通过 <code>/api/public/otel</code> (OTLP) 接口接收 Trace 数据，仅支持 HTTP/protobuf，不支持 gRPC。
 上述代码通过设置 <code>OTEL_EXPORTER_OTLP_HEADERS</code> 和 <code>OTEL_EXPORTER_OTLP_TRACES_ENDPOINT</code> 来接入 langfuse。</p>
@@ -3019,7 +3098,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月29日 09:48:45 UTC">2026-04-29 09:48:45</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月11日 06:34:22 UTC">2026-05-11 06:34:22</span>
   </span>
 
     
@@ -3127,13 +3206,13 @@
         
         
           
-          <a href="../ecosystem/" class="md-footer__link md-footer__link--next" aria-label="下一页: 生态">
+          <a href="../telemetry-multimodal/" class="md-footer__link md-footer__link--next" aria-label="下一页: 多模态遥测">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 下一页
               </span>
               <div class="md-ellipsis">
-                生态
+                多模态遥测
               </div>
             </div>
             <div class="md-footer__button md-icon">

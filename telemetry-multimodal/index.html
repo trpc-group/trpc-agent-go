@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/knowledge/troubleshooting/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/telemetry-multimodal/">
       
       
-        <link rel="prev" href="../vectorstore/milvus/">
+        <link rel="prev" href="../observability/">
       
       
-        <link rel="next" href="../../planner/">
+        <link rel="next" href="../ecosystem/">
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
     
     
       
-        <title>Troubleshooting - tRPC-Agent-Go</title>
+        <title>Multimodal Telemetry - tRPC-Agent-Go</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.7e37652d.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -48,9 +48,9 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="../assets/stylesheets/extra.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
   
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#troubleshooting" class="md-skip">
+        <a href="#multimodal-telemetry-messages" class="md-skip">
           Skip to content
         </a>
       
@@ -100,9 +100,9 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href=".." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../assets/img/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Troubleshooting
+              Multimodal Telemetry
             
           </span>
         </div>
@@ -172,7 +172,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../zh/knowledge/troubleshooting/" hreflang="zh" class="md-select__link">
+            <a href="../zh/telemetry-multimodal/" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -263,7 +263,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href=".." class="md-tabs__link">
         
   
   
@@ -280,8 +280,6 @@
   
   
   
-    
-  
   
     
     
@@ -289,13 +287,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../agent/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../agent/" class="md-tabs__link">
           
   
   
@@ -318,7 +314,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../gateway/" class="md-tabs__link">
+        <a href="../gateway/" class="md-tabs__link">
           
   
   
@@ -334,11 +330,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../observability/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../observability/" class="md-tabs__link">
           
   
   
@@ -356,7 +354,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../ecosystem/" class="md-tabs__link">
+      <a href="../ecosystem/" class="md-tabs__link">
         
   
   
@@ -391,9 +389,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href=".." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../assets/img/logo.png" alt="logo">
 
     </a>
     tRPC-Agent-Go
@@ -420,7 +418,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href=".." class="md-nav__link">
         
   
   
@@ -439,29 +437,24 @@
       
   
   
-    
   
   
-  
     
     
     
     
       
-        
-        
-      
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -474,7 +467,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Components
@@ -529,7 +522,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agent/" class="md-nav__link">
+      <a href="../agent/" class="md-nav__link">
         
   
   
@@ -552,7 +545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../multiagent/" class="md-nav__link">
+      <a href="../multiagent/" class="md-nav__link">
         
   
   
@@ -575,7 +568,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../team/" class="md-nav__link">
+      <a href="../team/" class="md-nav__link">
         
   
   
@@ -598,7 +591,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../graph/" class="md-nav__link">
+      <a href="../graph/" class="md-nav__link">
         
   
   
@@ -621,7 +614,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../custom-agent/" class="md-nav__link">
+      <a href="../custom-agent/" class="md-nav__link">
         
   
   
@@ -644,7 +637,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../dify/" class="md-nav__link">
+      <a href="../dify/" class="md-nav__link">
         
   
   
@@ -667,7 +660,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../claudecode/" class="md-nav__link">
+      <a href="../claudecode/" class="md-nav__link">
         
   
   
@@ -698,7 +691,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runner/" class="md-nav__link">
+      <a href="../runner/" class="md-nav__link">
         
   
   
@@ -721,7 +714,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../codeexecutor/" class="md-nav__link">
+      <a href="../codeexecutor/" class="md-nav__link">
         
   
   
@@ -744,7 +737,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../error-handling/" class="md-nav__link">
+      <a href="../error-handling/" class="md-nav__link">
         
   
   
@@ -767,7 +760,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../model/" class="md-nav__link">
+      <a href="../model/" class="md-nav__link">
         
   
   
@@ -790,7 +783,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../callbacks/" class="md-nav__link">
+      <a href="../callbacks/" class="md-nav__link">
         
   
   
@@ -813,7 +806,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../plugin/" class="md-nav__link">
+      <a href="../plugin/" class="md-nav__link">
         
   
   
@@ -836,7 +829,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/" class="md-nav__link">
+      <a href="../memory/" class="md-nav__link">
         
   
   
@@ -859,7 +852,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../artifact/" class="md-nav__link">
+      <a href="../artifact/" class="md-nav__link">
         
   
   
@@ -882,7 +875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skill/" class="md-nav__link">
+      <a href="../skill/" class="md-nav__link">
         
   
   
@@ -905,7 +898,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../tool/" class="md-nav__link">
+      <a href="../tool/" class="md-nav__link">
         
   
   
@@ -969,7 +962,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/" class="md-nav__link">
+      <a href="../session/" class="md-nav__link">
         
   
   
@@ -992,7 +985,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/summary/" class="md-nav__link">
+      <a href="../session/summary/" class="md-nav__link">
         
   
   
@@ -1015,7 +1008,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/inmemory/" class="md-nav__link">
+      <a href="../session/inmemory/" class="md-nav__link">
         
   
   
@@ -1038,7 +1031,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/sqlite/" class="md-nav__link">
+      <a href="../session/sqlite/" class="md-nav__link">
         
   
   
@@ -1061,7 +1054,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/redis/" class="md-nav__link">
+      <a href="../session/redis/" class="md-nav__link">
         
   
   
@@ -1084,7 +1077,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/mysql/" class="md-nav__link">
+      <a href="../session/mysql/" class="md-nav__link">
         
   
   
@@ -1107,7 +1100,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/postgres/" class="md-nav__link">
+      <a href="../session/postgres/" class="md-nav__link">
         
   
   
@@ -1130,7 +1123,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/pgvector/" class="md-nav__link">
+      <a href="../session/pgvector/" class="md-nav__link">
         
   
   
@@ -1153,7 +1146,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/clickhouse/" class="md-nav__link">
+      <a href="../session/clickhouse/" class="md-nav__link">
         
   
   
@@ -1181,8 +1174,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1193,11 +1184,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_13" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_13" >
         
           
           <label class="md-nav__link" for="__nav_2_13" id="__nav_2_13_label" tabindex="0">
@@ -1213,7 +1204,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_13_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_13_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_13">
             <span class="md-nav__icon md-icon"></span>
             Knowledge
@@ -1227,7 +1218,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../knowledge/" class="md-nav__link">
         
   
   
@@ -1250,7 +1241,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../embedder/" class="md-nav__link">
+      <a href="../knowledge/embedder/" class="md-nav__link">
         
   
   
@@ -1273,7 +1264,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../reranker/" class="md-nav__link">
+      <a href="../knowledge/reranker/" class="md-nav__link">
         
   
   
@@ -1296,7 +1287,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../source/" class="md-nav__link">
+      <a href="../knowledge/source/" class="md-nav__link">
         
   
   
@@ -1319,7 +1310,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filter/" class="md-nav__link">
+      <a href="../knowledge/filter/" class="md-nav__link">
         
   
   
@@ -1342,7 +1333,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../extractor/" class="md-nav__link">
+      <a href="../knowledge/extractor/" class="md-nav__link">
         
   
   
@@ -1365,7 +1356,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../management/" class="md-nav__link">
+      <a href="../knowledge/management/" class="md-nav__link">
         
   
   
@@ -1388,7 +1379,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ocr/" class="md-nav__link">
+      <a href="../knowledge/ocr/" class="md-nav__link">
         
   
   
@@ -1452,7 +1443,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/" class="md-nav__link">
         
   
   
@@ -1475,7 +1466,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/inmemory/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/inmemory/" class="md-nav__link">
         
   
   
@@ -1498,7 +1489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/pgvector/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/pgvector/" class="md-nav__link">
         
   
   
@@ -1521,7 +1512,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/tcvector/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/tcvector/" class="md-nav__link">
         
   
   
@@ -1544,7 +1535,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/elasticsearch/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
         
   
   
@@ -1567,7 +1558,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/qdrant/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/qdrant/" class="md-nav__link">
         
   
   
@@ -1590,7 +1581,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/milvus/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/milvus/" class="md-nav__link">
         
   
   
@@ -1618,32 +1609,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Troubleshooting
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../knowledge/troubleshooting/" class="md-nav__link">
         
   
   
@@ -1654,68 +1623,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#common-issues-and-solutions" class="md-nav__link">
-    <span class="md-ellipsis">
-      Common Issues and Solutions
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Common Issues and Solutions">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-create-embedding-failedhttp-4xx5xx" class="md-nav__link">
-    <span class="md-ellipsis">
-      1. Create embedding failed/HTTP 4xx/5xx
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-pdf-file-reading-support" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. PDF File Reading Support
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#environment-variables-for-running-examples" class="md-nav__link">
-    <span class="md-ellipsis">
-      Environment Variables for Running Examples
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1736,7 +1643,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../planner/" class="md-nav__link">
+      <a href="../planner/" class="md-nav__link">
         
   
   
@@ -1759,7 +1666,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../event/" class="md-nav__link">
+      <a href="../event/" class="md-nav__link">
         
   
   
@@ -1782,7 +1689,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/" class="md-nav__link">
+      <a href="../evaluation/" class="md-nav__link">
         
   
   
@@ -1805,7 +1712,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../promptiter/" class="md-nav__link">
+      <a href="../promptiter/" class="md-nav__link">
         
   
   
@@ -1876,7 +1783,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../gateway/" class="md-nav__link">
+      <a href="../gateway/" class="md-nav__link">
         
   
   
@@ -1940,7 +1847,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/" class="md-nav__link">
+      <a href="../agui/" class="md-nav__link">
         
   
   
@@ -1963,7 +1870,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/chat/" class="md-nav__link">
+      <a href="../agui/chat/" class="md-nav__link">
         
   
   
@@ -1986,7 +1893,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/history/" class="md-nav__link">
+      <a href="../agui/history/" class="md-nav__link">
         
   
   
@@ -2009,7 +1916,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/cancel/" class="md-nav__link">
+      <a href="../agui/cancel/" class="md-nav__link">
         
   
   
@@ -2040,7 +1947,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2a/" class="md-nav__link">
+      <a href="../a2a/" class="md-nav__link">
         
   
   
@@ -2063,7 +1970,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2ui/" class="md-nav__link">
+      <a href="../a2ui/" class="md-nav__link">
         
   
   
@@ -2086,7 +1993,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../openclaw-runtime/" class="md-nav__link">
+      <a href="../openclaw-runtime/" class="md-nav__link">
         
   
   
@@ -2113,24 +2020,29 @@
       
   
   
+    
   
   
+  
     
     
     
     
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
             
   
   
@@ -2143,7 +2055,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             Observability
@@ -2157,7 +2069,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../observability/" class="md-nav__link">
+      <a href="../observability/" class="md-nav__link">
         
   
   
@@ -2177,10 +2089,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../telemetry-multimodal/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Multimodal Telemetry
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -2191,6 +2125,53 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#message-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Message Attributes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#otel-payload-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      OTel Payload Shape
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#langfuse-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Langfuse Conversion
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -2210,7 +2191,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../ecosystem/" class="md-nav__link">
+      <a href="../ecosystem/" class="md-nav__link">
         
   
   
@@ -2252,42 +2233,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#common-issues-and-solutions" class="md-nav__link">
+  <a href="#message-attributes" class="md-nav__link">
     <span class="md-ellipsis">
-      Common Issues and Solutions
+      Message Attributes
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Common Issues and Solutions">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-create-embedding-failedhttp-4xx5xx" class="md-nav__link">
-    <span class="md-ellipsis">
-      1. Create embedding failed/HTTP 4xx/5xx
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-pdf-file-reading-support" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. PDF File Reading Support
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables-for-running-examples" class="md-nav__link">
+  <a href="#otel-payload-shape" class="md-nav__link">
     <span class="md-ellipsis">
-      Environment Variables for Running Examples
+      OTel Payload Shape
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#langfuse-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Langfuse Conversion
     </span>
   </a>
   
@@ -2309,7 +2275,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge/troubleshooting.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/telemetry-multimodal.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2318,152 +2284,73 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge/troubleshooting.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/telemetry-multimodal.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="troubleshooting">Troubleshooting</h1>
-<h2 id="common-issues-and-solutions">Common Issues and Solutions</h2>
-<h3 id="1-create-embedding-failedhttp-4xx5xx">1. Create embedding failed/HTTP 4xx/5xx</h3>
-<p><strong>Possible Causes</strong>:
-- Invalid or missing API Key
-- Incorrect BaseURL configuration
-- Network access restricted
-- Text too long
-- Configured BaseURL doesn't provide Embeddings endpoint or doesn't support the selected embedding model (e.g., returns 404 Not Found)</p>
-<p><strong>Troubleshooting Steps</strong>:
-1. Confirm <code>OPENAI_API_KEY</code> is set and valid
-2. If using a compatible gateway, explicitly set <code>WithBaseURL(os.Getenv("OPENAI_BASE_URL"))</code>
-3. Confirm <code>WithModel("text-embedding-3-small")</code> or the embedding model name actually supported by your service
-4. Use a minimal example to call the embedding API once to verify connectivity
-5. Use curl to verify the target BaseURL implements <code>/v1/embeddings</code> and the model exists:
-   <div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<h1 id="multimodal-telemetry-messages">Multimodal Telemetry Messages</h1>
+<h2 id="message-attributes">Message Attributes</h2>
+<p>tRPC-Agent-Go emits two message attribute families:</p>
+<ul>
+<li><code>gen_ai.input.messages</code> and <code>gen_ai.output.messages</code> are deprecated compatibility fields. Their payload shape is kept unchanged for existing telemetry consumers.</li>
+<li><code>gen_ai.input.messages.otel</code> and <code>gen_ai.output.messages.otel</code> are the recommended fields for new integrations. Their payload follows an OpenTelemetry-aligned <code>role</code> plus <code>parts</code> schema.</li>
+</ul>
+<p>The old fields will remain available in this change, but new adapters should read the <code>.otel</code> fields first.</p>
+<h2 id="otel-payload-shape">OTel Payload Shape</h2>
+<p><code>gen_ai.input.messages.otel</code> is a JSON array of messages:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
 <span class="normal"><a href="#__codelineno-0-2">2</a></span>
 <span class="normal"><a href="#__codelineno-0-3">3</a></span>
-<span class="normal"><a href="#__codelineno-0-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$OPENAI_BASE_URL</span><span class="s2">/embeddings&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$OPENAI_API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;model&quot;:&quot;text-embedding-3-small&quot;,&quot;input&quot;:&quot;ping&quot;}&#39;</span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span>
+<span class="normal"><a href="#__codelineno-0-7">7</a></span>
+<span class="normal"><a href="#__codelineno-0-8">8</a></span>
+<span class="normal"><a href="#__codelineno-0-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="p">[</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;parts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;text&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;describe this image&quot;</span><span class="p">},</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;uri&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;modality&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;mime_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image/png&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;uri&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/image.png&quot;</span><span class="p">}</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="p">]</span>
 </span></code></pre></div></td></tr></table></div>
-   If it returns 404/model doesn't exist, switch to a BaseURL that supports Embeddings or use a valid embedding model name provided by that service
-6. Gradually shorten text to confirm it's not caused by overly long input</p>
-<p><strong>Reference Code</strong>:
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-1-10">10</a></span>
-<span class="normal"><a href="#__codelineno-1-11">11</a></span>
-<span class="normal"><a href="#__codelineno-1-12">12</a></span>
-<span class="normal"><a href="#__codelineno-1-13">13</a></span>
-<span class="normal"><a href="#__codelineno-1-14">14</a></span>
-<span class="normal"><a href="#__codelineno-1-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="s">&quot;log&quot;</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="s">&quot;os&quot;</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="w">    </span><span class="nx">openaiembedder</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai&quot;</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="p">)</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="nx">embedder</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openaiembedder</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">    </span><span class="nx">openaiembedder</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="s">&quot;text-embedding-3-small&quot;</span><span class="p">),</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="w">    </span><span class="nx">openaiembedder</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;OPENAI_API_KEY&quot;</span><span class="p">)),</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nx">openaiembedder</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;OPENAI_BASE_URL&quot;</span><span class="p">)),</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="p">)</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="k">if</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">embedder</span><span class="p">.</span><span class="nx">GetEmbedding</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ping&quot;</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;embed check failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div></p>
-<h3 id="2-pdf-file-reading-support">2. PDF File Reading Support</h3>
-<p><strong>Description</strong>: Since the PDF reader depends on third-party libraries, to avoid introducing unnecessary dependencies in the main module, the PDF reader uses a separate <code>go.mod</code>.</p>
-<p><strong>Usage</strong>: To support PDF file reading, manually import the PDF reader package in your code:
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
-<span class="normal"><a href="#__codelineno-2-2">2</a></span>
-<span class="normal"><a href="#__codelineno-2-3">3</a></span>
-<span class="normal"><a href="#__codelineno-2-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="c1">// Import PDF reader to support .pdf file parsing</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf&quot;</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
-</span></code></pre></div></td></tr></table></div></p>
-<h2 id="environment-variables-for-running-examples">Environment Variables for Running Examples</h2>
-<blockquote>
-<p>The following environment variables are used for running example programs in the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge">examples/knowledge</a> directory.</p>
-</blockquote>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-3-10">10</a></span>
-<span class="normal"><a href="#__codelineno-3-11">11</a></span>
-<span class="normal"><a href="#__codelineno-3-12">12</a></span>
-<span class="normal"><a href="#__codelineno-3-13">13</a></span>
-<span class="normal"><a href="#__codelineno-3-14">14</a></span>
-<span class="normal"><a href="#__codelineno-3-15">15</a></span>
-<span class="normal"><a href="#__codelineno-3-16">16</a></span>
-<span class="normal"><a href="#__codelineno-3-17">17</a></span>
-<span class="normal"><a href="#__codelineno-3-18">18</a></span>
-<span class="normal"><a href="#__codelineno-3-19">19</a></span>
-<span class="normal"><a href="#__codelineno-3-20">20</a></span>
-<span class="normal"><a href="#__codelineno-3-21">21</a></span>
-<span class="normal"><a href="#__codelineno-3-22">22</a></span>
-<span class="normal"><a href="#__codelineno-3-23">23</a></span>
-<span class="normal"><a href="#__codelineno-3-24">24</a></span>
-<span class="normal"><a href="#__codelineno-3-25">25</a></span>
-<span class="normal"><a href="#__codelineno-3-26">26</a></span>
-<span class="normal"><a href="#__codelineno-3-27">27</a></span>
-<span class="normal"><a href="#__codelineno-3-28">28</a></span>
-<span class="normal"><a href="#__codelineno-3-29">29</a></span>
-<span class="normal"><a href="#__codelineno-3-30">30</a></span>
-<span class="normal"><a href="#__codelineno-3-31">31</a></span>
-<span class="normal"><a href="#__codelineno-3-32">32</a></span>
-<span class="normal"><a href="#__codelineno-3-33">33</a></span>
-<span class="normal"><a href="#__codelineno-3-34">34</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="c1"># OpenAI API configuration (required when using OpenAI embedder, auto-read by OpenAI SDK)</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-openai-api-key&quot;</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_BASE_URL</span><span class="o">=</span><span class="s2">&quot;your-openai-base-url&quot;</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="c1"># OpenAI embedding model configuration (optional, requires manual reading in code)</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_EMBEDDING_MODEL</span><span class="o">=</span><span class="s2">&quot;text-embedding-3-small&quot;</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="c1"># Google Gemini API configuration (when using Gemini embedder)</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GOOGLE_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-google-api-key&quot;</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="c1"># PostgreSQL + pgvector configuration (required when using -vectorstore=pgvector)</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PGVECTOR_HOST</span><span class="o">=</span><span class="s2">&quot;127.0.0.1&quot;</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PGVECTOR_PORT</span><span class="o">=</span><span class="s2">&quot;5432&quot;</span>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PGVECTOR_USER</span><span class="o">=</span><span class="s2">&quot;postgres&quot;</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PGVECTOR_PASSWORD</span><span class="o">=</span><span class="s2">&quot;your-password&quot;</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PGVECTOR_DATABASE</span><span class="o">=</span><span class="s2">&quot;vectordb&quot;</span>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a><span class="c1"># TcVector configuration (required when using -vectorstore=tcvector)</span>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TCVECTOR_URL</span><span class="o">=</span><span class="s2">&quot;https://your-tcvector-endpoint&quot;</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TCVECTOR_USERNAME</span><span class="o">=</span><span class="s2">&quot;your-username&quot;</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TCVECTOR_PASSWORD</span><span class="o">=</span><span class="s2">&quot;your-password&quot;</span>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a>
-</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="c1"># Elasticsearch configuration (required when using -vectorstore=elasticsearch)</span>
-</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ELASTICSEARCH_HOSTS</span><span class="o">=</span><span class="s2">&quot;http://localhost:9200&quot;</span>
-</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ELASTICSEARCH_USERNAME</span><span class="o">=</span><span class="s2">&quot;&quot;</span>
-</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ELASTICSEARCH_PASSWORD</span><span class="o">=</span><span class="s2">&quot;&quot;</span>
-</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ELASTICSEARCH_API_KEY</span><span class="o">=</span><span class="s2">&quot;&quot;</span>
-</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ELASTICSEARCH_INDEX_NAME</span><span class="o">=</span><span class="s2">&quot;trpc_agent_documents&quot;</span>
-</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a>
-</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="c1"># Milvus configuration (required when using -vectorstore=milvus)</span>
-</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MILVUS_ADDRESS</span><span class="o">=</span><span class="s2">&quot;localhost:19530&quot;</span>
-</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MILVUS_USERNAME</span><span class="o">=</span><span class="s2">&quot;&quot;</span>
-</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MILVUS_PASSWORD</span><span class="o">=</span><span class="s2">&quot;&quot;</span>
-</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MILVUS_DB_NAME</span><span class="o">=</span><span class="s2">&quot;&quot;</span>
-</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MILVUS_COLLECTION</span><span class="o">=</span><span class="s2">&quot;trpc_agent_go&quot;</span>
+<p><code>gen_ai.output.messages.otel</code> is a JSON array of output messages:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span>
+<span class="normal"><a href="#__codelineno-1-3">3</a></span>
+<span class="normal"><a href="#__codelineno-1-4">4</a></span>
+<span class="normal"><a href="#__codelineno-1-5">5</a></span>
+<span class="normal"><a href="#__codelineno-1-6">6</a></span>
+<span class="normal"><a href="#__codelineno-1-7">7</a></span>
+<span class="normal"><a href="#__codelineno-1-8">8</a></span>
+<span class="normal"><a href="#__codelineno-1-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="p">[</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="nt">&quot;parts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;text&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;The image shows a city skyline.&quot;</span><span class="p">}</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="w">    </span><span class="p">],</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">    </span><span class="nt">&quot;finish_reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;stop&quot;</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="p">]</span>
 </span></code></pre></div></td></tr></table></div>
+<p>Supported part types include:</p>
+<ul>
+<li><code>text</code>: plain text content.</li>
+<li><code>uri</code>: URI-backed multimodal content with <code>modality</code> and optional <code>mime_type</code>.</li>
+<li><code>blob</code>: base64-encoded binary content with <code>modality</code> and optional <code>mime_type</code>.</li>
+<li><code>file</code>: uploaded file references via <code>file_id</code>.</li>
+<li><code>tool_call</code>: assistant tool requests.</li>
+<li><code>tool_call_response</code>: tool outputs sent back to the model.</li>
+<li><code>reasoning</code>: provider reasoning or thinking content.</li>
+</ul>
+<h2 id="langfuse-conversion">Langfuse Conversion</h2>
+<p>The Langfuse exporter only converts <code>gen_ai.input.messages.otel</code> and <code>gen_ai.output.messages.otel</code> into the displayed input/output payload. Deprecated compatibility fields remain available on raw spans for other consumers, but Langfuse does not parse them.</p>
+<p>This keeps existing raw attributes available while making the OTel payload the only Langfuse conversion path.</p>
 
 
 
@@ -2486,7 +2373,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 11, 2026 06:34:22 UTC">2026-05-11 06:34:22</span>
   </span>
 
     
@@ -2496,7 +2383,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 29, 2026 05:53:25 UTC">2026-04-29 05:53:25</span>
   </span>
 
     
@@ -2577,7 +2464,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../vectorstore/milvus/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Milvus">
+          <a href="../observability/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Overview">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -2587,20 +2474,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Milvus
+                Overview
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../planner/" class="md-footer__link md-footer__link--next" aria-label="Next: Planner">
+          <a href="../ecosystem/" class="md-footer__link md-footer__link--next" aria-label="Next: Ecosystem">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Planner
+                Ecosystem
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -2636,12 +2523,12 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../assets/javascripts/bundle.92b07e13.min.js"></script>
       
-        <script src="../../assets/javascripts/mathjax.js"></script>
+        <script src="../assets/javascripts/mathjax.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       
