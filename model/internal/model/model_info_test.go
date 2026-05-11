@@ -57,9 +57,29 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  1050000,
 		},
 		{
-			name:      "exact match - GPT-5.2-instant",
-			modelName: "gpt-5.2-instant",
+			name:      "exact match - GPT-5.2-codex",
+			modelName: "gpt-5.2-codex",
 			expected:  400000,
+		},
+		{
+			name:      "exact match - GPT-5.1-chat-latest",
+			modelName: "gpt-5.1-chat-latest",
+			expected:  128000,
+		},
+		{
+			name:      "exact match - GPT-5.1-codex-mini",
+			modelName: "gpt-5.1-codex-mini",
+			expected:  400000,
+		},
+		{
+			name:      "exact match - GPT-5-pro",
+			modelName: "gpt-5-pro",
+			expected:  400000,
+		},
+		{
+			name:      "exact match - GPT-5-chat-latest",
+			modelName: "gpt-5-chat-latest",
+			expected:  128000,
 		},
 		{
 			name:      "exact match - Claude Sonnet 4.6",
@@ -99,7 +119,17 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "exact match - GLM-5.1",
 			modelName: "glm-5.1",
-			expected:  204800,
+			expected:  200000,
+		},
+		{
+			name:      "exact match - GLM-5-Turbo",
+			modelName: "glm-5-turbo",
+			expected:  200000,
+		},
+		{
+			name:      "exact match - GLM-4.5-Air",
+			modelName: "glm-4.5-air",
+			expected:  128000,
 		},
 		{
 			name:      "exact match - Qwen3-Max",
@@ -114,6 +144,11 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "exact match - Qwen-Max",
 			modelName: "qwen-max",
+			expected:  32768,
+		},
+		{
+			name:      "exact match - Qwen-Max-Latest",
+			modelName: "qwen-max-latest",
 			expected:  131072,
 		},
 		{
@@ -129,17 +164,27 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "exact match - DeepSeek v4 pro",
 			modelName: "deepseek-v4-pro",
-			expected:  1000000,
+			expected:  1048576,
 		},
 		{
 			name:      "exact match - DeepSeek v4 flash",
 			modelName: "deepseek-v4-flash",
-			expected:  1000000,
+			expected:  1048576,
 		},
 		{
 			name:      "exact match - Kimi K2.5",
 			modelName: "kimi-k2.5",
 			expected:  256000,
+		},
+		{
+			name:      "exact match - Kimi K2.6",
+			modelName: "kimi-k2.6",
+			expected:  256000,
+		},
+		{
+			name:      "exact match - Moonshot V1 128k",
+			modelName: "moonshot-v1-128k",
+			expected:  131072,
 		},
 		{
 			name:      "exact match - Kimi K2 legacy preview",
@@ -223,7 +268,7 @@ func TestLookupContextWindow(t *testing.T) {
 		{
 			name:      "prefix match",
 			modelName: "gpt-4o-mini-preview",
-			expected:  200000,
+			expected:  128000,
 			ok:        true,
 		},
 		{
@@ -241,7 +286,7 @@ func TestLookupContextWindow(t *testing.T) {
 		{
 			name:      "qwen snapshot prefix match",
 			modelName: "qwen-max-2025-01-25",
-			expected:  131072,
+			expected:  32768,
 			ok:        true,
 		},
 		{
