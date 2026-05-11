@@ -64,6 +64,8 @@ go run .
 
 You can view tracing data in the Langfuse console.
 
+For message payload compatibility and the recommended OTel `role + parts` fields, see [Multimodal Telemetry Messages](telemetry-multimodal.md).
+
 ##### Integration Code Description
 Langfuse supports receiving Trace data via the `/api/public/otel` (OTLP) endpoint, supporting HTTP/protobuf only, not gRPC.
 The above code integrates with Langfuse by setting `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.

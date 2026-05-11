@@ -66,6 +66,8 @@ go run .
 
 你可以在 Langfuse 控制台查看链路追踪数据。
 
+消息 payload 的兼容策略以及推荐使用的 OTel `role + parts` 字段，见 [多模态遥测消息](telemetry-multimodal.md)。
+
 ##### 接入代码说明
 Langfuse 支持通过 `/api/public/otel` (OTLP) 接口接收 Trace 数据，仅支持 HTTP/protobuf，不支持 gRPC。
 上述代码通过设置 `OTEL_EXPORTER_OTLP_HEADERS` 和 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 来接入 langfuse。
