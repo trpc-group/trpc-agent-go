@@ -55,3 +55,109 @@ new backend capability with explicit policy fields rather than overloading
 `NetworkRestricted`.
 
 ## File System
+
+File system policy is enforced as a boundary between the sandbox workspace and
+the host file system. Managed profiles use an allow-list for writes and a
+read-mostly view of the host:
+
+- `ReadOnlyProfile` grants read access to the sandbox root and keeps networking
+  restricted.
+- `WorkspaceWriteProfile` is the default managed profile. It starts from
+  `ReadOnlyProfile` and grants write access to the session workspace and its
+  well-known working directories.
+- `WithReadPaths` and `WithWritePaths` add explicit path grants. Relative paths
+  are resolved inside the workspace. Absolute paths are treated as host paths
+  and must be granted explicitly before they are mounted into the sandbox.
+- `WithDenyReadPaths` and `WithDenyReadGlobs` take precedence over read/write
+  grants for matching paths.
+
+### Boundary model
+
+The managed file-system boundary is designed around three rules:
+
+1. Workspace paths cannot escape the workspace root. Runtime file APIs reject
+   `..`, absolute paths outside the workspace, and symlinks that resolve outside
+   the workspace.
+2. Writes are only allowed where the policy grants write access. The default
+   profile makes the session workspace writable, while the host root remains
+   read-only.
+3. Protected metadata paths are never writable, even if they are under a writable
+   workspace grant. The default protected set is `.git`, `.agents`, `.codex`,
+   and `.trpc-agent-sandbox`.
+
+This boundary is not intended to hide the entire host file system by default.
+On Linux, managed execution starts with a read-only bind mount of `/`, then adds
+writable bind mounts for the workspace and any explicit external write grants.
+Sensitive files that must not be readable should be covered by deny-read rules
+or kept outside the host paths visible to the sandbox.
+
+### Linux implementation
+
+The Linux backend uses `bubblewrap` mount namespaces to materialize the policy:
+
+- `--ro-bind / /` gives the command a read-only view of the host root.
+- `--bind <workspace> <workspace>` makes the sandbox workspace writable.
+- Explicit absolute read grants are added with `--ro-bind`.
+- Explicit absolute write grants are added with `--bind`.
+- Protected metadata paths are re-mounted read-only.
+- Deny-read file matches are replaced with a zero-permission mask file, and
+  deny-read directory matches are covered with an empty `tmpfs`.
+
+The implementation is intentionally path-based. It supports concrete path grants,
+workspace-relative glob deny rules, and protected metadata masks, but it does not
+currently implement per-file capabilities beyond read, write, and deny-read.
+
+### Session visibility
+
+Each sandbox session gets a deterministic workspace path under the runtime
+workspace root:
+
+```text
+<workspaceRoot>/sandbox/<sanitized exec/session id>
+```
+
+The default workspace root is `${TMPDIR}/trpc-agent-go-sandbox`, and callers can
+override it with `WithWorkspaceRoot`.
+
+Different session ids map to different workspace directories, so files written in
+one session are not visible through another session's workspace. This is the
+session-level file-system boundary. The runtime sanitizes path components in the
+session id before constructing the workspace path, so an id cannot escape the
+configured workspace root.
+
+This boundary is directory isolation, not a separate storage backend. If a
+profile grants read or write access to an absolute host path outside the
+workspace, sessions with the same external grant can still observe that shared
+host path.
+
+### Turn visibility
+
+Turns in the same session reuse the same workspace path. By default,
+`SessionPolicy.PersistFilesAcrossTurns` is enabled, so files created or modified
+by one turn remain visible to later turns in the same session.
+
+`SessionPolicy.MutatingCommandsSerial` is also enabled by default. Program runs
+for the same workspace are serialized so concurrent mutating commands do not
+race against the same session file tree.
+
+Callers can disable persistence with `WithSessionPolicy`. When
+`PersistFilesAcrossTurns` is false, `Cleanup` removes the workspace directory
+instead of keeping it for the next turn.
+
+### Lifecycle
+
+`CreateWorkspace` creates or opens the deterministic session workspace. It
+ensures the standard layout exists, creates `home` and `tmp`, and then applies
+the optional manifest.
+
+Manifest files are materialized append-only: if a manifest file already exists,
+`CreateWorkspace` leaves it in place rather than overwriting live session state.
+Manifest `EphemeralPaths` are removed each time the workspace is created or
+reopened, which gives callers a scoped way to reset selected paths while keeping
+the rest of the session persistent.
+
+`Cleanup` is policy-driven. With the default persistent session policy it is a
+no-op for files, preserving the workspace for future turns. With persistence
+disabled, it deletes the workspace directory. There is no automatic TTL or quota
+cleanup in this backend; callers that use persistent sessions should manage
+workspace retention outside the runtime.
