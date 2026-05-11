@@ -10,6 +10,7 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -71,12 +72,15 @@ type innerTextModePreference interface {
 }
 
 type toolEventStateDelta struct {
-	tool   tool.Tool
-	args   []byte
-	choice model.Choice
+	tool            tool.Tool
+	invocation      *agent.Invocation
+	sessionBaseline session.StateMap
+	args            []byte
+	choice          model.Choice
 }
 
 type resolvedToolContextKey struct{}
+type stateDeltaSessionBaselineContextKey struct{}
 
 // toolResult holds the result of a single tool execution.
 type toolResult struct {
@@ -456,6 +460,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	if err == nil {
 		stateDelta = p.buildToolEventStateDelta(
 			ctx,
+			invocation,
 			modifiedArgs,
 			choices,
 		)
@@ -513,8 +518,16 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	for i, tc := range toolCalls {
 		wg.Add(1)
 		runCtx := agent.CloneContext(ctx)
+		runInv := invocation
+		if invocation != nil {
+			runInv = newParallelInvocationView(invocation)
+			if runCtx == nil {
+				runCtx = context.Background()
+			}
+			runCtx = agent.NewInvocationContext(runCtx, runInv)
+		}
 		go p.runParallelToolCall(
-			runCtx, &wg, invocation, llmResponse, tools, eventChan, resultChan, i, tc,
+			runCtx, &wg, runInv, llmResponse, tools, eventChan, resultChan, i, tc,
 		)
 	}
 
@@ -671,6 +684,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}
 	stateDelta := p.buildToolEventStateDelta(
 		ctx,
+		invocation,
 		modifiedArgs,
 		choices,
 	)
@@ -819,6 +833,7 @@ func (p *FunctionCallResponseProcessor) annotateSkipSummarization(
 
 func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	args []byte,
 	choices []model.Choice,
 ) *toolEventStateDelta {
@@ -829,10 +844,128 @@ func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	if !ok {
 		return nil
 	}
+	stateDeltaInv := newStateDeltaSnapshot(ctx, invocation)
 	return &toolEventStateDelta{
-		tool:   tl,
-		args:   args,
-		choice: choices[0],
+		tool:            tl,
+		invocation:      stateDeltaInv,
+		sessionBaseline: stateDeltaSessionBaseline(ctx),
+		args:            args,
+		choice:          choices[0],
+	}
+}
+
+func newStateDeltaSnapshot(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) *agent.Invocation {
+	if ctx == nil {
+		return cloneStateDeltaSession(invocationView(invocation))
+	}
+	ctxInv, hasCtxInv := agent.InvocationFromContext(ctx)
+	if !hasCtxInv || ctxInv == nil {
+		return cloneStateDeltaSession(invocationView(invocation))
+	}
+	if invocation == nil || ctxInv == invocation {
+		return cloneStateDeltaSession(invocationView(ctxInv))
+	}
+	view := ctxInv.View()
+	preserveStateDeltaInvocationDefaults(view, invocation)
+	return cloneStateDeltaSession(view)
+}
+
+func newParallelInvocationView(
+	invocation *agent.Invocation,
+) *agent.Invocation {
+	return cloneStateDeltaSession(invocationView(invocation))
+}
+
+func invocationView(invocation *agent.Invocation) *agent.Invocation {
+	if invocation == nil {
+		return nil
+	}
+	return invocation.View()
+}
+
+func cloneStateDeltaSession(invocation *agent.Invocation) *agent.Invocation {
+	if invocation != nil && invocation.Session != nil {
+		invocation.Session = invocation.Session.Clone()
+	}
+	return invocation
+}
+
+func withStateDeltaSessionBaseline(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	var baseline session.StateMap
+	baselineSession := stateDeltaBaselineSession(ctx, invocation)
+	if baselineSession != nil {
+		baseline = baselineSession.SnapshotState()
+	}
+	return context.WithValue(
+		ctx,
+		stateDeltaSessionBaselineContextKey{},
+		baseline,
+	)
+}
+
+func stateDeltaBaselineSession(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) *session.Session {
+	if ctx != nil {
+		if ctxInv, ok := agent.InvocationFromContext(ctx); ok &&
+			ctxInv != nil &&
+			ctxInv.Session != nil {
+			return ctxInv.Session
+		}
+	}
+	if invocation == nil {
+		return nil
+	}
+	return invocation.Session
+}
+
+func stateDeltaSessionBaseline(ctx context.Context) session.StateMap {
+	if ctx == nil {
+		return nil
+	}
+	baseline, _ := ctx.Value(
+		stateDeltaSessionBaselineContextKey{},
+	).(session.StateMap)
+	return baseline
+}
+
+func preserveStateDeltaInvocationDefaults(
+	view *agent.Invocation,
+	base *agent.Invocation,
+) {
+	if view == nil || base == nil {
+		return
+	}
+	view.Agent = base.Agent
+	view.AgentName = base.AgentName
+	view.InvocationID = base.InvocationID
+	view.Branch = base.Branch
+	view.Model = base.Model
+	view.Message = base.Message
+	view.RunOptions = base.RunOptions
+	view.TransferInfo = base.TransferInfo
+	view.Plugins = base.Plugins
+	view.StructuredOutput = base.StructuredOutput
+	view.StructuredOutputType = base.StructuredOutputType
+	view.MemoryService = base.MemoryService
+	view.ArtifactService = base.ArtifactService
+	view.MaxLLMCalls = base.MaxLLMCalls
+	view.MaxToolIterations = base.MaxToolIterations
+	if view.Session == nil {
+		view.Session = base.Session
+	}
+	if view.SessionService == nil {
+		view.SessionService = base.SessionService
 	}
 }
 
@@ -871,10 +1004,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 	invocation *agent.Invocation,
 	results []toolResult,
 ) []*event.Event {
-	var (
-		stateDeltaInv     *agent.Invocation
-		pendingStateDelta []*event.Event
-	)
+	var priorStateDelta []*event.Event
 	events := make([]*event.Event, 0, len(results))
 	for i := 0; i < len(results); i++ {
 		result := results[i]
@@ -882,15 +1012,16 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 			continue
 		}
 		if result.stateDelta != nil {
-			if stateDeltaInv == nil {
-				stateDeltaInv = newStateDeltaInvocationView(invocation)
-				if stateDeltaInv != nil && stateDeltaInv.Session != nil {
-					for j := 0; j < len(pendingStateDelta); j++ {
-						stateDeltaInv.Session.ApplyEventStateDelta(
-							pendingStateDelta[j],
-						)
-					}
-				}
+			stateDeltaInv := stateDeltaInvocationView(
+				invocation,
+				result.stateDelta,
+			)
+			if stateDeltaInv != nil && stateDeltaInv.Session != nil {
+				applyPriorStateDeltas(
+					stateDeltaInv.Session,
+					result.stateDelta.sessionBaseline,
+					priorStateDelta,
+				)
 			}
 			p.attachStateDelta(
 				stateDeltaInv,
@@ -900,19 +1031,74 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 				result.event,
 			)
 		}
-		if stateDeltaInv != nil &&
-			stateDeltaInv.Session != nil &&
-			len(result.event.StateDelta) > 0 {
-			stateDeltaInv.Session.ApplyEventStateDelta(result.event)
-		} else if len(result.event.StateDelta) > 0 {
-			pendingStateDelta = append(
-				pendingStateDelta,
+		if len(result.event.StateDelta) > 0 {
+			priorStateDelta = append(
+				priorStateDelta,
 				result.event,
 			)
 		}
 		events = append(events, result.event)
 	}
 	return events
+}
+
+func applyPriorStateDeltas(
+	sess *session.Session,
+	baseline session.StateMap,
+	events []*event.Event,
+) {
+	if sess == nil || len(events) == 0 {
+		return
+	}
+	changed := changedSessionKeys(baseline, sess.SnapshotState())
+	for i := 0; i < len(events); i++ {
+		applyReplayableStateDelta(sess, changed, events[i])
+	}
+}
+
+func changedSessionKeys(
+	baseline session.StateMap,
+	current session.StateMap,
+) map[string]bool {
+	changed := map[string]bool{}
+	for key, currentValue := range current {
+		baselineValue, ok := baseline[key]
+		if !ok || !bytes.Equal(currentValue, baselineValue) {
+			changed[key] = true
+		}
+	}
+	for key := range baseline {
+		if _, ok := current[key]; !ok {
+			changed[key] = true
+		}
+	}
+	return changed
+}
+
+func applyReplayableStateDelta(
+	sess *session.Session,
+	changed map[string]bool,
+	e *event.Event,
+) {
+	if e == nil {
+		return
+	}
+	for key, value := range e.StateDelta {
+		if changed[key] {
+			continue
+		}
+		sess.SetState(key, value)
+	}
+}
+
+func stateDeltaInvocationView(
+	invocation *agent.Invocation,
+	stateDelta *toolEventStateDelta,
+) *agent.Invocation {
+	if stateDelta != nil && stateDelta.invocation != nil {
+		return stateDelta.invocation.View()
+	}
+	return newStateDeltaInvocationView(invocation)
 }
 
 // lookupDeclaration returns a declaration or a safe placeholder.
@@ -1492,6 +1678,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		return ctx, nil, toolCall.Function.Arguments, false, false, err
 	}
 	if customResult != nil {
+		ctx = withStateDeltaSessionBaseline(ctx, invocation)
 		return ctx, customResult, toolCall.Function.Arguments, false,
 			false, nil
 	}
@@ -1503,6 +1690,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	if err != nil {
 		return ctx, nil, toolCall.Function.Arguments, false, false, err
 	}
+	ctx = withStateDeltaSessionBaseline(ctx, invocation)
 	if customResult != nil {
 		return ctx, customResult, toolCall.Function.Arguments, false,
 			false, nil
