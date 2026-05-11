@@ -263,11 +263,44 @@ summarizer := summary.NewSummarizer(
 应用切换模型时不会自动变化。
 
 如果摘要触发条件应该跟随当前模型的 context window，使用
-`WithContextThreshold`。它会在每次摘要检查时读取当前 invocation 的
-`Model.Info().Name`，从模型 context-window 注册表查窗口大小，并按
-`contextWindow * ratio` 计算阈值（默认 50%）。对于会在同一 session 中切换模型的
-agent，这是更推荐的配置。私有部署、endpoint ID、微调模型或新模型如果不在内置
-注册表中，需要先注册运行时模型名：
+`WithContextThreshold`。对于会在同一 session 中切换模型的 agent，这是更推荐的配置。
+每次摘要检查时，框架会按以下顺序解析 context window：
+
+1. 单次运行覆盖值：`agent.WithModelContextWindow(tokens)`
+2. 模型实例配置：例如 `openai.WithContextWindow(tokens)` 或 `provider.WithContextWindow(tokens)`
+3. 进程级模型名注册表：`model.RegisterModelContextWindow(name, tokens)`
+
+然后按 `contextWindow * ratio` 计算阈值（默认 50%）。对于私有部署、endpoint ID、
+微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
+避免不同用户覆盖同一个进程级注册表：
+
+```go
+modelInstance := openai.New(
+    "my-custom-model",
+    openai.WithAPIKey(apiKey),
+    openai.WithBaseURL(apiURI),
+    openai.WithContextWindow(204800),
+)
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithModel(modelInstance),
+)
+
+eventChan, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithModelName("my-custom-model"),
+    agent.WithModelContextWindow(204800),
+)
+```
+
+只有当模型名在当前进程中有稳定的全局含义时，才建议使用全局注册：
 
 ```go
 model.RegisterModelContextWindow("my-custom-model", 32768)
@@ -1102,7 +1135,7 @@ sessionService, err := mysql.NewService(
 
 ## 最佳实践
 
-1. **选择合适的阈值**：如果 agent 运行时可能切换模型，优先使用 `WithContextThreshold`；如果你明确需要固定 token 预算，再使用 `WithTokenThreshold`。自定义模型名需要先注册 context window，才能依赖模型窗口感知的触发条件
+1. **选择合适的阈值**：如果 agent 运行时可能切换模型，优先使用 `WithContextThreshold`；如果你明确需要固定 token 预算，再使用 `WithTokenThreshold`。对于自定义模型或租户提供的模型，优先使用模型级 `WithContextWindow` 或单次运行的 `agent.WithModelContextWindow`；只有稳定的进程级模型名才使用全局注册
 2. **使用异步处理**：在生产环境中始终使用 `EnqueueSummaryJob` 而不是 `CreateSessionSummary`，以避免阻塞对话流程
 3. **监控队列大小**：如果频繁看到"queue is full"警告，请增加 `WithSummaryQueueSize` 或 `WithAsyncSummaryNum`
 4. **自定义提示词**：根据应用需求定制摘要提示词。例如，如果你正在构建客户支持 Agent，应关注关键问题和解决方案

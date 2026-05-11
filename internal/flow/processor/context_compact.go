@@ -53,7 +53,7 @@ type ContextCompactionConfig struct {
 	// fire when context compaction is turned off, even if a positive threshold
 	// is configured. 0 disables it regardless of Enabled.
 	OversizedToolResultMaxTokens int
-	// TokenCounter estimates tool-result size for compaction decisions.
+	// TokenCounter estimates request and tool-result size for compaction decisions.
 	// When nil, SimpleTokenCounter is used.
 	TokenCounter model.TokenCounter
 }
