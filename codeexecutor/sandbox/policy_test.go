@@ -36,6 +36,67 @@ func TestPermissionProfileEnforcement(t *testing.T) {
 	}
 }
 
+func TestRuntimeDefaultProfileIsWorkspaceWrite(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if !containsSpecialRule(rt.profile, AccessWrite, SpecialWork) {
+		t.Fatalf("default runtime profile does not grant work writes: %#v", rt.profile.FileSystem.Rules)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "default-profile", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
+		Path:    "work/ok.txt",
+		Content: []byte("ok"),
+	}}); err != nil {
+		t.Fatalf("default workspace-write profile rejected work write: %v", err)
+	}
+}
+
+func TestWithPermissionProfileKeepsCompleteManagedProfile(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(PermissionProfile{
+			Type:    ProfileManaged,
+			Network: NetworkPolicy{Mode: NetworkEnabled},
+		}),
+	)
+	if rt.profile.Network.Mode != NetworkEnabled {
+		t.Fatalf("network mode = %s, want %s", rt.profile.Network.Mode, NetworkEnabled)
+	}
+	if len(rt.profile.FileSystem.Rules) != 0 {
+		t.Fatalf("empty managed profile was expanded to rules: %#v", rt.profile.FileSystem.Rules)
+	}
+	if len(rt.profile.FileSystem.ProtectedMetadata) == 0 {
+		t.Fatalf("protected metadata defaults were not populated")
+	}
+	if !rt.Describe().NetworkAllowed {
+		t.Fatalf("Describe did not report enabled network")
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "strict-profile", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = rt.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
+		Path:    "work/blocked.txt",
+		Content: []byte("blocked"),
+	}})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("empty managed filesystem rules should be restrictive, got %v", err)
+	}
+}
+
+func TestWorkspaceWriteProfileCanSetNetwork(t *testing.T) {
+	profile := WorkspaceWriteProfile()
+	profile.Network = NetworkPolicy{Mode: NetworkEnabled}
+	if profile.Network.Mode != NetworkEnabled {
+		t.Fatalf("network mode = %s, want %s", profile.Network.Mode, NetworkEnabled)
+	}
+	if !containsSpecialRule(profile, AccessWrite, SpecialWork) {
+		t.Fatalf("workspace-write network profile missing work write grant: %#v", profile.FileSystem.Rules)
+	}
+}
+
 func TestEnvironmentPolicyCoreDoesNotInheritLLMKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-secret")
 	rt := NewRuntime(WithPermissionProfile(DangerFullAccessProfile()))
@@ -461,6 +522,15 @@ func containsPath(paths []string, want string) bool {
 func containsRule(profile PermissionProfile, access FileSystemAccess, path string) bool {
 	for _, rule := range profile.FileSystem.Rules {
 		if rule.Kind == RulePath && rule.Access == access && rule.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSpecialRule(profile PermissionProfile, access FileSystemAccess, special SpecialPath) bool {
+	for _, rule := range profile.FileSystem.Rules {
+		if rule.Kind == RuleSpecial && rule.Access == access && rule.Special == special {
 			return true
 		}
 	}

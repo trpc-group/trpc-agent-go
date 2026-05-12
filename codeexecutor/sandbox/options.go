@@ -32,7 +32,7 @@ func WithBackend(backend BackendType) Option {
 	}
 }
 
-// WithPermissionProfile sets the permission profile.
+// WithPermissionProfile sets the complete permission profile.
 func WithPermissionProfile(profile PermissionProfile) Option {
 	return func(r *Runtime) {
 		r.profile = normalizeProfile(profile)
@@ -96,9 +96,6 @@ func defaultWorkspaceRoot() string {
 func normalizeProfile(profile PermissionProfile) PermissionProfile {
 	if profile.Type == "" {
 		profile.Type = ProfileManaged
-	}
-	if profile.Type == ProfileManaged && len(profile.FileSystem.Rules) == 0 {
-		return WorkspaceWriteProfile()
 	}
 	if profile.Network.Mode == "" {
 		profile.Network.Mode = NetworkRestricted

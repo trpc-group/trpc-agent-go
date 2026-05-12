@@ -72,6 +72,19 @@ Protected metadata is not a replacement for `AccessNone`. It only prevents
 writes to those paths, even when a broader rule grants workspace write access.
 Use `AccessNone` when a path must be neither readable nor writable.
 
+## Default Profile
+
+The runtime defaults to `WorkspaceWriteProfile()`. When callers pass
+`WithPermissionProfile`, that explicit profile replaces the default.
+
+`WorkspaceWriteProfile()` uses these file-system rules:
+
+- `SpecialRoot` is `AccessRead`, giving the sandbox a read-only host view.
+- `SpecialWorkspace`, `SpecialWork`, `SpecialHome`, `SpecialTmp`,
+  `SpecialRuns`, `SpecialOut`, and `SpecialSkills` are `AccessWrite`.
+- Default protected metadata still blocks writes to `.git`, `.agents`,
+  `.codex`, and `.trpc-agent-sandbox` inside the workspace.
+
 ## Public Builders
 
 The builder API mirrors the access model:
