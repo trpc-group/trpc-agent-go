@@ -70,6 +70,7 @@ type LLMAgent struct {
 	userToolNames           map[string]bool // Names of tools explicitly registered
 	// via WithTools and WithToolSets.
 	codeExecutor         codeexecutor.CodeExecutor
+	workspaceRegistry    *codeexecutor.WorkspaceRegistry
 	planner              planner.Planner
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
 	agentCallbacks       *agent.Callbacks
@@ -114,7 +115,7 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
 	// Also track which tools are user-registered (via WithTools) for filtering purposes.
-	tools, userToolNames := registerTools(&options)
+	tools, userToolNames, wsReg := registerTools(&options, nil)
 
 	// Initialize models map and determine the initial model.
 	initialModel, models := initializeModels(&options)
@@ -133,6 +134,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		),
 		genConfig:            options.GenerationConfig,
 		codeExecutor:         options.codeExecutor,
+		workspaceRegistry:    wsReg,
 		tools:                tools,
 		userToolNames:        userToolNames,
 		planner:              options.Planner,
@@ -625,31 +627,61 @@ func initializeModels(options *Options) (model.Model, map[string]model.Model) {
 	return nil, models
 }
 
-func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
+// registerTools assembles the full tool list for an LLMAgent from user-
+// registered tools, knowledge tools, skill tools, and workspace tools.
+//
+// existingReg, when non-nil, is a WorkspaceRegistry carried over from a
+// previous call (e.g. agent construction or tool refresh). Reusing it
+// ensures that successive invocations share the same workspace cache
+// instead of creating duplicate directories. The returned registry
+// should be stored on the agent for future reuse.
+func registerTools(
+	options *Options,
+	existingReg *codeexecutor.WorkspaceRegistry,
+) ([]tool.Tool, map[string]bool, *codeexecutor.WorkspaceRegistry) {
+	// Step 1: collect user-registered tools (WithTools + WithToolSets)
+	// and knowledge search tools.
 	userToolNames := collectUserToolNames(options.Tools)
 	allTools := append([]tool.Tool(nil), options.Tools...)
-	allTools, userToolNames = appendStaticToolSetTools(
-		allTools, userToolNames, options,
-	)
+	allTools, userToolNames = appendStaticToolSetTools(allTools, userToolNames, options)
 	allTools = appendKnowledgeTools(allTools, options)
+
+	// Step 2: determine workspace registry and skill_run tool based on
+	// which capabilities the caller configured.
+	//
+	// Three scenarios:
+	//   a) skills + executor → shared registry for both skill_run and
+	//      workspace_exec; create one only if not inherited.
+	//   b) skills only (no executor) → skill_run gets nil registry and
+	//      builds its own internally; workspace_exec is not wired.
+	//   c) executor only (no skills) → registry for workspace_exec;
+	//      no skill_run needed.
 	var runTool *toolskill.RunTool
-	var workspaceRegistry *codeexecutor.WorkspaceRegistry
+	workspaceRegistry := existingReg
 	if options.skillsRepository != nil {
-		if options.codeExecutor != nil {
+		if options.codeExecutor != nil && workspaceRegistry == nil {
 			workspaceRegistry = buildWorkspaceRegistry()
 		}
 		runTool = buildSkillRunTool(options, workspaceRegistry)
 	} else if executorSupportsWorkspaceExec(options) {
-		workspaceRegistry = buildWorkspaceRegistry()
+		if workspaceRegistry == nil {
+			workspaceRegistry = buildWorkspaceRegistry()
+		}
 	}
+
+	// Step 3: wire workspace_exec (and session companions) when an
+	// executor with EngineProvider is available.
 	allTools = appendWorkspaceExecTool(
 		allTools,
 		options,
 		workspaceRegistry,
 		nil,
 	)
+
+	// Step 4: wire skill tools (skill_load, skill_run, etc.) when a
+	// skill repository is configured.
 	allTools = appendSkillTools(allTools, options, runTool)
-	return allTools, userToolNames
+	return allTools, userToolNames, workspaceRegistry
 }
 
 func collectUserToolNames(tools []tool.Tool) map[string]bool {
@@ -967,6 +999,19 @@ func appendOnDemandSessionTools(
 
 func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
 	return codeexecutor.NewWorkspaceRegistry()
+}
+
+// ensureWorkspaceRegistry returns the agent-level registry, creating
+// one if it does not yet exist. The registry is stored on the agent so
+// that successive invocations (different rounds) reuse the same
+// instance and do not create duplicate workspace directories.
+func (a *LLMAgent) ensureWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.workspaceRegistry == nil {
+		a.workspaceRegistry = codeexecutor.NewWorkspaceRegistry()
+	}
+	return a.workspaceRegistry
 }
 
 // workspacePrepOptions translates llmagent-level workspace options
@@ -1726,9 +1771,14 @@ func (a *LLMAgent) SetSubAgents(subAgents []agent.Agent) {
 // refreshToolsLocked recomputes the aggregated tool list and user tool
 // tracking map from the current options. Caller must hold a.mu.Lock.
 func (a *LLMAgent) refreshToolsLocked() {
-	tools, userToolNames := registerTools(&a.option)
+	tools, userToolNames, reg := registerTools(
+		&a.option, a.workspaceRegistry,
+	)
 	a.tools = tools
 	a.userToolNames = userToolNames
+	if a.workspaceRegistry == nil {
+		a.workspaceRegistry = reg
+	}
 }
 
 // AddToolSet adds or replaces a tool set at runtime in a

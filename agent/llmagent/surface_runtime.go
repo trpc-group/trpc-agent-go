@@ -203,9 +203,9 @@ func (a *LLMAgent) InvocationToolSurface(
 		codeExecutorSupportsWorkspaceExecSessions(effectiveExec)
 	var workspaceRegistry *codeexecutor.WorkspaceRegistry
 	if effectiveSkills != nil && effectiveExec != nil {
-		workspaceRegistry = buildWorkspaceRegistry()
+		workspaceRegistry = a.ensureWorkspaceRegistry()
 	} else if workspaceExecEnabled {
-		workspaceRegistry = buildWorkspaceRegistry()
+		workspaceRegistry = a.ensureWorkspaceRegistry()
 	}
 	// Pass effectiveSkills so workspace_exec's loaded-skills
 	// reconcile reads the same repository that skill tools and the
