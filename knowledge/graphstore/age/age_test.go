@@ -1381,14 +1381,14 @@ func TestCypherSQL(t *testing.T) {
 }
 
 func TestOptionsBuilderOptions(t *testing.T) {
-	t.Run("empty options returns nil", func(t *testing.T) {
+	t.Run("empty options returns error", func(t *testing.T) {
 		o := options{graphName: "test"}
-		opts, err := o.builderOptions()
-		if err != nil {
-			t.Fatalf("builderOptions() error = %v", err)
+		_, err := o.builderOptions()
+		if err == nil {
+			t.Fatal("builderOptions() error = nil, want error for missing connection config")
 		}
-		if opts != nil {
-			t.Errorf("builderOptions() = %v, want nil", opts)
+		if !strings.Contains(err.Error(), "requires WithClientDSN or WithPostgresInstance") {
+			t.Errorf("builderOptions() error = %v, want containing connection config hint", err)
 		}
 	})
 

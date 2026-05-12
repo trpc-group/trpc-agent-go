@@ -82,9 +82,9 @@ func TestBuilderOptions(t *testing.T) {
 		wantErrSub string
 	}{
 		{
-			name:    "neither DSN nor instance returns nil",
-			opts:    defaultOptions,
-			wantNil: true,
+			name:       "neither DSN nor instance returns error",
+			opts:       defaultOptions,
+			wantErrSub: "requires WithClientDSN or WithPostgresInstance",
 		},
 		{
 			name:    "DSN set returns one builder opt",
