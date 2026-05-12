@@ -93,8 +93,8 @@ func runAgentToolManualRun(ctx context.Context, cfg config) error {
 	}
 	defer h.runner.Close()
 	defer h.printToolTrace()
-	// final, err := h.runTurn(ctx, "agent-tool-basic", `print name of current/working directory`)
-	final, err := h.runTurn(ctx, "agent-tool-basic", `send ICMP ECHO_REQUEST to network hosts baidu.com`)
+	final, err := h.runTurn(ctx, "agent-tool-basic", `
+	Use workspace_exec to print the current working directory and list the sandbox workspace directories.`)
 	if err != nil {
 		return err
 	}

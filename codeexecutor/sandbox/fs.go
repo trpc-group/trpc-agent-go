@@ -194,87 +194,9 @@ func (r *Runtime) StageInputs(
 		if to == "" {
 			to = filepath.Join(codeexecutor.DirWork, "inputs", inputName(sp.From))
 		}
-		var resolved string
-		var version *int
-		switch {
-		case strings.HasPrefix(sp.From, inputSchemeArtifact):
-			name := strings.TrimPrefix(sp.From, inputSchemeArtifact)
-			aname, aver, err := codeexecutor.ParseArtifactRef(name)
-			if err != nil {
-				return err
-			}
-			useVer := aver
-			if useVer == nil && sp.Pin {
-				useVer = pinnedArtifactVersion(md, aname, to)
-			}
-			data, _, actual, err := codeexecutor.LoadArtifactHelper(ctx, aname, useVer)
-			if err != nil {
-				return err
-			}
-			if useVer != nil {
-				v := *useVer
-				version = &v
-			} else {
-				v := actual
-				version = &v
-			}
-			if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{{
-				Path:    to,
-				Content: data,
-				Mode:    codeexecutor.DefaultScriptFileMode,
-			}}); err != nil {
-				return err
-			}
-			resolved = aname
-		case strings.HasPrefix(sp.From, inputSchemeHost):
-			src := strings.TrimPrefix(sp.From, inputSchemeHost)
-			if err := r.StageDirectory(ctx, ws, src, to, codeexecutor.StageOptions{}); err != nil {
-				return err
-			}
-			resolved = src
-		case strings.HasPrefix(sp.From, inputSchemeWorkspace):
-			srcRel := strings.TrimPrefix(sp.From, inputSchemeWorkspace)
-			if err := r.checkRead(profile, ws, srcRel); err != nil {
-				return err
-			}
-			if err := r.checkWrite(profile, ws, to); err != nil {
-				return err
-			}
-			src, _, err := r.resolveWorkspacePath(ws, srcRel)
-			if err != nil {
-				return err
-			}
-			dst, _, err := r.resolveWorkspacePath(ws, to)
-			if err != nil {
-				return err
-			}
-			if err := copyPath(src, dst); err != nil {
-				return err
-			}
-			resolved = srcRel
-		case strings.HasPrefix(sp.From, inputSchemeSkill):
-			rest := strings.TrimPrefix(sp.From, inputSchemeSkill)
-			srcRel := filepath.Join(codeexecutor.DirSkills, filepath.Clean(rest))
-			if err := r.checkRead(profile, ws, srcRel); err != nil {
-				return err
-			}
-			if err := r.checkWrite(profile, ws, to); err != nil {
-				return err
-			}
-			src, _, err := r.resolveWorkspacePath(ws, srcRel)
-			if err != nil {
-				return err
-			}
-			dst, _, err := r.resolveWorkspacePath(ws, to)
-			if err != nil {
-				return err
-			}
-			if err := copyPath(src, dst); err != nil {
-				return err
-			}
-			resolved = srcRel
-		default:
-			return fmt.Errorf("unsupported input: %s", sp.From)
+		resolved, version, err := r.stageInput(ctx, ws, profile, md, sp, to)
+		if err != nil {
+			return err
 		}
 		md.Inputs = append(md.Inputs, codeexecutor.InputRecord{
 			From:      sp.From,
@@ -286,6 +208,126 @@ func (r *Runtime) StageInputs(
 		})
 	}
 	return codeexecutor.SaveMetadata(ws.Path, md)
+}
+
+func (r *Runtime) stageInput(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	profile PermissionProfile,
+	md codeexecutor.WorkspaceMetadata,
+	sp codeexecutor.InputSpec,
+	to string,
+) (string, *int, error) {
+	switch {
+	case strings.HasPrefix(sp.From, inputSchemeArtifact):
+		return r.stageArtifactInput(ctx, ws, md, sp, to)
+	case strings.HasPrefix(sp.From, inputSchemeHost):
+		return r.stageHostInput(ctx, ws, sp, to)
+	case strings.HasPrefix(sp.From, inputSchemeWorkspace):
+		return r.stageWorkspaceInput(ws, profile, sp, to)
+	case strings.HasPrefix(sp.From, inputSchemeSkill):
+		return r.stageSkillInput(ws, profile, sp, to)
+	default:
+		return "", nil, fmt.Errorf("unsupported input: %s", sp.From)
+	}
+}
+
+func (r *Runtime) stageArtifactInput(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	md codeexecutor.WorkspaceMetadata,
+	sp codeexecutor.InputSpec,
+	to string,
+) (string, *int, error) {
+	name := strings.TrimPrefix(sp.From, inputSchemeArtifact)
+	aname, aver, err := codeexecutor.ParseArtifactRef(name)
+	if err != nil {
+		return "", nil, err
+	}
+	useVer := aver
+	if useVer == nil && sp.Pin {
+		useVer = pinnedArtifactVersion(md, aname, to)
+	}
+	data, _, actual, err := codeexecutor.LoadArtifactHelper(ctx, aname, useVer)
+	if err != nil {
+		return "", nil, err
+	}
+	version := useVer
+	if version == nil {
+		v := actual
+		version = &v
+	}
+	if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    to,
+		Content: data,
+		Mode:    codeexecutor.DefaultScriptFileMode,
+	}}); err != nil {
+		return "", nil, err
+	}
+	return aname, version, nil
+}
+
+func (r *Runtime) stageHostInput(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	sp codeexecutor.InputSpec,
+	to string,
+) (string, *int, error) {
+	src := strings.TrimPrefix(sp.From, inputSchemeHost)
+	if err := r.StageDirectory(ctx, ws, src, to, codeexecutor.StageOptions{}); err != nil {
+		return "", nil, err
+	}
+	return src, nil, nil
+}
+
+func (r *Runtime) stageWorkspaceInput(
+	ws codeexecutor.Workspace,
+	profile PermissionProfile,
+	sp codeexecutor.InputSpec,
+	to string,
+) (string, *int, error) {
+	srcRel := strings.TrimPrefix(sp.From, inputSchemeWorkspace)
+	if err := r.stageWorkspaceRelativePath(ws, profile, srcRel, to); err != nil {
+		return "", nil, err
+	}
+	return srcRel, nil, nil
+}
+
+func (r *Runtime) stageSkillInput(
+	ws codeexecutor.Workspace,
+	profile PermissionProfile,
+	sp codeexecutor.InputSpec,
+	to string,
+) (string, *int, error) {
+	rest := strings.TrimPrefix(sp.From, inputSchemeSkill)
+	srcRel := filepath.Join(codeexecutor.DirSkills, filepath.Clean(rest))
+	if err := r.stageWorkspaceRelativePath(ws, profile, srcRel, to); err != nil {
+		return "", nil, err
+	}
+	return srcRel, nil, nil
+}
+
+func (r *Runtime) stageWorkspaceRelativePath(
+	ws codeexecutor.Workspace,
+	profile PermissionProfile,
+	srcRel string,
+	to string,
+) error {
+	if err := r.checkRead(profile, ws, srcRel); err != nil {
+		return err
+	}
+	if err := r.checkWrite(profile, ws, to); err != nil {
+		return err
+	}
+	src, _, err := r.resolveWorkspacePath(ws, srcRel)
+	if err != nil {
+		return err
+	}
+	dst, _, err := r.resolveWorkspacePath(ws, to)
+	if err != nil {
+		return err
+	}
+	return copyPath(src, dst)
 }
 
 // CollectOutputs applies the declarative output spec under the same read
