@@ -97,13 +97,149 @@ func TestProtectedMetadataWriteDenied(t *testing.T) {
 	}
 }
 
-func TestDenyReadGlobCollectDenied(t *testing.T) {
-	profile := WorkspaceWriteProfile().WithDenyReadGlobs("work/*.env")
+func TestNoAccessGlobCollectDenied(t *testing.T) {
+	profile := WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
 	rt := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(profile),
 	)
 	ws, err := rt.CreateWorkspace(context.Background(), "s1", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(ws.Path, "work", "app.env"),
+		[]byte("TOKEN=secret"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, err = rt.Collect(context.Background(), ws, []string{"work/*.env"})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("expected no-access glob to block Collect, got %v", err)
+	}
+	err = rt.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
+		Path:    "work/app.env",
+		Content: []byte("TOKEN=new"),
+	}})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("expected no-access glob to block PutFiles, got %v", err)
+	}
+}
+
+func TestAccessNonePathDeniesReadAndWrite(t *testing.T) {
+	profile := WorkspaceWriteProfile().WithNoAccessPaths("work/secret.txt")
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(profile),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "none-path", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(ws.Path, "work", "secret.txt"),
+		[]byte("secret"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Collect(context.Background(), ws, []string{"work/secret.txt"}); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("expected AccessNone to deny read, got %v", err)
+	}
+	err = rt.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
+		Path:    "work/secret.txt",
+		Content: []byte("new"),
+	}})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("expected AccessNone to deny write, got %v", err)
+	}
+}
+
+func TestMoreSpecificReadRuleOverridesWorkspaceWrite(t *testing.T) {
+	profile := WorkspaceWriteProfile().WithReadPaths("work/readonly")
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(profile),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "specific-read", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(ws.Path, "work", "readonly")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := rt.Collect(context.Background(), ws, []string{"work/readonly/note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Content != "ok" {
+		t.Fatalf("read-only subtree collect = %#v", files)
+	}
+	err = rt.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
+		Path:    "work/readonly/note.txt",
+		Content: []byte("new"),
+	}})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("expected more specific read rule to deny write, got %v", err)
+	}
+}
+
+func TestEqualSpecificityAccessPrecedence(t *testing.T) {
+	profile := WorkspaceWriteProfile()
+	profile.FileSystem.Rules = append(profile.FileSystem.Rules,
+		FileSystemRule{Kind: RulePath, Access: AccessRead, Path: "work/tie.txt"},
+		FileSystemRule{Kind: RulePath, Access: AccessWrite, Path: "work/tie.txt"},
+		FileSystemRule{Kind: RulePath, Access: AccessNone, Path: "work/tie.txt"},
+	)
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(profile),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "tie", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "work", "tie.txt"), []byte("tie"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := rt.decidePath(normalizeProfile(profile), ws, "work/tie.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.access != AccessNone {
+		t.Fatalf("equal-specificity access = %s, want %s", d.access, AccessNone)
+	}
+	if _, err := rt.Collect(context.Background(), ws, []string{"work/tie.txt"}); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("expected equal-specificity AccessNone to deny read, got %v", err)
+	}
+}
+
+func TestRuleGlobOnlySupportsAccessNone(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "glob-shape", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, access := range []FileSystemAccess{AccessRead, AccessWrite} {
+		profile := WorkspaceWriteProfile()
+		profile.FileSystem.Rules = append(profile.FileSystem.Rules, FileSystemRule{
+			Kind: RuleGlob, Access: access, Glob: "work/*.env",
+		})
+		err := rt.checkRead(profile, ws, codeexecutor.DirWork)
+		if !IsKind(err, ErrPolicyViolation) {
+			t.Fatalf("glob access %s: expected ErrPolicyViolation, got %v", access, err)
+		}
+	}
+}
+
+func TestAccessNoneMaskCollectionAcceptsPathGlobAndSpecial(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "none-supported", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,9 +249,37 @@ func TestDenyReadGlobCollectDenied(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = rt.Collect(context.Background(), ws, []string{"work/*.env"})
-	if !IsKind(err, ErrPathDenied) {
-		t.Fatalf("expected deny-read glob to block Collect, got %v", err)
+	profile := WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
+	profile = profile.WithNoAccessPaths("work/app.env")
+	profile.FileSystem.Rules = append(profile.FileSystem.Rules, FileSystemRule{
+		Kind: RuleSpecial, Access: AccessNone, Special: SpecialOut,
+	})
+	matches, err := rt.deniedReadMatches(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		filepath.Join(ws.Path, "work", "app.env"),
+		filepath.Join(ws.Path, codeexecutor.DirOut),
+	} {
+		if !containsPath(matches, want) {
+			t.Fatalf("AccessNone matches = %#v, missing %s", matches, want)
+		}
+	}
+}
+
+func TestPermissionProfileBuildersDoNotAliasRules(t *testing.T) {
+	base := WorkspaceWriteProfile()
+	withRead := base.WithReadPaths("work/read")
+	withNone := base.WithNoAccessPaths("work/none")
+	if containsRule(withRead, AccessNone, "work/none") {
+		t.Fatalf("WithNoAccessPaths mutated sibling profile rules: %#v", withRead.FileSystem.Rules)
+	}
+	if containsRule(withNone, AccessRead, "work/read") {
+		t.Fatalf("WithReadPaths mutated sibling profile rules: %#v", withNone.FileSystem.Rules)
+	}
+	if containsRule(base, AccessRead, "work/read") || containsRule(base, AccessNone, "work/none") {
+		t.Fatalf("builder mutated base profile rules: %#v", base.FileSystem.Rules)
 	}
 }
 
@@ -279,6 +443,24 @@ func hasEnv(env []string, want string) bool {
 func hasEnvPrefix(env []string, prefix string) bool {
 	for _, kv := range env {
 		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsRule(profile PermissionProfile, access FileSystemAccess, path string) bool {
+	for _, rule := range profile.FileSystem.Rules {
+		if rule.Kind == RulePath && rule.Access == access && rule.Path == path {
 			return true
 		}
 	}

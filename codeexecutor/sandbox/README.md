@@ -57,8 +57,10 @@ new backend capability with explicit policy fields rather than overloading
 ## File System
 
 File system policy is enforced as a boundary between the sandbox workspace and
-the host file system. Managed profiles use an allow-list for writes and a
-read-mostly view of the host:
+the host file system. Managed profiles use the `read` / `write` / `none`
+access model described in [`FILE_SYSTEM_POLICY.md`](FILE_SYSTEM_POLICY.md). In
+short, `write` includes read access, while `none` means neither readable nor
+writable:
 
 - `ReadOnlyProfile` grants read access to the sandbox root and keeps networking
   restricted.
@@ -68,8 +70,8 @@ read-mostly view of the host:
 - `WithReadPaths` and `WithWritePaths` add explicit path grants. Relative paths
   are resolved inside the workspace. Absolute paths are treated as host paths
   and must be granted explicitly before they are mounted into the sandbox.
-- `WithDenyReadPaths` and `WithDenyReadGlobs` take precedence over read/write
-  grants for matching paths.
+- `WithNoAccessPaths` and `WithNoAccessGlobs` create `none` rules. Matching
+  paths are neither readable nor writable.
 
 ### Boundary model
 
@@ -78,9 +80,8 @@ The managed file-system boundary is designed around three rules:
 1. Workspace paths cannot escape the workspace root. Runtime file APIs reject
    `..`, absolute paths outside the workspace, and symlinks that resolve outside
    the workspace.
-2. Writes are only allowed where the policy grants write access. The default
-   profile makes the session workspace writable, while the host root remains
-   read-only.
+2. Reads and writes are resolved through the file-system policy. More specific
+   rules win first; equally specific rules use `none > write > read`.
 3. Protected metadata paths are never writable, even if they are under a writable
    workspace grant. The default protected set is `.git`, `.agents`, `.codex`,
    and `.trpc-agent-sandbox`.
@@ -88,8 +89,8 @@ The managed file-system boundary is designed around three rules:
 This boundary is not intended to hide the entire host file system by default.
 On Linux, managed execution starts with a read-only bind mount of `/`, then adds
 writable bind mounts for the workspace and any explicit external write grants.
-Sensitive files that must not be readable should be covered by deny-read rules
-or kept outside the host paths visible to the sandbox.
+Sensitive files that must not be readable should be covered by `none` rules or
+kept outside the host paths visible to the sandbox.
 
 ### Linux implementation
 
@@ -100,12 +101,12 @@ The Linux backend uses `bubblewrap` mount namespaces to materialize the policy:
 - Explicit absolute read grants are added with `--ro-bind`.
 - Explicit absolute write grants are added with `--bind`.
 - Protected metadata paths are re-mounted read-only.
-- Deny-read file matches are replaced with a zero-permission mask file, and
-  deny-read directory matches are covered with an empty `tmpfs`.
+- `none` file matches are replaced with a zero-permission mask file, and `none`
+  directory matches are covered with an empty `tmpfs`.
 
 The implementation is intentionally path-based. It supports concrete path grants,
-workspace-relative glob deny rules, and protected metadata masks, but it does not
-currently implement per-file capabilities beyond read, write, and deny-read.
+workspace-relative glob `none` rules, and protected metadata masks, but it does
+not currently implement per-file capabilities beyond read, write, and none.
 
 ### Session visibility
 

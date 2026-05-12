@@ -48,7 +48,7 @@ func main() {
 	scenarioName := flag.String(
 		"scenario",
 		"basic",
-		"basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|deny-read|network-restricted|timeout|output-cap|additional-permissions|all",
+		"basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|timeout|output-cap|additional-permissions|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|all",
 	)
 	modelName := flag.String("model", "glm-4.7-flash", "model name")
 	workspaceRoot := flag.String("workspace-root", "", "sandbox workspace root")
@@ -95,11 +95,15 @@ func runScenarios(ctx context.Context, cfg config) error {
 		{"session-isolation", runSessionIsolation},
 		{"env-redaction", runEnvRedaction},
 		{"metadata-protection", runMetadataProtection},
-		{"deny-read", runDenyRead},
+		{"no-access", runNoAccess},
 		{"network-restricted", runNetworkRestricted},
 		{"timeout", runTimeout},
 		{"output-cap", runOutputCap},
 		{"additional-permissions", runAdditionalPermissions},
+		{"file-system-policy-access-modes", runFileSystemPolicyAccessModes},
+		{"file-system-policy-specificity", runFileSystemPolicySpecificity},
+		{"file-system-policy-glob-no-access", runFileSystemPolicyGlobNoAccess},
+		{"file-system-policy-agent-enforcement", runFileSystemPolicyAgentEnforcement},
 	}
 	selected := map[string]scenario{}
 	for _, sc := range scenarios {
@@ -298,24 +302,31 @@ func runMetadataProtection(ctx context.Context, cfg config) error {
 	return nil
 }
 
-func runDenyRead(ctx context.Context, cfg config) error {
-	profile := sandbox.WorkspaceWriteProfile().WithDenyReadGlobs("work/*.env")
+func runNoAccess(ctx context.Context, cfg config) error {
+	profile := sandbox.WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
 	rt := newRuntime(cfg, profile, 1<<20, 3*time.Second)
 	if err := requireManagedSandbox(ctx, rt, cfg); err != nil {
 		return err
 	}
-	ws, err := rt.CreateWorkspace(ctx, "deny-read", codeexecutor.WorkspacePolicy{})
+	ws, err := rt.CreateWorkspace(ctx, "no-access", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		return err
 	}
-	if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
-		Path:    "work/secret.env",
-		Content: []byte("OPENAI_API_KEY=redacted"),
-	}}); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(ws.Path, "work", "secret.env"),
+		[]byte("OPENAI_API_KEY=redacted"),
+		0o600,
+	); err != nil {
 		return err
 	}
 	if _, err := rt.Collect(ctx, ws, []string{"work/*.env"}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
-		return fmt.Errorf("file API deny-read was not enforced: %v", err)
+		return fmt.Errorf("file API no-access rule was not enforced: %v", err)
+	}
+	if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    "work/secret.env",
+		Content: []byte("OPENAI_API_KEY=new"),
+	}}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+		return fmt.Errorf("file API no-access write was not enforced: %v", err)
 	}
 	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
 		Cmd:  "bash",

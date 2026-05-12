@@ -56,7 +56,7 @@ type NetworkPolicy struct {
 	Mode NetworkMode
 }
 
-// FileSystemAccess describes a filesystem rule's grant or denial.
+// FileSystemAccess describes a filesystem rule's access mode.
 type FileSystemAccess string
 
 const (
@@ -64,10 +64,8 @@ const (
 	AccessRead FileSystemAccess = "read"
 	// AccessWrite grants read and write access.
 	AccessWrite FileSystemAccess = "write"
-	// AccessDenyRead denies reads and takes precedence over read/write grants.
-	AccessDenyRead FileSystemAccess = "deny-read"
-	// AccessDenyReadGlob denies reads for glob matches.
-	AccessDenyReadGlob FileSystemAccess = "deny-read-glob"
+	// AccessNone denies both reads and writes.
+	AccessNone FileSystemAccess = "none"
 )
 
 // FileSystemRuleKind describes how a filesystem rule target is interpreted.
@@ -105,7 +103,7 @@ const (
 	SpecialSkills SpecialPath = "skills"
 )
 
-// FileSystemRule declares one filesystem grant or denial.
+// FileSystemRule declares one filesystem access rule.
 type FileSystemRule struct {
 	Kind    FileSystemRuleKind
 	Access  FileSystemAccess
@@ -197,7 +195,7 @@ func (p PermissionProfile) WithReadPaths(paths ...string) PermissionProfile {
 		if path == "" {
 			continue
 		}
-		p.FileSystem.Rules = append(p.FileSystem.Rules, FileSystemRule{
+		p = p.withFileSystemRule(FileSystemRule{
 			Kind: RulePath, Access: AccessRead, Path: path,
 		})
 	}
@@ -210,36 +208,46 @@ func (p PermissionProfile) WithWritePaths(paths ...string) PermissionProfile {
 		if path == "" {
 			continue
 		}
-		p.FileSystem.Rules = append(p.FileSystem.Rules, FileSystemRule{
+		p = p.withFileSystemRule(FileSystemRule{
 			Kind: RulePath, Access: AccessWrite, Path: path,
 		})
 	}
 	return p
 }
 
-// WithDenyReadPaths adds concrete deny-read rules.
-func (p PermissionProfile) WithDenyReadPaths(paths ...string) PermissionProfile {
+// WithNoAccessPaths adds concrete no-access rules. Matching paths are neither
+// readable nor writable.
+func (p PermissionProfile) WithNoAccessPaths(paths ...string) PermissionProfile {
 	for _, path := range paths {
 		if path == "" {
 			continue
 		}
-		p.FileSystem.Rules = append(p.FileSystem.Rules, FileSystemRule{
-			Kind: RulePath, Access: AccessDenyRead, Path: path,
+		p = p.withFileSystemRule(FileSystemRule{
+			Kind: RulePath, Access: AccessNone, Path: path,
 		})
 	}
 	return p
 }
 
-// WithDenyReadGlobs adds workspace-relative deny-read glob rules.
-func (p PermissionProfile) WithDenyReadGlobs(patterns ...string) PermissionProfile {
+// WithNoAccessGlobs adds workspace-relative no-access glob rules. Matching
+// files are neither readable nor writable.
+func (p PermissionProfile) WithNoAccessGlobs(patterns ...string) PermissionProfile {
 	for _, pattern := range patterns {
 		if pattern == "" {
 			continue
 		}
-		p.FileSystem.Rules = append(p.FileSystem.Rules, FileSystemRule{
-			Kind: RuleGlob, Access: AccessDenyReadGlob, Glob: pattern,
+		p = p.withFileSystemRule(FileSystemRule{
+			Kind: RuleGlob, Access: AccessNone, Glob: pattern,
 		})
 	}
+	return p
+}
+
+func (p PermissionProfile) withFileSystemRule(rule FileSystemRule) PermissionProfile {
+	rules := make([]FileSystemRule, 0, len(p.FileSystem.Rules)+1)
+	rules = append(rules, p.FileSystem.Rules...)
+	rules = append(rules, rule)
+	p.FileSystem.Rules = rules
 	return p
 }
 

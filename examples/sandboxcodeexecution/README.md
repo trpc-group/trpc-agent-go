@@ -31,7 +31,7 @@ clear message. The example never reads or prints key contents.
   session; the model uses `workspace_exec` to create a file, then reads it in a
   later turn.
 - `agent-tool-security`: runs a real LLMAgent and asks it to use
-  `workspace_exec` to verify env redaction and deny-read behavior.
+  `workspace_exec` to verify env redaction and no-access behavior.
 - `agent-artifact-stage`: seeds an in-memory artifact service, asks a real
   LLMAgent to call an artifact staging tool, then uses `workspace_exec` to
   consume the staged artifact in the sandbox.
@@ -48,18 +48,26 @@ clear message. The example never reads or prints key contents.
   `OPENAI_API_KEY` by default.
 - `metadata-protection`: verifies protected metadata paths are blocked through
   both file API and shell execution.
-- `deny-read`: verifies deny-read policy blocks file API reads and shell access.
+- `no-access`: verifies no-access policy blocks file API reads and shell access.
 - `network-restricted`: verifies restricted networking prevents outbound socket
   connections.
 - `timeout`: verifies long-running commands are timed out.
 - `output-cap`: verifies large output is capped and marked as truncated.
 - `additional-permissions`: verifies a host path grant is scoped to one
   operation and expires afterward.
+- `file-system-policy-access-modes`: verifies read, write, no-access, metadata
+  protection, and restricted networking.
+- `file-system-policy-specificity`: verifies a more specific read rule can make
+  a subtree read-only under a writable workspace.
+- `file-system-policy-glob-no-access`: verifies glob no-access policy blocks
+  file API and shell reads.
+- `file-system-policy-agent-enforcement`: uses a real LLMAgent and
+  `workspace_exec` to verify no-access enforcement.
 
 ## Flags
 
 ```bash
--scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|deny-read|network-restricted|timeout|output-cap|additional-permissions|all
+-scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|timeout|output-cap|additional-permissions|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|all
 -model glm-4.7-flash
 -workspace-root /tmp/my-sandbox-root
 -keep-workspace

@@ -52,3 +52,57 @@ func TestLinuxBwrapWorkspaceWriteIntegration(t *testing.T) {
 		t.Fatalf("workspace write failed: %q", data)
 	}
 }
+
+func TestLinuxNoAccessMaskArgsCoverPathGlobAndSpecial(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-args", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "work", "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "work", "app.env"), []byte("TOKEN=secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().
+		WithNoAccessPaths("work/secret.txt").
+		WithNoAccessGlobs("work/*.env")
+	profile.FileSystem.Rules = append(profile.FileSystem.Rules, FileSystemRule{
+		Kind: RuleSpecial, Access: AccessNone, Special: SpecialOut,
+	})
+	args, err := rt.denyReadMaskArgs(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mask := denyReadMaskSource(ws)
+	for _, want := range []string{
+		filepath.Join(ws.Path, "work", "secret.txt"),
+		filepath.Join(ws.Path, "work", "app.env"),
+	} {
+		if !hasArgTriple(args, "--ro-bind", mask, want) {
+			t.Fatalf("mask args = %#v, missing ro-bind mask for %s", args, want)
+		}
+	}
+	if !hasArgPair(args, "--tmpfs", filepath.Join(ws.Path, codeexecutor.DirOut)) {
+		t.Fatalf("mask args = %#v, missing tmpfs for out special path", args)
+	}
+}
+
+func hasArgPair(args []string, first, second string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == first && args[i+1] == second {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArgTriple(args []string, first, second, third string) bool {
+	for i := 0; i+2 < len(args); i++ {
+		if args[i] == first && args[i+1] == second && args[i+2] == third {
+			return true
+		}
+	}
+	return false
+}

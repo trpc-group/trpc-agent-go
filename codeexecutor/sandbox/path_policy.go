@@ -10,6 +10,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,12 +25,11 @@ func defaultProtectedMetadata() []string {
 }
 
 type pathDecision struct {
-	rel        string
-	abs        string
-	canRead    bool
-	canWrite   bool
-	readDenied bool
-	protected  bool
+	rel       string
+	abs       string
+	access    FileSystemAccess
+	matched   bool
+	protected bool
 }
 
 func (r *Runtime) resolveWorkspacePath(
@@ -136,37 +136,157 @@ func (r *Runtime) decidePath(
 	ws codeexecutor.Workspace,
 	rel string,
 ) (pathDecision, error) {
+	if err := validateFileSystemRules(profile); err != nil {
+		return pathDecision{}, err
+	}
 	abs, rel, err := r.resolveWorkspacePath(ws, rel)
 	if err != nil {
 		return pathDecision{}, err
 	}
 	d := pathDecision{rel: rel, abs: abs}
 	d.protected = isProtectedRel(rel, profile.FileSystem.ProtectedMetadata)
+	access, matched, err := r.resolveAccess(profile, ws, rel, abs)
+	if err != nil {
+		return pathDecision{}, err
+	}
+	d.access = access
+	d.matched = matched
+	return d, nil
+}
+
+func (r *Runtime) resolveAccess(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	rel string,
+	abs string,
+) (FileSystemAccess, bool, error) {
+	var best FileSystemAccess
+	bestSpecificity := -1
+	bestRank := -1
 	for _, rule := range profile.FileSystem.Rules {
 		matched, err := r.matchRule(ws, rel, abs, rule)
 		if err != nil {
-			return pathDecision{}, err
+			return "", false, err
 		}
 		if !matched {
 			continue
 		}
-		switch rule.Access {
-		case AccessRead:
-			d.canRead = true
-		case AccessWrite:
-			d.canRead = true
-			d.canWrite = true
-		case AccessDenyRead, AccessDenyReadGlob:
-			d.readDenied = true
+		specificity, err := ruleSpecificity(ws, rule)
+		if err != nil {
+			return "", false, err
+		}
+		rank := accessPrecedence(rule.Access)
+		if specificity > bestSpecificity ||
+			(specificity == bestSpecificity && rank > bestRank) {
+			best = rule.Access
+			bestSpecificity = specificity
+			bestRank = rank
 		}
 	}
-	if d.readDenied {
-		d.canRead = false
+	return best, bestSpecificity >= 0, nil
+}
+
+func accessPrecedence(access FileSystemAccess) int {
+	switch access {
+	case AccessNone:
+		return 3
+	case AccessWrite:
+		return 2
+	case AccessRead:
+		return 1
+	default:
+		return 0
 	}
-	if d.protected {
-		d.canWrite = false
+}
+
+func accessCanRead(access FileSystemAccess) bool {
+	return access == AccessRead || access == AccessWrite
+}
+
+func accessCanWrite(access FileSystemAccess) bool {
+	return access == AccessWrite
+}
+
+func validateFileSystemRules(profile PermissionProfile) error {
+	for _, rule := range profile.FileSystem.Rules {
+		if !validFileSystemRuleShape(rule) {
+			return deniedf(
+				ErrPolicyViolation,
+				"filesystem-rule",
+				ruleTarget(rule),
+				"unsupported access/kind combination: access=%s kind=%s",
+				rule.Access,
+				rule.Kind,
+			)
+		}
 	}
-	return d, nil
+	return nil
+}
+
+func validFileSystemRuleShape(rule FileSystemRule) bool {
+	switch rule.Access {
+	case AccessRead, AccessWrite:
+		return rule.Kind == RulePath || rule.Kind == RuleSpecial
+	case AccessNone:
+		return rule.Kind == RulePath || rule.Kind == RuleSpecial || rule.Kind == RuleGlob
+	default:
+		return false
+	}
+}
+
+func ruleTarget(rule FileSystemRule) string {
+	switch rule.Kind {
+	case RulePath:
+		return rule.Path
+	case RuleGlob:
+		return rule.Glob
+	case RuleSpecial:
+		return string(rule.Special)
+	default:
+		return fmt.Sprintf("kind=%s", rule.Kind)
+	}
+}
+
+func ruleSpecificity(ws codeexecutor.Workspace, rule FileSystemRule) (int, error) {
+	switch rule.Kind {
+	case RuleSpecial:
+		rel, ok := specialRel(rule.Special)
+		if !ok {
+			return 0, nil
+		}
+		return pathSpecificity(rel), nil
+	case RuleGlob:
+		return pathSpecificity(rule.Glob), nil
+	default:
+		target := strings.TrimSpace(rule.Path)
+		if target == "" {
+			return 0, nil
+		}
+		if filepath.IsAbs(target) {
+			rootAbs, err := filepath.Abs(ws.Path)
+			if err != nil {
+				return 0, err
+			}
+			targetAbs, err := filepath.Abs(target)
+			if err != nil {
+				return 0, err
+			}
+			if rel, err := filepath.Rel(rootAbs, targetAbs); err == nil &&
+				!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) &&
+				rel != ".." {
+				target = rel
+			}
+		}
+		return pathSpecificity(target), nil
+	}
+}
+
+func pathSpecificity(path string) int {
+	path = strings.Trim(filepath.ToSlash(filepath.Clean(path)), "/")
+	if path == "" || path == "." {
+		return 0
+	}
+	return len(strings.Split(path, "/"))
 }
 
 func (r *Runtime) matchRule(
@@ -199,10 +319,18 @@ func (r *Runtime) matchRule(
 }
 
 func matchSpecial(ws codeexecutor.Workspace, abs string, special SpecialPath) (bool, error) {
+	target, ok, err := specialPathAbs(ws, special)
+	if err != nil || !ok {
+		return false, err
+	}
+	return sameOrChild(target, abs), nil
+}
+
+func specialPathAbs(ws codeexecutor.Workspace, special SpecialPath) (string, bool, error) {
 	var target string
 	switch special {
 	case SpecialRoot:
-		return true, nil
+		target = ws.Path
 	case SpecialWorkspace:
 		target = ws.Path
 	case SpecialWork:
@@ -218,13 +346,34 @@ func matchSpecial(ws codeexecutor.Workspace, abs string, special SpecialPath) (b
 	case SpecialSkills:
 		target = filepath.Join(ws.Path, codeexecutor.DirSkills)
 	default:
-		return false, nil
+		return "", false, nil
 	}
 	targetAbs, err := filepath.Abs(target)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	return sameOrChild(targetAbs, abs), nil
+	return targetAbs, true, nil
+}
+
+func specialRel(special SpecialPath) (string, bool) {
+	switch special {
+	case SpecialRoot, SpecialWorkspace:
+		return ".", true
+	case SpecialWork:
+		return codeexecutor.DirWork, true
+	case SpecialHome:
+		return "home", true
+	case SpecialTmp:
+		return "tmp", true
+	case SpecialRuns:
+		return codeexecutor.DirRuns, true
+	case SpecialOut:
+		return codeexecutor.DirOut, true
+	case SpecialSkills:
+		return codeexecutor.DirSkills, true
+	default:
+		return "", false
+	}
 }
 
 func isProtectedRel(rel string, protected []string) bool {
@@ -261,7 +410,7 @@ func (r *Runtime) checkRead(profile PermissionProfile, ws codeexecutor.Workspace
 	if err != nil {
 		return err
 	}
-	if !d.canRead {
+	if !accessCanRead(d.access) {
 		return deniedf(ErrPathDenied, "read", rel, "read denied")
 	}
 	return nil
@@ -278,7 +427,7 @@ func (r *Runtime) checkWrite(profile PermissionProfile, ws codeexecutor.Workspac
 	if d.protected {
 		return deniedf(ErrPathDenied, "write", rel, "protected metadata path")
 	}
-	if !d.canWrite {
+	if !accessCanWrite(d.access) {
 		return deniedf(ErrPathDenied, "write", rel, "write denied")
 	}
 	return nil
@@ -288,11 +437,17 @@ func (r *Runtime) deniedReadMatches(
 	profile PermissionProfile,
 	ws codeexecutor.Workspace,
 ) ([]string, error) {
+	if err := validateFileSystemRules(profile); err != nil {
+		return nil, err
+	}
 	var matches []string
 	for _, rule := range profile.FileSystem.Rules {
-		switch rule.Access {
-		case AccessDenyRead:
-			if rule.Kind != RulePath || rule.Path == "" {
+		if rule.Access != AccessNone {
+			continue
+		}
+		switch rule.Kind {
+		case RulePath:
+			if rule.Path == "" {
 				continue
 			}
 			abs := rule.Path
@@ -306,7 +461,18 @@ func (r *Runtime) deniedReadMatches(
 			if _, err := os.Stat(abs); err == nil {
 				matches = append(matches, abs)
 			}
-		case AccessDenyReadGlob:
+		case RuleSpecial:
+			abs, ok, err := specialPathAbs(ws, rule.Special)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			if _, err := os.Stat(abs); err == nil {
+				matches = append(matches, abs)
+			}
+		case RuleGlob:
 			if rule.Glob == "" {
 				continue
 			}
