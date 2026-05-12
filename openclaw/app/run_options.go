@@ -1121,10 +1121,11 @@ type knowledgesConfig struct {
 }
 
 type knowledgeProviderConfig struct {
-	Type       string       `yaml:"type,omitempty"`
-	Name       string       `yaml:"name,omitempty"`
-	MaxResults *int         `yaml:"max_results,omitempty"`
-	Config     *rawYAMLNode `yaml:"config,omitempty"`
+	Type        string       `yaml:"type,omitempty"`
+	Name        string       `yaml:"name,omitempty"`
+	Description string       `yaml:"description,omitempty"`
+	MaxResults  *int         `yaml:"max_results,omitempty"`
+	Config      *rawYAMLNode `yaml:"config,omitempty"`
 }
 
 type pluginSpec struct {
@@ -1921,10 +1922,11 @@ func convertKnowledgeConfigs(
 		}
 
 		out = append(out, knowledgeEntry{
-			Type:       typeName,
-			Name:       name,
-			MaxResults: maxResults,
-			Config:     config,
+			Type:        typeName,
+			Name:        name,
+			Description: strings.TrimSpace(p.Description),
+			MaxResults:  maxResults,
+			Config:      config,
 		})
 	}
 
