@@ -27,6 +27,7 @@ import (
 const (
 	maxCollectFileBytes = 4 << 20
 
+	inputSchemeArtifact  = "artifact://"
 	inputSchemeHost      = "host://"
 	inputSchemeWorkspace = "workspace://"
 	inputSchemeSkill     = "skill://"
@@ -173,21 +174,64 @@ func (r *Runtime) StageInputs(
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
 ) error {
+	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+		return err
+	}
 	profile := applyAdditionalPermissions(
 		normalizeProfile(r.profile),
 		additionalPermissionsFromContext(ctx),
 	)
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	if err != nil {
+		return err
+	}
 	for _, sp := range specs {
+		mode := strings.ToLower(strings.TrimSpace(sp.Mode))
+		if mode == "" {
+			mode = "copy"
+		}
 		to := strings.TrimSpace(sp.To)
 		if to == "" {
 			to = filepath.Join(codeexecutor.DirWork, "inputs", inputName(sp.From))
 		}
+		var resolved string
+		var version *int
 		switch {
+		case strings.HasPrefix(sp.From, inputSchemeArtifact):
+			name := strings.TrimPrefix(sp.From, inputSchemeArtifact)
+			aname, aver, err := codeexecutor.ParseArtifactRef(name)
+			if err != nil {
+				return err
+			}
+			useVer := aver
+			if useVer == nil && sp.Pin {
+				useVer = pinnedArtifactVersion(md, aname, to)
+			}
+			data, _, actual, err := codeexecutor.LoadArtifactHelper(ctx, aname, useVer)
+			if err != nil {
+				return err
+			}
+			if useVer != nil {
+				v := *useVer
+				version = &v
+			} else {
+				v := actual
+				version = &v
+			}
+			if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+				Path:    to,
+				Content: data,
+				Mode:    codeexecutor.DefaultScriptFileMode,
+			}}); err != nil {
+				return err
+			}
+			resolved = aname
 		case strings.HasPrefix(sp.From, inputSchemeHost):
 			src := strings.TrimPrefix(sp.From, inputSchemeHost)
 			if err := r.StageDirectory(ctx, ws, src, to, codeexecutor.StageOptions{}); err != nil {
 				return err
 			}
+			resolved = src
 		case strings.HasPrefix(sp.From, inputSchemeWorkspace):
 			srcRel := strings.TrimPrefix(sp.From, inputSchemeWorkspace)
 			if err := r.checkRead(profile, ws, srcRel); err != nil {
@@ -207,6 +251,7 @@ func (r *Runtime) StageInputs(
 			if err := copyPath(src, dst); err != nil {
 				return err
 			}
+			resolved = srcRel
 		case strings.HasPrefix(sp.From, inputSchemeSkill):
 			rest := strings.TrimPrefix(sp.From, inputSchemeSkill)
 			srcRel := filepath.Join(codeexecutor.DirSkills, filepath.Clean(rest))
@@ -227,11 +272,20 @@ func (r *Runtime) StageInputs(
 			if err := copyPath(src, dst); err != nil {
 				return err
 			}
+			resolved = srcRel
 		default:
 			return fmt.Errorf("unsupported input: %s", sp.From)
 		}
+		md.Inputs = append(md.Inputs, codeexecutor.InputRecord{
+			From:      sp.From,
+			To:        to,
+			Resolved:  resolved,
+			Version:   version,
+			Mode:      mode,
+			Timestamp: time.Now(),
+		})
 	}
-	return nil
+	return codeexecutor.SaveMetadata(ws.Path, md)
 }
 
 // CollectOutputs applies the declarative output spec under the same read
@@ -241,6 +295,9 @@ func (r *Runtime) CollectOutputs(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.OutputSpec,
 ) (codeexecutor.OutputManifest, error) {
+	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+		return codeexecutor.OutputManifest{}, err
+	}
 	if len(spec.Globs) == 0 {
 		spec.Globs = []string{filepath.Join(codeexecutor.DirOut, "**")}
 	}
@@ -256,43 +313,176 @@ func (r *Runtime) CollectOutputs(
 	if maxTotalBytes <= 0 {
 		maxTotalBytes = 64 << 20
 	}
-	files, err := r.Collect(ctx, ws, spec.Globs)
-	if err != nil {
-		return codeexecutor.OutputManifest{}, err
-	}
+	profile := applyAdditionalPermissions(
+		normalizeProfile(r.profile),
+		additionalPermissionsFromContext(ctx),
+	)
+	globs := codeexecutor.NormalizeGlobs(spec.Globs)
 	out := codeexecutor.OutputManifest{}
-	var total int64
-	for _, f := range files {
-		if len(out.Files) >= maxFiles {
-			out.LimitsHit = true
-			break
+	var savedNames []string
+	var savedVersions []int
+	leftTotal := maxTotalBytes
+	count := 0
+	for _, pattern := range globs {
+		pattern = filepath.ToSlash(filepath.Clean(pattern))
+		if pattern == "." {
+			pattern = "**"
 		}
-		if f.SizeBytes > maxFileBytes || int64(len(f.Content)) > maxFileBytes {
-			f.Content = f.Content[:minInt(len(f.Content), int(maxFileBytes))]
-			f.Truncated = true
-			out.LimitsHit = true
+		absPattern := filepath.Join(ws.Path, pattern)
+		glob := strings.TrimPrefix(filepath.ToSlash(absPattern), "/")
+		matches, err := ds.Glob(os.DirFS("/"), glob)
+		if err != nil {
+			return codeexecutor.OutputManifest{}, err
 		}
-		total += int64(len(f.Content))
-		if total > maxTotalBytes {
-			out.LimitsHit = true
-			break
+		for _, match := range matches {
+			if count >= maxFiles || leftTotal <= 0 {
+				out.LimitsHit = true
+				break
+			}
+			ref, consumed, skip, err := r.collectOutputMatch(
+				ctx,
+				profile,
+				ws,
+				"/"+strings.TrimPrefix(match, "/"),
+				spec,
+				maxFileBytes,
+				leftTotal,
+			)
+			if err != nil {
+				return codeexecutor.OutputManifest{}, err
+			}
+			if skip {
+				continue
+			}
+			if ref.Truncated {
+				out.LimitsHit = true
+			}
+			leftTotal -= consumed
+			count++
+			if ref.SavedAs != "" {
+				savedNames = append(savedNames, ref.SavedAs)
+				savedVersions = append(savedVersions, ref.Version)
+			}
+			out.Files = append(out.Files, ref)
 		}
-		out.Files = append(out.Files, codeexecutor.FileRef{
-			Name:      f.Name,
-			MIMEType:  f.MIMEType,
-			Content:   f.Content,
-			SizeBytes: f.SizeBytes,
-			Truncated: f.Truncated,
-		})
 	}
 	md, _ := codeexecutor.LoadMetadata(ws.Path)
 	md.Outputs = append(md.Outputs, codeexecutor.OutputRecord{
 		Globs:     spec.Globs,
+		SavedAs:   savedNames,
+		Versions:  savedVersions,
 		LimitsHit: out.LimitsHit,
 		Timestamp: time.Now(),
 	})
 	_ = codeexecutor.SaveMetadata(ws.Path, md)
 	return out, nil
+}
+
+func (r *Runtime) collectOutputMatch(
+	ctx context.Context,
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	absPath string,
+	spec codeexecutor.OutputSpec,
+	maxFileBytes int64,
+	leftTotal int64,
+) (codeexecutor.FileRef, int64, bool, error) {
+	rootAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return codeexecutor.FileRef{}, 0, false, err
+	}
+	absPath, err = filepath.Abs(absPath)
+	if err != nil {
+		return codeexecutor.FileRef{}, 0, false, err
+	}
+	if !sameOrChild(rootAbs, absPath) {
+		return codeexecutor.FileRef{}, 0, true, nil
+	}
+	rel, err := filepath.Rel(rootAbs, absPath)
+	if err != nil {
+		return codeexecutor.FileRef{}, 0, false, err
+	}
+	rel = filepath.ToSlash(rel)
+	if err := r.checkRead(profile, ws, rel); err != nil {
+		return codeexecutor.FileRef{}, 0, false, err
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return codeexecutor.FileRef{}, 0, false, err
+	}
+	if info.IsDir() {
+		return codeexecutor.FileRef{}, 0, true, nil
+	}
+	limit := maxFileBytes
+	if leftTotal < limit {
+		limit = leftTotal
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	data, truncated, err := readFileLimited(absPath, int(limit))
+	if err != nil {
+		return codeexecutor.FileRef{}, 0, false, err
+	}
+	if info.Size() > int64(len(data)) {
+		truncated = true
+	}
+	if truncated && spec.Save {
+		return codeexecutor.FileRef{}, 0, false, fmt.Errorf(
+			"cannot save truncated output file: %s",
+			rel,
+		)
+	}
+	ref := codeexecutor.FileRef{
+		Name:      rel,
+		MIMEType:  fileMIMEType(absPath),
+		SizeBytes: info.Size(),
+		Truncated: truncated,
+	}
+	if spec.Inline {
+		ref.Content = string(data)
+	}
+	if spec.Save {
+		saveName := rel
+		if spec.NameTemplate != "" {
+			saveName = spec.NameTemplate + rel
+		}
+		ver, err := codeexecutor.SaveArtifactHelper(ctx, saveName, data, ref.MIMEType)
+		if err != nil {
+			return codeexecutor.FileRef{}, 0, false, err
+		}
+		ref.SavedAs = saveName
+		ref.Version = ver
+	}
+	return ref, int64(len(data)), false, nil
+}
+
+func pinnedArtifactVersion(
+	md codeexecutor.WorkspaceMetadata,
+	name string,
+	to string,
+) *int {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(to) == "" {
+		return nil
+	}
+	for i := len(md.Inputs) - 1; i >= 0; i-- {
+		rec := md.Inputs[i]
+		if rec.To != to || rec.Version == nil {
+			continue
+		}
+		if rec.Resolved == name {
+			return rec.Version
+		}
+		if !strings.HasPrefix(rec.From, inputSchemeArtifact) {
+			continue
+		}
+		ref := strings.TrimPrefix(rec.From, inputSchemeArtifact)
+		rname, _, err := codeexecutor.ParseArtifactRef(ref)
+		if err == nil && rname == name {
+			return rec.Version
+		}
+	}
+	return nil
 }
 
 func pathHasRule(profile PermissionProfile, target string, access FileSystemAccess) bool {
@@ -395,6 +585,12 @@ func inputName(ref string) string {
 	if ref == "" {
 		return "input"
 	}
+	if strings.HasPrefix(ref, inputSchemeArtifact) {
+		name := strings.TrimPrefix(ref, inputSchemeArtifact)
+		if parsed, _, err := codeexecutor.ParseArtifactRef(name); err == nil {
+			ref = parsed
+		}
+	}
 	name := filepath.Base(ref)
 	if name == "." || name == string(filepath.Separator) {
 		return "input"
@@ -402,9 +598,10 @@ func inputName(ref string) string {
 	return sanitizeID(name)
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
+func fileMIMEType(path string) string {
+	mt := mime.TypeByExtension(filepath.Ext(path))
+	if mt == "" {
+		return "application/octet-stream"
 	}
-	return b
+	return mt
 }

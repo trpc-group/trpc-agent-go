@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -50,6 +51,32 @@ type toolInputRecord struct {
 	Name     string
 	Argument string
 	CallID   string
+}
+
+type agentToolHarnessConfig struct {
+	artifactService artifact.Service
+	extraTools      []tool.Tool
+	instructionTail string
+}
+
+type agentToolHarnessOption func(*agentToolHarnessConfig)
+
+func withAgentToolArtifactService(svc artifact.Service) agentToolHarnessOption {
+	return func(cfg *agentToolHarnessConfig) {
+		cfg.artifactService = svc
+	}
+}
+
+func withAgentToolExtraTools(extra []tool.Tool) agentToolHarnessOption {
+	return func(cfg *agentToolHarnessConfig) {
+		cfg.extraTools = append(cfg.extraTools, extra...)
+	}
+}
+
+func withAgentToolInstructionTail(tail string) agentToolHarnessOption {
+	return func(cfg *agentToolHarnessConfig) {
+		cfg.instructionTail = tail
+	}
 }
 
 func runAgentToolManualRun(ctx context.Context, cfg config) error {
@@ -176,10 +203,17 @@ func newAgentToolHarness(
 	cfg config,
 	profile sandbox.PermissionProfile,
 	manifest *sandbox.Manifest,
+	options ...agentToolHarnessOption,
 ) (*agentToolHarness, error) {
 	if os.Getenv("OPENAI_API_KEY") == "" {
-		fmt.Println("OPENAI_API_KEY is not set; source ./dpskv4.sh from the repo root to run the real agent+tool scenario.")
+		fmt.Println("OPENAI_API_KEY is not set; source ./glm.sh from the repo root to run the real agent+tool scenario.")
 		return nil, errSkip
+	}
+	harnessCfg := agentToolHarnessConfig{}
+	for _, opt := range options {
+		if opt != nil {
+			opt(&harnessCfg)
+		}
 	}
 	opts := commonOptions(cfg, profile, 1<<20, 10*time.Second)
 	if manifest != nil {
@@ -201,11 +235,15 @@ func newAgentToolHarness(
 		return &tool.BeforeToolResult{}, nil
 	})
 	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-		if args != nil && args.ToolName == "workspace_exec" {
+		if args != nil {
 			h.recordToolResult(args.Result, args.Error)
 		}
 		return &tool.AfterToolResult{}, nil
 	})
+	instruction := agentToolInstruction()
+	if strings.TrimSpace(harnessCfg.instructionTail) != "" {
+		instruction += "\n\n" + strings.TrimSpace(harnessCfg.instructionTail)
+	}
 	agent := llmagent.New(
 		"sandbox_agent_tool_example",
 		llmagent.WithModel(openai.New(cfg.modelName)),
@@ -213,15 +251,20 @@ func newAgentToolHarness(
 			MaxTokens:   intPtr(1600),
 			Temperature: floatPtr(0.0),
 		}),
-		llmagent.WithInstruction(agentToolInstruction()),
+		llmagent.WithInstruction(instruction),
 		llmagent.WithCodeExecutor(exec),
+		llmagent.WithTools(harnessCfg.extraTools),
 		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithWorkspaceExecSurfaceEnabled(true),
 		llmagent.WithMaxToolIterations(4),
 		llmagent.WithMaxLLMCalls(8),
 		llmagent.WithToolCallbacks(callbacks),
 	)
-	h.runner = runner.NewRunner("sandbox_agent_tool_example", agent)
+	var runnerOpts []runner.Option
+	if harnessCfg.artifactService != nil {
+		runnerOpts = append(runnerOpts, runner.WithArtifactService(harnessCfg.artifactService))
+	}
+	h.runner = runner.NewRunner("sandbox_agent_tool_example", agent, runnerOpts...)
 	return h, nil
 }
 
@@ -269,6 +312,19 @@ func (h *agentToolHarness) requireWorkspaceExecCalls(min int64) error {
 	got := h.workspaceExecSeen.Load()
 	if got < min {
 		return fmt.Errorf("expected at least %d workspace_exec tool calls, got %d", min, got)
+	}
+	return nil
+}
+
+func (h *agentToolHarness) requireToolCalls(name string, min int) error {
+	got := 0
+	for _, record := range h.toolInputRecords() {
+		if record.Name == name {
+			got++
+		}
+	}
+	if got < min {
+		return fmt.Errorf("expected at least %d %s tool calls, got %d", min, name, got)
 	}
 	return nil
 }

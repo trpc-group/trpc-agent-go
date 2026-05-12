@@ -7,14 +7,14 @@ runtime-level sandbox behavior checks.
 From the repository root, load model credentials without printing them:
 
 ```bash
-source ./dpskv4.sh
+source ./glm.sh
 ```
 
 Then run the example from the `examples` module:
 
 ```bash
 cd examples
-go run ./sandboxcodeexecution -scenario all -model deepseek-v4-flash
+go run ./sandboxcodeexecution -scenario all -model glm-4.7-flash
 ```
 
 If `OPENAI_API_KEY` is not set, the LLM-backed scenarios are skipped with a
@@ -32,6 +32,14 @@ clear message. The example never reads or prints key contents.
   later turn.
 - `agent-tool-security`: runs a real LLMAgent and asks it to use
   `workspace_exec` to verify env redaction and deny-read behavior.
+- `agent-artifact-stage`: seeds an in-memory artifact service, asks a real
+  LLMAgent to call an artifact staging tool, then uses `workspace_exec` to
+  consume the staged artifact in the sandbox.
+- `agent-artifact-save`: asks a real LLMAgent to create a workspace output and
+  persist it through `workspace_save_artifact`, verifying the returned
+  `artifact://` reference is actually loadable.
+- `agent-artifact-pin`: verifies pinned `artifact://` inputs stay on the
+  originally resolved version across turns in the same session.
 - `session-persistence`: verifies one session can see files created by a prior
   turn.
 - `session-isolation`: verifies a different session cannot see another
@@ -51,8 +59,8 @@ clear message. The example never reads or prints key contents.
 ## Flags
 
 ```bash
--scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|session-persistence|session-isolation|env-redaction|metadata-protection|deny-read|network-restricted|timeout|output-cap|additional-permissions|all
--model deepseek-v4-flash
+-scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|deny-read|network-restricted|timeout|output-cap|additional-permissions|all
+-model glm-4.7-flash
 -workspace-root /tmp/my-sandbox-root
 -keep-workspace
 -require-os-sandbox=true

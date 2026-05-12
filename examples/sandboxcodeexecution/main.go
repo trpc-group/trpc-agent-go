@@ -48,9 +48,9 @@ func main() {
 	scenarioName := flag.String(
 		"scenario",
 		"basic",
-		"basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|session-persistence|session-isolation|env-redaction|metadata-protection|deny-read|network-restricted|timeout|output-cap|additional-permissions|all",
+		"basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|deny-read|network-restricted|timeout|output-cap|additional-permissions|all",
 	)
-	modelName := flag.String("model", "deepseek-v4-flash", "model name")
+	modelName := flag.String("model", "glm-4.7-flash", "model name")
 	workspaceRoot := flag.String("workspace-root", "", "sandbox workspace root")
 	keepWorkspace := flag.Bool("keep-workspace", false, "keep generated sandbox workspaces")
 	requireOSSandbox := flag.Bool("require-os-sandbox", true, "fail instead of skipping when OS sandbox is unavailable")
@@ -88,6 +88,9 @@ func runScenarios(ctx context.Context, cfg config) error {
 		{"agent-tool-basic", runAgentToolBasic},
 		{"agent-tool-session-persistence", runAgentToolSessionPersistence},
 		{"agent-tool-security", runAgentToolSecurity},
+		{"agent-artifact-stage", runAgentArtifactStage},
+		{"agent-artifact-save", runAgentArtifactSave},
+		{"agent-artifact-pin", runAgentArtifactPin},
 		{"session-persistence", runSessionPersistence},
 		{"session-isolation", runSessionIsolation},
 		{"env-redaction", runEnvRedaction},
@@ -129,7 +132,7 @@ func runScenarios(ctx context.Context, cfg config) error {
 
 func runBasic(ctx context.Context, cfg config) error {
 	if os.Getenv("OPENAI_API_KEY") == "" {
-		fmt.Println("OPENAI_API_KEY is not set; source ./dpskv4.sh from the repo root to run the real LLM scenario.")
+		fmt.Println("OPENAI_API_KEY is not set; source ./glm.sh from the repo root to run the real LLM scenario.")
 		return errSkip
 	}
 	exec := sandbox.New(commonOptions(cfg, sandbox.WorkspaceWriteProfile(), 1<<20, 10*time.Second)...)
