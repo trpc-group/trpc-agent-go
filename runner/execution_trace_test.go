@@ -519,13 +519,108 @@ func TestRunnerCompletion_GraphAgentNodePropagatesTraceMetadataToChildAgent(t *t
 	require.NoError(t, err)
 	trace := collectRunnerCompletionEvent(t, eventCh).ExecutionTrace
 	require.NotNil(t, trace)
-	require.Len(t, trace.Steps, 2)
-	firstStep := trace.Steps[0]
-	secondStep := trace.Steps[1]
-	assert.Equal(t, "assistant/delegate", firstStep.NodeID)
-	assert.Equal(t, "assistant/delegate", secondStep.NodeID)
-	assert.Empty(t, firstStep.PredecessorStepIDs)
-	assert.Equal(t, []string{firstStep.StepID}, secondStep.PredecessorStepIDs)
+	require.Len(t, trace.Steps, 1)
+	step := trace.Steps[0]
+	assert.Equal(t, "delegate", step.AgentName)
+	assert.Equal(t, "assistant/delegate", step.NodeID)
+	assert.Empty(t, step.PredecessorStepIDs)
+}
+
+func TestRunnerCompletion_GraphAgentNodePropagatesComplexChildGraphTrace(t *testing.T) {
+	childBuilder := graph.NewStateGraph(graph.NewStateSchema())
+	childBuilder.AddNode("plan", func(context.Context, graph.State) (any, error) {
+		return graph.State{"plan": true}, nil
+	})
+	childBuilder.AddNode("write", func(context.Context, graph.State) (any, error) {
+		return graph.State{"write": true}, nil
+	})
+	childBuilder.SetEntryPoint("plan")
+	childBuilder.AddEdge("plan", "write")
+	childBuilder.SetFinishPoint("write")
+	childAgent, err := graphagent.New("worker_flow", childBuilder.MustCompile(), graphagent.WithMaxConcurrency(1))
+	require.NoError(t, err)
+	parentBuilder := graph.NewStateGraph(graph.NewStateSchema())
+	parentBuilder.AddNode("start", func(context.Context, graph.State) (any, error) {
+		return graph.State{"start": true}, nil
+	})
+	parentBuilder.AddAgentNode("worker_flow")
+	parentBuilder.AddNode("after", func(context.Context, graph.State) (any, error) {
+		return graph.State{"after": true}, nil
+	})
+	parentBuilder.SetEntryPoint("start")
+	parentBuilder.AddEdge("start", "worker_flow")
+	parentBuilder.AddEdge("worker_flow", "after")
+	parentBuilder.SetFinishPoint("after")
+	parentAgent, err := graphagent.New("assistant", parentBuilder.MustCompile(), graphagent.WithSubAgents([]agent.Agent{childAgent}))
+	require.NoError(t, err)
+	r := NewRunner("app", parentAgent, WithSessionService(sessioninmemory.NewSessionService()))
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("hello complex delegated graph"),
+		agent.WithExecutionTraceEnabled(true),
+	)
+	require.NoError(t, err)
+	trace := collectRunnerCompletionEvent(t, eventCh).ExecutionTrace
+	require.NotNil(t, trace)
+	require.Len(t, trace.Steps, 4)
+	startStep := requireTraceStepByNodeID(t, trace, "assistant/start")
+	planStep := requireTraceStepByNodeID(t, trace, "assistant/worker_flow/plan")
+	writeStep := requireTraceStepByNodeID(t, trace, "assistant/worker_flow/write")
+	afterStep := requireTraceStepByNodeID(t, trace, "assistant/after")
+	requireNoTraceStepByNodeID(t, trace, "assistant/worker_flow")
+	assert.Empty(t, startStep.PredecessorStepIDs)
+	assert.Equal(t, []string{startStep.StepID}, planStep.PredecessorStepIDs)
+	assert.Equal(t, []string{planStep.StepID}, writeStep.PredecessorStepIDs)
+	assert.Equal(t, []string{writeStep.StepID}, afterStep.PredecessorStepIDs)
+}
+
+func TestRunnerCompletion_GraphAgentNodePropagatesNestedAgentTrace(t *testing.T) {
+	middleBuilder := graph.NewStateGraph(graph.NewStateSchema())
+	middleBuilder.AddAgentNode("leaf")
+	middleBuilder.SetEntryPoint("leaf")
+	middleBuilder.SetFinishPoint("leaf")
+	leafAgent := llmagent.New("leaf", llmagent.WithModel(&staticModel{name: "leaf-model", content: "leaf"}))
+	middleAgent, err := graphagent.New(
+		"middle_flow",
+		middleBuilder.MustCompile(),
+		graphagent.WithSubAgents([]agent.Agent{leafAgent}),
+	)
+	require.NoError(t, err)
+	parentBuilder := graph.NewStateGraph(graph.NewStateSchema())
+	parentBuilder.AddNode("start", func(context.Context, graph.State) (any, error) {
+		return graph.State{"start": true}, nil
+	})
+	parentBuilder.AddAgentNode("middle_flow")
+	parentBuilder.AddNode("after", func(context.Context, graph.State) (any, error) {
+		return graph.State{"after": true}, nil
+	})
+	parentBuilder.SetEntryPoint("start")
+	parentBuilder.AddEdge("start", "middle_flow")
+	parentBuilder.AddEdge("middle_flow", "after")
+	parentBuilder.SetFinishPoint("after")
+	parentAgent, err := graphagent.New("assistant", parentBuilder.MustCompile(), graphagent.WithSubAgents([]agent.Agent{middleAgent}))
+	require.NoError(t, err)
+	r := NewRunner("app", parentAgent, WithSessionService(sessioninmemory.NewSessionService()))
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("hello nested delegated graph"),
+		agent.WithExecutionTraceEnabled(true),
+	)
+	require.NoError(t, err)
+	trace := collectRunnerCompletionEvent(t, eventCh).ExecutionTrace
+	require.NotNil(t, trace)
+	require.Len(t, trace.Steps, 3)
+	startStep := requireTraceStepByNodeID(t, trace, "assistant/start")
+	leafStep := requireTraceStepByNodeID(t, trace, "assistant/middle_flow/leaf")
+	afterStep := requireTraceStepByNodeID(t, trace, "assistant/after")
+	requireNoTraceStepByNodeID(t, trace, "assistant/middle_flow")
+	assert.Empty(t, startStep.PredecessorStepIDs)
+	assert.Equal(t, []string{startStep.StepID}, leafStep.PredecessorStepIDs)
+	assert.Equal(t, []string{leafStep.StepID}, afterStep.PredecessorStepIDs)
 }
 
 func collectRunnerCompletionEvent(t *testing.T, eventCh <-chan *event.Event) *event.Event {
@@ -538,6 +633,24 @@ func collectRunnerCompletionEvent(t *testing.T, eventCh <-chan *event.Event) *ev
 	}
 	require.NotNil(t, completion)
 	return completion
+}
+
+func requireTraceStepByNodeID(t *testing.T, trace *atrace.Trace, nodeID string) atrace.Step {
+	t.Helper()
+	for _, step := range trace.Steps {
+		if step.NodeID == nodeID {
+			return step
+		}
+	}
+	require.Failf(t, "missing trace step", "node=%s steps=%v", nodeID, trace.Steps)
+	return atrace.Step{}
+}
+
+func requireNoTraceStepByNodeID(t *testing.T, trace *atrace.Trace, nodeID string) {
+	t.Helper()
+	for _, step := range trace.Steps {
+		require.NotEqual(t, nodeID, step.NodeID)
+	}
 }
 
 func findTraceStepByPredecessor(

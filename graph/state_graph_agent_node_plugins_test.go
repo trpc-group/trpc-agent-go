@@ -594,6 +594,7 @@ func TestAgentNode_Stage2_SubInvocation_InheritsPluginsFromParent(t *testing.T) 
 
 	childInv := buildAgentInvocationWithStateScopeAndInputKey(
 		ctx, state, State{}, sub, "agentNode", "", "",
+		nil,
 	)
 	require.NotNil(t, childInv)
 	require.NotNil(t, childInv.Plugins, "child invocation must inherit parent Plugins via Clone")
