@@ -3478,6 +3478,123 @@ func TestRunParallelToolCall_LongRunningToolNoImmediateResult(t *testing.T) {
 	assert.NoError(t, res.err)
 }
 
+func TestRunParallelToolCall_PanicUsesModifiedArgsExtension(t *testing.T) {
+	const (
+		originalArgs = `{"action":"query"}`
+		modifiedArgs = `{"action":"set"}`
+	)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(modifiedArgs),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(true, callbacks)
+	tools := map[string]tool.Tool{
+		"panic": &mockTool{name: "panic", shouldPanic: true},
+	}
+	tc := model.ToolCall{
+		ID: "call-panic",
+		Function: model.FunctionDefinitionParam{
+			Name:      "panic",
+			Arguments: []byte(originalArgs),
+		},
+	}
+	inv := &agent.Invocation{AgentName: "panic-agent"}
+	llmResp := &model.Response{Model: "mock"}
+	resultChan := make(chan toolResult, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	p.runParallelToolCall(
+		context.Background(),
+		&wg,
+		inv,
+		llmResp,
+		tools,
+		nil,
+		resultChan,
+		0,
+		tc,
+	)
+	wg.Wait()
+	close(resultChan)
+
+	res, ok := <-resultChan
+	require.True(t, ok)
+	require.NotNil(t, res.event)
+	argsByID, found, err := event.GetExtension[map[string]string](
+		res.event,
+		event.ToolCallArgsExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, modifiedArgs, argsByID["call-panic"])
+}
+
+func TestHandleFunctionCalls_ParallelLongRunningNilResultUsesModifiedArgs(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(fmt.Sprintf(
+				`{"call_id":%q,"action":"set"}`,
+				args.ToolCallID,
+			)),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(true, callbacks)
+	tools := map[string]tool.Tool{
+		"long-a": &mockNilLongRunningTool{name: "long-a"},
+		"long-b": &mockNilLongRunningTool{name: "long-b"},
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID: "call-a",
+			Function: model.FunctionDefinitionParam{
+				Name:      "long-a",
+				Arguments: []byte(`{"action":"query"}`),
+			},
+		},
+		{
+			ID: "call-b",
+			Function: model.FunctionDefinitionParam{
+				Name:      "long-b",
+				Arguments: []byte(`{"action":"query"}`),
+			},
+		},
+	}
+	llmResp := &model.Response{Model: "mock", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: toolCalls},
+	}}}
+	inv := &agent.Invocation{InvocationID: "inv-long", AgentName: "agent"}
+
+	ev, err := p.handleFunctionCalls(
+		context.Background(),
+		inv,
+		llmResp,
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	argsByID, found, err := event.GetExtension[map[string]string](
+		ev,
+		event.ToolCallArgsExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, `{"call_id":"call-a","action":"set"}`, argsByID["call-a"])
+	require.Equal(t, `{"call_id":"call-b","action":"set"}`, argsByID["call-b"])
+}
+
 func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 	ctx := context.Background()
 	p := NewFunctionCallResponseProcessor(false, nil)

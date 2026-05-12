@@ -81,6 +81,7 @@ type toolEventStateDelta struct {
 
 type resolvedToolContextKey struct{}
 type stateDeltaSessionBaselineContextKey struct{}
+type executingToolArgsContextKey struct{}
 
 // toolResult holds the result of a single tool execution.
 type toolResult struct {
@@ -88,6 +89,7 @@ type toolResult struct {
 	event      *event.Event
 	err        error
 	stateDelta *toolEventStateDelta
+	toolArgs   []byte
 }
 
 // Default message used when transferring to a sub-agent without an explicit message.
@@ -351,9 +353,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 		if err != nil {
 			return nil, err
 		}
-		if result.event != nil {
-			toolResults = append(toolResults, result)
-		}
+		toolResults = append(toolResults, result)
 	}
 	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
 		invocation,
@@ -373,7 +373,8 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 	}
 
 	mergedEvent := p.buildMergedParallelEvent(
-		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
+		ctx, invocation, llmResponse, tools, toolCalls, toolResults,
+		toolCallResponsesEvents,
 	)
 	return mergedEvent, nil
 }
@@ -454,7 +455,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		skipSummarization,
 	)
 	if toolEvent == nil {
-		return toolResult{index: index}, nil
+		return toolResult{index: index, toolArgs: modifiedArgs}, nil
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 	var stateDelta *toolEventStateDelta
@@ -500,6 +501,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		index:      index,
 		event:      toolEvent,
 		stateDelta: stateDelta,
+		toolArgs:   modifiedArgs,
 	}, nil
 }
 
@@ -542,7 +544,11 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	toolResults, err := p.collectParallelToolResults(
 		ctx, resultChan, len(toolCalls),
 	)
-	if len(toolResults) == 0 &&
+	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
+		invocation,
+		toolResults,
+	)
+	if len(toolCallResponsesEvents) == 0 &&
 		invocation != nil &&
 		invocation.RunOptions.ToolExecutionFilter != nil {
 		filter := invocation.RunOptions.ToolExecutionFilter
@@ -553,12 +559,9 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 			}
 		}
 	}
-	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
-		invocation,
-		toolResults,
-	)
 	mergedEvent := p.buildMergedParallelEvent(
-		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
+		ctx, invocation, llmResponse, tools, toolCalls, toolResults,
+		toolCallResponsesEvents,
 	)
 	return mergedEvent, err
 }
@@ -576,6 +579,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	tc model.ToolCall,
 ) {
 	defer wg.Done()
+	toolArgs := tc.Function.Arguments
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithValue(ctx, executingToolArgsContextKey{}, &toolArgs)
 	// Recover from panics to avoid breaking sibling goroutines.
 	defer func() {
 		if r := recover(); r != nil {
@@ -595,11 +603,15 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			errorEvent := newToolCallResponseEvent(
 				invocation, llmResponse, []model.Choice{*errorChoice},
 			)
-			annotateToolCallArgs(errorEvent, tc, tc.Function.Arguments)
+			annotateToolCallArgs(errorEvent, tc, toolArgs)
 			if tc.Function.Name == transfer.TransferToolName {
 				errorEvent.Tag = event.TransferTag
 			}
-			p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent})
+			p.sendToolResult(ctx, resultChan, toolResult{
+				index:    index,
+				event:    errorEvent,
+				toolArgs: toolArgs,
+			})
 		}
 	}()
 	// Trace the tool execution for observability.
@@ -618,6 +630,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			index,
 			eventChan,
 		)
+	toolArgs = modifiedArgs
 	// Handle errors based on whether they are ignorable or critical.
 	if err != nil {
 		log.ErrorfContext(
@@ -648,7 +661,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		if !shouldIgnoreError {
 			returnErr = err
 		}
-		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: returnErr})
+		p.sendToolResult(ctx, resultChan, toolResult{
+			index:    index,
+			event:    errorEvent,
+			err:      returnErr,
+			toolArgs: modifiedArgs,
+		})
 		return
 	}
 
@@ -664,7 +682,10 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		skipSummarization,
 	)
 	if toolCallResponseEvent == nil {
-		p.sendToolResult(ctx, resultChan, toolResult{index: index})
+		p.sendToolResult(ctx, resultChan, toolResult{
+			index:    index,
+			toolArgs: modifiedArgs,
+		})
 		return
 	}
 	// Include declaration for telemetry even when tool is missing.
@@ -710,6 +731,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			index:      index,
 			event:      toolCallResponseEvent,
 			stateDelta: stateDelta,
+			toolArgs:   modifiedArgs,
 		},
 	)
 }
@@ -1175,8 +1197,17 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 	llmResponse *model.Response,
 	tools map[string]tool.Tool,
 	toolCalls []model.ToolCall,
+	toolResults []toolResult,
 	toolCallEvents []*event.Event,
 ) *event.Event {
+	toolArgsByIndex := make(map[int][]byte, len(toolResults))
+	for _, result := range toolResults {
+		if result.index >= 0 && result.index < len(toolCalls) &&
+			result.toolArgs != nil {
+			toolArgsByIndex[result.index] = result.toolArgs
+		}
+	}
+
 	var mergedEvent *event.Event
 	if len(toolCallEvents) == 0 {
 		minimal := make([]model.Choice, 0, len(toolCalls))
@@ -1184,9 +1215,6 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 			minimal = append(minimal, newMinimalToolChoice(tc, i))
 		}
 		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, minimal)
-		for _, tc := range toolCalls {
-			annotateToolCallArgs(mergedEvent, tc, tc.Function.Arguments)
-		}
 		for _, tc := range toolCalls {
 			if tl, ok := tools[tc.Function.Name]; ok &&
 				toolPrefersSkipSummarization(tl) {
@@ -1196,6 +1224,9 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 		}
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallEvents)
+	}
+	for i, tc := range toolCalls {
+		annotateToolCallArgs(mergedEvent, tc, toolArgsByIndex[i])
 	}
 	if len(toolCallEvents) > 1 {
 		_, span, startedSpan := itrace.StartSpan(
@@ -1485,7 +1516,7 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 		case result, ok := <-resultChan:
 			if !ok {
 				// Channel closed, all results received.
-				return p.filterNilToolResults(results), err
+				return p.compactToolResults(results), err
 			}
 			if result.index >= 0 && result.index < len(results) {
 				results[result.index] = result
@@ -1506,7 +1537,7 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 				ctx,
 				"Context cancelled while waiting for tool results",
 			)
-			return p.filterNilToolResults(results), nil
+			return p.compactToolResults(results), nil
 		}
 	}
 }
@@ -1717,6 +1748,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
 	}
+	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	toolDeclaration := tl.Declaration()
 	ctx, toolCall, customResult, err := p.runBeforeToolPluginCallbacks(
 		ctx,
@@ -1727,6 +1759,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	if err != nil {
 		return ctx, nil, toolCall.Function.Arguments, false, false, err
 	}
+	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	if customResult != nil {
 		ctx = withStateDeltaSessionBaseline(ctx, invocation)
 		return ctx, customResult, toolCall.Function.Arguments, false,
@@ -1741,6 +1774,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		return ctx, nil, toolCall.Function.Arguments, false, false, err
 	}
 	ctx = withStateDeltaSessionBaseline(ctx, invocation)
+	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	if customResult != nil {
 		return ctx, customResult, toolCall.Function.Arguments, false,
 			false, nil
@@ -1811,6 +1845,17 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 	return ctx, toolResult, toolCall.Function.Arguments,
 		suppressDefaultToolMessage, skipSummarization || localSkip, toolErr
+}
+
+func rememberExecutingToolArgs(ctx context.Context, args []byte) {
+	if ctx == nil {
+		return
+	}
+	tracker, ok := ctx.Value(executingToolArgsContextKey{}).(*[]byte)
+	if !ok || tracker == nil {
+		return
+	}
+	*tracker = args
 }
 
 // afterCallbackReplacedResult returns true when the after-tool callback has
@@ -2249,15 +2294,15 @@ func marshalChunkToText(content any) string {
 	}
 }
 
-// filterNilToolResults filters out nil events while preserving order.
-// Pre-allocates capacity to avoid multiple memory allocations.
-func (p *FunctionCallResponseProcessor) filterNilToolResults(
+// compactToolResults keeps received tool results while preserving order.
+// Results without an event may still carry executed args for merged metadata.
+func (p *FunctionCallResponseProcessor) compactToolResults(
 	results []toolResult,
 ) []toolResult {
-	// Pre-allocate with capacity to reduce allocations
 	filtered := make([]toolResult, 0, len(results))
 	for _, result := range results {
-		if result.event != nil {
+		if result.event != nil || result.toolArgs != nil ||
+			result.err != nil || result.stateDelta != nil {
 			filtered = append(filtered, result)
 		}
 	}
