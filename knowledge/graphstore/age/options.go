@@ -65,5 +65,5 @@ func (o options) builderOptions() ([]postgres.ClientBuilderOpt, error) {
 	if o.dsn != "" {
 		return []postgres.ClientBuilderOpt{postgres.WithClientConnString(o.dsn)}, nil
 	}
-	return nil, nil
+	return nil, fmt.Errorf("age: graph store requires WithClientDSN or WithPostgresInstance")
 }

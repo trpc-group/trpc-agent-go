@@ -87,7 +87,7 @@ func (a *defaultAnalyzer) analyzeFunction(
 		structName := strings.TrimPrefix(receiverType, "*")
 		structID := fmt.Sprintf("%s.%s", pkg.ID, structName)
 
-		fullMethodName := fmt.Sprintf("%s.%s", receiverType, funcName)
+		fullMethodName := fmt.Sprintf("%s.%s", structName, funcName)
 		funcID = fmt.Sprintf("%s.%s", pkg.ID, fullMethodName)
 
 		*edges = append(*edges, &codeast.Edge{

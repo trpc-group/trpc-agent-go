@@ -937,6 +937,16 @@ func TestNewInvalidGraphName(t *testing.T) {
 	}
 }
 
+func TestNewWithoutDSNOrInstance(t *testing.T) {
+	_, err := New(WithGraphName("valid_graph"))
+	if err == nil {
+		t.Fatal("New() error = nil, want error for missing connection config")
+	}
+	if !strings.Contains(err.Error(), "requires WithClientDSN or WithPostgresInstance") {
+		t.Errorf("New() error = %v, want containing connection config hint", err)
+	}
+}
+
 func TestNewWithInvalidInstanceName(t *testing.T) {
 	_, err := New(WithPostgresInstance("nonexistent_instance"))
 	if err == nil {
@@ -982,7 +992,7 @@ func TestNewWithInitDBError(t *testing.T) {
 		}, nil
 	})
 
-	_, err := New(WithGraphName("valid_graph"))
+	_, err := New(WithGraphName("valid_graph"), WithClientDSN("postgres://localhost/test"))
 	if err == nil {
 		t.Fatal("New() error = nil, want error")
 	}
@@ -2621,7 +2631,7 @@ func TestNewWithValidGraphName(t *testing.T) {
 		return &mockPostgresClient{}, nil
 	})
 
-	store, err := New(WithGraphName("my_graph"))
+	store, err := New(WithGraphName("my_graph"), WithClientDSN("postgres://localhost/test"))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -2660,7 +2670,7 @@ func TestNewDefaultGraphName(t *testing.T) {
 		return &mockPostgresClient{}, nil
 	})
 
-	store, err := New()
+	store, err := New(WithClientDSN("postgres://localhost/test"))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

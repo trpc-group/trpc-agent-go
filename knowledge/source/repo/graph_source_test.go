@@ -79,6 +79,15 @@ func TestRepoGraphNamespace(t *testing.T) {
 			},
 			want: "repo:https://github.com/example/repo#tag",
 		},
+		{
+			name: "tag target kind with tag value",
+			info: &repoInfo{
+				url:        "https://github.com/example/repo",
+				branch:     "v1.0.0",
+				targetKind: checkoutTargetTag,
+			},
+			want: "repo:https://github.com/example/repo#tag:v1.0.0",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

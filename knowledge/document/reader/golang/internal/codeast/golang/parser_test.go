@@ -208,7 +208,7 @@ type NodeResult any
 type Store struct{}
 `)
 
-	parser := NewParser()
+	parser := NewParser(WithEdgeAnalysis(true))
 	result, err := parser.ParseDirectory(dir)
 	if err != nil {
 		t.Fatalf("ParseDirectory() error = %v", err)
