@@ -131,6 +131,7 @@ type Invocation struct {
 	parent *Invocation
 	// traceCapture stores the shared execution trace capture for one root run.
 	traceCapture *tracecapture.Capture
+	traceMu      sync.Mutex
 	// entryPredecessorStepIDs stores the predecessor step ids passed to this invocation entry.
 	entryPredecessorStepIDs []string
 	// traceNodeID stores the mounted static root node id for this invocation.
@@ -1195,7 +1196,6 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,
 		parent:          inv,
-		traceCapture:    inv.traceCapture,
 		state:           inv.cloneState(),
 	}
 
@@ -1216,6 +1216,10 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	if newInv.eventFilterKey == "" && newInv.AgentName != "" {
 		newInv.eventFilterKey = newInv.AgentName
 	}
+	if newInv.RunOptions.ExecutionTraceEnabled && inv.RunOptions.ExecutionTraceEnabled {
+		inv.initializeExecutionTrace()
+		newInv.traceCapture = inv.executionTraceCapture()
+	}
 	if newInv.traceCapture == nil {
 		newInv.initializeExecutionTrace()
 	}
@@ -1232,6 +1236,7 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 	if inv == nil {
 		return nil
 	}
+	traceCapture, traceNodeID := inv.executionTraceFields()
 	view := &Invocation{
 		Agent:                inv.Agent,
 		AgentName:            inv.AgentName,
@@ -1253,11 +1258,11 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 		noticeMu:             inv.noticeMu,
 		eventFilterKey:       inv.eventFilterKey,
 		parent:               inv.parent,
-		traceCapture:         inv.traceCapture,
+		traceCapture:         traceCapture,
 		entryPredecessorStepIDs: cloneStringSlice(
 			inv.entryPredecessorStepIDs,
 		),
-		traceNodeID:        inv.traceNodeID,
+		traceNodeID:        traceNodeID,
 		state:              inv.cloneViewState(),
 		MaxLLMCalls:        inv.MaxLLMCalls,
 		MaxToolIterations:  inv.MaxToolIterations,
@@ -1295,11 +1300,14 @@ func (inv *Invocation) SyncView(view *Invocation) {
 	inv.noticeMu = view.noticeMu
 	inv.eventFilterKey = view.eventFilterKey
 	inv.parent = view.parent
-	inv.traceCapture = view.traceCapture
+	traceCapture, traceNodeID := view.executionTraceFields()
+	inv.traceMu.Lock()
+	inv.traceCapture = traceCapture
+	inv.traceNodeID = traceNodeID
+	inv.traceMu.Unlock()
 	inv.entryPredecessorStepIDs = cloneStringSlice(
 		view.entryPredecessorStepIDs,
 	)
-	inv.traceNodeID = view.traceNodeID
 	inv.MaxLLMCalls = view.MaxLLMCalls
 	inv.MaxToolIterations = view.MaxToolIterations
 	inv.timingInfo = view.timingInfo
