@@ -10,6 +10,7 @@ package agent
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -80,6 +81,53 @@ func TestClone_PreservesExecutionTraceCaptureAndEntryPredecessors(t *testing.T) 
 	assert.Equal(t, child.InvocationID, executionTrace.Steps[1].InvocationID)
 	assert.Equal(t, []string{rootStepID}, executionTrace.Steps[1].PredecessorStepIDs)
 	assert.Equal(t, "assistant/worker", executionTrace.Steps[1].NodeID)
+}
+
+func TestClone_LazilyInitializesParentTraceCaptureOnlyWhenCloneTraceEnabled(t *testing.T) {
+	root := &Invocation{
+		InvocationID: "root-inv",
+		AgentName:    "root",
+		RunOptions:   RunOptions{ExecutionTraceEnabled: true},
+	}
+	disabledChild := root.Clone(WithInvocationRunOptions(RunOptions{}))
+	require.NotNil(t, disabledChild)
+	assert.Nil(t, root.traceCapture)
+	assert.Nil(t, disabledChild.traceCapture)
+	enabledChild := root.Clone(
+		WithInvocationAgent(&mockAgent{name: "child"}),
+		WithInvocationRunOptions(RunOptions{ExecutionTraceEnabled: true}),
+	)
+	require.NotNil(t, enabledChild)
+	require.NotNil(t, root.traceCapture)
+	require.Same(t, root.traceCapture, enabledChild.traceCapture)
+}
+
+func TestClone_ConcurrentlySharesLazyParentTraceCapture(t *testing.T) {
+	root := &Invocation{
+		InvocationID: "root-inv",
+		AgentName:    "root",
+		RunOptions:   RunOptions{ExecutionTraceEnabled: true},
+	}
+	const cloneCount = 32
+	children := make([]*Invocation, cloneCount)
+	var wg sync.WaitGroup
+	for i := range children {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			children[i] = root.Clone(
+				WithInvocationAgent(&mockAgent{name: "child"}),
+				WithInvocationRunOptions(RunOptions{ExecutionTraceEnabled: true}),
+			)
+		}(i)
+	}
+	wg.Wait()
+	rootCapture := root.executionTraceCapture()
+	require.NotNil(t, rootCapture)
+	for _, child := range children {
+		require.NotNil(t, child)
+		require.Same(t, rootCapture, child.executionTraceCapture())
+	}
 }
 
 func TestExecutionTrace_LazilyInitializesForDirectInvocationLiteral(t *testing.T) {
