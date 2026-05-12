@@ -9,7 +9,12 @@
 
 package team
 
-import "time"
+import (
+	"context"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
 
 // SwarmConfig defines optional safety limits for swarm-style handoffs.
 //
@@ -31,6 +36,18 @@ type SwarmConfig struct {
 	// A zero value disables this check.
 	RepetitiveHandoffMinUnique int
 }
+
+// SwarmHandoffInputArgs describes one Swarm handoff input rewrite.
+type SwarmHandoffInputArgs struct {
+	FromAgentName   string
+	ToAgentName     string
+	RootInput       model.Message
+	ParentInput     model.Message
+	TransferMessage string
+}
+
+// SwarmHandoffInputBuilder builds the target agent input message for a Swarm handoff.
+type SwarmHandoffInputBuilder func(ctx context.Context, args SwarmHandoffInputArgs) (model.Message, error)
 
 // DefaultSwarmConfig returns conservative defaults that prevent unbounded
 // transfer loops while keeping behavior predictable.
