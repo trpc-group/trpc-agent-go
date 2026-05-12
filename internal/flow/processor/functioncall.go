@@ -450,6 +450,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		tools,
 		toolCall,
 		index,
+		modifiedArgs,
 		skipSummarization,
 	)
 	if toolEvent == nil {
@@ -594,6 +595,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			errorEvent := newToolCallResponseEvent(
 				invocation, llmResponse, []model.Choice{*errorChoice},
 			)
+			annotateToolCallArgs(errorEvent, tc, tc.Function.Arguments)
 			if tc.Function.Name == transfer.TransferToolName {
 				errorEvent.Tag = event.TransferTag
 			}
@@ -634,6 +636,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		errorEvent := newToolCallResponseEvent(
 			invocation, llmResponse, []model.Choice{*errorChoice},
 		)
+		annotateToolCallArgs(errorEvent, tc, modifiedArgs)
 		errorEvent = p.decorateToolCallResponseEvent(
 			errorEvent,
 			tools,
@@ -657,6 +660,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		tools,
 		tc,
 		index,
+		modifiedArgs,
 		skipSummarization,
 	)
 	if toolCallResponseEvent == nil {
@@ -717,6 +721,7 @@ func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
 	tools map[string]tool.Tool,
 	toolCall model.ToolCall,
 	index int,
+	toolArgs []byte,
 	skipSummarization bool,
 ) *event.Event {
 	if len(choices) == 0 {
@@ -729,6 +734,7 @@ func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
 				llmResponse,
 				toolCall,
 				index,
+				toolArgs,
 			),
 			tools,
 			toolCall,
@@ -736,8 +742,10 @@ func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
 		)
 	}
 	annotateToolChoicesWithName(choices, toolCall.Function.Name)
+	ev := newToolCallResponseEvent(invocation, llmResponse, choices)
+	annotateToolCallArgs(ev, toolCall, toolArgs)
 	return p.decorateToolCallResponseEvent(
-		newToolCallResponseEvent(invocation, llmResponse, choices),
+		ev,
 		tools,
 		toolCall,
 		skipSummarization,
@@ -751,6 +759,45 @@ func annotateToolChoicesWithName(choices []model.Choice, toolName string) {
 			choices[i].Message.ToolName = toolName
 		}
 	}
+}
+
+func annotateToolCallArgs(
+	ev *event.Event,
+	toolCall model.ToolCall,
+	toolArgs []byte,
+) {
+	if toolArgs == nil {
+		toolArgs = toolCall.Function.Arguments
+	}
+	if err := setToolCallArgs(ev, toolCall.ID, toolArgs); err != nil {
+		log.Warnf("Failed to set tool call args extension: %v", err)
+	}
+}
+
+func setToolCallArgs(
+	ev *event.Event,
+	toolCallID string,
+	toolArgs []byte,
+) error {
+	if ev == nil || toolCallID == "" {
+		return nil
+	}
+	args, _, err := event.GetExtension[map[string]string](
+		ev,
+		event.ToolCallArgsExtensionKey,
+	)
+	if err != nil {
+		return err
+	}
+	if args == nil {
+		args = make(map[string]string)
+	}
+	args[toolCallID] = string(toolArgs)
+	return event.SetExtension(
+		ev,
+		event.ToolCallArgsExtensionKey,
+		args,
+	)
 }
 
 func (p *FunctionCallResponseProcessor) decorateToolCallResponseEvent(
@@ -1137,6 +1184,9 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 			minimal = append(minimal, newMinimalToolChoice(tc, i))
 		}
 		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, minimal)
+		for _, tc := range toolCalls {
+			annotateToolCallArgs(mergedEvent, tc, tc.Function.Arguments)
+		}
 		for _, tc := range toolCalls {
 			if tl, ok := tools[tc.Function.Name]; ok &&
 				toolPrefersSkipSummarization(tl) {
@@ -2239,12 +2289,15 @@ func newMinimalToolCallResponseEvent(
 	functionCallResponse *model.Response,
 	toolCall model.ToolCall,
 	index int,
+	toolArgs []byte,
 ) *event.Event {
-	return newToolCallResponseEvent(
+	ev := newToolCallResponseEvent(
 		invocation,
 		functionCallResponse,
 		[]model.Choice{newMinimalToolChoice(toolCall, index)},
 	)
+	annotateToolCallArgs(ev, toolCall, toolArgs)
+	return ev
 }
 
 func newMinimalToolChoice(
@@ -2272,12 +2325,22 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 
 	mergedChoices := collectMergedChoices(es)
 	mergedDelta := collectStateDelta(es)
+	mergedToolArgs := collectToolCallArgs(es)
 	baseEvent := findBaseEvent(es)
 	resp := buildMergedToolResponse(baseEvent, mergedChoices)
 	mergedEvent := buildMergedEvent(baseEvent, resp)
 
 	if len(mergedDelta) > 0 {
 		mergedEvent.StateDelta = mergedDelta
+	}
+	if len(mergedToolArgs) > 0 {
+		if err := event.SetExtension(
+			mergedEvent,
+			event.ToolCallArgsExtensionKey,
+			mergedToolArgs,
+		); err != nil {
+			log.Warnf("Failed to merge tool call args extension: %v", err)
+		}
 	}
 	if shouldSkipSummarization(es) {
 		markSkipSummarization(mergedEvent)
@@ -2316,6 +2379,30 @@ func collectStateDelta(es []*event.Event) map[string][]byte {
 		}
 	}
 	return mergedDelta
+}
+
+func collectToolCallArgs(es []*event.Event) map[string]string {
+	var merged map[string]string
+	for _, e := range es {
+		args, ok, err := event.GetExtension[map[string]string](
+			e,
+			event.ToolCallArgsExtensionKey,
+		)
+		if err != nil {
+			log.Warnf("Failed to decode tool call args extension: %v", err)
+			continue
+		}
+		if !ok || len(args) == 0 {
+			continue
+		}
+		if merged == nil {
+			merged = make(map[string]string)
+		}
+		for toolCallID, toolArgs := range args {
+			merged[toolCallID] = toolArgs
+		}
+	}
+	return merged
 }
 
 // findBaseEvent finds a valid base event for metadata.
