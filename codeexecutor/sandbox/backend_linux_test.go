@@ -38,7 +38,7 @@ func TestLinuxBwrapWorkspaceWriteIntegration(t *testing.T) {
 		Cmd:  "bash",
 		Args: []string{"-c", "echo ok > ok.txt; echo bad > ../.git/config"},
 	})
-	if err != nil && !IsKind(err, ErrTimeout) {
+	if err != nil {
 		t.Fatalf("run error: %v", err)
 	}
 	if res.ExitCode == 0 {

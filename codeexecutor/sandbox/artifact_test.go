@@ -11,6 +11,8 @@ package sandbox
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -214,5 +216,37 @@ func TestCollectOutputsSaveTruncatedFileErrors(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot save truncated output file") {
 		t.Fatalf("expected truncated save error, got %v", err)
+	}
+}
+
+func TestCollectOutputsMetadataLoadError(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "artifact/bad-metadata", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(ws.Path, codeexecutor.MetaFileName),
+		[]byte("{bad json"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(ws.Path, codeexecutor.DirOut, "report.txt"),
+		[]byte("ok"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = rt.CollectOutputs(context.Background(), ws, codeexecutor.OutputSpec{
+		Globs: []string{"out/report.txt"},
+	})
+	if err == nil {
+		t.Fatalf("expected metadata load error")
 	}
 }

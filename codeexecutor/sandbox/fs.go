@@ -366,7 +366,10 @@ func (r *Runtime) CollectOutputs(
 			out.Files = append(out.Files, ref)
 		}
 	}
-	md, _ := codeexecutor.LoadMetadata(ws.Path)
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	if err != nil {
+		return codeexecutor.OutputManifest{}, fmt.Errorf("load workspace metadata: %w", err)
+	}
 	md.Outputs = append(md.Outputs, codeexecutor.OutputRecord{
 		Globs:     spec.Globs,
 		SavedAs:   savedNames,
@@ -374,7 +377,9 @@ func (r *Runtime) CollectOutputs(
 		LimitsHit: out.LimitsHit,
 		Timestamp: time.Now(),
 	})
-	_ = codeexecutor.SaveMetadata(ws.Path, md)
+	if err := codeexecutor.SaveMetadata(ws.Path, md); err != nil {
+		return codeexecutor.OutputManifest{}, fmt.Errorf("save workspace metadata: %w", err)
+	}
 	return out, nil
 }
 
