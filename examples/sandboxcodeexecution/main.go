@@ -48,7 +48,13 @@ func main() {
 	scenarioName := flag.String(
 		"scenario",
 		"basic",
-		"basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|timeout|output-cap|additional-permissions|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|all",
+		"basic|"+
+			"agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|"+
+			"agent-artifact-stage|agent-artifact-save|agent-artifact-pin|"+
+			"session-persistence|session-isolation|"+
+			"env-redaction|metadata-protection|no-access|network-restricted|timeout|output-cap|additional-permissions|"+
+			"file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|"+
+			"all",
 	)
 	modelName := flag.String("model", "glm-4.7-flash", "model name")
 	workspaceRoot := flag.String("workspace-root", "", "sandbox workspace root")
