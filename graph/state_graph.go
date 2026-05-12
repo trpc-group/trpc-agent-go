@@ -2186,6 +2186,19 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 	return nodeFunc
 }
 
+// toolOutputRawMessageForNodeResponse returns JSON bytes suitable for the
+// "output" field of serialized tool node responses. Valid JSON document
+// fragments are passed through; otherwise content is JSON-string-encoded so
+// json.Marshal of the parent slice never fails or emits invalid JSON.
+func toolOutputRawMessageForNodeResponse(content string) json.RawMessage {
+	output := json.RawMessage(content)
+	if !json.Valid([]byte(content)) {
+		escaped, _ := json.Marshal(content)
+		output = json.RawMessage(escaped)
+	}
+	return output
+}
+
 func newToolsNodeRuntime(
 	tools map[string]tool.Tool,
 	opts ...Option,
@@ -2284,10 +2297,11 @@ func newToolsNodeRuntime(
 
 			responses := make([]toolNodeResponse, 0, len(newMessages))
 			for _, msg := range newMessages {
+				output := toolOutputRawMessageForNodeResponse(msg.Content)
 				responses = append(responses, toolNodeResponse{
 					ToolID:   msg.ToolID,
 					ToolName: msg.ToolName,
-					Output:   json.RawMessage(msg.Content),
+					Output:   output,
 				})
 			}
 

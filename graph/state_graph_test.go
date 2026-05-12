@@ -1203,6 +1203,57 @@ type assertAnError struct{}
 
 func (assertAnError) Error() string { return "boom" }
 
+func TestToolOutputRawMessageForNodeResponse(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		content string
+		want    string // expected JSON text for the output field alone
+	}{
+		{
+			name:    "object_passthrough",
+			content: `{"x":1}`,
+			want:    `{"x":1}`,
+		},
+		{
+			name:    "array_passthrough",
+			content: `[1,2]`,
+			want:    `[1,2]`,
+		},
+		{
+			name:    "plain_text_escaped",
+			content: `not json`,
+			want:    `"not json"`,
+		},
+		{
+			name:    "truncated_object_escaped",
+			content: `{"a":`,
+			want:    `"{\"a\":"`,
+		},
+		{
+			name:    "empty_invalid_then_string",
+			content: "",
+			want:    `""`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := toolOutputRawMessageForNodeResponse(tc.content)
+			require.True(t, json.Valid(got), "output must be valid JSON: %s", got)
+			require.JSONEq(t, tc.want, string(got))
+
+			wrapped := []map[string]json.RawMessage{{
+				"output": got,
+			}}
+			outer, err := json.Marshal(wrapped)
+			require.NoError(t, err)
+			require.True(t, json.Valid(outer), "wrapped marshal must succeed: %s", outer)
+		})
+	}
+}
+
 func TestNewToolsNodeFunc_WithEnableParallelTools(t *testing.T) {
 	started := make(chan string, 2)
 	allowA, allowB := make(chan struct{}), make(chan struct{})
