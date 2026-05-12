@@ -1225,7 +1225,23 @@ func skillFileText(
 	return filepath.ToSlash(path)
 }
 
+// canonicalPathForRel expands symlinks in a path so filepath.Rel agrees across
+// aliases such as /var vs /private/var on macOS.
+func canonicalPathForRel(p string) string {
+	p = filepath.Clean(strings.TrimSpace(p))
+	if p == "" {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return p
+	}
+	return filepath.Clean(resolved)
+}
+
 func relativeSkillPath(root string, path string) (string, bool) {
+	root = canonicalPathForRel(root)
+	path = canonicalPathForRel(path)
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return "", false
