@@ -34,7 +34,7 @@ type Runtime struct {
 	backend        BackendType
 	profile        PermissionProfile
 	sessionPolicy  SessionPolicy
-	envPolicy      EnvironmentPolicy
+	envPolicy      ShellEnvironmentPolicy
 	manifest       Manifest
 	outputMaxBytes int
 	defaultTimeout time.Duration
@@ -54,7 +54,7 @@ func NewRuntime(opts ...Option) *Runtime {
 		backend:        BackendAuto,
 		profile:        WorkspaceWriteProfile(),
 		sessionPolicy:  normalizeSessionPolicy(SessionPolicy{}),
-		envPolicy:      normalizeEnvironmentPolicy(EnvironmentPolicy{}),
+		envPolicy:      normalizeShellEnvironmentPolicy(ShellEnvironmentPolicy{}),
 		outputMaxBytes: defaultOutputMaxBytes,
 		defaultTimeout: defaultRunTimeout,
 		runLocks:       map[string]*sync.Mutex{},
@@ -66,7 +66,7 @@ func NewRuntime(opts ...Option) *Runtime {
 	}
 	r.profile = normalizeProfile(r.profile)
 	r.sessionPolicy = normalizeSessionPolicy(r.sessionPolicy)
-	r.envPolicy = normalizeEnvironmentPolicy(r.envPolicy)
+	r.envPolicy = normalizeShellEnvironmentPolicy(r.envPolicy)
 	if r.outputMaxBytes <= 0 {
 		r.outputMaxBytes = defaultOutputMaxBytes
 	}

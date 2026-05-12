@@ -45,7 +45,8 @@ clear message. The example never reads or prints key contents.
 - `session-isolation`: verifies a different session cannot see another
   session's workspace files.
 - `env-redaction`: verifies sandbox child processes do not inherit
-  `OPENAI_API_KEY` by default.
+  `OPENAI_API_KEY` when the scenario explicitly uses the stricter `Core`
+  shell environment policy.
 - `metadata-protection`: verifies protected metadata paths are blocked through
   both file API and shell execution.
 - `no-access`: verifies no-access policy blocks file API reads and shell access.
@@ -55,6 +56,17 @@ clear message. The example never reads or prints key contents.
 - `output-cap`: verifies large output is capped and marked as truncated.
 - `additional-permissions`: verifies a host path grant is scoped to one
   operation and expires afterward.
+- `shell-environment-policy-default-all`: verifies the default shell environment
+  policy inherits a harmless host variable, matching Codex.
+- `shell-environment-policy-core`: verifies `Core` preserves shell startup
+  variables while hiding a custom host variable.
+- `shell-environment-policy-none-set`: verifies `None` starts empty except
+  explicit `Set` entries and sandbox runtime variables.
+- `shell-environment-policy-include-only`: verifies `IncludeOnly` is a final
+  allow-list over inherited, `Set`, and per-run environment variables.
+- `shell-environment-policy-exclude-set`: verifies `Exclude` runs before `Set`.
+- `shell-environment-policy-agent`: uses a real LLMAgent and `workspace_exec` to
+  verify shell environment policy behavior through an actual model call.
 - `file-system-policy-access-modes`: verifies read, write, no-access, metadata
   protection, and restricted networking.
 - `file-system-policy-specificity`: verifies a more specific read rule can make
@@ -67,7 +79,7 @@ clear message. The example never reads or prints key contents.
 ## Flags
 
 ```bash
--scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|timeout|output-cap|additional-permissions|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|all
+-scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|timeout|output-cap|additional-permissions|shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|all
 -model glm-4.7-flash
 -workspace-root /tmp/my-sandbox-root
 -keep-workspace

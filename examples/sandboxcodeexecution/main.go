@@ -53,6 +53,8 @@ func main() {
 			"agent-artifact-stage|agent-artifact-save|agent-artifact-pin|"+
 			"session-persistence|session-isolation|"+
 			"env-redaction|metadata-protection|no-access|network-restricted|timeout|output-cap|additional-permissions|"+
+			"shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|"+
+			"shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|"+
 			"file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|"+
 			"all",
 	)
@@ -106,6 +108,12 @@ func runScenarios(ctx context.Context, cfg config) error {
 		{"timeout", runTimeout},
 		{"output-cap", runOutputCap},
 		{"additional-permissions", runAdditionalPermissions},
+		{"shell-environment-policy-default-all", runShellEnvironmentPolicyDefaultAll},
+		{"shell-environment-policy-core", runShellEnvironmentPolicyCore},
+		{"shell-environment-policy-none-set", runShellEnvironmentPolicyNoneSet},
+		{"shell-environment-policy-include-only", runShellEnvironmentPolicyIncludeOnly},
+		{"shell-environment-policy-exclude-set", runShellEnvironmentPolicyExcludeSet},
+		{"shell-environment-policy-agent", runShellEnvironmentPolicyAgent},
 		{"file-system-policy-access-modes", runFileSystemPolicyAccessModes},
 		{"file-system-policy-specificity", runFileSystemPolicySpecificity},
 		{"file-system-policy-glob-no-access", runFileSystemPolicyGlobNoAccess},
@@ -199,7 +207,15 @@ func runBasic(ctx context.Context, cfg config) error {
 }
 
 func runSessionPersistence(ctx context.Context, cfg config) error {
-	rt := newRuntime(cfg, sandbox.WorkspaceWriteProfile(), 1<<20, 3*time.Second)
+	rt := newRuntime(
+		cfg,
+		sandbox.WorkspaceWriteProfile(),
+		1<<20,
+		3*time.Second,
+		sandbox.WithShellEnvironmentPolicy(sandbox.ShellEnvironmentPolicy{
+			Inherit: sandbox.ShellEnvironmentPolicyInheritCore,
+		}),
+	)
 	if err := requireManagedSandbox(ctx, rt, cfg); err != nil {
 		return err
 	}
@@ -456,8 +472,16 @@ func runAdditionalPermissions(ctx context.Context, cfg config) error {
 	return nil
 }
 
-func newRuntime(cfg config, profile sandbox.PermissionProfile, outputCap int, timeout time.Duration) *sandbox.Runtime {
-	return sandbox.NewRuntime(commonOptions(cfg, profile, outputCap, timeout)...)
+func newRuntime(
+	cfg config,
+	profile sandbox.PermissionProfile,
+	outputCap int,
+	timeout time.Duration,
+	opts ...sandbox.Option,
+) *sandbox.Runtime {
+	options := commonOptions(cfg, profile, outputCap, timeout)
+	options = append(options, opts...)
+	return sandbox.NewRuntime(options...)
 }
 
 func commonOptions(

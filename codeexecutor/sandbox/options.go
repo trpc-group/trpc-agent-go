@@ -46,10 +46,10 @@ func WithSessionPolicy(policy SessionPolicy) Option {
 	}
 }
 
-// WithEnvironmentPolicy sets environment inheritance and overrides.
-func WithEnvironmentPolicy(policy EnvironmentPolicy) Option {
+// WithShellEnvironmentPolicy sets shell environment inheritance and overrides.
+func WithShellEnvironmentPolicy(policy ShellEnvironmentPolicy) Option {
 	return func(r *Runtime) {
-		r.envPolicy = normalizeEnvironmentPolicy(policy)
+		r.envPolicy = normalizeShellEnvironmentPolicy(policy)
 	}
 }
 
@@ -119,9 +119,9 @@ func normalizeSessionPolicy(policy SessionPolicy) SessionPolicy {
 	return policy
 }
 
-func normalizeEnvironmentPolicy(policy EnvironmentPolicy) EnvironmentPolicy {
+func normalizeShellEnvironmentPolicy(policy ShellEnvironmentPolicy) ShellEnvironmentPolicy {
 	if policy.Inherit == "" {
-		policy.Inherit = EnvInheritCore
+		policy.Inherit = ShellEnvironmentPolicyInheritAll
 	}
 	if policy.Set == nil {
 		policy.Set = map[string]string{}

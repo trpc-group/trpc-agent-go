@@ -97,34 +97,28 @@ func TestWorkspaceWriteProfileCanSetNetwork(t *testing.T) {
 	}
 }
 
-func TestEnvironmentPolicyCoreDoesNotInheritLLMKey(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "test-secret")
+func TestShellEnvironmentPolicyDefaultAllInheritsHostEnv(t *testing.T) {
+	t.Setenv("TRPC_SANDBOX_DEFAULT_ALL_VISIBLE", "yes")
 	rt := NewRuntime(WithPermissionProfile(DangerFullAccessProfile()))
 	ws := codeexecutor.Workspace{ID: "s1", Path: t.TempDir()}
 	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
 		t.Fatal(err)
 	}
 	env := rt.buildEnvironment(ws, codeexecutor.RunProgramSpec{})
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "OPENAI_API_KEY=") {
-			t.Fatalf("core environment inherited OPENAI_API_KEY")
-		}
+	if !hasEnv(env, "TRPC_SANDBOX_DEFAULT_ALL_VISIBLE=yes") {
+		t.Fatalf("default All policy did not inherit host env: %v", env)
 	}
 	if !hasEnv(env, "HOME="+filepath.Join(ws.Path, "home")) {
 		t.Fatalf("HOME did not point at sandbox home: %v", env)
 	}
 }
 
-func TestEnvironmentPolicyIncludeExcludeSet(t *testing.T) {
-	t.Setenv("SANDBOX_KEEP", "yes")
-	t.Setenv("SANDBOX_DROP", "no")
+func TestShellEnvironmentPolicyCoreDoesNotInheritLLMKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-secret")
 	rt := NewRuntime(
 		WithPermissionProfile(DangerFullAccessProfile()),
-		WithEnvironmentPolicy(EnvironmentPolicy{
-			Inherit:     EnvInheritAll,
-			IncludeOnly: []string{"SANDBOX_*"},
-			Exclude:     []string{"*_DROP"},
-			Set:         map[string]string{"SANDBOX_SET": "ok"},
+		WithShellEnvironmentPolicy(ShellEnvironmentPolicy{
+			Inherit: ShellEnvironmentPolicyInheritCore,
 		}),
 	)
 	ws := codeexecutor.Workspace{ID: "s1", Path: t.TempDir()}
@@ -132,6 +126,41 @@ func TestEnvironmentPolicyIncludeExcludeSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := rt.buildEnvironment(ws, codeexecutor.RunProgramSpec{})
+	if hasEnvPrefix(env, "OPENAI_API_KEY=") {
+		t.Fatalf("core environment inherited OPENAI_API_KEY")
+	}
+	if !hasEnv(env, "HOME="+filepath.Join(ws.Path, "home")) {
+		t.Fatalf("HOME did not point at sandbox home: %v", env)
+	}
+}
+
+func TestShellEnvironmentPolicyIncludeOnlyFiltersFinalCallerEnv(t *testing.T) {
+	t.Setenv("SANDBOX_KEEP", "yes")
+	t.Setenv("SANDBOX_DROP", "no")
+	rt := NewRuntime(
+		WithPermissionProfile(DangerFullAccessProfile()),
+		WithShellEnvironmentPolicy(ShellEnvironmentPolicy{
+			Inherit:     ShellEnvironmentPolicyInheritAll,
+			IncludeOnly: []string{"SANDBOX_*"},
+			Exclude:     []string{"*_DROP"},
+			Set: map[string]string{
+				"SANDBOX_SET":          "ok",
+				"OTHER_SET_FILTERED":   "no",
+				"SANDBOX_DROP_SET":     "no",
+				"SANDBOX_CASE_MATCHED": "ok",
+			},
+		}),
+	)
+	ws := codeexecutor.Workspace{ID: "s1", Path: t.TempDir()}
+	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+		t.Fatal(err)
+	}
+	env := rt.buildEnvironment(ws, codeexecutor.RunProgramSpec{
+		Env: map[string]string{
+			"SANDBOX_RUN":        "ok",
+			"OTHER_RUN_FILTERED": "no",
+		},
+	})
 	if !hasEnv(env, "SANDBOX_KEEP=yes") {
 		t.Fatalf("expected SANDBOX_KEEP in env: %v", env)
 	}
@@ -140,6 +169,40 @@ func TestEnvironmentPolicyIncludeExcludeSet(t *testing.T) {
 	}
 	if !hasEnv(env, "SANDBOX_SET=ok") {
 		t.Fatalf("expected SANDBOX_SET override: %v", env)
+	}
+	if !hasEnv(env, "SANDBOX_RUN=ok") {
+		t.Fatalf("expected matching per-run env in env: %v", env)
+	}
+	if hasEnvPrefix(env, "OTHER_SET_FILTERED=") || hasEnvPrefix(env, "OTHER_RUN_FILTERED=") {
+		t.Fatalf("IncludeOnly should filter Set and per-run env: %v", env)
+	}
+	if !hasEnv(env, "HOME="+filepath.Join(ws.Path, "home")) {
+		t.Fatalf("runtime HOME should be injected after IncludeOnly: %v", env)
+	}
+}
+
+func TestShellEnvironmentPolicyExcludeBeforeSetAndCaseInsensitivePatterns(t *testing.T) {
+	t.Setenv("SANDBOX_RESTORE", "host")
+	t.Setenv("SANDBOX_SECRET_TOKEN", "secret")
+	rt := NewRuntime(
+		WithPermissionProfile(DangerFullAccessProfile()),
+		WithShellEnvironmentPolicy(ShellEnvironmentPolicy{
+			Inherit:              ShellEnvironmentPolicyInheritAll,
+			ApplyDefaultExcludes: true,
+			Exclude:              []string{"sandbox_restore"},
+			Set:                  map[string]string{"SANDBOX_RESTORE": "set"},
+		}),
+	)
+	ws := codeexecutor.Workspace{ID: "s1", Path: t.TempDir()}
+	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+		t.Fatal(err)
+	}
+	env := rt.buildEnvironment(ws, codeexecutor.RunProgramSpec{})
+	if !hasEnv(env, "SANDBOX_RESTORE=set") {
+		t.Fatalf("expected Set to run after Exclude: %v", env)
+	}
+	if hasEnvPrefix(env, "SANDBOX_SECRET_TOKEN=") {
+		t.Fatalf("default secret-name excludes did not remove token env: %v", env)
 	}
 }
 

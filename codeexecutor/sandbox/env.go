@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -22,12 +23,28 @@ import (
 var coreEnvironmentKeys = map[string]struct{}{
 	"PATH":     {},
 	"SHELL":    {},
+	"HOME":     {},
+	"TMPDIR":   {},
+	"TMP":      {},
+	"TEMP":     {},
 	"LANG":     {},
 	"LC_ALL":   {},
 	"LC_CTYPE": {},
-	"TERM":     {},
 	"USER":     {},
 	"LOGNAME":  {},
+}
+
+var windowsCoreEnvironmentKeys = map[string]struct{}{
+	"PATH":                   {},
+	"PATHEXT":                {},
+	"USERNAME":               {},
+	"USERPROFILE":            {},
+	"LOCALAPPDATA":           {},
+	"APPDATA":                {},
+	"TEMP":                   {},
+	"TMP":                    {},
+	"PROCESSOR_ARCHITECTURE": {},
+	"OS":                     {},
 }
 
 var secretNameFragments = []string{
@@ -45,28 +62,24 @@ func (r *Runtime) buildEnvironment(
 	env := map[string]string{}
 	host := hostEnvMap()
 	switch r.envPolicy.Inherit {
-	case EnvInheritNone:
-	case EnvInheritAll:
+	case ShellEnvironmentPolicyInheritNone:
+	case ShellEnvironmentPolicyInheritCore:
 		for k, v := range host {
-			env[k] = v
-		}
-	default:
-		for k := range coreEnvironmentKeys {
-			if v, ok := host[k]; ok {
+			if isCoreEnvironmentKey(k) {
 				env[k] = v
 			}
 		}
+	default:
+		for k, v := range host {
+			env[k] = v
+		}
 	}
-	if len(r.envPolicy.IncludeOnly) > 0 {
-		filtered := map[string]string{}
-		for _, pattern := range r.envPolicy.IncludeOnly {
-			for k, v := range host {
-				if envNameMatch(pattern, k) {
-					filtered[k] = v
-				}
+	if r.envPolicy.ApplyDefaultExcludes {
+		for k := range env {
+			if isSecretName(k) {
+				delete(env, k)
 			}
 		}
-		env = filtered
 	}
 	for _, pattern := range r.envPolicy.Exclude {
 		for k := range env {
@@ -83,6 +96,13 @@ func (r *Runtime) buildEnvironment(
 	for k, v := range spec.Env {
 		if k != "" {
 			env[k] = v
+		}
+	}
+	if len(r.envPolicy.IncludeOnly) > 0 {
+		for k := range env {
+			if !envNameMatchesAny(r.envPolicy.IncludeOnly, k) {
+				delete(env, k)
+			}
 		}
 	}
 	home := filepath.Join(ws.Path, "home")
@@ -103,6 +123,19 @@ func (r *Runtime) buildEnvironment(
 		env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	}
 	return envSlice(env)
+}
+
+func isCoreEnvironmentKey(name string) bool {
+	keys := coreEnvironmentKeys
+	if runtime.GOOS == "windows" {
+		keys = windowsCoreEnvironmentKeys
+	}
+	for k := range keys {
+		if strings.EqualFold(k, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func hostEnvMap() map[string]string {
@@ -134,11 +167,22 @@ func envNameMatch(pattern, name string) bool {
 	if pattern == "" {
 		return false
 	}
+	pattern = strings.ToLower(pattern)
+	name = strings.ToLower(name)
 	if strings.ContainsAny(pattern, "*?[") {
 		ok, err := path.Match(pattern, name)
 		return err == nil && ok
 	}
 	return pattern == name
+}
+
+func envNameMatchesAny(patterns []string, name string) bool {
+	for _, pattern := range patterns {
+		if envNameMatch(pattern, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // RedactEnvironment returns a copy safe for diagnostics.

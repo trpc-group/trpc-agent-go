@@ -57,6 +57,7 @@ type agentToolHarnessConfig struct {
 	artifactService artifact.Service
 	extraTools      []tool.Tool
 	instructionTail string
+	sandboxOptions  []sandbox.Option
 }
 
 type agentToolHarnessOption func(*agentToolHarnessConfig)
@@ -76,6 +77,12 @@ func withAgentToolExtraTools(extra []tool.Tool) agentToolHarnessOption {
 func withAgentToolInstructionTail(tail string) agentToolHarnessOption {
 	return func(cfg *agentToolHarnessConfig) {
 		cfg.instructionTail = tail
+	}
+}
+
+func withAgentToolSandboxOptions(opts ...sandbox.Option) agentToolHarnessOption {
+	return func(cfg *agentToolHarnessConfig) {
+		cfg.sandboxOptions = append(cfg.sandboxOptions, opts...)
 	}
 }
 
@@ -168,7 +175,15 @@ func runAgentToolSecurity(ctx context.Context, cfg config) error {
 			Mode:    0o600,
 		}},
 	}
-	h, err := newAgentToolHarness(ctx, cfg, profile, manifest)
+	h, err := newAgentToolHarness(
+		ctx,
+		cfg,
+		profile,
+		manifest,
+		withAgentToolSandboxOptions(sandbox.WithShellEnvironmentPolicy(sandbox.ShellEnvironmentPolicy{
+			Inherit: sandbox.ShellEnvironmentPolicyInheritCore,
+		})),
+	)
 	if err != nil {
 		return err
 	}
@@ -216,6 +231,7 @@ func newAgentToolHarness(
 		}
 	}
 	opts := commonOptions(cfg, profile, 1<<20, 10*time.Second)
+	opts = append(opts, harnessCfg.sandboxOptions...)
 	if manifest != nil {
 		opts = append(opts, sandbox.WithManifest(*manifest))
 	}
