@@ -68,9 +68,15 @@ inside the workspace. The default protected set is:
 .trpc-agent-sandbox
 ```
 
+Protected metadata entries are interpreted as workspace-root-relative paths.
+For the default single-segment names above, protection applies to the top-level
+workspace path and its children, for example `.git` and `.git/config`. It does
+not match the same name at arbitrary depth, such as `vendor/.git/config`.
+
 Protected metadata is not a replacement for `AccessNone`. It only prevents
 writes to those paths, even when a broader rule grants workspace write access.
-Use `AccessNone` when a path must be neither readable nor writable.
+Use `AccessNone` when a path must be neither readable nor writable, or when a
+nested metadata directory must be denied explicitly.
 
 ## Default Profile
 

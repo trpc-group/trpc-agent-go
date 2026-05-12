@@ -389,15 +389,6 @@ func isProtectedRel(rel string, protected []string) bool {
 		if rel == p || strings.HasPrefix(rel, p+"/") {
 			return true
 		}
-		if !strings.Contains(p, "/") {
-			first := rel
-			if i := strings.IndexByte(first, '/'); i >= 0 {
-				first = first[:i]
-			}
-			if first == p {
-				return true
-			}
-		}
 	}
 	return false
 }
