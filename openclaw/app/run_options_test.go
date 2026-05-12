@@ -937,6 +937,30 @@ knowledges:
 	require.Equal(t, 5, opts.KnowledgesConfig[0].MaxResults)
 }
 
+func TestParseRunOptions_KnowledgesProvidersWithDescription(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  providers:
+    - name: "docs"
+      description: "Framework docs and API reference"
+      max_results: 5
+      config:
+        vector_store:
+          type: "inmemory"
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Len(t, opts.KnowledgesConfig, 1)
+	require.Equal(t, "docs", opts.KnowledgesConfig[0].Name)
+	require.Equal(t,
+		"Framework docs and API reference",
+		opts.KnowledgesConfig[0].Description,
+	)
+}
+
 func TestParseRunOptions_KnowledgesProvidersExternalConfig(t *testing.T) {
 	t.Parallel()
 
