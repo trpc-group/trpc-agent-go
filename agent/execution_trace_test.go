@@ -130,6 +130,18 @@ func TestClone_ConcurrentlySharesLazyParentTraceCapture(t *testing.T) {
 	}
 }
 
+func TestExecutionTraceInternalHelpers_HandleNilAndUninitializedInvocation(t *testing.T) {
+	var nilInv *Invocation
+	assert.Nil(t, nilInv.executionTraceCapture())
+	capture, nodeID := nilInv.executionTraceFields()
+	assert.Nil(t, capture)
+	assert.Empty(t, nodeID)
+	nilInv.ensureTraceNodeID()
+	inv := &Invocation{}
+	inv.ensureTraceCaptureMetadata()
+	assert.Nil(t, inv.executionTraceCapture())
+}
+
 func TestExecutionTrace_LazilyInitializesForDirectInvocationLiteral(t *testing.T) {
 	inv := &Invocation{
 		InvocationID: "inv-1",
