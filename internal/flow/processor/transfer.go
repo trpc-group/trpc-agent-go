@@ -12,12 +12,14 @@ package processor
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
+	itransfer "trpc.group/trpc-go/trpc-agent-go/internal/transfer"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -72,6 +74,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	transferInfo := invocation.TransferInfo
 	targetAgentName := transferInfo.TargetAgentName
 	var nodeTimeout time.Duration
+	var transferCustomizer itransfer.InvocationCustomizer
 
 	// Look up the target agent from the current agent's sub-agents.
 	var targetAgent agent.Agent
@@ -119,8 +122,26 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			return
 		}
 		nodeTimeout = targetTimeout
+		transferCustomizer = transferInvocationCustomizerFor(controller)
 	}
 
+	targetInvocation, targetMessageBeforeCustomize, err := prepareTransferTargetInvocation(
+		ctx,
+		invocation,
+		targetAgent,
+		transferInfo,
+		transferCustomizer,
+	)
+	if err != nil {
+		invocation.TransferInfo = nil
+		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			model.ErrorTypeFlowError,
+			fmt.Sprintf("Transfer customization rejected: %v", err),
+		))
+		return
+	}
 	// Create transfer event to notify about the handoff.
 	transferEvent := event.New(
 		invocation.InvocationID,
@@ -144,38 +165,16 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			},
 		},
 	}
-
-	// Send transfer event.
+	// Send transfer event after customization succeeds.
 	if err := agent.EmitEvent(ctx, invocation, ch, transferEvent); err != nil {
 		return
 	}
-
-	// Create new invocation for the target agent.
-	// Do NOT propagate EndInvocation from the coordinator.
-	// end_invocation is intended to end the current (parent) invocation
-	// after transfer, not the target agent's invocation.
-	targetInvocation := invocation.Clone(
-		agent.WithInvocationAgent(targetAgent),
-		agent.WithInvocationTraceNodeID(
-			transferTargetTraceNodeID(invocation, targetAgent),
-		),
-		agent.WithInvocationEntryPredecessorStepIDs(
-			agent.NextExecutionTracePredecessors(invocation),
-		),
-		func(inv *agent.Invocation) {
-			if surfaceRootNodeID := transferTargetSurfaceRootNodeID(invocation, targetAgent); surfaceRootNodeID != "" {
-				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
-			}
-		},
-	)
-
-	// Set the message for the target agent.
-	if transferInfo.Message != "" {
-		targetInvocation.Message = model.Message{
-			Role:    model.RoleUser,
-			Content: transferInfo.Message,
-		}
-		// Always emit a transfer message echo for visibility and traceability.
+	if shouldEmitTransferMessageEcho(
+		transferInfo.Message != "",
+		targetMessageBeforeCustomize,
+		targetInvocation.Message,
+	) {
+		// Emit explicit transfer input for visibility and traceability.
 		// Use tag so UIs can filter internal delegation messages without breaking event alignment.
 		agent.EmitEvent(ctx, targetInvocation, ch, event.NewResponseEvent(
 			targetInvocation.InvocationID,
@@ -249,6 +248,57 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	)
 	invocation.TransferInfo = nil
 	invocation.EndInvocation = p.endInvocationAfterTransfer
+}
+
+func prepareTransferTargetInvocation(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	targetAgent agent.Agent,
+	transferInfo *agent.TransferInfo,
+	customizer itransfer.InvocationCustomizer,
+) (*agent.Invocation, model.Message, error) {
+	// Do NOT propagate EndInvocation from the coordinator.
+	// end_invocation is intended to end the current invocation.
+	targetInvocation := invocation.Clone(
+		agent.WithInvocationAgent(targetAgent),
+		agent.WithInvocationTraceNodeID(
+			transferTargetTraceNodeID(invocation, targetAgent),
+		),
+		agent.WithInvocationEntryPredecessorStepIDs(
+			agent.NextExecutionTracePredecessors(invocation),
+		),
+		func(inv *agent.Invocation) {
+			if surfaceRootNodeID := transferTargetSurfaceRootNodeID(invocation, targetAgent); surfaceRootNodeID != "" {
+				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
+			}
+		},
+	)
+	if transferInfo.Message != "" {
+		targetInvocation.Message = model.Message{
+			Role:    model.RoleUser,
+			Content: transferInfo.Message,
+		}
+	}
+	beforeCustomize := targetInvocation.Message
+	if customizer == nil {
+		return targetInvocation, beforeCustomize, nil
+	}
+	customizeCtx := itransfer.ContextWithTransferMessage(ctx, transferInfo.Message)
+	if err := customizer.CustomizeTransferInvocation(customizeCtx, invocation, targetInvocation); err != nil {
+		return nil, model.Message{}, err
+	}
+	return targetInvocation, beforeCustomize, nil
+}
+
+func shouldEmitTransferMessageEcho(
+	hasTransferMessage bool,
+	beforeCustomize model.Message,
+	afterCustomize model.Message,
+) bool {
+	if !model.HasPayload(afterCustomize) {
+		return false
+	}
+	return hasTransferMessage || !reflect.DeepEqual(beforeCustomize, afterCustomize)
 }
 
 // saveActiveAgent saves the target agent to session state for Swarm cross-request transfer
@@ -325,4 +375,14 @@ func swarmActiveAgentKey(teamName string) string {
 		return swarmActiveAgentKeyPrefix
 	}
 	return swarmActiveAgentKeyPrefix + teamName
+}
+
+func transferInvocationCustomizerFor(
+	controller agent.TransferController,
+) itransfer.InvocationCustomizer {
+	customizer, ok := controller.(itransfer.InvocationCustomizer)
+	if !ok {
+		return nil
+	}
+	return customizer
 }

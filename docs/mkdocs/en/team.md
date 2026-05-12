@@ -398,6 +398,42 @@ This is different from `await_user_reply` plus
 - `await_user_reply` is a one-shot route. It is consumed by exactly one future
   user turn and then cleared automatically.
 
+### Rewrite handoff input (optional)
+
+By default, when a Swarm member hands off with `transfer_to_agent`, the target member receives the tool call's `message` field as its user input. If your application needs to construct the target member's first input from the original user input, a template, or other context, configure `team.WithSwarmHandoffInputBuilder`:
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmHandoffInputBuilder(func(
+        ctx context.Context,
+        args team.SwarmHandoffInputArgs,
+    ) (model.Message, error) {
+        if args.ToAgentName == "refund_agent" {
+            return model.NewUserMessage(
+                "Refund request:\n" + args.RootInput.Content,
+            ), nil
+        }
+        return model.NewUserMessage(args.TransferMessage), nil
+    }),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+`SwarmHandoffInputArgs` provides:
+
+- `FromAgentName`: the member that initiated the handoff.
+- `ToAgentName`: the member that receives the handoff.
+- `RootInput`: the original user input for the current run.
+- `ParentInput`: the current input of the member that initiated the handoff.
+- `TransferMessage`: the `message` field from the `transfer_to_agent` call.
+
+This option only rewrites the target member's current input for this handoff. It does not rewrite the source member's context or prevent the target member from reading existing conversation history.
+
 ### Dynamic members (runtime)
 
 In long-running services, the set of available Swarm members may change over
