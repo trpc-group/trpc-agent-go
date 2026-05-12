@@ -64,7 +64,6 @@ inside the workspace. The default protected set is:
 ```text
 .git
 .agents
-.codex
 .trpc-agent-sandbox
 ```
 
@@ -88,8 +87,8 @@ The runtime defaults to `WorkspaceWriteProfile()`. When callers pass
 - `SpecialRoot` is `AccessRead`, giving the sandbox a read-only host view.
 - `SpecialWorkspace`, `SpecialWork`, `SpecialHome`, `SpecialTmp`,
   `SpecialRuns`, `SpecialOut`, and `SpecialSkills` are `AccessWrite`.
-- Default protected metadata still blocks writes to `.git`, `.agents`,
-  `.codex`, and `.trpc-agent-sandbox` inside the workspace.
+- Default protected metadata still blocks writes to `.git`, `.agents`, and
+  `.trpc-agent-sandbox` inside the workspace.
 
 ## Public Builders
 

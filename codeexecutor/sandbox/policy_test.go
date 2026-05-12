@@ -223,12 +223,16 @@ func TestProtectedMetadataWriteDenied(t *testing.T) {
 
 func TestProtectedMetadataOnlyCoversWorkspaceRoot(t *testing.T) {
 	protected := defaultProtectedMetadata()
-	for _, rel := range []string{".git", ".git/config", ".codex/settings.json"} {
+	for _, rel := range []string{".git", ".git/config", ".agents/skills/demo/SKILL.md"} {
 		if !isProtectedRel(rel, protected) {
 			t.Fatalf("expected %q to be protected", rel)
 		}
 	}
-	for _, rel := range []string{"vendor/.git/config", "submodule/.codex/config.json"} {
+	for _, rel := range []string{
+		".codex/settings.json",
+		"vendor/.git/config",
+		"submodule/.agents/skills/demo/SKILL.md",
+	} {
 		if isProtectedRel(rel, protected) {
 			t.Fatalf("expected %q not to be protected", rel)
 		}

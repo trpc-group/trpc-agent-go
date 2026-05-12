@@ -21,7 +21,7 @@ import (
 )
 
 func defaultProtectedMetadata() []string {
-	return []string{".git", ".agents", ".codex", ".trpc-agent-sandbox"}
+	return []string{".git", ".agents", ".trpc-agent-sandbox"}
 }
 
 type pathDecision struct {

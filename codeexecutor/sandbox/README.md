@@ -83,8 +83,8 @@ The managed file-system boundary is designed around three rules:
 2. Reads and writes are resolved through the file-system policy. More specific
    rules win first; equally specific rules use `none > write > read`.
 3. Protected metadata paths are never writable, even if they are under a writable
-   workspace grant. The default protected set is `.git`, `.agents`, `.codex`,
-   and `.trpc-agent-sandbox`.
+   workspace grant. The default protected set is `.git`, `.agents`, and
+   `.trpc-agent-sandbox`.
 
 This boundary is not intended to hide the entire host file system by default.
 On Linux, managed execution starts with a read-only bind mount of `/`, then adds

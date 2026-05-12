@@ -305,7 +305,7 @@ func runMetadataProtection(ctx context.Context, cfg config) error {
 		return err
 	}
 	if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
-		Path:    ".codex/should-not-write",
+		Path:    ".agents/should-not-write",
 		Content: []byte("bad"),
 	}}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("file API protected metadata write was not denied: %v", err)
