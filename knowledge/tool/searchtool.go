@@ -30,6 +30,57 @@ const (
 	defaultMaxResults        = 10
 	defaultMinScore          = 0.0
 	agenticFilterPromptIntro = "You are a helpful assistant that can search for relevant information in the knowledge base."
+
+	// metadataFilterHint is appended to the tool description when no explicit
+	// agenticFilterInfo is provided. It teaches the LLM that metadata fields
+	// from search results can be used to construct filter conditions.
+	metadataFilterHint = `Each search result contains two types of filterable fields:
+
+  1. Document text — shown as "text" in results, but use field name
+     "content" when constructing filters. Use the "like" operator for
+     substring matching against the original document content.
+
+  2. "metadata.*" — structured metadata fields. Keys in results appear
+     without prefix (e.g. "source", "topic"), but when constructing
+     filters, prefix them with "metadata." (e.g. "metadata.source").
+
+You can use these field names and values from previous search results
+to construct filter conditions for more precise subsequent searches.
+
+Example — given a search result like:
+  {
+    "text": "Graph state is the core mechanism...",
+    "metadata": {"source": "docs/graph.md", "topic": "architecture"},
+    "score": 0.87
+  }
+
+  Filter by document text (use "content" as field name, not "text";
+  use %% wildcards for substring matching):
+    {"field": "content", "operator": "like", "value": "%graph state%"}
+
+  Filter by metadata (note the "metadata." prefix):
+    {"field": "metadata.topic", "operator": "eq", "value": "architecture"}
+
+  Filter by metadata (multiple values):
+    {"field": "metadata.topic", "operator": "in", "value": ["architecture", "api"]}
+
+  Combine content and metadata:
+    {"operator": "and", "value": [
+      {"field": "content", "operator": "like", "value": "%graph state%"},
+      {"field": "metadata.source", "operator": "eq", "value": "docs/graph.md"}
+    ]}
+
+Available operators:
+  eq, ne, gt, gte, lt, lte, in, not in, like, not like, between, and, or
+
+Usage modes:
+  - query + filter: use together for semantic search narrowed by metadata constraints.
+  - filter only: omit query and use filter alone for pure metadata-based retrieval.
+  - query only: omit filter for standard semantic search.
+  At least one of query or filter must be provided.
+
+Note:
+  For logical operators (and/or), use "value" to specify an array of sub-conditions.`
 )
 
 // KnowledgeSearchRequest represents the input for the knowledge search tool.
@@ -318,19 +369,17 @@ func composeAgenticToolDescription(toolDescription, filterInfo string) string {
 	toolDescription = strings.TrimSpace(toolDescription)
 	filterInfo = strings.TrimSpace(filterInfo)
 
-	switch {
-	case toolDescription == "":
-		return filterInfo
-	case filterInfo == "":
-		return toolDescription
+	base := toolDescription
+	if base == "" {
+		base = agenticFilterPromptIntro
 	}
 
 	filterAppendix := strings.TrimSpace(strings.TrimPrefix(filterInfo, agenticFilterPromptIntro))
 	if filterAppendix == "" {
-		return toolDescription
+		filterAppendix = metadataFilterHint
 	}
 
-	return fmt.Sprintf("%s\n\n== FILTER GUIDANCE ==\n\n%s", toolDescription, filterAppendix)
+	return fmt.Sprintf("%s\n\n== FILTER GUIDANCE ==\n\n%s", base, filterAppendix)
 }
 
 // applyPostProcessor runs the optional ResultPostProcessor on resp. Passing a
