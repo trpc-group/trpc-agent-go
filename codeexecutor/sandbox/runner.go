@@ -181,6 +181,8 @@ func (r *Runtime) commandForProfile(
 ) (*exec.Cmd, string, error) {
 	switch profile.Enforcement() {
 	case EnforcementDisabled:
+		// #nosec G204 -- RunProgram intentionally executes caller-provided
+		// commands when sandboxing is explicitly disabled.
 		cmd := exec.CommandContext(ctx, spec.Cmd, spec.Args...)
 		cmd.Dir = cwd
 		cmd.Env = env
