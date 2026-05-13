@@ -237,6 +237,15 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 				"bytes": []byte{9, 8, 7},
 			},
 		},
+		Rubrics: []*evalset.EvalCaseRubric{
+			{
+				MetricName:  "llm_rubric_response",
+				ID:          "case:rubric",
+				Description: "case rubric",
+				Type:        "CASE_RUBRIC",
+				Content:     &evalset.EvalCaseRubricContent{Text: "Case-specific requirement."},
+			},
+		},
 		CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1, 0).UTC()},
 	}
 
@@ -271,6 +280,9 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.SessionInput.State["bytes"].([]byte)[0] = 0
 	assert.Equal(t, byte(9), src.SessionInput.State["bytes"].([]byte)[0])
+
+	dst.Rubrics[0].Content.Text = "changed"
+	assert.Equal(t, "Case-specific requirement.", src.Rubrics[0].Content.Text)
 
 	dst.CreationTimestamp.Time = time.Unix(2, 0).UTC()
 	assert.Equal(t, time.Unix(1, 0).UTC(), src.CreationTimestamp.Time)

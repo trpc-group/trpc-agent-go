@@ -1,0 +1,75 @@
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": false,
+        "subsetMatching": false,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact"
+          }
+        },
+        "toolStrategy": {
+          "get_time": {
+            "result": {
+              "ignore": true
+            }
+          },
+          "get_ticket": {
+            "arguments": {
+              "ignoreTree": {
+                "time": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignoreTree": {
+                "time": true
+              },
+              "matchStrategy": "exact"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "metricName": "travel_answer_quality",
+    "evaluatorName": "llm_rubric_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "gpt-5.2",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 1,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 0,
+            "stream": false
+          }
+        },
+        "rubrics": [
+          {
+            "id": "global:answer-completeness",
+            "description": "The final answer addresses the travel question.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "The final answer should directly answer both parts of the user's question: what to watch out for while traveling to Shanghai and whether a ticket is still available."
+            }
+          }
+        ]
+      }
+    }
+  }
+]

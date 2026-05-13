@@ -559,7 +559,22 @@ type EvalCase struct {
 	ConversationScenario  *ConversationScenario // ConversationScenario is the dynamic user simulation scenario. In default mode it is mutually exclusive with Conversation.
 	ActualConversation    []*Invocation         // ActualConversation is the actual trace in trace mode. It is required in trace mode.
 	SessionInput          *SessionInput         // SessionInput is session initialization info, required.
+	Rubrics               []*EvalCaseRubric     // Rubrics contains case-level rubrics, optional.
 	CreationTimestamp     *epochtime.EpochTime  // CreationTimestamp is the creation timestamp, optional.
+}
+
+// EvalCaseRubric represents a rubric that applies only to one eval case.
+type EvalCaseRubric struct {
+	MetricName  string                 // MetricName identifies the metric instance this rubric augments.
+	ID          string                 // ID uniquely identifies this case-level rubric.
+	Content     *EvalCaseRubricContent // Content contains the judge-readable rubric content.
+	Description string                 // Description stores human-facing context that is not judged by default.
+	Type        string                 // Type classifies the rubric for result inspection.
+}
+
+// EvalCaseRubricContent provides judge-readable content for a case-level rubric.
+type EvalCaseRubricContent struct {
+	Text string // Text is the actual rubric instruction used by rubric evaluators.
 }
 
 // ConversationScenario represents a dynamic user simulation scenario.
@@ -1574,6 +1589,10 @@ type RubricContent struct {
 
 `rubrics` split a metric into multiple clear-granularity criteria. Each rubric should be independent and directly verifiable from user input and the final answer, which improves judge stability and makes issues easier to locate. `id` is a stable identifier, and `content.text` is the rubric text used by the judge.
 
+`EvalCase.rubrics` adds extra evaluation criteria for a single case. Each rubric targets a configured metric through `metricName`; when that case is evaluated, the framework appends those criteria after the metric's shared rubrics. This affects only the current case and leaves the metric file's global configuration unchanged.
+
+The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in rubric evaluators read the merged criteria, and custom rubric evaluators can read the same field.
+
 `template` is used only by `llm_judge_template`. It keeps template-based evaluation focused on cases where the prompt changes while the evaluation orchestration stays the same. Template evaluators do not read `rubrics`; evaluation criteria should be written directly into `template.prompt`.
 
 `template.prompt` uses double-brace template syntax such as `{{question}}` and `{{answer}}`. Every placeholder must be explicitly bound in `variableBindings`. Unbound variables, unknown variables, or binding resolution failures all result in errors.
@@ -1628,6 +1647,38 @@ Below is an example metric configuration that selects `llm_rubric_response` and 
 	}
 ]
 ```
+
+Case-level rubrics are configured directly in `EvalCase.rubrics`, for example:
+
+```json
+{
+	"evalId": "case_compound_profit",
+	"conversation": [
+		{
+			"invocationId": "case_compound_profit-1",
+			"userContent": {
+				"role": "user",
+				"content": "With a principal of 1000 dollars and a compound annual interest rate of 10%, what will the profit be after 30 years?"
+			}
+		}
+	],
+	"rubrics": [
+		{
+			"metricName": "llm_rubric_response",
+			"id": "case:compound-profit",
+			"content": {
+				"text": "For this case, the final answer must distinguish profit from total accumulated amount. A response that only gives the final amount without subtracting the original principal fails this rubric."
+			}
+		}
+	],
+	"sessionInput": {
+		"appName": "rubric-response-app",
+		"userId": "demo-user"
+	}
+}
+```
+
+Here, `metricName` selects the metric that receives the extra criterion. This example appends `case:compound-profit` to the rubrics for `llm_rubric_response`.
 
 Below is an example template metric configuration. It explicitly selects `llm_judge_template` via `evaluatorName`, while keeping `metricName` as the metric instance name in results.
 
