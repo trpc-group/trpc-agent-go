@@ -94,7 +94,13 @@ func (s *requestScopedSummarizer) ShouldSummarizeWithContext(
 	sess *session.Session,
 ) bool {
 	sum := s.summarizerFromContext(ctx)
-	return sum != nil && sum.ShouldSummarize(sess)
+	if sum == nil {
+		return false
+	}
+	if contextual, ok := sum.(summary.ContextAwareSummarizer); ok {
+		return contextual.ShouldSummarizeWithContext(ctx, sess)
+	}
+	return sum.ShouldSummarize(sess)
 }
 
 func (s *requestScopedSummarizer) Summarize(
