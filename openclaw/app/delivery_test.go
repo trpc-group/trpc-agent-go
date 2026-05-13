@@ -35,10 +35,11 @@ func TestBuildDeliveryRunOptionResolver(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, runOpts := buildDeliveryRunOptionResolver()(
+	_, runOpts, err := buildDeliveryRunOptionResolver()(
 		context.Background(),
 		gateway.RunOptionInput{Extensions: extensions},
 	)
+	require.NoError(t, err)
 	require.Len(t, runOpts, 1)
 
 	cfg := agent.RunOptions{}
@@ -56,10 +57,11 @@ func TestBuildDeliveryRunOptionResolver(t *testing.T) {
 func TestBuildDeliveryRunOptionResolverSkipsEmptyInput(t *testing.T) {
 	t.Parallel()
 
-	_, runOpts := buildDeliveryRunOptionResolver()(
+	_, runOpts, err := buildDeliveryRunOptionResolver()(
 		context.Background(),
 		gateway.RunOptionInput{},
 	)
+	require.NoError(t, err)
 	require.Nil(t, runOpts)
 }
 
@@ -68,7 +70,7 @@ func TestBuildDeliveryRunOptionResolverSkipsMalformedExtension(
 ) {
 	t.Parallel()
 
-	_, runOpts := buildDeliveryRunOptionResolver()(
+	_, runOpts, err := buildDeliveryRunOptionResolver()(
 		context.Background(),
 		gateway.RunOptionInput{
 			Extensions: map[string]json.RawMessage{
@@ -76,5 +78,6 @@ func TestBuildDeliveryRunOptionResolverSkipsMalformedExtension(
 			},
 		},
 	)
+	require.NoError(t, err)
 	require.Nil(t, runOpts)
 }

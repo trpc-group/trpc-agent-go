@@ -1564,7 +1564,7 @@ func TestServer_ProcessMessage_RunOptionResolver(t *testing.T) {
 		WithRunOptionResolver(func(
 			ctx context.Context,
 			input RunOptionInput,
-		) (context.Context, []agent.RunOption) {
+		) (context.Context, []agent.RunOption, error) {
 			require.Equal(t, "telegram", input.Inbound.Channel)
 			require.Equal(t, "u1", input.Inbound.From)
 			require.Equal(t, "msg-1", input.Inbound.MessageID)
@@ -1583,7 +1583,7 @@ func TestServer_ProcessMessage_RunOptionResolver(t *testing.T) {
 					resolverTag,
 				), []agent.RunOption{
 					agent.WithInstruction("resolver"),
-				}
+				}, nil
 		}),
 	)
 	require.NoError(t, err)
@@ -1630,8 +1630,8 @@ func TestServer_ProcessMessage_RunOptionResolver_NoExtraOptions(
 		WithRunOptionResolver(func(
 			ctx context.Context,
 			_ RunOptionInput,
-		) (context.Context, []agent.RunOption) {
-			return context.WithValue(ctx, resolverKey, "ok"), nil
+		) (context.Context, []agent.RunOption, error) {
+			return context.WithValue(ctx, resolverKey, "ok"), nil, nil
 		}),
 	)
 	require.NoError(t, err)
@@ -1653,6 +1653,34 @@ func TestServer_ProcessMessage_RunOptionResolver_NoExtraOptions(
 	require.Empty(t, runner.opts.Instruction)
 }
 
+func TestServer_ProcessMessage_RunOptionResolverError(t *testing.T) {
+	t.Parallel()
+
+	runner := &resolvingRunner{}
+	srv, err := New(
+		runner,
+		WithRunOptionResolver(func(
+			context.Context,
+			RunOptionInput,
+		) (context.Context, []agent.RunOption, error) {
+			return nil, nil, errors.New("profile denied")
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			Channel: "telegram",
+			From:    "u1",
+			Text:    "hello",
+		},
+	)
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.Contains(t, rsp.Error.Message, "profile denied")
+	require.Equal(t, 0, runner.calls)
+}
+
 func TestServer_ProcessMessage_RunOptionResolver_Composes(t *testing.T) {
 	t.Parallel()
 
@@ -1671,7 +1699,7 @@ func TestServer_ProcessMessage_RunOptionResolver_Composes(t *testing.T) {
 		WithRunOptionResolver(func(
 			ctx context.Context,
 			_ RunOptionInput,
-		) (context.Context, []agent.RunOption) {
+		) (context.Context, []agent.RunOption, error) {
 			return context.WithValue(
 					ctx,
 					firstKey,
@@ -1680,12 +1708,12 @@ func TestServer_ProcessMessage_RunOptionResolver_Composes(t *testing.T) {
 					agent.WithTraceStartedCallback(
 						func(oteltrace.SpanContext) {},
 					),
-				}
+				}, nil
 		}),
 		WithRunOptionResolver(func(
 			ctx context.Context,
 			_ RunOptionInput,
-		) (context.Context, []agent.RunOption) {
+		) (context.Context, []agent.RunOption, error) {
 			require.Equal(t, firstTag, ctx.Value(firstKey))
 			return context.WithValue(
 					ctx,
@@ -1695,7 +1723,7 @@ func TestServer_ProcessMessage_RunOptionResolver_Composes(t *testing.T) {
 					agent.WithTraceStartedCallback(
 						func(oteltrace.SpanContext) {},
 					),
-				}
+				}, nil
 		}),
 	)
 	require.NoError(t, err)
@@ -3002,6 +3030,56 @@ func TestServer_StreamMessage_RunError(t *testing.T) {
 	)
 	require.NotNil(t, events[2].Error)
 	require.Equal(t, "boom", events[2].Error.Message)
+}
+
+func TestServer_StreamMessage_RunOptionResolverError(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{}
+	srv, err := New(
+		runner,
+		WithRunOptionResolver(func(
+			context.Context,
+			RunOptionInput,
+		) (context.Context, []agent.RunOption, error) {
+			return nil, nil, errors.New("profile denied")
+		}),
+	)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 3)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunError,
+		events[2].Type,
+	)
+	require.NotNil(t, events[2].Error)
+	require.Equal(t, "profile denied", events[2].Error.Message)
+	require.Equal(t, 0, runner.Calls())
 }
 
 func TestServer_StreamMessage_ThoughtEvents(t *testing.T) {
