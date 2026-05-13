@@ -308,6 +308,11 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
+		if model.IsTokenTailoringOverflow(err) {
+			log.WarnContext(ctx, "token tailoring overflow in hunyuan.Model; using protected context", err)
+			request.Messages = tailored
+			return
+		}
 		log.WarnContext(ctx, "token tailoring failed in hunyuan.Model", "error", err)
 		return
 	}

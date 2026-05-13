@@ -11,6 +11,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"unicode/utf8"
 )
@@ -77,7 +78,31 @@ type TokenCounter interface {
 // TailoringStrategy tailors messages to fit within a token budget.
 type TailoringStrategy interface {
 	// TailorMessages reduces message list so total tokens are within maxTokens.
+	// If the smallest protected context cannot fit, it returns that best-effort
+	// context with a TokenTailoringOverflowError.
 	TailorMessages(ctx context.Context, messages []Message, maxTokens int) ([]Message, error)
+}
+
+// TokenTailoringOverflowError reports that token tailoring could only produce
+// a protected context that still exceeds the requested input budget.
+type TokenTailoringOverflowError struct {
+	Tokens    int
+	MaxTokens int
+}
+
+// Error implements the error interface.
+func (e *TokenTailoringOverflowError) Error() string {
+	return fmt.Sprintf(
+		"token tailoring overflow: minimal protected context uses %d tokens, max input tokens is %d",
+		e.Tokens,
+		e.MaxTokens,
+	)
+}
+
+// IsTokenTailoringOverflow reports whether err is a token tailoring overflow.
+func IsTokenTailoringOverflow(err error) bool {
+	var overflow *TokenTailoringOverflowError
+	return errors.As(err, &overflow)
 }
 
 // SimpleTokenCounter provides a very rough token estimation based on rune length.
@@ -369,7 +394,21 @@ func ensureTailoredWithinBudget(
 	}
 
 	preservedHead := calculatePreservedHeadCount(messages)
-	return buildMinimalSuffixCandidate(messages, preservedHead), nil
+	candidate := buildMinimalSuffixCandidate(messages, preservedHead)
+	if len(candidate) == 0 {
+		return nil, nil
+	}
+	if fitsWithinBudget(ctx, tokenCounter, candidate, maxTokens) {
+		return candidate, nil
+	}
+	tokens, err := countCandidateTokens(ctx, tokenCounter, candidate)
+	if err != nil {
+		return candidate, err
+	}
+	return candidate, &TokenTailoringOverflowError{
+		Tokens:    tokens,
+		MaxTokens: maxTokens,
+	}
 }
 
 // shouldReturnOriginal checks if the messages should be returned as is.
@@ -405,11 +444,25 @@ func fitsWithinBudget(
 	if len(messages) == 0 {
 		return false
 	}
+	if tokenCounter == nil {
+		tokenCounter = NewSimpleTokenCounter()
+	}
 	tokens, err := tokenCounter.CountTokensRange(ctx, messages, 0, len(messages))
 	if err != nil {
 		return false
 	}
 	return tokens <= maxTokens
+}
+
+func countCandidateTokens(
+	ctx context.Context,
+	tokenCounter TokenCounter,
+	messages []Message,
+) (int, error) {
+	if tokenCounter == nil {
+		tokenCounter = NewSimpleTokenCounter()
+	}
+	return tokenCounter.CountTokensRange(ctx, messages, 0, len(messages))
 }
 
 // buildMinimalSuffixCandidate builds the smallest protected context for the

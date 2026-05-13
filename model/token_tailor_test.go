@@ -1329,7 +1329,8 @@ func TestMiddleOutStrategy_PreservesSystemWhenMinimalSuffixExceedsBudget(t *test
 	strategy := NewMiddleOutStrategy(counter)
 
 	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.True(t, IsTokenTailoringOverflow(err))
 	require.GreaterOrEqual(t, len(tailored), 2)
 
 	assert.Equal(t, RoleSystem, tailored[0].Role)
@@ -1370,7 +1371,8 @@ func TestTokenTailor_DoesNotDropSystemForLargeToolResult(t *testing.T) {
 	strategy := NewMiddleOutStrategy(counter)
 
 	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.True(t, IsTokenTailoringOverflow(err))
 	require.Len(t, tailored, 4)
 
 	assert.Equal(t, RoleSystem, tailored[0].Role)
@@ -1398,7 +1400,8 @@ func TestHeadOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 
 	// Budget is less than preserved segments.
 	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.True(t, IsTokenTailoringOverflow(err))
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
@@ -1422,7 +1425,8 @@ func TestTailOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 
 	// Budget is less than preserved segments.
 	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.True(t, IsTokenTailoringOverflow(err))
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
