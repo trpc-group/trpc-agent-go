@@ -176,6 +176,8 @@ type Options struct {
 	Model model.Model
 	// Models is a map of models that can be switched by name at runtime.
 	Models map[string]model.Model
+	// ModelSelector selects the default model for each LLMAgent LLM call.
+	ModelSelector agent.ModelSelector
 	// Description is a description of the agent.
 	Description string
 	// Instruction is the instruction template for the agent.
@@ -586,6 +588,16 @@ func WithModel(model model.Model) Option {
 func WithModels(models map[string]model.Model) Option {
 	return func(opts *Options) {
 		opts.Models = models
+	}
+}
+
+// WithModelSelector sets the default model selector for this LLMAgent.
+// The selector is used only when a run-level selector or explicit run/surface
+// model override is not present. Returning nil with nil error keeps the base
+// model for the call.
+func WithModelSelector(selector agent.ModelSelector) Option {
+	return func(opts *Options) {
+		opts.ModelSelector = selector
 	}
 }
 
