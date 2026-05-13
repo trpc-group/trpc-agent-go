@@ -91,16 +91,26 @@ func (r *RLM) makeExecuteCode(repl *REPL) func(context.Context, executeCodeArgs)
 	return func(_ context.Context, args executeCodeArgs) (executeCodeResult, error) {
 		execCount++
 		result := repl.Execute(args.Code)
+		dumpCode(r.agentID, execCount, args.Code, result.Stdout, result.Stderr)
 		res := executeCodeResult{
-			Stdout: result.Stdout,
-			Stderr: result.Stderr,
+			Stdout: limitToolOutput("stdout", result.Stdout),
+			Stderr: limitToolOutput("stderr", result.Stderr),
 		}
 		if result.FinalAnswer != "" {
 			res.Stdout += "\n[FINAL answer set via REPL]"
 		}
-		dumpCode(r.agentID, execCount, args.Code, res.Stdout, res.Stderr)
 		return res, nil
 	}
+}
+
+func limitToolOutput(name, s string) string {
+	if len(s) <= MaxToolOutputChars {
+		return s
+	}
+	return s[:MaxToolOutputChars] + fmt.Sprintf(
+		"\n\n[TRUNCATED: %s was %d chars, returned first %d chars. "+
+			"Run another execute_code call with a smaller slice or summary.]",
+		name, len(s), MaxToolOutputChars)
 }
 
 type finalAnswerArgs struct {

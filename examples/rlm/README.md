@@ -28,7 +28,7 @@ Key properties:
 - **Symbolic Recursion** — `rlm_query()` spawns child agents on sub-contexts
 - **Parallel Execution** — `rlm_query_batched()` / `llm_query_batched()` for concurrent processing
 - **Rate Limiting** — token-bucket rate limiter prevents upstream API overload
-- **MaxFanOut = 10** — prevents excessive sub-agent spawning per batch
+- **Guardrails** — limits sub-agent fan-out, direct LLM prompt size, and tool output size
 
 ## Prerequisites
 
@@ -60,7 +60,7 @@ go run ./simple/ 2>rlm-run.log
 
 The example automatically:
 1. Clones [EbookFoundation/free-programming-books](https://github.com/EbookFoundation/free-programming-books) (shallow, ~5s)
-2. Collects all `*.md` files (~1.4 MB, 120+ files)
+2. Collects all `*.md` files (currently ~2.2 MB, 200+ files)
 3. Runs RLM analysis: "Identify all outdated or deprecated content"
 
 ## CLI Flags
@@ -97,6 +97,15 @@ Available inside `execute_code`:
 | `rlm_query_batched(queries, contexts)` | Spawn parallel child agents (max 10) |
 | `print(...)` | Output to observation |
 
+### Runtime Guardrails
+
+| Limit | Value | Behavior |
+|-------|-------|----------|
+| Tool output returned to LLM | 8 KiB per stdout/stderr stream | Output is truncated with an explicit notice; full output remains in `rlm-code-dump.log` |
+| Direct `llm_query` prompt | 30,000 chars | Oversized prompts return an error asking the agent to split the text |
+| Child RLM context | 60,000 chars | Oversized child contexts return an error asking the agent to split the context |
+| RLM batch fan-out | 10 child agents | Larger batches return an error asking the agent to split the batch |
+
 ## Output Files
 
 After a run, two log files are generated in the working directory:
@@ -107,10 +116,10 @@ After a run, two log files are generated in the working directory:
 ## Performance Notes
 
 - **20 QPM default** matches common API rate limits; adjust with `--qpm`
-- **HTTP timeout = 30 min** per sub-agent call (deep recursion can take 10+ min)
+- **Model call timeout = 2 min** per LLM request; recursive HTTP calls can wait up to 30 min
 - **Burst = 3** initial tokens to avoid cold-start stampede
 - **Exponential backoff** on 429 errors (5s → 10s → 20s → 40s → 60s)
-- For a 1.4 MB document, expect ~15-20 minutes with 20 QPM
+- For a multi-MB document, expect tens of minutes with 20 QPM depending on model behavior and recursion fan-out
 
 ## Example Output
 
@@ -122,7 +131,7 @@ Recursive Language Model (RLM)
 Model: deepseek-v3
 Max Depth: 5
 Rate Limit: 20 QPM
-Context: 1405839 chars, 22856 lines
+Context: 2255996 chars, 32975 lines
 Query: Identify all outdated or deprecated content...
 ==================================================
 

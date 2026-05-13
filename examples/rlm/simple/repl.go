@@ -120,6 +120,12 @@ func (r *REPL) builtinLLMQuery(_ *starlark.Thread, fn *starlark.Builtin, args st
 	if err := starlark.UnpackPositionalArgs(fn.Name(), args, kwargs, 1, &prompt); err != nil {
 		return starlark.None, err
 	}
+	if len(prompt) > MaxLLMPromptChars {
+		return starlark.String(fmt.Sprintf(
+			"Error: llm_query prompt is %d chars, exceeds max %d chars. "+
+				"Split the text into smaller chunks and call llm_query_batched or pass chunks to child RLM agents.",
+			len(prompt), MaxLLMPromptChars)), nil
+	}
 	resp, err := r.callLLM(prompt)
 	if err != nil {
 		return starlark.String(fmt.Sprintf("Error: %v", err)), nil
@@ -156,6 +162,12 @@ func (r *REPL) builtinRLMQuery(_ *starlark.Thread, fn *starlark.Builtin, args st
 		"boundary?", &boundary, "stop_condition?", &stopCondition,
 	); err != nil {
 		return starlark.None, err
+	}
+	if len(subContext) > MaxChildContextChars {
+		return starlark.String(fmt.Sprintf(
+			"Error: child RLM context is %d chars, exceeds max %d chars. "+
+				"Split the context into smaller chunks before calling rlm_query.",
+			len(subContext), MaxChildContextChars)), nil
 	}
 	resp, err := r.callRLM(query, subContext, boundary, stopCondition)
 	if err != nil {
@@ -256,6 +268,15 @@ func (r *REPL) batchCallLLM(prompts []string) []string {
 		wg.Add(1)
 		go func(idx int, prompt string) {
 			defer wg.Done()
+			if len(prompt) > MaxLLMPromptChars {
+				results[idx] = fmt.Sprintf(
+					"Error: llm_query prompt is %d chars, exceeds max %d chars. "+
+						"Split the text into smaller chunks.",
+					len(prompt), MaxLLMPromptChars)
+				log.Printf("[REPL depth=%d] llm_batch[%d/%d] REJECTED prompt=%d chars max=%d",
+					r.depth, idx+1, len(prompts), len(prompt), MaxLLMPromptChars)
+				return
+			}
 			resp, err := r.callLLM(prompt)
 			if err != nil {
 				results[idx] = fmt.Sprintf("Error: %v", err)
@@ -290,6 +311,15 @@ func (r *REPL) batchCallRLM(queries, contexts []string, boundary, stopCondition 
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
+			if len(contexts[idx]) > MaxChildContextChars {
+				results[idx] = fmt.Sprintf(
+					"Error: child RLM context is %d chars, exceeds max %d chars. "+
+						"Split the context into smaller chunks.",
+					len(contexts[idx]), MaxChildContextChars)
+				log.Printf("[REPL depth=%d] rlm_batch[%d/%d] REJECTED context=%d chars max=%d",
+					r.depth, idx+1, len(queries), len(contexts[idx]), MaxChildContextChars)
+				return
+			}
 			subStart := time.Now()
 			resp, err := r.callRLM(queries[idx], contexts[idx], boundary, stopCondition)
 			if err != nil {

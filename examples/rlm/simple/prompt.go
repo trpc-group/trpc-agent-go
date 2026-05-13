@@ -15,6 +15,15 @@ import "fmt"
 // Enforced both in the prompt (guidance) and in code (batchCallRLM rejects excess).
 const MaxFanOut = 10
 
+// MaxToolOutputChars limits how much REPL stdout/stderr is returned to the LLM.
+const MaxToolOutputChars = 8 * 1024
+
+// MaxLLMPromptChars limits direct llm_query prompts.
+const MaxLLMPromptChars = 30000
+
+// MaxChildContextChars limits context passed to a child RLM agent.
+const MaxChildContextChars = 60000
+
 // BuildSystemPrompt generates the system prompt for an RLM agent.
 // All agents (root or child, any depth) share the same prompt structure.
 // The LLM decides its own decomposition strategy based on context size and content.
@@ -42,13 +51,19 @@ STARLARK NOTES (the REPL language):
 }
 
 func buildToolSection(canRecurse bool) string {
-	base := `
+	base := fmt.Sprintf(`
 YOUR TOOLS:
 1. execute_code — Run Starlark code in the REPL. The REPL has these builtins:
    • context                         — the full context string (your data)
    • llm_query(prompt)               — call LLM once, returns string
    • llm_query_batched(prompt_list)   — call LLM in PARALLEL, returns list of strings
-   • print(...)                      — output to stdout (visible in tool result)`
+   • print(...)                      — output to stdout (visible in tool result)
+
+OUTPUT LIMITS:
+- Do NOT print more than %d characters in one execute_code call. Inspect small slices.
+- llm_query prompts must be <= %d characters. Split larger text and use llm_query_batched.
+- Child RLM contexts must be <= %d characters. Split larger context before rlm_query.
+`, MaxToolOutputChars, MaxLLMPromptChars, MaxChildContextChars)
 
 	if canRecurse {
 		base += fmt.Sprintf(`
@@ -102,7 +117,7 @@ You should decompose it. Here is the general approach:
 Key rules:
 - rlm_query_batched() accepts at most %d sub-agents per call.
   If you need more, make multiple batched calls sequentially.
-- Do NOT send the full context to llm_query() — it will be silently truncated.
+- Do NOT send the full context to llm_query(); prompts over the limit are rejected.
 - Let children handle their own chunks; do not try to analyze everything yourself.
 `, MaxFanOut, MaxFanOut)
 	} else if canRecurse && contextLen > 30000 {

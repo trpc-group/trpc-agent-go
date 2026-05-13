@@ -42,8 +42,8 @@ import (
 )
 
 const (
-	repoURL     = "https://github.com/EbookFoundation/free-programming-books"
-	globPattern = "*.md"
+	repoURL      = "https://github.com/EbookFoundation/free-programming-books"
+	globPattern  = "*.md"
 	defaultQuery = "Identify all outdated or deprecated content in this document that is no longer " +
 		"recommended in the current technology landscape. For each finding, state what it is, " +
 		"why it is outdated, and what the modern alternative is."

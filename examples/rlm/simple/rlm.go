@@ -34,6 +34,8 @@ type RLM struct {
 	rootQuery   string
 }
 
+const modelCallTimeout = 2 * time.Minute
+
 // Run executes the ReAct agent loop driven by tool calling.
 func (r *RLM) Run(ctx context.Context, query, promptContext, boundary, stopCondition string) (string, error) {
 	repl := NewREPL(promptContext, r.serviceAddr, r.depth, r.rootQuery)
@@ -133,6 +135,9 @@ func (r *RLM) executeTool(ctx context.Context, toolMap map[string]tool.Tool, tc 
 }
 
 func generateSync(ctx context.Context, llm model.Model, messages []model.Message, tools map[string]tool.Tool) (*model.Response, error) {
+	ctx, cancel := context.WithTimeout(ctx, modelCallTimeout)
+	defer cancel()
+
 	req := &model.Request{
 		Messages: messages,
 		Tools:    tools,
