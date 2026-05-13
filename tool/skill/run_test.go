@@ -2848,6 +2848,7 @@ func TestRunTool_StagesUserFileInputs_DedupesAllMetadataInputs(t *testing.T) {
 
 	args1 := runInput{
 		Skill:   testSkillName,
+		Cwd:     "/",
 		Command: "cat work/inputs/" + uploadNotesTxt + " > " + outATxt,
 		Inputs: []codeexecutor.InputSpec{
 			{
@@ -2883,6 +2884,7 @@ func TestRunTool_StagesUserFileInputs_DedupesAllMetadataInputs(t *testing.T) {
 	}, " ")
 	args2 := runInput{
 		Skill:       testSkillName,
+		Cwd:         "/",
 		Command:     cmd2,
 		OutputFiles: []string{outBTxt},
 		Timeout:     timeoutSecSmall,
