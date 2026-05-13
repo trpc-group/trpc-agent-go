@@ -36,22 +36,6 @@ const (
 	ProfileExternal PermissionProfileType = "external"
 )
 
-// NetworkMode describes network access.
-type NetworkMode string
-
-const (
-	// NetworkRestricted blocks outbound networking when the backend can enforce
-	// it. Linux v1 uses an isolated network namespace.
-	NetworkRestricted NetworkMode = "restricted"
-	// NetworkEnabled allows the command to use the host network.
-	NetworkEnabled NetworkMode = "enabled"
-)
-
-// NetworkPolicy describes network access for a profile.
-type NetworkPolicy struct {
-	Mode NetworkMode
-}
-
 // PermissionProfile is the public sandbox permission model. It intentionally
 // owns both filesystem and network policy so callers cannot request contradictory
 // combinations such as read-only + disabled enforcement.
