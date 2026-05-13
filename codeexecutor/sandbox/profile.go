@@ -7,13 +7,9 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package sandbox provides an OS-level sandbox code executor.
 package sandbox
 
-import (
-	"context"
-	"time"
-)
+import "context"
 
 // Enforcement is the internal execution mode derived from PermissionProfile.
 type Enforcement string
@@ -54,68 +50,6 @@ const (
 // NetworkPolicy describes network access for a profile.
 type NetworkPolicy struct {
 	Mode NetworkMode
-}
-
-// FileSystemAccess describes a filesystem rule's access mode.
-type FileSystemAccess string
-
-const (
-	// AccessRead grants read-only access.
-	AccessRead FileSystemAccess = "read"
-	// AccessWrite grants read and write access.
-	AccessWrite FileSystemAccess = "write"
-	// AccessNone denies both reads and writes.
-	AccessNone FileSystemAccess = "none"
-)
-
-// FileSystemRuleKind describes how a filesystem rule target is interpreted.
-type FileSystemRuleKind string
-
-const (
-	// RulePath targets a concrete path. Relative paths are workspace-relative;
-	// absolute paths are host paths.
-	RulePath FileSystemRuleKind = "path"
-	// RuleSpecial targets a well-known sandbox path.
-	RuleSpecial FileSystemRuleKind = "special"
-	// RuleGlob targets a workspace-relative glob.
-	RuleGlob FileSystemRuleKind = "glob"
-)
-
-// SpecialPath identifies well-known session-scoped directories.
-type SpecialPath string
-
-const (
-	// SpecialRoot matches the whole sandbox workspace.
-	SpecialRoot SpecialPath = "root"
-	// SpecialWorkspace matches the session workspace directory.
-	SpecialWorkspace SpecialPath = "workspace"
-	// SpecialWork matches the workspace work directory.
-	SpecialWork SpecialPath = "work"
-	// SpecialHome matches the workspace home directory.
-	SpecialHome SpecialPath = "home"
-	// SpecialTmp matches the workspace tmp directory.
-	SpecialTmp SpecialPath = "tmp"
-	// SpecialRuns matches the workspace runs directory.
-	SpecialRuns SpecialPath = "runs"
-	// SpecialOut matches the workspace output directory.
-	SpecialOut SpecialPath = "out"
-	// SpecialSkills matches the workspace skills directory.
-	SpecialSkills SpecialPath = "skills"
-)
-
-// FileSystemRule declares one filesystem access rule.
-type FileSystemRule struct {
-	Kind    FileSystemRuleKind
-	Access  FileSystemAccess
-	Path    string
-	Special SpecialPath
-	Glob    string
-}
-
-// FileSystemPolicy is the filesystem portion of a PermissionProfile.
-type FileSystemPolicy struct {
-	Rules             []FileSystemRule
-	ProtectedMetadata []string
 }
 
 // PermissionProfile is the public sandbox permission model. It intentionally
@@ -280,98 +214,4 @@ func applyAdditionalPermissions(p PermissionProfile, add AdditionalPermissions) 
 		p.Network = *add.Network
 	}
 	return p
-}
-
-// SessionPolicy controls sandbox session lifecycle.
-type SessionPolicy struct {
-	PersistFilesAcrossTurns bool
-	MutatingCommandsSerial  bool
-}
-
-// ShellEnvironmentPolicyInherit controls which host environment variables are
-// visible before filters, overrides, per-run env, and sandbox runtime variables
-// are applied.
-type ShellEnvironmentPolicyInherit string
-
-const (
-	// ShellEnvironmentPolicyInheritAll inherits the full host environment by
-	// default, matching Codex shell behavior. Use Core or None for stricter
-	// sandbox deployments.
-	ShellEnvironmentPolicyInheritAll ShellEnvironmentPolicyInherit = "all"
-	// ShellEnvironmentPolicyInheritCore includes only shell startup variables
-	// such as PATH, HOME, locale, user, and temporary-directory variables.
-	ShellEnvironmentPolicyInheritCore ShellEnvironmentPolicyInherit = "core"
-	// ShellEnvironmentPolicyInheritNone starts from an empty caller-controlled
-	// environment.
-	ShellEnvironmentPolicyInheritNone ShellEnvironmentPolicyInherit = "none"
-)
-
-// ShellEnvironmentPolicy controls the caller-controlled environment for shell
-// commands. Resolution follows Codex semantics: inherit, optional default
-// secret-name excludes, custom excludes, set overrides, per-run env overlays,
-// final IncludeOnly allow-list, then sandbox-owned runtime variables.
-type ShellEnvironmentPolicy struct {
-	Inherit              ShellEnvironmentPolicyInherit
-	ApplyDefaultExcludes bool
-	Exclude              []string
-	Set                  map[string]string
-	IncludeOnly          []string
-}
-
-// BackendType selects the OS sandbox backend.
-type BackendType string
-
-const (
-	// BackendAuto selects the native backend for the current platform.
-	BackendAuto BackendType = "auto"
-	// BackendLinuxBubblewrap uses bubblewrap on Linux.
-	BackendLinuxBubblewrap BackendType = "linux-bubblewrap"
-)
-
-// BackendCapabilities reports backend support above the generic engine
-// capabilities exposed by codeexecutor.Engine.
-type BackendCapabilities struct {
-	OSSandbox          bool
-	PTY                bool
-	Stdin              bool
-	NetworkIsolation   bool
-	DenyReadGlob       bool
-	Snapshot           bool
-	Ports              bool
-	ExternalPathGrants bool
-	ProtectedPathMasks bool
-	PerCommandGrants   bool
-}
-
-// AuditRecord is a small execution audit payload suitable for structured logs.
-// It deliberately excludes secrets and full environment values.
-type AuditRecord struct {
-	Backend     BackendType
-	SandboxType Enforcement
-	SessionID   string
-	PolicyID    string
-	Cwd         string
-	ExitCode    int
-	Duration    time.Duration
-	TimedOut    bool
-	StdoutCut   bool
-	StderrCut   bool
-}
-
-// Manifest describes the initial sandbox session state v1 can materialize.
-// It is intentionally append-only during CreateWorkspace: existing files are
-// left in place so live sessions are not silently rewritten.
-type Manifest struct {
-	Files           []ManifestFile
-	Environment     map[string]string
-	ExtraReadPaths  []string
-	ExtraWritePaths []string
-	EphemeralPaths  []string
-}
-
-// ManifestFile is a workspace-relative file in a sandbox manifest.
-type ManifestFile struct {
-	Path    string
-	Content []byte
-	Mode    uint32
 }
