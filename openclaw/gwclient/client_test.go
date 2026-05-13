@@ -606,6 +606,7 @@ func TestClient_StreamMessageWithOptions_EnablesGatewayProgressAfterDelta(
 	)
 	require.Equal(t, "Running local tool", events[3].Summary)
 	require.Equal(t, "demo_tool", events[3].ToolName)
+	require.Empty(t, events[3].ToolDetail)
 	require.Equal(t, "call-demo", events[3].ToolCallID)
 	require.Equal(t, gwproto.StreamToolStatusRunning, events[3].ToolStatus)
 	require.Equal(
@@ -839,6 +840,7 @@ func TestParseSSEStream_EventFallbackAndErrors(t *testing.T) {
 			"event: run.progress\n"+
 				"data: {\"summary\":\"Preparing\","+
 				"\"tool_name\":\"kb_search\","+
+				"\"tool_detail\":\"query docs\","+
 				"\"tool_call_id\":\"call-1\","+
 				"\"tool_status\":\"running\"}\n\n",
 		),
@@ -848,6 +850,7 @@ func TestParseSSEStream_EventFallbackAndErrors(t *testing.T) {
 	evt := <-out
 	require.Equal(t, gwproto.StreamEventTypeRunProgress, evt.Type)
 	require.Equal(t, "kb_search", evt.ToolName)
+	require.Equal(t, "query docs", evt.ToolDetail)
 	require.Equal(t, "call-1", evt.ToolCallID)
 	require.Equal(t, gwproto.StreamToolStatusRunning, evt.ToolStatus)
 
