@@ -180,6 +180,61 @@ func TestExecuteSingleToolCallSequential_DisableTracingSkipsSpanCreation(t *test
 	require.Empty(t, recorder.Ended())
 }
 
+func TestExecuteSingleToolCallSequential_AddsToolCallArgsExtension(t *testing.T) {
+	const (
+		originalArgs = `{"action":"query"}`
+		modifiedArgs = `{"action":"set"}`
+	)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(modifiedArgs),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	invocation := agent.NewInvocation()
+	invocation.AgentName = "test-agent"
+	response := &model.Response{Model: "mock-model"}
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "gametime",
+			Arguments: []byte(originalArgs),
+		},
+	}
+	tools := map[string]tool.Tool{
+		"gametime": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "gametime"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				require.Equal(t, modifiedArgs, string(args))
+				return "ok", nil
+			},
+		},
+	}
+
+	toolEvent, err := p.executeSingleToolCallSequential(
+		context.Background(),
+		invocation,
+		response,
+		tools,
+		nil,
+		0,
+		toolCall,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, toolEvent)
+	argsByID, ok, err := event.GetExtension[map[string]string](
+		toolEvent,
+		event.ToolCallArgsExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, modifiedArgs, argsByID["call-1"])
+}
+
 func TestExecuteToolCallsInParallel_DisableTracingSkipsSpanCreation(t *testing.T) {
 	recorder := useSpanRecorder(t)
 	p := NewFunctionCallResponseProcessor(true, nil)
@@ -3423,6 +3478,123 @@ func TestRunParallelToolCall_LongRunningToolNoImmediateResult(t *testing.T) {
 	assert.NoError(t, res.err)
 }
 
+func TestRunParallelToolCall_PanicUsesModifiedArgsExtension(t *testing.T) {
+	const (
+		originalArgs = `{"action":"query"}`
+		modifiedArgs = `{"action":"set"}`
+	)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(modifiedArgs),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(true, callbacks)
+	tools := map[string]tool.Tool{
+		"panic": &mockTool{name: "panic", shouldPanic: true},
+	}
+	tc := model.ToolCall{
+		ID: "call-panic",
+		Function: model.FunctionDefinitionParam{
+			Name:      "panic",
+			Arguments: []byte(originalArgs),
+		},
+	}
+	inv := &agent.Invocation{AgentName: "panic-agent"}
+	llmResp := &model.Response{Model: "mock"}
+	resultChan := make(chan toolResult, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	p.runParallelToolCall(
+		context.Background(),
+		&wg,
+		inv,
+		llmResp,
+		tools,
+		nil,
+		resultChan,
+		0,
+		tc,
+	)
+	wg.Wait()
+	close(resultChan)
+
+	res, ok := <-resultChan
+	require.True(t, ok)
+	require.NotNil(t, res.event)
+	argsByID, found, err := event.GetExtension[map[string]string](
+		res.event,
+		event.ToolCallArgsExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, modifiedArgs, argsByID["call-panic"])
+}
+
+func TestHandleFunctionCalls_ParallelLongRunningNilResultUsesModifiedArgs(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(fmt.Sprintf(
+				`{"call_id":%q,"action":"set"}`,
+				args.ToolCallID,
+			)),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(true, callbacks)
+	tools := map[string]tool.Tool{
+		"long-a": &mockNilLongRunningTool{name: "long-a"},
+		"long-b": &mockNilLongRunningTool{name: "long-b"},
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID: "call-a",
+			Function: model.FunctionDefinitionParam{
+				Name:      "long-a",
+				Arguments: []byte(`{"action":"query"}`),
+			},
+		},
+		{
+			ID: "call-b",
+			Function: model.FunctionDefinitionParam{
+				Name:      "long-b",
+				Arguments: []byte(`{"action":"query"}`),
+			},
+		},
+	}
+	llmResp := &model.Response{Model: "mock", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: toolCalls},
+	}}}
+	inv := &agent.Invocation{InvocationID: "inv-long", AgentName: "agent"}
+
+	ev, err := p.handleFunctionCalls(
+		context.Background(),
+		inv,
+		llmResp,
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	argsByID, found, err := event.GetExtension[map[string]string](
+		ev,
+		event.ToolCallArgsExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, `{"call_id":"call-a","action":"set"}`, argsByID["call-a"])
+	require.Equal(t, `{"call_id":"call-b","action":"set"}`, argsByID["call-b"])
+}
+
 func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 	ctx := context.Background()
 	p := NewFunctionCallResponseProcessor(false, nil)
@@ -4950,6 +5122,33 @@ func TestMergeParallelToolCallResponseEvents_MergesStateDelta(t *testing.T) {
 	require.NotNil(t, merged)
 	require.Equal(t, []byte("override"), merged.StateDelta["k1"])
 	require.Equal(t, []byte("v2"), merged.StateDelta["k2"])
+}
+
+func TestMergeParallelToolCallResponseEvents_MergesToolCallArgs(t *testing.T) {
+	e1 := event.New("inv1", "author", event.WithResponse(&model.Response{Model: "m"}))
+	require.NoError(t, event.SetExtension(
+		e1,
+		event.ToolCallArgsExtensionKey,
+		map[string]string{"call-1": `{"action":"query"}`},
+	))
+
+	e2 := event.New("inv2", "author", event.WithResponse(&model.Response{Model: "m"}))
+	require.NoError(t, event.SetExtension(
+		e2,
+		event.ToolCallArgsExtensionKey,
+		map[string]string{"call-2": `{"action":"set"}`},
+	))
+
+	merged := mergeParallelToolCallResponseEvents([]*event.Event{e1, e2})
+	require.NotNil(t, merged)
+	argsByID, ok, err := event.GetExtension[map[string]string](
+		merged,
+		event.ToolCallArgsExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, `{"action":"query"}`, argsByID["call-1"])
+	require.Equal(t, `{"action":"set"}`, argsByID["call-2"])
 }
 
 func TestMergeParallelToolCallResponseEvents_FallbackWithoutBaseEvent(t *testing.T) {
