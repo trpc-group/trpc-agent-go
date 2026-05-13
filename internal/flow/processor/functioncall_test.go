@@ -17,7 +17,6 @@ import (
 	"io"
 	"math"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -2411,10 +2410,10 @@ func TestRunParallelToolCall_LongRunningToolNoImmediateResult(t *testing.T) {
 	resultChan := make(chan toolResult, 1)
 	eventChan := make(chan *event.Event, 1)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	p.runParallelToolCall(ctx, &wg, inv, llmResp, tools, eventChan, resultChan, 0, tc)
-	wg.Wait()
+	// runParallelToolCall returns nil for non-cancelling outcomes (including
+	// recovered panics and ignorable errors). Critical errors return a
+	// non-nil error so the errgroup cancels siblings.
+	require.NoError(t, p.runParallelToolCall(ctx, inv, llmResp, tools, eventChan, resultChan, 0, tc))
 	close(resultChan)
 
 	res, ok := <-resultChan
@@ -5214,7 +5213,108 @@ func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	cancel()
 	res, err := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
 	require.NotNil(t, res)
-	require.NoError(t, err)
+	// When the parent ctx is cancelled before any result arrives, the
+	// collector now surfaces ctx.Err() instead of a silent nil so callers
+	// can distinguish "cancelled mid-flight" from "all tools completed".
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// mockStopTool is a callable tool that returns an agent.StopError on its
+// first invocation. Stop errors are the canonical "critical, non-ignorable"
+// failure that should fan out and cancel sibling tool calls in the new
+// errgroup-based parallel dispatch.
+type mockStopTool struct {
+	name string
+}
+
+func (m *mockStopTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        m.name,
+		Description: "Mock tool that returns a StopError",
+	}
+}
+
+func (m *mockStopTool) Call(_ context.Context, _ []byte) (any, error) {
+	return nil, agent.NewStopError("mock stop error")
+}
+
+// TestExecuteToolCallsInParallel_ErrgroupCancelsSiblings verifies the
+// fail-fast semantics introduced when parallel tool dispatch moved from
+// raw goroutines to errgroup.WithContext: when one sibling returns a
+// non-ignorable (StopError) failure, the group ctx is cancelled and a
+// slow-but-cancellable sibling observes ctx.Done() and aborts instead of
+// running to completion. This is what keeps the agent budget from being
+// burned on work whose result will never be consumed.
+func TestExecuteToolCallsInParallel_ErrgroupCancelsSiblings(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(true, nil)
+
+	const slowDelay = 1500 * time.Millisecond
+
+	// Slow tool blocks until ctx is done or the delay elapses, returning
+	// ctx.Err() on cancel.
+	slow := &mockTool{
+		name:   "slow",
+		delay:  slowDelay,
+		result: "slow-ok",
+	}
+	// Stop tool returns an immediate StopError — this is the critical
+	// (non-ignorable) failure that should cancel siblings.
+	stopper := &mockStopTool{name: "stopper"}
+
+	tools := map[string]tool.Tool{
+		"slow":    slow,
+		"stopper": stopper,
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID:       "call-slow",
+			Function: model.FunctionDefinitionParam{Name: "slow", Arguments: []byte(`{}`)},
+		},
+		{
+			ID:       "call-stopper",
+			Function: model.FunctionDefinitionParam{Name: "stopper", Arguments: []byte(`{}`)},
+		},
+	}
+	llmResp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:      model.RoleAssistant,
+				ToolCalls: toolCalls,
+			},
+		}},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-errgroup"),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "errgroup-test"}),
+	)
+	eventChan := make(chan *event.Event, 8)
+
+	// Drain eventChan in the background so writes never block the dispatch.
+	doneDrain := make(chan struct{})
+	go func() {
+		defer close(doneDrain)
+		for range eventChan {
+		}
+	}()
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := p.executeToolCallsInParallel(ctx, inv, llmResp, toolCalls, tools, eventChan)
+	elapsed := time.Since(start)
+	close(eventChan)
+	<-doneDrain
+
+	// The stopper's critical error must surface as the group error.
+	require.Error(t, err, "expected the critical sibling error to be returned")
+	_, isStop := agent.AsStopError(err)
+	require.True(t, isStop, "expected a StopError to surface, got %v", err)
+
+	// The slow tool must have been cancelled — we should be well under its
+	// natural delay. Generous margin avoids CI flakes while still proving
+	// the slow tool didn't run to completion.
+	require.Less(t, elapsed, slowDelay/2,
+		"slow sibling should have been cancelled by errgroup; elapsed=%v", elapsed)
 }
 
 func TestConvertToolArguments_DefaultMessageAndSetter(t *testing.T) {

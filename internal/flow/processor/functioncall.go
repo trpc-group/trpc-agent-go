@@ -15,10 +15,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -499,6 +499,17 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 
 // executeToolCallsInParallel runs multiple tool calls concurrently and merges
 // their results into a single event.
+//
+// Concurrency model: each tool call is dispatched on its own goroutine via an
+// [errgroup.Group]. The group ctx is derived from the parent ctx so that a
+// parent-side cancellation (e.g. agent timeout) cancels every sibling
+// immediately. When a sibling reports a *critical* (non-ignorable) tool
+// execution error, the group ctx is also cancelled and the remaining
+// siblings observe `ctx.Done()` and stop early instead of burning compute on
+// work whose result will never be consumed. Panics inside a tool execution
+// are recovered locally and surfaced as a tool error in the merged response;
+// they do NOT cancel sibling goroutines. Normal tool errors that callbacks
+// flag as "ignorable" are likewise non-cancelling.
 func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -508,26 +519,43 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
 	resultChan := make(chan toolResult, len(toolCalls))
-	var wg sync.WaitGroup
 
+	g, gctx := errgroup.WithContext(ctx)
 	for i, tc := range toolCalls {
-		wg.Add(1)
-		runCtx := agent.CloneContext(ctx)
-		go p.runParallelToolCall(
-			runCtx, &wg, invocation, llmResponse, tools, eventChan, resultChan, i, tc,
-		)
+		i, tc := i, tc
+		g.Go(func() error {
+			runCtx := agent.CloneContext(gctx)
+			return p.runParallelToolCall(
+				runCtx, invocation, llmResponse, tools, eventChan, resultChan, i, tc,
+			)
+		})
 	}
 
-	done := make(chan struct{})
+	// Wait for all siblings to finish in a separate goroutine so the
+	// collector can drain results as they arrive. Closing resultChan is
+	// what signals "no more results" to collectParallelToolResults.
+	// errgroup.Wait is safe to call multiple times — it returns the same
+	// stored error — so racing with the post-collect Wait below is OK.
 	go func() {
-		wg.Wait()
+		_ = g.Wait()
 		close(resultChan)
-		close(done)
 	}()
 
-	toolResults, err := p.collectParallelToolResults(
+	// Drain results in arrival order, preserving slot index. Use the
+	// parent ctx (not gctx) here: gctx is cancelled automatically when
+	// errgroup.Wait returns, so reading on gctx would race with the normal
+	// "all siblings done, channel closed" path and falsely report a
+	// cancellation on every successful run. The parent ctx is the right
+	// signal for "the caller has abandoned this work".
+	toolResults, drainErr := p.collectParallelToolResults(
 		ctx, resultChan, len(toolCalls),
 	)
+
+	// Read the first critical sibling error from the group; prefer it over
+	// the collector's view because it carries the causal failure (the
+	// collector typically just sees ctx.Done()).
+	err := firstNonNilErr(g.Wait(), drainErr)
+
 	if len(toolResults) == 0 &&
 		invocation != nil &&
 		invocation.RunOptions.ToolExecutionFilter != nil {
@@ -549,10 +577,28 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	return mergedEvent, err
 }
 
+// firstNonNilErr returns the first non-nil error from its arguments, in
+// order. Used to prefer the group-level critical error (which carries the
+// causal failure) over a derived collector error.
+func firstNonNilErr(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
 // runParallelToolCall executes one tool call and reports the result.
+//
+// The returned error is non-nil only when the failure is critical enough
+// that sibling goroutines should be cancelled — i.e. the underlying call
+// returned a non-ignorable error. All other outcomes — successes, ignorable
+// errors, and recovered panics — return nil so the errgroup keeps remaining
+// siblings running. The same "critical" classification is also propagated
+// through toolResult.err so it flows into the merged event as before.
 func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	ctx context.Context,
-	wg *sync.WaitGroup,
 	invocation *agent.Invocation,
 	llmResponse *model.Response,
 	tools map[string]tool.Tool,
@@ -560,9 +606,9 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	resultChan chan<- toolResult,
 	index int,
 	tc model.ToolCall,
-) {
-	defer wg.Done()
-	// Recover from panics to avoid breaking sibling goroutines.
+) (rerr error) {
+	// Recover from panics to avoid breaking sibling goroutines. Panics are
+	// surfaced as a tool error in the merged response (no sibling cancel).
 	defer func() {
 		if r := recover(); r != nil {
 			log.ErrorfContext(
@@ -585,6 +631,8 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 				errorEvent.Tag = event.TransferTag
 			}
 			p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent})
+			// Recovered panic — do NOT cancel siblings.
+			rerr = nil
 		}
 	}()
 	// Trace the tool execution for observability.
@@ -633,7 +681,9 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			returnErr = err
 		}
 		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: returnErr})
-		return
+		// Return the critical error so the errgroup cancels siblings.
+		// Ignorable errors return nil here and travel only via toolResult.err.
+		return returnErr
 	}
 
 	// No error and at least one choice means we have tool result messages.
@@ -648,7 +698,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	)
 	if toolCallResponseEvent == nil {
 		p.sendToolResult(ctx, resultChan, toolResult{index: index})
-		return
+		return nil
 	}
 	// Include declaration for telemetry even when tool is missing.
 	decl := p.lookupDeclaration(tools, tc.Function.Name)
@@ -694,6 +744,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			stateDelta: stateDelta,
 		},
 	)
+	return nil
 }
 
 func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
@@ -1236,7 +1287,9 @@ func (p *FunctionCallResponseProcessor) createErrorChoice(index int, toolID stri
 }
 
 // collectParallelToolResults drains resultChan and preserves order by index.
-// It returns only non-nil events.
+// It returns only non-nil events. When ctx is cancelled mid-drain it returns
+// the partial set together with ctx.Err() so callers can distinguish a
+// completed-but-erroring run from a cancelled-mid-flight run.
 func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 	ctx context.Context,
 	resultChan <-chan toolResult,
@@ -1265,12 +1318,17 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 				)
 			}
 		case <-ctx.Done():
-			// Context cancelled, return what we have.
+			// Context cancelled — siblings are aborting. Return what we
+			// have plus ctx.Err so the caller knows results may be partial.
 			log.WarnfContext(
 				ctx,
-				"Context cancelled while waiting for tool results",
+				"Context cancelled while waiting for tool results: %v",
+				ctx.Err(),
 			)
-			return p.filterNilToolResults(results), nil
+			if err == nil {
+				err = ctx.Err()
+			}
+			return p.filterNilToolResults(results), err
 		}
 	}
 }
