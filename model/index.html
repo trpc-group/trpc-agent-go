@@ -1836,6 +1836,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#modelselector" class="md-nav__link">
+    <span class="md-ellipsis">
+      ModelSelector
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4247,6 +4256,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#modelselector" class="md-nav__link">
+    <span class="md-ellipsis">
+      ModelSelector
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -5238,7 +5256,7 @@ hedge models. The built-in OpenAI and HuggingFace/OpenAI-compatible adapters
 merge these fields into the top-level JSON request body. Other provider
 adapters ignore the field unless they add an explicit provider-specific mapping.</p>
 <h4 id="2-model-switching">2. Model Switching</h4>
-<p>Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).</p>
+<p>Model switching allows dynamically changing the LLM model used by an Agent at runtime. This section shows static switching for OpenAI and OpenAI-compatible model instances at the agent level and per-request level. To select a model separately for each LLM call within the same <code>runner.Run(...)</code>, use <a href="#modelselector">ModelSelector</a>.</p>
 <h5 id="agent-level-switching">Agent-level Switching</h5>
 <p>Agent-level switching changes the Agent's default model, affecting all subsequent requests.</p>
 <h6 id="approach-1-direct-model-instance">Approach 1: Direct Model Instance</h6>
@@ -5312,41 +5330,37 @@ adapters ignore the field unless they add an explicit provider-specific mapping.
 <span class="normal"><a href="#__codelineno-20-28">28</a></span>
 <span class="normal"><a href="#__codelineno-20-29">29</a></span>
 <span class="normal"><a href="#__codelineno-20-30">30</a></span>
-<span class="normal"><a href="#__codelineno-20-31">31</a></span>
-<span class="normal"><a href="#__codelineno-20-32">32</a></span>
-<span class="normal"><a href="#__codelineno-20-33">33</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-20-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
 </span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
 </span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
 </span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a><span class="p">)</span>
 </span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6"></a>
 </span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a><span class="c1">// Create multiple model instances.</span>
-</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8"></a><span class="nx">gpt4</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">)</span>
-</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9"></a><span class="nx">gpt4mini</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)</span>
-</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10"></a><span class="nx">deepseek</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)</span>
-</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11"></a>
-</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12"></a><span class="c1">// Register all models when creating the Agent.</span>
-</span><span id="__span-20-13"><a id="__codelineno-20-13" name="__codelineno-20-13"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
-</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModels</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">{</span>
-</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15"></a><span class="w">        </span><span class="s">&quot;smart&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">gpt4</span><span class="p">,</span>
-</span><span id="__span-20-16"><a id="__codelineno-20-16" name="__codelineno-20-16"></a><span class="w">        </span><span class="s">&quot;fast&quot;</span><span class="p">:</span><span class="w">  </span><span class="nx">gpt4mini</span><span class="p">,</span>
-</span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17"></a><span class="w">        </span><span class="s">&quot;cheap&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">deepseek</span><span class="p">,</span>
-</span><span id="__span-20-18"><a id="__codelineno-20-18" name="__codelineno-20-18"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-20-19"><a id="__codelineno-20-19" name="__codelineno-20-19"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">gpt4mini</span><span class="p">),</span><span class="w"> </span><span class="c1">// Specify initial model.</span>
-</span><span id="__span-20-20"><a id="__codelineno-20-20" name="__codelineno-20-20"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;You are an intelligent assistant.&quot;</span><span class="p">),</span>
-</span><span id="__span-20-21"><a id="__codelineno-20-21" name="__codelineno-20-21"></a><span class="p">)</span>
-</span><span id="__span-20-22"><a id="__codelineno-20-22" name="__codelineno-20-22"></a>
-</span><span id="__span-20-23"><a id="__codelineno-20-23" name="__codelineno-20-23"></a><span class="c1">// Switch models by name at runtime.</span>
-</span><span id="__span-20-24"><a id="__codelineno-20-24" name="__codelineno-20-24"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModelByName</span><span class="p">(</span><span class="s">&quot;smart&quot;</span><span class="p">)</span>
-</span><span id="__span-20-25"><a id="__codelineno-20-25" name="__codelineno-20-25"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-20-26"><a id="__codelineno-20-26" name="__codelineno-20-26"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-20-27"><a id="__codelineno-20-27" name="__codelineno-20-27"></a><span class="p">}</span>
-</span><span id="__span-20-28"><a id="__codelineno-20-28" name="__codelineno-20-28"></a>
-</span><span id="__span-20-29"><a id="__codelineno-20-29" name="__codelineno-20-29"></a><span class="c1">// Switch to another model.</span>
-</span><span id="__span-20-30"><a id="__codelineno-20-30" name="__codelineno-20-30"></a><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModelByName</span><span class="p">(</span><span class="s">&quot;cheap&quot;</span><span class="p">)</span>
-</span><span id="__span-20-31"><a id="__codelineno-20-31" name="__codelineno-20-31"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-20-32"><a id="__codelineno-20-32" name="__codelineno-20-32"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-20-33"><a id="__codelineno-20-33" name="__codelineno-20-33"></a><span class="p">}</span>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8"></a><span class="nx">strong</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">)</span>
+</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9"></a><span class="nx">fast</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)</span>
+</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10"></a>
+</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11"></a><span class="c1">// Register all models when creating the Agent.</span>
+</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-20-13"><a id="__codelineno-20-13" name="__codelineno-20-13"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModels</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">{</span>
+</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14"></a><span class="w">        </span><span class="s">&quot;smart&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">strong</span><span class="p">,</span>
+</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15"></a><span class="w">        </span><span class="s">&quot;fast&quot;</span><span class="p">:</span><span class="w">  </span><span class="nx">fast</span><span class="p">,</span>
+</span><span id="__span-20-16"><a id="__codelineno-20-16" name="__codelineno-20-16"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">fast</span><span class="p">),</span><span class="w"> </span><span class="c1">// Specify initial model.</span>
+</span><span id="__span-20-18"><a id="__codelineno-20-18" name="__codelineno-20-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;You are an intelligent assistant.&quot;</span><span class="p">),</span>
+</span><span id="__span-20-19"><a id="__codelineno-20-19" name="__codelineno-20-19"></a><span class="p">)</span>
+</span><span id="__span-20-20"><a id="__codelineno-20-20" name="__codelineno-20-20"></a>
+</span><span id="__span-20-21"><a id="__codelineno-20-21" name="__codelineno-20-21"></a><span class="c1">// Switch models by name at runtime.</span>
+</span><span id="__span-20-22"><a id="__codelineno-20-22" name="__codelineno-20-22"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModelByName</span><span class="p">(</span><span class="s">&quot;smart&quot;</span><span class="p">)</span>
+</span><span id="__span-20-23"><a id="__codelineno-20-23" name="__codelineno-20-23"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-20-24"><a id="__codelineno-20-24" name="__codelineno-20-24"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-20-25"><a id="__codelineno-20-25" name="__codelineno-20-25"></a><span class="p">}</span>
+</span><span id="__span-20-26"><a id="__codelineno-20-26" name="__codelineno-20-26"></a>
+</span><span id="__span-20-27"><a id="__codelineno-20-27" name="__codelineno-20-27"></a><span class="c1">// Switch to another model.</span>
+</span><span id="__span-20-28"><a id="__codelineno-20-28" name="__codelineno-20-28"></a><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModelByName</span><span class="p">(</span><span class="s">&quot;fast&quot;</span><span class="p">)</span>
+</span><span id="__span-20-29"><a id="__codelineno-20-29" name="__codelineno-20-29"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-20-30"><a id="__codelineno-20-30" name="__codelineno-20-30"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-20-31"><a id="__codelineno-20-31" name="__codelineno-20-31"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Use Cases</strong>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-21-1"> 1</a></span>
@@ -5378,11 +5392,11 @@ adapters ignore the field unless they add an explicit provider-specific mapping.
 </span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10"></a><span class="c1">// Select model based on time of day (cost optimization).</span>
 </span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11"></a><span class="nx">hour</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">().</span><span class="nx">Hour</span><span class="p">()</span>
 </span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12"></a><span class="k">if</span><span class="w"> </span><span class="nx">hour</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">22</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">hour</span><span class="w"> </span><span class="p">&lt;</span><span class="w"> </span><span class="mi">8</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-21-13"><a id="__codelineno-21-13" name="__codelineno-21-13"></a><span class="w">    </span><span class="c1">// Use cheap model at night.</span>
-</span><span id="__span-21-14"><a id="__codelineno-21-14" name="__codelineno-21-14"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModelByName</span><span class="p">(</span><span class="s">&quot;cheap&quot;</span><span class="p">)</span>
+</span><span id="__span-21-13"><a id="__codelineno-21-13" name="__codelineno-21-13"></a><span class="w">    </span><span class="c1">// Use fast model at night.</span>
+</span><span id="__span-21-14"><a id="__codelineno-21-14" name="__codelineno-21-14"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModelByName</span><span class="p">(</span><span class="s">&quot;fast&quot;</span><span class="p">)</span>
 </span><span id="__span-21-15"><a id="__codelineno-21-15" name="__codelineno-21-15"></a><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-21-16"><a id="__codelineno-21-16" name="__codelineno-21-16"></a><span class="w">    </span><span class="c1">// Use fast model during the day.</span>
-</span><span id="__span-21-17"><a id="__codelineno-21-17" name="__codelineno-21-17"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModelByName</span><span class="p">(</span><span class="s">&quot;fast&quot;</span><span class="p">)</span>
+</span><span id="__span-21-16"><a id="__codelineno-21-16" name="__codelineno-21-16"></a><span class="w">    </span><span class="c1">// Use smart model during the day.</span>
+</span><span id="__span-21-17"><a id="__codelineno-21-17" name="__codelineno-21-17"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModelByName</span><span class="p">(</span><span class="s">&quot;smart&quot;</span><span class="p">)</span>
 </span><span id="__span-21-18"><a id="__codelineno-21-18" name="__codelineno-21-18"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h5 id="per-request-switching">Per-request Switching</h5>
@@ -5430,9 +5444,9 @@ adapters ignore the field unless they add an explicit provider-specific mapping.
 <span class="normal"><a href="#__codelineno-23-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1"></a><span class="c1">// Pre-register multiple models when creating the Agent.</span>
 </span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModels</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">{</span>
-</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">        </span><span class="s">&quot;smart&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">),</span>
-</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a><span class="w">        </span><span class="s">&quot;fast&quot;</span><span class="p">:</span><span class="w">  </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">),</span>
-</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a><span class="w">        </span><span class="s">&quot;cheap&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">),</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">        </span><span class="s">&quot;smart&quot;</span><span class="p">:</span><span class="w">  </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">),</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a><span class="w">        </span><span class="s">&quot;fast&quot;</span><span class="p">:</span><span class="w">   </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">),</span>
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a><span class="w">        </span><span class="s">&quot;vision&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">),</span>
 </span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7"></a><span class="w">    </span><span class="p">}),</span>
 </span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)),</span><span class="w"> </span><span class="c1">// Default model.</span>
 </span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a><span class="p">)</span>
@@ -5467,9 +5481,9 @@ adapters ignore the field unless they add an explicit provider-specific mapping.
 </span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6"></a>
 </span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="o">...</span><span class="p">)</span>
 </span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8"></a>
-</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9"></a><span class="c1">// Use specialized reasoning model for reasoning tasks.</span>
-</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">reasoningMessage</span><span class="p">,</span>
-</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithModelName</span><span class="p">(</span><span class="s">&quot;deepseek-v4-pro&quot;</span><span class="p">),</span>
+</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9"></a><span class="c1">// Use a specialized model for a specific task.</span>
+</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">visionMessage</span><span class="p">,</span>
+</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithModelName</span><span class="p">(</span><span class="s">&quot;vision&quot;</span><span class="p">),</span>
 </span><span id="__span-24-12"><a id="__codelineno-24-12" name="__codelineno-24-12"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h5 id="configuration-details">Configuration Details</h5>
@@ -7176,7 +7190,7 @@ to preserve the default clean text-streaming behavior.</p>
 </span><span id="__span-63-28"><a id="__codelineno-63-28" name="__codelineno-63-28"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="2-model-switching_1">2. Model Switching</h4>
-<p>Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).</p>
+<p>Model switching allows dynamically changing the LLM model used by an Agent at runtime. This section shows static switching for Anthropic model instances at the agent level and per-request level. To select a model separately for each LLM call within the same <code>runner.Run(...)</code>, use <a href="#modelselector">ModelSelector</a>.</p>
 <h5 id="agent-level-switching_1">Agent-level Switching</h5>
 <p>Agent-level switching changes the Agent's default model, affecting all subsequent requests.</p>
 <h6 id="approach-1-direct-model-instance_1">Approach 1: Direct Model Instance</h6>
@@ -8050,6 +8064,53 @@ to preserve the default clean text-streaming behavior.</p>
 <li><code>candidate[2]</code> starts at <code>0ms</code>.</li>
 </ul>
 <p>This is the all-at-once case where every candidate launches immediately when the request begins. In fixed-interval form, the same setup can be written as <code>WithDelay(0)</code>.</p>
+<h2 id="modelselector">ModelSelector</h2>
+<p><code>ModelSelector</code> dynamically selects a model for each framework-managed LLM call within the same <code>runner.Run(...)</code>.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-85-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-85-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-85-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-85-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-85-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-85-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-85-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-85-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-85-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-85-10">10</a></span>
+<span class="normal"><a href="#__codelineno-85-11">11</a></span>
+<span class="normal"><a href="#__codelineno-85-12">12</a></span>
+<span class="normal"><a href="#__codelineno-85-13">13</a></span>
+<span class="normal"><a href="#__codelineno-85-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-85-1"><a id="__codelineno-85-1" name="__codelineno-85-1"></a><span class="nx">selectModel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-85-2"><a id="__codelineno-85-2" name="__codelineno-85-2"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">shouldUseAnotherModel</span><span class="p">(</span><span class="nx">inv</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-85-3"><a id="__codelineno-85-3" name="__codelineno-85-3"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">anotherModel</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-85-4"><a id="__codelineno-85-4" name="__codelineno-85-4"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-85-5"><a id="__codelineno-85-5" name="__codelineno-85-5"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-85-6"><a id="__codelineno-85-6" name="__codelineno-85-6"></a><span class="p">}</span>
+</span><span id="__span-85-7"><a id="__codelineno-85-7" name="__codelineno-85-7"></a>
+</span><span id="__span-85-8"><a id="__codelineno-85-8" name="__codelineno-85-8"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-85-9"><a id="__codelineno-85-9" name="__codelineno-85-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-85-10"><a id="__codelineno-85-10" name="__codelineno-85-10"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-85-11"><a id="__codelineno-85-11" name="__codelineno-85-11"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-85-12"><a id="__codelineno-85-12" name="__codelineno-85-12"></a><span class="w">    </span><span class="nx">message</span><span class="p">,</span>
+</span><span id="__span-85-13"><a id="__codelineno-85-13" name="__codelineno-85-13"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithModelSelector</span><span class="p">(</span><span class="nx">selectModel</span><span class="p">),</span>
+</span><span id="__span-85-14"><a id="__codelineno-85-14" name="__codelineno-85-14"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>If an <code>LLMAgent</code> has its own fixed model selection policy, configure it when creating the agent:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-86-1">1</a></span>
+<span class="normal"><a href="#__codelineno-86-2">2</a></span>
+<span class="normal"><a href="#__codelineno-86-3">3</a></span>
+<span class="normal"><a href="#__codelineno-86-4">4</a></span>
+<span class="normal"><a href="#__codelineno-86-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-86-1"><a id="__codelineno-86-1" name="__codelineno-86-1"></a><span class="nx">a</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-86-2"><a id="__codelineno-86-2" name="__codelineno-86-2"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-86-3"><a id="__codelineno-86-3" name="__codelineno-86-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">defaultModel</span><span class="p">),</span>
+</span><span id="__span-86-4"><a id="__codelineno-86-4" name="__codelineno-86-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModelSelector</span><span class="p">(</span><span class="nx">selectModel</span><span class="p">),</span>
+</span><span id="__span-86-5"><a id="__codelineno-86-5" name="__codelineno-86-5"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Notes:</p>
+<ul>
+<li>When both are configured, <code>agent.WithModelSelector(...)</code> takes precedence over <code>llmagent.WithModelSelector(...)</code>.</li>
+<li>If selector returns <code>nil, nil</code>, the model is not switched and the current <code>inv.Model</code> is kept; returning an error terminates the current LLM call.</li>
+</ul>
+<p>For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/selector">examples/model/selector</a>.</p>
 
 
 
@@ -8072,7 +8133,7 @@ to preserve the default clean text-streaming behavior.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 11, 2026 08:28:08 UTC">2026-05-11 08:28:08</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 13, 2026 03:31:57 UTC">2026-05-13 03:31:57</span>
   </span>
 
     

@@ -1845,6 +1845,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#modelselector" class="md-nav__link">
+    <span class="md-ellipsis">
+      ModelSelector
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4265,6 +4274,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#modelselector" class="md-nav__link">
+    <span class="md-ellipsis">
+      ModelSelector
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -5250,7 +5268,7 @@ Graph LLM 节点，以及经由 failover 或 hedge model 路由的请求。内�
 和 HuggingFace/OpenAI 兼容 adapter 会把这些字段合并到顶层 JSON 请求体中。
 其他供应商 adapter 默认不会使用该字段，除非后续显式增加对应的供应商映射。</p>
 <h4 id="2-model-switching">2. 模型切换（Model Switching）</h4>
-<p>模型切换允许在运行时动态更换 Agent 使用的 LLM 模型。框架提供两种方式：Agent 级别切换（影响所有后续请求）和请求级别切换（仅影响单次请求）。</p>
+<p>模型切换允许在运行时动态更换 Agent 使用的 LLM 模型。本小节展示 OpenAI 及其兼容模型实例在 Agent 级别和请求级别的静态切换用法。如果需要在同一次 <code>runner.Run(...)</code> 内对每次 LLM 调用分别选择模型，可以使用 <a href="#modelselector">ModelSelector</a>。</p>
 <h5 id="agent">Agent 级别切换</h5>
 <p>Agent 级别切换会改变 Agent 的默认模型，影响所有后续请求。</p>
 <h6 id="_17">方式一：直接设置模型实例</h6>
@@ -5268,16 +5286,16 @@ Graph LLM 节点，以及经由 failover 或 hedge model 路由的请求。内�
 <span class="normal"><a href="#__codelineno-18-11">11</a></span>
 <span class="normal"><a href="#__codelineno-18-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
 </span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4"></a><span class="p">)</span>
 </span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5"></a>
 </span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6"></a><span class="c1">// 创建 Agent.</span>
 </span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
-</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-haiku-20241022&quot;</span><span class="p">)),</span>
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)),</span>
 </span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9"></a><span class="p">)</span>
 </span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10"></a>
 </span><span id="__span-18-11"><a id="__codelineno-18-11" name="__codelineno-18-11"></a><span class="c1">// 切换到其他模型.</span>
-</span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModel</span><span class="p">(</span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-sonnet-20241022&quot;</span><span class="p">))</span>
+</span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>使用场景</strong>：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1">1</a></span>
@@ -5287,9 +5305,9 @@ Graph LLM 节点，以及经由 failover 或 hedge model 路由的请求。内�
 <span class="normal"><a href="#__codelineno-19-5">5</a></span>
 <span class="normal"><a href="#__codelineno-19-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1"></a><span class="c1">// 根据任务复杂度选择模型.</span>
 </span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">isComplexTask</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModel</span><span class="p">(</span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-sonnet-20241022&quot;</span><span class="p">))</span><span class="w">  </span><span class="c1">// 使用强大模型.</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">))</span><span class="w">  </span><span class="c1">// 使用强大模型.</span>
 </span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4"></a><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModel</span><span class="p">(</span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-haiku-20241022&quot;</span><span class="p">))</span><span class="w">  </span><span class="c1">// 使用快速模型.</span>
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SetModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">))</span><span class="w">  </span><span class="c1">// 使用快速模型.</span>
 </span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h6 id="_18">方式二：按名称切换模型</h6>
@@ -5327,20 +5345,20 @@ Graph LLM 节点，以及经由 failover 或 hedge model 路由的请求。内�
 <span class="normal"><a href="#__codelineno-20-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
 </span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
 </span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a><span class="p">)</span>
 </span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6"></a>
 </span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a><span class="c1">// 创建多个模型实例.</span>
-</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8"></a><span class="nx">sonnet</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-sonnet-20241022&quot;</span><span class="p">)</span>
-</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9"></a><span class="nx">haiku</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-haiku-20241022&quot;</span><span class="p">)</span>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8"></a><span class="nx">strong</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">)</span>
+</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9"></a><span class="nx">fast</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)</span>
 </span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10"></a>
 </span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11"></a><span class="c1">// 创建 Agent 时注册所有模型.</span>
 </span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-20-13"><a id="__codelineno-20-13" name="__codelineno-20-13"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModels</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">{</span>
-</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14"></a><span class="w">        </span><span class="s">&quot;smart&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">sonnet</span><span class="p">,</span>
-</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15"></a><span class="w">        </span><span class="s">&quot;fast&quot;</span><span class="p">:</span><span class="w">  </span><span class="nx">haiku</span><span class="p">,</span>
+</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14"></a><span class="w">        </span><span class="s">&quot;smart&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">strong</span><span class="p">,</span>
+</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15"></a><span class="w">        </span><span class="s">&quot;fast&quot;</span><span class="p">:</span><span class="w">  </span><span class="nx">fast</span><span class="p">,</span>
 </span><span id="__span-20-16"><a id="__codelineno-20-16" name="__codelineno-20-16"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">haiku</span><span class="p">),</span><span class="w"> </span><span class="c1">// 指定初始模型.</span>
+</span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">fast</span><span class="p">),</span><span class="w"> </span><span class="c1">// 指定初始模型.</span>
 </span><span id="__span-20-18"><a id="__codelineno-20-18" name="__codelineno-20-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;你是一个智能助手。&quot;</span><span class="p">),</span>
 </span><span id="__span-20-19"><a id="__codelineno-20-19" name="__codelineno-20-19"></a><span class="p">)</span>
 </span><span id="__span-20-20"><a id="__codelineno-20-20" name="__codelineno-20-20"></a>
@@ -5407,12 +5425,12 @@ Graph LLM 节点，以及经由 failover 或 hedge model 路由的请求。内�
 <span class="normal"><a href="#__codelineno-22-8">8</a></span>
 <span class="normal"><a href="#__codelineno-22-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
 </span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4"></a><span class="p">)</span>
 </span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5"></a>
 </span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6"></a><span class="c1">// 为这次请求使用特定模型.</span>
 </span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">,</span>
-</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-sonnet-20241022&quot;</span><span class="p">)),</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">)),</span>
 </span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h6 id="withmodelname">方式二：使用 WithModelName 选项（推荐）</h6>
@@ -5434,24 +5452,26 @@ Graph LLM 节点，以及经由 failover 或 hedge model 路由的请求。内�
 <span class="normal"><a href="#__codelineno-23-15">15</a></span>
 <span class="normal"><a href="#__codelineno-23-16">16</a></span>
 <span class="normal"><a href="#__codelineno-23-17">17</a></span>
-<span class="normal"><a href="#__codelineno-23-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1"></a><span class="c1">// 创建 Agent 时预注册多个模型.</span>
+<span class="normal"><a href="#__codelineno-23-18">18</a></span>
+<span class="normal"><a href="#__codelineno-23-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1"></a><span class="c1">// 创建 Agent 时预注册多个模型.</span>
 </span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModels</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">{</span>
-</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">        </span><span class="s">&quot;smart&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-sonnet-20241022&quot;</span><span class="p">),</span>
-</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a><span class="w">        </span><span class="s">&quot;fast&quot;</span><span class="p">:</span><span class="w">  </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-haiku-20241022&quot;</span><span class="p">),</span>
-</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-haiku-20241022&quot;</span><span class="p">)),</span><span class="w"> </span><span class="c1">// 默认模型.</span>
-</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8"></a><span class="p">)</span>
-</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a>
-</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
-</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11"></a>
-</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12"></a><span class="c1">// 为这次请求临时使用 &quot;smart&quot; 模型.</span>
-</span><span id="__span-23-13"><a id="__codelineno-23-13" name="__codelineno-23-13"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">,</span>
-</span><span id="__span-23-14"><a id="__codelineno-23-14" name="__codelineno-23-14"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithModelName</span><span class="p">(</span><span class="s">&quot;smart&quot;</span><span class="p">),</span>
-</span><span id="__span-23-15"><a id="__codelineno-23-15" name="__codelineno-23-15"></a><span class="p">)</span>
-</span><span id="__span-23-16"><a id="__codelineno-23-16" name="__codelineno-23-16"></a>
-</span><span id="__span-23-17"><a id="__codelineno-23-17" name="__codelineno-23-17"></a><span class="c1">// 下一次请求仍然使用默认模型 &quot;claude-3-5-haiku-20241022&quot;.</span>
-</span><span id="__span-23-18"><a id="__codelineno-23-18" name="__codelineno-23-18"></a><span class="nx">eventChan2</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message2</span><span class="p">)</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">        </span><span class="s">&quot;smart&quot;</span><span class="p">:</span><span class="w">  </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">),</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a><span class="w">        </span><span class="s">&quot;fast&quot;</span><span class="p">:</span><span class="w">   </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">),</span>
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a><span class="w">        </span><span class="s">&quot;vision&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o&quot;</span><span class="p">),</span>
+</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)),</span><span class="w"> </span><span class="c1">// 默认模型.</span>
+</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a><span class="p">)</span>
+</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10"></a>
+</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12"></a>
+</span><span id="__span-23-13"><a id="__codelineno-23-13" name="__codelineno-23-13"></a><span class="c1">// 为这次请求临时使用 &quot;smart&quot; 模型.</span>
+</span><span id="__span-23-14"><a id="__codelineno-23-14" name="__codelineno-23-14"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">,</span>
+</span><span id="__span-23-15"><a id="__codelineno-23-15" name="__codelineno-23-15"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithModelName</span><span class="p">(</span><span class="s">&quot;smart&quot;</span><span class="p">),</span>
+</span><span id="__span-23-16"><a id="__codelineno-23-16" name="__codelineno-23-16"></a><span class="p">)</span>
+</span><span id="__span-23-17"><a id="__codelineno-23-17" name="__codelineno-23-17"></a>
+</span><span id="__span-23-18"><a id="__codelineno-23-18" name="__codelineno-23-18"></a><span class="c1">// 下一次请求仍然使用默认模型 &quot;gpt-4o-mini&quot;.</span>
+</span><span id="__span-23-19"><a id="__codelineno-23-19" name="__codelineno-23-19"></a><span class="nx">eventChan2</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message2</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>使用场景</strong>：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-24-1"> 1</a></span>
@@ -7171,7 +7191,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 </span><span id="__span-63-28"><a id="__codelineno-63-28" name="__codelineno-63-28"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="2-model-switching_1">2. 模型切换（Model Switching）</h4>
-<p>模型切换允许在运行时动态更换 Agent 使用的 LLM 模型。框架提供两种方式：Agent 级别切换（影响所有后续请求）和请求级别切换（仅影响单次请求）。</p>
+<p>模型切换允许在运行时动态更换 Agent 使用的 LLM 模型。本小节展示 Anthropic 模型实例在 Agent 级别和请求级别的静态切换用法。如果需要在同一次 <code>runner.Run(...)</code> 内对每次 LLM 调用分别选择模型，可以使用 <a href="#modelselector">ModelSelector</a>。</p>
 <h5 id="agent_2">Agent 级别切换</h5>
 <p>Agent 级别切换会改变 Agent 的默认模型，影响所有后续请求。</p>
 <h6 id="_44">方式一：直接设置模型实例</h6>
@@ -8040,6 +8060,53 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <li><code>candidate[2]</code> 在 <code>0ms</code> 启动。</li>
 </ul>
 <p>这相当于所有候选在请求开始时立即并发发起；如果是固定间隔模式，也可以写成 <code>WithDelay(0)</code>。</p>
+<h2 id="modelselector">ModelSelector</h2>
+<p><code>ModelSelector</code> 用于在同一次 <code>runner.Run(...)</code> 中，为每次框架托管的 LLM 调用动态选择模型。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-86-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-86-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-86-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-86-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-86-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-86-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-86-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-86-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-86-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-86-10">10</a></span>
+<span class="normal"><a href="#__codelineno-86-11">11</a></span>
+<span class="normal"><a href="#__codelineno-86-12">12</a></span>
+<span class="normal"><a href="#__codelineno-86-13">13</a></span>
+<span class="normal"><a href="#__codelineno-86-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-86-1"><a id="__codelineno-86-1" name="__codelineno-86-1"></a><span class="nx">selectModel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-86-2"><a id="__codelineno-86-2" name="__codelineno-86-2"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">shouldUseAnotherModel</span><span class="p">(</span><span class="nx">inv</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-86-3"><a id="__codelineno-86-3" name="__codelineno-86-3"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">anotherModel</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-86-4"><a id="__codelineno-86-4" name="__codelineno-86-4"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-86-5"><a id="__codelineno-86-5" name="__codelineno-86-5"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-86-6"><a id="__codelineno-86-6" name="__codelineno-86-6"></a><span class="p">}</span>
+</span><span id="__span-86-7"><a id="__codelineno-86-7" name="__codelineno-86-7"></a>
+</span><span id="__span-86-8"><a id="__codelineno-86-8" name="__codelineno-86-8"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-86-9"><a id="__codelineno-86-9" name="__codelineno-86-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-86-10"><a id="__codelineno-86-10" name="__codelineno-86-10"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-86-11"><a id="__codelineno-86-11" name="__codelineno-86-11"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-86-12"><a id="__codelineno-86-12" name="__codelineno-86-12"></a><span class="w">    </span><span class="nx">message</span><span class="p">,</span>
+</span><span id="__span-86-13"><a id="__codelineno-86-13" name="__codelineno-86-13"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithModelSelector</span><span class="p">(</span><span class="nx">selectModel</span><span class="p">),</span>
+</span><span id="__span-86-14"><a id="__codelineno-86-14" name="__codelineno-86-14"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>如果某个 <code>LLMAgent</code> 本身就有固定的模型选择策略，也可以在创建 Agent 时配置 <code>llmagent.WithModelSelector(...)</code>：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-87-1">1</a></span>
+<span class="normal"><a href="#__codelineno-87-2">2</a></span>
+<span class="normal"><a href="#__codelineno-87-3">3</a></span>
+<span class="normal"><a href="#__codelineno-87-4">4</a></span>
+<span class="normal"><a href="#__codelineno-87-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-87-1"><a id="__codelineno-87-1" name="__codelineno-87-1"></a><span class="nx">a</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-87-2"><a id="__codelineno-87-2" name="__codelineno-87-2"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-87-3"><a id="__codelineno-87-3" name="__codelineno-87-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">defaultModel</span><span class="p">),</span>
+</span><span id="__span-87-4"><a id="__codelineno-87-4" name="__codelineno-87-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModelSelector</span><span class="p">(</span><span class="nx">selectModel</span><span class="p">),</span>
+</span><span id="__span-87-5"><a id="__codelineno-87-5" name="__codelineno-87-5"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>注意事项：</p>
+<ul>
+<li>同时配置时，<code>agent.WithModelSelector(...)</code> 优先于 <code>llmagent.WithModelSelector(...)</code>。</li>
+<li>selector 返回 <code>nil, nil</code> 表示不切换模型，并保留当前 <code>inv.Model</code>；返回 error 会终止本次 LLM 调用。</li>
+</ul>
+<p>完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/selector">examples/model/selector</a>。</p>
 
 
 
@@ -8062,7 +8129,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月11日 08:28:08 UTC">2026-05-11 08:28:08</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月13日 03:31:57 UTC">2026-05-13 03:31:57</span>
   </span>
 
     
