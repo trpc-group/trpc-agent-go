@@ -352,7 +352,11 @@ func countTokensForRounds(prefixSum []int, rounds []userAnchoredRound, keep []bo
 	return total
 }
 
-// ensureTailoredWithinBudget ensures the tailored result is within the budget.
+// ensureTailoredWithinBudget returns the smallest protected context when the
+// tailored result is still over budget. The protected context keeps the system
+// prefix and the latest valid round. If that minimal context is still too large,
+// the caller should surface the overflow instead of silently dropping system
+// instructions.
 func ensureTailoredWithinBudget(
 	ctx context.Context,
 	tokenCounter TokenCounter,
@@ -365,18 +369,7 @@ func ensureTailoredWithinBudget(
 	}
 
 	preservedHead := calculatePreservedHeadCount(messages)
-	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, preservedHead)
-	if fitsWithinBudget(ctx, tokenCounter, withSystem, maxTokens) {
-		return withSystem, nil
-	}
-
-	if len(withoutSystem) == 0 {
-		return nil, nil
-	}
-	if fitsWithinBudget(ctx, tokenCounter, withoutSystem, maxTokens) {
-		return withoutSystem, nil
-	}
-	return withoutSystem, nil
+	return buildMinimalSuffixCandidate(messages, preservedHead), nil
 }
 
 // shouldReturnOriginal checks if the messages should be returned as is.
@@ -419,21 +412,22 @@ func fitsWithinBudget(
 	return tokens <= maxTokens
 }
 
-// buildMinimalSuffixCandidates builds the minimal suffix candidates for the messages.
-func buildMinimalSuffixCandidates(messages []Message, preservedHead int) ([]Message, []Message) {
+// buildMinimalSuffixCandidate builds the smallest protected context for the
+// messages: the system prefix plus the latest valid user-anchored round.
+func buildMinimalSuffixCandidate(messages []Message, preservedHead int) []Message {
 	last := lastNonSystemIndex(messages)
 	if last < 0 {
-		return nil, nil
+		return nil
 	}
 
 	last = trimTrailingAssistant(messages, last)
 	if last < 0 {
-		return nil, nil
+		return nil
 	}
 
 	start := startOfUserToolGroup(messages, last)
 	if start < 0 {
-		return nil, nil
+		return nil
 	}
 
 	end := last + 1
@@ -445,8 +439,7 @@ func buildMinimalSuffixCandidates(messages []Message, preservedHead int) ([]Mess
 	withSystem = append(withSystem, messages[start:end]...)
 	withSystem = validateAndFixMessageSequence(withSystem)
 
-	withoutSystem := validateAndFixMessageSequence(messages[start:end])
-	return withSystem, withoutSystem
+	return withSystem
 }
 
 // lastNonSystemIndex finds the last non-system message index.

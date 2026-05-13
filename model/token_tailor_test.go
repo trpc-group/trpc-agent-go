@@ -1316,6 +1316,73 @@ func TestTailOutStrategy_VeryTightBudget(t *testing.T) {
 	assert.LessOrEqual(t, totalTokens, 20)
 }
 
+func TestMiddleOutStrategy_PreservesSystemWhenMinimalSuffixExceedsBudget(t *testing.T) {
+	msgs := []Message{
+		NewSystemMessage(repeat("system ", 100)),
+		NewUserMessage("Old 1 " + repeat("x", 200)),
+		NewUserMessage("Old 2 " + repeat("y", 200)),
+		NewUserMessage("Query"),
+		NewAssistantMessage(repeat("response ", 100)),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewMiddleOutStrategy(counter)
+
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(tailored), 2)
+
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
+
+	totalTokens := 0
+	for _, msg := range tailored {
+		tokens, err := counter.CountTokens(context.Background(), msg)
+		require.NoError(t, err)
+		totalTokens += tokens
+	}
+	assert.Greater(t, totalTokens, 10)
+}
+
+func TestTokenTailor_DoesNotDropSystemForLargeToolResult(t *testing.T) {
+	toolCall := ToolCall{
+		Type: "function",
+		ID:   "call_1",
+		Function: FunctionDefinitionParam{
+			Name:      "search",
+			Arguments: []byte(`{"q":"latest"}`),
+		},
+	}
+	msgs := []Message{
+		NewSystemMessage(repeat("system ", 100)),
+		NewUserMessage("Old turn " + repeat("x", 200)),
+		NewUserMessage("Latest question"),
+		{
+			Role:      RoleAssistant,
+			Content:   "Calling search",
+			ToolCalls: []ToolCall{toolCall},
+		},
+		NewToolMessage("call_1", "search", repeat("large-result ", 200)),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewMiddleOutStrategy(counter)
+
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
+	require.NoError(t, err)
+	require.Len(t, tailored, 4)
+
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+	assert.Equal(t, RoleUser, tailored[1].Role)
+	assert.Equal(t, "Latest question", tailored[1].Content)
+	assert.Equal(t, RoleAssistant, tailored[2].Role)
+	require.Len(t, tailored[2].ToolCalls, 1)
+	assert.Equal(t, "call_1", tailored[2].ToolCalls[0].ID)
+	assert.Equal(t, RoleTool, tailored[3].Role)
+	assert.Equal(t, "call_1", tailored[3].ToolID)
+}
+
 // TestHeadOutStrategy_PreservedSegmentsExceedBudget tests when preserved segments exceed budget.
 func TestHeadOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 	msgs := []Message{
@@ -1335,6 +1402,7 @@ func TestHeadOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
+	assert.Equal(t, RoleSystem, tailored[0].Role)
 	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
 	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 }
@@ -1358,6 +1426,7 @@ func TestTailOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
+	assert.Equal(t, RoleSystem, tailored[0].Role)
 	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
 	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 }
@@ -1685,9 +1754,8 @@ func TestBuildMinimalSuffixCandidates_NoNonSystem(t *testing.T) {
 		NewSystemMessage("sys"),
 	}
 
-	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 1)
+	withSystem := buildMinimalSuffixCandidate(messages, 1)
 	require.Nil(t, withSystem)
-	require.Nil(t, withoutSystem)
 }
 
 func TestBuildMinimalSuffixCandidates_ToolAtEnd(t *testing.T) {
@@ -1697,11 +1765,10 @@ func TestBuildMinimalSuffixCandidates_ToolAtEnd(t *testing.T) {
 		NewToolMessage("tool_1", "search", "result"),
 	}
 
-	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 1)
+	withSystem := buildMinimalSuffixCandidate(messages, 1)
 	require.Len(t, withSystem, 3)
+	require.Equal(t, RoleSystem, withSystem[0].Role)
 	require.Equal(t, RoleTool, withSystem[len(withSystem)-1].Role)
-	require.Len(t, withoutSystem, 2)
-	require.Equal(t, RoleTool, withoutSystem[len(withoutSystem)-1].Role)
 }
 
 func TestBuildMinimalSuffixCandidates_ToolOnly(t *testing.T) {
@@ -1709,9 +1776,8 @@ func TestBuildMinimalSuffixCandidates_ToolOnly(t *testing.T) {
 		NewToolMessage("tool_1", "search", "result"),
 	}
 
-	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 0)
+	withSystem := buildMinimalSuffixCandidate(messages, 0)
 	require.Nil(t, withSystem)
-	require.Nil(t, withoutSystem)
 }
 
 func TestLastNonSystemIndex_AllSystem(t *testing.T) {
