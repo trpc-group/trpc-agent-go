@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/examples/weknora
 
-go 1.26.1
+go 1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
