@@ -307,11 +307,14 @@ func (h *agentToolHarness) runTurn(
 			continue
 		}
 		choice := event.Response.Choices[0]
-		if choice.Message.Content != "" {
+		if choice.Message.Role != model.RoleTool && choice.Message.Content != "" {
 			final.WriteString(choice.Message.Content)
 		}
-		if choice.Delta.Content != "" {
+		if choice.Delta.Role != model.RoleTool && choice.Delta.Content != "" {
 			final.WriteString(choice.Delta.Content)
+		}
+		if event.IsRunnerCompletion() {
+			break
 		}
 	}
 	answer := strings.TrimSpace(final.String())

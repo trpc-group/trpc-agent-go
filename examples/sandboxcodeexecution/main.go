@@ -185,16 +185,18 @@ func runBasic(ctx context.Context, cfg config) error {
 		if event.Error != nil {
 			return fmt.Errorf("agent event error: %s", event.Error.Message)
 		}
+		// A model completion with Done=true can still be followed by tool/code
+		// execution events. Stop only once the runner reports completion.
 		if len(event.Response.Choices) > 0 {
 			choice := event.Response.Choices[0]
-			if choice.Message.Content != "" {
+			if choice.Message.Role != model.RoleTool && choice.Message.Content != "" {
 				final.WriteString(choice.Message.Content)
 			}
 			if choice.Delta.Content != "" {
 				final.WriteString(choice.Delta.Content)
 			}
 		}
-		if event.Done {
+		if event.IsRunnerCompletion() {
 			break
 		}
 	}
