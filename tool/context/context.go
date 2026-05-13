@@ -229,6 +229,118 @@ func NewReadNotesTool() tool.CallableTool {
 	)
 }
 
+// --- notes_index tool ---
+
+// NotesIndexInput is the input for the notes_index tool (empty — no args).
+type NotesIndexInput struct{}
+
+// NoteIndexEntry summarises a single persistent note without sending its
+// full body back to the model. It carries everything the LLM needs to
+// decide whether to fetch the body via read_notes.
+type NoteIndexEntry struct {
+	// Key is the note key (without the internal note: prefix).
+	Key string `json:"key"`
+	// Bytes is the raw byte length of the stored content, useful when the
+	// model is reasoning about its remaining context budget.
+	Bytes int `json:"bytes"`
+	// Preview is the first PreviewMaxChars characters of the note content
+	// with a trailing ellipsis when truncated. It exists so the LLM can
+	// disambiguate similarly-named notes without paying for the whole body.
+	Preview string `json:"preview,omitempty"`
+}
+
+// NotesIndexOutput is the output for the notes_index tool.
+type NotesIndexOutput struct {
+	// Notes lists every persistent note in deterministic key order.
+	Notes []NoteIndexEntry `json:"notes"`
+	// Count is len(Notes), surfaced for cheap "do I have any notes?" checks.
+	Count int `json:"count"`
+	// TotalBytes is the sum of all note byte lengths. Hosts can use this
+	// alongside their context budget to decide when to prune.
+	TotalBytes int `json:"total_bytes"`
+}
+
+// notesIndexPreviewMaxChars caps how much of each note body the index
+// returns. Long enough to disambiguate notes by content, short enough that
+// indexing 100 notes stays well under 8 KB of total payload.
+const notesIndexPreviewMaxChars = 80
+
+// notesIndexPreview returns the first notesIndexPreviewMaxChars characters
+// of content, collapsing runs of whitespace into a single space and
+// appending an ellipsis when the original was longer. Empty input returns
+// the empty string so callers don't have to special-case it.
+func notesIndexPreview(content string) string {
+	if content == "" {
+		return ""
+	}
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+	flat := strings.Join(strings.Fields(trimmed), " ")
+	if len(flat) <= notesIndexPreviewMaxChars {
+		return flat
+	}
+	return flat[:notesIndexPreviewMaxChars] + "…"
+}
+
+// NewNotesIndexTool creates a tool that returns a lightweight index of all
+// persistent notes — keys, byte sizes, and short previews — without
+// dumping every note body into the prompt.
+//
+// This pairs with note / read_notes to support a "browse → fetch" pattern
+// for context-pressed agents: the LLM scans the index, picks the note(s)
+// it actually needs, and only then calls read_notes (or, in a future
+// iteration, a keyed fetch). It's the on-demand alternative to read_notes
+// returning the entire map every time.
+func NewNotesIndexTool() tool.CallableTool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, _ NotesIndexInput) (NotesIndexOutput, error) {
+			sess := sessionFromContext(ctx)
+			if sess == nil {
+				return NotesIndexOutput{Notes: []NoteIndexEntry{}}, nil
+			}
+
+			snapshot := sess.SnapshotState()
+			// Collect note keys first so the index is emitted in a
+			// deterministic order regardless of map iteration order.
+			keys := make([]string, 0, len(snapshot))
+			for k := range snapshot {
+				if strings.HasPrefix(k, noteKeyPrefix) {
+					keys = append(keys, k)
+				}
+			}
+			sort.Strings(keys)
+
+			entries := make([]NoteIndexEntry, 0, len(keys))
+			total := 0
+			for _, k := range keys {
+				body := snapshot[k]
+				entries = append(entries, NoteIndexEntry{
+					Key:     strings.TrimPrefix(k, noteKeyPrefix),
+					Bytes:   len(body),
+					Preview: notesIndexPreview(string(body)),
+				})
+				total += len(body)
+			}
+
+			return NotesIndexOutput{
+				Notes:      entries,
+				Count:      len(entries),
+				TotalBytes: total,
+			}, nil
+		},
+		function.WithName("notes_index"),
+		function.WithDescription(
+			"List the keys, byte sizes, and short previews of every persistent "+
+				"note saved via the note tool, without returning their full "+
+				"content. Use this to discover what notes exist before deciding "+
+				"whether to fetch any of them via read_notes — much cheaper than "+
+				"read_notes when the agent only needs the index, not the bodies.",
+		),
+	)
+}
+
 // Tools returns all context management tools as a convenience.
 func Tools() []tool.Tool {
 	return []tool.Tool{
@@ -236,5 +348,6 @@ func Tools() []tool.Tool {
 		NewCheckBudgetTool(),
 		NewNoteTool(),
 		NewReadNotesTool(),
+		NewNotesIndexTool(),
 	}
 }

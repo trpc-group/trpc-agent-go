@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -191,12 +192,109 @@ func TestReadNotesTool(t *testing.T) {
 	})
 }
 
+// --- notes_index tests ---
+
+func TestNotesIndexTool(t *testing.T) {
+	t.Run("returns keys, sizes, and previews in deterministic order", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "ni1")
+		sess.SetState("note:plan", []byte("step 1 do thing\nstep 2 do other thing"))
+		sess.SetState("note:findings", []byte("the answer is 42"))
+		// Non-note state must be ignored so the index stays focused on notes.
+		sess.SetState("non_note_key", []byte("ignore me"))
+		ctx := ctxWithSession(sess)
+
+		tool := NewNotesIndexTool()
+		result, err := tool.Call(ctx, []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := result.(NotesIndexOutput)
+
+		if out.Count != 2 {
+			t.Fatalf("expected 2 entries, got %d", out.Count)
+		}
+		// Keys are sorted alphabetically so consumers can rely on order.
+		if out.Notes[0].Key != "findings" || out.Notes[1].Key != "plan" {
+			t.Fatalf("unexpected key order: %v", out.Notes)
+		}
+		if out.Notes[0].Bytes != len("the answer is 42") {
+			t.Fatalf("unexpected bytes for findings: %d", out.Notes[0].Bytes)
+		}
+		if out.Notes[1].Preview == "" {
+			t.Fatal("expected non-empty preview for plan")
+		}
+		// Whitespace runs should collapse so previews stay readable.
+		if got := out.Notes[1].Preview; got != "step 1 do thing step 2 do other thing" {
+			t.Fatalf("preview not normalised: %q", got)
+		}
+		expectedTotal := len("step 1 do thing\nstep 2 do other thing") + len("the answer is 42")
+		if out.TotalBytes != expectedTotal {
+			t.Fatalf("unexpected total bytes: %d (want %d)", out.TotalBytes, expectedTotal)
+		}
+	})
+
+	t.Run("truncates long previews with ellipsis", func(t *testing.T) {
+		// 200 'a's far exceeds notesIndexPreviewMaxChars (80).
+		long := make([]byte, 200)
+		for i := range long {
+			long[i] = 'a'
+		}
+		sess := session.NewSession("app", "user", "ni2")
+		sess.SetState("note:big", long)
+		ctx := ctxWithSession(sess)
+
+		out := mustCallNotesIndex(t, ctx)
+		if out.Count != 1 {
+			t.Fatalf("expected 1 entry, got %d", out.Count)
+		}
+		entry := out.Notes[0]
+		if entry.Bytes != 200 {
+			t.Fatalf("expected bytes=200, got %d", entry.Bytes)
+		}
+		// 80 chars of payload + the ellipsis rune.
+		if entry.Preview != strings.Repeat("a", notesIndexPreviewMaxChars)+"…" {
+			t.Fatalf("preview not truncated as expected: %q", entry.Preview)
+		}
+	})
+
+	t.Run("empty when no notes are stored", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "ni3")
+		ctx := ctxWithSession(sess)
+
+		out := mustCallNotesIndex(t, ctx)
+		if out.Count != 0 || out.TotalBytes != 0 || len(out.Notes) != 0 {
+			t.Fatalf("expected empty index, got %+v", out)
+		}
+	})
+
+	t.Run("no session returns graceful empty result", func(t *testing.T) {
+		out := mustCallNotesIndex(t, context.Background())
+		if out.Count != 0 || len(out.Notes) != 0 {
+			t.Fatalf("expected empty index without session, got %+v", out)
+		}
+	})
+}
+
+// mustCallNotesIndex invokes notes_index with empty args and fails the test
+// on any error. Keeps the individual notes_index sub-tests focused on the
+// behaviour they're asserting rather than on plumbing.
+func mustCallNotesIndex(t *testing.T, ctx context.Context) NotesIndexOutput {
+	t.Helper()
+	tool := NewNotesIndexTool()
+	result, err := tool.Call(ctx, []byte(`{}`))
+	if err != nil {
+		t.Fatalf("notes_index call failed: %v", err)
+	}
+	return result.(NotesIndexOutput)
+}
+
 // --- Tools() convenience ---
 
-func TestToolsReturnsAllFour(t *testing.T) {
+func TestToolsReturnsAllContextTools(t *testing.T) {
 	tools := Tools()
-	if len(tools) != 4 {
-		t.Fatalf("expected 4 tools, got %d", len(tools))
+	expected := []string{"delete_context", "check_budget", "note", "read_notes", "notes_index"}
+	if len(tools) != len(expected) {
+		t.Fatalf("expected %d tools, got %d", len(expected), len(tools))
 	}
 
 	names := map[string]bool{}
@@ -204,9 +302,9 @@ func TestToolsReturnsAllFour(t *testing.T) {
 		names[tl.Declaration().Name] = true
 	}
 
-	for _, expected := range []string{"delete_context", "check_budget", "note", "read_notes"} {
-		if !names[expected] {
-			t.Fatalf("missing tool: %s", expected)
+	for _, name := range expected {
+		if !names[name] {
+			t.Fatalf("missing tool: %s", name)
 		}
 	}
 }
