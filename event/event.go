@@ -52,6 +52,10 @@ const (
 
 	// TransferTag is the tag for transfer event.
 	TransferTag = "transfer"
+
+	// ToolCallArgsExtensionKey stores tool call arguments keyed by tool call ID
+	// on tool result events.
+	ToolCallArgsExtensionKey = "trpc_agent.tool_call_args"
 )
 
 // Event represents an event in conversation between agents and users.
