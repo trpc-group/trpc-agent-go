@@ -344,6 +344,51 @@ func TestSummarizeSession_ConcurrentSameKeyRechecksDelta(t *testing.T) {
 	require.Equal(t, 1, s.callCount())
 }
 
+func TestSummarizeSession_CanceledWhileWaitingForSameKey(t *testing.T) {
+	now := time.Now()
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("e1", now.Add(-1*time.Minute), "b1"),
+	}
+	s := &blockingSummarizer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	firstDone := make(chan error, 1)
+
+	go func() {
+		_, err := SummarizeSession(context.Background(), s, base, "b1", false)
+		firstDone <- err
+	}()
+	<-s.started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan struct {
+		updated bool
+		err     error
+	}, 1)
+	go func() {
+		updated, err := SummarizeSession(ctx, s, base, "b1", false)
+		secondDone <- struct {
+			updated bool
+			err     error
+		}{updated: updated, err: err}
+	}()
+	cancel()
+
+	select {
+	case got := <-secondDone:
+		require.ErrorIs(t, got.err, context.Canceled)
+		require.False(t, got.updated)
+	case <-time.After(time.Second):
+		t.Fatal("canceled summary wait did not return")
+	}
+	require.Equal(t, 1, s.callCount())
+
+	close(s.release)
+	require.NoError(t, <-firstDone)
+}
+
 func TestSummarizeSession_EmptyDelta_WithForce(t *testing.T) {
 	now := time.Now()
 	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}

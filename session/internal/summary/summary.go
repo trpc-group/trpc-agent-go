@@ -100,8 +100,17 @@ func SummarizeSession(
 	if base == nil {
 		return false, nil
 	}
-	unlock := lockSessionSummary(base, filterKey)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	unlock, err := lockSessionSummary(ctx, base, filterKey)
+	if err != nil {
+		return false, err
+	}
 	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 
 	// Get previous summary info.
 	var prevText string
@@ -200,6 +209,7 @@ const lastIncludedTsKey = "summary:last_included_ts"
 
 type summaryTriggerFilterKeyContextKey struct{}
 
+// summaryLockKey identifies the summary scope that must be serialized.
 type summaryLockKey struct {
 	appName   string
 	userID    string
@@ -207,48 +217,73 @@ type summaryLockKey struct {
 	filterKey string
 }
 
+// summaryLock is a cancelable binary semaphore with reference counting.
 type summaryLock struct {
-	mu   sync.Mutex
+	ch   chan struct{}
 	refs int
 }
 
+// summaryLockGroup stores in-flight summary locks keyed by session scope.
 type summaryLockGroup struct {
 	mu    sync.Mutex
 	locks map[summaryLockKey]*summaryLock
 }
 
+// sessionSummaryLocks prevents duplicate concurrent summaries in this process.
 var sessionSummaryLocks summaryLockGroup
 
-func (g *summaryLockGroup) lock(key summaryLockKey) func() {
+// lock acquires the keyed summary semaphore or returns when ctx is canceled.
+func (g *summaryLockGroup) lock(ctx context.Context, key summaryLockKey) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	g.mu.Lock()
 	if g.locks == nil {
 		g.locks = make(map[summaryLockKey]*summaryLock)
 	}
 	l := g.locks[key]
 	if l == nil {
-		l = &summaryLock{}
+		l = &summaryLock{ch: make(chan struct{}, 1)}
+		l.ch <- struct{}{}
 		g.locks[key] = l
 	}
 	l.refs++
 	g.mu.Unlock()
 
-	l.mu.Lock()
+	select {
+	case <-l.ch:
+	case <-ctx.Done():
+		g.release(key, l)
+		return nil, ctx.Err()
+	}
 	return func() {
-		l.mu.Unlock()
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		l.refs--
-		if l.refs == 0 && g.locks[key] == l {
-			delete(g.locks, key)
+		select {
+		case l.ch <- struct{}{}:
+		default:
 		}
+		g.release(key, l)
+	}, nil
+}
+
+// release drops one reference and removes the lock after the last waiter exits.
+func (g *summaryLockGroup) release(key summaryLockKey, l *summaryLock) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	l.refs--
+	if l.refs == 0 && g.locks[key] == l {
+		delete(g.locks, key)
 	}
 }
 
-func lockSessionSummary(sess *session.Session, filterKey string) func() {
+// lockSessionSummary serializes summary generation for a session/filter pair.
+func lockSessionSummary(ctx context.Context, sess *session.Session, filterKey string) (func(), error) {
 	if sess == nil {
-		return func() {}
+		return func() {}, nil
 	}
-	return sessionSummaryLocks.lock(summaryLockKey{
+	return sessionSummaryLocks.lock(ctx, summaryLockKey{
 		appName:   sess.AppName,
 		userID:    sess.UserID,
 		sessionID: sess.ID,
