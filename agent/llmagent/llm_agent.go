@@ -71,6 +71,7 @@ type LLMAgent struct {
 	// via WithTools and WithToolSets.
 	codeExecutor         codeexecutor.CodeExecutor
 	workspaceRegistry    *codeexecutor.WorkspaceRegistry
+	workspaceRegistries  map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry
 	planner              planner.Planner
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
 	agentCallbacks       *agent.Callbacks
@@ -135,6 +136,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		genConfig:            options.GenerationConfig,
 		codeExecutor:         options.codeExecutor,
 		workspaceRegistry:    wsReg,
+		workspaceRegistries:  workspaceRegistryMap(options.codeExecutor, wsReg),
 		tools:                tools,
 		userToolNames:        userToolNames,
 		planner:              options.Planner,
@@ -1001,17 +1003,83 @@ func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
 	return codeexecutor.NewWorkspaceRegistry()
 }
 
-// ensureWorkspaceRegistry returns the agent-level registry, creating
-// one if it does not yet exist. The registry is stored on the agent so
-// that successive invocations (different rounds) reuse the same
-// instance and do not create duplicate workspace directories.
-func (a *LLMAgent) ensureWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
+type workspaceRegistryKey struct {
+	exec codeexecutor.CodeExecutor
+}
+
+func workspaceRegistryKeyForExecutor(
+	exec codeexecutor.CodeExecutor,
+) (workspaceRegistryKey, bool) {
+	if exec == nil {
+		return workspaceRegistryKey{}, false
+	}
+	if !reflect.TypeOf(exec).Comparable() {
+		return workspaceRegistryKey{}, false
+	}
+	return workspaceRegistryKey{exec: exec}, true
+}
+
+func workspaceRegistryMap(
+	exec codeexecutor.CodeExecutor,
+	reg *codeexecutor.WorkspaceRegistry,
+) map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry {
+	if reg == nil {
+		return nil
+	}
+	key, ok := workspaceRegistryKeyForExecutor(exec)
+	if !ok {
+		return nil
+	}
+	return map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry{
+		key: reg,
+	}
+}
+
+func (a *LLMAgent) ensureWorkspaceRegistryForExecutor(
+	exec codeexecutor.CodeExecutor,
+) (*codeexecutor.WorkspaceRegistry, bool) {
+	key, ok := workspaceRegistryKeyForExecutor(exec)
+	if !ok {
+		return nil, false
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.workspaceRegistry == nil {
-		a.workspaceRegistry = codeexecutor.NewWorkspaceRegistry()
+	return a.workspaceRegistryForKeyLocked(key), true
+}
+
+func (a *LLMAgent) workspaceRegistryForKeyLocked(
+	key workspaceRegistryKey,
+) *codeexecutor.WorkspaceRegistry {
+	if a.workspaceRegistries == nil {
+		a.workspaceRegistries = make(map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry)
+		if a.workspaceRegistry != nil {
+			if defaultKey, ok := workspaceRegistryKeyForExecutor(a.codeExecutor); ok {
+				a.workspaceRegistries[defaultKey] = a.workspaceRegistry
+			}
+		}
 	}
-	return a.workspaceRegistry
+	if reg := a.workspaceRegistries[key]; reg != nil {
+		return reg
+	}
+	reg := codeexecutor.NewWorkspaceRegistry()
+	a.workspaceRegistries[key] = reg
+	if a.workspaceRegistry == nil {
+		a.workspaceRegistry = reg
+	}
+	return reg
+}
+
+func (a *LLMAgent) workspaceRegistryForInvocation(
+	inv *agent.Invocation,
+	exec codeexecutor.CodeExecutor,
+) *codeexecutor.WorkspaceRegistry {
+	if inv == nil || inv.Session == nil || inv.Session.ID == "" {
+		return buildWorkspaceRegistry()
+	}
+	if reg, ok := a.ensureWorkspaceRegistryForExecutor(exec); ok {
+		return reg
+	}
+	return buildWorkspaceRegistry()
 }
 
 // workspacePrepOptions translates llmagent-level workspace options
@@ -1771,8 +1839,12 @@ func (a *LLMAgent) SetSubAgents(subAgents []agent.Agent) {
 // refreshToolsLocked recomputes the aggregated tool list and user tool
 // tracking map from the current options. Caller must hold a.mu.Lock.
 func (a *LLMAgent) refreshToolsLocked() {
+	reg := a.workspaceRegistry
+	if key, ok := workspaceRegistryKeyForExecutor(a.option.codeExecutor); ok {
+		reg = a.workspaceRegistryForKeyLocked(key)
+	}
 	tools, userToolNames, reg := registerTools(
-		&a.option, a.workspaceRegistry,
+		&a.option, reg,
 	)
 	a.tools = tools
 	a.userToolNames = userToolNames

@@ -70,12 +70,15 @@ func (r *Resolver) CreateWorkspace(
 		reg = codeexecutor.NewWorkspaceRegistry()
 		r.reg = reg
 	}
-	sid := name
+	var sid string
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 		if inv.Session != nil && inv.Session.ID != "" {
 			sid = inv.Session.ID
 		}
 		ctx = withWorkspaceArtifactContext(ctx, inv)
+	}
+	if sid == "" {
+		return eng.Manager().CreateWorkspace(ctx, name, codeexecutor.WorkspacePolicy{})
 	}
 	return reg.Acquire(ctx, eng.Manager(), sid)
 }

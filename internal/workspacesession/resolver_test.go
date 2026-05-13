@@ -129,7 +129,7 @@ func TestResolver_EnsureEngine(t *testing.T) {
 	require.NotNil(t, fallback.Runner())
 }
 
-func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
+func TestResolver_CreateWorkspace_UsesRegistryOnlyWithSessionID(t *testing.T) {
 	mgr := &resolverStubMgr{}
 	eng := newResolverStubEngine(mgr)
 	r := NewResolver(nil, nil)
@@ -140,11 +140,11 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	require.Equal(t, "workspace", ws.ID)
 	require.Equal(t, []string{"workspace"}, mgr.created)
 
-	// Reuse through registry.
+	// No session ID: create a fresh workspace instead of caching "workspace".
 	ws2, err := r.CreateWorkspace(ctx, eng, "workspace")
 	require.NoError(t, err)
 	require.Equal(t, ws, ws2)
-	require.Equal(t, []string{"workspace"}, mgr.created)
+	require.Equal(t, []string{"workspace", "workspace"}, mgr.created)
 
 	inv := agent.NewInvocation()
 	inv.Session = &session.Session{ID: "sess-123"}
@@ -152,7 +152,12 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	ws3, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
 	require.Equal(t, "sess-123", ws3.ID)
-	require.Equal(t, []string{"workspace", "sess-123"}, mgr.created)
+	require.Equal(t, []string{"workspace", "workspace", "sess-123"}, mgr.created)
+
+	ws4, err := r.CreateWorkspace(ctx, eng, "ignored-name")
+	require.NoError(t, err)
+	require.Equal(t, ws3, ws4)
+	require.Equal(t, []string{"workspace", "workspace", "sess-123"}, mgr.created)
 }
 
 // artifactProbeManager asserts CreateWorkspace's context can resolve an artifact
