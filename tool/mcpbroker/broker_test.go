@@ -1485,3 +1485,254 @@ func TestNormalizeConnectionConfigValidation(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ad-hoc MCP only supports HTTP")
 }
+
+// =============================================================================
+// Ad-hoc HTTP timeout tests (WithAdHocHTTPTimeout)
+// =============================================================================
+
+// startSlowHTTPMCPServer starts a real MCP HTTP server whose `slow_echo` tool
+// sleeps for delay before returning. Callers receive the URL suffix /mcp.
+func startSlowHTTPMCPServer(t *testing.T, delay time.Duration) string {
+	t.Helper()
+	srv := tmcp.NewServer("slow-mcp", "1.0.0", tmcp.WithServerPath("/mcp"))
+	slowTool := tmcp.NewTool(
+		"slow_echo",
+		tmcp.WithDescription("Sleeps then echoes the input."),
+		tmcp.WithString("text", tmcp.Required(), tmcp.Description("Text.")),
+	)
+	srv.RegisterTool(slowTool, func(ctx context.Context, req *tmcp.CallToolRequest) (*tmcp.CallToolResult, error) {
+		select {
+		case <-time.After(delay):
+			text, _ := req.Params.Arguments["text"].(string)
+			return tmcp.NewTextResult("echo: " + text), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+
+	httpSrv := httptest.NewServer(srv.HTTPHandler())
+	t.Cleanup(func() {
+		httpSrv.CloseClientConnections()
+		httpSrv.Close()
+	})
+	return httpSrv.URL + "/mcp"
+}
+
+func TestAdHocHTTPTimeout_BoundsSlowCall(t *testing.T) {
+	url := startSlowHTTPMCPServer(t, 2*time.Second)
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithAdHocHTTPTimeout(150*time.Millisecond),
+	)
+
+	start := time.Now()
+	_, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  url + "#tool=slow_echo",
+		Arguments: map[string]any{"text": "hi"},
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "expected deadline exceeded, got nil after %v", elapsed)
+	require.Contains(t, err.Error(), "deadline exceeded",
+		"unexpected error: %v (elapsed=%v)", err, elapsed)
+	require.Less(t, elapsed, 1*time.Second,
+		"expected cut near 150ms, took %v - timeout not enforced for ad-hoc?", elapsed)
+}
+
+func TestAdHocHTTPTimeout_ZeroIsNoOp(t *testing.T) {
+	url := startSlowHTTPMCPServer(t, 300*time.Millisecond)
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithAdHocHTTPTimeout(0), // explicit no-op
+	)
+
+	start := time.Now()
+	out, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  url + "#tool=slow_echo",
+		Arguments: map[string]any{"text": "hi"},
+	})
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "expected success with Timeout=0 (elapsed=%v)", elapsed)
+	require.GreaterOrEqual(t, elapsed, 250*time.Millisecond,
+		"call returned too fast (%v); server should have slept ~300ms", elapsed)
+	require.NotEmpty(t, out.Content, "expected non-empty MCP tool content")
+}
+
+func TestAdHocHTTPTimeout_DefaultIsNoBound(t *testing.T) {
+	url := startSlowHTTPMCPServer(t, 300*time.Millisecond)
+
+	broker := New(WithAllowAdHocHTTP(true)) // option not called
+
+	start := time.Now()
+	out, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  url + "#tool=slow_echo",
+		Arguments: map[string]any{"text": "hi"},
+	})
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "expected success without WithAdHocHTTPTimeout (elapsed=%v)", elapsed)
+	require.GreaterOrEqual(t, elapsed, 250*time.Millisecond,
+		"call returned too fast (%v); server should have slept ~300ms", elapsed)
+	require.NotEmpty(t, out.Content)
+}
+
+func TestAdHocHTTPTimeout_DoesNotAffectNamedServers(t *testing.T) {
+	namedSrv := startBrokerHTTPServer(t)
+	defer namedSrv.Close()
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		// Hostile-low ad-hoc timeout. If it leaks into the named path,
+		// the named server listTools call below would fail.
+		WithAdHocHTTPTimeout(1*time.Millisecond),
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"named": {
+				Transport: "streamable",
+				ServerURL: namedSrv.URL,
+				Timeout:   5 * time.Second,
+			},
+		}),
+	)
+
+	out, err := broker.listTools(context.Background(), listToolsInput{Selector: "named"})
+	require.NoError(t, err,
+		"named-server listTools must not be bounded by WithAdHocHTTPTimeout: %v", err)
+	require.NotEmpty(t, out.Tools)
+}
+
+func TestAdHocHTTPTimeout_NegativeIsClampedToZero(t *testing.T) {
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithAdHocHTTPTimeout(-5*time.Second),
+	)
+	require.Equal(t, time.Duration(0), broker.options.adhocHTTPTimeout,
+		"negative values must be clamped to 0 to avoid breaking normalizeConnectionConfig")
+}
+
+// startStagedSlowHTTPMCPServer starts an MCP HTTP server that introduces a
+// per-JSON-RPC-method delay before delegating to the real MCP handler. The
+// delays map keys are JSON-RPC method names (e.g. "tools/list", "tools/call",
+// "initialize"); methods absent from the map respond immediately.
+func startStagedSlowHTTPMCPServer(t *testing.T, delays map[string]time.Duration) string {
+	t.Helper()
+
+	srv := tmcp.NewServer("staged-slow-mcp", "1.0.0", tmcp.WithServerPath("/mcp"))
+	echoTool := tmcp.NewTool(
+		"echo",
+		tmcp.WithDescription("Echo text back."),
+		tmcp.WithString("text", tmcp.Required(), tmcp.Description("Text.")),
+	)
+	srv.RegisterTool(echoTool, func(ctx context.Context, req *tmcp.CallToolRequest) (*tmcp.CallToolResult, error) {
+		text, _ := req.Params.Arguments["text"].(string)
+		return tmcp.NewTextResult("echo: " + text), nil
+	})
+
+	baseHandler := srv.HTTPHandler()
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && len(delays) > 0 {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+
+			var rpc struct {
+				Method string `json:"method"`
+			}
+			if err := json.Unmarshal(body, &rpc); err == nil {
+				if delay := delays[rpc.Method]; delay > 0 {
+					select {
+					case <-time.After(delay):
+					case <-r.Context().Done():
+						return
+					}
+				}
+			}
+		}
+		baseHandler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(func() {
+		httpSrv.CloseClientConnections()
+		httpSrv.Close()
+	})
+	return httpSrv.URL + "/mcp"
+}
+
+// TestAdHocHTTPTimeout_BoundsSSEStartup verifies that the timeout reaches the
+// SSE transport, even though trpc-mcp-go's SSE client detaches the long-lived
+// stream context. The startup path (waiting for the "endpoint" event) still
+// observes the caller-supplied ctx deadline, so a stalled SSE endpoint cannot
+// hold the broker call past the configured budget.
+func TestAdHocHTTPTimeout_BoundsSSEStartup(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Hold the GET open without ever sending an "endpoint" event.
+		// trpc-mcp-go's SSE client must time out via the broker ctx.
+		<-r.Context().Done()
+	}))
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithAdHocHTTPTimeout(300*time.Millisecond),
+	)
+
+	start := time.Now()
+	_, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  srv.URL + "/sse#tool=anything",
+		Transport: "sse",
+		Arguments: map[string]any{},
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "expected timeout error from stalled SSE endpoint")
+	require.Less(t, elapsed, 1*time.Second,
+		"WithAdHocHTTPTimeout must bound SSE ad-hoc operations; took %v", elapsed)
+}
+
+// TestAdHocHTTPTimeout_BoundsTotalOperationAcrossRPCs verifies that the
+// configured timeout bounds the total wall-clock of a single mcp_call
+// operation, not each underlying MCP RPC independently. The mcp_call path
+// issues ListTools (for argument validation) followed by CallTool; if the
+// broker accidentally gave each RPC its own fresh timeout budget, the total
+// elapsed time would exceed the configured upper bound.
+func TestAdHocHTTPTimeout_BoundsTotalOperationAcrossRPCs(t *testing.T) {
+	url := startStagedSlowHTTPMCPServer(t, map[string]time.Duration{
+		"tools/list": 200 * time.Millisecond,
+		"tools/call": 200 * time.Millisecond,
+	})
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithAdHocHTTPTimeout(300*time.Millisecond),
+	)
+
+	start := time.Now()
+	_, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  url + "#tool=echo",
+		Arguments: map[string]any{"text": "hi"},
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "expected per-call timeout to fire across ListTools+CallTool")
+	require.Contains(t, err.Error(), "deadline exceeded")
+	require.Less(t, elapsed, 500*time.Millisecond,
+		"per-call budget must bound the total wall-clock across all internal RPCs; got %v", elapsed)
+}
