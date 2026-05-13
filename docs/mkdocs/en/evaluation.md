@@ -1589,7 +1589,7 @@ type RubricContent struct {
 
 `rubrics` split a metric into multiple clear-granularity criteria. Each rubric should be independent and directly verifiable from user input and the final answer, which improves judge stability and makes issues easier to locate. `id` is a stable identifier, and `content.text` is the rubric text used by the judge.
 
-`EvalCase.rubrics` adds extra evaluation criteria for a single case. Each rubric targets a configured metric through `metricName`; when that case is evaluated, the framework appends those criteria after the metric's shared rubrics. This affects only the current case and leaves the metric file's global configuration unchanged.
+`EvalCase.rubrics` adds extra evaluation criteria for a single case. Each rubric targets a configured metric through `metricName`; when that case is evaluated, the framework appends those criteria after the metric's shared rubrics. This affects only the current case and leaves the metric file's global configuration unchanged. Rubric `id` values must be unique after merging.
 
 The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in rubric evaluators read the merged criteria, and custom rubric evaluators can read the same field.
 

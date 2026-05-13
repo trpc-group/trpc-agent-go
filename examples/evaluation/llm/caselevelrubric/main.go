@@ -69,11 +69,7 @@ func printSummary(result *evaluation.EvaluationResult, outDir string) {
 	fmt.Printf("App: %s\n", result.AppName)
 	fmt.Printf("Eval Set: %s\n", result.EvalSetID)
 	fmt.Printf("Overall Status: %s\n", result.OverallStatus)
-	runs := 0
-	if len(result.EvalCases) > 0 {
-		runs = len(result.EvalCases[0].EvalCaseResults)
-	}
-	fmt.Printf("Runs: %d\n", runs)
+	fmt.Printf("Runs: %d\n", countRuns(result))
 	for _, caseResult := range result.EvalCases {
 		fmt.Printf("Case %s -> %s\n", caseResult.EvalCaseID, caseResult.OverallStatus)
 		for _, metricResult := range caseResult.MetricResults {
@@ -87,4 +83,17 @@ func printSummary(result *evaluation.EvaluationResult, outDir string) {
 		fmt.Println()
 	}
 	fmt.Printf("Results saved under: %s\n", outDir)
+}
+
+func countRuns(result *evaluation.EvaluationResult) int {
+	if result.EvalResult != nil && result.EvalResult.Summary != nil && result.EvalResult.Summary.NumRuns > 0 {
+		return result.EvalResult.Summary.NumRuns
+	}
+	runs := 0
+	for _, caseResult := range result.EvalCases {
+		if len(caseResult.EvalCaseResults) > runs {
+			runs = len(caseResult.EvalCaseResults)
+		}
+	}
+	return runs
 }

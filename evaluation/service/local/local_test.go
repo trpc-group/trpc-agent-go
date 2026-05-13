@@ -3968,10 +3968,28 @@ func TestBuildCaseRubricIndexValidation(t *testing.T) {
 		wantErr string
 	}{
 		{
+			name:    "nil rubric",
+			metrics: []*metric.EvalMetric{baseMetric()},
+			rubrics: []*evalset.EvalCaseRubric{nil},
+			wantErr: "rubric is nil",
+		},
+		{
+			name:    "empty metric name",
+			metrics: []*metric.EvalMetric{baseMetric()},
+			rubrics: []*evalset.EvalCaseRubric{caseRubric(" ", "case", "Case requirement.")},
+			wantErr: "metricName is empty",
+		},
+		{
 			name:    "missing target metric",
 			metrics: []*metric.EvalMetric{baseMetric()},
 			rubrics: []*evalset.EvalCaseRubric{caseRubric("missing", "case", "Case requirement.")},
 			wantErr: "metric missing not found",
+		},
+		{
+			name:    "no usable metrics",
+			metrics: []*metric.EvalMetric{nil, {}},
+			rubrics: []*evalset.EvalCaseRubric{caseRubric("llm_rubric_response", "case", "Case requirement.")},
+			wantErr: "metric llm_rubric_response not found",
 		},
 		{
 			name:    "empty rubric text",

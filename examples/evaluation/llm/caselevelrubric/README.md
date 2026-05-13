@@ -60,3 +60,5 @@ Key points in the data files:
 ## Expected Behavior
 
 The tool trajectory metric evaluates only tool usage. The case-level rubric is appended only to `travel_answer_quality` and appears in that metric's effective `criterion.llmJudge.rubrics` and rubric scores.
+
+IDs, timestamps, tool-call details, and LLM wording in the sample output can vary by run and model; the stable expectation is the rubric merge behavior.

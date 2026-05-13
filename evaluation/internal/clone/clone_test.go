@@ -119,6 +119,22 @@ func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {
 	assert.Nil(t, cloneTemplateVariableBinding(nil))
 }
 
+func TestCloneEvalCaseRubricsHandlesNilAndEmptyContent(t *testing.T) {
+	got := cloneEvalCaseRubrics([]*evalset.EvalCaseRubric{
+		nil,
+		{
+			MetricName: "llm_rubric_response",
+			ID:         "case:rubric",
+		},
+	})
+	require.Len(t, got, 2)
+	assert.Nil(t, got[0])
+	require.NotNil(t, got[1])
+	assert.Equal(t, "case:rubric", got[1].ID)
+	assert.Nil(t, got[1].Content)
+	assert.Nil(t, cloneEvalCaseRubrics(nil))
+}
+
 func TestCloneEvalMetric_PreservesNilTemplateBinding(t *testing.T) {
 	src := &metric.EvalMetric{
 		MetricName:    "metric-1",

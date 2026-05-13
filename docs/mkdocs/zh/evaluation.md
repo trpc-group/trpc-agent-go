@@ -1592,7 +1592,7 @@ type RubricContent struct {
 
 `rubrics` 用于把一个指标拆成多条粒度清晰的评估细则。每条细则尽量保持独立，并能从用户输入与最终回答中直接验证，使裁判判断更稳定，也便于定位问题。`id` 用作稳定标识，`content.text` 是裁判实际执行的细则文本。
 
-`EvalCase.rubrics` 用于给单个用例补充额外评估细则。每条 rubric 通过 `metricName` 指向一个已配置的 metric；评估该 case 时，框架会在该 metric 的公共 rubrics 之后追加这些细则，只影响当前 case，不改变指标文件中的全局配置。
+`EvalCase.rubrics` 用于给单个用例补充额外评估细则。每条 rubric 通过 `metricName` 指向一个已配置的 metric；评估该 case 时，框架会在该 metric 的公共 rubrics 之后追加这些细则，只影响当前 case，不改变指标文件中的全局配置。合并后的 rubric `id` 需要保持唯一。
 
 目标 metric 使用 `criterion.llmJudge` 承载 rubric 列表。内置 rubric evaluator 会读取合并后的细则；自定义 rubric evaluator 按同一字段读取即可。
 
