@@ -278,7 +278,15 @@ func runEnvRedaction(ctx context.Context, cfg config) error {
 	if os.Getenv("OPENAI_API_KEY") == "" {
 		_ = os.Setenv("OPENAI_API_KEY", "sandbox-example-redacted")
 	}
-	rt := newRuntime(cfg, sandbox.WorkspaceWriteProfile(), 1<<20, 3*time.Second)
+	rt := newRuntime(
+		cfg,
+		sandbox.WorkspaceWriteProfile(),
+		1<<20,
+		3*time.Second,
+		sandbox.WithShellEnvironmentPolicy(sandbox.ShellEnvironmentPolicy{
+			Inherit: sandbox.ShellEnvironmentPolicyInheritCore,
+		}),
+	)
 	if err := requireManagedSandbox(ctx, rt, cfg); err != nil {
 		return err
 	}
