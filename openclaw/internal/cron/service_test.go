@@ -11,6 +11,7 @@ package cron
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -278,6 +280,223 @@ func TestServiceRunNowSendsToDeliveryTarget(t *testing.T) {
 		job.ID,
 		runner.runOpts.RuntimeState[runtimeStateJobID],
 	)
+}
+
+func TestServiceRunNowAppliesRuntimeProfile(t *testing.T) {
+	runner := &stubRunner{reply: "ok"}
+	resolver := runtimeprofile.NewMapResolver(runtimeprofile.Config{
+		Profiles: map[string]runtimeprofile.Profile{
+			"retail": {
+				AppName: "retail-app",
+				Version: "v2",
+				Prompt: runtimeprofile.Prompt{
+					Instruction: "retail instruction",
+				},
+			},
+		},
+	})
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		nil,
+		WithRuntimeProfileResolver(resolver),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Profile: &RuntimeProfileRef{
+			ID: "retail",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+	waitFor(t, func() bool {
+		runner.mu.Lock()
+		defer runner.mu.Unlock()
+		return len(runner.messages) > 0
+	})
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, "retail-app", runner.runOpts.AppName)
+	require.Equal(t, "retail instruction", runner.runOpts.Instruction)
+	require.Equal(
+		t,
+		"retail",
+		runner.runOpts.RuntimeState[runtimeprofile.RuntimeStateProfileID],
+	)
+	require.Equal(
+		t,
+		"v2",
+		runner.runOpts.RuntimeState[runtimeprofile.RuntimeStateProfileVersion],
+	)
+}
+
+func TestServiceRunNowResolvesRuntimeProfileWithRequestMetadata(
+	t *testing.T,
+) {
+	runner := &stubRunner{reply: "ok"}
+	requests := make(chan runtimeprofile.Request, 1)
+	resolver := runtimeprofile.ResolverFunc(func(
+		ctx context.Context,
+		req runtimeprofile.Request,
+	) (runtimeprofile.Profile, error) {
+		requests <- req
+		return runtimeprofile.Profile{
+			ID:      req.ProfileID,
+			AppName: "retail-app",
+		}, nil
+	})
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		nil,
+		WithRuntimeProfileResolver(resolver),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Profile: &RuntimeProfileRef{
+			ID:        "retail",
+			Channel:   "wecom",
+			TenantID:  "tenant-a",
+			SessionID: "session-a",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	var got runtimeprofile.Request
+	select {
+	case got = <-requests:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime profile request was not observed")
+	}
+	require.Equal(t, "retail", got.ProfileID)
+	require.Equal(t, "wecom", got.Channel)
+	require.Equal(t, "tenant-a", got.TenantID)
+	require.Equal(t, "telegram:user", got.UserID)
+	require.Equal(t, "session-a", got.SessionID)
+}
+
+func TestJobProfileJSONOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(Job{ID: "job-1"})
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), `"profile"`)
+}
+
+func TestServiceRunNowFailsClosedForMissingRuntimeProfile(
+	t *testing.T,
+) {
+	runner := &stubRunner{reply: "ok"}
+	svc, err := NewService(t.TempDir(), runner, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Profile: &RuntimeProfileRef{
+			ID:      "retail",
+			Version: "v1",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+	waitFor(t, func() bool {
+		got := svc.Get(job.ID)
+		return got != nil && got.LastStatus == StatusFailed
+	})
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Empty(t, runner.messages)
+}
+
+func TestServiceRunNowFailsOnRuntimeProfileVersionMismatch(
+	t *testing.T,
+) {
+	runner := &stubRunner{reply: "ok"}
+	resolver := runtimeprofile.NewMapResolver(runtimeprofile.Config{
+		Profiles: map[string]runtimeprofile.Profile{
+			"retail": {
+				AppName: "retail-app",
+				Version: "v2",
+			},
+		},
+	})
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		nil,
+		WithRuntimeProfileResolver(resolver),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Profile: &RuntimeProfileRef{
+			ID:      "retail",
+			Version: "v1",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+	waitFor(t, func() bool {
+		got := svc.Get(job.ID)
+		return got != nil && got.LastStatus == StatusFailed &&
+			strings.Contains(got.LastError, "version mismatch")
+	})
 }
 
 func TestToolAddUsesCurrentSessionDelivery(t *testing.T) {

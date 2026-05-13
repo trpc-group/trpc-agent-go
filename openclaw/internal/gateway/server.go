@@ -38,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -492,7 +493,14 @@ func (s *Server) runLocked(
 		)
 	}
 
-	ctx, runOpts := s.resolveRunOptions(ctx, run)
+	ctx, runOpts, err := s.resolveRunOptions(ctx, run)
+	if err != nil {
+		if trace != nil {
+			_ = trace.RecordError(err)
+		}
+		return "", "", nil, err
+	}
+	recordRuntimeProfile(trace, ctx)
 	events, err := s.runner.Run(
 		ctx,
 		run.userID,
@@ -533,10 +541,10 @@ func (s *Server) runLocked(
 func (s *Server) resolveRunOptions(
 	ctx context.Context,
 	run preparedMessageRun,
-) (context.Context, []agent.RunOption) {
+) (context.Context, []agent.RunOption, error) {
 	extra := []agent.RunOption(nil)
 	if s != nil && s.runOptionResolver != nil {
-		resolvedCtx, resolvedOpts := s.runOptionResolver(
+		resolvedCtx, resolvedOpts, err := s.runOptionResolver(
 			ctx,
 			RunOptionInput{
 				Inbound:   run.inbound,
@@ -550,6 +558,9 @@ func (s *Server) resolveRunOptions(
 				),
 			},
 		)
+		if err != nil {
+			return ctx, nil, err
+		}
 		if resolvedCtx != nil {
 			ctx = resolvedCtx
 		}
@@ -563,10 +574,28 @@ func (s *Server) resolveRunOptions(
 		run.requestSystemPrompt,
 	)
 	if len(extra) == 0 {
-		return ctx, runOpts
+		return ctx, runOpts, nil
 	}
 	runOpts = append(runOpts, extra...)
-	return ctx, runOpts
+	return ctx, runOpts, nil
+}
+
+func recordRuntimeProfile(
+	trace *debugrecorder.Trace,
+	ctx context.Context,
+) {
+	if trace == nil {
+		return
+	}
+	profile, ok := runtimeprofile.ProfileFromContext(ctx)
+	if !ok {
+		return
+	}
+	fields := runtimeprofile.TraceFields(profile)
+	if len(fields) == 0 {
+		return
+	}
+	_ = trace.Record(debugrecorder.KindRuntimeProfile, fields)
 }
 
 func (s *Server) runOptions(

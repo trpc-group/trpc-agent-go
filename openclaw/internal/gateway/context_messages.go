@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 const personaContextHeader = "Active preset persona for this chat:"
@@ -103,7 +104,7 @@ func (s *Server) memoryFileContextMessages(
 		return nil
 	}
 
-	appName := strings.TrimSpace(s.appName)
+	appName := runtimeprofile.AppNameFromContext(ctx, s.appName)
 	userID = strings.TrimSpace(userID)
 	if appName == "" || userID == "" {
 		return nil

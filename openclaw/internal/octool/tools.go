@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 const (
@@ -274,6 +275,10 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 
 	workdir, err := resolveWorkdir(in.Workdir)
+	if err != nil {
+		return nil, err
+	}
+	workdir, err = runtimeprofile.ResolveWorkdir(ctx, workdir)
 	if err != nil {
 		return nil, err
 	}

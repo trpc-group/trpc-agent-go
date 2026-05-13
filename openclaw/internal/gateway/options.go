@@ -42,7 +42,7 @@ type RunOptionInput struct {
 type RunOptionResolver func(
 	ctx context.Context,
 	input RunOptionInput,
-) (context.Context, []agent.RunOption)
+) (context.Context, []agent.RunOption, error)
 
 type options struct {
 	basePath      string
@@ -328,16 +328,22 @@ func WithRunOptionResolver(resolver RunOptionResolver) Option {
 		o.runOptionResolver = func(
 			ctx context.Context,
 			input RunOptionInput,
-		) (context.Context, []agent.RunOption) {
-			prevCtx, prevOpts := prev(ctx, input)
+		) (context.Context, []agent.RunOption, error) {
+			prevCtx, prevOpts, err := prev(ctx, input)
+			if err != nil {
+				return ctx, nil, err
+			}
 			if prevCtx == nil {
 				prevCtx = ctx
 			}
-			nextCtx, nextOpts := resolver(prevCtx, input)
+			nextCtx, nextOpts, err := resolver(prevCtx, input)
+			if err != nil {
+				return prevCtx, prevOpts, err
+			}
 			if nextCtx == nil {
 				nextCtx = prevCtx
 			}
-			return nextCtx, append(prevOpts, nextOpts...)
+			return nextCtx, append(prevOpts, nextOpts...), nil
 		}
 	}
 }

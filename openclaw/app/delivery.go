@@ -22,12 +22,12 @@ func buildDeliveryRunOptionResolver() gateway.RunOptionResolver {
 	return func(
 		ctx context.Context,
 		input gateway.RunOptionInput,
-	) (context.Context, []agent.RunOption) {
+	) (context.Context, []agent.RunOption, error) {
 		target, ok, err := delivery.TargetFromRequestExtensions(
 			input.Extensions,
 		)
 		if err != nil || !ok {
-			return ctx, nil
+			return ctx, nil, nil
 		}
 
 		runtimeState := internaloutbound.RuntimeStateForTarget(
@@ -37,11 +37,11 @@ func buildDeliveryRunOptionResolver() gateway.RunOptionResolver {
 			},
 		)
 		if len(runtimeState) == 0 {
-			return ctx, nil
+			return ctx, nil, nil
 		}
 
 		return ctx, []agent.RunOption{
 			agent.MergeRuntimeState(runtimeState),
-		}
+		}, nil
 	}
 }
