@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/delivery"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -61,11 +62,12 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 		Extensions: extensions,
 	}
 
-	_, deliveryOpts := buildDeliveryRunOptionResolver()(
+	_, deliveryOpts, err := buildDeliveryRunOptionResolver()(
 		context.Background(),
 		input,
 	)
-	ctx, conversationOpts := buildConversationRunOptionResolver(
+	require.NoError(t, err)
+	ctx, conversationOpts, err := buildConversationRunOptionResolver(
 		"demo-app",
 		nil,
 		conversation.HistoryOptions{},
@@ -73,6 +75,7 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 		context.Background(),
 		input,
 	)
+	require.NoError(t, err)
 
 	cfg := agent.RunOptions{}
 	for _, opt := range deliveryOpts {
@@ -190,7 +193,7 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 	)
 	require.NoError(t, err)
 
-	ctx, runOpts := buildConversationRunOptionResolver(
+	ctx, runOpts, err := buildConversationRunOptionResolver(
 		"demo-app",
 		sessSvc,
 		conversation.HistoryOptions{},
@@ -202,6 +205,7 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 			Extensions: extensions,
 		},
 	)
+	require.NoError(t, err)
 	require.Equal(
 		t,
 		"chat-scope",
@@ -226,13 +230,86 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 	)
 }
 
+func TestBuildConversationRunOptionResolverUsesProfileAppName(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	baseSessSvc := sessioninmemory.NewSessionService()
+	sessSvc := conversationscope.WrapSessionService(baseSessSvc)
+	key := session.Key{
+		AppName:   "profile-app",
+		UserID:    "chat-scope",
+		SessionID: "session-1",
+	}
+	sess, err := baseSessSvc.CreateSession(
+		context.Background(),
+		key,
+		nil,
+	)
+	require.NoError(t, err)
+
+	userEvt := event.NewResponseEvent(
+		"inv",
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("profile hello"),
+			}},
+		},
+	)
+	userEvt.Timestamp = time.Now()
+	require.NoError(
+		t,
+		baseSessSvc.AppendEvent(context.Background(), sess, userEvt),
+	)
+
+	extensions, err := conversation.MergeRequestExtension(
+		nil,
+		conversation.Annotation{
+			HistoryMode:   conversation.HistoryModeShared,
+			StorageUserID: "chat-scope",
+		},
+	)
+	require.NoError(t, err)
+
+	ctx := runtimeprofile.WithProfile(
+		context.Background(),
+		runtimeprofile.Profile{AppName: "profile-app"},
+	)
+	_, runOpts, err := buildConversationRunOptionResolver(
+		"demo-app",
+		sessSvc,
+		conversation.HistoryOptions{},
+	)(
+		ctx,
+		gateway.RunOptionInput{
+			UserID:     "canonical-user",
+			SessionID:  key.SessionID,
+			Extensions: extensions,
+		},
+	)
+	require.NoError(t, err)
+
+	cfg := agent.RunOptions{}
+	for _, opt := range runOpts {
+		opt(&cfg)
+	}
+	require.Len(t, cfg.InjectedContextMessages, 1)
+	require.Contains(
+		t,
+		cfg.InjectedContextMessages[0].Content,
+		"profile hello",
+	)
+}
+
 func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 	t.Parallel()
 
 	t.Run("invalid extension is ignored", func(t *testing.T) {
 		t.Parallel()
 
-		_, runOpts := buildConversationRunOptionResolver(
+		_, runOpts, err := buildConversationRunOptionResolver(
 			"demo-app",
 			nil,
 			conversation.HistoryOptions{},
@@ -244,6 +321,7 @@ func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 				},
 			},
 		)
+		require.NoError(t, err)
 		require.Nil(t, runOpts)
 	})
 
@@ -262,7 +340,7 @@ func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		_, runOpts := buildConversationRunOptionResolver(
+		_, runOpts, err := buildConversationRunOptionResolver(
 			"demo-app",
 			nil,
 			conversation.HistoryOptions{},
@@ -270,6 +348,7 @@ func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 			context.Background(),
 			gateway.RunOptionInput{Extensions: extensions},
 		)
+		require.NoError(t, err)
 		require.Len(t, runOpts, 1)
 
 		cfg := agent.RunOptions{}

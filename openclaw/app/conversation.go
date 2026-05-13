@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -31,13 +32,13 @@ func buildConversationRunOptionResolver(
 	return func(
 		ctx context.Context,
 		input gateway.RunOptionInput,
-	) (context.Context, []agent.RunOption) {
+	) (context.Context, []agent.RunOption, error) {
 		annotation, ok, err := conversation.
 			AnnotationFromRequestExtensions(
 				input.Extensions,
 			)
 		if err != nil || !ok {
-			return ctx, nil
+			return ctx, nil, nil
 		}
 		if storageUserID := strings.TrimSpace(
 			annotation.StorageUserID,
@@ -57,10 +58,14 @@ func buildConversationRunOptionResolver(
 			runtimeState[graph.CfgKeyIncludeContents] =
 				includeContentsNone
 			if sessionSvc != nil {
+				resolvedAppName := runtimeprofile.AppNameFromContext(
+					ctx,
+					appName,
+				)
 				sess, err := sessionSvc.GetSession(
 					ctx,
 					session.Key{
-						AppName:   appName,
+						AppName:   resolvedAppName,
 						UserID:    input.UserID,
 						SessionID: input.SessionID,
 					},
@@ -90,6 +95,6 @@ func buildConversationRunOptionResolver(
 				agent.MergeRuntimeState(runtimeState),
 			)
 		}
-		return ctx, runOpts
+		return ctx, runOpts, nil
 	}
 }

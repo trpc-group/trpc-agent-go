@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 const (
@@ -175,6 +176,10 @@ func (t *readDocumentTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	path, err = runtimeprofile.ResolveWorkdir(ctx, path)
+	if err != nil {
+		return nil, err
+	}
 
 	maxChars := resolvedMaxChars(in.MaxChars, defaultReadDocumentChars)
 	text, pageCount, err := readDocumentText(path, kind, in.Page)
@@ -249,6 +254,10 @@ func (t *readSpreadsheetTool) Call(
 
 	env := uploadEnvFromContext(ctx, t.uploads)
 	path, kind, err := resolveSpreadsheetPath(in.Path, env)
+	if err != nil {
+		return nil, err
+	}
+	path, err = runtimeprofile.ResolveWorkdir(ctx, path)
 	if err != nil {
 		return nil, err
 	}
