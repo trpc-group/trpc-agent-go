@@ -281,8 +281,18 @@ func runSessionIsolation(ctx context.Context, cfg config) error {
 }
 
 func runEnvRedaction(ctx context.Context, cfg config) error {
-	if os.Getenv("OPENAI_API_KEY") == "" {
-		_ = os.Setenv("OPENAI_API_KEY", "sandbox-example-redacted")
+	openAIAPIKey, hadOpenAIAPIKey := os.LookupEnv("OPENAI_API_KEY")
+	if openAIAPIKey == "" {
+		if err := os.Setenv("OPENAI_API_KEY", "sandbox-example-redacted"); err != nil {
+			return err
+		}
+		defer func() {
+			if hadOpenAIAPIKey {
+				_ = os.Setenv("OPENAI_API_KEY", openAIAPIKey)
+			} else {
+				_ = os.Unsetenv("OPENAI_API_KEY")
+			}
+		}()
 	}
 	rt := newRuntime(
 		cfg,
@@ -423,6 +433,9 @@ func runOutputCap(ctx context.Context, cfg config) error {
 
 func runAdditionalPermissions(ctx context.Context, cfg config) error {
 	rt := newRuntime(cfg, sandbox.WorkspaceWriteProfile(), 1<<20, 3*time.Second)
+	if err := requireManagedSandbox(ctx, rt, cfg); err != nil {
+		return err
+	}
 	ws, err := rt.CreateWorkspace(ctx, "additional-permissions", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		return err
