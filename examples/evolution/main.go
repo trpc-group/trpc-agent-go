@@ -41,7 +41,7 @@ import (
 )
 
 var (
-	flagModel = flag.String("model", "gpt-4o-mini", "LLM model name")
+	flagModel  = flag.String("model", "gpt-4o-mini", "LLM model name")
 	flagRounds = flag.Int("rounds", 3, "number of task rounds to run")
 	flagClean  = flag.Bool("clean", false, "remove managed_skills/ before starting")
 )
