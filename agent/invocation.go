@@ -206,6 +206,14 @@ func NewWaitNoticeTimeoutError(message string) *WaitNoticeTimeoutError {
 // RunOption is a function that configures a RunOptions.
 type RunOption func(*RunOptions)
 
+// ModelSelector selects the model for one framework-managed LLM call.
+// The invocation's Model is the base model for this call when the selector is
+// invoked. Returning nil with nil error keeps that base model. Returning an
+// error fails the current call before the request is built. A selector may be
+// called concurrently by different runs and must protect any shared state it
+// owns.
+type ModelSelector func(ctx context.Context, inv *Invocation) (model.Model, error)
+
 type runControlConfig struct {
 	DisableGraphCompletionEvent bool
 	DisableGraphExecutorEvents  bool
@@ -637,6 +645,15 @@ func ModelContextWindowFromRunOptions(opts *RunOptions) (int, bool) {
 	return opts.ModelContextWindow, true
 }
 
+// WithModelSelector sets the model selector for this specific run.
+// The selector is called before each framework-managed LLM call and takes
+// precedence over any agent-level selector.
+func WithModelSelector(selector ModelSelector) RunOption {
+	return func(opts *RunOptions) {
+		opts.ModelSelector = selector
+	}
+}
+
 // WithCodeExecutor sets the code executor for this specific run.
 // If set, it temporarily overrides the agent's default code executor for this
 // request only.
@@ -1030,6 +1047,8 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+	// ModelSelector selects the model before each framework-managed LLM call.
+	ModelSelector ModelSelector
 
 	// ModelContextWindow is the model context window for this specific run.
 	// If set, it takes precedence over model instance configuration and the

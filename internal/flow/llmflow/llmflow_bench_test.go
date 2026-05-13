@@ -97,7 +97,7 @@ func BenchmarkGenerateContentSeq(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				seq, err := f.generateContentSeq(ctx, invocation, request)
+				seq, err := f.generateContentSeq(ctx, invocation, request, invocation.Model)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -111,7 +111,7 @@ func BenchmarkGenerateContentSeq(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				seq, err := f.generateContentSeq(ctx, invocation, request)
+				seq, err := f.generateContentSeq(ctx, invocation, request, invocation.Model)
 				if err != nil {
 					b.Fatal(err)
 				}

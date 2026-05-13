@@ -14,6 +14,7 @@ See also the focused sub-examples in this directory:
 
 - `retry/` for SDK-level retry configuration.
 - `switch/` for runtime model switching.
+- `selector/` for per-LLM-call model selection with `runner.Run`.
 - `failover/` for primary/backup model failover before the first non-error chunk.
 - `hedge/` for delayed or failure-triggered hedge requests across multiple candidates.
 
