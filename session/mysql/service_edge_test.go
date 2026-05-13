@@ -437,20 +437,24 @@ func TestGetEventsList(t *testing.T) {
 		})
 		evt2Bytes, _ := json.Marshal(evt2)
 		evt3Bytes, _ := json.Marshal(evt3)
+		older := time.Now().Add(-time.Minute)
+		newer := time.Now()
 
-		// Phase 1: query IDs only
-		idRows := sqlmock.NewRows([]string{"id"}).
-			AddRow(int64(10)).
-			AddRow(int64(11))
-		mock.ExpectQuery("SELECT id FROM").
+		// Phase 1: query IDs and created_at in descending page order.
+		// id intentionally does not match created_at order.
+		idRows := sqlmock.NewRows([]string{"id", "created_at"}).
+			AddRow(int64(10), newer).
+			AddRow(int64(11), older)
+		mock.ExpectQuery("SELECT id, created_at FROM").
 			WithArgs("app1", "user1", "sess1", createdAt, 2, 1).
 			WillReturnRows(idRows)
 
-		// Phase 2: fetch events by IDs (ORDER BY id ASC returns in ascending order)
-		eventRows := sqlmock.NewRows([]string{"event"}).
-			AddRow(evt2Bytes).
-			AddRow(evt3Bytes)
-		mock.ExpectQuery("SELECT event FROM").
+		// Phase 2: fetch events by IDs. Return order is deliberately not the
+		// desired final order; getPagedEvents must restore it from created_at.
+		eventRows := sqlmock.NewRows([]string{"id", "event"}).
+			AddRow(int64(10), evt3Bytes).
+			AddRow(int64(11), evt2Bytes)
+		mock.ExpectQuery("SELECT id, event FROM").
 			WithArgs(int64(10), int64(11)).
 			WillReturnRows(eventRows)
 
@@ -475,8 +479,8 @@ func TestGetEventsList(t *testing.T) {
 			{AppName: "app1", UserID: "user1", SessionID: "sess1"},
 		}
 		// Phase 1: query IDs returns empty
-		idRows := sqlmock.NewRows([]string{"id"})
-		mock.ExpectQuery("SELECT id FROM").
+		idRows := sqlmock.NewRows([]string{"id", "created_at"})
+		mock.ExpectQuery("SELECT id, created_at FROM").
 			WithArgs("app1", "user1", "sess1", sqlmock.AnyArg(), 2, 0).
 			WillReturnRows(idRows)
 

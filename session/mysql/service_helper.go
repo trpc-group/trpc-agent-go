@@ -547,8 +547,6 @@ func (s *Service) getEventsList(
 		afterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
 
-	// Avoid ORDER BY on large TEXT/JSON columns to prevent sort buffer overflow (MySQL Error 1038).
-	// Sorting is done in Go after loading all events into memory.
 	query := fmt.Sprintf(`SELECT id, app_name, user_id, session_id, event, created_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
 		AND deleted_at IS NULL`,
@@ -633,9 +631,9 @@ func (s *Service) getPagedEvents(
 		afterTime = sessionCreatedAt
 	}
 
-	// Phase 1: fetch only IDs with ORDER BY + LIMIT/OFFSET.
-	// Sorting lightweight integer rows avoids sort buffer overflow on large event JSON.
-	idsQuery := fmt.Sprintf(`SELECT id FROM %s
+	// Phase 1: fetch only ordering metadata with ORDER BY + LIMIT/OFFSET.
+	// Sorting lightweight rows avoids sort buffer overflow on large event JSON.
+	idsQuery := fmt.Sprintf(`SELECT id, created_at FROM %s
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND created_at >= ?
 		AND deleted_at IS NULL
@@ -643,51 +641,72 @@ func (s *Service) getPagedEvents(
 		LIMIT ? OFFSET ?`,
 		s.tableSessionEvents)
 
-	var ids []int64
+	type eventRef struct {
+		id        int64
+		createdAt time.Time
+	}
+	var refs []eventRef
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var createdAt time.Time
+		if err := rows.Scan(&id, &createdAt); err != nil {
 			return err
 		}
-		ids = append(ids, id)
+		refs = append(refs, eventRef{id: id, createdAt: createdAt})
 		return nil
 	}, idsQuery, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
 
-	if len(ids) == 0 {
+	if len(refs) == 0 {
 		return [][]event.Event{nil}, nil
 	}
 
-	// Phase 2: fetch full event rows by IDs, ordered by PK (index-ordered scan, no filesort).
-	placeholders := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
+	// Phase 2: fetch full event rows by IDs. The final return order is restored
+	// from refs to preserve (created_at ASC, id ASC) semantics.
+	placeholders := make([]string, len(refs))
+	args := make([]any, len(refs))
+	for i, ref := range refs {
 		placeholders[i] = "?"
-		args[i] = id
+		args[i] = ref.id
 	}
 
-	eventsQuery := fmt.Sprintf(`SELECT event FROM %s WHERE id IN (%s) ORDER BY id ASC`,
+	eventsQuery := fmt.Sprintf(`SELECT id, event FROM %s WHERE id IN (%s)`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
 
-	var events []event.Event
+	eventsByID := make(map[int64]event.Event, len(refs))
 	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var id int64
 		var eventBytes []byte
-		if err := rows.Scan(&eventBytes); err != nil {
+		if err := rows.Scan(&id, &eventBytes); err != nil {
 			return err
 		}
 		var evt event.Event
 		if err := json.Unmarshal(eventBytes, &evt); err != nil {
 			return fmt.Errorf("unmarshal event failed: %w", err)
 		}
-		events = append(events, evt)
+		eventsByID[id] = evt
 		return nil
 	}, eventsQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
 
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].createdAt.Equal(refs[j].createdAt) {
+			return refs[i].id < refs[j].id
+		}
+		return refs[i].createdAt.Before(refs[j].createdAt)
+	})
+	events := make([]event.Event, 0, len(refs))
+	for _, ref := range refs {
+		evt, ok := eventsByID[ref.id]
+		if !ok {
+			continue
+		}
+		events = append(events, evt)
+	}
 	return [][]event.Event{events}, nil
 }
 
