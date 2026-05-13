@@ -393,12 +393,18 @@ func splitToolResults(toolResults []model.Message, validIDs map[string]struct{},
 		kept:        make([]model.Message, 0, len(toolResults)),
 		invalidByID: make(map[string][]model.Message),
 	}
+	respondedValidIDs := make(map[string]struct{}, len(validIDs))
 	for _, tr := range toolResults {
 		if tr.ToolID == "" {
 			out.orphan = append(out.orphan, tr)
 			continue
 		}
 		if _, ok := validIDs[tr.ToolID]; ok {
+			if _, responded := respondedValidIDs[tr.ToolID]; responded {
+				out.orphan = append(out.orphan, tr)
+				continue
+			}
+			respondedValidIDs[tr.ToolID] = struct{}{}
 			out.kept = append(out.kept, tr)
 			continue
 		}
