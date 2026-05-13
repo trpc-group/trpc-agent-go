@@ -44,11 +44,19 @@ const (
 	testRunBase    = "/tmp/run"
 	contentHello   = "hello world"
 	contentCollect = "filedata"
+	metadataTmpPre = ".metadata."
+	metadataTmpSuf = ".tmp"
 	waitShortSec   = 5
 	b64PathStat    = "eyJuYW1lIjogIndoYXRldmVyIiwgInNpemUiOiAxMiwg"
 	b64PathStat2   = "Im1vZGUiOiAzMzE4OCwgIm10aW1lIjogIjIwMjQtMDEtMDFU"
 	b64PathStat3   = "MDA6MDA6MDBaIiwgImxpbmtUYXJnZXQiOiAiIn0="
 )
+
+func isMetadataArchiveName(name string) bool {
+	return name == codeexecutor.MetaFileName ||
+		strings.HasPrefix(name, metadataTmpPre) &&
+			strings.HasSuffix(name, metadataTmpSuf)
+}
 
 // helper: fake docker client bound to httptest server.
 func fakeDocker(t *testing.T, h http.HandlerFunc) (*client.Client, func()) {
@@ -450,6 +458,7 @@ func TestWorkspaceRuntime_RunProgram_WithStdin(t *testing.T) {
 }
 
 func TestWorkspaceRuntime_Collect(t *testing.T) {
+	tmpName := codeexecutor.MetadataTempFileName()
 	// will list two files and return tar streams for each
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -464,7 +473,8 @@ func TestWorkspaceRuntime_Collect(t *testing.T) {
 			hj, _ := w.(http.Hijacker)
 			conn, buf, _ := hj.Hijack()
 			// echo file list
-			list := "/work/out/a.txt\n/work/other.png\n"
+			list := "/work/" + tmpName +
+				"\n/work/out/a.txt\n/work/other.png\n"
 			writeHijackStream(t, conn, buf, list, "")
 		case r.Method == http.MethodGet &&
 			strings.Contains(r.URL.Path,
@@ -513,6 +523,7 @@ func TestWorkspaceRuntime_Collect(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, files, 2)
 	require.Equal(t, "out/a.txt", files[0].Name)
+	require.NotEqual(t, tmpName, files[0].Name)
 	require.Contains(t, files[0].Content, contentCollect)
 }
 
@@ -829,7 +840,7 @@ func TestWorkspaceRuntime_StageInputs_DefaultTo_StripsVersion(t *testing.T) {
 			tr := tar.NewReader(bytes.NewReader(b))
 			hdr, err := tr.Next()
 			require.NoError(t, err)
-			if hdr.Name != codeexecutor.MetaFileName {
+			if !isMetadataArchiveName(hdr.Name) {
 				stagedName = hdr.Name
 				stagedDest = r.URL.Query().Get("path")
 			}
@@ -876,6 +887,151 @@ func TestWorkspaceRuntime_StageInputs_DefaultTo_StripsVersion(t *testing.T) {
 	require.Equal(t,
 		path.Join(ws.Path, codeexecutor.DirWork, "inputs"), stagedDest,
 	)
+}
+
+func TestWorkspaceRuntime_SaveWorkspaceMetadata_ReturnsCommitExitError(
+	t *testing.T,
+) {
+	var execIdx int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			execIdx++
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			if execIdx == 1 {
+				require.Contains(
+					t,
+					string(body),
+					"metadata path is a directory",
+				)
+			}
+			id := testExec1
+			if execIdx > 1 {
+				id = testExec2
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + id + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "mv failed")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":1}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{
+		ID:   "w-meta",
+		Path: path.Join(testRunBase, "w-meta"),
+	}
+
+	err := rt.saveWorkspaceMetadata(
+		context.Background(),
+		ws,
+		codeexecutor.WorkspaceMetadata{},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exit code 1")
+	require.GreaterOrEqual(t, execIdx, 2)
+}
+
+func TestWorkspaceRuntime_SaveWorkspaceMetadata_ReturnsPutError(
+	t *testing.T,
+) {
+	var cleanupCalls int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusInternalServerError)
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			cleanupCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{
+		ID:   "w-meta-put",
+		Path: path.Join(testRunBase, "w-meta-put"),
+	}
+
+	err := rt.saveWorkspaceMetadata(
+		context.Background(),
+		ws,
+		codeexecutor.WorkspaceMetadata{},
+	)
+
+	require.Error(t, err)
+	require.Equal(t, 1, cleanupCalls)
+}
+
+func TestWorkspaceRuntime_CleanupMetadataTempEmptyPath(t *testing.T) {
+	rt := &workspaceRuntime{}
+	committed := false
+
+	rt.cleanupMetadataTemp(context.Background(), "", &committed)
 }
 
 func TestWorkspaceRuntime_Collect_NoMatches_And_CopyError(t *testing.T) {
@@ -1500,6 +1656,72 @@ func TestStageInputs_LoadWorkspaceMetadataError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestLoadWorkspaceMetadata_RecoversCorruptJSON(t *testing.T) {
+	ws := codeexecutor.Workspace{
+		ID:   "w-md-corrupt",
+		Path: path.Join(testRunBase, "w-md-corrupt"),
+	}
+	var execIdx int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			execIdx++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, bw, _ := hj.Hijack()
+			list := ws.Path + "/" + codeexecutor.MetaFileName + "\n"
+			writeHijackStream(t, conn, bw, list, "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.Header().Set(
+				"X-Docker-Container-Path-Stat",
+				b64PathStat+b64PathStat2+b64PathStat3,
+			)
+			data := []byte("not-json}")
+			var tarBuf bytes.Buffer
+			tw := tar.NewWriter(&tarBuf)
+			_ = tw.WriteHeader(&tar.Header{
+				Name: codeexecutor.MetaFileName,
+				Mode: 0o600,
+				Size: int64(len(data)),
+			})
+			_, _ = tw.Write(data)
+			_ = tw.Close()
+			_, _ = w.Write(tarBuf.Bytes())
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	md, err := rt.loadWorkspaceMetadata(context.Background(), ws)
+	require.NoError(t, err)
+	require.Equal(t, 1, md.Version)
+	require.NotNil(t, md.Skills)
+	require.Equal(t, 1, execIdx)
+}
+
 func TestStageInputs_AllBranches(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -1569,6 +1791,7 @@ func TestStageInputs_AllBranches(t *testing.T) {
 func TestCollectOutputs_SaveInlineLimits(t *testing.T) {
 	// Exec lists two files; archive serves content.
 	calls := 0
+	tmpName := codeexecutor.MetadataTempFileName()
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost &&
@@ -1582,7 +1805,8 @@ func TestCollectOutputs_SaveInlineLimits(t *testing.T) {
 			hj, _ := w.(http.Hijacker)
 			conn, buf, _ := hj.Hijack()
 			writeHijackStream(t, conn, buf,
-				"/ws/out/a.txt\n/ws/out/b.txt\n", "")
+				"/ws/"+tmpName+"\n"+
+					"/ws/out/a.txt\n/ws/out/b.txt\n", "")
 		case r.Method == http.MethodGet &&
 			strings.Contains(r.URL.Path,
 				"/exec/"+testExec1+"/json"):

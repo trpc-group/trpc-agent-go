@@ -485,6 +485,9 @@ func (r *Runtime) Collect(
 			name := strings.TrimPrefix(
 				realp, realRoot+string(os.PathSeparator),
 			)
+			if codeexecutor.IsRootMetadataTempPath(name) {
+				continue
+			}
 			if seen[name] {
 				continue
 			}
@@ -568,10 +571,30 @@ func (r *Runtime) StageInputs(
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
 ) error {
+	return codeexecutor.WithWorkspaceMetadataLock(
+		ctx,
+		ws.Path,
+		func(ctx context.Context) error {
+			return r.stageInputsLocked(ctx, ws, specs)
+		},
+	)
+}
+
+func (r *Runtime) stageInputsLocked(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	specs []codeexecutor.InputSpec,
+) error {
 	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
 		return err
 	}
-	md, _ := codeexecutor.LoadMetadata(ws.Path)
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	if err != nil {
+		if !codeexecutor.IsMetadataCorruptError(err) {
+			return err
+		}
+		md = codeexecutor.NewWorkspaceMetadata()
+	}
 	for _, sp := range specs {
 		mode := strings.ToLower(strings.TrimSpace(sp.Mode))
 		if mode == "" {
@@ -674,6 +697,8 @@ func (r *Runtime) stageInput(
 }
 
 // CollectOutputs implements the declarative collector with limits.
+// It returns codeexecutor.ErrPartialOutputCommit when collected files exist
+// but the metadata record could not be committed.
 func (r *Runtime) CollectOutputs(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
@@ -742,15 +767,33 @@ func (r *Runtime) CollectOutputs(
 			}
 		}
 	}
-	md, _ := codeexecutor.LoadMetadata(ws.Path)
-	md.Outputs = append(md.Outputs, codeexecutor.OutputRecord{
-		Globs:     spec.Globs,
-		SavedAs:   savedNames,
-		Versions:  savedVers,
-		LimitsHit: out.LimitsHit,
-		Timestamp: time.Now(),
-	})
-	_ = codeexecutor.SaveMetadata(ws.Path, md)
+	if err := codeexecutor.WithWorkspaceMetadataLock(
+		ctx,
+		ws.Path,
+		func(context.Context) error {
+			md, err := codeexecutor.LoadMetadata(ws.Path)
+			if err != nil {
+				if !codeexecutor.IsMetadataCorruptError(err) {
+					return err
+				}
+				md = codeexecutor.NewWorkspaceMetadata()
+			}
+			md.Outputs = append(md.Outputs, codeexecutor.OutputRecord{
+				Globs:     spec.Globs,
+				SavedAs:   savedNames,
+				Versions:  savedVers,
+				LimitsHit: out.LimitsHit,
+				Timestamp: time.Now(),
+			})
+			return codeexecutor.SaveMetadata(ws.Path, md)
+		},
+	); err != nil {
+		return out, fmt.Errorf(
+			"%w: %w",
+			codeexecutor.ErrPartialOutputCommit,
+			err,
+		)
+	}
 	return out, nil
 }
 
@@ -765,6 +808,12 @@ func collectOutputMatch(
 	if !withinWorkspacePath(wsPath, absPath) {
 		return codeexecutor.FileRef{}, 0, true, nil
 	}
+	name := strings.TrimPrefix(
+		absPath, wsPath+string(os.PathSeparator),
+	)
+	if codeexecutor.IsRootMetadataTempPath(name) {
+		return codeexecutor.FileRef{}, 0, true, nil
+	}
 	st, err := os.Stat(absPath)
 	if err != nil {
 		return codeexecutor.FileRef{}, 0, false, err
@@ -772,9 +821,6 @@ func collectOutputMatch(
 	if st.IsDir() {
 		return codeexecutor.FileRef{}, 0, true, nil
 	}
-	name := strings.TrimPrefix(
-		absPath, wsPath+string(os.PathSeparator),
-	)
 	limit := int(maxFileBytes)
 	if int64(limit) > leftTotal {
 		limit = int(leftTotal)

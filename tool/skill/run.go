@@ -15,6 +15,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -146,8 +147,6 @@ const (
 )
 
 const workspaceMetadataFileMode uint32 = 0o600
-
-const workspaceMetadataTmpFile = ".metadata.tmp"
 
 const (
 	editorHelperDir     = ".trpc_agent"
@@ -493,7 +492,12 @@ func (t *RunTool) Call(
 	}
 
 	autoFiles := t.autoExportWorkspaceOut(ctxIO, eng, ws, in)
-	files, manifest, err := t.prepareOutputs(ctxIO, eng, ws, in)
+	files, manifest, outputWarn, err := t.prepareOutputs(
+		ctxIO,
+		eng,
+		ws,
+		in,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -515,6 +519,9 @@ func (t *RunTool) Call(
 	}
 	if len(filteredOutputs.warnings) > 0 {
 		out.Warnings = append(out.Warnings, filteredOutputs.warnings...)
+	}
+	if len(outputWarn) > 0 {
+		out.Warnings = append(out.Warnings, outputWarn...)
 	}
 	out.StagedInputs = staged
 	if len(stageWarn) > 0 {
@@ -1541,33 +1548,47 @@ func (t *RunTool) prepareOutputs(
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	in runInput,
-) ([]codeexecutor.File, *codeexecutor.OutputManifest, error) {
+) ([]codeexecutor.File, *codeexecutor.OutputManifest, []string, error) {
 	var files []codeexecutor.File
 	var manifest *codeexecutor.OutputManifest
 	if in.Outputs != nil && len(in.OutputFiles) == 0 {
 		m, err := eng.FS().CollectOutputs(ctx, ws, *in.Outputs)
-		if err != nil {
-			return nil, nil, err
+		if err != nil &&
+			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
+			return nil, nil, nil, err
 		}
 		manifest = &m
 		if in.Outputs.Inline {
-			for _, fr := range m.Files {
-				files = append(files, codeexecutor.File{
-					Name:      fr.Name,
-					Content:   fr.Content,
-					MIMEType:  fr.MIMEType,
-					SizeBytes: fr.SizeBytes,
-					Truncated: fr.Truncated,
-				})
-			}
+			files = outputFilesFromManifest(m)
 		}
-		return files, manifest, nil
+		if err != nil {
+			return files, manifest, []string{
+				warnPartialOutputCommit,
+			}, nil
+		}
+		return files, manifest, nil, nil
 	}
 	fs, err := t.collectFiles(ctx, eng, ws, in.OutputFiles)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return fs, nil, nil
+	return fs, nil, nil, nil
+}
+
+func outputFilesFromManifest(
+	manifest codeexecutor.OutputManifest,
+) []codeexecutor.File {
+	files := make([]codeexecutor.File, 0, len(manifest.Files))
+	for _, fr := range manifest.Files {
+		files = append(files, codeexecutor.File{
+			Name:      fr.Name,
+			Content:   fr.Content,
+			MIMEType:  fr.MIMEType,
+			SizeBytes: fr.SizeBytes,
+			Truncated: fr.Truncated,
+		})
+	}
+	return files
 }
 
 // buildRunOutput converts a RunResult and files into runOutput.
@@ -1738,8 +1759,10 @@ const (
 )
 
 const (
-	warnStdoutTruncated           = "stdout truncated"
-	warnStderrTruncated           = "stderr truncated"
+	warnStdoutTruncated     = "stdout truncated"
+	warnStderrTruncated     = "stderr truncated"
+	warnPartialOutputCommit = "output files were collected, but " +
+		"workspace metadata could not be updated"
 	warnFailedRunEmptyOutputFiles = "empty output_files omitted " +
 		"because command failed; shell redirections can create " +
 		"empty files before execution fails"
