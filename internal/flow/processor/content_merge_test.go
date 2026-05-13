@@ -244,3 +244,146 @@ func Test_rearrangeAsyncFuncRespHist_MergesSeparateResponseEvents(t *testing.T) 
 	assert.ElementsMatch(t, []string{"t1", "t2"}, out[1].GetToolResultIDs())
 	assert.Len(t, out[1].Response.Choices, 2)
 }
+
+func Test_rearrangeAsyncFuncRespHist_ReusedToolCallIDsStayInTheirRounds(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	firstCall := event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{ID: "file_read:47", Function: model.FunctionDefinitionParam{Name: "file_read"}},
+							{ID: "shell:49", Function: model.FunctionDefinitionParam{Name: "shell"}},
+						},
+					},
+				},
+			},
+		},
+	}
+	firstFileResult := event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{Message: model.Message{Role: model.RoleTool, ToolID: "file_read:47", Content: "file result"}},
+			},
+		},
+	}
+	firstShellResult := event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{Message: model.Message{Role: model.RoleTool, ToolID: "shell:49", Content: "first shell result"}},
+			},
+		},
+	}
+	secondCall := event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{ID: "shell:49", Function: model.FunctionDefinitionParam{Name: "shell"}},
+						},
+					},
+				},
+			},
+		},
+	}
+	secondShellResult := event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{Message: model.Message{Role: model.RoleTool, ToolID: "shell:49", Content: "second shell result"}},
+			},
+		},
+	}
+
+	out := p.rearrangeAsyncFuncRespHist([]event.Event{
+		firstCall,
+		firstFileResult,
+		firstShellResult,
+		secondCall,
+		secondShellResult,
+	})
+
+	assert.Len(t, out, 4, "each call round should keep only its own tool result event")
+	assert.True(t, out[0].IsToolCallResponse())
+	assert.True(t, out[1].IsToolResultResponse())
+	assert.ElementsMatch(t, []string{"file_read:47", "shell:49"}, out[1].GetToolResultIDs())
+	assert.Contains(t, []string{
+		out[1].Response.Choices[0].Message.Content,
+		out[1].Response.Choices[1].Message.Content,
+	}, "first shell result")
+	assert.NotContains(t, []string{
+		out[1].Response.Choices[0].Message.Content,
+		out[1].Response.Choices[1].Message.Content,
+	}, "second shell result")
+	assert.True(t, out[2].IsToolCallResponse())
+	assert.True(t, out[3].IsToolResultResponse())
+	assert.Equal(t, []string{"shell:49"}, out[3].GetToolResultIDs())
+	assert.Equal(t, "second shell result", out[3].Response.Choices[0].Message.Content)
+}
+
+func Test_rearrangeAsyncFuncRespHist_FiltersMixedResponseEventAcrossRounds(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	firstCall := event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{ID: "call_first", Function: model.FunctionDefinitionParam{Name: "first_tool"}},
+						},
+					},
+				},
+			},
+		},
+	}
+	secondCall := event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{ID: "call_second", Function: model.FunctionDefinitionParam{Name: "second_tool"}},
+						},
+					},
+				},
+			},
+		},
+	}
+	mixedResult := event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{Message: model.Message{Role: model.RoleTool, ToolID: "call_first", Content: "first result"}},
+				{Message: model.Message{Role: model.RoleTool, ToolID: "call_second", Content: "second result"}},
+			},
+		},
+	}
+
+	out := p.rearrangeAsyncFuncRespHist([]event.Event{firstCall, secondCall, mixedResult})
+
+	assert.Len(t, out, 4, "mixed tool result event should be split across matching rounds")
+	assert.True(t, out[0].IsToolCallResponse())
+	assert.True(t, out[1].IsToolResultResponse())
+	assert.Equal(t, []string{"call_first"}, out[1].GetToolResultIDs())
+	assert.Len(t, out[1].Response.Choices, 1)
+	assert.Equal(t, "first result", out[1].Response.Choices[0].Message.Content)
+	assert.True(t, out[2].IsToolCallResponse())
+	assert.True(t, out[3].IsToolResultResponse())
+	assert.Equal(t, []string{"call_second"}, out[3].GetToolResultIDs())
+	assert.Len(t, out[3].Response.Choices, 1)
+	assert.Equal(t, "second result", out[3].Response.Choices[0].Message.Content)
+}
