@@ -10,12 +10,10 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -33,12 +31,11 @@ type REPLResult struct {
 	FinalAnswer string
 }
 
-// REPL is a persistent Starlark execution environment.
-// It holds the external context as a variable and provides llm_query, rlm_query, and FINAL
-// as callable builtins. Variables persist across Execute() calls without being frozen.
+// REPL is a persistent Starlark execution environment with injected builtins.
 type REPL struct {
 	serviceAddr string
 	depth       int
+	rootQuery   string
 
 	thread      *starlark.Thread
 	predeclared starlark.StringDict
@@ -48,10 +45,11 @@ type REPL struct {
 }
 
 // NewREPL creates a Starlark REPL with the given context pre-loaded.
-func NewREPL(contextStr, serviceAddr string, depth int) *REPL {
+func NewREPL(contextStr, serviceAddr string, depth int, rootQuery string) *REPL {
 	r := &REPL{
 		serviceAddr: serviceAddr,
 		depth:       depth,
+		rootQuery:   rootQuery,
 		stdout:      &strings.Builder{},
 		predeclared: make(starlark.StringDict),
 		accumulated: make(starlark.StringDict),
@@ -75,9 +73,7 @@ func NewREPL(contextStr, serviceAddr string, depth int) *REPL {
 	return r
 }
 
-// Execute runs a Starlark code block and returns the captured output.
-// Uses Parse+FileProgram+Init (skipping Freeze) so mutable values persist across blocks.
-// If FINAL() is called mid-block, execution halts immediately via sentinel error.
+// Execute runs a Starlark code block and returns captured output.
 func (r *REPL) Execute(code string) *REPLResult {
 	r.stdout.Reset()
 	r.finalAnswer = ""
@@ -101,7 +97,6 @@ func (r *REPL) Execute(code string) *REPLResult {
 		return &REPLResult{Stdout: r.stdout.String(), Stderr: err.Error()}
 	}
 
-	// Init executes the program. We intentionally skip Freeze() so lists/dicts remain mutable.
 	globals, err := prog.Init(r.thread, combined)
 
 	for k, v := range globals {
@@ -112,7 +107,6 @@ func (r *REPL) Execute(code string) *REPLResult {
 		Stdout:      r.stdout.String(),
 		FinalAnswer: r.finalAnswer,
 	}
-	// Only report as error if it's not caused by FINAL() interrupting execution.
 	if err != nil && r.finalAnswer == "" {
 		result.Stderr = err.Error()
 	}
@@ -133,8 +127,6 @@ func (r *REPL) builtinLLMQuery(_ *starlark.Thread, fn *starlark.Builtin, args st
 	return starlark.String(resp), nil
 }
 
-// llm_query_batched(prompts) -> list[string]
-// Sends multiple LLM prompts concurrently and returns all responses.
 func (r *REPL) builtinLLMQueryBatched(_ *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var prompts *starlark.List
 	if err := starlark.UnpackPositionalArgs(fn.Name(), args, kwargs, 1, &prompts); err != nil {
@@ -172,8 +164,6 @@ func (r *REPL) builtinRLMQuery(_ *starlark.Thread, fn *starlark.Builtin, args st
 	return starlark.String(resp), nil
 }
 
-// rlm_query_batched(queries, contexts, boundary="", stop_condition="") -> list[string]
-// Spawns multiple recursive RLM children concurrently and returns all answers.
 func (r *REPL) builtinRLMQueryBatched(_ *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var queries, contexts *starlark.List
 	var boundary, stopCondition string
@@ -209,7 +199,6 @@ func (r *REPL) builtinRLMQueryBatched(_ *starlark.Thread, fn *starlark.Builtin, 
 	return starlark.NewList(elems), nil
 }
 
-// FINAL(answer) halts execution immediately by returning a sentinel error.
 func (r *REPL) builtinFinal(_ *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var answer starlark.Value
 	if err := starlark.UnpackPositionalArgs(fn.Name(), args, kwargs, 1, &answer); err != nil {
@@ -226,7 +215,7 @@ func (r *REPL) builtinFinal(_ *starlark.Thread, fn *starlark.Builtin, args starl
 // --- HTTP call helpers ---
 
 func (r *REPL) callLLM(prompt string) (string, error) {
-	body, err := r.postJSON("/api/llm", LLMQueryRequest{Prompt: prompt})
+	body, err := postJSON(r.serviceAddr, "/api/llm", LLMQueryRequest{Prompt: prompt})
 	if err != nil {
 		return "", err
 	}
@@ -241,9 +230,9 @@ func (r *REPL) callLLM(prompt string) (string, error) {
 }
 
 func (r *REPL) callRLM(query, subContext, boundary, stopCondition string) (string, error) {
-	body, err := r.postJSON("/api/rlm", RLMQueryRequest{
+	body, err := postJSON(r.serviceAddr, "/api/rlm", RLMQueryRequest{
 		Query: query, Context: subContext, Depth: r.depth + 1,
-		Boundary: boundary, StopCondition: stopCondition,
+		RootQuery: r.rootQuery, Boundary: boundary, StopCondition: stopCondition,
 	})
 	if err != nil {
 		return "", err
@@ -259,6 +248,8 @@ func (r *REPL) callRLM(query, subContext, boundary, stopCondition string) (strin
 }
 
 func (r *REPL) batchCallLLM(prompts []string) []string {
+	log.Printf("[REPL depth=%d] llm_query_batched: dispatching %d parallel LLM calls", r.depth, len(prompts))
+	start := time.Now()
 	results := make([]string, len(prompts))
 	var wg sync.WaitGroup
 	for i, p := range prompts {
@@ -268,47 +259,52 @@ func (r *REPL) batchCallLLM(prompts []string) []string {
 			resp, err := r.callLLM(prompt)
 			if err != nil {
 				results[idx] = fmt.Sprintf("Error: %v", err)
+				log.Printf("[REPL depth=%d] llm_batch[%d/%d] FAIL: %v", r.depth, idx+1, len(prompts), err)
 			} else {
 				results[idx] = resp
+				log.Printf("[REPL depth=%d] llm_batch[%d/%d] done (%d chars)", r.depth, idx+1, len(prompts), len(resp))
 			}
 		}(i, p)
 	}
 	wg.Wait()
+	log.Printf("[REPL depth=%d] llm_query_batched: all %d calls completed in %s", r.depth, len(prompts), time.Since(start))
 	return results
 }
 
 func (r *REPL) batchCallRLM(queries, contexts []string, boundary, stopCondition string) []string {
+	if len(queries) > MaxFanOut {
+		log.Printf("[REPL depth=%d] rlm_query_batched: REJECTED %d sub-agents (max %d)",
+			r.depth, len(queries), MaxFanOut)
+		results := make([]string, len(queries))
+		for i := range results {
+			results[i] = fmt.Sprintf("Error: batch size %d exceeds max fan-out %d. Split into smaller batches.", len(queries), MaxFanOut)
+		}
+		return results
+	}
+	log.Printf("[REPL depth=%d] rlm_query_batched: dispatching %d parallel sub-agents (child depth=%d)",
+		r.depth, len(queries), r.depth+1)
+	start := time.Now()
 	results := make([]string, len(queries))
 	var wg sync.WaitGroup
 	for i := range queries {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
+			subStart := time.Now()
 			resp, err := r.callRLM(queries[idx], contexts[idx], boundary, stopCondition)
 			if err != nil {
 				results[idx] = fmt.Sprintf("Error: %v", err)
+				log.Printf("[REPL depth=%d] rlm_batch[%d/%d] FAIL after %s: %v",
+					r.depth, idx+1, len(queries), time.Since(subStart), err)
 			} else {
 				results[idx] = resp
+				log.Printf("[REPL depth=%d] rlm_batch[%d/%d] done after %s (%d chars)",
+					r.depth, idx+1, len(queries), time.Since(subStart), len(resp))
 			}
 		}(i)
 	}
 	wg.Wait()
+	log.Printf("[REPL depth=%d] rlm_query_batched: all %d sub-agents completed in %s",
+		r.depth, len(queries), time.Since(start))
 	return results
-}
-
-// --- HTTP transport ---
-
-var httpClient = &http.Client{Timeout: 5 * time.Minute}
-
-func (r *REPL) postJSON(path string, reqBody any) ([]byte, error) {
-	data, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := httpClient.Post("http://"+r.serviceAddr+path, "application/json", bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
 }

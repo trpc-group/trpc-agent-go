@@ -10,9 +10,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -23,48 +25,48 @@ import (
 	openaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-// Service is the central HTTP server that manages all LLM calls and recursive RLM invocations.
-// The Starlark REPL calls back to this service for llm_query and rlm_query, providing a single
-// point of monitoring and control for the entire recursion tree.
+// Service is the central HTTP server that proxies LLM calls and handles
+// recursive RLM invocations. Both the outer agent's tools and the inner
+// Starlark REPL call back to this service via HTTP.
 type Service struct {
 	model    model.Model
 	server   *http.Server
 	addr     string
 	maxDepth int
-	maxIter  int
+	limiter  *RateLimiter
 
 	totalLLMCalls int64
 	totalRLMCalls int64
+	subAgentSeq   int64
 }
 
-// LLMQueryRequest is the JSON body for POST /api/llm.
+// --- Request/Response types ---
+
 type LLMQueryRequest struct {
 	Prompt string `json:"prompt"`
 }
 
-// LLMQueryResponse is the JSON response from POST /api/llm.
 type LLMQueryResponse struct {
 	Response string `json:"response,omitempty"`
 	Error    string `json:"error,omitempty"`
 }
 
-// RLMQueryRequest is the JSON body for POST /api/rlm.
 type RLMQueryRequest struct {
 	Query         string `json:"query"`
 	Context       string `json:"context"`
 	Depth         int    `json:"depth"`
+	RootQuery     string `json:"root_query,omitempty"`
 	Boundary      string `json:"boundary,omitempty"`
 	StopCondition string `json:"stop_condition,omitempty"`
 }
 
-// RLMQueryResponse is the JSON response from POST /api/rlm.
 type RLMQueryResponse struct {
 	Answer string `json:"answer,omitempty"`
 	Error  string `json:"error,omitempty"`
 }
 
 // NewService creates and starts the HTTP service on a random available port.
-func NewService(modelName string, maxDepth, maxIter int) (*Service, error) {
+func NewService(modelName string, maxDepth, qpm int) (*Service, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
@@ -74,8 +76,9 @@ func NewService(modelName string, maxDepth, maxIter int) (*Service, error) {
 		model:    openaimodel.New(modelName),
 		addr:     listener.Addr().String(),
 		maxDepth: maxDepth,
-		maxIter:  maxIter,
+		limiter:  NewRateLimiter(qpm),
 	}
+	log.Printf("[Service] rate limit: %d QPM", qpm)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/llm", svc.handleLLMQuery)
@@ -99,9 +102,44 @@ func (s *Service) Stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	s.server.Shutdown(ctx)
+	s.limiter.Stop()
 }
 
-// handleLLMQuery handles plain LLM completion requests from the REPL.
+// RunRLM creates and executes a ReAct-driven RLM agent at the given depth.
+func (s *Service) RunRLM(ctx context.Context, req RLMQueryRequest) (string, error) {
+	seq := atomic.AddInt64(&s.subAgentSeq, 1)
+	agentID := fmt.Sprintf("d%d#%d", req.Depth, seq)
+
+	log.Printf("[%s] START depth=%d context=%d chars query=%q",
+		agentID, req.Depth, len(req.Context), truncate(req.Query, 120))
+	start := time.Now()
+
+	rootQuery := req.RootQuery
+	if rootQuery == "" {
+		rootQuery = req.Query
+	}
+	r := &RLM{
+		model:       s.model,
+		serviceAddr: s.addr,
+		depth:       req.Depth,
+		maxDepth:    s.maxDepth,
+		agentID:     agentID,
+		limiter:     s.limiter,
+		rootQuery:   rootQuery,
+	}
+	answer, err := r.Run(ctx, req.Query, req.Context, req.Boundary, req.StopCondition)
+
+	elapsed := time.Since(start)
+	if err != nil {
+		log.Printf("[%s] FAIL  elapsed=%s error=%v", agentID, elapsed, err)
+	} else {
+		log.Printf("[%s] DONE  elapsed=%s answer=%d chars", agentID, elapsed, len(answer))
+	}
+	return answer, err
+}
+
+// --- HTTP handlers ---
+
 func (s *Service) handleLLMQuery(w http.ResponseWriter, r *http.Request) {
 	var req LLMQueryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -120,8 +158,6 @@ func (s *Service) handleLLMQuery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, LLMQueryResponse{Response: resp})
 }
 
-// handleRLMQuery handles recursive RLM requests from the REPL.
-// Each request spawns a child RLM with its own iterative loop and REPL.
 func (s *Service) handleRLMQuery(w http.ResponseWriter, r *http.Request) {
 	var req RLMQueryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -130,21 +166,12 @@ func (s *Service) handleRLMQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	n := atomic.AddInt64(&s.totalRLMCalls, 1)
-	log.Printf("[Service] rlm_query #%d depth=%d context=%d chars", n, req.Depth, len(req.Context))
+	log.Printf("[Service] /api/rlm #%d depth=%d context=%d chars", n, req.Depth, len(req.Context))
 
-	// Detach from HTTP request lifecycle — recursive RLM calls can be long-running.
 	ctx := context.WithoutCancel(r.Context())
 
 	if req.Depth >= s.maxDepth {
-		// At max depth, fall back to a plain LLM call with truncated context.
-		prompt := req.Query + "\n\nContext:\n" + truncate(req.Context, 50000)
-		resp, err := s.callLLM(ctx, prompt)
-		if err != nil {
-			writeJSON(w, RLMQueryResponse{Error: err.Error()})
-			return
-		}
-		writeJSON(w, RLMQueryResponse{Answer: resp})
-		return
+		log.Printf("[Service] depth=%d >= maxDepth=%d, leaf agent (no further recursion)", req.Depth, s.maxDepth)
 	}
 
 	answer, err := s.RunRLM(ctx, req)
@@ -155,21 +182,14 @@ func (s *Service) handleRLMQuery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, RLMQueryResponse{Answer: answer})
 }
 
-// RunRLM creates and executes an RLM instance at the given depth.
-func (s *Service) RunRLM(ctx context.Context, req RLMQueryRequest) (string, error) {
-	r := &RLM{
-		model:       s.model,
-		serviceAddr: s.addr,
-		depth:       req.Depth,
-		maxDepth:    s.maxDepth,
-		maxIter:     s.maxIter,
-	}
-	return r.Run(ctx, req.Query, req.Context, req.Boundary, req.StopCondition)
-}
+// --- Internal helpers ---
 
 func (s *Service) callLLM(ctx context.Context, prompt string) (string, error) {
+	if err := s.limiter.Wait(ctx); err != nil {
+		return "", fmt.Errorf("rate limit: %w", err)
+	}
 	messages := []model.Message{{Role: model.RoleUser, Content: prompt}}
-	resp, err := generateSync(ctx, s.model, messages)
+	resp, err := generateSync(ctx, s.model, messages, nil)
 	if err != nil {
 		return "", err
 	}
@@ -182,4 +202,38 @@ func (s *Service) callLLM(ctx context.Context, prompt string) (string, error) {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+func countLines(s string) int {
+	n := 1
+	for _, c := range s {
+		if c == '\n' {
+			n++
+		}
+	}
+	return n
+}
+
+// --- HTTP client (used by tools and REPL to call back to the service) ---
+
+var httpClient = &http.Client{Timeout: 30 * time.Minute}
+
+func postJSON(serviceAddr, path string, reqBody any) ([]byte, error) {
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := httpClient.Post("http://"+serviceAddr+path, "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
 }
