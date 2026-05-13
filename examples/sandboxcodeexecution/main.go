@@ -52,7 +52,9 @@ func main() {
 			"agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|"+
 			"agent-artifact-stage|agent-artifact-save|agent-artifact-pin|"+
 			"session-persistence|session-isolation|"+
-			"env-redaction|metadata-protection|no-access|network-restricted|timeout|output-cap|additional-permissions|"+
+			"env-redaction|metadata-protection|no-access|network-restricted|"+
+			"network-policy-restricted|network-policy-enabled|network-policy-additional-permissions|network-policy-agent-enforcement|"+
+			"timeout|output-cap|additional-permissions|"+
 			"shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|"+
 			"shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|"+
 			"file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|"+
@@ -105,6 +107,10 @@ func runScenarios(ctx context.Context, cfg config) error {
 		{"metadata-protection", runMetadataProtection},
 		{"no-access", runNoAccess},
 		{"network-restricted", runNetworkRestricted},
+		{"network-policy-restricted", runNetworkPolicyRestricted},
+		{"network-policy-enabled", runNetworkPolicyEnabled},
+		{"network-policy-additional-permissions", runNetworkPolicyAdditionalPermissions},
+		{"network-policy-agent-enforcement", runNetworkPolicyAgentEnforcement},
 		{"timeout", runTimeout},
 		{"output-cap", runOutputCap},
 		{"additional-permissions", runAdditionalPermissions},
@@ -372,35 +378,6 @@ func runNoAccess(ctx context.Context, cfg config) error {
 		return errors.New("shell read of denied file unexpectedly succeeded")
 	}
 	return nil
-}
-
-func runNetworkRestricted(ctx context.Context, cfg config) error {
-	rt := newRuntime(cfg, sandbox.WorkspaceWriteProfile(), 1<<20, 3*time.Second)
-	if err := requireManagedSandbox(ctx, rt, cfg); err != nil {
-		return err
-	}
-	ws, err := rt.CreateWorkspace(ctx, "network-restricted", codeexecutor.WorkspacePolicy{})
-	if err != nil {
-		return err
-	}
-	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
-		Cmd: "python3",
-		Args: []string{"-c", `
-import socket
-s = socket.socket()
-s.settimeout(1)
-try:
-    s.connect(("1.1.1.1", 80))
-    print("connected")
-except OSError:
-    print("network-denied")
-`},
-		Cwd: codeexecutor.DirWork,
-	})
-	if err != nil {
-		return err
-	}
-	return expectContains(res.Stdout, "network-denied")
 }
 
 func runTimeout(ctx context.Context, cfg config) error {

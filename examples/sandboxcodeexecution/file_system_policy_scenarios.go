@@ -191,24 +191,7 @@ func maybeVerifyFileSystemPolicyNetworkRestricted(
 		}
 		return err
 	}
-	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
-		Cmd: "python3",
-		Args: []string{"-c", `
-import socket
-s = socket.socket()
-s.settimeout(1)
-try:
-    s.connect(("1.1.1.1", 80))
-    print("connected")
-except OSError:
-    print("network-denied")
-`},
-		Cwd: codeexecutor.DirWork,
-	})
-	if err != nil {
-		return err
-	}
-	return expectContains(res.Stdout, "network-denied")
+	return expectNetworkDenied(ctx, rt, ws)
 }
 
 func maybeVerifyFileSystemPolicyShellMask(

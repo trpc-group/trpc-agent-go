@@ -52,6 +52,15 @@ clear message. The example never reads or prints key contents.
 - `no-access`: verifies no-access policy blocks file API reads and shell access.
 - `network-restricted`: verifies restricted networking prevents outbound socket
   connections.
+- `network-policy-restricted`: verifies the default managed profile blocks
+  outbound socket connections.
+- `network-policy-enabled`: verifies `NetworkEnabled` allows outbound socket
+  connections through the host network namespace.
+- `network-policy-additional-permissions`: verifies a per-command network grant
+  can enable networking for one run without changing the base restricted
+  profile.
+- `network-policy-agent-enforcement`: uses a real LLMAgent and `workspace_exec`
+  to verify restricted networking through an actual model call.
 - `timeout`: verifies long-running commands are timed out.
 - `output-cap`: verifies large output is capped and marked as truncated.
 - `additional-permissions`: verifies a host path grant is scoped to one
@@ -79,7 +88,7 @@ clear message. The example never reads or prints key contents.
 ## Flags
 
 ```bash
--scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|timeout|output-cap|additional-permissions|shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|all
+-scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|network-policy-restricted|network-policy-enabled|network-policy-additional-permissions|network-policy-agent-enforcement|timeout|output-cap|additional-permissions|shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|all
 -model glm-4.7-flash
 -workspace-root /tmp/my-sandbox-root
 -keep-workspace
