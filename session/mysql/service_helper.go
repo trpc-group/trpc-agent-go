@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -546,10 +547,11 @@ func (s *Service) getEventsList(
 		afterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
 
-	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event, created_at FROM %s
+	// Avoid ORDER BY on large TEXT/JSON columns to prevent sort buffer overflow (MySQL Error 1038).
+	// Sorting is done in Go after loading all events into memory.
+	query := fmt.Sprintf(`SELECT id, app_name, user_id, session_id, event, created_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
-		AND deleted_at IS NULL
-		ORDER BY app_name, user_id, session_id, created_at ASC, id ASC`,
+		AND deleted_at IS NULL`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
 
 	sessionCreatedAtMap := make(map[string]time.Time, len(sessionKeys))
@@ -558,13 +560,19 @@ func (s *Service) getEventsList(
 		sessionCreatedAtMap[keyStr] = sessionCreatedAts[i]
 	}
 
-	eventsMap := make(map[string][]event.Event)
+	type eventWithOrder struct {
+		evt       event.Event
+		createdAt time.Time
+		id        int64
+	}
+	eventsMap := make(map[string][]eventWithOrder)
 
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var rowID int64
 		var appName, userID, sessionID string
 		var eventBytes []byte
 		var eventCreatedAt time.Time
-		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
+		if err := rows.Scan(&rowID, &appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
 			return err
 		}
 		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
@@ -579,7 +587,7 @@ func (s *Service) getEventsList(
 		if err := json.Unmarshal(eventBytes, &evt); err != nil {
 			return fmt.Errorf("unmarshal event failed: %w", err)
 		}
-		eventsMap[keyStr] = append(eventsMap[keyStr], evt)
+		eventsMap[keyStr] = append(eventsMap[keyStr], eventWithOrder{evt: evt, createdAt: eventCreatedAt, id: rowID})
 		return nil
 	}, query, args...)
 
@@ -590,7 +598,17 @@ func (s *Service) getEventsList(
 	result := make([][]event.Event, len(sessionKeys))
 	for i, key := range sessionKeys {
 		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-		events := eventsMap[keyStr]
+		items := eventsMap[keyStr]
+		sort.Slice(items, func(a, b int) bool {
+			if items[a].createdAt.Equal(items[b].createdAt) {
+				return items[a].id < items[b].id
+			}
+			return items[a].createdAt.Before(items[b].createdAt)
+		})
+		events := make([]event.Event, len(items))
+		for j, item := range items {
+			events[j] = item.evt
+		}
 		sess := session.Session{
 			Events: events,
 		}
@@ -615,42 +633,62 @@ func (s *Service) getPagedEvents(
 		afterTime = sessionCreatedAt
 	}
 
-	query := fmt.Sprintf(`
-		SELECT app_name, user_id, session_id, event, created_at FROM (
-			SELECT app_name, user_id, session_id, event, created_at, id
-			FROM %s
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND created_at >= ?
-			AND deleted_at IS NULL
-			ORDER BY created_at DESC, id DESC
-			LIMIT ? OFFSET ?
-		) page
-		ORDER BY created_at ASC, id ASC`,
+	// Phase 1: fetch only IDs with ORDER BY + LIMIT/OFFSET.
+	// Sorting lightweight integer rows avoids sort buffer overflow on large event JSON.
+	idsQuery := fmt.Sprintf(`SELECT id FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND created_at >= ?
+		AND deleted_at IS NULL
+		ORDER BY created_at DESC, id DESC
+		LIMIT ? OFFSET ?`,
 		s.tableSessionEvents)
 
-	rowsBySession := make(map[string][]event.Event, 1)
+	var ids []int64
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		var appName, userID, sessionID string
-		var eventBytes []byte
-		var eventCreatedAt time.Time
-		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
 			return err
 		}
-
-		var evt event.Event
-		if err := json.Unmarshal(eventBytes, &evt); err != nil {
-			return fmt.Errorf("unmarshal event failed: %w", err)
-		}
-		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
-		rowsBySession[keyStr] = append(rowsBySession[keyStr], evt)
+		ids = append(ids, id)
 		return nil
-	}, query, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
+	}, idsQuery, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
 
-	keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-	return [][]event.Event{rowsBySession[keyStr]}, nil
+	if len(ids) == 0 {
+		return [][]event.Event{nil}, nil
+	}
+
+	// Phase 2: fetch full event rows by IDs, ordered by PK (index-ordered scan, no filesort).
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	eventsQuery := fmt.Sprintf(`SELECT event FROM %s WHERE id IN (%s) ORDER BY id ASC`,
+		s.tableSessionEvents, strings.Join(placeholders, ","))
+
+	var events []event.Event
+	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var eventBytes []byte
+		if err := rows.Scan(&eventBytes); err != nil {
+			return err
+		}
+		var evt event.Event
+		if err := json.Unmarshal(eventBytes, &evt); err != nil {
+			return fmt.Errorf("unmarshal event failed: %w", err)
+		}
+		events = append(events, evt)
+		return nil
+	}, eventsQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch get events failed: %w", err)
+	}
+
+	return [][]event.Event{events}, nil
 }
 
 // getTrackEvents loads track events for multiple sessions in batch.
