@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	sandboxexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -1761,6 +1762,46 @@ func TestNewAgent_LocalExecKeepsExecCommandButOmitsWorkspaceExec(
 		EnableLocalExec: true,
 	}, nil, nil)
 	require.NoError(t, err)
+
+	names := make(map[string]bool)
+	for _, tl := range agt.Tools() {
+		if decl := tl.Declaration(); decl != nil {
+			names[decl.Name] = true
+		}
+	}
+
+	require.False(t, names["workspace_exec"])
+	require.False(t, names["workspace_write_stdin"])
+	require.False(t, names["workspace_kill_session"])
+}
+
+func TestNewAgent_SandboxExecOmitsWorkspaceExec(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	agt, _, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+		CodeExecutor: codeExecutorOptions{
+			Type: codeExecutorTypeSandbox,
+			Sandbox: sandboxCodeExecutorOptions{
+				Backend:        sandboxBackendAuto,
+				Profile:        sandboxProfileWorkspaceWrite,
+				Network:        sandboxNetworkRestricted,
+				DefaultTimeout: time.Second,
+				OutputMaxBytes: 1024,
+				ShellEnv: sandboxShellEnvOptions{
+					Inherit:              sandboxShellEnvInheritCore,
+					ApplyDefaultExcludes: true,
+				},
+			},
+		},
+	}, nil, nil)
+	require.NoError(t, err)
+	llm, ok := agt.(*llmagent.LLMAgent)
+	require.True(t, ok)
+	require.IsType(t, &sandboxexec.CodeExecutor{}, llm.CodeExecutor())
 
 	names := make(map[string]bool)
 	for _, tl := range agt.Tools() {

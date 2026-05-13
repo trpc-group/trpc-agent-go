@@ -629,6 +629,23 @@ skills:
 
 tools:
   enable_local_exec: true
+  code_executor:
+    type: "sandbox"
+    auto_execute_code_blocks: true
+    sandbox:
+      workspace_root: "/tmp/openclaw-sandbox"
+      backend: "linux-bubblewrap"
+      profile: "workspace_write"
+      network: "restricted"
+      default_timeout: "45s"
+      output_max_bytes: 2048
+      shell_env:
+        inherit: "core"
+        apply_default_excludes: true
+        exclude: ["*_TOKEN"]
+        include_only: ["PATH", "HOME", "CUSTOM"]
+        set:
+          CUSTOM: "ok"
   enable_openclaw_tools: true
   openclaw_tooling_guidance: ""
   enable_parallel_tools: true
@@ -785,6 +802,52 @@ memory:
 	)
 
 	require.True(t, opts.EnableLocalExec)
+	require.Equal(t, codeExecutorTypeSandbox, opts.CodeExecutor.Type)
+	require.NotNil(t, opts.CodeExecutor.AutoExecuteCodeBlocks)
+	require.True(t, *opts.CodeExecutor.AutoExecuteCodeBlocks)
+	require.Equal(
+		t,
+		"/tmp/openclaw-sandbox",
+		opts.CodeExecutor.Sandbox.WorkspaceRoot,
+	)
+	require.Equal(
+		t,
+		sandboxBackendLinuxBubblewrap,
+		opts.CodeExecutor.Sandbox.Backend,
+	)
+	require.Equal(
+		t,
+		sandboxProfileWorkspaceWrite,
+		opts.CodeExecutor.Sandbox.Profile,
+	)
+	require.Equal(
+		t,
+		sandboxNetworkRestricted,
+		opts.CodeExecutor.Sandbox.Network,
+	)
+	require.Equal(t, 45*time.Second, opts.CodeExecutor.Sandbox.DefaultTimeout)
+	require.Equal(t, 2048, opts.CodeExecutor.Sandbox.OutputMaxBytes)
+	require.Equal(
+		t,
+		sandboxShellEnvInheritCore,
+		opts.CodeExecutor.Sandbox.ShellEnv.Inherit,
+	)
+	require.True(t, opts.CodeExecutor.Sandbox.ShellEnv.ApplyDefaultExcludes)
+	require.Equal(
+		t,
+		[]string{"*_TOKEN"},
+		opts.CodeExecutor.Sandbox.ShellEnv.Exclude,
+	)
+	require.Equal(
+		t,
+		[]string{"PATH", "HOME", "CUSTOM"},
+		opts.CodeExecutor.Sandbox.ShellEnv.IncludeOnly,
+	)
+	require.Equal(
+		t,
+		"ok",
+		opts.CodeExecutor.Sandbox.ShellEnv.Set["CUSTOM"],
+	)
 	require.True(t, opts.EnableOpenClawTools)
 	require.NotNil(t, opts.OpenClawToolingGuide)
 	require.Equal(t, "", *opts.OpenClawToolingGuide)
@@ -837,6 +900,69 @@ func TestParseRunOptions_UnexpectedArgsFails(t *testing.T) {
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 2, exitErr.Code)
+}
+
+func TestParseRunOptions_CodeExecutorSandboxDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  code_executor:
+    type: "sandbox"
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, codeExecutorTypeSandbox, opts.CodeExecutor.Type)
+	require.Nil(t, opts.CodeExecutor.AutoExecuteCodeBlocks)
+	require.Equal(
+		t,
+		sandboxBackendAuto,
+		opts.CodeExecutor.Sandbox.Backend,
+	)
+	require.Equal(
+		t,
+		sandboxProfileWorkspaceWrite,
+		opts.CodeExecutor.Sandbox.Profile,
+	)
+	require.Equal(
+		t,
+		sandboxNetworkRestricted,
+		opts.CodeExecutor.Sandbox.Network,
+	)
+	require.Equal(
+		t,
+		defaultSandboxCodeExecutorTimeout,
+		opts.CodeExecutor.Sandbox.DefaultTimeout,
+	)
+	require.Equal(
+		t,
+		defaultSandboxCodeExecutorOutputMaxBytes,
+		opts.CodeExecutor.Sandbox.OutputMaxBytes,
+	)
+	require.Equal(
+		t,
+		sandboxShellEnvInheritCore,
+		opts.CodeExecutor.Sandbox.ShellEnv.Inherit,
+	)
+	require.True(t, opts.CodeExecutor.Sandbox.ShellEnv.ApplyDefaultExcludes)
+}
+
+func TestParseRunOptions_CodeExecutorInvalidEnumFails(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  code_executor:
+    type: "sandbox"
+    sandbox:
+      profile: "everything"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tools.code_executor")
+	require.Contains(t, err.Error(), "sandbox.profile")
 }
 
 func TestParseRunOptions_MultipleYAMLDocsFails(t *testing.T) {
