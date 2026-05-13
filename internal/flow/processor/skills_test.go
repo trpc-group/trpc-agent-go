@@ -12,6 +12,8 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -505,6 +507,25 @@ func TestSkillPathHelpers(t *testing.T) {
 		rel, ok = relativeSkillPath("/tmp/skills", "/tmp/other")
 		require.False(t, ok)
 		require.Empty(t, rel)
+	})
+
+	t.Run("relative path resolves symlink root vs real path", func(t *testing.T) {
+		dir := t.TempDir()
+		root := filepath.Join(dir, "skills-root")
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "my-skill"), 0o700))
+
+		link := filepath.Join(dir, "skills-link")
+		require.NoError(t, os.Symlink(root, link))
+
+		skillDir := filepath.Join(root, "my-skill")
+
+		rel, ok := relativeSkillPath(link, skillDir)
+		require.True(t, ok)
+		require.Equal(t, "my-skill", rel)
+
+		rel, ok = relativeSkillPath(root, filepath.Join(link, "my-skill"))
+		require.True(t, ok)
+		require.Equal(t, "my-skill", rel)
 	})
 
 	t.Run("overview suffix and path hints honor configured fields", func(t *testing.T) {

@@ -31,6 +31,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -56,6 +57,38 @@ func (c *captureModel) GenerateContent(ctx context.Context, req *model.Request) 
 }
 
 func (c *captureModel) Info() model.Info { return model.Info{Name: "capture"} }
+
+type namedGraphModel struct {
+	name   string
+	called bool
+	mu     sync.Mutex
+}
+
+func (m *namedGraphModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.called = true
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *namedGraphModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *namedGraphModel) Called() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.called
+}
 
 // echoTool is a minimal CallableTool used for ToolSet injection tests.
 type echoTool struct{ name string }
@@ -470,6 +503,102 @@ func TestAddLLMNode_GenerationConfigOption(t *testing.T) {
 	}
 	require.Equal(t, cfg.Stop, got.Stop)
 
+}
+
+func TestAddLLMNode_NoModelSelectorKeepsCallbackInvocation(t *testing.T) {
+	baseModel := &namedGraphModel{name: "base"}
+	ctxInvocation := agent.NewInvocation(
+		agent.WithInvocationID("graph-no-selector-ctx-inv"),
+	)
+	stateInvocation := agent.NewInvocation(
+		agent.WithInvocationID("graph-no-selector-state-inv"),
+	)
+	var callbackInvocation *agent.Invocation
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			callbackInvocation, _ = agent.InvocationFromContext(ctx)
+			callbackInvocation.SetState("callback-state", "visible")
+			return nil, nil
+		},
+	)
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", baseModel, "inst", nil)
+	node := sg.graph.nodes["llm"]
+	require.NotNil(t, node)
+	state := State{
+		StateKeyExecContext:    &ExecutionContext{InvocationID: stateInvocation.InvocationID, Invocation: stateInvocation},
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), ctxInvocation)
+	_, err := node.Function(ctx, state)
+	require.NoError(t, err)
+	require.Same(t, ctxInvocation, callbackInvocation)
+	got, ok := ctxInvocation.GetState("callback-state")
+	require.True(t, ok)
+	require.Equal(t, "visible", got)
+	_, ok = stateInvocation.GetState("callback-state")
+	require.False(t, ok)
+	require.True(t, baseModel.Called())
+}
+
+func TestAddLLMNode_RunLevelModelSelectorUsesSelectedModelAndNodeID(t *testing.T) {
+	baseModel := &namedGraphModel{name: "base"}
+	selectedModel := &namedGraphModel{name: "selected"}
+	hijackModel := &namedGraphModel{name: "hijack"}
+	var selectorNodeID string
+	var selectorBaseModel string
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("graph-selector-inv"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithModelSelector(func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+				selectorBaseModel = inv.Model.Info().Name
+				rawNodeID, ok := inv.GetState(StateKeyCurrentNodeID)
+				require.True(t, ok)
+				selectorNodeID, _ = rawNodeID.(string)
+				inv.SetState(StateKeyCurrentNodeID, "polluted")
+				inv.SetState("selector-state", "visible")
+				return selectedModel, nil
+			}),
+		)),
+	)
+	var callbackNodeID string
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			inv, ok := agent.InvocationFromContext(ctx)
+			require.True(t, ok)
+			rawNodeID, ok := inv.GetState(StateKeyCurrentNodeID)
+			require.True(t, ok)
+			callbackNodeID, _ = rawNodeID.(string)
+			selectorState, ok := inv.GetState("selector-state")
+			require.True(t, ok)
+			require.Equal(t, "visible", selectorState)
+			inv.Model = hijackModel
+			return nil, nil
+		},
+	)
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", baseModel, "inst", nil)
+	node := sg.graph.nodes["llm"]
+	require.NotNil(t, node)
+	state := State{
+		StateKeyExecContext:    &ExecutionContext{InvocationID: invocation.InvocationID, Invocation: invocation},
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := node.Function(context.Background(), state)
+	require.NoError(t, err)
+	require.Equal(t, "base", selectorBaseModel)
+	require.Equal(t, "llm", selectorNodeID)
+	require.Equal(t, "llm", callbackNodeID)
+	require.False(t, baseModel.Called())
+	require.True(t, selectedModel.Called())
+	require.False(t, hijackModel.Called())
+	_, ok := invocation.GetState(StateKeyCurrentNodeID)
+	require.False(t, ok)
+	require.Nil(t, invocation.Model)
 }
 
 func TestRunModelStream_IterModelError(t *testing.T) {
@@ -1429,6 +1558,47 @@ func TestExecuteModelAndProcessResponses_UsesUpdatedInvocationForMetricsMetadata
 	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIConversationID, updatedInvocation.Session.ID))
 	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoUserID, updatedInvocation.Session.UserID))
 	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoAppName, updatedInvocation.Session.AppName))
+}
+
+func TestExecuteModelAndProcessResponses_AttachesTimingInfoBeforeAfterModelCallbacks(t *testing.T) {
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-callback-timing"),
+	)
+	response := &model.Response{
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage("done")},
+		},
+	}
+	var callbackTimingInfo *model.TimingInfo
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			require.NotNil(t, args.Response)
+			require.NotNil(t, args.Response.Usage)
+			require.NotNil(t, args.Response.Usage.TimingInfo)
+			require.NotZero(t, args.Response.Usage.TimingInfo.FirstTokenDuration)
+			callbackTimingInfo = args.Response.Usage.TimingInfo
+			return &model.AfterModelResult{}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel: &multiResponseModel{
+				responses: []*model.Response{response},
+				delay:     time.Millisecond,
+			},
+			Request:      &model.Request{},
+			InvocationID: baseInvocation.InvocationID,
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, response.Usage)
+	require.Same(t, callbackTimingInfo, response.Usage.TimingInfo)
 }
 
 func TestExecuteModelAndProcessResponses_UsesUpdatedInvocationForResponseUsageTimingOnSingleChunk(t *testing.T) {
@@ -3228,7 +3398,7 @@ func TestBuildAgentInvocationWithStateAndScope_PropagatesExecutionTraceMetadata(
 	require.Equal(t, "parent/delegate", agent.InvocationTraceNodeID(inv))
 	require.Equal(
 		t,
-		"parent/delegate/child",
+		"parent/delegate",
 		agent.InvocationSurfaceRootNodeID(inv),
 	)
 	require.Equal(t, []string{rootStepID}, agent.NextExecutionTracePredecessors(inv))
@@ -3260,7 +3430,7 @@ func TestBuildAgentInvocationWithStateAndScope_PreservesMountedSurfaceRoot(
 	require.Equal(t, "trace-parent/delegate", agent.InvocationTraceNodeID(inv))
 	require.Equal(
 		t,
-		"workflow/parent/delegate/child",
+		"workflow/parent/delegate",
 		agent.InvocationSurfaceRootNodeID(inv),
 	)
 }
@@ -3295,6 +3465,807 @@ func TestBuildAgentInvocationWithStateAndScope_PrefersCurrentTraceStepPredecesso
 		"",
 	)
 	require.Equal(t, []string{firstStepID}, agent.NextExecutionTracePredecessors(inv))
+}
+
+func TestBuildAgentInvocationWithStateAndScope_PrefersTraceTaskPredecessors(t *testing.T) {
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&stubAgent{name: "parent"}),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	rootStepID := agent.StartExecutionTraceStep(
+		parent,
+		agent.InvocationTraceNodeID(parent),
+		nil,
+		nil,
+	)
+	agent.FinishExecutionTraceStep(parent, rootStepID, nil, nil)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	target := &stubAgent{name: "child"}
+	inv := buildAgentInvocationWithStateScopeAndInputKey(
+		ctx,
+		State{},
+		State{},
+		target,
+		"delegate",
+		"",
+		StateKeyUserInput,
+		newTraceTaskMetadata(nil, "task", "delegate", []string{"upstream-1", "upstream-2"}, nil),
+	)
+	require.Equal(t, []string{"upstream-1", "upstream-2"}, agent.NextExecutionTracePredecessors(inv))
+}
+
+type traceStepAgent struct {
+	name     string
+	skipStep bool
+}
+
+type traceRunErrorAgent struct {
+	name     string
+	emitStep bool
+}
+
+type unregisteredTraceAgent struct {
+	name string
+}
+
+type traceParentWithSubAgents struct {
+	agents map[string]agent.Agent
+}
+
+func (p *traceParentWithSubAgents) FindSubAgent(name string) agent.Agent {
+	return p.agents[name]
+}
+
+func (a *traceStepAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	_ = ctx
+	ch := make(chan *event.Event, 1)
+	if !a.skipStep {
+		stepID := agent.StartExecutionTraceStep(
+			inv,
+			agent.InvocationTraceNodeID(inv),
+			&atrace.Snapshot{Text: "child input"},
+			nil,
+		)
+		agent.FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "child output"}, nil)
+	}
+	ch <- NewGraphCompletionEvent(
+		WithCompletionEventInvocationID(inv.InvocationID),
+		WithCompletionEventFinalState(State{StateKeyLastResponse: "child output"}),
+	)
+	close(ch)
+	return ch, nil
+}
+
+func (a *traceStepAgent) Tools() []tool.Tool { return nil }
+
+func (a *traceStepAgent) Info() agent.Info { return agent.Info{Name: a.name} }
+
+func (a *traceStepAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *traceStepAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+func (a *unregisteredTraceAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	return (&traceStepAgent{name: a.name}).Run(ctx, inv)
+}
+
+func (a *unregisteredTraceAgent) Tools() []tool.Tool { return nil }
+
+func (a *unregisteredTraceAgent) Info() agent.Info { return agent.Info{Name: a.name} }
+
+func (a *unregisteredTraceAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *unregisteredTraceAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+func (a *traceRunErrorAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	_ = ctx
+	if a.emitStep {
+		stepID := agent.StartExecutionTraceStep(
+			inv,
+			agent.InvocationTraceNodeID(inv),
+			&atrace.Snapshot{Text: "child input"},
+			nil,
+		)
+		agent.FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "child output"}, nil)
+	}
+	return nil, errors.New("child run failed")
+}
+
+func (a *traceRunErrorAgent) Tools() []tool.Tool { return nil }
+
+func (a *traceRunErrorAgent) Info() agent.Info { return agent.Info{Name: a.name} }
+
+func (a *traceRunErrorAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *traceRunErrorAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+type traceFanoutAgent struct {
+	name string
+}
+
+func (a *traceFanoutAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	_ = ctx
+	ch := make(chan *event.Event, 1)
+	predecessors := agent.NextExecutionTracePredecessors(inv)
+	leftStepID := agent.StartExecutionTraceStep(
+		inv,
+		agent.InvocationTraceNodeID(inv)+"/left",
+		&atrace.Snapshot{Text: "left input"},
+		predecessors,
+	)
+	agent.FinishExecutionTraceStep(inv, leftStepID, &atrace.Snapshot{Text: "left output"}, nil)
+	rightStepID := agent.StartExecutionTraceStep(
+		inv,
+		agent.InvocationTraceNodeID(inv)+"/right",
+		&atrace.Snapshot{Text: "right input"},
+		predecessors,
+	)
+	agent.FinishExecutionTraceStep(inv, rightStepID, &atrace.Snapshot{Text: "right output"}, nil)
+	ch <- NewGraphCompletionEvent(
+		WithCompletionEventInvocationID(inv.InvocationID),
+		WithCompletionEventFinalState(State{StateKeyLastResponse: "fanout output"}),
+	)
+	close(ch)
+	return ch, nil
+}
+
+func (a *traceFanoutAgent) Tools() []tool.Tool { return nil }
+
+func (a *traceFanoutAgent) Info() agent.Info { return agent.Info{Name: a.name} }
+
+func (a *traceFanoutAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *traceFanoutAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+type traceContextInspectAgent struct {
+	name          string
+	sawInvocation bool
+}
+
+func (a *traceContextInspectAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	_, a.sawInvocation = agent.InvocationFromContext(ctx)
+	ch := make(chan *event.Event, 1)
+	stepID := agent.StartExecutionTraceStep(
+		inv,
+		agent.InvocationTraceNodeID(inv),
+		&atrace.Snapshot{Text: "child input"},
+		nil,
+	)
+	agent.FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "child output"}, nil)
+	ch <- NewGraphCompletionEvent(
+		WithCompletionEventInvocationID(inv.InvocationID),
+		WithCompletionEventFinalState(State{StateKeyLastResponse: "child output"}),
+	)
+	close(ch)
+	return ch, nil
+}
+
+func (a *traceContextInspectAgent) Tools() []tool.Tool { return nil }
+
+func (a *traceContextInspectAgent) Info() agent.Info { return agent.Info{Name: a.name} }
+
+func (a *traceContextInspectAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *traceContextInspectAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+func TestAgentNodeTrace_UsesChildStepAsPublicNodeStep(t *testing.T) {
+	trace := runAgentNodeTraceGraph(t, nil)
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	childStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	afterStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/after")
+	requireNoTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	require.Equal(t, []string{startStep.StepID}, childStep.PredecessorStepIDs)
+	require.Equal(t, []string{childStep.StepID}, afterStep.PredecessorStepIDs)
+	require.Equal(t, []string{afterStep.StepID}, traceTerminalIDs(t, trace))
+}
+
+func TestAgentNodeTrace_UsesChildTerminalFanOutAsDownstreamSources(t *testing.T) {
+	trace := runAgentNodeTraceGraphWithChild(t, &traceFanoutAgent{name: "child"}, nil)
+	leftStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child/left")
+	rightStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child/right")
+	afterStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/after")
+	requireNoTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	require.ElementsMatch(t, []string{leftStep.StepID, rightStep.StepID}, afterStep.PredecessorStepIDs)
+	require.Equal(t, []string{afterStep.StepID}, traceTerminalIDs(t, trace))
+}
+
+func TestAgentNodeTrace_JoinUsesAllTransparentChildTerminals(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("start", func(context.Context, State) (any, error) {
+		return State{"start": true}, nil
+	})
+	builder.AddAgentNode("single")
+	builder.AddAgentNode("fanout")
+	builder.AddNode("join", func(context.Context, State) (any, error) {
+		return State{"joined": true}, nil
+	})
+	graph, err := builder.
+		SetEntryPoint("start").
+		AddEdge("start", "single").
+		AddEdge("start", "fanout").
+		AddJoinEdge([]string{"single", "fanout"}, "join").
+		SetFinishPoint("join").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(graph)
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&stubAgent{name: "root"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	events, err := exec.Execute(context.Background(), State{
+		StateKeyParentAgent: &traceParentWithSubAgents{
+			agents: map[string]agent.Agent{
+				"single": &traceStepAgent{name: "single"},
+				"fanout": &traceFanoutAgent{name: "fanout"},
+			},
+		},
+	}, inv)
+	require.NoError(t, err)
+	for range events {
+	}
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	singleStep := requireTraceStepByAgentAndNode(t, trace, "single", "root/single")
+	fanoutLeftStep := requireTraceStepByAgentAndNode(t, trace, "fanout", "root/fanout/left")
+	fanoutRightStep := requireTraceStepByAgentAndNode(t, trace, "fanout", "root/fanout/right")
+	joinStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/join")
+	requireNoTraceStepByAgentAndNode(t, trace, "root", "root/single")
+	requireNoTraceStepByAgentAndNode(t, trace, "root", "root/fanout")
+	require.Equal(t, []string{startStep.StepID}, singleStep.PredecessorStepIDs)
+	require.Equal(t, []string{startStep.StepID}, fanoutLeftStep.PredecessorStepIDs)
+	require.Equal(t, []string{startStep.StepID}, fanoutRightStep.PredecessorStepIDs)
+	require.ElementsMatch(
+		t,
+		[]string{singleStep.StepID, fanoutLeftStep.StepID, fanoutRightStep.StepID},
+		joinStep.PredecessorStepIDs,
+	)
+}
+
+func TestAgentNodeTrace_DAGUsesChildTerminalFanOutAsDownstreamSources(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("start", func(context.Context, State) (any, error) {
+		return State{"start": true}, nil
+	})
+	builder.AddAgentNode("child")
+	builder.AddNode("after", func(context.Context, State) (any, error) {
+		return State{"after": true}, nil
+	})
+	graph, err := builder.
+		SetEntryPoint("start").
+		AddEdge("start", "child").
+		AddEdge("child", "after").
+		SetFinishPoint("after").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(graph, WithExecutionEngine(ExecutionEngineDAG))
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&stubAgent{name: "root"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	events, err := exec.Execute(context.Background(), State{
+		StateKeyParentAgent: &parentWithSubAgent{a: &traceFanoutAgent{name: "child"}},
+	}, inv)
+	require.NoError(t, err)
+	for range events {
+	}
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	leftStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child/left")
+	rightStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child/right")
+	afterStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/after")
+	requireNoTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	require.ElementsMatch(t, []string{leftStep.StepID, rightStep.StepID}, afterStep.PredecessorStepIDs)
+}
+
+func TestAgentNodeTrace_ConditionalEdgeErrorCreatesParentErrorStep(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("start", func(context.Context, State) (any, error) {
+		return State{"start": true}, nil
+	})
+	builder.AddAgentNode("child")
+	builder.AddNode("after", func(context.Context, State) (any, error) {
+		return State{"after": true}, nil
+	})
+	graph, err := builder.
+		SetEntryPoint("start").
+		AddEdge("start", "child").
+		AddConditionalEdges("child", func(context.Context, State) (string, error) {
+			return "", errors.New("route boom")
+		}, map[string]string{"after": "after"}).
+		SetFinishPoint("after").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(graph)
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&stubAgent{name: "root"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	events, err := exec.Execute(context.Background(), State{
+		StateKeyParentAgent: &parentWithSubAgent{a: &traceStepAgent{name: "child"}},
+	}, inv)
+	require.NoError(t, err)
+	for range events {
+	}
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	childStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	parentErrorStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	require.Equal(t, []string{startStep.StepID}, childStep.PredecessorStepIDs)
+	require.Equal(t, []string{childStep.StepID}, parentErrorStep.PredecessorStepIDs)
+	require.Contains(t, parentErrorStep.Error, "route boom")
+	require.Equal(t, []string{parentErrorStep.StepID}, traceTerminalIDs(t, trace))
+}
+
+func TestAgentNodeTrace_ChildRunErrorWithoutTerminalKeepsWrapperStep(t *testing.T) {
+	trace := runFailingAgentNodeTraceGraph(t, &traceRunErrorAgent{name: "child"})
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	wrapperStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	requireNoTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	require.Equal(t, []string{startStep.StepID}, wrapperStep.PredecessorStepIDs)
+	require.Contains(t, wrapperStep.Error, "child run failed")
+	require.Equal(t, []string{wrapperStep.StepID}, traceTerminalIDs(t, trace))
+}
+
+func TestAgentNodeTrace_ChildRunErrorWithTerminalCreatesParentErrorStep(t *testing.T) {
+	trace := runFailingAgentNodeTraceGraph(t, &traceRunErrorAgent{name: "child", emitStep: true})
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	childStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	parentErrorStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	require.Equal(t, []string{startStep.StepID}, childStep.PredecessorStepIDs)
+	require.Equal(t, []string{childStep.StepID}, parentErrorStep.PredecessorStepIDs)
+	require.Contains(t, parentErrorStep.Error, "child run failed")
+	require.Equal(t, []string{parentErrorStep.StepID}, traceTerminalIDs(t, trace))
+}
+
+func TestAgentNodeTrace_OutputMapperKeepsWrapperStep(t *testing.T) {
+	mapper := func(parent State, result SubgraphResult) State {
+		_ = parent
+		return State{"mapped": result.LastResponse}
+	}
+	trace := runAgentNodeTraceGraph(t, mapper)
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	childStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	wrapperStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	afterStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/after")
+	require.Equal(t, []string{startStep.StepID}, wrapperStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, childStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, afterStep.PredecessorStepIDs)
+	require.ElementsMatch(t, []string{childStep.StepID, afterStep.StepID}, traceTerminalIDs(t, trace))
+}
+
+func TestAgentNodeTrace_RetryPolicyKeepsWrapperStep(t *testing.T) {
+	trace := runAgentNodeTraceGraph(t, nil, WithRetryPolicy(WithSimpleRetry(2)))
+	assertAgentNodeWrapperBetweenStartChildAndAfter(t, trace)
+}
+
+func TestAgentNodeTrace_CachePolicyKeepsWrapperStep(t *testing.T) {
+	trace := runAgentNodeTraceGraph(t, nil, WithNodeCachePolicy(DefaultCachePolicy()))
+	assertAgentNodeWrapperBetweenStartChildAndAfter(t, trace)
+}
+
+func TestAgentNodeTrace_BSPSameNodeDuplicateKeepsWrapperStep(t *testing.T) {
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("fanout", func(context.Context, State) (any, error) {
+		return []*Command{
+			{GoTo: "child", Update: State{"branch": "left"}},
+			{GoTo: "child", Update: State{"branch": "right"}},
+		}, nil
+	})
+	builder.AddAgentNode("child")
+	graph, err := builder.
+		SetEntryPoint("fanout").
+		AddEdge("fanout", "child").
+		SetFinishPoint("child").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(graph)
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&stubAgent{name: "root"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	events, err := exec.Execute(context.Background(), State{
+		StateKeyParentAgent: &parentWithSubAgent{a: &traceStepAgent{name: "child"}},
+	}, inv)
+	require.NoError(t, err)
+	for range events {
+	}
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.Equal(t, 2, countTraceStepsByAgentAndNode(trace, "root", "root/child"))
+	require.Equal(t, 2, countTraceStepsByAgentAndNode(trace, "child", "root/child"))
+}
+
+func TestAgentNodeTrace_AfterNodeOverrideKeepsWrapperStep(t *testing.T) {
+	callbacks := NewNodeCallbacks().RegisterAfterNode(func(
+		ctx context.Context,
+		cb *NodeCallbackContext,
+		state State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		_ = ctx
+		_ = cb
+		_ = state
+		_ = result
+		_ = nodeErr
+		return State{"mapped": "after override"}, nil
+	})
+	trace := runAgentNodeTraceGraph(t, nil, WithNodeCallbacks(callbacks))
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	childStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	wrapperStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	afterStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/after")
+	require.Equal(t, []string{startStep.StepID}, wrapperStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, childStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, afterStep.PredecessorStepIDs)
+	require.ElementsMatch(t, []string{childStep.StepID, afterStep.StepID}, traceTerminalIDs(t, trace))
+}
+
+func TestAgentNodeTrace_AgentEventCallbacksKeepWrapperStep(t *testing.T) {
+	globalEvents := 0
+	perNodeEvents := 0
+	globalCallbacks := NewNodeCallbacks().RegisterAgentEvent(func(
+		ctx context.Context,
+		cb *NodeCallbackContext,
+		state State,
+		evt *event.Event,
+	) {
+		_ = ctx
+		_ = cb
+		_ = state
+		_ = evt
+		globalEvents++
+	})
+	perNodeCallbacks := NewNodeCallbacks().RegisterAgentEvent(func(
+		ctx context.Context,
+		cb *NodeCallbackContext,
+		state State,
+		evt *event.Event,
+	) {
+		_ = ctx
+		_ = cb
+		_ = state
+		_ = evt
+		perNodeEvents++
+	})
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("start", func(context.Context, State) (any, error) {
+		return State{"start": true}, nil
+	})
+	builder.AddAgentNode("child", WithNodeCallbacks(perNodeCallbacks))
+	builder.AddNode("after", func(context.Context, State) (any, error) {
+		return State{"after": true}, nil
+	})
+	graph, err := builder.
+		SetEntryPoint("start").
+		AddEdge("start", "child").
+		AddEdge("child", "after").
+		SetFinishPoint("after").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(graph)
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&stubAgent{name: "root"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	events, err := exec.Execute(context.Background(), State{
+		StateKeyParentAgent:   &parentWithSubAgent{a: &traceStepAgent{name: "child"}},
+		StateKeyNodeCallbacks: globalCallbacks,
+	}, inv)
+	require.NoError(t, err)
+	for range events {
+	}
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	assertAgentNodeWrapperBetweenStartChildAndAfter(t, trace)
+	require.Positive(t, globalEvents)
+	require.Positive(t, perNodeEvents)
+}
+
+func TestAgentNodeTrace_CustomChildAgentCanUseChildTraceStep(t *testing.T) {
+	trace := runAgentNodeTraceGraphWithChild(
+		t,
+		&unregisteredTraceAgent{name: "child"},
+		nil,
+	)
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	childStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	afterStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/after")
+	requireNoTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	require.Equal(t, []string{startStep.StepID}, childStep.PredecessorStepIDs)
+	require.Equal(t, []string{childStep.StepID}, afterStep.PredecessorStepIDs)
+}
+
+func TestAgentNodeTrace_ChildSuccessWithoutTerminalKeepsWrapperStep(t *testing.T) {
+	trace := runAgentNodeTraceGraphWithChild(
+		t,
+		&traceStepAgent{name: "child", skipStep: true},
+		nil,
+	)
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	wrapperStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	afterStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/after")
+	requireNoTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	require.Equal(t, []string{startStep.StepID}, wrapperStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, afterStep.PredecessorStepIDs)
+	require.Equal(t, []string{afterStep.StepID}, traceTerminalIDs(t, trace))
+}
+
+func TestAgentNodeTrace_LowLevelNodeTypeAgentKeepsWrapperStep(t *testing.T) {
+	trace := runLowLevelAgentNodeTraceGraph(t, nil)
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	childStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	wrapperStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	afterStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/after")
+	require.Equal(t, []string{startStep.StepID}, wrapperStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, childStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, afterStep.PredecessorStepIDs)
+}
+
+func TestAgentNodeTrace_ParentPluginAgentCallbackKeepsWrapperStep(t *testing.T) {
+	pm := plugin.MustNewManager(&hookPlugin{
+		name: "agent-callback",
+		reg: func(r *plugin.Registry) {
+			r.BeforeAgent(func(context.Context, *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+				return nil, nil
+			})
+		},
+	})
+	trace := runAgentNodeTraceGraphWithChildAndPlugins(
+		t,
+		&traceStepAgent{name: "child"},
+		nil,
+		pm,
+	)
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	childStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	wrapperStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	afterStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/after")
+	require.Equal(t, []string{startStep.StepID}, wrapperStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, childStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, afterStep.PredecessorStepIDs)
+}
+
+func assertAgentNodeWrapperBetweenStartChildAndAfter(t *testing.T, trace *atrace.Trace) {
+	t.Helper()
+	startStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/start")
+	childStep := requireTraceStepByAgentAndNode(t, trace, "child", "root/child")
+	wrapperStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/child")
+	afterStep := requireTraceStepByAgentAndNode(t, trace, "root", "root/after")
+	require.Equal(t, []string{startStep.StepID}, wrapperStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, childStep.PredecessorStepIDs)
+	require.Equal(t, []string{wrapperStep.StepID}, afterStep.PredecessorStepIDs)
+}
+
+func TestAgentNodeTrace_DoesNotRequireTraceTaskContextToChildAgent(t *testing.T) {
+	child := &traceContextInspectAgent{name: "child"}
+	trace := runAgentNodeTraceGraphWithChild(t, child, nil)
+	require.True(t, child.sawInvocation)
+	require.NotNil(t, trace)
+}
+
+func runAgentNodeTraceGraph(
+	t *testing.T,
+	outputMapper SubgraphOutputMapper,
+	agentNodeOpts ...Option,
+) *atrace.Trace {
+	return runAgentNodeTraceGraphWithChild(t, &traceStepAgent{name: "child"}, outputMapper, agentNodeOpts...)
+}
+
+func runAgentNodeTraceGraphWithChild(
+	t *testing.T,
+	childAgent agent.Agent,
+	outputMapper SubgraphOutputMapper,
+	agentNodeOpts ...Option,
+) *atrace.Trace {
+	return runAgentNodeTraceGraphWithChildAndPlugins(t, childAgent, outputMapper, nil, agentNodeOpts...)
+}
+
+func runAgentNodeTraceGraphWithChildAndPlugins(
+	t *testing.T,
+	childAgent agent.Agent,
+	outputMapper SubgraphOutputMapper,
+	plugins agent.PluginManager,
+	agentNodeOpts ...Option,
+) *atrace.Trace {
+	t.Helper()
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("start", func(context.Context, State) (any, error) {
+		return State{"start": true}, nil
+	})
+	agentOpts := append([]Option(nil), agentNodeOpts...)
+	if outputMapper != nil {
+		agentOpts = append(agentOpts, WithSubgraphOutputMapper(outputMapper))
+	}
+	builder.AddAgentNode("child", agentOpts...)
+	builder.AddNode("after", func(context.Context, State) (any, error) {
+		return State{"after": true}, nil
+	})
+	graph, err := builder.
+		SetEntryPoint("start").
+		AddEdge("start", "child").
+		AddEdge("child", "after").
+		SetFinishPoint("after").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(graph)
+	require.NoError(t, err)
+	invocationOpts := []agent.InvocationOptions{
+		agent.WithInvocationAgent(&stubAgent{name: "root"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	}
+	if plugins != nil {
+		invocationOpts = append(invocationOpts, agent.WithInvocationPlugins(plugins))
+	}
+	inv := agent.NewInvocation(invocationOpts...)
+	events, err := exec.Execute(context.Background(), State{
+		StateKeyParentAgent: &parentWithSubAgent{a: childAgent},
+	}, inv)
+	require.NoError(t, err)
+	for range events {
+	}
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, trace)
+	return trace
+}
+
+func runFailingAgentNodeTraceGraph(t *testing.T, childAgent agent.Agent) *atrace.Trace {
+	t.Helper()
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("start", func(context.Context, State) (any, error) {
+		return State{"start": true}, nil
+	})
+	builder.AddAgentNode("child")
+	graph, err := builder.
+		SetEntryPoint("start").
+		AddEdge("start", "child").
+		SetFinishPoint("child").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(graph)
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&stubAgent{name: "root"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	events, err := exec.Execute(context.Background(), State{
+		StateKeyParentAgent: &parentWithSubAgent{a: childAgent},
+	}, inv)
+	require.NoError(t, err)
+	for range events {
+	}
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+	require.NotNil(t, trace)
+	return trace
+}
+
+func runLowLevelAgentNodeTraceGraph(t *testing.T, plugins agent.PluginManager) *atrace.Trace {
+	t.Helper()
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("start", func(context.Context, State) (any, error) {
+		return State{"start": true}, nil
+	})
+	builder.AddNode("child", NewAgentNodeFunc("child"), WithNodeType(NodeTypeAgent))
+	builder.AddNode("after", func(context.Context, State) (any, error) {
+		return State{"after": true}, nil
+	})
+	graph, err := builder.
+		SetEntryPoint("start").
+		AddEdge("start", "child").
+		AddEdge("child", "after").
+		SetFinishPoint("after").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(graph)
+	require.NoError(t, err)
+	invocationOpts := []agent.InvocationOptions{
+		agent.WithInvocationAgent(&stubAgent{name: "root"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	}
+	if plugins != nil {
+		invocationOpts = append(invocationOpts, agent.WithInvocationPlugins(plugins))
+	}
+	inv := agent.NewInvocation(invocationOpts...)
+	events, err := exec.Execute(context.Background(), State{
+		StateKeyParentAgent: &parentWithSubAgent{a: &traceStepAgent{name: "child"}},
+	}, inv)
+	require.NoError(t, err)
+	for range events {
+	}
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, trace)
+	return trace
+}
+
+func requireTraceStepByAgentAndNode(
+	t *testing.T,
+	trace *atrace.Trace,
+	agentName string,
+	nodeID string,
+) atrace.Step {
+	t.Helper()
+	for _, step := range trace.Steps {
+		if step.AgentName == agentName && step.NodeID == nodeID {
+			return step
+		}
+	}
+	require.Failf(t, "missing trace step", "agent=%s node=%s steps=%v", agentName, nodeID, trace.Steps)
+	return atrace.Step{}
+}
+
+func requireNoTraceStepByAgentAndNode(
+	t *testing.T,
+	trace *atrace.Trace,
+	agentName string,
+	nodeID string,
+) {
+	t.Helper()
+	for _, step := range trace.Steps {
+		require.False(t, step.AgentName == agentName && step.NodeID == nodeID)
+	}
+}
+
+func traceTerminalIDs(t *testing.T, trace *atrace.Trace) []string {
+	t.Helper()
+	referenced := make(map[string]struct{})
+	for _, step := range trace.Steps {
+		for _, predecessorStepID := range step.PredecessorStepIDs {
+			referenced[predecessorStepID] = struct{}{}
+		}
+	}
+	terminals := make([]string, 0, 1)
+	for _, step := range trace.Steps {
+		if _, ok := referenced[step.StepID]; ok {
+			continue
+		}
+		terminals = append(terminals, step.StepID)
+	}
+	return terminals
+}
+
+func countTraceStepsByAgentAndNode(trace *atrace.Trace, agentName string, nodeID string) int {
+	if trace == nil {
+		return 0
+	}
+	var count int
+	for _, step := range trace.Steps {
+		if step.AgentName == agentName && step.NodeID == nodeID {
+			count++
+		}
+	}
+	return count
 }
 
 func TestTerminalAgentErrorHelpers(t *testing.T) {

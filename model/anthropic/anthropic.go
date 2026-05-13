@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -24,6 +23,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -55,6 +55,7 @@ type Model struct {
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
+	contextWindow              int                     // Context window for this model instance.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
@@ -105,6 +106,7 @@ func New(name string, opts ...Option) *Model {
 		chatChunkCallback:          o.chatChunkCallback,
 		chatStreamCompleteCallback: o.chatStreamCompleteCallback,
 		enableTokenTailoring:       o.enableTokenTailoring,
+		contextWindow:              o.contextWindow,
 		tokenCounter:               o.tokenCounter,
 		tailoringStrategy:          o.tailoringStrategy,
 		maxInputTokens:             o.maxInputTokens,
@@ -124,7 +126,8 @@ func New(name string, opts ...Option) *Model {
 // Info returns the model information.
 func (m *Model) Info() model.Info {
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
 	}
 }
 
@@ -221,7 +224,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	maxInputTokens := m.maxInputTokens
 	if maxInputTokens <= 0 {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
+		contextWindow := m.contextWindow
+		if contextWindow <= 0 {
+			contextWindow = imodel.ResolveContextWindow(m.name)
+		}
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
@@ -977,18 +983,9 @@ func convertContentBlock(contents []anthropic.ContentBlockUnion) model.Message {
 
 // convertTools maps our tool declarations to Anthropic tool parameters.
 func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
-	// Extract and sort tool names for stable ordering to improve cache hit rate
-	toolNames := make([]string, 0, len(tools))
-	for name := range tools {
-		toolNames = append(toolNames, name)
-	}
-	sort.Strings(toolNames)
-
-	// Build tools in sorted order
 	var result []anthropic.ToolUnionParam
-	for _, name := range toolNames {
-		tool := tools[name]
-		declaration := tool.Declaration()
+	for _, t := range toolorder.SortedTools(tools) {
+		declaration := t.Declaration()
 		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        declaration.Name,

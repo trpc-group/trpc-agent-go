@@ -12,12 +12,6 @@ tRPC-Agent-Go provides comprehensive observability features built on the OpenTel
 - **Multi-platform Support**: Supports mainstream monitoring platforms such as Jaeger, Prometheus, Galileo, and ZhiYan Monitoring Bao.
 - **Flexible Configuration**: Supports multiple configuration methods and custom extensions.
 
-### Telemetry Protocol
-
-For the OpenTelemetry-aligned multimodal message schema, provider capability
-boundaries, and replay rules, see
-[Telemetry Multimodal Protocol](telemetry-multimodal.md).
-
 ## Integration with Different Monitoring Platforms
 
 ### Langfuse Integration
@@ -69,6 +63,8 @@ go run .
 ```
 
 You can view tracing data in the Langfuse console.
+
+For message payload compatibility and the recommended OTel `role + parts` fields, see [Multimodal Telemetry Messages](telemetry-multimodal.md).
 
 ##### Integration Code Description
 Langfuse supports receiving Trace data via the `/api/public/otel` (OTLP) endpoint, supporting HTTP/protobuf only, not gRPC.

@@ -294,6 +294,7 @@ func (l *dagLoop) launchTask(t *Task, step int) {
 			t,
 			step,
 			l.report,
+			false,
 		)
 		if err == nil && l.report != nil {
 			l.report.markCompleted(t)

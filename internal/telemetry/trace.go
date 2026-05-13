@@ -24,6 +24,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
@@ -94,6 +95,56 @@ type Workflow struct {
 // NewWorkflowSpanName creates a new workflow span name.
 func NewWorkflowSpanName(workflowName string) string {
 	return OperationWorkflow + " " + workflowName
+}
+
+type telemetryMessage struct {
+	Role             model.Role          `json:"role"`
+	Content          string              `json:"content,omitempty"`
+	ContentParts     []model.ContentPart `json:"content_parts,omitempty"`
+	ToolCallID       string              `json:"tool_call_id,omitempty"`
+	Name             string              `json:"name,omitempty"`
+	ToolCalls        []model.ToolCall    `json:"tool_calls,omitempty"`
+	ReasoningContent string              `json:"reasoning_content,omitempty"`
+}
+
+type telemetryChoice struct {
+	Index        int              `json:"index"`
+	Message      telemetryMessage `json:"message,omitempty"`
+	Delta        telemetryMessage `json:"delta,omitempty"`
+	FinishReason *string          `json:"finish_reason,omitempty"`
+}
+
+func telemetryMessageFromModel(msg model.Message) telemetryMessage {
+	return telemetryMessage{
+		Role:             msg.Role,
+		Content:          msg.Content,
+		ContentParts:     msg.ContentParts,
+		ToolCallID:       msg.ToolID,
+		Name:             msg.ToolName,
+		ToolCalls:        msg.ToolCalls,
+		ReasoningContent: msg.ReasoningContent,
+	}
+}
+
+func marshalTelemetryMessages(messages []model.Message) ([]byte, error) {
+	out := make([]telemetryMessage, len(messages))
+	for i, msg := range messages {
+		out[i] = telemetryMessageFromModel(msg)
+	}
+	return json.Marshal(out)
+}
+
+func marshalTelemetryChoices(choices []model.Choice) ([]byte, error) {
+	out := make([]telemetryChoice, len(choices))
+	for i, choice := range choices {
+		out[i] = telemetryChoice{
+			Index:        choice.Index,
+			Message:      telemetryMessageFromModel(choice.Message),
+			Delta:        telemetryMessageFromModel(choice.Delta),
+			FinishReason: choice.FinishReason,
+		}
+	}
+	return json.Marshal(out)
 }
 
 // TraceWorkflow traces the workflow.
@@ -256,43 +307,67 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		attribute.String(semconvtrace.KeyGenAISystemInstructions, instructions),
 	}
 	if invoke != nil {
-		if len(invoke.RunOptions.SpanAttributes) > 0 {
-			span.SetAttributes(invoke.RunOptions.SpanAttributes...)
-		}
-		if invoke.GetParentInvocation() == nil &&
-			len(invoke.RunOptions.TraceStartedCallbacks) > 0 {
-			spanContext := span.SpanContext()
-			for _, callback := range invoke.RunOptions.TraceStartedCallbacks {
-				if callback == nil {
-					continue
-				}
-				callback(spanContext)
-			}
-		}
-		if bts, err := marshalTelemetryMessages([]model.Message{invoke.Message}); err == nil {
-			span.SetAttributes(
-				attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
-			)
-		} else {
-			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
-		}
-		agentName, agentID := resolveInvocationAgentIdentity(invoke)
-		if agentName != "" {
-			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, agentName))
-		}
-		if agentID != "" {
-			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentID, agentID))
-		}
-		attrs = append(attrs, attribute.String(semconvtrace.KeyInvocationID, invoke.InvocationID))
-
-		if invoke.Session != nil {
-			attrs = append(attrs,
-				attribute.String(semconvtrace.KeyRunnerUserID, invoke.Session.UserID),
-				attribute.String(semconvtrace.KeyGenAIConversationID, invoke.Session.ID),
-			)
-		}
+		traceBeforeInvokeAgentInvocation(span, invoke)
+		attrs = append(attrs, beforeInvokeAgentAttributes(invoke)...)
 	}
 	span.SetAttributes(attrs...)
+	setInvokeAgentGenerationConfigAttributes(span, genConfig)
+}
+
+func traceBeforeInvokeAgentInvocation(span trace.Span, invoke *agent.Invocation) {
+	if len(invoke.RunOptions.SpanAttributes) > 0 {
+		span.SetAttributes(invoke.RunOptions.SpanAttributes...)
+	}
+	if invoke.GetParentInvocation() == nil &&
+		len(invoke.RunOptions.TraceStartedCallbacks) > 0 {
+		spanContext := span.SpanContext()
+		for _, callback := range invoke.RunOptions.TraceStartedCallbacks {
+			if callback == nil {
+				continue
+			}
+			callback(spanContext)
+		}
+	}
+	setInvokeAgentInputMessageAttributes(span, invoke.Message)
+}
+
+func setInvokeAgentInputMessageAttributes(span trace.Span, msg model.Message) {
+	if bts, err := marshalTelemetryMessages([]model.Message{msg}); err == nil {
+		span.SetAttributes(
+			attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
+		)
+	} else {
+		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
+	}
+	if bts, err := marshalOTelTelemetryMessages([]model.Message{msg}); err == nil {
+		span.SetAttributes(
+			attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, string(bts)),
+		)
+	} else {
+		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>"))
+	}
+}
+
+func beforeInvokeAgentAttributes(invoke *agent.Invocation) []attribute.KeyValue {
+	var attrs []attribute.KeyValue
+	agentName, agentID := resolveInvocationAgentIdentity(invoke)
+	if agentName != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, agentName))
+	}
+	if agentID != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentID, agentID))
+	}
+	attrs = append(attrs, attribute.String(semconvtrace.KeyInvocationID, invoke.InvocationID))
+	if invoke.Session != nil {
+		attrs = append(attrs,
+			attribute.String(semconvtrace.KeyRunnerUserID, invoke.Session.UserID),
+			attribute.String(semconvtrace.KeyGenAIConversationID, invoke.Session.ID),
+		)
+	}
+	return attrs
+}
+
+func setInvokeAgentGenerationConfigAttributes(span trace.Span, genConfig *model.GenerationConfig) {
 	if genConfig != nil {
 		span.SetAttributes(attribute.Bool(semconvtrace.KeyGenAIRequestIsStream, genConfig.Stream))
 		if len(genConfig.Stop) > 0 {
@@ -355,6 +430,11 @@ func TraceAfterInvokeAgent(
 		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			span.SetAttributes(
 				attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)),
+			)
+		}
+		if bts, err := marshalOTelTelemetryChoices(rsp.Choices); err == nil {
+			span.SetAttributes(
+				attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, string(bts)),
 			)
 		}
 		var finishReasons []string
@@ -509,13 +589,8 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	// Add tool definitions as best-effort structured array (JSON string fallback)
 	if len(req.Tools) > 0 {
 		definitions := make([]*tool.Declaration, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			if t == nil {
-				continue
-			}
-			if decl := t.Declaration(); decl != nil {
-				definitions = append(definitions, decl)
-			}
+		for _, t := range toolorder.SortedTools(req.Tools) {
+			definitions = append(definitions, t.Declaration())
 		}
 
 		if len(definitions) > 0 {
@@ -530,6 +605,11 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
+	}
+	if bts, err := marshalOTelTelemetryMessages(req.Messages); err == nil {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, string(bts)))
+	} else {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>"))
 	}
 
 	return attrs
@@ -576,6 +656,9 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 	if len(rsp.Choices) > 0 {
 		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)))
+		}
+		if bts, err := marshalOTelTelemetryChoices(rsp.Choices); err == nil {
+			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, string(bts)))
 		}
 
 		// Extract finish reasons

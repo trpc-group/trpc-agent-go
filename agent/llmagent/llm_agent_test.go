@@ -334,6 +334,8 @@ func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
 	WithEnableContextCompaction(true)(opts)
 	WithContextCompactionKeepRecentRequests(2)(opts)
 	WithContextCompactionToolResultMaxTokens(2048)(opts)
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	WithContextCompactionTokenCounter(counter)(opts)
 
 	procs := buildRequestProcessors("test-agent", opts)
 	var crp *processor.ContentRequestProcessor
@@ -346,6 +348,7 @@ func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
 	require.True(t, crp.ContextCompactionConfig.Enabled)
 	require.Equal(t, 2, crp.ContextCompactionConfig.KeepRecentRequests)
 	require.Equal(t, 2048, crp.ContextCompactionConfig.ToolResultMaxTokens)
+	require.Same(t, counter, crp.ContextCompactionConfig.TokenCounter)
 }
 
 // Test that buildRequestProcessors wires PreserveSameBranch into
@@ -2245,6 +2248,30 @@ func TestLLMAgent_RunWithModelName_NotFound(t *testing.T) {
 
 	llmAgent.setupInvocation(inv)
 	require.Equal(t, defaultModel, inv.Model)
+}
+
+func TestLLMAgent_BaseModelForInvocation_MissingModelNameSuppressesAgentSelector(t *testing.T) {
+	defaultModel := &mockModelWithResponse{}
+	selectorModel := &mockModelWithResponse{}
+	llmAgent := New(
+		"test-agent",
+		WithModel(defaultModel),
+		WithModelSelector(func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+			return selectorModel, nil
+		}),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "test-1",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message"),
+		RunOptions: agent.RunOptions{
+			ModelName: "non-existent-model",
+		},
+	}
+	resolution := llmAgent.resolveFlowBaseModel(inv)
+	require.Same(t, defaultModel, resolution.Model)
+	require.NotSame(t, selectorModel, resolution.Model)
+	require.False(t, resolution.AllowAgentSelector)
 }
 
 // TestLLMAgent_RunWithModel_Priority tests that WithModel takes priority over WithModelName.

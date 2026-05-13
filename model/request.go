@@ -76,6 +76,11 @@ type Message struct {
 	// ReasoningContent is hunyuan or deepseek think content
 	// - https://api-docs.deepseek.com/api/create-chat-completion#responses
 	ReasoningContent string `json:"reasoning_content,omitempty"`
+	// ReasoningSignature is a token that verifies the reasoning text was generated
+	// by the model. When passing a reasoning block back to the API in a multi-turn
+	// conversation, include the text and its signature unmodified.
+	// Currently used by AWS Bedrock (Claude) models.
+	ReasoningSignature string `json:"reasoning_signature,omitempty"`
 }
 
 // AddFilePath adds a file path to the message.
@@ -450,6 +455,11 @@ type Request struct {
 	// capabilities (e.g. OpenAI response_format with json_schema) to enforce
 	// JSON formatting. This field is optional and provider-agnostic.
 	StructuredOutput *StructuredOutput `json:"structured_output,omitempty"`
+
+	// ExtraFields stores provider-specific top-level request body fields.
+	// Model adapters merge these with model-level extra fields when supported;
+	// request-level values take precedence.
+	ExtraFields map[string]any `json:"-"`
 
 	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
 }

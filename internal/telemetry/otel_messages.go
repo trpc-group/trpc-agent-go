@@ -36,9 +36,7 @@ const (
 	otelModalityVideo = "video"
 )
 
-// OTelMessagePart is the framework's OpenTelemetry-aligned message part payload.
-// It follows the OTel GenAI schemas while preserving a few provider-specific
-// hints, such as image detail and filename, via additional properties.
+// OTelMessagePart is the OpenTelemetry-aligned message part payload.
 type OTelMessagePart struct {
 	Type      string          `json:"type"`
 	Content   string          `json:"content,omitempty"`
@@ -54,14 +52,14 @@ type OTelMessagePart struct {
 	Filename  string          `json:"filename,omitempty"`
 }
 
-// OTelInputMessage is the OpenTelemetry-aligned JSON payload for gen_ai.input.messages.
+// OTelInputMessage is the OpenTelemetry-aligned payload for gen_ai.input.messages.otel.
 type OTelInputMessage struct {
 	Role  model.Role        `json:"role"`
 	Parts []OTelMessagePart `json:"parts"`
 	Name  string            `json:"name,omitempty"`
 }
 
-// OTelOutputMessage is the OpenTelemetry-aligned JSON payload for gen_ai.output.messages.
+// OTelOutputMessage is the OpenTelemetry-aligned payload for gen_ai.output.messages.otel.
 type OTelOutputMessage struct {
 	Role         model.Role        `json:"role"`
 	Parts        []OTelMessagePart `json:"parts"`
@@ -69,208 +67,77 @@ type OTelOutputMessage struct {
 	FinishReason string            `json:"finish_reason,omitempty"`
 }
 
-func telemetryMessageFromModel(msg model.Message) OTelInputMessage {
-	return OTelInputMessage{
-		Role:  normalizedMessageRole(msg.Role, ""),
-		Parts: telemetryPartsFromModelMessage(msg),
-		Name:  telemetryMessageName(msg),
-	}
-}
-
-func marshalTelemetryMessages(messages []model.Message) ([]byte, error) {
+func marshalOTelTelemetryMessages(messages []model.Message) ([]byte, error) {
 	out := make([]OTelInputMessage, len(messages))
 	for i, msg := range messages {
-		out[i] = telemetryMessageFromModel(msg)
+		out[i] = OTelInputMessage{
+			Role:  normalizedOTelMessageRole(msg.Role, ""),
+			Parts: otelPartsFromModelMessage(msg),
+			Name:  strings.TrimSpace(msg.ToolName),
+		}
 	}
 	return json.Marshal(out)
 }
 
-func marshalTelemetryChoices(choices []model.Choice) ([]byte, error) {
+func marshalOTelTelemetryChoices(choices []model.Choice) ([]byte, error) {
 	out := make([]OTelOutputMessage, len(choices))
 	for i, choice := range choices {
-		out[i] = telemetryOutputMessageFromChoice(choice)
+		msg := choice.Message
+		if isZeroOTelTelemetryMessage(msg) && !isZeroOTelTelemetryMessage(choice.Delta) {
+			msg = choice.Delta
+		}
+		out[i] = OTelOutputMessage{
+			Role:         normalizedOTelMessageRole(msg.Role, model.RoleAssistant),
+			Parts:        otelPartsFromModelMessage(msg),
+			Name:         strings.TrimSpace(msg.ToolName),
+			FinishReason: derefString(choice.FinishReason),
+		}
 	}
 	return json.Marshal(out)
 }
 
-// ParseOTelInputMessagesJSON parses gen_ai.input.messages JSON encoded with the
-// OpenTelemetry-aligned schema used by this package.
-func ParseOTelInputMessagesJSON(raw string) ([]OTelInputMessage, error) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, nil
-	}
-
-	var topLevel any
-	if err := json.Unmarshal([]byte(raw), &topLevel); err != nil {
-		return nil, err
-	}
-	if _, ok := topLevel.([]any); !ok {
-		return nil, nil
-	}
-
-	var messages []OTelInputMessage
-	if err := json.Unmarshal([]byte(raw), &messages); err != nil {
-		return nil, err
-	}
-	if !isValidOTelInputMessages(messages) {
-		return nil, nil
-	}
-	return messages, nil
-}
-
-// ParseOTelOutputMessagesJSON parses gen_ai.output.messages JSON encoded with the
-// OpenTelemetry-aligned schema used by this package.
-func ParseOTelOutputMessagesJSON(raw string) ([]OTelOutputMessage, error) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, nil
-	}
-
-	var topLevel any
-	if err := json.Unmarshal([]byte(raw), &topLevel); err != nil {
-		return nil, err
-	}
-	if _, ok := topLevel.([]any); !ok {
-		return nil, nil
-	}
-
-	var messages []OTelOutputMessage
-	if err := json.Unmarshal([]byte(raw), &messages); err != nil {
-		return nil, err
-	}
-	if !isValidOTelOutputMessages(messages) {
-		return nil, nil
-	}
-	return messages, nil
-}
-
-func isValidOTelInputMessages(messages []OTelInputMessage) bool {
-	if messages == nil {
-		return false
-	}
-	for _, msg := range messages {
-		if !msg.Role.IsValid() || !isValidOTelParts(msg.Parts) {
-			return false
-		}
-	}
-	return true
-}
-
-func isValidOTelOutputMessages(messages []OTelOutputMessage) bool {
-	if messages == nil {
-		return false
-	}
-	for _, msg := range messages {
-		if !msg.Role.IsValid() || !isValidOTelParts(msg.Parts) {
-			return false
-		}
-	}
-	return true
-}
-
-func isValidOTelParts(parts []OTelMessagePart) bool {
-	if len(parts) == 0 {
-		return false
-	}
-	for _, part := range parts {
-		if !isValidOTelPart(part) {
-			return false
-		}
-	}
-	return true
-}
-
-func isValidOTelPart(part OTelMessagePart) bool {
-	switch part.Type {
-	case otelPartTypeText, otelPartTypeReasoning, otelPartTypeBlob:
-		return part.Content != ""
-	case otelPartTypeURI:
-		return part.URI != ""
-	case otelPartTypeFile:
-		return strings.TrimSpace(part.FileID) != ""
-	case otelPartTypeToolCall:
-		return strings.TrimSpace(part.Name) != ""
-	case otelPartTypeToolCallResponse:
-		return strings.TrimSpace(part.ID) != "" || len(part.Response) > 0
-	default:
-		return false
-	}
-}
-
-func telemetryOutputMessageFromChoice(choice model.Choice) OTelOutputMessage {
-	msg := choice.Message
-	if isZeroTelemetryMessage(msg) && !isZeroTelemetryMessage(choice.Delta) {
-		msg = choice.Delta
-	}
-	return OTelOutputMessage{
-		Role:         normalizedMessageRole(msg.Role, model.RoleAssistant),
-		Parts:        telemetryPartsFromModelMessage(msg),
-		Name:         telemetryMessageName(msg),
-		FinishReason: derefString(choice.FinishReason),
-	}
-}
-
-func telemetryPartsFromModelMessage(msg model.Message) []OTelMessagePart {
+func otelPartsFromModelMessage(msg model.Message) []OTelMessagePart {
 	parts := make([]OTelMessagePart, 0, 1+len(msg.ContentParts)+len(msg.ToolCalls))
-
-	if msg.Role == model.RoleTool && shouldUseToolCallResponsePart(msg) {
-		part, ok := telemetryPartFromToolCallResponse(msg)
-		if ok {
-			parts = append(parts, part)
-		}
+	if part, ok := otelPartFromToolCallResponse(msg); ok {
+		parts = append(parts, part)
 	} else {
 		if msg.Content != "" {
-			parts = append(parts, OTelMessagePart{
-				Type:    otelPartTypeText,
-				Content: msg.Content,
-			})
+			parts = append(parts, OTelMessagePart{Type: otelPartTypeText, Content: msg.Content})
 		}
-		parts = append(parts, telemetryPartsFromContentParts(msg.ContentParts)...)
+		parts = append(parts, otelPartsFromContentParts(msg.ContentParts)...)
 	}
-
 	if msg.ReasoningContent != "" {
-		parts = append(parts, OTelMessagePart{
-			Type:    otelPartTypeReasoning,
-			Content: msg.ReasoningContent,
-		})
+		parts = append(parts, OTelMessagePart{Type: otelPartTypeReasoning, Content: msg.ReasoningContent})
 	}
-
 	for _, toolCall := range msg.ToolCalls {
-		parts = append(parts, telemetryPartFromToolCall(toolCall))
+		parts = append(parts, otelPartFromToolCall(toolCall))
 	}
-
 	if len(parts) == 0 {
 		return []OTelMessagePart{}
 	}
 	return parts
 }
 
-func telemetryPartsFromContentParts(contentParts []model.ContentPart) []OTelMessagePart {
+func otelPartsFromContentParts(contentParts []model.ContentPart) []OTelMessagePart {
 	parts := make([]OTelMessagePart, 0, len(contentParts))
 	for _, contentPart := range contentParts {
-		part, ok := telemetryPartFromContentPart(contentPart)
-		if !ok {
-			continue
+		part, ok := otelPartFromContentPart(contentPart)
+		if ok {
+			parts = append(parts, part)
 		}
-		parts = append(parts, part)
 	}
 	return parts
 }
 
-func telemetryPartFromContentPart(contentPart model.ContentPart) (OTelMessagePart, bool) {
+func otelPartFromContentPart(contentPart model.ContentPart) (OTelMessagePart, bool) {
 	switch contentPart.Type {
 	case model.ContentTypeText:
 		if contentPart.Text == nil {
 			return OTelMessagePart{}, false
 		}
-		return OTelMessagePart{
-			Type:    otelPartTypeText,
-			Content: *contentPart.Text,
-		}, true
+		return OTelMessagePart{Type: otelPartTypeText, Content: *contentPart.Text}, true
 	case model.ContentTypeImage:
-		if contentPart.Image == nil {
-			return OTelMessagePart{}, false
-		}
-		return telemetryPartFromImage(contentPart.Image)
+		return otelPartFromImage(contentPart.Image)
 	case model.ContentTypeAudio:
 		if contentPart.Audio == nil || len(contentPart.Audio.Data) == 0 {
 			return OTelMessagePart{}, false
@@ -278,20 +145,17 @@ func telemetryPartFromContentPart(contentPart model.ContentPart) (OTelMessagePar
 		return OTelMessagePart{
 			Type:     otelPartTypeBlob,
 			Modality: otelModalityAudio,
-			MIMEType: audioMIMEType(contentPart.Audio.Format),
+			MIMEType: normalizeFormatAsMIME(contentPart.Audio.Format, "audio"),
 			Content:  base64.StdEncoding.EncodeToString(contentPart.Audio.Data),
 		}, true
 	case model.ContentTypeFile:
-		if contentPart.File == nil {
-			return OTelMessagePart{}, false
-		}
-		return telemetryPartFromFile(contentPart.File)
+		return otelPartFromFile(contentPart.File)
 	default:
 		return OTelMessagePart{}, false
 	}
 }
 
-func telemetryPartFromImage(image *model.Image) (OTelMessagePart, bool) {
+func otelPartFromImage(image *model.Image) (OTelMessagePart, bool) {
 	if image == nil {
 		return OTelMessagePart{}, false
 	}
@@ -316,11 +180,11 @@ func telemetryPartFromImage(image *model.Image) (OTelMessagePart, bool) {
 	}, true
 }
 
-func telemetryPartFromFile(file *model.File) (OTelMessagePart, bool) {
-	modality, mimeType := fileMetadata(file)
+func otelPartFromFile(file *model.File) (OTelMessagePart, bool) {
 	if file == nil {
 		return OTelMessagePart{}, false
 	}
+	modality, mimeType := fileMetadata(file)
 	if strings.TrimSpace(file.FileID) != "" {
 		return OTelMessagePart{
 			Type:     otelPartTypeFile,
@@ -342,7 +206,7 @@ func telemetryPartFromFile(file *model.File) (OTelMessagePart, bool) {
 	}, true
 }
 
-func telemetryPartFromToolCall(toolCall model.ToolCall) OTelMessagePart {
+func otelPartFromToolCall(toolCall model.ToolCall) OTelMessagePart {
 	return OTelMessagePart{
 		Type:      otelPartTypeToolCall,
 		ID:        strings.TrimSpace(toolCall.ID),
@@ -351,7 +215,7 @@ func telemetryPartFromToolCall(toolCall model.ToolCall) OTelMessagePart {
 	}
 }
 
-func telemetryPartFromToolCallResponse(msg model.Message) (OTelMessagePart, bool) {
+func otelPartFromToolCallResponse(msg model.Message) (OTelMessagePart, bool) {
 	if msg.Role != model.RoleTool {
 		return OTelMessagePart{}, false
 	}
@@ -371,13 +235,12 @@ func toolResponseRawMessage(msg model.Message) json.RawMessage {
 	if len(msg.ContentParts) == 0 && msg.ReasoningContent == "" && len(msg.ToolCalls) == 0 {
 		return rawJSONOrJSONString([]byte(msg.Content))
 	}
-
 	payload := make(map[string]any)
 	if msg.Content != "" {
 		payload["content"] = jsonValueOrString([]byte(msg.Content))
 	}
 	if len(msg.ContentParts) > 0 {
-		payload["parts"] = telemetryPartsFromContentParts(msg.ContentParts)
+		payload["parts"] = otelPartsFromContentParts(msg.ContentParts)
 	}
 	if msg.ReasoningContent != "" {
 		payload["reasoning"] = msg.ReasoningContent
@@ -385,7 +248,7 @@ func toolResponseRawMessage(msg model.Message) json.RawMessage {
 	if len(msg.ToolCalls) > 0 {
 		parts := make([]OTelMessagePart, 0, len(msg.ToolCalls))
 		for _, toolCall := range msg.ToolCalls {
-			parts = append(parts, telemetryPartFromToolCall(toolCall))
+			parts = append(parts, otelPartFromToolCall(toolCall))
 		}
 		payload["tool_calls"] = parts
 	}
@@ -426,23 +289,14 @@ func jsonValueOrString(raw []byte) any {
 	return string(raw)
 }
 
-func telemetryMessageName(msg model.Message) string {
-	return strings.TrimSpace(msg.ToolName)
-}
-
-func shouldUseToolCallResponsePart(msg model.Message) bool {
-	_, ok := telemetryPartFromToolCallResponse(msg)
-	return ok
-}
-
-func normalizedMessageRole(role model.Role, fallback model.Role) model.Role {
+func normalizedOTelMessageRole(role model.Role, fallback model.Role) model.Role {
 	if role.IsValid() {
 		return role
 	}
 	return fallback
 }
 
-func isZeroTelemetryMessage(msg model.Message) bool {
+func isZeroOTelTelemetryMessage(msg model.Message) bool {
 	return msg.Role == "" &&
 		msg.Content == "" &&
 		len(msg.ContentParts) == 0 &&
@@ -484,10 +338,6 @@ func imageMIMEType(image *model.Image) string {
 		return mimeType
 	}
 	return mimeTypeFromURL(image.URL)
-}
-
-func audioMIMEType(format string) string {
-	return normalizeFormatAsMIME(format, "audio")
 }
 
 func normalizeFormatAsMIME(format, category string) string {

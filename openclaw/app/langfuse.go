@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	langfuseobs "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 )
 
@@ -32,14 +33,17 @@ const (
 
 	langfuseTraceIDPlaceholder = "{{trace_id}}"
 
-	langfuseTraceNameKey      = "langfuse.trace.name"
-	langfuseUserIDKey         = "langfuse.user.id"
-	langfuseSessionIDKey      = "langfuse.session.id"
-	langfuseMetadataPrefix    = "langfuse.trace.metadata."
-	langfuseMetadataAppName   = langfuseMetadataPrefix + "app_name"
-	langfuseMetadataChannel   = langfuseMetadataPrefix + "channel"
-	langfuseMetadataRequestID = langfuseMetadataPrefix + "request_id"
-	langfuseMetadataMessageID = langfuseMetadataPrefix + "message_id"
+	langfuseTraceNameKey           = "langfuse.trace.name"
+	langfuseUserIDKey              = "langfuse.user.id"
+	langfuseSessionIDKey           = "langfuse.session.id"
+	langfuseMetadataPrefix         = "langfuse.trace.metadata."
+	langfuseMetadataAppName        = langfuseMetadataPrefix + "app_name"
+	langfuseMetadataChannel        = langfuseMetadataPrefix + "channel"
+	langfuseMetadataRequestID      = langfuseMetadataPrefix + "request_id"
+	langfuseMetadataMessageID      = langfuseMetadataPrefix + "message_id"
+	langfuseMetadataProfileID      = langfuseMetadataPrefix + "profile_id"
+	langfuseMetadataProfileVersion = langfuseMetadataPrefix +
+		"profile_version"
 
 	langfuseTraceDefaultName = "request"
 )
@@ -161,11 +165,12 @@ func buildLangfuseRunOptionResolver(
 	return func(
 		ctx context.Context,
 		input gateway.RunOptionInput,
-	) (context.Context, []agent.RunOption) {
+	) (context.Context, []agent.RunOption, error) {
 		ctx = withLangfuseBaggage(ctx, appName, input)
 
 		runOpts := make([]agent.RunOption, 0, 2)
-		traceName := buildLangfuseTraceName(appName, input)
+		resolvedAppName := runtimeprofile.AppNameFromContext(ctx, appName)
+		traceName := buildLangfuseTraceName(resolvedAppName, input)
 		if traceName != "" {
 			runOpts = append(
 				runOpts,
@@ -198,7 +203,7 @@ func buildLangfuseRunOptionResolver(
 				),
 			)
 		}
-		return ctx, runOpts
+		return ctx, runOpts, nil
 	}
 }
 
@@ -224,8 +229,20 @@ func withLangfuseBaggage(
 	bag = setLangfuseBaggageMember(
 		bag,
 		langfuseMetadataAppName,
-		appName,
+		runtimeprofile.AppNameFromContext(ctx, appName),
 	)
+	if profile, ok := runtimeprofile.ProfileFromContext(ctx); ok {
+		bag = setLangfuseBaggageMember(
+			bag,
+			langfuseMetadataProfileID,
+			profile.ID,
+		)
+		bag = setLangfuseBaggageMember(
+			bag,
+			langfuseMetadataProfileVersion,
+			profile.Version,
+		)
+	}
 	bag = setLangfuseBaggageMember(
 		bag,
 		langfuseMetadataChannel,

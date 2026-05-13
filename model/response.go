@@ -17,6 +17,8 @@ const (
 	ErrorTypeAPIError    = "api_error"
 	ErrorTypeFlowError   = "flow_error"
 	ErrorTypeRunError    = "run_error"
+	// ErrorTypeCancelled indicates an error resulting from the caller actively canceling the operation or from a timeout.
+	ErrorTypeCancelled = "cancelled"
 )
 
 // Object type constants for Response.Object field.

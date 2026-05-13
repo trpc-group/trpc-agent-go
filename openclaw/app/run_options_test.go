@@ -23,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 func TestMain(m *testing.M) {
@@ -85,6 +86,127 @@ a2a:
 	require.True(t, opts.A2AAdvertiseTools)
 	require.Equal(t, "openclaw-sandbox", opts.A2AName)
 	require.Equal(t, "sandbox subagent", opts.A2ADescription)
+}
+
+func TestParseRunOptions_RuntimeProfilesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+runtime_profiles:
+  default: retail
+  required: true
+  fallback_to_default: true
+  profiles:
+    retail:
+      app_name: retail-app
+      agent_name: assistant
+      model_name: gpt-retail
+      prompt:
+        instruction: "help retail customers"
+        system_prompt: "stay concise"
+      tools:
+        include: ["knowledge_search", "order_lookup"]
+        execution_exclude: ["dangerous_tool"]
+        toolsets: ["crm"]
+        credential_refs:
+          crm: "secret://retail/crm"
+      knowledge:
+        indexes: ["retail-index"]
+        filter:
+          tenant: retail
+      workspace:
+        workdir: "/workspace/retail"
+        allowed_roots: ["/workspace/retail"]
+      credentials:
+        allowed_refs: ["secret://retail/crm"]
+      skills:
+        include: ["crm"]
+        exclude: ["draft"]
+        roots: ["/skills/retail"]
+      isolation:
+        mode: "service"
+        agent_cache: true
+        toolset_cache: true
+        service_mode: "sidecar"
+      runtime_state:
+        plan: vip
+      model_request_extra:
+        reasoning_effort: medium
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.RuntimeProfiles)
+	require.Equal(t, "retail", opts.RuntimeProfiles.Default)
+	require.True(t, opts.RuntimeProfiles.Required)
+	require.True(t, opts.RuntimeProfiles.FallbackToDefault)
+
+	profile := opts.RuntimeProfiles.Profiles["retail"]
+	require.Equal(t, "retail-app", profile.AppName)
+	require.Equal(t, "assistant", profile.AgentName)
+	require.Equal(t, "gpt-retail", profile.ModelName)
+	require.Equal(t, "help retail customers", profile.Prompt.Instruction)
+	require.Equal(t, "stay concise", profile.Prompt.SystemPrompt)
+	require.Equal(t, []string{
+		"knowledge_search",
+		"order_lookup",
+	}, profile.Tools.Include)
+	require.Equal(t, []string{
+		"dangerous_tool",
+	}, profile.Tools.ExecutionExclude)
+	require.Equal(t, []string{"crm"}, profile.Tools.ToolSets)
+	require.Equal(
+		t,
+		map[string]string{"crm": "secret://retail/crm"},
+		profile.Tools.CredentialRefs,
+	)
+	require.Equal(t, []string{"retail-index"}, profile.Knowledge.Indexes)
+	require.Equal(t, "retail", profile.Knowledge.Filter["tenant"])
+	require.Equal(t, "/workspace/retail", profile.Workspace.Workdir)
+	require.Equal(
+		t,
+		[]string{"/workspace/retail"},
+		profile.Workspace.AllowedRoots,
+	)
+	require.Equal(
+		t,
+		[]string{"secret://retail/crm"},
+		profile.Credentials.AllowedRefs,
+	)
+	require.Equal(t, []string{"crm"}, profile.Skills.Include)
+	require.Equal(t, []string{"draft"}, profile.Skills.Exclude)
+	require.Equal(t, []string{"/skills/retail"}, profile.Skills.Roots)
+	require.Equal(
+		t,
+		runtimeprofile.IsolationModeService,
+		profile.Isolation.Mode,
+	)
+	require.True(t, profile.Isolation.AgentCache)
+	require.True(t, profile.Isolation.ToolSetCache)
+	require.Equal(t, "sidecar", profile.Isolation.ServiceMode)
+	require.Equal(t, "vip", profile.State["plan"])
+	require.Equal(t, "medium", profile.ExtraModel["reasoning_effort"])
+
+	resolver := runtimeprofile.NewMapResolver(*opts.RuntimeProfiles)
+	require.NotNil(t, resolver)
+}
+
+func TestParseRunOptions_RuntimeProfilesRejectUnsupportedAgent(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+runtime_profiles:
+  profiles:
+    retail:
+      agent_name: sales-agent
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "runtime_profiles.profiles.retail")
+	require.Contains(t, err.Error(), "sales-agent")
 }
 
 func TestParseRunOptions_MemoryBackendFileFromConfig(t *testing.T) {
@@ -913,36 +1035,89 @@ skills:
 	require.Equal(t, "b,c", opts.SkillsAllowBundled)
 }
 
-func TestParseRunOptions_KnowledgesEntriesConfig(t *testing.T) {
+func TestParseRunOptions_KnowledgesProvidersConfig(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := writeTempConfig(t, `
 knowledges:
-  entries:
+  providers:
     - name: "docs"
-      embedder:
-        type: "openai"
-        model: "text-embedding-3-small"
-      vector_store:
-        type: "inmemory"
-        max_results: 5
+      max_results: 5
+      config:
+        embedder:
+          type: "openai"
+          model: "text-embedding-3-small"
+        vector_store:
+          type: "inmemory"
 `)
 
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
 	require.Len(t, opts.KnowledgesConfig, 1)
-	require.Contains(t, opts.KnowledgesConfig, "docs")
-	require.NotNil(t, opts.KnowledgesConfig["docs"])
+	require.Equal(t, "docs", opts.KnowledgesConfig[0].Name)
+	require.Equal(t, "builtin", opts.KnowledgesConfig[0].Type)
+	require.Equal(t, 5, opts.KnowledgesConfig[0].MaxResults)
 }
 
-func TestParseRunOptions_KnowledgesEntriesRequireName(t *testing.T) {
+func TestParseRunOptions_KnowledgesProvidersWithDescription(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := writeTempConfig(t, `
 knowledges:
-  entries:
-    - vector_store:
-        type: "inmemory"
+  providers:
+    - name: "docs"
+      description: "Framework docs and API reference"
+      max_results: 5
+      config:
+        vector_store:
+          type: "inmemory"
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Len(t, opts.KnowledgesConfig, 1)
+	require.Equal(t, "docs", opts.KnowledgesConfig[0].Name)
+	require.Equal(t,
+		"Framework docs and API reference",
+		opts.KnowledgesConfig[0].Description,
+	)
+}
+
+func TestParseRunOptions_KnowledgesProvidersExternalConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  providers:
+    - type: "lingshan"
+      name: "lingshan"
+      max_results: 5
+      config:
+        knowledge_base_id: "kb1"
+        service_name: "trpc.test.knowledge.lingshan"
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Len(t, opts.KnowledgesConfig, 1)
+	entry := opts.KnowledgesConfig[0]
+	require.Equal(t, "lingshan", entry.Type)
+	require.Equal(t, "lingshan", entry.Name)
+	require.Equal(t, 5, entry.MaxResults)
+	require.NotNil(t, entry.Config)
+	require.Equal(t, "kb1", mappingValue(entry.Config, "knowledge_base_id").Value)
+	require.Equal(t, "trpc.test.knowledge.lingshan", mappingValue(entry.Config, "service_name").Value)
+}
+
+func TestParseRunOptions_KnowledgesProvidersRequireName(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  providers:
+    - config:
+        vector_store:
+          type: "inmemory"
 `)
 
 	_, err := parseRunOptions([]string{"-config", cfgPath})
@@ -950,21 +1125,23 @@ knowledges:
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 1, exitErr.Code)
-	require.Contains(t, err.Error(), "knowledges.entries[0].name is empty")
+	require.Contains(t, err.Error(), "knowledges.providers[0].name is empty")
 }
 
-func TestParseRunOptions_KnowledgesEntriesRejectDuplicateNames(t *testing.T) {
+func TestParseRunOptions_KnowledgesProvidersRejectDuplicateNames(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := writeTempConfig(t, `
 knowledges:
-  entries:
+  providers:
     - name: "docs"
-      vector_store:
-        type: "inmemory"
+      config:
+        vector_store:
+          type: "inmemory"
     - name: "docs"
-      vector_store:
-        type: "inmemory"
+      config:
+        vector_store:
+          type: "inmemory"
 `)
 
 	_, err := parseRunOptions([]string{"-config", cfgPath})
@@ -975,26 +1152,7 @@ knowledges:
 	require.Contains(t, err.Error(), "duplicate knowledge name: docs")
 }
 
-func TestConvertKnowledgeConfigs_SkipsEntriesWithoutComponents(t *testing.T) {
-	t.Parallel()
-
-	configs, err := convertKnowledgeConfigs([]knowledgeEntryConfig{
-		{Name: "empty"},
-		{
-			Name: "docs",
-			VectorStore: &rawYAMLNode{Node: yamlNode(t, `
-type: inmemory
-max_results: 5
-`)},
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, configs, 1)
-	require.NotContains(t, configs, "empty")
-	require.Contains(t, configs, "docs")
-}
-
-func TestConvertKnowledgeConfigs_EmptyEntriesReturnNil(t *testing.T) {
+func TestConvertKnowledgeConfigs_EmptyProvidersReturnNil(t *testing.T) {
 	t.Parallel()
 
 	configs, err := convertKnowledgeConfigs(nil)
@@ -1002,38 +1160,26 @@ func TestConvertKnowledgeConfigs_EmptyEntriesReturnNil(t *testing.T) {
 	require.Nil(t, configs)
 }
 
-func TestConvertKnowledgeConfigs_ClonesNestedNodes(t *testing.T) {
+func TestParseRunOptions_KnowledgesLegacyEntriesReturnsHelpfulError(t *testing.T) {
 	t.Parallel()
 
-	embedderNode := yamlNode(t, `
-type: openai
-model: text-embedding-3-small
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  entries:
+    - name: "docs"
+      embedder:
+        type: "openai"
+      vector_store:
+        type: "inmemory"
 `)
-	vectorStoreNode := yamlNode(t, `
-type: inmemory
-max_results: 5
-`)
 
-	configs, err := convertKnowledgeConfigs([]knowledgeEntryConfig{{
-		Name:        "docs",
-		Embedder:    &rawYAMLNode{Node: embedderNode},
-		VectorStore: &rawYAMLNode{Node: vectorStoreNode},
-	}})
-	require.NoError(t, err)
-
-	mappingValue(embedderNode, "model").Value = "mutated-model"
-	mappingValue(vectorStoreNode, "max_results").Value = "99"
-
-	gotEmbedder := mappingValue(configs["docs"], "embedder")
-	gotVectorStore := mappingValue(configs["docs"], "vector_store")
-	require.Equal(t, "text-embedding-3-small", mappingValue(gotEmbedder, "model").Value)
-	require.Equal(t, "5", mappingValue(gotVectorStore, "max_results").Value)
-}
-
-func TestCloneYAMLNode_NilReturnsNil(t *testing.T) {
-	t.Parallel()
-
-	require.Nil(t, cloneYAMLNode(nil))
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.Contains(t, err.Error(), "knowledges.entries is no longer supported")
+	require.Contains(t, err.Error(), "knowledges.providers")
 }
 
 func TestParseRunOptions_DebugRecorder_ConfigApplied(t *testing.T) {

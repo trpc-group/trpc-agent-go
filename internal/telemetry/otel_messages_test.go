@@ -19,255 +19,170 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestParseOTelMessagesJSON_EmptyAndInvalid(t *testing.T) {
-	inputMessages, err := ParseOTelInputMessagesJSON("")
-	require.NoError(t, err)
-	require.Nil(t, inputMessages)
-
-	inputMessages, err = ParseOTelInputMessagesJSON("  \n\t  ")
-	require.NoError(t, err)
-	require.Nil(t, inputMessages)
-
-	inputMessages, err = ParseOTelInputMessagesJSON(`{"role":"user","parts":[{"type":"text","content":"hi"}]}`)
-	require.NoError(t, err)
-	require.Nil(t, inputMessages)
-
-	outputMessages, err := ParseOTelOutputMessagesJSON("")
-	require.NoError(t, err)
-	require.Nil(t, outputMessages)
-
-	outputMessages, err = ParseOTelOutputMessagesJSON("  \n\t  ")
-	require.NoError(t, err)
-	require.Nil(t, outputMessages)
-
-	outputMessages, err = ParseOTelOutputMessagesJSON(`{"role":"assistant","parts":[{"type":"text","content":"hi"}],"finish_reason":"stop"}`)
-	require.NoError(t, err)
-	require.Nil(t, outputMessages)
-
-	_, err = ParseOTelInputMessagesJSON("{")
-	require.Error(t, err)
-
-	_, err = ParseOTelOutputMessagesJSON("{")
-	require.Error(t, err)
-}
-
-func TestParseOTelMessagesJSON_RejectsLegacyOrIncompleteShapes(t *testing.T) {
-	inputMessages, err := ParseOTelInputMessagesJSON(`[{"role":"user","content":"hi"}]`)
-	require.NoError(t, err)
-	require.Nil(t, inputMessages)
-
-	inputMessages, err = ParseOTelInputMessagesJSON(`[{"role":"user","parts":[]}]`)
-	require.NoError(t, err)
-	require.Nil(t, inputMessages)
-
-	inputMessages, err = ParseOTelInputMessagesJSON(`[{"role":"user","parts":[{"type":"tool_call"}]}]`)
-	require.NoError(t, err)
-	require.Nil(t, inputMessages)
-
-	outputMessages, err := ParseOTelOutputMessagesJSON(`[{"role":"assistant","content":"hi","finish_reason":"stop"}]`)
-	require.NoError(t, err)
-	require.Nil(t, outputMessages)
-
-	outputMessages, err = ParseOTelOutputMessagesJSON(`[{"role":"assistant","parts":[],"finish_reason":"stop"}]`)
-	require.NoError(t, err)
-	require.Nil(t, outputMessages)
-
-	outputMessages, err = ParseOTelOutputMessagesJSON(`[{"role":"assistant","parts":[{"type":"tool_call_response"}],"finish_reason":"stop"}]`)
-	require.NoError(t, err)
-	require.Nil(t, outputMessages)
-}
-
-func TestParseOTelMessagesJSON_AcceptsValidOTelShapes(t *testing.T) {
-	inputMessages, err := ParseOTelInputMessagesJSON(`[{"role":"user","parts":[{"type":"text","content":"hi"}]},{"role":"assistant","parts":[{"type":"tool_call","name":"lookup","arguments":{"key":"otel"}}]}]`)
-	require.NoError(t, err)
-	require.Len(t, inputMessages, 2)
-	require.Equal(t, model.RoleUser, inputMessages[0].Role)
-	require.Equal(t, otelPartTypeText, inputMessages[0].Parts[0].Type)
-	require.Equal(t, otelPartTypeToolCall, inputMessages[1].Parts[0].Type)
-
-	outputMessages, err := ParseOTelOutputMessagesJSON(`[{"role":"assistant","parts":[{"type":"reasoning","content":"thinking"},{"type":"text","content":"done"}],"finish_reason":"stop"},{"role":"tool","parts":[{"type":"tool_call_response","id":"call-1","response":{"ok":true}}]}]`)
-	require.NoError(t, err)
-	require.Len(t, outputMessages, 2)
-	require.Equal(t, model.RoleAssistant, outputMessages[0].Role)
-	require.Equal(t, otelPartTypeReasoning, outputMessages[0].Parts[0].Type)
-	require.Equal(t, model.RoleTool, outputMessages[1].Role)
-	require.Equal(t, otelPartTypeToolCallResponse, outputMessages[1].Parts[0].Type)
-}
-
-func TestTelemetryOutputMessageFromChoice_UsesDeltaFallback(t *testing.T) {
-	msg := telemetryOutputMessageFromChoice(model.Choice{
-		Delta: model.Message{
-			Content: "streamed",
-		},
-	})
-
-	require.Equal(t, model.RoleAssistant, msg.Role)
-	require.Empty(t, msg.FinishReason)
-	require.Len(t, msg.Parts, 1)
-	require.Equal(t, otelPartTypeText, msg.Parts[0].Type)
-	require.Equal(t, "streamed", msg.Parts[0].Content)
-}
-
-func TestTelemetryPartsFromContentParts_SkipsInvalidParts(t *testing.T) {
-	parts := telemetryPartsFromContentParts([]model.ContentPart{
+func TestOTelPartsFromContentParts_Multimodal(t *testing.T) {
+	text := "hello"
+	parts := otelPartsFromContentParts([]model.ContentPart{
 		{Type: model.ContentTypeText},
+		{Type: model.ContentTypeText, Text: &text},
 		{Type: model.ContentTypeImage},
-		{Type: model.ContentTypeImage, Image: &model.Image{}},
+		{Type: model.ContentTypeImage, Image: &model.Image{
+			URL:    "https://example.com/picture.jpeg?size=large",
+			Format: "jpg",
+			Detail: " high ",
+		}},
+		{Type: model.ContentTypeImage, Image: &model.Image{
+			Data:   []byte("image-bytes"),
+			Format: ".png",
+			Detail: "low",
+		}},
 		{Type: model.ContentTypeAudio},
-		{Type: model.ContentTypeAudio, Audio: &model.Audio{}},
+		{Type: model.ContentTypeAudio, Audio: &model.Audio{
+			Data:   []byte("audio-bytes"),
+			Format: "m4a",
+		}},
 		{Type: model.ContentTypeFile},
-		{Type: model.ContentTypeFile, File: &model.File{}},
+		{Type: model.ContentTypeFile, File: &model.File{
+			FileID:   " file-123 ",
+			Name:     " photo.jpg ",
+			MimeType: " IMAGE/PNG ",
+		}},
+		{Type: model.ContentTypeFile, File: &model.File{
+			Name: "clip.mp4",
+			Data: []byte("video-bytes"),
+		}},
 		{Type: model.ContentType("unknown")},
 	})
 
-	require.Empty(t, parts)
-
-	part, ok := telemetryPartFromImage(nil)
-	require.False(t, ok)
-	require.Empty(t, part)
-
-	part, ok = telemetryPartFromFile(nil)
-	require.False(t, ok)
-	require.Empty(t, part)
+	require.Len(t, parts, 6)
+	require.Equal(t, OTelMessagePart{Type: otelPartTypeText, Content: text}, parts[0])
+	require.Equal(t, otelPartTypeURI, parts[1].Type)
+	require.Equal(t, otelModalityImage, parts[1].Modality)
+	require.Equal(t, "image/jpeg", parts[1].MIMEType)
+	require.Equal(t, "https://example.com/picture.jpeg?size=large", parts[1].URI)
+	require.Equal(t, "high", parts[1].Detail)
+	require.Equal(t, otelPartTypeBlob, parts[2].Type)
+	require.Equal(t, otelModalityImage, parts[2].Modality)
+	require.Equal(t, "image/png", parts[2].MIMEType)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("image-bytes")), parts[2].Content)
+	require.Equal(t, "low", parts[2].Detail)
+	require.Equal(t, otelPartTypeBlob, parts[3].Type)
+	require.Equal(t, otelModalityAudio, parts[3].Modality)
+	require.Equal(t, "audio/mp4", parts[3].MIMEType)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("audio-bytes")), parts[3].Content)
+	require.Equal(t, otelPartTypeFile, parts[4].Type)
+	require.Equal(t, otelModalityImage, parts[4].Modality)
+	require.Equal(t, "image/png", parts[4].MIMEType)
+	require.Equal(t, "file-123", parts[4].FileID)
+	require.Equal(t, "photo.jpg", parts[4].Filename)
+	require.Equal(t, otelPartTypeBlob, parts[5].Type)
+	require.Equal(t, otelModalityVideo, parts[5].Modality)
+	require.Equal(t, "video/mp4", parts[5].MIMEType)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("video-bytes")), parts[5].Content)
+	require.Equal(t, "clip.mp4", parts[5].Filename)
 }
 
-func TestToolResponseRawMessage_CompositePayload(t *testing.T) {
+func TestOTelToolCallAndResponseParts(t *testing.T) {
+	jsonCall := otelPartFromToolCall(model.ToolCall{
+		ID: " call-1 ",
+		Function: model.FunctionDefinitionParam{
+			Name:      " search ",
+			Arguments: []byte(`{"q":"otel"}`),
+		},
+	})
+	require.Equal(t, otelPartTypeToolCall, jsonCall.Type)
+	require.Equal(t, "call-1", jsonCall.ID)
+	require.Equal(t, "search", jsonCall.Name)
+	require.JSONEq(t, `{"q":"otel"}`, string(jsonCall.Arguments))
+
+	stringCall := otelPartFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{Arguments: []byte("not-json")},
+	})
+	require.JSONEq(t, `"not-json"`, string(stringCall.Arguments))
+
+	jsonResponse, ok := otelPartFromToolCallResponse(model.Message{
+		Role:    model.RoleTool,
+		ToolID:  " call-2 ",
+		Content: `{"ok":true}`,
+	})
+	require.True(t, ok)
+	require.Equal(t, otelPartTypeToolCallResponse, jsonResponse.Type)
+	require.Equal(t, "call-2", jsonResponse.ID)
+	require.JSONEq(t, `{"ok":true}`, string(jsonResponse.Response))
+
 	text := "part text"
-	raw := toolResponseRawMessage(model.Message{
-		Content:          `{"status":"ok"}`,
+	richResponse, ok := otelPartFromToolCallResponse(model.Message{
+		Role:             model.RoleTool,
+		Content:          `{"content":true}`,
+		ContentParts:     []model.ContentPart{{Type: model.ContentTypeText, Text: &text}},
 		ReasoningContent: "because",
-		ContentParts: []model.ContentPart{{
-			Type: model.ContentTypeText,
-			Text: &text,
-		}},
 		ToolCalls: []model.ToolCall{{
-			ID: " call-1 ",
-			Function: model.FunctionDefinitionParam{
-				Name:      " lookup ",
-				Arguments: []byte("not json"),
-			},
+			ID:       "nested",
+			Function: model.FunctionDefinitionParam{Name: "nested_tool"},
 		}},
 	})
+	require.True(t, ok)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(richResponse.Response, &payload))
+	require.Equal(t, "because", payload["reasoning"])
+	require.Contains(t, payload, "content")
+	require.Contains(t, payload, "parts")
+	require.Contains(t, payload, "tool_calls")
 
-	require.JSONEq(t, `{
-		"content": {"status":"ok"},
-		"parts": [{"type":"text","content":"part text"}],
-		"reasoning": "because",
-		"tool_calls": [{
-			"type":"tool_call",
-			"id":"call-1",
-			"name":"lookup",
-			"arguments":"not json"
-		}]
-	}`, string(raw))
-
-	raw = toolResponseRawMessage(model.Message{
-		Content:          "plain",
-		ReasoningContent: "because",
-	})
-	require.JSONEq(t, `{"content":"plain","reasoning":"because"}`, string(raw))
-}
-
-func TestTelemetryPartFromToolCallResponse_RejectsEmptyPayload(t *testing.T) {
-	part, ok := telemetryPartFromToolCallResponse(model.Message{
-		Role:     model.RoleTool,
-		ToolID:   "   ",
-		ToolName: "lookup",
-	})
+	_, ok = otelPartFromToolCallResponse(model.Message{Role: model.RoleAssistant, Content: "not a tool"})
 	require.False(t, ok)
-	require.Equal(t, OTelMessagePart{}, part)
-	require.False(t, shouldUseToolCallResponsePart(model.Message{
-		Role:     model.RoleTool,
-		ToolID:   "   ",
-		ToolName: "lookup",
-	}))
-
-	parts := telemetryPartsFromModelMessage(model.Message{
-		Role:     model.RoleTool,
-		ToolID:   "   ",
-		ToolName: "lookup",
-	})
-	require.Empty(t, parts)
+	_, ok = otelPartFromToolCallResponse(model.Message{Role: model.RoleTool})
+	require.False(t, ok)
 }
 
-func TestTelemetryPartFromToolCallResponse_AcceptsIDOrResponse(t *testing.T) {
-	part, ok := telemetryPartFromToolCallResponse(model.Message{
-		Role:    model.RoleTool,
-		ToolID:  " call-1 ",
-		Content: "   ",
-	})
-	require.True(t, ok)
-	require.Equal(t, otelPartTypeToolCallResponse, part.Type)
-	require.Equal(t, "call-1", part.ID)
-	require.Nil(t, part.Response)
-	require.True(t, shouldUseToolCallResponsePart(model.Message{
-		Role:    model.RoleTool,
-		ToolID:  " call-1 ",
-		Content: "   ",
-	}))
-
-	part, ok = telemetryPartFromToolCallResponse(model.Message{
-		Role:    model.RoleTool,
-		Content: `{"status":"ok"}`,
-	})
-	require.True(t, ok)
-	require.Empty(t, part.ID)
-	require.JSONEq(t, `{"status":"ok"}`, string(part.Response))
-}
-
-func TestRawJSONOrJSONStringAndJSONValueOrString(t *testing.T) {
-	require.Nil(t, rawJSONOrJSONString([]byte("  ")))
-	require.JSONEq(t, `{"ok":true}`, string(rawJSONOrJSONString([]byte(` {"ok":true} `))))
-
-	raw := rawJSONOrJSONString([]byte("  not json\n"))
-	var got string
-	require.NoError(t, json.Unmarshal(raw, &got))
-	require.Equal(t, "  not json\n", got)
+func TestOTelMessageHelpers(t *testing.T) {
+	require.Nil(t, rawJSONOrJSONString([]byte(" \t\n ")))
+	require.JSONEq(t, `{"a":1}`, string(rawJSONOrJSONString([]byte(` {"a":1} `))))
+	require.JSONEq(t, `"plain"`, string(rawJSONOrJSONString([]byte("plain"))))
 
 	require.Equal(t, "", jsonValueOrString([]byte(" ")))
-	require.Equal(t, float64(1), jsonValueOrString([]byte("1")))
-	require.Equal(t, "  not json\n", jsonValueOrString([]byte("  not json\n")))
-}
+	require.Equal(t, "plain", jsonValueOrString([]byte("plain")))
+	jsonValue := jsonValueOrString([]byte(`{"a":1}`))
+	require.IsType(t, map[string]any{}, jsonValue)
 
-func TestTelemetryMIMEAndModalityHelpers(t *testing.T) {
-	require.Equal(t, otelModalityFile, modalityFromMIMEType(""))
-	require.Equal(t, otelModalityImage, modalityFromMIMEType("image/png"))
+	require.Equal(t, otelModalityImage, modalityFromMIMEType("image/gif"))
 	require.Equal(t, otelModalityAudio, modalityFromMIMEType("audio/wav"))
 	require.Equal(t, otelModalityVideo, modalityFromMIMEType("video/mp4"))
+	require.Equal(t, otelModalityFile, modalityFromMIMEType("application/pdf"))
 
 	require.Equal(t, "", imageMIMEType(nil))
-	require.Equal(t, "image/jpeg", imageMIMEType(&model.Image{Format: ".JPG"}))
-	require.Equal(t, "image/png", imageMIMEType(&model.Image{URL: "https://example.com/a/picture.png?x=1"}))
-	require.Equal(t, "", mimeTypeFromURL(" "))
-
-	require.Equal(t, "image/gif", normalizeFormatAsMIME("gif", "image"))
-	require.Equal(t, "image/webp", normalizeFormatAsMIME("webp", "image"))
-	require.Equal(t, "image/bmp", normalizeFormatAsMIME("bmp", "image"))
-	require.Equal(t, "image/tiff", normalizeFormatAsMIME("tif", "image"))
+	require.Equal(t, "image/webp", imageMIMEType(&model.Image{URL: "https://example.com/a.webp"}))
+	require.Equal(t, "", fileMetadataMIME(nil))
+	require.Equal(t, "application/pdf", mimeTypeFromURL("https://example.com/doc.pdf?download=1"))
 	require.Equal(t, "image/svg+xml", normalizeFormatAsMIME("svg", "image"))
-	require.Equal(t, "audio/wav", normalizeFormatAsMIME("wav", "audio"))
-	require.Equal(t, "audio/mp4", normalizeFormatAsMIME("m4a", "audio"))
-	require.Equal(t, "audio/ogg", normalizeFormatAsMIME("ogg", "audio"))
-	require.Equal(t, "", normalizeFormatAsMIME("png", "file"))
-
-	require.Equal(t, "application/json", mimeTypeFromName("data.json"))
+	require.Equal(t, "image/heic", normalizeFormatAsMIME("heic", "image"))
+	require.Equal(t, "audio/mpeg", normalizeFormatAsMIME("mp3", "audio"))
+	require.Equal(t, "", normalizeFormatAsMIME("txt", "file"))
+	require.Equal(t, "", mimeTypeFromURL(""))
 	require.Equal(t, "", mimeTypeFromName("no-extension"))
-
-	modality, mimeType := fileMetadata(nil)
-	require.Equal(t, otelModalityFile, modality)
-	require.Empty(t, mimeType)
 }
 
-func TestTelemetryPartFromFile_InfersMetadataFromName(t *testing.T) {
-	part, ok := telemetryPartFromFile(&model.File{
-		Name: "photo.jpeg",
-		Data: []byte("image"),
-	})
+func fileMetadataMIME(file *model.File) string {
+	_, mimeType := fileMetadata(file)
+	return mimeType
+}
 
-	require.True(t, ok)
-	require.Equal(t, otelPartTypeBlob, part.Type)
-	require.Equal(t, otelModalityImage, part.Modality)
-	require.Equal(t, "image/jpeg", part.MIMEType)
-	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("image")), part.Content)
-	require.Equal(t, "photo.jpeg", part.Filename)
+func TestMarshalOTelTelemetryChoices_UsesDeltaWhenMessageEmpty(t *testing.T) {
+	finishReason := "tool_calls"
+	bts, err := marshalOTelTelemetryChoices([]model.Choice{{
+		Delta: model.Message{
+			Role:    model.RoleAssistant,
+			Content: "delta text",
+		},
+		FinishReason: &finishReason,
+	}})
+	require.NoError(t, err)
+
+	var messages []OTelOutputMessage
+	require.NoError(t, json.Unmarshal(bts, &messages))
+	require.Len(t, messages, 1)
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
+	require.Equal(t, finishReason, messages[0].FinishReason)
+	require.Len(t, messages[0].Parts, 1)
+	require.Equal(t, otelPartTypeText, messages[0].Parts[0].Type)
+	require.Equal(t, "delta text", messages[0].Parts[0].Content)
 }

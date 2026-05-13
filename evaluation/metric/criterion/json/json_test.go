@@ -36,6 +36,38 @@ func TestMapCriterionCompareOverride(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestJSONCriterionCompareReceivesRawMessage(t *testing.T) {
+	called := false
+	criterion := &JSONCriterion{
+		Compare: func(actual, expected any) (bool, error) {
+			called = true
+			_, actualRaw := actual.(json.RawMessage)
+			_, expectedRaw := expected.(json.RawMessage)
+			return actualRaw && expectedRaw, nil
+		},
+	}
+	ok, err := criterion.Match(json.RawMessage(`{"a":1}`), json.RawMessage(`{"a":1}`))
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestJSONCriterionOnlyTreeAndIgnoreTreeConflictBeforeCompare(t *testing.T) {
+	called := false
+	criterion := &JSONCriterion{
+		OnlyTree:   map[string]any{"keep": true},
+		IgnoreTree: map[string]any{"skip": true},
+		Compare: func(actual, expected any) (bool, error) {
+			called = true
+			return true, nil
+		},
+	}
+	ok, err := criterion.Match(map[string]any{"keep": true}, map[string]any{"keep": true})
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.False(t, called)
+}
+
 func TestJSONCriterionJSONRoundTrip(t *testing.T) {
 	tolerance := 1e-3
 	criterion := New(
@@ -43,6 +75,7 @@ func TestJSONCriterionJSONRoundTrip(t *testing.T) {
 		WithIgnoreTree(map[string]any{"timestamp": true}),
 		WithMatchStrategy(JSONMatchStrategyExact),
 		WithNumberTolerance(tolerance),
+		WithValid(true),
 		WithCompareName("allow_delta"),
 	)
 	data, err := json.Marshal(criterion)
@@ -52,6 +85,7 @@ func TestJSONCriterionJSONRoundTrip(t *testing.T) {
 		"ignoreTree": {"timestamp": true},
 		"matchStrategy": "exact",
 		"numberTolerance": 0.001,
+		"valid": true,
 		"compareName": "allow_delta"
 	}`, string(data))
 
@@ -60,10 +94,65 @@ func TestJSONCriterionJSONRoundTrip(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, criterion.Ignore, decoded.Ignore)
 	assert.Equal(t, criterion.MatchStrategy, decoded.MatchStrategy)
+	assert.Equal(t, criterion.Valid, decoded.Valid)
 	assert.Equal(t, criterion.CompareName, decoded.CompareName)
 	if assert.NotNil(t, decoded.NumberTolerance) {
 		assert.Equal(t, tolerance, *decoded.NumberTolerance)
 	}
+}
+
+func TestJSONCriterionMatchRawMessage(t *testing.T) {
+	criterion := &JSONCriterion{}
+	ok, err := criterion.Match(json.RawMessage(`{"a":1,"b":[2,3]}`), json.RawMessage(`{"b":[2,3],"a":1}`))
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionMatchRawMessageParseError(t *testing.T) {
+	criterion := &JSONCriterion{}
+	ok, err := criterion.Match(json.RawMessage(`not json`), json.RawMessage(`{}`))
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parse actual raw json")
+}
+
+func TestJSONCriterionMatchRawMessageWithParsedValue(t *testing.T) {
+	criterion := &JSONCriterion{}
+	ok, err := criterion.Match(json.RawMessage(`{"a":1}`), map[string]any{"a": float64(1)})
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionValidRawMessage(t *testing.T) {
+	criterion := &JSONCriterion{Valid: true}
+
+	ok, err := criterion.Match(json.RawMessage(`{"a":1}`), json.RawMessage(`not checked`))
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
+	ok, err = criterion.Match(`{"a":1}`, nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
+	ok, err = criterion.Match([]byte(`{"a":1}`), nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
+	ok, err = criterion.Match(`not json`, nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
+
+	ok, err = criterion.Match(map[string]any{"a": 1}, nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
+	ok, err = criterion.Match(map[string]any{"bad": make(chan int)}, nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
+
+	ok, err = criterion.Match(json.RawMessage(`{} {}`), nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
 }
 
 func TestMapCriterionDeepEqualMismatch(t *testing.T) {
