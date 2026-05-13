@@ -255,10 +255,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
-		if model.IsTokenTailoringOverflow(err) {
+		if len(tailored) > 0 {
 			log.WarnContext(
 				ctx,
-				"token tailoring overflow in anthropic.Model; using protected context",
+				"token tailoring returned best-effort messages in anthropic.Model",
 				err,
 			)
 			request.Messages = tailored

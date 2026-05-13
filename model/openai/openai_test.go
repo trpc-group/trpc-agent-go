@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -2276,10 +2277,7 @@ func (s overflowTailoringStrategy) TailorMessages(
 	messages []model.Message,
 	maxTokens int,
 ) ([]model.Message, error) {
-	return s.tailored, &model.TokenTailoringOverflowError{
-		Tokens:    maxTokens + 1,
-		MaxTokens: maxTokens,
-	}
+	return s.tailored, errors.New("minimal protected context exceeds token budget")
 }
 
 type captureMaxTokensStrategy struct {

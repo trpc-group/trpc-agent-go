@@ -18,6 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func requireTokenTailoringOverflow(t *testing.T, err error) {
+	t.Helper()
+	var overflow *tokenTailoringOverflowError
+	require.ErrorAs(t, err, &overflow)
+}
+
 func TestSimpleTokenCounter_CountTokens(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 	msg := NewSystemMessage("You are a helpful assistant.")
@@ -1330,7 +1336,7 @@ func TestMiddleOutStrategy_PreservesSystemWhenMinimalSuffixExceedsBudget(t *test
 
 	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
 	require.Error(t, err)
-	require.True(t, IsTokenTailoringOverflow(err))
+	requireTokenTailoringOverflow(t, err)
 	require.GreaterOrEqual(t, len(tailored), 2)
 
 	assert.Equal(t, RoleSystem, tailored[0].Role)
@@ -1372,7 +1378,7 @@ func TestTokenTailor_DoesNotDropSystemForLargeToolResult(t *testing.T) {
 
 	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
 	require.Error(t, err)
-	require.True(t, IsTokenTailoringOverflow(err))
+	requireTokenTailoringOverflow(t, err)
 	require.Len(t, tailored, 4)
 
 	assert.Equal(t, RoleSystem, tailored[0].Role)
@@ -1401,7 +1407,7 @@ func TestHeadOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 	// Budget is less than preserved segments.
 	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
 	require.Error(t, err)
-	require.True(t, IsTokenTailoringOverflow(err))
+	requireTokenTailoringOverflow(t, err)
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
@@ -1426,7 +1432,7 @@ func TestTailOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 	// Budget is less than preserved segments.
 	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
 	require.Error(t, err)
-	require.True(t, IsTokenTailoringOverflow(err))
+	requireTokenTailoringOverflow(t, err)
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)

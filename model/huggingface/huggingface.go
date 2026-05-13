@@ -480,8 +480,8 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
-		if model.IsTokenTailoringOverflow(err) {
-			log.Warn("token tailoring overflow in huggingface.Model; using protected context", err)
+		if len(tailored) > 0 {
+			log.Warn("token tailoring returned best-effort messages in huggingface.Model", err)
 			request.Messages = tailored
 			return
 		}

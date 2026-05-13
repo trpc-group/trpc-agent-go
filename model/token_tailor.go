@@ -11,7 +11,6 @@ package model
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"unicode/utf8"
 )
@@ -79,30 +78,21 @@ type TokenCounter interface {
 type TailoringStrategy interface {
 	// TailorMessages reduces message list so total tokens are within maxTokens.
 	// If the smallest protected context cannot fit, it returns that best-effort
-	// context with a TokenTailoringOverflowError.
+	// context together with an error.
 	TailorMessages(ctx context.Context, messages []Message, maxTokens int) ([]Message, error)
 }
 
-// TokenTailoringOverflowError reports that token tailoring could only produce
-// a protected context that still exceeds the requested input budget.
-type TokenTailoringOverflowError struct {
+type tokenTailoringOverflowError struct {
 	Tokens    int
 	MaxTokens int
 }
 
-// Error implements the error interface.
-func (e *TokenTailoringOverflowError) Error() string {
+func (e *tokenTailoringOverflowError) Error() string {
 	return fmt.Sprintf(
 		"token tailoring overflow: minimal protected context uses %d tokens, max input tokens is %d",
 		e.Tokens,
 		e.MaxTokens,
 	)
-}
-
-// IsTokenTailoringOverflow reports whether err is a token tailoring overflow.
-func IsTokenTailoringOverflow(err error) bool {
-	var overflow *TokenTailoringOverflowError
-	return errors.As(err, &overflow)
 }
 
 // SimpleTokenCounter provides a very rough token estimation based on rune length.
@@ -405,7 +395,7 @@ func ensureTailoredWithinBudget(
 	if err != nil {
 		return candidate, err
 	}
-	return candidate, &TokenTailoringOverflowError{
+	return candidate, &tokenTailoringOverflowError{
 		Tokens:    tokens,
 		MaxTokens: maxTokens,
 	}
