@@ -4171,6 +4171,7 @@ func TestStreamProgressHelpers(t *testing.T) {
 	)
 	require.Equal(t, "Reading document page 2", update.summary)
 	require.Equal(t, streamToolReadDocument, update.toolName)
+	require.Equal(t, "page 2", update.toolDetail)
 	require.Equal(t, testReadDocumentToolCallID, update.toolCallID)
 	require.Equal(
 		t,
@@ -4198,6 +4199,7 @@ func TestStreamProgressHelpers(t *testing.T) {
 	)
 	require.Equal(t, progressSummaryAnswering, update.summary)
 	require.Equal(t, streamToolReadDocument, update.toolName)
+	require.Empty(t, update.toolDetail)
 	require.Equal(t, testReadDocumentToolCallID, update.toolCallID)
 	require.Equal(
 		t,
@@ -4224,6 +4226,7 @@ func TestToolCallProgressSummaries(t *testing.T) {
 	)
 	require.Equal(t, "Reading spreadsheet rows 2-4", update.summary)
 	require.Equal(t, streamToolReadSheet, update.toolName)
+	require.Equal(t, "rows 2-4", update.toolDetail)
 	require.Equal(t, testReadDocumentToolCallID, update.toolCallID)
 	require.Equal(
 		t,
@@ -4244,6 +4247,7 @@ func TestToolCallProgressSummaries(t *testing.T) {
 		update.stage,
 	)
 	require.Equal(t, progressSummaryGoTest, update.summary)
+	require.Equal(t, "go test ./...", update.toolDetail)
 
 	update, ok = progressFromToolCall(model.ToolCall{
 		Function: model.FunctionDefinitionParam{
@@ -4253,6 +4257,7 @@ func TestToolCallProgressSummaries(t *testing.T) {
 	})
 	require.True(t, ok)
 	require.Equal(t, progressSummaryGit, update.summary)
+	require.Equal(t, "git status", update.toolDetail)
 
 	update, ok = progressFromToolCall(model.ToolCall{
 		Function: model.FunctionDefinitionParam{
@@ -4262,6 +4267,138 @@ func TestToolCallProgressSummaries(t *testing.T) {
 	})
 	require.True(t, ok)
 	require.Equal(t, progressSummaryInspect, update.summary)
+	require.Equal(t, "rg TODO .", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"bash -lc 'go test ./...'"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryGoTest, update.summary)
+	require.Equal(t, "go test ./...", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"cd repo && GOFLAGS=-count=1 go test ./..."}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryGoTest, update.summary)
+	require.Equal(t, "go test ./...", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"make test"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryTool, update.summary)
+	require.Equal(t, "make test", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"gh pr view 123"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryTool, update.summary)
+	require.Equal(t, "gh pr view 123", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolReadFile,
+			Arguments: []byte(
+				`{"path":"/workspace/openclaw/channel/wecom/a.go"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryTool, update.summary)
+	require.Equal(t, ".../channel/wecom/a.go", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"printf %s 'sk-test-secret'"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, "printf", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"go test --token visible ./safe"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, "go test safe", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"rg tokenizer.go ./openclaw"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, "rg tokenizer.go openclaw", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"curl -H 'Authorization: Bearer sk-test' ` +
+					`https://api.example.com/v1?token=x"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.NotContains(t, update.toolDetail, "Authorization")
+	require.NotContains(t, update.toolDetail, "sk-test")
+	require.Equal(t, "curl -H api.example.com/v1", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: "browser",
+			Arguments: []byte(
+				`{"action":"navigate","url":"https://example.com/a?token=x"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryTool, update.summary)
+	require.Equal(t, "browser", update.toolName)
+	require.Equal(t, "navigate example.com/a", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: "custom_tool",
+			Arguments: []byte(
+				`{"auth_token":"sk-test","path":"tokenizer.go"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, "tokenizer.go", update.toolDetail)
 
 	update, ok = progressFromToolCall(model.ToolCall{
 		Function: model.FunctionDefinitionParam{
@@ -4293,6 +4430,250 @@ func TestToolCallProgressSummaries(t *testing.T) {
 			},
 		}),
 	)
+}
+
+func TestStreamToolDetailHelpers(t *testing.T) {
+	t.Parallel()
+
+	toolCall := func(name, args string) model.ToolCall {
+		return model.ToolCall{
+			Function: model.FunctionDefinitionParam{
+				Name:      name,
+				Arguments: []byte(args),
+			},
+		}
+	}
+	detail := func(name, args string) string {
+		return toolDetailFromToolCall(toolCall(name, args))
+	}
+
+	require.Empty(t, detail(streamToolExecCommand, "{"))
+	require.Empty(t, detail(streamToolReadDocument, "{"))
+	require.Empty(t, detail(streamToolReadSheet, "{"))
+	require.Empty(t, detail("custom_tool", "{"))
+	require.Empty(t, detail(streamToolReadFile, `{}`))
+	require.Empty(t, detail(streamToolSearch, `{}`))
+	_, ok := stringArgFromToolCall(
+		toolCall(streamToolReadFile, "{"),
+		streamToolArgPath,
+	)
+	require.False(t, ok)
+
+	require.Equal(
+		t,
+		".../project/docs/report.pdf page 3",
+		detail(
+			streamToolReadDocument,
+			`{"path":"/workspace/project/docs/report.pdf","page":3}`,
+		),
+	)
+	require.Equal(
+		t,
+		"workspace/data/book.xlsx sheet Data row 7",
+		detail(
+			streamToolReadSheet,
+			`{"path":"/workspace/data/book.xlsx",`+
+				`"sheet":"Data","row":7}`,
+		),
+	)
+	require.Equal(
+		t,
+		"book.xlsx row 3",
+		detail(
+			streamToolReadSheet,
+			`{"path":"book.xlsx","start_row":3}`,
+		),
+	)
+	require.Equal(
+		t,
+		"TODO",
+		detail(streamToolSearch, `{"pattern":"TODO"}`),
+	)
+	require.Equal(
+		t,
+		"same q",
+		detail(
+			"custom_tool",
+			`{"action":"same","operation":"same","query":"q"}`,
+		),
+	)
+	require.Equal(
+		t,
+		"job 123 session abc",
+		detail(
+			"custom_tool",
+			`{"job_id":"123","session_id":"abc"}`,
+		),
+	)
+	require.Equal(
+		t,
+		"safe",
+		detail("custom_tool", `{"id":123,"name":"safe"}`),
+	)
+	require.Equal(
+		t,
+		"github",
+		detail("skill_load", `{"skill":"github"}`),
+	)
+	require.Equal(
+		t,
+		"github refs/api.md",
+		detail(
+			"skill_select_docs",
+			`{"skill":"github","docs":["refs/api.md"]}`,
+		),
+	)
+	require.Equal(
+		t,
+		"github refs/a.md",
+		detail(
+			"skill_select_docs",
+			`{"skill":"github","docs":["refs/a.md","refs/b.md"]}`,
+		),
+	)
+	require.Equal(
+		t,
+		"example.com/a",
+		detail(
+			"web_fetch",
+			`{"urls":["https://example.com/a?token=x"]}`,
+		),
+	)
+	require.Equal(
+		t,
+		"example.com/ok",
+		detail(
+			"web_fetch",
+			`{"urls":["https://sk-secret.example.com",`+
+				`"https://example.com/ok"]}`,
+		),
+	)
+	require.Equal(
+		t,
+		"example.com/a example.com/b",
+		detail(
+			"web_fetch",
+			`{"urls":["https://example.com/a","https://example.com/a",`+
+				`"","https://example.com/b","https://example.com/c"]}`,
+		),
+	)
+	require.Equal(
+		t,
+		"notes/todo.md",
+		detail(
+			"fs_save_file",
+			`{"file_name":"notes/todo.md","contents":"secret"}`,
+		),
+	)
+	require.Equal(
+		t,
+		"preferred.md",
+		detail(
+			"fs_save_file",
+			`{"path":"preferred.md","file_name":"fallback.md"}`,
+		),
+	)
+
+	update, ok := progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolSearch,
+			Arguments: []byte(
+				`{"query":"搜索 tokenizer.go"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, "搜索 tokenizer.go", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"sed -n '1,5p' openclaw/channel/wecom/a.go"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, "sed .../channel/wecom/a.go", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"python -m pytest tests/unit"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryPytest, update.summary)
+	require.Equal(t, "pytest tests/unit", update.toolDetail)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: streamToolExecCommand,
+			Arguments: []byte(
+				`{"command":"npm run test --workspace app"}`,
+			),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryNPMTest, update.summary)
+	require.Equal(t, "npm run test --workspace app", update.toolDetail)
+
+	require.Equal(
+		t,
+		"printf",
+		shellCommandDetail(`printf 'a;b' && git status`),
+	)
+	require.Equal(t, "git status", shellCommandDetail(`cd repo && git status`))
+	require.Equal(
+		t,
+		"node script.js --env prod",
+		shellCommandDetail(`NODE_ENV=test node script.js --env prod`),
+	)
+	require.Equal(t, "shell loop", shellCommandDetail(`for f in *.go; do`))
+	require.Equal(t, "git status", shellCommandDetail(`; git status`))
+	require.Equal(t, "echo hello world", shellCommandDetail(`echo hello\ world`))
+	require.Equal(t, "ls", shellCommandDetail(`ls -la`))
+	require.Equal(t, "npm", shellCommandDetail(`npm`))
+	require.Equal(t, "pnpm install", shellCommandDetail(`pnpm install`))
+	require.Equal(
+		t,
+		"python script.py --mode test",
+		shellCommandDetail(`python script.py --mode test`),
+	)
+	require.Empty(t, shellCommandDetail(`set -e && export TOKEN=x`))
+	require.Empty(t, shellCommandDetail(`bash`))
+	require.Empty(t, shellCommandDetail(`bash -c`))
+	require.Empty(t, shellCommandDetail(`. env.sh`))
+	require.Empty(t, safeCommandName("sk-secret"))
+	require.Empty(t, safeCommandArgDetail("--count=1"))
+	require.Empty(t, safePathDetail("/"))
+	require.Equal(t, ".", safePathDetail("."))
+	require.Equal(t, "..", safePathDetail(".."))
+	require.Empty(t, safeURLDetail("Bearer abc.def"))
+	require.Equal(t, "api.example.com/v1", safeURLDetail("api.example.com/v1"))
+	require.Empty(t, safeURLDetail("https://sk-secret.example.com"))
+	require.True(t, isSensitiveCommandFlag("--api-key=value"))
+	require.False(t, isSensitiveCommandFlag("--count=1"))
+	require.True(t, isSensitiveCommandKeyToken("Authorization:"))
+	require.False(t, isSensitiveCommandKeyToken("tokenizer.go"))
+	require.True(t, looksSensitiveCommandArg("--token=value"))
+	require.False(t, looksSensitiveCommandArg("--count=1"))
+	require.False(t, isSensitiveToolArgKey(""))
+	require.True(t, isSensitiveToolArgKey("user-key"))
+	require.False(t, looksSensitiveValue(""))
+	require.True(t, looksSensitiveValue("ghp_testtoken"))
+	require.True(t, looksSensitiveValue("tgit_testtoken"))
+	require.False(t, looksLikeJWT("short"))
+	require.False(t, looksLikeJWT("aaaaaaaa.bbbbbbbb"))
+	require.False(t, looksLikeJWT("aaaaaaaa.bbbbbbbb.invalid+part"))
+	require.True(
+		t,
+		looksSensitiveValue("aaaaaaaaaaaa.bbbbbbbbbbbb.cccccccccccc"),
+	)
+	require.True(t, isBase64URLLike("Abc123-_"))
+	require.False(t, isBase64URLLike("abc+def"))
 }
 
 func TestSendProgressUpdateAndHelpers(t *testing.T) {
@@ -4330,6 +4711,24 @@ func TestSendProgressUpdateAndHelpers(t *testing.T) {
 	evt := <-out
 	require.Equal(t, gwproto.StreamEventTypeRunProgress, evt.Type)
 	require.Equal(t, progressSummaryPrepare, evt.Summary)
+
+	require.True(t, sendProgressUpdate(
+		ctx,
+		out,
+		run,
+		state,
+		progressUpdate{
+			stage:      gwproto.StreamProgressStageRunningTool,
+			summary:    progressSummaryGoTest,
+			toolName:   streamToolExecCommand,
+			toolDetail: "go test ./...",
+			toolCallID: "call-1",
+			toolStatus: gwproto.StreamToolStatusRunning,
+		},
+	))
+	evt = <-out
+	require.Equal(t, streamToolExecCommand, evt.ToolName)
+	require.Equal(t, "go test ./...", evt.ToolDetail)
 
 	canceledCtx, cancel := context.WithCancel(ctx)
 	cancel()
