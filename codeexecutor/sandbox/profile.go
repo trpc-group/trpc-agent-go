@@ -184,9 +184,6 @@ func WithAdditionalPermissions(ctx context.Context, add AdditionalPermissions) c
 }
 
 func additionalPermissionsFromContext(ctx context.Context) AdditionalPermissions {
-	if ctx == nil {
-		return AdditionalPermissions{}
-	}
 	add, _ := ctx.Value(additionalPermissionsKey{}).(AdditionalPermissions)
 	return add
 }

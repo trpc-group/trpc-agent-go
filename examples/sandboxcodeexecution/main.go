@@ -183,7 +183,7 @@ func runBasic(ctx context.Context, cfg config) error {
 	var final strings.Builder
 	for event := range events {
 		if event.Error != nil {
-			return fmt.Errorf("agent event error: %s", event.Error.Message)
+			return fmt.Errorf("agent event error: %w", event.Error)
 		}
 		// A model completion with Done=true can still be followed by tool/code
 		// execution events. Stop only once the runner reports completion.

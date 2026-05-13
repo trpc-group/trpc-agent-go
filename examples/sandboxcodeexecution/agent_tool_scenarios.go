@@ -301,7 +301,7 @@ func (h *agentToolHarness) runTurn(
 	var final strings.Builder
 	for event := range events {
 		if event.Error != nil {
-			return "", fmt.Errorf("agent event error: %s", event.Error.Message)
+			return "", fmt.Errorf("agent event error: %w", event.Error)
 		}
 		if event.Response == nil || len(event.Response.Choices) == 0 {
 			continue
