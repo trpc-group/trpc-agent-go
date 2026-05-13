@@ -125,6 +125,39 @@ func (f *fakeSummarizer) SetPrompt(prompt string)  {}
 func (f *fakeSummarizer) SetModel(m model.Model)   {}
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
+type blockingSummarizer struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingSummarizer) ShouldSummarize(*session.Session) bool { return true }
+
+func (b *blockingSummarizer) Summarize(context.Context, *session.Session) (string, error) {
+	b.mu.Lock()
+	b.calls++
+	call := b.calls
+	if call == 1 {
+		close(b.started)
+	}
+	b.mu.Unlock()
+	if call == 1 {
+		<-b.release
+	}
+	return "sum", nil
+}
+
+func (b *blockingSummarizer) SetPrompt(string)         {}
+func (b *blockingSummarizer) SetModel(model.Model)     {}
+func (b *blockingSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func (b *blockingSummarizer) callCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.calls
+}
+
 type fakeSummarizerWithTs struct {
 	out string
 	ts  time.Time
@@ -272,6 +305,43 @@ func TestSummarizeSession_EmptyDelta_NoForce(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, updated)
 	require.Equal(t, "sum1", base.Summaries["b1"].Summary)
+}
+
+func TestSummarizeSession_ConcurrentSameKeyRechecksDelta(t *testing.T) {
+	now := time.Now()
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("e1", now.Add(-1*time.Minute), "b1"),
+	}
+	s := &blockingSummarizer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	results := make(chan bool, 2)
+	errs := make(chan error, 2)
+
+	go func() {
+		updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
+		results <- updated
+		errs <- err
+	}()
+	<-s.started
+	go func() {
+		updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
+		results <- updated
+		errs <- err
+	}()
+	close(s.release)
+
+	var updatedCount int
+	for i := 0; i < 2; i++ {
+		require.NoError(t, <-errs)
+		if <-results {
+			updatedCount++
+		}
+	}
+	require.Equal(t, 1, updatedCount)
+	require.Equal(t, 1, s.callCount())
 }
 
 func TestSummarizeSession_EmptyDelta_WithForce(t *testing.T) {

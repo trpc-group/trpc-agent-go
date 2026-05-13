@@ -100,6 +100,8 @@ func SummarizeSession(
 	if base == nil {
 		return false, nil
 	}
+	unlock := lockSessionSummary(base, filterKey)
+	defer unlock()
 
 	// Get previous summary info.
 	var prevText string
@@ -197,6 +199,62 @@ func selectUpdatedAt(tmp *session.Session, prevAt, latestTs time.Time, hasDelta 
 const lastIncludedTsKey = "summary:last_included_ts"
 
 type summaryTriggerFilterKeyContextKey struct{}
+
+type summaryLockKey struct {
+	appName   string
+	userID    string
+	sessionID string
+	filterKey string
+}
+
+type summaryLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+type summaryLockGroup struct {
+	mu    sync.Mutex
+	locks map[summaryLockKey]*summaryLock
+}
+
+var sessionSummaryLocks summaryLockGroup
+
+func (g *summaryLockGroup) lock(key summaryLockKey) func() {
+	g.mu.Lock()
+	if g.locks == nil {
+		g.locks = make(map[summaryLockKey]*summaryLock)
+	}
+	l := g.locks[key]
+	if l == nil {
+		l = &summaryLock{}
+		g.locks[key] = l
+	}
+	l.refs++
+	g.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		l.refs--
+		if l.refs == 0 && g.locks[key] == l {
+			delete(g.locks, key)
+		}
+	}
+}
+
+func lockSessionSummary(sess *session.Session, filterKey string) func() {
+	if sess == nil {
+		return func() {}
+	}
+	return sessionSummaryLocks.lock(summaryLockKey{
+		appName:   sess.AppName,
+		userID:    sess.UserID,
+		sessionID: sess.ID,
+		filterKey: filterKey,
+	})
+}
 
 func contextWithSummaryTriggerFilterKey(ctx context.Context, filterKey string) context.Context {
 	if filterKey == "" {
