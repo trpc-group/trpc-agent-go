@@ -15,6 +15,7 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 type transferMessageContextKey struct{}
@@ -37,4 +38,14 @@ type InvocationCustomizer interface {
 		source *agent.Invocation,
 		target *agent.Invocation,
 	) error
+}
+
+// CompletionObserver observes when a transfer target invocation completes.
+type CompletionObserver interface {
+	OnTransferComplete(
+		ctx context.Context,
+		source *agent.Invocation,
+		target *agent.Invocation,
+		targetEvent *event.Event,
+	)
 }

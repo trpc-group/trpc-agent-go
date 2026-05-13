@@ -17,8 +17,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	itransfer "trpc.group/trpc-go/trpc-agent-go/internal/transfer"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 const (
@@ -103,7 +107,10 @@ func TestEnsureSwarmRuntime_PreservesExistingTransferControllerAndComposesCustom
 	}
 	ensureSwarmRuntime(
 		inv,
+		"team",
+		"entry",
 		SwarmConfig{NodeTimeout: testTimeout},
+		swarmHandoffPolicy{},
 		inputBuilder,
 	)
 	controller, ok := agent.GetRuntimeStateValue[agent.TransferController](
@@ -133,12 +140,18 @@ func TestEnsureSwarmRuntime_IsolatesSharedRuntimeState(t *testing.T) {
 	}))
 	ensureSwarmRuntime(
 		invA,
+		"team",
+		"entry",
 		SwarmConfig{MaxHandoffs: 1},
+		swarmHandoffPolicy{},
 		nil,
 	)
 	ensureSwarmRuntime(
 		invB,
+		"team",
+		"entry",
 		SwarmConfig{MaxHandoffs: 1},
+		swarmHandoffPolicy{},
 		nil,
 	)
 	require.NotContains(t, sharedState, agent.RuntimeStateKeyTransferController)
@@ -210,6 +223,288 @@ func TestSwarmRuntime_CustomizeTransferInvocation_UsesRawTransferMessage(t *test
 	require.Equal(t, "custom child input", target.Message.Content)
 }
 
+func TestSwarmRuntime_CustomizeTransferInvocation_IsolatesSessionAndBuildsInput(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	parentSess, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "parent",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	source := &agent.Invocation{
+		AgentName: "parent",
+		Session:   parentSess,
+		Message:   model.NewUserMessage("raw user input"),
+	}
+	target := &agent.Invocation{
+		AgentName:      "child",
+		InvocationID:   "target-invocation",
+		Session:        parentSess,
+		SessionService: service,
+		Message:        model.NewUserMessage("parent supplied transfer"),
+	}
+	rt := &swarmRuntime{
+		teamName: "support",
+		handoff:  swarmHandoffPolicy{sessionScope: swarmSessionScopePerAgent},
+		inputBuilder: func(ctx context.Context, args SwarmHandoffInputArgs) (model.Message, error) {
+			require.Equal(t, "parent", args.FromAgentName)
+			require.Equal(t, "child", args.ToAgentName)
+			require.Equal(t, "raw user input", args.RootInput.Content)
+			require.Equal(t, "raw user input", args.ParentInput.Content)
+			require.Equal(t, "parent supplied transfer", args.TransferMessage)
+			require.Equal(t, "parent/support/child", target.Session.ID)
+			_ = ctx
+			return model.Message{Content: "rendered child input"}, nil
+		},
+	}
+	require.NoError(t, rt.CustomizeTransferInvocation(ctx, source, target))
+	require.Equal(t, "parent/support/child", target.Session.ID)
+	require.Equal(t, model.RoleUser, target.Message.Role)
+	require.Equal(t, "rendered child input", target.Message.Content)
+	got, err := service.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "parent/support/child",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Empty(t, got.Events)
+}
+
+func TestSwarmRuntime_OnTransferCompleteKeepsRootStateOutOfRoutedChildEvent(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	rootSess, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{SwarmTeamNameKey: []byte("team")})
+	require.NoError(t, err)
+	childSess, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "child",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	source := &agent.Invocation{
+		Session:        rootSess,
+		SessionService: service,
+	}
+	target := &agent.Invocation{
+		AgentName: "child",
+		Session:   childSess,
+	}
+	targetEvent := &event.Event{
+		StateDelta: map[string][]byte{"child_state": []byte("ok")},
+	}
+	rt := &swarmRuntime{handoff: swarmHandoffPolicy{
+		sessionScope: swarmSessionScopePerAgent,
+		turnRouting:  swarmTurnRoutingTargetTakesOver,
+	}}
+	rt.OnTransferComplete(ctx, source, target, targetEvent)
+	activeAgent, ok := rootSess.GetState(swarmActiveAgentKey("team"))
+	require.True(t, ok)
+	require.Equal(t, []byte("child"), activeAgent)
+	require.Equal(t, map[string][]byte{"child_state": []byte("ok")}, targetEvent.StateDelta)
+	rootGot, err := service.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []byte("child"), rootGot.State[swarmActiveAgentKey("team")])
+	owner := &testSwarmMember{
+		name:      "team",
+		subAgents: []agent.Agent{&testSwarmMember{name: "child"}},
+	}
+	turnSession, err := sessionroute.ResolveCurrentTurnSession(ctx, service, rootGot, owner)
+	require.NoError(t, err)
+	require.Equal(t, "child", turnSession.ID)
+}
+
+func TestSwarmRuntime_OnTransferCompletePreservesSharedStateDelta(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	rootSess, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{SwarmTeamNameKey: []byte("team")})
+	require.NoError(t, err)
+	source := &agent.Invocation{
+		Session:        rootSess,
+		SessionService: service,
+	}
+	target := &agent.Invocation{
+		AgentName: "child",
+		Session:   rootSess,
+	}
+	targetEvent := &event.Event{
+		StateDelta: map[string][]byte{"child_state": []byte("ok")},
+	}
+	rt := &swarmRuntime{handoff: swarmHandoffPolicy{
+		turnRouting: swarmTurnRoutingTargetTakesOver,
+	}}
+	rt.OnTransferComplete(ctx, source, target, targetEvent)
+	require.Equal(t, []byte("child"), targetEvent.StateDelta[swarmActiveAgentKey("team")])
+	require.Equal(t, []byte("ok"), targetEvent.StateDelta["child_state"])
+	rootGot, err := service.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	})
+	require.NoError(t, err)
+	_, ok := rootGot.State[swarmActiveAgentKey("team")]
+	require.False(t, ok)
+}
+
+func TestSwarmRuntime_RouteIsolatedEventInheritsParentRoute(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	root, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	child, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "child",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	rt := &swarmRuntime{handoff: swarmHandoffPolicy{sessionScope: swarmSessionScopePerAgent}}
+	rt.registerInvocationSession("child-parent", "team/child", child)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(root),
+		agent.WithInvocationSessionService(service),
+	)
+	childEvent := event.NewResponseEvent(
+		"child-descendant",
+		"child",
+		&model.Response{Done: true, Choices: []model.Choice{{Message: model.NewAssistantMessage("child answer")}}},
+	)
+	childEvent.ParentInvocationID = "child-parent"
+	got, ok := rt.RouteEvent(inv, childEvent)
+	require.True(t, ok)
+	require.Same(t, child, got)
+	grandchildEvent := event.NewResponseEvent(
+		"child-grandchild",
+		"child",
+		&model.Response{Done: true, Choices: []model.Choice{{Message: model.NewAssistantMessage("grandchild answer")}}},
+	)
+	grandchildEvent.ParentInvocationID = "child-descendant"
+	grandchildEvent.Branch = "team/child/internal"
+	got, ok = rt.RouteEvent(inv, grandchildEvent)
+	require.True(t, ok)
+	require.Same(t, child, got)
+}
+
+func TestSwarmRuntime_RouteIsolatedEventUsesBranchFallback(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	root, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	child, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "child",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	rt := &swarmRuntime{handoff: swarmHandoffPolicy{sessionScope: swarmSessionScopePerAgent}}
+	rt.registerInvocationSession("child-parent", "team/child", child)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(root),
+		agent.WithInvocationSessionService(service),
+	)
+	childEvent := event.NewResponseEvent(
+		"child-internal-without-parent",
+		"child",
+		&model.Response{Done: true, Choices: []model.Choice{{Message: model.NewAssistantMessage("branch-routed answer")}}},
+	)
+	childEvent.Branch = "team/child/internal"
+	got, ok := rt.RouteEvent(inv, childEvent)
+	require.True(t, ok)
+	require.Same(t, child, got)
+	rt.mu.Lock()
+	_, cached := rt.sessions["child-internal-without-parent"]
+	rt.mu.Unlock()
+	require.False(t, cached)
+}
+
+func TestDefaultSwarmSessionID(t *testing.T) {
+	got := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "parent",
+		TeamName:        "team",
+		ToAgentName:     "child",
+	})
+	require.Equal(t, "parent/team/child", got)
+	escaped := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "parent/id",
+		TeamName:        "team/name",
+		ToAgentName:     "child/name",
+	})
+	require.Equal(t, "parent%2Fid/team%2Fname/child%2Fname", escaped)
+	left := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "p/a",
+		TeamName:        "b",
+		ToAgentName:     "c",
+	})
+	right := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "p",
+		TeamName:        "a/b",
+		ToAgentName:     "c",
+	})
+	require.NotEqual(t, left, right)
+	entry := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "parent",
+		EntryAgentName:  "main",
+		ToAgentName:     "main",
+	})
+	require.Equal(t, "parent", entry)
+}
+
+type createRaceSessionService struct {
+	session.Service
+}
+
+func (s createRaceSessionService) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	options ...session.Option,
+) (*session.Session, error) {
+	_, err := s.Service.CreateSession(ctx, key, state, options...)
+	if err != nil {
+		return nil, err
+	}
+	return nil, errors.New("session already exists and has not expired")
+}
+
+func TestSwarmRuntime_GetOrCreateSessionFallsBackAfterConcurrentCreate(t *testing.T) {
+	ctx := context.Background()
+	base := sessioninmemory.NewSessionService()
+	root, err := base.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	got, err := (&swarmRuntime{}).getOrCreateSession(
+		ctx,
+		createRaceSessionService{Service: base},
+		root,
+		"root/team/child",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "root/team/child", got.ID)
+}
+
 func TestRootMessageUsesRootMostPayload(t *testing.T) {
 	root := agent.NewInvocation(
 		agent.WithInvocationID("root"),
@@ -254,7 +549,7 @@ func TestSwarmRuntime_CustomizeTransferInvocation_HandlesNilAndBuilderErrors(t *
 
 func TestRuntimeControllerHelpers_HandleNilAndStripSwarmControllers(t *testing.T) {
 	require.NotPanics(t, func() {
-		ensureSwarmRuntime(nil, SwarmConfig{}, nil)
+		ensureSwarmRuntime(nil, "", "", SwarmConfig{}, swarmHandoffPolicy{}, nil)
 	})
 	installSwarmTransferController(nil, &swarmRuntime{})
 	opts := &agent.RunOptions{}

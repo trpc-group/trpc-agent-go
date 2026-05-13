@@ -25,9 +25,8 @@ import (
 )
 
 const (
-	swarmTeamNameKey          = "swarm_team_name"
-	swarmActiveAgentKeyPrefix = "swarm_active_agent:"
-	swarmTraceNodeIDKey       = "__swarm_trace_node_id__"
+	swarmTeamNameKey    = "swarm_team_name"
+	swarmTraceNodeIDKey = "__swarm_trace_node_id__"
 )
 
 // TransferResponseProcessor handles agent transfer operations after LLM responses.
@@ -75,6 +74,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	targetAgentName := transferInfo.TargetAgentName
 	var nodeTimeout time.Duration
 	var transferCustomizer itransfer.InvocationCustomizer
+	var transferCompletionHandler itransfer.CompletionObserver
 
 	// Look up the target agent from the current agent's sub-agents.
 	var targetAgent agent.Agent
@@ -123,6 +123,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		}
 		nodeTimeout = targetTimeout
 		transferCustomizer = transferInvocationCustomizerFor(controller)
+		transferCompletionHandler = transferCompletionHandlerFor(controller)
 	}
 
 	targetInvocation, targetMessageBeforeCustomize, err := prepareTransferTargetInvocation(
@@ -223,9 +224,24 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	// Forward all events from the target agent.
+	targetCompleted := false
+	targetDelegated := false
+	targetErrored := false
 	for targetEvent := range targetEventChan {
-		if targetEvent != nil && targetEvent.Response != nil && targetEvent.Response.Done {
-			p.saveActiveAgent(ctx, invocation, targetAgent, targetEvent)
+		if isTransferDelegationEvent(targetEvent) {
+			targetDelegated = true
+		}
+		if isTransferErrorEvent(targetEvent) {
+			targetErrored = true
+		}
+		if transferCompletionHandler != nil &&
+			targetEvent != nil &&
+			targetEvent.InvocationID == targetInvocation.InvocationID &&
+			targetEvent.Response != nil &&
+			!targetErrored &&
+			targetEvent.Response.Done {
+			targetCompleted = true
+			transferCompletionHandler.OnTransferComplete(ctx, invocation, targetInvocation, targetEvent)
 		}
 		if err := event.EmitEvent(ctx, ch, targetEvent); err != nil {
 			return
@@ -235,6 +251,14 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			"Transfer response processor: forwarded event from "+
 				"target agent %s",
 			targetAgent.Info().Name,
+		)
+	}
+	if transferCompletionHandler != nil && !targetCompleted && !targetDelegated && !targetErrored {
+		transferCompletionHandler.OnTransferComplete(
+			ctx,
+			invocation,
+			targetInvocation,
+			syntheticTransferCompletionEvent(targetInvocation),
 		)
 	}
 
@@ -301,39 +325,12 @@ func shouldEmitTransferMessageEcho(
 	return hasTransferMessage || !reflect.DeepEqual(beforeCustomize, afterCustomize)
 }
 
-// saveActiveAgent saves the target agent to session state for Swarm cross-request transfer
-// by attaching a StateDelta to the final response event.
-func (p *TransferResponseProcessor) saveActiveAgent(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	targetAgent agent.Agent,
-	targetEvent *event.Event,
-) {
-	if invocation == nil || invocation.Session == nil || targetEvent == nil {
-		return
-	}
-
-	// Check if this session belongs to a Swarm Team with cross-request transfer enabled.
-	// In Swarm mode with cross-request transfer, Team.runSwarm() sets SwarmTeamNameKey in session state.
-	// This works for both direct Team transfers and member-to-member transfers.
-	teamNameBytes, ok := invocation.Session.GetState(swarmTeamNameKey)
-	if !ok || len(teamNameBytes) == 0 {
-		// Not a Swarm team session with cross-request transfer enabled, skip.
-		return
-	}
-	teamName := string(teamNameBytes)
-
-	if targetEvent.StateDelta == nil {
-		targetEvent.StateDelta = make(map[string][]byte)
-	}
-	// Save the target agent name for cross-request transfer.
-	// Next user message will start from this agent.
-	targetEvent.StateDelta[swarmActiveAgentKey(teamName)] = []byte(targetAgent.Info().Name)
-}
-
 func transferTargetTraceNodeID(invocation *agent.Invocation, targetAgent agent.Agent) string {
 	if invocation == nil || targetAgent == nil {
 		return ""
+	}
+	if root := agent.InvocationTeamMemberTraceRoot(invocation); root != "" {
+		return istructure.JoinNodeID(root, targetAgent.Info().Name)
 	}
 	if invocation.Session != nil {
 		if traceRootBytes, ok := invocation.Session.GetState(swarmTraceNodeIDKey); ok && len(traceRootBytes) > 0 {
@@ -359,6 +356,27 @@ func transferTargetSurfaceRootNodeID(invocation *agent.Invocation, targetAgent a
 	return transferTargetTraceNodeID(invocation, targetAgent)
 }
 
+func isTransferDelegationEvent(evt *event.Event) bool {
+	if evt == nil {
+		return false
+	}
+	return evt.Object == model.ObjectTypeTransfer || evt.ContainsTag(event.TransferTag)
+}
+
+func isTransferErrorEvent(evt *event.Event) bool {
+	return evt != nil && evt.IsError()
+}
+
+func syntheticTransferCompletionEvent(invocation *agent.Invocation) *event.Event {
+	invocationID := ""
+	author := ""
+	if invocation != nil {
+		invocationID = invocation.InvocationID
+		author = invocation.AgentName
+	}
+	return event.NewResponseEvent(invocationID, author, &model.Response{Done: true})
+}
+
 func parentTraceNodeID(nodeID string) string {
 	if nodeID == "" {
 		return ""
@@ -370,13 +388,6 @@ func parentTraceNodeID(nodeID string) string {
 	return nodeID[:lastSlash]
 }
 
-func swarmActiveAgentKey(teamName string) string {
-	if teamName == "" {
-		return swarmActiveAgentKeyPrefix
-	}
-	return swarmActiveAgentKeyPrefix + teamName
-}
-
 func transferInvocationCustomizerFor(
 	controller agent.TransferController,
 ) itransfer.InvocationCustomizer {
@@ -385,4 +396,14 @@ func transferInvocationCustomizerFor(
 		return nil
 	}
 	return customizer
+}
+
+func transferCompletionHandlerFor(
+	controller agent.TransferController,
+) itransfer.CompletionObserver {
+	handler, ok := controller.(itransfer.CompletionObserver)
+	if !ok {
+		return nil
+	}
+	return handler
 }
