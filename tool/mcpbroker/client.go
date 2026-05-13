@@ -65,6 +65,7 @@ func (b *Broker) buildAdHocConfig(input targetInput) (mcpcfg.ConnectionConfig, s
 		Transport: strings.TrimSpace(input.Transport),
 		ServerURL: strings.TrimSpace(input.URL),
 		Headers:   headers,
+		Timeout:   b.options.adhocHTTPTimeout,
 	}, true)
 	if err != nil {
 		return mcpcfg.ConnectionConfig{}, "", err
@@ -351,21 +352,22 @@ func withOneShotClient[T any](
 ) (T, error) {
 	var zero T
 
+	// Per-call deadline: applied once and shared by Initialize and every MCP
+	// RPC issued inside fn. This matches the user-facing contract that
+	// ConnectionConfig.Timeout / WithAdHocHTTPTimeout bound the total
+	// wall-clock time of a single broker operation.
+	ctx, cancel := withTimeoutContext(ctx, cfg.Timeout)
+	defer cancel()
+
 	client, err := createClient(cfg, extraHTTP, extraStdio)
 	if err != nil {
 		return zero, err
 	}
 	defer client.Close()
 
-	initCtx, cancel := withTimeoutContext(ctx, cfg.Timeout)
-	defer cancel()
-
-	if _, err := client.Initialize(initCtx, &tmcp.InitializeRequest{}); err != nil {
+	if _, err := client.Initialize(ctx, &tmcp.InitializeRequest{}); err != nil {
 		return zero, fmt.Errorf("initialize MCP client: %w", err)
 	}
 
-	opCtx, opCancel := withTimeoutContext(ctx, cfg.Timeout)
-	defer opCancel()
-
-	return fn(opCtx, client)
+	return fn(ctx, client)
 }
