@@ -520,6 +520,7 @@ func TestSetSkillEnabledInConfig_ErrorPathsAndWriteConfigDocument(t *testing.T) 
 	}
 	path = filepath.Join(t.TempDir(), "write.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("app_name: old\n"), 0o644))
+	require.NoError(t, os.Chmod(path, 0o644))
 	require.NoError(t, writeConfigDocument(path, &doc))
 
 	body, err := os.ReadFile(path)
