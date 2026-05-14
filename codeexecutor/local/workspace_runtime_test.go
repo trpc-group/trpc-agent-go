@@ -33,6 +33,9 @@ import (
 const (
 	permDenied        = "permission denied"
 	unsupportedLangJS = "unsupported language: javascript"
+	envPathKey        = "PATH"
+	testProgramOutput = "local path command"
+	testExecFileMode  = 0o755
 )
 
 func TestRuntime_RunProgram_Basic(t *testing.T) {
@@ -64,6 +67,12 @@ func TestRuntime_RunProgram_Basic(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, res.Stdout, "hello runtime")
+}
+
+func TestRuntime_PathListSeparator(t *testing.T) {
+	rt := local.NewRuntime("")
+
+	require.Equal(t, string(os.PathListSeparator), rt.PathListSeparator())
 }
 
 func TestRuntime_CreateWorkspace_TrustedLocal_ReusesRoot(t *testing.T) {
@@ -314,6 +323,125 @@ func TestRuntime_RunProgram_EnvAndStdin(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, res.Stdout, "HELLO")
 	require.Contains(t, res.Stdout, "BAR")
+}
+
+func TestRuntime_RunProgram_UsesSpecPATHForBareCommand(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-path", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	cwd := filepath.Join(ws.Path, codeexecutor.DirWork)
+	bin := filepath.Join(cwd, "custom-bin")
+	require.NoError(t, os.MkdirAll(bin, 0o755))
+	writeExecutable(
+		t,
+		filepath.Join(bin, "pathcmd"),
+		"#!/bin/sh\necho '"+testProgramOutput+"'\n",
+	)
+
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "pathcmd",
+		Env: map[string]string{
+			envPathKey: "custom-bin",
+		},
+		Cwd:     codeexecutor.DirWork,
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, res.ExitCode)
+	require.Contains(t, res.Stdout, testProgramOutput)
+}
+
+func TestRuntime_RunProgram_SpecPATHWinsForExistingCommand(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-path-priority", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	cwd := filepath.Join(ws.Path, codeexecutor.DirWork)
+	bin := filepath.Join(cwd, "custom-bin")
+	require.NoError(t, os.MkdirAll(bin, 0o755))
+	writeExecutable(
+		t,
+		filepath.Join(bin, "sh"),
+		"#!/bin/sh\necho '"+testProgramOutput+"'\n",
+	)
+	pathValue := strings.Join(
+		[]string{"custom-bin", os.Getenv(envPathKey)},
+		string(os.PathListSeparator),
+	)
+
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "sh",
+		Args: []string{"-c", "echo process path"},
+		Env: map[string]string{
+			envPathKey: pathValue,
+		},
+		Cwd:     codeexecutor.DirWork,
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, res.ExitCode)
+	require.Contains(t, res.Stdout, testProgramOutput)
+	require.NotContains(t, res.Stdout, "process path")
+}
+
+func TestRuntime_RunProgram_EmptySpecPATHDoesNotUseProcessLookup(
+	t *testing.T,
+) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-empty-path", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "sh",
+		Args: []string{"-c", "echo ok"},
+		Env: map[string]string{
+			envPathKey: "",
+		},
+		Cwd:     codeexecutor.DirWork,
+		Timeout: 5 * time.Second,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, -1, res.ExitCode)
+	require.NotContains(t, res.Stdout, "ok")
+}
+
+func TestRuntime_RunProgram_LayoutError(t *testing.T) {
+	rt := local.NewRuntime("")
+	ws := codeexecutor.Workspace{
+		ID:   "rt-layout-error",
+		Path: t.TempDir(),
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ws.Path, codeexecutor.DirRuns),
+		[]byte("x"),
+		0o644,
+	))
+
+	_, err := rt.RunProgram(
+		context.Background(),
+		ws,
+		codeexecutor.RunProgramSpec{
+			Cmd:     "sh",
+			Args:    []string{"-lc", "true"},
+			Timeout: 5 * time.Second,
+		},
+	)
+
+	require.Error(t, err)
 }
 
 func TestRuntime_RunProgram_Timeout(t *testing.T) {
@@ -685,7 +813,7 @@ func TestRuntime_RunProgram_InjectsWorkspaceEnvs(t *testing.T) {
 	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
 		Cmd: "bash",
 		Args: []string{
-			"-lc",
+			"-c",
 			"echo $WORKSPACE_DIR; echo $SKILLS_DIR; echo $WORK_DIR; " +
 				"echo $OUTPUT_DIR; echo $RUN_DIR",
 		},
@@ -1293,4 +1421,13 @@ func TestRuntime_StageInputs_HostLink_ReplacesExisting(t *testing.T) {
 	st, lerr := os.Lstat(absDst)
 	require.NoError(t, lerr)
 	require.NotZero(t, st.Mode()&os.ModeSymlink)
+}
+
+func writeExecutable(t *testing.T, name string, content string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(
+		name,
+		[]byte(content),
+		testExecFileMode,
+	))
 }
