@@ -869,6 +869,16 @@ func TestTrimTrackEventsToHistoryStartUsesCustomUserMessage(t *testing.T) {
 	require.Equal(t, events[2:], trimmed)
 }
 
+func TestTrimTrackEventsToHistoryStartKeepsEmptyWindowSafe(t *testing.T) {
+	trimmed, safeForFollow := trimTrackEventsToHistoryStart(nil)
+	require.True(t, safeForFollow)
+	require.Nil(t, trimmed)
+}
+
+func TestIsUserMessageTrackEventRejectsEmptyPayload(t *testing.T) {
+	require.False(t, isUserMessageTrackEvent(session.TrackEvent{}))
+}
+
 func TestMessagesSnapshotReduceErrorEmitsSnapshotThenError(t *testing.T) {
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
