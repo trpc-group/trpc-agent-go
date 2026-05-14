@@ -55,6 +55,26 @@ func TestDynamicSummarizer_DelegatesToResolvedSummarizer(t *testing.T) {
 	assert.Equal(t, "dynamic-summary", text)
 }
 
+func TestDynamicSummarizer_LegacyMethodsAndEmptyResolver(t *testing.T) {
+	sess := &session.Session{ID: "sid"}
+	s := NewDynamicSummarizer(func(
+		context.Context,
+		*session.Session,
+	) (SessionSummarizer, error) {
+		return &dynamicFakeSummarizer{allow: true}, nil
+	})
+
+	assert.True(t, s.ShouldSummarize(sess))
+	s.SetPrompt("ignored")
+	s.SetModel(nil)
+
+	var nilDynamic *dynamicSummarizer
+	assert.False(t, nilDynamic.ShouldSummarizeWithContext(context.Background(), sess))
+
+	emptyDynamic := &dynamicSummarizer{}
+	assert.False(t, emptyDynamic.ShouldSummarizeWithContext(context.Background(), sess))
+}
+
 func TestDynamicSummarizer_NilResolvedSummarizer(t *testing.T) {
 	s := NewDynamicSummarizer(func(
 		context.Context,
