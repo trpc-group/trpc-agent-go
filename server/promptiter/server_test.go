@@ -227,6 +227,57 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 	assert.Equal(t, enginepkg.RunStatusSucceeded, resp.Result.Status)
 }
 
+func TestHandleRunsAppliesResponseResultSlimming(t *testing.T) {
+	srv := newTestServer(t,
+		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitStructure: true}),
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return &astructure.Snapshot{
+					StructureID: "struct_1",
+					EntryNodeID: "node_1",
+					Nodes: []astructure.Node{
+						{NodeID: "node_1", Name: "candidate", Kind: astructure.NodeKindLLM},
+					},
+					Surfaces: []astructure.Surface{
+						{
+							SurfaceID: "candidate#instruction",
+							NodeID:    "node_1",
+							Type:      astructure.SurfaceTypeInstruction,
+						},
+					},
+				}, nil
+			},
+			run: func(ctx context.Context, request *enginepkg.RunRequest, opts ...enginepkg.Option) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = request
+				_ = opts
+				return &enginepkg.RunResult{
+					Structure: &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
+					Status:    enginepkg.RunStatusSucceeded,
+				}, nil
+			},
+		}),
+	)
+	body, err := json.Marshal(&RunRequest{
+		Run: &enginepkg.RunRequest{
+			TrainEvalSetIDs:      []string{"train"},
+			ValidationEvalSetIDs: []string{"validation"},
+			TargetSurfaceIDs:     []string{"candidate#instruction"},
+			MaxRounds:            1,
+		},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var resp RunResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Result)
+	assert.Nil(t, resp.Result.Structure)
+}
+
 func TestHandleRunsRejectsInvalidRequest(t *testing.T) {
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewBufferString(`{"run":null}`))
@@ -275,13 +326,15 @@ func TestHandleAsyncRunsIsNotExposedWithoutManager(t *testing.T) {
 func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	var captured *enginepkg.RunRequest
 	srv := newTestServer(t,
+		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitStructure: true}),
 		WithManager(&fakeManager{
 			start: func(ctx context.Context, request *enginepkg.RunRequest) (*enginepkg.RunResult, error) {
 				_ = ctx
 				captured = request
 				return &enginepkg.RunResult{
-					ID:     "run_1",
-					Status: enginepkg.RunStatusQueued,
+					ID:        "run_1",
+					Status:    enginepkg.RunStatusQueued,
+					Structure: &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
 				}, nil
 			},
 		}),
@@ -307,6 +360,7 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	require.NotNil(t, resp.Result)
 	assert.Equal(t, "run_1", resp.Result.ID)
 	assert.Equal(t, enginepkg.RunStatusQueued, resp.Result.Status)
+	assert.Nil(t, resp.Result.Structure)
 }
 
 func TestHandleAsyncRunsRejectsInvalidMethodWhenManagerIsConfigured(t *testing.T) {
@@ -352,6 +406,7 @@ func TestHandleAsyncRunsSupportsOptionsAndMapsStartErrors(t *testing.T) {
 
 func TestHandleGetRunReturnsRun(t *testing.T) {
 	srv := newTestServer(t,
+		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitStructure: true}),
 		WithManager(&fakeManager{
 			get: func(ctx context.Context, runID string) (*enginepkg.RunResult, error) {
 				_ = ctx
@@ -359,6 +414,7 @@ func TestHandleGetRunReturnsRun(t *testing.T) {
 					ID:           runID,
 					Status:       enginepkg.RunStatusRunning,
 					CurrentRound: 2,
+					Structure:    &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
 				}, nil
 			},
 		}),
@@ -373,6 +429,7 @@ func TestHandleGetRunReturnsRun(t *testing.T) {
 	assert.Equal(t, "run_1", resp.Result.ID)
 	assert.Equal(t, enginepkg.RunStatusRunning, resp.Result.Status)
 	assert.Equal(t, 2, resp.Result.CurrentRound)
+	assert.Nil(t, resp.Result.Structure)
 }
 
 func TestHandleCancelRunCancelsAsyncRun(t *testing.T) {
