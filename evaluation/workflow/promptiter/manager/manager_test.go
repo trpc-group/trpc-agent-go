@@ -326,6 +326,12 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 	require.NotNil(t, result.Rounds[0].Backward)
 }
 
+func TestSlimStoredRunReturnsOriginalForNilManager(t *testing.T) {
+	run := &promptiterengine.RunResult{ID: "run-1"}
+	var managerInstance *manager
+	assert.Same(t, run, managerInstance.slimStoredRun(run))
+}
+
 func TestManagerCancelTransitionsRun(t *testing.T) {
 	engineInstance := &fakePromptIterEngine{
 		run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
