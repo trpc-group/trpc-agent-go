@@ -12,6 +12,8 @@ package cron
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -192,6 +195,7 @@ type stubSender struct {
 	mu     sync.Mutex
 	target string
 	text   string
+	err    error
 }
 
 func (s *stubSender) ID() string { return "telegram" }
@@ -210,7 +214,7 @@ func (s *stubSender) SendText(
 	defer s.mu.Unlock()
 	s.target = target
 	s.text = text
-	return nil
+	return s.err
 }
 
 func TestServiceRunNowSendsToDeliveryTarget(t *testing.T) {
@@ -280,6 +284,122 @@ func TestServiceRunNowSendsToDeliveryTarget(t *testing.T) {
 		job.ID,
 		runner.runOpts.RuntimeState[runtimeStateJobID],
 	)
+}
+
+func TestServiceRunNowWritesDebugTrace(t *testing.T) {
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	runner := &stubRunner{reply: "resource report"}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		router,
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	traceDir := waitForCronTrace(t, rec.Dir())
+	events, err := debugrecorder.ReadEventsFile(traceDir)
+	require.NoError(t, err)
+	rawEvents := string(events)
+	require.Contains(t, rawEvents, debugrecorder.KindCronRun)
+	require.Contains(t, rawEvents, debugrecorder.KindRunnerEvent)
+	require.Contains(t, rawEvents, debugrecorder.KindCronDelivery)
+	require.Contains(t, rawEvents, "resource report")
+
+	meta := readCronTraceMeta(t, traceDir)
+	require.Equal(t, "cron", meta.Start.Source)
+	require.Equal(t, "telegram", meta.Start.Channel)
+	require.Equal(t, "telegram:user", meta.Start.UserID)
+	require.True(t, strings.HasPrefix(meta.Start.SessionID, cronSessionPrefix))
+	require.Empty(t, meta.Start.TraceID)
+
+	result := readCronTraceResult(t, traceDir)
+	require.Equal(t, StatusSucceeded, result.Status)
+	require.Empty(t, result.Error)
+}
+
+func TestServiceRunNowDebugTraceRecordsDeliveryFailure(t *testing.T) {
+	router := outbound.NewRouter()
+	sender := &stubSender{err: context.DeadlineExceeded}
+	router.RegisterSender(sender)
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	runner := &stubRunner{reply: "resource report"}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		router,
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		got := svc.Get(job.ID)
+		return got != nil && got.LastStatus == StatusDeliveryFailed
+	})
+
+	traceDir := waitForCronTrace(t, rec.Dir())
+	events, err := debugrecorder.ReadEventsFile(traceDir)
+	require.NoError(t, err)
+	rawEvents := string(events)
+	require.Contains(t, rawEvents, debugrecorder.KindCronDelivery)
+	require.Contains(t, rawEvents, context.DeadlineExceeded.Error())
+
+	result := readCronTraceResult(t, traceDir)
+	require.Equal(t, StatusDeliveryFailed, result.Status)
+	require.Equal(t, context.DeadlineExceeded.Error(), result.Error)
 }
 
 func TestServiceRunNowAppliesRuntimeProfile(t *testing.T) {
@@ -1468,6 +1588,54 @@ func waitFor(t *testing.T, fn func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("condition was not met")
+}
+
+type cronTraceMeta struct {
+	Start debugrecorder.TraceStart `json:"start"`
+}
+
+func waitForCronTrace(t *testing.T, root string) string {
+	t.Helper()
+
+	var matches []string
+	waitFor(t, func() bool {
+		var err error
+		matches, err = filepath.Glob(
+			filepath.Join(root, "*", "*", "result.json"),
+		)
+		require.NoError(t, err)
+		if len(matches) == 0 {
+			return false
+		}
+		_, err = debugrecorder.ReadEventsFile(filepath.Dir(matches[0]))
+		return err == nil
+	})
+	return filepath.Dir(matches[0])
+}
+
+func readCronTraceMeta(t *testing.T, traceDir string) cronTraceMeta {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(traceDir, "meta.json"))
+	require.NoError(t, err)
+
+	var meta cronTraceMeta
+	require.NoError(t, json.Unmarshal(data, &meta))
+	return meta
+}
+
+func readCronTraceResult(
+	t *testing.T,
+	traceDir string,
+) debugrecorder.TraceEnd {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(traceDir, "result.json"))
+	require.NoError(t, err)
+
+	var result debugrecorder.TraceEnd
+	require.NoError(t, json.Unmarshal(data, &result))
+	return result
 }
 
 func timePointer(ts time.Time) *time.Time {
