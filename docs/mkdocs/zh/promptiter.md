@@ -159,8 +159,16 @@ targetScore := 1.0
 targetSurfaceID := astructure.SurfaceID(candidateAgentName, astructure.SurfaceTypeInstruction)
 
 result, err := engineInstance.Run(ctx, &engine.RunRequest{
-	TrainEvalSetIDs:      []string{"nba-commentary-train"},
-	ValidationEvalSetIDs: []string{"nba-commentary-validation"},
+	Train: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-train",
+		},
+	},
+	Validation: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-validation",
+		},
+	},
 	EvaluationOptions: engine.EvaluationOptions{
 		EvalCaseParallelism:               8,
 		EvalCaseParallelInferenceEnabled:  true,
@@ -441,8 +449,8 @@ import (
 )
 
 type RunRequest struct {
-	TrainEvalSetIDs      []string            // TrainEvalSetIDs 表示训练集 EvalSet ID 列表。
-	ValidationEvalSetIDs []string            // ValidationEvalSetIDs 表示验证集 EvalSet ID 列表。
+	Train                []EvalSetInput      // Train 表示用于生成梯度的评估数据。
+	Validation           []EvalSetInput      // Validation 表示用于补丁接受检查的评估数据。
 	InitialProfile       *promptiter.Profile // InitialProfile 表示第一轮开始前的初始候选版本。
 	Teacher              runner.Runner       // Teacher 表示按需动态生成参考答案时使用的 Runner。
 	Judge                runner.Runner       // Judge 表示 Judge 类指标按需使用的 Runner。
@@ -453,6 +461,57 @@ type RunRequest struct {
 	TargetSurfaceIDs     []string            // TargetSurfaceIDs 表示本次运行允许修改的可编辑位置列表。
 }
 ```
+
+#### Train 和 Validation
+
+`Train` 用于训练阶段，PromptIter 会基于训练集评估结果提取 loss 并生成梯度。`Validation` 用于验证阶段，PromptIter 会基于验证集评估结果计算 baseline、判断补丁是否接受，并参与停止条件判断。
+
+二者都使用 `[]EvalSetInput` 描述评估数据选择：
+
+```go
+type EvalSetInput struct {
+	EvalSetID   string   // EvalSetID 表示要执行的评估集。
+	EvalCaseIDs []string // EvalCaseIDs 表示按需限制执行的评估用例列表。
+}
+```
+
+不指定 `EvalCaseIDs` 时，会执行对应评估集下的全部样本：
+
+```go
+request := &engine.RunRequest{
+	Train: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-train",
+		},
+	},
+	Validation: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-validation",
+		},
+	},
+}
+```
+
+如果只希望训练集或验证集执行指定样本，可以在对应的 `EvalSetInput` 中设置 `EvalCaseIDs`：
+
+```go
+request := &engine.RunRequest{
+	Train: []engine.EvalSetInput{
+		{
+			EvalSetID:   "nba-commentary-train",
+			EvalCaseIDs: []string{"case_1", "case_2"},
+		},
+	},
+	Validation: []engine.EvalSetInput{
+		{
+			EvalSetID:   "nba-commentary-validation",
+			EvalCaseIDs: []string{"case_3"},
+		},
+	},
+}
+```
+
+`EvalCaseIDs` 省略或传空数组时，表示执行该评估集下的全部样本；传非空数组时，只执行指定样本。
 
 #### EvaluationOptions
 
