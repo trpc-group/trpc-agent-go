@@ -688,8 +688,23 @@ func rewriteUserMessage(
         return []model.Message{args.OriginalMessage}, nil
     }
     if needsContext(raw) {
+        const toolCallID = "call_business_context"
+        businessContext := loadBusinessContext(raw)
         return []model.Message{
             model.NewUserMessage("请先结合以下业务上下文理解用户问题。"),
+            {
+                Role:    model.RoleAssistant,
+                Content: "我会先读取业务上下文，再整理用户请求。",
+                ToolCalls: []model.ToolCall{{
+                    Type: "function",
+                    ID:   toolCallID,
+                    Function: model.FunctionDefinitionParam{
+                        Name:      "load_business_context",
+                        Arguments: []byte(`{"source":"crm"}`),
+                    },
+                }},
+            },
+            model.NewToolMessage(toolCallID, "load_business_context", businessContext),
             model.NewUserMessage(raw),
         }, nil
     }
