@@ -84,6 +84,14 @@ func (f *fakeManager) Close() error {
 	return nil
 }
 
+func testEvalSetInputs(evalSetID string) []enginepkg.EvalSetInput {
+	return []enginepkg.EvalSetInput{
+		{
+			EvalSetID: evalSetID,
+		},
+	}
+}
+
 func (failingWriter) Header() http.Header {
 	return http.Header{}
 }
@@ -205,10 +213,10 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 	)
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
-			TrainEvalSetIDs:      []string{"train"},
-			ValidationEvalSetIDs: []string{"validation"},
-			TargetSurfaceIDs:     []string{"candidate#instruction"},
-			MaxRounds:            1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"candidate#instruction"},
+			MaxRounds:        1,
 		},
 	})
 	require.NoError(t, err)
@@ -217,14 +225,70 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 	srv.Handler().ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.NotNil(t, captured)
-	assert.Equal(t, []string{"train"}, captured.TrainEvalSetIDs)
-	assert.Equal(t, []string{"validation"}, captured.ValidationEvalSetIDs)
+	assert.Equal(t, testEvalSetInputs("train"), captured.Train)
+	assert.Equal(t, testEvalSetInputs("validation"), captured.Validation)
 	assert.Equal(t, []string{"candidate#instruction"}, captured.TargetSurfaceIDs)
 	assert.Equal(t, 1, captured.MaxRounds)
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
 	assert.Equal(t, enginepkg.RunStatusSucceeded, resp.Result.Status)
+}
+
+func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
+	var captured *enginepkg.RunRequest
+	srv := newTestServer(t,
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return &astructure.Snapshot{
+					StructureID: "struct_1",
+					EntryNodeID: "node_1",
+					Nodes: []astructure.Node{
+						{NodeID: "node_1", Name: "candidate", Kind: astructure.NodeKindLLM},
+					},
+					Surfaces: []astructure.Surface{
+						{
+							SurfaceID: "candidate#instruction",
+							NodeID:    "node_1",
+							Type:      astructure.SurfaceTypeInstruction,
+						},
+					},
+				}, nil
+			},
+			run: func(ctx context.Context, request *enginepkg.RunRequest, opts ...enginepkg.Option) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = opts
+				captured = request
+				return &enginepkg.RunResult{Status: enginepkg.RunStatusSucceeded}, nil
+			},
+		}),
+	)
+	body := `{
+		"run": {
+			"train": [{"evalSetId": "train", "evalCaseIds": ["train_case_1"]}],
+			"validation": [{"evalSetId": "validation", "evalCaseIds": ["validation_case_1", "validation_case_2"]}],
+			"TargetSurfaceIDs": ["candidate#instruction"],
+			"MaxRounds": 1
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewBufferString(body))
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotNil(t, captured)
+	assert.Equal(t, []enginepkg.EvalSetInput{
+		{
+			EvalSetID:   "train",
+			EvalCaseIDs: []string{"train_case_1"},
+		},
+	}, captured.Train)
+	assert.Equal(t, []enginepkg.EvalSetInput{
+		{
+			EvalSetID:   "validation",
+			EvalCaseIDs: []string{"validation_case_1", "validation_case_2"},
+		},
+	}, captured.Validation)
 }
 
 func TestHandleRunsRejectsInvalidRequest(t *testing.T) {
@@ -249,10 +313,10 @@ func TestHandleRunsRejectsUnknownTargetSurfaceID(t *testing.T) {
 	srv := newTestServer(t)
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
-			TrainEvalSetIDs:      []string{"train"},
-			ValidationEvalSetIDs: []string{"validation"},
-			TargetSurfaceIDs:     []string{"unknown#instruction"},
-			MaxRounds:            1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"unknown#instruction"},
+			MaxRounds:        1,
 		},
 	})
 	require.NoError(t, err)
@@ -288,10 +352,10 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	)
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
-			TrainEvalSetIDs:      []string{"train"},
-			ValidationEvalSetIDs: []string{"validation"},
-			TargetSurfaceIDs:     []string{"candidate#instruction"},
-			MaxRounds:            1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"candidate#instruction"},
+			MaxRounds:        1,
 		},
 	})
 	require.NoError(t, err)
@@ -300,7 +364,7 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	srv.Handler().ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusCreated, recorder.Code)
 	require.NotNil(t, captured)
-	assert.Equal(t, []string{"train"}, captured.TrainEvalSetIDs)
+	assert.Equal(t, testEvalSetInputs("train"), captured.Train)
 	assert.Equal(t, "/promptiter/v1/apps/demo-app/async-runs/run_1", recorder.Header().Get("Location"))
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
@@ -336,10 +400,10 @@ func TestHandleAsyncRunsSupportsOptionsAndMapsStartErrors(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, optionsRecorder.Code)
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
-			TrainEvalSetIDs:      []string{"train"},
-			ValidationEvalSetIDs: []string{"validation"},
-			TargetSurfaceIDs:     []string{"candidate#instruction"},
-			MaxRounds:            1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"candidate#instruction"},
+			MaxRounds:        1,
 		},
 	})
 	require.NoError(t, err)
@@ -470,10 +534,10 @@ func TestHandleRunsMethodAndExecutionErrors(t *testing.T) {
 	assert.Equal(t, http.MethodPost, getRecorder.Header().Get(headerAllow))
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
-			TrainEvalSetIDs:      []string{"train"},
-			ValidationEvalSetIDs: []string{"validation"},
-			TargetSurfaceIDs:     []string{"candidate#instruction"},
-			MaxRounds:            1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"candidate#instruction"},
+			MaxRounds:        1,
 		},
 	})
 	require.NoError(t, err)

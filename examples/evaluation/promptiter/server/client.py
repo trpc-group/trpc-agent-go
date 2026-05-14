@@ -138,8 +138,8 @@ def resolve_target_surface_id(structure: dict) -> str:
 def build_run_request(args: argparse.Namespace, target_surface_id: str) -> dict:
     return {
         "run": {
-            "TrainEvalSetIDs": ["nba-commentary-train"],
-            "ValidationEvalSetIDs": ["nba-commentary-validation"],
+            "train": [{"evalSetId": "nba-commentary-train"}],
+            "validation": [{"evalSetId": "nba-commentary-validation"}],
             "TargetSurfaceIDs": [target_surface_id],
             "EvaluationOptions": {
                 "EvalCaseParallelism": args.eval_case_parallelism,

@@ -216,8 +216,16 @@ func buildPromptIterRuntime(ctx context.Context, cfg asyncRunConfig) (*promptIte
 func buildRunRequest(cfg asyncRunConfig, targetSurfaceID string) *promptiterengine.RunRequest {
 	targetScore := cfg.TargetScore
 	return &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{trainEvalSetID},
-		ValidationEvalSetIDs: []string{validationEvalSetID},
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: trainEvalSetID,
+			},
+		},
+		Validation: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: validationEvalSetID,
+			},
+		},
 		EvaluationOptions: promptiterengine.EvaluationOptions{
 			EvalCaseParallelism:               cfg.EvalCaseParallelism,
 			EvalCaseParallelInferenceEnabled:  cfg.ParallelInferenceEnabled,

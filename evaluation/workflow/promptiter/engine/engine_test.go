@@ -158,6 +158,7 @@ func (m *providerBackedTestModel) Info() model.Info {
 type scriptedEvalService struct {
 	profiles         []string
 	runOptions       []agent.RunOptions
+	evalCaseIDs      map[string][][]string
 	profileByEvalSet map[string]string
 	outcomeByEvalSet map[string]scriptedEvalOutcome
 	script           func(evalSetID string, profileValue string) scriptedEvalOutcome
@@ -167,6 +168,7 @@ func newScriptedEvalService(
 	script func(evalSetID string, profileValue string) scriptedEvalOutcome,
 ) *scriptedEvalService {
 	return &scriptedEvalService{
+		evalCaseIDs:      make(map[string][][]string),
 		profileByEvalSet: make(map[string]string),
 		outcomeByEvalSet: make(map[string]scriptedEvalOutcome),
 		script:           script,
@@ -192,6 +194,7 @@ func (s *scriptedEvalService) Inference(
 	outcome := s.script(req.EvalSetID, profileValue)
 	s.profiles = append(s.profiles, profileValue)
 	s.runOptions = append(s.runOptions, runOptions)
+	s.evalCaseIDs[req.EvalSetID] = append(s.evalCaseIDs[req.EvalSetID], append([]string(nil), req.EvalCaseIDs...))
 	s.profileByEvalSet[req.EvalSetID] = profileValue
 	s.outcomeByEvalSet[req.EvalSetID] = outcome
 	result := &service.InferenceResult{
@@ -333,6 +336,14 @@ func seedTestEvalSet(t *testing.T, manager evalset.Manager, evalSetID string) {
 	assert.NoError(t, err)
 }
 
+func testEvalSetInputs(evalSetID string) []EvalSetInput {
+	return []EvalSetInput{
+		{
+			EvalSetID: evalSetID,
+		},
+	}
+}
+
 type fakeStructureAgent struct {
 	snapshot  *astructure.Snapshot
 	exportErr error
@@ -460,9 +471,9 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	result, err := engineInstance.Run(context.Background(), &RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		InitialProfile:       nil,
+		Train:          testEvalSetInputs("train"),
+		Validation:     testEvalSetInputs("validation"),
+		InitialProfile: nil,
 		AcceptancePolicy: AcceptancePolicy{
 			MinScoreGain: 0.1,
 		},
@@ -546,8 +557,8 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	assert.NoError(t, err)
 	var observedEvents []Event
 	result, err := engineInstance.Run(context.Background(), &RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
 		AcceptancePolicy: AcceptancePolicy{
 			MinScoreGain: 0.1,
 		},
@@ -598,6 +609,102 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	assert.Equal(t, EventKindRoundCompleted, observedEvents[10].Kind)
 	assert.Equal(t, 1, observedEvents[10].Round)
 	assert.IsType(t, &RoundCompleted{}, observedEvents[10].Payload)
+}
+
+func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
+	newEvalService := func() *scriptedEvalService {
+		return newScriptedEvalService(func(evalSetID string, profileValue string) scriptedEvalOutcome {
+			_ = evalSetID
+			_ = profileValue
+			return scriptedEvalOutcome{
+				score:             0.8,
+				metricStatus:      status.EvalStatusPassed,
+				appliedSurfaceIDs: []string{testSurfaceID},
+			}
+		})
+	}
+	newEngine := func(t *testing.T, evalService *scriptedEvalService) Engine {
+		t.Helper()
+		engineInstance, err := New(
+			context.Background(),
+			testTargetAgent(),
+			newTestAgentEvaluator(t, evalService),
+			&fakeBackwarder{},
+			&fakeAggregator{},
+			&fakeOptimizer{},
+		)
+		require.NoError(t, err)
+		return engineInstance
+	}
+	t.Run("forwards non-empty case filters", func(t *testing.T) {
+		evalService := newEvalService()
+		engineInstance := newEngine(t, evalService)
+		result, err := engineInstance.Run(context.Background(), &RunRequest{
+			Train: []EvalSetInput{
+				{
+					EvalSetID:   "train",
+					EvalCaseIDs: []string{"train_case_1", "train_case_2"},
+				},
+			},
+			Validation: []EvalSetInput{
+				{
+					EvalSetID:   "validation",
+					EvalCaseIDs: []string{"validation_case_1"},
+				},
+			},
+			MaxRounds: 1,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, [][]string{{"train_case_1", "train_case_2"}}, evalService.evalCaseIDs["train"])
+		assert.Equal(t, [][]string{{"validation_case_1"}, {"validation_case_1"}}, evalService.evalCaseIDs["validation"])
+	})
+	t.Run("omits nil case filters", func(t *testing.T) {
+		evalService := newEvalService()
+		engineInstance := newEngine(t, evalService)
+		result, err := engineInstance.Run(context.Background(), &RunRequest{
+			Train: []EvalSetInput{
+				{
+					EvalSetID: "train",
+				},
+			},
+			Validation: []EvalSetInput{
+				{
+					EvalSetID: "validation",
+				},
+			},
+			MaxRounds: 1,
+		})
+		var noFilter []string
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, [][]string{noFilter}, evalService.evalCaseIDs["train"])
+		assert.Equal(t, [][]string{noFilter, noFilter}, evalService.evalCaseIDs["validation"])
+	})
+	t.Run("omits empty case filters", func(t *testing.T) {
+		evalService := newEvalService()
+		engineInstance := newEngine(t, evalService)
+		result, err := engineInstance.Run(context.Background(), &RunRequest{
+			Train: []EvalSetInput{
+				{
+					EvalSetID:   "train",
+					EvalCaseIDs: []string{},
+				},
+			},
+			Validation: []EvalSetInput{
+				{
+					EvalSetID:   "validation",
+					EvalCaseIDs: []string{},
+				},
+			},
+			MaxRounds: 1,
+		})
+		var noFilter []string
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, [][]string{noFilter}, evalService.evalCaseIDs["train"])
+		assert.Equal(t, [][]string{noFilter, noFilter}, evalService.evalCaseIDs["validation"])
+	})
 }
 
 func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
@@ -656,8 +763,8 @@ func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	result, err := engineInstance.Run(context.Background(), &RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
 		AcceptancePolicy: AcceptancePolicy{
 			MinScoreGain: 0.1,
 		},
@@ -834,18 +941,24 @@ func TestEvaluateValidatesRequests(t *testing.T) {
 	result, runErr := engineInstance.evaluate(context.Background(), structure, nil)
 	assert.Nil(t, result)
 	assert.EqualError(t, runErr, "evaluation request is nil")
-	result, runErr = engineInstance.evaluate(context.Background(), nil, &EvaluationRequest{EvalSetIDs: []string{"validation"}})
+	result, runErr = engineInstance.evaluate(context.Background(), nil, &EvaluationRequest{
+		EvalSets: []EvalSetInput{{EvalSetID: "validation"}},
+	})
 	assert.Nil(t, result)
 	assert.EqualError(t, runErr, "structure state is nil")
 	result, runErr = engineInstance.evaluate(context.Background(), structure, &EvaluationRequest{})
 	assert.Nil(t, result)
-	assert.EqualError(t, runErr, "evaluation set ids are empty")
+	assert.EqualError(t, runErr, "evaluation sets are empty")
 	engineInstance.agentEvaluator = nil
-	result, runErr = engineInstance.evaluate(context.Background(), structure, &EvaluationRequest{EvalSetIDs: []string{"validation"}})
+	result, runErr = engineInstance.evaluate(context.Background(), structure, &EvaluationRequest{
+		EvalSets: []EvalSetInput{{EvalSetID: "validation"}},
+	})
 	assert.Nil(t, result)
 	assert.EqualError(t, runErr, "agent evaluator is nil")
 	engineInstance.agentEvaluator = &fakeAgentEvaluator{}
-	result, runErr = engineInstance.evaluate(context.Background(), structure, &EvaluationRequest{EvalSetIDs: []string{""}})
+	result, runErr = engineInstance.evaluate(context.Background(), structure, &EvaluationRequest{
+		EvalSets: []EvalSetInput{{EvalSetID: ""}},
+	})
 	assert.Nil(t, result)
 	assert.EqualError(t, runErr, "evaluation set id is empty")
 }
@@ -856,15 +969,15 @@ func TestBuildEvaluationCallOptionsUsesConfiguredRunnersAndFlags(t *testing.T) {
 	teacher := &stubRunner{}
 	judge := &stubRunner{}
 	options, buildErr := buildEvaluationCallOptions(structure, &EvaluationRequest{
-		EvalSetIDs: []string{"validation"},
-		Teacher:    teacher,
-		Judge:      judge,
+		EvalSets: []EvalSetInput{{EvalSetID: "validation"}},
+		Teacher:  teacher,
+		Judge:    judge,
 		Options: EvaluationOptions{
 			EvalCaseParallelism:               3,
 			EvalCaseParallelInferenceEnabled:  true,
 			EvalCaseParallelEvaluationEnabled: true,
 		},
-	})
+	}, EvalSetInput{EvalSetID: "validation", EvalCaseIDs: []string{"case_1"}})
 	require.NoError(t, buildErr)
 	agentEvaluator, newErr := evaluation.New("promptiter-test", &stubRunner{}, options...)
 	require.NoError(t, newErr)
@@ -883,10 +996,12 @@ func TestBuildEvaluationCallOptionsUsesConfiguredRunnersAndFlags(t *testing.T) {
 	parallelEvaluationEnabled := readPrivateField[*bool](t, agentEvaluator, "evalCaseParallelEvaluationEnabled")
 	require.NotNil(t, parallelEvaluationEnabled)
 	assert.True(t, *parallelEvaluationEnabled)
+	evalCaseIDs := readPrivateField[[]string](t, agentEvaluator, "evalCaseIDs")
+	assert.Equal(t, []string{"case_1"}, evalCaseIDs)
 }
 
 func TestBuildEvaluationCallOptionsRejectsInvalidRequest(t *testing.T) {
-	options, err := buildEvaluationCallOptions(nil, nil)
+	options, err := buildEvaluationCallOptions(nil, nil, EvalSetInput{})
 	assert.Nil(t, options)
 	assert.EqualError(t, err, "evaluation request is nil")
 	structure, buildErr := newStructureState(testStructureSnapshot(t))
@@ -895,7 +1010,7 @@ func TestBuildEvaluationCallOptionsRejectsInvalidRequest(t *testing.T) {
 		Profile: &promptiter.Profile{
 			StructureID: "other",
 		},
-	})
+	}, EvalSetInput{EvalSetID: "validation"})
 	assert.Nil(t, options)
 	assert.ErrorContains(t, err, "profile structure id")
 }
@@ -1442,7 +1557,7 @@ func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T
 	assert.Equal(t, 0.9, result.Metrics[0].Score)
 }
 
-func TestRunRejectsEmptyValidationEvalSetIDs(t *testing.T) {
+func TestRunRejectsEmptyValidationEvalSets(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
 		testTargetAgent(),
@@ -1453,11 +1568,11 @@ func TestRunRejectsEmptyValidationEvalSetIDs(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	_, err = engineInstance.Run(context.Background(), &RunRequest{
-		TrainEvalSetIDs: []string{"train"},
-		MaxRounds:       1,
+		Train:     testEvalSetInputs("train"),
+		MaxRounds: 1,
 	})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "validation evaluation set ids are empty")
+	assert.Contains(t, err.Error(), "validation evaluation sets are empty")
 }
 
 func TestRunRejectsNilRequest(t *testing.T) {
@@ -1475,7 +1590,7 @@ func TestRunRejectsNilRequest(t *testing.T) {
 	assert.EqualError(t, runErr, "run request is nil")
 }
 
-func TestRunRejectsEmptyTrainEvalSetIDs(t *testing.T) {
+func TestRunRejectsEmptyTrainEvalSets(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
 		testTargetAgent(),
@@ -1486,11 +1601,39 @@ func TestRunRejectsEmptyTrainEvalSetIDs(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	result, runErr := engineInstance.Run(context.Background(), &RunRequest{
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
 	})
 	assert.Nil(t, result)
-	assert.EqualError(t, runErr, "train evaluation set ids are empty")
+	assert.EqualError(t, runErr, "train evaluation sets are empty")
+}
+
+func TestValidateEvalSetInputsRejectsInvalidInputs(t *testing.T) {
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "",
+		},
+	}), "train evaluation set id is empty")
+	assert.NoError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+		},
+		{
+			EvalSetID: "train",
+		},
+	}))
+	assert.NoError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID:   "train",
+			EvalCaseIDs: []string{},
+		},
+	}))
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID:   "train",
+			EvalCaseIDs: []string{""},
+		},
+	}), `train eval case id for eval set "train" is empty`)
 }
 
 func TestRunRejectsNonPositiveMaxRounds(t *testing.T) {
@@ -1504,9 +1647,9 @@ func TestRunRejectsNonPositiveMaxRounds(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	result, runErr := engineInstance.Run(context.Background(), &RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            0,
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  0,
 	})
 	assert.Nil(t, result)
 	assert.EqualError(t, runErr, "max rounds must be greater than 0")
@@ -1526,8 +1669,8 @@ func TestRunRejectsInvalidInitialProfile(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	_, err = engineInstance.Run(context.Background(), &RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
 		InitialProfile: &promptiter.Profile{
 			Overrides: []promptiter.SurfaceOverride{
 				{
@@ -2520,10 +2663,10 @@ func TestRunRejectsEmptyTargetSurfaceIDs(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	_, err = engineInstance.Run(context.Background(), &RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		TargetSurfaceIDs:     []string{},
-		MaxRounds:            1,
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		TargetSurfaceIDs: []string{},
+		MaxRounds:        1,
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "target surface ids must not be empty")
@@ -2540,10 +2683,10 @@ func TestRunRejectsUnknownTargetSurfaceID(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	_, err = engineInstance.Run(context.Background(), &RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		TargetSurfaceIDs:     []string{"unknown#instruction"},
-		MaxRounds:            1,
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		TargetSurfaceIDs: []string{"unknown#instruction"},
+		MaxRounds:        1,
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown")
@@ -2637,9 +2780,9 @@ func TestRunRejectsStructureExportFailure(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	_, err = engineInstance.Run(context.Background(), &RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "describe structure")
