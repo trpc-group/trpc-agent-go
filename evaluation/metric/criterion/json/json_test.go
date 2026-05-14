@@ -124,7 +124,7 @@ func TestJSONCriterionMatchRawMessageWithParsedValue(t *testing.T) {
 }
 
 func TestJSONCriterionValidRawMessage(t *testing.T) {
-	criterion := &JSONCriterion{Valid: true}
+	criterion := &JSONCriterion{Valid: true, MatchStrategy: JSONMatchStrategySkip}
 
 	ok, err := criterion.Match(json.RawMessage(`{"a":1}`), json.RawMessage(`not checked`))
 	assert.True(t, ok)
@@ -188,14 +188,14 @@ func TestJSONCriterionValidWithSkipMatchStrategy(t *testing.T) {
 	assert.Contains(t, err.Error(), "parse actual raw json")
 }
 
-func TestJSONCriterionValidOnlyDoesNotCompareExpected(t *testing.T) {
+func TestJSONCriterionValidWithExactMatchStrategy(t *testing.T) {
 	criterion := &JSONCriterion{Valid: true, MatchStrategy: JSONMatchStrategyExact}
 	ok, err := criterion.Match(json.RawMessage(`{"a":1}`), json.RawMessage(`{"a":1}`))
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	ok, err = criterion.Match(json.RawMessage(`{"a":1}`), json.RawMessage(`{"a":2}`))
-	assert.True(t, ok)
-	assert.NoError(t, err)
+	assert.False(t, ok)
+	assert.Error(t, err)
 }
 
 func TestMapCriterionDeepEqualMismatch(t *testing.T) {
