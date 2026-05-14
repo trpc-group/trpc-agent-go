@@ -22,6 +22,7 @@ func requireTokenTailoringOverflow(t *testing.T, err error) {
 	t.Helper()
 	var overflow *tokenTailoringOverflowError
 	require.ErrorAs(t, err, &overflow)
+	require.Contains(t, err.Error(), "token tailoring overflow")
 }
 
 func TestSimpleTokenCounter_CountTokens(t *testing.T) {
@@ -1107,6 +1108,37 @@ func (c *mockErrorTokenCounter) CountTokensRange(ctx context.Context, messages [
 	return 0, fmt.Errorf("mock error")
 }
 
+type rangeLenTokenCounter struct{}
+
+func (rangeLenTokenCounter) CountTokens(ctx context.Context, message Message) (int, error) {
+	return 1, nil
+}
+
+func (rangeLenTokenCounter) CountTokensRange(ctx context.Context, messages []Message, start, end int) (int, error) {
+	if start < 0 || end > len(messages) || start >= end {
+		return 0, fmt.Errorf("invalid range")
+	}
+	return end - start, nil
+}
+
+type scriptedRangeTokenCounter struct {
+	calls int
+	steps []struct {
+		tokens int
+		err    error
+	}
+}
+
+func (c *scriptedRangeTokenCounter) CountTokens(ctx context.Context, message Message) (int, error) {
+	return 1, nil
+}
+
+func (c *scriptedRangeTokenCounter) CountTokensRange(ctx context.Context, messages []Message, start, end int) (int, error) {
+	step := c.steps[c.calls]
+	c.calls++
+	return step.tokens, step.err
+}
+
 // TestBuildPrefixSum_WithActualError tests the error handling path in buildPrefixSum
 func TestBuildPrefixSum_WithActualError(t *testing.T) {
 	counter := &mockErrorTokenCounter{}
@@ -1752,6 +1784,16 @@ func TestShouldReturnOriginal_CountTokensError(t *testing.T) {
 	require.Len(t, out, 1)
 }
 
+func TestShouldReturnOriginal_NilTokenCounter(t *testing.T) {
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	done, out := shouldReturnOriginal(context.Background(), nil, messages, 10)
+	require.True(t, done)
+	require.Equal(t, messages, out)
+}
+
 func TestFitsWithinBudget_Empty(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 
@@ -1836,6 +1878,63 @@ func TestEnsureTailoredWithinBudget_CountTokensError(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	require.Equal(t, "q", out[0].Content)
+}
+
+func TestEnsureTailoredWithinBudget_MinimalCandidateFits(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("old"),
+		NewAssistantMessage("old answer"),
+		NewUserMessage("q"),
+	}
+
+	out, err := ensureTailoredWithinBudget(context.Background(),
+		rangeLenTokenCounter{}, messages, 2)
+	require.NoError(t, err)
+	require.Equal(t, []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("q"),
+	}, out)
+}
+
+func TestEnsureTailoredWithinBudget_NoMinimalCandidate(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewSystemMessage("sys2"),
+	}
+
+	out, err := ensureTailoredWithinBudget(context.Background(),
+		rangeLenTokenCounter{}, messages, 1)
+	require.NoError(t, err)
+	require.Nil(t, out)
+}
+
+func TestEnsureTailoredWithinBudget_CandidateTokenCountError(t *testing.T) {
+	counter := &scriptedRangeTokenCounter{
+		steps: []struct {
+			tokens int
+			err    error
+		}{
+			{tokens: 4},
+			{tokens: 4},
+			{err: fmt.Errorf("count candidate")},
+		},
+	}
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("old"),
+		NewAssistantMessage("old answer"),
+		NewUserMessage("q"),
+	}
+
+	out, err := ensureTailoredWithinBudget(context.Background(),
+		counter, messages, 2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "count candidate")
+	require.Equal(t, []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("q"),
+	}, out)
 }
 
 func TestFitsWithinBudget_CountTokensError(t *testing.T) {

@@ -414,6 +414,9 @@ func shouldReturnOriginal(
 	if maxTokens <= 0 {
 		return true, nil
 	}
+	if tokenCounter == nil {
+		tokenCounter = NewSimpleTokenCounter()
+	}
 	tokens, err := tokenCounter.CountTokensRange(ctx, messages, 0, len(messages))
 	if err != nil {
 		return true, messages
