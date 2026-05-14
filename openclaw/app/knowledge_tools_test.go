@@ -245,10 +245,11 @@ vector_store:
 	require.NotNil(t, bundle)
 	require.Len(t, bundle.tools, 1)
 	require.Equal(t, "knowledge_search", bundle.tools[0].Declaration().Name)
-	require.Equal(t,
-		"Search the trpc-agent-go documentation including API reference and design docs.",
+	require.Contains(t,
 		bundle.tools[0].Declaration().Description,
+		"Search the trpc-agent-go documentation including API reference and design docs.",
 	)
+	require.Contains(t, bundle.tools[0].Declaration().Description, "== FILTER GUIDANCE ==")
 }
 
 func TestBuildKnowledgeTools_MultipleKnowledgesCustomDescription(t *testing.T) {
@@ -265,10 +266,11 @@ vector_store:
 	require.NoError(t, err)
 	require.NotNil(t, bundle)
 	require.Len(t, bundle.tools, 2)
-	require.Equal(t,
-		"Framework documentation and design docs.",
+	require.Contains(t,
 		bundle.tools[0].Declaration().Description,
+		"Framework documentation and design docs.",
 	)
+	require.Contains(t, bundle.tools[0].Declaration().Description, "== FILTER GUIDANCE ==")
 	require.Contains(t,
 		bundle.tools[1].Declaration().Description,
 		`"faq"`,
