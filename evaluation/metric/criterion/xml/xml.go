@@ -56,14 +56,14 @@ func (c *XMLCriterion) Match(actual, expected string) (bool, error) {
 	if c.Ignore {
 		return true, nil
 	}
+	if c.Compare != nil {
+		return c.Compare(actual, expected)
+	}
 	if c.MatchStrategy == "" {
 		return false, fmt.Errorf("xml match strategy is empty")
 	}
 	if c.MatchStrategy != XMLMatchStrategySkip {
 		return false, fmt.Errorf("invalid match strategy %s", c.MatchStrategy)
-	}
-	if c.Compare != nil {
-		return c.Compare(actual, expected)
 	}
 	if c.Valid {
 		return matchValid(actual)

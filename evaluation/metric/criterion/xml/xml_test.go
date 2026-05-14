@@ -105,6 +105,18 @@ func TestXMLCriterionCompare(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestXMLCriterionCompareWithoutMatchStrategy(t *testing.T) {
+	called := false
+	criterion := New(WithValid(true), WithCompare(func(actual, expected string) (bool, error) {
+		called = true
+		return actual == expected, nil
+	}))
+	ok, err := criterion.Match(`<root`, `<root`)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
 func TestXMLCriterionIgnore(t *testing.T) {
 	ok, err := (&XMLCriterion{Ignore: true}).Match("", "")
 	assert.True(t, ok)
