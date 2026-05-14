@@ -817,6 +817,45 @@ func TestSaveArtifact_ValidatesInputs(t *testing.T) {
 	require.ErrorIs(t, err, ErrNilArtifact)
 }
 
+func TestService_ObjectKey(t *testing.T) {
+	s, _ := createMockService()
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	key, err := s.ObjectKey(sessionInfo, "out/site.zip", 2)
+	require.NoError(t, err)
+	assert.Equal(t, "artifact/testapp/user123/session456/out/site.zip/2", key)
+
+	key, err = s.ObjectKey(sessionInfo, "user:out/site.zip", 3)
+	require.NoError(t, err)
+	assert.Equal(t, "artifact/testapp/user123/user/user:out/site.zip/3", key)
+}
+
+func TestService_ObjectKeyValidatesInputs(t *testing.T) {
+	s, _ := createMockService()
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	_, err := s.ObjectKey(artifact.SessionInfo{}, "test.txt", 0)
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	_, err = s.ObjectKey(sessionInfo, "", 0)
+	require.ErrorIs(t, err, ErrEmptyFilename)
+
+	_, err = s.ObjectKey(sessionInfo, "a\x00b", 0)
+	require.ErrorIs(t, err, ErrInvalidFilename)
+
+	_, err = s.ObjectKey(sessionInfo, "test.txt", -1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "version cannot be negative")
+}
+
 func TestService_ValidatesInputs(t *testing.T) {
 	s, _ := createMockService()
 	ctx := context.Background()
