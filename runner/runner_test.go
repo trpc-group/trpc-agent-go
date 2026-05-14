@@ -4201,6 +4201,46 @@ func TestCaptureCompletionFallback_IgnoresPartialError(t *testing.T) {
 	require.Nil(t, loop.finalError)
 }
 
+func TestCaptureRoutedCompletionError(t *testing.T) {
+	r := &runner{}
+	loop := &eventLoopContext{}
+	require.NotPanics(t, func() {
+		r.captureRoutedCompletionError(nil, nil)
+		r.captureRoutedCompletionError(loop, nil)
+		r.captureRoutedCompletionError(loop, &event.Event{})
+		r.captureRoutedCompletionError(loop, &event.Event{
+			Response: &model.Response{
+				IsPartial: true,
+				Error:     &model.ResponseError{Message: "partial"},
+			},
+		})
+	})
+	require.Nil(t, loop.finalError)
+	errEvt := event.NewErrorEvent("invocation", "agent", model.ErrorTypeFlowError, "hidden failure")
+	r.captureRoutedCompletionError(loop, errEvt)
+	require.NotNil(t, loop.finalError)
+	require.Equal(t, "hidden failure", loop.finalError.Message)
+	require.True(t, loop.sawTerminalError)
+	doneLoop := &eventLoopContext{}
+	r.captureRoutedCompletionError(doneLoop, event.NewResponseEvent("invocation", "agent", &model.Response{Done: true}))
+	require.Nil(t, doneLoop.finalError)
+	require.False(t, doneLoop.sawTerminalError)
+}
+
+func TestRunnerSameSession(t *testing.T) {
+	require.True(t, sameSession(nil, nil))
+	require.False(t, sameSession(session.NewSession("app", "user", "session"), nil))
+	require.False(t, sameSession(nil, session.NewSession("app", "user", "session")))
+	require.True(t, sameSession(
+		session.NewSession("app", "user", "session"),
+		session.NewSession("app", "user", "session"),
+	))
+	require.False(t, sameSession(
+		session.NewSession("app", "user", "session"),
+		session.NewSession("app", "user", "other"),
+	))
+}
+
 func TestMergeCompletionFallbackStateDelta(t *testing.T) {
 	t.Run("empty src", func(t *testing.T) {
 		dst := map[string][]byte{"keep": []byte("v")}
