@@ -509,6 +509,29 @@ func TestSessionSummarizer_ExtractConversationText_WithAuthor(t *testing.T) {
 	assert.Contains(t, text, "assistant:")
 }
 
+func TestSessionSummarizer_ExtractConversationText_WithReasoningContent(t *testing.T) {
+	s := NewSummarizer(&fakeModel{})
+	sess := &session.Session{
+		ID: "test-reasoning-content",
+		Events: []event.Event{
+			{
+				Author: "assistant",
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ReasoningContent: "I should inspect the user request first.",
+						Content:          "Here is the final answer.",
+					},
+				}}},
+			},
+		},
+	}
+
+	text, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Contains(t, text, "assistant: [Reasoning: I should inspect the user request first.]")
+	assert.Contains(t, text, "assistant: Here is the final answer.")
+}
+
 func TestSessionSummarizer_ExtractConversationText_WithToolCalls(t *testing.T) {
 	s := NewSummarizer(&fakeModel{})
 

@@ -334,6 +334,22 @@ func TestCheckTokenThreshold(t *testing.T) {
 		assert.False(t, checker(sess))
 	})
 
+	t.Run("reasoning content counts toward token threshold", func(t *testing.T) {
+		checker := CheckTokenThreshold(100)
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ReasoningContent: strings.Repeat("r", 800),
+					},
+				}}},
+			},
+		}}
+		assert.True(t, checker(sess))
+	})
+
 	t.Run("tokens equal threshold does not trigger", func(t *testing.T) {
 		const contentLen = 200
 		sess := &session.Session{Events: []event.Event{

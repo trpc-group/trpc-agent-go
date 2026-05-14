@@ -534,7 +534,7 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 }
 
 // extractConversationText extracts conversation text from events.
-// This includes regular messages, tool calls, and tool responses.
+// This includes regular messages, reasoning content, tool calls, and tool responses.
 func (s *sessionSummarizer) extractConversationText(events []event.Event) string {
 	return extractConversationText(
 		events,
@@ -584,6 +584,11 @@ func extractConversationText(
 						parts = append(parts, fmt.Sprintf("%s: %s", author, toolCallText))
 					}
 				}
+			}
+
+			// Handle reasoning content.
+			if trimmed := strings.TrimSpace(msg.ReasoningContent); trimmed != "" {
+				parts = append(parts, fmt.Sprintf("%s: [Reasoning: %s]", author, trimmed))
 			}
 
 			// Handle tool response.
