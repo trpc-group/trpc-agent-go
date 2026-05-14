@@ -368,6 +368,42 @@ Session State 实现，因此需要复用同一个 session。
   transfer，后续用户消息都会继续落到当前 active member。
 - `await_user_reply` 是一次性路由。它只消费下一条用户消息，消费后会自动清掉。
 
+### 改写 handoff 输入（可选）
+
+默认情况下，Swarm 成员通过 `transfer_to_agent` 交接时，目标成员收到的用户输入就是工具调用中的 `message` 字段。如果业务希望用原始用户输入、模板或其他上下文重新构造目标成员的首轮输入，可以配置 `team.WithSwarmHandoffInputBuilder`：
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmHandoffInputBuilder(func(
+        ctx context.Context,
+        args team.SwarmHandoffInputArgs,
+    ) (model.Message, error) {
+        if args.ToAgentName == "refund_agent" {
+            return model.NewUserMessage(
+                "退款处理请求：\n" + args.RootInput.Content,
+            ), nil
+        }
+        return model.NewUserMessage(args.TransferMessage), nil
+    }),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+`SwarmHandoffInputArgs` 提供以下字段：
+
+- `FromAgentName`：发起 handoff 的成员名。
+- `ToAgentName`：接收 handoff 的成员名。
+- `RootInput`：本轮用户最初输入。
+- `ParentInput`：发起 handoff 的当前成员输入。
+- `TransferMessage`：`transfer_to_agent` 工具调用里携带的 message。
+
+该选项只改写目标成员本次 handoff 的当前输入；不会改写发起方成员的上下文，也不会阻止目标成员读取已有会话历史。
+
 ### 动态成员（运行时增删）
 
 在长时间运行的服务中，Swarm 的成员列表可能会变化（例如远程 Agent

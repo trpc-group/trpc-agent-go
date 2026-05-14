@@ -570,14 +570,50 @@ func TestStageConversationFiles_CoversEmptyAndReusePaths(t *testing.T) {
 	ws := codeexecutor.Workspace{ID: "ws"}
 
 	t.Run("no invocation", func(t *testing.T) {
-		staged, warnings := StageConversationFiles(context.Background(), codeexecutor.NewEngine(nil, &stubFS{}, nil), ws)
+		staged, warnings := StageConversationFiles(
+			context.Background(),
+			codeexecutor.NewEngine(nil, &stubFS{}, nil),
+			ws,
+		)
 		require.Nil(t, staged)
 		require.Nil(t, warnings)
 	})
 
+	t.Run("locked helper without invocation", func(t *testing.T) {
+		staged, warnings := stageConversationFilesLocked(
+			context.Background(),
+			codeexecutor.NewEngine(nil, &stubFS{}, nil),
+			ws,
+			[]model.File{{Name: "report.txt", Data: []byte("data")}},
+		)
+		require.Nil(t, staged)
+		require.Nil(t, warnings)
+	})
+
+	t.Run("metadata lock warning", func(t *testing.T) {
+		msg := model.NewUserMessage("process")
+		msg.AddFileData("report.txt", []byte("data"), "text/plain")
+		ctx := newInvocationCtx(msg, nil, nil, nil)
+		ctx, cancel := context.WithCancel(ctx)
+		cancel()
+
+		staged, warnings := StageConversationFiles(
+			ctx,
+			codeexecutor.NewEngine(nil, &stubFS{}, nil),
+			ws,
+		)
+		require.Nil(t, staged)
+		require.Len(t, warnings, 1)
+		require.Contains(t, warnings[0], "lock metadata")
+	})
+
 	t.Run("no files", func(t *testing.T) {
 		ctx := newInvocationCtx(model.NewUserMessage("no files"), nil, nil, nil)
-		staged, warnings := StageConversationFiles(ctx, codeexecutor.NewEngine(nil, &stubFS{}, nil), ws)
+		staged, warnings := StageConversationFiles(
+			ctx,
+			codeexecutor.NewEngine(nil, &stubFS{}, nil),
+			ws,
+		)
 		require.Nil(t, staged)
 		require.Nil(t, warnings)
 	})
@@ -608,7 +644,11 @@ func TestStageConversationFiles_CoversEmptyAndReusePaths(t *testing.T) {
 		})
 		ctx := newInvocationCtx(msg, nil, nil, nil)
 
-		staged, warnings := StageConversationFiles(ctx, codeexecutor.NewEngine(nil, fs, &stubRunner{}), ws)
+		staged, warnings := StageConversationFiles(
+			ctx,
+			codeexecutor.NewEngine(nil, fs, &stubRunner{}),
+			ws,
+		)
 		require.Len(t, staged, 1)
 		require.Empty(t, warnings)
 		require.Equal(

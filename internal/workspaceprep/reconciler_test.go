@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -26,7 +27,9 @@ import (
 
 // newTestEngine returns a live local-runtime engine plus a fresh
 // workspace for reconciler tests.
-func newTestEngine(t *testing.T) (codeexecutor.Engine, codeexecutor.Workspace) {
+func newTestEngine(
+	t *testing.T,
+) (codeexecutor.Engine, codeexecutor.Workspace) {
 	t.Helper()
 	rt := localexec.NewRuntime("")
 	eng := codeexecutor.NewEngine(rt, rt, rt)
@@ -266,6 +269,269 @@ func TestReconciler_ConcurrentReconcileIsSerialized(t *testing.T) {
 	require.Equal(t, int32(8), calls.Load())
 	require.LessOrEqual(t, int(maxParallel.Load()), 1,
 		"reconciler must serialize applies for the same workspace")
+}
+
+func TestReconciler_ConcurrentInstancesMergePreparedMetadata(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	eng, ws := newTestEngine(t)
+	base := codeexecutor.WorkspaceMetadata{
+		Version: 1,
+		Skills: map[string]codeexecutor.SkillMeta{
+			"demo": {Name: "demo"},
+		},
+		Inputs: []codeexecutor.InputRecord{{
+			From: "host://input", To: "work/input",
+		}},
+		Outputs: []codeexecutor.OutputRecord{{
+			Globs: []string{"out/*"},
+		}},
+	}
+	require.NoError(t, codeexecutor.SaveMetadata(ws.Path, base))
+
+	var wg sync.WaitGroup
+	keys := []string{"prep-a", "prep-b"}
+	errs := make(chan error, len(keys))
+	for _, key := range keys {
+		key := key
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := &orderReq{
+				key:   key,
+				kind:  KindCommand,
+				phase: PhaseCommand,
+				apply: func() {},
+			}
+			_, err := NewReconciler().Reconcile(
+				ctx,
+				eng,
+				ws,
+				[]Requirement{req},
+			)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Contains(t, md.Prepared, "prep-a")
+	require.Contains(t, md.Prepared, "prep-b")
+	require.Contains(t, md.Skills, "demo")
+	require.Len(t, md.Inputs, 1)
+	require.Len(t, md.Outputs, 1)
+}
+
+func TestReconciler_SavePreparedDoesNotOverwriteStaleKeys(t *testing.T) {
+	ctx := context.Background()
+	eng, ws := newTestEngine(t)
+	oldShared := codeexecutor.PreparedRecord{
+		Key:         "shared",
+		Kind:        string(KindCommand),
+		Fingerprint: "old",
+	}
+	newShared := codeexecutor.PreparedRecord{
+		Key:         "shared",
+		Kind:        string(KindCommand),
+		Fingerprint: "new",
+	}
+	newLocal := codeexecutor.PreparedRecord{
+		Key:         "local",
+		Kind:        string(KindCommand),
+		Fingerprint: "local-new",
+	}
+	base := codeexecutor.WorkspaceMetadata{
+		Version: 1,
+		Skills: map[string]codeexecutor.SkillMeta{
+			"demo": {Name: "demo"},
+		},
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			"shared": oldShared,
+		},
+	}
+	require.NoError(t, codeexecutor.SaveMetadata(ws.Path, base))
+
+	stale := cloneReconcileMetadata(base)
+	stale.Prepared["local"] = newLocal
+	latest, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	latest.Prepared["shared"] = newShared
+	latest.Inputs = []codeexecutor.InputRecord{{
+		From: "host://latest", To: "work/latest",
+	}}
+	require.NoError(t, codeexecutor.SaveMetadata(ws.Path, latest))
+
+	rec := NewReconciler().(*defaultReconciler)
+	err = rec.saveReconcileMetadata(
+		ctx,
+		eng,
+		ws,
+		base,
+		stale,
+		[]string{"local"},
+	)
+	require.NoError(t, err)
+
+	got, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Equal(t, "new", got.Prepared["shared"].Fingerprint)
+	require.Equal(t, "local-new", got.Prepared["local"].Fingerprint)
+	require.Contains(t, got.Skills, "demo")
+	require.Len(t, got.Inputs, 1)
+	require.Equal(t, "host://latest", got.Inputs[0].From)
+}
+
+func TestReconciler_SavePreparedPreservesDirectMetadataChanges(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	eng, ws := newTestEngine(t)
+	base := codeexecutor.WorkspaceMetadata{
+		Version: 1,
+		Outputs: []codeexecutor.OutputRecord{},
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			"shared": {Key: "shared", Fingerprint: "old"},
+		},
+	}
+	require.NoError(t, codeexecutor.SaveMetadata(ws.Path, base))
+
+	updated := cloneReconcileMetadata(base)
+	updated.Outputs = []codeexecutor.OutputRecord{{
+		Globs: []string{"out/*.txt"},
+	}}
+	updated.Prepared["local"] = codeexecutor.PreparedRecord{
+		Key:         "local",
+		Fingerprint: "new",
+	}
+
+	rec := NewReconciler().(*defaultReconciler)
+	err := rec.saveReconcileMetadata(
+		ctx,
+		eng,
+		ws,
+		base,
+		updated,
+		[]string{"local"},
+	)
+	require.NoError(t, err)
+
+	got, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Len(t, got.Outputs, 1)
+	require.Equal(t, []string{"out/*.txt"}, got.Outputs[0].Globs)
+	require.Equal(t, "new", got.Prepared["local"].Fingerprint)
+}
+
+func TestReconciler_MergePreservesAllDirectMetadataChanges(t *testing.T) {
+	baseTime := time.Unix(100, 0).UTC()
+	updateTime := time.Unix(200, 0).UTC()
+	base := codeexecutor.WorkspaceMetadata{
+		Version:    1,
+		CreatedAt:  baseTime,
+		UpdatedAt:  baseTime,
+		LastAccess: baseTime,
+		Skills: map[string]codeexecutor.SkillMeta{
+			"old": {Name: "old"},
+		},
+		Inputs: []codeexecutor.InputRecord{{
+			From: "host://old",
+			To:   "work/old",
+		}},
+		Outputs: []codeexecutor.OutputRecord{{
+			Globs: []string{"out/old"},
+		}},
+	}
+	latest := cloneReconcileMetadata(base)
+	updated := codeexecutor.WorkspaceMetadata{
+		Version:    2,
+		CreatedAt:  updateTime,
+		UpdatedAt:  updateTime,
+		LastAccess: updateTime,
+		Skills: map[string]codeexecutor.SkillMeta{
+			"new": {Name: "new"},
+		},
+		Inputs: []codeexecutor.InputRecord{{
+			From: "host://new",
+			To:   "work/new",
+		}},
+		Outputs: []codeexecutor.OutputRecord{{
+			Globs: []string{"out/new"},
+		}},
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			"changed": {Key: "changed"},
+		},
+	}
+
+	got := mergeReconcileMetadata(
+		latest,
+		base,
+		updated,
+		[]string{"changed"},
+	)
+
+	require.Equal(t, 2, got.Version)
+	require.True(t, got.CreatedAt.Equal(updateTime))
+	require.True(t, got.UpdatedAt.Equal(updateTime))
+	require.True(t, got.LastAccess.Equal(updateTime))
+	require.Contains(t, got.Skills, "new")
+	require.NotContains(t, got.Skills, "old")
+	require.Equal(t, "host://new", got.Inputs[0].From)
+	require.Equal(t, []string{"out/new"}, got.Outputs[0].Globs)
+	require.Contains(t, got.Prepared, "changed")
+}
+
+func TestReconciler_SavePreparedReturnsLoadMetadataError(t *testing.T) {
+	rec := NewReconciler().(*defaultReconciler)
+	err := rec.saveReconcileMetadata(
+		context.Background(),
+		&fakeEngine{fs: &fakeFS{collectErr: fmt.Errorf("collect failed")}},
+		codeexecutor.Workspace{Path: t.TempDir()},
+		codeexecutor.WorkspaceMetadata{},
+		codeexecutor.WorkspaceMetadata{},
+		nil,
+	)
+
+	require.ErrorContains(t, err, "collect failed")
+}
+
+func TestReconciler_RequiredFailurePropagatesPartialSaveError(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	eng, ws := newTestEngine(t)
+
+	metadataDirectory := &orderReq{
+		key:   "changed",
+		kind:  KindCommand,
+		phase: PhaseCommand,
+		apply: func() {
+			metaPath := filepath.Join(ws.Path, codeexecutor.MetaFileName)
+			require.NoError(t, os.Remove(metaPath))
+			require.NoError(t, os.Mkdir(metaPath, 0o755))
+		},
+	}
+	requiredFail := &orderReq{
+		key:      "bad",
+		kind:     KindCommand,
+		phase:    PhaseCommand,
+		applyErr: fmt.Errorf("boom"),
+	}
+
+	warnings, err := NewReconciler().Reconcile(
+		ctx,
+		eng,
+		ws,
+		[]Requirement{metadataDirectory, requiredFail},
+	)
+	require.Empty(t, warnings)
+	require.ErrorContains(t, err, "save metadata after partial apply")
+	require.ErrorContains(t, err, "is a directory")
 }
 
 func TestReconciler_OptionalRequirementFailureIsWarning(t *testing.T) {
