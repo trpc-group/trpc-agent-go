@@ -1134,6 +1134,9 @@ func (c *scriptedRangeTokenCounter) CountTokens(ctx context.Context, message Mes
 }
 
 func (c *scriptedRangeTokenCounter) CountTokensRange(ctx context.Context, messages []Message, start, end int) (int, error) {
+	if c.calls >= len(c.steps) {
+		return 0, fmt.Errorf("unexpected CountTokensRange call: %d", c.calls+1)
+	}
 	step := c.steps[c.calls]
 	c.calls++
 	return step.tokens, step.err
