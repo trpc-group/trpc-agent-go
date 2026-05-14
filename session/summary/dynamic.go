@@ -25,8 +25,10 @@ var errNoDynamicSummarizerResolved = errors.New("no dynamic summarizer resolved"
 //
 // It is useful when the session service should be long-lived while the summary
 // model, prompt, or checks need to vary per request. Returning nil from resolve
-// skips automatic summary checks. Calling Summarize directly, or forcing a
-// summary without a resolved summarizer, returns an error.
+// skips automatic summary checks. Resolver errors also make the automatic
+// summary gate return false, while Summarize propagates resolver errors.
+// Calling Summarize directly, or forcing a summary without a resolved
+// summarizer, returns an error.
 func NewDynamicSummarizer(
 	resolve func(context.Context, *session.Session) (SessionSummarizer, error),
 ) SessionSummarizer {

@@ -303,7 +303,10 @@ for actual summary generation. If constructing the summarizer is expensive,
 store the already-built summarizer in `ctx` and let the resolver only read it.
 Returning nil from the resolver skips automatic summary checks. Direct
 `Summarize` calls, or forced summary calls without a resolved summarizer, return
-an error.
+an error. If the resolver returns an error while `ShouldSummarizeWithContext`
+is checking an automatic, non-forced summary, the gate treats it as `false` and
+skips summary generation; direct `Summarize` calls propagate resolver errors to
+the caller.
 
 ## Summarizer Options
 

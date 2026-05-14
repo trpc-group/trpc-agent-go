@@ -301,7 +301,9 @@ ctx = WithSummaryCfg(ctx, SummaryCfg{
 场景下，它可能在摘要检查阶段调用一次，在实际生成摘要阶段再调用一次。如果
 构造摘要器成本较高，可以把已构造好的摘要器放到 `ctx`，resolver 只负责读取。
 resolver 返回 nil 会跳过自动摘要检查；如果直接调用 `Summarize`，或在没有
-解析到真实摘要器时强制摘要，会返回错误。
+解析到真实摘要器时强制摘要，会返回错误。如果 resolver 在
+`ShouldSummarizeWithContext` 执行自动、非强制摘要检查时返回错误，gate 会将其
+当作 `false` 并跳过摘要生成；直接调用 `Summarize` 时会把 resolver 错误返回给调用方。
 
 ## 摘要器选项
 
