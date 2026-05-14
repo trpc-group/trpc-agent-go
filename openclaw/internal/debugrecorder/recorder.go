@@ -61,6 +61,8 @@ const (
 	KindGatewayReq     = "gateway.request"
 	KindGatewayRsp     = "gateway.response"
 	KindGatewayRun     = "gateway.run.start"
+	KindCronRun        = "cron.run.start"
+	KindCronDelivery   = "cron.delivery"
 	KindRuntimeProfile = "runtime.profile"
 	KindModelReq       = "model.chat.request"
 	KindRunnerEvent    = "runner.event"
