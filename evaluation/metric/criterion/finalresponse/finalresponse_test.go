@@ -63,6 +63,7 @@ func TestFinalResponseCriterion_JSONRoundTrip(t *testing.T) {
 	}
 	assert.NotNil(t, decoded.XML)
 	assert.True(t, decoded.XML.Valid)
+	assert.Equal(t, criterionxml.XMLMatchStrategySkip, decoded.XML.MatchStrategy)
 }
 
 // TestFinalResponseCriterion_EmptyCriteriaError verifies that missing sub-criteria returns an error.

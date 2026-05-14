@@ -942,7 +942,7 @@ type TextCriterion struct {
 type TextMatchStrategy string
 ```
 
-TextMatchStrategy supports `exact`, `contains`, `regex`, and `skip`, with a default of `exact`. During comparison, `source` is the actual string and `target` is the expected string. `exact` requires equality, `contains` requires `source` to contain `target`, `regex` treats `target` as a regular expression and matches `source`, and `skip` skips built-in text matching.
+When `Compare` is provided from code, TextCriterion uses that custom logic directly and does not run built-in length validation or text matching. Otherwise, it first applies `length` to the actual string `source`, then compares `source` with the expected string `target` according to `matchStrategy`. TextMatchStrategy supports `exact`, `contains`, `regex`, and `skip`, with a default of `exact`.
 
 | TextMatchStrategy Value | Description                                      |
 |-------------------------|--------------------------------------------------|
@@ -971,8 +971,6 @@ If you only want to validate actual text length without comparing it with expect
   "matchStrategy": "skip"
 }
 ```
-
-TextCriterion provides a `Compare` extension to override default comparison logic. When `Compare` is configured, the custom logic is used and built-in length validation and text matching are not executed.
 
 The following snippet uses `Compare` to trim spaces before comparison.
 
@@ -1009,9 +1007,7 @@ type JSONCriterion struct {
 type JSONMatchStrategy string
 ```
 
-Currently, `matchStrategy` supports `exact` and `skip`, with default `exact`. `exact` compares JSON values structurally, and `skip` skips built-in JSON value matching.
-
-During comparison, `actual` is the actual value and `expected` is the expected value. `valid` validates whether actual is a complete and strict legal JSON document. If you only want JSON validity validation without comparing against expected, configure both `valid: true` and `matchStrategy: "skip"`. `skip` only skips built-in JSON value matching; it does not skip `valid` validation or a `Compare` function injected from code. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
+During comparison, `actual` is the actual value and `expected` is the expected value. When `Compare` is provided from code, JSONCriterion uses that custom logic directly. Otherwise, `valid` first validates whether actual is a complete and strict legal JSON document, and `matchStrategy` then decides whether to run built-in JSON value matching. Currently, `matchStrategy` supports `exact` and `skip`, with a default of `exact`; `exact` compares JSON values structurally, and `skip` skips built-in JSON value matching. If you only want JSON validity validation without comparing against expected, configure both `valid: true` and `matchStrategy: "skip"`. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 

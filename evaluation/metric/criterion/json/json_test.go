@@ -162,10 +162,11 @@ func TestJSONCriterionSkipMatchStrategy(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestJSONCriterionCompareOverridesSkipMatchStrategy(t *testing.T) {
+func TestJSONCriterionCompareOverridesValidAndSkipMatchStrategy(t *testing.T) {
 	called := false
 	criterion := &JSONCriterion{
 		MatchStrategy: JSONMatchStrategySkip,
+		Valid:         true,
 		Compare: func(actual, expected any) (bool, error) {
 			called = true
 			return actual == "not json" && expected == "not checked", nil
