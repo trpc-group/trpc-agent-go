@@ -1220,11 +1220,18 @@ func NewRuntimeWithOptions(
 			memSvc,
 			rlCfg,
 		)
+		cronOpts := runtimeProfileCronOptions(runtimeProfileResolver)
+		if debugRec != nil {
+			cronOpts = append(
+				cronOpts,
+				cron.WithDebugRecorder(debugRec),
+			)
+		}
 		cronSvc, err = cron.NewService(
 			resolvedStateDir,
 			cronRunner,
 			openClawTools.router,
-			runtimeProfileCronOptions(runtimeProfileResolver)...,
+			cronOpts...,
 		)
 		if err != nil {
 			if cronRunner != nil {
@@ -1741,11 +1748,18 @@ func run(ctx context.Context, args []string) error {
 			memSvc,
 			rlCfg,
 		)
+		cronOpts := runtimeProfileCronOptions(runtimeProfileResolver)
+		if debugRec != nil {
+			cronOpts = append(
+				cronOpts,
+				cron.WithDebugRecorder(debugRec),
+			)
+		}
 		cronSvc, err = cron.NewService(
 			resolvedStateDir,
 			cronRunner,
 			openClawTools.router,
-			runtimeProfileCronOptions(runtimeProfileResolver)...,
+			cronOpts...,
 		)
 		if err != nil {
 			if cronRunner != nil {
