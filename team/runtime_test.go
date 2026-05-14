@@ -359,6 +359,39 @@ func TestSwarmRuntime_OnTransferCompletePreservesSharedStateDelta(t *testing.T) 
 	require.False(t, ok)
 }
 
+func TestSwarmRuntime_OnTransferCompletePersistsSharedSyntheticFallback(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	rootSess, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{SwarmTeamNameKey: []byte("team")})
+	require.NoError(t, err)
+	source := &agent.Invocation{
+		Session:        rootSess,
+		SessionService: service,
+	}
+	target := &agent.Invocation{
+		AgentName: "child",
+		Session:   rootSess,
+	}
+	targetEvent := event.NewResponseEvent("target", "child", &model.Response{Done: true})
+	itransfer.MarkSyntheticCompletionEvent(targetEvent)
+	rt := &swarmRuntime{handoff: swarmHandoffPolicy{
+		turnRouting: swarmTurnRoutingTargetTakesOver,
+	}}
+	rt.OnTransferComplete(ctx, source, target, targetEvent)
+	rootGot, err := service.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []byte("child"), rootGot.State[swarmActiveAgentKey("team")])
+	require.Equal(t, []byte("child"), targetEvent.StateDelta[swarmActiveAgentKey("team")])
+}
+
 func TestSwarmRuntime_RouteIsolatedEventInheritsParentRoute(t *testing.T) {
 	ctx := context.Background()
 	service := sessioninmemory.NewSessionService()

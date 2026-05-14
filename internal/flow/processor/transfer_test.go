@@ -710,6 +710,39 @@ func (d *errorResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-ch
 	return ch, nil
 }
 
+type nonTerminalErrorThenDoneAgent struct {
+	name string
+}
+
+func (d *nonTerminalErrorThenDoneAgent) Info() agent.Info { return agent.Info{Name: d.name} }
+func (d *nonTerminalErrorThenDoneAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (d *nonTerminalErrorThenDoneAgent) FindSubAgent(string) agent.Agent { return nil }
+func (d *nonTerminalErrorThenDoneAgent) Tools() []tool.Tool              { return nil }
+func (d *nonTerminalErrorThenDoneAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		ch <- event.NewResponseEvent(
+			inv.InvocationID,
+			d.name,
+			&model.Response{
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "recoverable target signal",
+				},
+			},
+		)
+		ch <- event.NewResponseEvent(
+			inv.InvocationID,
+			d.name,
+			&model.Response{Done: true},
+		)
+	}()
+	return ch, nil
+}
+
 type forwardedDoneResponseAgent struct {
 	name string
 }
@@ -966,6 +999,35 @@ func TestTransferResponseProc_CompletionHandlerDoesNotFallbackAfterTargetError(t
 	for range out {
 	}
 	require.Zero(t, handler.count)
+}
+
+func TestTransferResponseProc_CompletionHandlerAllowsDoneAfterNonTerminalTargetError(t *testing.T) {
+	target := &nonTerminalErrorThenDoneAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	handler := &completionInvocationCustomizer{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-completion-target-recovered",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-target-recovered"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, 1, handler.count)
+	require.True(t, handler.done)
 }
 
 type controllerCompletionObserver struct {

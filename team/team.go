@@ -274,6 +274,9 @@ func (t *Team) runSwarm(
 		t.swarmHandoffInput,
 	)
 	startSession := invocation.Session
+	currentTurnRouteMissing := t.swarmHandoff.usesIsolatedSession() &&
+		t.swarmHandoff.targetTakesOver() &&
+		!sessionroute.HasCurrentTurnRoute(t.name, invocation.Session)
 	if t.swarmHandoff.usesIsolatedSession() {
 		var err error
 		startSession, err = swarmRun.sessionForAgentStart(
@@ -283,6 +286,12 @@ func (t *Team) runSwarm(
 			startAgent.Info().Name,
 		)
 		if err != nil {
+			teamtrace.ClearMemberTraceRootForInvocation(invocation)
+			return nil, err
+		}
+	}
+	if currentTurnRouteMissing && !sameSession(invocation.Session, startSession) {
+		if err := appendCurrentTurnUserEvents(ctx, invocation, startSession); err != nil {
 			teamtrace.ClearMemberTraceRootForInvocation(invocation)
 			return nil, err
 		}

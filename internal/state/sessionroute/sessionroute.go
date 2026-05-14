@@ -85,6 +85,15 @@ func ApplyCurrentTurnRouteState(root *session.Session, state session.StateMap) {
 	}
 }
 
+// HasCurrentTurnRoute reports whether root stores a current-turn route.
+func HasCurrentTurnRoute(ownerAgentName string, root *session.Session) bool {
+	if root == nil {
+		return false
+	}
+	raw, ok := root.GetState(currentTurnRouteStateKey(ownerAgentName))
+	return ok && len(raw) > 0
+}
+
 // ResolveCurrentTurnSession returns the session that should receive this user
 // turn before the selected agent runs.
 func ResolveCurrentTurnSession(

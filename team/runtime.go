@@ -280,9 +280,21 @@ func (sr *swarmRuntime) OnTransferComplete(
 		}
 		targetEvent.StateDelta[activeAgentKey] = activeAgentValue
 		if !sr.handoff.usesIsolatedSession() {
+			if itransfer.IsSyntheticCompletionEvent(targetEvent) {
+				updateRootSessionState(ctx, source, root, state)
+			}
 			return
 		}
 	}
+	updateRootSessionState(ctx, source, root, state)
+}
+
+func updateRootSessionState(
+	ctx context.Context,
+	source *agent.Invocation,
+	root *session.Session,
+	state session.StateMap,
+) {
 	if source == nil || source.SessionService == nil {
 		return
 	}
@@ -431,6 +443,39 @@ func sameSession(a *session.Session, b *session.Session) bool {
 		return a == b
 	}
 	return a.AppName == b.AppName && a.UserID == b.UserID && a.ID == b.ID
+}
+
+func appendCurrentTurnUserEvents(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	target *session.Session,
+) error {
+	if invocation == nil || invocation.SessionService == nil || target == nil || sameSession(invocation.Session, target) {
+		return nil
+	}
+	for _, evt := range currentTurnUserEvents(invocation) {
+		if err := invocation.SessionService.AppendEvent(ctx, target, evt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func currentTurnUserEvents(invocation *agent.Invocation) []*event.Event {
+	if invocation == nil || invocation.Session == nil {
+		return nil
+	}
+	events := make([]*event.Event, 0)
+	invocation.Session.EventMu.RLock()
+	defer invocation.Session.EventMu.RUnlock()
+	for i := range invocation.Session.Events {
+		evt := invocation.Session.Events[i]
+		if evt.InvocationID != invocation.InvocationID || !evt.IsUserMessage() {
+			continue
+		}
+		events = append(events, evt.Clone())
+	}
+	return events
 }
 
 func normalizeHandoffInputMessage(msg model.Message) model.Message {

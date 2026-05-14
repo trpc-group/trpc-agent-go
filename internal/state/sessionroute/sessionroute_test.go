@@ -92,6 +92,15 @@ func TestCurrentTurnRouteState_ClearsRootRoute(t *testing.T) {
 	require.Nil(t, state[key])
 }
 
+func TestHasCurrentTurnRoute(t *testing.T) {
+	root := session.NewSession("app", "user", "root")
+	require.False(t, HasCurrentTurnRoute("team", root))
+	state, err := CurrentTurnRouteState("team", "member", root, session.NewSession("app", "user", "member"))
+	require.NoError(t, err)
+	ApplyCurrentTurnRouteState(root, state)
+	require.True(t, HasCurrentTurnRoute("team", root))
+}
+
 type recordingEventRouter struct {
 	root    *agent.Invocation
 	event   *event.Event

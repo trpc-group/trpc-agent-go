@@ -226,19 +226,19 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	// Forward all events from the target agent.
 	targetCompleted := false
 	targetDelegated := false
-	targetErrored := false
+	targetTerminalErrored := false
 	for targetEvent := range targetEventChan {
 		if isTransferDelegationEvent(targetEvent) {
 			targetDelegated = true
 		}
-		if isTransferErrorEvent(targetEvent) {
-			targetErrored = true
+		if isTransferTerminalErrorEvent(targetEvent, targetInvocation.InvocationID) {
+			targetTerminalErrored = true
 		}
 		if transferCompletionHandler != nil &&
 			targetEvent != nil &&
 			targetEvent.InvocationID == targetInvocation.InvocationID &&
 			targetEvent.Response != nil &&
-			!targetErrored &&
+			!targetTerminalErrored &&
 			targetEvent.Response.Done {
 			targetCompleted = true
 			transferCompletionHandler.OnTransferComplete(ctx, invocation, targetInvocation, targetEvent)
@@ -253,7 +253,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			targetAgent.Info().Name,
 		)
 	}
-	if transferCompletionHandler != nil && !targetCompleted && !targetDelegated && !targetErrored {
+	if transferCompletionHandler != nil && !targetCompleted && !targetDelegated && !targetTerminalErrored {
 		transferCompletionHandler.OnTransferComplete(
 			ctx,
 			invocation,
@@ -363,8 +363,8 @@ func isTransferDelegationEvent(evt *event.Event) bool {
 	return evt.Object == model.ObjectTypeTransfer || evt.ContainsTag(event.TransferTag)
 }
 
-func isTransferErrorEvent(evt *event.Event) bool {
-	return evt != nil && evt.IsError()
+func isTransferTerminalErrorEvent(evt *event.Event, invocationID string) bool {
+	return evt != nil && evt.InvocationID == invocationID && evt.IsTerminalError()
 }
 
 func syntheticTransferCompletionEvent(invocation *agent.Invocation) *event.Event {
@@ -374,7 +374,9 @@ func syntheticTransferCompletionEvent(invocation *agent.Invocation) *event.Event
 		invocationID = invocation.InvocationID
 		author = invocation.AgentName
 	}
-	return event.NewResponseEvent(invocationID, author, &model.Response{Done: true})
+	evt := event.NewResponseEvent(invocationID, author, &model.Response{Done: true})
+	itransfer.MarkSyntheticCompletionEvent(evt)
+	return evt
 }
 
 func parentTraceNodeID(nodeID string) string {

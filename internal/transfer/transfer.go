@@ -20,6 +20,8 @@ import (
 
 type transferMessageContextKey struct{}
 
+const syntheticCompletionExtensionKey = "trpc_agent.transfer.synthetic_completion"
+
 // ContextWithTransferMessage returns a context carrying the raw transfer message.
 func ContextWithTransferMessage(ctx context.Context, message string) context.Context {
 	return context.WithValue(ctx, transferMessageContextKey{}, message)
@@ -29,6 +31,17 @@ func ContextWithTransferMessage(ctx context.Context, message string) context.Con
 func TransferMessageFromContext(ctx context.Context) (string, bool) {
 	message, ok := ctx.Value(transferMessageContextKey{}).(string)
 	return message, ok
+}
+
+// MarkSyntheticCompletionEvent marks a completion event synthesized by transfer.
+func MarkSyntheticCompletionEvent(evt *event.Event) {
+	_ = event.SetExtension(evt, syntheticCompletionExtensionKey, true)
+}
+
+// IsSyntheticCompletionEvent reports whether transfer synthesized the event.
+func IsSyntheticCompletionEvent(evt *event.Event) bool {
+	synthetic, ok, err := event.GetExtension[bool](evt, syntheticCompletionExtensionKey)
+	return err == nil && ok && synthetic
 }
 
 // InvocationCustomizer customizes a transfer target invocation before it runs.

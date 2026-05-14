@@ -2002,6 +2002,65 @@ func TestRunnerRun_SwarmIndependentAgents_WithCrossRequestPersistsNextTurnToActi
 	require.True(t, teamSessionContainsContent(childSession, "second turn for child"))
 }
 
+func TestRunnerRun_SwarmIndependentAgents_BackfillsLegacyActiveMemberTurn(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	_, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user-independent-legacy",
+		SessionID: "root-session",
+	}, session.StateMap{
+		swarmActiveAgentKey("support"): []byte("child"),
+	})
+	require.NoError(t, err)
+	parentModel := &teamScriptedSurfaceModel{
+		name:      "swarm-parent-model",
+		responses: []model.Message{model.NewAssistantMessage("parent should not run")},
+	}
+	childModel := &teamScriptedSurfaceModel{
+		name:      "swarm-child-model",
+		responses: []model.Message{model.NewAssistantMessage("child legacy answer")},
+	}
+	parent := llmagent.New("parent", llmagent.WithModel(parentModel))
+	child := llmagent.New("child", llmagent.WithModel(childModel))
+	swarm, err := NewSwarm(
+		"support",
+		"parent",
+		[]agent.Agent{parent, child},
+		WithSwarmIndependentAgents(),
+		WithCrossRequestTransfer(true),
+	)
+	require.NoError(t, err)
+	r := runner.NewRunner("app", swarm, runner.WithSessionService(service))
+	eventCh, err := r.Run(
+		ctx,
+		"user-independent-legacy",
+		"root-session",
+		model.NewUserMessage("legacy active child turn"),
+	)
+	require.NoError(t, err)
+	collectTeamRunnerCompletionEvent(t, eventCh)
+	childSessionID := defaultSwarmSessionID(swarmSessionIDArgs{
+		ParentSessionID: "root-session",
+		TeamName:        "support",
+		EntryAgentName:  "parent",
+		ToAgentName:     "child",
+	})
+	childSession, err := service.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user-independent-legacy",
+		SessionID: childSessionID,
+	})
+	require.NoError(t, err)
+	require.Zero(t, parentModel.RequestCount())
+	require.Equal(t, 1, childModel.RequestCount())
+	require.True(t, teamMessagesContainContent(
+		childModel.LatestRequest().messages,
+		"legacy active child turn",
+	))
+	require.True(t, teamSessionContainsContent(childSession, "legacy active child turn"))
+}
+
 func TestRunnerRun_SwarmIndependentAgents_WithCrossRequestRemovedActiveMemberUsesRoot(t *testing.T) {
 	ctx := context.Background()
 	service := sessioninmemory.NewSessionService()
