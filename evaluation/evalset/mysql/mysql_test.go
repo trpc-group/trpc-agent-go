@@ -35,17 +35,12 @@ type evalCasePayloadMatcher struct {
 }
 
 func (m evalCasePayloadMatcher) Match(v driver.Value) bool {
-	var payload []byte
-	switch typed := v.(type) {
-	case []byte:
-		payload = typed
-	case string:
-		payload = []byte(typed)
-	default:
+	payload, ok := v.(string)
+	if !ok {
 		return false
 	}
 	var c evalset.EvalCase
-	if err := json.Unmarshal(payload, &c); err != nil {
+	if err := json.Unmarshal([]byte(payload), &c); err != nil {
 		return false
 	}
 	if c.EvalID != "case" {
@@ -445,7 +440,7 @@ func TestCaseCRUD(t *testing.T) {
 		m.tables.EvalCases,
 	)
 	mock.ExpectExec(regexp.QuoteMeta(updateSQL)).
-		WithArgs("", sqlmock.AnyArg(), "app", "set", "case").
+		WithArgs("", `{"evalId":"case"}`, "app", "set", "case").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err = m.UpdateCase(ctx, "app", "set", &evalset.EvalCase{EvalID: "case"})

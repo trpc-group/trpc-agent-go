@@ -242,7 +242,7 @@ func TestGet_Add_Update_Delete(t *testing.T) {
 		m.tables.Metrics,
 	)
 	mock.ExpectExec(regexp.QuoteMeta(addSQL)).
-		WithArgs("app", "set", "m1", sqlmock.AnyArg()).
+		WithArgs("app", "set", "m1", `{"metricName":"m1","threshold":0.5}`).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err = m.Add(ctx, "app", "set", &metric.EvalMetric{MetricName: "m1", Threshold: 0.5})
@@ -253,7 +253,7 @@ func TestGet_Add_Update_Delete(t *testing.T) {
 		m.tables.Metrics,
 	)
 	mock.ExpectExec(regexp.QuoteMeta(updateSQL)).
-		WithArgs(sqlmock.AnyArg(), "app", "set", "m1").
+		WithArgs(`{"metricName":"m1","threshold":0.7}`, "app", "set", "m1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err = m.Update(ctx, "app", "set", &metric.EvalMetric{MetricName: "m1", Threshold: 0.7})
