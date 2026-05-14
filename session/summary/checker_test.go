@@ -335,19 +335,26 @@ func TestCheckTokenThreshold(t *testing.T) {
 	})
 
 	t.Run("reasoning content counts toward token threshold", func(t *testing.T) {
+		defer SetTokenCounter(nil)
+		counter := &testCaptureTokenCounter{}
+		SetTokenCounter(counter)
+
 		checker := CheckTokenThreshold(100)
+		reasoning := strings.Repeat("r", 800)
 		sess := &session.Session{Events: []event.Event{
 			{
 				Author:    "assistant",
 				Timestamp: time.Now(),
 				Response: &model.Response{Choices: []model.Choice{{
 					Message: model.Message{
-						ReasoningContent: strings.Repeat("r", 800),
+						Content:          "short answer",
+						ReasoningContent: reasoning,
 					},
 				}}},
 			},
 		}}
 		assert.True(t, checker(sess))
+		assert.Equal(t, reasoning, counter.lastMessage.ReasoningContent)
 	})
 
 	t.Run("tokens equal threshold does not trigger", func(t *testing.T) {
@@ -722,6 +729,38 @@ func (c testFixedTokenCounter) CountTokensRange(
 		return 0, nil
 	}
 	return c.tokens * (end - start), nil
+}
+
+type testCaptureTokenCounter struct {
+	lastMessage model.Message
+}
+
+func (c *testCaptureTokenCounter) CountTokens(_ context.Context, message model.Message) (int, error) {
+	c.lastMessage = message
+	if strings.TrimSpace(message.ReasoningContent) != "" {
+		return 1000, nil
+	}
+	return 0, nil
+}
+
+func (c *testCaptureTokenCounter) CountTokensRange(
+	ctx context.Context,
+	messages []model.Message,
+	start,
+	end int,
+) (int, error) {
+	if start >= end {
+		return 0, nil
+	}
+	total := 0
+	for i := start; i < end; i++ {
+		tokens, err := c.CountTokens(ctx, messages[i])
+		if err != nil {
+			return 0, err
+		}
+		total += tokens
+	}
+	return total, nil
 }
 
 type testContextTokenCounter struct {

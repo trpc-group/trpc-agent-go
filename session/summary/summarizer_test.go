@@ -509,7 +509,7 @@ func TestSessionSummarizer_ExtractConversationText_WithAuthor(t *testing.T) {
 	assert.Contains(t, text, "assistant:")
 }
 
-func TestSessionSummarizer_ExtractConversationText_WithReasoningContent(t *testing.T) {
+func TestSessionSummarizer_ExtractConversationText_LeavesOutReasoningContent(t *testing.T) {
 	s := NewSummarizer(&fakeModel{})
 	sess := &session.Session{
 		ID: "test-reasoning-content",
@@ -528,7 +528,7 @@ func TestSessionSummarizer_ExtractConversationText_WithReasoningContent(t *testi
 
 	text, err := s.Summarize(context.Background(), sess)
 	require.NoError(t, err)
-	assert.Contains(t, text, "assistant: [Reasoning: I should inspect the user request first.]")
+	assert.NotContains(t, text, "I should inspect the user request first.")
 	assert.Contains(t, text, "assistant: Here is the final answer.")
 }
 
@@ -1705,6 +1705,32 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
 		require.True(t, ok)
 		assert.Empty(t, string(raw))
+	})
+
+	t.Run("injects reasoning content only for token threshold checks", func(t *testing.T) {
+		s := &sessionSummarizer{}
+		reasoning := "thinking through the answer"
+		sess := &session.Session{
+			Events: []event.Event{
+				{
+					Author:    "assistant",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Content:          "final answer",
+							ReasoningContent: reasoning,
+						},
+					}}},
+				},
+			},
+		}
+
+		checkSess := s.buildCheckSession(sess)
+		require.NotNil(t, checkSess)
+
+		raw, ok := checkSess.GetState(tokenThresholdReasoningContentStateKey)
+		require.True(t, ok)
+		assert.Equal(t, reasoning, string(raw))
 	})
 
 	t.Run("uses branch scope when building injected token text", func(t *testing.T) {
