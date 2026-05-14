@@ -60,6 +60,10 @@ const (
 	cmdEcho          = "echo"
 	cmdLS            = "ls"
 	cmdEchoThenLS    = "echo ok; ls"
+	testSkillCLI     = "skill-cli"
+	testBinOutput    = "bin-ok"
+	testHostOutput   = "host-ok"
+	testVenvOutput   = "venv-ok"
 
 	errCollectFail     = "collect-fail"
 	errPutFail         = "put-fail"
@@ -85,6 +89,19 @@ func writeSkill(t *testing.T, root, name string) string {
 		[]byte(data), 0o644)
 	require.NoError(t, err)
 	return dir
+}
+
+func writeSkillExecutable(
+	t *testing.T,
+	skillDir string,
+	rel string,
+	output string,
+) {
+	t.Helper()
+	full := filepath.Join(skillDir, filepath.FromSlash(rel))
+	require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' %q\n", output)
+	require.NoError(t, os.WriteFile(full, []byte(script), 0o755))
 }
 
 func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
@@ -1012,12 +1029,379 @@ func TestRunTool_AutoPrependsVenvBinToPATH(t *testing.T) {
 	require.Contains(t, out.Stdout, "OK")
 }
 
+func TestRunTool_ShellPATHFindsSkillBinFromDefaultCWD(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	writeSkillExecutable(
+		t,
+		dir,
+		path.Join(skillDirBin, testSkillCLI),
+		testBinOutput,
+	)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, localexec.New())
+	args := runInput{
+		Skill:   testSkillName,
+		Command: testSkillCLI,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, testBinOutput)
+}
+
+func TestRunTool_ShellPATHFindsSkillBinFromChildCWD(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	writeSkillExecutable(
+		t,
+		dir,
+		path.Join(skillDirBin, testSkillCLI),
+		testBinOutput,
+	)
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(dir, scriptsDir),
+		0o755,
+	))
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, localexec.New())
+	args := runInput{
+		Skill:   testSkillName,
+		Cwd:     scriptsDir,
+		Command: testSkillCLI,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, testBinOutput)
+}
+
+func TestRunTool_ShellPATHPrefersVenvBinBeforeSkillBin(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	writeSkillExecutable(
+		t,
+		dir,
+		path.Join(skillDirBin, testSkillCLI),
+		testBinOutput,
+	)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, localexec.New())
+	cmd := strings.Join([]string{
+		"set -e",
+		"mkdir -p .venv/bin",
+		"printf '%s\\n' '#!/bin/sh' 'printf %s\\\\n " +
+			testVenvOutput + "' > .venv/bin/" + testSkillCLI,
+		"chmod +x .venv/bin/" + testSkillCLI,
+		testSkillCLI,
+	}, "; ")
+	args := runInput{
+		Skill:   testSkillName,
+		Command: cmd,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, testVenvOutput)
+	require.NotContains(t, out.Stdout, testBinOutput)
+}
+
+func TestRunTool_ShellPATHPrefersInheritedPATHBeforeSkillBin(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	writeSkillExecutable(
+		t,
+		dir,
+		path.Join(skillDirBin, testSkillCLI),
+		testBinOutput,
+	)
+	hostBin := t.TempDir()
+	writeSkillExecutable(t, hostBin, testSkillCLI, testHostOutput)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, localexec.New())
+	args := runInput{
+		Skill:   testSkillName,
+		Command: testSkillCLI,
+		Env: map[string]string{
+			envPath: hostBin + string(os.PathListSeparator) +
+				os.Getenv(envPath),
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, testHostOutput)
+	require.NotContains(t, out.Stdout, testBinOutput)
+}
+
+func TestRunTool_AllowedCommandsFindsSkillBin(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	writeSkillExecutable(
+		t,
+		dir,
+		path.Join(skillDirBin, testSkillCLI),
+		testBinOutput,
+	)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithAllowedCommands(testSkillCLI),
+	)
+	args := runInput{
+		Skill:   testSkillName,
+		Command: testSkillCLI,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, testBinOutput)
+}
+
+func TestRunTool_AllowedCommandsPrefersExplicitPATHBeforeSkillBin(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	writeSkillExecutable(
+		t,
+		dir,
+		path.Join(skillDirBin, testSkillCLI),
+		testBinOutput,
+	)
+	hostBin := t.TempDir()
+	writeSkillExecutable(t, hostBin, testSkillCLI, testHostOutput)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithAllowedCommands(testSkillCLI),
+	)
+	args := runInput{
+		Skill:   testSkillName,
+		Command: testSkillCLI,
+		Env: map[string]string{
+			envPath: hostBin + string(os.PathListSeparator) +
+				os.Getenv(envPath),
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, testHostOutput)
+	require.NotContains(t, out.Stdout, testBinOutput)
+}
+
+func TestRunTool_AllowedCommandsPathAllowsBareSkillBin(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	writeSkillExecutable(
+		t,
+		dir,
+		path.Join(skillDirBin, testSkillCLI),
+		testBinOutput,
+	)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithAllowedCommands(path.Join(skillDirBin, testSkillCLI)),
+	)
+	args := runInput{
+		Skill:   testSkillName,
+		Command: testSkillCLI,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, testBinOutput)
+}
+
+func TestRunTool_DeniedCommandsPathScopeKeepsInheritedPATH(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	writeSkillExecutable(
+		t,
+		dir,
+		path.Join(skillDirBin, testSkillCLI),
+		testBinOutput,
+	)
+	hostBin := t.TempDir()
+	writeSkillExecutable(t, hostBin, testSkillCLI, testHostOutput)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithDeniedCommands(path.Join(skillDirBin, testSkillCLI)),
+	)
+	args := runInput{
+		Skill:   testSkillName,
+		Command: testSkillCLI,
+		Env: map[string]string{
+			envPath: hostBin + string(os.PathListSeparator) +
+				os.Getenv(envPath),
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, testHostOutput)
+	require.NotContains(t, out.Stdout, testBinOutput)
+}
+
+func TestRunTool_DeniedCommandsRejectsExplicitRelativeSkillBin(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	writeSkillExecutable(
+		t,
+		dir,
+		path.Join(skillDirBin, testSkillCLI),
+		testBinOutput,
+	)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithDeniedCommands(path.Join(skillDirBin, testSkillCLI)),
+	)
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "./" + path.Join(skillDirBin, testSkillCLI),
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "denied_commands")
+}
+
+func TestRunTool_AllowedCommandsFindsSkillBinFromChildCWD(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	writeSkillExecutable(
+		t,
+		dir,
+		path.Join(skillDirBin, testSkillCLI),
+		testBinOutput,
+	)
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(dir, scriptsDir),
+		0o755,
+	))
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithAllowedCommands(testSkillCLI),
+	)
+	args := runInput{
+		Skill:   testSkillName,
+		Cwd:     scriptsDir,
+		Command: testSkillCLI,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, testBinOutput)
+}
+
 func TestVenvRelPaths_FromWorkspaceSkillDir(t *testing.T) {
 	skillRoot := path.Join(codeexecutor.DirWork, "custom", testSkillName)
 	cwd := skillRoot
 	venvRel, venvBinRel := venvRelPaths(cwd, skillRoot)
 	require.Equal(t, skillDirVenv, venvRel)
-	require.Equal(t, path.Join(skillDirVenv, "bin"), venvBinRel)
+	require.Equal(t, path.Join(skillDirVenv, skillDirBin), venvBinRel)
 }
 
 func TestVenvRelPaths_FromChildDir(t *testing.T) {
@@ -1025,7 +1409,35 @@ func TestVenvRelPaths_FromChildDir(t *testing.T) {
 	cwd := path.Join(skillRoot, scriptsDir)
 	venvRel, venvBinRel := venvRelPaths(cwd, skillRoot)
 	require.Equal(t, path.Join("..", skillDirVenv), venvRel)
-	require.Equal(t, path.Join("..", skillDirVenv, "bin"), venvBinRel)
+	require.Equal(t, path.Join("..", skillDirVenv, skillDirBin), venvBinRel)
+}
+
+func TestSkillLocalRelPaths_FromChildDir(t *testing.T) {
+	skillRoot := path.Join(codeexecutor.DirWork, "custom", testSkillName)
+	cwd := path.Join(skillRoot, scriptsDir)
+	venvRel, venvBinRel, skillBinRel := skillLocalRelPaths(
+		cwd,
+		skillRoot,
+	)
+
+	require.Equal(t, path.Join("..", skillDirVenv), venvRel)
+	require.Equal(t, path.Join("..", skillDirVenv, skillDirBin), venvBinRel)
+	require.Equal(t, path.Join("..", skillDirBin), skillBinRel)
+}
+
+func TestSkillLocalRelPaths_EmptyCWDDefaultsToWorkspace(t *testing.T) {
+	venvRel, venvBinRel, skillBinRel := skillLocalRelPaths(
+		"",
+		testSkillName,
+	)
+
+	require.Equal(t, path.Join(testSkillName, skillDirVenv), venvRel)
+	require.Equal(
+		t,
+		path.Join(testSkillName, skillDirVenv, skillDirBin),
+		venvBinRel,
+	)
+	require.Equal(t, path.Join(testSkillName, skillDirBin), skillBinRel)
 }
 
 func TestVenvRelPaths_EmptyWorkspaceSkillDirDefaultsToWorkspace(
@@ -1033,7 +1445,7 @@ func TestVenvRelPaths_EmptyWorkspaceSkillDirDefaultsToWorkspace(
 ) {
 	venvRel, venvBinRel := venvRelPaths(".", "")
 	require.Equal(t, skillDirVenv, venvRel)
-	require.Equal(t, path.Join(skillDirVenv, "bin"), venvBinRel)
+	require.Equal(t, path.Join(skillDirVenv, skillDirBin), venvBinRel)
 }
 
 func TestInjectVenvEnv_PrependsPATHAndSetsVirtualEnv(t *testing.T) {
@@ -1041,13 +1453,143 @@ func TestInjectVenvEnv_PrependsPATHAndSetsVirtualEnv(t *testing.T) {
 		envPath: "/usr/bin",
 	}
 	venv := path.Join(skillDirVenv)
-	venvBin := path.Join(skillDirVenv, "bin")
+	venvBin := path.Join(skillDirVenv, skillDirBin)
 
 	injectVenvEnv(env, venv, venvBin)
 
 	require.Equal(t, venv, env[envVirtualEnv])
-	sep := string(os.PathListSeparator)
-	require.Equal(t, venvBin+sep+"/usr/bin", env[envPath])
+	require.Equal(t, venvBin+posixPathListSep+"/usr/bin", env[envPath])
+}
+
+func TestInjectSkillLocalEnv_PrependsOrderedPATH(t *testing.T) {
+	env := map[string]string{
+		envPath: "/usr/bin",
+	}
+	venv := skillDirVenv
+	venvBin := path.Join(skillDirVenv, skillDirBin)
+	skillBin := skillDirBin
+
+	injectSkillLocalEnv(env, venv, venvBin, skillBin)
+
+	require.Equal(t, venv, env[envVirtualEnv])
+	want := strings.Join(
+		[]string{venvBin, "/usr/bin", skillBin},
+		posixPathListSep,
+	)
+	require.Equal(t, want, env[envPath])
+}
+
+func TestInjectSkillLocalEnvWithSep_UsesRequestedSeparator(t *testing.T) {
+	env := map[string]string{
+		envPath: "/usr/bin",
+	}
+
+	injectSkillLocalEnvWithSep(
+		env,
+		skillDirVenv,
+		path.Join(skillDirVenv, skillDirBin),
+		skillDirBin,
+		";",
+	)
+
+	require.Equal(
+		t,
+		strings.Join(
+			[]string{
+				path.Join(skillDirVenv, skillDirBin),
+				"/usr/bin",
+				skillDirBin,
+			},
+			";",
+		),
+		env[envPath],
+	)
+}
+
+func TestInjectSkillLocalEnvWithSep_UsesWindowsPathKey(t *testing.T) {
+	const windowsPathKey = "Path"
+	env := map[string]string{
+		windowsPathKey: "C:\\Windows\\System32",
+	}
+
+	injectSkillLocalEnvWithSep(
+		env,
+		skillDirVenv,
+		path.Join(skillDirVenv, skillDirBin),
+		skillDirBin,
+		windowsPathListSep,
+	)
+
+	require.NotContains(t, env, envPath)
+	require.Equal(
+		t,
+		strings.Join(
+			[]string{
+				path.Join(skillDirVenv, skillDirBin),
+				"C:\\Windows\\System32",
+				skillDirBin,
+			},
+			windowsPathListSep,
+		),
+		env[windowsPathKey],
+	)
+}
+
+func TestInjectSkillLocalEnvWithSep_DefaultsEmptySeparator(t *testing.T) {
+	env := map[string]string{
+		envPath: "/usr/bin",
+	}
+
+	injectSkillLocalEnvWithSep(
+		env,
+		skillDirVenv,
+		path.Join(skillDirVenv, skillDirBin),
+		skillDirBin,
+		"",
+	)
+
+	require.Equal(
+		t,
+		strings.Join(
+			[]string{
+				path.Join(skillDirVenv, skillDirBin),
+				"/usr/bin",
+				skillDirBin,
+			},
+			posixPathListSep,
+		),
+		env[envPath],
+	)
+}
+
+func TestPathListSeparatorForEngine_Fallbacks(t *testing.T) {
+	require.Equal(t, posixPathListSep, pathListSeparatorForEngine(nil))
+	require.Equal(
+		t,
+		posixPathListSep,
+		pathListSeparatorForEngine(&fakeEngine{}),
+	)
+	require.Equal(
+		t,
+		posixPathListSep,
+		pathListSeparatorForEngine(&fakeEngine{
+			r: &recordingRunner{},
+		}),
+	)
+	require.Equal(
+		t,
+		posixPathListSep,
+		pathListSeparatorForEngine(&fakeEngine{
+			r: &separatorRunner{},
+		}),
+	)
+	require.Equal(
+		t,
+		";",
+		pathListSeparatorForEngine(&fakeEngine{
+			r: &separatorRunner{sep: ";"},
+		}),
+	)
 }
 
 func TestInjectVenvEnv_DoesNotOverrideVirtualEnv(t *testing.T) {
@@ -1057,7 +1599,7 @@ func TestInjectVenvEnv_DoesNotOverrideVirtualEnv(t *testing.T) {
 		envPath:       "/bin",
 	}
 	venv := path.Join(skillDirVenv)
-	venvBin := path.Join(skillDirVenv, "bin")
+	venvBin := path.Join(skillDirVenv, skillDirBin)
 
 	injectVenvEnv(env, venv, venvBin)
 
@@ -1069,7 +1611,7 @@ func TestInjectVenvEnv_EmptyPATHUsesVenvOnly(t *testing.T) {
 	t.Setenv(envPath, "")
 	env := map[string]string{}
 	venv := path.Join(skillDirVenv)
-	venvBin := path.Join(skillDirVenv, "bin")
+	venvBin := path.Join(skillDirVenv, skillDirBin)
 
 	injectVenvEnv(env, venv, venvBin)
 
@@ -1077,10 +1619,69 @@ func TestInjectVenvEnv_EmptyPATHUsesVenvOnly(t *testing.T) {
 	require.Equal(t, venvBin, env[envPath])
 }
 
+func TestInjectSkillLocalEnv_NilEnvIsNoop(t *testing.T) {
+	require.NotPanics(t, func() {
+		injectSkillLocalEnv(nil, skillDirVenv, "", skillDirBin)
+	})
+}
+
+func TestInjectSkillLocalEnv_UsesProcessPATHFallback(t *testing.T) {
+	t.Setenv(envPath, "/process/bin")
+	env := map[string]string{}
+
+	injectSkillLocalEnv(env, "", "", skillDirBin)
+
+	require.Equal(
+		t,
+		"/process/bin"+posixPathListSep+skillDirBin,
+		env[envPath],
+	)
+	require.NotContains(t, env, envVirtualEnv)
+}
+
 func TestWrapWithVenvPrefix_BuildsExports(t *testing.T) {
 	cmd := wrapWithVenvPrefix(cmdEcho, "VENV", "VENV/bin")
 	require.Contains(t, cmd, "export "+envPath+"='VENV/bin'")
 	require.Contains(t, cmd, "export "+envVirtualEnv+"='VENV'")
+}
+
+func TestWrapWithSkillLocalPrefix_BuildsOrderedPATH(t *testing.T) {
+	cmd := wrapWithSkillLocalPrefix(
+		cmdEcho,
+		"VENV",
+		"VENV/bin",
+		skillDirBin,
+	)
+
+	require.Contains(t, cmd, "export "+envPath+"='VENV/bin'")
+	require.Contains(t, cmd, "${"+envPath+":+\":$"+envPath+"\"}")
+	require.Contains(t, cmd, "export "+envPath+"=\"${")
+	require.Contains(t, cmd, envPath+":+$"+envPath+":}\"'bin'")
+	require.Contains(t, cmd, "export "+envVirtualEnv+"='VENV'")
+}
+
+func TestWriteShellSkillPATH_EmptyVenvKeepsInheritedPATH(t *testing.T) {
+	var sb strings.Builder
+
+	writeShellSkillPATH(&sb, "", skillDirBin)
+
+	require.Equal(
+		t,
+		"\"$"+envPath+"\"; export "+envPath+"=\"${"+
+			envPath+":+$"+envPath+":}\"'"+skillDirBin+"'",
+		sb.String(),
+	)
+}
+
+func TestForceExplicitRelativeCommand_EdgeCases(t *testing.T) {
+	require.Equal(t, ".", forceExplicitRelativeCommand(""))
+	require.Equal(t, ".", forceExplicitRelativeCommand("."))
+	require.Equal(t, "./"+testSkillCLI,
+		forceExplicitRelativeCommand(testSkillCLI))
+	require.Equal(t, path.Join(skillDirBin, testSkillCLI),
+		forceExplicitRelativeCommand(
+			path.Join(skillDirBin, testSkillCLI),
+		))
 }
 
 func TestRunTool_PrimaryOutput_SelectsByName(t *testing.T) {
@@ -1925,8 +2526,10 @@ func TestRunTool_setAllowedCommands_TrimsAndSkipsEmpty(t *testing.T) {
 	rt.setAllowedCommands(nil)
 	require.Nil(t, rt.allowedCmds)
 
-	rt.setAllowedCommands([]string{"", "  ", cmdEcho})
+	rt.setAllowedCommands([]string{"", "  ", cmdEcho, "./bin/tool"})
 	require.Contains(t, rt.allowedCmds, cmdEcho)
+	require.Contains(t, rt.allowedCmds, "bin/tool")
+	require.NotContains(t, rt.allowedCmds, "./bin/tool")
 
 	rt.setAllowedCommands([]string{cmdLS})
 	require.Contains(t, rt.allowedCmds, cmdLS)
@@ -1937,8 +2540,10 @@ func TestRunTool_setDeniedCommands_TrimsAndSkipsEmpty(t *testing.T) {
 	rt.setDeniedCommands(nil)
 	require.Nil(t, rt.deniedCmds)
 
-	rt.setDeniedCommands([]string{"", "  ", cmdEcho})
+	rt.setDeniedCommands([]string{"", "  ", cmdEcho, "./bin/tool"})
 	require.Contains(t, rt.deniedCmds, cmdEcho)
+	require.Contains(t, rt.deniedCmds, "bin/tool")
+	require.NotContains(t, rt.deniedCmds, "./bin/tool")
 
 	rt.setDeniedCommands([]string{cmdLS})
 	require.Contains(t, rt.deniedCmds, cmdLS)
@@ -4324,6 +4929,15 @@ func (r *recordingRunner) RunProgram(
 	return codeexecutor.RunResult{}, nil
 }
 
+type separatorRunner struct {
+	recordingRunner
+	sep string
+}
+
+func (r *separatorRunner) PathListSeparator() string {
+	return r.sep
+}
+
 type fakeEngine struct {
 	r codeexecutor.ProgramRunner
 }
@@ -4795,7 +5409,9 @@ func TestCopySkillStager_StageSkill_PropagatesStageError(t *testing.T) {
 	require.ErrorContains(t, err, "workspace fs is not configured")
 }
 
-func TestCopySkillStager_StageSkill_ContextAwareRepoRejectsHiddenSkill(t *testing.T) {
+func TestCopySkillStager_StageSkill_ContextAwareRepoRejectsHiddenSkill(
+	t *testing.T,
+) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
 	writeSkill(t, root, "other")
