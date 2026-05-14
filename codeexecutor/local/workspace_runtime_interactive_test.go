@@ -208,6 +208,151 @@ func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {
 	require.NoError(t, envErr)
 }
 
+func TestEnvValue_UsesLastAssignment(t *testing.T) {
+	value, ok := envValue([]string{
+		envPathKey + "=/first",
+		"CUSTOM_ENV=1",
+		envPathKey + "=/second",
+	}, envPathKey)
+
+	require.True(t, ok)
+	require.Equal(t, "/second", value)
+}
+
+func TestEnvValue_WindowsPathCase(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows path environment keys are case-insensitive")
+	}
+
+	value, ok := envValue([]string{"Path=C:\\bin"}, envPathKey)
+
+	require.True(t, ok)
+	require.Equal(t, "C:\\bin", value)
+}
+
+func TestEnvKeyEqualForGOOS(t *testing.T) {
+	require.True(t, envKeyEqualForGOOS("Path", envPathKey, "windows"))
+	require.False(t, envKeyEqualForGOOS("Path", envPathKey, "linux"))
+}
+
+func TestNewLocalProgramCommand_NonBareCommand(t *testing.T) {
+	cmd := newLocalProgramCommand(
+		context.Background(),
+		t.TempDir(),
+		codeexecutor.RunProgramSpec{Cmd: "./tool"},
+		nil,
+	)
+
+	require.Equal(t, "./tool", cmd.Path)
+}
+
+func TestNewLocalProgramCommand_PathMissDoesNotUseProcessPATH(t *testing.T) {
+	cmd := newLocalProgramCommand(
+		context.Background(),
+		t.TempDir(),
+		codeexecutor.RunProgramSpec{Cmd: "sh"},
+		[]string{envPathKey + "=" + t.TempDir()},
+	)
+
+	require.Equal(t, "sh", cmd.Path)
+	require.ErrorIs(t, cmd.Err, exec.ErrNotFound)
+}
+
+func TestLocalProgramCommandPath_NonBareCommand(t *testing.T) {
+	got, ok := localProgramCommandPath(t.TempDir(), "./tool", nil)
+
+	require.True(t, ok)
+	require.Equal(t, "./tool", got)
+}
+
+func TestLocalProgramCommandPath_EmptyPATHEntryUsesCWD(
+	t *testing.T,
+) {
+	cwd := t.TempDir()
+	toolPath := filepath.Join(cwd, "tool")
+	require.NoError(t, os.WriteFile(
+		toolPath,
+		[]byte("#!/bin/sh\n"),
+		0o755,
+	))
+
+	got, ok := localProgramCommandPath(cwd, "tool", []string{
+		envPathKey + "=" + string(os.PathListSeparator),
+	})
+
+	require.True(t, ok)
+	require.Equal(t, toolPath, got)
+}
+
+func TestLocalProgramCandidateNamesForGOOS(t *testing.T) {
+	require.Equal(
+		t,
+		[]string{"tool"},
+		localProgramCandidateNamesForGOOS("tool", "", "linux", ":"),
+	)
+	require.Equal(
+		t,
+		[]string{"tool.sh"},
+		localProgramCandidateNamesForGOOS("tool.sh", "", "windows", ";"),
+	)
+	require.Equal(
+		t,
+		[]string{"tool.cmd", "tool.exe"},
+		localProgramCandidateNamesForGOOS(
+			"tool",
+			".cmd;exe",
+			"windows",
+			";",
+		),
+	)
+	require.Equal(
+		t,
+		[]string{"tool.com", "tool.exe", "tool.bat", "tool.cmd"},
+		localProgramCandidateNamesForGOOS("tool", "", "windows", ";"),
+	)
+	require.Equal(
+		t,
+		[]string{"tool.exe"},
+		localProgramCandidateNamesForGOOS("tool", ".exe;;", "windows", ";"),
+	)
+}
+
+func TestIsLocalExecutableFileForGOOS(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "tool")
+	require.NoError(t, os.WriteFile(file, []byte(""), 0o644))
+
+	require.True(t, isLocalExecutableFileForGOOS(file, "windows"))
+	require.False(t, isLocalExecutableFileForGOOS(file, "linux"))
+	require.False(t, isLocalExecutableFileForGOOS(t.TempDir(), "windows"))
+}
+
+func TestLocalProgramCommandPath_WindowsPathExt(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PATHEXT lookup only applies on Windows")
+	}
+	cwd := t.TempDir()
+	bin := filepath.Join(cwd, "bin")
+	require.NoError(t, os.MkdirAll(bin, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(bin, "tool"),
+		[]byte("@echo off"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(bin, "tool.cmd"),
+		[]byte("@echo off"),
+		0o644,
+	))
+
+	got, ok := localProgramCommandPath(cwd, "tool", []string{
+		envPathKey + "=bin",
+		envPathExtKey + "=.CMD;.EXE",
+	})
+
+	require.True(t, ok)
+	require.Equal(t, filepath.Join(bin, "tool.cmd"), got)
+}
+
 func TestStartPipes_RejectsPresetFields(t *testing.T) {
 	cmd := exec.Command("echo", "hi")
 	cmd.Stdout = os.Stdout

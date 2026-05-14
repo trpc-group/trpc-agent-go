@@ -108,6 +108,43 @@ func TestSanitizeMessagesWithTools_PreservesValidToolRound(t *testing.T) {
 	}
 }
 
+func TestSanitizeMessagesWithTools_DowngradesDuplicateToolResult(t *testing.T) {
+	in := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "test_tool",
+						Arguments: []byte(`{"a":1}`),
+					},
+				},
+			},
+		},
+		{
+			Role:    model.RoleTool,
+			ToolID:  "call_1",
+			Content: "first result",
+		},
+		{
+			Role:    model.RoleTool,
+			ToolID:  "call_1",
+			Content: "duplicate result",
+		},
+	}
+
+	out := SanitizeMessagesWithTools(in, nil)
+	if assert.Len(t, out, 3) {
+		assert.Equal(t, model.RoleAssistant, out[0].Role)
+		assert.Equal(t, model.RoleTool, out[1].Role)
+		assert.Equal(t, "first result", out[1].Content)
+		assert.Equal(t, model.RoleUser, out[2].Role)
+		assert.Contains(t, out[2].Content, orphanToolResultTag)
+		assert.Contains(t, out[2].Content, "duplicate result")
+	}
+}
+
 func TestSanitizeMessagesWithTools_NormalizesEmptyArgumentsToEmptyObject(t *testing.T) {
 	in := []model.Message{
 		{
