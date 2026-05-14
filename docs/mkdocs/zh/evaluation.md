@@ -558,7 +558,22 @@ type EvalCase struct {
 	ConversationScenario  *ConversationScenario // ConversationScenario 是动态用户模拟场景，默认模式下与 Conversation 二选一
 	ActualConversation    []*Invocation         // ActualConversation 是 Trace 模式下的实际输出轨迹，可选
 	SessionInput          *SessionInput         // SessionInput 是会话初始化信息，必填
+	Rubrics               []*EvalCaseRubric     // Rubrics 是用例级评估细则，可选
 	CreationTimestamp     *epochtime.EpochTime  // CreationTimestamp 是创建时间戳，可选
+}
+
+// EvalCaseRubric 表示只作用于单个评估用例的评估细则
+type EvalCaseRubric struct {
+	MetricName  string                 // MetricName 是该细则补充的指标实例名
+	ID          string                 // ID 是用例级细则的唯一标识
+	Content     *EvalCaseRubricContent // Content 是裁判可读取的细则内容
+	Description string                 // Description 是人类可读说明，默认不参与裁判
+	Type        string                 // Type 是细则类型，用于结果排查
+}
+
+// EvalCaseRubricContent 表示用例级细则的裁判可读内容
+type EvalCaseRubricContent struct {
+	Text string // Text 是 rubric 评估器实际使用的细则文本
 }
 
 // ConversationScenario 表示动态用户模拟场景
@@ -1577,6 +1592,10 @@ type RubricContent struct {
 
 `rubrics` 用于把一个指标拆成多条粒度清晰的评估细则。每条细则尽量保持独立，并能从用户输入与最终回答中直接验证，使裁判判断更稳定，也便于定位问题。`id` 用作稳定标识，`content.text` 是裁判实际执行的细则文本。
 
+`EvalCase.rubrics` 用于给单个用例补充额外评估细则。每条 rubric 通过 `metricName` 指向一个已配置的 metric；评估该 case 时，框架会在该 metric 的公共 rubrics 之后追加这些细则，只影响当前 case，不改变指标文件中的全局配置。合并后的 rubric `id` 需要保持唯一。
+
+目标 metric 使用 `criterion.llmJudge` 承载 rubric 列表。内置 rubric evaluator 会读取合并后的细则；自定义 rubric evaluator 按同一字段读取即可。
+
 `template` 仅用于 `llm_judge_template`。它将模板化评估限制在“prompt 不同，但评估编排逻辑相同”的场景，不要求框架把所有评估器都表达成模板。模板评估器不读取 `rubrics`，评估标准应直接写入 `template.prompt`。
 
 `template.prompt` 使用双大括号模板语法，例如 `{{question}}`、`{{answer}}`。每个占位符都必须在 `variableBindings` 中显式绑定；未绑定变量、未知变量或绑定解析失败都会直接报错，不存在“可选变量”或空字符串兜底。
@@ -1631,6 +1650,38 @@ type RubricContent struct {
 	}
 ]
 ```
+
+用例级 rubric 可以直接写在 `EvalCase.rubrics` 中，例如：
+
+```json
+{
+	"evalId": "case_compound_profit",
+	"conversation": [
+		{
+			"invocationId": "case_compound_profit-1",
+			"userContent": {
+				"role": "user",
+				"content": "本金 1000 元、年复利 10%、30 年后的利润是多少？"
+			}
+		}
+	],
+	"rubrics": [
+		{
+			"metricName": "llm_rubric_response",
+			"id": "case:compound-profit",
+			"content": {
+				"text": "For this case, the final answer must distinguish profit from total accumulated amount. A response that only gives the final amount without subtracting the original principal fails this rubric."
+			}
+		}
+	],
+	"sessionInput": {
+		"appName": "rubric-response-app",
+		"userId": "demo-user"
+	}
+}
+```
+
+其中 `metricName` 指向要追加细则的 metric。上例会把 `case:compound-profit` 追加到 `llm_rubric_response` 的 rubrics 中。
 
 以下给出一条模板评估指标配置示例，通过 `evaluatorName` 显式选择 `llm_judge_template`，并让 `metricName` 仅作为结果中的指标实例名。
 
