@@ -72,6 +72,12 @@ func NewRuntime(workRoot string) *Runtime {
 	}
 }
 
+// PathListSeparator returns the local host separator used for PATH-like
+// environment variables.
+func (*Runtime) PathListSeparator() string {
+	return string(os.PathListSeparator)
+}
+
 // RuntimeOption customizes the local Runtime behavior.
 type RuntimeOption func(*Runtime)
 
@@ -345,50 +351,11 @@ func (r *Runtime) RunProgram(
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(tctx, spec.Cmd, spec.Args...) //nolint:gosec
-	cmd.Dir = cwd
-
-	// Build environment. Start with current env, then inject
-	// workspace vars, then overlay user-provided.
-	env := os.Environ()
-
-	// Ensure layout exists and compute run dir.
-	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+	env, err := r.buildProgramEnv(ws, spec)
+	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
-	runDir := filepath.Join(
-		ws.Path, codeexecutor.DirRuns,
-		"run_"+time.Now().Format("20060102T150405.000"),
-	)
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		return codeexecutor.RunResult{}, err
-	}
-
-	// Inject well-known variables if not set.
-	baseEnv := map[string]string{
-		codeexecutor.WorkspaceEnvDirKey: ws.Path,
-		codeexecutor.EnvSkillsDir: filepath.Join(
-			ws.Path, codeexecutor.DirSkills,
-		),
-		codeexecutor.EnvWorkDir: filepath.Join(
-			ws.Path, codeexecutor.DirWork,
-		),
-		codeexecutor.EnvOutputDir: filepath.Join(
-			ws.Path, codeexecutor.DirOut,
-		),
-		codeexecutor.EnvRunDir: runDir,
-	}
-	for k, v := range baseEnv {
-		// If user already set, respect it.
-		if _, ok := spec.Env[k]; ok {
-			continue
-		}
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
-	for k, v := range spec.Env {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
-	cmd.Env = env
+	cmd := newLocalProgramCommand(tctx, cwd, spec, env)
 
 	if spec.Stdin != "" {
 		cmd.Stdin = strings.NewReader(spec.Stdin)
