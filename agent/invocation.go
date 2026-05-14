@@ -10,10 +10,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,6 +131,7 @@ type Invocation struct {
 	parent *Invocation
 	// traceCapture stores the shared execution trace capture for one root run.
 	traceCapture *tracecapture.Capture
+	traceMu      sync.Mutex
 	// entryPredecessorStepIDs stores the predecessor step ids passed to this invocation entry.
 	entryPredecessorStepIDs []string
 	// traceNodeID stores the mounted static root node id for this invocation.
@@ -201,6 +205,14 @@ func NewWaitNoticeTimeoutError(message string) *WaitNoticeTimeoutError {
 
 // RunOption is a function that configures a RunOptions.
 type RunOption func(*RunOptions)
+
+// ModelSelector selects the model for one framework-managed LLM call.
+// The invocation's Model is the base model for this call when the selector is
+// invoked. Returning nil with nil error keeps that base model. Returning an
+// error fails the current call before the request is built. A selector may be
+// called concurrently by different runs and must protect any shared state it
+// owns.
+type ModelSelector func(ctx context.Context, inv *Invocation) (model.Model, error)
 
 type runControlConfig struct {
 	DisableGraphCompletionEvent bool
@@ -613,6 +625,35 @@ func WithModelName(name string) RunOption {
 	}
 }
 
+// WithModelContextWindow sets the model context window for this specific run.
+// This is useful for user-defined or private models whose names should not be
+// registered in the process-wide model registry.
+func WithModelContextWindow(tokens int) RunOption {
+	return func(opts *RunOptions) {
+		if tokens > 0 {
+			opts.ModelContextWindow = tokens
+		}
+	}
+}
+
+// ModelContextWindowFromRunOptions returns the context window configured by
+// WithModelContextWindow.
+func ModelContextWindowFromRunOptions(opts *RunOptions) (int, bool) {
+	if opts == nil || opts.ModelContextWindow <= 0 {
+		return 0, false
+	}
+	return opts.ModelContextWindow, true
+}
+
+// WithModelSelector sets the model selector for this specific run.
+// The selector is called before each framework-managed LLM call and takes
+// precedence over any agent-level selector.
+func WithModelSelector(selector ModelSelector) RunOption {
+	return func(opts *RunOptions) {
+		opts.ModelSelector = selector
+	}
+}
+
 // WithCodeExecutor sets the code executor for this specific run.
 // If set, it temporarily overrides the agent's default code executor for this
 // request only.
@@ -1006,6 +1047,13 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+	// ModelSelector selects the model before each framework-managed LLM call.
+	ModelSelector ModelSelector
+
+	// ModelContextWindow is the model context window for this specific run.
+	// If set, it takes precedence over model instance configuration and the
+	// process-wide model registry.
+	ModelContextWindow int
 
 	// ModelRequestExtraFields contains provider-specific top-level request body
 	// fields for model calls made during this run.
@@ -1167,7 +1215,6 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,
 		parent:          inv,
-		traceCapture:    inv.traceCapture,
 		state:           inv.cloneState(),
 	}
 
@@ -1188,6 +1235,10 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	if newInv.eventFilterKey == "" && newInv.AgentName != "" {
 		newInv.eventFilterKey = newInv.AgentName
 	}
+	if newInv.RunOptions.ExecutionTraceEnabled && inv.RunOptions.ExecutionTraceEnabled {
+		inv.initializeExecutionTrace()
+		newInv.traceCapture = inv.executionTraceCapture()
+	}
 	if newInv.traceCapture == nil {
 		newInv.initializeExecutionTrace()
 	}
@@ -1204,6 +1255,7 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 	if inv == nil {
 		return nil
 	}
+	traceCapture, traceNodeID := inv.executionTraceFields()
 	view := &Invocation{
 		Agent:                inv.Agent,
 		AgentName:            inv.AgentName,
@@ -1225,12 +1277,12 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 		noticeMu:             inv.noticeMu,
 		eventFilterKey:       inv.eventFilterKey,
 		parent:               inv.parent,
-		traceCapture:         inv.traceCapture,
+		traceCapture:         traceCapture,
 		entryPredecessorStepIDs: cloneStringSlice(
 			inv.entryPredecessorStepIDs,
 		),
-		traceNodeID:        inv.traceNodeID,
-		state:              inv.cloneState(),
+		traceNodeID:        traceNodeID,
+		state:              inv.cloneViewState(),
 		MaxLLMCalls:        inv.MaxLLMCalls,
 		MaxToolIterations:  inv.MaxToolIterations,
 		timingInfo:         inv.timingInfo,
@@ -1267,47 +1319,335 @@ func (inv *Invocation) SyncView(view *Invocation) {
 	inv.noticeMu = view.noticeMu
 	inv.eventFilterKey = view.eventFilterKey
 	inv.parent = view.parent
-	inv.traceCapture = view.traceCapture
+	traceCapture, traceNodeID := view.executionTraceFields()
+	inv.traceMu.Lock()
+	inv.traceCapture = traceCapture
+	inv.traceNodeID = traceNodeID
+	inv.traceMu.Unlock()
 	inv.entryPredecessorStepIDs = cloneStringSlice(
 		view.entryPredecessorStepIDs,
 	)
-	inv.traceNodeID = view.traceNodeID
 	inv.MaxLLMCalls = view.MaxLLMCalls
 	inv.MaxToolIterations = view.MaxToolIterations
 	inv.timingInfo = view.timingInfo
 	inv.llmCallCount = view.llmCallCount
 	inv.toolIterationCount = view.toolIterationCount
 	inv.stateMu.Lock()
-	inv.state = view.cloneState()
+	inv.state = view.cloneViewState()
 	inv.stateMu.Unlock()
 }
 
 func (inv *Invocation) cloneState() map[string]any {
-	if inv == nil || inv.state == nil {
+	return inv.cloneStateByFilter(isCloneStateKey, keepStateValue)
+}
+
+func (inv *Invocation) cloneViewState() map[string]any {
+	return inv.cloneStateByFilter(includeAllStateKeys, cloneViewStateValue)
+}
+
+func (inv *Invocation) cloneStateByFilter(
+	include func(string) bool,
+	cloneValue func(string, any) any,
+) map[string]any {
+	if inv == nil {
 		return nil
 	}
 	inv.stateMu.RLock()
 	defer inv.stateMu.RUnlock()
-	copied := make(map[string]any)
-	if holder, ok := inv.state[flusherStateKey]; ok {
-		copied[flusherStateKey] = holder
+	if inv.state == nil {
+		return nil
 	}
-	if barrier, ok := inv.state[barrierStateKey]; ok {
-		copied[barrierStateKey] = barrier
-	}
-	if holder, ok := inv.state[appenderStateKey]; ok {
-		copied[appenderStateKey] = holder
-	}
-	if hub, ok := inv.state[streamHubStateKey]; ok {
-		copied[streamHubStateKey] = hub
-	}
-	if nodeID, ok := inv.state[surfaceRootNodeIDStateKey]; ok {
-		copied[surfaceRootNodeIDStateKey] = nodeID
-	}
-	if rootNodeID, ok := inv.state[teamMemberTraceRootStateKey]; ok {
-		copied[teamMemberTraceRootStateKey] = rootNodeID
+	copied := make(map[string]any, len(inv.state))
+	for key, value := range inv.state {
+		if !include(key) {
+			continue
+		}
+		copied[key] = cloneValue(key, value)
 	}
 	return copied
+}
+
+func includeAllStateKeys(string) bool {
+	return true
+}
+
+func keepStateValue(_ string, value any) any {
+	return value
+}
+
+func cloneViewStateValue(key string, value any) any {
+	if isCloneStateKey(key) {
+		return value
+	}
+	return cloneStateValue(value)
+}
+
+func isCloneStateKey(key string) bool {
+	switch key {
+	case flusherStateKey,
+		barrierStateKey,
+		appenderStateKey,
+		streamHubStateKey,
+		surfaceRootNodeIDStateKey,
+		teamMemberTraceRootStateKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// cloneStateValue isolates common mutable custom state for invocation views.
+// Known mutable types such as bytes.Buffer, strings.Builder, and big.Int are
+// copied explicitly. Maps, slices, pointers, arrays, and fully exported
+// structs are cloned recursively. Opaque structs with unexported fields are
+// kept by reference to avoid unsafe copies of no-copy state such as locks.
+func cloneStateValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	cloned, ok := cloneStateReflectValue(
+		reflect.ValueOf(value),
+		map[reflectVisit]reflect.Value{},
+	)
+	if !ok {
+		return value
+	}
+	return cloned.Interface()
+}
+
+type reflectVisit struct {
+	typ      reflect.Type
+	ptr      uintptr
+	length   int
+	capacity int
+}
+
+func cloneStateReflectValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	if value.IsValid() && value.CanInterface() {
+		if cloned, ok := cloneKnownStateValue(value.Interface()); ok {
+			return reflect.ValueOf(cloned), true
+		}
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return value, true
+		}
+		return cloneStateReflectValue(value.Elem(), visited)
+	case reflect.Pointer:
+		return cloneStatePointerValue(value, visited)
+	case reflect.Map:
+		return cloneStateMapValue(value, visited)
+	case reflect.Slice:
+		return cloneStateSliceValue(value, visited)
+	case reflect.Array:
+		return cloneStateArrayValue(value, visited)
+	case reflect.Struct:
+		return cloneStateStructValue(value, visited)
+	default:
+		return value, true
+	}
+}
+
+func cloneKnownStateValue(value any) (any, bool) {
+	switch v := value.(type) {
+	case *bytes.Buffer:
+		if v == nil {
+			return v, true
+		}
+		return bytes.NewBuffer(cloneBytes(v.Bytes())), true
+	case bytes.Buffer:
+		return *bytes.NewBuffer(cloneBytes(v.Bytes())), true
+	case *strings.Builder:
+		if v == nil {
+			return v, true
+		}
+		var cloned strings.Builder
+		_, _ = cloned.WriteString(v.String())
+		return &cloned, true
+	case *big.Int:
+		if v == nil {
+			return v, true
+		}
+		return new(big.Int).Set(v), true
+	case big.Int:
+		return *new(big.Int).Set(&v), true
+	default:
+		return nil, false
+	}
+}
+
+func cloneBytes(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	cloned := make([]byte, len(value))
+	copy(cloned, value)
+	return cloned
+}
+
+func cloneStatePointerValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	if value.IsNil() {
+		return value, true
+	}
+	visit := reflectVisit{
+		typ: value.Type(),
+		ptr: value.Pointer(),
+	}
+	if cloned, ok := visited[visit]; ok {
+		return cloned, true
+	}
+	cloned := reflect.New(value.Type().Elem())
+	visited[visit] = cloned
+	elem, ok := cloneStateReflectValue(value.Elem(), visited)
+	if !ok {
+		delete(visited, visit)
+		return value, false
+	}
+	if elem.Type().AssignableTo(cloned.Elem().Type()) {
+		cloned.Elem().Set(elem)
+		return cloneStateAsType(cloned, value.Type())
+	}
+	if elem.Type().ConvertibleTo(cloned.Elem().Type()) {
+		cloned.Elem().Set(elem.Convert(cloned.Elem().Type()))
+		return cloneStateAsType(cloned, value.Type())
+	}
+	return value, false
+}
+
+func cloneStateAsType(
+	value reflect.Value,
+	typ reflect.Type,
+) (reflect.Value, bool) {
+	if value.Type().AssignableTo(typ) {
+		return value, true
+	}
+	if value.Type().ConvertibleTo(typ) {
+		return value.Convert(typ), true
+	}
+	return value, false
+}
+
+func cloneStateMapValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	if value.IsNil() {
+		return value, true
+	}
+	visit := reflectVisit{
+		typ: value.Type(),
+		ptr: value.Pointer(),
+	}
+	if cloned, ok := visited[visit]; ok {
+		return cloned, true
+	}
+	cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+	visited[visit] = cloned
+	iter := value.MapRange()
+	for iter.Next() {
+		// Keep keys unchanged; cloning pointer keys changes lookup identity.
+		cloned.SetMapIndex(
+			iter.Key(),
+			cloneStateElement(iter.Value(), value.Type().Elem(), visited),
+		)
+	}
+	return cloned, true
+}
+
+func cloneStateElement(
+	value reflect.Value,
+	elemType reflect.Type,
+	visited map[reflectVisit]reflect.Value,
+) reflect.Value {
+	cloned, ok := cloneStateReflectValue(value, visited)
+	if !ok {
+		return value
+	}
+	if cloned.Type().AssignableTo(elemType) {
+		return cloned
+	}
+	if cloned.Type().ConvertibleTo(elemType) {
+		return cloned.Convert(elemType)
+	}
+	return value
+}
+
+func cloneStateSliceValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	if value.IsNil() {
+		return value, true
+	}
+	visit := reflectVisit{
+		typ:      value.Type(),
+		ptr:      value.Pointer(),
+		length:   value.Len(),
+		capacity: value.Cap(),
+	}
+	if cloned, ok := visited[visit]; ok {
+		return cloned, true
+	}
+	cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+	visited[visit] = cloned
+	for i := 0; i < value.Len(); i++ {
+		cloned.Index(i).Set(
+			cloneStateElement(
+				value.Index(i),
+				value.Type().Elem(),
+				visited,
+			),
+		)
+	}
+	return cloned, true
+}
+
+func cloneStateArrayValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	cloned := reflect.New(value.Type()).Elem()
+	for i := 0; i < value.Len(); i++ {
+		cloned.Index(i).Set(
+			cloneStateElement(
+				value.Index(i),
+				value.Type().Elem(),
+				visited,
+			),
+		)
+	}
+	return cloned, true
+}
+
+func cloneStateStructValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	for i := 0; i < value.NumField(); i++ {
+		if value.Type().Field(i).PkgPath != "" {
+			// Opaque structs may carry no-copy state such as locks.
+			return value, false
+		}
+	}
+	cloned := reflect.New(value.Type()).Elem()
+	for i := 0; i < value.NumField(); i++ {
+		target := cloned.Field(i)
+		target.Set(
+			cloneStateElement(
+				value.Field(i),
+				target.Type(),
+				visited,
+			),
+		)
+	}
+	return cloned, true
 }
 
 // GetEventFilterKey get event filter key.

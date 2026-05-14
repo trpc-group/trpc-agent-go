@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 const (
@@ -220,9 +221,10 @@ type runOptions struct {
 	DebugRecorderDir     string
 	DebugRecorderMode    string
 
-	AllowUsers     string
-	RequireMention bool
-	Mention        string
+	AllowUsers      string
+	RequireMention  bool
+	Mention         string
+	RuntimeProfiles *runtimeprofile.Config
 
 	Channels []pluginSpec
 
@@ -944,17 +946,18 @@ type fileConfig struct {
 
 	DebugRecorder *debugRecorderConfig `yaml:"debug_recorder,omitempty"`
 
-	HTTP          *httpConfig          `yaml:"http,omitempty"`
-	Admin         *adminConfig         `yaml:"admin,omitempty"`
-	Observability *observabilityConfig `yaml:"observability,omitempty"`
-	A2A           *a2aConfig           `yaml:"a2a,omitempty"`
-	Agent         *agentRunConfig      `yaml:"agent,omitempty"`
-	Model         *modelConfig         `yaml:"model,omitempty"`
-	Knowledges    *knowledgesConfig    `yaml:"knowledges,omitempty"`
-	Gateway       *gatewayConfig       `yaml:"gateway,omitempty"`
-	Channels      []filePluginSpec     `yaml:"channels,omitempty"`
-	Skills        *skillsConfig        `yaml:"skills,omitempty"`
-	Tools         *toolsConfig         `yaml:"tools,omitempty"`
+	HTTP            *httpConfig            `yaml:"http,omitempty"`
+	Admin           *adminConfig           `yaml:"admin,omitempty"`
+	Observability   *observabilityConfig   `yaml:"observability,omitempty"`
+	A2A             *a2aConfig             `yaml:"a2a,omitempty"`
+	Agent           *agentRunConfig        `yaml:"agent,omitempty"`
+	Model           *modelConfig           `yaml:"model,omitempty"`
+	Knowledges      *knowledgesConfig      `yaml:"knowledges,omitempty"`
+	Gateway         *gatewayConfig         `yaml:"gateway,omitempty"`
+	RuntimeProfiles *runtimeprofile.Config `yaml:"runtime_profiles,omitempty"`
+	Channels        []filePluginSpec       `yaml:"channels,omitempty"`
+	Skills          *skillsConfig          `yaml:"skills,omitempty"`
+	Tools           *toolsConfig           `yaml:"tools,omitempty"`
 
 	Session *sessionConfig `yaml:"session,omitempty"`
 	Memory  *memoryConfig  `yaml:"memory,omitempty"`
@@ -1192,10 +1195,11 @@ type knowledgesConfig struct {
 }
 
 type knowledgeProviderConfig struct {
-	Type       string       `yaml:"type,omitempty"`
-	Name       string       `yaml:"name,omitempty"`
-	MaxResults *int         `yaml:"max_results,omitempty"`
-	Config     *rawYAMLNode `yaml:"config,omitempty"`
+	Type        string       `yaml:"type,omitempty"`
+	Name        string       `yaml:"name,omitempty"`
+	Description string       `yaml:"description,omitempty"`
+	MaxResults  *int         `yaml:"max_results,omitempty"`
+	Config      *rawYAMLNode `yaml:"config,omitempty"`
 }
 
 type pluginSpec struct {
@@ -1584,6 +1588,12 @@ func (cfg *fileConfig) apply(
 				csvDelimiter,
 			)
 		}
+	}
+	if cfg.RuntimeProfiles != nil {
+		if err := validateRuntimeProfiles(cfg.RuntimeProfiles); err != nil {
+			return err
+		}
+		opts.RuntimeProfiles = cfg.RuntimeProfiles
 	}
 
 	if len(cfg.Channels) > 0 {
@@ -2001,10 +2011,11 @@ func convertKnowledgeConfigs(
 		}
 
 		out = append(out, knowledgeEntry{
-			Type:       typeName,
-			Name:       name,
-			MaxResults: maxResults,
-			Config:     config,
+			Type:        typeName,
+			Name:        name,
+			Description: strings.TrimSpace(p.Description),
+			MaxResults:  maxResults,
+			Config:      config,
 		})
 	}
 

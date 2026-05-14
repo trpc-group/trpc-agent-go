@@ -394,7 +394,7 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) ContentOption
 }
 
 // WithContextCompactionTokenCounter sets the token counter used by context
-// compaction for deciding whether tool results exceed configured budgets.
+// compaction for request thresholds and tool-result budgets.
 func WithContextCompactionTokenCounter(counter model.TokenCounter) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		if counter == nil {
@@ -1905,25 +1905,10 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	events []event.Event,
 ) []event.Event {
-	functionCallIDToResponseEventIndex := make(map[string]int)
-
-	// Map function response IDs to event indices.
-	for i, evt := range events {
-		// Create a local copy to avoid implicit memory aliasing.
-		// This bug is fixed in go 1.22.
-		// See: https://tip.golang.org/doc/go1.22#language
-		evt := evt
-
-		if evt.IsToolResultResponse() {
-			responseIDs := evt.GetToolResultIDs()
-			for _, responseID := range responseIDs {
-				functionCallIDToResponseEventIndex[responseID] = i
-			}
-		}
-	}
+	responseMatchesByCallEvent := toolResponseMatchesByCallEvent(events)
 
 	var resultEvents []event.Event
-	for _, evt := range events {
+	for i, evt := range events {
 		// Create a local copy to avoid implicit memory aliasing.
 		// This bug is fixed in go 1.22.
 		// See: https://tip.golang.org/doc/go1.22#language
@@ -1933,40 +1918,18 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 			// Function response should be handled with function call below.
 			continue
 		} else if evt.IsToolCallResponse() {
-			functionCallIDs := evt.GetToolCallIDs()
-			var responseEventIndices []int
-			for _, callID := range functionCallIDs {
-				if idx, exists := functionCallIDToResponseEventIndex[callID]; exists {
-					responseEventIndices = append(responseEventIndices, idx)
-				}
-			}
-			// When tools run in parallel they commonly return all results inside one response event.
-			// If we pushed the same event once per tool ID, the LLM would see duplicated tool
-			// messages and reject the request. Keep only the first occurrence of each event index
-			// while preserving their original order.
-			seenIdx := make(map[int]struct{}, len(functionCallIDs))
-			uniqueIndices := responseEventIndices[:0]
-			// Reuse the existing slice to deduplicate in place and maintain the original order.
-			for _, idx := range responseEventIndices {
-				if _, seen := seenIdx[idx]; seen {
-					continue
-				}
-				seenIdx[idx] = struct{}{}
-				uniqueIndices = append(uniqueIndices, idx)
-			}
-			responseEventIndices = uniqueIndices
-
+			responseMatches := responseMatchesByCallEvent[i]
 			resultEvents = append(resultEvents, evt)
 
-			if len(responseEventIndices) == 0 {
+			if len(responseMatches) == 0 {
 				continue
-			} else if len(responseEventIndices) == 1 {
-				resultEvents = append(resultEvents, events[responseEventIndices[0]])
+			} else if len(responseMatches) == 1 {
+				resultEvents = append(resultEvents, filterToolResponseEvent(events, responseMatches[0]))
 			} else {
 				// Merge multiple async function responses.
 				var responseEvents []event.Event
-				for _, idx := range responseEventIndices {
-					responseEvents = append(responseEvents, events[idx])
+				for _, match := range responseMatches {
+					responseEvents = append(responseEvents, filterToolResponseEvent(events, match))
 				}
 				mergedEvent := p.mergeFunctionResponseEvents(responseEvents)
 				resultEvents = append(resultEvents, mergedEvent)
@@ -1977,6 +1940,101 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	}
 
 	return resultEvents
+}
+
+type pendingToolCallRound struct {
+	eventIndex int
+	pendingIDs map[string]struct{}
+}
+
+type matchedToolResponseEvent struct {
+	eventIndex    int
+	choiceIndices []int
+}
+
+// toolResponseMatchesByCallEvent matches tool-result choices to the nearest
+// preceding tool-call round that is still waiting for the result ID.
+func toolResponseMatchesByCallEvent(events []event.Event) map[int][]matchedToolResponseEvent {
+	responseMatchesByCallEvent := make(map[int][]matchedToolResponseEvent)
+	var pendingCallRounds []pendingToolCallRound
+	for i, evt := range events {
+		evt := evt
+		if evt.IsToolCallResponse() {
+			ids := evt.GetToolCallIDs()
+			if len(ids) == 0 {
+				continue
+			}
+			pendingCallRounds = append(pendingCallRounds, pendingToolCallRound{
+				eventIndex: i,
+				pendingIDs: toStringSet(ids),
+			})
+			continue
+		}
+		if !evt.IsToolResultResponse() {
+			continue
+		}
+		for choiceIndex, choice := range evt.Response.Choices {
+			responseID := choice.Message.ToolID
+			if responseID == "" {
+				responseID = choice.Delta.ToolID
+			}
+			if responseID == "" {
+				continue
+			}
+			for j := len(pendingCallRounds) - 1; j >= 0; j-- {
+				if _, ok := pendingCallRounds[j].pendingIDs[responseID]; !ok {
+					continue
+				}
+				delete(pendingCallRounds[j].pendingIDs, responseID)
+				responseMatchesByCallEvent[pendingCallRounds[j].eventIndex] = appendToolResponseChoice(
+					responseMatchesByCallEvent[pendingCallRounds[j].eventIndex],
+					i,
+					choiceIndex,
+				)
+				break
+			}
+		}
+	}
+	return responseMatchesByCallEvent
+}
+
+// appendToolResponseChoice records one matching choice while coalescing choices
+// from the same response event into one match.
+func appendToolResponseChoice(
+	matches []matchedToolResponseEvent,
+	eventIndex int,
+	choiceIndex int,
+) []matchedToolResponseEvent {
+	for i := range matches {
+		if matches[i].eventIndex != eventIndex {
+			continue
+		}
+		matches[i].choiceIndices = append(matches[i].choiceIndices, choiceIndex)
+		return matches
+	}
+	return append(matches, matchedToolResponseEvent{
+		eventIndex:    eventIndex,
+		choiceIndices: []int{choiceIndex},
+	})
+}
+
+// filterToolResponseEvent clones a matched response event with only the tool
+// result choices that belong to the current tool-call round.
+func filterToolResponseEvent(events []event.Event, match matchedToolResponseEvent) event.Event {
+	evt := events[match.eventIndex]
+	if evt.Response == nil || len(match.choiceIndices) == 0 {
+		return evt
+	}
+	response := *evt.Response
+	response.Choices = make([]model.Choice, 0, len(match.choiceIndices))
+	for _, choiceIndex := range match.choiceIndices {
+		if choiceIndex < 0 || choiceIndex >= len(evt.Response.Choices) {
+			continue
+		}
+		response.Choices = append(response.Choices, evt.Response.Choices[choiceIndex])
+	}
+	evt.Response = &response
+	return evt
 }
 
 // mergeFunctionResponseEvents merges a list of function_response events into one event.
@@ -2011,6 +2069,15 @@ func toMap(ids []string) map[string]bool {
 	m := make(map[string]bool)
 	for _, id := range ids {
 		m[id] = true
+	}
+	return m
+}
+
+// toStringSet converts IDs to a set for membership checks.
+func toStringSet(ids []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		m[id] = struct{}{}
 	}
 	return m
 }

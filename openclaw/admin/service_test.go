@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
@@ -502,6 +503,28 @@ func gzipDebugTraceEventsFixture(t *testing.T, traceDir string) {
 	require.NoError(t, os.Remove(eventsPath))
 }
 
+func appendRuntimeProfileTraceFixture(t *testing.T, traceDir string) {
+	t.Helper()
+
+	event := map[string]any{
+		"kind": debugrecorder.KindRuntimeProfile,
+		"payload": map[string]any{
+			"profile_id":       "retail",
+			"profile_version":  "v2",
+			"profile_app_name": "retail-app",
+		},
+	}
+	raw, err := json.Marshal(event)
+	require.NoError(t, err)
+	raw = append(raw, '\n')
+	eventsPath := filepath.Join(traceDir, debugEventsFileName)
+	file, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	defer file.Close()
+	_, err = file.Write(raw)
+	require.NoError(t, err)
+}
+
 func TestNormalizeLangfuseStatus_TrimsValues(t *testing.T) {
 	t.Parallel()
 
@@ -620,6 +643,20 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Contains(t, body, "telegram")
 	require.Contains(t, body, "Refresh page")
 	require.Contains(t, body, `data-page-stale-root`)
+	require.Contains(t, body, "overflow-y: auto;")
+	require.Contains(t, body, "overscroll-behavior: contain;")
+	require.Contains(t, body, "scrollbar-gutter: stable;")
+	require.Contains(t, body, `sidebar.querySelector(".sidebar-link.active")`)
+	require.Contains(t, body, "sidebar.scrollTop")
+	require.Contains(t, body, "openclaw.admin.pendingScroll")
+	require.Contains(t, body, "window.sessionStorage")
+	require.Contains(t, body, "window.scrollBy")
+	require.Contains(t, body, "targetURL.pathname")
+	require.Contains(t, body, "value.targetPath")
+	require.NotContains(t, body, "window.scrollTo(0, pageTop)")
+	require.NotContains(t, body, "pageTop:")
+	require.NotContains(t, body, `window.addEventListener("pagehide"`)
+	require.NotContains(t, body, "scrollIntoView")
 	require.NotContains(t, body, `http-equiv="refresh"`)
 }
 
@@ -4023,7 +4060,7 @@ func TestServiceDebugEndpoints(t *testing.T) {
 
 	debugRoot := t.TempDir()
 	now := time.Date(2026, 3, 6, 18, 10, 0, 0, time.UTC)
-	writeDebugTraceFixture(
+	traceDir := writeDebugTraceFixture(
 		t,
 		debugRoot,
 		"telegram:dm:1",
@@ -4031,6 +4068,7 @@ func TestServiceDebugEndpoints(t *testing.T) {
 		now,
 		"trace-1",
 	)
+	appendRuntimeProfileTraceFixture(t, traceDir)
 	writeDebugTraceFixture(
 		t,
 		debugRoot,
@@ -4084,6 +4122,12 @@ func TestServiceDebugEndpoints(t *testing.T) {
 		"http://127.0.0.1:3000/project/local-dev/traces/trace-1",
 		snap.Debug.RecentTraces[0].LangfuseURL,
 	)
+	require.Equal(t, "retail", snap.Debug.RecentTraces[0].ProfileID)
+	require.Equal(t, "v2", snap.Debug.RecentTraces[0].ProfileVersion)
+	require.Equal(t, "retail-app", snap.Debug.RecentTraces[0].ProfileAppName)
+	require.Equal(t, "retail", snap.Debug.Sessions[0].ProfileID)
+	require.Equal(t, "v2", snap.Debug.Sessions[0].ProfileVersion)
+	require.Equal(t, "retail-app", snap.Debug.Sessions[0].ProfileAppName)
 
 	sessionsRR := httptest.NewRecorder()
 	sessionsReq := httptest.NewRequest(

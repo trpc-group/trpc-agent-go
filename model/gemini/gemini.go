@@ -15,13 +15,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"google.golang.org/genai"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -47,6 +46,7 @@ type Model struct {
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
+	contextWindow              int                     // Context window for this model instance.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
@@ -81,6 +81,7 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
 		maxInputTokens:             o.maxInputTokens,
+		contextWindow:              o.contextWindow,
 		chatRequestCallback:        o.chatRequestCallback,
 		chatResponseCallback:       o.chatResponseCallback,
 		chatChunkCallback:          o.chatChunkCallback,
@@ -91,7 +92,8 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 // Info implements the model.Model interface.
 func (m *Model) Info() model.Info {
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
 	}
 }
 
@@ -575,7 +577,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	maxInputTokens := m.maxInputTokens
 	if maxInputTokens <= 0 {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
+		contextWindow := m.contextWindow
+		if contextWindow <= 0 {
+			contextWindow = imodel.ResolveContextWindow(m.name)
+		}
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
@@ -736,11 +741,8 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 	if len(tools) == 0 {
 		return nil
 	}
-	// Sort keys for deterministic declaration order across runs.
-	keys := slices.Sorted(maps.Keys(tools))
 	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
-	for _, k := range keys {
-		t := tools[k]
+	for _, t := range toolorder.SortedTools(tools) {
 		decl := t.Declaration()
 		funcDeclaration := &genai.FunctionDeclaration{
 			Description: decl.Description,

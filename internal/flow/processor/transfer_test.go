@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itransfer "trpc.group/trpc-go/trpc-agent-go/internal/transfer"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/team"
@@ -37,6 +38,8 @@ type mockAgent struct {
 	gotEndInvocation bool
 	gotTraceNodeID   string
 	gotSurfaceRoot   string
+	gotMessage       model.Message
+	invoked          bool
 }
 
 func (m *mockAgent) Info() agent.Info                { return agent.Info{Name: m.name} }
@@ -48,9 +51,11 @@ func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	go func() {
 		defer close(ch)
 		// Record whether the invocation was incorrectly marked as ended.
+		m.invoked = true
 		m.gotEndInvocation = inv.EndInvocation
 		m.gotTraceNodeID = agent.InvocationTraceNodeID(inv)
 		m.gotSurfaceRoot = agent.InvocationSurfaceRootNodeID(inv)
+		m.gotMessage = inv.Message
 		if m.emit {
 			ch <- event.New(inv.InvocationID, m.name)
 		}
@@ -102,6 +107,62 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 	require.Len(t, evts, 3)
 	require.Equal(t, model.ObjectTypeTransfer, evts[0].Object)
 	require.Equal(t, "child", evts[1].Author)
+}
+
+func TestTransferResponseProc_EmptyMessageDoesNotEchoInheritedInput(t *testing.T) {
+	target := &mockAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-empty-message",
+		Message:      model.NewUserMessage("original user input"),
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-empty-message", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	var evts []*event.Event
+	for e := range out {
+		evts = append(evts, e)
+	}
+	require.Len(t, evts, 1)
+	require.Equal(t, model.ObjectTypeTransfer, evts[0].Object)
+	require.Equal(t, model.RoleUser, target.gotMessage.Role)
+	require.Equal(t, "original user input", target.gotMessage.Content)
+}
+
+func TestTransferResponseProc_CustomizerReceivesRawEmptyTransferMessage(t *testing.T) {
+	target := &mockAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	var gotTransferMessage string
+	var gotTransferMessageOK bool
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-empty-customize",
+		Message:      model.NewUserMessage("original user input"),
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{
+				agent.RuntimeStateKeyTransferController: customizeTransferController{
+					message:            model.NewUserMessage("custom child input"),
+					transferMessage:    &gotTransferMessage,
+					hasTransferMessage: &gotTransferMessageOK,
+				},
+			},
+		},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-empty-customize", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	for range out {
+	}
+	require.True(t, gotTransferMessageOK)
+	require.Empty(t, gotTransferMessage)
+	require.Equal(t, "custom child input", target.gotMessage.Content)
 }
 
 func TestTransferResponseProc_Target404(t *testing.T) {
@@ -313,6 +374,40 @@ func (t timeoutTransferController) OnTransfer(
 	return t.timeout, nil
 }
 
+type customizeTransferController struct {
+	message            model.Message
+	err                error
+	transferMessage    *string
+	hasTransferMessage *bool
+}
+
+func (c customizeTransferController) OnTransfer(
+	context.Context,
+	string,
+	string,
+) (time.Duration, error) {
+	return 0, nil
+}
+
+func (c customizeTransferController) CustomizeTransferInvocation(
+	ctx context.Context,
+	_ *agent.Invocation,
+	target *agent.Invocation,
+) error {
+	transferMessage, ok := itransfer.TransferMessageFromContext(ctx)
+	if c.transferMessage != nil {
+		*c.transferMessage = transferMessage
+	}
+	if c.hasTransferMessage != nil {
+		*c.hasTransferMessage = ok
+	}
+	if c.err != nil {
+		return c.err
+	}
+	target.Message = c.message
+	return nil
+}
+
 type structuredOutputCaptureModel struct {
 	name       string
 	mu         sync.Mutex
@@ -392,6 +487,87 @@ func TestTransferResponseProc_ControllerNodeTimeout(t *testing.T) {
 	for range out {
 	}
 	require.True(t, target.gotDeadline)
+}
+
+func TestTransferResponseProc_CustomizesTargetInvocation(t *testing.T) {
+	target := &mockAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-customize",
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{
+				agent.RuntimeStateKeyTransferController: customizeTransferController{
+					message: model.NewUserMessage("custom child input"),
+				},
+			},
+		},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", Message: "parent transfer"},
+	}
+	rsp := &model.Response{ID: "r-customize"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	var echoedInput string
+	for evt := range out {
+		if evt != nil && evt.Author == "child" && evt.Tag == event.TransferTag && evt.Response != nil {
+			require.NotEmpty(t, evt.Response.Choices)
+			echoedInput = evt.Response.Choices[0].Message.Content
+		}
+	}
+	require.Equal(t, model.RoleUser, target.gotMessage.Role)
+	require.Equal(t, "custom child input", target.gotMessage.Content)
+	require.Equal(t, "custom child input", echoedInput)
+}
+
+func TestTransferResponseProc_CustomizerRejects(t *testing.T) {
+	target := &mockAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-customize-reject",
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{
+				agent.RuntimeStateKeyTransferController: customizeTransferController{
+					err: errors.New("custom rejected"),
+				},
+			},
+		},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", Message: "parent transfer"},
+	}
+	rsp := &model.Response{ID: "r-customize-reject"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	var errorEvent *event.Event
+	var transferEvents int
+	for evt := range out {
+		if evt != nil && evt.Tag == event.TransferTag {
+			transferEvents++
+		}
+		if evt != nil && evt.Error != nil {
+			errorEvent = evt
+		}
+	}
+	require.NotNil(t, errorEvent)
+	require.Contains(t, errorEvent.Error.Message, "custom rejected")
+	require.Zero(t, transferEvents)
+	require.Nil(t, inv.TransferInfo)
+	require.False(t, target.invoked)
 }
 
 func TestTransferResponseProc_PreservesRunStructuredOutput(t *testing.T) {

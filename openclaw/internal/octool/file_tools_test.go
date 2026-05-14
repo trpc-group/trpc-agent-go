@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -59,6 +60,50 @@ func TestReadDocumentTool_PDFPage(t *testing.T) {
 	require.NotNil(t, res.Page)
 	require.Equal(t, 2, *res.Page)
 	require.Contains(t, res.Text, "Page 2")
+}
+
+func TestReadDocumentTool_RuntimeProfileWorkspacePolicy(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	allowed := filepath.Join(root, "allowed")
+	denied := filepath.Join(root, "denied")
+	require.NoError(t, os.MkdirAll(allowed, 0o755))
+	require.NoError(t, os.MkdirAll(denied, 0o755))
+
+	allowedFile := filepath.Join(allowed, "allowed.txt")
+	deniedFile := filepath.Join(denied, "denied.txt")
+	require.NoError(t, os.WriteFile(
+		allowedFile,
+		[]byte("allowed text"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		deniedFile,
+		[]byte("denied text"),
+		0o600,
+	))
+
+	ctx := runtimeprofile.WithProfile(
+		context.Background(),
+		runtimeprofile.Profile{
+			Workspace: runtimeprofile.WorkspacePolicy{
+				AllowedRoots: []string{allowed},
+			},
+		},
+	)
+	tool := newReadDocumentTool()
+
+	out, err := tool.Call(ctx, mustJSON(t, map[string]any{
+		"path": allowedFile,
+	}))
+	require.NoError(t, err)
+	require.Contains(t, out.(readDocumentResult).Text, "allowed text")
+
+	_, err = tool.Call(ctx, mustJSON(t, map[string]any{
+		"path": deniedFile,
+	}))
+	require.ErrorIs(t, err, runtimeprofile.ErrWorkspaceDenied)
 }
 
 func TestReadDocumentTool_DefaultsToLatestPDFUpload(t *testing.T) {

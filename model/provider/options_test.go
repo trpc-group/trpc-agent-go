@@ -40,6 +40,7 @@ func TestOptionsSetters(t *testing.T) {
 	WithHeaders(map[string]string{"X-Trace": "id"})(opts)
 	WithEnableTokenTailoring(true)(opts)
 	WithMaxInputTokens(512)(opts)
+	WithContextWindow(204800)(opts)
 	WithTokenCounter(counter)(opts)
 	WithTailoringStrategy(strategy)(opts)
 
@@ -55,6 +56,8 @@ func TestOptionsSetters(t *testing.T) {
 	assert.True(t, *opts.EnableTokenTailoring)
 	assert.NotNil(t, opts.MaxInputTokens)
 	assert.Equal(t, 512, *opts.MaxInputTokens)
+	assert.NotNil(t, opts.ContextWindow)
+	assert.Equal(t, 204800, *opts.ContextWindow)
 	assert.Equal(t, counter, opts.TokenCounter)
 	assert.Equal(t, strategy, opts.TailoringStrategy)
 }
