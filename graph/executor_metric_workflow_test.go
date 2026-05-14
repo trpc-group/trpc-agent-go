@@ -168,6 +168,217 @@ func TestWorkflowMetricBeforeCallbackCustomResultRecordsSuccess(t *testing.T) {
 	require.False(t, workflowPointHasAttrKey(points[0], semconvtrace.KeyErrorType))
 }
 
+func TestWorkflowMetricRecorderBuildsFallbackAttributes(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("unnamed", func(ctx context.Context, state State) (any, error) {
+		return State{"ok": true}, nil
+	}, WithName("")).SetEntryPoint("unnamed").SetFinishPoint("unnamed")
+	exec := compileExecutorForWorkflowMetric(t, sg)
+	execCtx := &ExecutionContext{
+		State: State{
+			StateKeySession: &session.Session{AppName: "state-app", UserID: "state-user"},
+		},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationModel(&MockModel{}))
+	inv.AgentName = "agent-name"
+
+	rec := exec.newWorkflowMetricRecorder(inv, execCtx, "unnamed", NodeTypeLLM, time.Now())
+
+	require.Equal(t, "agent-name", rec.attributes.AgentID)
+	require.Equal(t, "agent-name", rec.attributes.AgentName)
+	require.Equal(t, "mock-model", rec.attributes.System)
+	require.Equal(t, "state-app", rec.attributes.AppName)
+	require.Equal(t, "state-user", rec.attributes.UserID)
+	require.Equal(t, "unnamed", rec.attributes.WorkflowName)
+	require.Equal(t, itelemetry.WorkflowTypeLLM.String(), rec.attributes.WorkflowType)
+
+	appName, userID := exec.getSessionIdentity(nil)
+	require.Empty(t, appName)
+	require.Empty(t, userID)
+}
+
+func TestWorkflowMetricConditionalEdgeFailureRecordsError(t *testing.T) {
+	reader, cleanup := setupWorkflowMetricReader(t)
+	defer cleanup()
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("route", func(ctx context.Context, state State) (any, error) {
+		return State{"ok": true}, nil
+	}).SetEntryPoint("route").SetFinishPoint("route")
+	sg.AddConditionalEdges("route", func(ctx context.Context, state State) (string, error) {
+		return "", fmt.Errorf("route boom")
+	}, map[string]string{End: End})
+	exec := compileExecutorForWorkflowMetric(t, sg)
+
+	ch, err := exec.Execute(context.Background(), State{}, agent.NewInvocation(agent.WithInvocationID("inv-workflow-metric-route-error")))
+	require.NoError(t, err)
+	drainWorkflowEvents(ch)
+
+	point := requireWorkflowErrorPoint(t, collectWorkflowMetricPoints(t, reader))
+	require.Equal(t, uint64(1), point.Count)
+}
+
+func TestWorkflowMetricBeforeCallbackConditionalEdgeFailureRecordsError(t *testing.T) {
+	reader, cleanup := setupWorkflowMetricReader(t)
+	defer cleanup()
+
+	var calls int32
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("route", func(ctx context.Context, state State) (any, error) {
+		atomic.AddInt32(&calls, 1)
+		return State{"ok": true}, nil
+	}).SetEntryPoint("route").SetFinishPoint("route")
+	sg.WithNodeCallbacks(NewNodeCallbacks().RegisterBeforeNode(func(ctx context.Context, cb *NodeCallbackContext, state State) (any, error) {
+		return State{"from_callback": true}, nil
+	}))
+	sg.AddConditionalEdges("route", func(ctx context.Context, state State) (string, error) {
+		return "", fmt.Errorf("before route boom")
+	}, map[string]string{End: End})
+	exec := compileExecutorForWorkflowMetric(t, sg)
+
+	ch, err := exec.Execute(context.Background(), State{}, agent.NewInvocation(agent.WithInvocationID("inv-workflow-metric-before-route-error")))
+	require.NoError(t, err)
+	drainWorkflowEvents(ch)
+
+	require.Equal(t, int32(0), atomic.LoadInt32(&calls))
+	point := requireWorkflowErrorPoint(t, collectWorkflowMetricPoints(t, reader))
+	require.Equal(t, uint64(1), point.Count)
+}
+
+func TestWorkflowMetricRecoveredNodeConditionalEdgeFailureRecordsError(t *testing.T) {
+	reader, cleanup := setupWorkflowMetricReader(t)
+	defer cleanup()
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("recover", func(ctx context.Context, state State) (any, error) {
+		return nil, fmt.Errorf("node boom")
+	}).SetEntryPoint("recover").SetFinishPoint("recover")
+	sg.WithNodeCallbacks(NewNodeCallbacks().RegisterAfterNode(func(
+		ctx context.Context,
+		cb *NodeCallbackContext,
+		state State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		require.Error(t, nodeErr)
+		return State{"recovered": true}, nil
+	}))
+	sg.AddConditionalEdges("recover", func(ctx context.Context, state State) (string, error) {
+		return "", fmt.Errorf("recovered route boom")
+	}, map[string]string{End: End})
+	exec := compileExecutorForWorkflowMetric(t, sg)
+
+	ch, err := exec.Execute(context.Background(), State{}, agent.NewInvocation(agent.WithInvocationID("inv-workflow-metric-recovered-route-error")))
+	require.NoError(t, err)
+	drainWorkflowEvents(ch)
+
+	point := requireWorkflowErrorPoint(t, collectWorkflowMetricPoints(t, reader))
+	require.Equal(t, uint64(1), point.Count)
+}
+
+func TestWorkflowMetricAfterCallbackErrorOnFailedNodeRecordsError(t *testing.T) {
+	reader, cleanup := setupWorkflowMetricReader(t)
+	defer cleanup()
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("fail", func(ctx context.Context, state State) (any, error) {
+		return nil, fmt.Errorf("node boom")
+	}).SetEntryPoint("fail").SetFinishPoint("fail")
+	sg.WithNodeCallbacks(NewNodeCallbacks().RegisterAfterNode(func(
+		ctx context.Context,
+		cb *NodeCallbackContext,
+		state State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		require.Error(t, nodeErr)
+		return nil, fmt.Errorf("after boom")
+	}))
+	exec := compileExecutorForWorkflowMetric(t, sg)
+
+	ch, err := exec.Execute(context.Background(), State{}, agent.NewInvocation(agent.WithInvocationID("inv-workflow-metric-after-error")))
+	require.NoError(t, err)
+	drainWorkflowEvents(ch)
+
+	point := requireWorkflowErrorPoint(t, collectWorkflowMetricPoints(t, reader))
+	require.Equal(t, uint64(1), point.Count)
+}
+
+func TestWorkflowMetricCacheHitConditionalEdgeFailureRecordsError(t *testing.T) {
+	reader, cleanup := setupWorkflowMetricReader(t)
+	defer cleanup()
+
+	var calls int32
+	var routeCalls int32
+	sg := NewStateGraph(NewStateSchema()).
+		WithCache(NewInMemoryCache()).
+		WithCachePolicy(DefaultCachePolicy())
+	sg.AddNode("cached", func(ctx context.Context, state State) (any, error) {
+		atomic.AddInt32(&calls, 1)
+		return State{"ok": true}, nil
+	}).SetEntryPoint("cached").SetFinishPoint("cached")
+	sg.AddConditionalEdges("cached", func(ctx context.Context, state State) (string, error) {
+		if atomic.AddInt32(&routeCalls, 1) == 1 {
+			return End, nil
+		}
+		return "", fmt.Errorf("cache route boom")
+	}, map[string]string{End: End})
+	exec := compileExecutorForWorkflowMetric(t, sg)
+
+	for i := 0; i < 2; i++ {
+		ch, err := exec.Execute(context.Background(), State{}, agent.NewInvocation(agent.WithInvocationID(fmt.Sprintf("inv-workflow-metric-cache-route-%d", i))))
+		require.NoError(t, err)
+		drainWorkflowEvents(ch)
+	}
+
+	require.Equal(t, int32(1), atomic.LoadInt32(&calls))
+	point := requireWorkflowErrorPoint(t, collectWorkflowMetricPoints(t, reader))
+	require.Equal(t, uint64(1), point.Count)
+}
+
+func TestWorkflowMetricRetryCancellationBeforeRetryRecordsError(t *testing.T) {
+	reader, cleanup := setupWorkflowMetricReader(t)
+	defer cleanup()
+
+	exec := &Executor{}
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-workflow-metric-retry-cancel"))
+	execCtx := &ExecutionContext{
+		EventChan:    make(chan *event.Event, 4),
+		InvocationID: inv.InvocationID,
+	}
+	nodeCtx := &nodeExecutionContext{
+		nodeType: NodeTypeFunction,
+		metricRecorder: &workflowMetricRecorder{
+			start: time.Now(),
+			attributes: itelemetry.WorkflowAttributes{
+				WorkflowID:   "retry",
+				WorkflowName: "retry",
+				WorkflowType: itelemetry.WorkflowTypeFunction.String(),
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	shouldRetry, err := exec.waitBeforeRetry(
+		ctx,
+		inv,
+		execCtx,
+		"retry",
+		1,
+		nodeCtx,
+		&retryContext{attempt: 1, err: fmt.Errorf("temporary boom")},
+		RetryPolicy{InitialInterval: time.Hour, BackoffFactor: 1},
+		2,
+	)
+
+	require.False(t, shouldRetry)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+	point := requireWorkflowErrorPoint(t, collectWorkflowMetricPoints(t, reader))
+	require.Equal(t, uint64(1), point.Count)
+}
+
 func setupWorkflowMetricReader(t *testing.T) (*sdkmetric.ManualReader, func()) {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
@@ -249,4 +460,18 @@ func workflowPointHasAttrKey(point metricdata.HistogramDataPoint[float64], key s
 		}
 	}
 	return false
+}
+
+func requireWorkflowErrorPoint(
+	t *testing.T,
+	points []metricdata.HistogramDataPoint[float64],
+) metricdata.HistogramDataPoint[float64] {
+	t.Helper()
+	for _, point := range points {
+		if workflowPointHasAttr(point, semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType) {
+			return point
+		}
+	}
+	t.Fatalf("workflow error point not found")
+	return metricdata.HistogramDataPoint[float64]{}
 }
