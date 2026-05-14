@@ -27,8 +27,6 @@ const (
 
 const workspaceMetadataFileMode uint32 = 0o600
 
-const workspaceMetadataTmpFile = ".metadata.tmp"
-
 // Stager materializes skill package contents into a workspace and maintains
 // the corresponding workspace metadata and links.
 type Stager struct{}
@@ -80,12 +78,33 @@ func (s *Stager) StageSkillWithOptions(
 	if err != nil {
 		return err
 	}
+	return codeexecutor.WithWorkspaceMetadataLock(
+		ctx,
+		ws.Path,
+		func(ctx context.Context) error {
+			return s.stageSkillWithOptionsLocked(
+				ctx, eng, ws, root, name, dg, opts,
+			)
+		},
+	)
+}
+
+func (s *Stager) stageSkillWithOptionsLocked(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	root string,
+	name string,
+	dg string,
+	opts StageOptions,
+) error {
 	md, err := s.LoadWorkspaceMetadata(ctx, eng, ws)
 	if err != nil {
 		return err
 	}
 	dest := path.Join(codeexecutor.DirSkills, name)
-	if meta, ok := md.Skills[name]; ok && meta.Digest == dg && meta.Mounted {
+	if meta, ok := md.Skills[name]; ok &&
+		meta.Digest == dg && meta.Mounted {
 		ok, err := s.SkillLinksPresent(ctx, eng, ws, name)
 		if err != nil {
 			return err
@@ -134,13 +153,7 @@ func (s *Stager) LoadWorkspaceMetadata(
 	ws codeexecutor.Workspace,
 ) (codeexecutor.WorkspaceMetadata, error) {
 	now := time.Now()
-	md := codeexecutor.WorkspaceMetadata{
-		Version:    1,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		LastAccess: now,
-		Skills:     map[string]codeexecutor.SkillMeta{},
-	}
+	md := codeexecutor.NewWorkspaceMetadata()
 	if eng == nil || eng.FS() == nil {
 		return md, fmt.Errorf("workspace fs is not configured")
 	}
@@ -154,6 +167,9 @@ func (s *Stager) LoadWorkspaceMetadata(
 		return md, nil
 	}
 	if err := json.Unmarshal([]byte(files[0].Content), &md); err != nil {
+		if codeexecutor.IsMetadataCorruptError(err) {
+			return codeexecutor.NewWorkspaceMetadata(), nil
+		}
 		return codeexecutor.WorkspaceMetadata{}, err
 	}
 	if md.Version == 0 {
@@ -199,19 +215,27 @@ func (s *Stager) SaveWorkspaceMetadata(
 	if err != nil {
 		return err
 	}
+	tmpFile := codeexecutor.MetadataTempFileName()
+	committed := false
+	defer cleanupMetadataTemp(ctx, eng, ws, tmpFile, &committed)
 	if err := eng.FS().PutFiles(ctx, ws, []codeexecutor.PutFile{{
-		Path:    workspaceMetadataTmpFile,
+		Path:    tmpFile,
 		Content: buf,
 		Mode:    workspaceMetadataFileMode,
 	}}); err != nil {
 		return err
 	}
 	var sb strings.Builder
-	sb.WriteString("set -e; mv -f ")
-	sb.WriteString(shellQuote(workspaceMetadataTmpFile))
-	sb.WriteString(" ")
+	sb.WriteString("set -e; tmp=")
+	sb.WriteString(shellQuote(tmpFile))
+	sb.WriteString("; dest=")
 	sb.WriteString(shellQuote(codeexecutor.MetaFileName))
-	_, err = eng.Runner().RunProgram(
+	sb.WriteString("; trap 'rm -f \"$tmp\"' EXIT; ")
+	sb.WriteString("if [ -d \"$dest\" ]; then ")
+	sb.WriteString("echo \"metadata path is a directory\" >&2; exit 1; ")
+	sb.WriteString("fi; mv -f \"$tmp\" \"$dest\"")
+	sb.WriteString("; trap - EXIT")
+	res, err := eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
 			Args:    []string{"-lc", sb.String()},
@@ -220,7 +244,45 @@ func (s *Stager) SaveWorkspaceMetadata(
 			Timeout: 5 * time.Second,
 		},
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf(
+			"workspace metadata commit failed: exit code %d: %s",
+			res.ExitCode,
+			strings.TrimSpace(res.Stderr),
+		)
+	}
+	committed = true
+	return nil
+}
+
+func cleanupMetadataTemp(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	tmpFile string,
+	committed *bool,
+) {
+	if committed != nil && *committed {
+		return
+	}
+	if eng == nil || eng.Runner() == nil || tmpFile == "" {
+		return
+	}
+	cleanupCtx := context.WithoutCancel(ctx)
+	_, _ = eng.Runner().RunProgram(
+		cleanupCtx,
+		ws,
+		codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", "rm -f " + shellQuote(tmpFile)},
+			Env:     map[string]string{},
+			Cwd:     ".",
+			Timeout: 5 * time.Second,
+		},
+	)
 }
 
 // SkillLinksPresent reports whether the staged skill directory still exposes
@@ -289,7 +351,7 @@ func (s *Stager) linkWorkspaceDirs(
 	sb.WriteString(" work; ln -sfn ")
 	sb.WriteString(shellQuote(toInputs))
 	sb.WriteString(" inputs")
-	_, err := eng.Runner().RunProgram(
+	res, err := eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
 			Args:    []string{"-lc", sb.String()},
@@ -298,7 +360,7 @@ func (s *Stager) linkWorkspaceDirs(
 			Timeout: 5 * time.Second,
 		},
 	)
-	return err
+	return runProgramExitError("link workspace dirs", res, err)
 }
 
 // RemoveWorkspacePath removes a workspace-relative path after first making
@@ -324,7 +386,7 @@ func (s *Stager) RemoveWorkspacePath(
 	sb.WriteString(" -type l -prune -o -exec chmod u+w {} +; fi")
 	sb.WriteString("; rm -rf ")
 	sb.WriteString(shellQuote(target))
-	_, err := eng.Runner().RunProgram(
+	res, err := eng.Runner().RunProgram(
 		ctx,
 		ws,
 		codeexecutor.RunProgramSpec{
@@ -335,7 +397,7 @@ func (s *Stager) RemoveWorkspacePath(
 			Timeout: 5 * time.Second,
 		},
 	)
-	return err
+	return runProgramExitError("remove workspace path", res, err)
 }
 
 func (s *Stager) readOnlyExceptSymlinks(
@@ -351,7 +413,7 @@ func (s *Stager) readOnlyExceptSymlinks(
 	sb.WriteString(" -path ")
 	sb.WriteString(shellQuote(venv))
 	sb.WriteString(" -prune -o -type l -prune -o -exec chmod a-w {} +")
-	_, err := eng.Runner().RunProgram(
+	res, err := eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
 			Args:    []string{"-lc", sb.String()},
@@ -360,7 +422,26 @@ func (s *Stager) readOnlyExceptSymlinks(
 			Timeout: 5 * time.Second,
 		},
 	)
-	return err
+	return runProgramExitError("make skill read-only", res, err)
+}
+
+func runProgramExitError(
+	op string,
+	res codeexecutor.RunResult,
+	err error,
+) error {
+	if err != nil {
+		return err
+	}
+	if res.ExitCode == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s failed: exit code %d: %s",
+		op,
+		res.ExitCode,
+		strings.TrimSpace(res.Stderr),
+	)
 }
 
 func shellQuote(s string) string {

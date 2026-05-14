@@ -431,12 +431,14 @@ func TestCollect_ReadsFiles(t *testing.T) {
 
 func TestCollect_FiltersPathsOutsideWorkspace(t *testing.T) {
 	calls := 0
+	tmpName := codeexecutor.MetadataTempFileName()
 	srv := newMockE2BServer(t, func(code string) string {
 		calls++
 		if calls == 1 {
 			return ndjsonLines(stdoutMsg(
 				"__E2B_BASE__=/tmp/ws\n" +
 					"/tmp/ws/out/safe.txt\n" +
+					"/tmp/ws/" + tmpName + "\n" +
 					"/etc/passwd\n" +
 					"/tmp/wsmalicious/x.txt\n" +
 					"/tmp/ws/../escaped.txt\n"))
@@ -462,12 +464,14 @@ func TestCollect_FiltersPathsOutsideWorkspace(t *testing.T) {
 
 func TestCollectOutputs_FiltersPathsOutsideWorkspace(t *testing.T) {
 	calls := 0
+	tmpName := codeexecutor.MetadataTempFileName()
 	srv := newMockE2BServer(t, func(code string) string {
 		calls++
 		if calls == 1 {
 			return ndjsonLines(stdoutMsg(
 				"__E2B_BASE__=/tmp/ws\n" +
 					"/etc/passwd\n" +
+					"/tmp/ws/" + tmpName + "\n" +
 					"/tmp/ws/out/ok.txt\n"))
 		}
 		body := strings.Join([]string{
@@ -754,6 +758,84 @@ func TestPinnedArtifactVersion(t *testing.T) {
 	assert.Nil(t, pinnedArtifactVersion(md2, "name", "t"))
 }
 
+func TestSaveWorkspaceMetadata_ReturnsCommitExitError(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string {
+		switch {
+		case strings.Contains(code, "base64 -d >"):
+			return ndjsonLines(stdoutMsg(""))
+		case strings.Contains(code, "mv -f"):
+			require.Contains(t, code, "metadata path is a directory")
+			stdout := strings.Join([]string{
+				sentinelStdoutBegin,
+				sentinelStdoutEnd,
+				sentinelExitPrefix + "1",
+			}, "\n") + "\n"
+			stderr := strings.Join([]string{
+				sentinelStderrBegin,
+				"mv failed",
+				sentinelStderrEnd,
+			}, "\n") + "\n"
+			return ndjsonLines(stdoutMsg(stdout), stderrMsg(stderr))
+		case strings.Contains(code, "rm -f"):
+			stdout := strings.Join([]string{
+				sentinelStdoutBegin,
+				sentinelStdoutEnd,
+				sentinelExitPrefix + "0",
+			}, "\n") + "\n"
+			stderr := strings.Join([]string{
+				sentinelStderrBegin,
+				sentinelStderrEnd,
+			}, "\n") + "\n"
+			return ndjsonLines(stdoutMsg(stdout), stderrMsg(stderr))
+		default:
+			return ndjsonLines(stdoutMsg(""))
+		}
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	err := c.ensureRuntime().saveWorkspaceMetadata(
+		context.Background(),
+		codeexecutor.Workspace{ID: "w", Path: "/workspace"},
+		codeexecutor.WorkspaceMetadata{},
+	)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exit code 1")
+}
+
+func TestSaveWorkspaceMetadata_ReturnsWriteError(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string {
+		if strings.Contains(code, "base64 -d >") {
+			return ndjsonLines(errorMsg(
+				"RuntimeError",
+				"write failed",
+				"",
+			))
+		}
+		return ndjsonLines(stdoutMsg(""))
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	err := c.ensureRuntime().saveWorkspaceMetadata(
+		context.Background(),
+		codeexecutor.Workspace{ID: "w", Path: "/workspace"},
+		codeexecutor.WorkspaceMetadata{},
+	)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "write failed")
+}
+
+func TestCleanupMetadataTempEmptyPath(t *testing.T) {
+	c := &CodeExecutor{}
+	rt := c.ensureRuntime()
+	committed := false
+
+	rt.cleanupMetadataTemp(context.Background(), "", &committed)
+}
+
 func TestSanitize_Unicode(t *testing.T) {
 	assert.Equal(t, "_abc_",
 		sanitize("中abc中"),
@@ -838,6 +920,31 @@ func TestLoadWorkspaceMetadata_ParsesJSON(t *testing.T) {
 	err := c.StageInputs(context.Background(), ws,
 		[]codeexecutor.InputSpec{{From: "workspace://data.txt"}})
 	require.NoError(t, err)
+}
+
+func TestLoadWorkspaceMetadata_RecoversCorruptJSON(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string {
+		if strings.Contains(code, "metadata.json") {
+			body := strings.Join([]string{
+				"__E2B_SIZE__=9",
+				"__E2B_B64_BEGIN__",
+				base64.StdEncoding.EncodeToString([]byte("not-json}")),
+				"__E2B_B64_END__",
+			}, "\n") + "\n"
+			return ndjsonLines(stdoutMsg(body))
+		}
+		return ""
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	md, err := c.ensureRuntime().loadWorkspaceMetadata(
+		context.Background(),
+		codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, md.Version)
+	require.NotNil(t, md.Skills)
 }
 
 func TestCollectOutputs_LimitsAndNameTemplate(t *testing.T) {

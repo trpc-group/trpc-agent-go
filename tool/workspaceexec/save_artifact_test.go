@@ -299,6 +299,31 @@ func TestSaveArtifactTool_ManifestFailures(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "boom")
 	})
+
+	t.Run("partial output commit keeps saved artifact", func(t *testing.T) {
+		tl := NewSaveArtifactTool(newStubExecTool(
+			stubOutputFS{
+				manifest: codeexecutor.OutputManifest{
+					Files: []codeexecutor.FileRef{{
+						Name:      "out/site.zip",
+						SavedAs:   "out/site.zip",
+						Version:   2,
+						SizeBytes: 10,
+					}},
+				},
+				err: codeexecutor.ErrPartialOutputCommit,
+			},
+		))
+		ctx := saveArtifactContext()
+		enc, err := json.Marshal(saveArtifactInput{Path: "out/site.zip"})
+		require.NoError(t, err)
+
+		res, err := tl.Call(ctx, enc)
+
+		require.NoError(t, err)
+		out := res.(saveArtifactOutput)
+		require.Equal(t, "artifact://out/site.zip@2", out.Ref)
+	})
 }
 
 func TestSaveArtifactTool_StateDeltaFallbacks(t *testing.T) {
