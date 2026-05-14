@@ -87,6 +87,35 @@ func StageConversationFiles(
 		return nil, nil
 	}
 
+	var staged []StagedInput
+	var warnings []string
+	if err := codeexecutor.WithWorkspaceMetadataLock(
+		ctx,
+		ws.Path,
+		func(ctx context.Context) error {
+			staged, warnings = stageConversationFilesLocked(
+				ctx, eng, ws, files,
+			)
+			return nil
+		},
+	); err != nil {
+		return nil, []string{
+			fmt.Sprintf("%s lock metadata: %v", warnPrefix, err),
+		}
+	}
+	return staged, warnings
+}
+
+func stageConversationFilesLocked(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	files []model.File,
+) ([]StagedInput, []string) {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return nil, nil
+	}
 	stager := skillstage.New()
 	md, err := stager.LoadWorkspaceMetadata(ctx, eng, ws)
 	if err != nil {

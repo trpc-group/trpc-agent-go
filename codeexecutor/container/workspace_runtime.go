@@ -517,6 +517,9 @@ func (r *workspaceRuntime) Collect(
 		if rel == line {
 			rel = filepath.ToSlash(line)
 		}
+		if codeexecutor.IsRootMetadataTempPath(rel) {
+			continue
+		}
 		if seen[rel] {
 			continue
 		}
@@ -538,6 +541,20 @@ func (r *workspaceRuntime) Collect(
 
 // StageInputs maps external inputs using container semantics.
 func (r *workspaceRuntime) StageInputs(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	specs []codeexecutor.InputSpec,
+) error {
+	return codeexecutor.WithWorkspaceMetadataLock(
+		ctx,
+		ws.Path,
+		func(ctx context.Context) error {
+			return r.stageInputsLocked(ctx, ws, specs)
+		},
+	)
+}
+
+func (r *workspaceRuntime) stageInputsLocked(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
@@ -780,11 +797,45 @@ func (r *workspaceRuntime) saveWorkspaceMetadata(
 	if err != nil {
 		return err
 	}
-	return r.PutFiles(ctx, ws, []codeexecutor.PutFile{{
-		Path:    codeexecutor.MetaFileName,
+	tmpFile := codeexecutor.MetadataTempFileName()
+	tmpPath := path.Join(ws.Path, tmpFile)
+	destPath := path.Join(ws.Path, codeexecutor.MetaFileName)
+	committed := false
+	defer r.cleanupMetadataTemp(ctx, tmpPath, &committed)
+	if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    tmpFile,
 		Content: buf,
 		Mode:    metadataFileMode,
-	}})
+	}}); err != nil {
+		return err
+	}
+	var sb strings.Builder
+	sb.WriteString("set -e; tmp=")
+	sb.WriteString(shellQuote(tmpPath))
+	sb.WriteString("; dest=")
+	sb.WriteString(shellQuote(destPath))
+	sb.WriteString("; trap 'rm -f \"$tmp\"' EXIT; ")
+	sb.WriteString("if [ -d \"$dest\" ]; then ")
+	sb.WriteString("echo \"metadata path is a directory\" >&2; exit 1; ")
+	sb.WriteString("fi; mv -f \"$tmp\" \"$dest\"")
+	sb.WriteString("; trap - EXIT")
+	_, stderr, code, _, err := r.execCmd(
+		ctx,
+		[]string{"/bin/bash", "-lc", sb.String()},
+		time.Duration(defaultStageTimeoutSec)*time.Second,
+	)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf(
+			"workspace metadata commit failed: exit code %d: %s",
+			code,
+			strings.TrimSpace(stderr),
+		)
+	}
+	committed = true
+	return nil
 }
 
 func (r *workspaceRuntime) loadWorkspaceMetadata(
@@ -809,6 +860,9 @@ func (r *workspaceRuntime) loadWorkspaceMetadata(
 		return md, nil
 	}
 	if err := json.Unmarshal([]byte(files[0].Content), &md); err != nil {
+		if codeexecutor.IsMetadataCorruptError(err) {
+			return codeexecutor.NewWorkspaceMetadata(), nil
+		}
 		return codeexecutor.WorkspaceMetadata{}, err
 	}
 	if md.Version == 0 {
@@ -822,6 +876,29 @@ func (r *workspaceRuntime) loadWorkspaceMetadata(
 		md.Skills = map[string]codeexecutor.SkillMeta{}
 	}
 	return md, nil
+}
+
+func (r *workspaceRuntime) cleanupMetadataTemp(
+	ctx context.Context,
+	tmpPath string,
+	committed *bool,
+) {
+	if committed != nil && *committed {
+		return
+	}
+	if tmpPath == "" {
+		return
+	}
+	cleanupCtx := context.WithoutCancel(ctx)
+	_, _, _, _, _ = r.execCmd(
+		cleanupCtx,
+		[]string{
+			"/bin/bash",
+			"-lc",
+			"rm -f " + shellQuote(tmpPath),
+		},
+		time.Duration(defaultStageTimeoutSec)*time.Second,
+	)
 }
 
 // CollectOutputs applies container-side glob and optional save.
@@ -874,6 +951,10 @@ func (r *workspaceRuntime) CollectOutputs(
 			mf.LimitsHit = true
 			break
 		}
+		rel := strings.TrimPrefix(line, ws.Path+"/")
+		if codeexecutor.IsRootMetadataTempPath(rel) {
+			continue
+		}
 		data, sizeBytes, _, mime, err := r.copyFileOut(ctx, line)
 		if err != nil {
 			return codeexecutor.OutputManifest{}, err
@@ -895,7 +976,6 @@ func (r *workspaceRuntime) CollectOutputs(
 			)
 		}
 		left -= int64(len(data))
-		rel := strings.TrimPrefix(line, ws.Path+"/")
 		ref := codeexecutor.FileRef{
 			Name:      rel,
 			MIMEType:  mime,

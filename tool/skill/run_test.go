@@ -2969,6 +2969,41 @@ func TestRunTool_OutputsSpec_Inline_NoSave(t *testing.T) {
 	require.Len(t, out.ArtifactFiles, 0)
 }
 
+func TestRunTool_OutputsSpec_PartialMetadataCommitReturnsFiles(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "rm -rf " + codeexecutor.MetaFileName + "; mkdir " +
+			codeexecutor.MetaFileName + "; mkdir -p out; echo " +
+			contentHi + " > " + outATxt,
+		Cwd: "$" + codeexecutor.WorkspaceEnvDirKey,
+		Outputs: &codeexecutor.OutputSpec{
+			Globs:  []string{outGlobTxt},
+			Inline: true,
+			Save:   false,
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, outATxt, out.OutputFiles[0].Name)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+	require.Contains(t, out.Warnings, warnPartialOutputCommit)
+}
+
 // Using Outputs spec with Save=true and Inline=false should attach
 // artifact refs from manifest without inlining file content.
 func TestRunTool_OutputsSpec_Save_NoInline(t *testing.T) {
@@ -4455,7 +4490,7 @@ func TestRunTool_stageSkill_StageDirectoryError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRunTool_stageSkill_LoadMetadataError(t *testing.T) {
+func TestRunTool_stageSkill_RecoversCorruptMetadata(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSkill(t, root, testSkillName)
 
@@ -4473,7 +4508,11 @@ func TestRunTool_stageSkill_LoadMetadataError(t *testing.T) {
 	err = rt.stageSkill(context.Background(), eng, ws, dir,
 		testSkillName,
 	)
-	require.Error(t, err)
+	require.NoError(t, err)
+
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Contains(t, md.Skills, testSkillName)
 }
 
 func TestRunTool_stageSkill_CreatesInputsDir(t *testing.T) {
@@ -5238,6 +5277,7 @@ type stubRunner struct {
 	err      error
 	calls    int
 	lastSpec codeexecutor.RunProgramSpec
+	specs    []codeexecutor.RunProgramSpec
 }
 
 func (r *stubRunner) RunProgram(
@@ -5247,6 +5287,7 @@ func (r *stubRunner) RunProgram(
 ) (codeexecutor.RunResult, error) {
 	r.calls++
 	r.lastSpec = spec
+	r.specs = append(r.specs, spec)
 	return r.res, r.err
 }
 
@@ -5338,19 +5379,29 @@ func TestRunTool_saveWorkspaceMetadata_CoversBranches(t *testing.T) {
 	err = rt.saveWorkspaceMetadata(ctx, eng, ws, md)
 	require.Error(t, err)
 	require.Equal(t, 1, fs.putCalls)
-	require.Equal(t, 0, r.calls)
-	require.Equal(t, workspaceMetadataTmpFile, fs.putFiles[0].Path)
+	require.Equal(t, 1, r.calls)
+	require.True(t, codeexecutor.IsMetadataTempFileName(
+		fs.putFiles[0].Path,
+	))
 	require.Equal(t, workspaceMetadataFileMode, fs.putFiles[0].Mode)
+	require.Contains(t, r.specs[0].Args[1], "rm -f")
 
 	fs.putErr = nil
 	r.err = fmt.Errorf(errRunFail)
 	err = rt.saveWorkspaceMetadata(ctx, eng, ws, md)
 	require.Error(t, err)
 	require.Equal(t, 2, fs.putCalls)
-	require.Equal(t, 1, r.calls)
-	require.Equal(t, "bash", r.lastSpec.Cmd)
-	require.Len(t, r.lastSpec.Args, 2)
-	require.Contains(t, r.lastSpec.Args[1], "mv -f")
+	require.Equal(t, 3, r.calls)
+	require.Equal(t, "bash", r.specs[1].Cmd)
+	require.Len(t, r.specs[1].Args, 2)
+	require.Contains(t, r.specs[1].Args[1], "mv -f")
+	require.Contains(t, r.specs[2].Args[1], "rm -f")
+
+	r.err = nil
+	r.res = codeexecutor.RunResult{ExitCode: 1, Stderr: errRunFail}
+	err = rt.saveWorkspaceMetadata(ctx, eng, ws, md)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exit code 1")
 }
 
 func TestRunTool_skillLinksPresent_ExitCodes(t *testing.T) {

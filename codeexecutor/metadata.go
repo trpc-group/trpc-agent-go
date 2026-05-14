@@ -11,14 +11,21 @@
 package codeexecutor
 
 import (
+	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -50,6 +57,207 @@ const (
 	EnvRunDir    = "RUN_DIR"
 	EnvSkillName = "SKILL_NAME"
 )
+
+const (
+	metadataFileMode       fs.FileMode = 0o600
+	legacyMetadataTmpName              = ".metadata.tmp"
+	metadataTmpPrefix                  = ".metadata."
+	metadataTmpSuffix                  = ".tmp"
+	metadataTmpPartCount               = 4
+	metadataRandomHexLen               = 16
+	metadataNoRandomSuffix             = "norand"
+	emptyMetadataLockKey               = "__empty_workspace__"
+)
+
+var (
+	metadataTmpCounter uint64
+	metadataLocks      = newWorkspaceMetadataLocker()
+)
+
+type workspaceMetadataLocker struct {
+	mu    sync.Mutex
+	locks map[string]*workspaceMetadataLock
+}
+
+type workspaceMetadataLock struct {
+	ch   chan struct{}
+	refs int
+}
+
+func newWorkspaceMetadataLocker() *workspaceMetadataLocker {
+	return &workspaceMetadataLocker{
+		locks: make(map[string]*workspaceMetadataLock),
+	}
+}
+
+// MetadataTempFileName returns a unique workspace-relative temporary file
+// name suitable for atomically replacing metadata.json.
+func MetadataTempFileName() string {
+	id := atomic.AddUint64(&metadataTmpCounter, 1)
+	return fmt.Sprintf(
+		"%s%d.%d.%d.%s%s",
+		metadataTmpPrefix,
+		os.Getpid(),
+		time.Now().UnixNano(),
+		id,
+		metadataRandomSuffix(),
+		metadataTmpSuffix,
+	)
+}
+
+// NewWorkspaceMetadata returns a metadata value initialized with defaults.
+func NewWorkspaceMetadata() WorkspaceMetadata {
+	now := time.Now()
+	return WorkspaceMetadata{
+		Version:    1,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		LastAccess: now,
+		Skills:     map[string]SkillMeta{},
+	}
+}
+
+// IsMetadataCorruptError reports whether err came from decoding workspace
+// metadata JSON.
+func IsMetadataCorruptError(err error) bool {
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return true
+	}
+	var typeErr *json.UnmarshalTypeError
+	return errors.As(err, &typeErr)
+}
+
+// IsMetadataTempFileName reports whether name is a metadata temp file created
+// by MetadataTempFileName.
+func IsMetadataTempFileName(name string) bool {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == legacyMetadataTmpName {
+		return true
+	}
+	if !strings.HasPrefix(base, metadataTmpPrefix) ||
+		!strings.HasSuffix(base, metadataTmpSuffix) {
+		return false
+	}
+	body := strings.TrimPrefix(base, metadataTmpPrefix)
+	body = strings.TrimSuffix(body, metadataTmpSuffix)
+	parts := strings.Split(body, ".")
+	if len(parts) != metadataTmpPartCount {
+		return false
+	}
+	for _, part := range parts[:metadataTmpPartCount-1] {
+		n, err := strconv.ParseUint(part, 10, 64)
+		if err != nil || n == 0 {
+			return false
+		}
+	}
+	return isMetadataRandomSuffix(parts[metadataTmpPartCount-1])
+}
+
+// IsRootMetadataTempPath reports whether rel identifies a root-level
+// workspace metadata temp file.
+func IsRootMetadataTempPath(rel string) bool {
+	rel = filepath.ToSlash(strings.TrimSpace(rel))
+	return !strings.Contains(rel, "/") && IsMetadataTempFileName(rel)
+}
+
+func metadataRandomSuffix() string {
+	var buf [8]byte
+	if _, err := cryptorand.Read(buf[:]); err != nil {
+		return metadataNoRandomSuffix
+	}
+	return hex.EncodeToString(buf[:])
+}
+
+func isMetadataRandomSuffix(s string) bool {
+	if s == metadataNoRandomSuffix {
+		return true
+	}
+	if len(s) != metadataRandomHexLen {
+		return false
+	}
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r >= 'a' && r <= 'f' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// WithWorkspaceMetadataLock serializes metadata read-modify-write operations
+// for the same workspace within this process. The callback should keep the
+// critical section limited to metadata load, mutation, and save.
+func WithWorkspaceMetadataLock(
+	ctx context.Context,
+	root string,
+	fn func(context.Context) error,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	key := workspaceMetadataLockKey(root)
+	unlock, err := metadataLocks.lock(ctx, key)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn(ctx)
+}
+
+func workspaceMetadataLockKey(root string) string {
+	key := strings.TrimSpace(root)
+	if key == "" {
+		return emptyMetadataLockKey
+	}
+	if abs, err := filepath.Abs(key); err == nil {
+		key = abs
+	}
+	return filepath.Clean(key)
+}
+
+func (k *workspaceMetadataLocker) lock(
+	ctx context.Context,
+	key string,
+) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	k.mu.Lock()
+	kl, ok := k.locks[key]
+	if !ok {
+		kl = &workspaceMetadataLock{ch: make(chan struct{}, 1)}
+		k.locks[key] = kl
+	}
+	kl.refs++
+	k.mu.Unlock()
+
+	select {
+	case kl.ch <- struct{}{}:
+	case <-ctx.Done():
+		k.releaseRef(key, kl)
+		return nil, ctx.Err()
+	}
+	return func() {
+		<-kl.ch
+		k.releaseRef(key, kl)
+	}, nil
+}
+
+func (k *workspaceMetadataLocker) releaseRef(
+	key string,
+	kl *workspaceMetadataLock,
+) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	kl.refs--
+	if kl.refs == 0 {
+		delete(k.locks, key)
+	}
+}
 
 // WorkspaceMetadata describes staged skills and recent activity.
 type WorkspaceMetadata struct {
@@ -126,13 +334,7 @@ func EnsureLayout(root string) (map[string]string, error) {
 	mf := filepath.Join(root, MetaFileName)
 	if _, err := os.Stat(mf); err != nil {
 		if os.IsNotExist(err) {
-			md := WorkspaceMetadata{
-				Version:    1,
-				CreatedAt:  time.Now(),
-				UpdatedAt:  time.Now(),
-				LastAccess: time.Now(),
-				Skills:     map[string]SkillMeta{},
-			}
+			md := NewWorkspaceMetadata()
 			if err := SaveMetadata(root, md); err != nil {
 				return nil, err
 			}
@@ -150,13 +352,7 @@ func LoadMetadata(root string) (WorkspaceMetadata, error) {
 	b, err := os.ReadFile(mf)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return WorkspaceMetadata{
-				Version:    1,
-				CreatedAt:  time.Now(),
-				UpdatedAt:  time.Now(),
-				LastAccess: time.Now(),
-				Skills:     map[string]SkillMeta{},
-			}, nil
+			return NewWorkspaceMetadata(), nil
 		}
 		return WorkspaceMetadata{}, err
 	}
@@ -174,11 +370,33 @@ func SaveMetadata(root string, md WorkspaceMetadata) error {
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(root, ".metadata.tmp")
-	if err := os.WriteFile(tmp, buf, 0o600); err != nil {
+	tmp := filepath.Join(root, MetadataTempFileName())
+	f, err := os.OpenFile(
+		tmp,
+		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
+		metadataFileMode,
+	)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(root, MetaFileName))
+	removeTmp := true
+	defer func() {
+		if removeTmp {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(buf); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(root, MetaFileName)); err != nil {
+		return err
+	}
+	removeTmp = false
+	return nil
 }
 
 // DirDigest computes a stable digest of a directory tree. It walks

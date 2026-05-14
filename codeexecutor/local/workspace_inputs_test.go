@@ -64,6 +64,54 @@ func TestStageInputs_WorkspaceAndArtifact(t *testing.T) {
 	require.GreaterOrEqual(t, len(man.Files), 2)
 }
 
+func TestStageInputs_RecoversCorruptMetadata(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx,
+		"inputs-invalid-metadata",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ws.Path, codeexecutor.MetaFileName),
+		[]byte("not-json"),
+		0o600,
+	))
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "workspace://" + filepath.Join(codeexecutor.DirWork, "missing"),
+		To:   filepath.Join(codeexecutor.DirWork, "inputs", "missing"),
+	}})
+	require.Error(t, err)
+
+	require.NoError(t, rt.StageInputs(ctx, ws, nil))
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Equal(t, 1, md.Version)
+}
+
+func TestStageInputs_MetadataDirectoryErrors(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx,
+		"inputs-metadata-dir",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	metaPath := filepath.Join(ws.Path, codeexecutor.MetaFileName)
+	require.NoError(t, os.Remove(metaPath))
+	require.NoError(t, os.Mkdir(metaPath, 0o755))
+
+	err = rt.StageInputs(ctx, ws, nil)
+
+	require.Error(t, err)
+}
+
 func TestStageInputs_HostLinkAndCopy(t *testing.T) {
 	rt := local.NewRuntime("")
 	ctx := context.Background()

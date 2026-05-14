@@ -130,7 +130,9 @@ type WorkspaceFS interface {
 	StageInputs(ctx context.Context, ws Workspace,
 		specs []InputSpec) error
 	// CollectOutputs applies the declarative output spec to collect
-	// files and optionally persist artifacts.
+	// files and optionally persist artifacts. Implementations should
+	// return ErrPartialOutputCommit when output collection completed but
+	// the metadata record could not be committed.
 	CollectOutputs(ctx context.Context, ws Workspace,
 		spec OutputSpec) (OutputManifest, error)
 }
