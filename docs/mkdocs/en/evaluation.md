@@ -960,7 +960,7 @@ Example configuration snippet uses regex matching and case-insensitive mode.
 }
 ```
 
-If you only want to validate actual text length without comparing it with expected text, configure `length` and set `matchStrategy` to `skip`.
+If you only want to validate actual text length without comparing it with expected text, configure `length` and set `matchStrategy` to `skip`. `skip` only skips built-in text matching; when `Compare` is not configured, `length` still runs. When `Compare` is configured, the custom logic is used and built-in length validation and text matching are not executed.
 
 ```json
 {
@@ -972,7 +972,7 @@ If you only want to validate actual text length without comparing it with expect
 }
 ```
 
-TextCriterion provides a `Compare` extension to override default comparison logic. When `Compare` is configured, the custom logic is used and built-in length validation and text matching are not executed.
+TextCriterion provides a `Compare` extension to override default comparison logic.
 
 The following snippet uses `Compare` to trim spaces before comparison.
 
@@ -1011,7 +1011,7 @@ type JSONMatchStrategy string
 
 Currently, `matchStrategy` supports `exact` and `skip`, with default `exact`. `exact` compares JSON values structurally, and `skip` skips built-in JSON value matching.
 
-During comparison, `actual` is the actual value and `expected` is the expected value. `valid` validates whether actual is a complete and strict legal JSON document. If you only want JSON validity validation without comparing against expected, configure both `valid: true` and `matchStrategy: "skip"`. `skip` only skips built-in JSON value matching; it does not skip `valid` validation or a `Compare` function injected from code. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
+During comparison, `actual` is the actual value and `expected` is the expected value. `valid` validates whether actual is a complete and strict legal JSON document. When `valid: true` is configured, only actual validity is checked, and expected is not compared. `skip` skips built-in JSON value matching when neither `Compare` nor `valid` is configured, and is commonly used to make a JSON criterion a no-op in a unified template. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 
