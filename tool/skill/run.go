@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -127,13 +128,16 @@ const (
 const (
 	skillDirInputs = "inputs"
 	skillDirVenv   = ".venv"
+	skillDirBin    = "bin"
 )
 
 const (
-	envPath       = "PATH"
-	envVirtualEnv = "VIRTUAL_ENV"
-	envEditor     = "EDITOR"
-	envVisual     = "VISUAL"
+	envPath            = "PATH"
+	envVirtualEnv      = "VIRTUAL_ENV"
+	envEditor          = "EDITOR"
+	envVisual          = "VISUAL"
+	posixPathListSep   = ":"
+	windowsPathListSep = ";"
 )
 
 const (
@@ -243,7 +247,7 @@ func (t *RunTool) setAllowedCommands(cmds []string) {
 		t.allowedCmds = make(map[string]struct{}, len(cmds))
 	}
 	for _, c := range cmds {
-		s := strings.TrimSpace(c)
+		s := normalizeCommandForList(c)
 		if s == "" {
 			continue
 		}
@@ -271,7 +275,7 @@ func (t *RunTool) setDeniedCommands(cmds []string) {
 		t.deniedCmds = make(map[string]struct{}, len(cmds))
 	}
 	for _, c := range cmds {
-		s := strings.TrimSpace(c)
+		s := normalizeCommandForList(c)
 		if s == "" {
 			continue
 		}
@@ -1134,20 +1138,50 @@ func (t *RunTool) buildRunProgramSpec(
 		return codeexecutor.RunProgramSpec{}, err
 	}
 
-	venvRel, venvBinRel := venvRelPaths(cwd, skillRoot)
+	venvRel, venvBinRel, skillBinRel := skillLocalRelPaths(
+		cwd,
+		skillRoot,
+	)
 
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
-		injectVenvEnv(env, venvRel, venvBinRel)
+		injectSkillLocalEnvWithSep(
+			env,
+			venvRel,
+			venvBinRel,
+			skillBinRel,
+			pathListSeparatorForEngine(eng),
+		)
 		argv, err := splitCommandLine(in.Command)
 		if err != nil {
 			return codeexecutor.RunProgramSpec{}, err
 		}
 		cmd := argv[0]
-		if len(t.allowedCmds) > 0 && !cmdInList(t.allowedCmds, cmd) {
+		if _, ok := matchSkillLocalCommand(
+			t.deniedCmds,
+			cmd,
+			venvBinRel,
+			"",
+		); ok {
 			return codeexecutor.RunProgramSpec{}, fmt.Errorf(
-				"skill_run: command %q is not allowed by allowed_commands",
+				"skill_run: command %q is denied by denied_commands",
 				cmd,
 			)
+		}
+		if len(t.allowedCmds) > 0 && !cmdInList(t.allowedCmds, cmd) {
+			if rel, ok := matchSkillLocalCommand(
+				t.allowedCmds,
+				cmd,
+				venvBinRel,
+				skillBinRel,
+			); ok {
+				cmd = rel
+			} else {
+				return codeexecutor.RunProgramSpec{}, fmt.Errorf(
+					"skill_run: command %q is not allowed by "+
+						"allowed_commands",
+					cmd,
+				)
+			}
 		}
 		if cmdInList(t.deniedCmds, cmd) {
 			return codeexecutor.RunProgramSpec{}, fmt.Errorf(
@@ -1165,7 +1199,12 @@ func (t *RunTool) buildRunProgramSpec(
 		}, nil
 	}
 
-	cmd := wrapWithVenvPrefix(in.Command, venvRel, venvBinRel)
+	cmd := wrapWithSkillLocalPrefix(
+		in.Command,
+		venvRel,
+		venvBinRel,
+		skillBinRel,
+	)
 	return codeexecutor.RunProgramSpec{
 		Cmd:     "bash",
 		Args:    []string{"-c", cmd},
@@ -1177,6 +1216,14 @@ func (t *RunTool) buildRunProgramSpec(
 }
 
 func venvRelPaths(cwd string, skillRoot string) (string, string) {
+	venvRel, venvBinRel, _ := skillLocalRelPaths(cwd, skillRoot)
+	return venvRel, venvBinRel
+}
+
+func skillLocalRelPaths(
+	cwd string,
+	skillRoot string,
+) (string, string, string) {
 	base := path.Clean(strings.TrimSpace(cwd))
 	if base == "" {
 		base = "."
@@ -1186,11 +1233,13 @@ func venvRelPaths(cwd string, skillRoot string) (string, string) {
 		skillRoot = "."
 	}
 	venv := path.Join(skillRoot, skillDirVenv)
-	venvBin := path.Join(venv, "bin")
+	venvBin := path.Join(venv, skillDirBin)
+	skillBin := path.Join(skillRoot, skillDirBin)
 
 	relVenv := slashRel(base, venv)
 	relBin := slashRel(base, venvBin)
-	return relVenv, relBin
+	relSkillBin := slashRel(base, skillBin)
+	return relVenv, relBin, relSkillBin
 }
 
 func (t *RunTool) maybeInjectSkillEnv(
@@ -1308,22 +1357,86 @@ func slashRel(base string, target string) string {
 }
 
 func injectVenvEnv(env map[string]string, venv string, venvBin string) {
+	injectSkillLocalEnv(env, venv, venvBin, "")
+}
+
+func injectSkillLocalEnv(
+	env map[string]string,
+	venv string,
+	venvBin string,
+	skillBin string,
+) {
+	injectSkillLocalEnvWithSep(
+		env,
+		venv,
+		venvBin,
+		skillBin,
+		posixPathListSep,
+	)
+}
+
+func injectSkillLocalEnvWithSep(
+	env map[string]string,
+	venv string,
+	venvBin string,
+	skillBin string,
+	sep string,
+) {
 	if env == nil {
 		return
+	}
+	if sep == "" {
+		sep = posixPathListSep
 	}
 	if _, ok := env[envVirtualEnv]; !ok && strings.TrimSpace(venv) != "" {
 		env[envVirtualEnv] = venv
 	}
-	basePATH := strings.TrimSpace(env[envPath])
+	pathKey := pathEnvKey(env, sep)
+	basePATH := strings.TrimSpace(env[pathKey])
 	if basePATH == "" {
 		basePATH = strings.TrimSpace(os.Getenv(envPath))
 	}
-	sep := string(os.PathListSeparator)
-	if basePATH == "" {
-		env[envPath] = venvBin
-		return
+	pathParts := make([]string, 0, 3)
+	for _, dir := range []string{venvBin, basePATH, skillBin} {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		pathParts = append(pathParts, dir)
 	}
-	env[envPath] = venvBin + sep + basePATH
+	env[pathKey] = strings.Join(pathParts, sep)
+}
+
+func pathEnvKey(env map[string]string, sep string) string {
+	if _, ok := env[envPath]; ok {
+		return envPath
+	}
+	if sep != windowsPathListSep {
+		return envPath
+	}
+	for key := range env {
+		if strings.EqualFold(key, envPath) {
+			return key
+		}
+	}
+	return envPath
+}
+
+type pathListSeparatorProvider interface {
+	PathListSeparator() string
+}
+
+func pathListSeparatorForEngine(eng codeexecutor.Engine) string {
+	if eng == nil || eng.Runner() == nil {
+		return posixPathListSep
+	}
+	provider, ok := eng.Runner().(pathListSeparatorProvider)
+	if !ok {
+		return posixPathListSep
+	}
+	if sep := provider.PathListSeparator(); sep != "" {
+		return sep
+	}
+	return posixPathListSep
 }
 
 func cloneStringMap(src map[string]string) map[string]string {
@@ -1412,14 +1525,21 @@ func buildEditorWrapperScript(contentPath string) string {
 }
 
 func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {
+	return wrapWithSkillLocalPrefix(cmd, venv, venvBin, "")
+}
+
+func wrapWithSkillLocalPrefix(
+	cmd string,
+	venv string,
+	venvBin string,
+	skillBin string,
+) string {
 	var sb strings.Builder
 	sb.WriteString("export ")
 	sb.WriteString(envPath)
 	sb.WriteString("=")
-	sb.WriteString(shellQuote(venvBin))
-	sb.WriteString(":\"$")
-	sb.WriteString(envPath)
-	sb.WriteString("\"; ")
+	writeShellSkillPATH(&sb, venvBin, skillBin)
+	sb.WriteString("; ")
 	sb.WriteString("if [ -z \"$")
 	sb.WriteString(envVirtualEnv)
 	sb.WriteString("\" ]; then export ")
@@ -1429,6 +1549,80 @@ func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {
 	sb.WriteString("; fi; ")
 	sb.WriteString(cmd)
 	return sb.String()
+}
+
+func writeShellSkillPATH(
+	sb *strings.Builder,
+	venvBin string,
+	skillBin string,
+) {
+	if strings.TrimSpace(venvBin) == "" {
+		sb.WriteString("\"$")
+		sb.WriteString(envPath)
+		sb.WriteString("\"")
+	} else {
+		sb.WriteString(shellQuote(venvBin))
+		sb.WriteString("${")
+		sb.WriteString(envPath)
+		sb.WriteString(":+\":$")
+		sb.WriteString(envPath)
+		sb.WriteString("\"}")
+	}
+	if strings.TrimSpace(skillBin) == "" {
+		return
+	}
+	sb.WriteString("; export ")
+	sb.WriteString(envPath)
+	sb.WriteString("=\"${")
+	sb.WriteString(envPath)
+	sb.WriteString(":+$")
+	sb.WriteString(envPath)
+	sb.WriteString(":}\"")
+	sb.WriteString(shellQuote(skillBin))
+}
+
+func isBareCommandName(cmd string) bool {
+	cmd = strings.TrimSpace(cmd)
+	return cmd != "" && cmd == path.Base(cmd) && cmd == filepath.Base(cmd)
+}
+
+func matchSkillLocalCommand(
+	list map[string]struct{},
+	cmd string,
+	venvBinRel string,
+	skillBinRel string,
+) (string, bool) {
+	if len(list) == 0 || !isBareCommandName(cmd) {
+		return "", false
+	}
+	for _, dir := range []string{venvBinRel, skillBinRel} {
+		candidate := skillLocalCommandPath(dir, cmd)
+		if candidate == "" {
+			continue
+		}
+		if cmdInList(list, candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func skillLocalCommandPath(dirRel string, cmd string) string {
+	if strings.TrimSpace(dirRel) == "" {
+		return ""
+	}
+	return forceExplicitRelativeCommand(path.Join(dirRel, cmd))
+}
+
+func forceExplicitRelativeCommand(rel string) string {
+	out := path.Clean(filepath.ToSlash(rel))
+	if out == "." || out == "" {
+		return out
+	}
+	if out == path.Base(out) {
+		return "./" + out
+	}
+	return out
 }
 
 const (
@@ -1450,9 +1644,23 @@ func cmdInList(list map[string]struct{}, cmd string) bool {
 	if _, ok := list[cmd]; ok {
 		return true
 	}
+	if normalized := normalizeCommandForList(cmd); normalized != cmd {
+		if _, ok := list[normalized]; ok {
+			return true
+		}
+	}
 	base := filepathBase(cmd)
 	_, ok := list[base]
 	return ok
+}
+
+func normalizeCommandForList(cmd string) string {
+	cmd = strings.TrimSpace(filepath.ToSlash(cmd))
+	cmd = strings.TrimPrefix(cmd, "./")
+	if cmd == "" {
+		return ""
+	}
+	return path.Clean(cmd)
 }
 
 func splitCommandLine(s string) ([]string, error) {
