@@ -11,6 +11,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -62,6 +64,8 @@ type inProcGatewayClient struct {
 	uploads         *uploads.Store
 	personas        *persona.Store
 	memoryFileStore *memoryfile.Store
+	profileCatalog  runtimeprofile.Catalog
+	profileAppNames []string
 }
 
 func newInProcGatewayClient(
@@ -105,6 +109,22 @@ func (c *inProcGatewayClient) SetMemoryFileStore(store *memoryfile.Store) {
 		return
 	}
 	c.memoryFileStore = store
+}
+
+func (c *inProcGatewayClient) SetRuntimeProfileAppNames(appNames []string) {
+	if c == nil {
+		return
+	}
+	c.profileAppNames = appendUniqueAppNames(nil, appNames...)
+}
+
+func (c *inProcGatewayClient) SetRuntimeProfileCatalog(
+	catalog runtimeprofile.Catalog,
+) {
+	if c == nil {
+		return
+	}
+	c.profileCatalog = catalog
 }
 
 func (c *inProcGatewayClient) SendMessage(
@@ -207,59 +227,101 @@ func (c *inProcGatewayClient) ForgetUser(
 		}
 	}
 
-	storageUserIDs := []string{userID}
-	var indexedStorageUsers []string
-	var err error
+	appNames, err := c.forgetAppNames(ctx)
+	if err != nil {
+		return err
+	}
+	allStorageUserIDs := []string{userID}
+	appStorageUserIDs := make(map[string][]string, len(appNames))
+	appIndexedStorageUsers := make(map[string][]string, len(appNames))
 	if c.sessions != nil {
-		indexedStorageUsers, err = conversationscope.ListIndexedStorageUsers(
-			ctx,
-			c.sessions,
-			appName,
-			userID,
-		)
-		if err != nil {
-			return fmt.Errorf("forget: list storage scopes: %w", err)
-		}
-		storageUserIDs = appendUniqueUserIDs(
-			storageUserIDs,
-			indexedStorageUsers...,
-		)
-		for _, storageUserID := range storageUserIDs {
-			sessions, err := c.sessions.ListSessions(
-				ctx,
-				session.UserKey{AppName: appName, UserID: storageUserID},
-			)
+		for _, currentAppName := range appNames {
+			indexedStorageUsers, err :=
+				conversationscope.ListIndexedStorageUsers(
+					ctx,
+					c.sessions,
+					currentAppName,
+					userID,
+				)
 			if err != nil {
-				return fmt.Errorf("forget: list sessions: %w", err)
+				return fmt.Errorf(
+					"forget: list storage scopes: %w",
+					err,
+				)
 			}
-			for _, sess := range sessions {
-				if sess == nil || strings.TrimSpace(sess.ID) == "" {
-					continue
+			appIndexedStorageUsers[currentAppName] = indexedStorageUsers
+			storageUserIDs := appendUniqueUserIDs(
+				[]string{userID},
+				indexedStorageUsers...,
+			)
+			appStorageUserIDs[currentAppName] = storageUserIDs
+			allStorageUserIDs = appendUniqueUserIDs(
+				allStorageUserIDs,
+				indexedStorageUsers...,
+			)
+			for _, storageUserID := range storageUserIDs {
+				sessions, err := c.sessions.ListSessions(
+					ctx,
+					session.UserKey{
+						AppName: currentAppName,
+						UserID:  storageUserID,
+					},
+				)
+				if err != nil {
+					return fmt.Errorf("forget: list sessions: %w", err)
 				}
-				if cron.IsRunSessionID(sess.ID) {
-					continue
-				}
-				key := session.Key{
-					AppName:   appName,
-					UserID:    storageUserID,
-					SessionID: sess.ID,
-				}
-				if err := c.sessions.DeleteSession(ctx, key); err != nil {
-					return fmt.Errorf("forget: delete session: %w", err)
+				for _, sess := range sessions {
+					if sess == nil || strings.TrimSpace(sess.ID) == "" {
+						continue
+					}
+					if cron.IsRunSessionID(sess.ID) {
+						continue
+					}
+					key := session.Key{
+						AppName:   currentAppName,
+						UserID:    storageUserID,
+						SessionID: sess.ID,
+					}
+					if err := c.sessions.DeleteSession(
+						ctx,
+						key,
+					); err != nil {
+						return fmt.Errorf(
+							"forget: delete session: %w",
+							err,
+						)
+					}
 				}
 			}
 		}
 	}
 
 	if c.memories != nil {
-		userKey := memory.UserKey{AppName: appName, UserID: userID}
-		if err := c.memories.ClearMemories(ctx, userKey); err != nil {
-			return fmt.Errorf("forget: clear memories: %w", err)
+		for _, currentAppName := range appNames {
+			storageUserIDs := appStorageUserIDs[currentAppName]
+			if len(storageUserIDs) == 0 {
+				storageUserIDs = []string{userID}
+			}
+			for _, storageUserID := range storageUserIDs {
+				userKey := memory.UserKey{
+					AppName: currentAppName,
+					UserID:  storageUserID,
+				}
+				if err := c.memories.ClearMemories(
+					ctx,
+					userKey,
+				); err != nil {
+					return fmt.Errorf(
+						"forget: clear memories: %w",
+						err,
+					)
+				}
+			}
 		}
 	}
 
 	if c.uploads != nil {
-		for _, storageUserID := range storageUserIDs {
+		for _, storageUserID := range allStorageUserIDs {
 			if err := c.uploads.DeleteUser(
 				ctx,
 				channel,
@@ -275,40 +337,75 @@ func (c *inProcGatewayClient) ForgetUser(
 		}
 	}
 	if c.memoryFileStore != nil {
-		for _, storageUserID := range storageUserIDs {
-			if err := c.memoryFileStore.DeleteUser(ctx, appName, storageUserID); err != nil {
-				return fmt.Errorf("forget: delete user memory files: %w", err)
+		for _, currentAppName := range appNames {
+			storageUserIDs := appStorageUserIDs[currentAppName]
+			if len(storageUserIDs) == 0 {
+				storageUserIDs = []string{userID}
+			}
+			for _, storageUserID := range storageUserIDs {
+				if err := c.memoryFileStore.DeleteUser(
+					ctx,
+					currentAppName,
+					storageUserID,
+				); err != nil {
+					return fmt.Errorf(
+						"forget: delete user memory files: %w",
+						err,
+					)
+				}
 			}
 		}
 	}
 	if c.sessions != nil {
-		for _, storageUserID := range indexedStorageUsers {
-			if err := conversationscope.DeleteIndexedStorageUser(
-				ctx,
-				c.sessions,
-				appName,
-				userID,
-				storageUserID,
-			); err != nil {
-				return fmt.Errorf(
-					"forget: delete storage scope index: %w",
-					err,
-				)
+		for _, currentAppName := range appNames {
+			indexedStorageUsers := appIndexedStorageUsers[currentAppName]
+			for _, storageUserID := range indexedStorageUsers {
+				if err := conversationscope.DeleteIndexedStorageUser(
+					ctx,
+					c.sessions,
+					currentAppName,
+					userID,
+					storageUserID,
+				); err != nil {
+					return fmt.Errorf(
+						"forget: delete storage scope index: %w",
+						err,
+					)
+				}
 			}
 		}
 	}
 
-	if err := deleteDebugTraces(
-		ctx,
-		c.debugDir,
-		channel,
-		appName,
-		userID,
-	); err != nil {
-		return fmt.Errorf("forget: delete debug traces: %w", err)
+	for _, currentAppName := range appNames {
+		if err := deleteDebugTraces(
+			ctx,
+			c.debugDir,
+			channel,
+			currentAppName,
+			userID,
+		); err != nil {
+			return fmt.Errorf("forget: delete debug traces: %w", err)
+		}
 	}
 
 	return nil
+}
+
+func (c *inProcGatewayClient) forgetAppNames(
+	ctx context.Context,
+) ([]string, error) {
+	appNames := appendUniqueAppNames([]string{c.appName}, c.profileAppNames...)
+	if c.profileCatalog == nil {
+		return appNames, nil
+	}
+	catalogAppNames, err := c.profileCatalog.AppNames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"forget: list runtime profile app names: %w",
+			err,
+		)
+	}
+	return appendUniqueAppNames(appNames, catalogAppNames...), nil
 }
 
 func appendUniqueUserIDs(
@@ -548,6 +645,47 @@ type traceMeta struct {
 	Start debugrecorder.TraceStart `json:"start"`
 }
 
+type traceRuntimeProfileEvent struct {
+	Kind    string         `json:"kind"`
+	Payload map[string]any `json:"payload,omitempty"`
+}
+
+func debugTraceMatchesApp(
+	traceDir string,
+	metaAppName string,
+	appName string,
+) bool {
+	if strings.TrimSpace(metaAppName) == appName {
+		return true
+	}
+	return traceRuntimeProfileAppName(traceDir) == appName
+}
+
+func traceRuntimeProfileAppName(traceDir string) string {
+	raw, err := debugrecorder.ReadEventsFile(traceDir)
+	if err != nil {
+		return ""
+	}
+	for _, line := range bytes.Split(raw, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var event traceRuntimeProfileEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			continue
+		}
+		if event.Kind != debugrecorder.KindRuntimeProfile {
+			continue
+		}
+		appName, _ := event.Payload["profile_app_name"].(string)
+		if appName = strings.TrimSpace(appName); appName != "" {
+			return appName
+		}
+	}
+	return ""
+}
+
 func deleteDebugTraces(
 	ctx context.Context,
 	debugDir string,
@@ -598,9 +736,6 @@ func deleteDebugTraces(
 				return nil
 			}
 
-			if strings.TrimSpace(meta.Start.AppName) != appName {
-				return nil
-			}
 			if strings.TrimSpace(meta.Start.Channel) != channel {
 				return nil
 			}
@@ -610,6 +745,13 @@ func deleteDebugTraces(
 
 			dir := filepath.Dir(path)
 			if filepath.Clean(dir) == filepath.Clean(debugDir) {
+				return nil
+			}
+			if !debugTraceMatchesApp(
+				dir,
+				meta.Start.AppName,
+				appName,
+			) {
 				return nil
 			}
 			dirs = append(dirs, dir)
