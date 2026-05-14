@@ -176,6 +176,8 @@ type Options struct {
 	Model model.Model
 	// Models is a map of models that can be switched by name at runtime.
 	Models map[string]model.Model
+	// ModelSelector selects the default model for each LLMAgent LLM call.
+	ModelSelector agent.ModelSelector
 	// Description is a description of the agent.
 	Description string
 	// Instruction is the instruction template for the agent.
@@ -332,6 +334,9 @@ type Options struct {
 	// Default is 0; the recommended value to pass when opting in is
 	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
+	// ContextCompactionTokenCounter estimates request and tool-result size for
+	// context compaction. When nil, SimpleTokenCounter is used.
+	ContextCompactionTokenCounter model.TokenCounter
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	summaryFormatter func(summary string) string
@@ -507,6 +512,10 @@ type Options struct {
 	// retrieval mode is used for query-time session recall.
 	// Default is session.SearchModeHybrid.
 	PreloadSessionRecallSearchMode session.SearchMode
+	// EnableOnDemandSession enables invocation-scoped
+	// session_search / session_load exposure and injects
+	// a small overview prompt.
+	EnableOnDemandSession bool
 
 	// postToolPromptEnabled controls whether the post-tool dynamic prompt
 	// injection is enabled. When nil (default), injection is enabled to
@@ -579,6 +588,16 @@ func WithModel(model model.Model) Option {
 func WithModels(models map[string]model.Model) Option {
 	return func(opts *Options) {
 		opts.Models = models
+	}
+}
+
+// WithModelSelector sets the default model selector for this LLMAgent.
+// The selector is used only when a run-level selector or explicit run/surface
+// model override is not present. Returning nil with nil error keeps the base
+// model for the call.
+func WithModelSelector(selector agent.ModelSelector) Option {
+	return func(opts *Options) {
+		opts.ModelSelector = selector
 	}
 }
 
@@ -1336,6 +1355,16 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 	}
 }
 
+// WithContextCompactionTokenCounter sets the token counter used by context
+// compaction to evaluate request thresholds and tool-result budgets.
+func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
+	return func(opts *Options) {
+		if counter != nil {
+			opts.ContextCompactionTokenCounter = counter
+		}
+	}
+}
+
 // WithPreserveSameBranch controls whether messages from the same invocation
 // branch lineage (ancestor/descendant) should preserve their original roles
 // instead of being rewritten into user context when used as history.
@@ -1528,6 +1557,14 @@ func WithPreloadSessionRecallSearchMode(
 		default:
 			opts.PreloadSessionRecallSearchMode = session.SearchModeHybrid
 		}
+	}
+}
+
+// WithEnableOnDemandSession enables or disables invocation-scoped on-demand
+// session recall tools and their lightweight overview prompt.
+func WithEnableOnDemandSession(enable bool) Option {
+	return func(opts *Options) {
+		opts.EnableOnDemandSession = enable
 	}
 }
 

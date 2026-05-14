@@ -45,6 +45,7 @@ type Team struct {
 	memberToolSet        tool.ToolSet
 	swarm                SwarmConfig
 	crossRequestTransfer bool
+	swarmHandoffInput    SwarmHandoffInputBuilder
 }
 
 // Mode controls how a Team runs.
@@ -174,6 +175,7 @@ func NewSwarm(
 		memberByName:         memberByName,
 		swarm:                cfg.swarm,
 		crossRequestTransfer: cfg.crossRequestTransfer,
+		swarmHandoffInput:    cfg.swarmHandoffInput,
 	}, nil
 }
 
@@ -271,7 +273,7 @@ func (t *Team) runSwarm(
 		}
 	}
 
-	ensureSwarmRuntime(invocation, t.swarm)
+	ensureSwarmRuntime(invocation, t.swarm, t.swarmHandoffInput)
 	memberPathAllocator := istructure.NewPathAllocator(traceRootNodeID)
 	var memberNodeID string
 	startAgentName := startAgent.Info().Name

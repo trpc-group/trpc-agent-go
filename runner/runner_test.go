@@ -5705,6 +5705,76 @@ func TestRunner_Run_UserMessageRewriter_RewritesCurrentTurnMessages(t *testing.T
 	require.Equal(t, "rewritten", sess.Events[1].Choices[0].Message.Content)
 }
 
+func TestRunner_Run_UserMessageRewriter_RewritesCurrentTurnToolTranscript(t *testing.T) {
+	toolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call_1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "lookup",
+			Arguments: []byte(`{"query":"hello"}`),
+		},
+	}
+	assistantMessage := model.Message{
+		Role:      model.RoleAssistant,
+		Content:   "calling lookup",
+		ToolCalls: []model.ToolCall{toolCall},
+	}
+	rewritten := []model.Message{
+		model.NewUserMessage("first user"),
+		assistantMessage,
+		model.NewToolMessage("call_1", "lookup", `{"answer":"world"}`),
+		model.NewUserMessage("final user"),
+	}
+	modelStub := &sequentialModel{
+		name: "seq",
+		responses: []*model.Response{{
+			ID:   "resp-1",
+			Done: true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("ok"),
+			}},
+		}},
+	}
+	svc := sessioninmemory.NewSessionService()
+	ag := llmagent.New("a", llmagent.WithModel(modelStub))
+	r := NewRunner("app", ag, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return rewritten, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+	requests := modelStub.Requests()
+	require.Len(t, requests, 1)
+	require.Equal(t, rewritten, requests[0].messages)
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 5)
+	require.Equal(t, model.RoleUser, sess.Events[0].Choices[0].Message.Role)
+	require.Equal(t, model.RoleAssistant, sess.Events[1].Choices[0].Message.Role)
+	require.Equal(t, model.RoleTool, sess.Events[2].Choices[0].Message.Role)
+	require.Equal(t, model.RoleUser, sess.Events[3].Choices[0].Message.Role)
+	require.Equal(t, rewritten, []model.Message{
+		sess.Events[0].Choices[0].Message,
+		sess.Events[1].Choices[0].Message,
+		sess.Events[2].Choices[0].Message,
+		sess.Events[3].Choices[0].Message,
+	})
+}
+
 func TestRunner_Run_UserMessageRewriter_EmptyResultReturnsError(t *testing.T) {
 	svc := sessioninmemory.NewSessionService()
 	r := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(svc))
@@ -7625,7 +7695,7 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesGraphChildAgentPatch(
 		t,
 		snapshot,
 		"researcher",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var patch agent.SurfacePatch
 	patch.SetInstruction("child patched instruction")
@@ -7652,6 +7722,222 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesGraphChildAgentPatch(
 		firstSystemMessageContent(childPatched.LatestRequest().messages),
 		"child patched instruction",
 	)
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_AppliesNestedGraphChildLLMPatch(
+	t *testing.T,
+) {
+	childStatic := &scriptedSurfaceModel{
+		name:      "nested-graph-child-static",
+		responses: []model.Message{model.NewAssistantMessage("child static")},
+	}
+	childPatched := &scriptedSurfaceModel{
+		name:      "nested-graph-child-patched",
+		responses: []model.Message{model.NewAssistantMessage("child patched")},
+	}
+	childCompiled := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddLLMNode(
+			"plan",
+			childStatic,
+			"nested child static instruction",
+			nil,
+		).
+		SetEntryPoint("plan").
+		SetFinishPoint("plan").
+		MustCompile()
+	child, err := graphagent.New("research_flow", childCompiled)
+	require.NoError(t, err)
+	parentCompiled := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddAgentNode("research_flow").
+		SetEntryPoint("research_flow").
+		SetFinishPoint("research_flow").
+		MustCompile()
+	parent, err := graphagent.New(
+		"assistant",
+		parentCompiled,
+		graphagent.WithSubAgents([]agent.Agent{child}),
+	)
+	require.NoError(t, err)
+	snapshot := mustExportSnapshot(t, parent)
+	planNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"plan",
+		structure.NodeKindLLM,
+	)
+	require.Equal(t, "assistant/research_flow/plan", planNodeID)
+	var patch agent.SurfacePatch
+	patch.SetInstruction("nested child patched instruction")
+	patch.SetModel(childPatched)
+	r := NewRunner(
+		"app",
+		parent,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-nested-graph-child",
+		"session-nested-graph-child",
+		model.NewUserMessage("nested graph child input"),
+		agent.WithSurfacePatchForNode(planNodeID, patch),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.Response)
+	require.Zero(t, childStatic.RequestCount())
+	require.Equal(t, 1, childPatched.RequestCount())
+	system := firstSystemMessageContent(childPatched.LatestRequest().messages)
+	require.Contains(t, system, "nested child patched instruction")
+	require.NotContains(t, system, "nested child static instruction")
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_AppliesNestedGraphAgentNodePatch(
+	t *testing.T,
+) {
+	reviewerStatic := &scriptedSurfaceModel{
+		name:      "nested-agent-node-static",
+		responses: []model.Message{model.NewAssistantMessage("reviewer static")},
+	}
+	reviewerPatched := &scriptedSurfaceModel{
+		name:      "nested-agent-node-patched",
+		responses: []model.Message{model.NewAssistantMessage("reviewer patched")},
+	}
+	reviewer := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(reviewerStatic),
+		llmagent.WithInstruction("nested reviewer static instruction"),
+	)
+	childCompiled := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddAgentNode("reviewer").
+		SetEntryPoint("reviewer").
+		SetFinishPoint("reviewer").
+		MustCompile()
+	child, err := graphagent.New(
+		"research_flow",
+		childCompiled,
+		graphagent.WithSubAgents([]agent.Agent{reviewer}),
+	)
+	require.NoError(t, err)
+	parentCompiled := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddAgentNode("research_flow").
+		SetEntryPoint("research_flow").
+		SetFinishPoint("research_flow").
+		MustCompile()
+	parent, err := graphagent.New(
+		"assistant",
+		parentCompiled,
+		graphagent.WithSubAgents([]agent.Agent{child}),
+	)
+	require.NoError(t, err)
+	snapshot := mustExportSnapshot(t, parent)
+	reviewerNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"reviewer",
+		structure.NodeKindAgent,
+	)
+	require.Equal(t, "assistant/research_flow/reviewer", reviewerNodeID)
+	var patch agent.SurfacePatch
+	patch.SetInstruction("nested reviewer patched instruction")
+	patch.SetModel(reviewerPatched)
+	r := NewRunner(
+		"app",
+		parent,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-nested-agent-node",
+		"session-nested-agent-node",
+		model.NewUserMessage("nested agent node input"),
+		agent.WithSurfacePatchForNode(reviewerNodeID, patch),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.Response)
+	require.Zero(t, reviewerStatic.RequestCount())
+	require.Equal(t, 1, reviewerPatched.RequestCount())
+	system := firstSystemMessageContent(reviewerPatched.LatestRequest().messages)
+	require.Contains(t, system, "nested reviewer patched instruction")
+	require.NotContains(t, system, "nested reviewer static instruction")
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_AppliesGraphCompositeChildPatch(
+	t *testing.T,
+) {
+	plannerStatic := &scriptedSurfaceModel{
+		name:      "graph-composite-planner-static",
+		responses: []model.Message{model.NewAssistantMessage("planner static")},
+	}
+	plannerPatched := &scriptedSurfaceModel{
+		name:      "graph-composite-planner-patched",
+		responses: []model.Message{model.NewAssistantMessage("planner patched")},
+	}
+	writerStatic := &scriptedSurfaceModel{
+		name:      "graph-composite-writer-static",
+		responses: []model.Message{model.NewAssistantMessage("writer static")},
+	}
+	pipeline := chainagent.New(
+		"pipeline",
+		chainagent.WithSubAgents([]agent.Agent{
+			llmagent.New(
+				"planner",
+				llmagent.WithModel(plannerStatic),
+				llmagent.WithInstruction("planner static instruction"),
+			),
+			llmagent.New(
+				"writer",
+				llmagent.WithModel(writerStatic),
+				llmagent.WithInstruction("writer static instruction"),
+			),
+		}),
+	)
+	parentCompiled := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddAgentNode("pipeline").
+		SetEntryPoint("pipeline").
+		SetFinishPoint("pipeline").
+		MustCompile()
+	parent, err := graphagent.New(
+		"assistant",
+		parentCompiled,
+		graphagent.WithSubAgents([]agent.Agent{pipeline}),
+	)
+	require.NoError(t, err)
+	snapshot := mustExportSnapshot(t, parent)
+	plannerNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"planner",
+		structure.NodeKindLLM,
+	)
+	require.Equal(t, "assistant/pipeline/planner", plannerNodeID)
+	var patch agent.SurfacePatch
+	patch.SetInstruction("planner patched instruction")
+	patch.SetModel(plannerPatched)
+	r := NewRunner(
+		"app",
+		parent,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-graph-composite",
+		"session-graph-composite",
+		model.NewUserMessage("graph composite input"),
+		agent.WithSurfacePatchForNode(plannerNodeID, patch),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.Response)
+	require.Zero(t, plannerStatic.RequestCount())
+	require.Equal(t, 1, plannerPatched.RequestCount())
+	require.Equal(t, 1, writerStatic.RequestCount())
+	plannerSystem := firstSystemMessageContent(plannerPatched.LatestRequest().messages)
+	require.Contains(t, plannerSystem, "planner patched instruction")
+	require.NotContains(t, plannerSystem, "planner static instruction")
+	writerSystem := firstSystemMessageContent(writerStatic.LatestRequest().messages)
+	require.Contains(t, writerSystem, "writer static instruction")
+	require.NotContains(t, writerSystem, "planner patched instruction")
 }
 
 func TestRunner_GraphChildAgentNode_PersistedRunnerCompletionDoesNotReplayIntoNextTurnHistory(

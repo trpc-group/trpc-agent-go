@@ -10,8 +10,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -580,6 +583,224 @@ func TestInvocation_cloneState(t *testing.T) {
 	})
 }
 
+func TestInvocation_ViewCopiesCustomState(t *testing.T) {
+	const (
+		customStateKey   = "custom:payload"
+		customStateValue = "business-data"
+		updatedValue     = "updated-data"
+	)
+	inv := NewInvocation()
+	inv.SetState(customStateKey, customStateValue)
+
+	view := inv.View()
+	value, ok := view.GetState(customStateKey)
+	require.True(t, ok)
+	require.Equal(t, customStateValue, value)
+
+	view.SetState(customStateKey, updatedValue)
+	value, ok = inv.GetState(customStateKey)
+	require.True(t, ok)
+	require.Equal(t, customStateValue, value)
+}
+
+func TestInvocation_ViewCopiesMutableCustomState(t *testing.T) {
+	const customStateKey = "custom:payload"
+	inv := NewInvocation()
+	inv.SetState(customStateKey, []byte("abc"))
+
+	view := inv.View()
+	value, ok := view.GetState(customStateKey)
+	require.True(t, ok)
+	viewValue, ok := value.([]byte)
+	require.True(t, ok)
+	viewValue[0] = 'z'
+
+	sourceValue, ok := inv.GetState(customStateKey)
+	require.True(t, ok)
+	require.Equal(t, []byte("abc"), sourceValue)
+}
+
+func TestInvocation_ViewCopiesNestedMutableCustomState(t *testing.T) {
+	const (
+		customMapStateKey   = "custom:map_payload"
+		customPtrStateKey   = "custom:ptr_payload"
+		customCycleStateKey = "custom:cycle_payload"
+	)
+	type customPayload struct {
+		Data []byte
+	}
+	type customNode struct {
+		Data []byte
+		Next *customNode
+	}
+	node := &customNode{Data: []byte("ghi")}
+	node.Next = node
+	inv := NewInvocation()
+	inv.SetState(customMapStateKey, map[string][]byte{
+		"nested": []byte("abc"),
+	})
+	inv.SetState(customPtrStateKey, &customPayload{
+		Data: []byte("def"),
+	})
+	inv.SetState(customCycleStateKey, node)
+
+	view := inv.View()
+	value, ok := view.GetState(customMapStateKey)
+	require.True(t, ok)
+	viewValue, ok := value.(map[string][]byte)
+	require.True(t, ok)
+	viewValue["nested"][0] = 'z'
+	ptrValue, ok := view.GetState(customPtrStateKey)
+	require.True(t, ok)
+	viewPtr, ok := ptrValue.(*customPayload)
+	require.True(t, ok)
+	viewPtr.Data[0] = 'z'
+	cycleValue, ok := view.GetState(customCycleStateKey)
+	require.True(t, ok)
+	viewNode, ok := cycleValue.(*customNode)
+	require.True(t, ok)
+	require.Same(t, viewNode, viewNode.Next)
+	viewNode.Data[0] = 'z'
+
+	sourceValue, ok := inv.GetState(customMapStateKey)
+	require.True(t, ok)
+	sourceMap, ok := sourceValue.(map[string][]byte)
+	require.True(t, ok)
+	require.Equal(t, []byte("abc"), sourceMap["nested"])
+	sourceValue, ok = inv.GetState(customPtrStateKey)
+	require.True(t, ok)
+	sourcePtr, ok := sourceValue.(*customPayload)
+	require.True(t, ok)
+	require.Equal(t, []byte("def"), sourcePtr.Data)
+	sourceValue, ok = inv.GetState(customCycleStateKey)
+	require.True(t, ok)
+	sourceNode, ok := sourceValue.(*customNode)
+	require.True(t, ok)
+	require.Equal(t, []byte("ghi"), sourceNode.Data)
+}
+
+func TestCloneStateValueHandlesEdgeCases(t *testing.T) {
+	type namedString string
+	type customPayload struct {
+		Data []byte
+	}
+	type opaquePayload struct {
+		Data   []byte
+		hidden int
+	}
+	type sharedSlices struct {
+		Short []byte
+		Long  []byte
+	}
+
+	require.Nil(t, cloneStateValue(nil))
+	var nilSlice []byte
+	require.Nil(t, cloneStateValue(nilSlice).([]byte))
+	var nilMap map[string][]byte
+	require.Nil(t, cloneStateValue(nilMap).(map[string][]byte))
+	var nilPtr *customPayload
+	require.Nil(t, cloneStateValue(nilPtr).(*customPayload))
+
+	arr := [1][]byte{[]byte("abc")}
+	clonedArr := cloneStateValue(arr).([1][]byte)
+	clonedArr[0][0] = 'z'
+	require.Equal(t, []byte("abc"), arr[0])
+
+	const (
+		sharedShortData = "ab"
+		sharedLongData  = "abcd"
+	)
+	base := []byte(sharedLongData)
+	shared := sharedSlices{
+		Short: base[:len(sharedShortData)],
+		Long:  base,
+	}
+	clonedShared := cloneStateValue(shared).(sharedSlices)
+	require.Equal(t, []byte(sharedShortData), clonedShared.Short)
+	require.Equal(t, []byte(sharedLongData), clonedShared.Long)
+	clonedShared.Long[0] = 'z'
+	require.Equal(t, []byte(sharedLongData), base)
+	require.Equal(t, []byte(sharedShortData), clonedShared.Short)
+
+	var iface any = []byte("abc")
+	clonedValue, ok := cloneStateReflectValue(
+		reflect.ValueOf(&iface).Elem(),
+		map[reflectVisit]reflect.Value{},
+	)
+	require.True(t, ok)
+	clonedBytes := clonedValue.Interface().([]byte)
+	clonedBytes[0] = 'z'
+	require.Equal(t, []byte("abc"), iface)
+
+	var nilIface any
+	clonedValue, ok = cloneStateReflectValue(
+		reflect.ValueOf(&nilIface).Elem(),
+		map[reflectVisit]reflect.Value{},
+	)
+	require.True(t, ok)
+	require.True(t, clonedValue.IsNil())
+
+	opaque := &opaquePayload{Data: []byte("abc"), hidden: 1}
+	require.Same(t, opaque, cloneStateValue(opaque))
+	opaqueMap := map[string]*opaquePayload{"opaque": opaque}
+	clonedMap := cloneStateValue(opaqueMap).(map[string]*opaquePayload)
+	require.Same(t, opaque, clonedMap["opaque"])
+
+	buffer := bytes.NewBufferString("abc")
+	clonedBuffer := cloneStateValue(buffer).(*bytes.Buffer)
+	clonedBuffer.WriteString("d")
+	require.Equal(t, "abc", buffer.String())
+	bufferValue := *bytes.NewBufferString("efg")
+	clonedBufferValue := cloneStateValue(bufferValue).(bytes.Buffer)
+	clonedBufferValue.WriteString("h")
+	require.Equal(t, "efg", bufferValue.String())
+
+	var builder strings.Builder
+	builder.WriteString("abc")
+	clonedBuilder := cloneStateValue(&builder).(*strings.Builder)
+	clonedBuilder.WriteString("d")
+	require.Equal(t, "abc", builder.String())
+
+	bigValue := big.NewInt(10)
+	clonedBig := cloneStateValue(bigValue).(*big.Int)
+	clonedBig.Add(clonedBig, big.NewInt(1))
+	require.Equal(t, int64(10), bigValue.Int64())
+
+	clonedValue, ok = cloneStateAsType(
+		reflect.ValueOf("named"),
+		reflect.TypeOf(namedString("")),
+	)
+	require.True(t, ok)
+	require.Equal(t, namedString("named"), clonedValue.Interface())
+	_, ok = cloneStateAsType(
+		reflect.ValueOf(struct{}{}),
+		reflect.TypeOf([]byte{}),
+	)
+	require.False(t, ok)
+	element := cloneStateElement(
+		reflect.ValueOf("named"),
+		reflect.TypeOf(namedString("")),
+		map[reflectVisit]reflect.Value{},
+	)
+	require.Equal(t, namedString("named"), element.Interface())
+}
+
+func TestInvocation_SyncViewCopiesCustomState(t *testing.T) {
+	const (
+		customStateKey   = "custom:payload"
+		customStateValue = "business-data"
+	)
+	inv := NewInvocation()
+	view := inv.View()
+	view.SetState(customStateKey, customStateValue)
+
+	inv.SyncView(view)
+
+	value, ok := inv.GetState(customStateKey)
+	require.True(t, ok)
+	require.Equal(t, customStateValue, value)
+}
+
 func TestInvocation_GetEventFilterKey(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -847,6 +1068,44 @@ func TestWithModelName(t *testing.T) {
 	WithModelName("gpt-4")(opts)
 
 	require.Equal(t, "gpt-4", opts.ModelName)
+}
+
+func TestWithModelContextWindow(t *testing.T) {
+	window, ok := ModelContextWindowFromRunOptions(nil)
+	require.False(t, ok)
+	require.Zero(t, window)
+
+	window, ok = ModelContextWindowFromRunOptions(&RunOptions{})
+	require.False(t, ok)
+	require.Zero(t, window)
+
+	opts := &RunOptions{}
+	WithModelContextWindow(204800)(opts)
+	window, ok = ModelContextWindowFromRunOptions(opts)
+	require.True(t, ok)
+	require.Equal(t, 204800, window)
+
+	WithModelContextWindow(0)(opts)
+	window, ok = ModelContextWindowFromRunOptions(opts)
+	require.True(t, ok)
+	require.Equal(t, 204800, window)
+
+	opts.ModelContextWindow = -1
+	window, ok = ModelContextWindowFromRunOptions(opts)
+	require.False(t, ok)
+	require.Zero(t, window)
+}
+
+func TestWithModelSelector(t *testing.T) {
+	selector := func(ctx context.Context, inv *Invocation) (model.Model, error) {
+		return inv.Model, nil
+	}
+	opts := &RunOptions{}
+	WithModelSelector(selector)(opts)
+	require.NotNil(t, opts.ModelSelector)
+	got, err := opts.ModelSelector(context.Background(), &Invocation{Model: &mockModel{name: "selector-model"}})
+	require.NoError(t, err)
+	require.Equal(t, "selector-model", got.Info().Name)
 }
 
 func TestWithInstruction(t *testing.T) {

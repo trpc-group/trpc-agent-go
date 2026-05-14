@@ -58,6 +58,9 @@ func TestManager(t *testing.T) {
 		Conversation: []*evalset.Invocation{
 			{InvocationID: "inv1"},
 		},
+		Rubrics: []*evalset.EvalCaseRubric{
+			{MetricName: "llm_rubric_response", ID: "case:rubric", Content: &evalset.EvalCaseRubricContent{Text: "Case requirement."}},
+		},
 		CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1700, 0).UTC()},
 	}
 	err = mgr.AddCase(ctx, "app", "set1", caseInput)
@@ -67,15 +70,19 @@ func TestManager(t *testing.T) {
 	assert.Error(t, err)
 
 	caseInput.SessionInput.AppName = "changed"
+	caseInput.Rubrics[0].Content.Text = "mutated"
 
 	storedCase, err := mgr.GetCase(ctx, "app", "set1", "case1")
 	assert.NoError(t, err)
 	assert.Equal(t, "app", storedCase.SessionInput.AppName)
+	assert.Equal(t, "Case requirement.", storedCase.Rubrics[0].Content.Text)
 	storedCase.SessionInput.AppName = "local-mutation"
+	storedCase.Rubrics[0].Content.Text = "local mutation"
 
 	refetchedCase, err := mgr.GetCase(ctx, "app", "set1", "case1")
 	assert.NoError(t, err)
 	assert.Equal(t, "app", refetchedCase.SessionInput.AppName)
+	assert.Equal(t, "Case requirement.", refetchedCase.Rubrics[0].Content.Text)
 	assert.Len(t, refetchedCase.Conversation, 1)
 
 	update := &evalset.EvalCase{
@@ -88,17 +95,22 @@ func TestManager(t *testing.T) {
 			{InvocationID: "inv1"},
 			{InvocationID: "inv2"},
 		},
+		Rubrics: []*evalset.EvalCaseRubric{
+			{MetricName: "llm_rubric_response", ID: "case:updated", Content: &evalset.EvalCaseRubricContent{Text: "Updated case requirement."}},
+		},
 	}
 	err = mgr.UpdateCase(ctx, "app", "set1", update)
 	assert.NoError(t, err)
 
 	update.SessionInput.AppName = "mutated-after-update"
+	update.Rubrics[0].Content.Text = "mutated-after-update"
 
 	updatedCase, err := mgr.GetCase(ctx, "app", "set1", "case1")
 	assert.NoError(t, err)
 	assert.Equal(t, "app-updated", updatedCase.SessionInput.AppName)
 	assert.Equal(t, map[string]any{"level": 2}, updatedCase.SessionInput.State)
 	assert.Len(t, updatedCase.Conversation, 2)
+	assert.Equal(t, "Updated case requirement.", updatedCase.Rubrics[0].Content.Text)
 
 	evalSetAfterUpdate, err := mgr.Get(ctx, "app", "set1")
 	assert.NoError(t, err)

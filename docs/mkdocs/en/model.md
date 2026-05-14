@@ -562,26 +562,63 @@ model := oaimodel.New("deepseek-v4-flash",
 )
 ```
 
-**Difference between `SetExtraFields` in callback and `WithExtraFields`**:
+**Difference between request-body customization approaches**:
 
-| Aspect | `WithExtraFields` | `SetExtraFields` in `WithChatRequestCallback` |
-| --- | --- | --- |
-| Timing | Set once at model creation | Called before every request |
-| Dynamism | Static values only | Dynamic values based on `ctx` or runtime state |
-| Mechanism | Injected via `openaiopt.WithJSONSet` (RequestOption layer) | Set on the `ChatCompletionNewParams` struct (serialization layer) |
-| Same key conflict | `WithExtraFields` wins (applied later, overwrites same keys) | Overwritten by `WithExtraFields` if same key exists |
+| Aspect | `WithExtraFields` | `agent.WithModelRequestExtraFields` | `SetExtraFields` in `WithChatRequestCallback` |
+| --- | --- | --- | --- |
+| Timing | Set once at model creation | Set on one `runner.Run(...)` call | Called before every model request |
+| Dynamism | Static values only | Dynamic values known at run time | Dynamic values based on `ctx` or runtime state |
+| Mechanism | Injected via `openaiopt.WithJSONSet` (RequestOption layer) | Copied into `model.Request.ExtraFields`, then injected by supported adapters | Set on the `ChatCompletionNewParams` struct (serialization layer) |
+| Same key conflict | Overwritten by request-level extra fields | Takes precedence over model-level extra fields | Overwritten by RequestOption-layer extra fields if the same key exists |
 
-When both are used with **different keys**, all fields appear in the final
-JSON body without conflict. When both set the **same key**,
-`WithExtraFields` takes precedence because `WithJSONSet` is applied after
-struct serialization.
+When multiple approaches use **different keys**, all fields appear in the final
+JSON body without conflict. When they set the **same key**, request-level extra
+fields passed with `agent.WithModelRequestExtraFields` take precedence in
+OpenAI-compatible adapters.
 
-For most dynamic per-request customization, `SetExtraFields` in the callback
-is the recommended approach.
+##### Request-scoped extra fields from Runner
+
+Use `agent.WithModelRequestExtraFields` when a provider-specific top-level
+request body field should vary per `runner.Run(...)` call, for example
+`prompt_cache_key` on OpenAI-compatible endpoints:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+func runOnce(ctx context.Context, r runner.Runner, cacheKey string) error {
+    events, err := r.Run(
+        ctx,
+        "user-001",
+        "session-001",
+        model.NewUserMessage("Hello"),
+        agent.WithModelRequestExtraFields(map[string]any{
+            "prompt_cache_key": cacheKey,
+        }),
+    )
+    if err != nil {
+        return err
+    }
+    for range events {
+    }
+    return nil
+}
+```
+
+This option applies to every model call created during that run, including
+normal LLM agents, graph LLM nodes, and requests routed through failover or
+hedge models. The built-in OpenAI and HuggingFace/OpenAI-compatible adapters
+merge these fields into the top-level JSON request body. Other provider
+adapters ignore the field unless they add an explicit provider-specific mapping.
 
 #### 2. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. This section shows static switching for OpenAI and OpenAI-compatible model instances at the agent level and per-request level. To select a model separately for each LLM call within the same `runner.Run(...)`, use [ModelSelector](#modelselector).
 
 ##### Agent-level Switching
 
@@ -629,18 +666,16 @@ import (
 )
 
 // Create multiple model instances.
-gpt4 := openai.New("gpt-4o")
-gpt4mini := openai.New("gpt-4o-mini")
-deepseek := openai.New("deepseek-v4-flash")
+strong := openai.New("gpt-4o")
+fast := openai.New("gpt-4o-mini")
 
 // Register all models when creating the Agent.
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
-        "smart": gpt4,
-        "fast":  gpt4mini,
-        "cheap": deepseek,
+        "smart": strong,
+        "fast":  fast,
     }),
-    llmagent.WithModel(gpt4mini), // Specify initial model.
+    llmagent.WithModel(fast), // Specify initial model.
     llmagent.WithInstruction("You are an intelligent assistant."),
 )
 
@@ -651,7 +686,7 @@ if err != nil {
 }
 
 // Switch to another model.
-err = agent.SetModelByName("cheap")
+err = agent.SetModelByName("fast")
 if err != nil {
     log.Fatal(err)
 }
@@ -672,11 +707,11 @@ if err := agent.SetModelByName(modelName); err != nil {
 // Select model based on time of day (cost optimization).
 hour := time.Now().Hour()
 if hour >= 22 || hour < 8 {
-    // Use cheap model at night.
-    agent.SetModelByName("cheap")
-} else {
-    // Use fast model during the day.
+    // Use fast model at night.
     agent.SetModelByName("fast")
+} else {
+    // Use smart model during the day.
+    agent.SetModelByName("smart")
 }
 ```
 
@@ -708,9 +743,9 @@ Use `agent.WithModelName` to specify a pre-registered model name for a single re
 // Pre-register multiple models when creating the Agent.
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
-        "smart": openai.New("gpt-4o"),
-        "fast":  openai.New("gpt-4o-mini"),
-        "cheap": openai.New("deepseek-v4-flash"),
+        "smart":  openai.New("gpt-4o"),
+        "fast":   openai.New("gpt-4o-mini"),
+        "vision": openai.New("gpt-4o"),
     }),
     llmagent.WithModel(openai.New("gpt-4o-mini")), // Default model.
 )
@@ -737,9 +772,9 @@ if isComplexQuery(message) {
 
 eventChan, err := runner.Run(ctx, userID, sessionID, message, opts...)
 
-// Use specialized reasoning model for reasoning tasks.
-eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
-    agent.WithModelName("deepseek-v4-pro"),
+// Use a specialized model for a specific task.
+eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
+    agent.WithModelName("vision"),
 )
 ```
 
@@ -1527,36 +1562,46 @@ model := openai.New("deepseek-v4-flash",
 
 **Token Calculation Formula**:
 
-The framework automatically calculates "maxInputTokens" based on the model's context window:
+The framework automatically calculates `maxInputTokens` based on the model's
+context window. For OpenAI-compatible models, the automatic budget also accounts
+for request-scoped output limits and tool definitions:
 
 > **Context Window Registration**
 >
-> Both Token Tailoring and session summary `WithContextThreshold` rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with `model.RegisterModelContextWindow("my-model", 32768)` or `model.RegisterModelContextWindows(map[string]int{...})`. See the [Session Summary documentation](session/summary.md) for a full example.
+> Token Tailoring and session summary `WithContextThreshold` both need a model context window. Built-in model names are resolved automatically. For private deployments, tenant-provided models, or endpoint IDs, prefer model-instance configuration such as `openai.WithContextWindow(32768)` or the unified `provider.WithContextWindow(32768)`. For one-off runs, use `agent.WithModelContextWindow(32768)`. Use `model.RegisterModelContextWindow("my-model", 32768)` only when the name has a stable process-wide meaning. See the [Session Summary documentation](session/summary.md) for a full example.
 
-```
-safetyMargin = contextWindow × 10%
-calculatedMax = contextWindow - 2048 (output reserve) - 512 (protocol overhead) - safetyMargin
-ratioLimit = contextWindow × 100% (max input ratio)
-maxInputTokens = max(min(calculatedMax, ratioLimit), 1024 (minimum))
+```text
+outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
+safetyMargin = contextWindow × SafetyMarginRatio
+calculatedMax = contextWindow - outputReserve - ProtocolOverheadTokens - safetyMargin
+ratioLimit = contextWindow × MaxInputTokensRatio
+messageBudget = min(max(min(calculatedMax, ratioLimit), InputTokensFloor), calculatedMax)
+maxInputTokens = max(messageBudget - estimatedToolsTokens, 0)
 ```
 
 For example, "gpt-4o" (contextWindow = 128000):
 
-```
+```text
 safetyMargin = 128000 × 0.10 = 12800 tokens
-calculatedMax = 128000 - 2048 - 512 - 12800 = 112640 tokens
+outputReserve = max(2048, request.MaxTokens, request.ThinkingTokens)
+calculatedMax = 128000 - outputReserve - 512 - 12800
 ratioLimit = 128000 × 1.0 = 128000 tokens
-maxInputTokens = 112640 tokens (approximately 88% of context window)
+maxInputTokens = messageBudget - estimatedToolsTokens
 ```
+
+If `WithMaxInputTokens` is set explicitly, the framework keeps that value as the
+configured message budget and does not subtract the estimated `Tools` schema
+budget from it. The explicit value is still clamped to the context-safe hard
+budget after output reserves and safety margin are applied.
 
 **Default Budget Parameters**:
 
 The framework uses the following default values for token allocation (**it is recommended to keep the defaults**):
 
 - **Protocol Overhead (ProtocolOverheadTokens)**: 512 tokens - reserved for request/response formatting
-- **Output Reserve (ReserveOutputTokens)**: 2048 tokens - reserved for output generation
+- **Output Reserve (ReserveOutputTokens)**: 2048 tokens - minimum reserve for output generation; OpenAI-compatible requests reserve the larger value among this setting, `GenerationConfig.MaxTokens`, and `GenerationConfig.ThinkingTokens`
 - **Input Floor (InputTokensFloor)**: 1024 tokens - ensures proper model processing
-- **Output Floor (OutputTokensFloor)**: 256 tokens - ensures meaningful responses
+- **Output Floor (OutputTokensFloor)**: deprecated and no longer used to auto-calculate output `MaxTokens`
 - **Safety Margin Ratio (SafetyMarginRatio)**: 10% - buffer for token counting inaccuracies
 - **Max Input Ratio (MaxInputTokensRatio)**: 100% - maximum input ratio of context window
 
@@ -1954,7 +1999,7 @@ model := anthropic.New(
 
 #### 2. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. This section shows static switching for Anthropic model instances at the agent level and per-request level. To select a model separately for each LLM call within the same `runner.Run(...)`, use [ModelSelector](#modelselector).
 
 ##### Agent-level Switching
 
@@ -2506,7 +2551,7 @@ if err != nil {
 }
 ```
 
-`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
+`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. If the hedge wrapper is used with context-threshold summary or token tailoring and the candidates have different or unknown context windows, set a stable wrapper window with `hedge.WithContextWindow(...)`; otherwise the wrapper reports the shared candidate window only when all candidates expose the same positive value. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
 
 **Scheduling And Commit Rules**:
 
@@ -2562,3 +2607,41 @@ This configuration means:
 - `candidate[2]` starts at `0ms`.
 
 This is the all-at-once case where every candidate launches immediately when the request begins. In fixed-interval form, the same setup can be written as `WithDelay(0)`.
+
+## ModelSelector
+
+`ModelSelector` dynamically selects a model for each framework-managed LLM call within the same `runner.Run(...)`.
+
+```go
+selectModel := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+    if shouldUseAnotherModel(inv) {
+        return anotherModel, nil
+    }
+    return nil, nil
+}
+
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithModelSelector(selectModel),
+)
+```
+
+If an `LLMAgent` has its own fixed model selection policy, configure it when creating the agent:
+
+```go
+a := llmagent.New(
+    "assistant",
+    llmagent.WithModel(defaultModel),
+    llmagent.WithModelSelector(selectModel),
+)
+```
+
+Notes:
+
+- When both are configured, `agent.WithModelSelector(...)` takes precedence over `llmagent.WithModelSelector(...)`.
+- If selector returns `nil, nil`, the model is not switched and the current `inv.Model` is kept; returning an error terminates the current LLM call.
+
+For a complete example, see [examples/model/selector](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/selector).

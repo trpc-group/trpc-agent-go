@@ -83,6 +83,8 @@ type options struct {
 	ChatChunkCallback ChatChunkCallbackFunc
 	// Callback for the chat stream completion.
 	ChatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	// ChatTelemetry enables opt-in telemetry for direct model usage.
+	ChatTelemetry bool
 	// Options for the OpenAI client.
 	OpenAIOptions []openaiopt.RequestOption
 	// Extra fields to be added to the HTTP request body.
@@ -105,6 +107,8 @@ type options struct {
 	TailoringStrategy model.TailoringStrategy
 	// MaxInputTokens is the max input tokens for token tailoring.
 	MaxInputTokens int
+	// ContextWindow is the model context window size in tokens.
+	ContextWindow int
 	// TokenTailoringConfig allows customization of token tailoring parameters.
 	TokenTailoringConfig *model.TokenTailoringConfig
 	// ShowToolCallDelta controls whether to expose tool call
@@ -116,8 +120,9 @@ type options struct {
 	// ReasoningContentBackfill controls whether assistant messages should
 	// replay an empty reasoning_content field when the message has no
 	// reasoning text.
-	ReasoningContentBackfill bool
-	accumulateChunkUsage     AccumulateChunkUsage
+	ReasoningContentBackfill    bool
+	reasoningContentBackfillSet bool
+	accumulateChunkUsage        AccumulateChunkUsage
 	// OptimizeForCache controls whether to optimize message structure for prompt caching.
 	// When enabled, system messages will be moved to the front to improve cache hit rates.
 	// OpenAI's prompt caching is automatic and doesn't require explicit cache control,
@@ -221,11 +226,25 @@ func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	}
 }
 
+// WithChatTelemetry enables chat trace and metric reporting for direct
+// model/openai usage.
+//
+// This option is intended for users who call Model.GenerateContent or
+// Model.GenerateContentIter directly. The recommended runner + agent path
+// already reports chat telemetry from llmflow. Reusing a model with this
+// option enabled inside runner + agent may report duplicate chat telemetry.
+func WithChatTelemetry(enabled bool) Option {
+	return func(opts *options) {
+		opts.ChatTelemetry = enabled
+	}
+}
+
 // WithReasoningContentBackfill enables replay-time reasoning_content backfill
 // for assistant messages that have no reasoning text.
 func WithReasoningContentBackfill(enabled bool) Option {
 	return func(opts *options) {
 		opts.ReasoningContentBackfill = enabled
+		opts.reasoningContentBackfillSet = true
 	}
 }
 
@@ -349,6 +368,16 @@ func WithEnableTokenTailoring(enabled bool) Option {
 func WithMaxInputTokens(limit int) Option {
 	return func(opts *options) {
 		opts.MaxInputTokens = limit
+	}
+}
+
+// WithContextWindow sets the model context window size in tokens for this
+// model instance.
+func WithContextWindow(tokens int) Option {
+	return func(opts *options) {
+		if tokens > 0 {
+			opts.ContextWindow = tokens
+		}
 	}
 }
 

@@ -54,14 +54,25 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_NoSkillsRepo(
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	sys := req.Messages[0].Content
 	require.Contains(t, sys, workspaceExecGuidanceHeader)
-	require.Contains(t, sys, "general shell runner for the current executor workspace")
+	require.Contains(t, sys, "shell command tool for the current workspace")
+	require.Contains(t, sys, "Prefer task-specific tools")
+	require.Contains(t, sys, "general shell fallback tool")
+	require.Contains(t, sys, "no suitable specialized tool is available")
+	require.Contains(t, sys, "specialized tool fails")
+	require.Contains(t, sys, "workspace or shell environment")
+	require.Contains(t, sys, "explicitly asks for shell execution")
+	require.Contains(t, sys, "external information retrieval")
+	require.Contains(t, sys, "dedicated search, fetch, or API tools")
+	require.Contains(t, sys, "cannot access the required source")
 	require.Contains(t, sys, "Command paths are resolved relative to cwd")
 	require.Contains(t, sys, "Choose one path base per command")
 	require.Contains(t, sys, "Prefer work/, out/, and runs/")
 	require.Contains(t, sys, "staged automatically under work/inputs")
-	require.Contains(t, sys, "Network access depends on the current executor environment")
-	require.Contains(t, sys, "verify first before claiming the limitation")
-	require.Contains(t, sys, "command availability, file presence, or access to a known URL")
+	require.Contains(t, sys, "Network access through workspace_exec depends")
+	require.Contains(t, sys, "check it only when that environment matters")
+	require.NotContains(t, sys, "curl")
+	require.NotContains(t, sys, "sufficient")
+	require.NotContains(t, sys, "insufficient")
 	require.NotContains(t, sys, "workspace_save_artifact")
 	require.NotContains(t, sys, "skills/")
 	require.NotContains(t, sys, "workspace_write_stdin")
@@ -97,13 +108,24 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_InteractiveWithSkillsRepo(
 	sys := req.Messages[0].Content
 	require.Contains(t, sys, "base")
 	require.Contains(t, sys, workspaceExecGuidanceHeader)
-	require.Contains(t, sys, "general shell runner for the current executor workspace")
+	require.Contains(t, sys, "shell command tool for the current workspace")
+	require.Contains(t, sys, "Prefer task-specific tools")
+	require.Contains(t, sys, "general shell fallback tool")
+	require.Contains(t, sys, "no suitable specialized tool is available")
+	require.Contains(t, sys, "specialized tool fails")
+	require.Contains(t, sys, "workspace or shell environment")
+	require.Contains(t, sys, "explicitly asks for shell execution")
+	require.Contains(t, sys, "external information retrieval")
+	require.Contains(t, sys, "dedicated search, fetch, or API tools")
+	require.Contains(t, sys, "cannot access the required source")
 	require.Contains(t, sys, "Command paths are resolved relative to cwd")
 	require.Contains(t, sys, "Choose one path base per command")
 	require.Contains(t, sys, "staged automatically under work/inputs")
-	require.Contains(t, sys, "Network access depends on the current executor environment")
-	require.Contains(t, sys, "verify first before claiming the limitation")
-	require.Contains(t, sys, "command availability, file presence, or access to a known URL")
+	require.Contains(t, sys, "Network access through workspace_exec depends")
+	require.Contains(t, sys, "check it only when that environment matters")
+	require.NotContains(t, sys, "curl")
+	require.NotContains(t, sys, "sufficient")
+	require.NotContains(t, sys, "insufficient")
 	require.Contains(t, sys, "workspace_save_artifact")
 	require.Contains(t, sys, "Skill working copies appear under skills/<name>")
 	require.Contains(t, sys, "Use the loaded SKILL.md as the source of truth")
@@ -126,6 +148,24 @@ func TestWorkspaceExecRequestProcessor_NoDuplicateGuidance(t *testing.T) {
 
 	require.Len(t, req.Messages, 1)
 	require.Equal(t, 1, strings.Count(req.Messages[0].Content, workspaceExecGuidanceHeader))
+}
+
+func TestWorkspaceExecRequestProcessor_NoDuplicateLegacyGuidance(t *testing.T) {
+	p := NewWorkspaceExecRequestProcessor()
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage(legacyWorkspaceExecGuidanceHeader + "\nold"),
+	}}
+
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{AgentName: "tester"},
+		req,
+		nil,
+	)
+
+	require.Len(t, req.Messages, 1)
+	require.Contains(t, req.Messages[0].Content, legacyWorkspaceExecGuidanceHeader)
+	require.NotContains(t, req.Messages[0].Content, workspaceExecGuidanceHeader)
 }
 
 func TestWorkspaceExecRequestProcessor_ProcessRequest_UsesSkillsRepoResolver(

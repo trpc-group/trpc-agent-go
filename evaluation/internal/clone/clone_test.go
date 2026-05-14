@@ -29,10 +29,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	criterionlength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	criterionrouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+	criterionxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -115,6 +117,22 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {
 	assert.Nil(t, cloneTemplateVariableBindings(nil))
 	assert.Nil(t, cloneTemplateVariableBinding(nil))
+}
+
+func TestCloneEvalCaseRubricsHandlesNilAndEmptyContent(t *testing.T) {
+	got := cloneEvalCaseRubrics([]*evalset.EvalCaseRubric{
+		nil,
+		{
+			MetricName: "llm_rubric_response",
+			ID:         "case:rubric",
+		},
+	})
+	require.Len(t, got, 2)
+	assert.Nil(t, got[0])
+	require.NotNil(t, got[1])
+	assert.Equal(t, "case:rubric", got[1].ID)
+	assert.Nil(t, got[1].Content)
+	assert.Nil(t, cloneEvalCaseRubrics(nil))
 }
 
 func TestCloneEvalMetric_PreservesNilTemplateBinding(t *testing.T) {
@@ -235,6 +253,15 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 				"bytes": []byte{9, 8, 7},
 			},
 		},
+		Rubrics: []*evalset.EvalCaseRubric{
+			{
+				MetricName:  "llm_rubric_response",
+				ID:          "case:rubric",
+				Description: "case rubric",
+				Type:        "CASE_RUBRIC",
+				Content:     &evalset.EvalCaseRubricContent{Text: "Case-specific requirement."},
+			},
+		},
 		CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1, 0).UTC()},
 	}
 
@@ -269,6 +296,9 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.SessionInput.State["bytes"].([]byte)[0] = 0
 	assert.Equal(t, byte(9), src.SessionInput.State["bytes"].([]byte)[0])
+
+	dst.Rubrics[0].Content.Text = "changed"
+	assert.Equal(t, "Case-specific requirement.", src.Rubrics[0].Content.Text)
 
 	dst.CreationTimestamp.Time = time.Unix(2, 0).UTC()
 	assert.Equal(t, time.Unix(1, 0).UTC(), src.CreationTimestamp.Time)
@@ -331,6 +361,10 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 			FinalResponse: &finalresponse.FinalResponseCriterion{
 				Text: &text.TextCriterion{
 					CaseInsensitive: true,
+					Length: &criterionlength.LengthCriterion{
+						Min: intPtr(1),
+						Max: intPtr(10),
+					},
 				},
 				JSON: &criterionjson.JSONCriterion{
 					IgnoreTree: map[string]any{
@@ -346,6 +380,7 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 					Measure:   criterionrouge.RougeMeasureF1,
 					Threshold: criterionrouge.Score{Precision: 0.1, Recall: 0.2, F1: 0.3},
 				},
+				XML: &criterionxml.XMLCriterion{},
 			},
 			LLMJudge: &criterionllm.LLMCriterion{
 				Rubrics: []*criterionllm.Rubric{
@@ -409,6 +444,12 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 
 	dst.Criterion.FinalResponse.Rouge.RougeType = "rougeL"
 	assert.Equal(t, "rouge1", src.Criterion.FinalResponse.Rouge.RougeType)
+
+	*dst.Criterion.FinalResponse.Text.Length.Min = 2
+	assert.Equal(t, 1, *src.Criterion.FinalResponse.Text.Length.Min)
+
+	dst.Criterion.FinalResponse.XML.Ignore = true
+	assert.False(t, src.Criterion.FinalResponse.XML.Ignore)
 }
 
 func TestCloneEvalSetResult_DeepCopy(t *testing.T) {

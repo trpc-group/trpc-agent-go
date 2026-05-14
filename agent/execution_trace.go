@@ -40,7 +40,7 @@ func WithInvocationTraceNodeID(nodeID string) InvocationOptions {
 
 // executionTraceEnabled reports whether this invocation has execution trace enabled.
 func executionTraceEnabled(inv *Invocation) bool {
-	return inv != nil && inv.traceCapture != nil
+	return inv != nil && inv.executionTraceCapture() != nil
 }
 
 // InvocationTraceNodeID returns the invocation root node id used by execution trace.
@@ -49,7 +49,8 @@ func InvocationTraceNodeID(inv *Invocation) string {
 		return ""
 	}
 	inv.ensureTraceNodeID()
-	return inv.traceNodeID
+	_, nodeID := inv.executionTraceFields()
+	return nodeID
 }
 
 // SetInvocationSurfaceRootNodeID stores one invocation's mounted surface root node id.
@@ -118,12 +119,13 @@ func StartExecutionTraceStep(
 		return ""
 	}
 	inv.initializeExecutionTrace()
-	if inv.traceCapture == nil {
+	capture := inv.executionTraceCapture()
+	if capture == nil {
 		return ""
 	}
 	preds := predecessors
 	if len(preds) == 0 {
-		preds = inv.traceCapture.PredecessorsForInvocation(
+		preds = capture.PredecessorsForInvocation(
 			inv.InvocationID,
 			inv.entryPredecessorStepIDs,
 		)
@@ -132,7 +134,7 @@ func StartExecutionTraceStep(
 	if inv.parent != nil {
 		parentInvocationID = inv.parent.InvocationID
 	}
-	return inv.traceCapture.StartStep(tracecapture.StartStepInput{
+	return capture.StartStep(tracecapture.StartStepInput{
 		InvocationID:       inv.InvocationID,
 		ParentInvocationID: parentInvocationID,
 		AgentName:          inv.AgentName,
@@ -155,14 +157,15 @@ func FinishExecutionTraceStep(
 		return
 	}
 	inv.initializeExecutionTrace()
-	if inv.traceCapture == nil {
+	capture := inv.executionTraceCapture()
+	if capture == nil {
 		return
 	}
 	errText := ""
 	if stepErr != nil {
 		errText = stepErr.Error()
 	}
-	inv.traceCapture.FinishStep(stepID, output, errText, time.Now())
+	capture.FinishStep(stepID, output, errText, time.Now())
 }
 
 // SetExecutionTraceStepAppliedSurfaceIDs records one step's applied surfaces from the invocation agent when supported.
@@ -177,10 +180,11 @@ func SetExecutionTraceStepAppliedSurfaceIDs(inv *Invocation, stepID string) {
 		return
 	}
 	inv.initializeExecutionTrace()
-	if inv.traceCapture == nil {
+	capture := inv.executionTraceCapture()
+	if capture == nil {
 		return
 	}
-	inv.traceCapture.SetStepAppliedSurfaceIDs(stepID, reporter.ExecutionTraceAppliedSurfaceIDs(inv))
+	capture.SetStepAppliedSurfaceIDs(stepID, reporter.ExecutionTraceAppliedSurfaceIDs(inv))
 }
 
 // NextExecutionTracePredecessors returns the predecessor set for the next real step or child invocation.
@@ -189,10 +193,11 @@ func NextExecutionTracePredecessors(inv *Invocation) []string {
 		return nil
 	}
 	inv.initializeExecutionTrace()
-	if inv.traceCapture == nil {
+	capture := inv.executionTraceCapture()
+	if capture == nil {
 		return nil
 	}
-	return inv.traceCapture.PredecessorsForInvocation(inv.InvocationID, inv.entryPredecessorStepIDs)
+	return capture.PredecessorsForInvocation(inv.InvocationID, inv.entryPredecessorStepIDs)
 }
 
 // BuildExecutionTrace builds the final trace for the root invocation.
@@ -204,18 +209,24 @@ func BuildExecutionTrace(
 		return nil
 	}
 	inv.initializeExecutionTrace()
-	if inv.traceCapture == nil {
+	capture := inv.executionTraceCapture()
+	if capture == nil {
 		return nil
 	}
 	inv.ensureTraceCaptureMetadata()
-	return inv.traceCapture.Build(status, time.Now())
+	return capture.Build(status, time.Now())
 }
 
 func (inv *Invocation) initializeExecutionTrace() {
-	if inv == nil || !inv.RunOptions.ExecutionTraceEnabled || inv.traceCapture != nil {
+	if inv == nil || !inv.RunOptions.ExecutionTraceEnabled {
 		return
 	}
-	inv.ensureTraceNodeID()
+	inv.traceMu.Lock()
+	defer inv.traceMu.Unlock()
+	if inv.traceCapture != nil {
+		return
+	}
+	inv.ensureTraceNodeIDLocked()
 	sessionID := ""
 	if inv.Session != nil {
 		sessionID = inv.Session.ID
@@ -229,21 +240,60 @@ func (inv *Invocation) initializeExecutionTrace() {
 }
 
 func (inv *Invocation) ensureTraceCaptureMetadata() {
-	if inv == nil || inv.traceCapture == nil {
+	if inv == nil {
 		return
 	}
-	inv.ensureTraceNodeID()
-	inv.traceCapture.SetRootAgentName(inv.AgentName)
+	inv.traceMu.Lock()
+	capture := inv.traceCapture
+	if capture == nil {
+		inv.traceMu.Unlock()
+		return
+	}
+	inv.ensureTraceNodeIDLocked()
+	agentName := inv.AgentName
+	sessionID := ""
 	if inv.Session != nil {
-		inv.traceCapture.SetSessionID(inv.Session.ID)
+		sessionID = inv.Session.ID
+	}
+	inv.traceMu.Unlock()
+	capture.SetRootAgentName(agentName)
+	if sessionID != "" {
+		capture.SetSessionID(sessionID)
 	}
 }
 
 func (inv *Invocation) ensureTraceNodeID() {
+	if inv == nil {
+		return
+	}
+	inv.traceMu.Lock()
+	defer inv.traceMu.Unlock()
+	inv.ensureTraceNodeIDLocked()
+}
+
+func (inv *Invocation) ensureTraceNodeIDLocked() {
 	if inv == nil || inv.traceNodeID != "" || inv.AgentName == "" {
 		return
 	}
 	inv.traceNodeID = escapeTraceLocalName(inv.AgentName)
+}
+
+func (inv *Invocation) executionTraceCapture() *tracecapture.Capture {
+	if inv == nil {
+		return nil
+	}
+	inv.traceMu.Lock()
+	defer inv.traceMu.Unlock()
+	return inv.traceCapture
+}
+
+func (inv *Invocation) executionTraceFields() (*tracecapture.Capture, string) {
+	if inv == nil {
+		return nil, ""
+	}
+	inv.traceMu.Lock()
+	defer inv.traceMu.Unlock()
+	return inv.traceCapture, inv.traceNodeID
 }
 
 func cloneStringSlice(values []string) []string {

@@ -29,11 +29,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	toolsessionrecall "trpc.group/trpc-go/trpc-agent-go/internal/session/tool/recall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
@@ -58,6 +60,7 @@ type LLMAgent struct {
 	mu                      sync.RWMutex
 	model                   model.Model
 	models                  map[string]model.Model // Registered models for switching
+	modelSelector           agent.ModelSelector
 	description             string
 	instruction             prompt.Text
 	systemPrompt            prompt.Text
@@ -123,6 +126,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		name:              name,
 		model:             initialModel,
 		models:            models,
+		modelSelector:     options.ModelSelector,
 		description:       options.Description,
 		instruction:       newTextPrompt(options.Instruction),
 		systemPrompt:      newTextPrompt(options.GlobalInstruction),
@@ -202,6 +206,8 @@ func New(name string, opts ...Option) *LLMAgent {
 	flowOpts := llmflow.Options{
 		ChannelBufferSize:               options.ChannelBufferSize,
 		ModelCallbacks:                  options.ModelCallbacks,
+		BaseModelResolver:               a.resolveFlowBaseModel,
+		ModelSelector:                   a.modelSelector,
 		SyncSummaryIntraRun:             options.SyncSummaryIntraRun,
 		EnableContextCompaction:         options.EnableContextCompaction,
 		ContextCompactionThresholdRatio: options.ContextCompactionThresholdRatio,
@@ -365,6 +371,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithContextCompactionOversizedToolResultMaxTokens(
 			options.ContextCompactionOversizedToolResultMaxTokens,
 		),
+		processor.WithContextCompactionTokenCounter(
+			options.ContextCompactionTokenCounter,
+		),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 		processor.WithPreserveForeignMessages(options.PreserveForeignMessages),
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
@@ -395,14 +404,18 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
-	// 8. Post-tool processor - injects dynamic prompt after tool results.
+	// 8. On-demand session processor - injects a small overview for
+	// session_search / session_load when enabled.
+	requestProcessors = appendOnDemandSessionProcessor(options, requestProcessors)
+
+	// 9. Post-tool processor - injects dynamic prompt after tool results.
 	requestProcessors = appendPostToolProcessor(options, requestProcessors)
 
-	// 9. Skills tool result processor - materializes loaded skill content
+	// 10. Skills tool result processor - materializes loaded skill content
 	// into tool result messages.
 	requestProcessors = appendSkillsToolResultProcessor(a, options, requestProcessors)
 
-	// 10. Time processor - adds current time information if enabled.
+	// 11. Time processor - adds current time information if enabled.
 	// Moved after content processor to avoid invalidating system message cache.
 	// Time information changes frequently, so placing it last allows previous
 	// stable content (instructions, identity, skills, history) to be cached.
@@ -437,6 +450,16 @@ func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestP
 	}
 	postToolProcessor := processor.NewPostToolRequestProcessor(postToolOpts...)
 	return append(requestProcessors, postToolProcessor)
+}
+
+func appendOnDemandSessionProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	if !options.EnableOnDemandSession || options.OutputSchema != nil {
+		return requestProcessors
+	}
+	return append(
+		requestProcessors,
+		processor.NewOnDemandSessionRequestProcessor(),
+	)
 }
 
 func appendSkillsToolResultProcessor(a *LLMAgent, options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
@@ -928,6 +951,25 @@ func appendWorkspaceExecToolWithExecutor(
 	return allTools
 }
 
+func appendOnDemandSessionTools(
+	allTools []tool.Tool,
+	options *Options,
+	inv *agent.Invocation,
+) []tool.Tool {
+	if options == nil || !options.EnableOnDemandSession ||
+		options.OutputSchema != nil {
+		return allTools
+	}
+	if inv != nil && !toolsessionrecall.SupportsOnDemandSession(inv) {
+		return allTools
+	}
+	return append(
+		allTools,
+		toolsessionrecall.NewSearchTool(),
+		toolsessionrecall.NewLoadTool(),
+	)
+}
+
 func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
 	return codeexecutor.NewWorkspaceRegistry()
 }
@@ -1232,34 +1274,54 @@ func (e *haveCustomResponseError) Error() string {
 	return "custom response provided, returning early"
 }
 
-// setupInvocation sets up the invocation
+type baseModelResolution struct {
+	Model              model.Model
+	AllowAgentSelector bool
+}
+
+func (a *LLMAgent) resolveFlowBaseModel(inv *agent.Invocation) llmflow.ModelBaseResolution {
+	resolution := a.resolveBaseModel(inv)
+	return llmflow.ModelBaseResolution{
+		Model:              resolution.Model,
+		AllowAgentSelector: resolution.AllowAgentSelector,
+	}
+}
+
+func (a *LLMAgent) resolveBaseModel(inv *agent.Invocation) baseModelResolution {
+	if patchedModel, ok := a.modelSurfaceForInvocation(inv); ok {
+		return baseModelResolution{Model: patchedModel}
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if inv != nil && inv.RunOptions.Model != nil {
+		return baseModelResolution{Model: inv.RunOptions.Model}
+	}
+	if inv != nil && inv.RunOptions.ModelName != "" {
+		if m, ok := a.models[inv.RunOptions.ModelName]; ok {
+			return baseModelResolution{Model: m}
+		}
+		log.Warnf(
+			"Model name %q not found for agent %s; falling back to default model",
+			inv.RunOptions.ModelName,
+			a.name,
+		)
+		return baseModelResolution{Model: a.model}
+	}
+	return baseModelResolution{
+		Model:              a.model,
+		AllowAgentSelector: true,
+	}
+}
+
+// setupInvocation sets up the invocation.
 func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// Set agent identity before resolving node-scoped surfaces.
 	invocation.Agent = a
 	invocation.AgentName = a.name
 
-	// Set model: prioritize RunOptions.Model, then RunOptions.ModelName, then agent's default model.
-	a.mu.RLock()
-	if patchedModel, ok := a.modelSurfaceForInvocation(invocation); ok {
-		invocation.Model = patchedModel
-	} else if invocation.RunOptions.Model != nil {
-		// Check if a per-request model is specified.
-		// Use the model directly from RunOptions.
-		invocation.Model = invocation.RunOptions.Model
-	} else if invocation.RunOptions.ModelName != "" {
-		// Look up model by name from registered models.
-		if m, ok := a.models[invocation.RunOptions.ModelName]; ok {
-			invocation.Model = m
-		} else {
-			// If model name not found, fall back to agent's default model.
-			// Log a warning but don't fail the request.
-			invocation.Model = a.model
-		}
-	} else {
-		// Use agent's default model.
-		invocation.Model = a.model
-	}
-	a.mu.RUnlock()
+	// Set the base model once for compatibility with existing callbacks.
+	resolution := a.resolveBaseModel(invocation)
+	invocation.Model = resolution.Model
 
 	// Lift run-scoped structured output into the current invocation once.
 	if invocation.StructuredOutput == nil {

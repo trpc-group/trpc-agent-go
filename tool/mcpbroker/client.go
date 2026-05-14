@@ -65,6 +65,7 @@ func (b *Broker) buildAdHocConfig(input targetInput) (mcpcfg.ConnectionConfig, s
 		Transport: strings.TrimSpace(input.Transport),
 		ServerURL: strings.TrimSpace(input.URL),
 		Headers:   headers,
+		Timeout:   b.options.adhocHTTPTimeout,
 	}, true)
 	if err != nil {
 		return mcpcfg.ConnectionConfig{}, "", err
@@ -221,14 +222,65 @@ func (b *Broker) resolveClientOptions(
 		Config:     cloneConnectionConfig(cfg),
 	}
 
-	out, err := b.options.clientOptionsProvider(ctx, req)
+	out, err := invokeClientOptionsProvider(ctx, b.options.clientOptionsProvider, req)
 	if err != nil {
 		return nil, nil, err
 	}
 	if out == nil {
 		return nil, nil, nil
 	}
-	return out.HTTP, out.Stdio, nil
+	return filterNilClientOptions(out.HTTP), filterNilStdioClientOptions(out.Stdio), nil
+}
+
+// invokeClientOptionsProvider runs the host-supplied provider with a panic guard so a
+// misbehaving hook surfaces as an error wrapping ErrClientOptionsProviderPanicked instead
+// of crashing the agent. The provider runs on the hot path of every list/inspect/call
+// invocation; recover() here is cheap insurance against host bugs that would otherwise
+// unwind through trpc-mcp-go internals.
+func invokeClientOptionsProvider(
+	ctx context.Context,
+	fn ClientOptionsProvider,
+	req *ClientOptionsRequest,
+) (out *ClientOptions, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+			err = fmt.Errorf("%w: %v", ErrClientOptionsProviderPanicked, r)
+		}
+	}()
+	return fn(ctx, req)
+}
+
+// filterNilClientOptions drops nil entries so trpc-mcp-go's option application loop never
+// invokes a nil ClientOption (which would panic). Hosts often build options conditionally,
+// so tolerating sparse slices keeps the contract forgiving.
+func filterNilClientOptions(opts []tmcp.ClientOption) []tmcp.ClientOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	result := make([]tmcp.ClientOption, 0, len(opts))
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		result = append(result, opt)
+	}
+	return result
+}
+
+// filterNilStdioClientOptions mirrors filterNilClientOptions for the stdio transport.
+func filterNilStdioClientOptions(opts []tmcp.StdioClientOption) []tmcp.StdioClientOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	result := make([]tmcp.StdioClientOption, 0, len(opts))
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		result = append(result, opt)
+	}
+	return result
 }
 
 func createClient(cfg mcpcfg.ConnectionConfig, extraHTTP []tmcp.ClientOption, extraStdio []tmcp.StdioClientOption) (tmcp.Connector, error) {
@@ -300,21 +352,22 @@ func withOneShotClient[T any](
 ) (T, error) {
 	var zero T
 
+	// Per-call deadline: applied once and shared by Initialize and every MCP
+	// RPC issued inside fn. This matches the user-facing contract that
+	// ConnectionConfig.Timeout / WithAdHocHTTPTimeout bound the total
+	// wall-clock time of a single broker operation.
+	ctx, cancel := withTimeoutContext(ctx, cfg.Timeout)
+	defer cancel()
+
 	client, err := createClient(cfg, extraHTTP, extraStdio)
 	if err != nil {
 		return zero, err
 	}
 	defer client.Close()
 
-	initCtx, cancel := withTimeoutContext(ctx, cfg.Timeout)
-	defer cancel()
-
-	if _, err := client.Initialize(initCtx, &tmcp.InitializeRequest{}); err != nil {
+	if _, err := client.Initialize(ctx, &tmcp.InitializeRequest{}); err != nil {
 		return zero, fmt.Errorf("initialize MCP client: %w", err)
 	}
 
-	opCtx, opCancel := withTimeoutContext(ctx, cfg.Timeout)
-	defer opCancel()
-
-	return fn(opCtx, client)
+	return fn(ctx, client)
 }
