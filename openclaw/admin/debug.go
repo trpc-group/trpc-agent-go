@@ -10,6 +10,7 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/json"
 	"io/fs"
 	"net/url"
@@ -33,31 +34,37 @@ type debugStatus struct {
 }
 
 type debugSessionView struct {
-	SessionID   string    `json:"session_id,omitempty"`
-	TraceCount  int       `json:"trace_count"`
-	LastTraceAt time.Time `json:"last_trace_at,omitempty"`
-	Channel     string    `json:"channel,omitempty"`
-	RequestID   string    `json:"request_id,omitempty"`
-	TraceID     string    `json:"trace_id,omitempty"`
-	TracePath   string    `json:"trace_path,omitempty"`
-	LangfuseURL string    `json:"langfuse_url,omitempty"`
-	MetaURL     string    `json:"meta_url,omitempty"`
-	EventsURL   string    `json:"events_url,omitempty"`
-	ResultURL   string    `json:"result_url,omitempty"`
+	SessionID      string    `json:"session_id,omitempty"`
+	TraceCount     int       `json:"trace_count"`
+	LastTraceAt    time.Time `json:"last_trace_at,omitempty"`
+	Channel        string    `json:"channel,omitempty"`
+	RequestID      string    `json:"request_id,omitempty"`
+	TraceID        string    `json:"trace_id,omitempty"`
+	ProfileID      string    `json:"profile_id,omitempty"`
+	ProfileVersion string    `json:"profile_version,omitempty"`
+	ProfileAppName string    `json:"profile_app_name,omitempty"`
+	TracePath      string    `json:"trace_path,omitempty"`
+	LangfuseURL    string    `json:"langfuse_url,omitempty"`
+	MetaURL        string    `json:"meta_url,omitempty"`
+	EventsURL      string    `json:"events_url,omitempty"`
+	ResultURL      string    `json:"result_url,omitempty"`
 }
 
 type debugTraceView struct {
-	SessionID   string    `json:"session_id,omitempty"`
-	StartedAt   time.Time `json:"started_at,omitempty"`
-	Channel     string    `json:"channel,omitempty"`
-	RequestID   string    `json:"request_id,omitempty"`
-	MessageID   string    `json:"message_id,omitempty"`
-	TraceID     string    `json:"trace_id,omitempty"`
-	TracePath   string    `json:"trace_path,omitempty"`
-	LangfuseURL string    `json:"langfuse_url,omitempty"`
-	MetaURL     string    `json:"meta_url,omitempty"`
-	EventsURL   string    `json:"events_url,omitempty"`
-	ResultURL   string    `json:"result_url,omitempty"`
+	SessionID      string    `json:"session_id,omitempty"`
+	StartedAt      time.Time `json:"started_at,omitempty"`
+	Channel        string    `json:"channel,omitempty"`
+	RequestID      string    `json:"request_id,omitempty"`
+	MessageID      string    `json:"message_id,omitempty"`
+	TraceID        string    `json:"trace_id,omitempty"`
+	ProfileID      string    `json:"profile_id,omitempty"`
+	ProfileVersion string    `json:"profile_version,omitempty"`
+	ProfileAppName string    `json:"profile_app_name,omitempty"`
+	TracePath      string    `json:"trace_path,omitempty"`
+	LangfuseURL    string    `json:"langfuse_url,omitempty"`
+	MetaURL        string    `json:"meta_url,omitempty"`
+	EventsURL      string    `json:"events_url,omitempty"`
+	ResultURL      string    `json:"result_url,omitempty"`
 }
 
 type debugTraceRef struct {
@@ -118,6 +125,9 @@ func (s *Service) buildDebugStatus(sessionFilter string) debugStatus {
 			entry.Channel = trace.Channel
 			entry.RequestID = trace.RequestID
 			entry.TraceID = trace.TraceID
+			entry.ProfileID = trace.ProfileID
+			entry.ProfileVersion = trace.ProfileVersion
+			entry.ProfileAppName = trace.ProfileAppName
 			entry.TracePath = trace.TracePath
 			entry.LangfuseURL = trace.LangfuseURL
 			entry.MetaURL = trace.MetaURL
@@ -263,7 +273,48 @@ func (s *Service) readDebugTrace(
 	if fileExists(filepath.Join(traceAbs, debugResultFileName)) {
 		out.ResultURL = s.debugFileURL(traceRel, debugResultFileName)
 	}
+	enrichDebugTraceProfile(traceAbs, &out)
 	return out, true, nil
+}
+
+type debugRuntimeProfileRecord struct {
+	Kind    string         `json:"kind"`
+	Payload map[string]any `json:"payload,omitempty"`
+}
+
+func enrichDebugTraceProfile(traceAbs string, out *debugTraceView) {
+	if out == nil {
+		return
+	}
+	raw, err := debugrecorder.ReadEventsFile(traceAbs)
+	if err != nil {
+		return
+	}
+	for _, line := range bytes.Split(raw, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var rec debugRuntimeProfileRecord
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue
+		}
+		if rec.Kind != debugrecorder.KindRuntimeProfile {
+			continue
+		}
+		out.ProfileID = stringField(rec.Payload, "profile_id")
+		out.ProfileVersion = stringField(rec.Payload, "profile_version")
+		out.ProfileAppName = stringField(rec.Payload, "profile_app_name")
+		return
+	}
+}
+
+func stringField(values map[string]any, key string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func (s *Service) debugFileURL(tracePath string, name string) string {

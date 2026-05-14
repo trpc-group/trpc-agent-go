@@ -66,6 +66,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/subagentrun"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 const (
@@ -836,9 +837,19 @@ func (c *RuntimePromptController) SetPrompts(
 func NewRuntime(
 	ctx context.Context,
 	args []string,
+) (*Runtime, error) {
+	return NewRuntimeWithOptions(ctx, args)
+}
+
+// NewRuntimeWithOptions constructs an embedded OpenClaw runtime with options.
+func NewRuntimeWithOptions(
+	ctx context.Context,
+	args []string,
+	options ...RuntimeOption,
 ) (rt *Runtime, err error) {
 	rt = &Runtime{}
 	startedAt := time.Now()
+	runtimeOpts := buildRuntimeOptions(options)
 	cleanup := rt
 	defer func() {
 		if err != nil {
@@ -1085,6 +1096,12 @@ func NewRuntime(
 	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 	rt.runner = r
 
+	runtimeProfileResolver, runtimeProfileCatalog, runtimeProfileRequired :=
+		runtimeProfileResolverFromOptions(
+			opts.RuntimeProfiles,
+			runtimeOpts,
+		)
+
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
@@ -1102,6 +1119,11 @@ func NewRuntime(
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
+	gwOpts = appendRuntimeProfileGatewayOption(
+		gwOpts,
+		runtimeProfileResolver,
+		runtimeProfileRequired,
+	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
 			gwOpts,
@@ -1162,6 +1184,8 @@ func NewRuntime(
 	)
 	gw.SetPersonaStore(stores.personas)
 	gw.SetMemoryFileStore(fileMemoryStore)
+	gw.SetRuntimeProfileAppNames(runtimeProfileAppNames(opts.RuntimeProfiles))
+	gw.SetRuntimeProfileCatalog(runtimeProfileCatalog)
 
 	if len(opts.Channels) > 0 {
 		extra, err := channelsFromRegistry(
@@ -1200,6 +1224,7 @@ func NewRuntime(
 			resolvedStateDir,
 			cronRunner,
 			openClawTools.router,
+			runtimeProfileCronOptions(runtimeProfileResolver)...,
 		)
 		if err != nil {
 			if cronRunner != nil {
@@ -1571,6 +1596,12 @@ func run(ctx context.Context, args []string) error {
 	}
 	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 
+	runtimeProfileResolver, runtimeProfileCatalog, runtimeProfileRequired :=
+		runtimeProfileResolverFromOptions(
+			opts.RuntimeProfiles,
+			runtimeOptions{},
+		)
+
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
@@ -1588,6 +1619,11 @@ func run(ctx context.Context, args []string) error {
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
+	gwOpts = appendRuntimeProfileGatewayOption(
+		gwOpts,
+		runtimeProfileResolver,
+		runtimeProfileRequired,
+	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
 			gwOpts,
@@ -1630,6 +1666,8 @@ func run(ctx context.Context, args []string) error {
 	)
 	gw.SetPersonaStore(stores.personas)
 	gw.SetMemoryFileStore(fileMemoryStore)
+	gw.SetRuntimeProfileAppNames(runtimeProfileAppNames(opts.RuntimeProfiles))
+	gw.SetRuntimeProfileCatalog(runtimeProfileCatalog)
 
 	a2aSurface, err := newA2ASurface(ag, r, opts)
 	if err != nil {
@@ -1707,6 +1745,7 @@ func run(ctx context.Context, args []string) error {
 			resolvedStateDir,
 			cronRunner,
 			openClawTools.router,
+			runtimeProfileCronOptions(runtimeProfileResolver)...,
 		)
 		if err != nil {
 			if cronRunner != nil {
@@ -2386,6 +2425,9 @@ func newAgent(
 		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
 		llmagent.WithPostToolPrompt(openClawPostToolPrompt),
+		llmagent.WithSkillFilter(
+			runtimeprofile.SkillVisibilityFilterForRepository(repo),
+		),
 	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(

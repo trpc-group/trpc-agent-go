@@ -58,6 +58,38 @@ func (c *captureModel) GenerateContent(ctx context.Context, req *model.Request) 
 
 func (c *captureModel) Info() model.Info { return model.Info{Name: "capture"} }
 
+type namedGraphModel struct {
+	name   string
+	called bool
+	mu     sync.Mutex
+}
+
+func (m *namedGraphModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.called = true
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *namedGraphModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *namedGraphModel) Called() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.called
+}
+
 // echoTool is a minimal CallableTool used for ToolSet injection tests.
 type echoTool struct{ name string }
 
@@ -471,6 +503,102 @@ func TestAddLLMNode_GenerationConfigOption(t *testing.T) {
 	}
 	require.Equal(t, cfg.Stop, got.Stop)
 
+}
+
+func TestAddLLMNode_NoModelSelectorKeepsCallbackInvocation(t *testing.T) {
+	baseModel := &namedGraphModel{name: "base"}
+	ctxInvocation := agent.NewInvocation(
+		agent.WithInvocationID("graph-no-selector-ctx-inv"),
+	)
+	stateInvocation := agent.NewInvocation(
+		agent.WithInvocationID("graph-no-selector-state-inv"),
+	)
+	var callbackInvocation *agent.Invocation
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			callbackInvocation, _ = agent.InvocationFromContext(ctx)
+			callbackInvocation.SetState("callback-state", "visible")
+			return nil, nil
+		},
+	)
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", baseModel, "inst", nil)
+	node := sg.graph.nodes["llm"]
+	require.NotNil(t, node)
+	state := State{
+		StateKeyExecContext:    &ExecutionContext{InvocationID: stateInvocation.InvocationID, Invocation: stateInvocation},
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), ctxInvocation)
+	_, err := node.Function(ctx, state)
+	require.NoError(t, err)
+	require.Same(t, ctxInvocation, callbackInvocation)
+	got, ok := ctxInvocation.GetState("callback-state")
+	require.True(t, ok)
+	require.Equal(t, "visible", got)
+	_, ok = stateInvocation.GetState("callback-state")
+	require.False(t, ok)
+	require.True(t, baseModel.Called())
+}
+
+func TestAddLLMNode_RunLevelModelSelectorUsesSelectedModelAndNodeID(t *testing.T) {
+	baseModel := &namedGraphModel{name: "base"}
+	selectedModel := &namedGraphModel{name: "selected"}
+	hijackModel := &namedGraphModel{name: "hijack"}
+	var selectorNodeID string
+	var selectorBaseModel string
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("graph-selector-inv"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithModelSelector(func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+				selectorBaseModel = inv.Model.Info().Name
+				rawNodeID, ok := inv.GetState(StateKeyCurrentNodeID)
+				require.True(t, ok)
+				selectorNodeID, _ = rawNodeID.(string)
+				inv.SetState(StateKeyCurrentNodeID, "polluted")
+				inv.SetState("selector-state", "visible")
+				return selectedModel, nil
+			}),
+		)),
+	)
+	var callbackNodeID string
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			inv, ok := agent.InvocationFromContext(ctx)
+			require.True(t, ok)
+			rawNodeID, ok := inv.GetState(StateKeyCurrentNodeID)
+			require.True(t, ok)
+			callbackNodeID, _ = rawNodeID.(string)
+			selectorState, ok := inv.GetState("selector-state")
+			require.True(t, ok)
+			require.Equal(t, "visible", selectorState)
+			inv.Model = hijackModel
+			return nil, nil
+		},
+	)
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", baseModel, "inst", nil)
+	node := sg.graph.nodes["llm"]
+	require.NotNil(t, node)
+	state := State{
+		StateKeyExecContext:    &ExecutionContext{InvocationID: invocation.InvocationID, Invocation: invocation},
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := node.Function(context.Background(), state)
+	require.NoError(t, err)
+	require.Equal(t, "base", selectorBaseModel)
+	require.Equal(t, "llm", selectorNodeID)
+	require.Equal(t, "llm", callbackNodeID)
+	require.False(t, baseModel.Called())
+	require.True(t, selectedModel.Called())
+	require.False(t, hijackModel.Called())
+	_, ok := invocation.GetState(StateKeyCurrentNodeID)
+	require.False(t, ok)
+	require.Nil(t, invocation.Model)
 }
 
 func TestRunModelStream_IterModelError(t *testing.T) {
