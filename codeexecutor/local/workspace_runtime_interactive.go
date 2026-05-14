@@ -32,6 +32,8 @@ import (
 const (
 	defaultInteractiveMaxLines = 20_000
 	defaultInteractiveKillWait = 2 * time.Second
+	envPathKey                 = "PATH"
+	envPathExtKey              = "PATHEXT"
 )
 
 var errInteractiveTTYWindows = errors.New(
@@ -373,15 +375,17 @@ func (r *Runtime) StartProgram(
 	}
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 
-	cmd := exec.CommandContext(tctx, spec.Cmd, spec.Args...) //nolint:gosec
-	cmd.Dir = cwd
-
 	env, err := r.buildProgramEnv(ws, spec.RunProgramSpec)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-	cmd.Env = env
+	cmd := newLocalProgramCommand(
+		tctx,
+		cwd,
+		spec.RunProgramSpec,
+		env,
+	)
 
 	sess := newInteractiveSession(
 		uuid.NewString(),
@@ -509,6 +513,136 @@ func (r *Runtime) buildProgramEnv(
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 	return env, nil
+}
+
+func newLocalProgramCommand(
+	ctx context.Context,
+	cwd string,
+	spec codeexecutor.RunProgramSpec,
+	env []string,
+) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, spec.Cmd, spec.Args...) //nolint:gosec
+	cmd.Dir = cwd
+	cmd.Env = env
+	if !isBareLocalCommand(spec.Cmd) {
+		return cmd
+	}
+	if resolved, ok := localProgramCommandPath(cwd, spec.Cmd, env); ok {
+		cmd.Path = resolved
+		cmd.Err = nil
+	} else {
+		cmd.Path = spec.Cmd
+		cmd.Err = exec.ErrNotFound
+	}
+	return cmd
+}
+
+func localProgramCommandPath(
+	cwd string,
+	name string,
+	env []string,
+) (string, bool) {
+	if !isBareLocalCommand(name) {
+		return name, true
+	}
+	pathValue, _ := envValue(env, envPathKey)
+	pathExt, _ := envValue(env, envPathExtKey)
+	for _, dir := range filepath.SplitList(pathValue) {
+		if strings.TrimSpace(dir) == "" {
+			dir = "."
+		}
+		for _, candidateName := range localProgramCandidateNames(
+			name,
+			pathExt,
+		) {
+			candidate := filepath.Join(dir, candidateName)
+			if !filepath.IsAbs(candidate) {
+				candidate = filepath.Join(cwd, candidate)
+			}
+			if isLocalExecutableFile(candidate) {
+				return candidate, true
+			}
+		}
+	}
+	return name, false
+}
+
+func envValue(env []string, key string) (string, bool) {
+	for i := len(env) - 1; i >= 0; i-- {
+		name, value, ok := strings.Cut(env[i], "=")
+		if !ok || !envKeyEqual(name, key) {
+			continue
+		}
+		return value, true
+	}
+	return "", false
+}
+
+func envKeyEqual(a string, b string) bool {
+	return envKeyEqualForGOOS(a, b, runtime.GOOS)
+}
+
+func envKeyEqualForGOOS(a string, b string, goos string) bool {
+	if goos == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+func localProgramCandidateNames(name string, pathExt string) []string {
+	return localProgramCandidateNamesForGOOS(
+		name,
+		pathExt,
+		runtime.GOOS,
+		string(os.PathListSeparator),
+	)
+}
+
+func localProgramCandidateNamesForGOOS(
+	name string,
+	pathExt string,
+	goos string,
+	pathListSep string,
+) []string {
+	if goos != "windows" || filepath.Ext(name) != "" {
+		return []string{name}
+	}
+	exts := strings.Split(pathExt, pathListSep)
+	if len(exts) == 0 || strings.TrimSpace(pathExt) == "" {
+		exts = []string{".com", ".exe", ".bat", ".cmd"}
+	}
+	names := make([]string, 0, len(exts))
+	for _, ext := range exts {
+		ext = strings.TrimSpace(ext)
+		if ext == "" {
+			continue
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		names = append(names, name+ext)
+	}
+	return names
+}
+
+func isBareLocalCommand(name string) bool {
+	name = strings.TrimSpace(name)
+	return name != "" && name == filepath.Base(name)
+}
+
+func isLocalExecutableFile(name string) bool {
+	return isLocalExecutableFileForGOOS(name, runtime.GOOS)
+}
+
+func isLocalExecutableFileForGOOS(name string, goos string) bool {
+	info, err := os.Stat(name)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if goos == "windows" {
+		return true
+	}
+	return info.Mode()&0o111 != 0
 }
 
 func formatInteractiveCommand(cmd string, args []string) string {
