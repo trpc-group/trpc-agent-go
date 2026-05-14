@@ -246,6 +246,65 @@ application needs to distinguish different summary entry points, annotate the
 context before calling the session APIs and read the value inside your
 `ContextChecker`.
 
+## Dynamic Summarizer
+
+Use `NewDynamicSummarizer` when the session service should be reused, but the
+summary model, prompt, or checks must vary per request. This is useful for
+multi-tenant systems and custom model routing. Keep the session service
+long-lived, especially for database-backed services such as MySQL, so the
+underlying connection pool can be reused.
+
+```go
+type summaryCfgKey struct{}
+
+type SummaryCfg struct {
+    ModelName string
+    Prompt    string
+}
+
+func WithSummaryCfg(ctx context.Context, cfg SummaryCfg) context.Context {
+    return context.WithValue(ctx, summaryCfgKey{}, cfg)
+}
+
+func SummaryCfgFromContext(ctx context.Context) (SummaryCfg, bool) {
+    cfg, ok := ctx.Value(summaryCfgKey{}).(SummaryCfg)
+    return cfg, ok
+}
+
+summarizer := summary.NewDynamicSummarizer(func(
+    ctx context.Context,
+    sess *session.Session,
+) (summary.SessionSummarizer, error) {
+    cfg, ok := SummaryCfgFromContext(ctx)
+    if !ok {
+        return nil, nil // Skip automatic summary for this call.
+    }
+    return BuildSummarizer(cfg)
+})
+
+sessionService, err := mysql.NewService(
+    mysql.WithMySQLClientDSN(dsn),
+    mysql.WithSummarizer(summarizer),
+)
+```
+
+Before running the request, attach the request-scoped configuration to `ctx`:
+
+```go
+ctx = WithSummaryCfg(ctx, SummaryCfg{
+    ModelName: req.SummaryModel,
+    Prompt:    req.SummaryPrompt,
+})
+```
+
+The resolver should be cheap and deterministic for the same `ctx` and session.
+During non-forced summary, it may be called once for the summary gate and once
+for actual summary generation. If constructing the summarizer is expensive,
+store the already-built summarizer in `ctx` and let the resolver only read it.
+Returning nil from the resolver skips automatic summary checks. Direct
+`Summarize` calls, or forced summary calls without a resolved summarizer, return
+an error.
+
 ## Summarizer Options
 
 ### Trigger Conditions
