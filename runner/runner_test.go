@@ -5705,6 +5705,76 @@ func TestRunner_Run_UserMessageRewriter_RewritesCurrentTurnMessages(t *testing.T
 	require.Equal(t, "rewritten", sess.Events[1].Choices[0].Message.Content)
 }
 
+func TestRunner_Run_UserMessageRewriter_RewritesCurrentTurnToolTranscript(t *testing.T) {
+	toolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call_1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "lookup",
+			Arguments: []byte(`{"query":"hello"}`),
+		},
+	}
+	assistantMessage := model.Message{
+		Role:      model.RoleAssistant,
+		Content:   "calling lookup",
+		ToolCalls: []model.ToolCall{toolCall},
+	}
+	rewritten := []model.Message{
+		model.NewUserMessage("first user"),
+		assistantMessage,
+		model.NewToolMessage("call_1", "lookup", `{"answer":"world"}`),
+		model.NewUserMessage("final user"),
+	}
+	modelStub := &sequentialModel{
+		name: "seq",
+		responses: []*model.Response{{
+			ID:   "resp-1",
+			Done: true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("ok"),
+			}},
+		}},
+	}
+	svc := sessioninmemory.NewSessionService()
+	ag := llmagent.New("a", llmagent.WithModel(modelStub))
+	r := NewRunner("app", ag, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return rewritten, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+	requests := modelStub.Requests()
+	require.Len(t, requests, 1)
+	require.Equal(t, rewritten, requests[0].messages)
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 5)
+	require.Equal(t, model.RoleUser, sess.Events[0].Choices[0].Message.Role)
+	require.Equal(t, model.RoleAssistant, sess.Events[1].Choices[0].Message.Role)
+	require.Equal(t, model.RoleTool, sess.Events[2].Choices[0].Message.Role)
+	require.Equal(t, model.RoleUser, sess.Events[3].Choices[0].Message.Role)
+	require.Equal(t, rewritten, []model.Message{
+		sess.Events[0].Choices[0].Message,
+		sess.Events[1].Choices[0].Message,
+		sess.Events[2].Choices[0].Message,
+		sess.Events[3].Choices[0].Message,
+	})
+}
+
 func TestRunner_Run_UserMessageRewriter_EmptyResultReturnsError(t *testing.T) {
 	svc := sessioninmemory.NewSessionService()
 	r := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(svc))
