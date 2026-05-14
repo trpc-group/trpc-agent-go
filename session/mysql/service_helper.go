@@ -14,7 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -597,11 +597,17 @@ func (s *Service) getEventsList(
 	for i, key := range sessionKeys {
 		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
 		items := eventsMap[keyStr]
-		sort.Slice(items, func(a, b int) bool {
-			if items[a].createdAt.Equal(items[b].createdAt) {
-				return items[a].id < items[b].id
+		slices.SortFunc(items, func(a, b eventWithOrder) int {
+			if cmp := a.createdAt.Compare(b.createdAt); cmp != 0 {
+				return cmp
 			}
-			return items[a].createdAt.Before(items[b].createdAt)
+			if a.id < b.id {
+				return -1
+			}
+			if a.id > b.id {
+				return 1
+			}
+			return 0
 		})
 		events := make([]event.Event, len(items))
 		for j, item := range items {
@@ -693,11 +699,17 @@ func (s *Service) getPagedEvents(
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
 
-	sort.Slice(refs, func(i, j int) bool {
-		if refs[i].createdAt.Equal(refs[j].createdAt) {
-			return refs[i].id < refs[j].id
+	slices.SortFunc(refs, func(a, b eventRef) int {
+		if cmp := a.createdAt.Compare(b.createdAt); cmp != 0 {
+			return cmp
 		}
-		return refs[i].createdAt.Before(refs[j].createdAt)
+		if a.id < b.id {
+			return -1
+		}
+		if a.id > b.id {
+			return 1
+		}
+		return 0
 	})
 	events := make([]event.Event, 0, len(refs))
 	for _, ref := range refs {

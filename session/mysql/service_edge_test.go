@@ -469,6 +469,48 @@ func TestGetEventsList(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
+	t.Run("WithEventPageSkipsMissingPhase2Rows", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db)
+		keys := []session.Key{
+			{AppName: "app1", UserID: "user1", SessionID: "sess1"},
+		}
+		createdAt := time.Now().Add(-time.Hour)
+		createdAts := []time.Time{createdAt}
+
+		evt3 := event.NewResponseEvent("inv-3", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant-3"}}},
+		})
+		evt3Bytes, _ := json.Marshal(evt3)
+		older := time.Now().Add(-time.Minute)
+		newer := time.Now()
+
+		idRows := sqlmock.NewRows([]string{"id", "created_at"}).
+			AddRow(int64(10), newer).
+			AddRow(int64(11), older)
+		mock.ExpectQuery("SELECT id, created_at FROM").
+			WithArgs("app1", "user1", "sess1", createdAt, 2, 1).
+			WillReturnRows(idRows)
+
+		eventRows := sqlmock.NewRows([]string{"id", "event"}).
+			AddRow(int64(10), evt3Bytes)
+		mock.ExpectQuery("SELECT id, event FROM").
+			WithArgs(int64(10), int64(11)).
+			WillReturnRows(eventRows)
+
+		result, err := s.getEventsList(
+			context.Background(), keys, createdAts, 0, time.Time{}, &session.EventPage{Offset: 1, Limit: 2},
+		)
+		assert.NoError(t, err)
+		require.Len(t, result, 1)
+		require.Len(t, result[0], 1)
+		assert.Equal(t, "inv-3", result[0][0].InvocationID)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 	t.Run("WithEventPageUsesTTLLowerBound", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
