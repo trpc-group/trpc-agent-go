@@ -1,0 +1,417 @@
+{
+  "evalSetResultId": "case-level-rubric-app_case-level-rubric-basic_39aba2cf-ea67-4535-a581-238641acfd5f",
+  "evalSetResultName": "case-level-rubric-app_case-level-rubric-basic_39aba2cf-ea67-4535-a581-238641acfd5f",
+  "evalSetId": "case-level-rubric-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "case-level-rubric-basic",
+      "evalId": "shanghai_travel_case",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              },
+              "toolStrategy": {
+                "get_ticket": {
+                  "arguments": {
+                    "ignoreTree": {
+                      "time": true
+                    },
+                    "matchStrategy": "exact"
+                  },
+                  "result": {
+                    "ignoreTree": {
+                      "time": true
+                    },
+                    "matchStrategy": "exact"
+                  }
+                },
+                "get_time": {
+                  "result": {
+                    "ignore": true
+                  }
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        },
+        {
+          "metricName": "travel_answer_quality",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.9,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "global:answer-completeness",
+                  "content": {
+                    "text": "The final answer should directly answer both parts of the user's question: what to watch out for while traveling to Shanghai and whether a ticket is still available."
+                  },
+                  "description": "The final answer addresses the travel question.",
+                  "type": "FINAL_RESPONSE_QUALITY"
+                },
+                {
+                  "id": "case:festival-ticket-advice",
+                  "content": {
+                    "text": "For this Shanghai travel case, the final answer must mention festival-related traffic disruption and ticket availability. It should also include at least one concrete action recommendation, such as leaving early, planning extra travel time, reserving, or buying the ticket soon."
+                  },
+                  "description": "This case needs festival traffic and ticket availability advice."
+                }
+              ],
+              "judgeModel": {
+                "providerName": "openai",
+                "modelName": "gpt-5.2",
+                "baseURL": "${JUDGE_MODEL_BASE_URL}",
+                "numSamples": 1,
+                "generationConfig": {
+                  "max_tokens": 512,
+                  "temperature": 0,
+                  "stream": false
+                }
+              }
+            }
+          },
+          "details": {
+            "reason": "The response explicitly warns about travel issues (festival traffic controls, congestion, reroutes, plus general weather-related precautions) and clearly states that tickets are still available.\nIt mentions festival-related disruption and ticket availability, and provides concrete actions (avoid the core area, allow extra time, leave early, use metro, monitor road closures).",
+            "score": 1,
+            "rubricScores": [
+              {
+                "id": "global:answer-completeness",
+                "reason": "The response explicitly warns about travel issues (festival traffic controls, congestion, reroutes, plus general weather-related precautions) and clearly states that tickets are still available.",
+                "score": 1
+              },
+              {
+                "id": "case:festival-ticket-advice",
+                "reason": "It mentions festival-related disruption and ticket availability, and provides concrete actions (avoid the core area, allow extra time, leave early, use metro, monitor road closures).",
+                "score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "b8a938b3-dad9-430d-aeb7-b87ee9c9e748",
+            "userContent": {
+              "role": "user",
+              "content": "I'm traveling to Shanghai tonight. What should I watch out for, and can I still get a ticket?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "上海今晚天气：晴，约 26°C。注意防晒、补水，夜间出行可带一件薄外套。  \n\n本地提醒：市中心有节庆活动，预计会有交通管制/拥堵与临时改道；尽量避开核心活动区域，预留更充足的出发与换乘时间。  \n\n票务情况：目前仍有余票，剩余 25 张，今晚出行仍可购票。  \n\n出行建议：可以按计划前往；优先选择地铁等公共交通，若打车请提前出发并关注实时路况与临时封路信息。"
+            },
+            "tools": [
+              {
+                "id": "call_e6fAwty1b2M1FFC2PbidMcan",
+                "name": "get_time",
+                "arguments": {},
+                "result": {
+                  "timestamp": "2026-05-13T13:05:23+08:00"
+                }
+              },
+              {
+                "id": "call_BgFF17fyHIG3jEVwTcRqn6qH",
+                "name": "get_weather",
+                "arguments": {
+                  "city": "Shanghai"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "condition": "sunny",
+                  "tempC": 26
+                }
+              },
+              {
+                "id": "call_ZH853elmWwBe6cFh6MX5I9mt",
+                "name": "get_news",
+                "arguments": {
+                  "city": "Shanghai"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "headline": "Festival events will be held downtown; traffic disruptions are expected."
+                }
+              },
+              {
+                "id": "call_DB6e6ucRqVg9Qy9pjspBgM60",
+                "name": "get_ticket",
+                "arguments": {
+                  "city": "Shanghai",
+                  "time": "2026-05-13T13:05:23+08:00"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "seatsLeft": 25,
+                  "time": "2026-05-13T13:05:23+08:00"
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "shanghai_travel_case-1",
+            "userContent": {
+              "role": "user",
+              "content": "I'm traveling to Shanghai tonight. What should I watch out for, and can I still get a ticket?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Shanghai is sunny at 26C. Downtown festival events may cause traffic disruptions. There are 25 tickets left, so tickets are still available. Leave early, plan extra travel time, and buy or reserve the ticket soon."
+            },
+            "tools": [
+              {
+                "id": "tool_use_weather",
+                "name": "get_weather",
+                "arguments": {
+                  "city": "Shanghai"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "condition": "sunny",
+                  "tempC": 26
+                }
+              },
+              {
+                "id": "tool_use_news",
+                "name": "get_news",
+                "arguments": {
+                  "city": "Shanghai"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "headline": "Festival events will be held downtown; traffic disruptions are expected."
+                }
+              },
+              {
+                "id": "tool_use_time",
+                "name": "get_time",
+                "arguments": {},
+                "result": {}
+              },
+              {
+                "id": "tool_use_ticket",
+                "name": "get_ticket",
+                "arguments": {
+                  "city": "Shanghai"
+                },
+                "result": {
+                  "city": "Shanghai",
+                  "seatsLeft": 25
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "toolStrategy": {
+                    "get_ticket": {
+                      "arguments": {
+                        "ignoreTree": {
+                          "time": true
+                        },
+                        "matchStrategy": "exact"
+                      },
+                      "result": {
+                        "ignoreTree": {
+                          "time": true
+                        },
+                        "matchStrategy": "exact"
+                      }
+                    },
+                    "get_time": {
+                      "result": {
+                        "ignore": true
+                      }
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            },
+            {
+              "metricName": "travel_answer_quality",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.9,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "global:answer-completeness",
+                      "content": {
+                        "text": "The final answer should directly answer both parts of the user's question: what to watch out for while traveling to Shanghai and whether a ticket is still available."
+                      },
+                      "description": "The final answer addresses the travel question.",
+                      "type": "FINAL_RESPONSE_QUALITY"
+                    },
+                    {
+                      "id": "case:festival-ticket-advice",
+                      "content": {
+                        "text": "For this Shanghai travel case, the final answer must mention festival-related traffic disruption and ticket availability. It should also include at least one concrete action recommendation, such as leaving early, planning extra travel time, reserving, or buying the ticket soon."
+                      },
+                      "description": "This case needs festival traffic and ticket availability advice."
+                    }
+                  ],
+                  "judgeModel": {
+                    "providerName": "openai",
+                    "modelName": "gpt-5.2",
+                    "baseURL": "${JUDGE_MODEL_BASE_URL}",
+                    "numSamples": 1,
+                    "generationConfig": {
+                      "max_tokens": 512,
+                      "temperature": 0,
+                      "stream": false
+                    }
+                  }
+                }
+              },
+              "details": {
+                "reason": "The response explicitly warns about travel issues (festival traffic controls, congestion, reroutes, plus general weather-related precautions) and clearly states that tickets are still available.\nIt mentions festival-related disruption and ticket availability, and provides concrete actions (avoid the core area, allow extra time, leave early, use metro, monitor road closures).",
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "id": "global:answer-completeness",
+                    "reason": "The response explicitly warns about travel issues (festival traffic controls, congestion, reroutes, plus general weather-related precautions) and clearly states that tickets are still available.",
+                    "score": 1
+                  },
+                  {
+                    "id": "case:festival-ticket-advice",
+                    "reason": "It mentions festival-related disruption and ticket availability, and provides concrete actions (avoid the core area, allow extra time, leave early, use metro, monitor road closures).",
+                    "score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "d9fb9cb1-01d2-43c3-8d76-f20362c1ef8c",
+      "userId": "traveler"
+    }
+  ],
+  "summary": {
+    "overallStatus": "passed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "passed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "passed",
+        "caseStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "travel_answer_quality",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.9,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "shanghai_travel_case",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "travel_answer_quality",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.9,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              },
+              {
+                "metricName": "travel_answer_quality",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 0.9
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1778648732.6204293
+}

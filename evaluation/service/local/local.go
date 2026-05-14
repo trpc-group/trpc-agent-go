@@ -32,6 +32,7 @@ import (
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/internal/inference"
@@ -408,6 +409,10 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	if err != nil {
 		return nil, fmt.Errorf("prepare case evaluation inputs (evalCaseID=%s): %w", inferenceResult.EvalCaseID, err)
 	}
+	caseRubricsByMetric, err := buildCaseRubricIndex(inferenceResult.EvalCaseID, evaluateConfig.EvalMetrics, evalCase.Rubrics)
+	if err != nil {
+		return nil, err
+	}
 	// overallMetricResults collects the metric results for the entire eval case.
 	overallMetricResults := make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics))
 	perInvocation := make([]*evalresult.EvalMetricResultPerInvocation, len(inputs.actuals))
@@ -419,13 +424,25 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		}
 	}
 	// Iterate through every configured metric and run the evaluation.
-	for _, evalMetric := range evaluateConfig.EvalMetrics {
-		result, err := s.evaluateMetric(ctx, opts.Registry, evalMetric, inputs.actuals, inputs.expecteds)
+	for _, configuredMetric := range evaluateConfig.EvalMetrics {
+		metricEvaluator, err := lookupMetricEvaluator(opts.Registry, configuredMetric)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				// Skip metrics whose evaluator or artifacts are intentionally absent.
 				continue
 			}
+			return nil, err
+		}
+		evalMetric, err := buildCaseEffectiveMetric(
+			inferenceResult.EvalCaseID,
+			configuredMetric,
+			caseRubricsByMetric[configuredMetric.MetricName],
+		)
+		if err != nil {
+			return nil, err
+		}
+		result, err := metricEvaluator.Evaluate(ctx, inputs.actuals, inputs.expecteds, evalMetric)
+		if err != nil {
 			return nil, fmt.Errorf("run evaluation for metric %s: %w", evalMetric.MetricName, err)
 		}
 		if len(result.PerInvocationResults) != len(perInvocation) {
@@ -495,18 +512,110 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	}, nil
 }
 
-// evaluateMetric locates the evaluator registered for the metric and runs the evaluation.
-func (s *local) evaluateMetric(ctx context.Context, reg registry.Registry, evalMetric *metric.EvalMetric, actuals, expecteds []*evalset.Invocation) (*evaluator.EvaluateResult, error) {
-	evaluatorName := evalMetric.MetricName
-	if evalMetric.EvaluatorName != "" {
-		evaluatorName = evalMetric.EvaluatorName
-	}
+func lookupMetricEvaluator(reg registry.Registry, evalMetric *metric.EvalMetric) (evaluator.Evaluator, error) {
+	evaluatorName := resolveEvaluatorName(evalMetric)
 	metricEvaluator, err := reg.Get(evaluatorName)
 	if err != nil {
 		return nil, fmt.Errorf("get evaluator for metric %s: %w", evaluatorName, err)
 	}
-	// Run the evaluation on the actual and expected invocations and return the evaluation result.
-	return metricEvaluator.Evaluate(ctx, actuals, expecteds, evalMetric)
+	return metricEvaluator, nil
+}
+
+func buildCaseRubricIndex(
+	evalCaseID string,
+	evalMetrics []*metric.EvalMetric,
+	caseRubrics []*evalset.EvalCaseRubric,
+) (map[string][]*criterionllm.Rubric, error) {
+	if len(caseRubrics) == 0 {
+		return nil, nil
+	}
+	metricNames := make(map[string]struct{}, len(evalMetrics))
+	for _, evalMetric := range evalMetrics {
+		if evalMetric == nil {
+			continue
+		}
+		if strings.TrimSpace(evalMetric.MetricName) == "" {
+			continue
+		}
+		metricNames[evalMetric.MetricName] = struct{}{}
+	}
+	rubricsByMetric := make(map[string][]*criterionllm.Rubric)
+	for i, caseRubric := range caseRubrics {
+		if caseRubric == nil {
+			return nil, fmt.Errorf("case rubric %s[%d]: rubric is nil", evalCaseID, i)
+		}
+		if strings.TrimSpace(caseRubric.MetricName) == "" {
+			return nil, fmt.Errorf("case rubric %s[%d]: metricName is empty", evalCaseID, i)
+		}
+		if caseRubric.Content == nil {
+			return nil, fmt.Errorf("case rubric %s[%d]: content is nil", evalCaseID, i)
+		}
+		text := strings.TrimSpace(caseRubric.Content.Text)
+		if text == "" {
+			return nil, fmt.Errorf("case rubric %s[%d]: content.text is empty", evalCaseID, i)
+		}
+		if _, ok := metricNames[caseRubric.MetricName]; !ok {
+			return nil, fmt.Errorf("case rubric %s[%d]: metric %s not found", evalCaseID, i, caseRubric.MetricName)
+		}
+		id := strings.TrimSpace(caseRubric.ID)
+		if id == "" {
+			id = fmt.Sprintf("case_rubric_%d", i+1)
+		}
+		rubric := &criterionllm.Rubric{
+			ID:          id,
+			Content:     &criterionllm.RubricContent{Text: text},
+			Description: caseRubric.Description,
+			Type:        strings.TrimSpace(caseRubric.Type),
+		}
+		rubricsByMetric[caseRubric.MetricName] = append(rubricsByMetric[caseRubric.MetricName], rubric)
+	}
+	return rubricsByMetric, nil
+}
+
+func buildCaseEffectiveMetric(evalCaseID string, evalMetric *metric.EvalMetric, caseRubrics []*criterionllm.Rubric) (*metric.EvalMetric, error) {
+	if len(caseRubrics) == 0 {
+		return evalMetric, nil
+	}
+	if evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
+		return nil, fmt.Errorf("case rubric %s: metric %s llmJudge criterion is required as rubric container", evalCaseID, evalMetric.MetricName)
+	}
+	effectiveMetric, err := clone.CloneEvalMetric(evalMetric)
+	if err != nil {
+		return nil, fmt.Errorf("clone metric %s for case rubric: %w", evalMetric.MetricName, err)
+	}
+	effectiveMetric.Criterion.LLMJudge.JudgeRunnerOptions = evalMetric.Criterion.LLMJudge.JudgeRunnerOptions
+	if err := appendCaseRubricsToMetric(evalCaseID, effectiveMetric, caseRubrics); err != nil {
+		return nil, err
+	}
+	return effectiveMetric, nil
+}
+
+func appendCaseRubricsToMetric(evalCaseID string, evalMetric *metric.EvalMetric, caseRubrics []*criterionllm.Rubric) error {
+	if len(caseRubrics) == 0 {
+		return nil
+	}
+	seenIDs := make(map[string]struct{}, len(evalMetric.Criterion.LLMJudge.Rubrics)+len(caseRubrics))
+	for _, rubric := range evalMetric.Criterion.LLMJudge.Rubrics {
+		if rubric == nil {
+			continue
+		}
+		id := strings.TrimSpace(rubric.ID)
+		if id == "" {
+			continue
+		}
+		if _, exists := seenIDs[id]; exists {
+			return fmt.Errorf("case rubric %s: duplicate rubric id %s", evalCaseID, id)
+		}
+		seenIDs[id] = struct{}{}
+	}
+	for _, caseRubric := range caseRubrics {
+		if _, exists := seenIDs[caseRubric.ID]; exists {
+			return fmt.Errorf("case rubric %s: duplicate rubric id %s", evalCaseID, caseRubric.ID)
+		}
+		seenIDs[caseRubric.ID] = struct{}{}
+		evalMetric.Criterion.LLMJudge.Rubrics = append(evalMetric.Criterion.LLMJudge.Rubrics, caseRubric)
+	}
+	return nil
 }
 
 type caseEvaluationInputs struct {
