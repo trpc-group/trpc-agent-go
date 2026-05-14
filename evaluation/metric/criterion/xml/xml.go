@@ -20,12 +20,22 @@ import (
 // CompareFunc defines custom XML comparison logic.
 type CompareFunc func(actual, expected string) (bool, error)
 
+// XMLMatchStrategy enumerates supported XML matching strategies.
+type XMLMatchStrategy string
+
+const (
+	// XMLMatchStrategySkip skips XML value matching.
+	XMLMatchStrategySkip XMLMatchStrategy = "skip"
+)
+
 // XMLCriterion validates XML content.
 type XMLCriterion struct {
 	// Ignore skips XML validation when true.
 	Ignore bool `json:"ignore,omitempty"`
 	// Valid validates that the actual content is a well-formed XML document.
 	Valid bool `json:"valid,omitempty"`
+	// MatchStrategy selects the XML matching rule.
+	MatchStrategy XMLMatchStrategy `json:"matchStrategy,omitempty"`
 	// Compare overrides default validation when provided.
 	Compare CompareFunc `json:"-"`
 }
@@ -34,9 +44,10 @@ type XMLCriterion struct {
 func New(opt ...Option) *XMLCriterion {
 	opts := newOptions(opt...)
 	return &XMLCriterion{
-		Ignore:  opts.ignore,
-		Valid:   opts.valid,
-		Compare: opts.compare,
+		Ignore:        opts.ignore,
+		Valid:         opts.valid,
+		MatchStrategy: opts.matchStrategy,
+		Compare:       opts.compare,
 	}
 }
 
@@ -45,13 +56,19 @@ func (c *XMLCriterion) Match(actual, expected string) (bool, error) {
 	if c.Ignore {
 		return true, nil
 	}
+	if c.MatchStrategy == "" {
+		return false, fmt.Errorf("xml match strategy is empty")
+	}
+	if c.MatchStrategy != XMLMatchStrategySkip {
+		return false, fmt.Errorf("invalid match strategy %s", c.MatchStrategy)
+	}
 	if c.Compare != nil {
 		return c.Compare(actual, expected)
 	}
 	if c.Valid {
 		return matchValid(actual)
 	}
-	return false, fmt.Errorf("xml criterion not configured")
+	return true, nil
 }
 
 func matchValid(content string) (bool, error) {

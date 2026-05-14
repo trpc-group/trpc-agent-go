@@ -124,7 +124,7 @@ func TestJSONCriterionMatchRawMessageWithParsedValue(t *testing.T) {
 }
 
 func TestJSONCriterionValidRawMessage(t *testing.T) {
-	criterion := &JSONCriterion{Valid: true}
+	criterion := &JSONCriterion{Valid: true, MatchStrategy: JSONMatchStrategySkip}
 
 	ok, err := criterion.Match(json.RawMessage(`{"a":1}`), json.RawMessage(`not checked`))
 	assert.True(t, ok)
@@ -151,6 +151,49 @@ func TestJSONCriterionValidRawMessage(t *testing.T) {
 	assert.Error(t, err)
 
 	ok, err = criterion.Match(json.RawMessage(`{} {}`), nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestJSONCriterionSkipMatchStrategy(t *testing.T) {
+	criterion := &JSONCriterion{MatchStrategy: JSONMatchStrategySkip}
+	ok, err := criterion.Match("not json", "not checked")
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionCompareOverridesSkipMatchStrategy(t *testing.T) {
+	called := false
+	criterion := &JSONCriterion{
+		MatchStrategy: JSONMatchStrategySkip,
+		Compare: func(actual, expected any) (bool, error) {
+			called = true
+			return actual == "not json" && expected == "not checked", nil
+		},
+	}
+	ok, err := criterion.Match("not json", "not checked")
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestJSONCriterionValidWithSkipMatchStrategy(t *testing.T) {
+	criterion := &JSONCriterion{Valid: true, MatchStrategy: JSONMatchStrategySkip}
+	ok, err := criterion.Match(json.RawMessage(`{"a":1}`), json.RawMessage(`not checked`))
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	ok, err = criterion.Match(json.RawMessage(`not json`), json.RawMessage(`not checked`))
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parse actual raw json")
+}
+
+func TestJSONCriterionValidWithExactMatchStrategy(t *testing.T) {
+	criterion := &JSONCriterion{Valid: true, MatchStrategy: JSONMatchStrategyExact}
+	ok, err := criterion.Match(json.RawMessage(`{"a":1}`), json.RawMessage(`{"a":1}`))
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	ok, err = criterion.Match(json.RawMessage(`{"a":1}`), json.RawMessage(`{"a":2}`))
 	assert.False(t, ok)
 	assert.Error(t, err)
 }
