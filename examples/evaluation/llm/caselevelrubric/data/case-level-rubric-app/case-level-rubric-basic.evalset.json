@@ -1,0 +1,78 @@
+{
+  "evalSetId": "case-level-rubric-basic",
+  "name": "case-level-rubric-basic",
+  "evalCases": [
+    {
+      "evalId": "shanghai_travel_case",
+      "conversation": [
+        {
+          "invocationId": "shanghai_travel_case-1",
+          "userContent": {
+            "role": "user",
+            "content": "I'm traveling to Shanghai tonight. What should I watch out for, and can I still get a ticket?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Shanghai is sunny at 26C. Downtown festival events may cause traffic disruptions. There are 25 tickets left, so tickets are still available. Leave early, plan extra travel time, and buy or reserve the ticket soon."
+          },
+          "tools": [
+            {
+              "id": "tool_use_weather",
+              "name": "get_weather",
+              "arguments": {
+                "city": "Shanghai"
+              },
+              "result": {
+                "city": "Shanghai",
+                "condition": "sunny",
+                "tempC": 26
+              }
+            },
+            {
+              "id": "tool_use_news",
+              "name": "get_news",
+              "arguments": {
+                "city": "Shanghai"
+              },
+              "result": {
+                "city": "Shanghai",
+                "headline": "Festival events will be held downtown; traffic disruptions are expected."
+              }
+            },
+            {
+              "id": "tool_use_time",
+              "name": "get_time",
+              "arguments": {},
+              "result": {}
+            },
+            {
+              "id": "tool_use_ticket",
+              "name": "get_ticket",
+              "arguments": {
+                "city": "Shanghai"
+              },
+              "result": {
+                "city": "Shanghai",
+                "seatsLeft": 25
+              }
+            }
+          ]
+        }
+      ],
+      "rubrics": [
+        {
+          "metricName": "travel_answer_quality",
+          "id": "case:festival-ticket-advice",
+          "description": "This case needs festival traffic and ticket availability advice.",
+          "content": {
+            "text": "For this Shanghai travel case, the final answer must mention festival-related traffic disruption and ticket availability. It should also include at least one concrete action recommendation, such as leaving early, planning extra travel time, reserving, or buying the ticket soon."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "case-level-rubric-app",
+        "userId": "traveler"
+      }
+    }
+  ]
+}

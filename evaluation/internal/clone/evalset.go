@@ -58,7 +58,31 @@ func CloneEvalCase(src *evalset.EvalCase) (*evalset.EvalCase, error) {
 		return nil, err
 	}
 	copied.SessionInput = sessionInput
+	copied.Rubrics = cloneEvalCaseRubrics(src.Rubrics)
 	return &copied, nil
+}
+
+func cloneEvalCaseRubrics(src []*evalset.EvalCaseRubric) []*evalset.EvalCaseRubric {
+	if src == nil {
+		return nil
+	}
+	copied := make([]*evalset.EvalCaseRubric, len(src))
+	for i := range src {
+		copied[i] = cloneEvalCaseRubric(src[i])
+	}
+	return copied
+}
+
+func cloneEvalCaseRubric(src *evalset.EvalCaseRubric) *evalset.EvalCaseRubric {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	if src.Content != nil {
+		content := *src.Content
+		copied.Content = &content
+	}
+	return &copied
 }
 
 func cloneInvocations(src []*evalset.Invocation) ([]*evalset.Invocation, error) {
