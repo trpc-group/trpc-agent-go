@@ -419,6 +419,94 @@ func TestLLMAgent_InvocationWorkspaceRegistry_IsolatedByExecutor(
 	require.Equal(t, "override", out["output"])
 }
 
+func TestLLMAgent_WorkspaceRegistryKey_NonComparableExecutor(t *testing.T) {
+	exec := nonComparableExec{tags: []string{"slice"}}
+
+	_, ok := workspaceRegistryKeyForExecutor(exec)
+	require.False(t, ok)
+
+	reg := codeexecutor.NewWorkspaceRegistry()
+	require.Nil(t, workspaceRegistryMap(exec, reg))
+
+	a := New("tester")
+	got, ok := a.ensureWorkspaceRegistryForExecutor(exec)
+	require.False(t, ok)
+	require.Nil(t, got)
+}
+
+func TestLLMAgent_WorkspaceRegistryForInvocation_NonComparableExecutorFallback(
+	t *testing.T,
+) {
+	a := New("tester")
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "sess"}),
+	)
+	exec := nonComparableExec{tags: []string{"slice"}}
+
+	reg1 := a.workspaceRegistryForInvocation(inv, exec)
+	reg2 := a.workspaceRegistryForInvocation(inv, exec)
+
+	require.NotNil(t, reg1)
+	require.NotNil(t, reg2)
+	require.NotSame(t, reg1, reg2)
+}
+
+func TestLLMAgent_WorkspaceRegistryForKeyLocked_InitializesCacheFromDefault(
+	t *testing.T,
+) {
+	exec := &stubExec{}
+	defaultReg := codeexecutor.NewWorkspaceRegistry()
+	a := &LLMAgent{
+		codeExecutor:      exec,
+		workspaceRegistry: defaultReg,
+	}
+	key, ok := workspaceRegistryKeyForExecutor(exec)
+	require.True(t, ok)
+
+	reg := a.workspaceRegistryForKeyLocked(key)
+
+	require.Same(t, defaultReg, reg)
+	require.Same(t, defaultReg, a.workspaceRegistries[key])
+}
+
+func TestLLMAgent_WorkspaceRegistryForKeyLocked_StoresPrimaryRegistry(
+	t *testing.T,
+) {
+	exec := &stubExec{}
+	a := &LLMAgent{}
+	key, ok := workspaceRegistryKeyForExecutor(exec)
+	require.True(t, ok)
+
+	reg := a.workspaceRegistryForKeyLocked(key)
+
+	require.NotNil(t, reg)
+	require.Same(t, reg, a.workspaceRegistry)
+	require.Same(t, reg, a.workspaceRegistries[key])
+}
+
+func TestLLMAgent_RefreshToolsLocked_ReusesExecutorRegistry(t *testing.T) {
+	exec := &stubExec{}
+	a := New("tester", WithCodeExecutor(exec))
+	initialReg := a.workspaceRegistry
+	require.NotNil(t, initialReg)
+
+	a.mu.Lock()
+	a.workspaceRegistries = nil
+	a.refreshToolsLocked()
+	key, ok := workspaceRegistryKeyForExecutor(exec)
+	refreshedReg := a.workspaceRegistry
+	var cachedReg *codeexecutor.WorkspaceRegistry
+	if ok {
+		cachedReg = a.workspaceRegistries[key]
+	}
+	a.mu.Unlock()
+
+	require.True(t, ok)
+	require.Same(t, initialReg, refreshedReg)
+	require.Same(t, initialReg, cachedReg)
+	require.NotNil(t, findTool(a.Tools(), "workspace_exec"))
+}
+
 func callInvocationWorkspaceExec(
 	t *testing.T,
 	a *LLMAgent,
@@ -668,6 +756,25 @@ func (s *stubExec) Engine() codeexecutor.Engine {
 	fs := &stubFS{}
 	rr := &stubRunner{s: s}
 	return codeexecutor.NewEngine(mgr, fs, rr)
+}
+
+type nonComparableExec struct {
+	tags []string
+}
+
+func (n nonComparableExec) ExecuteCode(
+	_ context.Context,
+	_ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (n nonComparableExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+func (n nonComparableExec) Engine() codeexecutor.Engine {
+	return codeexecutor.NewEngine(&stubMgr{}, &stubFS{}, &stubRunner{s: &stubExec{}})
 }
 
 type stubMgr struct{}
