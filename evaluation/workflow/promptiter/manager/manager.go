@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 
 	"github.com/google/uuid"
@@ -183,13 +184,16 @@ func (m *manager) clearCancel(runID string) {
 }
 
 func validateRunRequest(request *engine.RunRequest) error {
-	switch {
-	case request == nil:
+	if request == nil {
 		return errors.New("run request is nil")
-	case len(request.TrainEvalSetIDs) == 0:
-		return errors.New("train evaluation set ids are empty")
-	case len(request.ValidationEvalSetIDs) == 0:
-		return errors.New("validation evaluation set ids are empty")
+	}
+	if err := validateEvalSetInputs("train", request.Train); err != nil {
+		return err
+	}
+	if err := validateEvalSetInputs("validation", request.Validation); err != nil {
+		return err
+	}
+	switch {
 	case request.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than 0")
 	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
@@ -204,8 +208,8 @@ func cloneRunRequest(request *engine.RunRequest) *engine.RunRequest {
 		return nil
 	}
 	cloned := *request
-	cloned.TrainEvalSetIDs = append([]string(nil), request.TrainEvalSetIDs...)
-	cloned.ValidationEvalSetIDs = append([]string(nil), request.ValidationEvalSetIDs...)
+	cloned.Train = cloneEvalSetInputs(request.Train)
+	cloned.Validation = cloneEvalSetInputs(request.Validation)
 	cloned.InitialProfile = iprofile.Clone(request.InitialProfile)
 	cloned.TargetSurfaceIDs = append([]string(nil), request.TargetSurfaceIDs...)
 	if request.StopPolicy.TargetScore != nil {
@@ -213,4 +217,34 @@ func cloneRunRequest(request *engine.RunRequest) *engine.RunRequest {
 		cloned.StopPolicy.TargetScore = &targetScore
 	}
 	return &cloned
+}
+
+func validateEvalSetInputs(role string, inputs []engine.EvalSetInput) error {
+	prefix := role + " "
+	if len(inputs) == 0 {
+		return fmt.Errorf("%sevaluation sets are empty", prefix)
+	}
+	for _, input := range inputs {
+		if input.EvalSetID == "" {
+			return fmt.Errorf("%sevaluation set id is empty", prefix)
+		}
+		if slices.Contains(input.EvalCaseIDs, "") {
+			return fmt.Errorf("%seval case id for eval set %q is empty", prefix, input.EvalSetID)
+		}
+	}
+	return nil
+}
+
+func cloneEvalSetInputs(inputs []engine.EvalSetInput) []engine.EvalSetInput {
+	if inputs == nil {
+		return nil
+	}
+	cloned := make([]engine.EvalSetInput, 0, len(inputs))
+	for _, input := range inputs {
+		cloned = append(cloned, engine.EvalSetInput{
+			EvalSetID:   input.EvalSetID,
+			EvalCaseIDs: append([]string(nil), input.EvalCaseIDs...),
+		})
+	}
+	return cloned
 }
