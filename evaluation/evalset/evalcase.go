@@ -42,8 +42,30 @@ type EvalCase struct {
 	ActualConversation []*Invocation `json:"actualConversation,omitempty"`
 	// SessionInput contains initialization data for the session.
 	SessionInput *SessionInput `json:"sessionInput,omitempty"`
+	// Rubrics contains case-level evaluation rubrics bound to metric instances.
+	Rubrics []*EvalCaseRubric `json:"rubrics,omitempty"`
 	// CreationTimestamp when this eval case was created.
 	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp,omitempty"`
+}
+
+// EvalCaseRubric represents a rubric that applies only to one eval case.
+type EvalCaseRubric struct {
+	// MetricName identifies the metric instance this rubric augments.
+	MetricName string `json:"metricName,omitempty"`
+	// ID uniquely identifies this case-level rubric.
+	ID string `json:"id,omitempty"`
+	// Content contains the judge-readable rubric content.
+	Content *EvalCaseRubricContent `json:"content,omitempty"`
+	// Description stores human-facing context that is not judged by default.
+	Description string `json:"description,omitempty"`
+	// Type classifies the rubric for result inspection.
+	Type string `json:"type,omitempty"`
+}
+
+// EvalCaseRubricContent provides judge-readable content for a case-level rubric.
+type EvalCaseRubricContent struct {
+	// Text is the actual rubric instruction used by rubric evaluators.
+	Text string `json:"text,omitempty"`
 }
 
 // ConversationScenario describes how a simulated user should drive a conversation.

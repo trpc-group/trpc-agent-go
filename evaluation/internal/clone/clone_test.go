@@ -119,6 +119,22 @@ func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {
 	assert.Nil(t, cloneTemplateVariableBinding(nil))
 }
 
+func TestCloneEvalCaseRubricsHandlesNilAndEmptyContent(t *testing.T) {
+	got := cloneEvalCaseRubrics([]*evalset.EvalCaseRubric{
+		nil,
+		{
+			MetricName: "llm_rubric_response",
+			ID:         "case:rubric",
+		},
+	})
+	require.Len(t, got, 2)
+	assert.Nil(t, got[0])
+	require.NotNil(t, got[1])
+	assert.Equal(t, "case:rubric", got[1].ID)
+	assert.Nil(t, got[1].Content)
+	assert.Nil(t, cloneEvalCaseRubrics(nil))
+}
+
 func TestCloneEvalMetric_PreservesNilTemplateBinding(t *testing.T) {
 	src := &metric.EvalMetric{
 		MetricName:    "metric-1",
@@ -237,6 +253,15 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 				"bytes": []byte{9, 8, 7},
 			},
 		},
+		Rubrics: []*evalset.EvalCaseRubric{
+			{
+				MetricName:  "llm_rubric_response",
+				ID:          "case:rubric",
+				Description: "case rubric",
+				Type:        "CASE_RUBRIC",
+				Content:     &evalset.EvalCaseRubricContent{Text: "Case-specific requirement."},
+			},
+		},
 		CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1, 0).UTC()},
 	}
 
@@ -271,6 +296,9 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.SessionInput.State["bytes"].([]byte)[0] = 0
 	assert.Equal(t, byte(9), src.SessionInput.State["bytes"].([]byte)[0])
+
+	dst.Rubrics[0].Content.Text = "changed"
+	assert.Equal(t, "Case-specific requirement.", src.Rubrics[0].Content.Text)
 
 	dst.CreationTimestamp.Time = time.Unix(2, 0).UTC()
 	assert.Equal(t, time.Unix(1, 0).UTC(), src.CreationTimestamp.Time)
