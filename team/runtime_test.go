@@ -272,6 +272,61 @@ func TestSwarmRuntime_CustomizeTransferInvocation_IsolatesSessionAndBuildsInput(
 	require.Empty(t, got.Events)
 }
 
+func TestSwarmRuntime_IsolateTargetSessionValidatesInputs(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	root, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	rt := &swarmRuntime{
+		teamName:  "support",
+		entryName: "parent",
+		handoff:   swarmHandoffPolicy{sessionScope: swarmSessionScopePerAgent},
+	}
+	target := &agent.Invocation{AgentName: "child"}
+	require.ErrorContains(t, rt.isolateTargetSession(ctx, nil, target), "root session is nil")
+	source := agent.NewInvocation(agent.WithInvocationSession(root))
+	require.ErrorContains(t, rt.isolateTargetSession(ctx, source, target), "target session service is nil")
+	target.SessionService = service
+	require.NoError(t, rt.isolateTargetSession(ctx, source, target))
+	require.Equal(t, "root/support/child", target.Session.ID)
+}
+
+func TestSwarmRuntime_SessionSelectionValidatesInputs(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	root, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	rt := &swarmRuntime{
+		teamName:  "support",
+		entryName: "entry",
+		handoff:   swarmHandoffPolicy{sessionScope: swarmSessionScopePerAgent},
+	}
+	_, err = rt.perAgentSession(ctx, service, nil, "child")
+	require.ErrorContains(t, err, "root session is nil")
+	_, err = rt.perAgentSession(ctx, nil, root, "child")
+	require.ErrorContains(t, err, "session service is nil")
+	_, err = rt.perAgentSession(ctx, service, root, "")
+	require.ErrorContains(t, err, "target agent name is empty")
+	got, err := rt.sessionForAgentStart(ctx, service, root, "entry")
+	require.NoError(t, err)
+	require.Same(t, root, got)
+	got, err = rt.sessionForAgentStart(ctx, service, root, "child")
+	require.NoError(t, err)
+	require.Equal(t, "root/support/child", got.ID)
+	shared := &swarmRuntime{handoff: swarmHandoffPolicy{sessionScope: swarmSessionScopeShared}}
+	got, err = shared.sessionForAgentStart(ctx, nil, root, "child")
+	require.NoError(t, err)
+	require.Same(t, root, got)
+}
+
 func TestSwarmRuntime_OnTransferCompleteKeepsRootStateOutOfRoutedChildEvent(t *testing.T) {
 	ctx := context.Background()
 	service := sessioninmemory.NewSessionService()
@@ -321,6 +376,33 @@ func TestSwarmRuntime_OnTransferCompleteKeepsRootStateOutOfRoutedChildEvent(t *t
 	turnSession, err := sessionroute.ResolveCurrentTurnSession(ctx, service, rootGot, owner)
 	require.NoError(t, err)
 	require.Equal(t, "child", turnSession.ID)
+}
+
+func TestSwarmRuntime_OnTransferCompleteUsesRuntimeTeamName(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	rootSess, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	source := &agent.Invocation{
+		Session:        rootSess,
+		SessionService: service,
+	}
+	target := &agent.Invocation{
+		AgentName: "child",
+		Session:   rootSess,
+	}
+	targetEvent := event.NewResponseEvent("target", "child", &model.Response{Done: true})
+	rt := &swarmRuntime{
+		teamName: "team",
+		handoff:  swarmHandoffPolicy{turnRouting: swarmTurnRoutingTargetTakesOver},
+	}
+	rt.OnTransferComplete(ctx, source, target, targetEvent)
+	require.Equal(t, []byte("child"), targetEvent.StateDelta[swarmActiveAgentKey("team")])
+	require.Equal(t, []byte("child"), rootSess.State[swarmActiveAgentKey("team")])
 }
 
 func TestSwarmRuntime_OnTransferCompletePreservesSharedStateDelta(t *testing.T) {
@@ -470,6 +552,24 @@ func TestSwarmRuntime_RouteIsolatedEventUsesBranchFallback(t *testing.T) {
 	require.False(t, cached)
 }
 
+func TestSwarmRuntime_RouteEventRejectsRootAndInvalidInputs(t *testing.T) {
+	root := session.NewSession("app", "user", "root")
+	rt := &swarmRuntime{handoff: swarmHandoffPolicy{sessionScope: swarmSessionScopePerAgent}}
+	inv := agent.NewInvocation(agent.WithInvocationSession(root))
+	got, ok := rt.RouteEvent(inv, nil)
+	require.False(t, ok)
+	require.Nil(t, got)
+	got, ok = (*swarmRuntime)(nil).RouteEvent(inv, event.New("child", "agent"))
+	require.False(t, ok)
+	require.Nil(t, got)
+	rt.registerInvocationSession("root-event", "team/entry", root)
+	got, ok = rt.RouteEvent(inv, event.New("root-event", "entry"))
+	require.False(t, ok)
+	require.Nil(t, got)
+	require.True(t, branchMatchesPrefix("team/member/tool", "team/member"))
+	require.False(t, branchMatchesPrefix("team/memberish", "team/member"))
+}
+
 func TestDefaultSwarmSessionID(t *testing.T) {
 	got := defaultSwarmSessionID(swarmSessionIDArgs{
 		ParentSessionID: "parent",
@@ -552,6 +652,114 @@ func TestRootMessageUsesRootMostPayload(t *testing.T) {
 		agent.WithInvocationMessage(model.NewUserMessage("child input")),
 	)
 	require.Equal(t, "root input", rootMessage(child).Content)
+}
+
+func TestRootSessionPrefersSwarmMarkedAncestor(t *testing.T) {
+	root := session.NewSession("app", "user", "root")
+	childSession := session.NewSession("app", "user", "child")
+	root.SetState(SwarmTeamNameKey, []byte("team"))
+	parent := agent.NewInvocation(agent.WithInvocationSession(root))
+	child := parent.Clone(agent.WithInvocationSession(childSession))
+	require.Same(t, root, rootSession(child))
+	require.Same(t, childSession, rootSession(agent.NewInvocation(agent.WithInvocationSession(childSession))))
+	require.Nil(t, rootSession(nil))
+}
+
+func TestCurrentTurnUserEventsCloneCurrentInvocationUserEvents(t *testing.T) {
+	sess := session.NewSession("app", "user", "root")
+	currentUser := event.NewResponseEvent("turn", "user", &model.Response{
+		Choices: []model.Choice{{Message: model.NewUserMessage("current input")}},
+	})
+	currentAssistant := event.NewResponseEvent("turn", "agent", &model.Response{
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("answer")}},
+	})
+	otherUser := event.NewResponseEvent("other", "user", &model.Response{
+		Choices: []model.Choice{{Message: model.NewUserMessage("other input")}},
+	})
+	sess.Events = []event.Event{*currentUser, *currentAssistant, *otherUser}
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("turn"),
+		agent.WithInvocationSession(sess),
+	)
+	got := currentTurnUserEvents(inv)
+	require.Len(t, got, 1)
+	require.Equal(t, "current input", got[0].Choices[0].Message.Content)
+	got[0].Choices[0].Message.Content = "changed"
+	require.Equal(t, "current input", sess.Events[0].Choices[0].Message.Content)
+	require.Nil(t, currentTurnUserEvents(nil))
+	require.Nil(t, currentTurnUserEvents(agent.NewInvocation(agent.WithInvocationID("turn"))))
+}
+
+func TestAppendCurrentTurnUserEvents(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	root, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	target, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root/team/member",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	root.Events = []event.Event{*event.NewResponseEvent("turn", "user", &model.Response{
+		Choices: []model.Choice{{Message: model.NewUserMessage("current input")}},
+	})}
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("turn"),
+		agent.WithInvocationSession(root),
+		agent.WithInvocationSessionService(service),
+	)
+	require.NoError(t, appendCurrentTurnUserEvents(ctx, nil, target))
+	require.NoError(t, appendCurrentTurnUserEvents(ctx, inv, root))
+	require.NoError(t, appendCurrentTurnUserEvents(ctx, inv, target))
+	got, err := service.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root/team/member",
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Events, 1)
+	require.Equal(t, "current input", got.Events[0].Choices[0].Message.Content)
+	missing := session.NewSession("app", "user", "missing")
+	require.Error(t, appendCurrentTurnUserEvents(ctx, inv, missing))
+}
+
+func TestPrepareSwarmStartSessionAppendsCurrentTurnInput(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	root, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	root.Events = []event.Event{*event.NewResponseEvent("turn", "user", &model.Response{
+		Choices: []model.Choice{{Message: model.NewUserMessage("current input")}},
+	})}
+	handoff := swarmHandoffPolicy{
+		sessionScope: swarmSessionScopePerAgent,
+		turnRouting:  swarmTurnRoutingTargetTakesOver,
+	}
+	tm := &Team{name: "team", swarmHandoff: handoff}
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("turn"),
+		agent.WithInvocationSession(root),
+		agent.WithInvocationSessionService(service),
+	)
+	rt := &swarmRuntime{teamName: "team", entryName: "entry", handoff: handoff}
+	got, err := tm.prepareSwarmStartSession(ctx, inv, testAgent{name: "member"}, rt)
+	require.NoError(t, err)
+	require.Equal(t, "root/team/member", got.ID)
+	require.Len(t, got.Events, 1)
+	require.Equal(t, "current input", got.Events[0].Choices[0].Message.Content)
+	_, routed := sessionroute.RouteEvent(inv, event.New("unknown", "member"))
+	require.False(t, routed)
+	_, err = tm.prepareSwarmStartSession(ctx, agent.NewInvocation(agent.WithInvocationSession(root)), testAgent{name: "member"}, rt)
+	require.ErrorContains(t, err, "session service is nil")
 }
 
 func TestSwarmRuntime_CustomizeTransferInvocation_HandlesNilAndBuilderErrors(t *testing.T) {
@@ -657,6 +865,26 @@ func TestChainedTransferController_CustomizeTransferInvocation_PropagatesErrorsA
 	}).CustomizeTransferInvocation(context.Background(), nil, target))
 }
 
+func TestChainedTransferController_OnTransferCompleteNotifiesObservers(t *testing.T) {
+	first := &runtimeCompletionController{}
+	second := &runtimeCompletionController{}
+	targetEvent := event.NewResponseEvent("target", "child", &model.Response{Done: true})
+	(chainedTransferController{first: first, second: second}).OnTransferComplete(
+		context.Background(),
+		nil,
+		nil,
+		targetEvent,
+	)
+	require.Equal(t, 1, first.completed)
+	require.Equal(t, 1, second.completed)
+	require.Same(t, targetEvent, first.targetEvent)
+	require.Same(t, targetEvent, second.targetEvent)
+	(chainedTransferController{
+		first:  plainTransferController{},
+		second: plainTransferController{},
+	}).OnTransferComplete(context.Background(), nil, nil, targetEvent)
+}
+
 func TestTighterTimeout_SelectsNonZeroMinimum(t *testing.T) {
 	require.Equal(t, 3*time.Second, tighterTimeout(0, 3*time.Second))
 	require.Equal(t, 3*time.Second, tighterTimeout(3*time.Second, 0))
@@ -705,4 +933,27 @@ func (plainTransferController) OnTransfer(
 	string,
 ) (time.Duration, error) {
 	return 0, nil
+}
+
+type runtimeCompletionController struct {
+	completed   int
+	targetEvent *event.Event
+}
+
+func (c *runtimeCompletionController) OnTransfer(
+	context.Context,
+	string,
+	string,
+) (time.Duration, error) {
+	return 0, nil
+}
+
+func (c *runtimeCompletionController) OnTransferComplete(
+	_ context.Context,
+	_ *agent.Invocation,
+	_ *agent.Invocation,
+	targetEvent *event.Event,
+) {
+	c.completed++
+	c.targetEvent = targetEvent
 }

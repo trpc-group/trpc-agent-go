@@ -83,6 +83,45 @@ func TestResolveCurrentTurnSession(t *testing.T) {
 	require.Same(t, root, got)
 }
 
+func TestResolveCurrentTurnSession_EdgeCases(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	root, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	owner := &recordingAgent{
+		name:      "team",
+		subAgents: []agent.Agent{&recordingAgent{name: "member"}},
+	}
+	got, err := ResolveCurrentTurnSession(ctx, service, nil, owner)
+	require.NoError(t, err)
+	require.Nil(t, got)
+	got, err = ResolveCurrentTurnSession(ctx, service, root, nil)
+	require.NoError(t, err)
+	require.Same(t, root, got)
+	root.SetState(currentTurnRouteStateKey("team"), []byte("{"))
+	got, err = ResolveCurrentTurnSession(ctx, service, root, owner)
+	require.Error(t, err)
+	require.Nil(t, got)
+	state, err := CurrentTurnRouteState(
+		"team",
+		"member",
+		root,
+		session.NewSession("app", "user", "root/team/member"),
+	)
+	require.NoError(t, err)
+	ApplyCurrentTurnRouteState(root, state)
+	got, err = ResolveCurrentTurnSession(ctx, nil, root, owner)
+	require.Error(t, err)
+	require.Nil(t, got)
+	got, err = ResolveCurrentTurnSession(ctx, service, root, owner)
+	require.NoError(t, err)
+	require.Equal(t, "root/team/member", got.ID)
+}
+
 func TestCurrentTurnRouteState_ClearsRootRoute(t *testing.T) {
 	root := session.NewSession("app", "user", "root")
 	state, err := CurrentTurnRouteState("team", "member", root, root)
@@ -92,13 +131,95 @@ func TestCurrentTurnRouteState_ClearsRootRoute(t *testing.T) {
 	require.Nil(t, state[key])
 }
 
+func TestCurrentTurnRouteState_ClearsInvalidRoutes(t *testing.T) {
+	root := session.NewSession("app", "user", "root")
+	target := session.NewSession("app", "user", "root/team/member")
+	cases := []struct {
+		name        string
+		owner       string
+		targetAgent string
+		root        *session.Session
+		target      *session.Session
+	}{
+		{name: "nil root", owner: "team", targetAgent: "member", target: target},
+		{name: "nil target", owner: "team", targetAgent: "member", root: root},
+		{name: "empty owner", owner: " ", targetAgent: "member", root: root, target: target},
+		{name: "empty target agent", owner: "team", targetAgent: " ", root: root, target: target},
+		{name: "empty target session", owner: "team", targetAgent: "member", root: root, target: session.NewSession("app", "user", " ")},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			state, err := CurrentTurnRouteState(tt.owner, tt.targetAgent, tt.root, tt.target)
+			require.NoError(t, err)
+			key := currentTurnRouteStateKey(tt.owner)
+			require.Contains(t, state, key)
+			require.Nil(t, state[key])
+		})
+	}
+}
+
+func TestApplyCurrentTurnRouteState_NilAndEmptyState(t *testing.T) {
+	require.NotPanics(t, func() {
+		ApplyCurrentTurnRouteState(nil, session.StateMap{"route": []byte("member")})
+	})
+	root := session.NewSession("app", "user", "root")
+	ApplyCurrentTurnRouteState(root, nil)
+	_, ok := root.GetState("route")
+	require.False(t, ok)
+	ApplyCurrentTurnRouteState(root, session.StateMap{"route": []byte("member"), "clear": nil})
+	route, ok := root.GetState("route")
+	require.True(t, ok)
+	require.Equal(t, []byte("member"), route)
+	clear, ok := root.GetState("clear")
+	require.True(t, ok)
+	require.Nil(t, clear)
+}
+
 func TestHasCurrentTurnRoute(t *testing.T) {
 	root := session.NewSession("app", "user", "root")
+	require.False(t, HasCurrentTurnRoute("team", root))
+	require.False(t, HasCurrentTurnRoute("team", nil))
+	root.SetState(currentTurnRouteStateKey("team"), nil)
 	require.False(t, HasCurrentTurnRoute("team", root))
 	state, err := CurrentTurnRouteState("team", "member", root, session.NewSession("app", "user", "member"))
 	require.NoError(t, err)
 	ApplyCurrentTurnRouteState(root, state)
 	require.True(t, HasCurrentTurnRoute("team", root))
+}
+
+func TestRouteEvent_NilAndUnroutedInputs(t *testing.T) {
+	inv := agent.NewInvocation(agent.WithInvocationID("root"))
+	evt := event.New("invocation", "agent")
+	got, ok := RouteEvent(nil, evt)
+	require.False(t, ok)
+	require.Nil(t, got)
+	got, ok = RouteEvent(inv, evt)
+	require.False(t, ok)
+	require.Nil(t, got)
+	require.NotPanics(t, func() {
+		AttachEventRouter(nil, &recordingEventRouter{})
+		AttachEventRouter(inv, nil)
+	})
+	got, ok = RouteEvent(inv, evt)
+	require.False(t, ok)
+	require.Nil(t, got)
+}
+
+func TestSnapshotEventIdentity(t *testing.T) {
+	require.Nil(t, SnapshotEventIdentity(nil))
+	src := event.New("invocation", "agent")
+	src.RequestID = "request"
+	src.ParentInvocationID = "parent"
+	src.Branch = "team/member"
+	src.FilterKey = "filter"
+	got := SnapshotEventIdentity(src)
+	require.NotSame(t, src, got)
+	require.Equal(t, "request", got.RequestID)
+	require.Equal(t, "invocation", got.InvocationID)
+	require.Equal(t, "parent", got.ParentInvocationID)
+	require.Equal(t, "team/member", got.Branch)
+	require.Equal(t, "filter", got.FilterKey)
+	require.Nil(t, got.Response)
 }
 
 type recordingEventRouter struct {

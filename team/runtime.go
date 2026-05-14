@@ -445,6 +445,39 @@ func sameSession(a *session.Session, b *session.Session) bool {
 	return a.AppName == b.AppName && a.UserID == b.UserID && a.ID == b.ID
 }
 
+func (t *Team) prepareSwarmStartSession(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	startAgent agent.Agent,
+	swarmRun *swarmRuntime,
+) (*session.Session, error) {
+	startSession := invocation.Session
+	currentTurnRouteMissing := t.swarmHandoff.usesIsolatedSession() &&
+		t.swarmHandoff.targetTakesOver() &&
+		!sessionroute.HasCurrentTurnRoute(t.name, invocation.Session)
+	if t.swarmHandoff.usesIsolatedSession() {
+		sess, err := swarmRun.sessionForAgentStart(
+			ctx,
+			invocation.SessionService,
+			invocation.Session,
+			startAgent.Info().Name,
+		)
+		if err != nil {
+			return nil, err
+		}
+		startSession = sess
+	}
+	if currentTurnRouteMissing && !sameSession(invocation.Session, startSession) {
+		if err := appendCurrentTurnUserEvents(ctx, invocation, startSession); err != nil {
+			return nil, err
+		}
+	}
+	if swarmRun != nil && t.swarmHandoff.usesIsolatedSession() {
+		sessionroute.AttachEventRouter(invocation, swarmRun)
+	}
+	return startSession, nil
+}
+
 func appendCurrentTurnUserEvents(
 	ctx context.Context,
 	invocation *agent.Invocation,

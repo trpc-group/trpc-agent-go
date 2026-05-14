@@ -18,7 +18,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -273,31 +272,15 @@ func (t *Team) runSwarm(
 		t.swarmHandoff,
 		t.swarmHandoffInput,
 	)
-	startSession := invocation.Session
-	currentTurnRouteMissing := t.swarmHandoff.usesIsolatedSession() &&
-		t.swarmHandoff.targetTakesOver() &&
-		!sessionroute.HasCurrentTurnRoute(t.name, invocation.Session)
-	if t.swarmHandoff.usesIsolatedSession() {
-		var err error
-		startSession, err = swarmRun.sessionForAgentStart(
-			ctx,
-			invocation.SessionService,
-			invocation.Session,
-			startAgent.Info().Name,
-		)
-		if err != nil {
-			teamtrace.ClearMemberTraceRootForInvocation(invocation)
-			return nil, err
-		}
-	}
-	if currentTurnRouteMissing && !sameSession(invocation.Session, startSession) {
-		if err := appendCurrentTurnUserEvents(ctx, invocation, startSession); err != nil {
-			teamtrace.ClearMemberTraceRootForInvocation(invocation)
-			return nil, err
-		}
-	}
-	if swarmRun != nil && t.swarmHandoff.usesIsolatedSession() {
-		sessionroute.AttachEventRouter(invocation, swarmRun)
+	startSession, err := t.prepareSwarmStartSession(
+		ctx,
+		invocation,
+		startAgent,
+		swarmRun,
+	)
+	if err != nil {
+		teamtrace.ClearMemberTraceRootForInvocation(invocation)
+		return nil, err
 	}
 	memberPathAllocator := istructure.NewPathAllocator(traceRootNodeID)
 	var memberNodeID string

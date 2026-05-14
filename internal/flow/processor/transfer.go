@@ -223,43 +223,16 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		return
 	}
 
-	// Forward all events from the target agent.
-	targetCompleted := false
-	targetDelegated := false
-	targetTerminalErrored := false
-	for targetEvent := range targetEventChan {
-		if isTransferDelegationEvent(targetEvent) {
-			targetDelegated = true
-		}
-		if isTransferTerminalErrorEvent(targetEvent, targetInvocation.InvocationID) {
-			targetTerminalErrored = true
-		}
-		if transferCompletionHandler != nil &&
-			targetEvent != nil &&
-			targetEvent.InvocationID == targetInvocation.InvocationID &&
-			targetEvent.Response != nil &&
-			!targetTerminalErrored &&
-			targetEvent.Response.Done {
-			targetCompleted = true
-			transferCompletionHandler.OnTransferComplete(ctx, invocation, targetInvocation, targetEvent)
-		}
-		if err := event.EmitEvent(ctx, ch, targetEvent); err != nil {
-			return
-		}
-		log.DebugfContext(
-			ctx,
-			"Transfer response processor: forwarded event from "+
-				"target agent %s",
-			targetAgent.Info().Name,
-		)
-	}
-	if transferCompletionHandler != nil && !targetCompleted && !targetDelegated && !targetTerminalErrored {
-		transferCompletionHandler.OnTransferComplete(
-			ctx,
-			invocation,
-			targetInvocation,
-			syntheticTransferCompletionEvent(targetInvocation),
-		)
+	if !forwardTransferTargetEvents(
+		ctx,
+		invocation,
+		targetInvocation,
+		targetAgent,
+		targetEventChan,
+		ch,
+		transferCompletionHandler,
+	) {
+		return
 	}
 
 	// Clear the transfer info and end the original invocation to stop further LLM calls.
@@ -272,6 +245,75 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	)
 	invocation.TransferInfo = nil
 	invocation.EndInvocation = p.endInvocationAfterTransfer
+}
+
+type transferForwardResult struct {
+	completed       bool
+	delegated       bool
+	terminalErrored bool
+}
+
+func forwardTransferTargetEvents(
+	ctx context.Context,
+	source *agent.Invocation,
+	target *agent.Invocation,
+	targetAgent agent.Agent,
+	events <-chan *event.Event,
+	out chan<- *event.Event,
+	completionHandler itransfer.CompletionObserver,
+) bool {
+	result := transferForwardResult{}
+	for targetEvent := range events {
+		result.observe(targetEvent, target.InvocationID)
+		if result.shouldNotifyCompletion(completionHandler, targetEvent, target.InvocationID) {
+			result.completed = true
+			completionHandler.OnTransferComplete(ctx, source, target, targetEvent)
+		}
+		if err := event.EmitEvent(ctx, out, targetEvent); err != nil {
+			return false
+		}
+		log.DebugfContext(
+			ctx,
+			"Transfer response processor: forwarded event from "+
+				"target agent %s",
+			targetAgent.Info().Name,
+		)
+	}
+	if completionHandler != nil && result.needsSyntheticCompletion() {
+		completionHandler.OnTransferComplete(
+			ctx,
+			source,
+			target,
+			syntheticTransferCompletionEvent(target),
+		)
+	}
+	return true
+}
+
+func (r *transferForwardResult) observe(evt *event.Event, invocationID string) {
+	if isTransferDelegationEvent(evt) {
+		r.delegated = true
+	}
+	if isTransferTerminalErrorEvent(evt, invocationID) {
+		r.terminalErrored = true
+	}
+}
+
+func (r transferForwardResult) shouldNotifyCompletion(
+	handler itransfer.CompletionObserver,
+	evt *event.Event,
+	invocationID string,
+) bool {
+	return handler != nil &&
+		evt != nil &&
+		evt.InvocationID == invocationID &&
+		evt.Response != nil &&
+		!r.terminalErrored &&
+		evt.Response.Done
+}
+
+func (r transferForwardResult) needsSyntheticCompletion() bool {
+	return !r.completed && !r.delegated && !r.terminalErrored
 }
 
 func prepareTransferTargetInvocation(
