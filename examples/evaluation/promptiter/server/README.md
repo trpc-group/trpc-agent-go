@@ -166,14 +166,22 @@ curl -X POST "http://127.0.0.1:8080/promptiter/v1/apps/promptiter-nba-commentary
   -H "Content-Type: application/json" \
   -d '{
     "run": {
-      "TrainEvalSetIDs": ["nba-commentary-train"],
-      "ValidationEvalSetIDs": ["nba-commentary-validation"],
+      "train": [
+        {
+          "evalSetId": "nba-commentary-train"
+        }
+      ],
+      "validation": [
+        {
+          "evalSetId": "nba-commentary-validation"
+        }
+      ],
       "TargetSurfaceIDs": ["candidate#instruction"],
-        "EvaluationOptions": {
-          "EvalCaseParallelism": 8,
-          "EvalCaseParallelInferenceEnabled": true,
-          "EvalCaseParallelEvaluationEnabled": true
-        },
+      "EvaluationOptions": {
+        "EvalCaseParallelism": 8,
+        "EvalCaseParallelInferenceEnabled": true,
+        "EvalCaseParallelEvaluationEnabled": true
+      },
       "AcceptancePolicy": {
         "MinScoreGain": 0.005
       },
@@ -188,6 +196,29 @@ curl -X POST "http://127.0.0.1:8080/promptiter/v1/apps/promptiter-nba-commentary
 
 The `runs` endpoint waits until the run reaches a terminal state and then returns the full `run` result directly.
 
+To restrict a run to selected eval cases, add `evalCaseIds` to the corresponding eval set input:
+
+```json
+{
+  "run": {
+    "train": [
+      {
+        "evalSetId": "nba-commentary-train",
+        "evalCaseIds": ["case_1", "case_2"]
+      }
+    ],
+    "validation": [
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseIds": ["case_3"]
+      }
+    ]
+  }
+}
+```
+
+Omitting `evalCaseIds` or passing an empty array runs all cases in that eval set. Passing a non-empty array runs only the listed cases. Empty string case IDs are invalid.
+
 Run one asynchronous PromptIter optimization session:
 
 ```bash
@@ -195,14 +226,22 @@ curl -X POST "http://127.0.0.1:8080/promptiter/v1/apps/promptiter-nba-commentary
   -H "Content-Type: application/json" \
   -d '{
     "run": {
-      "TrainEvalSetIDs": ["nba-commentary-train"],
-      "ValidationEvalSetIDs": ["nba-commentary-validation"],
+      "train": [
+        {
+          "evalSetId": "nba-commentary-train"
+        }
+      ],
+      "validation": [
+        {
+          "evalSetId": "nba-commentary-validation"
+        }
+      ],
       "TargetSurfaceIDs": ["candidate#instruction"],
       "EvaluationOptions": {
-          "EvalCaseParallelism": 8,
-          "EvalCaseParallelInferenceEnabled": true,
-          "EvalCaseParallelEvaluationEnabled": true
-        },
+        "EvalCaseParallelism": 8,
+        "EvalCaseParallelInferenceEnabled": true,
+        "EvalCaseParallelEvaluationEnabled": true
+      },
       "AcceptancePolicy": {
         "MinScoreGain": 0.005
       },
