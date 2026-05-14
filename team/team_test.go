@@ -1564,6 +1564,58 @@ func (m *teamScriptedSurfaceModel) Requests() []*teamSurfaceCapturedRequest {
 	return out
 }
 
+func TestRunnerRun_SwarmHandoffInputBuilder_RewritesTargetInput(t *testing.T) {
+	parentModel := &teamScriptedSurfaceModel{
+		name: "swarm-parent-model",
+		responses: []model.Message{
+			teamToolCallAssistantMessage(
+				transfertool.TransferToolName,
+				`{"agent_name":"child","message":"transfer payload"}`,
+			),
+		},
+	}
+	childModel := &teamScriptedSurfaceModel{
+		name:      "swarm-child-model",
+		responses: []model.Message{model.NewAssistantMessage("child done")},
+	}
+	parent := llmagent.New("parent", llmagent.WithModel(parentModel))
+	child := llmagent.New("child", llmagent.WithModel(childModel))
+	swarm, err := NewSwarm(
+		"support",
+		"parent",
+		[]agent.Agent{parent, child},
+		WithSwarmHandoffInputBuilder(func(ctx context.Context, args SwarmHandoffInputArgs) (model.Message, error) {
+			_ = ctx
+			require.Equal(t, "parent", args.FromAgentName)
+			require.Equal(t, "child", args.ToAgentName)
+			require.Equal(t, "original user input", args.RootInput.Content)
+			require.Equal(t, "transfer payload", args.TransferMessage)
+			return model.NewUserMessage("CUSTOM_CHILD_INPUT: " + args.RootInput.Content), nil
+		}),
+	)
+	require.NoError(t, err)
+	r := runner.NewRunner(
+		"app",
+		swarm,
+		runner.WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-swarm-builder",
+		"session-swarm-builder",
+		model.NewUserMessage("original user input"),
+	)
+	require.NoError(t, err)
+	completion := collectTeamRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.Response)
+	require.Equal(t, 1, parentModel.RequestCount())
+	require.Equal(t, 1, childModel.RequestCount())
+	require.True(t, teamMessagesContainContent(
+		childModel.LatestRequest().messages,
+		"CUSTOM_CHILD_INPUT: original user input",
+	))
+}
+
 func TestRunnerRun_WithSurfacePatchForNode_AppliesCoordinatorAndMemberPatches(
 	t *testing.T,
 ) {
@@ -1792,6 +1844,15 @@ func teamFirstSystemMessageContent(messages []model.Message) string {
 		}
 	}
 	return ""
+}
+
+func teamMessagesContainContent(messages []model.Message, content string) bool {
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, content) {
+			return true
+		}
+	}
+	return false
 }
 
 func mustExportTeamSnapshot(

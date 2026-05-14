@@ -232,6 +232,51 @@ vector_store:
 	require.Equal(t, "knowledge_search", bundle.tools[0].Declaration().Name)
 }
 
+func TestBuildKnowledgeTools_SingleKnowledgeCustomDescription(t *testing.T) {
+	t.Parallel()
+
+	entry := builtinKnowledgeEntry(t, "docs", `
+vector_store:
+  type: inmemory
+`)
+	entry.Description = "Search the trpc-agent-go documentation including API reference and design docs."
+	bundle, err := buildKnowledgeTools([]knowledgeEntry{entry})
+	require.NoError(t, err)
+	require.NotNil(t, bundle)
+	require.Len(t, bundle.tools, 1)
+	require.Equal(t, "knowledge_search", bundle.tools[0].Declaration().Name)
+	require.Contains(t,
+		bundle.tools[0].Declaration().Description,
+		"Search the trpc-agent-go documentation including API reference and design docs.",
+	)
+	require.Contains(t, bundle.tools[0].Declaration().Description, "== FILTER GUIDANCE ==")
+}
+
+func TestBuildKnowledgeTools_MultipleKnowledgesCustomDescription(t *testing.T) {
+	t.Parallel()
+
+	inmemory := `
+vector_store:
+  type: inmemory
+`
+	docs := builtinKnowledgeEntry(t, "docs", inmemory)
+	docs.Description = "Framework documentation and design docs."
+	faq := builtinKnowledgeEntry(t, "faq", inmemory)
+	bundle, err := buildKnowledgeTools([]knowledgeEntry{docs, faq})
+	require.NoError(t, err)
+	require.NotNil(t, bundle)
+	require.Len(t, bundle.tools, 2)
+	require.Contains(t,
+		bundle.tools[0].Declaration().Description,
+		"Framework documentation and design docs.",
+	)
+	require.Contains(t, bundle.tools[0].Declaration().Description, "== FILTER GUIDANCE ==")
+	require.Contains(t,
+		bundle.tools[1].Declaration().Description,
+		`"faq"`,
+	)
+}
+
 func TestBuildKnowledgeTools_VectorStoreUsesTypeSpecificValidation(t *testing.T) {
 	t.Parallel()
 

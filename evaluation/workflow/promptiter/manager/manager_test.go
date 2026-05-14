@@ -130,6 +130,14 @@ func (f *fakePromptIterEngine) Run(
 	return &promptiterengine.RunResult{}, nil
 }
 
+func testEvalSetInputs(evalSetID string) []promptiterengine.EvalSetInput {
+	return []promptiterengine.EvalSetInput{
+		{
+			EvalSetID: evalSetID,
+		},
+	}
+}
+
 func TestManagerStartAndGetReturnRun(t *testing.T) {
 	engineInstance := &fakePromptIterEngine{
 		run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
@@ -161,10 +169,10 @@ func TestManagerStartAndGetReturnRun(t *testing.T) {
 		require.NoError(t, managerInstance.Close())
 	})
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
-		TargetSurfaceIDs:     []string{"candidate#instruction"},
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, run)
@@ -210,9 +218,9 @@ func TestManagerCancelTransitionsRun(t *testing.T) {
 		require.NoError(t, managerInstance.Close())
 	})
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
 	})
 	require.NoError(t, err)
 	require.NoError(t, managerInstance.Cancel(context.Background(), run.ID))
@@ -527,9 +535,9 @@ func TestManagerStartRejectsClosedManager(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, managerInstance.Close())
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
 	})
 	assert.Nil(t, run)
 	assert.EqualError(t, err, "promptiter manager is closed")
@@ -549,9 +557,9 @@ func TestManagerStartReturnsCreateError(t *testing.T) {
 		require.NoError(t, managerInstance.Close())
 	})
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
 	})
 	assert.Nil(t, run)
 	assert.ErrorContains(t, err, "create run")
@@ -760,33 +768,57 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 
 func TestValidateRunRequest(t *testing.T) {
 	assert.EqualError(t, validateRunRequest(nil), "run request is nil")
-	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{}), "train evaluation set ids are empty")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{}), "train evaluation sets are empty")
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
-		TrainEvalSetIDs: []string{"train"},
-	}), "validation evaluation set ids are empty")
+		Train: testEvalSetInputs("train"),
+	}), "validation evaluation sets are empty")
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "",
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), "train evaluation set id is empty")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: testEvalSetInputs("train"),
+		Validation: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID:   "validation",
+				EvalCaseIDs: []string{""},
+			},
+		},
+		MaxRounds: 1,
+	}), `validation eval case id for eval set "validation" is empty`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
 	}), "max rounds must be greater than 0")
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
-		TargetSurfaceIDs:     []string{},
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{},
 	}), "target surface ids must not be empty")
 	assert.NoError(t, validateRunRequest(&promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
-		TargetSurfaceIDs:     []string{"candidate#instruction"},
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	}))
 }
 
 func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 	targetScore := 0.9
 	request := &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
+		Train: testEvalSetInputs("train"),
+		Validation: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID:   "validation",
+				EvalCaseIDs: []string{"case_1"},
+			},
+		},
 		InitialProfile: &promptiter.Profile{
 			StructureID: "structure_1",
 			Overrides: []promptiter.SurfaceOverride{
@@ -805,13 +837,13 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 	}
 	cloned := cloneRunRequest(request)
 	require.NotNil(t, cloned)
-	cloned.TrainEvalSetIDs[0] = "mutated"
-	cloned.ValidationEvalSetIDs[0] = "mutated"
+	cloned.Train[0].EvalSetID = "mutated"
+	cloned.Validation[0].EvalCaseIDs[0] = "mutated"
 	cloned.TargetSurfaceIDs[0] = "mutated"
 	*cloned.InitialProfile.Overrides[0].Value.Text = "mutated"
 	*cloned.StopPolicy.TargetScore = 1.0
-	assert.Equal(t, "train", request.TrainEvalSetIDs[0])
-	assert.Equal(t, "validation", request.ValidationEvalSetIDs[0])
+	assert.Equal(t, "train", request.Train[0].EvalSetID)
+	assert.Equal(t, []string{"case_1"}, request.Validation[0].EvalCaseIDs)
 	assert.Equal(t, "candidate#instruction", request.TargetSurfaceIDs[0])
 	assert.Equal(t, "prompt", *request.InitialProfile.Overrides[0].Value.Text)
 	assert.Equal(t, 0.9, *request.StopPolicy.TargetScore)

@@ -66,7 +66,8 @@ func (s *mysqlStore) Create(ctx context.Context, run *engine.RunResult) error {
 		"INSERT INTO %s (run_id, status, run_result) VALUES (?, ?, ?)",
 		s.tableName,
 	)
-	if _, err := s.db.Exec(ctx, query, run.ID, string(run.Status), payload); err != nil {
+	// Pass JSON as a UTF-8 string so the driver does not bind []byte as BINARY (MySQL JSON rejects binary charset).
+	if _, err := s.db.Exec(ctx, query, run.ID, string(run.Status), string(payload)); err != nil {
 		if mysqldb.IsDuplicateEntry(err) {
 			return fmt.Errorf("run %q already exists", run.ID)
 		}
@@ -117,7 +118,7 @@ func (s *mysqlStore) Update(ctx context.Context, run *engine.RunResult) error {
 		"UPDATE %s SET status = ?, run_result = ?, updated_at = CURRENT_TIMESTAMP(6) WHERE run_id = ?",
 		s.tableName,
 	)
-	result, err := s.db.Exec(ctx, query, string(run.Status), payload, run.ID)
+	result, err := s.db.Exec(ctx, query, string(run.Status), string(payload), run.ID)
 	if err != nil {
 		return fmt.Errorf("update run %q: %w", run.ID, err)
 	}

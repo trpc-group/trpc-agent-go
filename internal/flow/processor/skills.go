@@ -1064,8 +1064,10 @@ func defaultFullToolingAndWorkspaceGuidance(flags skillprofile.Flags) string {
 	}
 	b.WriteString("- skill_run is a command runner inside the skill ")
 	b.WriteString("workspace, not a magic capability. It does not ")
-	b.WriteString("automatically add the skill directory to PATH or ")
-	b.WriteString("install dependencies; invoke scripts via an explicit ")
+	b.WriteString("install dependencies or add the skill root itself ")
+	b.WriteString("to PATH. Executables under bin/ are available ")
+	b.WriteString("as bare commands after .venv/bin and the inherited ")
+	b.WriteString("PATH; invoke other scripts via an explicit ")
 	b.WriteString("interpreter and path (e.g., python3 scripts/foo.py).\n")
 	b.WriteString("- When you execute, follow the tool description, ")
 	if flags.Load {
@@ -1225,7 +1227,23 @@ func skillFileText(
 	return filepath.ToSlash(path)
 }
 
+// canonicalPathForRel expands symlinks in a path so filepath.Rel agrees across
+// aliases such as /var vs /private/var on macOS.
+func canonicalPathForRel(p string) string {
+	p = filepath.Clean(strings.TrimSpace(p))
+	if p == "" {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return p
+	}
+	return filepath.Clean(resolved)
+}
+
 func relativeSkillPath(root string, path string) (string, bool) {
+	root = canonicalPathForRel(root)
+	path = canonicalPathForRel(path)
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return "", false

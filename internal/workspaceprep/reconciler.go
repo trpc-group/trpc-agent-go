@@ -12,6 +12,7 @@ package workspaceprep
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -68,6 +69,7 @@ func (r *defaultReconciler) Reconcile(
 	if md.Prepared == nil {
 		md.Prepared = map[string]codeexecutor.PreparedRecord{}
 	}
+	baseMD := cloneReconcileMetadata(md)
 
 	rctx := ApplyContext{
 		Engine:    eng,
@@ -80,6 +82,7 @@ func (r *defaultReconciler) Reconcile(
 
 	var warnings []string
 	changed := false
+	var changedKeys []string
 	for _, req := range reqs {
 		applied, warn, err := r.runOne(ctx, rctx, req)
 		if warn != "" {
@@ -94,7 +97,15 @@ func (r *defaultReconciler) Reconcile(
 				continue
 			}
 			if changed {
-				_ = r.stager.SaveWorkspaceMetadata(ctx, eng, ws, md)
+				if saveErr := r.saveReconcileMetadata(
+					ctx, eng, ws, baseMD, md, changedKeys,
+				); saveErr != nil {
+					return warnings, fmt.Errorf(
+						"workspaceprep: save metadata after "+
+							"partial apply: %w",
+						saveErr,
+					)
+				}
 			}
 			return warnings, fmt.Errorf(
 				"workspaceprep: required requirement %q failed: %w",
@@ -103,11 +114,12 @@ func (r *defaultReconciler) Reconcile(
 		}
 		if applied {
 			changed = true
+			changedKeys = append(changedKeys, req.Key())
 		}
 	}
 	if changed {
-		if err := r.stager.SaveWorkspaceMetadata(
-			ctx, eng, ws, md,
+		if err := r.saveReconcileMetadata(
+			ctx, eng, ws, baseMD, md, changedKeys,
 		); err != nil {
 			warnings = append(warnings, fmt.Sprintf(
 				"save metadata: %v", err,
@@ -115,6 +127,114 @@ func (r *defaultReconciler) Reconcile(
 		}
 	}
 	return warnings, nil
+}
+
+func (r *defaultReconciler) saveReconcileMetadata(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	base codeexecutor.WorkspaceMetadata,
+	md codeexecutor.WorkspaceMetadata,
+	changedKeys []string,
+) error {
+	return codeexecutor.WithWorkspaceMetadataLock(
+		ctx,
+		ws.Path,
+		func(ctx context.Context) error {
+			latest, err := r.stager.LoadWorkspaceMetadata(ctx, eng, ws)
+			if err != nil {
+				return err
+			}
+			merged := mergeReconcileMetadata(
+				latest,
+				base,
+				md,
+				changedKeys,
+			)
+			return r.stager.SaveWorkspaceMetadata(ctx, eng, ws, merged)
+		},
+	)
+}
+
+func mergeReconcileMetadata(
+	latest codeexecutor.WorkspaceMetadata,
+	base codeexecutor.WorkspaceMetadata,
+	updated codeexecutor.WorkspaceMetadata,
+	changedKeys []string,
+) codeexecutor.WorkspaceMetadata {
+	merged := latest
+	mergeDirectMetadataChanges(&merged, base, updated)
+	prepared := make(
+		map[string]codeexecutor.PreparedRecord,
+		len(merged.Prepared)+len(changedKeys),
+	)
+	for key, rec := range merged.Prepared {
+		prepared[key] = rec
+	}
+	for _, key := range changedKeys {
+		rec, ok := updated.Prepared[key]
+		if ok {
+			prepared[key] = rec
+		}
+	}
+	merged.Prepared = prepared
+	return merged
+}
+
+func mergeDirectMetadataChanges(
+	merged *codeexecutor.WorkspaceMetadata,
+	base codeexecutor.WorkspaceMetadata,
+	updated codeexecutor.WorkspaceMetadata,
+) {
+	if updated.Version != base.Version {
+		merged.Version = updated.Version
+	}
+	if !updated.CreatedAt.Equal(base.CreatedAt) {
+		merged.CreatedAt = updated.CreatedAt
+	}
+	if !updated.UpdatedAt.Equal(base.UpdatedAt) {
+		merged.UpdatedAt = updated.UpdatedAt
+	}
+	if !updated.LastAccess.Equal(base.LastAccess) {
+		merged.LastAccess = updated.LastAccess
+	}
+	if !reflect.DeepEqual(updated.Skills, base.Skills) {
+		merged.Skills = updated.Skills
+	}
+	if !reflect.DeepEqual(updated.Inputs, base.Inputs) {
+		merged.Inputs = updated.Inputs
+	}
+	if !reflect.DeepEqual(updated.Outputs, base.Outputs) {
+		merged.Outputs = updated.Outputs
+	}
+}
+
+func cloneReconcileMetadata(
+	md codeexecutor.WorkspaceMetadata,
+) codeexecutor.WorkspaceMetadata {
+	out := md
+	if md.Skills != nil {
+		out.Skills = make(map[string]codeexecutor.SkillMeta, len(md.Skills))
+		for key, rec := range md.Skills {
+			out.Skills[key] = rec
+		}
+	}
+	if md.Inputs != nil {
+		out.Inputs = append([]codeexecutor.InputRecord(nil), md.Inputs...)
+	}
+	if md.Outputs != nil {
+		out.Outputs = append([]codeexecutor.OutputRecord(nil), md.Outputs...)
+	}
+	if md.Prepared != nil {
+		out.Prepared = make(
+			map[string]codeexecutor.PreparedRecord,
+			len(md.Prepared),
+		)
+		for key, rec := range md.Prepared {
+			out.Prepared[key] = rec
+		}
+	}
+	return out
 }
 
 // runOne applies a single requirement. It returns whether work was

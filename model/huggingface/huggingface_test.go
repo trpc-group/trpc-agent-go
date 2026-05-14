@@ -30,6 +30,16 @@ import (
 
 const ApiKey = "*****"
 
+func TestWithContextWindow(t *testing.T) {
+	m, err := New("test-model", WithAPIKey("test-key"), WithContextWindow(204800))
+	require.NoError(t, err)
+	require.Equal(t, 204800, m.Info().ContextWindow)
+
+	m, err = New("test-model", WithAPIKey("test-key"), WithContextWindow(0))
+	require.NoError(t, err)
+	require.Zero(t, m.Info().ContextWindow)
+}
+
 func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
 	t.Run("request callback", func(t *testing.T) {
 		callbackCalled := false

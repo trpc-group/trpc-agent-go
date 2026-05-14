@@ -618,7 +618,7 @@ adapters ignore the field unless they add an explicit provider-specific mapping.
 
 #### 2. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. This section shows static switching for OpenAI and OpenAI-compatible model instances at the agent level and per-request level. To select a model separately for each LLM call within the same `runner.Run(...)`, use [ModelSelector](#modelselector).
 
 ##### Agent-level Switching
 
@@ -666,18 +666,16 @@ import (
 )
 
 // Create multiple model instances.
-gpt4 := openai.New("gpt-4o")
-gpt4mini := openai.New("gpt-4o-mini")
-deepseek := openai.New("deepseek-v4-flash")
+strong := openai.New("gpt-4o")
+fast := openai.New("gpt-4o-mini")
 
 // Register all models when creating the Agent.
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
-        "smart": gpt4,
-        "fast":  gpt4mini,
-        "cheap": deepseek,
+        "smart": strong,
+        "fast":  fast,
     }),
-    llmagent.WithModel(gpt4mini), // Specify initial model.
+    llmagent.WithModel(fast), // Specify initial model.
     llmagent.WithInstruction("You are an intelligent assistant."),
 )
 
@@ -688,7 +686,7 @@ if err != nil {
 }
 
 // Switch to another model.
-err = agent.SetModelByName("cheap")
+err = agent.SetModelByName("fast")
 if err != nil {
     log.Fatal(err)
 }
@@ -709,11 +707,11 @@ if err := agent.SetModelByName(modelName); err != nil {
 // Select model based on time of day (cost optimization).
 hour := time.Now().Hour()
 if hour >= 22 || hour < 8 {
-    // Use cheap model at night.
-    agent.SetModelByName("cheap")
-} else {
-    // Use fast model during the day.
+    // Use fast model at night.
     agent.SetModelByName("fast")
+} else {
+    // Use smart model during the day.
+    agent.SetModelByName("smart")
 }
 ```
 
@@ -745,9 +743,9 @@ Use `agent.WithModelName` to specify a pre-registered model name for a single re
 // Pre-register multiple models when creating the Agent.
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
-        "smart": openai.New("gpt-4o"),
-        "fast":  openai.New("gpt-4o-mini"),
-        "cheap": openai.New("deepseek-v4-flash"),
+        "smart":  openai.New("gpt-4o"),
+        "fast":   openai.New("gpt-4o-mini"),
+        "vision": openai.New("gpt-4o"),
     }),
     llmagent.WithModel(openai.New("gpt-4o-mini")), // Default model.
 )
@@ -774,9 +772,9 @@ if isComplexQuery(message) {
 
 eventChan, err := runner.Run(ctx, userID, sessionID, message, opts...)
 
-// Use specialized reasoning model for reasoning tasks.
-eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
-    agent.WithModelName("deepseek-v4-pro"),
+// Use a specialized model for a specific task.
+eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
+    agent.WithModelName("vision"),
 )
 ```
 
@@ -1570,7 +1568,7 @@ for request-scoped output limits and tool definitions:
 
 > **Context Window Registration**
 >
-> Both Token Tailoring and session summary `WithContextThreshold` rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with `model.RegisterModelContextWindow("my-model", 32768)` or `model.RegisterModelContextWindows(map[string]int{...})`. See the [Session Summary documentation](session/summary.md) for a full example.
+> Token Tailoring and session summary `WithContextThreshold` both need a model context window. Built-in model names are resolved automatically. For private deployments, tenant-provided models, or endpoint IDs, prefer model-instance configuration such as `openai.WithContextWindow(32768)` or the unified `provider.WithContextWindow(32768)`. For one-off runs, use `agent.WithModelContextWindow(32768)`. Use `model.RegisterModelContextWindow("my-model", 32768)` only when the name has a stable process-wide meaning. See the [Session Summary documentation](session/summary.md) for a full example.
 
 ```text
 outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
@@ -2052,7 +2050,7 @@ model := anthropic.New(
 
 #### 2. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. This section shows static switching for Anthropic model instances at the agent level and per-request level. To select a model separately for each LLM call within the same `runner.Run(...)`, use [ModelSelector](#modelselector).
 
 ##### Agent-level Switching
 
@@ -2604,7 +2602,7 @@ if err != nil {
 }
 ```
 
-`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
+`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. If the hedge wrapper is used with context-threshold summary or token tailoring and the candidates have different or unknown context windows, set a stable wrapper window with `hedge.WithContextWindow(...)`; otherwise the wrapper reports the shared candidate window only when all candidates expose the same positive value. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
 
 **Scheduling And Commit Rules**:
 
@@ -2660,3 +2658,41 @@ This configuration means:
 - `candidate[2]` starts at `0ms`.
 
 This is the all-at-once case where every candidate launches immediately when the request begins. In fixed-interval form, the same setup can be written as `WithDelay(0)`.
+
+## ModelSelector
+
+`ModelSelector` dynamically selects a model for each framework-managed LLM call within the same `runner.Run(...)`.
+
+```go
+selectModel := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+    if shouldUseAnotherModel(inv) {
+        return anotherModel, nil
+    }
+    return nil, nil
+}
+
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithModelSelector(selectModel),
+)
+```
+
+If an `LLMAgent` has its own fixed model selection policy, configure it when creating the agent:
+
+```go
+a := llmagent.New(
+    "assistant",
+    llmagent.WithModel(defaultModel),
+    llmagent.WithModelSelector(selectModel),
+)
+```
+
+Notes:
+
+- When both are configured, `agent.WithModelSelector(...)` takes precedence over `llmagent.WithModelSelector(...)`.
+- If selector returns `nil, nil`, the model is not switched and the current `inv.Model` is kept; returning an error terminates the current LLM call.
+
+For a complete example, see [examples/model/selector](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/selector).

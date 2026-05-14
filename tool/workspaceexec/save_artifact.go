@@ -136,7 +136,7 @@ func (t *SaveArtifactTool) Call(
 		Save:          true,
 		Inline:        false,
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
 		return nil, err
 	}
 	if len(manifest.Files) == 0 {

@@ -35,6 +35,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
@@ -59,6 +60,7 @@ type LLMAgent struct {
 	mu                      sync.RWMutex
 	model                   model.Model
 	models                  map[string]model.Model // Registered models for switching
+	modelSelector           agent.ModelSelector
 	description             string
 	instruction             prompt.Text
 	systemPrompt            prompt.Text
@@ -124,6 +126,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		name:              name,
 		model:             initialModel,
 		models:            models,
+		modelSelector:     options.ModelSelector,
 		description:       options.Description,
 		instruction:       newTextPrompt(options.Instruction),
 		systemPrompt:      newTextPrompt(options.GlobalInstruction),
@@ -203,6 +206,8 @@ func New(name string, opts ...Option) *LLMAgent {
 	flowOpts := llmflow.Options{
 		ChannelBufferSize:               options.ChannelBufferSize,
 		ModelCallbacks:                  options.ModelCallbacks,
+		BaseModelResolver:               a.resolveFlowBaseModel,
+		ModelSelector:                   a.modelSelector,
 		SyncSummaryIntraRun:             options.SyncSummaryIntraRun,
 		EnableContextCompaction:         options.EnableContextCompaction,
 		ContextCompactionThresholdRatio: options.ContextCompactionThresholdRatio,
@@ -1269,34 +1274,54 @@ func (e *haveCustomResponseError) Error() string {
 	return "custom response provided, returning early"
 }
 
-// setupInvocation sets up the invocation
+type baseModelResolution struct {
+	Model              model.Model
+	AllowAgentSelector bool
+}
+
+func (a *LLMAgent) resolveFlowBaseModel(inv *agent.Invocation) llmflow.ModelBaseResolution {
+	resolution := a.resolveBaseModel(inv)
+	return llmflow.ModelBaseResolution{
+		Model:              resolution.Model,
+		AllowAgentSelector: resolution.AllowAgentSelector,
+	}
+}
+
+func (a *LLMAgent) resolveBaseModel(inv *agent.Invocation) baseModelResolution {
+	if patchedModel, ok := a.modelSurfaceForInvocation(inv); ok {
+		return baseModelResolution{Model: patchedModel}
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if inv != nil && inv.RunOptions.Model != nil {
+		return baseModelResolution{Model: inv.RunOptions.Model}
+	}
+	if inv != nil && inv.RunOptions.ModelName != "" {
+		if m, ok := a.models[inv.RunOptions.ModelName]; ok {
+			return baseModelResolution{Model: m}
+		}
+		log.Warnf(
+			"Model name %q not found for agent %s; falling back to default model",
+			inv.RunOptions.ModelName,
+			a.name,
+		)
+		return baseModelResolution{Model: a.model}
+	}
+	return baseModelResolution{
+		Model:              a.model,
+		AllowAgentSelector: true,
+	}
+}
+
+// setupInvocation sets up the invocation.
 func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// Set agent identity before resolving node-scoped surfaces.
 	invocation.Agent = a
 	invocation.AgentName = a.name
 
-	// Set model: prioritize RunOptions.Model, then RunOptions.ModelName, then agent's default model.
-	a.mu.RLock()
-	if patchedModel, ok := a.modelSurfaceForInvocation(invocation); ok {
-		invocation.Model = patchedModel
-	} else if invocation.RunOptions.Model != nil {
-		// Check if a per-request model is specified.
-		// Use the model directly from RunOptions.
-		invocation.Model = invocation.RunOptions.Model
-	} else if invocation.RunOptions.ModelName != "" {
-		// Look up model by name from registered models.
-		if m, ok := a.models[invocation.RunOptions.ModelName]; ok {
-			invocation.Model = m
-		} else {
-			// If model name not found, fall back to agent's default model.
-			// Log a warning but don't fail the request.
-			invocation.Model = a.model
-		}
-	} else {
-		// Use agent's default model.
-		invocation.Model = a.model
-	}
-	a.mu.RUnlock()
+	// Set the base model once for compatibility with existing callbacks.
+	resolution := a.resolveBaseModel(invocation)
+	invocation.Model = resolution.Model
 
 	// Lift run-scoped structured output into the current invocation once.
 	if invocation.StructuredOutput == nil {
