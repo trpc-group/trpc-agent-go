@@ -98,7 +98,7 @@ func (m *manager) Save(ctx context.Context, appName string, evalSetResult *evalr
 		if err != nil {
 			return "", fmt.Errorf("marshal summary: %w", err)
 		}
-		summaryPayload = summaryBytes
+		summaryPayload = string(summaryBytes)
 	}
 	query := fmt.Sprintf(
 		`INSERT INTO %s (app_name, eval_set_result_id, eval_set_id, eval_set_result_name, eval_case_results, summary)
@@ -111,7 +111,7 @@ func (m *manager) Save(ctx context.Context, appName string, evalSetResult *evalr
 		   updated_at = CURRENT_TIMESTAMP(6)`,
 		m.tables.EvalSetResults,
 	)
-	if _, err := m.db.Exec(ctx, query, appName, evalSetResultID, evalSetResult.EvalSetID, evalSetResultName, casePayload, summaryPayload); err != nil {
+	if _, err := m.db.Exec(ctx, query, appName, evalSetResultID, evalSetResult.EvalSetID, evalSetResultName, string(casePayload), summaryPayload); err != nil {
 		return "", fmt.Errorf("store eval set result %s.%s: %w", appName, evalSetResultID, err)
 	}
 	return evalSetResultID, nil
