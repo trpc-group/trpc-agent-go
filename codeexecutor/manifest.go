@@ -10,7 +10,14 @@
 
 package codeexecutor
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+)
+
+// ErrPartialOutputCommit marks a CollectOutputs error after output files may
+// already have been added to the returned manifest or persisted as artifacts.
+var ErrPartialOutputCommit = errors.New("partial output commit")
 
 // InputSpec declares a single input mapping into the workspace.
 //

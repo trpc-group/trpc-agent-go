@@ -611,7 +611,7 @@ func (t *ExecTool) captureFinalResult(
 		sess.ws,
 		sess.in,
 	)
-	files, manifest, err := t.run.prepareOutputs(
+	files, manifest, outputWarn, err := t.run.prepareOutputs(
 		ctxIO,
 		sess.eng,
 		sess.ws,
@@ -640,6 +640,9 @@ func (t *ExecTool) captureFinalResult(
 	}
 	if len(filteredOutputs.warnings) > 0 {
 		out.Warnings = append(out.Warnings, filteredOutputs.warnings...)
+	}
+	if len(outputWarn) > 0 {
+		out.Warnings = append(out.Warnings, outputWarn...)
 	}
 	out.StagedInputs = sess.staged
 	if len(sess.stageWarnings) > 0 {
