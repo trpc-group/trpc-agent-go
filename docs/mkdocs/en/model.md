@@ -1962,6 +1962,57 @@ request := &model.Request{
 }
 ```
 
+### Multimodal Input
+
+The Anthropic Model supports images and files in `user` messages:
+
+- Images: Provide an image URL or raw image data. Supported MIME types are `image/jpeg`, `image/png`, `image/gif`, and `image/webp`. Images are sent as Anthropic image blocks.
+- PDFs: Provide a URL that Claude can access or raw data, using `application/pdf`. PDFs are sent as Anthropic document blocks.
+- Text content: Use raw data only. `text/plain` is sent as an Anthropic document block; text-based MIME types such as `text/csv` or `text/html` are sent as Anthropic text blocks.
+- Other formats: Office documents, JSON, and other formats are not parsed automatically. Convert them to text or PDF first. Audio and `FileID` are not supported. Non-PDF file URLs are sent as URL text only.
+
+```go
+import (
+    "context"
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+func main() {
+    llm := anthropic.New("claude-sonnet-4-6")
+    imageData, _ := os.ReadFile("diagram.png")
+    request := &model.Request{
+        Messages: []model.Message{
+            model.NewSystemMessage("You are a professional document and image analysis assistant."),
+            {
+                Role:    model.RoleUser,
+                Content: "Summarize the key information from the image and PDF.",
+                ContentParts: []model.ContentPart{
+                    {
+                        Type: model.ContentTypeImage,
+                        Image: &model.Image{
+                            Data:   imageData,
+                            Format: "png",
+                        },
+                    },
+                    {
+                        Type: model.ContentTypeFile,
+                        File: &model.File{
+                            Name:     "report.pdf",
+                            URL:      "https://example.com/report.pdf",
+                            MimeType: "application/pdf",
+                        },
+                    },
+                },
+            },
+        },
+    }
+    _, _ = llm.GenerateContent(context.Background(), request)
+}
+```
+
 ### Advanced features
 
 #### 1. Callback Functions

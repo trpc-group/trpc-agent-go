@@ -985,6 +985,16 @@ func onlyInternalFileContentParts(parts []model.ContentPart) bool {
 	return true
 }
 
+func fileURLFallbackText(file *model.File) string {
+	if file == nil ||
+		strings.TrimSpace(file.URL) == "" ||
+		len(file.Data) != 0 ||
+		isProviderFileID(file.FileID) {
+		return ""
+	}
+	return model.FileURLText(file)
+}
+
 func userTextPart(text string) openai.ChatCompletionContentPartUnionParam {
 	return openai.ChatCompletionContentPartUnionParam{
 		OfText: &openai.ChatCompletionContentPartTextParam{
@@ -993,16 +1003,24 @@ func userTextPart(text string) openai.ChatCompletionContentPartUnionParam {
 	}
 }
 
+func appendFileURLFallbackText(
+	dst *[]openai.ChatCompletionContentPartUnionParam,
+	file *model.File,
+) bool {
+	text := fileURLFallbackText(file)
+	if text == "" {
+		return false
+	}
+	*dst = append(*dst, userTextPart(text))
+	return true
+}
+
 func (m *Model) appendUserContentParts(
 	dst *[]openai.ChatCompletionContentPartUnionParam,
 	parts []model.ContentPart,
 ) map[string]any {
 	var extraFields map[string]any
 	for _, part := range parts {
-		if m.variantConfig.textOnlyMessageContent &&
-			part.Type != model.ContentTypeText {
-			continue
-		}
 		if part.Type == model.ContentTypeFile &&
 			m.omitFileContentParts {
 			continue
@@ -1012,8 +1030,18 @@ func (m *Model) appendUserContentParts(
 			isInternalOnlyFile(part.File) {
 			continue
 		}
+		if m.variantConfig.textOnlyMessageContent &&
+			part.Type != model.ContentTypeText {
+			if part.Type == model.ContentTypeFile {
+				appendFileURLFallbackText(dst, part.File)
+			}
+			continue
+		}
 		if part.Type == model.ContentTypeFile &&
 			m.variantConfig.skipFileTypeInContent {
+			if appendFileURLFallbackText(dst, part.File) {
+				continue
+			}
 			extraFields = appendFileID(extraFields, part)
 			continue
 		}
@@ -1039,6 +1067,9 @@ func (m *Model) omittedContentHint(parts []model.ContentPart) string {
 		case model.ContentTypeAudio:
 			audioCount++
 		case model.ContentTypeFile:
+			if fileURLFallbackText(part.File) != "" {
+				continue
+			}
 			fileCount++
 		}
 	}
@@ -1227,6 +1258,13 @@ func (m *Model) convertContentPart(part model.ContentPart) *openai.ChatCompletio
 		if part.File != nil {
 			params, ok := fileToParamsOK(part.File)
 			if !ok {
+				if text := fileURLFallbackText(part.File); text != "" {
+					return &openai.ChatCompletionContentPartUnionParam{
+						OfText: &openai.ChatCompletionContentPartTextParam{
+							Text: text,
+						},
+					}
+				}
 				return nil
 			}
 			return &openai.ChatCompletionContentPartUnionParam{
@@ -1259,7 +1297,8 @@ func isInternalOnlyFile(file *model.File) bool {
 		return false
 	}
 	return fileref.IsInternalFileRef(file.FileID) &&
-		len(file.Data) == 0
+		len(file.Data) == 0 &&
+		strings.TrimSpace(file.URL) == ""
 }
 
 func safeFileHintName(file *model.File) string {

@@ -692,10 +692,15 @@ func convertImageToBlock(img *model.Image) (types.ContentBlock, error) {
 	return nil, errors.New("bedrock: image content part has neither data nor URL")
 }
 
-// convertFileToBlock converts file data to a Bedrock document block.
+// convertFileToBlock converts file content to a Bedrock content block.
 func convertFileToBlock(file *model.File) (types.ContentBlock, error) {
 	if file == nil {
 		return nil, errors.New("bedrock: file content part has nil file data")
+	}
+	if len(file.Data) == 0 {
+		if text := model.FileURLText(file); text != "" {
+			return &types.ContentBlockMemberText{Value: text}, nil
+		}
 	}
 	if len(file.Data) == 0 && file.FileID == "" {
 		return nil, errors.New("bedrock: file content part has neither data nor file ID")
