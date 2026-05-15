@@ -48,6 +48,8 @@ type JSONMatchStrategy string
 const (
 	// JSONMatchStrategyExact matches json objects exactly.
 	JSONMatchStrategyExact JSONMatchStrategy = "exact"
+	// JSONMatchStrategySkip skips JSON value matching.
+	JSONMatchStrategySkip JSONMatchStrategy = "skip"
 )
 
 // New creates a new JSONCriterion with the provided options.
@@ -80,6 +82,8 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 		if err := validateRawJSON(actual); err != nil {
 			return false, fmt.Errorf("parse actual raw json: %w", err)
 		}
+	}
+	if j.MatchStrategy == JSONMatchStrategySkip {
 		return true, nil
 	}
 	var err error
