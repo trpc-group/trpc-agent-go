@@ -128,9 +128,10 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 		return s.asyncWorker.EnqueueJob(ctx, sess, filterKey, force)
 	}
 
-	// Fallback to synchronous processing.
+	// Fallback to synchronous processing with the same detached context that
+	// async workers use.
 	return isummary.CreateSessionSummaryWithCascade(
-		ctx,
+		isummary.DetachContext(ctx),
 		sess,
 		filterKey,
 		force,
