@@ -1947,6 +1947,57 @@ request := &model.Request{
 }
 ```
 
+### 多模态输入
+
+Anthropic Model 支持在 `user` 消息中传入图片和文件：
+
+- 图片：可以使用 URL 或原始数据，支持 `image/jpeg`、`image/png`、`image/gif`、`image/webp`，会作为 Anthropic image block 发送。
+- PDF：可以使用 URL 或原始数据，使用 `application/pdf`，会作为 Anthropic document block 发送。
+- 文本内容：只能使用原始数据，使用 `text/plain` 会作为 Anthropic document block 发送；使用 `text/csv`、`text/html` 等文本型 MIME type 会作为 Anthropic text block 发送。
+- 其他格式：Office 文档、JSON 等不会自动解析，请先转换为文本或 PDF。音频和 `FileID` 不支持。非 PDF 文件 URL 只会作为 URL 文本发送。
+
+```go
+import (
+    "context"
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+func main() {
+    llm := anthropic.New("claude-sonnet-4-6")
+    imageData, _ := os.ReadFile("diagram.png")
+    request := &model.Request{
+        Messages: []model.Message{
+            model.NewSystemMessage("你是一个专业的文档和图像分析助手。"),
+            {
+                Role:    model.RoleUser,
+                Content: "请结合图片和 PDF 总结关键信息。",
+                ContentParts: []model.ContentPart{
+                    {
+                        Type: model.ContentTypeImage,
+                        Image: &model.Image{
+                            Data:   imageData,
+                            Format: "png",
+                        },
+                    },
+                    {
+                        Type: model.ContentTypeFile,
+                        File: &model.File{
+                            Name:     "report.pdf",
+                            URL:      "https://example.com/report.pdf",
+                            MimeType: "application/pdf",
+                        },
+                    },
+                },
+            },
+        },
+    }
+    _, _ = llm.GenerateContent(context.Background(), request)
+}
+```
+
 ### 高级功能
 
 #### 1. 回调函数

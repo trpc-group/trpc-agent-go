@@ -2425,6 +2425,20 @@ func TestConvertFileToBlock_NoDataNoFileID(t *testing.T) {
 	assert.Contains(t, err.Error(), "neither data nor file ID")
 }
 
+// TestConvertFileToBlock_URLFallsBackToText verifies that URL files are preserved as text.
+func TestConvertFileToBlock_URLFallsBackToText(t *testing.T) {
+	file := &model.File{
+		Name:     "report.pdf",
+		URL:      "https://example.com/report.pdf",
+		MimeType: "application/pdf",
+	}
+	block, err := convertFileToBlock(file)
+	require.NoError(t, err)
+	textBlock, ok := block.(*types.ContentBlockMemberText)
+	require.True(t, ok)
+	assert.Equal(t, "File URL: report.pdf (application/pdf): https://example.com/report.pdf", textBlock.Value)
+}
+
 // TestConvertFileToBlock_FileIDOnly verifies that file with only file ID returns an error.
 func TestConvertFileToBlock_FileIDOnly(t *testing.T) {
 	file := &model.File{FileID: "file-123"}
