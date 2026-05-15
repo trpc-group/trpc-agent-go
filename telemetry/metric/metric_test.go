@@ -111,15 +111,14 @@ func TestStartAndClean(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			mp, err := NewMeterProvider(ctx, tt.opts...)
-			if err != nil {
-				t.Fatalf("NewMeterProvider returned error: %v", err)
-			}
-
 			if tt.expectError {
 				if err == nil {
 					t.Fatal("expected error but got nil")
 				}
 				return
+			}
+			if err != nil {
+				t.Fatalf("NewMeterProvider returned error: %v", err)
 			}
 
 			// Verify meter provider was created successfully
@@ -352,6 +351,64 @@ func TestInitMeterProvider(t *testing.T) {
 	if itelemetry.ExecuteToolMetricGenAIClientOperationDuration == nil {
 		t.Error("ExecuteToolMetricGenAIClientOperationDuration was not created")
 	}
+	if itelemetry.WorkflowMeter == nil {
+		t.Error("WorkflowMeter was not created")
+	}
+	if itelemetry.WorkflowMetricGenAIClientOperationDuration == nil {
+		t.Error("WorkflowMetricGenAIClientOperationDuration was not created")
+	}
+}
+
+func TestInitMeterProvider_WorkflowMetricError(t *testing.T) {
+	originalMP := itelemetry.MeterProvider
+	originalWorkflowMeter := itelemetry.WorkflowMeter
+	originalWorkflowOpDur := itelemetry.WorkflowMetricGenAIClientOperationDuration
+	defer func() {
+		itelemetry.MeterProvider = originalMP
+		itelemetry.WorkflowMeter = originalWorkflowMeter
+		itelemetry.WorkflowMetricGenAIClientOperationDuration = originalWorkflowOpDur
+	}()
+
+	mp := &namedMockMeterProvider{
+		workflowMeter: &mockMeter{
+			shouldFail: true,
+			failOn:     metrics.MetricGenAIClientOperationDuration,
+		},
+		defaultMeter: &mockMeter{},
+	}
+
+	err := InitMeterProvider(mp)
+	if err == nil {
+		t.Fatalf("expected workflow metric initialization error")
+	}
+	if !strings.Contains(err.Error(), "failed to create trpc_agent_go.internal.workflow metric gen_ai.client.operation.duration") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitWorkflowMetrics_ErrorHandling(t *testing.T) {
+	originalWorkflowMeter := itelemetry.WorkflowMeter
+	originalWorkflowOpDur := itelemetry.WorkflowMetricGenAIClientOperationDuration
+	defer func() {
+		itelemetry.WorkflowMeter = originalWorkflowMeter
+		itelemetry.WorkflowMetricGenAIClientOperationDuration = originalWorkflowOpDur
+	}()
+
+	if err := initWorkflowMetrics(nil); err == nil || !strings.Contains(err.Error(), "workflow meter provider is nil") {
+		t.Fatalf("expected nil provider error, got %v", err)
+	}
+
+	mp := &mockMeterProvider{meter: &mockMeter{
+		shouldFail: true,
+		failOn:     metrics.MetricGenAIClientOperationDuration,
+	}}
+	err := initWorkflowMetrics(mp)
+	if err == nil {
+		t.Fatalf("expected workflow histogram creation error")
+	}
+	if !strings.Contains(err.Error(), "failed to create trpc_agent_go.internal.workflow metric gen_ai.client.operation.duration") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
@@ -366,6 +423,7 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 	origInvokeTTFT := itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken
 	origInvokeTokenUsage := itelemetry.InvokeAgentMetricGenAIClientTokenUsage
 	origInvokeOpDur := itelemetry.InvokeAgentMetricGenAIClientOperationDuration
+	origWorkflowOpDur := itelemetry.WorkflowMetricGenAIClientOperationDuration
 	defer func() {
 		itelemetry.MeterProvider = originalMP
 		itelemetry.ChatMetricGenAIClientOperationDuration = origChatOpDur
@@ -378,6 +436,7 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 		itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = origInvokeTTFT
 		itelemetry.InvokeAgentMetricGenAIClientTokenUsage = origInvokeTokenUsage
 		itelemetry.InvokeAgentMetricGenAIClientOperationDuration = origInvokeOpDur
+		itelemetry.WorkflowMetricGenAIClientOperationDuration = origWorkflowOpDur
 	}()
 
 	reset := func(t *testing.T) {
@@ -427,6 +486,16 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 				itelemetry.InvokeAgentMetricGenAIClientTokenUsage = nil
 			case metrics.MetricGenAIClientOperationDuration:
 				itelemetry.InvokeAgentMetricGenAIClientOperationDuration = nil
+			}
+		}
+	}
+
+	nilWorkflowMetric := func(metricName string) func(t *testing.T) {
+		return func(t *testing.T) {
+			t.Helper()
+			switch metricName {
+			case metrics.MetricGenAIClientOperationDuration:
+				itelemetry.WorkflowMetricGenAIClientOperationDuration = nil
 			}
 		}
 	}
@@ -503,6 +572,13 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			metricName: metrics.MetricGenAIClientOperationDuration,
 			boundaries: []float64{0.1, 1, 10},
 		},
+		// --- Execute-workflow success ---
+		{
+			name:       "workflow: operation duration",
+			meterName:  metrics.MeterNameWorkflow,
+			metricName: metrics.MetricGenAIClientOperationDuration,
+			boundaries: []float64{0.1, 1, 10},
+		},
 
 		// --- Default/unsupported branches ---
 		{
@@ -536,6 +612,14 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			boundaries:  []float64{1},
 			wantErr:     true,
 			errContains: "unknown or unsupported invoke agent histogram metric",
+		},
+		{
+			name:        "unsupported workflow metric",
+			meterName:   metrics.MeterNameWorkflow,
+			metricName:  metrics.MetricGenAIClientTokenUsage,
+			boundaries:  []float64{1},
+			wantErr:     true,
+			errContains: "unknown or unsupported workflow histogram metric",
 		},
 
 		// --- Not initialized guards for every branch ---
@@ -626,6 +710,15 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			metricName:  metrics.MetricGenAIClientOperationDuration,
 			boundaries:  []float64{1},
 			before:      nilInvokeAgentMetric(metrics.MetricGenAIClientOperationDuration),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "workflow operation duration not initialized",
+			meterName:   metrics.MeterNameWorkflow,
+			metricName:  metrics.MetricGenAIClientOperationDuration,
+			boundaries:  []float64{1},
+			before:      nilWorkflowMetric(metrics.MetricGenAIClientOperationDuration),
 			wantErr:     true,
 			errContains: "not initialized",
 		},
@@ -880,6 +973,19 @@ type mockMeterProvider struct {
 
 func (m *mockMeterProvider) Meter(name string, opts ...metric.MeterOption) metric.Meter {
 	return m.meter
+}
+
+type namedMockMeterProvider struct {
+	noop.MeterProvider
+	workflowMeter metric.Meter
+	defaultMeter  metric.Meter
+}
+
+func (m *namedMockMeterProvider) Meter(name string, opts ...metric.MeterOption) metric.Meter {
+	if name == metrics.MeterNameWorkflow {
+		return m.workflowMeter
+	}
+	return m.defaultMeter
 }
 
 // TestInitMeterProvider_ErrorHandling tests error handling in InitMeterProvider
