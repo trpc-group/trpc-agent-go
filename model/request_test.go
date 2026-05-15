@@ -544,6 +544,84 @@ func TestMessage_AddFileData(t *testing.T) {
 	}
 }
 
+func TestMessage_AddFileURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		url      string
+		mimetype string
+	}{
+		{
+			name:     "add PDF URL",
+			filename: "report.pdf",
+			url:      "https://example.com/report.pdf",
+			mimetype: "application/pdf",
+		},
+		{
+			name:     "add URL without name",
+			filename: "",
+			url:      "https://example.com/download",
+			mimetype: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &Message{}
+			msg.AddFileURL(tt.filename, tt.url, tt.mimetype)
+			require.Len(t, msg.ContentParts, 1)
+			assert.Equal(t, ContentTypeFile, msg.ContentParts[0].Type)
+			require.NotNil(t, msg.ContentParts[0].File)
+			assert.Equal(t, tt.filename, msg.ContentParts[0].File.Name)
+			assert.Equal(t, tt.url, msg.ContentParts[0].File.URL)
+			assert.Equal(t, tt.mimetype, msg.ContentParts[0].File.MimeType)
+		})
+	}
+}
+
+func TestFileURLText(t *testing.T) {
+	tests := []struct {
+		name string
+		file *File
+		want string
+	}{
+		{
+			name: "nil",
+			file: nil,
+			want: "",
+		},
+		{
+			name: "empty URL",
+			file: &File{Name: "report.pdf"},
+			want: "",
+		},
+		{
+			name: "name and MIME",
+			file: &File{Name: "report.pdf", URL: " https://example.com/report.pdf ", MimeType: "application/pdf"},
+			want: "File URL: report.pdf (application/pdf): https://example.com/report.pdf",
+		},
+		{
+			name: "name only",
+			file: &File{Name: "report.pdf", URL: "https://example.com/report.pdf"},
+			want: "File URL: report.pdf: https://example.com/report.pdf",
+		},
+		{
+			name: "MIME only",
+			file: &File{URL: "https://example.com/report.pdf", MimeType: "application/pdf"},
+			want: "File URL (application/pdf): https://example.com/report.pdf",
+		},
+		{
+			name: "URL only",
+			file: &File{URL: "https://example.com/report.pdf"},
+			want: "File URL: https://example.com/report.pdf",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, FileURLText(tt.file))
+		})
+	}
+}
+
 func TestMessage_AddFileID(t *testing.T) {
 	tests := []struct {
 		name   string

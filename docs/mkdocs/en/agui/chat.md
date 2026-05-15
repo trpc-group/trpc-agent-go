@@ -77,7 +77,7 @@ curl -N -X POST http://localhost:8080/ \
 Multimodal input uses the tail `role=user` message in `messages` to represent the current user input. Unlike text input, `content` is no longer a string. It is an array of `InputContent` fragments. Each item represents one piece of input. Common types include:
 
 - Text fragment: `type` is `"text"`, and the text content is in the `text` field.
-- Binary fragment: `type` is `"binary"` and `mimeType` is required. Image input can use `url` to point to an image URL. Other binary content can use `data` to pass base64 content.
+- Binary fragment: `type` is `"binary"`. Use `url` for image or file URLs, or use `data` for base64 content. Provide an accurate `mimeType` when possible; when passing a file, provide `filename` whether you use `url` or `data`.
 
 URL request body example:
 
@@ -115,7 +115,25 @@ DATA request body example:
 }
 ```
 
-The `url` form is only used for image input. Other binary content uses `data`. When using `data`, the server decodes it with standard base64 decoding. `data` can be either a raw base64 string or a string with the `data:*;base64,` prefix.
+The `url` form is for image or file URLs that the selected model can access. When using `data`, the server decodes it with standard base64 decoding. `data` can be either a raw base64 string or a string with the `data:*;base64,` prefix.
+
+File URL request body example:
+
+```json
+{
+    "threadId": "thread-id",
+    "runId": "run-id",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "Summarize this PDF." },
+                { "type": "binary", "mimeType": "application/pdf", "filename": "report.pdf", "url": "https://example.com/report.pdf" }
+            ]
+        }
+    ]
+}
+```
 
 ### External Tool Result Input
 
