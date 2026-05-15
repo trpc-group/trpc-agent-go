@@ -10,9 +10,10 @@
 package xml
 
 type options struct {
-	ignore  bool
-	valid   bool
-	compare CompareFunc
+	ignore        bool
+	valid         bool
+	matchStrategy XMLMatchStrategy
+	compare       CompareFunc
 }
 
 func newOptions(opt ...Option) *options {
@@ -37,6 +38,13 @@ func WithIgnore(ignore bool) Option {
 func WithValid(valid bool) Option {
 	return func(o *options) {
 		o.valid = valid
+	}
+}
+
+// WithMatchStrategy sets the XML match strategy.
+func WithMatchStrategy(matchStrategy XMLMatchStrategy) Option {
+	return func(o *options) {
+		o.matchStrategy = matchStrategy
 	}
 }
 
