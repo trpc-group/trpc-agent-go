@@ -76,7 +76,7 @@ func TestRegisterTools_Combinations(t *testing.T) {
 	kb := &minimalKnowledge{}
 
 	// with tools, toolset and knowledge and nil memory.
-	tools, userToolNames := registerTools(&Options{Tools: base, ToolSets: sets, Knowledge: kb})
+	tools, userToolNames, _ := registerTools(&Options{Tools: base, ToolSets: sets, Knowledge: kb}, nil)
 	if len(tools) < 2 {
 		t.Fatalf("expected aggregated tools from base and toolset")
 	}
