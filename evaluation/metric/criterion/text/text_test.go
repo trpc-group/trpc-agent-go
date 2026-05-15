@@ -101,6 +101,50 @@ func TestTextCriterionLengthAndMatchStrategy(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestTextCriterionLengthWithSkipMatchStrategy(t *testing.T) {
+	criterion := &TextCriterion{
+		Length:        &criterionlength.LengthCriterion{Min: intPtr(2), Max: intPtr(4)},
+		MatchStrategy: TextMatchStrategySkip,
+	}
+	ok, err := criterion.Match("abcd", "not checked")
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	ok, err = criterion.Match("a", "not checked")
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "length mismatch")
+}
+
+func TestTextCriterionCompareRunsWithSkipMatchStrategy(t *testing.T) {
+	called := false
+	criterion := &TextCriterion{
+		MatchStrategy: TextMatchStrategySkip,
+		Compare: func(actual, expected string) (bool, error) {
+			called = true
+			return actual == "source" && expected == "target", nil
+		},
+	}
+	ok, err := criterion.Match("source", "target")
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestTextCriterionCompareOverridesLength(t *testing.T) {
+	called := false
+	criterion := &TextCriterion{
+		Length: &criterionlength.LengthCriterion{Min: intPtr(3)},
+		Compare: func(actual, expected string) (bool, error) {
+			called = true
+			return true, nil
+		},
+	}
+	ok, err := criterion.Match("ab", "target")
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
 func TestTextCriterionRegexInvalid(t *testing.T) {
 	criterion := &TextCriterion{
 		MatchStrategy: TextMatchStrategyRegex,
