@@ -49,6 +49,14 @@ type AsyncSummaryConfig struct {
 	CreateSummaryFunc     func(context.Context, *session.Session, string, bool) error
 }
 
+// DetachContext clones ctx and strips cancellation for asynchronous summary work.
+func DetachContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithoutCancel(agent.CloneContext(ctx))
+}
+
 func (c AsyncSummaryConfig) hasSummarizer() bool {
 	return HasSummarizer(c.Summarizer)
 }
@@ -130,12 +138,8 @@ func (w *AsyncSummaryWorker) EnqueueJob(
 	}
 
 	// Create job with detached context.
-	jobCtx := ctx
-	if jobCtx == nil {
-		jobCtx = context.Background()
-	}
 	job := &summaryJob{
-		ctx:       context.WithoutCancel(agent.CloneContext(jobCtx)),
+		ctx:       DetachContext(ctx),
 		filterKey: filterKey,
 		force:     force,
 		session:   sess,
