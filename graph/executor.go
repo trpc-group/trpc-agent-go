@@ -2845,8 +2845,8 @@ func (e *Executor) executeSingleTask(
 	// Run before node callbacks.
 	if handled, err := e.runBeforeCallbacks(
 		ctx, invocation, nodeCtx.mergedCallbacks, nodeCtx.callbackCtx,
-		nodeCtx.stateCopy, execCtx, t, nodeCtx.nodeType, nodeCtx.nodeStart, step, nodeCtx.traceStepID,
-		nodeCtx.traceTask,
+		nodeCtx.stateCopy, execCtx, t, nodeCtx.nodeType, nodeCtx.nodeStart,
+		nodeCtx.metricRecorder, step, nodeCtx.traceStepID, nodeCtx.traceTask,
 	); handled || err != nil {
 		return err
 	}
@@ -2923,6 +2923,7 @@ func (e *Executor) initializeNodeContext(
 			stateCopy[currentTraceStepIDStateKey] = traceStepID
 		}
 	}
+	metricRecorder := e.newWorkflowMetricRecorder(invocation, execCtx, t.NodeID, nodeType, nodeStart)
 	return &nodeExecutionContext{
 		nodeType:        nodeType,
 		nodeStart:       nodeStart,
@@ -2931,6 +2932,7 @@ func (e *Executor) initializeNodeContext(
 		stateCopy:       stateCopy,
 		mergedCallbacks: mergedCallbacks,
 		traceStepID:     traceStepID,
+		metricRecorder:  metricRecorder,
 		traceTask:       traceTask,
 	}
 }
@@ -3079,6 +3081,7 @@ func (e *Executor) handleCachedResult(
 		t.NodeID,
 		nodeCtx.nodeType,
 		step,
+		nodeCtx.metricRecorder,
 	); err != nil {
 		e.ensureTraceSourceForTask(invocation, execCtx, t, result, err, nodeCtx.traceTask)
 		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), err)
@@ -3100,6 +3103,7 @@ func (e *Executor) handleCachedResult(
 	)
 	if herr != nil {
 		e.ensureTraceSourceForTask(invocation, execCtx, t, result, herr, nodeCtx.traceTask)
+		nodeCtx.metricRecorder.recordError(ctx, herr)
 		return herr
 	}
 
@@ -3111,11 +3115,13 @@ func (e *Executor) handleCachedResult(
 		if perr := e.processConditionalEdges(ctx, invocation, execCtx, t, step); perr != nil {
 			e.ensureTraceSourceForTask(invocation, execCtx, t, result, perr, nodeCtx.traceTask)
 			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), perr)
+			nodeCtx.metricRecorder.recordError(ctx, perr)
 			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
 		}
 	}
 	agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), nil)
 	// Emit node completion event with cache-hit metadata.
+	nodeCtx.metricRecorder.recordSuccess(ctx)
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType,
 		step, nodeCtx.nodeStart, true)
 	if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {
@@ -3133,7 +3139,33 @@ type nodeExecutionContext struct {
 	stateCopy       State
 	mergedCallbacks *NodeCallbacks
 	traceStepID     string
+	metricRecorder  *workflowMetricRecorder
 	traceTask       *traceTaskMetadata
+}
+
+type workflowMetricRecorder struct {
+	once       sync.Once
+	start      time.Time
+	attributes itelemetry.WorkflowAttributes
+}
+
+func (r *workflowMetricRecorder) recordSuccess(ctx context.Context) {
+	r.record(ctx, nil)
+}
+
+func (r *workflowMetricRecorder) recordError(ctx context.Context, err error) {
+	r.record(ctx, err)
+}
+
+func (r *workflowMetricRecorder) record(ctx context.Context, err error) {
+	if r == nil {
+		return
+	}
+	r.once.Do(func() {
+		attrs := r.attributes
+		attrs.Error = err
+		itelemetry.ReportWorkflowMetrics(ctx, attrs, time.Since(r.start))
+	})
 }
 
 // executeTaskWithRetry executes the task with retry logic.
@@ -3172,11 +3204,13 @@ func (e *Executor) executeTaskWithRetry(
 		if !shouldRetry {
 			if IsInterruptError(retryErr) {
 				e.ensureTraceSourceForTask(invocation, execCtx, t, result, retryErr, nodeCtx.traceTask)
+				nodeCtx.metricRecorder.recordError(ctx, retryErr)
 				agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), retryErr)
 				return retryErr
 			}
 			if !errors.Is(retryErr, err) {
 				e.ensureTraceSourceForTask(invocation, execCtx, t, result, retryErr, nodeCtx.traceTask)
+				nodeCtx.metricRecorder.recordError(ctx, retryErr)
 				agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), retryErr)
 				return retryErr
 			}
@@ -3232,6 +3266,7 @@ func (e *Executor) finalizeSuccessfulExecution(
 		t.NodeID,
 		nodeCtx.nodeType,
 		step,
+		nodeCtx.metricRecorder,
 	); aerr != nil {
 		e.ensureTraceSourceForTask(invocation, execCtx, t, result, aerr, nodeCtx.traceTask)
 		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), aerr)
@@ -3253,6 +3288,7 @@ func (e *Executor) finalizeSuccessfulExecution(
 	)
 	if herr != nil {
 		e.ensureTraceSourceForTask(invocation, execCtx, t, result, herr, nodeCtx.traceTask)
+		nodeCtx.metricRecorder.recordError(ctx, herr)
 		return herr
 	}
 
@@ -3282,11 +3318,13 @@ func (e *Executor) finalizeSuccessfulExecution(
 		if perr := e.processConditionalEdges(ctx, invocation, execCtx, t, step); perr != nil {
 			e.ensureTraceSourceForTask(invocation, execCtx, t, result, perr, nodeCtx.traceTask)
 			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), perr)
+			nodeCtx.metricRecorder.recordError(ctx, perr)
 			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
 		}
 	}
 	agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), nil)
 	// Emit node completion event for the overall node run (no cache hit).
+	nodeCtx.metricRecorder.recordSuccess(ctx)
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, nodeCtx.nodeStart, false)
 	if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {
 		return fmt.Errorf("emit node barrier: %w", err)
@@ -3309,6 +3347,7 @@ func (e *Executor) finalizeFailedExecution(
 		traceStepID := ""
 		if nodeCtx != nil {
 			traceStepID = nodeCtx.traceStepID
+			nodeCtx.metricRecorder.recordError(ctx, retryErr)
 		}
 		var traceTask *traceTaskMetadata
 		if nodeCtx != nil {
@@ -3331,15 +3370,18 @@ func (e *Executor) finalizeFailedExecution(
 		t.NodeID,
 		nodeCtx.nodeType,
 		step,
+		nodeCtx.metricRecorder,
 	)
 	if aerr != nil {
 		e.ensureTraceSourceForTask(invocation, execCtx, t, result, aerr, nodeCtx.traceTask)
 		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), aerr)
+		nodeCtx.metricRecorder.recordError(ctx, aerr)
 		return aerr
 	}
 	if !overridden {
 		e.ensureTraceSourceForTask(invocation, execCtx, t, result, retryErr, nodeCtx.traceTask)
 		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), retryErr)
+		nodeCtx.metricRecorder.recordError(ctx, retryErr)
 		return retryErr
 	}
 	return e.finalizeRecoveredExecution(
@@ -3375,6 +3417,7 @@ func (e *Executor) finalizeRecoveredExecution(
 	if herr != nil {
 		e.ensureTraceSourceForTask(invocation, execCtx, t, result, herr, nodeCtx.traceTask)
 		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), herr)
+		nodeCtx.metricRecorder.recordError(ctx, herr)
 		return herr
 	}
 
@@ -3390,6 +3433,7 @@ func (e *Executor) finalizeRecoveredExecution(
 		); err != nil {
 			e.ensureTraceSourceForTask(invocation, execCtx, t, result, err, nodeCtx.traceTask)
 			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), err)
+			nodeCtx.metricRecorder.recordError(ctx, err)
 			return fmt.Errorf(
 				"conditional edge processing failed for node %s: %w",
 				t.NodeID,
@@ -3398,6 +3442,7 @@ func (e *Executor) finalizeRecoveredExecution(
 		}
 	}
 	agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), nil)
+	nodeCtx.metricRecorder.recordSuccess(ctx)
 	e.emitNodeCompleteEvent(
 		ctx,
 		invocation,
@@ -3459,6 +3504,7 @@ func (e *Executor) evaluateRetryDecision(
 	matched, pol, maxAttempts := e.selectRetryPolicy(retryCtx.err, nodeCtx.nodePolicies)
 	if !matched {
 		// No retry policy matched -> emit error and exit.
+		nodeCtx.metricRecorder.recordError(ctx, retryCtx.err)
 		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, retryCtx.err)
 		if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {
 			return false, fmt.Errorf("emit node barrier: %w", err)
@@ -3489,6 +3535,7 @@ func (e *Executor) checkRetryBudget(
 ) (bool, error) {
 	// Check attempt budget.
 	if retryCtx.attempt >= maxAttempts {
+		nodeCtx.metricRecorder.recordError(ctx, retryCtx.err)
 		e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
 			WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
 		if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, nodeID, step); err != nil {
@@ -3500,6 +3547,7 @@ func (e *Executor) checkRetryBudget(
 	// Check elapsed time budget.
 	if pol.MaxElapsedTime > 0 && !retryCtx.totalStart.IsZero() {
 		if time.Since(retryCtx.totalStart) >= pol.MaxElapsedTime {
+			nodeCtx.metricRecorder.recordError(ctx, retryCtx.err)
 			e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
 				WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
 			if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, nodeID, step); err != nil {
@@ -3529,6 +3577,7 @@ func (e *Executor) waitBeforeRetry(
 	if deadline, ok := ctx.Deadline(); ok {
 		remain := time.Until(deadline)
 		if remain <= 0 {
+			nodeCtx.metricRecorder.recordError(ctx, retryCtx.err)
 			e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
 				WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
 			if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, nodeID, step); err != nil {
@@ -3551,6 +3600,7 @@ func (e *Executor) waitBeforeRetry(
 	// Sleep or abort if context canceled.
 	select {
 	case <-ctx.Done():
+		nodeCtx.metricRecorder.recordError(ctx, ctx.Err())
 		return false, fmt.Errorf("node %s execution canceled before retry: %w", nodeID, ctx.Err())
 	case <-time.After(delay):
 		return true, nil
@@ -3575,6 +3625,56 @@ func (e *Executor) getNodeName(nodeID string) string {
 	return node.Name
 }
 
+func (e *Executor) newWorkflowMetricRecorder(
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	nodeID string,
+	nodeType NodeType,
+	start time.Time,
+) *workflowMetricRecorder {
+	workflowName := e.getNodeName(nodeID)
+	if workflowName == "" {
+		workflowName = nodeID
+	}
+
+	attrs := itelemetry.WorkflowAttributes{
+		AgentID:      "",
+		WorkflowID:   nodeID,
+		WorkflowName: workflowName,
+		WorkflowType: workflowTypeFromNodeType(nodeType).String(),
+	}
+	if invocation != nil {
+		attrs.AgentID = invocation.AgentName
+		attrs.AgentName = invocation.AgentName
+		if invocation.Model != nil {
+			attrs.System = invocation.Model.Info().Name
+		}
+		if invocation.Session != nil {
+			attrs.AppName = invocation.Session.AppName
+			attrs.UserID = invocation.Session.UserID
+		}
+	}
+	if attrs.System == "" {
+		if node, ok := e.graph.Node(nodeID); ok && node != nil && node.llmModel != nil {
+			attrs.System = node.llmModel.Info().Name
+		}
+	}
+	if attrs.AppName == "" || attrs.UserID == "" {
+		appName, userID := e.getSessionIdentity(execCtx)
+		if attrs.AppName == "" {
+			attrs.AppName = appName
+		}
+		if attrs.UserID == "" {
+			attrs.UserID = userID
+		}
+	}
+
+	return &workflowMetricRecorder{
+		start:      start,
+		attributes: attrs,
+	}
+}
+
 // getSessionID retrieves the session ID from the execution context.
 func (e *Executor) getSessionID(execCtx *ExecutionContext) string {
 	if execCtx == nil {
@@ -3588,6 +3688,20 @@ func (e *Executor) getSessionID(execCtx *ExecutionContext) string {
 		}
 	}
 	return ""
+}
+
+func (e *Executor) getSessionIdentity(execCtx *ExecutionContext) (appName string, userID string) {
+	if execCtx == nil {
+		return "", ""
+	}
+	execCtx.stateMutex.RLock()
+	defer execCtx.stateMutex.RUnlock()
+	if sess, ok := execCtx.State[StateKeySession]; ok {
+		if s, ok := sess.(*session.Session); ok && s != nil {
+			return s.AppName, s.UserID
+		}
+	}
+	return "", ""
 }
 
 // newNodeContext creates a context for a single node execution with timeout.
@@ -3706,6 +3820,7 @@ func (e *Executor) runBeforeCallbacks(
 	t *Task,
 	nodeType NodeType,
 	nodeStart time.Time,
+	metricRecorder *workflowMetricRecorder,
 	step int,
 	traceStepID string,
 	traceTask *traceTaskMetadata,
@@ -3719,6 +3834,7 @@ func (e *Executor) runBeforeCallbacks(
 		agent.FinishExecutionTraceStep(invocation, traceStepID, nil, err)
 		callbacks.RunOnNodeError(ctx, cbCtx, stateCopy, err)
 		e.syncResumeState(execCtx, stateCopy)
+		metricRecorder.recordError(ctx, err)
 		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, err)
 		if berr := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); berr != nil {
 			return true, fmt.Errorf("emit node barrier: %w", berr)
@@ -3741,6 +3857,7 @@ func (e *Executor) runBeforeCallbacks(
 	if err != nil {
 		e.ensureTraceSourceForTask(invocation, execCtx, t, customResult, err, traceTask)
 		agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(customResult), err)
+		metricRecorder.recordError(ctx, err)
 		return true, err
 	}
 
@@ -3749,10 +3866,12 @@ func (e *Executor) runBeforeCallbacks(
 		if err := e.processConditionalEdges(ctx, invocation, execCtx, t, step); err != nil {
 			e.ensureTraceSourceForTask(invocation, execCtx, t, customResult, err, traceTask)
 			agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(customResult), err)
+			metricRecorder.recordError(ctx, err)
 			return true, fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
 		}
 	}
 	agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(customResult), nil)
+	metricRecorder.recordSuccess(ctx)
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart, false)
 	if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {
 		return true, fmt.Errorf("emit node barrier: %w", err)
@@ -3773,6 +3892,7 @@ func (e *Executor) runAfterCallbacks(
 	nodeID string,
 	nodeType NodeType,
 	step int,
+	metricRecorder *workflowMetricRecorder,
 ) (any, bool, error) {
 	if callbacks == nil {
 		return nil, false, nil
@@ -3788,6 +3908,7 @@ func (e *Executor) runAfterCallbacks(
 	if err != nil {
 		callbacks.RunOnNodeError(ctx, cbCtx, stateCopy, err)
 		e.syncResumeState(execCtx, stateCopy)
+		metricRecorder.recordError(ctx, err)
 		e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeType, step, err)
 		if berr := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, nodeID, step); berr != nil {
 			return nil, false, fmt.Errorf("emit node barrier: %w", berr)

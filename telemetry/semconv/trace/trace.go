@@ -47,6 +47,10 @@ const (
 	// KeyTRPCAgentGoClientTimeToFirstToken is the attribute key for time to first token metric.
 	KeyTRPCAgentGoClientTimeToFirstToken = "trpc_agent_go.client.time_to_first_token" // #nosec G101 - this is a metric key name, not a credential.
 
+	// KeyGenAIAppName is the attribute key for GenAI application name.
+	KeyGenAIAppName = "gen_ai.app.name"
+	// KeyGenAIUserID is the attribute key for GenAI user ID.
+	KeyGenAIUserID = "gen_ai.user.id"
 	// KeyGenAIOperationName is the attribute key for GenAI operation name.
 	KeyGenAIOperationName = "gen_ai.operation.name"
 	// KeyGenAISystem is the attribute key for GenAI system identifier.
