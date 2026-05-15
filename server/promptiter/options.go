@@ -26,14 +26,15 @@ const (
 type Option func(*options)
 
 type options struct {
-	appName       string
-	basePath      string
-	structurePath string
-	runsPath      string
-	asyncRunsPath string
-	timeout       time.Duration
-	engine        engine.Engine
-	manager       promptitermanager.Manager
+	appName                string
+	basePath               string
+	structurePath          string
+	runsPath               string
+	asyncRunsPath          string
+	timeout                time.Duration
+	engine                 engine.Engine
+	manager                promptitermanager.Manager
+	responseResultSlimming engine.RunResultSlimming
 }
 
 func newOptions(opt ...Option) *options {
@@ -102,5 +103,12 @@ func WithEngine(promptIterEngine engine.Engine) Option {
 func WithManager(promptIterManager promptitermanager.Manager) Option {
 	return func(opts *options) {
 		opts.manager = promptIterManager
+	}
+}
+
+// WithResponseResultSlimming omits selected fields from run response payloads.
+func WithResponseResultSlimming(slimming engine.RunResultSlimming) Option {
+	return func(opts *options) {
+		opts.responseResultSlimming = slimming
 	}
 }
