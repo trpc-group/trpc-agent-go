@@ -13,14 +13,15 @@ import "time"
 
 // Patch represents optional job updates.
 type Patch struct {
-	Name       *string
-	Message    *string
-	Enabled    *bool
-	Schedule   *Schedule
-	Policy     *ExecutionPolicy
-	TimeoutSec *int
-	Channel    *string
-	Target     *string
+	Name             *string
+	Message          *string
+	Enabled          *bool
+	Schedule         *Schedule
+	ScheduleTimezone *string
+	Policy           *ExecutionPolicy
+	TimeoutSec       *int
+	Channel          *string
+	Target           *string
 }
 
 func applyPatch(job *Job, patch Patch, now time.Time) error {
@@ -35,6 +36,9 @@ func applyPatch(job *Job, patch Patch, now time.Time) error {
 	}
 	if patch.Schedule != nil {
 		job.Schedule = *patch.Schedule
+	}
+	if patch.ScheduleTimezone != nil {
+		job.Schedule.Timezone = *patch.ScheduleTimezone
 	}
 	if patch.Policy != nil {
 		job.Policy = *patch.Policy
