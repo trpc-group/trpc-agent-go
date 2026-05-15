@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
@@ -89,9 +90,7 @@ func TestMessagesSnapshotRequiresSessionService(t *testing.T) {
 func TestMessagesSnapshotHappyPath(t *testing.T) {
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
-			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
-			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "hello")),
-			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-1")),
+			newUserMessageTrackEvent(t, "user-1", "hello"),
 			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
 			newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "thinking")),
 			newTrackEvent(t, aguievents.NewToolCallStartEvent("tool-call-1", "calc", aguievents.WithParentMessageID("assistant-1"))),
@@ -138,9 +137,45 @@ func TestMessagesSnapshotHappyPath(t *testing.T) {
 	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
 }
 
+func TestMessagesSnapshotAcceptsLegacyTextUserBoundary(t *testing.T) {
+	svc := &testSessionService{
+		trackEvents: []session.TrackEvent{
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("old-assistant", "orphan")),
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "hello")),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-1")),
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "hi")),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("assistant-1")),
+		},
+	}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:            noopBaseRunner{},
+		userIDResolver:    NewOptions().UserIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+	}
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 2)
+	assert.Equal(t, types.RoleUser, snapshot.Messages[0].Role)
+	assert.Equal(t, "user-1", snapshot.Messages[0].ID)
+	assert.Equal(t, types.RoleAssistant, snapshot.Messages[1].Role)
+	assert.Equal(t, "assistant-1", snapshot.Messages[1].ID)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
+}
+
 func TestMessagesSnapshotIncludesRunEventsWhenEnabled(t *testing.T) {
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
+			newUserMessageTrackEvent(t, "user-1", "hi"),
 			newTrackEvent(t, aguievents.NewRunStartedEvent("thread", "real-run-1")),
 			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
 			newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "hello")),
@@ -179,29 +214,30 @@ func TestMessagesSnapshotIncludesRunEventsWhenEnabled(t *testing.T) {
 	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
 	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
 	require.True(t, ok)
-	require.Len(t, snapshot.Messages, 4)
+	require.Len(t, snapshot.Messages, 5)
 	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
 
-	assert.Equal(t, types.RoleActivity, snapshot.Messages[0].Role)
-	assert.Equal(t, string(aguievents.EventTypeRunStarted), snapshot.Messages[0].ActivityType)
-	startedContent, ok := snapshot.Messages[0].ContentActivity()
+	assert.Equal(t, types.RoleUser, snapshot.Messages[0].Role)
+	assert.Equal(t, types.RoleActivity, snapshot.Messages[1].Role)
+	assert.Equal(t, string(aguievents.EventTypeRunStarted), snapshot.Messages[1].ActivityType)
+	startedContent, ok := snapshot.Messages[1].ContentActivity()
 	require.True(t, ok)
 	assert.Equal(t, map[string]any{"threadId": "thread", "runId": "real-run-1"}, startedContent)
 
-	assert.Equal(t, types.RoleAssistant, snapshot.Messages[1].Role)
-	content, ok := snapshot.Messages[1].ContentString()
+	assert.Equal(t, types.RoleAssistant, snapshot.Messages[2].Role)
+	content, ok := snapshot.Messages[2].ContentString()
 	require.True(t, ok)
 	assert.Equal(t, "hello", content)
 
-	assert.Equal(t, types.RoleActivity, snapshot.Messages[2].Role)
-	assert.Equal(t, string(aguievents.EventTypeRunFinished), snapshot.Messages[2].ActivityType)
-	finishedContent, ok := snapshot.Messages[2].ContentActivity()
+	assert.Equal(t, types.RoleActivity, snapshot.Messages[3].Role)
+	assert.Equal(t, string(aguievents.EventTypeRunFinished), snapshot.Messages[3].ActivityType)
+	finishedContent, ok := snapshot.Messages[3].ContentActivity()
 	require.True(t, ok)
 	assert.Equal(t, map[string]any{"threadId": "thread", "runId": "real-run-1", "result": "ok"}, finishedContent)
 
-	assert.Equal(t, types.RoleActivity, snapshot.Messages[3].Role)
-	assert.Equal(t, string(aguievents.EventTypeRunError), snapshot.Messages[3].ActivityType)
-	errContent, ok := snapshot.Messages[3].ContentActivity()
+	assert.Equal(t, types.RoleActivity, snapshot.Messages[4].Role)
+	assert.Equal(t, string(aguievents.EventTypeRunError), snapshot.Messages[4].ActivityType)
+	errContent, ok := snapshot.Messages[4].ContentActivity()
 	require.True(t, ok)
 	assert.Equal(t, map[string]any{"message": "boom", "runId": "real-run-2", "code": "E_RUN"}, errContent)
 }
@@ -209,6 +245,7 @@ func TestMessagesSnapshotIncludesRunEventsWhenEnabled(t *testing.T) {
 func TestMessagesSnapshotOmitsRunEventsByDefault(t *testing.T) {
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
+			newUserMessageTrackEvent(t, "user-1", "hi"),
 			newTrackEvent(t, aguievents.NewRunStartedEvent("thread", "real-run")),
 			newTrackEvent(t, aguievents.NewRunFinishedEvent("thread", "real-run")),
 			newTrackEvent(t, aguievents.NewRunErrorEvent("boom", aguievents.WithRunID("real-run"))),
@@ -235,7 +272,8 @@ func TestMessagesSnapshotOmitsRunEventsByDefault(t *testing.T) {
 	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
 	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
 	require.True(t, ok)
-	assert.Empty(t, snapshot.Messages)
+	require.Len(t, snapshot.Messages, 1)
+	assert.Equal(t, types.RoleUser, snapshot.Messages[0].Role)
 	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
 }
 
@@ -252,8 +290,22 @@ func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 		InvocationID: "inv-tool",
 		Branch:       "root.member-a",
 	}
+	orphanMetadata := source.Metadata{
+		EventID:      "evt-orphan",
+		Author:       "member-a",
+		InvocationID: "inv-orphan",
+		Branch:       "root.member-a",
+	}
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
+			newTrackEvent(t, withSnapshotRawEvent(
+				aguievents.NewTextMessageStartEvent(
+					"orphan-assistant",
+					aguievents.WithRole("assistant"),
+				),
+				orphanMetadata,
+			)),
+			newUserMessageTrackEvent(t, "user-1", "hi"),
 			newTrackEvent(t, withSnapshotRawEvent(
 				aguievents.NewToolCallStartEvent(
 					"tool-call-1",
@@ -314,6 +366,7 @@ func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 func TestMessagesSnapshotUsesResolvedAppName(t *testing.T) {
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
+			newUserMessageTrackEvent(t, "user-1", "hi"),
 			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
 			newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "hello")),
 			newTrackEvent(t, aguievents.NewTextMessageEndEvent("assistant-1")),
@@ -339,10 +392,10 @@ func TestMessagesSnapshotUsesResolvedAppName(t *testing.T) {
 	require.Len(t, collected, 3)
 	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
 	require.True(t, ok)
-	require.Len(t, snapshot.Messages, 1)
+	require.Len(t, snapshot.Messages, 2)
 	assert.Equal(t, "dynamic-app", svc.lastGetKey.AppName)
-	assert.Equal(t, types.RoleAssistant, snapshot.Messages[0].Role)
-	assert.Equal(t, "dynamic-app", snapshot.Messages[0].Name)
+	assert.Equal(t, types.RoleAssistant, snapshot.Messages[1].Role)
+	assert.Equal(t, "dynamic-app", snapshot.Messages[1].Name)
 }
 
 func TestMessagesSnapshotPreservesDistinctCanonicalToolCallIDsAcrossTurns(t *testing.T) {
@@ -350,18 +403,14 @@ func TestMessagesSnapshotPreservesDistinctCanonicalToolCallIDsAcrossTurns(t *tes
 	secondToolCallID := "trpc-agent-go-toolcall:inv-2:rsp-2:call-1:c0:t0"
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
-			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
-			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "hello")),
-			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-1")),
+			newUserMessageTrackEvent(t, "user-1", "hello"),
 			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
 			newTrackEvent(t, aguievents.NewToolCallStartEvent(firstToolCallID, "calc", aguievents.WithParentMessageID("assistant-1"))),
 			newTrackEvent(t, aguievents.NewToolCallArgsEvent(firstToolCallID, "{\"a\":1}")),
 			newTrackEvent(t, aguievents.NewToolCallEndEvent(firstToolCallID)),
 			newTrackEvent(t, aguievents.NewTextMessageEndEvent("assistant-1")),
 			newTrackEvent(t, aguievents.NewToolCallResultEvent("tool-msg-1", firstToolCallID, "1")),
-			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-2", aguievents.WithRole("user"))),
-			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-2", "again")),
-			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-2")),
+			newUserMessageTrackEvent(t, "user-2", "again"),
 			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-2", aguievents.WithRole("assistant"))),
 			newTrackEvent(t, aguievents.NewToolCallStartEvent(secondToolCallID, "calc", aguievents.WithParentMessageID("assistant-2"))),
 			newTrackEvent(t, aguievents.NewToolCallArgsEvent(secondToolCallID, "{\"a\":2}")),
@@ -627,7 +676,7 @@ func TestMessagesSnapshotGetSessionError(t *testing.T) {
 }
 
 func TestMessagesSnapshotUserIDResolverError(t *testing.T) {
-	svc := &testSessionService{trackEvents: []session.TrackEvent{newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")))}}
+	svc := &testSessionService{trackEvents: []session.TrackEvent{newUserMessageTrackEvent(t, "user-1", "hi")}}
 	tracker, err := track.New(svc)
 	require.NoError(t, err)
 	userIDResolver := func(context.Context, *adapter.RunAgentInput) (string, error) {
@@ -691,7 +740,7 @@ func TestMessagesSnapshotRunAgentInputHookError(t *testing.T) {
 	assert.Contains(t, err.Error(), "run input hook")
 }
 
-func TestMessagesSnapshotReduceError(t *testing.T) {
+func TestMessagesSnapshotWithoutUserBoundaryReturnsEmptySnapshot(t *testing.T) {
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
 			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "hello")),
@@ -715,17 +764,125 @@ func TestMessagesSnapshotReduceError(t *testing.T) {
 	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
 	require.True(t, ok)
 	require.Empty(t, snapshot.Messages)
-	errEvt, ok := collected[2].(*aguievents.RunErrorEvent)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
+}
+
+func TestMessagesSnapshotTrimsOrphanPrefixToUserBoundary(t *testing.T) {
+	svc := &testSessionService{
+		trackEvents: []session.TrackEvent{
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("old-assistant", "orphan")),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("old-assistant")),
+			newUserMessageTrackEvent(t, "user-1", "hi"),
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "hello")),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("assistant-1")),
+		},
+	}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:            noopBaseRunner{},
+		userIDResolver:    NewOptions().UserIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+	}
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
 	require.True(t, ok)
-	assert.Contains(t, errEvt.Message, "reduce track events")
+	require.Len(t, snapshot.Messages, 2)
+	assert.Equal(t, types.RoleUser, snapshot.Messages[0].Role)
+	assert.Equal(t, "user-1", snapshot.Messages[0].ID)
+	assert.Equal(t, types.RoleAssistant, snapshot.Messages[1].Role)
+	content, ok := snapshot.Messages[1].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "hello", content)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
+}
+
+func TestMessagesSnapshotFollowSkipsUnsafeInitialWindow(t *testing.T) {
+	base := time.Now().Add(-time.Second)
+	initial := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewTextMessageContentEvent("assistant-1", "orphan"), base),
+		},
+	}
+	follow := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewTextMessageContentEvent("assistant-1", "tail"), base.Add(time.Millisecond)),
+			newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "real-run"), base.Add(2*time.Millisecond)),
+		},
+	}
+	tracker := &sequenceTracker{first: initial, second: follow}
+	r := &runner{
+		runner:                            noopBaseRunner{},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		runAgentInputHook:                 NewOptions().RunAgentInputHook,
+		appName:                           "demo",
+		tracker:                           tracker,
+		flushInterval:                     time.Millisecond,
+		timeout:                           20 * time.Millisecond,
+		messagesSnapshotFollowEnabled:     true,
+		messagesSnapshotFollowMaxDuration: 20 * time.Millisecond,
+	}
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Empty(t, snapshot.Messages)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
+	tracker.mu.Lock()
+	calls := tracker.calls
+	tracker.mu.Unlock()
+	require.Equal(t, 1, calls)
+}
+
+func TestTrimTrackEventsToHistoryStartAcceptsLegacyTextUserStart(t *testing.T) {
+	events := []session.TrackEvent{
+		newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "orphan")),
+		newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
+		newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "hello")),
+		newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-1")),
+	}
+	trimmed, safeForFollow := trimTrackEventsToHistoryStart(events)
+	require.True(t, safeForFollow)
+	require.Equal(t, events[1:], trimmed)
+}
+
+func TestTrimTrackEventsToHistoryStartUsesCustomUserMessage(t *testing.T) {
+	events := []session.TrackEvent{
+		{Track: track.TrackAGUI, Payload: []byte("{")},
+		newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "orphan")),
+		newUserMessageTrackEvent(t, "user-1", "hello"),
+		newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-2", aguievents.WithRole("assistant"))),
+	}
+	trimmed, safeForFollow := trimTrackEventsToHistoryStart(events)
+	require.True(t, safeForFollow)
+	require.Len(t, trimmed, 2)
+	require.Equal(t, events[2:], trimmed)
+}
+
+func TestTrimTrackEventsToHistoryStartKeepsEmptyWindowSafe(t *testing.T) {
+	trimmed, safeForFollow := trimTrackEventsToHistoryStart(nil)
+	require.True(t, safeForFollow)
+	require.Nil(t, trimmed)
+}
+
+func TestIsUserMessageTrackEventRejectsEmptyPayload(t *testing.T) {
+	require.False(t, isUserMessageTrackEvent(session.TrackEvent{}))
 }
 
 func TestMessagesSnapshotReduceErrorEmitsSnapshotThenError(t *testing.T) {
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
-			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
-			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "hello")),
-			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-1")),
+			newUserMessageTrackEvent(t, "user-1", "hello"),
 			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "!")),
 		},
 	}
@@ -761,6 +918,7 @@ func TestMessagesSnapshotFollowUntilTerminalEvent(t *testing.T) {
 	initial := &session.TrackEvents{
 		Track: track.TrackAGUI,
 		Events: []session.TrackEvent{
+			newUserMessageTrackEventAt(t, "user-1", "hi", base.Add(-time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")), base),
 			newTrackEventAt(t, aguievents.NewTextMessageContentEvent("msg-1", "hello"), base.Add(time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageEndEvent("msg-1"), base.Add(2*time.Millisecond)),
@@ -807,6 +965,7 @@ func TestMessagesSnapshotFollowContinuesOpenReasoningFromSnapshot(t *testing.T) 
 	initial := &session.TrackEvents{
 		Track: track.TrackAGUI,
 		Events: []session.TrackEvent{
+			newUserMessageTrackEventAt(t, "user-1", "hi", base.Add(-time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewReasoningMessageStartEvent("reasoning-msg-1", "reasoning"), base),
 		},
 	}
@@ -842,10 +1001,10 @@ func TestMessagesSnapshotFollowContinuesOpenReasoningFromSnapshot(t *testing.T) 
 	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
 	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
 	require.True(t, ok)
-	require.Len(t, snapshot.Messages, 1)
-	assert.Equal(t, "reasoning-msg-1", snapshot.Messages[0].ID)
-	assert.Equal(t, types.RoleReasoning, snapshot.Messages[0].Role)
-	content, ok := snapshot.Messages[0].ContentString()
+	require.Len(t, snapshot.Messages, 2)
+	assert.Equal(t, "reasoning-msg-1", snapshot.Messages[1].ID)
+	assert.Equal(t, types.RoleReasoning, snapshot.Messages[1].Role)
+	content, ok := snapshot.Messages[1].ContentString()
 	require.True(t, ok)
 	assert.Equal(t, "", content)
 	require.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), collected[2])
@@ -875,6 +1034,7 @@ func TestMessagesSnapshotFollowSkipsWhenInitialAlreadyTerminal(t *testing.T) {
 	initial := &session.TrackEvents{
 		Track: track.TrackAGUI,
 		Events: []session.TrackEvent{
+			newUserMessageTrackEventAt(t, "user-1", "hi", base.Add(-time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")), base),
 			newTrackEventAt(t, aguievents.NewTextMessageContentEvent("msg-1", "hello"), base.Add(time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageEndEvent("msg-1"), base.Add(2*time.Millisecond)),
@@ -921,6 +1081,7 @@ func TestMessagesSnapshotFollowEmitsRunErrorOnTerminalErrorEvent(t *testing.T) {
 	initial := &session.TrackEvents{
 		Track: track.TrackAGUI,
 		Events: []session.TrackEvent{
+			newUserMessageTrackEventAt(t, "user-1", "hi", base.Add(-time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")), base),
 			newTrackEventAt(t, aguievents.NewTextMessageContentEvent("msg-1", "hello"), base.Add(time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageEndEvent("msg-1"), base.Add(2*time.Millisecond)),
@@ -965,6 +1126,7 @@ func TestMessagesSnapshotFollowEmitsRunErrorOnFollowGetEventsError(t *testing.T)
 	initial := &session.TrackEvents{
 		Track: track.TrackAGUI,
 		Events: []session.TrackEvent{
+			newUserMessageTrackEventAt(t, "user-1", "hi", base.Add(-time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")), base),
 			newTrackEventAt(t, aguievents.NewTextMessageContentEvent("msg-1", "hello"), base.Add(time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageEndEvent("msg-1"), base.Add(2*time.Millisecond)),
@@ -1000,6 +1162,7 @@ func TestMessagesSnapshotFollowEmitsTimeoutWhenNoTerminalEvent(t *testing.T) {
 	initial := &session.TrackEvents{
 		Track: track.TrackAGUI,
 		Events: []session.TrackEvent{
+			newUserMessageTrackEventAt(t, "user-1", "hi", base.Add(-time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")), base),
 			newTrackEventAt(t, aguievents.NewTextMessageContentEvent("msg-1", "hello"), base.Add(time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageEndEvent("msg-1"), base.Add(2*time.Millisecond)),
@@ -1036,6 +1199,7 @@ func TestMessagesSnapshotFollowSkipsInvalidAndNonIncrementalTrackEvents(t *testi
 	initial := &session.TrackEvents{
 		Track: track.TrackAGUI,
 		Events: []session.TrackEvent{
+			newUserMessageTrackEventAt(t, "user-1", "hi", base.Add(-time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")), base),
 			newTrackEventAt(t, aguievents.NewTextMessageContentEvent("msg-1", "hello"), base.Add(time.Millisecond)),
 			newTrackEventAt(t, aguievents.NewTextMessageEndEvent("msg-1"), base.Add(2*time.Millisecond)),
@@ -1103,6 +1267,24 @@ func newTrackEvent(t *testing.T, evt aguievents.Event) session.TrackEvent {
 		Payload:   append([]byte(nil), payload...),
 		Timestamp: time.Now(),
 	}
+}
+
+func newUserMessageTrackEvent(t *testing.T, id, content string) session.TrackEvent {
+	t.Helper()
+	user := types.Message{ID: id, Role: types.RoleUser, Content: content}
+	return newTrackEvent(t, aguievents.NewCustomEvent(
+		multimodal.CustomEventNameUserMessage,
+		aguievents.WithValue(user),
+	))
+}
+
+func newUserMessageTrackEventAt(t *testing.T, id, content string, ts time.Time) session.TrackEvent {
+	t.Helper()
+	user := types.Message{ID: id, Role: types.RoleUser, Content: content}
+	return newTrackEventAt(t, aguievents.NewCustomEvent(
+		multimodal.CustomEventNameUserMessage,
+		aguievents.WithValue(user),
+	), ts)
 }
 
 func newTrackEventAt(t *testing.T, evt aguievents.Event, ts time.Time) session.TrackEvent {
@@ -1378,8 +1560,7 @@ func TestMessagesSnapshotStopsWhenCanceledWhileLoadingHistory(t *testing.T) {
 	trackEvents := &session.TrackEvents{
 		Track: track.TrackAGUI,
 		Events: []session.TrackEvent{
-			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
-			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-1")),
+			newUserMessageTrackEvent(t, "user-1", "hi"),
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1423,8 +1604,7 @@ func TestMessagesSnapshotDropsRunFinishedWhenChannelFullAndContextDone(t *testin
 	trackEvents := &session.TrackEvents{
 		Track: track.TrackAGUI,
 		Events: []session.TrackEvent{
-			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
-			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-1")),
+			newUserMessageTrackEvent(t, "user-1", "hi"),
 		},
 	}
 	snapshotSeen := make(chan struct{})
