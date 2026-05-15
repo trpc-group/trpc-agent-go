@@ -22,6 +22,7 @@ import (
 	"time"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -72,7 +73,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		s.respondJSON(w, r, statusCodeFromError(err), map[string]string{"error": err.Error()})
 		return
 	}
-	s.respondJSON(w, r, http.StatusOK, &RunResponse{Result: run})
+	s.respondJSON(w, r, http.StatusOK, s.runResponse(run))
 }
 
 func (s *Server) handleAsyncRuns(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +103,7 @@ func (s *Server) handleAsyncRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", path.Join(s.asyncRunsPath, run.ID))
-	s.respondJSON(w, r, http.StatusCreated, &RunResponse{Result: run})
+	s.respondJSON(w, r, http.StatusCreated, s.runResponse(run))
 }
 
 func (s *Server) handleRunResource(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +195,16 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request, runID str
 		s.respondJSON(w, r, statusCodeFromError(err), map[string]string{"error": err.Error()})
 		return
 	}
-	s.respondJSON(w, r, http.StatusOK, &RunResponse{Result: run})
+	s.respondJSON(w, r, http.StatusOK, s.runResponse(run))
+}
+
+func (s *Server) runResponse(run *engine.RunResult) *RunResponse {
+	if s == nil {
+		return &RunResponse{Result: run}
+	}
+	return &RunResponse{
+		Result: slimRunResult(run, s.responseResultSlimming),
+	}
 }
 
 func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request, runID string) {

@@ -9,6 +9,7 @@
 package manager
 
 import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/store"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/store/inmemory"
 )
@@ -17,7 +18,8 @@ import (
 type Option func(*options)
 
 type options struct {
-	store store.Store
+	store                store.Store
+	storedResultSlimming engine.RunResultSlimming
 }
 
 func newOptions(opts ...Option) *options {
@@ -34,5 +36,12 @@ func newOptions(opts ...Option) *options {
 func WithStore(store store.Store) Option {
 	return func(opts *options) {
 		opts.store = store
+	}
+}
+
+// WithStoredResultSlimming omits selected fields before runs are persisted.
+func WithStoredResultSlimming(slimming engine.RunResultSlimming) Option {
+	return func(opts *options) {
+		opts.storedResultSlimming = slimming
 	}
 }
