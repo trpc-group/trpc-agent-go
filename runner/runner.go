@@ -1655,8 +1655,19 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		log.Errorf("Failed to append runner completion event to session: %v", err)
 	}
 
-	// Send the runner completion event to output channel.
-	agent.EmitEvent(ctx, loop.invocation, loop.processedEventCh, runnerCompletionEvent)
+	// Use a context to deliver runner-completion after cancellation without blocking cleanup indefinitely.
+	func() {
+		emitCtx, emitCancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			time.Second,
+		)
+		defer emitCancel()
+		if err := agent.EmitEvent(
+			emitCtx, loop.invocation, loop.processedEventCh, runnerCompletionEvent,
+		); err != nil {
+			log.Errorf("Failed to emit runner completion event: %v", err)
+		}
+	}()
 
 	// Enqueue auto memory extraction job if memory service is configured.
 	r.enqueueAutoMemoryJob(ctx, loop.sess)
