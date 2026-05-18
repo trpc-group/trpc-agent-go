@@ -9,6 +9,29 @@
 
 package evolution
 
+// Quality-gate pipeline overview
+// ==============================
+//
+// When the quality-gate pipeline is enabled (any gate configured), each
+// candidate revision goes through a sequence of gates before being
+// promoted to the active state. The gate chain runs in a fixed order:
+//
+//   SpecGate          – Deterministic schema/naming/content hygiene.
+//   SafetyGate        – Deterministic scan for secrets, path traversal,
+//                       dangerous patterns.
+//   EffectivenessGate – Outcome-based heuristic: was the session that
+//                       produced this revision "good enough"?
+//   HumanGate         – (Optional) Hold for external human approval
+//                       before promoting.
+//
+// Each gate produces a report attached to the Revision. If any gate
+// rejects, the revision is persisted to the candidate store with status
+// "rejected" (or "pending_eval" / "pending_approval") and never reaches
+// the live Publisher. The append-only audit.log records every decision.
+//
+// All gates are optional and nil-safe. When no gate is configured, the
+// worker publishes reviewer output directly (legacy direct-publish path).
+
 import (
 	"context"
 	"fmt"
@@ -47,12 +70,12 @@ type SafetyGate interface {
 	Scan(ctx context.Context, c *Revision) (*SafetyReport, error)
 }
 
-// EffectivenessGate (Phase C) evaluates whether a candidate revision
-// is likely to improve or at least not regress the agent's
-// performance. Unlike SpecGate and SafetyGate, the effectiveness
-// gate is allowed to consider external signals: the Outcome of the
-// session that triggered the review, historical revision statistics,
-// or even a mini-benchmark replay.
+// EffectivenessGate evaluates whether a candidate revision is likely
+// to improve or at least not regress the agent's performance. Unlike
+// SpecGate and SafetyGate (which are pure rule-based checks), the
+// effectiveness gate is allowed to consider external signals: the
+// Outcome of the session that triggered the review, historical
+// revision statistics, or even a mini-benchmark replay.
 //
 // The gate receives the full Revision (including Spec and gate
 // reports) plus the Outcome that accompanied the LearningJob. It
@@ -63,16 +86,16 @@ type SafetyGate interface {
 // Implementations should be cheap enough to run synchronously in the
 // worker goroutine. Expensive evaluation (multi-run benchmarks,
 // canary traffic sampling) belongs in an async loop outside the
-// worker; Phase C provides the lifecycle hooks (PendingEval, Shadow)
-// but not the async evaluator.
+// worker; the lifecycle hooks (PendingEval, Shadow statuses) support
+// that pattern but this gate itself runs inline.
 type EffectivenessGate interface {
 	Evaluate(ctx context.Context, rev *Revision, outcome *Outcome) (*EffectivenessReport, error)
 }
 
-// HumanGate (Phase D) decides whether a revision that passed all
-// automatic gates should be held for human approval before promotion.
-// It does NOT make the approval decision itself — it only decides
-// "should we wait for a human?".
+// HumanGate decides whether a revision that passed all automatic
+// gates (spec, safety, effectiveness) should be held for human
+// approval before promotion. It does NOT make the approval decision
+// itself — it only decides "should we wait for a human?".
 //
 // ShouldHold is called synchronously in the worker goroutine and
 // must be fast (no LLM, no network). For async external checks,
@@ -81,10 +104,10 @@ type HumanGate interface {
 	ShouldHold(ctx context.Context, rev *Revision, outcome *Outcome) (bool, error)
 }
 
-// OutcomeBasedEffectivenessGate is the Phase C default. It gates
-// revisions based on the Outcome of the session that produced the
-// transcript the reviewer just analyzed. The idea is simple: if the
-// session failed or scored poorly, the reviewer's extraction is
+// OutcomeBasedEffectivenessGate is the default EffectivenessGate. It
+// gates revisions based on the Outcome of the session that produced
+// the transcript the reviewer just analyzed. The idea is simple: if
+// the session failed or scored poorly, the reviewer's extraction is
 // suspect, so the revision is held for manual review rather than
 // auto-promoted.
 //
@@ -150,7 +173,7 @@ func (g *OutcomeBasedEffectivenessGate) Evaluate(
 	return &EffectivenessReport{Passed: len(reasons) == 0, Reasons: reasons}, nil
 }
 
-// DefaultSpecGate is the Phase A SpecGate implementation. It uses only
+// DefaultSpecGate is the built-in SpecGate implementation. It uses only
 // string-shape rules and the existing reconciler duplicate heuristics
 // so adopters can enable it without reviewer-side changes.
 type DefaultSpecGate struct {
@@ -236,7 +259,7 @@ func (g *DefaultSpecGate) Validate(_ context.Context, c *Revision, existing []Ex
 	return &SpecReport{Passed: len(reasons) == 0, Reasons: reasons}, nil
 }
 
-// DefaultSafetyGate is the Phase A SafetyGate implementation. It
+// DefaultSafetyGate is the built-in SafetyGate implementation. It
 // scans Spec text fields for high-confidence patterns only; false
 // positives translate directly into rejected skills, so the rule
 // list stays short and specific on purpose.
@@ -398,7 +421,7 @@ func containsPathTraversal(body string) (string, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Phase D: HumanGate default implementations
+// HumanGate default implementations
 // ---------------------------------------------------------------------------
 
 // AlwaysHoldGate holds every revision for human review (most conservative).

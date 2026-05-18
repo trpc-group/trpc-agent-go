@@ -55,8 +55,9 @@ type Worker struct {
 	jobTimeout                time.Duration
 	existingSkillBodyMaxChars int
 
-	// Approval-gate plumbing (Phase A + B). All nil-able; when any is
-	// set, applyDecision routes writes through the revision pipeline.
+	// Quality-gate plumbing. All nil-able; when any is set,
+	// applyDecision routes writes through the revision pipeline
+	// (candidate store → gates → publish) instead of direct publishing.
 	candidateStore     CandidateStore
 	activePointer      ActivePointer
 	specGate           SpecGate
@@ -121,9 +122,9 @@ type WorkerConfig struct {
 	// only — the pre-P1 behavior).
 	ExistingSkillBodyMaxChars int
 
-	// Approval-gate plumbing. Any non-nil field opts into the Phase A
-	// revision pipeline. Leaving all nil preserves exact pre-Phase-A
-	// behavior (direct Publisher writes, no candidate store).
+	// Quality-gate plumbing. Any non-nil field opts into the revision
+	// pipeline. Leaving all nil preserves direct-publish behavior
+	// (reviewer output → Publisher → managed_skills/ immediately).
 	CandidateStore     CandidateStore
 	ActivePointer      ActivePointer
 	SpecGate           SpecGate
@@ -362,7 +363,7 @@ func (w *Worker) applyDecision(ctx context.Context, decision *ReviewDecision, ou
 	}
 }
 
-// approvalGateEnabled reports whether any Phase A/B component is
+// approvalGateEnabled reports whether any quality-gate component is
 // configured. When true, applyDecision routes through the revision
 // pipeline; when false, the original direct-publish path is used.
 func (w *Worker) approvalGateEnabled() bool {
@@ -595,13 +596,13 @@ func (w *Worker) runGates(ctx context.Context, rev *Revision, existing []Existin
 			passed = false
 		}
 	}
-	// Phase C: effectiveness gate. Only runs when spec+safety passed.
+	// Effectiveness gate. Only runs when spec+safety passed.
 	if passed && w.effectivenessGate != nil {
 		if !w.runEffectivenessGate(ctx, rev, outcome) {
 			passed = false
 		}
 	}
-	// Phase D: human gate. Only runs when all automatic gates passed.
+	// Human gate. Only runs when all automatic gates passed.
 	if passed && w.humanGate != nil {
 		if !w.runHumanGate(ctx, rev, outcome) {
 			passed = false

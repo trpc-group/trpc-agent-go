@@ -1529,7 +1529,7 @@ func TestWorker_ApprovalGate_EffectivenessGateHoldsOnFail(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Phase D: HumanGate integration tests
+// HumanGate integration tests
 // ---------------------------------------------------------------------------
 
 func TestWorker_HumanGate_HoldsRevision(t *testing.T) {

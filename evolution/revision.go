@@ -25,17 +25,17 @@ import (
 
 // RevisionStatus classifies where a revision sits in its lifecycle.
 //
-// The set is intentionally small for Phase A: revisions are either
-// accepted by the gates (and therefore eligible to be promoted to
-// active), rejected (and therefore never visible to agents), or
-// archived (promoted then later superseded). The larger lifecycle
-// values from the long-term design (`PendingApproval`, `Shadow`,
-// `Canary`, `Deprecated`) are deliberately not introduced here;
-// adding them in later phases is additive and does not break
-// callers that only read/write Phase A status values.
+// A revision progresses through:
+//
+//	pending → [gates run] → active / rejected / pending_eval / pending_approval
+//	active  → archived (when a newer revision is promoted)
+//
+// The status set is intentionally flat rather than hierarchical.
+// Adding new terminal or intermediate states is additive and does not
+// break callers that only inspect the existing values.
 type RevisionStatus string
 
-// Phase A revision statuses.
+// Revision statuses.
 const (
 	// RevisionPending means the revision was built but gates have not
 	// run yet. Used briefly inside the worker and never persisted with
@@ -58,34 +58,33 @@ const (
 	// stay on disk so they can be promoted back by a rollback.
 	RevisionArchived RevisionStatus = "archived"
 
-	// RevisionPendingEval (Phase C) means the revision passed
-	// SpecGate + SafetyGate but the EffectivenessGate has not yet
-	// evaluated it. The revision is written to disk but the
-	// ActivePointer is not moved.
+	// RevisionPendingEval means the revision passed SpecGate + SafetyGate
+	// but the EffectivenessGate has not yet evaluated it. The revision
+	// is written to disk but the ActivePointer is not moved.
 	RevisionPendingEval RevisionStatus = "pending_eval"
 
-	// RevisionShadow (Phase C) means the revision is being evaluated
-	// by the EffectivenessGate in a non-live context. It sits alongside
+	// RevisionShadow means the revision is being evaluated by the
+	// EffectivenessGate in a non-live context. It sits alongside
 	// the current Active revision and can be promoted to Active or
 	// rejected based on evaluation results.
 	RevisionShadow RevisionStatus = "shadow"
 
-	// RevisionPendingApproval (Phase D) means the revision passed all
-	// automatic gates but is awaiting human approval before promotion.
-	// The worker does not block; an external system (CLI, API, webhook)
-	// drives the approval decision that either promotes or rejects.
+	// RevisionPendingApproval means the revision passed all automatic
+	// gates (spec, safety, effectiveness) but is awaiting human approval
+	// before promotion. The worker does not block; an external system
+	// (CLI, API, webhook) drives the approval decision that either
+	// promotes or rejects.
 	RevisionPendingApproval RevisionStatus = "pending_approval"
 )
 
 // Revision is an immutable snapshot of a SkillSpec plus the metadata
 // that makes it safe to ship, audit, and roll back.
 //
-// The split between SkillID and RevisionID is the core Phase A
-// contract: SkillID is the stable logical identity of a skill across
-// versions (matches the old on-disk directory name), RevisionID is the
-// content-addressable identity of this particular candidate body. An
+// SkillID is the stable logical identity of a skill across versions
+// (matches the on-disk directory name). RevisionID is the content-
+// addressable identity of this particular candidate body. An
 // ActivePointer keyed by SkillID decides which RevisionID an agent
-// actually sees.
+// actually sees at runtime.
 type Revision struct {
 	SkillID    string         `json:"skill_id"`
 	RevisionID string         `json:"revision_id"`
@@ -118,22 +117,22 @@ type SafetyReport struct {
 	Reasons []string `json:"reasons,omitempty"`
 }
 
-// EffectivenessReport is the Phase C effectiveness verdict.
+// EffectivenessReport is the effectiveness gate verdict.
 type EffectivenessReport struct {
 	Passed  bool     `json:"passed"`
 	Reasons []string `json:"reasons,omitempty"`
 }
 
-// HumanReport is the Phase D human gate verdict.
+// HumanReport is the human gate verdict.
 type HumanReport struct {
 	Held    bool     `json:"held"`
 	Reasons []string `json:"reasons,omitempty"`
 }
 
-// AuditEvent is one entry in the Phase A audit log. Each CandidateStore
-// operation that mutates on-disk state appends one AuditEvent to an
-// append-only JSON-lines file so operators can reconstruct "what the
-// worker did and why" without replaying the reviewer.
+// AuditEvent is one entry in the append-only audit log. Each
+// CandidateStore operation that mutates on-disk state appends one
+// AuditEvent to a JSON-lines file so operators can reconstruct "what
+// the worker did and why" without replaying the reviewer.
 type AuditEvent struct {
 	At         time.Time `json:"at"`
 	Action     string    `json:"action"` // "write_revision" | "reject" | "promote" | "archive" | "rollback".

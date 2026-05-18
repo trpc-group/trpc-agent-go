@@ -282,7 +282,7 @@ func TestNewOutcomeBasedEffectivenessGate_Defaults(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Phase D: HumanGate tests
+// HumanGate tests
 // ---------------------------------------------------------------------------
 
 func TestAlwaysHoldGate(t *testing.T) {

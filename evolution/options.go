@@ -27,10 +27,10 @@ type serviceOpts struct {
 	reviewerOptions           []LLMReviewerOption
 	customReviewer            Reviewer
 
-	// Approval gate (Phase A/B) fields. All optional; when any of
-	// candidateStore / activePointer / specGate / safetyGate is set,
-	// the worker routes writes through the revision pipeline. Leaving
-	// them all nil preserves pre-Phase-A behavior exactly.
+	// Quality-gate fields. All optional; when any of candidateStore /
+	// activePointer / specGate / safetyGate is set, the worker routes
+	// writes through the revision pipeline. Leaving all nil preserves
+	// the direct-publish behavior (reviewer → Publisher immediately).
 	candidateStore     CandidateStore
 	activePointer      ActivePointer
 	specGate           SpecGate
@@ -105,8 +105,8 @@ func WithReviewer(r Reviewer) Option {
 	return func(o *serviceOpts) { o.customReviewer = r }
 }
 
-// WithCandidateStore enables the Phase A revision store. When set, the
-// worker writes each accepted revision as an immutable snapshot
+// WithCandidateStore enables the immutable revision store. When set,
+// the worker writes each accepted revision as an immutable snapshot
 // (SKILL.md + meta.json) under a separate candidate directory,
 // independently of the live Publisher. Passing nil is equivalent to
 // not calling this option.
@@ -114,7 +114,7 @@ func WithCandidateStore(s CandidateStore) Option {
 	return func(o *serviceOpts) { o.candidateStore = s }
 }
 
-// WithActivePointer enables the Phase A active-pointer store. It is
+// WithActivePointer enables the active-pointer store. It is
 // typically paired with WithCandidateStore; together they give the
 // worker "materialize the active revision, not the latest reviewer
 // output" semantics. Passing nil is equivalent to not calling this
@@ -138,31 +138,31 @@ func WithSafetyGate(g SafetyGate) Option {
 	return func(o *serviceOpts) { o.safetyGate = g }
 }
 
-// WithEffectivenessGate installs a Phase C EffectivenessGate. When
-// set, the worker checks whether the session that triggered the
-// review was "good enough" for the resulting revision to be
-// auto-promoted. Revisions that fail the effectiveness check are
-// written to the candidate store with status PendingEval and are
-// never promoted to Active.
+// WithEffectivenessGate installs an EffectivenessGate. When set, the
+// worker checks whether the session that triggered the review was
+// "good enough" for the resulting revision to be auto-promoted.
+// Revisions that fail the effectiveness check are written to the
+// candidate store with status PendingEval and are never promoted to
+// Active.
 func WithEffectivenessGate(g EffectivenessGate) Option {
 	return func(o *serviceOpts) { o.effectivenessGate = g }
 }
 
-// WithHumanGate configures Phase D human approval. When set, revisions
-// that pass all automatic gates are held in pending_approval state
-// until an external system approves or rejects them. The gate itself
-// only decides "should we hold?" — the actual approve/reject action
-// is driven externally.
+// WithHumanGate configures human approval. When set, revisions that
+// pass all automatic gates are held in pending_approval state until
+// an external system approves or rejects them. The gate itself only
+// decides "should we hold?" — the actual approve/reject action is
+// driven externally (via CLI, HTTP API, or webhook).
 func WithHumanGate(g HumanGate) Option {
 	return func(o *serviceOpts) { o.humanGate = g }
 }
 
-// WithApprovalGateShadow runs the approval gate in shadow mode: gates
+// WithApprovalGateShadow runs the quality gates in shadow mode: gates
 // are evaluated and revisions are written to the candidate store, but
 // the live Publisher is still updated with the raw reviewer output
 // and rejected revisions are only logged, not enforced. Useful when
-// rolling out Phase A/B to an existing adopter without blocking any
-// historical reviewer behavior.
+// rolling out quality gates to an existing adopter without blocking
+// any historical reviewer behavior.
 func WithApprovalGateShadow(enable bool) Option {
 	return func(o *serviceOpts) { o.approvalGateShadow = enable }
 }
