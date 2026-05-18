@@ -741,58 +741,114 @@ func (p *SkillsRequestProcessor) injectOverview(
 	if len(sums) == 0 {
 		return
 	}
-	var b strings.Builder
 	flags := p.toolFlagsForInvocation(inv)
-	if protocol := p.protocolGuidanceText(flags); protocol != "" {
-		b.WriteString(protocol)
-		b.WriteString("\n")
-		b.WriteString(skillsOverviewHeader)
-		b.WriteString("\n")
-		if p.directoryHints || p.filePathHints {
-			if rootsText := buildSkillRootsText(repo); rootsText != "" {
-				b.WriteString(rootsText)
-			}
-		}
-		for _, s := range sums {
-			line := fmt.Sprintf(
-				"- %s: %s%s\n",
-				s.Name,
-				s.Description,
-				p.skillOverviewSuffix(ctx, repo, s.Name),
-			)
-			b.WriteString(line)
-		}
-	} else {
-		b.WriteString(skillsOverviewHeader)
-		b.WriteString("\n")
-		if p.directoryHints || p.filePathHints {
-			if rootsText := buildSkillRootsText(repo); rootsText != "" {
-				b.WriteString(rootsText)
-			}
-		}
-		for _, s := range sums {
-			line := fmt.Sprintf(
-				"- %s: %s%s\n",
-				s.Name,
-				s.Description,
-				p.skillOverviewSuffix(ctx, repo, s.Name),
-			)
-			b.WriteString(line)
-		}
-		if capability := p.capabilityGuidanceText(flags); capability != "" {
-			b.WriteString(capability)
-		}
-		if guidance := p.toolingGuidanceText(flags); guidance != "" {
-			b.WriteString(guidance)
+	availableSkills := p.availableSkillsText(ctx, inv, repo, sums)
+	overview, prepend := p.defaultOverviewText(flags, availableSkills)
+	p.mergeOverview(req, overview, prepend)
+}
+
+func (p *SkillsRequestProcessor) availableSkillsText(
+	ctx context.Context,
+	inv *agent.Invocation,
+	repo skill.Repository,
+	sums []skill.Summary,
+) string {
+	if renderer := availableSkillsRendererFromInvocation(inv); renderer != nil {
+		return normalizeSkillsOverviewText(
+			renderer(ctx, agent.AvailableSkillsRenderRequest{
+				Summaries: append([]skill.Summary(nil), sums...),
+			}),
+		)
+	}
+	var b strings.Builder
+	b.WriteString(skillsOverviewHeader)
+	b.WriteString("\n")
+	if p.directoryHints || p.filePathHints {
+		if rootsText := buildSkillRootsText(repo); rootsText != "" {
+			b.WriteString(rootsText)
 		}
 	}
-	overview := b.String()
+	for _, s := range sums {
+		line := fmt.Sprintf(
+			"- %s: %s%s\n",
+			s.Name,
+			s.Description,
+			p.skillOverviewSuffix(ctx, repo, s.Name),
+		)
+		b.WriteString(line)
+	}
+	return b.String()
+}
 
+func (p *SkillsRequestProcessor) defaultOverviewText(
+	flags skillprofile.Flags,
+	availableSkills string,
+) (string, bool) {
+	var b strings.Builder
+	if protocol := p.protocolGuidanceText(flags); protocol != "" {
+		b.WriteString(protocol)
+		if availableSkills != "" {
+			b.WriteString("\n")
+			b.WriteString(availableSkills)
+		}
+		return b.String(), true
+	}
+	if availableSkills != "" {
+		b.WriteString(availableSkills)
+	}
+	if capability := p.capabilityGuidanceText(flags); capability != "" {
+		b.WriteString(capability)
+	}
+	if guidance := p.toolingGuidanceText(flags); guidance != "" {
+		b.WriteString(guidance)
+	}
+	return b.String(), false
+}
+
+func availableSkillsRendererFromInvocation(
+	inv *agent.Invocation,
+) agent.AvailableSkillsRenderer {
+	if inv != nil && inv.RunOptions.AvailableSkillsRenderer != nil {
+		return inv.RunOptions.AvailableSkillsRenderer
+	}
+	return nil
+}
+
+func normalizeSkillsOverviewText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if startsWithSectionHeader(text, skillsOverviewHeader) {
+		return text
+	}
+	return skillsOverviewHeader + "\n" + text
+}
+
+func startsWithSectionHeader(text string, header string) bool {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		return strings.TrimSpace(line) == header
+	}
+	return false
+}
+
+func (p *SkillsRequestProcessor) mergeOverview(
+	req *model.Request,
+	overview string,
+	prepend bool,
+) {
+	if req == nil || overview == "" {
+		return
+	}
 	idx := findSystemMessageIndex(req.Messages)
 	if idx >= 0 {
 		sys := &req.Messages[idx]
 		if !strings.Contains(sys.Content, skillsOverviewHeader) {
-			if p.protocolGuidanceText(flags) != "" {
+			if prepend {
 				if sys.Content != "" {
 					sys.Content = overview + "\n\n" + sys.Content
 				} else {
