@@ -124,6 +124,118 @@ func TestTool_Call_ExplicitTargetAndErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTool_Call_RecordsSentText(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	sender := &stubSender{id: "telegram"}
+	router.RegisterSender(sender)
+	router.RegisterMessageSender(sender)
+
+	tool := NewTool(router)
+	recorder := NewSentTextRecorder()
+	ctx := WithSentTextRecorder(invocationCtx(
+		t,
+		"cron:job-1:1",
+		agent.RunOptions{
+			RuntimeState: scheduledTargetRuntimeState(DeliveryTarget{
+				Channel: "telegram",
+				Target:  "100",
+			}),
+		},
+	), recorder)
+
+	result, err := tool.Call(ctx, []byte(`{"text":"implicit target"}`))
+	require.NoError(t, err)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+	require.Equal(t, "implicit target", sender.text)
+	require.True(t, recorder.Contains(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "100",
+	}, "implicit target"))
+	require.True(t, recorder.ContainsTarget(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "100",
+	}))
+
+	result, err = tool.Call(
+		ctx,
+		[]byte(`{"text":"channel only","channel":"telegram"}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+	require.Equal(t, "channel only", sender.text)
+
+	result, err = tool.Call(
+		ctx,
+		[]byte(`{"text":"target only","target":"100"}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+	require.Equal(t, "target only", sender.text)
+
+	result, err = tool.Call(
+		ctx,
+		[]byte(`{"text":"same target","channel":"telegram","target":"100"}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+	require.Equal(t, "same target", sender.text)
+
+	_, err = tool.Call(
+		ctx,
+		[]byte(`{"text":"invalid","channel":"wecom","target":"bad"}`),
+	)
+	require.ErrorContains(t, err, "outbound: invalid target for wecom")
+	require.Equal(t, "same target", sender.text)
+
+	result, err = tool.Call(
+		ctx,
+		[]byte(`{"text":"different target","channel":"telegram","target":"200"}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+	require.Equal(t, "200", sender.target)
+	require.Equal(t, "different target", sender.text)
+	require.True(t, recorder.Contains(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "200",
+	}, "different target"))
+	require.True(t, recorder.ContainsTarget(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "200",
+	}))
+
+	result, err = tool.Call(
+		ctx,
+		[]byte(`{"text":"target only different","target":"300"}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+	require.Equal(t, "300", sender.target)
+	require.Equal(t, "target only different", sender.text)
+
+	result, err = tool.Call(
+		ctx,
+		[]byte(`{"text":"report","channel":"telegram","target":"100",
+			"file":"report.pdf"}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "report", sender.text)
+	require.Len(t, sender.files, 1)
+	require.Equal(t, "report.pdf", sender.files[0].Path)
+	require.False(t, recorder.Contains(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "100",
+	}, "report"))
+}
+
+func scheduledTargetRuntimeState(target DeliveryTarget) map[string]any {
+	return RuntimeStateForTarget(target)
+}
+
 func TestTool_Call_SendsFilesWithoutText(t *testing.T) {
 	t.Parallel()
 

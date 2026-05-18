@@ -38,8 +38,7 @@ func computeNextAfterRun(
 	base time.Time,
 	now time.Time,
 ) (*time.Time, error) {
-	kind := strings.ToLower(strings.TrimSpace(schedule.Kind))
-	switch kind {
+	switch normalizeScheduleKind(schedule.Kind) {
 	case ScheduleKindAt:
 		return nil, nil
 	case ScheduleKindEvery:
@@ -76,7 +75,7 @@ func computeNextRun(
 	schedule Schedule,
 	now time.Time,
 ) (time.Time, error) {
-	switch strings.ToLower(strings.TrimSpace(schedule.Kind)) {
+	switch normalizeScheduleKind(schedule.Kind) {
 	case ScheduleKindAt:
 		return parseAtTime(schedule.At)
 	case ScheduleKindEvery:

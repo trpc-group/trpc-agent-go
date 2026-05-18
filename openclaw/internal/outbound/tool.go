@@ -147,12 +147,28 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	if err := t.router.SendMessage(ctx, target, msg); err != nil {
 		return nil, err
 	}
+	recordSentText(ctx, target, msg)
 	return map[string]any{
 		"ok":         true,
 		"channel":    target.Channel,
 		"target":     target.Target,
 		"files_sent": len(msg.Files),
 	}, nil
+}
+
+func recordSentText(
+	ctx context.Context,
+	target DeliveryTarget,
+	msg channel.OutboundMessage,
+) {
+	if len(msg.Files) > 0 {
+		return
+	}
+	recorder, ok := sentTextRecorderFromContext(ctx)
+	if !ok {
+		return
+	}
+	recorder.Record(target, msg.Text)
 }
 
 func buildOutboundMessage(in toolInput) (channel.OutboundMessage, error) {

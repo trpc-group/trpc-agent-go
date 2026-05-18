@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
@@ -82,6 +83,63 @@ func (s *stubRunner) messagesSnapshot() []string {
 	out := make([]string, len(s.messages))
 	copy(out, s.messages)
 	return out
+}
+
+type toolCallingRunner struct {
+	mu         sync.Mutex
+	router     *outbound.Router
+	args       []byte
+	reply      string
+	toolResult any
+	toolErr    error
+}
+
+func (r *toolCallingRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	var runOpts agent.RunOptions
+	for _, opt := range opts {
+		opt(&runOpts)
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("app", userID, sessionID),
+		),
+		agent.WithInvocationRunOptions(runOpts),
+	)
+	toolCtx := agent.NewInvocationContext(ctx, inv)
+	result, err := outbound.NewTool(r.router).Call(toolCtx, r.args)
+
+	r.mu.Lock()
+	r.toolResult = result
+	r.toolErr = err
+	r.mu.Unlock()
+
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage(r.reply),
+			}},
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *toolCallingRunner) Close() error { return nil }
+
+func (r *toolCallingRunner) resultSnapshot() (any, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.toolResult, r.toolErr
 }
 
 type blockingRunner struct {
@@ -192,10 +250,20 @@ func (r *replaceAwareRunner) ctxAt(index int) context.Context {
 }
 
 type stubSender struct {
-	mu     sync.Mutex
+	mu      sync.Mutex
+	target  string
+	text    string
+	files   []channel.OutboundFile
+	err     error
+	errs    []error
+	count   int
+	records []sendRecord
+}
+
+type sendRecord struct {
 	target string
 	text   string
-	err    error
+	files  []channel.OutboundFile
 }
 
 func (s *stubSender) ID() string { return "telegram" }
@@ -214,7 +282,62 @@ func (s *stubSender) SendText(
 	defer s.mu.Unlock()
 	s.target = target
 	s.text = text
-	return s.err
+	s.records = append(s.records, sendRecord{
+		target: target,
+		text:   text,
+	})
+	s.count++
+	return s.nextErrLocked()
+}
+
+func (s *stubSender) SendMessage(
+	_ context.Context,
+	target string,
+	msg channel.OutboundMessage,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.target = target
+	s.text = msg.Text
+	s.files = append([]channel.OutboundFile(nil), msg.Files...)
+	s.records = append(s.records, sendRecord{
+		target: target,
+		text:   msg.Text,
+		files:  append([]channel.OutboundFile(nil), msg.Files...),
+	})
+	s.count++
+	return s.nextErrLocked()
+}
+
+func (s *stubSender) nextErrLocked() error {
+	if len(s.errs) == 0 {
+		return s.err
+	}
+	err := s.errs[0]
+	s.errs = s.errs[1:]
+	return err
+}
+
+func (s *stubSender) countSnapshot() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.count
+}
+
+func (s *stubSender) recordsSnapshot() []sendRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	records := make([]sendRecord, len(s.records))
+	for i, record := range s.records {
+		records[i] = sendRecord{
+			target: record.target,
+			text:   record.text,
+			files:  append([]channel.OutboundFile(nil), record.files...),
+		}
+	}
+	return records
 }
 
 func TestServiceRunNowSendsToDeliveryTarget(t *testing.T) {
@@ -284,6 +407,292 @@ func TestServiceRunNowSendsToDeliveryTarget(t *testing.T) {
 		job.ID,
 		runner.runOpts.RuntimeState[runtimeStateJobID],
 	)
+}
+
+func TestServiceRunNowSuppressesFinalAfterMessageToolSend(
+	t *testing.T,
+) {
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	runner := &toolCallingRunner{
+		router: router,
+		args: []byte(
+			`{"text":"提醒 wineguo：现在喝点水。"}`,
+		),
+		reply: "已在当前聊天中提醒 wineguo：现在喝点水。",
+	}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		router,
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "drink water",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "remind wineguo to drink water",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitForJobStatus(t, svc, job.ID, StatusSucceeded)
+
+	result, toolErr := runner.resultSnapshot()
+	require.NoError(t, toolErr)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "提醒 wineguo：现在喝点水。", sender.text)
+	require.Equal(t, 1, sender.count)
+
+	traceDir := waitForCronTrace(t, rec.Dir())
+	events, err := debugrecorder.ReadEventsFile(traceDir)
+	require.NoError(t, err)
+	require.Contains(t, string(events), "duplicate_message_tool_text")
+	require.Contains(t, string(events), cronDeliverySkipMessageToolTarget)
+}
+
+func TestServiceRunNowDeliversFinalTextWhenMessageToolFails(
+	t *testing.T,
+) {
+	router := outbound.NewRouter()
+	sender := &stubSender{
+		errs: []error{context.DeadlineExceeded, nil},
+	}
+	router.RegisterSender(sender)
+
+	runner := &toolCallingRunner{
+		router: router,
+		args:   []byte(`{"text":"report ready"}`),
+		reply:  "report ready",
+	}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "send report",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		return sender.countSnapshot() == 2
+	})
+
+	result, toolErr := runner.resultSnapshot()
+	require.Nil(t, result)
+	require.ErrorIs(t, toolErr, context.DeadlineExceeded)
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "report ready", sender.text)
+	require.Equal(t, 2, sender.count)
+}
+
+func TestServiceRunNowDeliversSameTextWhenMessageToolSendsFile(
+	t *testing.T,
+) {
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+	router.RegisterMessageSender(sender)
+
+	runner := &toolCallingRunner{
+		router: router,
+		args: []byte(
+			`{"text":"report ready","file":"report.pdf"}`,
+		),
+		reply: "report ready",
+	}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "send report",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		return sender.countSnapshot() == 2
+	})
+
+	result, toolErr := runner.resultSnapshot()
+	require.NoError(t, toolErr)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "report ready", sender.text)
+	require.Equal(t, 2, sender.count)
+}
+
+func TestServiceRunNowSuppressesWhitespaceDifferentFinalText(
+	t *testing.T,
+) {
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	runner := &toolCallingRunner{
+		router: router,
+		args:   []byte(`{"text":"report ready"}`),
+		reply:  "report ready\n",
+	}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "send report",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitForJobStatus(t, svc, job.ID, StatusSucceeded)
+
+	result, toolErr := runner.resultSnapshot()
+	require.NoError(t, toolErr)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "report ready", sender.text)
+	require.Equal(t, 1, sender.count)
+}
+
+func TestServiceRunNowDeliversFinalAfterDifferentTargetToolSend(
+	t *testing.T,
+) {
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	runner := &toolCallingRunner{
+		router: router,
+		args: []byte(
+			`{"text":"preparing report","channel":"telegram","target":"200"}`,
+		),
+		reply: "report ready",
+	}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "prepare report",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		return sender.countSnapshot() == 2
+	})
+
+	result, toolErr := runner.resultSnapshot()
+	require.NoError(t, toolErr)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+
+	sender.mu.Lock()
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "report ready", sender.text)
+	require.Equal(t, 2, sender.count)
+	sender.mu.Unlock()
+
+	records := sender.recordsSnapshot()
+	require.Len(t, records, 2)
+	require.Equal(t, "200", records[0].target)
+	require.Equal(t, "preparing report", records[0].text)
+	require.Equal(t, "100", records[1].target)
+	require.Equal(t, "report ready", records[1].text)
 }
 
 func TestServiceRunNowWritesDebugTrace(t *testing.T) {
@@ -1444,6 +1853,8 @@ func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 		},
 	})
 	require.Equal(t, true, runtimeState[runtimeStateScheduledRun])
+	require.Equal(t, "telegram", runtimeState["openclaw.delivery.channel"])
+	require.Equal(t, "1", runtimeState["openclaw.delivery.target"])
 	require.Equal(t, "job-1", runtimeState[runtimeStateJobID])
 	require.Equal(t, 2, runtimeState[runtimeStateRunIndex])
 	require.Equal(t, true, runtimeState[runtimeStateHasMaxRuns])
@@ -1575,6 +1986,11 @@ func TestRunContextPromptRequiresScheduledExecution(t *testing.T) {
 		runContextPrompt,
 		"perform the scheduled task and report the result",
 	)
+	require.Contains(
+		t,
+		runContextPrompt,
+		"counts as the job delivery",
+	)
 }
 
 func waitFor(t *testing.T, fn func() bool) {
@@ -1588,6 +2004,20 @@ func waitFor(t *testing.T, fn func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("condition was not met")
+}
+
+func waitForJobStatus(
+	t *testing.T,
+	svc *Service,
+	jobID string,
+	status string,
+) {
+	t.Helper()
+
+	waitFor(t, func() bool {
+		got := svc.Get(jobID)
+		return got != nil && got.LastStatus == status
+	})
 }
 
 type cronTraceMeta struct {
