@@ -821,6 +821,33 @@ func TestSkillsRequestProcessor_OverviewRendererBlankOmitsAvailableSkillsOnly(
 	require.Contains(t, sys, "Calc body")
 }
 
+func TestSkillsRequestProcessor_OverviewRendererBlankDoesNotDuplicateGuidance(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math ops"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			AvailableSkillsRenderer: func(
+				context.Context,
+				agent.AvailableSkillsRenderRequest,
+			) string {
+				return "  \n"
+			},
+		},
+		Session: &session.Session{},
+	}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(repo)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	sys := req.Messages[0].Content
+	require.NotContains(t, sys, skillsOverviewHeader)
+	require.Equal(t, 1, strings.Count(sys, skillsToolingGuidanceHeader))
+}
+
 func TestSkillsRequestProcessor_OverviewRendererNotCalledWithoutSummaries(
 	t *testing.T,
 ) {

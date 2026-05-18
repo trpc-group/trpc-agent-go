@@ -847,7 +847,7 @@ func (p *SkillsRequestProcessor) mergeOverview(
 	idx := findSystemMessageIndex(req.Messages)
 	if idx >= 0 {
 		sys := &req.Messages[idx]
-		if !strings.Contains(sys.Content, skillsOverviewHeader) {
+		if !strings.Contains(sys.Content, skillsOverviewMergeMarker(overview)) {
 			if prepend {
 				if sys.Content != "" {
 					sys.Content = overview + "\n\n" + sys.Content
@@ -865,6 +865,19 @@ func (p *SkillsRequestProcessor) mergeOverview(
 	// No system message yet: create one at the front.
 	msg := model.NewSystemMessage(overview)
 	req.Messages = append([]model.Message{msg}, req.Messages...)
+}
+
+func skillsOverviewMergeMarker(overview string) string {
+	if strings.Contains(overview, skillsOverviewHeader) {
+		return skillsOverviewHeader
+	}
+	if strings.Contains(overview, skillsToolingGuidanceHeader) {
+		return skillsToolingGuidanceHeader
+	}
+	if strings.Contains(overview, skillsCapabilityHeader) {
+		return skillsCapabilityHeader
+	}
+	return strings.TrimSpace(overview)
 }
 
 func (p *SkillsRequestProcessor) toolFlagsForInvocation(
