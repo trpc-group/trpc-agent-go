@@ -87,6 +87,7 @@ kb := knowledge.New(
 | `WithIndexDimension(dim)` | Vector dimension (must match embedding model) | `1536` |
 | `WithRemoteEmbeddingModel(model)` | Remote embedding model name (e.g., bge-base-zh) | - |
 | `WithEnableTSVector(enabled)` | Enable hybrid retrieval | `true` |
+| `WithSparseEncoder(encoder)` | Use a pre-initialized sparse encoder for keyword and hybrid retrieval | Default BM25 encoder |
 | `WithHybridSearchWeights(vector, text)` | Hybrid retrieval weights (vector/text) | `0.7, 0.3` |
 | `WithLanguage(lang)` | Text tokenization language (zh/en) | `"en"` |
 
@@ -118,6 +119,30 @@ kb := knowledge.New(
 | `WithCreatedAtField(field)` | Created time field name | `"created_at"` |
 | `WithUpdatedAtField(field)` | Updated time field name | `"updated_at"` |
 | `WithSparseVectorField(field)` | Sparse vector field name | `"sparse_vector"` |
+
+### Reusing Sparse Encoders
+
+When runner or vector store instances are created dynamically, initialize the sparse encoder once and pass it to TcVector to avoid repeated BM25 encoder setup:
+
+```go
+import "github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
+
+sparseEncoder, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{
+    Bm25Language: "en",
+})
+if err != nil {
+    // Handle error
+}
+
+tcVS, err := vectortcvector.New(
+    vectortcvector.WithURL("https://your-tcvector-endpoint"),
+    vectortcvector.WithUsername("your-username"),
+    vectortcvector.WithPassword("your-password"),
+    vectortcvector.WithSparseEncoder(sparseEncoder),
+)
+```
+
+`WithSparseEncoder` only replaces the encoder used by TSVector. It does not enable TSVector by itself; keep `WithEnableTSVector(true)` when keyword or hybrid retrieval is required.
 
 ## Filter Support
 

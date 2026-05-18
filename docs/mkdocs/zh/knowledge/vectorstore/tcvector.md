@@ -87,6 +87,7 @@ kb := knowledge.New(
 | `WithIndexDimension(dim)` | 向量维度（需与 embedding 模型匹配） | `1536` |
 | `WithRemoteEmbeddingModel(model)` | 远程 embedding 模型名称（如 bge-base-zh） | - |
 | `WithEnableTSVector(enabled)` | 启用混合检索 | `true` |
+| `WithSparseEncoder(encoder)` | 使用预初始化的稀疏向量编码器进行关键词和混合检索 | 默认 BM25 encoder |
 | `WithHybridSearchWeights(vector, text)` | 混合检索权重（向量/文本） | `0.7, 0.3` |
 | `WithLanguage(lang)` | 文本分词语言（zh/en） | `"en"` |
 
@@ -118,6 +119,30 @@ kb := knowledge.New(
 | `WithCreatedAtField(field)` | 创建时间字段名 | `"created_at"` |
 | `WithUpdatedAtField(field)` | 更新时间字段名 | `"updated_at"` |
 | `WithSparseVectorField(field)` | 稀疏向量字段名 | `"sparse_vector"` |
+
+### 复用稀疏向量编码器
+
+当 runner 或 vector store 动态创建时，可以先初始化一次 sparse encoder，再传给 TcVector，避免重复初始化 BM25 encoder：
+
+```go
+import "github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
+
+sparseEncoder, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{
+    Bm25Language: "en",
+})
+if err != nil {
+    // 处理 error
+}
+
+tcVS, err := vectortcvector.New(
+    vectortcvector.WithURL("https://your-tcvector-endpoint"),
+    vectortcvector.WithUsername("your-username"),
+    vectortcvector.WithPassword("your-password"),
+    vectortcvector.WithSparseEncoder(sparseEncoder),
+)
+```
+
+`WithSparseEncoder` 只替换 TSVector 使用的 encoder，不会自动开启 TSVector；如果需要关键词或混合检索，仍需保持 `WithEnableTSVector(true)`。
 
 ## 过滤器支持
 
