@@ -86,7 +86,7 @@ func (s *Service) getSession(
 	}
 
 	// Batch load events for all sessions
-	eventsList, err := s.getEventsList(ctx, []session.Key{key}, []time.Time{sessState.CreatedAt}, limit, afterTime, page)
+	eventsList, err := s.getSessionEvents(ctx, key, sessState.CreatedAt, limit, afterTime, page)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
@@ -127,6 +127,30 @@ func (s *Service) getSession(
 	}
 
 	return mergeState(appState, userState, sess), nil
+}
+
+// getSessionEvents loads events for GetSession. For non-paged GetSession with
+// an event limit, it pushes the window down to SQL and only unmarshals the
+// selected rows plus an optional user-message anchor.
+func (s *Service) getSessionEvents(
+	ctx context.Context,
+	key session.Key,
+	sessionCreatedAt time.Time,
+	limit int,
+	afterTime time.Time,
+	page *session.EventPage,
+) ([][]event.Event, error) {
+	if page != nil {
+		return s.getEventsList(ctx, []session.Key{key}, []time.Time{sessionCreatedAt}, limit, afterTime, page)
+	}
+	effectiveLimit := limit
+	if effectiveLimit <= 0 {
+		effectiveLimit = s.opts.sessionEventLimit
+	}
+	if effectiveLimit <= 0 {
+		return s.getEventsList(ctx, []session.Key{key}, []time.Time{sessionCreatedAt}, limit, afterTime, nil)
+	}
+	return s.getLimitedSessionEvents(ctx, key, sessionCreatedAt, effectiveLimit, afterTime)
 }
 
 // listSessions lists all sessions for a user.
@@ -623,54 +647,88 @@ func (s *Service) getEventsList(
 	return result, nil
 }
 
-func (s *Service) getPagedEvents(
+type eventRef struct {
+	id        int64
+	createdAt time.Time
+}
+
+func (s *Service) getLimitedSessionEvents(
 	ctx context.Context,
 	key session.Key,
 	sessionCreatedAt time.Time,
+	limit int,
 	afterTime time.Time,
-	page *session.EventPage,
 ) ([][]event.Event, error) {
-	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
-		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	filterAfterTime := afterTime
+	if filterAfterTime.IsZero() && s.opts.sessionTTL > 0 {
+		filterAfterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
-	if sessionCreatedAt.After(afterTime) {
-		afterTime = sessionCreatedAt
+	queryAfterTime := filterAfterTime
+	if sessionCreatedAt.After(queryAfterTime) {
+		queryAfterTime = sessionCreatedAt
 	}
 
-	// Phase 1: fetch only ordering metadata with ORDER BY + LIMIT/OFFSET.
-	// Sorting lightweight rows avoids sort buffer overflow on large event JSON.
-	idsQuery := fmt.Sprintf(`SELECT id, created_at FROM %s
+	refs, err := s.getRecentEventRefs(ctx, key, queryAfterTime, limit)
+	if err != nil {
+		return nil, err
+	}
+	events, err := s.getEventsByRefs(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	if len(refs) == 0 && filterAfterTime.IsZero() {
+		return [][]event.Event{nil}, nil
+	}
+	if idx := firstUserEventIndex(events); idx >= 0 {
+		return [][]event.Event{events[idx:]}, nil
+	}
+
+	anchor, ok, err := s.getLastUserEventBeforeRefs(ctx, key, sessionCreatedAt, refs)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return [][]event.Event{nil}, nil
+	}
+	return [][]event.Event{append([]event.Event{anchor}, events...)}, nil
+}
+
+func (s *Service) getRecentEventRefs(
+	ctx context.Context,
+	key session.Key,
+	afterTime time.Time,
+	limit int,
+) ([]eventRef, error) {
+	query := fmt.Sprintf(`SELECT id, created_at FROM %s
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND created_at >= ?
 		AND deleted_at IS NULL
 		ORDER BY created_at DESC, id DESC
-		LIMIT ? OFFSET ?`,
+		LIMIT ?`,
 		s.tableSessionEvents)
 
-	type eventRef struct {
-		id        int64
-		createdAt time.Time
-	}
-	var refs []eventRef
+	refs := make([]eventRef, 0, limit)
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		var id int64
-		var createdAt time.Time
-		if err := rows.Scan(&id, &createdAt); err != nil {
+		var ref eventRef
+		if err := rows.Scan(&ref.id, &ref.createdAt); err != nil {
 			return err
 		}
-		refs = append(refs, eventRef{id: id, createdAt: createdAt})
+		refs = append(refs, ref)
 		return nil
-	}, idsQuery, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
+	}, query, key.AppName, key.UserID, key.SessionID, afterTime, limit)
 	if err != nil {
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
+	return refs, nil
+}
 
+func (s *Service) getEventsByRefs(
+	ctx context.Context,
+	refs []eventRef,
+) ([]event.Event, error) {
 	if len(refs) == 0 {
-		return [][]event.Event{nil}, nil
+		return nil, nil
 	}
-
-	// Phase 2: fetch full event rows by IDs. The final return order is restored
-	// from refs to preserve (created_at ASC, id ASC) semantics.
 	placeholders := make([]string, len(refs))
 	args := make([]any, len(refs))
 	for i, ref := range refs {
@@ -682,7 +740,7 @@ func (s *Service) getPagedEvents(
 		s.tableSessionEvents, strings.Join(placeholders, ","))
 
 	eventsByID := make(map[int64]event.Event, len(refs))
-	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		var id int64
 		var eventBytes []byte
 		if err := rows.Scan(&id, &eventBytes); err != nil {
@@ -718,6 +776,117 @@ func (s *Service) getPagedEvents(
 			continue
 		}
 		events = append(events, evt)
+	}
+	return events, nil
+}
+
+func (s *Service) getLastUserEventBeforeRefs(
+	ctx context.Context,
+	key session.Key,
+	sessionCreatedAt time.Time,
+	refs []eventRef,
+) (event.Event, bool, error) {
+	query := fmt.Sprintf(`SELECT id, event, created_at FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND created_at >= ?
+		AND deleted_at IS NULL
+		AND JSON_SEARCH(event, 'one', 'user', NULL, '$.choices[*].message.role', '$.choices[*].delta.role') IS NOT NULL`,
+		s.tableSessionEvents)
+	args := []any{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
+	if len(refs) > 0 {
+		oldest := oldestEventRef(refs)
+		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+		args = append(args, oldest.createdAt, oldest.createdAt, oldest.id)
+	}
+	query += ` ORDER BY created_at DESC, id DESC LIMIT 1`
+
+	var anchor *event.Event
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var id int64
+		var eventBytes []byte
+		var createdAt time.Time
+		if err := rows.Scan(&id, &eventBytes, &createdAt); err != nil {
+			return err
+		}
+		var evt event.Event
+		if err := json.Unmarshal(eventBytes, &evt); err != nil {
+			return fmt.Errorf("unmarshal event failed: %w", err)
+		}
+		if evt.IsUserMessage() {
+			anchor = &evt
+		}
+		return nil
+	}, query, args...)
+	if err != nil {
+		return event.Event{}, false, fmt.Errorf("batch get events failed: %w", err)
+	}
+	if anchor == nil {
+		return event.Event{}, false, nil
+	}
+	return *anchor, true, nil
+}
+
+func oldestEventRef(refs []eventRef) eventRef {
+	oldest := refs[0]
+	for _, ref := range refs[1:] {
+		if ref.createdAt.Before(oldest.createdAt) ||
+			(ref.createdAt.Equal(oldest.createdAt) && ref.id < oldest.id) {
+			oldest = ref
+		}
+	}
+	return oldest
+}
+
+func firstUserEventIndex(events []event.Event) int {
+	for i := range events {
+		if events[i].IsUserMessage() {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Service) getPagedEvents(
+	ctx context.Context,
+	key session.Key,
+	sessionCreatedAt time.Time,
+	afterTime time.Time,
+	page *session.EventPage,
+) ([][]event.Event, error) {
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+	if sessionCreatedAt.After(afterTime) {
+		afterTime = sessionCreatedAt
+	}
+
+	// Phase 1: fetch only ordering metadata with ORDER BY + LIMIT/OFFSET.
+	// Sorting lightweight rows avoids sort buffer overflow on large event JSON.
+	idsQuery := fmt.Sprintf(`SELECT id, created_at FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND created_at >= ?
+		AND deleted_at IS NULL
+		ORDER BY created_at DESC, id DESC
+		LIMIT ? OFFSET ?`,
+		s.tableSessionEvents)
+
+	var refs []eventRef
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var id int64
+		var createdAt time.Time
+		if err := rows.Scan(&id, &createdAt); err != nil {
+			return err
+		}
+		refs = append(refs, eventRef{id: id, createdAt: createdAt})
+		return nil
+	}, idsQuery, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("batch get events failed: %w", err)
+	}
+
+	events, err := s.getEventsByRefs(ctx, refs)
+	if err != nil {
+		return nil, err
 	}
 	return [][]event.Event{events}, nil
 }

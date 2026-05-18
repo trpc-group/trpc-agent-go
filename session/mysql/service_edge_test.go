@@ -86,10 +86,9 @@ func TestGetSession(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
-		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
-			WithArgs(key.AppName, key.UserID, key.SessionID).
-			WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-				AddRow(int64(1), "app1", "user1", "session1", []byte("invalid-event-json"), time.Now()))
+		eventCreatedAt := time.Now()
+		expectLimitedEventRefs(mock, key, stateData.CreatedAt, defaultSessionEventLimit, eventRef{id: 1, createdAt: eventCreatedAt})
+		expectEventsByRefs(mock, limitedEventRow{id: 1, event: []byte("invalid-event-json"), createdAt: eventCreatedAt})
 
 		sess, err := s.getSession(context.Background(), key, 0, time.Time{}, nil)
 		assert.Error(t, err)
@@ -151,9 +150,8 @@ func TestGetSession(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
-		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
-			WithArgs(key.AppName, key.UserID, key.SessionID).
-			WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}))
+		expectLimitedEventRefs(mock, key, sessState.CreatedAt, defaultSessionEventLimit)
+		expectNoUserAnchor(mock, key, sessState.CreatedAt)
 
 		// GetSession is a pure read operation - no UPDATE expected.
 		sess, err := s.GetSession(context.Background(), key)

@@ -115,6 +115,56 @@ func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 	}
 }
 
+type limitedEventRow struct {
+	id        int64
+	event     []byte
+	createdAt time.Time
+}
+
+func expectLimitedEventRefs(
+	mock sqlmock.Sqlmock,
+	key session.Key,
+	afterTime any,
+	limit int,
+	refs ...eventRef,
+) *sqlmock.ExpectedQuery {
+	rows := sqlmock.NewRows([]string{"id", "created_at"})
+	for _, ref := range refs {
+		rows.AddRow(ref.id, ref.createdAt)
+	}
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at FROM session_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, afterTime, limit).
+		WillReturnRows(rows)
+}
+
+func expectEventsByRefs(
+	mock sqlmock.Sqlmock,
+	rows ...limitedEventRow,
+) *sqlmock.ExpectedQuery {
+	sqlRows := sqlmock.NewRows([]string{"id", "event"})
+	args := make([]driver.Value, 0, len(rows))
+	for _, row := range rows {
+		args = append(args, row.id)
+		sqlRows.AddRow(row.id, row.event)
+	}
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event FROM session_events WHERE id IN")).
+		WithArgs(args...).
+		WillReturnRows(sqlRows)
+}
+
+func expectNoUserAnchor(
+	mock sqlmock.Sqlmock,
+	key session.Key,
+	sessionCreatedAt driver.Value,
+	extraArgs ...driver.Value,
+) *sqlmock.ExpectedQuery {
+	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
+	args = append(args, extraArgs...)
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event, created_at FROM session_events")).
+		WithArgs(args...).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}))
+}
+
 const selectSessionStateForUpdateSQL = "SELECT state, expires_at FROM session_states WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL FOR UPDATE"
 
 func expectLoadSessionStateForUpdate(
@@ -1915,11 +1965,21 @@ func TestGetSession_WithEvents(t *testing.T) {
 	event2Bytes, _ := json.Marshal(evt2)
 
 	// Mock: Query events (multiple rows)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(int64(1), key.AppName, key.UserID, key.SessionID, event1Bytes, time.Now()).
-			AddRow(int64(2), key.AppName, key.UserID, key.SessionID, event2Bytes, time.Now()))
+	event1CreatedAt := time.Now()
+	event2CreatedAt := event1CreatedAt.Add(time.Second)
+	expectLimitedEventRefs(
+		mock,
+		key,
+		sessState.CreatedAt,
+		defaultSessionEventLimit,
+		eventRef{id: 2, createdAt: event2CreatedAt},
+		eventRef{id: 1, createdAt: event1CreatedAt},
+	)
+	expectEventsByRefs(
+		mock,
+		limitedEventRow{id: 2, event: event2Bytes, createdAt: event2CreatedAt},
+		limitedEventRow{id: 1, event: event1Bytes, createdAt: event1CreatedAt},
+	)
 
 	// Prepare multiple summaries
 	sum1 := session.Summary{Summary: "summary1", Topics: []string{}}
@@ -2277,9 +2337,8 @@ func TestGetSession_WithAfterTime(t *testing.T) {
 
 	// Mock: Query events with afterTime filter (should filter events)
 	afterTime := time.Now().Add(-1 * time.Hour)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}))
+	expectLimitedEventRefs(mock, key, afterTime, defaultSessionEventLimit)
+	expectNoUserAnchor(mock, key, sessState.CreatedAt)
 
 	sess, err := s.GetSession(ctx, key, session.WithEventTime(afterTime))
 	require.NoError(t, err)
