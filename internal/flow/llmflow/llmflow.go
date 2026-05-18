@@ -634,6 +634,7 @@ func (f *Flow) processStreamingResponses(
 	var tracker *itelemetry.ChatMetricsTracker
 	var timingInfo *model.TimingInfo
 	var partialUsageState responseusage.PartialState
+	traceRequestDetails := true
 	if metricsInvocation != nil {
 		timingInfo = responseUsageTimingInfo(currentInvocation)
 		tracker = itelemetry.NewChatMetricsTracker(
@@ -751,12 +752,14 @@ func (f *Flow) processStreamingResponses(
 		}
 		if startedSpan {
 			itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
-				Invocation:       observabilityInvocationForCurrent(eventInvocation, observabilityInvocation),
-				Request:          llmRequest,
-				Response:         response,
-				EventID:          llmResponseEvent.ID,
-				TimeToFirstToken: ttfb,
+				Invocation:         observabilityInvocationForCurrent(eventInvocation, observabilityInvocation),
+				Request:            llmRequest,
+				Response:           response,
+				EventID:            llmResponseEvent.ID,
+				TimeToFirstToken:   ttfb,
+				SkipRequestDetails: !traceRequestDetails,
 			})
+			traceRequestDetails = false
 		}
 		return true
 	})

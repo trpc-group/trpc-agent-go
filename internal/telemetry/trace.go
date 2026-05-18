@@ -115,6 +115,7 @@ type telemetryChoice struct {
 }
 
 func telemetryMessageFromModel(msg model.Message) telemetryMessage {
+	msg = truncateTelemetryModelMessage(msg)
 	return telemetryMessage{
 		Role:             msg.Role,
 		Content:          msg.Content,
@@ -460,12 +461,13 @@ func TraceAfterInvokeAgent(
 //
 // It is used to keep TraceChat signatures stable as parameters evolve.
 type TraceChatAttributes struct {
-	Invocation       *agent.Invocation
-	Request          *model.Request
-	Response         *model.Response
-	EventID          string
-	TimeToFirstToken time.Duration
-	TaskType         string
+	Invocation         *agent.Invocation
+	Request            *model.Request
+	Response           *model.Response
+	EventID            string
+	TimeToFirstToken   time.Duration
+	TaskType           string
+	SkipRequestDetails bool
 }
 
 // NewSummarizeTaskType creates a task type for summarize.
@@ -504,8 +506,11 @@ func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	// Add invocation attributes
 	attrs = append(attrs, buildInvocationAttributes(attributes.Invocation)...)
 
-	// Add request attributes
-	attrs = append(attrs, buildRequestAttributes(attributes.Request)...)
+	// Add request attributes once for streaming calls. Re-marshalling large
+	// request/message payloads for every chunk can dominate heap usage.
+	if !attributes.SkipRequestDetails {
+		attrs = append(attrs, buildRequestAttributes(attributes.Request)...)
+	}
 
 	// Add response attributes
 	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType)...)
@@ -580,7 +585,7 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	}
 
 	// Add request body
-	if bts, err := json.Marshal(req); err == nil {
+	if bts, err := json.Marshal(telemetryRequestForMarshal(req)); err == nil {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMRequest, string(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMRequest, "<not json serializable>"))
@@ -674,7 +679,7 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 	}
 
 	// Add response body
-	if bts, err := json.Marshal(rsp); err == nil {
+	if bts, err := json.Marshal(telemetryResponseForMarshal(rsp)); err == nil {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMResponse, string(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMResponse, "<not json serializable>"))

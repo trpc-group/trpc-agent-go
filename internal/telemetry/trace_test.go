@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -819,6 +820,59 @@ func TestTraceChat_WithTaskType(t *testing.T) {
 	})
 
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAITaskType, "summarize demo"))
+}
+
+func TestTraceChat_SkipRequestDetails(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	}
+	rsp := &model.Response{
+		ID: "resp-skip",
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, Content: "world"},
+		}},
+	}
+
+	span := newRecordingSpan()
+	TraceChat(span, &TraceChatAttributes{
+		Request:            req,
+		Response:           rsp,
+		SkipRequestDetails: true,
+	})
+
+	require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyLLMRequest))
+	require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyGenAIInputMessages))
+	require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyGenAIInputMessagesOTel))
+	require.True(t, hasAttrKey(span.attrs, semconvtrace.KeyLLMResponse))
+}
+
+func TestTraceChat_TruncatesLargeToolResponseTelemetry(t *testing.T) {
+	large := strings.Repeat("x", maxTelemetryStringBytes*4)
+	req := &model.Request{
+		Messages: []model.Message{{
+			Role:    model.RoleTool,
+			Content: large,
+			ToolID:  "tool-1",
+		}},
+	}
+
+	span := newRecordingSpan()
+	TraceChat(span, &TraceChatAttributes{Request: req})
+
+	requestBody, ok := attrStringValue(span.attrs, semconvtrace.KeyLLMRequest)
+	require.True(t, ok)
+	require.Less(t, len(requestBody), len(large))
+	require.Contains(t, requestBody, "truncated")
+
+	inputMessages, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIInputMessages)
+	require.True(t, ok)
+	require.Less(t, len(inputMessages), len(large))
+	require.Contains(t, inputMessages, "truncated")
+
+	otelMessages, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIInputMessagesOTel)
+	require.True(t, ok)
+	require.Less(t, len(otelMessages), len(large))
+	require.Contains(t, otelMessages, "truncated")
 }
 
 func TestBuildInvocationAttributes(t *testing.T) {

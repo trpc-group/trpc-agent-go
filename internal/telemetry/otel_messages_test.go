@@ -12,6 +12,7 @@ package telemetry
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -138,9 +139,19 @@ func TestOTelMessageHelpers(t *testing.T) {
 	require.Nil(t, rawJSONOrJSONString([]byte(" \t\n ")))
 	require.JSONEq(t, `{"a":1}`, string(rawJSONOrJSONString([]byte(` {"a":1} `))))
 	require.JSONEq(t, `"plain"`, string(rawJSONOrJSONString([]byte("plain"))))
+	require.Contains(
+		t,
+		string(rawJSONOrJSONString([]byte(strings.Repeat("x", maxTelemetryRawJSONBytes+1)))),
+		"truncated",
+	)
 
 	require.Equal(t, "", jsonValueOrString([]byte(" ")))
 	require.Equal(t, "plain", jsonValueOrString([]byte("plain")))
+	require.Contains(
+		t,
+		jsonValueOrString([]byte(strings.Repeat("x", maxTelemetryRawJSONBytes+1))),
+		"truncated",
+	)
 	jsonValue := jsonValueOrString([]byte(`{"a":1}`))
 	require.IsType(t, map[string]any{}, jsonValue)
 

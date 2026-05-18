@@ -102,12 +102,12 @@ func otelPartsFromModelMessage(msg model.Message) []OTelMessagePart {
 		parts = append(parts, part)
 	} else {
 		if msg.Content != "" {
-			parts = append(parts, OTelMessagePart{Type: otelPartTypeText, Content: msg.Content})
+			parts = append(parts, OTelMessagePart{Type: otelPartTypeText, Content: truncateTelemetryString(msg.Content)})
 		}
 		parts = append(parts, otelPartsFromContentParts(msg.ContentParts)...)
 	}
 	if msg.ReasoningContent != "" {
-		parts = append(parts, OTelMessagePart{Type: otelPartTypeReasoning, Content: msg.ReasoningContent})
+		parts = append(parts, OTelMessagePart{Type: otelPartTypeReasoning, Content: truncateTelemetryString(msg.ReasoningContent)})
 	}
 	for _, toolCall := range msg.ToolCalls {
 		parts = append(parts, otelPartFromToolCall(toolCall))
@@ -135,7 +135,7 @@ func otelPartFromContentPart(contentPart model.ContentPart) (OTelMessagePart, bo
 		if contentPart.Text == nil {
 			return OTelMessagePart{}, false
 		}
-		return OTelMessagePart{Type: otelPartTypeText, Content: *contentPart.Text}, true
+		return OTelMessagePart{Type: otelPartTypeText, Content: truncateTelemetryString(*contentPart.Text)}, true
 	case model.ContentTypeImage:
 		return otelPartFromImage(contentPart.Image)
 	case model.ContentTypeAudio:
@@ -146,7 +146,7 @@ func otelPartFromContentPart(contentPart model.ContentPart) (OTelMessagePart, bo
 			Type:     otelPartTypeBlob,
 			Modality: otelModalityAudio,
 			MIMEType: normalizeFormatAsMIME(contentPart.Audio.Format, "audio"),
-			Content:  base64.StdEncoding.EncodeToString(contentPart.Audio.Data),
+			Content:  base64.StdEncoding.EncodeToString(truncateTelemetryBytes(contentPart.Audio.Data, maxTelemetryBinaryBytes)),
 		}, true
 	case model.ContentTypeFile:
 		return otelPartFromFile(contentPart.File)
@@ -164,8 +164,8 @@ func otelPartFromImage(image *model.Image) (OTelMessagePart, bool) {
 			Type:     otelPartTypeURI,
 			Modality: otelModalityImage,
 			MIMEType: imageMIMEType(image),
-			URI:      image.URL,
-			Detail:   strings.TrimSpace(image.Detail),
+			URI:      truncateTelemetryString(image.URL),
+			Detail:   truncateTelemetryString(strings.TrimSpace(image.Detail)),
 		}, true
 	}
 	if len(image.Data) == 0 {
@@ -175,8 +175,8 @@ func otelPartFromImage(image *model.Image) (OTelMessagePart, bool) {
 		Type:     otelPartTypeBlob,
 		Modality: otelModalityImage,
 		MIMEType: imageMIMEType(image),
-		Content:  base64.StdEncoding.EncodeToString(image.Data),
-		Detail:   strings.TrimSpace(image.Detail),
+		Content:  base64.StdEncoding.EncodeToString(truncateTelemetryBytes(image.Data, maxTelemetryBinaryBytes)),
+		Detail:   truncateTelemetryString(strings.TrimSpace(image.Detail)),
 	}, true
 }
 
@@ -190,8 +190,8 @@ func otelPartFromFile(file *model.File) (OTelMessagePart, bool) {
 			Type:     otelPartTypeFile,
 			Modality: modality,
 			MIMEType: mimeType,
-			FileID:   strings.TrimSpace(file.FileID),
-			Filename: strings.TrimSpace(file.Name),
+			FileID:   truncateTelemetryString(strings.TrimSpace(file.FileID)),
+			Filename: truncateTelemetryString(strings.TrimSpace(file.Name)),
 		}, true
 	}
 	if len(file.Data) == 0 {
@@ -201,8 +201,8 @@ func otelPartFromFile(file *model.File) (OTelMessagePart, bool) {
 		Type:     otelPartTypeBlob,
 		Modality: modality,
 		MIMEType: mimeType,
-		Content:  base64.StdEncoding.EncodeToString(file.Data),
-		Filename: strings.TrimSpace(file.Name),
+		Content:  base64.StdEncoding.EncodeToString(truncateTelemetryBytes(file.Data, maxTelemetryBinaryBytes)),
+		Filename: truncateTelemetryString(strings.TrimSpace(file.Name)),
 	}, true
 }
 
@@ -267,6 +267,13 @@ func rawJSONOrJSONString(raw []byte) json.RawMessage {
 	if len(trimmed) == 0 {
 		return nil
 	}
+	if len(trimmed) > maxTelemetryRawJSONBytes {
+		bts, err := json.Marshal(telemetryTruncatedMarker(len(trimmed)))
+		if err != nil {
+			return nil
+		}
+		return bts
+	}
 	if json.Valid(trimmed) {
 		return append(json.RawMessage(nil), trimmed...)
 	}
@@ -281,6 +288,9 @@ func jsonValueOrString(raw []byte) any {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return ""
+	}
+	if len(trimmed) > maxTelemetryRawJSONBytes {
+		return telemetryTruncatedMarker(len(trimmed))
 	}
 	var v any
 	if err := json.Unmarshal(trimmed, &v); err == nil {
