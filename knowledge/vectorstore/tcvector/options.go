@@ -32,6 +32,7 @@ type options struct {
 	replicas       uint32
 	sharding       uint32
 	enableTSVector bool
+	sparseEncoder  SparseEncoder
 	instanceName   string
 	extraOptions   []any
 
@@ -310,6 +311,13 @@ func WithUpdatedAtField(field string) Option {
 func WithSparseVectorField(field string) Option {
 	return func(o *options) {
 		o.sparseVectorFieldName = field
+	}
+}
+
+// WithSparseEncoder sets the sparse encoder for keyword and hybrid search.
+func WithSparseEncoder(sparseEncoder SparseEncoder) Option {
+	return func(o *options) {
+		o.sparseEncoder = sparseEncoder
 	}
 }
 

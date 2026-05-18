@@ -1476,6 +1476,29 @@ func TestNewConnectionPriority(t *testing.T) {
 	})
 }
 
+func TestNewWithSparseEncoder(t *testing.T) {
+	oldBuilder := storage.GetClientBuilder()
+	defer func() { storage.SetClientBuilder(oldBuilder) }()
+
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
+		return newMockClient(), nil
+	})
+
+	sparseEncoder := newMockSparseEncoder()
+	vs, err := New(
+		WithDatabase("test_db"),
+		WithCollection("test_collection"),
+		WithIndexDimension(128),
+		WithSparseEncoder(sparseEncoder),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vs.sparseEncoder != sparseEncoder {
+		t.Fatalf("expected provided sparse encoder to be used")
+	}
+}
+
 // containsString checks if s contains substr.
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))

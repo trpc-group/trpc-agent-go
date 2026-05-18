@@ -113,6 +113,11 @@ func TestAllOptions(t *testing.T) {
 	// Test WithSparseVectorField
 	WithSparseVectorField("custom_sparse")(&opt)
 	assert.Equal(t, "custom_sparse", opt.sparseVectorFieldName)
+
+	// Test WithSparseEncoder
+	sparseEncoder := newMockSparseEncoder()
+	WithSparseEncoder(sparseEncoder)(&opt)
+	assert.Same(t, sparseEncoder, opt.sparseEncoder)
 }
 
 // TestOptionsDefaults verifies default option values
