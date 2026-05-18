@@ -43,8 +43,8 @@ const (
 	metadataBatchSize = 5000 // Maximum records per batch when querying all metadata
 )
 
-// SparseEncoder encodes text into sparse vectors for keyword and hybrid search.
-type SparseEncoder interface {
+// TCSparseEncoder encodes text into sparse vectors for keyword and hybrid search.
+type TCSparseEncoder interface {
 	// EncodeText encodes a single text into sparse vector format.
 	EncodeText(text string) ([]encoder.SparseVecItem, error)
 	// EncodeQuery encodes a single query into sparse vector format.
@@ -57,7 +57,7 @@ type SparseEncoder interface {
 type VectorStore struct {
 	client          storage.ClientInterface
 	option          options
-	sparseEncoder   SparseEncoder
+	sparseEncoder   TCSparseEncoder
 	filterConverter searchfilter.Converter[*tcvectordb.Filter]
 }
 
@@ -100,7 +100,7 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, err
 	}
 
-	var sparseEncoder SparseEncoder
+	var sparseEncoder TCSparseEncoder
 	if option.enableTSVector {
 		sparseEncoder = option.sparseEncoder
 		if sparseEncoder == nil {

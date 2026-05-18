@@ -87,7 +87,7 @@ kb := knowledge.New(
 | `WithIndexDimension(dim)` | Vector dimension (must match embedding model) | `1536` |
 | `WithRemoteEmbeddingModel(model)` | Remote embedding model name (e.g., bge-base-zh) | - |
 | `WithEnableTSVector(enabled)` | Enable hybrid retrieval | `true` |
-| `WithSparseEncoder(encoder)` | Use a pre-initialized sparse encoder for keyword and hybrid retrieval | Default BM25 encoder |
+| `WithTCSparseEncoder(encoder)` | Use a pre-initialized sparse encoder for keyword and hybrid retrieval | Default BM25 encoder |
 | `WithHybridSearchWeights(vector, text)` | Hybrid retrieval weights (vector/text) | `0.7, 0.3` |
 | `WithLanguage(lang)` | Text tokenization language (zh/en) | `"en"` |
 
@@ -138,11 +138,11 @@ tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
-    vectortcvector.WithSparseEncoder(sparseEncoder),
+    vectortcvector.WithTCSparseEncoder(sparseEncoder),
 )
 ```
 
-`WithSparseEncoder` only replaces the encoder used by TSVector. It does not enable TSVector by itself; keep `WithEnableTSVector(true)` when keyword or hybrid retrieval is required.
+`WithTCSparseEncoder` only replaces the encoder used by TSVector. It does not enable TSVector by itself; keep `WithEnableTSVector(true)` when keyword or hybrid retrieval is required.
 
 ## Filter Support
 

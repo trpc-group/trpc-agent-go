@@ -87,7 +87,7 @@ kb := knowledge.New(
 | `WithIndexDimension(dim)` | 向量维度（需与 embedding 模型匹配） | `1536` |
 | `WithRemoteEmbeddingModel(model)` | 远程 embedding 模型名称（如 bge-base-zh） | - |
 | `WithEnableTSVector(enabled)` | 启用混合检索 | `true` |
-| `WithSparseEncoder(encoder)` | 使用预初始化的稀疏向量编码器进行关键词和混合检索 | 默认 BM25 encoder |
+| `WithTCSparseEncoder(encoder)` | 使用预初始化的稀疏向量编码器进行关键词和混合检索 | 默认 BM25 encoder |
 | `WithHybridSearchWeights(vector, text)` | 混合检索权重（向量/文本） | `0.7, 0.3` |
 | `WithLanguage(lang)` | 文本分词语言（zh/en） | `"en"` |
 
@@ -138,11 +138,11 @@ tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
-    vectortcvector.WithSparseEncoder(sparseEncoder),
+    vectortcvector.WithTCSparseEncoder(sparseEncoder),
 )
 ```
 
-`WithSparseEncoder` 只替换 TSVector 使用的 encoder，不会自动开启 TSVector；如果需要关键词或混合检索，仍需保持 `WithEnableTSVector(true)`。
+`WithTCSparseEncoder` 只替换 TSVector 使用的 encoder，不会自动开启 TSVector；如果需要关键词或混合检索，仍需保持 `WithEnableTSVector(true)`。
 
 ## 过滤器支持
 

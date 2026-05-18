@@ -114,9 +114,9 @@ func TestAllOptions(t *testing.T) {
 	WithSparseVectorField("custom_sparse")(&opt)
 	assert.Equal(t, "custom_sparse", opt.sparseVectorFieldName)
 
-	// Test WithSparseEncoder
+	// Test WithTCSparseEncoder
 	sparseEncoder := newMockSparseEncoder()
-	WithSparseEncoder(sparseEncoder)(&opt)
+	WithTCSparseEncoder(sparseEncoder)(&opt)
 	assert.Same(t, sparseEncoder, opt.sparseEncoder)
 }
 

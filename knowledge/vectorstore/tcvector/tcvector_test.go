@@ -1476,7 +1476,7 @@ func TestNewConnectionPriority(t *testing.T) {
 	})
 }
 
-func TestNewWithSparseEncoder(t *testing.T) {
+func TestNewWithTCSparseEncoder(t *testing.T) {
 	oldBuilder := storage.GetClientBuilder()
 	defer func() { storage.SetClientBuilder(oldBuilder) }()
 
@@ -1489,7 +1489,7 @@ func TestNewWithSparseEncoder(t *testing.T) {
 		WithDatabase("test_db"),
 		WithCollection("test_collection"),
 		WithIndexDimension(128),
-		WithSparseEncoder(sparseEncoder),
+		WithTCSparseEncoder(sparseEncoder),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
