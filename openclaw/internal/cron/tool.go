@@ -36,9 +36,13 @@ const (
 )
 
 const (
-	errJobIDRequired      = "job_id is required"
-	errProfileIDRequired  = "cron: runtime profile id is required"
-	errHeadlessWithTarget = "cron: headless jobs cannot set " +
+	errJobIDRequired     = "job_id is required"
+	errProfileIDRequired = "cron: runtime profile id is required"
+	errAfterWithSchedule = "cron: after cannot be combined with " +
+		"at, every, every_ms, or cron_expr"
+	errAfterAliasConflict   = "cron: after and delay cannot both be set"
+	errAfterMSDelayTooLarge = "cron: after_ms delay is too large"
+	errHeadlessWithTarget   = "cron: headless jobs cannot set " +
 		"channel or target"
 	errDeliveryTargetUnavailable = "cron: current chat delivery " +
 		"target is unavailable; pass channel/target explicitly " +
@@ -49,6 +53,8 @@ const (
 		"{{.Cron.RemainingRuns}}, and " +
 		"{{if .Cron.IsFinalRun}}...{{end}}. Do not hardcode " +
 		"counters like 1/5 into a repeating task."
+
+	maxDelayMilliseconds = int64(1<<63-1) / int64(time.Millisecond)
 )
 
 // Tool exposes the scheduler to the model.
@@ -77,7 +83,10 @@ func (t *Tool) Declaration() *tool.Declaration {
 			"becomes a future agent turn. If channel/target are " +
 			"omitted when adding a job from chat, the final " +
 			"result is delivered back to the current chat when " +
-			"possible. Use max_runs for bounded repeats, " +
+			"possible. For one-shot relative reminders, use " +
+			"after or delay instead of calculating an absolute " +
+			"at timestamp yourself. Use every only for " +
+			"recurring jobs, max_runs for bounded repeats, " +
 			"ends_at for a stop time, and overlap_policy to " +
 			"control what happens when one run is still busy. " +
 			cronTemplateHint + " " +
@@ -127,8 +136,10 @@ func (t *Tool) Declaration() *tool.Declaration {
 					Description: "Whether the job is enabled.",
 				},
 				"schedule_kind": {
-					Type:        "string",
-					Description: "at, every, or cron.",
+					Type: "string",
+					Description: "at, after, every, or cron. " +
+						"after is an alias for at when " +
+						"used with after or delay.",
 				},
 				"at": {
 					Type: "string",
@@ -146,7 +157,8 @@ func (t *Tool) Declaration() *tool.Declaration {
 				"every": {
 					Type: "string",
 					Description: "Duration like 1m, 2h, or " +
-						"24h for recurring jobs.",
+						"24h for recurring jobs. Do not use " +
+						"for one-shot reminders.",
 				},
 				"interval": {
 					Type:        "string",
@@ -165,6 +177,34 @@ func (t *Tool) Declaration() *tool.Declaration {
 					Type:        "number",
 					Description: "Alias for every_ms.",
 				},
+				"after": {
+					Type: "string",
+					Description: "One-shot relative delay " +
+						"duration like 30m, 2h, or 24h. " +
+						"Creates an at schedule from the " +
+						"service clock.",
+				},
+				"delay": {
+					Type:        "string",
+					Description: "Alias for after.",
+				},
+				"after_ms": {
+					Type: "number",
+					Description: "Alias one-shot relative " +
+						"delay in milliseconds.",
+				},
+				"delay_ms": {
+					Type:        "number",
+					Description: "Alias for after_ms.",
+				},
+				"afterMs": {
+					Type:        "number",
+					Description: "Alias for after_ms.",
+				},
+				"delayMs": {
+					Type:        "number",
+					Description: "Alias for after_ms.",
+				},
 				"cron_expr": {
 					Type: "string",
 					Description: "Cron expression with 5 or " +
@@ -177,7 +217,8 @@ func (t *Tool) Declaration() *tool.Declaration {
 				"timezone": {
 					Type: "string",
 					Description: "Optional IANA timezone for " +
-						"cron schedules.",
+						"cron schedules. Ignored for " +
+						"relative after/delay schedules.",
 				},
 				"max_runs": {
 					Type: "number",
@@ -257,6 +298,12 @@ type toolInput struct {
 	Duration     string `json:"duration,omitempty"`
 	EveryMS      *int64 `json:"every_ms,omitempty"`
 	EveryMSOld   *int64 `json:"everyMs,omitempty"`
+	After        string `json:"after,omitempty"`
+	Delay        string `json:"delay,omitempty"`
+	AfterMS      *int64 `json:"after_ms,omitempty"`
+	DelayMS      *int64 `json:"delay_ms,omitempty"`
+	AfterMSOld   *int64 `json:"afterMs,omitempty"`
+	DelayMSOld   *int64 `json:"delayMs,omitempty"`
 	CronExpr     string `json:"cron_expr,omitempty"`
 	CronExprOld  string `json:"cronExpr,omitempty"`
 	Timezone     string `json:"timezone,omitempty"`
@@ -346,11 +393,15 @@ func (t *Tool) add(
 		Name:       in.Name,
 		Message:    resolveMessage(in),
 		Enabled:    true,
-		Schedule:   scheduleFromInput(in),
 		Policy:     policy,
 		UserID:     userID,
 		TimeoutSec: firstIntValue(in.TimeoutSec, in.TimeoutOld),
 	}
+	schedule, err := scheduleFromInput(in, t.svc.clock())
+	if err != nil {
+		return nil, err
+	}
+	job.Schedule = schedule
 	if in.Enabled != nil {
 		job.Enabled = *in.Enabled
 	}
@@ -408,8 +459,16 @@ func (t *Tool) update(
 		patch.Enabled = in.Enabled
 	}
 	if hasScheduleInput(in) {
-		schedule := scheduleFromInput(in)
-		patch.Schedule = &schedule
+		if hasOnlyTimezoneScheduleInput(in) {
+			timezone := strings.TrimSpace(in.Timezone)
+			patch.ScheduleTimezone = &timezone
+		} else {
+			schedule, err := scheduleFromInput(in, t.svc.clock())
+			if err != nil {
+				return nil, err
+			}
+			patch.Schedule = &schedule
+		}
 	}
 	if hasPolicyInput(in) {
 		policy, err := policyFromInputWithError(in)
@@ -500,11 +559,18 @@ func (t *Tool) runNow(
 	return job, nil
 }
 
-func scheduleFromInput(in toolInput) Schedule {
-	at := resolveAt(in)
+func scheduleFromInput(in toolInput, now time.Time) (Schedule, error) {
+	at, err := resolveAt(in, now)
+	if err != nil {
+		return Schedule{}, err
+	}
 	every := resolveEvery(in)
 	everyMS := firstInt64Value(in.EveryMS, in.EveryMSOld)
 	cronExpr := firstString(in.CronExpr, in.CronExprOld)
+	timezone := strings.TrimSpace(in.Timezone)
+	if hasDelayInput(in) {
+		timezone = ""
+	}
 	return Schedule{
 		Kind: resolveScheduleKind(
 			in.ScheduleKind,
@@ -517,8 +583,8 @@ func scheduleFromInput(in toolInput) Schedule {
 		Every:    every,
 		EveryMS:  everyMS,
 		CronExpr: cronExpr,
-		Timezone: strings.TrimSpace(in.Timezone),
-	}
+		Timezone: timezone,
+	}, nil
 }
 
 func policyFromInputWithError(
@@ -549,7 +615,7 @@ func resolveScheduleKind(
 	everyMS int64,
 	cronExpr string,
 ) string {
-	kind = strings.TrimSpace(kind)
+	kind = normalizeScheduleKind(kind)
 	if kind != "" {
 		return kind
 	}
@@ -569,12 +635,109 @@ func resolveMessage(in toolInput) string {
 	return firstString(in.Message, in.Prompt, in.Task)
 }
 
-func resolveAt(in toolInput) string {
-	return firstString(in.At, in.RunAt, in.RunAtOld)
+func resolveAt(in toolInput, now time.Time) (string, error) {
+	delay, hasDelay, err := resolveDelay(in)
+	if err != nil {
+		return "", err
+	}
+	at := firstString(in.At, in.RunAt, in.RunAtOld)
+	if !hasDelay {
+		return at, nil
+	}
+	if hasNonDelayScheduleInput(in) {
+		return "", fmt.Errorf(errAfterWithSchedule)
+	}
+	if kind := normalizeScheduleKind(in.ScheduleKind); kind != "" &&
+		kind != ScheduleKindAt {
+		return "", fmt.Errorf(
+			"cron: schedule_kind must be empty, at, or after "+
+				"when using after, got %s",
+			in.ScheduleKind,
+		)
+	}
+	return now.Add(delay).Format(time.RFC3339Nano), nil
 }
 
 func resolveEvery(in toolInput) string {
 	return firstString(in.Every, in.Interval, in.Duration)
+}
+
+func resolveDelay(in toolInput) (time.Duration, bool, error) {
+	value, hasValue, err := delayDurationInput(in.After, in.Delay)
+	if err != nil {
+		return 0, false, err
+	}
+	ms, hasMS, err := delayMillisecondsInput(
+		in.AfterMS,
+		in.DelayMS,
+		in.AfterMSOld,
+		in.DelayMSOld,
+	)
+	if err != nil {
+		return 0, false, err
+	}
+	switch {
+	case value != "" && hasMS:
+		return 0, false, fmt.Errorf(
+			"cron: after and after_ms cannot both be set",
+		)
+	case hasValue:
+		delay, err := time.ParseDuration(value)
+		if err != nil {
+			return 0, false, fmt.Errorf(
+				"cron: invalid after delay: %w",
+				err,
+			)
+		}
+		if delay <= 0 {
+			return 0, false, fmt.Errorf(
+				"cron: after delay must be positive",
+			)
+		}
+		return delay, true, nil
+	case hasMS:
+		if ms <= 0 {
+			return 0, false, fmt.Errorf(
+				"cron: after_ms delay must be positive",
+			)
+		}
+		if ms > maxDelayMilliseconds {
+			return 0, false, fmt.Errorf(errAfterMSDelayTooLarge)
+		}
+		return time.Duration(ms) * time.Millisecond, true, nil
+	default:
+		return 0, false, nil
+	}
+}
+
+func delayDurationInput(after string, delay string) (string, bool, error) {
+	hasAfter := strings.TrimSpace(after) != ""
+	hasDelay := strings.TrimSpace(delay) != ""
+	if hasAfter && hasDelay {
+		return "", false, fmt.Errorf(errAfterAliasConflict)
+	}
+	value := firstString(after, delay)
+	return value, value != "", nil
+}
+
+func delayMillisecondsInput(values ...*int64) (int64, bool, error) {
+	var selected int64
+	count := 0
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		if count == 0 {
+			selected = *value
+		}
+		count++
+	}
+	if count > 1 {
+		return 0, false, fmt.Errorf(
+			"cron: only one after_ms alias can be set",
+		)
+	}
+	return selected, count == 1, nil
 }
 
 func resolveEndsAt(in toolInput) string {
@@ -680,14 +843,41 @@ func isScheduledRunMutation(ctx context.Context, action string) bool {
 }
 
 func hasScheduleInput(in toolInput) bool {
+	return hasScheduleCoreInput(in) ||
+		strings.TrimSpace(in.Timezone) != ""
+}
+
+func hasScheduleCoreInput(in toolInput) bool {
 	return strings.TrimSpace(in.ScheduleKind) != "" ||
-		resolveAt(in) != "" ||
+		firstString(in.At, in.RunAt, in.RunAtOld) != "" ||
+		resolveEvery(in) != "" ||
+		in.EveryMS != nil ||
+		in.EveryMSOld != nil ||
+		hasDelayInput(in) ||
+		strings.TrimSpace(in.CronExpr) != "" ||
+		strings.TrimSpace(in.CronExprOld) != ""
+}
+
+func hasOnlyTimezoneScheduleInput(in toolInput) bool {
+	return strings.TrimSpace(in.Timezone) != "" &&
+		!hasScheduleCoreInput(in)
+}
+
+func hasDelayInput(in toolInput) bool {
+	return firstString(in.After, in.Delay) != "" ||
+		in.AfterMS != nil ||
+		in.DelayMS != nil ||
+		in.AfterMSOld != nil ||
+		in.DelayMSOld != nil
+}
+
+func hasNonDelayScheduleInput(in toolInput) bool {
+	return firstString(in.At, in.RunAt, in.RunAtOld) != "" ||
 		resolveEvery(in) != "" ||
 		in.EveryMS != nil ||
 		in.EveryMSOld != nil ||
 		strings.TrimSpace(in.CronExpr) != "" ||
-		strings.TrimSpace(in.CronExprOld) != "" ||
-		strings.TrimSpace(in.Timezone) != ""
+		strings.TrimSpace(in.CronExprOld) != ""
 }
 
 func hasPolicyInput(in toolInput) bool {

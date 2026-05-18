@@ -58,7 +58,7 @@ func ResolveTarget(
 }
 
 func RuntimeStateForTarget(target DeliveryTarget) map[string]any {
-	clean := sanitizeTarget(target)
+	clean := fillTargetFromOpaqueValue(sanitizeTarget(target))
 	if clean.Channel == "" || clean.Target == "" {
 		return nil
 	}
@@ -138,7 +138,8 @@ func fillTargetFromSession(
 	return target
 }
 
-// ResolveTargetFromSessionID infers an outbound target from a chat session id.
+// ResolveTargetFromSessionID infers an outbound target from a chat
+// session id.
 func ResolveTargetFromSessionID(sessionID string) (DeliveryTarget, bool) {
 	if target, ok := telegram.ResolveTextTargetFromSessionID(sessionID); ok {
 		return DeliveryTarget{

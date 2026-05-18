@@ -46,10 +46,13 @@ const (
 		"needed instead of blindly following old shell " +
 		"snippets. Do not create, update, remove, clear, or " +
 		"run cron jobs from within this scheduled run. " +
-		"Do not use message unless you need an additional " +
-		"side message beyond the final result. The final " +
-		"answer will be delivered automatically to the job " +
-		"target. Do not ask for confirmation unless blocked. " +
+		"Prefer the final answer for normal job delivery. " +
+		"Use message only when you intentionally need to " +
+		"send the scheduled task text yourself. A successful " +
+		"text message sent to the job target counts as the " +
+		"job delivery, so the final answer will be kept as " +
+		"the run result instead of delivered again. Do not " +
+		"ask for confirmation unless blocked. " +
 		"Do not return only a statement of what you will do; " +
 		"perform the scheduled task and report the result or " +
 		"the exact blocker."
@@ -542,6 +545,8 @@ func (s *Service) executeJob(
 		defer cancel()
 	}
 
+	sentTextRecorder := outbound.NewSentTextRecorder()
+	runCtx = outbound.WithSentTextRecorder(runCtx, sentTextRecorder)
 	runtimeState := scheduledRunRuntimeState(job)
 	runOpts := make([]agent.RunOption, 0, 3)
 	if runtimeState != nil {
@@ -629,26 +634,32 @@ func (s *Service) executeJob(
 		_ = trace.RecordText(output)
 	}
 	deliveryAttempted := false
+	deliverySkipReason := ""
 	if runErr == nil &&
 		s.deliveryAllowed(job.ID, runToken) &&
 		job.Delivery.Channel != "" &&
 		job.Delivery.Target != "" &&
 		strings.TrimSpace(result.text) != "" {
-		deliveryAttempted = true
-		if s.router == nil {
-			deliveryErr = fmt.Errorf("cron: nil outbound router")
+		if sentTextRecorder.ContainsTarget(job.Delivery) {
+			deliverySkipReason = cronDeliverySkipMessageToolTarget
 		} else {
-			deliveryErr = s.router.SendText(
-				runCtx,
-				job.Delivery,
-				result.text,
-			)
+			deliveryAttempted = true
+			if s.router == nil {
+				deliveryErr = fmt.Errorf("cron: nil outbound router")
+			} else {
+				deliveryErr = s.router.SendText(
+					runCtx,
+					job.Delivery,
+					result.text,
+				)
+			}
 		}
 	}
 	recordCronDeliveryTrace(
 		trace,
 		job,
 		deliveryAttempted,
+		deliverySkipReason,
 		deliveryErr,
 	)
 
@@ -732,6 +743,7 @@ func recordCronDeliveryTrace(
 	trace *debugrecorder.Trace,
 	job *Job,
 	attempted bool,
+	skipReason string,
 	err error,
 ) {
 	if trace == nil || job == nil {
@@ -744,6 +756,9 @@ func recordCronDeliveryTrace(
 	}
 	if err != nil {
 		record["error"] = err.Error()
+	}
+	if skipReason != "" {
+		record["skip_reason"] = skipReason
 	}
 	_ = trace.Record(debugrecorder.KindCronDelivery, record)
 }

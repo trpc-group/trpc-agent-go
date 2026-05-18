@@ -131,6 +131,112 @@ func TestResolveTarget_RuntimeStateFallback(t *testing.T) {
 	}, target)
 }
 
+func TestSentTextRecorderNormalizesOpaqueTarget(t *testing.T) {
+	t.Parallel()
+
+	recorder := NewSentTextRecorder()
+	recorder.Record(DeliveryTarget{
+		Target: "wecom:thread:wecom:dm:user-1",
+	}, "hello")
+
+	require.True(t, recorder.Contains(DeliveryTarget{
+		Channel: "wecom",
+		Target:  "single:user-1",
+	}, "hello"))
+	require.True(t, recorder.ContainsTarget(DeliveryTarget{
+		Channel: "wecom",
+		Target:  "single:user-1",
+	}))
+	require.False(t, recorder.Contains(DeliveryTarget{
+		Channel: "wecom",
+		Target:  "single:user-1",
+	}, " hello "))
+	require.False(t, recorder.ContainsTarget(DeliveryTarget{
+		Channel: "wecom",
+		Target:  "single:user-2",
+	}))
+	require.False(t, recorder.Contains(DeliveryTarget{
+		Channel: "wecom",
+		Target:  "single:user-2",
+	}, "hello"))
+}
+
+func TestSentTextRecorderHandlesEmptyAndNilInputs(t *testing.T) {
+	t.Parallel()
+
+	var nilRecorder *SentTextRecorder
+	nilRecorder.Record(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "100",
+	}, "hello")
+	require.False(t, nilRecorder.Contains(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "100",
+	}, "hello"))
+	require.False(t, nilRecorder.ContainsTarget(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "100",
+	}))
+
+	recorder := &SentTextRecorder{}
+	recorder.Record(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "100",
+	}, "hello")
+	require.True(t, recorder.Contains(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "100",
+	}, "hello"))
+	require.True(t, recorder.ContainsTarget(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "100",
+	}))
+	require.False(t, recorder.Contains(DeliveryTarget{
+		Channel: "telegram",
+		Target:  "100",
+	}, " "))
+	require.False(t, recorder.ContainsTarget(DeliveryTarget{
+		Channel: "telegram",
+	}))
+	require.False(t, recorder.Contains(DeliveryTarget{
+		Channel: "telegram",
+	}, "hello"))
+}
+
+func TestWithSentTextRecorderSkipsNil(t *testing.T) {
+	t.Parallel()
+
+	ctx := WithSentTextRecorder(context.Background(), nil)
+	_, ok := sentTextRecorderFromContext(ctx)
+	require.False(t, ok)
+
+	recorder := NewSentTextRecorder()
+	ctx = WithSentTextRecorder(nil, recorder)
+	got, ok := sentTextRecorderFromContext(ctx)
+	require.True(t, ok)
+	require.Same(t, recorder, got)
+}
+
+func TestSentTextRecorderFromContextHandlesMissingValues(t *testing.T) {
+	t.Parallel()
+
+	_, ok := sentTextRecorderFromContext(nil)
+	require.False(t, ok)
+
+	_, ok = sentTextRecorderFromContext(context.Background())
+	require.False(t, ok)
+
+	recorder := NewSentTextRecorder()
+	ctx := WithSentTextRecorder(invocationCtx(
+		t,
+		"cron:job-1:1",
+		agent.RunOptions{},
+	), recorder)
+	got, ok := sentTextRecorderFromContext(ctx)
+	require.True(t, ok)
+	require.Same(t, recorder, got)
+}
+
 func TestResolveTarget_SessionFallback(t *testing.T) {
 	ctx := invocationCtx(t, "telegram:thread:999:topic:7", agent.RunOptions{})
 
