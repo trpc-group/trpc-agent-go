@@ -20,6 +20,7 @@ import (
 
 const (
 	ScheduleKindAt    = "at"
+	ScheduleKindAfter = "after"
 	ScheduleKindEvery = "every"
 	ScheduleKindCron  = "cron"
 )
@@ -38,6 +39,8 @@ const (
 	runtimeStateRemaining    = "openclaw.cron.remaining_runs"
 	runtimeStateIsFinalRun   = "openclaw.cron.is_final_run"
 )
+
+const cronDeliverySkipMessageToolTarget = "duplicate_message_tool_text"
 
 const cronSessionPrefix = "cron:"
 
@@ -197,9 +200,18 @@ func IsRunSessionID(sessionID string) bool {
 	)
 }
 
+func normalizeScheduleKind(kind string) string {
+	switch value := strings.ToLower(strings.TrimSpace(kind)); value {
+	case ScheduleKindAfter:
+		return ScheduleKindAt
+	default:
+		return value
+	}
+}
+
 // ScheduleSummary returns a stable human-readable schedule summary.
 func ScheduleSummary(schedule Schedule) string {
-	switch strings.ToLower(strings.TrimSpace(schedule.Kind)) {
+	switch normalizeScheduleKind(schedule.Kind) {
 	case ScheduleKindAt:
 		return "at " + strings.TrimSpace(schedule.At)
 	case ScheduleKindEvery:

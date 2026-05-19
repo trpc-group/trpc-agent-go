@@ -5705,6 +5705,76 @@ func TestRunner_Run_UserMessageRewriter_RewritesCurrentTurnMessages(t *testing.T
 	require.Equal(t, "rewritten", sess.Events[1].Choices[0].Message.Content)
 }
 
+func TestRunner_Run_UserMessageRewriter_RewritesCurrentTurnToolTranscript(t *testing.T) {
+	toolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call_1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "lookup",
+			Arguments: []byte(`{"query":"hello"}`),
+		},
+	}
+	assistantMessage := model.Message{
+		Role:      model.RoleAssistant,
+		Content:   "calling lookup",
+		ToolCalls: []model.ToolCall{toolCall},
+	}
+	rewritten := []model.Message{
+		model.NewUserMessage("first user"),
+		assistantMessage,
+		model.NewToolMessage("call_1", "lookup", `{"answer":"world"}`),
+		model.NewUserMessage("final user"),
+	}
+	modelStub := &sequentialModel{
+		name: "seq",
+		responses: []*model.Response{{
+			ID:   "resp-1",
+			Done: true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("ok"),
+			}},
+		}},
+	}
+	svc := sessioninmemory.NewSessionService()
+	ag := llmagent.New("a", llmagent.WithModel(modelStub))
+	r := NewRunner("app", ag, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return rewritten, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+	requests := modelStub.Requests()
+	require.Len(t, requests, 1)
+	require.Equal(t, rewritten, requests[0].messages)
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 5)
+	require.Equal(t, model.RoleUser, sess.Events[0].Choices[0].Message.Role)
+	require.Equal(t, model.RoleAssistant, sess.Events[1].Choices[0].Message.Role)
+	require.Equal(t, model.RoleTool, sess.Events[2].Choices[0].Message.Role)
+	require.Equal(t, model.RoleUser, sess.Events[3].Choices[0].Message.Role)
+	require.Equal(t, rewritten, []model.Message{
+		sess.Events[0].Choices[0].Message,
+		sess.Events[1].Choices[0].Message,
+		sess.Events[2].Choices[0].Message,
+		sess.Events[3].Choices[0].Message,
+	})
+}
+
 func TestRunner_Run_UserMessageRewriter_EmptyResultReturnsError(t *testing.T) {
 	svc := sessioninmemory.NewSessionService()
 	r := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(svc))
@@ -5942,16 +6012,18 @@ func (m *tickCtxAgent) Run(
 
 func TestProcessAgentEvents_EmitEventContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel before running; EmitEvent should take ctx.Done() branch
+	cancel() // cancel before running
 	r := NewRunner("app", &oneEventAgent{name: "o"}, WithSessionService(sessioninmemory.NewSessionService()))
 	ch, err := r.Run(ctx, "u", "s", model.NewUserMessage(""))
 	require.NoError(t, err)
-	// Should close without emitting any event due to emit error path returning early.
-	var got int
-	for range ch {
-		got++
+	// Agent events are dropped due to cancelled context,
+	// but runner-completion should still be emitted as the terminal signal.
+	var events []*event.Event
+	for evt := range ch {
+		events = append(events, evt)
 	}
-	require.Equal(t, 0, got)
+	require.Len(t, events, 1)
+	require.True(t, events[0].IsRunnerCompletion())
 }
 
 func TestRunner_Run_DetachedCancelKeepsDeadline(t *testing.T) {
@@ -6080,6 +6152,67 @@ func TestRunner_ManagedRunner_CancelAndStatus(t *testing.T) {
 	require.False(t, mr.Cancel(requestID))
 }
 
+func TestRunner_CancelEmitsRunnerCompletion(t *testing.T) {
+	const (
+		requestID = "req-cancel-completion"
+		maxWait   = 2 * time.Second
+		interval  = 10 * time.Millisecond
+	)
+
+	r := NewRunner(
+		"app",
+		&tickCtxAgent{name: "t", interval: interval},
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	mr, ok := r.(ManagedRunner)
+	require.True(t, ok)
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage(""),
+		agent.WithRequestID(requestID),
+		agent.WithDetachedCancel(true),
+		agent.WithExecutionTraceEnabled(true),
+	)
+	require.NoError(t, err)
+
+	// Wait for at least one tick event before cancelling.
+	select {
+	case <-time.After(maxWait):
+		t.Fatal("did not receive first event")
+	case _, ok := <-ch:
+		require.True(t, ok)
+	}
+
+	require.True(t, mr.Cancel(requestID))
+
+	// Drain remaining events and look for runner-completion.
+	var completionCount int
+	var completion *event.Event
+	deadline := time.After(maxWait)
+	for ch != nil {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				ch = nil
+				continue
+			}
+			if evt != nil && evt.IsRunnerCompletion() {
+				completionCount++
+				completion = evt
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for channel to close")
+		}
+	}
+
+	require.Equal(t, 1, completionCount, "should receive exactly one runner-completion after cancel")
+	require.NotNil(t, completion.ExecutionTrace)
+	require.Equal(t, atrace.TraceStatusIncomplete, completion.ExecutionTrace.Status)
+}
+
 func TestRunner_Close_CancelsRunningRuns(t *testing.T) {
 	const (
 		requestID = "req-close-1"
@@ -6164,11 +6297,14 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 
 	// Do not read from processed until goroutine has had a chance to hit emit; then drain.
 	time.Sleep(50 * time.Millisecond)
-	var n int
-	for range processed {
-		n++
+	// Agent events are dropped due to cancelled context,
+	// but runner-completion should still be emitted.
+	var events []*event.Event
+	for evt := range processed {
+		events = append(events, evt)
 	}
-	require.Equal(t, 0, n)
+	require.Len(t, events, 1)
+	require.True(t, events[0].IsRunnerCompletion())
 }
 
 func drainChannel(ch <-chan *event.Event) <-chan struct{} {

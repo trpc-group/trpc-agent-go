@@ -140,7 +140,7 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	require.Equal(t, "workspace", ws.ID)
 	require.Equal(t, []string{"workspace"}, mgr.created)
 
-	// Reuse through registry.
+	// Reuse through fallback workspace name when no invocation session is present.
 	ws2, err := r.CreateWorkspace(ctx, eng, "workspace")
 	require.NoError(t, err)
 	require.Equal(t, ws, ws2)
@@ -154,15 +154,20 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	require.Equal(t, "sess-123", ws3.ID)
 	require.Equal(t, []string{"workspace", "sess-123"}, mgr.created)
 
+	ws4, err := r.CreateWorkspace(ctx, eng, "ignored-name")
+	require.NoError(t, err)
+	require.Equal(t, ws3, ws4)
+	require.Equal(t, []string{"workspace", "sess-123"}, mgr.created)
+
 	inv.Session = &session.Session{
 		AppName: "app",
 		UserID:  "user",
 		ID:      "sess-456",
 	}
 	ctx = agent.NewInvocationContext(context.Background(), inv)
-	ws4, err := r.CreateWorkspace(ctx, eng, "ignored-name")
+	ws5, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
-	require.Equal(t, "app/user/sess-456", ws4.ID)
+	require.Equal(t, "app/user/sess-456", ws5.ID)
 	require.Equal(t, []string{"workspace", "sess-123", "app/user/sess-456"}, mgr.created)
 }
 

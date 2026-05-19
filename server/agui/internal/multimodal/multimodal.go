@@ -68,23 +68,24 @@ func contentPartFromInputContent(part types.InputContent) (*model.ContentPart, e
 }
 
 func contentPartFromBinaryInput(part types.InputContent) (*model.ContentPart, error) {
-	if part.ID == "" && part.URL == "" && part.Data == "" {
+	binaryURL := strings.TrimSpace(part.URL)
+	if part.ID == "" && binaryURL == "" && part.Data == "" {
 		return nil, errors.New("binary input content requires at least one of id, url, or data")
 	}
 	mimeType := strings.ToLower(strings.TrimSpace(part.MimeType))
-	if part.URL != "" {
+	if binaryURL != "" {
 		if strings.HasPrefix(mimeType, "image/") {
 			return &model.ContentPart{
 				Type: model.ContentTypeImage,
 				Image: &model.Image{
-					URL: part.URL,
+					URL:    binaryURL,
+					Format: mimeType,
 				},
 			}, nil
 		}
-		text := part.URL
 		return &model.ContentPart{
-			Type: model.ContentTypeText,
-			Text: &text,
+			Type: model.ContentTypeFile,
+			File: fileFromBinaryURL(part, mimeType, binaryURL),
 		}, nil
 	}
 	if part.Data != "" {
@@ -124,6 +125,14 @@ func contentPartFromBinaryInput(part types.InputContent) (*model.ContentPart, er
 		Type: model.ContentTypeFile,
 		File: fileFromBinaryID(part),
 	}, nil
+}
+
+func fileFromBinaryURL(part types.InputContent, mimeType, fileURL string) *model.File {
+	return &model.File{
+		Name:     strings.TrimSpace(part.Filename),
+		URL:      fileURL,
+		MimeType: mimeType,
+	}
 }
 
 func fileFromBinaryID(part types.InputContent) *model.File {
