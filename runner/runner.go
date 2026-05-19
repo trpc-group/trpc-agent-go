@@ -45,8 +45,11 @@ import (
 const (
 	authorUser = "user"
 
-	errMsgEmptyRequestID = "runner: empty request id"
-	errMsgNilCancelFunc  = "runner: nil cancel function"
+	errMsgEmptyRequestID               = "runner: empty request id"
+	errMsgNilCancelFunc                = "runner: nil cancel function"
+	interruptedAssistantFinishReason   = "cancelled"
+	interruptedAssistantExtensionKey   = "trpc_agent.runner.interrupted_assistant"
+	cancelledSessionPersistenceTimeout = time.Second
 )
 
 var (
@@ -935,6 +938,11 @@ type eventLoopContext struct {
 	visibleCompletionChoiceSignatures  map[string]struct{}
 	sawTerminalError                   bool
 	streamFilter                       graph.StreamModeFilter
+	interruptedAssistantResponseID     string
+	interruptedAssistantAuthor         string
+	interruptedAssistantInvocationID   string
+	interruptedAssistantCreated        int64
+	interruptedAssistantContent        strings.Builder
 	// emittedAssistantResponseIDs tracks response IDs that already produced a
 	// non-partial assistant message event during this run.
 	//
@@ -980,6 +988,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		}
 		// Agent event stream completed.
 		steer.Close(loop.invocation)
+		r.safePersistInterruptedAssistant(ctx, loop)
 		r.safeEmitRunnerCompletion(ctx, loop)
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
@@ -1097,6 +1106,9 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	// Emit event to output channel.
 	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
 		return fmt.Errorf("emit event to output channel: %w", err)
+	}
+	if !excludeRootCompletion {
+		r.recordInterruptedAssistantDelta(loop, agentEvent)
 	}
 
 	return nil
@@ -1290,6 +1302,185 @@ func eventHasAssistantMessageContent(e *event.Event) bool {
 		}
 	}
 	return false
+}
+
+type interruptedAssistantMetadata struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+func (r *runner) recordInterruptedAssistantDelta(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) {
+	if loop == nil || agentEvent == nil || agentEvent.Response == nil {
+		return
+	}
+	rsp := agentEvent.Response
+	if !rsp.IsPartial || rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
+		return
+	}
+	var content strings.Builder
+	for _, choice := range rsp.Choices {
+		if choice.Delta.Role != "" && choice.Delta.Role != model.RoleAssistant {
+			continue
+		}
+		if choice.Delta.Content != "" {
+			content.WriteString(choice.Delta.Content)
+		}
+	}
+	if content.Len() == 0 {
+		return
+	}
+	responseID := rsp.ID
+	if responseID == "" {
+		responseID = loop.interruptedAssistantResponseID
+	}
+	if responseID == "" {
+		responseID = "interrupted-assistant-" + uuid.NewString()
+	}
+	if loop.interruptedAssistantResponseID != "" &&
+		responseID != loop.interruptedAssistantResponseID {
+		loop.interruptedAssistantContent.Reset()
+	}
+	loop.interruptedAssistantResponseID = responseID
+	loop.interruptedAssistantAuthor = agentEvent.Author
+	loop.interruptedAssistantInvocationID = agentEvent.InvocationID
+	if rsp.Created > 0 {
+		loop.interruptedAssistantCreated = rsp.Created
+	}
+	loop.interruptedAssistantContent.WriteString(content.String())
+}
+
+// safePersistInterruptedAssistant guards cancellation-time partial persistence
+// against panics from session services.
+func (r *runner) safePersistInterruptedAssistant(ctx context.Context, loop *eventLoopContext) {
+	defer func() {
+		if rr := recover(); rr != nil {
+			log.Errorf("panic persisting interrupted assistant: %v\n%s", rr, string(debug.Stack()))
+		}
+	}()
+	r.persistInterruptedAssistant(ctx, loop)
+}
+
+func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoopContext) {
+	if ctx == nil || ctx.Err() == nil || loop == nil || loop.sess == nil {
+		return
+	}
+	interruptedEvent := r.interruptedAssistantEvent(ctx, loop)
+	if interruptedEvent == nil {
+		return
+	}
+	persistCtx, cancel := sessionPersistenceContext(ctx)
+	defer cancel()
+	if err := r.sessionService.AppendEvent(
+		persistCtx,
+		loop.sess,
+		interruptedEvent,
+	); err != nil {
+		log.Errorf("Failed to append interrupted assistant event to session: %v", err)
+		return
+	}
+	r.recordPersistedAssistantEvent(loop, interruptedEvent, true)
+}
+
+func (r *runner) interruptedAssistantEvent(
+	ctx context.Context,
+	loop *eventLoopContext,
+) *event.Event {
+	content := loop.interruptedAssistantContent.String()
+	if content == "" {
+		return nil
+	}
+	finishReason := interruptedAssistantFinishReason
+	choices := []model.Choice{{
+		Index:        0,
+		Message:      model.NewAssistantMessage(content),
+		FinishReason: &finishReason,
+	}}
+	if r.interruptedAssistantAlreadyPersisted(loop, choices) {
+		return nil
+	}
+	created := loop.interruptedAssistantCreated
+	if created == 0 {
+		created = time.Now().Unix()
+	}
+	author := loop.interruptedAssistantAuthor
+	if author == "" && loop.invocation != nil {
+		author = loop.invocation.AgentName
+	}
+	invocationID := loop.interruptedAssistantInvocationID
+	if invocationID == "" && loop.invocation != nil {
+		invocationID = loop.invocation.InvocationID
+	}
+	evt := event.NewResponseEvent(
+		invocationID,
+		author,
+		&model.Response{
+			ID:        loop.interruptedAssistantResponseID,
+			Object:    model.ObjectTypeChatCompletion,
+			Created:   created,
+			Done:      true,
+			IsPartial: false,
+			Choices:   choices,
+		},
+	)
+	agent.InjectIntoEvent(loop.invocation, evt)
+	if reason := contextDoneReason(ctx); reason != "" {
+		if payload, err := json.Marshal(
+			interruptedAssistantMetadata{Reason: reason},
+		); err == nil {
+			evt.Extensions = map[string]json.RawMessage{
+				interruptedAssistantExtensionKey: payload,
+			}
+		}
+	}
+	return evt
+}
+
+func (r *runner) interruptedAssistantAlreadyPersisted(
+	loop *eventLoopContext,
+	choices []model.Choice,
+) bool {
+	if loop == nil {
+		return false
+	}
+	if loop.interruptedAssistantResponseID != "" {
+		if _, ok := loop.persistedAssistantResponseIDs[loop.interruptedAssistantResponseID]; ok {
+			return true
+		}
+	}
+	signature := assistantChoiceSignature(choices)
+	if signature == "" {
+		return false
+	}
+	_, ok := loop.persistedAssistantChoiceSignatures[signature]
+	return ok
+}
+
+func contextDoneReason(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return cause.Error()
+	}
+	if err := ctx.Err(); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+func sessionPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.Background(), func() {}
+	}
+	if ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(
+		context.WithoutCancel(ctx),
+		cancelledSessionPersistenceTimeout,
+	)
 }
 
 // safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
@@ -1710,13 +1901,17 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			persistRunnerCompletionEvent.StateDelta,
 		)
 	}
-	if err := r.sessionService.AppendEvent(
-		ctx,
-		loop.sess,
-		persistRunnerCompletionEvent,
-	); err != nil {
-		log.Errorf("Failed to append runner completion event to session: %v", err)
-	}
+	func() {
+		persistCtx, persistCancel := sessionPersistenceContext(ctx)
+		defer persistCancel()
+		if err := r.sessionService.AppendEvent(
+			persistCtx,
+			loop.sess,
+			persistRunnerCompletionEvent,
+		); err != nil {
+			log.Errorf("Failed to append runner completion event to session: %v", err)
+		}
+	}()
 
 	// Use a context to deliver runner-completion after cancellation without blocking cleanup indefinitely.
 	func() {
@@ -2069,7 +2264,7 @@ func collectPriorAssistantResponseIDs(sess *session.Session) map[string]struct{}
 	var responseIDs map[string]struct{}
 	for i := range sess.Events {
 		evt := &sess.Events[i]
-		if evt == nil || evt.Response == nil || evt.IsPartial {
+		if evt.Response == nil || evt.IsPartial {
 			continue
 		}
 		if isGraphCompletionEvent(evt) {
