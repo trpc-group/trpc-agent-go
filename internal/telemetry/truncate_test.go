@@ -126,9 +126,10 @@ func TestTruncateTelemetryModelMessageBoundsNestedPayloads(t *testing.T) {
 
 	require.Len(t, got.ToolCalls, 1)
 	require.Contains(t, string(got.ToolCalls[0].Function.Arguments), "truncated")
-	require.Equal(t, len(largeString), len(msg.Content))
-	require.Len(t, msg.ContentParts[1].Image.Data, maxTelemetryBinaryBytes+1)
-	require.Len(t, msg.ToolCalls[0].Function.Arguments, maxTelemetryRawJSONBytes+1)
+	require.Equal(t, largeString, msg.Content)
+	require.Equal(t, largeString, msg.ReasoningContent)
+	require.Equal(t, largeBinary, msg.ContentParts[1].Image.Data)
+	require.Equal(t, largeRaw, msg.ToolCalls[0].Function.Arguments)
 }
 
 func TestTruncateTelemetryBoundaries(t *testing.T) {
