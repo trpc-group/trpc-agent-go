@@ -18,15 +18,15 @@ asynchronous background loop — the main task path is never blocked.
 │                                                                 │
 │  ┌──────────┐    ┌────────────┐    ┌───────────┐    ┌────────┐  │
 │  │ Reviewer │──▶ │ Reconciler │──▶ │   Gates   │──▶ │Publish │  │
-│  │ (LLM)    │    │(dedup/abs) │    │(A → B → C)│    │        │  │
+│  │ (LLM)    │    │(dedup/abs) │    │           │    │        │  │
 │  └──────────┘    └────────────┘    └───────────┘    └───┬────┘  │
 └─────────────────────────────────────────────────────────┼───────┘
                                                           │
                               ┌───────────────────────────┘
                               ▼
                     ┌───────────────────┐
-                    │  Managed Skills   │ ◀── next task reads
-                    │  (SKILL.md files) │
+                    │  skills/evolution/ │ ◀── next task reads
+                    │  (SKILL.md files)  │
                     └───────────────────┘
 ```
 
@@ -37,6 +37,31 @@ asynchronous background loop — the main task path is never blocked.
 - Quality gates (spec, safety, effectiveness, human approval) — all
   rule-based, zero LLM cost
 - Immutable revision store with audit log and rollback capability
+- Write isolation — evolution cannot modify bundled or user-authored skills
+
+## Directory Layout
+
+Evolution uses the following layout under the runtime's `state_dir`:
+
+```
+<state_dir>/
+  skills/
+    bundled/              ← built-in skills (read-only)
+    local/                ← user-authored skills
+    evolution/            ← auto-learned skills (evolution writes here)
+      market-analysis/SKILL.md
+  evolution/
+    revisions/            ← immutable revision snapshots + audit logs
+      market-analysis/
+        revisions/<id>/meta.json
+        active.txt
+        audit.log
+```
+
+- `skills/evolution/` is written by the evolution publisher; the agent
+  reads these via `skill_load`
+- `evolution/revisions/` stores version history and audit logs for
+  diff, rollback, and approval workflows
 
 ## Quick Start
 
@@ -49,12 +74,17 @@ import (
 )
 
 // 1. Create a skill repository (reads SKILL.md files from disk).
-repo, _ := skill.NewFSRepository("./managed_skills")
+repo, _ := skill.NewFSRepository("./skills")
 
-// 2. Create the evolution service with a reviewer model.
+// 2. Create the evolution service with full quality gates.
 evoSvc := evolution.NewService(reviewerModel,
-    evolution.WithManagedSkillsDir("./managed_skills"),
+    evolution.WithManagedSkillsDir("./skills/evolution"),
     evolution.WithSkillRepository(repo),
+    evolution.WithCandidateStore(evolution.NewFileCandidateStore("./evolution/revisions")),
+    evolution.WithActivePointer(evolution.NewFileActivePointer("./evolution/revisions")),
+    evolution.WithSpecGate(evolution.NewDefaultSpecGate()),
+    evolution.WithSafetyGate(evolution.NewDefaultSafetyGate()),
+    evolution.WithEffectivenessGate(evolution.NewOutcomeBasedEffectivenessGate()),
 )
 defer evoSvc.Close()
 
@@ -74,11 +104,27 @@ defer r.Close()
 //    available to future runs via skill_load.
 ```
 
-## Configuration Options
+## Runtime Configuration (OpenClaw YAML)
+
+Configure evolution behavior in `openclaw.yaml`:
+
+```yaml
+evolution:
+  # Human approval gate:
+  #   "always" — hold all revisions for human approval
+  #   "create" — hold new skills only, auto-pass updates
+  #   ""       — disabled (default), revisions auto-promote
+  human_gate: ""
+```
+
+Evolution is **automatically enabled** when `state_dir` is set and the
+model is not mock — no additional configuration needed.
+
+## Configuration Options (Programmatic)
 
 | Option                         | Description                                    |
 | ------------------------------ | ---------------------------------------------- |
-| `WithManagedSkillsDir(dir)`    | Directory for managed SKILL.md files           |
+| `WithManagedSkillsDir(dir)`    | Directory where evolution writes SKILL.md      |
 | `WithSkillRepository(repo)`    | Skill repo for reading existing skills         |
 | `WithCandidateStore(store)`    | Immutable revision store (audit + rollback)    |
 | `WithActivePointer(ptr)`       | Active revision pointer                        |
@@ -95,16 +141,6 @@ gates before promoting it to the live library:
 
 ### SpecGate + SafetyGate (deterministic, zero LLM)
 
-```go
-evoSvc := evolution.NewService(reviewerModel,
-    evolution.WithManagedSkillsDir("./managed_skills"),
-    evolution.WithCandidateStore(evolution.NewFileCandidateStore("./revisions")),
-    evolution.WithActivePointer(evolution.NewFileActivePointer("./revisions")),
-    evolution.WithSpecGate(evolution.NewDefaultSpecGate()),
-    evolution.WithSafetyGate(evolution.NewDefaultSafetyGate()),
-)
-```
-
 - **SpecGate**: validates schema completeness, name stability, duplicate
   detection
 - **SafetyGate**: scans for secret patterns (`sk-`, `AKIA`, JWT),
@@ -112,39 +148,38 @@ evoSvc := evolution.NewService(reviewerModel,
 
 ### EffectivenessGate
 
-```go
-evolution.WithEffectivenessGate(evolution.NewOutcomeBasedEffectivenessGate())
-```
-
 Holds revisions extracted from failed sessions (score < 80 or
 status=fail) in `pending_eval` state, preventing the agent from
 learning incorrect procedures.
 
 ### HumanGate (optional human approval)
 
-```go
-// Hold all new skill creations for human review.
-evolution.WithHumanGate(evolution.NewCreateOnlyHoldGate())
-
-// Or hold everything:
-evolution.WithHumanGate(evolution.NewAlwaysHoldGate())
-```
-
 When configured, revisions that pass all automatic gates are held in
-`pending_approval` state. An external system (CLI, API, webhook) then
-approves or rejects them.
+`pending_approval` state. Use the CLI to approve or reject:
 
-```go
-// Query and approve pending revisions programmatically:
-svc := evolution.NewApprovalService(store, pointer, publisher)
-pending, _ := svc.ListPending(ctx, evolution.ListPendingOpts{})
-svc.Decide(ctx, evolution.ApprovalDecision{
-    RevisionID: pending[0].RevisionID,
-    SkillID:    pending[0].SkillID,
-    Approved:   true,
-    Reviewer:   "alice@example.com",
-})
+```bash
+# List pending revisions
+openclaw evolution pending --dir <state_dir>/evolution/revisions
+
+# View revision details
+openclaw evolution diff <revision-id> --dir <state_dir>/evolution/revisions
+
+# Approve (publish + promote)
+openclaw evolution approve <revision-id> --dir <state_dir>/evolution/revisions
+
+# Reject
+openclaw evolution reject <revision-id> --dir <state_dir>/evolution/revisions --comment "reason"
+
+# View audit trail
+openclaw evolution audit --dir <state_dir>/evolution/revisions
 ```
+
+### Write Isolation
+
+Evolution **can only modify skills it created** (under `skills/evolution/`).
+Updates targeting bundled or user-authored skills are silently skipped
+with a warning log, ensuring hand-written and built-in skills are never
+accidentally overwritten.
 
 ## Revision Lifecycle
 
@@ -173,9 +208,12 @@ output before the gates:
    superset of an existing skill (e.g. "Weather 5 Cities" vs "Weather
    Multi-City"), convert the create to an update
 2. **Intra-batch dedup**: if the reviewer produces multiple skills with
-   the same logical name, keep only the last
+   the same logical name or shape, keep only the first
 3. **Quantified-sibling absorption**: count-specific names (`3 Cities`)
    are rewritten to generic-parent form (`Multi-City`)
+4. **Word-overlap merge**: if a new skill name shares ≥50% significant
+   words with an existing skill (e.g. "Geopolitical Market Snapshot" vs
+   "Geopolitical Market Analysis"), convert the create to an update
 
 This ensures the skill library converges rather than growing unbounded.
 
@@ -197,5 +235,5 @@ runner.WithEvolutionOutcomeHook(func(ctx context.Context, result *runner.Result)
 ## Example
 
 See [`examples/evolution/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evolution)
-for a complete working example with managed skills, quality gates, and
-human approval.
+for a complete runnable example with managed skills, quality gates,
+and human approval.
