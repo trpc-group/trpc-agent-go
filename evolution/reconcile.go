@@ -647,35 +647,15 @@ func rewriteWordOverlapSkills(
 	}
 
 	// Build word sets for existing skills.
-	type existingWords struct {
-		name  string
-		words map[string]struct{}
-	}
-	existingIndex := make([]existingWords, 0, len(existing))
-	for _, e := range existing {
-		ws := significantWords(e.Name)
-		if len(ws) < 2 {
-			continue
-		}
-		existingIndex = append(existingIndex, existingWords{name: e.Name, words: ws})
-	}
+	existingIndex := buildExistingWordsIndex(existing)
 	if len(existingIndex) == 0 {
 		return skills, updates, events
 	}
 
 	// Track which existing names already have an explicit update or
 	// pending deletion.
-	claimedUpdates := make(map[string]struct{}, len(updates))
-	for _, u := range updates {
-		if u == nil {
-			continue
-		}
-		claimedUpdates[normalizeSkillName(u.Name)] = struct{}{}
-	}
-	pendingDeletions := make(map[string]struct{}, len(deletions))
-	for _, d := range deletions {
-		pendingDeletions[normalizeSkillName(d)] = struct{}{}
-	}
+	claimedUpdates := normalizeNameSet(updates)
+	pendingDeletions := normalizeStringSet(deletions)
 
 	keptSkills := make([]*SkillSpec, 0, len(skills))
 	rewriteByTarget := make(map[string]struct{})
@@ -690,26 +670,8 @@ func rewriteWordOverlapSkills(
 			continue
 		}
 
-		bestMatch := ""
-		bestScore := 0.0
-		candNorm := normalizeSkillName(cand.Name)
-		for _, e := range existingIndex {
-			// Skip pairs where one name is a prefix of the other — those
-			// are already handled by Rule 1 (superset) or Rule 3 (sibling).
-			eNorm := normalizeSkillName(e.name)
-			if strings.HasPrefix(candNorm, eNorm) || strings.HasPrefix(eNorm, candNorm) {
-				continue
-			}
-			score := jaccardSimilarity(candWords, e.words)
-			if score > bestScore {
-				bestScore = score
-				bestMatch = e.name
-			}
-		}
-
-		// Threshold: 50% word overlap (Jaccard), and at least 2 overlapping words.
-		minOverlap := wordOverlap(candWords, significantWords(bestMatch))
-		if bestScore < 0.5 || minOverlap < 2 {
+		bestMatch, bestScore := findBestWordOverlap(cand.Name, candWords, existingIndex)
+		if bestScore < 0.5 || wordOverlap(candWords, significantWords(bestMatch)) < 2 {
 			keptSkills = append(keptSkills, cand)
 			continue
 		}
@@ -761,6 +723,68 @@ func rewriteWordOverlapSkills(
 		})
 	}
 	return keptSkills, updates, events
+}
+
+// existingWordsEntry pairs an existing skill name with its significant word set.
+type existingWordsEntry struct {
+	name  string
+	words map[string]struct{}
+}
+
+// buildExistingWordsIndex extracts significant words for each existing skill
+// that has at least 2 significant words.
+func buildExistingWordsIndex(existing []ExistingSkill) []existingWordsEntry {
+	index := make([]existingWordsEntry, 0, len(existing))
+	for _, e := range existing {
+		ws := significantWords(e.Name)
+		if len(ws) < 2 {
+			continue
+		}
+		index = append(index, existingWordsEntry{name: e.Name, words: ws})
+	}
+	return index
+}
+
+// findBestWordOverlap finds the existing skill with the highest Jaccard
+// similarity to the candidate, skipping pairs where one name is a prefix
+// of the other (handled by Rule 1/3).
+func findBestWordOverlap(candName string, candWords map[string]struct{}, index []existingWordsEntry) (string, float64) {
+	candNorm := normalizeSkillName(candName)
+	bestMatch := ""
+	bestScore := 0.0
+	for _, e := range index {
+		eNorm := normalizeSkillName(e.name)
+		if strings.HasPrefix(candNorm, eNorm) || strings.HasPrefix(eNorm, candNorm) {
+			continue
+		}
+		score := jaccardSimilarity(candWords, e.words)
+		if score > bestScore {
+			bestScore = score
+			bestMatch = e.name
+		}
+	}
+	return bestMatch, bestScore
+}
+
+// normalizeNameSet builds a set of normalized names from update entries.
+func normalizeNameSet(updates []*SkillUpdate) map[string]struct{} {
+	m := make(map[string]struct{}, len(updates))
+	for _, u := range updates {
+		if u == nil {
+			continue
+		}
+		m[normalizeSkillName(u.Name)] = struct{}{}
+	}
+	return m
+}
+
+// normalizeStringSet builds a set of normalized names from a string slice.
+func normalizeStringSet(names []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(names))
+	for _, d := range names {
+		m[normalizeSkillName(d)] = struct{}{}
+	}
+	return m
 }
 
 // significantWords extracts meaningful words from a skill name, excluding
