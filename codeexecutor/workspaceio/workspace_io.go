@@ -177,7 +177,7 @@ func (w *Workspace) Collect(
 		return nil, errors.New("workspaceio: workspace is nil")
 	}
 	if len(patterns) == 0 {
-		return nil, nil
+		return []*File{}, nil
 	}
 	eng, ws, err := w.bindWorkspace(ctx)
 	if err != nil {

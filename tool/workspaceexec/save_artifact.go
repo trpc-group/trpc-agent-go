@@ -200,16 +200,11 @@ func (t *SaveArtifactTool) StateDelta(
 }
 
 // SupportsArtifactSave reports whether the current invocation can
-// persist artifacts for workspace tools.
+// persist artifacts for workspace tools. It forwards to
+// workspacefacade.ArtifactSaveSkipReasonInv so the predicate stays in
+// sync with workspacefacade.ArtifactSaveSkipReason (used by Call).
 func SupportsArtifactSave(inv *agent.Invocation) bool {
-	if inv == nil || inv.ArtifactService == nil || inv.Session == nil {
-		return false
-	}
-	if inv.Session.AppName == "" || inv.Session.UserID == "" ||
-		inv.Session.ID == "" {
-		return false
-	}
-	return true
+	return workspacefacade.ArtifactSaveSkipReasonInv(inv) == ""
 }
 
 var _ tool.Tool = (*SaveArtifactTool)(nil)

@@ -62,7 +62,7 @@ go run . \
 
 Expected output (abridged):
 
-```
+```text
 Workspace I/O demo
 - model:        deepseek-v4-flash
 - skill store:  /abs/path/to/examples/workspace_io/skills_store
@@ -84,7 +84,11 @@ Skill store after invocation:
 cb.RegisterAfterAgent(func(
     ctx context.Context, args *agent.AfterAgentArgs,
 ) (*agent.AfterAgentResult, error) {
-    ws, _ := workspaceio.WorkspaceFromContext(ctx)
+    ws, ok := workspaceio.WorkspaceFromContext(ctx)
+    if !ok {
+        // No code executor configured for this agent — nothing to mirror.
+        return nil, nil
+    }
     files, err := ws.Collect(ctx, "skills/*/SKILL.md")
     if err != nil {
         return nil, err

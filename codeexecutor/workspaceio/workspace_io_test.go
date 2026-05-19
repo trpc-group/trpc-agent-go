@@ -103,11 +103,16 @@ func TestCollect_ReturnsMatchingFiles(t *testing.T) {
 	}, paths)
 }
 
-func TestCollect_EmptyPatternsIsNil(t *testing.T) {
+// TestCollect_EmptyPatternsReturnsEmptySlice pins the documented contract
+// in workspace_io.go: "An empty pattern list returns an empty slice."
+// Returning nil would force callers to special-case the no-pattern path
+// and disagrees with the godoc.
+func TestCollect_EmptyPatternsReturnsEmptySlice(t *testing.T) {
 	ws, ctx, _, _ := newHarness(t)
 	got, err := ws.Collect(ctx)
 	require.NoError(t, err)
-	require.Nil(t, got)
+	require.NotNil(t, got, "Collect must return a non-nil empty slice for empty patterns")
+	require.Empty(t, got)
 }
 
 func TestPutFiles_BatchWrite(t *testing.T) {

@@ -31,12 +31,12 @@ const (
 	SaveReasonNoSessionIDs = "session app/user/session IDs are missing"
 )
 
-// ArtifactSaveSkipReason returns a non-empty string explaining why the
-// current invocation cannot persist artifacts, or "" when persistence
-// is supported.
-func ArtifactSaveSkipReason(ctx context.Context) string {
-	inv, ok := agent.InvocationFromContext(ctx)
-	if !ok || inv == nil {
+// ArtifactSaveSkipReasonInv is the single source of truth for "can this
+// invocation persist artifacts?". ArtifactSaveSkipReason, WithArtifactContext
+// and tool/workspaceexec.SupportsArtifactSave all forward to this helper so
+// the predicate stays consistent across the codebase.
+func ArtifactSaveSkipReasonInv(inv *agent.Invocation) string {
+	if inv == nil {
 		return SaveReasonNoInvocation
 	}
 	if inv.ArtifactService == nil {
@@ -51,20 +51,32 @@ func ArtifactSaveSkipReason(ctx context.Context) string {
 	return ""
 }
 
+// ArtifactSaveSkipReason returns a non-empty string explaining why the
+// current invocation cannot persist artifacts, or "" when persistence
+// is supported.
+func ArtifactSaveSkipReason(ctx context.Context) string {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok {
+		return SaveReasonNoInvocation
+	}
+	return ArtifactSaveSkipReasonInv(inv)
+}
+
 // WithArtifactContext copies the invocation's artifact service and
 // session info onto ctx so codeexecutor backends can persist files.
-// When the invocation does not carry that info, ctx is returned as-is.
+// Injection is gated on the same completeness check as
+// ArtifactSaveSkipReason — if any prerequisite is missing, ctx is
+// returned as-is so backends never receive a half-populated session.
 func WithArtifactContext(ctx context.Context) context.Context {
-	ctxIO := ctx
-	if inv, ok := agent.InvocationFromContext(ctx); ok &&
-		inv != nil && inv.ArtifactService != nil &&
-		inv.Session != nil {
-		ctxIO = codeexecutor.WithArtifactService(ctxIO, inv.ArtifactService)
-		ctxIO = codeexecutor.WithArtifactSession(ctxIO, artifact.SessionInfo{
-			AppName:   inv.Session.AppName,
-			UserID:    inv.Session.UserID,
-			SessionID: inv.Session.ID,
-		})
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || ArtifactSaveSkipReasonInv(inv) != "" {
+		return ctx
 	}
+	ctxIO := codeexecutor.WithArtifactService(ctx, inv.ArtifactService)
+	ctxIO = codeexecutor.WithArtifactSession(ctxIO, artifact.SessionInfo{
+		AppName:   inv.Session.AppName,
+		UserID:    inv.Session.UserID,
+		SessionID: inv.Session.ID,
+	})
 	return ctxIO
 }

@@ -63,6 +63,47 @@ func TestLLMAgent_Run_InstallsWorkspaceInContext(t *testing.T) {
 	require.NotNil(t, captured)
 }
 
+// TestLLMAgent_Run_PreservesExistingWorkspaceInContext verifies the
+// short-circuit branch in withWorkspace: when ctx already carries a
+// Workspace (e.g. installed by an outer agent in a composition), Run
+// must not overwrite it with a fresh facade.
+func TestLLMAgent_Run_PreservesExistingWorkspaceInContext(t *testing.T) {
+	exec := localexec.New()
+	existing := workspaceio.New(exec, nil)
+
+	var captured *workspaceio.Workspace
+	var captureOK bool
+	cb := agent.NewCallbacks()
+	cb.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		captured, captureOK = workspaceio.WorkspaceFromContext(ctx)
+		return nil, nil
+	})
+
+	a := New("agent",
+		WithCodeExecutor(exec),
+		WithAgentCallbacks(cb),
+	)
+	a.flow = &mockFlow{done: true}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-preserve-ws"),
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{
+			ID: "s1", AppName: "app", UserID: "user",
+		}),
+	)
+
+	ctx := workspaceio.WithWorkspace(context.Background(), existing)
+	events, err := a.Run(ctx, inv)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	require.True(t, captureOK, "BeforeAgent should still see a Workspace")
+	require.Same(t, existing, captured,
+		"withWorkspace must not overwrite an already-installed Workspace")
+}
+
 func TestLLMAgent_Run_WithoutCodeExecutor_NoWorkspaceInContext(t *testing.T) {
 	var captureOK bool
 

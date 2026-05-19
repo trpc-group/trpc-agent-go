@@ -1466,13 +1466,23 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 // the same invocation workspace as workspace_exec. The helper is a
 // no-op when the agent has no code executor configured.
 func (a *LLMAgent) withWorkspace(ctx context.Context) context.Context {
-	if a == nil || a.codeExecutor == nil {
+	if a == nil {
+		return ctx
+	}
+	// a.codeExecutor / a.workspaceRegistry can be mutated under a.mu
+	// by tool refresh paths (refreshToolsLocked → workspaceRegistryForKeyLocked);
+	// snapshot under RLock to avoid a data race with concurrent Run().
+	a.mu.RLock()
+	exec := a.codeExecutor
+	reg := a.workspaceRegistry
+	a.mu.RUnlock()
+	if exec == nil {
 		return ctx
 	}
 	if _, ok := workspaceio.WorkspaceFromContext(ctx); ok {
 		return ctx
 	}
-	ws := workspaceio.New(a.codeExecutor, a.workspaceRegistry)
+	ws := workspaceio.New(exec, reg)
 	return workspaceio.WithWorkspace(ctx, ws)
 }
 

@@ -332,6 +332,55 @@ func TestSaveArtifactTool_SupportsArtifactSave(t *testing.T) {
 	require.True(t, SupportsArtifactSave(inv))
 }
 
+// TestSaveArtifactTool_SupportsArtifactSave_Negatives directly pins the
+// false branches of SupportsArtifactSave. Call's tests exercise the same
+// preconditions through workspacefacade.ArtifactSaveSkipReason, but the
+// exported helper is a public contract on its own and deserves direct
+// coverage so refactors can't silently drift the predicate.
+func TestSaveArtifactTool_SupportsArtifactSave_Negatives(t *testing.T) {
+	svc := inmemory.NewService()
+	mkInv := func(mutate func(b *agent.Invocation)) *agent.Invocation {
+		inv := agent.NewInvocation(
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+			agent.WithInvocationSession(&session.Session{
+				ID:      "sess",
+				AppName: "app",
+				UserID:  "user",
+			}),
+			agent.WithInvocationArtifactService(svc),
+		)
+		if mutate != nil {
+			mutate(inv)
+		}
+		return inv
+	}
+
+	cases := []struct {
+		name string
+		inv  *agent.Invocation
+	}{
+		{"nil invocation", nil},
+		{"missing artifact service", mkInv(func(b *agent.Invocation) {
+			b.ArtifactService = nil
+		})},
+		{"nil session", mkInv(func(b *agent.Invocation) { b.Session = nil })},
+		{"empty app name", mkInv(func(b *agent.Invocation) {
+			b.Session.AppName = ""
+		})},
+		{"empty user id", mkInv(func(b *agent.Invocation) {
+			b.Session.UserID = ""
+		})},
+		{"empty session id", mkInv(func(b *agent.Invocation) {
+			b.Session.ID = ""
+		})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.False(t, SupportsArtifactSave(tc.inv))
+		})
+	}
+}
+
 func saveArtifactContext() context.Context {
 	svc := inmemory.NewService()
 	inv := agent.NewInvocation(

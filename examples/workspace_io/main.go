@@ -216,7 +216,16 @@ func (s *directorySink) Save(
 	if inv != nil && inv.Session != nil {
 		userID = inv.Session.UserID
 	}
-	dst := filepath.Join(s.root, userID, file.Path)
+	// Refuse to write outside s.root. file.Path comes from a workspace
+	// collector and should already be workspace-relative, but this example
+	// is copy-paste fodder — keep the containment check explicit so user
+	// code stays safe by default. filepath.IsLocal (Go 1.20+) rejects
+	// absolute paths, "..", and Windows UNC/volume escapes in one shot.
+	rel := filepath.Join(userID, file.Path)
+	if !filepath.IsLocal(rel) {
+		return fmt.Errorf("directorySink: refusing to write outside sink root: %q", rel)
+	}
+	dst := filepath.Join(s.root, rel)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
