@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -129,10 +130,32 @@ func TestOTelToolCallAndResponseParts(t *testing.T) {
 	require.Contains(t, payload, "parts")
 	require.Contains(t, payload, "tool_calls")
 
+	largeReasoning := strings.Repeat("r", maxTelemetryStringBytes+1)
+	reasoningResponse, ok := otelPartFromToolCallResponse(model.Message{
+		Role:             model.RoleTool,
+		ToolID:           "call-3",
+		ReasoningContent: largeReasoning,
+	})
+	require.True(t, ok)
+	var reasoningPayload map[string]any
+	require.NoError(t, json.Unmarshal(reasoningResponse.Response, &reasoningPayload))
+	reasoning, ok := reasoningPayload["reasoning"].(string)
+	require.True(t, ok)
+	require.LessOrEqual(t, len(reasoning), maxTelemetryStringBytes)
+	require.Contains(t, reasoning, "truncated")
+
 	_, ok = otelPartFromToolCallResponse(model.Message{Role: model.RoleAssistant, Content: "not a tool"})
 	require.False(t, ok)
 	_, ok = otelPartFromToolCallResponse(model.Message{Role: model.RoleTool})
 	require.False(t, ok)
+}
+
+func TestTruncateTelemetryStringFitsByteLimit(t *testing.T) {
+	input := strings.Repeat("好", maxTelemetryStringBytes)
+	got := truncateTelemetryString(input)
+	require.LessOrEqual(t, len(got), maxTelemetryStringBytes)
+	require.True(t, utf8.ValidString(got))
+	require.Contains(t, got, "truncated")
 }
 
 func TestOTelMessageHelpers(t *testing.T) {

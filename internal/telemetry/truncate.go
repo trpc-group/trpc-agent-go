@@ -22,6 +22,8 @@ const (
 	maxTelemetryBinaryBytes  = 8 * 1024
 )
 
+// truncateTelemetryModelMessages returns a copy of messages with large fields
+// bounded before they are marshaled into telemetry attributes.
 func truncateTelemetryModelMessages(messages []model.Message) []model.Message {
 	if len(messages) == 0 {
 		return nil
@@ -33,6 +35,8 @@ func truncateTelemetryModelMessages(messages []model.Message) []model.Message {
 	return out
 }
 
+// truncateTelemetryModelChoices returns a copy of choices with message and delta
+// payloads bounded for telemetry emission.
 func truncateTelemetryModelChoices(choices []model.Choice) []model.Choice {
 	if len(choices) == 0 {
 		return nil
@@ -46,6 +50,8 @@ func truncateTelemetryModelChoices(choices []model.Choice) []model.Choice {
 	return out
 }
 
+// truncateTelemetryModelMessage bounds the large string, content part, and tool
+// call fields on a message used for telemetry.
 func truncateTelemetryModelMessage(msg model.Message) model.Message {
 	msg.Content = truncateTelemetryString(msg.Content)
 	msg.ContentParts = truncateTelemetryContentParts(msg.ContentParts)
@@ -54,6 +60,8 @@ func truncateTelemetryModelMessage(msg model.Message) model.Message {
 	return msg
 }
 
+// telemetryRequestForMarshal returns a shallow request copy with telemetry-sized
+// message payloads.
 func telemetryRequestForMarshal(req *model.Request) *model.Request {
 	if req == nil {
 		return nil
@@ -63,6 +71,8 @@ func telemetryRequestForMarshal(req *model.Request) *model.Request {
 	return &clone
 }
 
+// telemetryResponseForMarshal returns a shallow response copy with
+// telemetry-sized choice payloads.
 func telemetryResponseForMarshal(rsp *model.Response) *model.Response {
 	if rsp == nil {
 		return nil
@@ -72,18 +82,32 @@ func telemetryResponseForMarshal(rsp *model.Response) *model.Response {
 	return &clone
 }
 
+// truncateTelemetryString keeps the returned telemetry string within the byte
+// cap, including the truncation marker.
 func truncateTelemetryString(s string) string {
 	if len(s) <= maxTelemetryStringBytes {
 		return s
 	}
-	prefix := validUTF8Prefix(s, maxTelemetryStringBytes)
-	return prefix + telemetryTruncatedMarker(len(s))
+	marker := telemetryTruncatedMarker(len(s))
+	allowedPrefixBytes := maxTelemetryStringBytes - len(marker)
+	if allowedPrefixBytes < 0 {
+		allowedPrefixBytes = 0
+	}
+	prefix := validUTF8Prefix(s, allowedPrefixBytes)
+	if len(marker) > maxTelemetryStringBytes {
+		return validUTF8Prefix(marker, maxTelemetryStringBytes)
+	}
+	return prefix + marker
 }
 
+// telemetryTruncatedMarker describes the original byte size of a truncated
+// telemetry payload.
 func telemetryTruncatedMarker(size int) string {
 	return fmt.Sprintf("...<truncated: %d bytes>", size)
 }
 
+// validUTF8Prefix returns a byte-limited string prefix without cutting through a
+// UTF-8 rune.
 func validUTF8Prefix(s string, limit int) string {
 	if limit >= len(s) {
 		return s
@@ -95,6 +119,8 @@ func validUTF8Prefix(s string, limit int) string {
 	return prefix
 }
 
+// truncateTelemetryContentParts returns a copy of content parts with text and
+// binary payload fields bounded for telemetry.
 func truncateTelemetryContentParts(parts []model.ContentPart) []model.ContentPart {
 	if len(parts) == 0 {
 		return nil
@@ -130,6 +156,7 @@ func truncateTelemetryContentParts(parts []model.ContentPart) []model.ContentPar
 	return out
 }
 
+// truncateTelemetryBytes bounds a binary telemetry payload.
 func truncateTelemetryBytes(b []byte, limit int) []byte {
 	if len(b) <= limit {
 		return b
@@ -137,6 +164,8 @@ func truncateTelemetryBytes(b []byte, limit int) []byte {
 	return b[:limit]
 }
 
+// truncateTelemetryToolCalls returns a copy of tool calls with bounded raw
+// argument payloads.
 func truncateTelemetryToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
 	if len(toolCalls) == 0 {
 		return nil
@@ -149,6 +178,8 @@ func truncateTelemetryToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
 	return out
 }
 
+// truncateTelemetryRawBytes bounds a raw JSON telemetry payload and replaces
+// oversized values with a truncation marker.
 func truncateTelemetryRawBytes(raw []byte) []byte {
 	if len(raw) <= maxTelemetryRawJSONBytes {
 		return raw

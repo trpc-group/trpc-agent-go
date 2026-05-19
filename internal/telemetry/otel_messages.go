@@ -243,7 +243,7 @@ func toolResponseRawMessage(msg model.Message) json.RawMessage {
 		payload["parts"] = otelPartsFromContentParts(msg.ContentParts)
 	}
 	if msg.ReasoningContent != "" {
-		payload["reasoning"] = msg.ReasoningContent
+		payload["reasoning"] = truncateTelemetryString(msg.ReasoningContent)
 	}
 	if len(msg.ToolCalls) > 0 {
 		parts := make([]OTelMessagePart, 0, len(msg.ToolCalls))
