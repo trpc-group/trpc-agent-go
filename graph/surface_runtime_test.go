@@ -96,6 +96,41 @@ func TestLLMNode_SurfacePatch_OverridesInstructionFewShotModelAndTools(t *testin
 	require.NotContains(t, patchedModel.lastReq.Tools, "old_tool")
 }
 
+func TestLLMNode_SurfacePatch_AppendsTools(t *testing.T) {
+	m := &captureModel{}
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode(
+		"llm",
+		m,
+		"static instruction",
+		map[string]tool.Tool{"old_tool": &echoTool{name: "old_tool"}},
+	)
+
+	var patch agent.SurfacePatch
+	patch.AppendTools([]tool.Tool{&echoTool{name: "frontend_tool"}})
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("graph"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithSurfacePatchForNode("graph/llm", patch),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	node := sg.graph.nodes["llm"]
+	exec := &ExecutionContext{InvocationID: inv.InvocationID, Invocation: inv}
+
+	_, err := node.Function(ctx, State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "llm",
+		StateKeyUserInput:     "actual user",
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, m.lastReq)
+	require.Contains(t, m.lastReq.Tools, "old_tool")
+	require.Contains(t, m.lastReq.Tools, "frontend_tool")
+}
+
 func TestToolsNode_SurfacePatch_OverridesExplicitTools(t *testing.T) {
 	sg := NewStateGraph(MessagesStateSchema())
 	sg.AddToolsNode("tools", map[string]tool.Tool{
@@ -127,6 +162,50 @@ func TestToolsNode_SurfacePatch_OverridesExplicitTools(t *testing.T) {
 					ID:   "call-1",
 					Function: model.FunctionDefinitionParam{
 						Name:      "new_tool",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	state, ok := result.(State)
+	require.True(t, ok)
+	require.NotNil(t, state[StateKeyMessages])
+}
+
+func TestToolsNode_SurfacePatch_AppendsTools(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddToolsNode("tools", map[string]tool.Tool{
+		"old_tool": &echoTool{name: "old_tool"},
+	})
+
+	var patch agent.SurfacePatch
+	patch.AppendTools([]tool.Tool{&echoTool{name: "frontend_tool"}})
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("graph"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithSurfacePatchForNode("graph/tools", patch),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	node := sg.graph.nodes["tools"]
+	exec := &ExecutionContext{InvocationID: inv.InvocationID, Invocation: inv}
+
+	result, err := node.Function(ctx, State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "tools",
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("hi"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "frontend_tool",
 						Arguments: []byte(`{}`),
 					},
 				}},

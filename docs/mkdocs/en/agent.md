@@ -1329,6 +1329,7 @@ Notes:
 - `SetFewShot([][]model.Message)`: overrides the node few-shot examples for this run.
 - `SetModel(model.Model)`: overrides the model instance used by the node for this run.
 - `SetTools([]tool.Tool)`: overrides the node tool surface for this run. This means replacing the tool set visible at runtime, not merely changing tool descriptions.
+- `AppendTools([]tool.Tool)`: appends tools to the node tool surface for this run. This keeps the node's existing tools and adds the supplied tools after them.
 - `SetSkillRepository(skill.Repository)`: overrides the node skill repository for this run. Passing `nil` explicitly disables the node skill surface.
 
 Not every node supports every surface. Common cases are:
@@ -1361,7 +1362,7 @@ var reviewerPatch agent.SurfacePatch
 reviewerPatch.SetInstruction("Reject any plan that lacks cost analysis.")
 
 var toolsPatch agent.SurfacePatch
-toolsPatch.SetTools([]tool.Tool{searchTool, priceTool})
+toolsPatch.AppendTools([]tool.Tool{priceTool})
 
 _, err = r.Run(
     ctx,
@@ -1379,6 +1380,9 @@ When `WithSurfacePatchForNode(...)` is passed multiple times for the same
 
 - Different surface types are combined.
 - For the same surface type, the later option overrides the earlier one.
+- Tool append patches are incremental. Repeated `AppendTools(...)` calls add to
+  the effective tool set. A later `SetTools(...)` call replaces earlier tool
+  appends for that node.
 
 ### Composite and Nested Structures
 
