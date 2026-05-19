@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -537,6 +538,16 @@ func (r *runner) Run(
 			rootLookupName,
 		)
 	}
+	currentTurnSession, err := sessionroute.ResolveCurrentTurnSession(
+		execCtx,
+		r.sessionService,
+		sess,
+		ag,
+	)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
 
 	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
@@ -560,7 +571,7 @@ func (r *runner) Run(
 
 	if err := r.persistCurrentTurnMessages(
 		execCtx,
-		sess,
+		currentTurnSession,
 		invocation,
 		ag,
 		message,
@@ -586,7 +597,14 @@ func (r *runner) Run(
 		if e == nil {
 			return nil
 		}
-		return r.sessionService.AppendEvent(ctx, sess, e)
+		persistSession, ok := sessionroute.RouteEvent(
+			invocation,
+			e,
+		)
+		if !ok || persistSession == nil {
+			persistSession = sess
+		}
+		return r.sessionService.AppendEvent(ctx, persistSession, e)
 	})
 	barrier.Enable(invocation)
 
@@ -604,7 +622,7 @@ func (r *runner) Run(
 		ensureErrorEventContent(errorEvent)
 		errorEvent = r.applyEventPlugins(execCtx, invocation, errorEvent)
 
-		appendErr := r.sessionService.AppendEvent(execCtx, sess, errorEvent)
+		appendErr := r.sessionService.AppendEvent(execCtx, currentTurnSession, errorEvent)
 		if appendErr != nil {
 			log.Errorf("failed to append agent run error event: %v", appendErr)
 		}
@@ -1032,18 +1050,26 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		log.Errorf("agentEvent is nil")
 		return nil
 	}
-
+	routeEvent := sessionroute.SnapshotEventIdentity(agentEvent)
 	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
 	if agentEvent == nil {
 		return nil
 	}
-
-	// Capture graph-level completion snapshot for final event.
-	if isGraphCompletionSnapshotEvent(agentEvent) {
-		loop.graphCompletionSeen = true
-		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
+	persistSession, routedEvent := sessionroute.RouteEvent(
+		loop.invocation,
+		routeEvent,
+	)
+	excludeRootCompletion := routedEvent && !sameSession(persistSession, loop.sess)
+	if excludeRootCompletion {
+		r.captureRoutedCompletionError(loop, agentEvent)
+	} else {
+		// Capture graph-level completion snapshot for final event.
+		if isGraphCompletionSnapshotEvent(agentEvent) {
+			loop.graphCompletionSeen = true
+			loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
+		}
+		r.captureCompletionFallback(loop, agentEvent)
 	}
-	r.captureCompletionFallback(loop, agentEvent)
 	r.markCompletionSnapshotOnly(loop, agentEvent)
 	if shouldSuppressGraphCompletionEvent(loop, agentEvent) {
 		return nil
@@ -1058,12 +1084,20 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
-	persisted := r.handleEventPersistence(ctx, loop.invocation, loop.sess, agentEvent)
-	r.recordPersistedAssistantEvent(
-		loop,
+	persisted := r.handleEventPersistence(
+		ctx,
+		loop.invocation,
+		loop.sess,
+		persistSession,
 		agentEvent,
-		persisted,
 	)
+	if !excludeRootCompletion {
+		r.recordPersistedAssistantEvent(
+			loop,
+			agentEvent,
+			persisted,
+		)
+	}
 
 	// Notify completion if required.
 	if agentEvent.RequiresCompletion {
@@ -1076,8 +1110,10 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 
-	r.recordEmittedAssistantResponseID(loop, agentEvent)
-	r.recordVisibleCompletionEmission(loop, agentEvent)
+	if !excludeRootCompletion {
+		r.recordEmittedAssistantResponseID(loop, agentEvent)
+		r.recordVisibleCompletionEmission(loop, agentEvent)
+	}
 
 	// Emit event to output channel.
 	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
@@ -1314,6 +1350,7 @@ func (r *runner) handleEventPersistence(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	sess *session.Session,
+	persistSession *session.Session,
 	agentEvent *event.Event,
 ) bool {
 	// Ensure error events have content so they are valid for persistence.
@@ -1322,6 +1359,9 @@ func (r *runner) handleEventPersistence(
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
 		return false
+	}
+	if persistSession == nil {
+		persistSession = sess
 	}
 
 	persistEvent := agentEvent
@@ -1337,7 +1377,7 @@ func (r *runner) handleEventPersistence(
 
 	if err := r.sessionService.AppendEvent(
 		ctx,
-		sess,
+		persistSession,
 		persistEvent,
 	); err != nil {
 		log.Errorf("Failed to append event to session: %v", err)
@@ -1377,7 +1417,7 @@ func (r *runner) handleEventPersistence(
 	// Use EnqueueSummaryJob for true asynchronous processing.
 	// Prefer filter-specific summarization to avoid scanning all filters.
 	if err := r.sessionService.EnqueueSummaryJob(
-		ctx, sess, agentEvent.FilterKey, false,
+		ctx, persistSession, agentEvent.FilterKey, false,
 	); err != nil {
 		log.DebugfContext(ctx, "Auto summarize after append skipped or failed: %v.", err)
 	}
@@ -1483,6 +1523,29 @@ func (r *runner) captureCompletionFallback(
 	// the terminal outcome seen by the runner.
 	loop.finalError = cloneResponseError(agentEvent.Response.Error)
 	loop.sawTerminalError = agentEvent.IsTerminalError()
+}
+
+func (r *runner) captureRoutedCompletionError(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) {
+	if loop == nil || agentEvent == nil {
+		return
+	}
+	if agentEvent.Response == nil || agentEvent.IsPartial {
+		return
+	}
+	if agentEvent.Response.Error != nil {
+		loop.finalError = cloneResponseError(agentEvent.Response.Error)
+	}
+	loop.sawTerminalError = agentEvent.IsTerminalError()
+}
+
+func sameSession(a *session.Session, b *session.Session) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.AppName == b.AppName && a.UserID == b.UserID && a.ID == b.ID
 }
 
 func mergeCompletionFallbackStateDelta(
@@ -1676,8 +1739,19 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		log.Errorf("Failed to append runner completion event to session: %v", err)
 	}
 
-	// Send the runner completion event to output channel.
-	agent.EmitEvent(ctx, loop.invocation, loop.processedEventCh, runnerCompletionEvent)
+	// Use a context to deliver runner-completion after cancellation without blocking cleanup indefinitely.
+	func() {
+		emitCtx, emitCancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			time.Second,
+		)
+		defer emitCancel()
+		if err := agent.EmitEvent(
+			emitCtx, loop.invocation, loop.processedEventCh, runnerCompletionEvent,
+		); err != nil {
+			log.Errorf("Failed to emit runner completion event: %v", err)
+		}
+	}()
 
 	// Enqueue auto memory extraction job if memory service is configured.
 	r.enqueueAutoMemoryJob(ctx, loop.sess)

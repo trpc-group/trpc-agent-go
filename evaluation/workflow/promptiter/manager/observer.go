@@ -35,7 +35,7 @@ func (o *observer) append(ctx context.Context, event *engine.Event) error {
 	if err := o.applyEvent(event); err != nil {
 		return err
 	}
-	return o.manager.store.Update(ctx, o.run)
+	return o.manager.store.Update(ctx, o.manager.slimStoredRun(o.run))
 }
 
 func (o *observer) applyEvent(event *engine.Event) error {

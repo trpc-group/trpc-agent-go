@@ -29,3 +29,32 @@ func TestWithSwarmHandoffInputBuilder_ConfiguresBuilder(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "input", msg.Content)
 }
+
+func TestWithSwarmIndependentAgents_ConfiguresIsolationOnly(t *testing.T) {
+	opts := defaultOptions("team")
+	WithSwarmIndependentAgents()(&opts)
+	require.True(t, opts.swarmHandoff.usesIsolatedSession())
+	require.False(t, opts.swarmHandoff.targetTakesOver())
+}
+
+func TestWithCrossRequestTransfer_ConfiguresTurnRouting(t *testing.T) {
+	opts := defaultOptions("team")
+	WithCrossRequestTransfer(true)(&opts)
+	require.True(t, opts.swarmHandoff.targetTakesOver())
+	require.False(t, opts.swarmHandoff.usesIsolatedSession())
+	WithCrossRequestTransfer(false)(&opts)
+	require.False(t, opts.swarmHandoff.targetTakesOver())
+}
+
+func TestSwarmHandoffOptions_ComposeIndependently(t *testing.T) {
+	opts := defaultOptions("team")
+	WithSwarmIndependentAgents()(&opts)
+	WithCrossRequestTransfer(true)(&opts)
+	require.True(t, opts.swarmHandoff.usesIsolatedSession())
+	require.True(t, opts.swarmHandoff.targetTakesOver())
+	reversed := defaultOptions("team")
+	WithCrossRequestTransfer(true)(&reversed)
+	WithSwarmIndependentAgents()(&reversed)
+	require.True(t, reversed.swarmHandoff.usesIsolatedSession())
+	require.True(t, reversed.swarmHandoff.targetTakesOver())
+}

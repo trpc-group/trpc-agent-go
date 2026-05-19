@@ -142,7 +142,7 @@ func (m *manager) Add(ctx context.Context, appName, evalSetID string, metricInpu
 		"INSERT INTO %s (app_name, eval_set_id, metric_name, metric) VALUES (?, ?, ?, ?)",
 		m.tables.Metrics,
 	)
-	if _, err := m.db.Exec(ctx, query, appName, evalSetID, metricInput.MetricName, payload); err != nil {
+	if _, err := m.db.Exec(ctx, query, appName, evalSetID, metricInput.MetricName, string(payload)); err != nil {
 		if mysqldb.IsDuplicateEntry(err) {
 			return fmt.Errorf("metric %s.%s.%s already exists", appName, evalSetID, metricInput.MetricName)
 		}
@@ -202,7 +202,7 @@ func (m *manager) Update(ctx context.Context, appName, evalSetID string, metricI
 		"UPDATE %s SET metric = ?, updated_at = CURRENT_TIMESTAMP(6) WHERE app_name = ? AND eval_set_id = ? AND metric_name = ?",
 		m.tables.Metrics,
 	)
-	res, err := m.db.Exec(ctx, query, payload, appName, evalSetID, metricInput.MetricName)
+	res, err := m.db.Exec(ctx, query, string(payload), appName, evalSetID, metricInput.MetricName)
 	if err != nil {
 		return fmt.Errorf("update metric %s.%s.%s: %w", appName, evalSetID, metricInput.MetricName, err)
 	}

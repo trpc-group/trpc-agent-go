@@ -559,7 +559,22 @@ type EvalCase struct {
 	ConversationScenario  *ConversationScenario // ConversationScenario is the dynamic user simulation scenario. In default mode it is mutually exclusive with Conversation.
 	ActualConversation    []*Invocation         // ActualConversation is the actual trace in trace mode. It is required in trace mode.
 	SessionInput          *SessionInput         // SessionInput is session initialization info, required.
+	Rubrics               []*EvalCaseRubric     // Rubrics contains case-level rubrics, optional.
 	CreationTimestamp     *epochtime.EpochTime  // CreationTimestamp is the creation timestamp, optional.
+}
+
+// EvalCaseRubric represents a rubric that applies only to one eval case.
+type EvalCaseRubric struct {
+	MetricName  string                 // MetricName identifies the metric instance this rubric augments.
+	ID          string                 // ID uniquely identifies this case-level rubric.
+	Content     *EvalCaseRubricContent // Content contains the judge-readable rubric content.
+	Description string                 // Description stores human-facing context that is not judged by default.
+	Type        string                 // Type classifies the rubric for result inspection.
+}
+
+// EvalCaseRubricContent provides judge-readable content for a case-level rubric.
+type EvalCaseRubricContent struct {
+	Text string // Text is the actual rubric instruction used by rubric evaluators.
 }
 
 // ConversationScenario represents a dynamic user simulation scenario.
@@ -927,13 +942,14 @@ type TextCriterion struct {
 type TextMatchStrategy string
 ```
 
-TextMatchStrategy supports `exact`, `contains`, and `regex`, with a default of `exact`. During comparison, `source` is the actual string and `target` is the expected string. `exact` requires equality, `contains` requires `source` to contain `target`, and `regex` treats `target` as a regular expression and matches `source`.
+When `Compare` is provided from code, TextCriterion uses that custom logic directly and does not run built-in length validation or text matching. Otherwise, it first applies `length` to the actual string `source`, then compares `source` with the expected string `target` according to `matchStrategy`. TextMatchStrategy supports `exact`, `contains`, `regex`, and `skip`, with a default of `exact`.
 
 | TextMatchStrategy Value | Description                                      |
 |-------------------------|--------------------------------------------------|
 | exact                   | Actual equals expected exactly (default).        |
 | contains                | Actual contains expected.                        |
 | regex                   | Actual matches expected as a regular expression. |
+| skip                    | Skips built-in text matching, commonly used for length-only validation. |
 
 Example configuration snippet uses regex matching and case-insensitive mode.
 
@@ -944,7 +960,17 @@ Example configuration snippet uses regex matching and case-insensitive mode.
 }
 ```
 
-TextCriterion provides a `Compare` extension to override default comparison logic.
+If you only want to validate actual text length without comparing it with expected text, configure `length` and set `matchStrategy` to `skip`.
+
+```json
+{
+  "length": {
+    "min": 20,
+    "max": 500
+  },
+  "matchStrategy": "skip"
+}
+```
 
 The following snippet uses `Compare` to trim spaces before comparison.
 
@@ -981,9 +1007,7 @@ type JSONCriterion struct {
 type JSONMatchStrategy string
 ```
 
-Currently, `matchStrategy` only supports `exact`, with default `exact`.
-
-During comparison, `actual` is the actual value and `expected` is the expected value. `valid` validates whether actual is a complete and strict legal JSON document. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
+During comparison, `actual` is the actual value and `expected` is the expected value. When `Compare` is provided from code, JSONCriterion uses that custom logic directly. Otherwise, `valid` first validates whether actual is a complete and strict legal JSON document, and `matchStrategy` then decides whether to run built-in JSON value matching. Currently, `matchStrategy` supports `exact` and `skip`, with a default of `exact`; `exact` compares JSON values structurally, and `skip` skips built-in JSON value matching. If you only want JSON validity validation without comparing against expected, configure both `valid: true` and `matchStrategy: "skip"`. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 
@@ -1046,17 +1070,21 @@ XMLCriterion validates whether a string is a legal XML document and also support
 
 ```go
 type XMLCriterion struct {
-	Ignore  bool
-	Valid   bool
-	Compare func(actual, expected string) (bool, error)
+	Ignore        bool
+	Valid         bool
+	MatchStrategy XMLMatchStrategy
+	Compare       func(actual, expected string) (bool, error)
 }
 ```
+
+XMLCriterion requires `matchStrategy` to be explicitly configured. Currently only `skip` is supported. Built-in XML behavior only validates well-formedness and does not perform XML structural value matching; use code-injected `Compare` when custom XML matching is needed.
 
 Example configuration validates that actual content is a legal XML document:
 
 ```json
 {
-  "valid": true
+  "valid": true,
+  "matchStrategy": "skip"
 }
 ```
 
@@ -1429,10 +1457,12 @@ The following example validates only that the actual final response length is be
 					"length": {
 						"min": 20,
 						"max": 500
-					}
+					},
+					"matchStrategy": "skip"
 				},
 				"json": {
-					"valid": true
+					"valid": true,
+					"matchStrategy": "skip"
 				}
 			}
 		}
@@ -1450,7 +1480,8 @@ The following example validates that the actual final response is legal XML.
 		"criterion": {
 			"finalResponse": {
 				"xml": {
-					"valid": true
+					"valid": true,
+					"matchStrategy": "skip"
 				}
 			}
 		}
@@ -1574,6 +1605,10 @@ type RubricContent struct {
 
 `rubrics` split a metric into multiple clear-granularity criteria. Each rubric should be independent and directly verifiable from user input and the final answer, which improves judge stability and makes issues easier to locate. `id` is a stable identifier, and `content.text` is the rubric text used by the judge.
 
+`EvalCase.rubrics` adds extra evaluation criteria for a single case. Each rubric targets a configured metric through `metricName`; when that case is evaluated, the framework appends those criteria after the metric's shared rubrics. This affects only the current case and leaves the metric file's global configuration unchanged. Rubric `id` values must be unique after merging.
+
+The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in rubric evaluators read the merged criteria, and custom rubric evaluators can read the same field.
+
 `template` is used only by `llm_judge_template`. It keeps template-based evaluation focused on cases where the prompt changes while the evaluation orchestration stays the same. Template evaluators do not read `rubrics`; evaluation criteria should be written directly into `template.prompt`.
 
 `template.prompt` uses double-brace template syntax such as `{{question}}` and `{{answer}}`. Every placeholder must be explicitly bound in `variableBindings`. Unbound variables, unknown variables, or binding resolution failures all result in errors.
@@ -1628,6 +1663,38 @@ Below is an example metric configuration that selects `llm_rubric_response` and 
 	}
 ]
 ```
+
+Case-level rubrics are configured directly in `EvalCase.rubrics`, for example:
+
+```json
+{
+	"evalId": "case_compound_profit",
+	"conversation": [
+		{
+			"invocationId": "case_compound_profit-1",
+			"userContent": {
+				"role": "user",
+				"content": "With a principal of 1000 dollars and a compound annual interest rate of 10%, what will the profit be after 30 years?"
+			}
+		}
+	],
+	"rubrics": [
+		{
+			"metricName": "llm_rubric_response",
+			"id": "case:compound-profit",
+			"content": {
+				"text": "For this case, the final answer must distinguish profit from total accumulated amount. A response that only gives the final amount without subtracting the original principal fails this rubric."
+			}
+		}
+	],
+	"sessionInput": {
+		"appName": "rubric-response-app",
+		"userId": "demo-user"
+	}
+}
+```
+
+Here, `metricName` selects the metric that receives the extra criterion. This example appends `case:compound-profit` to the rubrics for `llm_rubric_response`.
 
 Below is an example template metric configuration. It explicitly selects `llm_judge_template` via `evaluatorName`, while keeping `metricName` as the metric instance name in results.
 

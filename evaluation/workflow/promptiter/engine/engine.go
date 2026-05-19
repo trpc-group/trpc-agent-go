@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -35,10 +36,10 @@ type Engine interface {
 
 // RunRequest carries the inputs required to start PromptIter optimization.
 type RunRequest struct {
-	// TrainEvalSetIDs identifies evaluation sets used to generate gradients.
-	TrainEvalSetIDs []string
-	// ValidationEvalSetIDs identifies evaluation sets used for patch acceptance checks.
-	ValidationEvalSetIDs []string
+	// Train identifies evaluation data used to generate gradients.
+	Train []EvalSetInput `json:"train"`
+	// Validation identifies evaluation data used for patch acceptance checks.
+	Validation []EvalSetInput `json:"validation"`
 	// InitialProfile is the baseline profile for round one optimization.
 	InitialProfile *promptiter.Profile
 	// Teacher executes trace generation requests for evaluation.
@@ -55,6 +56,14 @@ type RunRequest struct {
 	MaxRounds int
 	// TargetSurfaceIDs limits this run to optimizing only the listed surfaces.
 	TargetSurfaceIDs []string
+}
+
+// EvalSetInput identifies one evaluation set and optional case filters for a PromptIter run.
+type EvalSetInput struct {
+	// EvalSetID identifies the eval set to execute.
+	EvalSetID string `json:"evalSetId"`
+	// EvalCaseIDs limits this eval set to specific eval cases when set.
+	EvalCaseIDs []string `json:"evalCaseIds,omitempty"`
 }
 
 // RunStatus identifies the lifecycle state of one PromptIter run view.
@@ -151,14 +160,15 @@ func New(ctx context.Context,
 		return nil, errors.New("aggregator is nil")
 	case optimizer == nil:
 		return nil, errors.New("optimizer is nil")
+	default:
+		return &engine{
+			targetAgent:    targetAgent,
+			backwarder:     backwarder,
+			aggregator:     aggregator,
+			optimizer:      optimizer,
+			agentEvaluator: agentEvaluator,
+		}, nil
 	}
-	return &engine{
-		targetAgent:    targetAgent,
-		backwarder:     backwarder,
-		aggregator:     aggregator,
-		optimizer:      optimizer,
-		agentEvaluator: agentEvaluator,
-	}, nil
 }
 
 // Describe returns the structure snapshot used for the current optimization session.
@@ -207,7 +217,7 @@ func (e *engine) run(
 	acceptedProfile := initialProfile
 	acceptedValidationScore := 0.0
 	baselineValidation, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
-		request.ValidationEvalSetIDs,
+		request.Validation,
 		acceptedProfile,
 		request.Teacher,
 		request.Judge,
@@ -295,13 +305,16 @@ func (e *engine) run(
 }
 
 func (e *engine) validateRunRequest(request *RunRequest) error {
-	switch {
-	case request == nil:
+	if request == nil {
 		return errors.New("run request is nil")
-	case len(request.TrainEvalSetIDs) == 0:
-		return errors.New("train evaluation set ids are empty")
-	case len(request.ValidationEvalSetIDs) == 0:
-		return errors.New("validation evaluation set ids are empty")
+	}
+	if err := validateEvalSetInputs("train", request.Train); err != nil {
+		return err
+	}
+	if err := validateEvalSetInputs("validation", request.Validation); err != nil {
+		return err
+	}
+	switch {
 	case request.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than 0")
 	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
@@ -345,7 +358,7 @@ func (e *engine) executeRound(
 		InputProfile: iprofile.Clone(acceptedProfile),
 	}
 	trainResult, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
-		request.TrainEvalSetIDs,
+		request.Train,
 		acceptedProfile,
 		request.Teacher,
 		request.Judge,
@@ -399,7 +412,7 @@ func (e *engine) executeRound(
 		return nil, 0, err
 	}
 	validationResult, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
-		request.ValidationEvalSetIDs,
+		request.Validation,
 		outputProfile,
 		request.Teacher,
 		request.Judge,
@@ -427,20 +440,36 @@ func (e *engine) executeRound(
 }
 
 func (e *engine) newEvaluationRequest(
-	evalSetIDs []string,
+	inputs []EvalSetInput,
 	profile *promptiter.Profile,
 	teacher runner.Runner,
 	judge runner.Runner,
 	options EvaluationOptions,
 ) *EvaluationRequest {
 	return &EvaluationRequest{
-		EvalSetIDs: append(
-			[]string(nil),
-			evalSetIDs...,
-		),
-		Profile: profile,
-		Teacher: teacher,
-		Judge:   judge,
-		Options: options,
+		EvalSets: inputs,
+		Profile:  profile,
+		Teacher:  teacher,
+		Judge:    judge,
+		Options:  options,
 	}
+}
+
+func validateEvalSetInputs(role string, inputs []EvalSetInput) error {
+	prefix := ""
+	if role != "" {
+		prefix = role + " "
+	}
+	if len(inputs) == 0 {
+		return fmt.Errorf("%sevaluation sets are empty", prefix)
+	}
+	for _, input := range inputs {
+		if input.EvalSetID == "" {
+			return fmt.Errorf("%sevaluation set id is empty", prefix)
+		}
+		if slices.Contains(input.EvalCaseIDs, "") {
+			return fmt.Errorf("%seval case id for eval set %q is empty", prefix, input.EvalSetID)
+		}
+	}
+	return nil
 }

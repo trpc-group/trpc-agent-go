@@ -130,6 +130,14 @@ func (f *fakePromptIterEngine) Run(
 	return &promptiterengine.RunResult{}, nil
 }
 
+func testEvalSetInputs(evalSetID string) []promptiterengine.EvalSetInput {
+	return []promptiterengine.EvalSetInput{
+		{
+			EvalSetID: evalSetID,
+		},
+	}
+}
+
 func TestManagerStartAndGetReturnRun(t *testing.T) {
 	engineInstance := &fakePromptIterEngine{
 		run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
@@ -161,10 +169,10 @@ func TestManagerStartAndGetReturnRun(t *testing.T) {
 		require.NoError(t, managerInstance.Close())
 	})
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
-		TargetSurfaceIDs:     []string{"candidate#instruction"},
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, run)
@@ -196,6 +204,134 @@ func TestManagerStartAndGetReturnRun(t *testing.T) {
 	assert.True(t, current.Rounds[0].Acceptance.Accepted)
 }
 
+func TestManagerStartStoresFinalSlimmedRun(t *testing.T) {
+	engineInstance := &fakePromptIterEngine{
+		run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
+			_ = ctx
+			_ = request
+			_ = opts
+			return &promptiterengine.RunResult{
+				Structure: &astructure.Snapshot{StructureID: "structure_1", EntryNodeID: "node_1"},
+				Status:    promptiterengine.RunStatusSucceeded,
+			}, nil
+		},
+	}
+	managerInstance, err := New(
+		engineInstance,
+		WithStoredResultSlimming(promptiterengine.RunResultSlimming{OmitStructure: true}),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, managerInstance.Close())
+	})
+	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		current, getErr := managerInstance.Get(context.Background(), run.ID)
+		require.NoError(t, getErr)
+		return current.Status == promptiterengine.RunStatusSucceeded
+	}, time.Second, 10*time.Millisecond)
+	current, err := managerInstance.Get(context.Background(), run.ID)
+	require.NoError(t, err)
+	assert.Nil(t, current.Structure)
+}
+
+func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
+	result := &promptiterengine.RunResult{
+		ID:           "run-1",
+		Status:       promptiterengine.RunStatusSucceeded,
+		CurrentRound: 1,
+		Structure:    &astructure.Snapshot{StructureID: "structure_1", EntryNodeID: "node_1"},
+		BaselineValidation: &promptiterengine.EvaluationResult{
+			OverallScore: 0.5,
+			EvalSets: []promptiterengine.EvalSetResult{
+				{
+					EvalSetID:    "validation",
+					OverallScore: 0.5,
+					Cases:        []promptiterengine.CaseResult{{EvalSetID: "validation", EvalCaseID: "case_1"}},
+				},
+			},
+		},
+		AcceptedProfile: &promptiter.Profile{
+			StructureID: "structure_1",
+			Overrides: []promptiter.SurfaceOverride{
+				{SurfaceID: "node_1#instruction", Value: astructure.SurfaceValue{Text: stringPtr("accepted")}},
+			},
+		},
+		Rounds: []promptiterengine.RoundResult{
+			{
+				Round:        1,
+				InputProfile: &promptiter.Profile{StructureID: "structure_1"},
+				Train: &promptiterengine.EvaluationResult{
+					OverallScore: 0.4,
+					EvalSets: []promptiterengine.EvalSetResult{
+						{
+							EvalSetID:    "train",
+							OverallScore: 0.4,
+							Cases:        []promptiterengine.CaseResult{{EvalSetID: "train", EvalCaseID: "case_1"}},
+						},
+					},
+				},
+				Losses:      []promptiter.CaseLoss{{EvalSetID: "train", EvalCaseID: "case_1"}},
+				Backward:    &promptiterengine.BackwardResult{Cases: []promptiterengine.CaseBackwardResult{{EvalSetID: "train", EvalCaseID: "case_1"}}},
+				Aggregation: &promptiterengine.AggregationResult{Surfaces: []promptiter.AggregatedSurfaceGradient{{SurfaceID: "node_1#instruction", NodeID: "node_1"}}},
+				Patches: &promptiter.PatchSet{
+					Patches: []promptiter.SurfacePatch{
+						{SurfaceID: "node_1#instruction", Value: astructure.SurfaceValue{Text: stringPtr("candidate")}},
+					},
+				},
+				OutputProfile: &promptiter.Profile{StructureID: "structure_1"},
+				Validation:    &promptiterengine.EvaluationResult{OverallScore: 0.7},
+				Acceptance:    &promptiterengine.AcceptanceDecision{Accepted: true},
+				Stop:          &promptiterengine.StopDecision{ShouldStop: true},
+			},
+		},
+	}
+	assert.Same(t, result, slimRunResult(result, promptiterengine.RunResultSlimming{}))
+	assert.Nil(t, slimRunResult(nil, promptiterengine.RunResultSlimming{OmitStructure: true}))
+	slimmed := slimRunResult(result, promptiterengine.RunResultSlimming{
+		OmitStructure:       true,
+		OmitEvaluationCases: true,
+		OmitBackward:        true,
+		OmitAggregation:     true,
+		OmitPatches:         true,
+		OmitProfiles:        true,
+		OmitLosses:          true,
+	})
+	require.NotSame(t, result, slimmed)
+	assert.Nil(t, slimmed.Structure)
+	assert.Nil(t, slimmed.AcceptedProfile)
+	require.NotNil(t, slimmed.BaselineValidation)
+	require.Len(t, slimmed.BaselineValidation.EvalSets, 1)
+	assert.Empty(t, slimmed.BaselineValidation.EvalSets[0].Cases)
+	require.Len(t, slimmed.Rounds, 1)
+	round := slimmed.Rounds[0]
+	assert.Nil(t, round.InputProfile)
+	assert.Nil(t, round.OutputProfile)
+	assert.Nil(t, round.Backward)
+	assert.Nil(t, round.Aggregation)
+	assert.Nil(t, round.Patches)
+	assert.Empty(t, round.Losses)
+	require.NotNil(t, round.Train)
+	require.Len(t, round.Train.EvalSets, 1)
+	assert.Empty(t, round.Train.EvalSets[0].Cases)
+	require.NotNil(t, round.Acceptance)
+	require.NotNil(t, round.Stop)
+	require.NotNil(t, result.Structure)
+	require.Len(t, result.BaselineValidation.EvalSets[0].Cases, 1)
+	require.NotNil(t, result.Rounds[0].Backward)
+}
+
+func TestSlimStoredRunReturnsOriginalForNilManager(t *testing.T) {
+	run := &promptiterengine.RunResult{ID: "run-1"}
+	var managerInstance *manager
+	assert.Same(t, run, managerInstance.slimStoredRun(run))
+}
+
 func TestManagerCancelTransitionsRun(t *testing.T) {
 	engineInstance := &fakePromptIterEngine{
 		run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
@@ -210,9 +346,9 @@ func TestManagerCancelTransitionsRun(t *testing.T) {
 		require.NoError(t, managerInstance.Close())
 	})
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
 	})
 	require.NoError(t, err)
 	require.NoError(t, managerInstance.Cancel(context.Background(), run.ID))
@@ -367,6 +503,60 @@ func TestRunObserverPassesContextToStoreUpdate(t *testing.T) {
 	assert.Equal(t, run.Status, store.updateRun.Status)
 	require.NotNil(t, store.updateRun.BaselineValidation)
 	assert.InDelta(t, 0.55, store.updateRun.BaselineValidation.OverallScore, 0.0001)
+}
+
+func TestRunObserverStoresSlimmedCopy(t *testing.T) {
+	store := &recordingStore{}
+	managerInstance, err := New(
+		&fakePromptIterEngine{},
+		WithStore(store),
+		WithStoredResultSlimming(promptiterengine.RunResultSlimming{
+			OmitStructure:       true,
+			OmitEvaluationCases: true,
+		}),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, managerInstance.Close())
+	})
+	concreteManager, ok := managerInstance.(*manager)
+	require.True(t, ok)
+	run := &promptiterengine.RunResult{
+		ID:     "run-slim",
+		Status: promptiterengine.RunStatusRunning,
+	}
+	observer := &observer{
+		manager: concreteManager,
+		run:     run,
+	}
+	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
+		Kind:    promptiterengine.EventKindStructureSnapshot,
+		Payload: &astructure.Snapshot{StructureID: "structure_1", EntryNodeID: "node_1"},
+	}))
+	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
+		Kind: promptiterengine.EventKindBaselineValidation,
+		Payload: &promptiterengine.EvaluationResult{
+			OverallScore: 0.55,
+			EvalSets: []promptiterengine.EvalSetResult{
+				{
+					EvalSetID:    "validation",
+					OverallScore: 0.55,
+					Cases: []promptiterengine.CaseResult{
+						{EvalSetID: "validation", EvalCaseID: "case_1"},
+					},
+				},
+			},
+		},
+	}))
+
+	require.NotNil(t, observer.run.Structure)
+	require.NotNil(t, observer.run.BaselineValidation)
+	require.Len(t, observer.run.BaselineValidation.EvalSets[0].Cases, 1)
+	require.NotNil(t, store.updateRun)
+	assert.Nil(t, store.updateRun.Structure)
+	require.NotNil(t, store.updateRun.BaselineValidation)
+	require.Len(t, store.updateRun.BaselineValidation.EvalSets, 1)
+	assert.Empty(t, store.updateRun.BaselineValidation.EvalSets[0].Cases)
 }
 
 func TestRunObserverRejectsInvalidEvents(t *testing.T) {
@@ -527,9 +717,9 @@ func TestManagerStartRejectsClosedManager(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, managerInstance.Close())
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
 	})
 	assert.Nil(t, run)
 	assert.EqualError(t, err, "promptiter manager is closed")
@@ -549,9 +739,9 @@ func TestManagerStartReturnsCreateError(t *testing.T) {
 		require.NoError(t, managerInstance.Close())
 	})
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
 	})
 	assert.Nil(t, run)
 	assert.ErrorContains(t, err, "create run")
@@ -760,33 +950,57 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 
 func TestValidateRunRequest(t *testing.T) {
 	assert.EqualError(t, validateRunRequest(nil), "run request is nil")
-	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{}), "train evaluation set ids are empty")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{}), "train evaluation sets are empty")
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
-		TrainEvalSetIDs: []string{"train"},
-	}), "validation evaluation set ids are empty")
+		Train: testEvalSetInputs("train"),
+	}), "validation evaluation sets are empty")
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "",
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), "train evaluation set id is empty")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: testEvalSetInputs("train"),
+		Validation: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID:   "validation",
+				EvalCaseIDs: []string{""},
+			},
+		},
+		MaxRounds: 1,
+	}), `validation eval case id for eval set "validation" is empty`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
 	}), "max rounds must be greater than 0")
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
-		TargetSurfaceIDs:     []string{},
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{},
 	}), "target surface ids must not be empty")
 	assert.NoError(t, validateRunRequest(&promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
-		TargetSurfaceIDs:     []string{"candidate#instruction"},
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	}))
 }
 
 func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 	targetScore := 0.9
 	request := &promptiterengine.RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
+		Train: testEvalSetInputs("train"),
+		Validation: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID:   "validation",
+				EvalCaseIDs: []string{"case_1"},
+			},
+		},
 		InitialProfile: &promptiter.Profile{
 			StructureID: "structure_1",
 			Overrides: []promptiter.SurfaceOverride{
@@ -805,13 +1019,13 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 	}
 	cloned := cloneRunRequest(request)
 	require.NotNil(t, cloned)
-	cloned.TrainEvalSetIDs[0] = "mutated"
-	cloned.ValidationEvalSetIDs[0] = "mutated"
+	cloned.Train[0].EvalSetID = "mutated"
+	cloned.Validation[0].EvalCaseIDs[0] = "mutated"
 	cloned.TargetSurfaceIDs[0] = "mutated"
 	*cloned.InitialProfile.Overrides[0].Value.Text = "mutated"
 	*cloned.StopPolicy.TargetScore = 1.0
-	assert.Equal(t, "train", request.TrainEvalSetIDs[0])
-	assert.Equal(t, "validation", request.ValidationEvalSetIDs[0])
+	assert.Equal(t, "train", request.Train[0].EvalSetID)
+	assert.Equal(t, []string{"case_1"}, request.Validation[0].EvalCaseIDs)
 	assert.Equal(t, "candidate#instruction", request.TargetSurfaceIDs[0])
 	assert.Equal(t, "prompt", *request.InitialProfile.Overrides[0].Value.Text)
 	assert.Equal(t, 0.9, *request.StopPolicy.TargetScore)
