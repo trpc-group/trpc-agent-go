@@ -78,16 +78,25 @@ func main() {
     reviewerModel := openai.New("gpt-4o-mini") // small model suffices for reviewer
 
     // 1. Create skill repository
+    //    repo is the shared dependency between agent and evolution:
+    //    - agent reads skill overviews and loads skills via skill_load
+    //    - evolution's reviewer reads existing skills for dedup decisions
+    //    - after evolution publishes, repo.Refresh() makes new skills
+    //      immediately visible to both agent and reviewer
     repo, _ := skill.NewFSRepository("./skills")
 
-    // 2. Create evolution service (minimal — no gates, direct publish)
+    // 2. Create evolution service
+    //    ManagedSkillsDir: the directory where evolution writes SKILL.md files
+    //    SkillRepository:  pass the same repo shared with the agent so that:
+    //      a) the reviewer sees all existing skills (bundled/local/evolution)
+    //      b) a single Refresh after publish updates both agent and reviewer
     evoSvc := evolution.NewService(reviewerModel,
         evolution.WithManagedSkillsDir("./skills"),
         evolution.WithSkillRepository(repo),
     )
     defer evoSvc.Close()
 
-    // 3. Create agent with skills
+    // 3. Create agent with skills (same repo instance)
     agent := llmagent.New("my-agent",
         llmagent.WithModel(agentModel),
         llmagent.WithSkills(repo),
@@ -269,8 +278,8 @@ revisions/
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `WithManagedSkillsDir(dir)` | Directory for published SKILL.md files | Required |
-| `WithSkillRepository(repo)` | Skill repo for reading existing skills | Required |
+| `WithManagedSkillsDir(dir)` | Directory where evolution **writes** SKILL.md files (Publisher target) | Required |
+| `WithSkillRepository(repo)` | Skill repo for **reading** existing skills for dedup; should be the same instance shared with the agent | Required |
 | `WithPolicy(p)` | Trigger policy | `DefaultPolicy` (≥4 tool calls) |
 | `WithCandidateStore(store)` | Immutable revision store | nil (no tracking) |
 | `WithActivePointer(ptr)` | Active revision pointer | nil |

@@ -78,16 +78,24 @@ func main() {
     reviewerModel := openai.New("gpt-4o-mini") // reviewer 用小模型即可
 
     // 1. 创建技能仓库
+    //    repo 是 agent 和 evolution 的共享依赖：
+    //    - agent 从中读取 skill overview 和 skill_load
+    //    - evolution 的 reviewer 从中读取已有 skill 进行去重判断
+    //    - evolution publish 新 skill 后调用 repo.Refresh() 使 agent 立即可见
     repo, _ := skill.NewFSRepository("./skills")
 
-    // 2. 创建 evolution 服务（最简 — 无质量门禁，直接 publish）
+    // 2. 创建 evolution 服务
+    //    ManagedSkillsDir: evolution 写入 SKILL.md 的目标目录
+    //    SkillRepository:  传入与 agent 共享的 repo，确保：
+    //      a) reviewer 能看到所有已有 skill（包括 bundled/local）做去重
+    //      b) publish 后 Refresh 一次，agent 和 reviewer 都能看到新 skill
     evoSvc := evolution.NewService(reviewerModel,
         evolution.WithManagedSkillsDir("./skills"),
         evolution.WithSkillRepository(repo),
     )
     defer evoSvc.Close()
 
-    // 3. 创建 agent 并接入技能
+    // 3. 创建 agent 并接入技能（使用同一个 repo）
     agent := llmagent.New("my-agent",
         llmagent.WithModel(agentModel),
         llmagent.WithSkills(repo),
@@ -313,8 +321,8 @@ revisions/
 
 | 选项 | 说明 | 默认值 |
 |------|------|--------|
-| `WithManagedSkillsDir(dir)` | evolution 写入 SKILL.md 的目录 | 必填 |
-| `WithSkillRepository(repo)` | 技能仓库（供 reviewer 读取已有技能） | 必填 |
+| `WithManagedSkillsDir(dir)` | evolution **写入** SKILL.md 的目录（Publisher 目标） | 必填 |
+| `WithSkillRepository(repo)` | 技能仓库（供 reviewer **读取**已有技能做去重；应与 agent 共享同一实例） | 必填 |
 | `WithPolicy(p)` | 触发策略 | `DefaultPolicy`（≥4 tool calls） |
 | `WithCandidateStore(store)` | 不可变 revision store | nil（不启用 revision 追踪） |
 | `WithActivePointer(ptr)` | Active revision 指针 | nil |
