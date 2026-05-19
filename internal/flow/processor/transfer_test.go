@@ -22,7 +22,6 @@ import (
 	itransfer "trpc.group/trpc-go/trpc-agent-go/internal/transfer"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/team"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -689,22 +688,184 @@ func (d *doneResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-cha
 	return ch, nil
 }
 
-func TestTransferResponseProc_CrossRequestTransfer_SetsStateDelta(t *testing.T) {
+type errorResponseAgent struct {
+	name string
+}
+
+func (d *errorResponseAgent) Info() agent.Info                { return agent.Info{Name: d.name} }
+func (d *errorResponseAgent) SubAgents() []agent.Agent        { return nil }
+func (d *errorResponseAgent) FindSubAgent(string) agent.Agent { return nil }
+func (d *errorResponseAgent) Tools() []tool.Tool              { return nil }
+func (d *errorResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		ch <- event.NewErrorEvent(
+			inv.InvocationID,
+			d.name,
+			model.ErrorTypeFlowError,
+			"target failed",
+		)
+	}()
+	return ch, nil
+}
+
+type nonTerminalErrorThenDoneAgent struct {
+	name string
+}
+
+func (d *nonTerminalErrorThenDoneAgent) Info() agent.Info { return agent.Info{Name: d.name} }
+func (d *nonTerminalErrorThenDoneAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (d *nonTerminalErrorThenDoneAgent) FindSubAgent(string) agent.Agent { return nil }
+func (d *nonTerminalErrorThenDoneAgent) Tools() []tool.Tool              { return nil }
+func (d *nonTerminalErrorThenDoneAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		ch <- event.NewResponseEvent(
+			inv.InvocationID,
+			d.name,
+			&model.Response{
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "recoverable target signal",
+				},
+			},
+		)
+		ch <- event.NewResponseEvent(
+			inv.InvocationID,
+			d.name,
+			&model.Response{Done: true},
+		)
+	}()
+	return ch, nil
+}
+
+type forwardedDoneResponseAgent struct {
+	name string
+}
+
+func (d *forwardedDoneResponseAgent) Info() agent.Info { return agent.Info{Name: d.name} }
+func (d *forwardedDoneResponseAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (d *forwardedDoneResponseAgent) FindSubAgent(string) agent.Agent { return nil }
+func (d *forwardedDoneResponseAgent) Tools() []tool.Tool              { return nil }
+func (d *forwardedDoneResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		ch <- event.NewResponseEvent(
+			inv.InvocationID,
+			d.name,
+			&model.Response{Done: true},
+		)
+		descendant := event.NewResponseEvent(
+			"descendant-invocation",
+			"descendant",
+			&model.Response{Done: true},
+		)
+		descendant.ParentInvocationID = inv.InvocationID
+		ch <- descendant
+	}()
+	return ch, nil
+}
+
+type descendantOnlyDoneResponseAgent struct {
+	name string
+}
+
+func (d *descendantOnlyDoneResponseAgent) Info() agent.Info { return agent.Info{Name: d.name} }
+func (d *descendantOnlyDoneResponseAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (d *descendantOnlyDoneResponseAgent) FindSubAgent(string) agent.Agent { return nil }
+func (d *descendantOnlyDoneResponseAgent) Tools() []tool.Tool              { return nil }
+func (d *descendantOnlyDoneResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		descendant := event.NewResponseEvent(
+			"descendant-invocation",
+			"descendant",
+			&model.Response{Done: true},
+		)
+		descendant.ParentInvocationID = inv.InvocationID
+		ch <- descendant
+	}()
+	return ch, nil
+}
+
+type nestedDelegationResponseAgent struct {
+	name string
+}
+
+func (d *nestedDelegationResponseAgent) Info() agent.Info { return agent.Info{Name: d.name} }
+func (d *nestedDelegationResponseAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (d *nestedDelegationResponseAgent) FindSubAgent(string) agent.Agent { return nil }
+func (d *nestedDelegationResponseAgent) Tools() []tool.Tool              { return nil }
+func (d *nestedDelegationResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		ch <- event.New(
+			inv.InvocationID,
+			d.name,
+			event.WithObject(model.ObjectTypeTransfer),
+			event.WithTag(event.TransferTag),
+		)
+		descendant := event.NewResponseEvent(
+			"descendant-invocation",
+			"descendant",
+			&model.Response{Done: true},
+		)
+		descendant.ParentInvocationID = inv.InvocationID
+		ch <- descendant
+	}()
+	return ch, nil
+}
+
+type recordingTransferCompletionObserver struct {
+	sourceAgent string
+	targetAgent string
+	count       int
+	done        bool
+}
+
+func (h *recordingTransferCompletionObserver) OnTransferComplete(
+	_ context.Context,
+	source *agent.Invocation,
+	target *agent.Invocation,
+	targetEvent *event.Event,
+) {
+	if source != nil {
+		h.sourceAgent = source.AgentName
+	}
+	if target != nil {
+		h.targetAgent = target.AgentName
+	}
+	h.count++
+	h.done = targetEvent != nil && targetEvent.Response != nil && targetEvent.Response.Done
+}
+
+func TestTransferResponseProc_CompletionHandlerFromController(t *testing.T) {
 	target := &doneResponseAgent{name: "child"}
 	parent := &parentAgent{child: target}
-
-	sess := session.NewSession("app", "user", "sess")
-	sess.SetState(team.SwarmTeamNameKey, []byte("team"))
-
+	handler := &completionInvocationCustomizer{}
 	inv := &agent.Invocation{
 		Agent:        parent,
 		AgentName:    "parent",
-		InvocationID: "inv-xrt",
-		Session:      sess,
+		InvocationID: "inv-completion",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
 		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
 	}
 	rsp := &model.Response{ID: "r1"}
-
 	out := make(chan *event.Event, 10)
 	NewTransferResponseProcessor(true).ProcessResponse(
 		context.Background(),
@@ -714,32 +875,28 @@ func TestTransferResponseProc_CrossRequestTransfer_SetsStateDelta(t *testing.T) 
 		out,
 	)
 	close(out)
-
-	var doneEvt *event.Event
-	for evt := range out {
-		if evt != nil && evt.Author == "child" && evt.Response != nil && evt.Response.Done {
-			doneEvt = evt
-		}
+	for range out {
 	}
-	require.NotNil(t, doneEvt)
-	require.Equal(t, []byte("child"), doneEvt.StateDelta[team.SwarmActiveAgentKeyPrefix+"team"])
+	require.Equal(t, "parent", handler.sourceAgent)
+	require.Equal(t, "child", handler.targetAgent)
+	require.Equal(t, 1, handler.count)
+	require.True(t, handler.done)
 }
 
-func TestTransferResponseProc_CrossRequestTransfer_SkipsStateDeltaWithoutMarker(t *testing.T) {
-	target := &doneResponseAgent{name: "child"}
+func TestTransferResponseProc_CompletionHandlerIgnoresForwardedDescendantDone(t *testing.T) {
+	target := &forwardedDoneResponseAgent{name: "child"}
 	parent := &parentAgent{child: target}
-
-	sess := session.NewSession("app", "user", "sess")
-
+	handler := &completionInvocationCustomizer{}
 	inv := &agent.Invocation{
 		Agent:        parent,
 		AgentName:    "parent",
-		InvocationID: "inv-xrt-skip",
-		Session:      sess,
+		InvocationID: "inv-completion-forwarded",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
 		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
 	}
-	rsp := &model.Response{ID: "r1"}
-
+	rsp := &model.Response{ID: "r-forwarded"}
 	out := make(chan *event.Event, 10)
 	NewTransferResponseProcessor(true).ProcessResponse(
 		context.Background(),
@@ -749,43 +906,245 @@ func TestTransferResponseProc_CrossRequestTransfer_SkipsStateDeltaWithoutMarker(
 		out,
 	)
 	close(out)
-
-	for evt := range out {
-		if evt == nil || evt.Author != "child" || evt.Response == nil || !evt.Response.Done {
-			continue
-		}
-		_, ok := evt.StateDelta[team.SwarmActiveAgentKeyPrefix+"team"]
-		require.False(t, ok)
-		return
+	for range out {
 	}
-	t.Fatal("missing done response event from child")
+	require.Equal(t, "parent", handler.sourceAgent)
+	require.Equal(t, "child", handler.targetAgent)
+	require.Equal(t, 1, handler.count)
+	require.True(t, handler.done)
 }
 
-func TestTransferResponseProc_SaveActiveAgent_EarlyReturns(t *testing.T) {
-	proc := NewTransferResponseProcessor(true)
+func TestTransferResponseProc_CompletionHandlerFallsBackWhenTargetForwardsOnlyDescendantDone(t *testing.T) {
+	target := &descendantOnlyDoneResponseAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	handler := &completionInvocationCustomizer{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-completion-descendant-only",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-descendant-only"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, "parent", handler.sourceAgent)
+	require.Equal(t, "child", handler.targetAgent)
+	require.Equal(t, 1, handler.count)
+	require.True(t, handler.done)
+}
+
+func TestTransferResponseProc_CompletionHandlerDoesNotFallbackAfterNestedDelegation(t *testing.T) {
+	target := &nestedDelegationResponseAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	handler := &completionInvocationCustomizer{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-completion-nested-delegation",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-nested-delegation"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	require.Zero(t, handler.count)
+}
+
+func TestTransferResponseProc_CompletionHandlerDoesNotFallbackAfterTargetError(t *testing.T) {
+	target := &errorResponseAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	handler := &completionInvocationCustomizer{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-completion-target-error",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-target-error"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	require.Zero(t, handler.count)
+}
+
+func TestTransferResponseProc_TerminalErrorHandlerMutatesTargetErrorBeforeForward(t *testing.T) {
+	target := &errorResponseAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	handler := &terminalErrorTransferController{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-terminal-error",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-terminal-error"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	var targetErr *event.Event
+	for evt := range out {
+		if evt != nil && evt.IsTerminalError() && evt.Author == "child" {
+			targetErr = evt
+		}
+	}
+	require.Equal(t, 1, handler.terminalErrors)
+	require.NotNil(t, targetErr)
+	require.Equal(t, []byte("child"), targetErr.StateDelta["owner"])
+}
+
+func TestTransferResponseProc_CompletionHandlerAllowsDoneAfterNonTerminalTargetError(t *testing.T) {
+	target := &nonTerminalErrorThenDoneAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	handler := &completionInvocationCustomizer{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-completion-target-recovered",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-target-recovered"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, 1, handler.count)
+	require.True(t, handler.done)
+}
+
+type controllerCompletionObserver struct {
+	recordingTransferCompletionObserver
+}
+
+func (h *controllerCompletionObserver) OnTransfer(
+	context.Context,
+	string,
+	string,
+) (time.Duration, error) {
+	return 0, nil
+}
+
+type completionInvocationCustomizer struct {
+	recordingTransferCompletionObserver
+}
+
+func (h *completionInvocationCustomizer) OnTransfer(
+	context.Context,
+	string,
+	string,
+) (time.Duration, error) {
+	return 0, nil
+}
+
+func (h *completionInvocationCustomizer) CustomizeTransferInvocation(
+	context.Context,
+	*agent.Invocation,
+	*agent.Invocation,
+) error {
+	return nil
+}
+
+type terminalErrorTransferController struct {
+	terminalErrors int
+}
+
+func (h *terminalErrorTransferController) OnTransfer(
+	context.Context,
+	string,
+	string,
+) (time.Duration, error) {
+	return 0, nil
+}
+
+func (h *terminalErrorTransferController) OnTransferTerminalError(
+	_ context.Context,
+	_ *agent.Invocation,
+	target *agent.Invocation,
+	targetEvent *event.Event,
+) {
+	h.terminalErrors++
+	if targetEvent.StateDelta == nil {
+		targetEvent.StateDelta = make(map[string][]byte)
+	}
+	targetEvent.StateDelta["owner"] = []byte(target.AgentName)
+}
+
+func TestTransferResponseProc_ControllerCompletionMethodIsObserved(t *testing.T) {
 	target := &doneResponseAgent{name: "child"}
-	ctx := context.Background()
-
-	require.NotPanics(t, func() {
-		proc.saveActiveAgent(ctx, nil, target, &event.Event{})
-	})
-
-	require.NotPanics(t, func() {
-		proc.saveActiveAgent(ctx, &agent.Invocation{}, target, &event.Event{})
-	})
-
-	sess := session.NewSession("app", "user", "sess")
-	inv := &agent.Invocation{Session: sess}
-
-	require.NotPanics(t, func() {
-		proc.saveActiveAgent(ctx, inv, target, nil)
-	})
-
-	evt := &event.Event{}
-	proc.saveActiveAgent(ctx, inv, target, evt)
-	require.Nil(t, evt.StateDelta)
-}
-
-func TestSwarmActiveAgentKey_EmptyTeamName(t *testing.T) {
-	require.Equal(t, swarmActiveAgentKeyPrefix, swarmActiveAgentKey(""))
+	parent := &parentAgent{child: target}
+	handler := &controllerCompletionObserver{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-completion-controller",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-controller"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, 1, handler.count)
 }
