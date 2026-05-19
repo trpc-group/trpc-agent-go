@@ -39,7 +39,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const testSurfaceID = "node_1#instruction"
+const (
+	testSurfaceID     = "node_1#instruction"
+	testToolSurfaceID = "node_1#tool"
+)
 
 type fakeBackwarder struct {
 	requests []*backwarder.Request
@@ -498,6 +501,82 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 	assert.Len(t, backward.requests, 2)
 	assert.Equal(t, "base prompt", *backward.requests[0].Surfaces[0].Value.Text)
 	assert.Equal(t, "accepted prompt", *backward.requests[1].Surfaces[0].Value.Text)
+}
+
+func TestRunAllowsToolSurfaceInTraceWhenTargetingInstruction(t *testing.T) {
+	backward := &fakeBackwarder{
+		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
+			_ = ctx
+			require.Len(t, request.Surfaces, 1)
+			assert.Equal(t, testSurfaceID, request.Surfaces[0].SurfaceID)
+			assert.Equal(t, []string{testSurfaceID}, request.AllowedGradientSurfaceIDs)
+			return &backwarder.Result{
+				Gradients: []promptiter.SurfaceGradient{
+					{
+						EvalSetID:  request.EvalSetID,
+						EvalCaseID: request.EvalCaseID,
+						StepID:     request.StepID,
+						SurfaceID:  testSurfaceID,
+						Severity:   promptiter.LossSeverityP1,
+						Gradient:   "improve prompt",
+					},
+				},
+			}, nil
+		},
+	}
+	aggregatorInstance := &fakeAggregator{
+		fn: func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error) {
+			_ = ctx
+			return &aggregator.Result{
+				Gradient: &promptiter.AggregatedSurfaceGradient{
+					SurfaceID: request.SurfaceID,
+					NodeID:    request.NodeID,
+					Type:      request.Type,
+					Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+				},
+			}, nil
+		},
+	}
+	optimizerInstance := &fakeOptimizer{
+		fn: func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error) {
+			_ = ctx
+			return &optimizer.Result{
+				Patch: &promptiter.SurfacePatch{
+					SurfaceID: request.Surface.SurfaceID,
+					Value: astructure.SurfaceValue{
+						Text: stringPtr("accepted prompt"),
+					},
+					Reason: "update prompt",
+				},
+			}, nil
+		},
+	}
+	evalService := newScriptedEvalService(func(evalSetID string, profileValue string) scriptedEvalOutcome {
+		outcome := scriptedOutcome(evalSetID, profileValue)
+		outcome.appliedSurfaceIDs = []string{testSurfaceID, testToolSurfaceID}
+		return outcome
+	})
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgentWithToolSurface(),
+		newTestAgentEvaluator(t, evalService),
+		backward,
+		aggregatorInstance,
+		optimizerInstance,
+	)
+	assert.NoError(t, err)
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{testSurfaceID},
+		AcceptancePolicy: AcceptancePolicy{
+			MinScoreGain: 0.1,
+		},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, backward.requests, 1)
 }
 
 func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
@@ -1784,6 +1863,31 @@ func TestValidateTraceAgainstStructure(t *testing.T) {
 	}))
 }
 
+func TestValidateTraceAgainstStructureAllowsKnownUnsupportedSurface(t *testing.T) {
+	structure, err := newStructureState(testStructureSnapshotWithToolSurface(t))
+	assert.NoError(t, err)
+	err = validateTraceAgainstStructure(structure, &atrace.Trace{
+		Steps: []atrace.Step{
+			{
+				StepID:            "step_1",
+				NodeID:            "node_1",
+				AppliedSurfaceIDs: []string{testSurfaceID, testToolSurfaceID},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	err = validateTraceAgainstStructure(structure, &atrace.Trace{
+		Steps: []atrace.Step{
+			{
+				StepID:            "step_1",
+				NodeID:            "node_1",
+				AppliedSurfaceIDs: []string{"node_1#missing_tool"},
+			},
+		},
+	})
+	assert.EqualError(t, err, `execution trace step "step_1" references unknown surface id "node_1#missing_tool"`)
+}
+
 func TestExtractInferenceTraceDetails(t *testing.T) {
 	structure, err := newStructureState(testStructureSnapshot(t))
 	assert.NoError(t, err)
@@ -2626,6 +2730,21 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 		traceIndex,
 		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
 		atrace.Step{
+			StepID:            "step_2",
+			NodeID:            "node_1",
+			AppliedSurfaceIDs: []string{"node_1#missing"},
+		},
+		nil,
+		nil,
+	)
+	assert.Nil(t, request)
+	assert.EqualError(t, err, `surface id "node_1#missing" is unknown`)
+	request, err = buildBackwardRequest(
+		structure,
+		nil,
+		traceIndex,
+		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
+		atrace.Step{
 			StepID:             "step_2",
 			NodeID:             "node_1",
 			PredecessorStepIDs: []string{"missing"},
@@ -2650,6 +2769,29 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 	assert.NoError(t, err)
 	require.NotNil(t, request)
 	assert.NotNil(t, request.Input)
+}
+
+func TestBuildBackwardRequestSkipsUnsupportedAppliedSurfaces(t *testing.T) {
+	structure, err := newStructureState(testStructureSnapshotWithToolSurface(t))
+	assert.NoError(t, err)
+	request, err := buildBackwardRequest(
+		structure,
+		nil,
+		nil,
+		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
+		atrace.Step{
+			StepID:            "step_1",
+			NodeID:            "node_1",
+			AppliedSurfaceIDs: []string{testSurfaceID, testToolSurfaceID, testSurfaceID},
+		},
+		nil,
+		targetSurfaceSet{testSurfaceID: struct{}{}},
+	)
+	assert.NoError(t, err)
+	require.NotNil(t, request)
+	require.Len(t, request.Surfaces, 1)
+	assert.Equal(t, testSurfaceID, request.Surfaces[0].SurfaceID)
+	assert.Equal(t, []string{testSurfaceID}, request.AllowedGradientSurfaceIDs)
 }
 
 func TestRunRejectsEmptyTargetSurfaceIDs(t *testing.T) {
@@ -2963,6 +3105,13 @@ func testStructureSnapshot(t *testing.T) *astructure.Snapshot {
 	return snapshot
 }
 
+func testStructureSnapshotWithToolSurface(t *testing.T) *astructure.Snapshot {
+	t.Helper()
+	snapshot, err := astructure.Export(context.Background(), testTargetAgentWithToolSurface())
+	assert.NoError(t, err)
+	return snapshot
+}
+
 func testTargetAgent() agent.Agent {
 	return &fakeStructureAgent{
 		snapshot: &astructure.Snapshot{
@@ -2980,6 +3129,42 @@ func testTargetAgent() agent.Agent {
 					Type:   astructure.SurfaceTypeInstruction,
 					Value: astructure.SurfaceValue{
 						Text: stringPtr("base prompt"),
+					},
+				},
+			},
+		},
+	}
+}
+
+func testTargetAgentWithToolSurface() agent.Agent {
+	return &fakeStructureAgent{
+		snapshot: &astructure.Snapshot{
+			EntryNodeID: "node_1",
+			Nodes: []astructure.Node{
+				{
+					NodeID: "node_1",
+					Kind:   astructure.NodeKindLLM,
+					Name:   "writer",
+				},
+			},
+			Surfaces: []astructure.Surface{
+				{
+					NodeID: "node_1",
+					Type:   astructure.SurfaceTypeInstruction,
+					Value: astructure.SurfaceValue{
+						Text: stringPtr("base prompt"),
+					},
+				},
+				{
+					NodeID: "node_1",
+					Type:   astructure.SurfaceTypeTool,
+					Value: astructure.SurfaceValue{
+						Tools: []astructure.ToolRef{
+							{
+								ID:          "bad_tool",
+								Description: "bad",
+							},
+						},
 					},
 				},
 			},
