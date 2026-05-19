@@ -2146,6 +2146,61 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	assert.NotContains(t, state.surfaceIndex, "candidate#unsupported")
 }
 
+func TestBuildKnownSurfaceIDsValidation(t *testing.T) {
+	nodes := map[string]astructure.Node{
+		"node_1": {NodeID: "node_1"},
+	}
+	known, err := buildKnownSurfaceIDs([]astructure.Surface{
+		{
+			SurfaceID: "node_1#instruction",
+			NodeID:    "node_1",
+		},
+		{
+			SurfaceID: "node_1#tool",
+			NodeID:    "node_1",
+		},
+	}, nodes)
+	assert.NoError(t, err)
+	assert.Equal(t, map[string]struct{}{
+		"node_1#instruction": {},
+		"node_1#tool":        {},
+	}, known)
+	known, err = buildKnownSurfaceIDs([]astructure.Surface{
+		{
+			NodeID: "node_1",
+		},
+	}, nodes)
+	assert.Nil(t, known)
+	assert.EqualError(t, err, "surface id is empty")
+	known, err = buildKnownSurfaceIDs([]astructure.Surface{
+		{
+			SurfaceID: "node_1#instruction",
+		},
+	}, nodes)
+	assert.Nil(t, known)
+	assert.EqualError(t, err, "surface node id is empty")
+	known, err = buildKnownSurfaceIDs([]astructure.Surface{
+		{
+			SurfaceID: "unknown#instruction",
+			NodeID:    "unknown",
+		},
+	}, nodes)
+	assert.Nil(t, known)
+	assert.EqualError(t, err, `surface "unknown#instruction" references unknown node id "unknown"`)
+	known, err = buildKnownSurfaceIDs([]astructure.Surface{
+		{
+			SurfaceID: "node_1#instruction",
+			NodeID:    "node_1",
+		},
+		{
+			SurfaceID: "node_1#instruction",
+			NodeID:    "node_1",
+		},
+	}, nodes)
+	assert.Nil(t, known)
+	assert.EqualError(t, err, `duplicate surface id "node_1#instruction"`)
+}
+
 func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 	structure, err := newStructureState(testStructureSnapshot(t))
 	assert.NoError(t, err)
