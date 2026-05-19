@@ -147,7 +147,7 @@ func expectEventsByRefs(
 		args = append(args, row.id)
 		sqlRows.AddRow(row.id, row.event)
 	}
-	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event FROM session_events WHERE id IN")).
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event FROM session_events WHERE id IN") + `.*` + regexp.QuoteMeta("AND deleted_at IS NULL")).
 		WithArgs(args...).
 		WillReturnRows(sqlRows)
 }

@@ -652,6 +652,8 @@ type eventRef struct {
 	createdAt time.Time
 }
 
+// getLimitedSessionEvents loads a bounded event window for GetSession while
+// preserving ApplyEventFiltering's user-message anchoring behavior.
 func (s *Service) getLimitedSessionEvents(
 	ctx context.Context,
 	key session.Key,
@@ -679,8 +681,12 @@ func (s *Service) getLimitedSessionEvents(
 	if len(refs) == 0 && filterAfterTime.IsZero() {
 		return [][]event.Event{nil}, nil
 	}
-	if idx := firstUserEventIndex(events); idx >= 0 {
-		return [][]event.Event{events[idx:]}, nil
+	filteredEvents := filterEventsByTimestamp(events, filterAfterTime)
+	if idx := firstUserEventIndex(filteredEvents); idx >= 0 {
+		return [][]event.Event{filteredEvents[idx:]}, nil
+	}
+	if anchor, ok := lastUserEvent(events); ok {
+		return [][]event.Event{append([]event.Event{anchor}, filteredEvents...)}, nil
 	}
 
 	anchor, ok, err := s.getLastUserEventBeforeRefs(ctx, key, sessionCreatedAt, refs)
@@ -690,9 +696,11 @@ func (s *Service) getLimitedSessionEvents(
 	if !ok {
 		return [][]event.Event{nil}, nil
 	}
-	return [][]event.Event{append([]event.Event{anchor}, events...)}, nil
+	return [][]event.Event{append([]event.Event{anchor}, filteredEvents...)}, nil
 }
 
+// getRecentEventRefs fetches lightweight event ordering metadata before
+// materializing full event JSON payloads.
 func (s *Service) getRecentEventRefs(
 	ctx context.Context,
 	key session.Key,
@@ -722,6 +730,8 @@ func (s *Service) getRecentEventRefs(
 	return refs, nil
 }
 
+// getEventsByRefs materializes events for previously selected refs and restores
+// ascending conversation order.
 func (s *Service) getEventsByRefs(
 	ctx context.Context,
 	refs []eventRef,
@@ -736,7 +746,8 @@ func (s *Service) getEventsByRefs(
 		args[i] = ref.id
 	}
 
-	eventsQuery := fmt.Sprintf(`SELECT id, event FROM %s WHERE id IN (%s)`,
+	eventsQuery := fmt.Sprintf(`SELECT id, event FROM %s WHERE id IN (%s)
+		AND deleted_at IS NULL`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
 
 	eventsByID := make(map[int64]event.Event, len(refs))
@@ -780,6 +791,8 @@ func (s *Service) getEventsByRefs(
 	return events, nil
 }
 
+// getLastUserEventBeforeRefs fetches the nearest older user event to anchor a
+// limited event window that otherwise contains no user message.
 func (s *Service) getLastUserEventBeforeRefs(
 	ctx context.Context,
 	key session.Key,
@@ -826,6 +839,7 @@ func (s *Service) getLastUserEventBeforeRefs(
 	return *anchor, true, nil
 }
 
+// oldestEventRef returns the earliest ref in the current bounded event window.
 func oldestEventRef(refs []eventRef) eventRef {
 	oldest := refs[0]
 	for _, ref := range refs[1:] {
@@ -837,6 +851,8 @@ func oldestEventRef(refs []eventRef) eventRef {
 	return oldest
 }
 
+// firstUserEventIndex returns the first event index whose response contains a
+// user message.
 func firstUserEventIndex(events []event.Event) int {
 	for i := range events {
 		if events[i].IsUserMessage() {
@@ -846,6 +862,32 @@ func firstUserEventIndex(events []event.Event) int {
 	return -1
 }
 
+// lastUserEvent returns the last user event from a loaded event set.
+func lastUserEvent(events []event.Event) (event.Event, bool) {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].IsUserMessage() {
+			return events[i], true
+		}
+	}
+	return event.Event{}, false
+}
+
+// filterEventsByTimestamp applies session event-time filtering using the event
+// timestamp, matching Session.ApplyEventFiltering semantics.
+func filterEventsByTimestamp(events []event.Event, afterTime time.Time) []event.Event {
+	if afterTime.IsZero() {
+		return events
+	}
+	for i, evt := range events {
+		if evt.Timestamp.After(afterTime) || evt.Timestamp.Equal(afterTime) {
+			return events[i:]
+		}
+	}
+	return nil
+}
+
+// getPagedEvents loads one explicit event page using two-phase ID then payload
+// fetches to avoid sorting large JSON payloads in MySQL.
 func (s *Service) getPagedEvents(
 	ctx context.Context,
 	key session.Key,
