@@ -289,6 +289,12 @@ func buildBackwardRequest(
 			continue
 		}
 		seenSurfaces[surfaceID] = struct{}{}
+		if _, ok := structure.knownSurfaceIDs[surfaceID]; !ok {
+			return nil, fmt.Errorf("surface id %q is unknown", surfaceID)
+		}
+		if _, ok := structure.surfaceIndex[surfaceID]; !ok {
+			continue
+		}
 		surface, err := resolveProfileSurface(structure, overrideIndex, surfaceID)
 		if err != nil {
 			return nil, err

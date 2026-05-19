@@ -519,7 +519,7 @@ func validateTraceAgainstStructure(
 			if surfaceID == "" {
 				return fmt.Errorf("execution trace step %q applied surface id is empty", step.StepID)
 			}
-			if _, ok := structure.surfaceIndex[surfaceID]; !ok {
+			if _, ok := structure.knownSurfaceIDs[surfaceID]; !ok {
 				return fmt.Errorf(
 					"execution trace step %q references unknown surface id %q",
 					step.StepID,
