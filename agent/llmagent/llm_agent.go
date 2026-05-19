@@ -998,6 +998,22 @@ func appendWorkspaceExecToolWithExecutor(
 		toolOpts,
 		workspacePrepOptions(options, loadedSkillsRepo)...,
 	)
+	if options != nil &&
+		len(options.workspaceExecAllowedCommands) > 0 {
+		toolOpts = append(toolOpts,
+			toolworkspaceexec.WithAllowedCommands(
+				options.workspaceExecAllowedCommands...,
+			),
+		)
+	}
+	if options != nil &&
+		len(options.workspaceExecDeniedCommands) > 0 {
+		toolOpts = append(toolOpts,
+			toolworkspaceexec.WithDeniedCommands(
+				options.workspaceExecDeniedCommands...,
+			),
+		)
+	}
 	execTool := toolworkspaceexec.NewExecTool(exec, toolOpts...)
 	allTools = append(
 		allTools,

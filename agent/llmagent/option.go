@@ -471,6 +471,22 @@ type Options struct {
 	// skillRunStager overrides how skill_run materializes a skill in
 	// the workspace.
 	skillRunStager toolskill.SkillStager
+	// workspaceExecAllowedCommands restricts workspace_exec to
+	// allowlisted commands. When non-empty the user's command is
+	// parsed by internal/shellsafe before execution and only simple
+	// commands joined by safe operators (|, &&, ||, ;) whose
+	// executable is in the list are accepted.
+	workspaceExecAllowedCommands []string
+	// workspaceExecDeniedCommands rejects denylisted commands for
+	// workspace_exec. The same shellsafe structural rules apply,
+	// plus an unconditional built-in deny set of shell wrappers and
+	// re-executing builtins (sh, bash, zsh, busybox, eval, exec,
+	// command, source, xargs, env, sudo, ...) that cannot be
+	// re-enabled via workspaceExecAllowedCommands; allow-list
+	// entries for those names are ignored. Precedence is
+	// explicit Deny > implicit deny > explicit Allow > implicit
+	// allow.
+	workspaceExecDeniedCommands []string
 	// workspaceBootstrap declares static files and commands that
 	// must be present/executed in the workspace before user
 	// commands run. When non-empty it is converted into a Provider
@@ -1050,6 +1066,65 @@ func WithSkillRunRequireSkillLoaded(enable bool) Option {
 func WithSkillRunStager(stager toolskill.SkillStager) Option {
 	return func(opts *Options) {
 		opts.skillRunStager = stager
+	}
+}
+
+// WithWorkspaceExecAllowedCommands restricts workspace_exec to
+// commands whose executable name (or basename for absolute paths)
+// appears in cmds.
+//
+// When non-empty the user's command is parsed by internal/shellsafe
+// (a conservative hand-rolled lexer) and only pipelines composed of
+// allowed commands joined by safe operators (|, &&, ||, ;) are
+// executed. Constructs that could bypass the policy - command and
+// parameter substitution, redirections, subshells and friends - are
+// rejected.
+//
+// Precedence is explicit Deny > implicit deny > explicit Allow >
+// implicit allow. Shell wrappers and re-executing builtins (sh,
+// bash, zsh, busybox, eval, exec, command, source, xargs, env,
+// sudo, ...) are blocked by an unconditional built-in deny set and
+// cannot be re-enabled by listing them here; allow-list entries
+// for them are ignored. If you legitimately need one of them, wrap
+// the desired use in an auditable workspace script and allow the
+// script instead.
+//
+// When a policy is active workspace_exec also switches the spawn
+// from "sh -lc" to "sh -c" and strips known shell-startup and
+// search-path environment variables (HOME, BASH_ENV, ENV, IFS,
+// PATH, LD_PRELOAD, ...) from the per-call env so a passing
+// command cannot be hijacked at shell start-up time or redirected
+// at a workspace-controlled binary via PATH.
+//
+// Scope: enforcement is at the executable-name level. If an allowed
+// command itself shells out based on its arguments (e.g.
+// "find . -exec curl ...", "awk 'BEGIN{system(\"curl ...\")}'",
+// "git -c protocol.ext.allow=..."), the inner command is the
+// allowed command's own subprocess and is not re-checked. Network
+// out-bound restrictions at the sandbox layer and per-command
+// argument validators are the right complementary defences for
+// those cases; the latter is a planned follow-up.
+//
+// Useful when the agent runs in a sandbox that has network access to
+// sensitive systems and the operator wants a command-level safety
+// net on top of (or in lieu of) network restrictions.
+func WithWorkspaceExecAllowedCommands(cmds ...string) Option {
+	return func(opts *Options) {
+		opts.workspaceExecAllowedCommands = append(
+			[]string(nil), cmds...,
+		)
+	}
+}
+
+// WithWorkspaceExecDeniedCommands rejects workspace_exec commands
+// whose executable name (or basename for absolute paths) appears in
+// cmds. The same shellsafe structural rules and built-in deny set
+// described in WithWorkspaceExecAllowedCommands apply.
+func WithWorkspaceExecDeniedCommands(cmds ...string) Option {
+	return func(opts *Options) {
+		opts.workspaceExecDeniedCommands = append(
+			[]string(nil), cmds...,
+		)
 	}
 }
 
