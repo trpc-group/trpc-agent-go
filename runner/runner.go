@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -942,7 +943,7 @@ type eventLoopContext struct {
 	interruptedAssistantAuthor         string
 	interruptedAssistantInvocationID   string
 	interruptedAssistantCreated        int64
-	interruptedAssistantContent        strings.Builder
+	interruptedAssistantChoiceContent  map[int]*strings.Builder
 	// emittedAssistantResponseIDs tracks response IDs that already produced a
 	// non-partial assistant message event during this run.
 	//
@@ -1070,6 +1071,9 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
+	if !excludeRootCompletion {
+		r.recordInterruptedAssistantDelta(loop, agentEvent)
+	}
 
 	// Append qualifying events to session and trigger summarization.
 	persisted := r.handleEventPersistence(
@@ -1106,9 +1110,6 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	// Emit event to output channel.
 	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
 		return fmt.Errorf("emit event to output channel: %w", err)
-	}
-	if !excludeRootCompletion {
-		r.recordInterruptedAssistantDelta(loop, agentEvent)
 	}
 
 	return nil
@@ -1319,18 +1320,6 @@ func (r *runner) recordInterruptedAssistantDelta(
 	if !rsp.IsPartial || rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
 		return
 	}
-	var content strings.Builder
-	for _, choice := range rsp.Choices {
-		if choice.Delta.Role != "" && choice.Delta.Role != model.RoleAssistant {
-			continue
-		}
-		if choice.Delta.Content != "" {
-			content.WriteString(choice.Delta.Content)
-		}
-	}
-	if content.Len() == 0 {
-		return
-	}
 	responseID := rsp.ID
 	if responseID == "" {
 		responseID = loop.interruptedAssistantResponseID
@@ -1340,7 +1329,29 @@ func (r *runner) recordInterruptedAssistantDelta(
 	}
 	if loop.interruptedAssistantResponseID != "" &&
 		responseID != loop.interruptedAssistantResponseID {
-		loop.interruptedAssistantContent.Reset()
+		loop.interruptedAssistantChoiceContent = nil
+	}
+	recorded := false
+	for _, choice := range rsp.Choices {
+		if choice.Delta.Role != "" && choice.Delta.Role != model.RoleAssistant {
+			continue
+		}
+		if choice.Delta.Content == "" {
+			continue
+		}
+		if loop.interruptedAssistantChoiceContent == nil {
+			loop.interruptedAssistantChoiceContent = make(map[int]*strings.Builder)
+		}
+		content := loop.interruptedAssistantChoiceContent[choice.Index]
+		if content == nil {
+			content = &strings.Builder{}
+			loop.interruptedAssistantChoiceContent[choice.Index] = content
+		}
+		content.WriteString(choice.Delta.Content)
+		recorded = true
+	}
+	if !recorded {
+		return
 	}
 	loop.interruptedAssistantResponseID = responseID
 	loop.interruptedAssistantAuthor = agentEvent.Author
@@ -1348,7 +1359,6 @@ func (r *runner) recordInterruptedAssistantDelta(
 	if rsp.Created > 0 {
 		loop.interruptedAssistantCreated = rsp.Created
 	}
-	loop.interruptedAssistantContent.WriteString(content.String())
 }
 
 // safePersistInterruptedAssistant guards cancellation-time partial persistence
@@ -1363,7 +1373,7 @@ func (r *runner) safePersistInterruptedAssistant(ctx context.Context, loop *even
 }
 
 func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoopContext) {
-	if ctx == nil || ctx.Err() == nil || loop == nil || loop.sess == nil {
+	if ctx.Err() == nil || loop == nil || loop.sess == nil {
 		return
 	}
 	interruptedEvent := r.interruptedAssistantEvent(ctx, loop)
@@ -1372,6 +1382,14 @@ func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoo
 	}
 	persistCtx, cancel := sessionPersistenceContext(ctx)
 	defer cancel()
+	interruptedEvent = r.applyEventPlugins(
+		persistCtx,
+		loop.invocation,
+		interruptedEvent,
+	)
+	if interruptedEvent == nil {
+		return
+	}
 	if err := r.sessionService.AppendEvent(
 		persistCtx,
 		loop.sess,
@@ -1387,16 +1405,10 @@ func (r *runner) interruptedAssistantEvent(
 	ctx context.Context,
 	loop *eventLoopContext,
 ) *event.Event {
-	content := loop.interruptedAssistantContent.String()
-	if content == "" {
+	choices := interruptedAssistantChoices(loop)
+	if len(choices) == 0 {
 		return nil
 	}
-	finishReason := interruptedAssistantFinishReason
-	choices := []model.Choice{{
-		Index:        0,
-		Message:      model.NewAssistantMessage(content),
-		FinishReason: &finishReason,
-	}}
 	if r.interruptedAssistantAlreadyPersisted(loop, choices) {
 		return nil
 	}
@@ -1437,6 +1449,31 @@ func (r *runner) interruptedAssistantEvent(
 	return evt
 }
 
+func interruptedAssistantChoices(loop *eventLoopContext) []model.Choice {
+	if loop == nil || len(loop.interruptedAssistantChoiceContent) == 0 {
+		return nil
+	}
+	indexes := make([]int, 0, len(loop.interruptedAssistantChoiceContent))
+	for index := range loop.interruptedAssistantChoiceContent {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	finishReason := interruptedAssistantFinishReason
+	choices := make([]model.Choice, 0, len(indexes))
+	for _, index := range indexes {
+		content := loop.interruptedAssistantChoiceContent[index]
+		if content == nil || content.Len() == 0 {
+			continue
+		}
+		choices = append(choices, model.Choice{
+			Index:        index,
+			Message:      model.NewAssistantMessage(content.String()),
+			FinishReason: &finishReason,
+		})
+	}
+	return choices
+}
+
 func (r *runner) interruptedAssistantAlreadyPersisted(
 	loop *eventLoopContext,
 	choices []model.Choice,
@@ -1458,22 +1495,13 @@ func (r *runner) interruptedAssistantAlreadyPersisted(
 }
 
 func contextDoneReason(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
 	if cause := context.Cause(ctx); cause != nil {
 		return cause.Error()
-	}
-	if err := ctx.Err(); err != nil {
-		return err.Error()
 	}
 	return ""
 }
 
 func sessionPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if ctx == nil {
-		return context.Background(), func() {}
-	}
 	if ctx.Err() == nil {
 		return ctx, func() {}
 	}
