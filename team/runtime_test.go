@@ -474,6 +474,40 @@ func TestSwarmRuntime_OnTransferCompletePersistsSharedSyntheticFallback(t *testi
 	require.Equal(t, []byte("child"), targetEvent.StateDelta[swarmActiveAgentKey("team")])
 }
 
+func TestSwarmRuntime_OnTransferTerminalErrorPreservesSharedOwnerStateDelta(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	rootSess, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	}, session.StateMap{SwarmTeamNameKey: []byte("team")})
+	require.NoError(t, err)
+	source := &agent.Invocation{
+		Session:        rootSess,
+		SessionService: service,
+	}
+	target := &agent.Invocation{
+		AgentName: "child",
+		Session:   rootSess,
+	}
+	targetEvent := event.NewErrorEvent("target", "child", model.ErrorTypeFlowError, "boom")
+	rt := &swarmRuntime{handoff: swarmHandoffPolicy{
+		turnRouting: swarmTurnRoutingTargetTakesOver,
+	}}
+	rt.OnTransferTerminalError(ctx, source, target, targetEvent)
+	rootGot, err := service.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "root",
+	})
+	require.NoError(t, err)
+	_, ok := rootGot.State[swarmActiveAgentKey("team")]
+	require.False(t, ok)
+	require.Equal(t, []byte("child"), targetEvent.StateDelta[swarmActiveAgentKey("team")])
+	require.Equal(t, []byte("child"), rootSess.State[swarmActiveAgentKey("team")])
+}
+
 func TestSwarmRuntime_RouteIsolatedEventInheritsParentRoute(t *testing.T) {
 	ctx := context.Background()
 	service := sessioninmemory.NewSessionService()
@@ -885,6 +919,26 @@ func TestChainedTransferController_OnTransferCompleteNotifiesObservers(t *testin
 	}).OnTransferComplete(context.Background(), nil, nil, targetEvent)
 }
 
+func TestChainedTransferController_OnTransferTerminalErrorNotifiesObservers(t *testing.T) {
+	first := &runtimeCompletionController{}
+	second := &runtimeCompletionController{}
+	targetEvent := event.NewErrorEvent("target", "child", model.ErrorTypeFlowError, "boom")
+	(chainedTransferController{first: first, second: second}).OnTransferTerminalError(
+		context.Background(),
+		nil,
+		nil,
+		targetEvent,
+	)
+	require.Equal(t, 1, first.terminalErrors)
+	require.Equal(t, 1, second.terminalErrors)
+	require.Same(t, targetEvent, first.terminalEvent)
+	require.Same(t, targetEvent, second.terminalEvent)
+	(chainedTransferController{
+		first:  plainTransferController{},
+		second: plainTransferController{},
+	}).OnTransferTerminalError(context.Background(), nil, nil, targetEvent)
+}
+
 func TestTighterTimeout_SelectsNonZeroMinimum(t *testing.T) {
 	require.Equal(t, 3*time.Second, tighterTimeout(0, 3*time.Second))
 	require.Equal(t, 3*time.Second, tighterTimeout(3*time.Second, 0))
@@ -936,8 +990,10 @@ func (plainTransferController) OnTransfer(
 }
 
 type runtimeCompletionController struct {
-	completed   int
-	targetEvent *event.Event
+	completed      int
+	targetEvent    *event.Event
+	terminalErrors int
+	terminalEvent  *event.Event
 }
 
 func (c *runtimeCompletionController) OnTransfer(
@@ -956,4 +1012,14 @@ func (c *runtimeCompletionController) OnTransferComplete(
 ) {
 	c.completed++
 	c.targetEvent = targetEvent
+}
+
+func (c *runtimeCompletionController) OnTransferTerminalError(
+	_ context.Context,
+	_ *agent.Invocation,
+	_ *agent.Invocation,
+	targetEvent *event.Event,
+) {
+	c.terminalErrors++
+	c.terminalEvent = targetEvent
 }

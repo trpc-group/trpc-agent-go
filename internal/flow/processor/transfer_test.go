@@ -1001,6 +1001,40 @@ func TestTransferResponseProc_CompletionHandlerDoesNotFallbackAfterTargetError(t
 	require.Zero(t, handler.count)
 }
 
+func TestTransferResponseProc_TerminalErrorHandlerMutatesTargetErrorBeforeForward(t *testing.T) {
+	target := &errorResponseAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	handler := &terminalErrorTransferController{}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-terminal-error",
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			agent.RuntimeStateKeyTransferController: handler,
+		}},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r-terminal-error"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	var targetErr *event.Event
+	for evt := range out {
+		if evt != nil && evt.IsTerminalError() && evt.Author == "child" {
+			targetErr = evt
+		}
+	}
+	require.Equal(t, 1, handler.terminalErrors)
+	require.NotNil(t, targetErr)
+	require.Equal(t, []byte("child"), targetErr.StateDelta["owner"])
+}
+
 func TestTransferResponseProc_CompletionHandlerAllowsDoneAfterNonTerminalTargetError(t *testing.T) {
 	target := &nonTerminalErrorThenDoneAgent{name: "child"}
 	parent := &parentAgent{child: target}
@@ -1060,6 +1094,31 @@ func (h *completionInvocationCustomizer) CustomizeTransferInvocation(
 	*agent.Invocation,
 ) error {
 	return nil
+}
+
+type terminalErrorTransferController struct {
+	terminalErrors int
+}
+
+func (h *terminalErrorTransferController) OnTransfer(
+	context.Context,
+	string,
+	string,
+) (time.Duration, error) {
+	return 0, nil
+}
+
+func (h *terminalErrorTransferController) OnTransferTerminalError(
+	_ context.Context,
+	_ *agent.Invocation,
+	target *agent.Invocation,
+	targetEvent *event.Event,
+) {
+	h.terminalErrors++
+	if targetEvent.StateDelta == nil {
+		targetEvent.StateDelta = make(map[string][]byte)
+	}
+	targetEvent.StateDelta["owner"] = []byte(target.AgentName)
 }
 
 func TestTransferResponseProc_ControllerCompletionMethodIsObserved(t *testing.T) {

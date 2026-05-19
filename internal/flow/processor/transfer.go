@@ -75,6 +75,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	var nodeTimeout time.Duration
 	var transferCustomizer itransfer.InvocationCustomizer
 	var transferCompletionHandler itransfer.CompletionObserver
+	var transferTerminalErrorHandler itransfer.TerminalErrorObserver
 
 	// Look up the target agent from the current agent's sub-agents.
 	var targetAgent agent.Agent
@@ -124,6 +125,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		nodeTimeout = targetTimeout
 		transferCustomizer = transferInvocationCustomizerFor(controller)
 		transferCompletionHandler = transferCompletionHandlerFor(controller)
+		transferTerminalErrorHandler = transferTerminalErrorHandlerFor(controller)
 	}
 
 	targetInvocation, targetMessageBeforeCustomize, err := prepareTransferTargetInvocation(
@@ -231,6 +233,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		targetEventChan,
 		ch,
 		transferCompletionHandler,
+		transferTerminalErrorHandler,
 	) {
 		return
 	}
@@ -261,10 +264,23 @@ func forwardTransferTargetEvents(
 	events <-chan *event.Event,
 	out chan<- *event.Event,
 	completionHandler itransfer.CompletionObserver,
+	terminalErrorHandler itransfer.TerminalErrorObserver,
 ) bool {
 	result := transferForwardResult{}
 	for targetEvent := range events {
 		result.observe(targetEvent, target.InvocationID)
+		if result.shouldNotifyTerminalError(
+			terminalErrorHandler,
+			targetEvent,
+			target.InvocationID,
+		) {
+			terminalErrorHandler.OnTransferTerminalError(
+				ctx,
+				source,
+				target,
+				targetEvent,
+			)
+		}
 		if result.shouldNotifyCompletion(completionHandler, targetEvent, target.InvocationID) {
 			result.completed = true
 			completionHandler.OnTransferComplete(ctx, source, target, targetEvent)
@@ -310,6 +326,16 @@ func (r transferForwardResult) shouldNotifyCompletion(
 		evt.Response != nil &&
 		!r.terminalErrored &&
 		evt.Response.Done
+}
+
+func (r transferForwardResult) shouldNotifyTerminalError(
+	handler itransfer.TerminalErrorObserver,
+	evt *event.Event,
+	invocationID string,
+) bool {
+	return handler != nil &&
+		r.terminalErrored &&
+		isTransferTerminalErrorEvent(evt, invocationID)
 }
 
 func (r transferForwardResult) needsSyntheticCompletion() bool {
@@ -446,6 +472,16 @@ func transferCompletionHandlerFor(
 	controller agent.TransferController,
 ) itransfer.CompletionObserver {
 	handler, ok := controller.(itransfer.CompletionObserver)
+	if !ok {
+		return nil
+	}
+	return handler
+}
+
+func transferTerminalErrorHandlerFor(
+	controller agent.TransferController,
+) itransfer.TerminalErrorObserver {
+	handler, ok := controller.(itransfer.TerminalErrorObserver)
 	if !ok {
 		return nil
 	}

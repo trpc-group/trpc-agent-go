@@ -62,3 +62,14 @@ type CompletionObserver interface {
 		targetEvent *event.Event,
 	)
 }
+
+// TerminalErrorObserver observes when a transfer target invocation terminates
+// with an error.
+type TerminalErrorObserver interface {
+	OnTransferTerminalError(
+		ctx context.Context,
+		source *agent.Invocation,
+		target *agent.Invocation,
+		targetEvent *event.Event,
+	)
+}

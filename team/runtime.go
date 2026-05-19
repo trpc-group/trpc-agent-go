@@ -240,6 +240,24 @@ func (sr *swarmRuntime) OnTransferComplete(
 	target *agent.Invocation,
 	targetEvent *event.Event,
 ) {
+	sr.saveTransferOwner(ctx, source, target, targetEvent)
+}
+
+func (sr *swarmRuntime) OnTransferTerminalError(
+	ctx context.Context,
+	source *agent.Invocation,
+	target *agent.Invocation,
+	targetEvent *event.Event,
+) {
+	sr.saveTransferOwner(ctx, source, target, targetEvent)
+}
+
+func (sr *swarmRuntime) saveTransferOwner(
+	ctx context.Context,
+	source *agent.Invocation,
+	target *agent.Invocation,
+	targetEvent *event.Event,
+) {
 	if !sr.handoff.targetTakesOver() || target == nil || targetEvent == nil {
 		return
 	}
@@ -658,6 +676,20 @@ func (c chainedTransferController) OnTransferComplete(
 	}
 	if second, ok := c.second.(itransfer.CompletionObserver); ok && second != nil {
 		second.OnTransferComplete(ctx, source, target, targetEvent)
+	}
+}
+
+func (c chainedTransferController) OnTransferTerminalError(
+	ctx context.Context,
+	source *agent.Invocation,
+	target *agent.Invocation,
+	targetEvent *event.Event,
+) {
+	if first, ok := c.first.(itransfer.TerminalErrorObserver); ok && first != nil {
+		first.OnTransferTerminalError(ctx, source, target, targetEvent)
+	}
+	if second, ok := c.second.(itransfer.TerminalErrorObserver); ok && second != nil {
+		second.OnTransferTerminalError(ctx, source, target, targetEvent)
 	}
 }
 
