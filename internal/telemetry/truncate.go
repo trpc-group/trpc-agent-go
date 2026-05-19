@@ -25,7 +25,7 @@ const (
 // truncateTelemetryModelMessages returns a copy of messages with large fields
 // bounded before they are marshaled into telemetry attributes.
 func truncateTelemetryModelMessages(messages []model.Message) []model.Message {
-	if len(messages) == 0 {
+	if messages == nil {
 		return nil
 	}
 	out := make([]model.Message, len(messages))
@@ -38,7 +38,7 @@ func truncateTelemetryModelMessages(messages []model.Message) []model.Message {
 // truncateTelemetryModelChoices returns a copy of choices with message and delta
 // payloads bounded for telemetry emission.
 func truncateTelemetryModelChoices(choices []model.Choice) []model.Choice {
-	if len(choices) == 0 {
+	if choices == nil {
 		return nil
 	}
 	out := make([]model.Choice, len(choices))
@@ -122,7 +122,7 @@ func validUTF8Prefix(s string, limit int) string {
 // truncateTelemetryContentParts returns a copy of content parts with text and
 // binary payload fields bounded for telemetry.
 func truncateTelemetryContentParts(parts []model.ContentPart) []model.ContentPart {
-	if len(parts) == 0 {
+	if parts == nil {
 		return nil
 	}
 	out := make([]model.ContentPart, len(parts))
@@ -167,7 +167,7 @@ func truncateTelemetryBytes(b []byte, limit int) []byte {
 // truncateTelemetryToolCalls returns a copy of tool calls with bounded raw
 // argument payloads.
 func truncateTelemetryToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
-	if len(toolCalls) == 0 {
+	if toolCalls == nil {
 		return nil
 	}
 	out := make([]model.ToolCall, len(toolCalls))
