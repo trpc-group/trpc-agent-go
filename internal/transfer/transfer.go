@@ -15,9 +15,12 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 type transferMessageContextKey struct{}
+
+const syntheticCompletionExtensionKey = "trpc_agent.transfer.synthetic_completion"
 
 // ContextWithTransferMessage returns a context carrying the raw transfer message.
 func ContextWithTransferMessage(ctx context.Context, message string) context.Context {
@@ -30,6 +33,17 @@ func TransferMessageFromContext(ctx context.Context) (string, bool) {
 	return message, ok
 }
 
+// MarkSyntheticCompletionEvent marks a completion event synthesized by transfer.
+func MarkSyntheticCompletionEvent(evt *event.Event) {
+	_ = event.SetExtension(evt, syntheticCompletionExtensionKey, true)
+}
+
+// IsSyntheticCompletionEvent reports whether transfer synthesized the event.
+func IsSyntheticCompletionEvent(evt *event.Event) bool {
+	synthetic, ok, err := event.GetExtension[bool](evt, syntheticCompletionExtensionKey)
+	return err == nil && ok && synthetic
+}
+
 // InvocationCustomizer customizes a transfer target invocation before it runs.
 type InvocationCustomizer interface {
 	CustomizeTransferInvocation(
@@ -37,4 +51,25 @@ type InvocationCustomizer interface {
 		source *agent.Invocation,
 		target *agent.Invocation,
 	) error
+}
+
+// CompletionObserver observes when a transfer target invocation completes.
+type CompletionObserver interface {
+	OnTransferComplete(
+		ctx context.Context,
+		source *agent.Invocation,
+		target *agent.Invocation,
+		targetEvent *event.Event,
+	)
+}
+
+// TerminalErrorObserver observes when a transfer target invocation terminates
+// with an error.
+type TerminalErrorObserver interface {
+	OnTransferTerminalError(
+		ctx context.Context,
+		source *agent.Invocation,
+		target *agent.Invocation,
+		targetEvent *event.Event,
+	)
 }
