@@ -398,6 +398,32 @@ This is different from `await_user_reply` plus
 - `await_user_reply` is a one-shot route. It is consumed by exactly one future
   user turn and then cleared automatically.
 
+### Independent member history (optional)
+
+By default, Swarm member events are persisted in the root session. If members
+need private history, enable independent member sessions:
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmIndependentAgents(),
+)
+```
+
+With this enabled, the entry member continues to use the root session. Other
+members use stable sessions derived from the root session, team name, and
+member name. Member events are still emitted to the caller, but isolated member
+transcripts are persisted into their member sessions instead of the root
+session. The runner completion event remains a root-run marker; consume the
+forwarded member event for the member's final reply.
+
+This option only controls history isolation. If the last transfer target should
+receive future user messages, combine it with `team.WithCrossRequestTransfer(true)`.
+When both options are enabled, the next user message is persisted to the active
+member session before that member runs.
+
 ### Rewrite handoff input (optional)
 
 By default, when a Swarm member hands off with `transfer_to_agent`, the target member receives the tool call's `message` field as its user input. If your application needs to construct the target member's first input from the original user input, a template, or other context, configure `team.WithSwarmHandoffInputBuilder`:
