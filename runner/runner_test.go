@@ -6414,6 +6414,7 @@ func TestRunner_CancelPersistsInterruptedPartialAssistant(t *testing.T) {
 		model.NewUserMessage("start"),
 		agent.WithRequestID(requestID),
 		agent.WithDetachedCancel(true),
+		agent.WithPersistInterruptedAssistant(true),
 	)
 	require.NoError(t, err)
 
@@ -6460,6 +6461,7 @@ func TestRunner_StreamModeUpdatesStillPersistsInterruptedPartialAssistant(t *tes
 	inv := agent.NewInvocation(
 		agent.WithInvocationRunOptions(agent.NewRunOptions(
 			agent.WithStreamMode(agent.StreamModeUpdates),
+			agent.WithPersistInterruptedAssistant(true),
 		)),
 	)
 	loop := &eventLoopContext{
@@ -6493,6 +6495,127 @@ func TestRunner_StreamModeUpdatesStillPersistsInterruptedPartialAssistant(t *tes
 	choices := interruptedAssistantChoices(loop)
 	require.Len(t, choices, 1)
 	require.Equal(t, "filtered text", choices[0].Message.Content)
+}
+
+func TestRunner_CancelDoesNotPersistInterruptedPartialAssistantByDefault(t *testing.T) {
+	const (
+		requestID = "req-cancel-partial-default"
+		userID    = "u"
+		sessionID = "s-default"
+	)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		&partialTextAgent{
+			name:          "partial",
+			chunks:        []string{"discard ", "me"},
+			waitForCancel: true,
+		},
+		WithSessionService(svc),
+	)
+	mr, ok := r.(ManagedRunner)
+	require.True(t, ok)
+
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("start"),
+		agent.WithRequestID(requestID),
+		agent.WithDetachedCancel(true),
+	)
+	require.NoError(t, err)
+	for i := 0; i < 2; i++ {
+		select {
+		case _, ok := <-ch:
+			require.True(t, ok)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for partial event")
+		}
+	}
+	require.True(t, mr.Cancel(requestID))
+	select {
+	case <-drainChannel(ch):
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cancelled run to finish")
+	}
+
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 1)
+	require.True(t, sess.Events[0].IsUserMessage())
+}
+
+func TestRunner_RunOptionOverridesInterruptedAssistantRunnerDefault(t *testing.T) {
+	const (
+		requestID = "req-cancel-partial-override"
+		userID    = "u"
+		sessionID = "s-override"
+	)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		&partialTextAgent{
+			name:          "partial",
+			chunks:        []string{"discard ", "override"},
+			waitForCancel: true,
+		},
+		WithSessionService(svc),
+		WithPersistInterruptedAssistant(true),
+	)
+	mr, ok := r.(ManagedRunner)
+	require.True(t, ok)
+
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("start"),
+		agent.WithRequestID(requestID),
+		agent.WithDetachedCancel(true),
+		agent.WithPersistInterruptedAssistant(false),
+	)
+	require.NoError(t, err)
+	for i := 0; i < 2; i++ {
+		select {
+		case _, ok := <-ch:
+			require.True(t, ok)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for partial event")
+		}
+	}
+	require.True(t, mr.Cancel(requestID))
+	select {
+	case <-drainChannel(ch):
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cancelled run to finish")
+	}
+
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 1)
+	require.True(t, sess.Events[0].IsUserMessage())
+}
+
+func TestRunner_ApplyRunnerRunDefaultsForPersistInterruptedAssistant(t *testing.T) {
+	rr := &runner{persistInterruptedAssistantDefault: true}
+	var ro agent.RunOptions
+	rr.applyRunnerRunDefaults(&ro)
+	require.NotNil(t, ro.PersistInterruptedAssistant)
+	require.True(t, *ro.PersistInterruptedAssistant)
+
+	ro = agent.NewRunOptions(agent.WithPersistInterruptedAssistant(false))
+	rr.applyRunnerRunDefaults(&ro)
+	require.NotNil(t, ro.PersistInterruptedAssistant)
+	require.False(t, *ro.PersistInterruptedAssistant)
 }
 
 func TestRunner_CompletedStreamDoesNotDuplicateInterruptedAssistant(t *testing.T) {
@@ -6566,6 +6689,7 @@ func TestRunner_CancelDoesNotPersistNonTextPartialAssistant(t *testing.T) {
 				model.NewUserMessage("start"),
 				agent.WithRequestID(requestID),
 				agent.WithDetachedCancel(true),
+				agent.WithPersistInterruptedAssistant(true),
 			)
 			require.NoError(t, err)
 			select {
@@ -6810,6 +6934,9 @@ func TestPersistInterruptedAssistantGuardBranches(t *testing.T) {
 		sessionService: &appendErrorSessionService{mockSessionService: base},
 	}
 	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		))),
 		sess:                           &session.Session{},
 		interruptedAssistantResponseID: "resp",
 	}

@@ -402,6 +402,18 @@ func WithResume(enabled bool) RunOption {
 	}
 }
 
+// WithPersistInterruptedAssistant controls whether a cancelled streaming run
+// persists already-emitted assistant text as a final assistant message.
+//
+// By default this is not set, so the Runner uses its own default. The built-in
+// Runner default is false to preserve the "cancel discards partial text"
+// session semantics.
+func WithPersistInterruptedAssistant(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.PersistInterruptedAssistant = &enabled
+	}
+}
+
 // WithGraphEmitFinalModelResponses controls whether graph-based agents emit
 // final (Done=true) model responses as events.
 //
@@ -945,6 +957,14 @@ type RunOptions struct {
 	// pending tool calls) and complete unfinished work prior to issuing a new
 	// LLM request.
 	Resume bool
+
+	// PersistInterruptedAssistant controls whether Runner persists already
+	// emitted assistant text as a final assistant message when a streaming run
+	// is cancelled before a normal final assistant response is produced.
+	//
+	// nil means the Runner default applies. The built-in Runner default is
+	// false to preserve the legacy cancellation semantics.
+	PersistInterruptedAssistant *bool
 
 	// GraphEmitFinalModelResponses controls event emission for graph-based
 	// Large Language Model (LLM) nodes.

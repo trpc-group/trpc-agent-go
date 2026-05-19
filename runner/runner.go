@@ -156,6 +156,19 @@ func WithAwaitUserReplyRouting(enabled bool) Option {
 	}
 }
 
+// WithPersistInterruptedAssistant sets the runner default for whether a
+// cancelled streaming run persists already-emitted assistant text as a final
+// assistant message.
+//
+// The default is false to preserve cancellation semantics for callers that
+// expect cancelled partial text not to affect later turns. A single run can
+// override this default with agent.WithPersistInterruptedAssistant.
+func WithPersistInterruptedAssistant(enabled bool) Option {
+	return func(opts *Options) {
+		opts.persistInterruptedAssistantDefault = enabled
+	}
+}
+
 // Runner is the interface for running agents.
 type Runner interface {
 	Run(
@@ -228,17 +241,18 @@ type RunStatus struct {
 
 // runner runs agents.
 type runner struct {
-	appName               string
-	defaultAgentName      string
-	agents                map[string]agent.Agent
-	agentFactories        map[string]AgentFactory
-	sessionService        session.Service
-	memoryService         memory.Service
-	ingestor              session.Ingestor
-	artifactService       artifact.Service
-	pluginManager         agent.PluginManager
-	ralphLoop             *RalphLoopConfig
-	awaitUserReplyRouting bool
+	appName                            string
+	defaultAgentName                   string
+	agents                             map[string]agent.Agent
+	agentFactories                     map[string]AgentFactory
+	sessionService                     session.Service
+	memoryService                      memory.Service
+	ingestor                           session.Ingestor
+	artifactService                    artifact.Service
+	pluginManager                      agent.PluginManager
+	ralphLoop                          *RalphLoopConfig
+	awaitUserReplyRouting              bool
+	persistInterruptedAssistantDefault bool
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -258,15 +272,16 @@ type runHandle struct {
 
 // Options is the options for the Runner.
 type Options struct {
-	sessionService        session.Service
-	memoryService         memory.Service
-	ingestor              session.Ingestor
-	artifactService       artifact.Service
-	agents                map[string]agent.Agent
-	agentFactories        map[string]AgentFactory
-	plugins               []plugin.Plugin
-	ralphLoop             *RalphLoopConfig
-	awaitUserReplyRouting bool
+	sessionService                     session.Service
+	memoryService                      memory.Service
+	ingestor                           session.Ingestor
+	artifactService                    artifact.Service
+	agents                             map[string]agent.Agent
+	agentFactories                     map[string]AgentFactory
+	plugins                            []plugin.Plugin
+	ralphLoop                          *RalphLoopConfig
+	awaitUserReplyRouting              bool
+	persistInterruptedAssistantDefault bool
 }
 
 // newOptions creates a new Options.
@@ -306,18 +321,19 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		appid.RegisterRunner(appName, a.Info().Name)
 	}
 	return &runner{
-		appName:               appName,
-		defaultAgentName:      ag.Info().Name,
-		agents:                agents,
-		agentFactories:        options.agentFactories,
-		sessionService:        options.sessionService,
-		memoryService:         options.memoryService,
-		ingestor:              options.ingestor,
-		artifactService:       options.artifactService,
-		pluginManager:         pm,
-		ralphLoop:             options.ralphLoop,
-		awaitUserReplyRouting: options.awaitUserReplyRouting,
-		ownedSessionService:   ownedSessionService,
+		appName:                            appName,
+		defaultAgentName:                   ag.Info().Name,
+		agents:                             agents,
+		agentFactories:                     options.agentFactories,
+		sessionService:                     options.sessionService,
+		memoryService:                      options.memoryService,
+		ingestor:                           options.ingestor,
+		artifactService:                    options.artifactService,
+		pluginManager:                      pm,
+		ralphLoop:                          options.ralphLoop,
+		awaitUserReplyRouting:              options.awaitUserReplyRouting,
+		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
+		ownedSessionService:                ownedSessionService,
 	}
 }
 
@@ -358,18 +374,19 @@ func NewRunnerWithAgentFactory(
 	}
 
 	return &runner{
-		appName:               appName,
-		defaultAgentName:      defaultAgentName,
-		agents:                options.agents,
-		agentFactories:        options.agentFactories,
-		sessionService:        options.sessionService,
-		memoryService:         options.memoryService,
-		ingestor:              options.ingestor,
-		artifactService:       options.artifactService,
-		pluginManager:         pm,
-		ralphLoop:             options.ralphLoop,
-		awaitUserReplyRouting: options.awaitUserReplyRouting,
-		ownedSessionService:   ownedSessionService,
+		appName:                            appName,
+		defaultAgentName:                   defaultAgentName,
+		agents:                             options.agents,
+		agentFactories:                     options.agentFactories,
+		sessionService:                     options.sessionService,
+		memoryService:                      options.memoryService,
+		ingestor:                           options.ingestor,
+		artifactService:                    options.artifactService,
+		pluginManager:                      pm,
+		ralphLoop:                          options.ralphLoop,
+		awaitUserReplyRouting:              options.awaitUserReplyRouting,
+		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
+		ownedSessionService:                ownedSessionService,
 	}
 }
 
@@ -440,6 +457,7 @@ func (r *runner) Run(
 	if ro.RequestID == "" {
 		ro.RequestID = uuid.NewString()
 	}
+	r.applyRunnerRunDefaults(&ro)
 
 	// Resolve per-request app name override. When the caller provides an
 	// AppName via RunOption, it takes precedence over the runner default so
@@ -626,6 +644,14 @@ func (r *runner) Run(
 		flushChan,
 		handle,
 	), nil
+}
+
+func (r *runner) applyRunnerRunDefaults(ro *agent.RunOptions) {
+	if ro == nil || ro.PersistInterruptedAssistant != nil {
+		return
+	}
+	persistInterruptedAssistant := r.persistInterruptedAssistantDefault
+	ro.PersistInterruptedAssistant = &persistInterruptedAssistant
 }
 
 // seedSessionHistory persists caller-supplied history messages into an empty
@@ -1071,7 +1097,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
-	if !excludeRootCompletion {
+	if !excludeRootCompletion && shouldPersistInterruptedAssistant(loop) {
 		r.recordInterruptedAssistantDelta(loop, agentEvent)
 	}
 
@@ -1373,7 +1399,10 @@ func (r *runner) safePersistInterruptedAssistant(ctx context.Context, loop *even
 }
 
 func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoopContext) {
-	if ctx.Err() == nil || loop == nil || loop.sess == nil {
+	if ctx.Err() == nil ||
+		loop == nil ||
+		loop.sess == nil ||
+		!shouldPersistInterruptedAssistant(loop) {
 		return
 	}
 	interruptedEvent := r.interruptedAssistantEvent(ctx, loop)
@@ -1492,6 +1521,14 @@ func (r *runner) interruptedAssistantAlreadyPersisted(
 	}
 	_, ok := loop.persistedAssistantChoiceSignatures[signature]
 	return ok
+}
+
+func shouldPersistInterruptedAssistant(loop *eventLoopContext) bool {
+	if loop == nil || loop.invocation == nil {
+		return false
+	}
+	enabled := loop.invocation.RunOptions.PersistInterruptedAssistant
+	return enabled != nil && *enabled
 }
 
 func contextDoneReason(ctx context.Context) string {
