@@ -689,6 +689,156 @@ your callback as needed.
 
 End-to-end example: [examples/workspace_io](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/workspace_io).
 
+## Restricting `workspace_exec` commands
+
+`workspace_exec` runs whatever shell command the model sends. In sandboxes
+with network egress this becomes a prompt-injection / SSRF surface: a
+user prompt can trick the model into running `curl <internal-url>` and
+the sandbox dutifully obliges.
+
+To shrink that surface you can attach an allow- and/or deny-list of
+executable names. When at least one list is non-empty, the command is
+parsed before execution and rejected if it does not pass.
+
+### Configure
+
+At the agent level:
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithCodeExecutor(executor),
+    llmagent.WithWorkspaceExecAllowedCommands("ls", "cat", "rg", "git"),
+    llmagent.WithWorkspaceExecDeniedCommands("curl", "wget", "nc"),
+)
+```
+
+Or directly on `ExecTool` if you build it yourself (the first argument
+is a `codeexecutor.CodeExecutor` such as `localexec.New()`):
+
+```go
+tool := workspaceexec.NewExecTool(
+    executor,
+    workspaceexec.WithAllowedCommands("ls", "cat", "rg", "git"),
+    workspaceexec.WithDeniedCommands("curl", "wget", "nc"),
+)
+```
+
+Or via environment, for deployment-time configuration (comma- or
+whitespace-separated):
+
+- `TRPC_AGENT_WORKSPACE_EXEC_ALLOWED_COMMANDS`
+- `TRPC_AGENT_WORKSPACE_EXEC_DENIED_COMMANDS`
+
+Explicit options take precedence over the environment. Leaving both
+unset disables the policy and preserves the historical behaviour.
+
+### What still works
+
+Pipelines made of allowed commands joined by the safe sequencing
+operators are accepted:
+
+```text
+ls | rg foo
+git status && git diff
+test -f x.txt || echo missing
+mkdir -p out; cp a.txt out/
+```
+
+Single-quoted, double-quoted and `\X`-escaped literals are accepted as
+arguments. `{}` is allowed as a literal so patterns like
+`find -exec {} \;` parse fine. Note that `xargs` itself is in the
+unconditional built-in deny set below — `xargs -I{}` will be rejected
+regardless of what is in the allow list.
+
+### What is rejected
+
+Whenever a policy is active the command is **structurally rejected**
+before any name lookup if it contains any of:
+
+- command, parameter, arithmetic or process substitution
+  (`$(…)`, `` `…` ``, `$VAR`, `${X}`, `$((…))`, `<(…)`, `>(…)`)
+- redirections of any kind (`>`, `>>`, `<`, `2>&1`, here-docs)
+- subshells, blocks, control flow, function definitions
+  (`(…)`, `{…}`, `if/for/while/case`, `f() { … }`)
+- backgrounding, `|&`, leading `VAR=… cmd`, glob characters, `!`, `#`,
+  bare or escaped newlines
+
+So a deny on `curl` cannot be sidestepped via `$(c\url)`,
+`echo \`curl http://x\``, `curl > /tmp/x`, `(curl http://x)`,
+`HOME=/tmp curl http://x`, etc.
+
+On top of the parser there is an **unconditional built-in deny set**
+of shell wrappers and re-executing builtins, blocked whenever any
+policy is active because they can launch arbitrary code with an
+innocent `argv[0]`: `sh`, `bash`, `zsh`, `ash`, `dash`, `ksh`, `mksh`,
+`fish`, `pwsh`, `powershell`, `cmd`, `busybox`, `toybox`, `eval`,
+`exec`, `command`, `source`, `.`, `builtin`, `xargs`, `env`, `nohup`,
+`timeout`, `sudo`, `su`, `doas`, `setsid`, `unshare`, `chroot`,
+`runuser`.
+
+This deny set is **not overridable** by `WithWorkspaceExecAllowedCommands`
+— allow-list entries for these names are ignored. If you legitimately
+need one of them (rare, but possible), wrap the desired use in an
+auditable script under the workspace and put the script in
+`allowed_commands` instead. The auditable wrapper is also better
+practice: reviewers can see exactly what is being exposed.
+
+On Windows the basename match strips common executable suffixes
+(`.exe`, `.cmd`, `.bat`, `.com`, `.ps1`) so `cmd` rejects `cmd.exe`
+and `curl` rejects `curl.exe`.
+
+### Precedence
+
+When the same name appears in both lists, **deny wins**:
+
+```text
+explicit Deny  >  implicit deny  >  explicit Allow  >  implicit allow
+```
+
+So `WithWorkspaceExecAllowedCommands("git") + WithWorkspaceExecDeniedCommands("git")`
+rejects `git`. If you also list `sh` in the allow list, it stays
+denied by the implicit-deny set; you cannot weaken the implicit
+deny by re-listing its members in `Allow`.
+
+### Spawn hardening
+
+When a policy is active, the spawn itself is also hardened to stop
+shell-startup tricks from re-arming a rejected command:
+
+- the shell invocation is `sh -c` instead of `sh -lc`, so
+  `/etc/profile` and `$HOME/.profile` are not sourced first;
+- per-call env is scrubbed: `HOME`, `ENV`, `BASH_ENV`,
+  `PROMPT_COMMAND`, `PS4`, `SHELL`, `SHELLOPTS`, `BASHOPTS`, `PATH`,
+  `IFS`, `CDPATH`, `GLOBIGNORE`, `LD_PRELOAD`, `LD_LIBRARY_PATH`,
+  `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`,
+  `DYLD_FORCE_FLAT_NAMESPACE`, and any `BASH_FUNC_*` entry (Shellshock)
+  are dropped. `LANG` and similar benign variables pass through
+  untouched.
+- `PATH` in particular is dropped because the policy only matches by
+  command name; a caller-controlled `PATH=./bin:$PATH` plus a
+  workspace-side `./bin/echo` would otherwise pass the policy and
+  execute attacker code. Allowed commands resolve against the shell's
+  default `PATH` instead.
+
+Without a policy configured none of this kicks in: `sh -lc` and the
+caller-supplied env (including `PATH`) are preserved as before.
+
+### Scope
+
+Enforcement is at the **executable-name** level. If an allowed command
+itself shells out based on its arguments — for example
+`find . -exec curl …`, `awk 'BEGIN{system("curl …")}'`,
+`git -c protocol.ext.allow=…` — the inner command is the allowed
+command's own subprocess and is not re-checked. Per-command argument
+validators are a planned follow-up; until they land, treat the
+network-egress policy of the sandbox itself as the primary defence and
+the allow/deny list as defence-in-depth.
+
+For lower-level (non-shell) skill execution, the equivalent knobs on
+`skill_run` are `WithSkillRunAllowedCommands` /
+`WithSkillRunDeniedCommands`; see [skill](skill.md).
+
 ## Environment Variables
 
 When the executor runs in a container, on a remote worker, or in another

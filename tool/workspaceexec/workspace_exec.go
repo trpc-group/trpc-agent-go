@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
+	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceprep"
@@ -35,6 +37,14 @@ import (
 const (
 	defaultWorkspaceExecTimeout = 5 * time.Minute
 	defaultWorkspaceWriteYield  = 200
+)
+
+// Environment variables that mirror the option names; useful for
+// deployments that prefer configuration via env over code. Values
+// are split by SplitList: comma- or whitespace-separated entries.
+const (
+	envWorkspaceExecAllowedCommands = "TRPC_AGENT_WORKSPACE_EXEC_ALLOWED_COMMANDS"
+	envWorkspaceExecDeniedCommands  = "TRPC_AGENT_WORKSPACE_EXEC_DENIED_COMMANDS"
 )
 
 // ExecTool executes shell commands in the shared executor workspace.
@@ -53,6 +63,17 @@ type ExecTool struct {
 	providers              []workspaceprep.Provider
 	reconciler             workspaceprep.Reconciler
 	conversationFilesWired bool
+
+	// allowedCmds / deniedCmds drive the per-segment command policy
+	// applied to commands executed via workspace_exec. When at least
+	// one is non-empty the command string is parsed by shellsafe and
+	// each pipeline segment's executable is checked against the
+	// lists; shellsafe also enforces a built-in deny set of shell
+	// wrappers and re-executing builtins (sh, eval, exec, xargs,
+	// env, sudo, ...) so the policy cannot be bypassed by way of
+	// "eval curl ..." or "sh -c '...'".
+	allowedCmds []string
+	deniedCmds  []string
 
 	mu       sync.Mutex
 	sessions map[string]*execSession
@@ -151,6 +172,8 @@ func NewExecTool(
 		}
 	}
 	tl.resolver = workspacesession.NewResolver(exec, tl.reg)
+	tl.loadAllowedCommandsFromEnv()
+	tl.loadDeniedCommandsFromEnv()
 	return tl
 }
 
@@ -172,6 +195,90 @@ func WithWorkspaceRegistry(
 	return func(t *ExecTool) {
 		t.reg = reg
 	}
+}
+
+// WithAllowedCommands restricts workspace_exec to commands whose
+// executable name (or basename, for absolute paths) is in cmds.
+//
+// When set the user's command is parsed by internal/shellsafe before
+// execution. Pipelines composed of allowed commands joined by safe
+// operators (|, &&, ||, ;) still work, but constructs that can
+// bypass the policy - $(...), backticks, ${VAR}, $VAR, redirections,
+// process/parameter substitution, subshells, brace expansion and
+// leading variable assignments - are rejected. Shell wrappers and
+// re-executing builtins (sh, bash, zsh, eval, exec, command, source,
+// xargs, env, sudo, ...) are subject to a built-in deny that can be
+// overridden by listing them explicitly here.
+//
+// Calling this option with an empty list is a no-op so callers can
+// conditionally enable the policy.
+func WithAllowedCommands(cmds ...string) func(*ExecTool) {
+	return func(t *ExecTool) {
+		t.setAllowedCommands(cmds)
+	}
+}
+
+// WithDeniedCommands rejects commands whose executable name (or
+// basename for absolute paths) appears in cmds. The same shellsafe
+// structural rules and built-in deny set described in
+// WithAllowedCommands apply. Allow and deny lists may be combined; a
+// command must satisfy both.
+func WithDeniedCommands(cmds ...string) func(*ExecTool) {
+	return func(t *ExecTool) {
+		t.setDeniedCommands(cmds)
+	}
+}
+
+func (t *ExecTool) setAllowedCommands(cmds []string) {
+	t.allowedCmds = mergeCommandList(t.allowedCmds, cmds)
+}
+
+func (t *ExecTool) setDeniedCommands(cmds []string) {
+	t.deniedCmds = mergeCommandList(t.deniedCmds, cmds)
+}
+
+func (t *ExecTool) loadAllowedCommandsFromEnv() {
+	if len(t.allowedCmds) > 0 {
+		return
+	}
+	t.setAllowedCommands(
+		shellsafe.SplitList(os.Getenv(envWorkspaceExecAllowedCommands)),
+	)
+}
+
+func (t *ExecTool) loadDeniedCommandsFromEnv() {
+	if len(t.deniedCmds) > 0 {
+		return
+	}
+	t.setDeniedCommands(
+		shellsafe.SplitList(os.Getenv(envWorkspaceExecDeniedCommands)),
+	)
+}
+
+func (t *ExecTool) commandPolicy() shellsafe.Policy {
+	return shellsafe.PolicyFromLists(t.allowedCmds, t.deniedCmds)
+}
+
+func mergeCommandList(into, more []string) []string {
+	for _, c := range more {
+		s := strings.TrimSpace(c)
+		if s == "" {
+			continue
+		}
+		if !containsString(into, s) {
+			into = append(into, s)
+		}
+	}
+	return into
+}
+
+func containsString(set []string, s string) bool {
+	for _, v := range set {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // WithWorkspaceBootstrap declares static files and one-shot commands
@@ -288,10 +395,29 @@ func toInternalBootstrapSpec(
 func (t *ExecTool) Declaration() *tool.Declaration {
 	desc := "Execute a shell command in the current workspace."
 	outputDesc := "Result of workspace_exec. The output field is aggregated terminal text and does not guarantee preservation of the original stdout/stderr interleaving."
+	cmdDesc := "Shell command to execute."
+	if t != nil && (len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0) {
+		desc += " Restricted: only simple commands joined by " +
+			"|, &&, || or ; are allowed; redirections (>, <), " +
+			"command substitution ($(...) / backticks), variable " +
+			"expansion ($VAR / ${VAR}), subshells, brace " +
+			"expansion and leading variable assignments are " +
+			"rejected, and shell wrappers / re-executing builtins " +
+			"(sh, bash, eval, exec, xargs, env, sudo, ...) are " +
+			"blocked unless explicitly allow-listed."
+		cmdDesc = "Shell command to execute. Restricted to a " +
+			"safe pipeline (no $(), no $VAR, no redirections, " +
+			"no subshells, no shell wrappers)."
+		if len(t.allowedCmds) > 0 {
+			desc += " Allowed commands: " +
+				shellsafe.PreviewList(t.allowedCmds, 20) +
+				"."
+		}
+	}
 	props := map[string]*tool.Schema{
 		"command": {
 			Type:        "string",
-			Description: "Shell command to execute.",
+			Description: cmdDesc,
 		},
 		"cwd": {
 			Type: "string",
@@ -450,6 +576,9 @@ func (t *ExecTool) prepareExec(
 	ctx context.Context,
 	in execInput,
 ) (execRequest, error) {
+	if err := t.checkCommandPolicy(in.Command); err != nil {
+		return execRequest{}, err
+	}
 	cwd, err := normalizeCWD(in.Cwd)
 	if err != nil {
 		return execRequest{}, err
@@ -469,6 +598,7 @@ func (t *ExecTool) prepareExec(
 	if timeout <= 0 {
 		timeout = in.Timeout
 	}
+	policyActive := t.commandPolicy().Active()
 	return execRequest{
 		background: in.Background,
 		tty:        firstBoolValue(in.TTY, in.PTY),
@@ -477,13 +607,107 @@ func (t *ExecTool) prepareExec(
 		ws:         ws,
 		spec: codeexecutor.RunProgramSpec{
 			Cmd:     "sh",
-			Args:    []string{"-lc", in.Command},
-			Env:     in.Env,
+			Args:    shellArgsForPolicy(policyActive, in.Command),
+			Env:     envForPolicy(policyActive, in.Env),
 			Cwd:     cwd,
 			Stdin:   in.Stdin,
 			Timeout: execTimeout(timeout),
 		},
 	}, nil
+}
+
+// checkCommandPolicy enforces the optional allow/deny lists. When no
+// policy is configured the command runs with the historical
+// "anything goes via sh -lc" semantics.
+func (t *ExecTool) checkCommandPolicy(command string) error {
+	policy := t.commandPolicy()
+	if !policy.Active() {
+		return nil
+	}
+	if err := shellsafe.CheckCommand(command, policy); err != nil {
+		return fmt.Errorf("workspace_exec: %w", err)
+	}
+	return nil
+}
+
+// shellArgsForPolicy returns the argv to pass to sh. When a command
+// policy is active, the leading "-l" (login shell) flag is dropped
+// so /etc/profile and $HOME/.profile are not sourced - otherwise a
+// passing command could still be hijacked at shell start-up time
+// via a planted profile script (e.g. when HOME is attacker
+// controlled). When no policy is configured the historical "-lc"
+// behaviour is preserved so existing callers see no behaviour
+// change.
+func shellArgsForPolicy(policyActive bool, command string) []string {
+	if policyActive {
+		return []string{"-c", command}
+	}
+	return []string{"-lc", command}
+}
+
+// shellStartupEnvBlocklist is the set of environment variables that
+// can redirect the shell's start-up path, dynamic linker resolution
+// or word-splitting semantics. Each of them has been used as a
+// privilege-escalation / sandbox-escape vector and none of them is
+// needed for the workspace_exec use case once a command-name
+// policy is in place. They are removed from the per-call env when a
+// policy is active.
+var shellStartupEnvBlocklist = map[string]struct{}{
+	// Shell start-up file selection.
+	"HOME":           {}, // sh -l sources $HOME/.profile
+	"ENV":            {}, // sh sources $ENV on every invocation
+	"BASH_ENV":       {}, // bash sources $BASH_ENV on non-interactive starts
+	"PROMPT_COMMAND": {}, // bash hook executed before each prompt
+	"PS4":            {}, // bash debug prompt, can re-enter shell
+	"SHELL":          {}, // some tools spawn $SHELL
+	"SHELLOPTS":      {}, // bash options
+	"BASHOPTS":       {}, // bash options
+
+	// Executable / search-path control. The allow/deny policy only
+	// reasons about command names, so a caller-supplied PATH that
+	// points at workspace-controlled binaries would let a malicious
+	// "echo" / "python" / "git" pass the policy and execute
+	// arbitrary code. Drop PATH and rely on the shell's default.
+	"PATH": {},
+
+	// Word-splitting / glob-expansion semantics.
+	"IFS":        {}, // changes word-splitting semantics
+	"CDPATH":     {}, // affects how `cd` resolves arguments
+	"GLOBIGNORE": {},
+
+	// Dynamic linker hijacks.
+	"LD_PRELOAD":                {},
+	"LD_LIBRARY_PATH":           {},
+	"LD_AUDIT":                  {},
+	"DYLD_INSERT_LIBRARIES":     {}, // macOS
+	"DYLD_LIBRARY_PATH":         {}, // macOS
+	"DYLD_FORCE_FLAT_NAMESPACE": {},
+}
+
+// envForPolicy returns the per-call env map that should be passed to
+// the shell. When no policy is configured the input is returned
+// verbatim. When a policy is active any entry whose name is in the
+// shellStartupEnvBlocklist - or whose name begins with "BASH_FUNC_"
+// (the Shellshock vector by which env entries are imported as
+// functions) - is dropped, so a command admitted by shellsafe
+// cannot be re-armed via the environment.
+func envForPolicy(
+	policyActive bool, env map[string]string,
+) map[string]string {
+	if !policyActive || len(env) == 0 {
+		return env
+	}
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		if _, blocked := shellStartupEnvBlocklist[k]; blocked {
+			continue
+		}
+		if strings.HasPrefix(k, "BASH_FUNC_") {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func (t *ExecTool) callNonSessional(
