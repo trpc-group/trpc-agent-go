@@ -201,14 +201,24 @@ func TestToolsNode_SurfacePatch_AppendsTools(t *testing.T) {
 			model.NewUserMessage("hi"),
 			{
 				Role: model.RoleAssistant,
-				ToolCalls: []model.ToolCall{{
-					Type: "function",
-					ID:   "call-1",
-					Function: model.FunctionDefinitionParam{
-						Name:      "frontend_tool",
-						Arguments: []byte(`{}`),
+				ToolCalls: []model.ToolCall{
+					{
+						Type: "function",
+						ID:   "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "frontend_tool",
+							Arguments: []byte(`{}`),
+						},
 					},
-				}},
+					{
+						Type: "function",
+						ID:   "call-2",
+						Function: model.FunctionDefinitionParam{
+							Name:      "old_tool",
+							Arguments: []byte(`{}`),
+						},
+					},
+				},
 			},
 		},
 	})
@@ -216,7 +226,11 @@ func TestToolsNode_SurfacePatch_AppendsTools(t *testing.T) {
 
 	state, ok := result.(State)
 	require.True(t, ok)
-	require.NotNil(t, state[StateKeyMessages])
+	messages, ok := state[StateKeyMessages].([]model.Message)
+	require.True(t, ok)
+	require.Len(t, messages, 2)
+	require.Equal(t, "frontend_tool", messages[0].ToolName)
+	require.Equal(t, "old_tool", messages[1].ToolName)
 }
 
 func TestLLMNode_SurfacePatch_UsesPatchedModelNameInMetadata(t *testing.T) {

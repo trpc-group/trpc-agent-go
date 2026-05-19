@@ -268,6 +268,9 @@ func (a *LLMAgent) userToolsForInvocation(
 	toolSets := append([]tool.ToolSet(nil), a.option.ToolSets...)
 	a.mu.RUnlock()
 
+	if patchedTools, ok := patch.Tools(); ok {
+		return patchedTools, collectUserToolNames(patchedTools)
+	}
 	if !refreshToolSets {
 		userTools := make([]tool.Tool, 0, len(userToolNames))
 		for _, t := range staticTools {
