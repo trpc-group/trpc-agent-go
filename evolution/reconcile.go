@@ -46,6 +46,14 @@ const (
 	// generic parent so the library does not accumulate count-specific
 	// siblings.
 	reconcileRewriteQuantifiedSiblingToUpdate reconcileEventKind = "rewrite_quantified_sibling_to_update"
+
+	// reconcileRewriteWordOverlapToUpdate marks a `skills` candidate
+	// whose name shares high word overlap (≥60% Jaccard on significant
+	// words) with an existing skill. This catches near-duplicate names
+	// that differ only in phrasing (e.g. "geopolitical-market-analysis"
+	// vs "geopolitical-market-impact-analysis") and rewrites the
+	// candidate as an update against the closest existing match.
+	reconcileRewriteWordOverlapToUpdate reconcileEventKind = "rewrite_word_overlap_to_update"
 )
 
 // reconcileEvent describes one fix the reconciler applied. Callers log
@@ -91,6 +99,9 @@ func reconcileWithLibrary(decision *ReviewDecision, existing []ExistingSkill) (*
 		decision.Skills, decision.Updates, decision.Deletions, existing, events,
 	)
 	decision.Skills, decision.Updates, events = rewriteQuantifiedSiblingSkills(
+		decision.Skills, decision.Updates, decision.Deletions, existing, events,
+	)
+	decision.Skills, decision.Updates, events = rewriteWordOverlapSkills(
 		decision.Skills, decision.Updates, decision.Deletions, existing, events,
 	)
 	return decision, events
@@ -607,4 +618,211 @@ func candidateShapeKey(s *SkillSpec) string {
 		steps = append(steps, strings.TrimSpace(strings.ToLower(st)))
 	}
 	return when + "\x1f" + strings.Join(steps, "\x1e")
+}
+
+// ---------------------------------------------------------------------------
+// Rule 4: word-overlap dedup
+// ---------------------------------------------------------------------------
+
+// rewriteWordOverlapSkills catches near-duplicate create candidates that
+// slipped past Rules 1 and 3. When a candidate's name shares ≥ 60% of
+// its significant words (Jaccard similarity) with an existing skill,
+// the candidate is rewritten as an update against the closest match.
+//
+// This handles cases like:
+//   - "geopolitical-market-analysis" vs "geopolitical-commodity-market-snapshot"
+//   - "weather-data-collector" vs "weather-data-collection"
+//
+// The threshold is deliberately conservative: short names (< 3 significant
+// words) require exact word overlap to avoid false positives.
+func rewriteWordOverlapSkills(
+	skills []*SkillSpec,
+	updates []*SkillUpdate,
+	deletions []string,
+	existing []ExistingSkill,
+	events []reconcileEvent,
+) ([]*SkillSpec, []*SkillUpdate, []reconcileEvent) {
+	if len(skills) == 0 || len(existing) == 0 {
+		return skills, updates, events
+	}
+
+	// Build word sets for existing skills.
+	type existingWords struct {
+		name  string
+		words map[string]struct{}
+	}
+	existingIndex := make([]existingWords, 0, len(existing))
+	for _, e := range existing {
+		ws := significantWords(e.Name)
+		if len(ws) < 2 {
+			continue
+		}
+		existingIndex = append(existingIndex, existingWords{name: e.Name, words: ws})
+	}
+	if len(existingIndex) == 0 {
+		return skills, updates, events
+	}
+
+	// Track which existing names already have an explicit update or
+	// pending deletion.
+	claimedUpdates := make(map[string]struct{}, len(updates))
+	for _, u := range updates {
+		if u == nil {
+			continue
+		}
+		claimedUpdates[normalizeSkillName(u.Name)] = struct{}{}
+	}
+	pendingDeletions := make(map[string]struct{}, len(deletions))
+	for _, d := range deletions {
+		pendingDeletions[normalizeSkillName(d)] = struct{}{}
+	}
+
+	keptSkills := make([]*SkillSpec, 0, len(skills))
+	rewriteByTarget := make(map[string]struct{})
+
+	for _, cand := range skills {
+		if cand == nil {
+			continue
+		}
+		candWords := significantWords(cand.Name)
+		if len(candWords) < 2 {
+			keptSkills = append(keptSkills, cand)
+			continue
+		}
+
+		bestMatch := ""
+		bestScore := 0.0
+		candNorm := normalizeSkillName(cand.Name)
+		for _, e := range existingIndex {
+			// Skip pairs where one name is a prefix of the other — those
+			// are already handled by Rule 1 (superset) or Rule 3 (sibling).
+			eNorm := normalizeSkillName(e.name)
+			if strings.HasPrefix(candNorm, eNorm) || strings.HasPrefix(eNorm, candNorm) {
+				continue
+			}
+			score := jaccardSimilarity(candWords, e.words)
+			if score > bestScore {
+				bestScore = score
+				bestMatch = e.name
+			}
+		}
+
+		// Threshold: 50% word overlap (Jaccard), and at least 2 overlapping words.
+		minOverlap := wordOverlap(candWords, significantWords(bestMatch))
+		if bestScore < 0.5 || minOverlap < 2 {
+			keptSkills = append(keptSkills, cand)
+			continue
+		}
+
+		targetNorm := normalizeSkillName(bestMatch)
+		if _, dropped := pendingDeletions[targetNorm]; dropped {
+			keptSkills = append(keptSkills, cand)
+			continue
+		}
+		if _, already := rewriteByTarget[targetNorm]; already {
+			events = append(events, reconcileEvent{
+				Kind:     reconcileDropIntraBatchDuplicate,
+				Original: cand.Name,
+				Target:   bestMatch,
+				Reason:   "another candidate already mapped to this target via word overlap",
+			})
+			continue
+		}
+		if _, alreadyClaimed := claimedUpdates[targetNorm]; alreadyClaimed {
+			events = append(events, reconcileEvent{
+				Kind:     reconcileDropConflictsWithExistingUpdate,
+				Original: cand.Name,
+				Target:   bestMatch,
+				Reason:   "reviewer already emitted an explicit update for this target",
+			})
+			continue
+		}
+
+		// Rewrite as update.
+		newSpec := *cand
+		newSpec.Name = bestMatch
+		updates = append(updates, &SkillUpdate{
+			Name:    bestMatch,
+			NewSpec: &newSpec,
+			Reason: fmt.Sprintf(
+				"auto-merged by reconciler: candidate %q has %.0f%% word overlap with existing skill %q",
+				cand.Name, bestScore*100, bestMatch,
+			),
+		})
+		rewriteByTarget[targetNorm] = struct{}{}
+		events = append(events, reconcileEvent{
+			Kind:     reconcileRewriteWordOverlapToUpdate,
+			Original: cand.Name,
+			Target:   bestMatch,
+			Reason: fmt.Sprintf(
+				"candidate name shares %.0f%% word overlap with existing skill",
+				bestScore*100,
+			),
+		})
+	}
+	return keptSkills, updates, events
+}
+
+// significantWords extracts meaningful words from a skill name, excluding
+// common stop words and short tokens. Returns a set for O(1) lookup.
+func significantWords(name string) map[string]struct{} {
+	name = strings.ToLower(name)
+	// Replace common separators with spaces.
+	name = strings.NewReplacer("-", " ", "_", " ", ".", " ").Replace(name)
+	words := strings.Fields(name)
+	result := make(map[string]struct{}, len(words))
+	for _, w := range words {
+		if len(w) < 3 || isStopWord(w) {
+			continue
+		}
+		result[w] = struct{}{}
+	}
+	return result
+}
+
+// jaccardSimilarity returns |A ∩ B| / |A ∪ B| for two word sets.
+func jaccardSimilarity(a, b map[string]struct{}) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	intersection := 0
+	for w := range a {
+		if _, ok := b[w]; ok {
+			intersection++
+		}
+	}
+	union := len(a) + len(b) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+// wordOverlap returns the count of words in common between two sets.
+func wordOverlap(a, b map[string]struct{}) int {
+	count := 0
+	for w := range a {
+		if _, ok := b[w]; ok {
+			count++
+		}
+	}
+	return count
+}
+
+// isStopWord returns true for English stop words commonly found in
+// skill names that should not contribute to similarity matching.
+func isStopWord(w string) bool {
+	switch w {
+	case "the", "and", "for", "with", "from", "that", "this",
+		"are", "was", "were", "been", "being", "have", "has",
+		"had", "does", "did", "will", "would", "could", "should",
+		"may", "might", "shall", "can", "not", "but", "yet",
+		"also", "then", "than", "when", "where", "how", "what",
+		"which", "who", "whom", "its", "each", "every", "all",
+		"any", "few", "more", "most", "other", "some", "such",
+		"into", "over", "under", "between", "through", "about",
+		"using", "multi", "multiple":
+		return true
+	}
+	return false
 }

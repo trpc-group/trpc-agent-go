@@ -58,6 +58,7 @@ func NewService(reviewModel model.Model, opts ...Option) Service {
 		EffectivenessGate:         o.effectivenessGate,
 		HumanGate:                 o.humanGate,
 		ApprovalGateShadow:        o.approvalGateShadow,
+		ManagedSkillsDir:          o.managedSkillsDir,
 	})
 	w.Start()
 

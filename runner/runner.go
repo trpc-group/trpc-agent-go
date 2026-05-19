@@ -2389,11 +2389,17 @@ func (r *runner) enqueueAutoMemoryJob(ctx context.Context, sess *session.Session
 // runners and RLHF pipelines that DO have an evaluator should attach
 // the service themselves and call EnqueueLearningJob with a populated
 // Outcome instead of relying on this hook.
+//
+// NOTE: We use context.WithoutCancel because this is called from the
+// runner completion handler (defer), at which point the request context
+// may already be cancelled (e.g. WeCom one-shot response mode). The
+// evolution worker manages its own timeouts internally.
 func (r *runner) enqueueEvolutionLearningJob(ctx context.Context, sess *session.Session) {
 	if r.evolutionService == nil || sess == nil {
 		return
 	}
-	if err := r.evolutionService.EnqueueLearningJob(ctx, evolution.LearningJob{Session: sess}); err != nil {
+	enqueueCtx := context.WithoutCancel(ctx)
+	if err := r.evolutionService.EnqueueLearningJob(enqueueCtx, evolution.LearningJob{Session: sess}); err != nil {
 		log.DebugfContext(ctx, "Evolution learning job skipped or failed: %v", err)
 		return
 	}

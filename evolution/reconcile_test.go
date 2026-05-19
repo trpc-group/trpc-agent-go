@@ -244,6 +244,9 @@ func TestReconcileWithLibrary_RewritesQuantifiedSiblingToGenericParent(t *testin
 }
 
 func TestReconcileWithLibrary_DoesNotGuessCanonicalSiblingWithoutGenericParent(t *testing.T) {
+	// Rule 3 alone does not merge count-specific siblings when no
+	// generic parent exists. However Rule 4 (word overlap) catches
+	// this case because the significant words are identical.
 	in := &ReviewDecision{
 		Skills: []*SkillSpec{{
 			Name:        "Weather Monitor - 3 Cities",
@@ -256,9 +259,17 @@ func TestReconcileWithLibrary_DoesNotGuessCanonicalSiblingWithoutGenericParent(t
 	}
 
 	out, events := reconcileWithLibrary(in, existing)
-	require.Len(t, out.Skills, 1)
-	assert.Empty(t, out.Updates)
-	assert.Empty(t, events)
+	// Rule 4 rewrites the candidate as an update against one of the
+	// existing siblings (they have 100% word overlap).
+	assert.Empty(t, out.Skills, "word-overlap rule should merge count-specific siblings")
+	require.Len(t, out.Updates, 1)
+	hasOverlapEvent := false
+	for _, e := range events {
+		if e.Kind == reconcileRewriteWordOverlapToUpdate {
+			hasOverlapEvent = true
+		}
+	}
+	assert.True(t, hasOverlapEvent)
 }
 
 func TestReconcileWithLibrary_DedupsIntraBatchByName(t *testing.T) {
@@ -384,4 +395,135 @@ func TestReconcileWithLibrary_RealWorldWeatherSiblingPatternWithoutSuperset(t *t
 	targetNames := []string{out.Updates[0].Name, out.Updates[1].Name}
 	assert.Contains(t, targetNames, "Weather Monitor - Multi-City")
 	assert.Contains(t, targetNames, "Weather Monitor - Multi-City with Historical Data")
+}
+
+// ---------------------------------------------------------------------------
+// Rule 4: word-overlap dedup tests
+// ---------------------------------------------------------------------------
+
+func TestReconcileWithLibrary_WordOverlap_RewritesHighOverlap(t *testing.T) {
+	existing := []ExistingSkill{
+		{Name: "Geopolitical Market Analysis"},
+	}
+	in := &ReviewDecision{
+		Skills: []*SkillSpec{
+			{Name: "Geopolitical Market Impact Analysis", Description: "similar analysis"},
+		},
+	}
+	out, events := reconcileWithLibrary(in, existing)
+	assert.Empty(t, out.Skills, "candidate should be rewritten as update")
+	require.Len(t, out.Updates, 1)
+	assert.Equal(t, "Geopolitical Market Analysis", out.Updates[0].Name)
+	require.Len(t, events, 1)
+	assert.Equal(t, reconcileRewriteWordOverlapToUpdate, events[0].Kind)
+}
+
+func TestReconcileWithLibrary_WordOverlap_KeepsLowOverlap(t *testing.T) {
+	existing := []ExistingSkill{
+		{Name: "Weather Data Collection"},
+	}
+	in := &ReviewDecision{
+		Skills: []*SkillSpec{
+			{Name: "Recipe Cookbook Builder", Description: "builds recipes"},
+		},
+	}
+	out, events := reconcileWithLibrary(in, existing)
+	require.Len(t, out.Skills, 1, "unrelated candidate should stay")
+	assert.Equal(t, "Recipe Cookbook Builder", out.Skills[0].Name)
+	assert.Empty(t, out.Updates)
+	// No word-overlap events.
+	for _, e := range events {
+		assert.NotEqual(t, reconcileRewriteWordOverlapToUpdate, e.Kind)
+	}
+}
+
+func TestReconcileWithLibrary_WordOverlap_RequiresMinTwoOverlapping(t *testing.T) {
+	existing := []ExistingSkill{
+		{Name: "Market Analysis"},
+	}
+	in := &ReviewDecision{
+		Skills: []*SkillSpec{
+			// Only shares "market" — 1 word overlap, below minimum.
+			{Name: "Market Data Fetcher"},
+		},
+	}
+	out, _ := reconcileWithLibrary(in, existing)
+	require.Len(t, out.Skills, 1, "single-word overlap should not trigger rewrite")
+}
+
+func TestReconcileWithLibrary_WordOverlap_SkipsWhenTargetBeingDeleted(t *testing.T) {
+	existing := []ExistingSkill{
+		{Name: "Geopolitical Market Analysis"},
+	}
+	in := &ReviewDecision{
+		Skills: []*SkillSpec{
+			{Name: "Geopolitical Market Impact Analysis"},
+		},
+		Deletions: []string{"Geopolitical Market Analysis"},
+	}
+	out, _ := reconcileWithLibrary(in, existing)
+	require.Len(t, out.Skills, 1, "should not rewrite when target is being deleted")
+}
+
+func TestReconcileWithLibrary_WordOverlap_DedupMultipleCandidates(t *testing.T) {
+	existing := []ExistingSkill{
+		{Name: "Geopolitical Market Analysis"},
+	}
+	in := &ReviewDecision{
+		Skills: []*SkillSpec{
+			{Name: "Geopolitical Market Snapshot"},   // shares geopolitical + market (2/4 = 0.5)
+			{Name: "Geopolitical Market Assessment"}, // shares geopolitical + market (2/4 = 0.5)
+		},
+	}
+	out, events := reconcileWithLibrary(in, existing)
+	assert.Empty(t, out.Skills)
+	// First one becomes update, second one is dropped as duplicate.
+	require.Len(t, out.Updates, 1)
+	assert.Equal(t, "Geopolitical Market Analysis", out.Updates[0].Name)
+	// Should have 2 events: one rewrite + one dedup.
+	hasRewrite := false
+	hasDedup := false
+	for _, e := range events {
+		if e.Kind == reconcileRewriteWordOverlapToUpdate {
+			hasRewrite = true
+		}
+		if e.Kind == reconcileDropIntraBatchDuplicate {
+			hasDedup = true
+		}
+	}
+	assert.True(t, hasRewrite)
+	assert.True(t, hasDedup)
+}
+
+func TestSignificantWords(t *testing.T) {
+	words := significantWords("Geopolitical-Commodity-Market-Snapshot")
+	assert.Contains(t, words, "geopolitical")
+	assert.Contains(t, words, "commodity")
+	assert.Contains(t, words, "market")
+	assert.Contains(t, words, "snapshot")
+	// Stop words and short tokens excluded.
+	assert.NotContains(t, words, "the")
+	assert.NotContains(t, words, "a")
+}
+
+func TestJaccardSimilarity(t *testing.T) {
+	a := map[string]struct{}{"geopolitical": {}, "market": {}, "analysis": {}}
+	b := map[string]struct{}{"geopolitical": {}, "market": {}, "snapshot": {}, "commodity": {}}
+	// intersection = {geopolitical, market} = 2
+	// union = {geopolitical, market, analysis, snapshot, commodity} = 5
+	// jaccard = 2/5 = 0.4
+	score := jaccardSimilarity(a, b)
+	assert.InDelta(t, 0.4, score, 0.01)
+
+	// Same sets.
+	assert.InDelta(t, 1.0, jaccardSimilarity(a, a), 0.01)
+
+	// Empty set.
+	assert.Equal(t, 0.0, jaccardSimilarity(a, nil))
+}
+
+func TestWordOverlap(t *testing.T) {
+	a := map[string]struct{}{"geopolitical": {}, "market": {}, "analysis": {}}
+	b := map[string]struct{}{"geopolitical": {}, "market": {}, "snapshot": {}}
+	assert.Equal(t, 2, wordOverlap(a, b))
 }

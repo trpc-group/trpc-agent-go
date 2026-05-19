@@ -72,6 +72,7 @@ func (m *mockPublisher) DeleteSkill(_ context.Context, name string) error {
 type mockSkillRepo struct {
 	summaries []skill.Summary
 	bodies    map[string]string // name -> body; missing names → Get returns error
+	paths     map[string]string // name -> path; missing names → Path returns error
 	refreshed int
 	mu        sync.Mutex
 }
@@ -86,7 +87,14 @@ func (m *mockSkillRepo) Get(name string) (*skill.Skill, error) {
 	}
 	return nil, fmt.Errorf("skill %q not found", name)
 }
-func (m *mockSkillRepo) Path(string) (string, error) { return "", nil }
+func (m *mockSkillRepo) Path(name string) (string, error) {
+	if m.paths != nil {
+		if p, ok := m.paths[name]; ok {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("skill %q path not found", name)
+}
 func (m *mockSkillRepo) Refresh() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1693,4 +1701,143 @@ func TestWorker_HumanGate_ErrorFailsClosed(t *testing.T) {
 	metrics := w.ApprovalGateMetricsJSON()
 	assert.Equal(t, 1, metrics.HumanGateHeld)
 	assert.Equal(t, 0, metrics.RevisionsPromoted)
+}
+
+// ---------------------------------------------------------------------------
+// Write isolation tests (ManagedSkillsDir)
+// ---------------------------------------------------------------------------
+
+func TestWorker_ApplyUpdates_SkipsNonEvolutionSkill(t *testing.T) {
+	managedDir := "/state/skills/evolution"
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{
+			{Name: "Bundled Weather", Description: "bundled skill"},
+		},
+		bodies: map[string]string{"Bundled Weather": "body"},
+		paths: map[string]string{
+			"Bundled Weather": "/state/skills/bundled/weather-monitor",
+		},
+	}
+	rev := &mockReviewer{
+		decision: &ReviewDecision{
+			Updates: []*SkillUpdate{{
+				Name: "Bundled Weather",
+				NewSpec: &SkillSpec{
+					Name:        "Bundled Weather",
+					Description: "new desc",
+					WhenToUse:   "always",
+					Steps:       []string{"step 1"},
+				},
+			}},
+		},
+	}
+	w := NewWorker(WorkerConfig{
+		Reviewer:         rev,
+		Publisher:        pub,
+		Policy:           alwaysPolicy{},
+		SkillRepo:        repo,
+		ManagedSkillsDir: managedDir,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "update weather"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.skills, "update to bundled skill should be skipped")
+	pub.mu.Unlock()
+}
+
+func TestWorker_ApplyUpdates_AllowsEvolutionSkill(t *testing.T) {
+	managedDir := "/state/skills/evolution"
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{
+			{Name: "Learned Analysis", Description: "evolution skill"},
+		},
+		bodies: map[string]string{"Learned Analysis": "body"},
+		paths: map[string]string{
+			"Learned Analysis": "/state/skills/evolution/learned-analysis",
+		},
+	}
+	rev := &mockReviewer{
+		decision: &ReviewDecision{
+			Updates: []*SkillUpdate{{
+				Name: "Learned Analysis",
+				NewSpec: &SkillSpec{
+					Name:        "Learned Analysis",
+					Description: "updated desc",
+					WhenToUse:   "always",
+					Steps:       []string{"step 1"},
+				},
+			}},
+		},
+	}
+	w := NewWorker(WorkerConfig{
+		Reviewer:         rev,
+		Publisher:        pub,
+		Policy:           alwaysPolicy{},
+		SkillRepo:        repo,
+		ManagedSkillsDir: managedDir,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "update analysis"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	require.Len(t, pub.skills, 1, "update to evolution skill should be allowed")
+	assert.Equal(t, "Learned Analysis", pub.skills[0].Name)
+	pub.mu.Unlock()
+}
+
+func TestWorker_ApplyUpdates_NoIsolationWhenManagedDirEmpty(t *testing.T) {
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{
+			{Name: "Any Skill", Description: "any"},
+		},
+		bodies: map[string]string{"Any Skill": "body"},
+		paths: map[string]string{
+			"Any Skill": "/anywhere/any-skill",
+		},
+	}
+	rev := &mockReviewer{
+		decision: &ReviewDecision{
+			Updates: []*SkillUpdate{{
+				Name: "Any Skill",
+				NewSpec: &SkillSpec{
+					Name:        "Any Skill",
+					Description: "updated",
+					WhenToUse:   "always",
+					Steps:       []string{"step"},
+				},
+			}},
+		},
+	}
+	// ManagedSkillsDir not set → no isolation.
+	w := NewWorker(WorkerConfig{
+		Reviewer:  rev,
+		Publisher: pub,
+		Policy:    alwaysPolicy{},
+		SkillRepo: repo,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "update"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	require.Len(t, pub.skills, 1, "no isolation when ManagedSkillsDir empty")
+	pub.mu.Unlock()
 }

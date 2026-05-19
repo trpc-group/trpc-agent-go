@@ -12,6 +12,7 @@ package evolution
 import (
 	"context"
 	"hash/fnv"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,7 @@ type Worker struct {
 	safetyGate         SafetyGate
 	effectivenessGate  EffectivenessGate
 	humanGate          HumanGate
+	managedSkillsDir   string
 	approvalGateShadow bool
 
 	// approvalGateMetrics records the last observed gate activity so
@@ -132,6 +134,12 @@ type WorkerConfig struct {
 	EffectivenessGate  EffectivenessGate
 	HumanGate          HumanGate
 	ApprovalGateShadow bool
+
+	// ManagedSkillsDir is the directory where evolution publishes SKILL.md
+	// files. When set, the worker enforces write isolation: updates
+	// targeting skills whose on-disk path is outside this directory are
+	// skipped to protect bundled and user-authored skills.
+	ManagedSkillsDir string
 }
 
 // NewWorker creates a new Worker.
@@ -168,6 +176,7 @@ func NewWorker(cfg WorkerConfig) *Worker {
 		effectivenessGate:         cfg.EffectivenessGate,
 		humanGate:                 cfg.HumanGate,
 		approvalGateShadow:        cfg.ApprovalGateShadow,
+		managedSkillsDir:          cfg.ManagedSkillsDir,
 	}
 }
 
@@ -279,13 +288,19 @@ func (w *Worker) processJob(item *pendingJob) {
 	since := readLastReviewAt(sess)
 	latestTs, reviewCtx := scanDelta(sess, since)
 	if len(reviewCtx.Messages) == 0 {
+		log.DebugfContext(ctx, "evolution: no messages in delta for session %s, skipping", sess.ID)
 		return
 	}
 
 	if !w.policy.ShouldReview(reviewCtx) {
+		log.DebugfContext(ctx, "evolution: policy declined review for session %s (tool_calls=%d)",
+			sess.ID, reviewCtx.ToolCallCount)
 		writeLastReviewAt(sess, latestTs)
 		return
 	}
+
+	log.InfofContext(ctx, "evolution: starting review for session %s (tool_calls=%d, messages=%d)",
+		sess.ID, reviewCtx.ToolCallCount, len(reviewCtx.Messages))
 
 	if hasSkillWritesInDelta(reviewCtx.Transcript) {
 		writeLastReviewAt(sess, latestTs)
@@ -779,6 +794,26 @@ func (w *Worker) applySkills(ctx context.Context, skills []*SkillSpec) bool {
 	return mutated
 }
 
+// isEvolutionManagedSkill checks whether the named skill resides within
+// the evolution-managed directory. Returns true (allow write) if:
+//   - managedSkillsDir is not configured (no isolation enforced)
+//   - skill does not exist yet in the repo (create is always safe)
+//   - skill's on-disk path is under managedSkillsDir
+func (w *Worker) isEvolutionManagedSkill(name string) bool {
+	if w.managedSkillsDir == "" || w.skillRepo == nil {
+		return true
+	}
+	p, err := w.skillRepo.Path(name)
+	if err != nil {
+		return true // doesn't exist yet → safe to create
+	}
+	rel, err := filepath.Rel(w.managedSkillsDir, p)
+	if err != nil {
+		return false
+	}
+	return !strings.HasPrefix(rel, "..")
+}
+
 func (w *Worker) applyUpdates(ctx context.Context, updates []*SkillUpdate) bool {
 	if w.publisher == nil {
 		return false
@@ -790,6 +825,13 @@ func (w *Worker) applyUpdates(ctx context.Context, updates []*SkillUpdate) bool 
 		}
 		if !skillExists(w.skillRepo, upd.Name) {
 			log.WarnfContext(ctx, "evolution: update skill %q skipped: not found in repo", upd.Name)
+			continue
+		}
+		// Write isolation: only update skills that live within the
+		// evolution-managed directory. Bundled and user-authored skills
+		// are protected from accidental overwrites.
+		if !w.isEvolutionManagedSkill(upd.Name) {
+			log.WarnfContext(ctx, "evolution: update skill %q skipped: not evolution-managed (protected)", upd.Name)
 			continue
 		}
 		// Force the on-disk directory name to remain stable.
