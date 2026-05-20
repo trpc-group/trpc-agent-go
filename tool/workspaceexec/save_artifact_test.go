@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -175,7 +176,7 @@ func TestSaveArtifactTool_RequiresInvocationContext(t *testing.T) {
 
 	_, err = tl.Call(context.Background(), enc)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), saveReasonNoInvocation)
+	require.Contains(t, err.Error(), workspacefacade.SaveReasonNoInvocation)
 }
 
 func TestSaveArtifactTool_RequiresCompleteSessionIDs(t *testing.T) {
@@ -193,35 +194,7 @@ func TestSaveArtifactTool_RequiresCompleteSessionIDs(t *testing.T) {
 
 	_, err = tl.Call(ctx, enc)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), saveReasonNoSessionIDs)
-}
-
-func TestSaveArtifactTool_NormalizesPathVariants(t *testing.T) {
-	rel, err := normalizeArtifactPath("/out/site.zip")
-	require.NoError(t, err)
-	require.Equal(t, "out/site.zip", rel)
-
-	rel, err = normalizeArtifactPath("${OUTPUT_DIR}/site.zip")
-	require.NoError(t, err)
-	require.Equal(t, "out/site.zip", rel)
-}
-
-func TestSaveArtifactTool_NormalizePathValidation(t *testing.T) {
-	_, err := normalizeArtifactPath("")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "path is required")
-
-	_, err = normalizeArtifactPath("/")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "inside the workspace")
-
-	_, err = normalizeArtifactPath("../site.zip")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "stay within the workspace")
-
-	_, err = normalizeArtifactPath("tmp/site.zip")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "supported artifact roots")
+	require.Contains(t, err.Error(), workspacefacade.SaveReasonNoSessionIDs)
 }
 
 func TestSaveArtifactTool_RejectsMissingFile(t *testing.T) {
@@ -352,43 +325,62 @@ func TestSaveArtifactTool_StateDeltaFallbacks(t *testing.T) {
 	require.Nil(t, tl.StateDelta("call-4", nil, []byte(`{"saved_as":"out/site.zip","version":-1}`)))
 }
 
-func TestSaveArtifactTool_ArtifactContextHelpers(t *testing.T) {
-	require.Equal(t, saveReasonNoInvocation, artifactSaveSkipReason(context.Background()))
-
-	noSvc := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
-		agent.WithInvocationMessage(model.NewUserMessage("hi")),
-		agent.WithInvocationSession(&session.Session{
-			ID:      "sess",
-			AppName: "app",
-			UserID:  "user",
-		}),
-	))
-	require.Equal(t, saveReasonNoService, artifactSaveSkipReason(noSvc))
-
-	noSession := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
-		agent.WithInvocationMessage(model.NewUserMessage("hi")),
-		agent.WithInvocationArtifactService(inmemory.NewService()),
-	))
-	require.Equal(t, saveReasonNoSession, artifactSaveSkipReason(noSession))
-
-	incompleteSession := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
-		agent.WithInvocationMessage(model.NewUserMessage("hi")),
-		agent.WithInvocationArtifactService(inmemory.NewService()),
-		agent.WithInvocationSession(&session.Session{ID: "sess"}),
-	))
-	require.Equal(t, saveReasonNoSessionIDs, artifactSaveSkipReason(incompleteSession))
-
+func TestSaveArtifactTool_SupportsArtifactSave(t *testing.T) {
 	ctx := saveArtifactContext()
-	require.Equal(t, "", artifactSaveSkipReason(ctx))
 	inv, ok := agent.InvocationFromContext(ctx)
 	require.True(t, ok)
 	require.True(t, SupportsArtifactSave(inv))
+}
 
-	ctx = withArtifactContext(ctx)
-	_, ok = codeexecutor.ArtifactServiceFromContext(ctx)
-	require.True(t, ok)
-	_, err := codeexecutor.SaveArtifactHelper(ctx, "out/site.zip", []byte("payload"), "text/plain")
-	require.NoError(t, err)
+// TestSaveArtifactTool_SupportsArtifactSave_Negatives directly pins the
+// false branches of SupportsArtifactSave. Call's tests exercise the same
+// preconditions through workspacefacade.ArtifactSaveSkipReason, but the
+// exported helper is a public contract on its own and deserves direct
+// coverage so refactors can't silently drift the predicate.
+func TestSaveArtifactTool_SupportsArtifactSave_Negatives(t *testing.T) {
+	svc := inmemory.NewService()
+	mkInv := func(mutate func(b *agent.Invocation)) *agent.Invocation {
+		inv := agent.NewInvocation(
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+			agent.WithInvocationSession(&session.Session{
+				ID:      "sess",
+				AppName: "app",
+				UserID:  "user",
+			}),
+			agent.WithInvocationArtifactService(svc),
+		)
+		if mutate != nil {
+			mutate(inv)
+		}
+		return inv
+	}
+
+	cases := []struct {
+		name string
+		inv  *agent.Invocation
+	}{
+		{"nil invocation", nil},
+		{"missing artifact service", mkInv(func(b *agent.Invocation) {
+			b.ArtifactService = nil
+		})},
+		{"nil session", mkInv(func(b *agent.Invocation) { b.Session = nil })},
+		{"empty app name", mkInv(func(b *agent.Invocation) {
+			b.Session.AppName = ""
+		})},
+		{"empty user id", mkInv(func(b *agent.Invocation) {
+			b.Session.UserID = ""
+		})},
+		{"empty session id", mkInv(func(b *agent.Invocation) {
+			b.Session.ID = ""
+		})},
+	}
+	for _, tc := range cases {
+		tc := tc // Go 1.21 range-var scoping: rebind for safety against
+		// future t.Parallel() calls. Cheap defensive write.
+		t.Run(tc.name, func(t *testing.T) {
+			require.False(t, SupportsArtifactSave(tc.inv))
+		})
+	}
 }
 
 func saveArtifactContext() context.Context {

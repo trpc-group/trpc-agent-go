@@ -457,14 +457,6 @@ func TestExecTool_HelperFunctions(t *testing.T) {
 	require.Equal(t, "", firstNonEmpty("", "   "))
 	require.Equal(t, "abc", firstNonEmpty("", " abc "))
 
-	require.True(t, hasEnvPrefix("$WORK_DIR/demo", codeexecutor.EnvWorkDir))
-	require.True(t, hasEnvPrefix("${OUTPUT_DIR}/demo", codeexecutor.EnvOutputDir))
-	require.False(t, hasEnvPrefix("$OUTPUT_DIR_demo", codeexecutor.EnvOutputDir))
-
-	require.True(t, isWorkspaceEnvPath("$WORK_DIR/demo"))
-	require.True(t, isWorkspaceEnvPath("${SKILLS_DIR}/demo"))
-	require.False(t, isWorkspaceEnvPath("/tmp/demo"))
-
 	require.True(t, isAllowedWorkspacePath("skills/demo"))
 	require.True(t, isAllowedWorkspacePath("work/demo"))
 	require.True(t, isAllowedWorkspacePath("out/demo"))

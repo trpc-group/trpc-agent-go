@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceprep"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
@@ -799,46 +799,11 @@ func (t *ExecTool) markSessionFinalized(sess *execSession) {
 	sess.exitedAt = now
 }
 
+// normalizeCWD forwards to workspacefacade.NormalizeWorkspaceCWD so the
+// LLM workspace_exec tool and Workspace.RunProgram share one canonical
+// containment policy. Keep the wrapper for the existing call sites.
 func normalizeCWD(raw string) (string, error) {
-	s := strings.TrimSpace(raw)
-	s = strings.ReplaceAll(s, "\\", "/")
-	if s == "" {
-		return ".", nil
-	}
-	if hasGlobMeta(s) {
-		return "", errors.New("cwd must not contain glob patterns")
-	}
-	if isWorkspaceEnvPath(s) {
-		out := codeexecutor.NormalizeGlobs([]string{s})
-		if len(out) == 0 {
-			return "", errors.New("invalid cwd")
-		}
-		s = out[0]
-	}
-	if strings.HasPrefix(s, "/") {
-		rel := strings.TrimPrefix(path.Clean(s), "/")
-		if rel == "" || rel == "." {
-			return ".", nil
-		}
-		if !isAllowedWorkspacePath(rel) {
-			return "", fmt.Errorf("cwd must stay under workspace roots: %q", raw)
-		}
-		return rel, nil
-	}
-	rel := path.Clean(s)
-	if rel == "." {
-		return ".", nil
-	}
-	if rel == ".." || strings.HasPrefix(rel, "../") {
-		return "", errors.New("cwd must stay within the workspace")
-	}
-	if !isAllowedWorkspacePath(rel) {
-		return "", fmt.Errorf(
-			"cwd must stay under supported workspace roots such as work/, out/, or runs/: %q",
-			raw,
-		)
-	}
-	return rel, nil
+	return workspacefacade.NormalizeWorkspaceCWD(raw)
 }
 
 func supportsInteractiveSessions(exec codeexecutor.CodeExecutor) bool {
@@ -885,10 +850,6 @@ func pollOutput(sessionID string, poll codeexecutor.ProgramPoll) execOutput {
 		out.SessionID = sessionID
 	}
 	return out
-}
-
-func hasGlobMeta(s string) bool {
-	return strings.ContainsAny(s, "*?[")
 }
 
 func execTimeout(raw int) time.Duration {
@@ -971,46 +932,12 @@ func intPtrValue(v int) *int {
 	return &v
 }
 
-const (
-	envVarPrefix = "$"
-	envVarLBrace = "${"
-	envVarRBrace = "}"
-)
-
-func hasEnvPrefix(s string, name string) bool {
-	if strings.HasPrefix(s, envVarPrefix+name) {
-		tail := s[len(envVarPrefix+name):]
-		return tail == "" || strings.HasPrefix(tail, "/") || strings.HasPrefix(tail, "\\")
-	}
-	prefix := envVarLBrace + name + envVarRBrace
-	if strings.HasPrefix(s, prefix) {
-		tail := s[len(prefix):]
-		return tail == "" || strings.HasPrefix(tail, "/") || strings.HasPrefix(tail, "\\")
-	}
-	return false
-}
-
-func isWorkspaceEnvPath(s string) bool {
-	return hasEnvPrefix(s, codeexecutor.WorkspaceEnvDirKey) ||
-		hasEnvPrefix(s, codeexecutor.EnvSkillsDir) ||
-		hasEnvPrefix(s, codeexecutor.EnvWorkDir) ||
-		hasEnvPrefix(s, codeexecutor.EnvOutputDir) ||
-		hasEnvPrefix(s, codeexecutor.EnvRunDir)
-}
-
+// isAllowedWorkspacePath forwards to
+// workspacefacade.IsAllowedWorkspaceRoot. Kept as a package-private
+// alias for the few remaining call sites; new code should call the
+// facade helper directly.
 func isAllowedWorkspacePath(rel string) bool {
-	switch {
-	case rel == codeexecutor.DirSkills || strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
-		return true
-	case rel == codeexecutor.DirWork || strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
-		return true
-	case rel == codeexecutor.DirOut || strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
-		return true
-	case rel == codeexecutor.DirRuns || strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
-		return true
-	default:
-		return false
-	}
+	return workspacefacade.IsAllowedWorkspaceRoot(rel)
 }
 
 var _ tool.Tool = (*ExecTool)(nil)
