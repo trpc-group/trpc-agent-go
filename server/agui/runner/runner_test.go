@@ -1925,6 +1925,43 @@ func TestRunRunOptionResolverError(t *testing.T) {
 	assert.Equal(t, 0, underlying.calls)
 }
 
+func TestRunExternalToolConversionError(t *testing.T) {
+	const (
+		errResolveExternalToolsPrefix = "resolve external tools"
+		toolDescription               = "missing name"
+	)
+
+	called := false
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			called = true
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(underlying)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+		Tools: []types.Tool{{
+			Description: toolDescription,
+		}},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+
+	assert.Nil(t, eventsCh)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, errResolveExternalToolsPrefix)
+	assert.ErrorContains(t, err, errAGUIToolNameRequired)
+	assert.False(t, called)
+}
+
 func TestRunStartSpanError(t *testing.T) {
 	startErr := errors.New("start span fail")
 	underlying := &fakeRunner{}
