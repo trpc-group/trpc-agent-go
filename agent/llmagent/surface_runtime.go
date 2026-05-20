@@ -194,6 +194,19 @@ func (a *LLMAgent) InvocationToolSurface(
 
 	allTools := append([]tool.Tool(nil), userTools...)
 	allTools = appendKnowledgeTools(allTools, &options)
+	// Extension-contributed tools (WithExtensions →
+	// extension.Registry.Tools) sit at the same logical layer as
+	// Knowledge/Skill auto-injection: framework-managed, not folded
+	// into userToolNames, yet must appear in every invocation's
+	// outbound tool surface. Without this line the registerTools-
+	// side append still puts them on a.tools (so LLMAgent.Tools()
+	// sees them) but the invocation path — getFilteredTools →
+	// InvocationToolSurface → userToolsForInvocation — only walks
+	// a.userToolNames-gated entries, silently dropping every
+	// extension tool before it can reach model.Request.Tools. The
+	// model then receives an incomplete tools list, while
+	// LLMAgent.Tools() still reports those extension tools as wired.
+	allTools = appendExtensionTools(allTools, &options)
 
 	effectiveSkills := a.skillRepositoryForInvocation(inv)
 	effectiveExec := a.codeExecutorForInvocation(inv)

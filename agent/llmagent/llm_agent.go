@@ -22,6 +22,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -100,6 +101,25 @@ func New(name string, opts ...Option) *LLMAgent {
 	prepareSkillsRepository(&options)
 	applySkillsExecutorFallback(&options)
 
+	// Wire agent-scoped extensions (WithExtensions) before any
+	// consumer of the callback fields runs. Order matters here:
+	//
+	//   - applyExtensionBundle must rewrite options.AgentCallbacks
+	//     / ModelCallbacks / ToolCallbacks BEFORE we copy them into
+	//     a.agentCallbacks, flowOpts.ModelCallbacks and the
+	//     FunctionCallResponseProcessor below — otherwise extension
+	//     hooks would silently no-op for this agent.
+	//   - extensionContributedTools is cached on Options so that the
+	//     same set is re-applied by registerTools every time the
+	//     tool list is rebuilt (AddToolSet / refreshToolsLocked).
+	//     Extension callbacks are static once merged; only tools need
+	//     to flow through registerTools more than once.
+	extBundle, err := extension.Collect(options.extensions)
+	if err != nil {
+		panic(err)
+	}
+	applyExtensionBundle(&options, extBundle)
+
 	// Validate output_schema configuration before registering tools.
 	if options.OutputSchema != nil {
 		if options.EnableAwaitUserReplyTool {
@@ -107,6 +127,18 @@ func New(name string, opts ...Option) *LLMAgent {
 		}
 		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
+		}
+		// Extension-contributed tools (WithExtensions →
+		// extension.Registry.Tools) must be covered by the same
+		// guard. They are appended to the outbound tool surface
+		// alongside WithTools/WithToolSets, so allowing them
+		// through would let an extension silently break the
+		// "structured output ⇒ no callable tools" contract.
+		// Hook-only extensions (no Tools(...) call inside Register)
+		// leave this slice empty and remain compatible with
+		// WithOutputSchema.
+		if len(options.extensionContributedTools) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, extension-contributed tools (WithExtensions → Registry.Tools) must be empty")
 		}
 		if options.Knowledge != nil {
 			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge must be empty")
@@ -688,6 +720,13 @@ func registerTools(
 	// Step 4: wire skill tools (skill_load, skill_run, etc.) when a
 	// skill repository is configured.
 	allTools = appendSkillTools(allTools, options, runTool)
+	// Extension-contributed tools (WithExtensions →
+	// extension.Registry.Tools) are appended last so any name
+	// collision against user tools, knowledge tools, workspace_exec
+	// or skill tools resolves in favour of the earlier (framework-
+	// or user-registered) entry. See appendExtensionTools
+	// docstring in extension.go.
+	allTools = appendExtensionTools(allTools, options)
 	return allTools, userToolNames, workspaceRegistry
 }
 
