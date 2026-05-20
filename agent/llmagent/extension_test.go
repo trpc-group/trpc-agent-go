@@ -406,6 +406,58 @@ func TestWithExtensions_Tools_InvocationSurfaceDedupAgainstUser(t *testing.T) {
 		"user-registered tool must win the collision")
 }
 
+func TestWithExtensions_Tools_InvocationSurfaceDedupAgainstLaterFrameworkTool(t *testing.T) {
+	extWorkspaceExec := echoTool("workspace_exec")
+	e := &fakeExt{name: "e", tools: []tool.Tool{extWorkspaceExec}}
+
+	a := New("a",
+		WithCodeExecutor(&stubExec{}),
+		WithExtensions(e),
+	)
+
+	tools, userToolNames := a.InvocationToolSurface(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		),
+	)
+
+	got := findTool(tools, "workspace_exec")
+	require.NotNil(t, got)
+	require.NotSame(t, extWorkspaceExec, got,
+		"framework workspace_exec must win over an extension collision")
+	assert.Equal(t, 1, countToolName(tools, "workspace_exec"),
+		"extension collisions must not produce duplicate declarations")
+	assert.False(t, userToolNames["workspace_exec"],
+		"framework-managed workspace_exec must not be marked as user")
+}
+
+func TestWithExtensions_Tools_InvocationSurfaceDedupAgainstTransferTool(t *testing.T) {
+	extTransfer := echoTool("transfer_to_agent")
+	e := &fakeExt{name: "e", tools: []tool.Tool{extTransfer}}
+
+	a := New("a",
+		WithSubAgents([]agent.Agent{&mockAgent{name: "sub"}}),
+		WithExtensions(e),
+	)
+
+	tools, userToolNames := a.InvocationToolSurface(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		),
+	)
+
+	got := findTool(tools, "transfer_to_agent")
+	require.NotNil(t, got)
+	require.NotSame(t, extTransfer, got,
+		"framework transfer_to_agent must win over an extension collision")
+	assert.Equal(t, 1, countToolName(tools, "transfer_to_agent"),
+		"extension collisions must not produce duplicate declarations")
+	assert.False(t, userToolNames["transfer_to_agent"],
+		"framework-managed transfer_to_agent must not be marked as user")
+}
+
 // The block below covers the small nil-edge branches inside
 // mergeAgentCallbacks / mergeModelCallbacks / mergeToolCallbacks
 // that the larger ordering tests (Test*_OrderIsUserThenExtension)
@@ -443,6 +495,45 @@ func TestMergeAgentCallbacks_OnlyOneSide_ReturnsTheNonNilSideAsIs(t *testing.T) 
 		"empty (zero-content) callbacks bundle must be treated as absent")
 }
 
+func TestMergeAgentCallbacks_PreservesUserOptionsAndDoesNotMutateOriginal(t *testing.T) {
+	var trail []string
+	user := agent.NewCallbacks(agent.WithContinueOnResponse(true))
+	user.RegisterBeforeAgent(func(_ context.Context, _ *agent.BeforeAgentArgs) (
+		*agent.BeforeAgentResult, error,
+	) {
+		trail = append(trail, "user")
+		return &agent.BeforeAgentResult{
+			CustomResponse: &model.Response{ID: "user"},
+		}, nil
+	})
+
+	ext := agent.NewCallbacks()
+	ext.RegisterBeforeAgent(func(_ context.Context, _ *agent.BeforeAgentArgs) (
+		*agent.BeforeAgentResult, error,
+	) {
+		trail = append(trail, "extension")
+		return &agent.BeforeAgentResult{
+			CustomResponse: &model.Response{ID: "extension"},
+		}, nil
+	})
+
+	merged := mergeAgentCallbacks(user, ext)
+	require.NotSame(t, user, merged,
+		"merge must clone before appending extension callbacks")
+	result, err := merged.RunBeforeAgent(context.Background(), &agent.BeforeAgentArgs{})
+	require.NoError(t, err)
+	require.Equal(t, "extension", result.CustomResponse.ID)
+	require.Equal(t, []string{"user", "extension"}, trail,
+		"ContinueOnResponse from user callbacks must survive the merge")
+
+	trail = nil
+	result, err = user.RunBeforeAgent(context.Background(), &agent.BeforeAgentArgs{})
+	require.NoError(t, err)
+	require.Equal(t, "user", result.CustomResponse.ID)
+	require.Equal(t, []string{"user"}, trail,
+		"merged chain must not mutate the caller-owned callbacks")
+}
+
 func TestMergeModelCallbacks_BothNil_ReturnsNil(t *testing.T) {
 	assert.Nil(t, mergeModelCallbacks(nil, nil))
 }
@@ -461,6 +552,51 @@ func TestMergeModelCallbacks_OnlyOneSide_ReturnsTheNonNilSideAsIs(t *testing.T) 
 		"empty bundle on b-side must be treated as absent")
 }
 
+func TestMergeModelCallbacks_PreservesUserOptionsAndDoesNotMutateOriginal(t *testing.T) {
+	var trail []string
+	user := model.NewCallbacks(model.WithContinueOnResponse(true))
+	user.RegisterBeforeModel(func(_ context.Context, _ *model.BeforeModelArgs) (
+		*model.BeforeModelResult, error,
+	) {
+		trail = append(trail, "user")
+		return &model.BeforeModelResult{
+			CustomResponse: &model.Response{ID: "user"},
+		}, nil
+	})
+
+	ext := model.NewCallbacks()
+	ext.RegisterBeforeModel(func(_ context.Context, _ *model.BeforeModelArgs) (
+		*model.BeforeModelResult, error,
+	) {
+		trail = append(trail, "extension")
+		return &model.BeforeModelResult{
+			CustomResponse: &model.Response{ID: "extension"},
+		}, nil
+	})
+
+	merged := mergeModelCallbacks(user, ext)
+	require.NotSame(t, user, merged,
+		"merge must clone before appending extension callbacks")
+	result, err := merged.RunBeforeModel(
+		context.Background(),
+		&model.BeforeModelArgs{Request: &model.Request{}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "extension", result.CustomResponse.ID)
+	require.Equal(t, []string{"user", "extension"}, trail,
+		"ContinueOnResponse from user callbacks must survive the merge")
+
+	trail = nil
+	result, err = user.RunBeforeModel(
+		context.Background(),
+		&model.BeforeModelArgs{Request: &model.Request{}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "user", result.CustomResponse.ID)
+	require.Equal(t, []string{"user"}, trail,
+		"merged chain must not mutate the caller-owned callbacks")
+}
+
 func TestMergeToolCallbacks_BothNil_ReturnsNil(t *testing.T) {
 	assert.Nil(t, mergeToolCallbacks(nil, nil))
 }
@@ -475,6 +611,47 @@ func TestMergeToolCallbacks_OnlyOneSide_ReturnsTheNonNilSideAsIs(t *testing.T) {
 
 	require.Same(t, a, mergeToolCallbacks(a, nil))
 	require.Same(t, a, mergeToolCallbacks(nil, a))
+}
+
+func TestMergeToolCallbacks_PreservesUserOptionsAndDoesNotMutateOriginal(t *testing.T) {
+	var trail []string
+	user := tool.NewCallbacks(tool.WithContinueOnResponse(true))
+	user.RegisterBeforeTool(func(_ context.Context, _ *tool.BeforeToolArgs) (
+		*tool.BeforeToolResult, error,
+	) {
+		trail = append(trail, "user")
+		return &tool.BeforeToolResult{CustomResult: "user"}, nil
+	})
+
+	ext := tool.NewCallbacks()
+	ext.RegisterBeforeTool(func(_ context.Context, _ *tool.BeforeToolArgs) (
+		*tool.BeforeToolResult, error,
+	) {
+		trail = append(trail, "extension")
+		return &tool.BeforeToolResult{CustomResult: "extension"}, nil
+	})
+
+	merged := mergeToolCallbacks(user, ext)
+	require.NotSame(t, user, merged,
+		"merge must clone before appending extension callbacks")
+	result, err := merged.RunBeforeTool(
+		context.Background(),
+		&tool.BeforeToolArgs{ToolName: "x"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "extension", result.CustomResult)
+	require.Equal(t, []string{"user", "extension"}, trail,
+		"ContinueOnResponse from user callbacks must survive the merge")
+
+	trail = nil
+	result, err = user.RunBeforeTool(
+		context.Background(),
+		&tool.BeforeToolArgs{ToolName: "x"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "user", result.CustomResult)
+	require.Equal(t, []string{"user"}, trail,
+		"merged chain must not mutate the caller-owned callbacks")
 }
 
 // TestMergeToolCallbacks_ToolResultMessages_BWinsWhenBothSet pins
@@ -552,4 +729,14 @@ func toolNames(tools []tool.Tool) []string {
 		out = append(out, t.Declaration().Name)
 	}
 	return out
+}
+
+func countToolName(tools []tool.Tool, name string) int {
+	var n int
+	for _, tl := range tools {
+		if tl.Declaration().Name == name {
+			n++
+		}
+	}
+	return n
 }

@@ -124,30 +124,21 @@ func appendExtensionTools(allTools []tool.Tool, options *Options) []tool.Tool {
 // the result is nil when neither side has content (lets downstream
 // nil-check fast paths stay valid).
 //
-// continueOnError / continueOnResponse on either side are dropped:
-// they are private knobs configured via NewCallbacks options and
-// would silently mismatch when sources disagree. The merged chain
-// uses the zero defaults (stop on first error / first response).
+// The returned chain clones a before appending extension callbacks,
+// preserving user-configured callback execution options such as
+// WithContinueOnError / WithContinueOnResponse without mutating the
+// caller-owned callback object.
 func mergeAgentCallbacks(a, b *agent.Callbacks) *agent.Callbacks {
-	an, bn := hasAgentContent(a), hasAgentContent(b)
-	if !an && !bn {
-		return nil
-	}
-	if !an {
-		return b
-	}
+	bn := hasAgentContent(b)
 	if !bn {
 		return a
 	}
-	out := agent.NewCallbacks()
-	for _, cb := range a.BeforeAgent {
-		out.RegisterBeforeAgent(cb)
+	if a == nil {
+		return b
 	}
+	out := a.Clone()
 	for _, cb := range b.BeforeAgent {
 		out.RegisterBeforeAgent(cb)
-	}
-	for _, cb := range a.AfterAgent {
-		out.RegisterAfterAgent(cb)
 	}
 	for _, cb := range b.AfterAgent {
 		out.RegisterAfterAgent(cb)
@@ -158,25 +149,16 @@ func mergeAgentCallbacks(a, b *agent.Callbacks) *agent.Callbacks {
 // mergeModelCallbacks mirrors mergeAgentCallbacks for model hooks.
 // See its docstring for shared semantics.
 func mergeModelCallbacks(a, b *model.Callbacks) *model.Callbacks {
-	an, bn := hasModelContent(a), hasModelContent(b)
-	if !an && !bn {
-		return nil
-	}
-	if !an {
-		return b
-	}
+	bn := hasModelContent(b)
 	if !bn {
 		return a
 	}
-	out := model.NewCallbacks()
-	for _, cb := range a.BeforeModel {
-		out.RegisterBeforeModel(cb)
+	if a == nil {
+		return b
 	}
+	out := a.Clone()
 	for _, cb := range b.BeforeModel {
 		out.RegisterBeforeModel(cb)
-	}
-	for _, cb := range a.AfterModel {
-		out.RegisterAfterModel(cb)
 	}
 	for _, cb := range b.AfterModel {
 		out.RegisterAfterModel(cb)
@@ -192,34 +174,22 @@ func mergeModelCallbacks(a, b *model.Callbacks) *model.Callbacks {
 // of the framework treats ToolResultMessages as a single pluggable
 // converter rather than a chain.
 func mergeToolCallbacks(a, b *tool.Callbacks) *tool.Callbacks {
-	an, bn := hasToolContent(a), hasToolContent(b)
-	if !an && !bn {
-		return nil
-	}
-	if !an {
-		return b
-	}
+	bn := hasToolContent(b)
 	if !bn {
 		return a
 	}
-	out := tool.NewCallbacks()
-	for _, cb := range a.BeforeTool {
-		out.RegisterBeforeTool(cb)
+	if a == nil {
+		return b
 	}
+	out := a.Clone()
 	for _, cb := range b.BeforeTool {
 		out.RegisterBeforeTool(cb)
-	}
-	for _, cb := range a.AfterTool {
-		out.RegisterAfterTool(cb)
 	}
 	for _, cb := range b.AfterTool {
 		out.RegisterAfterTool(cb)
 	}
-	switch {
-	case b.ToolResultMessages != nil:
+	if b.ToolResultMessages != nil {
 		out.ToolResultMessages = b.ToolResultMessages
-	case a.ToolResultMessages != nil:
-		out.ToolResultMessages = a.ToolResultMessages
 	}
 	return out
 }
