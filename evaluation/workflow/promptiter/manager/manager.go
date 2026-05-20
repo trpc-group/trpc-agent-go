@@ -241,15 +241,10 @@ func validateEvalSetInputs(role string, inputs []engine.EvalSetInput) error {
 	if len(inputs) == 0 {
 		return fmt.Errorf("%sevaluation sets are empty", prefix)
 	}
-	seenEvalSetIDs := make(map[string]struct{}, len(inputs))
 	for _, input := range inputs {
 		if input.EvalSetID == "" {
 			return fmt.Errorf("%sevaluation set id is empty", prefix)
 		}
-		if _, ok := seenEvalSetIDs[input.EvalSetID]; ok {
-			return fmt.Errorf("%sevaluation set id %q is duplicated", prefix, input.EvalSetID)
-		}
-		seenEvalSetIDs[input.EvalSetID] = struct{}{}
 		if slices.Contains(input.EvalCaseIDs, "") {
 			return fmt.Errorf("%seval case id for eval set %q is empty", prefix, input.EvalSetID)
 		}

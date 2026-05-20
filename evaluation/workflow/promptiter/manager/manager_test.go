@@ -973,7 +973,7 @@ func TestValidateRunRequest(t *testing.T) {
 		},
 		MaxRounds: 1,
 	}), `validation eval case id for eval set "validation" is empty`)
-	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+	assert.NoError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train: []promptiterengine.EvalSetInput{
 			{
 				EvalSetID: "train",
@@ -984,7 +984,7 @@ func TestValidateRunRequest(t *testing.T) {
 		},
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,
-	}), `train evaluation set id "train" is duplicated`)
+	}))
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train: []promptiterengine.EvalSetInput{
 			{

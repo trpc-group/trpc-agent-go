@@ -370,6 +370,41 @@ func TestHandleRunsRejectsInvalidRequest(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "run must not be nil")
 }
 
+func TestHandleRunsRejectsInvalidLossHints(t *testing.T) {
+	called := false
+	srv := newTestServer(t,
+		WithEngine(&fakeEngine{
+			run: func(ctx context.Context, request *enginepkg.RunRequest, opts ...enginepkg.Option) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = request
+				_ = opts
+				called = true
+				return &enginepkg.RunResult{Status: enginepkg.RunStatusSucceeded}, nil
+			},
+		}),
+	)
+	body := `{
+		"run": {
+			"train": [{
+				"evalSetId": "train",
+				"lossHints": [{
+					"evalCaseId": "case_1",
+					"metricName": "quality",
+					"reason": " "
+				}]
+			}],
+			"validation": [{"evalSetId": "validation"}],
+			"MaxRounds": 1
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewBufferString(body))
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "loss hint reason")
+	assert.False(t, called)
+}
+
 func TestHandleRunsSupportsOptions(t *testing.T) {
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodOptions, srv.RunsPath(), nil)
@@ -801,7 +836,7 @@ func TestValidateRunRequest(t *testing.T) {
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,
 	}}), "train evaluation set id is empty")
-	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+	assert.NoError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
 		Train: []enginepkg.EvalSetInput{
 			{
 				EvalSetID: "train",
@@ -812,7 +847,7 @@ func TestValidateRunRequest(t *testing.T) {
 		},
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,
-	}}), `train evaluation set id "train" is duplicated`)
+	}}))
 	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
 		Train: testEvalSetInputs("train"),
 		Validation: []enginepkg.EvalSetInput{

@@ -1705,14 +1705,14 @@ func TestValidateEvalSetInputsRejectsInvalidInputs(t *testing.T) {
 			EvalSetID: "",
 		},
 	}), "train evaluation set id is empty")
-	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+	assert.NoError(t, validateEvalSetInputs("train", []EvalSetInput{
 		{
 			EvalSetID: "train",
 		},
 		{
 			EvalSetID: "train",
 		},
-	}), `train evaluation set id "train" is duplicated`)
+	}))
 	assert.NoError(t, validateEvalSetInputs("train", []EvalSetInput{
 		{
 			EvalSetID:   "train",
