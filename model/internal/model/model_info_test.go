@@ -172,6 +172,11 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  1048576,
 		},
 		{
+			name:      "exact match - Llama 3.3 8B Instruct",
+			modelName: "llama-3.3-8b-instruct",
+			expected:  128000,
+		},
+		{
 			name:      "exact match - Kimi K2.5",
 			modelName: "kimi-k2.5",
 			expected:  256000,
