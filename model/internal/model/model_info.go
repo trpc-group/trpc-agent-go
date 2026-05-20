@@ -382,21 +382,27 @@ var ModelContextWindows = map[string]int{
 	"qwq-32b":         131072,
 	"qwq-32b-preview": 33000, // OpenRouter window (model card itself is 32k)
 
-	// Qwen 2.5
-	"qwen2.5-72b-instruct":       33000, // OpenRouter window (model card is 128k; some hosts deploy 8k)
+	// Qwen 2.5 (open-weight checkpoints).
+	// Generic IDs use the model card's full context length (131,072 tokens,
+	// reachable via YaRN extension). Narrower hosted-deployment windows
+	// (Groq / Aliyun default config / OpenRouter etc.) should be expressed
+	// either through provider-specific aliases or `WithContextWindow` on the
+	// caller side, mirroring the Llama 3.x convention above.
+	"qwen2.5-72b-instruct":       131072, // https://huggingface.co/Qwen/Qwen2.5-72B-Instruct (full 128k via YaRN)
 	"qwen2.5-32b-instruct":       131072,
 	"qwen2.5-14b-instruct":       128000, // open-weight: https://huggingface.co/Qwen/Qwen2.5-14B-Instruct
-	"qwen2.5-7b-instruct":        33000,
-	"qwen2.5-coder-32b-instruct": 33000,
+	"qwen2.5-7b-instruct":        131072, // https://huggingface.co/Qwen/Qwen2.5-7B-Instruct (full 128k via YaRN)
+	"qwen2.5-coder-32b-instruct": 131072, // https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct (full 128k via YaRN)
 	"qwen2.5-coder-7b-instruct":  131072,
-	"qwen2.5-vl-72b-instruct":    32000,
+	"qwen2.5-vl-72b-instruct":    32000, // VL series defaults to 32k; YaRN degrades temporal/spatial localization
 	"qwen2.5-vl-32b-instruct":    33000,
 	"qwen2.5-vl-7b-instruct":     33000,
 	"qwen2.5-vl-3b-instruct":     64000,
 
-	// Qwen 2
-	"qwen2-72b-instruct": 33000,
-	"qwen2-7b-instruct":  33000,
+	// Qwen 2 (open-weight checkpoints).
+	// Generic IDs follow the same convention as Qwen 2.5 above.
+	"qwen2-72b-instruct": 131072, // https://huggingface.co/Qwen/Qwen2-72B-Instruct (full 128k via YaRN)
+	"qwen2-7b-instruct":  131072, // https://huggingface.co/Qwen/Qwen2-7B-Instruct  (full 128k via YaRN)
 
 	// Qwen 1.5
 	"qwen1.5-110b-chat": 33000,
