@@ -965,17 +965,24 @@ type eventLoopContext struct {
 	visibleCompletionChoiceSignatures  map[string]struct{}
 	sawTerminalError                   bool
 	streamFilter                       graph.StreamModeFilter
-	interruptedAssistantResponseID     string
-	interruptedAssistantAuthor         string
-	interruptedAssistantInvocationID   string
-	interruptedAssistantCreated        int64
-	interruptedAssistantChoiceContent  map[int]*strings.Builder
+	interruptedAssistants              map[string]*interruptedAssistantAccumulator
 	// emittedAssistantResponseIDs tracks response IDs that already produced a
 	// non-partial assistant message event during this run.
 	//
 	// It is used to avoid echoing the same final assistant message again in the
 	// runner-completion event when graph final model responses are emitted.
 	emittedAssistantResponseIDs map[string]struct{}
+}
+
+type interruptedAssistantAccumulator struct {
+	sess                               *session.Session
+	responseID                         string
+	author                             string
+	invocationID                       string
+	created                            int64
+	choiceContent                      map[int]*strings.Builder
+	persistedAssistantResponseIDs      map[string]struct{}
+	persistedAssistantChoiceSignatures map[string]struct{}
 }
 
 // processAgentEvents consumes agent events, persists to session, and emits.
@@ -1066,14 +1073,17 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 	routeEvent := sessionroute.SnapshotEventIdentity(agentEvent)
-	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
-	if agentEvent == nil {
-		return nil
-	}
 	persistSession, routedEvent := sessionroute.RouteEvent(
 		loop.invocation,
 		routeEvent,
 	)
+	if shouldPersistInterruptedAssistant(loop) {
+		r.recordInterruptedAssistantDelta(loop, agentEvent, persistSession)
+	}
+	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
+	if agentEvent == nil {
+		return nil
+	}
 	excludeRootCompletion := routedEvent && !sameSession(persistSession, loop.sess)
 	if excludeRootCompletion {
 		r.captureRoutedCompletionError(loop, agentEvent)
@@ -1097,9 +1107,6 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
-	if !excludeRootCompletion && shouldPersistInterruptedAssistant(loop) {
-		r.recordInterruptedAssistantDelta(loop, agentEvent)
-	}
 
 	// Append qualifying events to session and trigger summarization.
 	persisted := r.handleEventPersistence(
@@ -1116,6 +1123,12 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 			persisted,
 		)
 	}
+	r.recordPersistedInterruptedAssistantSessionEvent(
+		loop,
+		persistSession,
+		agentEvent,
+		persisted,
+	)
 
 	// Notify completion if required.
 	if agentEvent.RequiresCompletion {
@@ -1180,6 +1193,54 @@ func (r *runner) recordPersistedAssistantEvent(
 		loop.persistedAssistantChoiceSignatures = make(map[string]struct{})
 	}
 	loop.persistedAssistantChoiceSignatures[signature] = struct{}{}
+}
+
+func (r *runner) recordPersistedInterruptedAssistantSessionEvent(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+	agentEvent *event.Event,
+	persisted bool,
+) {
+	acc := getInterruptedAssistantAccumulator(loop, persistSession)
+	if acc == nil {
+		return
+	}
+	recordPersistedAssistantOnAccumulator(acc, agentEvent, persisted)
+}
+
+func recordPersistedAssistantOnAccumulator(
+	acc *interruptedAssistantAccumulator,
+	agentEvent *event.Event,
+	persisted bool,
+) {
+	if acc == nil || agentEvent == nil || !persisted {
+		return
+	}
+	if isGraphCompletionEvent(agentEvent) {
+		return
+	}
+	if !eventHasAssistantMessageContent(agentEvent) || agentEvent.Response == nil {
+		return
+	}
+	if acc.persistedAssistantResponseIDs == nil {
+		acc.persistedAssistantResponseIDs = make(map[string]struct{})
+	}
+	if agentEvent.Response.ID != "" {
+		acc.persistedAssistantResponseIDs[agentEvent.Response.ID] = struct{}{}
+	}
+	if graph.IsVisibleGraphCompletionEvent(agentEvent) {
+		if responseID := finalResponseIDFromStateDelta(agentEvent.StateDelta); responseID != "" {
+			acc.persistedAssistantResponseIDs[responseID] = struct{}{}
+		}
+	}
+	signature := assistantChoiceSignature(agentEvent.Response.Choices)
+	if signature == "" {
+		return
+	}
+	if acc.persistedAssistantChoiceSignatures == nil {
+		acc.persistedAssistantChoiceSignatures = make(map[string]struct{})
+	}
+	acc.persistedAssistantChoiceSignatures[signature] = struct{}{}
 }
 
 func (r *runner) recordVisibleCompletionEmission(
@@ -1335,9 +1396,62 @@ type interruptedAssistantMetadata struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+func interruptedAssistantAccumulatorForSession(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+) *interruptedAssistantAccumulator {
+	if loop == nil {
+		return nil
+	}
+	if persistSession == nil {
+		persistSession = loop.sess
+	}
+	key := interruptedAssistantSessionKey(persistSession)
+	if loop.interruptedAssistants == nil {
+		loop.interruptedAssistants = make(map[string]*interruptedAssistantAccumulator)
+	}
+	if acc := loop.interruptedAssistants[key]; acc != nil {
+		return acc
+	}
+	acc := &interruptedAssistantAccumulator{
+		sess:                               persistSession,
+		persistedAssistantResponseIDs:      collectPriorAssistantResponseIDs(persistSession),
+		persistedAssistantChoiceSignatures: collectPriorAssistantChoiceSignatures(persistSession),
+	}
+	loop.interruptedAssistants[key] = acc
+	return acc
+}
+
+func getInterruptedAssistantAccumulator(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+) *interruptedAssistantAccumulator {
+	if loop == nil || len(loop.interruptedAssistants) == 0 {
+		return nil
+	}
+	if persistSession == nil {
+		persistSession = loop.sess
+	}
+	return loop.interruptedAssistants[interruptedAssistantSessionKey(persistSession)]
+}
+
+func defaultInterruptedAssistantAccumulator(
+	loop *eventLoopContext,
+) *interruptedAssistantAccumulator {
+	return getInterruptedAssistantAccumulator(loop, nil)
+}
+
+func interruptedAssistantSessionKey(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	return sess.AppName + "\x00" + sess.UserID + "\x00" + sess.ID
+}
+
 func (r *runner) recordInterruptedAssistantDelta(
 	loop *eventLoopContext,
 	agentEvent *event.Event,
+	persistSession *session.Session,
 ) {
 	if loop == nil || agentEvent == nil || agentEvent.Response == nil {
 		return
@@ -1346,16 +1460,19 @@ func (r *runner) recordInterruptedAssistantDelta(
 	if !rsp.IsPartial || rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
 		return
 	}
+	acc := interruptedAssistantAccumulatorForSession(loop, persistSession)
+	if acc == nil {
+		return
+	}
 	responseID := rsp.ID
 	if responseID == "" {
-		responseID = loop.interruptedAssistantResponseID
+		responseID = acc.responseID
 	}
 	if responseID == "" {
 		responseID = "interrupted-assistant-" + uuid.NewString()
 	}
-	if loop.interruptedAssistantResponseID != "" &&
-		responseID != loop.interruptedAssistantResponseID {
-		loop.interruptedAssistantChoiceContent = nil
+	if acc.responseID != "" && responseID != acc.responseID {
+		acc.choiceContent = nil
 	}
 	recorded := false
 	for _, choice := range rsp.Choices {
@@ -1365,13 +1482,13 @@ func (r *runner) recordInterruptedAssistantDelta(
 		if choice.Delta.Content == "" {
 			continue
 		}
-		if loop.interruptedAssistantChoiceContent == nil {
-			loop.interruptedAssistantChoiceContent = make(map[int]*strings.Builder)
+		if acc.choiceContent == nil {
+			acc.choiceContent = make(map[int]*strings.Builder)
 		}
-		content := loop.interruptedAssistantChoiceContent[choice.Index]
+		content := acc.choiceContent[choice.Index]
 		if content == nil {
 			content = &strings.Builder{}
-			loop.interruptedAssistantChoiceContent[choice.Index] = content
+			acc.choiceContent[choice.Index] = content
 		}
 		content.WriteString(choice.Delta.Content)
 		recorded = true
@@ -1379,11 +1496,11 @@ func (r *runner) recordInterruptedAssistantDelta(
 	if !recorded {
 		return
 	}
-	loop.interruptedAssistantResponseID = responseID
-	loop.interruptedAssistantAuthor = agentEvent.Author
-	loop.interruptedAssistantInvocationID = agentEvent.InvocationID
+	acc.responseID = responseID
+	acc.author = agentEvent.Author
+	acc.invocationID = agentEvent.InvocationID
 	if rsp.Created > 0 {
-		loop.interruptedAssistantCreated = rsp.Created
+		acc.created = rsp.Created
 	}
 }
 
@@ -1401,55 +1518,78 @@ func (r *runner) safePersistInterruptedAssistant(ctx context.Context, loop *even
 func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoopContext) {
 	if ctx.Err() == nil ||
 		loop == nil ||
-		loop.sess == nil ||
 		!shouldPersistInterruptedAssistant(loop) {
-		return
-	}
-	interruptedEvent := r.interruptedAssistantEvent(ctx, loop)
-	if interruptedEvent == nil {
 		return
 	}
 	persistCtx, cancel := sessionPersistenceContext(ctx)
 	defer cancel()
-	interruptedEvent = r.applyEventPlugins(
-		persistCtx,
-		loop.invocation,
-		interruptedEvent,
-	)
-	if interruptedEvent == nil {
-		return
+	for _, acc := range loop.interruptedAssistants {
+		persistSession := acc.sess
+		if persistSession == nil {
+			persistSession = loop.sess
+		}
+		if persistSession == nil {
+			continue
+		}
+		interruptedEvent := r.interruptedAssistantEventForAccumulator(ctx, loop, acc)
+		if interruptedEvent == nil {
+			continue
+		}
+		interruptedEvent = r.applyEventPlugins(
+			persistCtx,
+			loop.invocation,
+			interruptedEvent,
+		)
+		if interruptedEvent == nil {
+			continue
+		}
+		if err := r.sessionService.AppendEvent(
+			persistCtx,
+			persistSession,
+			interruptedEvent,
+		); err != nil {
+			log.Errorf("Failed to append interrupted assistant event to session: %v", err)
+			continue
+		}
+		recordPersistedAssistantOnAccumulator(acc, interruptedEvent, true)
+		if sameSession(persistSession, loop.sess) {
+			r.recordPersistedAssistantEvent(loop, interruptedEvent, true)
+		}
 	}
-	if err := r.sessionService.AppendEvent(
-		persistCtx,
-		loop.sess,
-		interruptedEvent,
-	); err != nil {
-		log.Errorf("Failed to append interrupted assistant event to session: %v", err)
-		return
-	}
-	r.recordPersistedAssistantEvent(loop, interruptedEvent, true)
 }
 
 func (r *runner) interruptedAssistantEvent(
 	ctx context.Context,
 	loop *eventLoopContext,
 ) *event.Event {
-	choices := interruptedAssistantChoices(loop)
+	return r.interruptedAssistantEventForAccumulator(
+		ctx,
+		loop,
+		defaultInterruptedAssistantAccumulator(loop),
+	)
+}
+
+func (r *runner) interruptedAssistantEventForAccumulator(
+	ctx context.Context,
+	loop *eventLoopContext,
+	acc *interruptedAssistantAccumulator,
+) *event.Event {
+	choices := interruptedAssistantChoicesFromAccumulator(acc)
 	if len(choices) == 0 {
 		return nil
 	}
-	if r.interruptedAssistantAlreadyPersisted(loop, choices) {
+	if r.interruptedAssistantAlreadyPersistedForAccumulator(acc, choices) {
 		return nil
 	}
-	created := loop.interruptedAssistantCreated
+	created := acc.created
 	if created == 0 {
 		created = time.Now().Unix()
 	}
-	author := loop.interruptedAssistantAuthor
+	author := acc.author
 	if author == "" && loop.invocation != nil {
 		author = loop.invocation.AgentName
 	}
-	invocationID := loop.interruptedAssistantInvocationID
+	invocationID := acc.invocationID
 	if invocationID == "" && loop.invocation != nil {
 		invocationID = loop.invocation.InvocationID
 	}
@@ -1457,7 +1597,7 @@ func (r *runner) interruptedAssistantEvent(
 		invocationID,
 		author,
 		&model.Response{
-			ID:        loop.interruptedAssistantResponseID,
+			ID:        acc.responseID,
 			Object:    model.ObjectTypeChatCompletion,
 			Created:   created,
 			Done:      true,
@@ -1479,18 +1619,26 @@ func (r *runner) interruptedAssistantEvent(
 }
 
 func interruptedAssistantChoices(loop *eventLoopContext) []model.Choice {
-	if loop == nil || len(loop.interruptedAssistantChoiceContent) == 0 {
+	return interruptedAssistantChoicesFromAccumulator(
+		defaultInterruptedAssistantAccumulator(loop),
+	)
+}
+
+func interruptedAssistantChoicesFromAccumulator(
+	acc *interruptedAssistantAccumulator,
+) []model.Choice {
+	if acc == nil || len(acc.choiceContent) == 0 {
 		return nil
 	}
-	indexes := make([]int, 0, len(loop.interruptedAssistantChoiceContent))
-	for index := range loop.interruptedAssistantChoiceContent {
+	indexes := make([]int, 0, len(acc.choiceContent))
+	for index := range acc.choiceContent {
 		indexes = append(indexes, index)
 	}
 	sort.Ints(indexes)
 	finishReason := interruptedAssistantFinishReason
 	choices := make([]model.Choice, 0, len(indexes))
 	for _, index := range indexes {
-		content := loop.interruptedAssistantChoiceContent[index]
+		content := acc.choiceContent[index]
 		if content == nil || content.Len() == 0 {
 			continue
 		}
@@ -1507,11 +1655,21 @@ func (r *runner) interruptedAssistantAlreadyPersisted(
 	loop *eventLoopContext,
 	choices []model.Choice,
 ) bool {
-	if loop == nil {
+	return r.interruptedAssistantAlreadyPersistedForAccumulator(
+		defaultInterruptedAssistantAccumulator(loop),
+		choices,
+	)
+}
+
+func (r *runner) interruptedAssistantAlreadyPersistedForAccumulator(
+	acc *interruptedAssistantAccumulator,
+	choices []model.Choice,
+) bool {
+	if acc == nil {
 		return false
 	}
-	if loop.interruptedAssistantResponseID != "" {
-		if _, ok := loop.persistedAssistantResponseIDs[loop.interruptedAssistantResponseID]; ok {
+	if acc.responseID != "" {
+		if _, ok := acc.persistedAssistantResponseIDs[acc.responseID]; ok {
 			return true
 		}
 	}
@@ -1519,7 +1677,7 @@ func (r *runner) interruptedAssistantAlreadyPersisted(
 	if signature == "" {
 		return false
 	}
-	_, ok := loop.persistedAssistantChoiceSignatures[signature]
+	_, ok := acc.persistedAssistantChoiceSignatures[signature]
 	return ok
 }
 
@@ -2353,6 +2511,31 @@ func collectPriorAssistantResponseIDs(sess *session.Session) map[string]struct{}
 		responseIDs[responseID] = struct{}{}
 	}
 	return responseIDs
+}
+
+func collectPriorAssistantChoiceSignatures(sess *session.Session) map[string]struct{} {
+	if sess == nil || len(sess.Events) == 0 {
+		return nil
+	}
+	var signatures map[string]struct{}
+	for i := range sess.Events {
+		evt := &sess.Events[i]
+		if evt.Response == nil || evt.IsPartial {
+			continue
+		}
+		if isGraphCompletionEvent(evt) || !eventHasAssistantMessageContent(evt) {
+			continue
+		}
+		signature := assistantChoiceSignature(evt.Response.Choices)
+		if signature == "" {
+			continue
+		}
+		if signatures == nil {
+			signatures = make(map[string]struct{})
+		}
+		signatures[signature] = struct{}{}
+	}
+	return signatures
 }
 
 func baselineFinalResponseIDFromRuntimeState(runtimeState map[string]any) string {
