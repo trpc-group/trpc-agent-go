@@ -264,7 +264,12 @@ func (w *Workspace) SaveArtifact(
 		Save:          true,
 		Inline:        false,
 	})
-	if err != nil {
+	// ErrPartialOutputCommit means the artifact already landed in the
+	// service but some non-fatal post-commit work failed (e.g. cleanup
+	// or secondary inline read). Mirror tool/workspaceexec.SaveArtifact
+	// and continue so the caller still gets the persisted ref. Any
+	// other error is fatal.
+	if err != nil && !errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
 		return nil, err
 	}
 	if len(manifest.Files) == 0 {
@@ -296,6 +301,11 @@ func (w *Workspace) SaveArtifact(
 
 // StageInputs maps external inputs (artifact://, host://, workspace://,
 // skill://) into the workspace using the engine's StageInputs primitive.
+//
+// The artifact service and session metadata are forwarded through ctx
+// (matching SaveArtifact) so artifact:// inputs can resolve against the
+// invocation's artifact service. When the invocation does not carry
+// that info ctx is forwarded unchanged.
 func (w *Workspace) StageInputs(
 	ctx context.Context,
 	specs []codeexecutor.InputSpec,
@@ -306,11 +316,12 @@ func (w *Workspace) StageInputs(
 	if len(specs) == 0 {
 		return nil
 	}
-	eng, ws, err := w.bindWorkspace(ctx)
+	ctxIO := workspacefacade.WithArtifactContext(ctx)
+	eng, ws, err := w.bindWorkspace(ctxIO)
 	if err != nil {
 		return err
 	}
-	return eng.FS().StageInputs(ctx, ws, specs)
+	return eng.FS().StageInputs(ctxIO, ws, specs)
 }
 
 // RunProgram executes a program inside the current invocation's
@@ -319,11 +330,12 @@ func (w *Workspace) StageInputs(
 //
 // The returned error is non-nil only for framework-level failures
 // (no executor configured, backend rejection, launch error, internal
-// timeout). A non-zero exit code is signaled via RunResult.ExitCode
-// and is NOT an error — callers inspect ExitCode / TimedOut on the
-// returned RunResult and decide whether to fail, retry, or accept the
-// outcome themselves. This matches the convention used by Go's
-// os/exec.Cmd.Run and by the workspace_exec LLM tool.
+// timeout, or an out-of-workspace Cwd). A non-zero exit code is
+// signaled via RunResult.ExitCode and is NOT an error — callers
+// inspect ExitCode / TimedOut on the returned RunResult and decide
+// whether to fail, retry, or accept the outcome themselves. This
+// matches the convention used by Go's os/exec.Cmd.Run and by the
+// workspace_exec LLM tool.
 func (w *Workspace) RunProgram(
 	ctx context.Context,
 	spec codeexecutor.RunProgramSpec,
@@ -333,6 +345,17 @@ func (w *Workspace) RunProgram(
 			"workspaceio: workspace is nil",
 		)
 	}
+	// Normalize Cwd through the same containment policy used by the
+	// workspace_exec LLM tool so the godoc claim "cannot escape the
+	// workspace" is actually enforced, not left to each backend. The
+	// local runtime in particular happily joins ws.Path with
+	// filepath.Clean(spec.Cwd) and would otherwise let "../.." run
+	// outside the workspace.
+	cwd, err := workspacefacade.NormalizeWorkspaceCWD(spec.Cwd)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	spec.Cwd = cwd
 	eng, ws, err := w.bindWorkspace(ctx)
 	if err != nil {
 		return codeexecutor.RunResult{}, err

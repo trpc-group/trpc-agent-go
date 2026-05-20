@@ -1294,7 +1294,7 @@ func codeExecutorSupportsWorkspaceExecSessions(
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
-	ctx = a.withWorkspace(ctx)
+	ctx = a.withWorkspace(ctx, invocation)
 	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
 		invocation,
@@ -1463,25 +1463,30 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 
 // withWorkspace installs a workspaceio.Workspace into ctx so that
 // AgentCallbacks (BeforeAgent/AfterAgent/BeforeTool/AfterTool) observe
-// the same invocation workspace as workspace_exec. The helper is a
-// no-op when the agent has no code executor configured.
-func (a *LLMAgent) withWorkspace(ctx context.Context) context.Context {
+// the same invocation workspace as workspace_exec.
+//
+// The helper resolves the effective executor and registry the same
+// way InvocationToolSurface does — honoring an invocation-scoped
+// RunOptions.CodeExecutor override and only installing a facade when
+// the executor actually supports workspace execution. This keeps the
+// callback view and the workspace_exec tool view in lockstep across
+// run-options overrides; otherwise callbacks could read or write a
+// stale executor while the LLM tool uses the override.
+func (a *LLMAgent) withWorkspace(
+	ctx context.Context,
+	inv *agent.Invocation,
+) context.Context {
 	if a == nil {
-		return ctx
-	}
-	// a.codeExecutor / a.workspaceRegistry can be mutated under a.mu
-	// by tool refresh paths (refreshToolsLocked → workspaceRegistryForKeyLocked);
-	// snapshot under RLock to avoid a data race with concurrent Run().
-	a.mu.RLock()
-	exec := a.codeExecutor
-	reg := a.workspaceRegistry
-	a.mu.RUnlock()
-	if exec == nil {
 		return ctx
 	}
 	if _, ok := workspaceio.WorkspaceFromContext(ctx); ok {
 		return ctx
 	}
+	exec := a.codeExecutorForInvocation(inv)
+	if !codeExecutorSupportsWorkspaceExec(exec) {
+		return ctx
+	}
+	reg := a.workspaceRegistryForInvocation(inv, exec)
 	ws := workspaceio.New(exec, reg)
 	return workspaceio.WithWorkspace(ctx, ws)
 }

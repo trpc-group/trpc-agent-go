@@ -401,6 +401,140 @@ func TestRunProgram_RunnerNil(t *testing.T) {
 	require.Contains(t, err.Error(), "does not expose a program runner")
 }
 
+// stubFSExec implements codeexecutor.CodeExecutor + EngineProvider with
+// a caller-supplied Engine. Used to inject FS doubles below.
+type stubFSExec struct {
+	eng codeexecutor.Engine
+}
+
+func (s *stubFSExec) ExecuteCode(
+	context.Context, codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (s *stubFSExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{}
+}
+
+func (s *stubFSExec) Engine() codeexecutor.Engine { return s.eng }
+
+// partialCommitFS layers ErrPartialOutputCommit on top of a real
+// CollectOutputs response so the SaveArtifact "ignore partial commit
+// when artifact landed" branch can be exercised without reaching for a
+// backend that emits the error organically.
+type partialCommitFS struct {
+	codeexecutor.WorkspaceFS
+}
+
+func (p *partialCommitFS) CollectOutputs(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.OutputSpec,
+) (codeexecutor.OutputManifest, error) {
+	m, err := p.WorkspaceFS.CollectOutputs(ctx, ws, spec)
+	if err != nil {
+		return m, err
+	}
+	return m, codeexecutor.ErrPartialOutputCommit
+}
+
+// TestSaveArtifact_PartialCommitStillReturnsRef pins the contract that
+// ErrPartialOutputCommit is non-fatal: the artifact has already been
+// persisted and callers must still receive the ref. Mirrors the same
+// concession in tool/workspaceexec.SaveArtifactTool.Call.
+func TestSaveArtifact_PartialCommitStillReturnsRef(t *testing.T) {
+	rt := localexec.NewRuntime("")
+	fs := &partialCommitFS{WorkspaceFS: rt}
+	eng := codeexecutor.NewEngine(rt, fs, rt)
+	exec := &stubFSExec{eng: eng}
+
+	ws := New(exec, codeexecutor.NewWorkspaceRegistry())
+	svc := inmemory.NewService()
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{
+			ID: "sess-partial", AppName: "app", UserID: "user",
+		}),
+		agent.WithInvocationArtifactService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	require.NoError(t, ws.PutFiles(ctx, codeexecutor.PutFile{
+		Path: "out/done.txt", Content: []byte("ok"),
+	}))
+
+	ref, err := ws.SaveArtifact(ctx, "out/done.txt")
+	require.NoError(t, err,
+		"ErrPartialOutputCommit must not bubble up when the artifact has landed")
+	require.NotNil(t, ref)
+	require.Equal(t, "out/done.txt", ref.Path)
+	require.NotEmpty(t, ref.SavedAs)
+}
+
+// captureCtxStageFS snapshots the ctx that StageInputs receives without
+// touching the inner backend, so the test can pin "artifact service /
+// session info is forwarded to the backend".
+type captureCtxStageFS struct {
+	codeexecutor.WorkspaceFS
+	gotCtx context.Context
+}
+
+func (c *captureCtxStageFS) StageInputs(
+	ctx context.Context,
+	_ codeexecutor.Workspace,
+	_ []codeexecutor.InputSpec,
+) error {
+	c.gotCtx = ctx
+	return nil
+}
+
+// TestStageInputs_ForwardsArtifactContext pins the contract that
+// StageInputs prepares ctx with the invocation's artifact service /
+// session info, matching what SaveArtifact already does. Without this,
+// `artifact://` inputs can't resolve even though workspace acquisition
+// silently used them earlier in the same call.
+func TestStageInputs_ForwardsArtifactContext(t *testing.T) {
+	rt := localexec.NewRuntime("")
+	fs := &captureCtxStageFS{WorkspaceFS: rt}
+	eng := codeexecutor.NewEngine(rt, fs, rt)
+	exec := &stubFSExec{eng: eng}
+
+	ws := New(exec, codeexecutor.NewWorkspaceRegistry())
+	svc := inmemory.NewService()
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{
+			ID: "sess-stage", AppName: "app", UserID: "user",
+		}),
+		agent.WithInvocationArtifactService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	require.NoError(t, ws.StageInputs(ctx, []codeexecutor.InputSpec{
+		{From: "artifact://placeholder@1", To: "in/placeholder"},
+	}))
+	require.NotNil(t, fs.gotCtx, "FS.StageInputs must have been called")
+	gotSvc, ok := codeexecutor.ArtifactServiceFromContext(fs.gotCtx)
+	require.True(t, ok,
+		"ctx forwarded to backend StageInputs must carry artifact service")
+	require.Same(t, artifact.Service(svc), gotSvc)
+}
+
+// TestRunProgram_RejectsCwdEscape pins the godoc claim that spec.Cwd
+// cannot escape the workspace. The local runtime in particular joins
+// ws.Path with filepath.Clean(spec.Cwd) verbatim and would otherwise
+// honor "../..".
+func TestRunProgram_RejectsCwdEscape(t *testing.T) {
+	ws, ctx, _, _ := newHarness(t)
+	_, err := ws.RunProgram(ctx, codeexecutor.RunProgramSpec{
+		Cmd: "true",
+		Cwd: "../etc",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cwd must stay within the workspace")
+}
+
 // TestWithSaveArtifactMaxBytes_Applies verifies the option is wired
 // to SaveArtifactOptions.MaxBytes. The option is otherwise applied
 // inside an internal flow; checking the struct directly is the

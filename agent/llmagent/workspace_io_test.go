@@ -104,6 +104,47 @@ func TestLLMAgent_Run_PreservesExistingWorkspaceInContext(t *testing.T) {
 		"withWorkspace must not overwrite an already-installed Workspace")
 }
 
+// TestLLMAgent_Run_HonorsRunOptionsCodeExecutorForWorkspace pins the
+// contract that withWorkspace resolves the *effective* executor via
+// codeExecutorForInvocation — same as workspace_exec / skill_run.
+// Pre-fix, withWorkspace read a.codeExecutor unconditionally so when
+// the executor only came from RunOptions, callbacks saw no Workspace
+// even though the LLM tools used the override. Now they stay in sync.
+func TestLLMAgent_Run_HonorsRunOptionsCodeExecutorForWorkspace(t *testing.T) {
+	runExec := localexec.New()
+
+	var called, captureOK bool
+	cb := agent.NewCallbacks()
+	cb.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		called = true
+		_, captureOK = workspaceio.WorkspaceFromContext(ctx)
+		return nil, nil
+	})
+
+	a := New("agent", WithAgentCallbacks(cb)) // no WithCodeExecutor
+	a.flow = &mockFlow{done: true}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-runopts"),
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{
+			ID: "s1", AppName: "app", UserID: "user",
+		}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithCodeExecutor(runExec),
+		)),
+	)
+
+	events, err := a.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	require.True(t, called, "BeforeAgent must have run")
+	require.True(t, captureOK,
+		"withWorkspace must honor RunOptions.CodeExecutor for installing the facade")
+}
+
 func TestLLMAgent_Run_WithoutCodeExecutor_NoWorkspaceInContext(t *testing.T) {
 	// captureOK defaults to false, so require.False alone would also pass
 	// if the callback never ran. Pin "callback was invoked" explicitly via

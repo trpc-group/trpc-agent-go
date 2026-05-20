@@ -101,6 +101,85 @@ func IsAllowedPublishArtifactPath(rel string) bool {
 	}
 }
 
+// IsAllowedWorkspaceRoot reports whether rel resolves to one of the
+// workspace roots reachable for read/write/exec operations
+// (skills/, work/, out/, runs/). Looser than
+// IsAllowedPublishArtifactPath, which excludes skills/ because artifact
+// publishing must not target skill assets.
+func IsAllowedWorkspaceRoot(rel string) bool {
+	switch {
+	case rel == codeexecutor.DirSkills || strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
+		return true
+	case rel == codeexecutor.DirWork || strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
+		return true
+	case rel == codeexecutor.DirOut || strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
+		return true
+	case rel == codeexecutor.DirRuns || strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizeWorkspaceCWD canonicalises a working-directory string for
+// program execution against the current invocation's workspace. It is
+// the single source of truth for "is this Cwd safe?" — both the
+// workspace_exec LLM tool and Workspace.RunProgram forward to it so a
+// single rule set governs Cwd containment.
+//
+// Behavior:
+//   - empty / whitespace-only returns ".", meaning workspace root.
+//   - glob metacharacters are rejected.
+//   - $WORK / $OUT / $RUNS / $SKILLS env-prefixed paths are expanded
+//     to their workspace-relative form via codeexecutor.NormalizeGlobs.
+//   - absolute paths (leading "/") are stripped to workspace-relative
+//     and then checked against IsAllowedWorkspaceRoot.
+//   - relative paths that traverse out of the workspace ("..", "../*")
+//     are rejected outright.
+//   - any other relative path must resolve under
+//     IsAllowedWorkspaceRoot (skills/, work/, out/, runs/).
+func NormalizeWorkspaceCWD(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	s = strings.ReplaceAll(s, "\\", "/")
+	if s == "" {
+		return ".", nil
+	}
+	if HasGlobMeta(s) {
+		return "", errors.New("cwd must not contain glob patterns")
+	}
+	if IsWorkspaceEnvPath(s) {
+		out := codeexecutor.NormalizeGlobs([]string{s})
+		if len(out) == 0 {
+			return "", errors.New("invalid cwd")
+		}
+		s = out[0]
+	}
+	if strings.HasPrefix(s, "/") {
+		rel := strings.TrimPrefix(path.Clean(s), "/")
+		if rel == "" || rel == "." {
+			return ".", nil
+		}
+		if !IsAllowedWorkspaceRoot(rel) {
+			return "", fmt.Errorf("cwd must stay under workspace roots: %q", raw)
+		}
+		return rel, nil
+	}
+	rel := path.Clean(s)
+	if rel == "." {
+		return ".", nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", errors.New("cwd must stay within the workspace")
+	}
+	if !IsAllowedWorkspaceRoot(rel) {
+		return "", fmt.Errorf(
+			"cwd must stay under supported workspace roots such as work/, out/, or runs/: %q",
+			raw,
+		)
+	}
+	return rel, nil
+}
+
 const (
 	envVarPrefix = "$"
 	envVarLBrace = "${"
