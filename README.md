@@ -757,3 +757,102 @@ Licensed under the **Apache 2.0 License** - see [LICENSE](LICENSE) file for deta
 _Empowering developers to build the next generation of intelligent applications_
 
 </div>
+
+## ❓ FAQ (Frequently Asked Questions)
+
+### What is tRPC-Agent-Go?
+
+tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems using large language models (LLMs) and tools. It provides advanced hierarchical planners, multi-agent orchestration, persistent memory, and production-ready telemetry.
+
+### How does tRPC-Agent-Go differ from LangChain or LangGraph?
+
+| Feature | tRPC-Agent-Go | LangChain | LangGraph |
+|---------|---------------|-----------|-----------|
+| Language | Go | Python | Python |
+| Architecture | Hierarchical planners | Chain-based | Graph-based |
+| GraphAgent | Type-safe routing | N/A | Equivalent to LangGraph |
+| Performance | High-throughput, low-latency | Moderate | Moderate |
+| Telemetry | Built-in | Optional | Optional |
+
+### What are the key features?
+
+- **Intelligent Reasoning**: Hierarchical planners, multi-agent orchestration
+- **Rich Tool Ecosystem**: External APIs, databases, MCP protocol
+- **Persistent Memory**: Long-term state management
+- **Multi-Agent Collaboration**: Chain, parallel, graph workflows
+- **GraphAgent**: Type-safe graph workflows with multi-conditional routing
+- **Agent Skills**: Reusable `SKILL.md` workflows
+- **Artifacts**: Versioned storage for agent outputs
+- **Prompt Caching**: 90% cost savings on cached content
+- **Evaluation & Benchmarks**: Quality metrics over time
+- **Production Ready**: Telemetry, tracing, enterprise reliability
+
+### What use cases is it designed for?
+
+- Customer support bots with context understanding
+- Data analysis assistants (query, report, insights)
+- DevOps automation (deployment, monitoring, incident response)
+- Business process automation (multi-step workflows)
+- Research & knowledge management (RAG, Q&A)
+
+### What LLM providers are supported?
+
+Built-in support for major LLM providers via configurable runtime. MCP protocol enables integration with any LLM service.
+
+### How do I get started?
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go"
+
+// Create agent with memory
+memory := memorysvc.NewInMemoryService()
+agent := llmagent.New("assistant",
+    llmagent.WithTools(memory.Tools()),
+    llmagent.WithModel(model))
+```
+
+### What is GraphAgent?
+
+GraphAgent is tRPC-Agent-Go's type-safe graph workflow system, functionally equivalent to LangGraph for Go. It supports multi-conditional routing for complex agent workflows.
+
+### What is the MCP protocol support?
+
+MCP (Model Context Protocol) enables:
+- Tool integration via `mcptool.New(serverConn)`
+- External service connections
+- Standardized tool interface
+
+### How does multi-agent orchestration work?
+
+```go
+// Chain agents for sequential workflows
+pipeline := chainagent.New("pipeline",
+    chainagent.WithSubAgents([]agent.Agent{
+        analyzer, processor, reporter,
+    }))
+
+// Parallel execution
+parallel := parallelagent.New("concurrent",
+    parallelagent.WithSubAgents(tasks))
+```
+
+### What is the Agent Skills system?
+
+Skills are reusable `SKILL.md` workflows with safe execution. They enable:
+- Workflow documentation in markdown
+- Reusable task patterns
+- Safe execution boundaries
+
+### Is there documentation?
+
+Yes: https://trpc-group.github.io/trpc-agent-go/
+
+### License
+
+Apache-2.0 (see LICENSE file)
+
+### Help Resources
+
+- 📖 Documentation: https://trpc-group.github.io/trpc-agent-go/
+- 💬 Discussions: https://github.com/trpc-group/trpc-agent-go/discussions
+- 🐛 Issues: https://github.com/trpc-group/trpc-agent-go/issues
