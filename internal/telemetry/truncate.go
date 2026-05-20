@@ -165,7 +165,7 @@ func truncateTelemetryBytes(b []byte, limit int) []byte {
 }
 
 // truncateTelemetryToolCalls returns a copy of tool calls with bounded raw
-// argument payloads.
+// argument payloads and without provider-specific extra fields.
 func truncateTelemetryToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
 	if toolCalls == nil {
 		return nil
@@ -174,6 +174,7 @@ func truncateTelemetryToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
 	for i, toolCall := range toolCalls {
 		out[i] = toolCall
 		out[i].Function.Arguments = truncateTelemetryRawBytes(toolCall.Function.Arguments)
+		out[i].ExtraFields = nil
 	}
 	return out
 }

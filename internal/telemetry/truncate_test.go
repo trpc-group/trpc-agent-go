@@ -91,6 +91,9 @@ func TestTruncateTelemetryModelMessageBoundsNestedPayloads(t *testing.T) {
 				Name:      "tool",
 				Arguments: largeRaw,
 			},
+			ExtraFields: map[string]any{
+				"thought_signature": largeString,
+			},
 		}},
 	}
 
@@ -126,10 +129,12 @@ func TestTruncateTelemetryModelMessageBoundsNestedPayloads(t *testing.T) {
 
 	require.Len(t, got.ToolCalls, 1)
 	require.Contains(t, string(got.ToolCalls[0].Function.Arguments), "truncated")
+	require.Nil(t, got.ToolCalls[0].ExtraFields)
 	require.Equal(t, largeString, msg.Content)
 	require.Equal(t, largeString, msg.ReasoningContent)
 	require.Equal(t, largeBinary, msg.ContentParts[1].Image.Data)
 	require.Equal(t, largeRaw, msg.ToolCalls[0].Function.Arguments)
+	require.Equal(t, largeString, msg.ToolCalls[0].ExtraFields["thought_signature"])
 }
 
 func TestTruncateTelemetryBoundaries(t *testing.T) {
