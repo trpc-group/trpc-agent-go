@@ -11,7 +11,6 @@ package runner
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -20,6 +19,7 @@ import (
 
 const (
 	errAGUIToolNameRequired        = "agui tool name is required"
+	errAGUIToolNameRequiredAt      = "agui tool[%d]: %s"
 	errConvertAGUIToolParameters   = "convert agui tool[%d] %q parameters: %w"
 	errMarshalAGUIToolParameters   = "marshal agui tool parameters"
 	errUnmarshalAGUIToolParameters = "unmarshal agui tool parameters"
@@ -39,7 +39,11 @@ func ExternalToolsFromRunAgentInput(
 	tools := make([]agenttool.Tool, 0, len(input.Tools))
 	for i, inputTool := range input.Tools {
 		if inputTool.Name == "" {
-			return nil, errors.New(errAGUIToolNameRequired)
+			return nil, fmt.Errorf(
+				errAGUIToolNameRequiredAt,
+				i,
+				errAGUIToolNameRequired,
+			)
 		}
 		schema, err := aguiToolParametersToSchema(inputTool.Parameters)
 		if err != nil {

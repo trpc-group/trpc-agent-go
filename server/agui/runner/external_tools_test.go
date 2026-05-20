@@ -20,6 +20,7 @@ import (
 )
 
 const errBadMarshalValue = "bad marshal value"
+const errToolIndexZero = "tool[0]"
 
 type badMarshalValue struct{}
 
@@ -107,6 +108,8 @@ func TestExternalToolsFromRunAgentInputRejectsEmptyName(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, tools)
+	assert.ErrorContains(t, err, errToolIndexZero)
+	assert.ErrorContains(t, err, errAGUIToolNameRequired)
 }
 
 func TestExternalToolsFromRunAgentInputReportsMarshalError(t *testing.T) {
@@ -123,6 +126,7 @@ func TestExternalToolsFromRunAgentInputReportsMarshalError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, tools)
+	assert.ErrorContains(t, err, errToolIndexZero)
 	assert.ErrorContains(t, err, errMarshalAGUIToolParameters)
 	assert.ErrorContains(t, err, toolName)
 	assert.ErrorContains(t, err, errBadMarshalValue)
@@ -146,6 +150,7 @@ func TestExternalToolsFromRunAgentInputReportsUnmarshalError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, tools)
+	assert.ErrorContains(t, err, errToolIndexZero)
 	assert.ErrorContains(t, err, errUnmarshalAGUIToolParameters)
 	assert.ErrorContains(t, err, toolName)
 }
