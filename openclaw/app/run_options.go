@@ -196,6 +196,8 @@ type runOptions struct {
 	SkillsToolingGuide  *string
 	StateDir            string
 
+	EvolutionHumanGate string
+
 	DebugRecorderEnabled bool
 	DebugRecorderDir     string
 	DebugRecorderMode    string
@@ -939,6 +941,8 @@ type fileConfig struct {
 
 	Session *sessionConfig `yaml:"session,omitempty"`
 	Memory  *memoryConfig  `yaml:"memory,omitempty"`
+
+	Evolution *evolutionConfig `yaml:"evolution,omitempty"`
 }
 
 type httpConfig struct {
@@ -1111,6 +1115,12 @@ type memoryConfig struct {
 	Limit   *int         `yaml:"limit,omitempty"`
 	Auto    *memoryAuto  `yaml:"auto,omitempty"`
 	Config  *rawYAMLNode `yaml:"config,omitempty"`
+}
+
+type evolutionConfig struct {
+	// HumanGate controls the human approval gate for skill revisions.
+	// Values: "always" (hold all), "create" (hold new skills only), "" (disabled).
+	HumanGate *string `yaml:"human_gate,omitempty"`
 }
 
 type knowledgesConfig struct {
@@ -1736,6 +1746,12 @@ func (cfg *fileConfig) apply(
 		}
 		if cfg.Memory.Config != nil {
 			opts.MemoryConfig = cfg.Memory.Config.Node
+		}
+	}
+
+	if cfg.Evolution != nil {
+		if cfg.Evolution.HumanGate != nil {
+			opts.EvolutionHumanGate = strings.TrimSpace(*cfg.Evolution.HumanGate)
 		}
 	}
 

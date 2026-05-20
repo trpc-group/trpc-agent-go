@@ -38,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -407,6 +408,8 @@ func Main(args []string) int {
 			return runInspect(args[1:])
 		case subcmdBootstrap:
 			return runBootstrap(args[1:])
+		case subcmdEvolution:
+			return runEvolution(args[1:])
 		}
 	}
 
@@ -644,6 +647,7 @@ type Runtime struct {
 	cronSvc           closeFunc
 	subagentSvc       closeFunc
 	skillsWatch       closeFunc
+	evolutionService  evolution.Service
 	toolSets          []tool.ToolSet
 	telemetryShutdown func(context.Context) error
 }
@@ -1091,6 +1095,13 @@ func NewRuntimeWithOptions(
 			runnerOpts,
 			runner.WithRalphLoop(*rlCfg),
 		)
+	}
+
+	// Evolution: if skills repo exists, wire up the async learning loop.
+	evoSvc := maybeCreateEvolutionService(opts, skillsRepo)
+	if evoSvc != nil {
+		runnerOpts = append(runnerOpts, runner.WithEvolutionService(evoSvc))
+		rt.evolutionService = evoSvc
 	}
 
 	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
@@ -1600,6 +1611,10 @@ func run(ctx context.Context, args []string) error {
 			runnerOpts,
 			runner.WithRalphLoop(*rlCfg),
 		)
+	}
+	evoSvc := maybeCreateEvolutionService(opts, skillsRepo)
+	if evoSvc != nil {
+		runnerOpts = append(runnerOpts, runner.WithEvolutionService(evoSvc))
 	}
 	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 
