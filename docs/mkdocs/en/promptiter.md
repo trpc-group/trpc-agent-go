@@ -455,6 +455,9 @@ type RunRequest struct {
 	Teacher              runner.Runner       // Teacher is the Runner used to generate reference answers when needed.
 	Judge                runner.Runner       // Judge is the Runner used by judge-style metrics when needed.
 	EvaluationOptions    EvaluationOptions   // EvaluationOptions defines evaluation execution parameters.
+	BackwardOptions      BackwardOptions     // BackwardOptions defines backward-stage execution parameters.
+	AggregationOptions   AggregationOptions  // AggregationOptions defines aggregation-stage execution parameters.
+	OptimizerOptions     OptimizerOptions    // OptimizerOptions defines optimizer-stage execution parameters.
 	AcceptancePolicy     AcceptancePolicy    // AcceptancePolicy defines how acceptance is decided.
 	StopPolicy           StopPolicy          // StopPolicy defines when the run should stop.
 	MaxRounds            int                 // MaxRounds is the maximum number of optimization rounds.
@@ -526,6 +529,45 @@ type EvaluationOptions struct {
 ```
 
 Its semantics stay aligned with Evaluation. PromptIter directly reuses the Evaluation concurrency model and fixes execution to a single run internally.
+
+#### BackwardOptions
+
+`BackwardOptions` controls concurrency in the backward stage. By default, train cases run backward serially.
+
+```go
+type BackwardOptions struct {
+	CaseParallelismEnabled bool // CaseParallelismEnabled controls whether train cases run backward in parallel.
+	CaseParallelism        int  // CaseParallelism is the upper bound of parallel backward cases.
+}
+```
+
+When `CaseParallelismEnabled` is enabled, PromptIter runs backward in parallel across train cases. A `CaseParallelism` value of `0` uses `GOMAXPROCS` as the default parallelism; a negative value makes `Engine` return an argument error.
+
+#### AggregationOptions
+
+`AggregationOptions` controls concurrency in the gradient aggregation stage. By default, target surfaces are aggregated serially.
+
+```go
+type AggregationOptions struct {
+	SurfaceParallelismEnabled bool // SurfaceParallelismEnabled controls whether target surfaces are aggregated in parallel.
+	SurfaceParallelism        int  // SurfaceParallelism is the upper bound of parallel aggregation surfaces.
+}
+```
+
+When `SurfaceParallelismEnabled` is enabled, PromptIter aggregates gradients in parallel across target surfaces. A `SurfaceParallelism` value of `0` uses `GOMAXPROCS` as the default parallelism; a negative value makes `Engine` return an argument error.
+
+#### OptimizerOptions
+
+`OptimizerOptions` controls concurrency in the optimizer stage that generates patch candidates. By default, target surfaces are optimized serially.
+
+```go
+type OptimizerOptions struct {
+	SurfaceParallelismEnabled bool // SurfaceParallelismEnabled controls whether target surfaces are optimized in parallel.
+	SurfaceParallelism        int  // SurfaceParallelism is the upper bound of parallel optimization surfaces.
+}
+```
+
+When `SurfaceParallelismEnabled` is enabled, PromptIter generates patch candidates in parallel across target surfaces. A `SurfaceParallelism` value of `0` uses `GOMAXPROCS` as the default parallelism; a negative value makes `Engine` return an argument error.
 
 #### AcceptancePolicy And StopPolicy
 

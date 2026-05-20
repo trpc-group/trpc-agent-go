@@ -13,11 +13,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
 )
+
+// AggregationOptions configures aggregation-stage execution behavior.
+type AggregationOptions struct {
+	// SurfaceParallelismEnabled enables concurrent aggregation across target surfaces.
+	SurfaceParallelismEnabled bool
+	// SurfaceParallelism caps concurrent aggregation across target surfaces when SurfaceParallelismEnabled is true. Zero uses GOMAXPROCS.
+	SurfaceParallelism int
+}
 
 // AggregationResult groups all surfaces after sample gradient merge.
 type AggregationResult struct {
@@ -30,6 +39,7 @@ func (e *engine) aggregate(
 	structure *structureState,
 	backward *BackwardResult,
 	targetSurfaceSet targetSurfaceSet,
+	options AggregationOptions,
 ) (*AggregationResult, error) {
 	if e.aggregator == nil {
 		return nil, errors.New("aggregator is nil")
@@ -58,10 +68,19 @@ func (e *engine) aggregate(
 	result := &AggregationResult{
 		Surfaces: make([]promptiter.AggregatedSurfaceGradient, 0, len(surfaceIDs)),
 	}
-	for _, surfaceID := range surfaceIDs {
+	surfaces := make([]promptiter.AggregatedSurfaceGradient, len(surfaceIDs))
+	parallelism := 0
+	if options.SurfaceParallelismEnabled {
+		parallelism = options.SurfaceParallelism
+		if parallelism <= 0 {
+			parallelism = runtime.GOMAXPROCS(0)
+		}
+	}
+	if err := runIndexedParallel(ctx, len(surfaceIDs), parallelism, func(ctx context.Context, index int) error {
+		surfaceID := surfaceIDs[index]
 		surface, ok := structure.surfaceIndex[surfaceID]
 		if !ok {
-			return nil, fmt.Errorf("aggregated surface id %q is unknown", surfaceID)
+			return fmt.Errorf("aggregated surface id %q is unknown", surfaceID)
 		}
 		response, err := e.aggregator.Aggregate(ctx, &aggregator.Request{
 			SurfaceID: surfaceID,
@@ -70,12 +89,16 @@ func (e *engine) aggregate(
 			Gradients: grouped[surfaceID],
 		})
 		if err != nil {
-			return nil, fmt.Errorf("aggregate surface %q: %w", surfaceID, err)
+			return fmt.Errorf("aggregate surface %q: %w", surfaceID, err)
 		}
 		if response == nil || response.Gradient == nil {
-			return nil, fmt.Errorf("aggregate surface %q returned empty result", surfaceID)
+			return fmt.Errorf("aggregate surface %q returned empty result", surfaceID)
 		}
-		result.Surfaces = append(result.Surfaces, *response.Gradient)
+		surfaces[index] = *response.Gradient
+		return nil
+	}); err != nil {
+		return nil, err
 	}
+	result.Surfaces = append(result.Surfaces, surfaces...)
 	return result, nil
 }

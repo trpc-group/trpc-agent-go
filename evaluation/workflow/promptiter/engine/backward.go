@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -22,6 +23,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
 	iloss "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/loss"
 )
+
+// BackwardOptions configures backward-stage execution behavior.
+type BackwardOptions struct {
+	// CaseParallelismEnabled enables concurrent backward processing across eval cases.
+	CaseParallelismEnabled bool
+	// CaseParallelism caps concurrent backward processing across eval cases when CaseParallelismEnabled is true. Zero uses GOMAXPROCS.
+	CaseParallelism int
+}
 
 // CaseBackwardResult stores all step gradients produced for one eval case.
 type CaseBackwardResult struct {
@@ -46,6 +55,7 @@ func (e *engine) backward(
 	train *EvaluationResult,
 	losses []promptiter.CaseLoss,
 	targetSurfaceSet targetSurfaceSet,
+	options BackwardOptions,
 ) (*BackwardResult, error) {
 	if e.backwarder == nil {
 		return nil, errors.New("backwarder is nil")
@@ -55,14 +65,23 @@ func (e *engine) backward(
 	}
 	caseIndex := indexCaseResults(train)
 	overrideIndex := buildOverrideIndex(profile)
+	caseResults := make([]*CaseBackwardResult, len(losses))
 	result := &BackwardResult{
 		Cases: make([]CaseBackwardResult, 0, len(losses)),
 	}
-	for _, caseLoss := range losses {
+	parallelism := 0
+	if options.CaseParallelismEnabled {
+		parallelism = options.CaseParallelism
+		if parallelism <= 0 {
+			parallelism = runtime.GOMAXPROCS(0)
+		}
+	}
+	if err := runIndexedParallel(ctx, len(losses), parallelism, func(ctx context.Context, index int) error {
+		caseLoss := losses[index]
 		caseKey := caseResultKey{evalSetID: caseLoss.EvalSetID, evalCaseID: caseLoss.EvalCaseID}
 		evalCase, ok := caseIndex[caseKey]
 		if !ok {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"eval case %q from eval set %q is missing from training result",
 				caseLoss.EvalCaseID,
 				caseLoss.EvalSetID,
@@ -70,8 +89,14 @@ func (e *engine) backward(
 		}
 		caseResult, err := e.backwardCase(ctx, structure, overrideIndex, evalCase, caseLoss, targetSurfaceSet)
 		if err != nil {
-			return nil, err
+			return err
 		}
+		caseResults[index] = caseResult
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	for _, caseResult := range caseResults {
 		if caseResult == nil {
 			continue
 		}

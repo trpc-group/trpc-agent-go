@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"slices"
 
+	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
@@ -48,6 +49,12 @@ type RunRequest struct {
 	Judge runner.Runner
 	// EvaluationOptions configures how training and validation runs are executed.
 	EvaluationOptions EvaluationOptions
+	// BackwardOptions configures backward-stage execution.
+	BackwardOptions BackwardOptions
+	// AggregationOptions configures aggregation-stage execution.
+	AggregationOptions AggregationOptions
+	// OptimizerOptions configures optimizer-stage execution.
+	OptimizerOptions OptimizerOptions
 	// AcceptancePolicy controls minimum quality gain required to accept patching.
 	AcceptancePolicy AcceptancePolicy
 	// StopPolicy controls termination conditions between rounds.
@@ -319,6 +326,12 @@ func (e *engine) validateRunRequest(request *RunRequest) error {
 		return errors.New("max rounds must be greater than 0")
 	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
+	case request.BackwardOptions.CaseParallelism < 0:
+		return errors.New("backward case parallelism must be non-negative")
+	case request.AggregationOptions.SurfaceParallelism < 0:
+		return errors.New("aggregation surface parallelism must be non-negative")
+	case request.OptimizerOptions.SurfaceParallelism < 0:
+		return errors.New("optimizer surface parallelism must be non-negative")
 	case e.targetAgent == nil:
 		return errors.New("target agent is nil")
 	case e.agentEvaluator == nil:
@@ -379,7 +392,15 @@ func (e *engine) executeRound(
 	if err := appendRunEvent(ctx, observer, EventKindRoundLosses, roundNumber, losses); err != nil {
 		return nil, 0, err
 	}
-	backwardResult, err := e.backward(ctx, structure, acceptedProfile, trainResult, losses, targetSurfaceSet)
+	backwardResult, err := e.backward(
+		ctx,
+		structure,
+		acceptedProfile,
+		trainResult,
+		losses,
+		targetSurfaceSet,
+		request.BackwardOptions,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("backward round %d: %w", roundNumber, err)
 	}
@@ -387,7 +408,13 @@ func (e *engine) executeRound(
 	if err := appendRunEvent(ctx, observer, EventKindRoundBackward, roundNumber, backwardResult); err != nil {
 		return nil, 0, err
 	}
-	aggregationResult, err := e.aggregate(ctx, structure, backwardResult, targetSurfaceSet)
+	aggregationResult, err := e.aggregate(
+		ctx,
+		structure,
+		backwardResult,
+		targetSurfaceSet,
+		request.AggregationOptions,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("aggregate round %d: %w", roundNumber, err)
 	}
@@ -395,7 +422,14 @@ func (e *engine) executeRound(
 	if err := appendRunEvent(ctx, observer, EventKindRoundAggregation, roundNumber, aggregationResult); err != nil {
 		return nil, 0, err
 	}
-	patchSet, err := e.optimize(ctx, structure, acceptedProfile, aggregationResult, targetSurfaceSet)
+	patchSet, err := e.optimize(
+		ctx,
+		structure,
+		acceptedProfile,
+		aggregationResult,
+		targetSurfaceSet,
+		request.OptimizerOptions,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("optimize round %d: %w", roundNumber, err)
 	}
@@ -472,4 +506,45 @@ func validateEvalSetInputs(role string, inputs []EvalSetInput) error {
 		}
 	}
 	return nil
+}
+
+func runIndexedParallel(
+	ctx context.Context,
+	count int,
+	parallelism int,
+	fn func(context.Context, int) error,
+) error {
+	if parallelism <= 1 || count <= 1 {
+		for index := range count {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := fn(ctx, index); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	group, groupCtx := errgroup.WithContext(ctx)
+	indexErrors := make([]error, count)
+	group.SetLimit(parallelism)
+	for index := range count {
+		if err := groupCtx.Err(); err != nil {
+			break
+		}
+		index := index
+		group.Go(func() error {
+			if err := groupCtx.Err(); err != nil {
+				return err
+			}
+			if err := fn(groupCtx, index); err != nil {
+				indexErrors[index] = err
+				return err
+			}
+			return nil
+		})
+	}
+	waitErr := group.Wait()
+	indexErrors = append(indexErrors, waitErr, ctx.Err())
+	return errors.Join(indexErrors...)
 }
