@@ -145,6 +145,28 @@ Common paths:
 - write intermediate files to `work/`
 - write result files to `out/`
 
+## What Persists Across Turns
+
+There are two important cases:
+
+- the request lands on the same physical workspace
+- the request lands on a fresh workspace
+
+In the same physical workspace:
+
+- files in `work/` and `out/` are usually still available
+- result files can often be read again directly
+
+In a fresh workspace:
+
+- conversation file inputs can usually be re-staged from visible message
+  history
+- old `out/**` files are not restored automatically
+- old `work/**` files should not be assumed to exist
+
+If a file must survive beyond a fresh workspace, store it as an artifact or
+persist it explicitly in your application layer.
+
 ## Where Uploaded Files Appear
 
 On execution paths that support conversation-file auto-staging, the framework
@@ -184,7 +206,7 @@ msg.AddFileIDWithName("artifact://uploads/report.pdf@1", "report.pdf")
 Before execution, the framework resolves that reference and writes the file
 under `work/inputs/`.
 
-## Example: Upload to Artifact First
+### End-to-end example: upload first, stage at execution time
 
 This example shows the full flow for uploading a file first and letting the
 executor stage it automatically later:
@@ -282,6 +304,18 @@ Requirement:
 Otherwise the framework will not find the artifact when resolving the
 `artifact://...` reference.
 
+## Provider File IDs vs Artifact References
+
+Some providers support native `file_id` values. Whether those IDs can be
+downloaded back by the executor depends on the model integration.
+
+If executor-side access must be reliable, prefer:
+
+- `artifact://...`
+
+This path is managed by the framework's artifact service and does not depend on
+provider-specific file download support.
+
 ## How Tools Usually Use These Files
 
 When your Agent exposes workspace tools such as `workspace_exec`, the common
@@ -361,39 +395,299 @@ need to duplicate skill sources in init hook `Inputs`; init hooks cover
 session-independent files and setup commands you want present before any tool
 run.
 
-## What Persists Across Turns
+## Accessing the Workspace From Application Code
 
-There are two important cases:
+The model drives the workspace through `workspace_exec`. Application
+code sometimes needs to read what the agent just produced — mirroring
+files at agreed paths into a profile store from `AfterAgent`, or
+harvesting intermediate output of a specific tool from `AfterTool`;
+some scenarios also need to run a command from a callback for
+validation or post-processing.
 
-- the request lands on the same physical workspace
-- the request lands on a fresh workspace
+`codeexecutor/workspaceio` exposes a single facade, `Workspace`. Once
+`WithCodeExecutor(...)` is configured, `LLMAgent.Run` installs it into
+`ctx` at entry, so any callback or tool that receives a `ctx` can
+resolve it — `BeforeAgent` / `AfterAgent` / `BeforeTool` / `AfterTool`
+/ `BeforeModel` / `AfterModel` / your own tool's `Run`.
 
-In the same physical workspace:
+It is a thin wrapper over `codeexecutor.WorkspaceFS` plus
+`ProgramRunner`: the framework does not enforce truncation, volume,
+atomicity, or non-zero-exit handling for you. How to validate after a
+read, when to refuse on overflow, what to do when a command exits
+non-zero — that all lives in your callback. See *Caller-owned policy*
+below.
 
-- files in `work/` and `out/` are usually still available
-- result files can often be read again directly
+> **About the name collision with `codeexecutor.Workspace`:** the
+> latter is a v1-published workspace descriptor (`{ID, Path}`, no
+> methods); this section's `Workspace` is the facade. The two are
+> disambiguated by import path; business code rarely references both
+> in the same file. When it does, use an import alias:
+>
+> ```go
+> import (
+>     "trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+>     wsio "trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
+> )
+> ```
 
-In a fresh workspace:
+### Read and write inside callbacks
 
-- conversation file inputs can usually be re-staged from visible message
-  history
-- old `out/**` files are not restored automatically
-- old `work/**` files should not be assumed to exist
+There are two recommended use patterns for `Workspace`:
 
-If a file must survive beyond a fresh workspace, store it as an artifact or
-persist it explicitly in your application layer.
+- **`AfterAgent`**: when the whole turn is done, mirror the artifacts
+  at agreed paths (`skills/*/SKILL.md`, `out/report.pdf`, ...) back
+  into your own store. Skip on failure since the workspace state
+  cannot be trusted.
+- **`AfterTool` gated on `args.ToolName`**: when you only care about
+  the artifacts produced by a specific tool (for example, mirroring
+  files written by `workspace_exec`, or harvesting intermediate output
+  of a custom skill tool), filter by tool name first so unrelated tool
+  calls do not trigger a `Collect`.
 
-## Provider File IDs vs Artifact References
+`myStore.Save(...)` and `mirror(ctx, files)` in the snippets below are
+interfaces you implement; the docs do not pin their signatures.
 
-Some providers support native `file_id` values. Whether those IDs can be
-downloaded back by the executor depends on the model integration.
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
 
-If executor-side access must be reliable, prefer:
+agentCB := agent.NewCallbacks()
+agentCB.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if args.Error != nil {
+        return nil, nil // workspace state is unreliable on failure
+    }
+    ws, ok := workspaceio.WorkspaceFromContext(ctx)
+    if !ok {
+        return nil, nil
+    }
+    files, err := ws.Collect(ctx, "skills/*/SKILL.md")
+    if err != nil {
+        return nil, err
+    }
+    for _, f := range files {
+        if f.Truncated {
+            return nil, fmt.Errorf("%s was truncated by the backend", f.Path)
+        }
+        if err := myStore.Save(ctx, args.Invocation, f); err != nil {
+            return nil, err
+        }
+    }
+    return nil, nil
+})
 
-- `artifact://...`
+toolCB := tool.NewCallbacks()
+toolCB.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+    // Only mirror after the target tool finishes; avoids scanning the
+    // workspace after every unrelated tool call.
+    if args.ToolName != "workspace_exec" {
+        return nil, nil
+    }
+    ws, ok := workspaceio.WorkspaceFromContext(ctx)
+    if !ok {
+        return nil, nil
+    }
+    files, err := ws.Collect(ctx, "out/**/*.json")
+    if err != nil {
+        return nil, err
+    }
+    return nil, mirror(ctx, files)
+})
 
-This path is managed by the framework's artifact service and does not depend on
-provider-specific file download support.
+agent := llmagent.New("demo",
+    llmagent.WithCodeExecutor(local.New()),
+    llmagent.WithAgentCallbacks(agentCB),
+    llmagent.WithToolCallbacks(toolCB),
+)
+```
+
+> Avoid using `BeforeAgent` + `PutFiles` to project external profile
+> or skill files into the workspace. That is workspace-initialization
+> work and belongs in `codeexecutor.WorkspaceInitHook` (see the
+> *Workspace init hooks* section above — use `InputSpec` with
+> `skill://` / `artifact://` / `host://` schemes to stage everything
+> at workspace creation time). `Workspace` exists for "read what the
+> agent produced", "promote a workspace file to an artifact", and
+> "run a one-off command for validation/post-processing", not for the
+> initialization path.
+
+### Available methods (every `path` is relative to the workspace root)
+
+- `Collect(ctx, patterns...)` — read every file matching one of the
+  patterns, returning `[]*File` (`Path`, `Data`, `MIMEType`,
+  `SizeBytes`, `Truncated`). Pattern syntax matches
+  `codeexecutor.WorkspaceFS.Collect` exactly: a literal path
+  (`skills/echoer/SKILL.md`), a wildcard (`out/*.json`), or a recursive
+  glob (`runs/**/result.md`). Single-file reads use the same entry
+  point — pass a literal pattern and take `result[0]`.
+- `PutFiles(ctx, files...)` — write 1..N `codeexecutor.PutFile`
+  values; parent directories are created automatically. Single-file
+  writes use the same entry point (pass one `PutFile`).
+  `PutFile.Mode == 0` falls back to the backend default (0o644 on
+  local); use `codeexecutor.DefaultExecFileMode` when you need 0o755.
+- `SaveArtifact(ctx, relPath, opts...)` — persist a workspace file as
+  an artifact (the `Runner` must be configured with an
+  `artifact.Service`); returns `*ArtifactRef`.
+- `StageInputs(ctx, specs)` — batch-stage external inputs identified
+  by `artifact://`, `host://`, `workspace://`, or `skill://` URIs.
+- `RunProgram(ctx, spec)` — run a program inside the workspace
+  (`spec.Cwd` is interpreted relative to the workspace root and
+  cannot escape it); returns `codeexecutor.RunResult` (`Stdout`,
+  `Stderr`, `ExitCode`, `Duration`, `TimedOut`). **A non-zero exit
+  code is NOT an error**, matching Go's `os/exec` convention — the
+  caller inspects `RunResult.ExitCode` / `TimedOut` and decides
+  whether to fail, retry, or accept. The returned `error` is reserved
+  for framework-level failures (no executor configured, backend
+  rejection, launch failure, internal timeout).
+
+`Workspace` has no internal locking; serialize calls yourself when
+ordering matters.
+
+### How to fill `Cmd` / `Args` in `RunProgram`
+
+`Cmd` is the executable name (**no shell parsing**); `Args` is the
+argument list. The `workspace_exec` LLM tool goes through the same
+`ProgramRunner.RunProgram` underneath — two patterns cover most needs.
+
+**Run a shell one-liner** (identical to how `workspace_exec` runs LLM
+commands):
+
+```go
+res, err := ws.RunProgram(ctx, codeexecutor.RunProgramSpec{
+    Cmd:     "sh",
+    Args:    []string{"-lc", "ls -la work && cat out/report.md"},
+    Cwd:     "",                  // empty == workspace root
+    Timeout: 30 * time.Second,
+})
+if err != nil {
+    return err
+}
+if res.ExitCode != 0 || res.TimedOut {
+    return fmt.Errorf("post-check failed: exit=%d timed_out=%v: %s",
+        res.ExitCode, res.TimedOut, res.Stderr)
+}
+```
+
+**Invoke a program directly** (no shell — zero argument escaping,
+more deterministic):
+
+```go
+res, err := ws.RunProgram(ctx, codeexecutor.RunProgramSpec{
+    Cmd:  "go",
+    Args: []string{"vet", "./..."},
+    Cwd:  "work",                 // run inside ${WORK}
+    Env:  map[string]string{"GOFLAGS": "-count=1"}, // appended/overridden, not a replacement
+})
+```
+
+Other fields:
+
+- `Stdin` — string piped to the process stdin once at startup, then
+  closed; use the `workspace_exec` LLM tool (or your own session) for
+  interactive programs.
+- `Timeout` — wall-clock timeout for the single run; on hit
+  `RunResult.TimedOut = true` while `error` stays `nil`.
+- `Env` — appended to / overriding environment variables; the
+  workspace already injects `${WORK}` / `${OUT}` / `${RUNS}` /
+  `${WORKSPACE_DIR}`, which you can reference directly in `Args`.
+
+### `*File`: what a read returns
+
+`Collect` returns a backend-agnostic snapshot per file:
+
+```go
+type File struct {
+    Path      string // workspace-relative, e.g. "skills/echoer/SKILL.md"
+    Data      []byte // copied bytes; callers may mutate
+    MIMEType  string // backend-detected; empty when the backend did not set it
+    SizeBytes int64  // actual file size; may exceed len(Data) when Truncated
+    Truncated bool   // backend hit its read cap; the framework does not error
+}
+```
+
+Two real uses:
+
+- **Mirror to external storage**: `os.WriteFile(dst, f.Data, 0o644)` /
+  `s3.PutObject(key, bytes.NewReader(f.Data))`. `f.Path` doubles as
+  the destination key or sub-path.
+- **Structural validation**: `bytes.Contains(f.Data, []byte("# "))`,
+  `yaml.Unmarshal(f.Data, &frontmatter)`, schema checks — fail
+  fast before mirroring.
+
+### `*ArtifactRef` + `WithSaveArtifactMaxBytes`: expose workspace output to later turns
+
+Use `SaveArtifact` when the model wrote something to `out/` (a
+generated PDF, a synthesized dataset, a training checkpoint, ...) and
+later turns need to reference it. The returned `ArtifactRef` mirrors
+the `workspace_save_artifact` LLM tool's output schema:
+
+```go
+ref, err := ws.SaveArtifact(ctx, "out/report.pdf",
+    workspaceio.WithSaveArtifactMaxBytes(8 * 1024 * 1024))
+if err != nil {
+    return err
+}
+
+// ref.Ref       == "artifact://out/report.pdf@3"  // pre-formatted reference
+// ref.SavedAs   == "out/report.pdf"               // artifact key
+// ref.Version   == 3
+// ref.SizeBytes == 4_812_345
+
+// Stash the reference in session state so the next turn's prompt can
+// quote ref.Ref directly.
+args.Invocation.Session.AppendStateValue("last_report", ref.Ref)
+```
+
+`WithSaveArtifactMaxBytes` is enforced at the backend's **read step**,
+not as a post-check — read-and-discard is avoided and overflow fails
+fast. Typical reasons to set it:
+
+- **The output may be large** (datasets, model weights, video) — set
+  8 MiB / 32 MiB so the backend fails fast instead of pushing GiB
+  through the artifact service.
+- **Compliance / audit boundaries** — pinning the per-artifact size
+  protects against runaway agents producing oversized outputs.
+
+The default cap is `64 MiB`, which covers most documents and small
+datasets, so most callers never need this option.
+
+### Caller-owned policy
+
+The framework does not make these choices for you; write each one in
+your callback as needed.
+
+**What to do with the bytes you just read**
+
+- *Mirror on failure?* Default: the example bails on
+  `args.Error != nil` — workspace state is unreliable in that case.
+  Drop the early return when you want post-mortem snapshots.
+- *Single file truncated?* Default: backends cap individual reads at
+  a few MiB and return `File.Truncated = true` on overflow; `Collect`
+  forwards the flag and does **not** error. Add
+  `if f.Truncated { return error }` for strict semantics.
+- *Too many / too large in aggregate?* Default: `Collect` caps neither
+  count nor total bytes. Apply your own check on `len(files)` /
+  summed `SizeBytes` and refuse when over budget.
+- *Non-zero exit from `RunProgram`?* Default: surfaced via
+  `RunResult.ExitCode` / `TimedOut`, **not** via error. Treat non-zero
+  exits as failures yourself with
+  `if res.ExitCode != 0 { return error }`.
+
+**Writing into your own store**
+
+- *Need all-or-nothing?* `Collect` followed by a `Save` loop is **not
+  transactional**. Stage to a temp prefix and rename, or use a
+  transactional store.
+
+**What happens when the callback returns an error**
+
+- Returning a non-`nil` error from `AfterAgent` / `AfterTool` **aborts
+  the current invocation**. Log-and-swallow if flush should be
+  best-effort.
+
+End-to-end example: [examples/workspace_io](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/workspace_io).
 
 ## Environment Variables
 
