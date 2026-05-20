@@ -77,7 +77,22 @@ type TokenCounter interface {
 // TailoringStrategy tailors messages to fit within a token budget.
 type TailoringStrategy interface {
 	// TailorMessages reduces message list so total tokens are within maxTokens.
+	// If the smallest protected context cannot fit, it returns that best-effort
+	// context together with an error.
 	TailorMessages(ctx context.Context, messages []Message, maxTokens int) ([]Message, error)
+}
+
+type tokenTailoringOverflowError struct {
+	Tokens    int
+	MaxTokens int
+}
+
+func (e *tokenTailoringOverflowError) Error() string {
+	return fmt.Sprintf(
+		"token tailoring overflow: minimal protected context uses %d tokens, max input tokens is %d",
+		e.Tokens,
+		e.MaxTokens,
+	)
 }
 
 // SimpleTokenCounter provides a very rough token estimation based on rune length.
@@ -352,7 +367,11 @@ func countTokensForRounds(prefixSum []int, rounds []userAnchoredRound, keep []bo
 	return total
 }
 
-// ensureTailoredWithinBudget ensures the tailored result is within the budget.
+// ensureTailoredWithinBudget returns the smallest protected context when the
+// tailored result is still over budget. The protected context keeps the system
+// prefix and the latest valid round. If that minimal context is still too large,
+// the caller should surface the overflow instead of silently dropping system
+// instructions.
 func ensureTailoredWithinBudget(
 	ctx context.Context,
 	tokenCounter TokenCounter,
@@ -365,18 +384,21 @@ func ensureTailoredWithinBudget(
 	}
 
 	preservedHead := calculatePreservedHeadCount(messages)
-	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, preservedHead)
-	if fitsWithinBudget(ctx, tokenCounter, withSystem, maxTokens) {
-		return withSystem, nil
-	}
-
-	if len(withoutSystem) == 0 {
+	candidate := buildMinimalSuffixCandidate(messages, preservedHead)
+	if len(candidate) == 0 {
 		return nil, nil
 	}
-	if fitsWithinBudget(ctx, tokenCounter, withoutSystem, maxTokens) {
-		return withoutSystem, nil
+	if fitsWithinBudget(ctx, tokenCounter, candidate, maxTokens) {
+		return candidate, nil
 	}
-	return withoutSystem, nil
+	tokens, err := countCandidateTokens(ctx, tokenCounter, candidate)
+	if err != nil {
+		return candidate, err
+	}
+	return candidate, &tokenTailoringOverflowError{
+		Tokens:    tokens,
+		MaxTokens: maxTokens,
+	}
 }
 
 // shouldReturnOriginal checks if the messages should be returned as is.
@@ -391,6 +413,9 @@ func shouldReturnOriginal(
 	}
 	if maxTokens <= 0 {
 		return true, nil
+	}
+	if tokenCounter == nil {
+		tokenCounter = NewSimpleTokenCounter()
 	}
 	tokens, err := tokenCounter.CountTokensRange(ctx, messages, 0, len(messages))
 	if err != nil {
@@ -412,6 +437,9 @@ func fitsWithinBudget(
 	if len(messages) == 0 {
 		return false
 	}
+	if tokenCounter == nil {
+		tokenCounter = NewSimpleTokenCounter()
+	}
 	tokens, err := tokenCounter.CountTokensRange(ctx, messages, 0, len(messages))
 	if err != nil {
 		return false
@@ -419,21 +447,33 @@ func fitsWithinBudget(
 	return tokens <= maxTokens
 }
 
-// buildMinimalSuffixCandidates builds the minimal suffix candidates for the messages.
-func buildMinimalSuffixCandidates(messages []Message, preservedHead int) ([]Message, []Message) {
+func countCandidateTokens(
+	ctx context.Context,
+	tokenCounter TokenCounter,
+	messages []Message,
+) (int, error) {
+	if tokenCounter == nil {
+		tokenCounter = NewSimpleTokenCounter()
+	}
+	return tokenCounter.CountTokensRange(ctx, messages, 0, len(messages))
+}
+
+// buildMinimalSuffixCandidate builds the smallest protected context for the
+// messages: the system prefix plus the latest valid user-anchored round.
+func buildMinimalSuffixCandidate(messages []Message, preservedHead int) []Message {
 	last := lastNonSystemIndex(messages)
 	if last < 0 {
-		return nil, nil
+		return nil
 	}
 
 	last = trimTrailingAssistant(messages, last)
 	if last < 0 {
-		return nil, nil
+		return nil
 	}
 
 	start := startOfUserToolGroup(messages, last)
 	if start < 0 {
-		return nil, nil
+		return nil
 	}
 
 	end := last + 1
@@ -445,8 +485,7 @@ func buildMinimalSuffixCandidates(messages []Message, preservedHead int) ([]Mess
 	withSystem = append(withSystem, messages[start:end]...)
 	withSystem = validateAndFixMessageSequence(withSystem)
 
-	withoutSystem := validateAndFixMessageSequence(messages[start:end])
-	return withSystem, withoutSystem
+	return withSystem
 }
 
 // lastNonSystemIndex finds the last non-system message index.

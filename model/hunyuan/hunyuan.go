@@ -308,6 +308,11 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
+		if len(tailored) > 0 {
+			log.WarnContext(ctx, "token tailoring returned best-effort messages in hunyuan.Model", err)
+			request.Messages = tailored
+			return
+		}
 		log.WarnContext(ctx, "token tailoring failed in hunyuan.Model", "error", err)
 		return
 	}
