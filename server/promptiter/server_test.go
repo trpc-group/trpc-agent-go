@@ -789,6 +789,156 @@ func TestValidateRunRequest(t *testing.T) {
 	assert.EqualError(t, validateRunRequest(nil), "request must not be nil")
 	assert.EqualError(t, validateRunRequest(&RunRequest{}), "run must not be nil")
 	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{}}), "train evaluation sets are empty")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: testEvalSetInputs("train"),
+	}}), "validation evaluation sets are empty")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "",
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), "train evaluation set id is empty")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+			},
+			{
+				EvalSetID: "train",
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train evaluation set id "train" is duplicated`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: testEvalSetInputs("train"),
+		Validation: []enginepkg.EvalSetInput{
+			{
+				EvalSetID:   "validation",
+				EvalCaseIDs: []string{""},
+			},
+		},
+		MaxRounds: 1,
+	}}), `validation eval case id for eval set "validation" is empty`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []enginepkg.LossHint{
+					{
+						EvalCaseID: " ",
+						MetricName: "quality",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss hint eval case id for eval set "train" is empty`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []enginepkg.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: " ",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss hint metric name for eval set "train" case "case_1" is empty`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []enginepkg.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: "quality",
+						Reason:     " ",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss hint reason for eval set "train" case "case_1" metric "quality" is empty`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []enginepkg.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: "quality",
+						Severity:   "P4",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss hint severity "P4" for eval set "train" case "case_1" metric "quality" is invalid`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID:   "train",
+				EvalCaseIDs: []string{"case_1"},
+				LossHints: []enginepkg.LossHint{
+					{
+						EvalCaseID: "case_2",
+						MetricName: "quality",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss hint eval case "case_2" is not selected for eval set "train"`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+	}}), "max rounds must be greater than 0")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{},
+	}}), "target surface ids must not be empty")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		BackwardOptions: enginepkg.BackwardOptions{
+			CaseParallelism: -1,
+		},
+	}}), "backward case parallelism must be non-negative")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		AggregationOptions: enginepkg.AggregationOptions{
+			SurfaceParallelism: -1,
+		},
+	}}), "aggregation surface parallelism must be non-negative")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		OptimizerOptions: enginepkg.OptimizerOptions{
+			SurfaceParallelism: -1,
+		},
+	}}), "optimizer surface parallelism must be non-negative")
 	assert.NoError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),

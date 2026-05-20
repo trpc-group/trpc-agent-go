@@ -1756,6 +1756,30 @@ func TestValidateEvalSetInputsRejectsInvalidInputs(t *testing.T) {
 			EvalSetID: "train",
 			LossHints: []LossHint{
 				{
+					EvalCaseID: " ",
+					MetricName: "quality",
+					Reason:     "business reason",
+				},
+			},
+		},
+	}), `train loss hint eval case id for eval set "train" is empty`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: " ",
+					Reason:     "business reason",
+				},
+			},
+		},
+	}), `train loss hint metric name for eval set "train" case "case_1" is empty`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
 					EvalCaseID: "case_1",
 					MetricName: "quality",
 					Severity:   promptiter.LossSeverity("P4"),
@@ -3574,6 +3598,50 @@ func TestMergeLossHintsAppendsToExistingFailedMetricLoss(t *testing.T) {
 	assert.Equal(t, "needs improvement", mergedLosses[0].TerminalLosses[1].Loss)
 }
 
+func TestMergeLossHintsReturnsOriginalLossesWhenHintsAreEmpty(t *testing.T) {
+	losses := []promptiter.CaseLoss{
+		{
+			EvalSetID:  "train",
+			EvalCaseID: "case_1",
+		},
+	}
+	mergedLosses, err := mergeLossHints(losses, nil, []EvalSetInput{{EvalSetID: "train"}})
+	assert.NoError(t, err)
+	assert.Equal(t, losses, mergedLosses)
+}
+
+func TestMergeLossHintsRejectsNilResultWhenHintsExist(t *testing.T) {
+	_, err := mergeLossHints(nil, nil, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Reason:     "manual concern",
+				},
+			},
+		},
+	})
+	assert.EqualError(t, err, "evaluation result is nil")
+}
+
+func TestMergeLossHintsRequiresCaseInTrainingResult(t *testing.T) {
+	_, err := mergeLossHints(nil, &EvaluationResult{}, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Reason:     "manual concern",
+				},
+			},
+		},
+	})
+	assert.EqualError(t, err, `loss hint case "case_1" from eval set "train" is missing from training result`)
+}
+
 func TestMergeLossHintsSkipsPassedMetric(t *testing.T) {
 	result := &EvaluationResult{
 		EvalSets: []EvalSetResult{
@@ -3602,6 +3670,44 @@ func TestMergeLossHintsSkipsPassedMetric(t *testing.T) {
 					EvalCaseID: "case_1",
 					MetricName: "quality",
 					Severity:   promptiter.LossSeverityP0,
+					Reason:     "manual concern",
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, mergedLosses)
+}
+
+func TestMergeLossHintsSkipsFailedMetricWithoutExistingLoss(t *testing.T) {
+	result := &EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "needs improvement",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	mergedLosses, err := mergeLossHints(nil, result, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP1,
 					Reason:     "manual concern",
 				},
 			},
@@ -3648,6 +3754,130 @@ func TestMergeLossHintsRequiresMetricInTrainingResult(t *testing.T) {
 		err,
 		`loss hint metric "quality" for eval case "case_1" from eval set "train" is missing from training result`,
 	)
+}
+
+func TestIndexLossHintTargetsDeduplicatesStepIDs(t *testing.T) {
+	_, stepIndex := indexLossHintTargets([]promptiter.CaseLoss{
+		{
+			EvalSetID:  "train",
+			EvalCaseID: "case_1",
+			TerminalLosses: []promptiter.TerminalLoss{
+				{
+					EvalSetID:  "train",
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					StepID:     "step_1",
+				},
+				{
+					EvalSetID:  "train",
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					StepID:     "step_1",
+				},
+			},
+		},
+	})
+	assert.Equal(t, []string{"step_1"}, stepIndex[lossHintMetricKey{
+		evalSetID:  "train",
+		evalCaseID: "case_1",
+		metricName: "quality",
+	}])
+}
+
+func TestSortCaseLossesOrdersCasesAndTerminalLosses(t *testing.T) {
+	losses := []promptiter.CaseLoss{
+		{
+			EvalSetID:  "train_b",
+			EvalCaseID: "case_2",
+			TerminalLosses: []promptiter.TerminalLoss{
+				{
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP2,
+					StepID:     "step_2",
+					Loss:       "z",
+				},
+				{
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_2",
+					Loss:       "y",
+				},
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_2",
+					Loss:       "y",
+				},
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_1",
+					Loss:       "y",
+				},
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_1",
+					Loss:       "x",
+				},
+			},
+		},
+		{
+			EvalSetID:  "train_a",
+			EvalCaseID: "case_1",
+		},
+		{
+			EvalSetID:  "train_b",
+			EvalCaseID: "case_1",
+		},
+	}
+	sortCaseLosses(losses)
+	assert.Equal(t, []promptiter.CaseLoss{
+		{
+			EvalSetID:  "train_a",
+			EvalCaseID: "case_1",
+		},
+		{
+			EvalSetID:  "train_b",
+			EvalCaseID: "case_1",
+		},
+		{
+			EvalSetID:  "train_b",
+			EvalCaseID: "case_2",
+			TerminalLosses: []promptiter.TerminalLoss{
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_1",
+					Loss:       "x",
+				},
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_1",
+					Loss:       "y",
+				},
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_2",
+					Loss:       "y",
+				},
+				{
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_2",
+					Loss:       "y",
+				},
+				{
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP2,
+					StepID:     "step_2",
+					Loss:       "z",
+				},
+			},
+		},
+	}, losses)
 }
 
 func scriptedOutcome(evalSetID string, profileValue string) scriptedEvalOutcome {

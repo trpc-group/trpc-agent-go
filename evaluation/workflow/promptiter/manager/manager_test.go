@@ -991,6 +991,71 @@ func TestValidateRunRequest(t *testing.T) {
 				EvalSetID: "train",
 				LossHints: []promptiterengine.LossHint{
 					{
+						EvalCaseID: " ",
+						MetricName: "quality",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss hint eval case id for eval set "train" is empty`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: " ",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss hint metric name for eval set "train" case "case_1" is empty`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: "quality",
+						Reason:     " ",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss hint reason for eval set "train" case "case_1" metric "quality" is empty`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID:   "train",
+				EvalCaseIDs: []string{"case_1"},
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: "case_2",
+						MetricName: "quality",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss hint eval case "case_2" is not selected for eval set "train"`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []promptiterengine.LossHint{
+					{
 						EvalCaseID: "case_1",
 						MetricName: "quality",
 						Severity:   promptiter.LossSeverity("P4"),
