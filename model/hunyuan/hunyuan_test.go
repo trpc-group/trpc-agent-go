@@ -74,6 +74,14 @@ func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Mes
 	return append([]model.Message{messages[0]}, messages[2:]...), nil
 }
 
+type overflowTailoringStrategy struct {
+	tailored []model.Message
+}
+
+func (s overflowTailoringStrategy) TailorMessages(ctx context.Context, messages []model.Message, maxTokens int) ([]model.Message, error) {
+	return s.tailored, fmt.Errorf("minimal protected context exceeds token budget")
+}
+
 // testErrorStrategy is a stub TailoringStrategy that returns an error.
 type testErrorStrategy struct{}
 
@@ -1190,6 +1198,28 @@ func TestWithTokenTailoring(t *testing.T) {
 	if len(capturedReq.Messages) != 1 {
 		t.Errorf("Expected 1 message after tailoring, got %d", len(capturedReq.Messages))
 	}
+}
+
+func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
+	tailored := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := &Model{
+		name:                 "test-model",
+		enableTokenTailoring: true,
+		maxInputTokens:       1,
+		tailoringStrategy:    overflowTailoringStrategy{tailored: tailored},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("old"),
+		model.NewUserMessage("q"),
+	}}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, tailored, req.Messages)
 }
 
 func TestWithEnableTokenTailoringDisabled(t *testing.T) {
