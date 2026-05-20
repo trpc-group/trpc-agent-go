@@ -13,11 +13,14 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"testing"
 	"time"
 
+	tcvdbtext "github.com/tencent/vectordatabase-sdk-go/tcvdbtext"
 	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -1474,6 +1477,69 @@ func TestNewConnectionPriority(t *testing.T) {
 			t.Errorf("expected error to contain 'create client failed', got: %v", err)
 		}
 	})
+}
+
+func TestNewWithTCSparseEncoder(t *testing.T) {
+	oldBuilder := storage.GetClientBuilder()
+	defer func() { storage.SetClientBuilder(oldBuilder) }()
+
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
+		return newMockClient(), nil
+	})
+
+	t.Run("uses_provided_encoder", func(t *testing.T) {
+		sparseEncoder := newMockSparseEncoder()
+		vs, err := New(
+			WithDatabase("test_db"),
+			WithCollection("test_collection"),
+			WithIndexDimension(128),
+			WithEnableTSVector(true),
+			WithTCSparseEncoder(sparseEncoder),
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if vs.sparseEncoder != sparseEncoder {
+			t.Fatalf("expected provided sparse encoder to be used")
+		}
+	})
+
+	t.Run("creates_default_encoder_when_not_provided", func(t *testing.T) {
+		ensureDefaultStopWordsFile(t)
+
+		_, err := New(
+			WithDatabase("test_db"),
+			WithCollection("test_collection"),
+			WithIndexDimension(128),
+			WithEnableTSVector(true),
+			WithLanguage("invalid"),
+		)
+		if err == nil {
+			t.Fatal("expected error but got nil")
+		}
+		if !containsString(err.Error(), "tcvectordb new bm25 encoder") {
+			t.Fatalf("expected bm25 encoder error, got: %v", err)
+		}
+	})
+}
+
+func ensureDefaultStopWordsFile(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(tcvdbtext.DefaultStorageDir, tcvdbtext.DefaultStopWordsFileName)
+	if _, err := os.Stat(path); err == nil {
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat default stop words file: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create default stop words dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("\n"), 0o644); err != nil {
+		t.Fatalf("write default stop words file: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
 }
 
 // containsString checks if s contains substr.

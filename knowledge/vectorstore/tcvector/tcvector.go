@@ -43,9 +43,8 @@ const (
 	metadataBatchSize = 5000 // Maximum records per batch when querying all metadata
 )
 
-// sparseVecEncoder is an interface for encoding text into sparse vectors for keyword search.
-// This interface abstracts the encoder dependency to make testing easier.
-type sparseVecEncoder interface {
+// TCSparseEncoder encodes text into sparse vectors for keyword and hybrid search.
+type TCSparseEncoder interface {
 	// EncodeText encodes a single text into sparse vector format.
 	EncodeText(text string) ([]encoder.SparseVecItem, error)
 	// EncodeQuery encodes a single query into sparse vector format.
@@ -58,7 +57,7 @@ type sparseVecEncoder interface {
 type VectorStore struct {
 	client          storage.ClientInterface
 	option          options
-	sparseEncoder   sparseVecEncoder
+	sparseEncoder   TCSparseEncoder
 	filterConverter searchfilter.Converter[*tcvectordb.Filter]
 }
 
@@ -101,11 +100,14 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, err
 	}
 
-	var sparseEncoder encoder.SparseEncoder
+	var sparseEncoder TCSparseEncoder
 	if option.enableTSVector {
-		sparseEncoder, err = encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: option.language})
-		if err != nil {
-			return nil, fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
+		sparseEncoder = option.sparseEncoder
+		if sparseEncoder == nil {
+			sparseEncoder, err = encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: option.language})
+			if err != nil {
+				return nil, fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
+			}
 		}
 	}
 
