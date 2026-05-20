@@ -1256,6 +1256,29 @@ func codeExecutorSupportsWorkspaceExec(exec codeexecutor.CodeExecutor) bool {
 	return eng.Manager() != nil && eng.FS() != nil && eng.Runner() != nil
 }
 
+// codeExecutorHasLiveWorkspace reports whether exec exposes an Engine
+// with Manager + FS — enough to drive Workspace.Collect / PutFiles /
+// StageInputs / SaveArtifact. Looser than
+// codeExecutorSupportsWorkspaceExec, which additionally requires
+// Runner for the workspace_exec LLM tool. Workspace.RunProgram still
+// surfaces a targeted "no program runner" error when Runner is nil,
+// so executors that intentionally omit ProgramRunner can keep the
+// other facade methods usable from callbacks.
+func codeExecutorHasLiveWorkspace(exec codeexecutor.CodeExecutor) bool {
+	if exec == nil {
+		return false
+	}
+	ep, ok := exec.(codeexecutor.EngineProvider)
+	if !ok || ep == nil {
+		return false
+	}
+	eng := ep.Engine()
+	if eng == nil {
+		return false
+	}
+	return eng.Manager() != nil && eng.FS() != nil
+}
+
 // executorSupportsWorkspaceExecSessions reports whether workspace_exec can
 // expose interactive session helpers such as workspace_write_stdin.
 func executorSupportsWorkspaceExecSessions(options *Options) bool {
@@ -1483,7 +1506,12 @@ func (a *LLMAgent) withWorkspace(
 		return ctx
 	}
 	exec := a.codeExecutorForInvocation(inv)
-	if !codeExecutorSupportsWorkspaceExec(exec) {
+	// Gate on "live workspace" (Manager + FS) rather than
+	// "workspace_exec" (Manager + FS + Runner). Executors that
+	// intentionally omit ProgramRunner can still serve Collect /
+	// PutFiles / StageInputs / SaveArtifact through the facade;
+	// RunProgram itself returns a targeted error when Runner is nil.
+	if !codeExecutorHasLiveWorkspace(exec) {
 		return ctx
 	}
 	reg := a.workspaceRegistryForInvocation(inv, exec)

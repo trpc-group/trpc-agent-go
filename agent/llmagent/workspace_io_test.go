@@ -17,11 +17,31 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+// liveButNoRunnerExec implements codeexecutor.CodeExecutor +
+// EngineProvider with FS + Manager but Runner=nil — mirroring real
+// executors that intentionally omit ProgramRunner.
+type liveButNoRunnerExec struct {
+	eng codeexecutor.Engine
+}
+
+func (l *liveButNoRunnerExec) ExecuteCode(
+	context.Context, codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (l *liveButNoRunnerExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{}
+}
+
+func (l *liveButNoRunnerExec) Engine() codeexecutor.Engine { return l.eng }
 
 // TestLLMAgent_Run_InstallsWorkspaceInContext verifies that callbacks
 // receive a ready-to-use Workspace via WorkspaceFromContext when the
@@ -102,6 +122,46 @@ func TestLLMAgent_Run_PreservesExistingWorkspaceInContext(t *testing.T) {
 	require.True(t, captureOK, "BeforeAgent should still see a Workspace")
 	require.Same(t, existing, captured,
 		"withWorkspace must not overwrite an already-installed Workspace")
+}
+
+// TestLLMAgent_Run_InstallsWorkspaceWhenRunnerNil pins withWorkspace's
+// gate at "live workspace" (FS + Manager) rather than "workspace_exec"
+// (FS + Manager + Runner). Executors that legitimately omit
+// ProgramRunner can still serve Collect / PutFiles / StageInputs /
+// SaveArtifact through the callback-side facade; RunProgram itself
+// surfaces a targeted error when Runner is nil.
+func TestLLMAgent_Run_InstallsWorkspaceWhenRunnerNil(t *testing.T) {
+	rt := localexec.NewRuntime("")
+	eng := codeexecutor.NewEngine(rt, rt, nil) // Manager + FS but no Runner
+	exec := &liveButNoRunnerExec{eng: eng}
+
+	var called, captureOK bool
+	cb := agent.NewCallbacks()
+	cb.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		called = true
+		_, captureOK = workspaceio.WorkspaceFromContext(ctx)
+		return nil, nil
+	})
+
+	a := New("agent", WithCodeExecutor(exec), WithAgentCallbacks(cb))
+	a.flow = &mockFlow{done: true}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-norunner"),
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{
+			ID: "s1", AppName: "app", UserID: "user",
+		}),
+	)
+
+	events, err := a.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	require.True(t, called, "BeforeAgent must have run")
+	require.True(t, captureOK,
+		"withWorkspace must accept FS+Manager-only executors; RunProgram surfaces a targeted error when Runner is nil")
 }
 
 // TestLLMAgent_Run_HonorsRunOptionsCodeExecutorForWorkspace pins the
