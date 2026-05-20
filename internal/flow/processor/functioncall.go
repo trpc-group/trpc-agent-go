@@ -210,7 +210,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
-	if deferred && !unknown {
+	if deferred {
 		invocation.EndInvocation = true
 	}
 

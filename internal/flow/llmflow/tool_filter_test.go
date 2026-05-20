@@ -607,6 +607,46 @@ func TestGetFilteredTools_ExternalToolCannotShadowAdditionalTool(
 	))
 }
 
+func TestGetFilteredTools_RunOptionToolsDoNotMutateUserToolNames(
+	t *testing.T,
+) {
+	f := New(nil, nil, Options{})
+
+	const (
+		registeredToolName = "registered_tool"
+		runtimeToolName    = "runtime_tool"
+		externalToolName   = "external_tool"
+	)
+
+	registeredTool := &mockTool{name: registeredToolName}
+	runtimeTool := &mockTool{name: runtimeToolName}
+	externalTool := &mockTool{name: externalToolName}
+	userToolNames := map[string]bool{
+		registeredToolName: true,
+	}
+
+	mockAgent := &mockAgentWithInvocationToolSurface{
+		name:          "test-agent",
+		allTools:      []tool.Tool{registeredTool},
+		userToolNames: userToolNames,
+	}
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+	inv.RunOptions = agent.NewRunOptions(
+		agent.WithAdditionalTools([]tool.Tool{runtimeTool}),
+		agent.WithExternalTools([]tool.Tool{externalTool}),
+	)
+
+	filtered := f.getFilteredTools(context.Background(), inv)
+
+	require.Len(t, filtered, 3)
+	require.True(t, hasToolName(filtered, registeredToolName))
+	require.True(t, hasToolName(filtered, runtimeToolName))
+	require.True(t, hasToolName(filtered, externalToolName))
+	require.Equal(t, map[string]bool{registeredToolName: true}, userToolNames)
+}
+
 // TestGetFilteredTools_WithExcludeFilter tests tool filtering using exclude filter.
 func TestGetFilteredTools_WithExcludeFilter(t *testing.T) {
 	f := New(nil, nil, Options{})

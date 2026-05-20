@@ -2294,6 +2294,83 @@ func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
 	require.True(t, inv.EndInvocation)
 }
 
+func TestFunctionCallResponseProcessor_WithExternalTools_UnknownStops(
+	t *testing.T,
+) {
+	const (
+		externalToolName = "external_tool"
+		unknownToolName  = "unknown_tool"
+		externalCallID   = "call-external"
+		unknownCallID    = "call-unknown"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	var callCount atomic.Int32
+	externalTool := &mockTool{
+		name: externalToolName,
+		callHook: func() {
+			callCount.Add(1)
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv-external-tool-unknown",
+		AgentName:    "test-agent",
+		Model:        &mockModel{},
+		RunOptions: agent.NewRunOptions(
+			agent.WithExternalTools([]tool.Tool{externalTool}),
+		),
+	}
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			externalToolName: externalTool,
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   externalCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      externalToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							ID:   unknownCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      unknownToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case ev := <-ch:
+		require.NotNil(t, ev.Response)
+		require.Len(t, ev.Response.Choices, 1)
+		msg := ev.Response.Choices[0].Message
+		require.Equal(t, model.RoleTool, msg.Role)
+		require.Equal(t, unknownCallID, msg.ToolID)
+	case <-time.After(time.Second):
+		t.Fatalf("expected a tool error response event")
+	}
+	assert.Zero(t, callCount.Load())
+	require.True(t, inv.EndInvocation)
+}
+
 func TestFunctionCallResponseProcessor_WaitsForToolResponseCompletion(
 	t *testing.T,
 ) {

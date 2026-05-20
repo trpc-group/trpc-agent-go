@@ -817,14 +817,9 @@ func WithExternalTools(tools []tool.Tool) RunOption {
 			return
 		}
 		for _, tl := range tools {
-			name := declarationName(tl)
-			if name == "" {
+			if declarationName(tl) == "" {
 				continue
 			}
-			if opts.ExternalToolNames == nil {
-				opts.ExternalToolNames = make(map[string]bool)
-			}
-			opts.ExternalToolNames[name] = true
 			opts.ExternalTools = append(opts.ExternalTools, tl)
 		}
 	}
@@ -1183,8 +1178,8 @@ type RunOptions struct {
 	ExternalTools []tool.Tool
 
 	// ExternalToolNames contains the accepted caller-executed tool names for
-	// this run. WithExternalTools initializes it, and LLM flows narrow it after
-	// the invocation tool surface rejects collisions with existing tools.
+	// this run. LLM flows set it after the invocation tool surface rejects
+	// collisions with existing tools.
 	ExternalToolNames map[string]bool
 
 	// ToolExecutionFilter controls which tools are executed by the
@@ -1217,14 +1212,38 @@ func (opts RunOptions) ShouldExecuteTool(
 	ctx context.Context,
 	tl tool.Tool,
 ) bool {
-	name := declarationName(tl)
-	if name != "" && opts.ExternalToolNames[name] {
+	if opts.isExternalTool(tl) {
 		return false
 	}
 	if opts.ToolExecutionFilter == nil {
 		return true
 	}
 	return opts.ToolExecutionFilter(ctx, tl)
+}
+
+func (opts RunOptions) isExternalTool(tl tool.Tool) bool {
+	name := declarationName(tl)
+	if opts.ExternalToolNames != nil {
+		return name != "" && opts.ExternalToolNames[name]
+	}
+	for _, external := range opts.ExternalTools {
+		if sameRunTool(tl, external) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameRunTool(a tool.Tool, b tool.Tool) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if av.Type() == bv.Type() && av.Type().Comparable() {
+		return a == b
+	}
+	return false
 }
 
 // IsGraphCompletionEventDisabled reports whether this invocation hides terminal graph completion events.
