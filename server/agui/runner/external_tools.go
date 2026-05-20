@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -26,11 +27,21 @@ const (
 	jsonSchemaTypeObject           = "object"
 )
 
-// ExternalToolsFromRunAgentInput converts AG-UI request tools to declaration
-// only trpc-agent-go tools. The returned tools are intended for
-// agent.WithExternalTools so the model can call frontend-owned tools while
-// the framework defers execution to the caller.
-func ExternalToolsFromRunAgentInput(
+func appendExternalToolRunOption(
+	opts []agent.RunOption,
+	input *adapter.RunAgentInput,
+) ([]agent.RunOption, error) {
+	externalTools, err := externalToolsFromRunAgentInput(input)
+	if err != nil {
+		return nil, err
+	}
+	if len(externalTools) == 0 {
+		return opts, nil
+	}
+	return append(opts, agent.WithExternalTools(externalTools)), nil
+}
+
+func externalToolsFromRunAgentInput(
 	input *adapter.RunAgentInput,
 ) ([]agenttool.Tool, error) {
 	if input == nil || len(input.Tools) == 0 {

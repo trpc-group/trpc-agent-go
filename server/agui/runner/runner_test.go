@@ -1038,8 +1038,6 @@ func TestRunTailToolMessagesEmitAndPersistAsCurrentTurn(t *testing.T) {
 }
 
 func TestRunInjectsAGUIInputToolsByDefault(t *testing.T) {
-	const toolName = "client_search"
-
 	var gotOptions agent.RunOptions
 	underlying := &fakeRunner{
 		run: func(ctx context.Context,
@@ -1053,22 +1051,9 @@ func TestRunInjectsAGUIInputToolsByDefault(t *testing.T) {
 		},
 	}
 	r := New(underlying)
-	var input adapter.RunAgentInput
-	err := json.Unmarshal([]byte(`{
-		"threadId": "thread",
-		"runId": "run",
-		"messages": [{"role": "user", "content": "hi"}],
-		"tools": [
-			{
-				"name": "client_search",
-				"description": "Search a frontend-owned source.",
-				"parameters": {"type": "object"}
-			}
-		]
-	}`), &input)
-	require.NoError(t, err)
+	input, toolName := newExternalToolRunAgentInput()
 
-	eventsCh, err := r.Run(context.Background(), &input)
+	eventsCh, err := r.Run(context.Background(), input)
 	require.NoError(t, err)
 	collectEvents(t, eventsCh)
 
@@ -1081,6 +1066,78 @@ func TestRunInjectsAGUIInputToolsByDefault(t *testing.T) {
 		context.Background(),
 		externalTool,
 	))
+}
+
+func TestRunInjectsAGUIInputToolsWithCustomResolver(t *testing.T) {
+	const customModelName = "custom-model"
+
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithRunOptionResolver(
+			func(context.Context,
+				*adapter.RunAgentInput) ([]agent.RunOption, error) {
+				return []agent.RunOption{
+					agent.WithModelName(customModelName),
+				}, nil
+			},
+		),
+	)
+	input, toolName := newExternalToolRunAgentInput()
+
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, eventsCh)
+
+	assert.Equal(t, customModelName, gotOptions.ModelName)
+	require.Len(t, gotOptions.ExternalTools, 1)
+	externalTool := gotOptions.ExternalTools[0]
+	decl := externalTool.Declaration()
+	require.NotNil(t, decl)
+	assert.Equal(t, toolName, decl.Name)
+	assert.False(t, gotOptions.ShouldExecuteTool(
+		context.Background(),
+		externalTool,
+	))
+}
+
+func newExternalToolRunAgentInput() (*adapter.RunAgentInput, string) {
+	const (
+		threadID        = "thread"
+		runID           = "run"
+		userContent     = "hi"
+		toolName        = "client_search"
+		toolDescription = "Search a frontend-owned source."
+		schemaTypeKey   = "type"
+	)
+
+	input := &adapter.RunAgentInput{
+		ThreadID: threadID,
+		RunID:    runID,
+		Messages: []types.Message{{
+			Role:    types.RoleUser,
+			Content: userContent,
+		}},
+		Tools: []types.Tool{{
+			Name:        toolName,
+			Description: toolDescription,
+			Parameters: map[string]any{
+				schemaTypeKey: jsonSchemaTypeObject,
+			},
+		}},
+	}
+	return input, toolName
 }
 
 func TestRunToolMessageKeepsCurrentTurnWithoutRewriter(t *testing.T) {

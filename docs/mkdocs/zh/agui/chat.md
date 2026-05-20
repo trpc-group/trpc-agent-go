@@ -273,7 +273,7 @@ server, _ := agui.New(
 
 ## 自定义 `RunOptionResolver`
 
-`RunOptionResolver` 用于为本次 Agent 运行补充 [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go)。它会在每次请求处理时执行，返回的选项只作用于当前这次运行。`WithRunOptionResolver` 会替换默认 resolver，所以如果仍要把请求中的 `input.Tools` 暴露为调用方执行的工具，需要自行组合 `ExternalToolsFromRunAgentInput`。
+`RunOptionResolver` 用于为本次 Agent 运行补充 [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go)。它会在每次请求处理时执行，返回的选项只作用于当前这次运行。AG-UI runner 会在自定义 resolver 返回后，继续把请求里的 `input.Tools` 映射为调用方执行的工具。
 
 ```go
 import (
@@ -291,16 +291,11 @@ resolver := func(_ context.Context, input *adapter.RunAgentInput) ([]agent.RunOp
 	if input == nil {
 		return nil, errors.New("empty input")
 	}
-	externalTools, err := aguirunner.ExternalToolsFromRunAgentInput(input)
-	if err != nil {
-		return nil, err
-	}
 	forwardedProps, ok := input.ForwardedProps.(map[string]any)
 	if !ok || forwardedProps == nil {
-		return []agent.RunOption{agent.WithExternalTools(externalTools)}, nil
+		return nil, nil
 	}
-	opts := make([]agent.RunOption, 0, 3)
-	opts = append(opts, agent.WithExternalTools(externalTools))
+	opts := make([]agent.RunOption, 0, 2)
 	if modelName, ok := forwardedProps["modelName"].(string); ok && modelName != "" {
 		opts = append(opts, agent.WithModelName(modelName))
 	}
@@ -782,9 +777,8 @@ server, err := agui.New(run)
 默认情况下，AG-UI runner 会把 AG-UI `input.Tools` 转成只有声明的
 trpc-agent-go 工具，通过 `WithExternalTools` 暴露给模型，并把执行权交给调用方。如果动态声明与服务端已有工具同名，服务端已有工具优先，动态声明不会覆盖或拦截已有工具。
 
-如果业务替换了默认 `RunOptionResolver`，需要自行组合
-`aguirunner.ExternalToolsFromRunAgentInput(input)` 和
-`agent.WithExternalTools(...)` 来保留这段默认行为。
+使用 `WithRunOptionResolver` 时仍然会保留这段自动映射；自定义
+resolver 只需要返回业务额外需要的 run options。
 
 完整 LLMAgent 示例：服务端可参考 [examples/agui/server/externaltool/llmagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/llmagent)，前端客户端可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 

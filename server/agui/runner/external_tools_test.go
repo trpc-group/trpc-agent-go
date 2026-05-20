@@ -28,7 +28,7 @@ func (badMarshalValue) MarshalJSON() ([]byte, error) {
 	return nil, errors.New(errBadMarshalValue)
 }
 
-func TestExternalToolsFromRunAgentInput(t *testing.T) {
+func TestExternalToolsFromInput(t *testing.T) {
 	const (
 		toolName        = "client_search"
 		toolDescription = "Search a frontend-owned source."
@@ -55,7 +55,7 @@ func TestExternalToolsFromRunAgentInput(t *testing.T) {
 	}`), &input)
 	require.NoError(t, err)
 
-	tools, err := ExternalToolsFromRunAgentInput(&input)
+	tools, err := externalToolsFromRunAgentInput(&input)
 
 	require.NoError(t, err)
 	require.Len(t, tools, 1)
@@ -70,14 +70,14 @@ func TestExternalToolsFromRunAgentInput(t *testing.T) {
 	assert.Equal(t, []string{argName}, decl.InputSchema.Required)
 }
 
-func TestExternalToolsFromRunAgentInputEmpty(t *testing.T) {
-	tools, err := ExternalToolsFromRunAgentInput(nil)
+func TestExternalToolsFromInputEmpty(t *testing.T) {
+	tools, err := externalToolsFromRunAgentInput(nil)
 
 	require.NoError(t, err)
 	assert.Nil(t, tools)
 }
 
-func TestExternalToolsFromRunAgentInputDefaultsNilParameters(t *testing.T) {
+func TestExternalToolsFromInputDefaultsNilParameters(t *testing.T) {
 	const toolName = "client_notify"
 
 	var input adapter.RunAgentInput
@@ -86,7 +86,7 @@ func TestExternalToolsFromRunAgentInputDefaultsNilParameters(t *testing.T) {
 	}`), &input)
 	require.NoError(t, err)
 
-	tools, err := ExternalToolsFromRunAgentInput(&input)
+	tools, err := externalToolsFromRunAgentInput(&input)
 
 	require.NoError(t, err)
 	require.Len(t, tools, 1)
@@ -97,14 +97,14 @@ func TestExternalToolsFromRunAgentInputDefaultsNilParameters(t *testing.T) {
 	assert.Equal(t, jsonSchemaTypeObject, decl.InputSchema.Type)
 }
 
-func TestExternalToolsFromRunAgentInputRejectsEmptyName(t *testing.T) {
+func TestExternalToolsFromInputRejectsEmptyName(t *testing.T) {
 	var input adapter.RunAgentInput
 	err := json.Unmarshal([]byte(`{
 		"tools": [{"description": "missing name"}]
 	}`), &input)
 	require.NoError(t, err)
 
-	tools, err := ExternalToolsFromRunAgentInput(&input)
+	tools, err := externalToolsFromRunAgentInput(&input)
 
 	require.Error(t, err)
 	assert.Nil(t, tools)
@@ -112,7 +112,7 @@ func TestExternalToolsFromRunAgentInputRejectsEmptyName(t *testing.T) {
 	assert.ErrorContains(t, err, errAGUIToolNameRequired)
 }
 
-func TestExternalToolsFromRunAgentInputReportsMarshalError(t *testing.T) {
+func TestExternalToolsFromInputReportsMarshalError(t *testing.T) {
 	const toolName = "bad_marshal"
 
 	var input adapter.RunAgentInput
@@ -122,7 +122,7 @@ func TestExternalToolsFromRunAgentInputReportsMarshalError(t *testing.T) {
 	require.NoError(t, err)
 	input.Tools[0].Parameters = badMarshalValue{}
 
-	tools, err := ExternalToolsFromRunAgentInput(&input)
+	tools, err := externalToolsFromRunAgentInput(&input)
 
 	require.Error(t, err)
 	assert.Nil(t, tools)
@@ -132,7 +132,7 @@ func TestExternalToolsFromRunAgentInputReportsMarshalError(t *testing.T) {
 	assert.ErrorContains(t, err, errBadMarshalValue)
 }
 
-func TestExternalToolsFromRunAgentInputReportsUnmarshalError(t *testing.T) {
+func TestExternalToolsFromInputReportsUnmarshalError(t *testing.T) {
 	const toolName = "bad_unmarshal"
 
 	var input adapter.RunAgentInput
@@ -146,7 +146,7 @@ func TestExternalToolsFromRunAgentInputReportsUnmarshalError(t *testing.T) {
 	}`), &input)
 	require.NoError(t, err)
 
-	tools, err := ExternalToolsFromRunAgentInput(&input)
+	tools, err := externalToolsFromRunAgentInput(&input)
 
 	require.Error(t, err)
 	assert.Nil(t, tools)

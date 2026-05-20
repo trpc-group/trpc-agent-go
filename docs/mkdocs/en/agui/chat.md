@@ -273,7 +273,7 @@ server, _ := agui.New(
 
 ## Custom `RunOptionResolver`
 
-`RunOptionResolver` adds [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go) for the current agent run. It runs for every request, and the returned options only affect that run. `WithRunOptionResolver` replaces the default resolver, so compose `ExternalToolsFromRunAgentInput` yourself if request `input.Tools` should still be exposed as caller-executed tools.
+`RunOptionResolver` adds [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go) for the current agent run. It runs for every request, and the returned options only affect that run. The AG-UI runner still maps request `input.Tools` to caller-executed tools after the custom resolver returns.
 
 ```go
 import (
@@ -291,16 +291,11 @@ resolver := func(_ context.Context, input *adapter.RunAgentInput) ([]agent.RunOp
 	if input == nil {
 		return nil, errors.New("empty input")
 	}
-	externalTools, err := aguirunner.ExternalToolsFromRunAgentInput(input)
-	if err != nil {
-		return nil, err
-	}
 	forwardedProps, ok := input.ForwardedProps.(map[string]any)
 	if !ok || forwardedProps == nil {
-		return []agent.RunOption{agent.WithExternalTools(externalTools)}, nil
+		return nil, nil
 	}
-	opts := make([]agent.RunOption, 0, 3)
-	opts = append(opts, agent.WithExternalTools(externalTools))
+	opts := make([]agent.RunOption, 0, 2)
 	if modelName, ok := forwardedProps["modelName"].(string); ok && modelName != "" {
 		opts = append(opts, agent.WithModelName(modelName))
 	}
@@ -785,9 +780,8 @@ model, and defers execution to the caller. If a dynamic declaration has the same
 name as an existing server tool, the existing server tool wins and the dynamic
 declaration does not override or intercept it.
 
-If you replace the default `RunOptionResolver`, compose this behavior manually
-with `aguirunner.ExternalToolsFromRunAgentInput(input)` and
-`agent.WithExternalTools(...)`.
+This automatic mapping also applies when `WithRunOptionResolver` is used; the
+custom resolver only needs to return additional run options.
 
 For the complete LLMAgent example, see the server implementation in [examples/agui/server/externaltool/llmagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/llmagent), and the frontend client in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
