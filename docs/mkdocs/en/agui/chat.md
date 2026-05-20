@@ -751,11 +751,11 @@ The general flow is:
 - The caller sends the tool result back with a subsequent request, represented as a `role=tool` message.
 - The AG-UI server sends `TOOL_CALL_RESULT`, writes it to session history, and passes the tool result to the agent to continue running.
 
-Two server-side forms are currently supported. When directly wrapping an `llmagent.Agent`, use LLMAgent Tool-Filter mode. When external execution belongs to a GraphAgent node and must resume from a checkpoint, use GraphAgent Interrupt mode.
+Two server-side forms are currently supported. When directly wrapping an `llmagent.Agent`, use LLMAgent External Tool mode. When external execution belongs to a GraphAgent node and must resume from a checkpoint, use GraphAgent Interrupt mode.
 
-### LLMAgent Tool-Filter Mode
+### LLMAgent External Tool Mode
 
-Use this mode when the AG-UI server directly wraps an `llmagent.Agent` and only some tools need to be executed by the caller. External tools are still registered with the Agent so the model can generate the corresponding tool calls. `RunOptionResolver` returns `agent.WithToolExecutionFilter(...)` to declare which tools are not executed on the server.
+Use this mode when the AG-UI server directly wraps an `llmagent.Agent` and only some tools need to be executed by the caller. If the external tools are already registered with the Agent, `RunOptionResolver` can return `agent.WithToolExecutionFilter(...)` to declare which tools are not executed on the server. If the frontend or upstream service declares external tools dynamically for one request, convert those declarations to `[]tool.Tool` and return `agent.WithExternalTools(...)`.
 
 The first request uses `role=user`. When the model generates a tool call that must be executed by the caller, the event stream outputs `TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END`, then ends the current run after that assistant tool-call response. The caller reads `toolCallId` and tool arguments from the event stream, executes the tool, and starts a second request with a `role=tool` message.
 
@@ -765,21 +765,24 @@ Code snippet:
 
 ```go
 import (
+    "context"
+
     "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     aguiadapter "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
     aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-    "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func resolveRunOptions(
     context.Context,
-    *aguiadapter.RunAgentInput,
+    input *aguiadapter.RunAgentInput,
 ) ([]agent.RunOption, error) {
+    externalTools, err := aguirunner.ExternalToolsFromRunAgentInput(input)
+    if err != nil {
+        return nil, err
+    }
     return []agent.RunOption{
-        agent.WithToolExecutionFilter(
-            tool.NewExcludeToolNamesFilter("external_note"),
-        ),
+        agent.WithExternalTools(externalTools),
     }, nil
 }
 
@@ -790,6 +793,12 @@ server, err := agui.New(
     ),
 )
 ```
+
+`ExternalToolsFromRunAgentInput` converts AG-UI `input.Tools` to declaration-only
+trpc-agent-go tools. `WithExternalTools` then exposes those tools to the model
+and defers execution to the caller. If a dynamic declaration has the same name
+as an existing server tool, the existing server tool wins and the dynamic
+declaration does not override or intercept it.
 
 For the complete LLMAgent example, see the server implementation in [examples/agui/server/externaltool/llmagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/llmagent), and the frontend client in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 

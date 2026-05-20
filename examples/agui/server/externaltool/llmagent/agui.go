@@ -14,18 +14,11 @@ import (
 	"errors"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	demotool "trpc.group/trpc-go/trpc-agent-go/examples/agui/server/externaltool/llmagent/tool"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	aguiadapter "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
-)
-
-var externalToolExecutionFilter = tool.NewExcludeToolNamesFilter(
-	demotool.ExternalNoteName,
-	demotool.ExternalApprovalName,
 )
 
 func newAGUIServer(run runner.Runner, sessionService session.Service) (*agui.Server, error) {
@@ -51,7 +44,11 @@ func resolveRunOptions(_ context.Context, input *aguiadapter.RunAgentInput) ([]a
 	if len(input.Messages) == 0 {
 		return nil, errors.New("no messages provided")
 	}
+	externalTools, err := aguirunner.ExternalToolsFromRunAgentInput(input)
+	if err != nil {
+		return nil, err
+	}
 	return []agent.RunOption{
-		agent.WithToolExecutionFilter(externalToolExecutionFilter),
+		agent.WithExternalTools(externalTools),
 	}, nil
 }

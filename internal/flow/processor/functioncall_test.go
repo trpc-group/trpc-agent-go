@@ -2230,6 +2230,65 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(
 	require.True(t, inv.EndInvocation)
 }
 
+func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
+	t *testing.T,
+) {
+	const (
+		toolName = "external_tool"
+		callID   = "call-1"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	externalTool := &mockTool{
+		name:        toolName,
+		shouldPanic: true,
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-external-tool",
+		AgentName:    "test-agent",
+		RunOptions: agent.NewRunOptions(
+			agent.WithExternalTools([]tool.Tool{externalTool}),
+		),
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			toolName: externalTool,
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   callID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      toolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case <-ch:
+		t.Fatalf("unexpected tool response event")
+	default:
+	}
+	require.True(t, inv.EndInvocation)
+}
+
 func TestFunctionCallResponseProcessor_WaitsForToolResponseCompletion(
 	t *testing.T,
 ) {

@@ -271,6 +271,54 @@ func (s *stubTool) Declaration() *tool.Declaration {
 	return s.decl
 }
 
+func TestWithAdditionalTools(t *testing.T) {
+	const toolName = "runtime_tool"
+
+	runtimeTool := &stubTool{
+		decl: &tool.Declaration{Name: toolName},
+	}
+
+	var ro RunOptions
+	WithAdditionalTools([]tool.Tool{runtimeTool})(&ro)
+
+	require.Equal(t, []tool.Tool{runtimeTool}, ro.AdditionalTools)
+	require.Empty(t, ro.ExternalTools)
+	require.Empty(t, ro.ExternalToolNames)
+}
+
+func TestWithExternalTools(t *testing.T) {
+	const (
+		externalToolName = "external_tool"
+		internalToolName = "internal_tool"
+		deniedToolName   = "denied_tool"
+	)
+
+	externalTool := &stubTool{
+		decl: &tool.Declaration{Name: externalToolName},
+	}
+	internalTool := &stubTool{
+		decl: &tool.Declaration{Name: internalToolName},
+	}
+	deniedTool := &stubTool{
+		decl: &tool.Declaration{Name: deniedToolName},
+	}
+
+	ro := NewRunOptions(
+		WithExternalTools([]tool.Tool{externalTool}),
+		WithToolExecutionFilter(
+			tool.NewIncludeToolNamesFilter(internalToolName),
+		),
+	)
+
+	require.Equal(t, []tool.Tool{externalTool}, ro.ExternalTools)
+	require.True(t, ro.ExternalToolNames[externalToolName])
+
+	ctx := context.Background()
+	require.False(t, ro.ShouldExecuteTool(ctx, externalTool))
+	require.True(t, ro.ShouldExecuteTool(ctx, internalTool))
+	require.False(t, ro.ShouldExecuteTool(ctx, deniedTool))
+}
+
 func TestWithToolExecutionFilter(t *testing.T) {
 	const (
 		allowedToolName = "tool1"

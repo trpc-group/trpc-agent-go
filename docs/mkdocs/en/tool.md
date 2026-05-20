@@ -1877,7 +1877,7 @@ tools automatically, then sends the tool results back to the model.
 In some systems, you may want the caller (for example, a client, an upstream
 service, or an external tool runtime such as Model Context Protocol (MCP)) to
 execute tools instead. You can interrupt tool execution with
-`agent.WithToolExecutionFilter(...)`.
+`agent.WithExternalTools(...)` or `agent.WithToolExecutionFilter(...)`.
 
 **Key idea:**
 
@@ -1885,21 +1885,44 @@ execute tools instead. You can interrupt tool execution with
   see and call).
 - `agent.WithToolExecutionFilter(...)` controls **tool execution** (what the
   framework will auto-run after the model requests it).
+- `agent.WithAdditionalTools(...)` appends temporary tools for one run.
+- `agent.WithExternalTools(...)` appends temporary tools and marks them as
+  caller-executed.
 
 #### Basic Flow
 
-1. Run the agent with `WithToolExecutionFilter` so the framework does **not**
-   execute selected tools.
+1. Run the agent with `WithExternalTools` so the model can see caller-owned
+   tools.
 2. Read `tool_calls` from the model response.
 3. Execute the tool externally.
 4. Send a `role=tool` message back so the model can continue.
 
 ```go
-execFilter := tool.NewExcludeToolNamesFilter("external_search")
+type declarationOnlyTool struct {
+    decl *tool.Declaration
+}
+
+func (t *declarationOnlyTool) Declaration() *tool.Declaration {
+    return t.decl
+}
+
+externalSearch := &declarationOnlyTool{
+    decl: &tool.Declaration{
+        Name:        "external_search",
+        Description: "Search a caller-owned system.",
+        InputSchema: &tool.Schema{
+            Type: "object",
+            Properties: map[string]*tool.Schema{
+                "query": {Type: "string"},
+            },
+            Required: []string{"query"},
+        },
+    },
+}
 
 // Step 1: model returns tool_calls, but the tool is NOT executed.
 ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("search ..."),
-    agent.WithToolExecutionFilter(execFilter),
+    agent.WithExternalTools([]tool.Tool{externalSearch}),
 )
 
 // Step 2: extract tool_call_id + arguments from events (omitted).
@@ -1909,9 +1932,18 @@ toolResultJSON := `{"status":"ok","data":"..."}`
 // Step 3/4: send tool result as role=tool, then model continues.
 toolMsg := model.NewToolMessage(toolCallID, "external_search", toolResultJSON)
 ch, err = r.Run(ctx, userID, sessionID, toolMsg,
-    agent.WithToolExecutionFilter(execFilter),
+    agent.WithExternalTools([]tool.Tool{externalSearch}),
 )
 ```
+
+If the tool is already registered on the Agent with `llmagent.WithTools(...)`
+and only its per-run execution policy should change, continue to use
+`agent.WithToolExecutionFilter(...)`. `WithExternalTools` is better for AG-UI,
+browser, mobile, or upstream-service callers that declare tools dynamically on
+each request. If an external tool has the same name as an existing tool, the
+existing tool wins; the external declaration does not override or intercept it.
+This includes tools registered on the Agent and tools added with
+`WithAdditionalTools`.
 
 **Complete example:** `examples/toolinterrupt/`
 
