@@ -2229,9 +2229,10 @@ func formatMemoryContent(memories []*memory.Entry) string {
 		if mem.Memory.Location != "" {
 			meta = append(meta, fmt.Sprintf("at=%s", mem.Memory.Location))
 		}
-		if len(mem.Memory.Topics) > 0 {
-			meta = append(meta, fmt.Sprintf("topics=%s", strings.Join(mem.Memory.Topics, ", ")))
-		}
+		// Do not render topic labels in the preload prompt. The memory_add
+		// tool expects topics as []string, and showing inline
+		// "topics=foo, bar" text can lead models to copy a scalar value into
+		// tool arguments.
 		if len(meta) > 0 {
 			fmt.Fprintf(&sb, " (%s)", strings.Join(meta, "; "))
 		}

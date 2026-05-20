@@ -40,9 +40,14 @@ func (p *SurfacePatch) SetModel(m model.Model) {
 	p.patch.SetModel(m)
 }
 
-// SetTools sets the tool surface override.
+// SetTools sets the tool surface override and clears appended tools.
 func (p *SurfacePatch) SetTools(tools []tool.Tool) {
 	p.patch.SetTools(tools)
+}
+
+// AppendTools appends tools to the node's runtime tool surface.
+func (p *SurfacePatch) AppendTools(tools []tool.Tool) {
+	p.patch.AppendTools(tools)
 }
 
 // SetSkillRepository sets the skill repository surface override.
