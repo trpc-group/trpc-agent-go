@@ -207,6 +207,12 @@ func validateRunRequest(request *engine.RunRequest) error {
 		return errors.New("max rounds must be greater than 0")
 	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
+	case request.BackwardOptions.CaseParallelism < 0:
+		return errors.New("backward case parallelism must be non-negative")
+	case request.AggregationOptions.SurfaceParallelism < 0:
+		return errors.New("aggregation surface parallelism must be non-negative")
+	case request.OptimizerOptions.SurfaceParallelism < 0:
+		return errors.New("optimizer surface parallelism must be non-negative")
 	default:
 		return nil
 	}
