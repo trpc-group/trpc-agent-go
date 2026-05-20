@@ -43,10 +43,6 @@ const (
 	metadataBatchSize = 5000 // Maximum records per batch when querying all metadata
 )
 
-var newBM25Encoder = func(params *encoder.BM25EncoderParams) (TCSparseEncoder, error) {
-	return encoder.NewBM25Encoder(params)
-}
-
 // TCSparseEncoder encodes text into sparse vectors for keyword and hybrid search.
 type TCSparseEncoder interface {
 	// EncodeText encodes a single text into sparse vector format.
@@ -108,7 +104,7 @@ func New(opts ...Option) (*VectorStore, error) {
 	if option.enableTSVector {
 		sparseEncoder = option.sparseEncoder
 		if sparseEncoder == nil {
-			sparseEncoder, err = newBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: option.language})
+			sparseEncoder, err = encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: option.language})
 			if err != nil {
 				return nil, fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
 			}
