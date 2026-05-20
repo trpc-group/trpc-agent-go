@@ -125,7 +125,10 @@ kb := knowledge.New(
 When runner or vector store instances are created dynamically, initialize the sparse encoder once and pass it to TcVector to avoid repeated BM25 encoder setup:
 
 ```go
-import "github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
+import (
+	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
+	vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+)
 
 sparseEncoder, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{
     Bm25Language: "en",

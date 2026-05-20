@@ -1493,6 +1493,7 @@ func TestNewWithTCSparseEncoder(t *testing.T) {
 			WithDatabase("test_db"),
 			WithCollection("test_collection"),
 			WithIndexDimension(128),
+			WithEnableTSVector(true),
 			WithTCSparseEncoder(sparseEncoder),
 		)
 		if err != nil {
@@ -1510,6 +1511,7 @@ func TestNewWithTCSparseEncoder(t *testing.T) {
 			WithDatabase("test_db"),
 			WithCollection("test_collection"),
 			WithIndexDimension(128),
+			WithEnableTSVector(true),
 			WithLanguage("invalid"),
 		)
 		if err == nil {
