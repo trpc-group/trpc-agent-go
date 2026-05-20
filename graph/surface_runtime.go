@@ -74,6 +74,28 @@ func toolSliceToMap(tools []tool.Tool) map[string]tool.Tool {
 	return out
 }
 
+func toolMapToSlice(tools map[string]tool.Tool) []tool.Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]tool.Tool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, t)
+	}
+	return out
+}
+
+func applyToolMapPatch(
+	base map[string]tool.Tool,
+	patch surfacepatch.Patch,
+) (map[string]tool.Tool, bool) {
+	patchedTools, ok := patch.ApplyTools(toolMapToSlice(base))
+	if !ok {
+		return nil, false
+	}
+	return toolSliceToMap(patchedTools), true
+}
+
 func (r *llmRunner) currentNodeID(state State) string {
 	if v, ok := state[StateKeyCurrentNodeID].(string); ok && v != "" {
 		return v

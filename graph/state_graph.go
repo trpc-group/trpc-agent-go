@@ -1515,8 +1515,8 @@ func (r *llmRunner) prepareModelCall(
 		call.tools = mergeToolsWithToolSets(call.ctx, call.tools, r.toolSets)
 	}
 	if patch, ok := graphSurfacePatch(rootInvocation, call.nodeID); ok {
-		if patchedTools, ok := patch.Tools(); ok {
-			call.tools = toolSliceToMap(patchedTools)
+		if patchedTools, ok := applyToolMapPatch(call.tools, patch); ok {
+			call.tools = patchedTools
 		}
 	}
 	return call, nil
@@ -2441,8 +2441,11 @@ func resolveToolsNodeRuntimeTools(
 		localNodeID = currentNodeID
 	}
 	if patch, ok := graphSurfacePatch(invocation, localNodeID); ok {
-		if patchedTools, ok := patch.Tools(); ok {
-			return toolSliceToMap(patchedTools)
+		if patchedTools, ok := applyToolMapPatch(
+			effectiveTools,
+			patch,
+		); ok {
+			return patchedTools
 		}
 	}
 	return effectiveTools
