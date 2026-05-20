@@ -18,10 +18,12 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -296,7 +298,6 @@ func decodeJSONBody[T any](
 	defer r.Body.Close()
 	var req T
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		respond(w, r, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid request body: %v", err)})
 		return req, err
@@ -319,5 +320,110 @@ func validateRunRequest(req *RunRequest) error {
 	if req.Run == nil {
 		return errors.New("run must not be nil")
 	}
+	return validateEngineRunRequest(req.Run)
+}
+
+func validateEngineRunRequest(request *engine.RunRequest) error {
+	if request == nil {
+		return errors.New("run request is nil")
+	}
+	if err := validateEvalSetInputs("train", request.Train); err != nil {
+		return err
+	}
+	if err := validateEvalSetInputs("validation", request.Validation); err != nil {
+		return err
+	}
+	switch {
+	case request.MaxRounds <= 0:
+		return errors.New("max rounds must be greater than 0")
+	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
+		return errors.New("target surface ids must not be empty")
+	case request.BackwardOptions.CaseParallelism < 0:
+		return errors.New("backward case parallelism must be non-negative")
+	case request.AggregationOptions.SurfaceParallelism < 0:
+		return errors.New("aggregation surface parallelism must be non-negative")
+	case request.OptimizerOptions.SurfaceParallelism < 0:
+		return errors.New("optimizer surface parallelism must be non-negative")
+	default:
+		return nil
+	}
+}
+
+func validateEvalSetInputs(role string, inputs []engine.EvalSetInput) error {
+	prefix := role + " "
+	if len(inputs) == 0 {
+		return fmt.Errorf("%sevaluation sets are empty", prefix)
+	}
+	seenEvalSetIDs := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		if input.EvalSetID == "" {
+			return fmt.Errorf("%sevaluation set id is empty", prefix)
+		}
+		if _, ok := seenEvalSetIDs[input.EvalSetID]; ok {
+			return fmt.Errorf("%sevaluation set id %q is duplicated", prefix, input.EvalSetID)
+		}
+		seenEvalSetIDs[input.EvalSetID] = struct{}{}
+		if slices.Contains(input.EvalCaseIDs, "") {
+			return fmt.Errorf("%seval case id for eval set %q is empty", prefix, input.EvalSetID)
+		}
+		selectedCaseIDs := make(map[string]struct{}, len(input.EvalCaseIDs))
+		for _, evalCaseID := range input.EvalCaseIDs {
+			selectedCaseIDs[evalCaseID] = struct{}{}
+		}
+		for _, hint := range input.LossHints {
+			hintEvalCaseID := strings.TrimSpace(hint.EvalCaseID)
+			switch {
+			case hintEvalCaseID == "":
+				return fmt.Errorf("%sloss hint eval case id for eval set %q is empty", prefix, input.EvalSetID)
+			case strings.TrimSpace(hint.MetricName) == "":
+				return fmt.Errorf(
+					"%sloss hint metric name for eval set %q case %q is empty",
+					prefix,
+					input.EvalSetID,
+					hint.EvalCaseID,
+				)
+			case strings.TrimSpace(hint.Reason) == "":
+				return fmt.Errorf(
+					"%sloss hint reason for eval set %q case %q metric %q is empty",
+					prefix,
+					input.EvalSetID,
+					hint.EvalCaseID,
+					hint.MetricName,
+				)
+			case !isValidLossHintSeverity(hint.Severity):
+				return fmt.Errorf(
+					"%sloss hint severity %q for eval set %q case %q metric %q is invalid",
+					prefix,
+					hint.Severity,
+					input.EvalSetID,
+					hint.EvalCaseID,
+					hint.MetricName,
+				)
+			}
+			if len(selectedCaseIDs) > 0 {
+				if _, ok := selectedCaseIDs[hintEvalCaseID]; !ok {
+					return fmt.Errorf(
+						"%sloss hint eval case %q is not selected for eval set %q",
+						prefix,
+						hint.EvalCaseID,
+						input.EvalSetID,
+					)
+				}
+			}
+		}
+	}
 	return nil
+}
+
+func isValidLossHintSeverity(severity promptiter.LossSeverity) bool {
+	switch severity {
+	case "",
+		promptiter.LossSeverityP0,
+		promptiter.LossSeverityP1,
+		promptiter.LossSeverityP2,
+		promptiter.LossSeverityP3:
+		return true
+	default:
+		return false
+	}
 }

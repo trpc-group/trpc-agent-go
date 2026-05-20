@@ -317,11 +317,22 @@ func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
 	)
 	body := `{
 		"run": {
-			"train": [{"evalSetId": "train", "evalCaseIds": ["train_case_1"]}],
+			"train": [{
+				"evalSetId": "train",
+				"evalCaseIds": ["train_case_1"],
+				"lossHints": [{
+					"evalCaseId": "train_case_1",
+					"metricName": "quality",
+					"severity": "P1",
+					"reason": "business reason"
+				}]
+			}],
 			"validation": [{"evalSetId": "validation", "evalCaseIds": ["validation_case_1", "validation_case_2"]}],
 			"TargetSurfaceIDs": ["candidate#instruction"],
-			"MaxRounds": 1
-		}
+			"MaxRounds": 1,
+			"unknownRunField": "ignored"
+		},
+		"unknownRootField": "ignored"
 	}`
 	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewBufferString(body))
 	recorder := httptest.NewRecorder()
@@ -332,6 +343,14 @@ func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
 		{
 			EvalSetID:   "train",
 			EvalCaseIDs: []string{"train_case_1"},
+			LossHints: []enginepkg.LossHint{
+				{
+					EvalCaseID: "train_case_1",
+					MetricName: "quality",
+					Severity:   "P1",
+					Reason:     "business reason",
+				},
+			},
 		},
 	}, captured.Train)
 	assert.Equal(t, []enginepkg.EvalSetInput{
@@ -760,13 +779,21 @@ func TestDecodeJSONBodyRejectsInvalidPayloads(t *testing.T) {
 	extraReq := httptest.NewRequest(http.MethodPost, "/runs", bytes.NewBufferString(`{} {}`))
 	_, err = decodeJSONBody[RunRequest](httptest.NewRecorder(), extraReq, respond)
 	assert.Error(t, err)
+	unknownReq := httptest.NewRequest(http.MethodPost, "/runs", bytes.NewBufferString(`{"unknown":true}`))
+	_, err = decodeJSONBody[RunRequest](httptest.NewRecorder(), unknownReq, respond)
+	assert.NoError(t, err)
 	assert.Equal(t, []int{http.StatusBadRequest, http.StatusBadRequest}, respondCalls)
 }
 
 func TestValidateRunRequest(t *testing.T) {
 	assert.EqualError(t, validateRunRequest(nil), "request must not be nil")
 	assert.EqualError(t, validateRunRequest(&RunRequest{}), "run must not be nil")
-	assert.NoError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{}}))
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{}}), "train evaluation sets are empty")
+	assert.NoError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}))
 }
 
 var _ managerpkg.Manager = (*fakeManager)(nil)

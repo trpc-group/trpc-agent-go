@@ -974,6 +974,35 @@ func TestValidateRunRequest(t *testing.T) {
 		MaxRounds: 1,
 	}), `validation eval case id for eval set "validation" is empty`)
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+			},
+			{
+				EvalSetID: "train",
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train evaluation set id "train" is duplicated`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: "quality",
+						Severity:   promptiter.LossSeverity("P4"),
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss hint severity "P4" for eval set "train" case "case_1" metric "quality" is invalid`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),
 	}), "max rounds must be greater than 0")
@@ -1035,6 +1064,14 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 			{
 				EvalSetID:   "validation",
 				EvalCaseIDs: []string{"case_1"},
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: "quality",
+						Severity:   promptiter.LossSeverityP1,
+						Reason:     "business reason",
+					},
+				},
 			},
 		},
 		InitialProfile: &promptiter.Profile{
@@ -1069,11 +1106,13 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 	require.NotNil(t, cloned)
 	cloned.Train[0].EvalSetID = "mutated"
 	cloned.Validation[0].EvalCaseIDs[0] = "mutated"
+	cloned.Validation[0].LossHints[0].Reason = "mutated"
 	cloned.TargetSurfaceIDs[0] = "mutated"
 	*cloned.InitialProfile.Overrides[0].Value.Text = "mutated"
 	*cloned.StopPolicy.TargetScore = 1.0
 	assert.Equal(t, "train", request.Train[0].EvalSetID)
 	assert.Equal(t, []string{"case_1"}, request.Validation[0].EvalCaseIDs)
+	assert.Equal(t, "business reason", request.Validation[0].LossHints[0].Reason)
 	assert.Equal(t, "candidate#instruction", request.TargetSurfaceIDs[0])
 	assert.Equal(t, "prompt", *request.InitialProfile.Overrides[0].Value.Text)
 	assert.Equal(t, 0.9, *request.StopPolicy.TargetScore)

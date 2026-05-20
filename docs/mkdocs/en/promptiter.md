@@ -473,8 +473,16 @@ Both fields use `[]EvalSetInput` to describe the selected evaluation data:
 
 ```go
 type EvalSetInput struct {
-	EvalSetID   string   // EvalSetID identifies the evaluation set to execute.
-	EvalCaseIDs []string // EvalCaseIDs limits evaluation to the specified cases when present.
+	EvalSetID   string     // EvalSetID identifies the evaluation set to execute.
+	EvalCaseIDs []string   // EvalCaseIDs limits evaluation to the specified cases when present.
+	LossHints   []LossHint // LossHints provides operator-written failure reasons.
+}
+
+type LossHint struct {
+	EvalCaseID string                  // EvalCaseID identifies the case to annotate.
+	MetricName string                  // MetricName identifies the failed metric to annotate.
+	Severity   promptiter.LossSeverity // Severity marks the priority of the hint.
+	Reason     string                  // Reason describes the operator-written failure cause.
 }
 ```
 
@@ -515,6 +523,33 @@ request := &engine.RunRequest{
 ```
 
 Omitting `EvalCaseIDs` or passing an empty slice runs all cases in that eval set. Passing a non-empty slice runs only the listed cases.
+
+If you already know why some bad cases failed, set `LossHints` on the corresponding `EvalSetInput`. Callers only need to provide the case, metric, and reason; PromptIter handles trace and step details internally.
+
+```go
+request := &engine.RunRequest{
+	Train: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-train",
+			LossHints: []engine.LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "answer_quality",
+					Severity:   promptiter.LossSeverityP1,
+					Reason:     "The answer missed the key defensive strategy constraint.",
+				},
+			},
+		},
+	},
+	Validation: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-validation",
+		},
+	},
+}
+```
+
+`LossHints` only supplements training optimization signals. It does not change evaluation scores or validation acceptance decisions. PromptIter uses a hint only when the corresponding case and metric fail in the current round; passing results are not forced into failures. A misspelled case or metric returns an argument error.
 
 #### EvaluationOptions
 

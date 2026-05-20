@@ -1705,14 +1705,14 @@ func TestValidateEvalSetInputsRejectsInvalidInputs(t *testing.T) {
 			EvalSetID: "",
 		},
 	}), "train evaluation set id is empty")
-	assert.NoError(t, validateEvalSetInputs("train", []EvalSetInput{
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
 		{
 			EvalSetID: "train",
 		},
 		{
 			EvalSetID: "train",
 		},
-	}))
+	}), `train evaluation set id "train" is duplicated`)
 	assert.NoError(t, validateEvalSetInputs("train", []EvalSetInput{
 		{
 			EvalSetID:   "train",
@@ -1725,6 +1725,58 @@ func TestValidateEvalSetInputsRejectsInvalidInputs(t *testing.T) {
 			EvalCaseIDs: []string{""},
 		},
 	}), `train eval case id for eval set "train" is empty`)
+	assert.NoError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID:   "train",
+			EvalCaseIDs: []string{"case_1"},
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP1,
+					Reason:     "business reason",
+				},
+			},
+		},
+	}))
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Reason:     " ",
+				},
+			},
+		},
+	}), `train loss hint reason for eval set "train" case "case_1" metric "quality" is empty`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverity("P4"),
+					Reason:     "business reason",
+				},
+			},
+		},
+	}), `train loss hint severity "P4" for eval set "train" case "case_1" metric "quality" is invalid`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID:   "train",
+			EvalCaseIDs: []string{"case_1"},
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_2",
+					MetricName: "quality",
+					Reason:     "business reason",
+				},
+			},
+		},
+	}), `train loss hint eval case "case_2" is not selected for eval set "train"`)
 }
 
 func TestRunRejectsNonPositiveMaxRounds(t *testing.T) {
@@ -3461,6 +3513,141 @@ func TestLossExpandsMetricAcrossTraceTerminalSteps(t *testing.T) {
 		assert.Equal(t, "step_2", losses[0].TerminalLosses[0].StepID)
 		assert.Equal(t, "step_3", losses[0].TerminalLosses[1].StepID)
 	}
+}
+
+func TestMergeLossHintsAppendsToExistingFailedMetricLoss(t *testing.T) {
+	result := &EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Trace: &atrace.Trace{
+							Status: atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID: "step_1",
+									NodeID: "node_1",
+								},
+							},
+						},
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "needs improvement",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	losses, err := (&engine{}).loss(result)
+	require.NoError(t, err)
+	mergedLosses, err := mergeLossHints(losses, result, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP1,
+					Reason:     " hallucinated business answer ",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, mergedLosses, 1)
+	require.Len(t, mergedLosses[0].TerminalLosses, 2)
+	assert.Equal(t, promptiter.TerminalLoss{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+		MetricName: "quality",
+		Severity:   promptiter.LossSeverityP1,
+		StepID:     "step_1",
+		Loss:       "hallucinated business answer",
+	}, mergedLosses[0].TerminalLosses[0])
+	assert.Equal(t, "needs improvement", mergedLosses[0].TerminalLosses[1].Loss)
+}
+
+func TestMergeLossHintsSkipsPassedMetric(t *testing.T) {
+	result := &EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusPassed,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	mergedLosses, err := mergeLossHints(nil, result, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP0,
+					Reason:     "manual concern",
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, mergedLosses)
+}
+
+func TestMergeLossHintsRequiresMetricInTrainingResult(t *testing.T) {
+	result := &EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Metrics: []MetricResult{
+							{
+								MetricName: "accuracy",
+								Status:     status.EvalStatusPassed,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	_, err := mergeLossHints(nil, result, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Reason:     "manual concern",
+				},
+			},
+		},
+	})
+	assert.EqualError(
+		t,
+		err,
+		`loss hint metric "quality" for eval case "case_1" from eval set "train" is missing from training result`,
+	)
 }
 
 func scriptedOutcome(evalSetID string, profileValue string) scriptedEvalOutcome {

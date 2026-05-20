@@ -15,9 +15,11 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	iprofile "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/profile"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/store"
@@ -239,15 +241,78 @@ func validateEvalSetInputs(role string, inputs []engine.EvalSetInput) error {
 	if len(inputs) == 0 {
 		return fmt.Errorf("%sevaluation sets are empty", prefix)
 	}
+	seenEvalSetIDs := make(map[string]struct{}, len(inputs))
 	for _, input := range inputs {
 		if input.EvalSetID == "" {
 			return fmt.Errorf("%sevaluation set id is empty", prefix)
 		}
+		if _, ok := seenEvalSetIDs[input.EvalSetID]; ok {
+			return fmt.Errorf("%sevaluation set id %q is duplicated", prefix, input.EvalSetID)
+		}
+		seenEvalSetIDs[input.EvalSetID] = struct{}{}
 		if slices.Contains(input.EvalCaseIDs, "") {
 			return fmt.Errorf("%seval case id for eval set %q is empty", prefix, input.EvalSetID)
 		}
+		selectedCaseIDs := make(map[string]struct{}, len(input.EvalCaseIDs))
+		for _, evalCaseID := range input.EvalCaseIDs {
+			selectedCaseIDs[evalCaseID] = struct{}{}
+		}
+		for _, hint := range input.LossHints {
+			hintEvalCaseID := strings.TrimSpace(hint.EvalCaseID)
+			switch {
+			case hintEvalCaseID == "":
+				return fmt.Errorf("%sloss hint eval case id for eval set %q is empty", prefix, input.EvalSetID)
+			case strings.TrimSpace(hint.MetricName) == "":
+				return fmt.Errorf(
+					"%sloss hint metric name for eval set %q case %q is empty",
+					prefix,
+					input.EvalSetID,
+					hint.EvalCaseID,
+				)
+			case strings.TrimSpace(hint.Reason) == "":
+				return fmt.Errorf(
+					"%sloss hint reason for eval set %q case %q metric %q is empty",
+					prefix,
+					input.EvalSetID,
+					hint.EvalCaseID,
+					hint.MetricName,
+				)
+			case !isValidLossHintSeverity(hint.Severity):
+				return fmt.Errorf(
+					"%sloss hint severity %q for eval set %q case %q metric %q is invalid",
+					prefix,
+					hint.Severity,
+					input.EvalSetID,
+					hint.EvalCaseID,
+					hint.MetricName,
+				)
+			}
+			if len(selectedCaseIDs) > 0 {
+				if _, ok := selectedCaseIDs[hintEvalCaseID]; !ok {
+					return fmt.Errorf(
+						"%sloss hint eval case %q is not selected for eval set %q",
+						prefix,
+						hint.EvalCaseID,
+						input.EvalSetID,
+					)
+				}
+			}
+		}
 	}
 	return nil
+}
+
+func isValidLossHintSeverity(severity promptiter.LossSeverity) bool {
+	switch severity {
+	case "",
+		promptiter.LossSeverityP0,
+		promptiter.LossSeverityP1,
+		promptiter.LossSeverityP2,
+		promptiter.LossSeverityP3:
+		return true
+	default:
+		return false
+	}
 }
 
 func cloneEvalSetInputs(inputs []engine.EvalSetInput) []engine.EvalSetInput {
@@ -259,6 +324,7 @@ func cloneEvalSetInputs(inputs []engine.EvalSetInput) []engine.EvalSetInput {
 		cloned = append(cloned, engine.EvalSetInput{
 			EvalSetID:   input.EvalSetID,
 			EvalCaseIDs: append([]string(nil), input.EvalCaseIDs...),
+			LossHints:   append([]engine.LossHint(nil), input.LossHints...),
 		})
 	}
 	return cloned
