@@ -46,8 +46,9 @@ var ModelContextWindows = map[string]int{
 	"gpt-5.4-nano": 400000,  // https://developers.openai.com/api/docs/models/gpt-5.4-nano
 
 	// OpenAI GPT-5.2
-	"gpt-5.2":       400000, // https://developers.openai.com/api/docs/models/gpt-5.2
-	"gpt-5.2-codex": 400000, // https://developers.openai.com/api/docs/models/gpt-5.2-codex
+	"gpt-5.2":             400000, // https://developers.openai.com/api/docs/models/gpt-5.2
+	"gpt-5.2-codex":       400000, // https://developers.openai.com/api/docs/models/gpt-5.2-codex
+	"gpt-5.2-chat-latest": 128000, // https://developers.openai.com/api/docs/models/gpt-5.2-chat-latest
 
 	// OpenAI GPT-5.1
 	"gpt-5.1":             400000, // https://developers.openai.com/api/docs/models/gpt-5.1

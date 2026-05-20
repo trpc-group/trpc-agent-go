@@ -62,6 +62,11 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  400000,
 		},
 		{
+			name:      "exact match - GPT-5.2-chat-latest",
+			modelName: "gpt-5.2-chat-latest",
+			expected:  128000,
+		},
+		{
 			name:      "exact match - GPT-5.1-chat-latest",
 			modelName: "gpt-5.1-chat-latest",
 			expected:  128000,
@@ -302,6 +307,12 @@ func TestLookupContextWindow(t *testing.T) {
 			name:      "qwen snapshot prefix match",
 			modelName: "qwen-max-2025-01-25",
 			expected:  32768,
+			ok:        true,
+		},
+		{
+			name:      "OpenAI chat-latest exact match avoids broader prefix",
+			modelName: "gpt-5.2-chat-latest",
+			expected:  128000,
 			ok:        true,
 		},
 		{
