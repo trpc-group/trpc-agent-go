@@ -18,6 +18,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2240,9 +2241,12 @@ func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
 
 	ctx := context.Background()
 	p := NewFunctionCallResponseProcessor(false, nil)
+	var callCount atomic.Int32
 	externalTool := &mockTool{
-		name:        toolName,
-		shouldPanic: true,
+		name: toolName,
+		callHook: func() {
+			callCount.Add(1)
+		},
 	}
 
 	inv := &agent.Invocation{
@@ -2286,6 +2290,7 @@ func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
 		t.Fatalf("unexpected tool response event")
 	default:
 	}
+	assert.Zero(t, callCount.Load())
 	require.True(t, inv.EndInvocation)
 }
 
@@ -3364,6 +3369,7 @@ type mockTool struct {
 	shouldPanic bool
 	delay       time.Duration
 	result      any
+	callHook    func()
 }
 
 func (m *mockTool) Declaration() *tool.Declaration {
@@ -3374,6 +3380,10 @@ func (m *mockTool) Declaration() *tool.Declaration {
 }
 
 func (m *mockTool) Call(ctx context.Context, args []byte) (any, error) {
+	if m.callHook != nil {
+		m.callHook()
+	}
+
 	// Add delay to simulate processing time
 	if m.delay > 0 {
 		select {

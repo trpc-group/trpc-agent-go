@@ -11,12 +11,21 @@ package runner
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 )
+
+const errBadMarshalValue = "bad marshal value"
+
+type badMarshalValue struct{}
+
+func (badMarshalValue) MarshalJSON() ([]byte, error) {
+	return nil, errors.New(errBadMarshalValue)
+}
 
 func TestExternalToolsFromRunAgentInput(t *testing.T) {
 	const (
@@ -98,4 +107,45 @@ func TestExternalToolsFromRunAgentInputRejectsEmptyName(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, tools)
+}
+
+func TestExternalToolsFromRunAgentInputReportsMarshalError(t *testing.T) {
+	const toolName = "bad_marshal"
+
+	var input adapter.RunAgentInput
+	err := json.Unmarshal([]byte(`{
+		"tools": [{"name": "bad_marshal"}]
+	}`), &input)
+	require.NoError(t, err)
+	input.Tools[0].Parameters = badMarshalValue{}
+
+	tools, err := ExternalToolsFromRunAgentInput(&input)
+
+	require.Error(t, err)
+	assert.Nil(t, tools)
+	assert.ErrorContains(t, err, errMarshalAGUIToolParameters)
+	assert.ErrorContains(t, err, toolName)
+	assert.ErrorContains(t, err, errBadMarshalValue)
+}
+
+func TestExternalToolsFromRunAgentInputReportsUnmarshalError(t *testing.T) {
+	const toolName = "bad_unmarshal"
+
+	var input adapter.RunAgentInput
+	err := json.Unmarshal([]byte(`{
+		"tools": [
+			{
+				"name": "bad_unmarshal",
+				"parameters": {"type": 123}
+			}
+		]
+	}`), &input)
+	require.NoError(t, err)
+
+	tools, err := ExternalToolsFromRunAgentInput(&input)
+
+	require.Error(t, err)
+	assert.Nil(t, tools)
+	assert.ErrorContains(t, err, errUnmarshalAGUIToolParameters)
+	assert.ErrorContains(t, err, toolName)
 }

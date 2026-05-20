@@ -20,6 +20,7 @@ import (
 
 const (
 	errAGUIToolNameRequired        = "agui tool name is required"
+	errConvertAGUIToolParameters   = "convert agui tool[%d] %q parameters: %w"
 	errMarshalAGUIToolParameters   = "marshal agui tool parameters"
 	errUnmarshalAGUIToolParameters = "unmarshal agui tool parameters"
 	jsonSchemaTypeObject           = "object"
@@ -36,13 +37,18 @@ func ExternalToolsFromRunAgentInput(
 		return nil, nil
 	}
 	tools := make([]agenttool.Tool, 0, len(input.Tools))
-	for _, inputTool := range input.Tools {
+	for i, inputTool := range input.Tools {
 		if inputTool.Name == "" {
 			return nil, errors.New(errAGUIToolNameRequired)
 		}
 		schema, err := aguiToolParametersToSchema(inputTool.Parameters)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf(
+				errConvertAGUIToolParameters,
+				i,
+				inputTool.Name,
+				err,
+			)
 		}
 		tools = append(tools, &declarationOnlyTool{
 			declaration: &agenttool.Declaration{
