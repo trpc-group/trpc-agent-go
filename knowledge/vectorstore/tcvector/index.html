@@ -1660,6 +1660,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#reusing-sparse-encoders" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reusing Sparse Encoders
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2401,6 +2410,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#reusing-sparse-encoders" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reusing Sparse Encoders
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2617,6 +2635,11 @@
 <td><code>true</code></td>
 </tr>
 <tr>
+<td><code>WithTCSparseEncoder(encoder)</code></td>
+<td>Use a pre-initialized sparse encoder for keyword and hybrid retrieval</td>
+<td>Default BM25 encoder</td>
+</tr>
+<tr>
 <td><code>WithHybridSearchWeights(vector, text)</code></td>
 <td>Hybrid retrieval weights (vector/text)</td>
 <td><code>0.7, 0.3</code></td>
@@ -2734,13 +2757,8 @@
 </tr>
 </tbody>
 </table>
-<h2 id="filter-support">Filter Support</h2>
-<p>TcVector filter support:</p>
-<ul>
-<li>✅ Supports all metadata filtering</li>
-<li>✅ v0.4.0+ new collections automatically support JSON index (requires TCVector service support)</li>
-<li>⚡ Optional: Use <code>WithFilterIndexFields</code> to build additional indexes for frequently queried fields</li>
-</ul>
+<h3 id="reusing-sparse-encoders">Reusing Sparse Encoders</h3>
+<p>When runner or vector store instances are created dynamically, initialize the sparse encoder once and pass it to TcVector to avoid repeated BM25 encoder setup:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
@@ -2755,21 +2773,65 @@
 <span class="normal"><a href="#__codelineno-2-12">12</a></span>
 <span class="normal"><a href="#__codelineno-2-13">13</a></span>
 <span class="normal"><a href="#__codelineno-2-14">14</a></span>
-<span class="normal"><a href="#__codelineno-2-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="c1">// Recommended configuration (suitable for most scenarios)</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="nx">vectorStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithURL</span><span class="p">(</span><span class="s">&quot;https://your-endpoint&quot;</span><span class="p">),</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterAll</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// Recommended: automatically index all metadata fields, no need to manually manage indexes</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="c1">// ... other configuration</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="p">)</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="c1">// Optional: Build additional indexes for frequently queried fields to optimize performance (use with WithFilterAll(true))</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="nx">metadataKeys</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">source</span><span class="p">.</span><span class="nx">GetAllMetadataKeys</span><span class="p">(</span><span class="nx">sources</span><span class="p">)</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="nx">vectorStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithURL</span><span class="p">(</span><span class="s">&quot;https://your-endpoint&quot;</span><span class="p">),</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterAll</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterIndexFields</span><span class="p">(</span><span class="nx">metadataKeys</span><span class="p">),</span><span class="w"> </span><span class="c1">// Optional: build additional inverted indexes for faster queries</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">    </span><span class="c1">// ... other configuration</span>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-2-15">15</a></span>
+<span class="normal"><a href="#__codelineno-2-16">16</a></span>
+<span class="normal"><a href="#__codelineno-2-17">17</a></span>
+<span class="normal"><a href="#__codelineno-2-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="s">&quot;github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder&quot;</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector&quot;</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="nx">sparseEncoder</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">encoder</span><span class="p">.</span><span class="nx">NewBM25Encoder</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">encoder</span><span class="p">.</span><span class="nx">BM25EncoderParams</span><span class="p">{</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">    </span><span class="nx">Bm25Language</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;en&quot;</span><span class="p">,</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="p">})</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="c1">// Handle error</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="p">}</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="nx">tcVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithURL</span><span class="p">(</span><span class="s">&quot;https://your-tcvector-endpoint&quot;</span><span class="p">),</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithUsername</span><span class="p">(</span><span class="s">&quot;your-username&quot;</span><span class="p">),</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithTCSparseEncoder</span><span class="p">(</span><span class="nx">sparseEncoder</span><span class="p">),</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>WithTCSparseEncoder</code> only replaces the encoder used by TSVector. It does not enable TSVector by itself; keep <code>WithEnableTSVector(true)</code> when keyword or hybrid retrieval is required.</p>
+<h2 id="filter-support">Filter Support</h2>
+<p>TcVector filter support:</p>
+<ul>
+<li>✅ Supports all metadata filtering</li>
+<li>✅ v0.4.0+ new collections automatically support JSON index (requires TCVector service support)</li>
+<li>⚡ Optional: Use <code>WithFilterIndexFields</code> to build additional indexes for frequently queried fields</li>
+</ul>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-3-10">10</a></span>
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span>
+<span class="normal"><a href="#__codelineno-3-14">14</a></span>
+<span class="normal"><a href="#__codelineno-3-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="c1">// Recommended configuration (suitable for most scenarios)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="nx">vectorStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithURL</span><span class="p">(</span><span class="s">&quot;https://your-endpoint&quot;</span><span class="p">),</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterAll</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// Recommended: automatically index all metadata fields, no need to manually manage indexes</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="c1">// ... other configuration</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="p">)</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="c1">// Optional: Build additional indexes for frequently queried fields to optimize performance (use with WithFilterAll(true))</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="nx">metadataKeys</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">source</span><span class="p">.</span><span class="nx">GetAllMetadataKeys</span><span class="p">(</span><span class="nx">sources</span><span class="p">)</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="nx">vectorStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithURL</span><span class="p">(</span><span class="s">&quot;https://your-endpoint&quot;</span><span class="p">),</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterAll</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterIndexFields</span><span class="p">(</span><span class="nx">metadataKeys</span><span class="p">),</span><span class="w"> </span><span class="c1">// Optional: build additional inverted indexes for faster queries</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="w">    </span><span class="c1">// ... other configuration</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Notes:</strong>
 - <strong>WithFilterAll(true)</strong> (Recommended): Automatically create JSON index for <code>metadata</code> fields, making all metadata fields filterable without pre-defining schema.
@@ -2796,7 +2858,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 20, 2026 12:50:40 UTC">2026-05-20 12:50:40</span>
   </span>
 
     

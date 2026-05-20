@@ -1660,13 +1660,22 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      复用稀疏向量编码器
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#_7" class="md-nav__link">
+  <a href="#_8" class="md-nav__link">
     <span class="md-ellipsis">
       过滤器支持
     </span>
@@ -2401,13 +2410,22 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      复用稀疏向量编码器
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#_7" class="md-nav__link">
+  <a href="#_8" class="md-nav__link">
     <span class="md-ellipsis">
       过滤器支持
     </span>
@@ -2617,6 +2635,11 @@
 <td><code>true</code></td>
 </tr>
 <tr>
+<td><code>WithTCSparseEncoder(encoder)</code></td>
+<td>使用预初始化的稀疏向量编码器进行关键词和混合检索</td>
+<td>默认 BM25 encoder</td>
+</tr>
+<tr>
 <td><code>WithHybridSearchWeights(vector, text)</code></td>
 <td>混合检索权重（向量/文本）</td>
 <td><code>0.7, 0.3</code></td>
@@ -2734,13 +2757,8 @@
 </tr>
 </tbody>
 </table>
-<h2 id="_7">过滤器支持</h2>
-<p>TcVector 对过滤器的支持：</p>
-<ul>
-<li>✅ 支持所有元数据过滤</li>
-<li>✅ v0.4.0+ 新建集合自动支持 JSON 索引（需 TCVector 服务支持）</li>
-<li>⚡ 可选：使用 <code>WithFilterIndexFields</code> 为高频字段构建额外索引</li>
-</ul>
+<h3 id="_7">复用稀疏向量编码器</h3>
+<p>当 runner 或 vector store 动态创建时，可以先初始化一次 sparse encoder，再传给 TcVector，避免重复初始化 BM25 encoder：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
@@ -2755,21 +2773,65 @@
 <span class="normal"><a href="#__codelineno-2-12">12</a></span>
 <span class="normal"><a href="#__codelineno-2-13">13</a></span>
 <span class="normal"><a href="#__codelineno-2-14">14</a></span>
-<span class="normal"><a href="#__codelineno-2-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="c1">// 推荐配置（适用于大多数场景）</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="nx">vectorStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithURL</span><span class="p">(</span><span class="s">&quot;https://your-endpoint&quot;</span><span class="p">),</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterAll</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// 推荐开启：自动索引所有元数据字段，无需手动管理索引</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="c1">// ... 其他配置</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="p">)</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="c1">// 可选：为高频字段构建额外索引以优化性能（配合 WithFilterAll(true) 使用）</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="nx">metadataKeys</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">source</span><span class="p">.</span><span class="nx">GetAllMetadataKeys</span><span class="p">(</span><span class="nx">sources</span><span class="p">)</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="nx">vectorStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithURL</span><span class="p">(</span><span class="s">&quot;https://your-endpoint&quot;</span><span class="p">),</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterAll</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterIndexFields</span><span class="p">(</span><span class="nx">metadataKeys</span><span class="p">),</span><span class="w"> </span><span class="c1">// 可选：构建额外倒排索引加速查询</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">    </span><span class="c1">// ... 其他配置</span>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-2-15">15</a></span>
+<span class="normal"><a href="#__codelineno-2-16">16</a></span>
+<span class="normal"><a href="#__codelineno-2-17">17</a></span>
+<span class="normal"><a href="#__codelineno-2-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="s">&quot;github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder&quot;</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector&quot;</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="nx">sparseEncoder</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">encoder</span><span class="p">.</span><span class="nx">NewBM25Encoder</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">encoder</span><span class="p">.</span><span class="nx">BM25EncoderParams</span><span class="p">{</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">    </span><span class="nx">Bm25Language</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;en&quot;</span><span class="p">,</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="p">})</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="c1">// 处理 error</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="p">}</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="nx">tcVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithURL</span><span class="p">(</span><span class="s">&quot;https://your-tcvector-endpoint&quot;</span><span class="p">),</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithUsername</span><span class="p">(</span><span class="s">&quot;your-username&quot;</span><span class="p">),</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithTCSparseEncoder</span><span class="p">(</span><span class="nx">sparseEncoder</span><span class="p">),</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>WithTCSparseEncoder</code> 只替换 TSVector 使用的 encoder，不会自动开启 TSVector；如果需要关键词或混合检索，仍需保持 <code>WithEnableTSVector(true)</code>。</p>
+<h2 id="_8">过滤器支持</h2>
+<p>TcVector 对过滤器的支持：</p>
+<ul>
+<li>✅ 支持所有元数据过滤</li>
+<li>✅ v0.4.0+ 新建集合自动支持 JSON 索引（需 TCVector 服务支持）</li>
+<li>⚡ 可选：使用 <code>WithFilterIndexFields</code> 为高频字段构建额外索引</li>
+</ul>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-3-10">10</a></span>
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span>
+<span class="normal"><a href="#__codelineno-3-14">14</a></span>
+<span class="normal"><a href="#__codelineno-3-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="c1">// 推荐配置（适用于大多数场景）</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="nx">vectorStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithURL</span><span class="p">(</span><span class="s">&quot;https://your-endpoint&quot;</span><span class="p">),</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterAll</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// 推荐开启：自动索引所有元数据字段，无需手动管理索引</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="c1">// ... 其他配置</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="p">)</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="c1">// 可选：为高频字段构建额外索引以优化性能（配合 WithFilterAll(true) 使用）</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="nx">metadataKeys</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">source</span><span class="p">.</span><span class="nx">GetAllMetadataKeys</span><span class="p">(</span><span class="nx">sources</span><span class="p">)</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="nx">vectorStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithURL</span><span class="p">(</span><span class="s">&quot;https://your-endpoint&quot;</span><span class="p">),</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterAll</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="w">    </span><span class="nx">vectortcvector</span><span class="p">.</span><span class="nx">WithFilterIndexFields</span><span class="p">(</span><span class="nx">metadataKeys</span><span class="p">),</span><span class="w"> </span><span class="c1">// 可选：构建额外倒排索引加速查询</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="w">    </span><span class="c1">// ... 其他配置</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>说明：</strong>
 - <strong>WithFilterAll(true)</strong>（推荐）：自动为 <code>metadata</code> 字段创建 JSON 索引，使所有元数据字段均可被过滤查询，无需预先定义 schema。
@@ -2796,7 +2858,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月8日 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月20日 12:50:40 UTC">2026-05-20 12:50:40</span>
   </span>
 
     
