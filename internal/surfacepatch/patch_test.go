@@ -93,6 +93,37 @@ func TestWithPatch_MergesBySurfaceTypePerNode(t *testing.T) {
 	require.Equal(t, "old", tools[0].Declaration().Name)
 }
 
+func TestWithPatch_AppendsToolsUntilLaterReplacement(t *testing.T) {
+	var first Patch
+	first.AppendTools([]tool.Tool{dummyTool{name: "one"}})
+
+	var second Patch
+	second.AppendTools([]tool.Tool{dummyTool{name: "two"}})
+
+	cfgs := WithPatch(nil, "root", first)
+	cfgs = WithPatch(cfgs, "root", second)
+
+	patch, ok := PatchForNode(cfgs, "root")
+	require.True(t, ok)
+	tools, ok := patch.ApplyTools([]tool.Tool{
+		dummyTool{name: "base"},
+	})
+	require.True(t, ok)
+	requireToolNames(t, tools, []string{"base", "one", "two"})
+
+	var replacement Patch
+	replacement.SetTools([]tool.Tool{dummyTool{name: "replacement"}})
+	cfgs = WithPatch(cfgs, "root", replacement)
+
+	patch, ok = PatchForNode(cfgs, "root")
+	require.True(t, ok)
+	tools, ok = patch.ApplyTools([]tool.Tool{
+		dummyTool{name: "base"},
+	})
+	require.True(t, ok)
+	requireToolNames(t, tools, []string{"replacement"})
+}
+
 func TestPatch_TracksExplicitZeroValues(t *testing.T) {
 	var patch Patch
 	patch.SetInstruction("")
@@ -125,6 +156,44 @@ func TestPatch_IgnoresNilModelOverride(t *testing.T) {
 	require.False(t, ok)
 	require.Nil(t, modelValue)
 	require.True(t, patch.IsEmpty())
+}
+
+func TestPatch_ApplyToolsAppendsToBaseOrReplacement(t *testing.T) {
+	var appendOnly Patch
+	appendOnly.AppendTools([]tool.Tool{dummyTool{name: "added"}})
+
+	tools, ok := appendOnly.ApplyTools([]tool.Tool{
+		dummyTool{name: "base"},
+	})
+	require.True(t, ok)
+	requireToolNames(t, tools, []string{"base", "added"})
+
+	_, ok = appendOnly.Tools()
+	require.False(t, ok)
+
+	var replaceAndAppend Patch
+	replaceAndAppend.SetTools([]tool.Tool{
+		dummyTool{name: "replacement"},
+	})
+	replaceAndAppend.AppendTools([]tool.Tool{
+		dummyTool{name: "added"},
+	})
+
+	tools, ok = replaceAndAppend.ApplyTools([]tool.Tool{
+		dummyTool{name: "base"},
+	})
+	require.True(t, ok)
+	requireToolNames(t, tools, []string{"replacement", "added"})
+
+	tools, ok = replaceAndAppend.Tools()
+	require.True(t, ok)
+	requireToolNames(t, tools, []string{"replacement", "added"})
+
+	var emptyAppend Patch
+	emptyAppend.AppendTools(nil)
+	require.True(t, emptyAppend.IsEmpty())
+	_, ok = emptyAppend.ApplyTools(nil)
+	require.False(t, ok)
 }
 
 func TestPatch_ClonesMutableValues(t *testing.T) {
@@ -224,4 +293,17 @@ func TestPatchForNode_ReadsMapStringPatchConfigs(t *testing.T) {
 	globalInstruction, ok = again.GlobalInstruction()
 	require.True(t, ok)
 	require.Equal(t, "global", globalInstruction)
+}
+
+func requireToolNames(
+	t *testing.T,
+	tools []tool.Tool,
+	want []string,
+) {
+	t.Helper()
+	got := make([]string, 0, len(tools))
+	for _, tl := range tools {
+		got = append(got, tl.Declaration().Name)
+	}
+	require.Equal(t, want, got)
 }

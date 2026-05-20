@@ -257,9 +257,6 @@ func (a *LLMAgent) userToolsForInvocation(
 	ctx context.Context,
 	patch surfacepatch.Patch,
 ) ([]tool.Tool, map[string]bool) {
-	if patchedTools, ok := patch.Tools(); ok {
-		return patchedTools, collectUserToolNames(patchedTools)
-	}
 	a.mu.RLock()
 	refreshToolSets := a.option.RefreshToolSetsOnRun
 	staticTools := append([]tool.Tool(nil), a.tools...)
@@ -271,6 +268,9 @@ func (a *LLMAgent) userToolsForInvocation(
 	toolSets := append([]tool.ToolSet(nil), a.option.ToolSets...)
 	a.mu.RUnlock()
 
+	if patchedTools, ok := patch.Tools(); ok {
+		return patchedTools, collectUserToolNames(patchedTools)
+	}
 	if !refreshToolSets {
 		userTools := make([]tool.Tool, 0, len(userToolNames))
 		for _, t := range staticTools {
@@ -278,7 +278,7 @@ func (a *LLMAgent) userToolsForInvocation(
 				userTools = append(userTools, t)
 			}
 		}
-		return userTools, userToolNames
+		return applyUserToolPatch(userTools, userToolNames, patch)
 	}
 	userTools := append([]tool.Tool(nil), baseTools...)
 	userToolNames = collectUserToolNames(baseTools)
@@ -289,7 +289,19 @@ func (a *LLMAgent) userToolsForInvocation(
 			userToolNames[t.Declaration().Name] = true
 		}
 	}
-	return userTools, userToolNames
+	return applyUserToolPatch(userTools, userToolNames, patch)
+}
+
+func applyUserToolPatch(
+	userTools []tool.Tool,
+	userToolNames map[string]bool,
+	patch surfacepatch.Patch,
+) ([]tool.Tool, map[string]bool) {
+	patchedTools, ok := patch.ApplyTools(userTools)
+	if !ok {
+		return userTools, userToolNames
+	}
+	return patchedTools, collectUserToolNames(patchedTools)
 }
 
 func filterInvocationUserTools(
