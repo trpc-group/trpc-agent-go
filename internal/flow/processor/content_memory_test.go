@@ -148,6 +148,8 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				"date=2024-05-07",
 				"with=Alice, Bob",
 				"at=Kyoto",
+			},
+			excludes: []string{
 				"topics=travel, hiking",
 			},
 		},
