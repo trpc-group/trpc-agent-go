@@ -197,11 +197,13 @@ var ModelContextWindows = map[string]int{
 	"llama-4-maverick": 1048576,  // 1M per model card
 
 	// Meta Llama 3.3 — https://www.llama.com/docs/model-cards-and-prompt-formats/llama3_3
-	// The 3.3 generation's main model card lists 70B only, but Meta later
-	// shipped a lightweight 3.3-8B Instruct variant; OpenRouter and Hugging
-	// Face both serve it at 128k.
+	// Meta only released a 70B size for the 3.3 generation (model card:
+	// https://github.com/meta-llama/llama-models/blob/main/models/llama3_3/MODEL_CARD.md
+	// — 70B Instruct, December 6 2024). Some hosted providers expose a
+	// `meta-llama/llama-3.3-8b-instruct` slug, but it is not an official Meta
+	// release; treat such names as unknown and let them fall back to the
+	// default window rather than encoding a fabricated value here.
 	"llama-3.3-70b-instruct":  131072, // 128k per model card
-	"llama-3.3-8b-instruct":   128000, // https://openrouter.ai/meta-llama/llama-3.3-8b-instruct
 	"llama-3.3-70b-versatile": 128000, // Groq deployment of llama-3.3-70b — https://console.groq.com/docs/models
 
 	// Meta Llama 3.2 — https://www.llama.com/docs/model-cards-and-prompt-formats/llama3_2
