@@ -334,7 +334,14 @@ func defaultAppNameResolver(ctx context.Context, input *adapter.RunAgentInput) (
 
 // defaultRunOptionResolver is the default run option resolver.
 func defaultRunOptionResolver(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
-	return nil, nil
+	externalTools, err := ExternalToolsFromRunAgentInput(input)
+	if err != nil {
+		return nil, err
+	}
+	if len(externalTools) == 0 {
+		return nil, nil
+	}
+	return []agent.RunOption{agent.WithExternalTools(externalTools)}, nil
 }
 
 // defaultStateResolver returns no runtime state.

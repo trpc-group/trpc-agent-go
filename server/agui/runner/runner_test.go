@@ -1037,6 +1037,52 @@ func TestRunTailToolMessagesEmitAndPersistAsCurrentTurn(t *testing.T) {
 	assert.Equal(t, "lookup", currentTurn[1].ToolName)
 }
 
+func TestRunInjectsAGUIInputToolsByDefault(t *testing.T) {
+	const toolName = "client_search"
+
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(underlying)
+	var input adapter.RunAgentInput
+	err := json.Unmarshal([]byte(`{
+		"threadId": "thread",
+		"runId": "run",
+		"messages": [{"role": "user", "content": "hi"}],
+		"tools": [
+			{
+				"name": "client_search",
+				"description": "Search a frontend-owned source.",
+				"parameters": {"type": "object"}
+			}
+		]
+	}`), &input)
+	require.NoError(t, err)
+
+	eventsCh, err := r.Run(context.Background(), &input)
+	require.NoError(t, err)
+	collectEvents(t, eventsCh)
+
+	require.Len(t, gotOptions.ExternalTools, 1)
+	externalTool := gotOptions.ExternalTools[0]
+	decl := externalTool.Declaration()
+	require.NotNil(t, decl)
+	assert.Equal(t, toolName, decl.Name)
+	assert.False(t, gotOptions.ShouldExecuteTool(
+		context.Background(),
+		externalTool,
+	))
+}
+
 func TestRunToolMessageKeepsCurrentTurnWithoutRewriter(t *testing.T) {
 	var gotMessage model.Message
 	var gotOptions agent.RunOptions

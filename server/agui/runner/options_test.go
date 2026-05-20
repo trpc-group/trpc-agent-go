@@ -11,6 +11,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -82,6 +83,36 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.False(t, opts.ToolCallDeltaStreamingEnabled)
 	assert.False(t, opts.StreamingToolResultActivityEnabled)
 	assert.False(t, opts.MessagesSnapshotRunLifecycleEventsEnabled)
+}
+
+func TestDefaultRunOptionResolverAddsExternalTools(t *testing.T) {
+	const toolName = "client_search"
+
+	var input adapter.RunAgentInput
+	err := json.Unmarshal([]byte(`{
+		"tools": [
+			{
+				"name": "client_search",
+				"description": "Search a frontend-owned source.",
+				"parameters": {"type": "object"}
+			}
+		]
+	}`), &input)
+	assert.NoError(t, err)
+
+	opts := NewOptions()
+	resolvedOpts, err := opts.RunOptionResolver(context.Background(), &input)
+
+	assert.NoError(t, err)
+	runOpts := agent.NewRunOptions(resolvedOpts...)
+	if assert.Len(t, runOpts.ExternalTools, 1) {
+		decl := runOpts.ExternalTools[0].Declaration()
+		assert.Equal(t, toolName, decl.Name)
+		assert.False(t, runOpts.ShouldExecuteTool(
+			context.Background(),
+			runOpts.ExternalTools[0],
+		))
+	}
 }
 
 func TestWithUserIDResolver(t *testing.T) {

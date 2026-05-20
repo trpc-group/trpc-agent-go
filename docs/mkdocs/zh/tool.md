@@ -1881,8 +1881,8 @@ ch, err = r.Run(ctx, userID, sessionID, toolMsg,
 如果工具已经通过 `llmagent.WithTools(...)` 注册在 Agent 上，只是想在某次
 运行中改成由调用方执行，可以继续使用 `agent.WithToolExecutionFilter(...)`。
 `WithExternalTools` 更适合 AG-UI、浏览器、移动端或上游服务在每次请求中动态声明
-工具的场景。外部工具与已有工具同名时，已有工具优先，外部声明不会覆盖或拦截它。
-这里的已有工具包括 Agent 上注册的工具，以及通过 `WithAdditionalTools` 追加的工具。
+工具的场景。AG-UI runner 默认会把请求里的 `input.Tools` 映射为
+`WithExternalTools`。外部工具与已有工具同名时，已有工具优先，外部声明不会覆盖或拦截它。这里的已有工具包括 Agent 上注册的工具，以及通过 `WithAdditionalTools` 追加的工具。
 
 **完整示例：** `examples/toolinterrupt/`
 

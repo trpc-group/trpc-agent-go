@@ -24,8 +24,7 @@ in one conversation:
 Call 2 uses the same `threadId` and a new `runId` for the follow-up `role=tool`
 request.
 
-The server converts `input.Tools` with
-`aguirunner.ExternalToolsFromRunAgentInput(input)` and passes them to
+The default AG-UI runner converts `input.Tools` and passes them to
 `agent.WithExternalTools(...)`. These tools do not need a backend `Call`
 implementation.
 

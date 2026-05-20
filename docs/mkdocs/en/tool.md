@@ -1940,7 +1940,8 @@ If the tool is already registered on the Agent with `llmagent.WithTools(...)`
 and only its per-run execution policy should change, continue to use
 `agent.WithToolExecutionFilter(...)`. `WithExternalTools` is better for AG-UI,
 browser, mobile, or upstream-service callers that declare tools dynamically on
-each request. If an external tool has the same name as an existing tool, the
+each request. The AG-UI runner maps request `input.Tools` to `WithExternalTools`
+by default. If an external tool has the same name as an existing tool, the
 existing tool wins; the external declaration does not override or intercept it.
 This includes tools registered on the Agent and tools added with
 `WithAdditionalTools`.

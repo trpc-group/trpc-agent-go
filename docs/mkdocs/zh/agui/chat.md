@@ -273,10 +273,13 @@ server, _ := agui.New(
 
 ## 自定义 `RunOptionResolver`
 
-`RunOptionResolver` 用于为本次 Agent 运行补充 [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go)。它会在每次请求处理时执行，返回的选项只作用于当前这次运行。
+`RunOptionResolver` 用于为本次 Agent 运行补充 [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go)。它会在每次请求处理时执行，返回的选项只作用于当前这次运行。`WithRunOptionResolver` 会替换默认 resolver，所以如果仍要把请求中的 `input.Tools` 暴露为调用方执行的工具，需要自行组合 `ExternalToolsFromRunAgentInput`。
 
 ```go
 import (
+	"context"
+	"errors"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
@@ -288,11 +291,16 @@ resolver := func(_ context.Context, input *adapter.RunAgentInput) ([]agent.RunOp
 	if input == nil {
 		return nil, errors.New("empty input")
 	}
+	externalTools, err := aguirunner.ExternalToolsFromRunAgentInput(input)
+	if err != nil {
+		return nil, err
+	}
 	forwardedProps, ok := input.ForwardedProps.(map[string]any)
 	if !ok || forwardedProps == nil {
-		return nil, nil
+		return []agent.RunOption{agent.WithExternalTools(externalTools)}, nil
 	}
-	opts := make([]agent.RunOption, 0, 2)
+	opts := make([]agent.RunOption, 0, 3)
+	opts = append(opts, agent.WithExternalTools(externalTools))
 	if modelName, ok := forwardedProps["modelName"].(string); ok && modelName != "" {
 		opts = append(opts, agent.WithModelName(modelName))
 	}
@@ -755,7 +763,7 @@ server, err := agui.New(
 
 ### LLMAgent 外部工具模式
 
-当 AG-UI 服务端直接包装 `llmagent.Agent`，并且只需要把部分工具交给调用方执行时，使用该模式。如果外部工具已经注册到 Agent 中，`RunOptionResolver` 可以返回 `agent.WithToolExecutionFilter(...)`，声明哪些工具不在服务端执行。如果外部工具由前端或上游服务在本次请求中动态声明，`RunOptionResolver` 可以把这些声明转换成 `[]tool.Tool`，再返回 `agent.WithExternalTools(...)`。
+当 AG-UI 服务端直接包装 `llmagent.Agent`，并且只需要把部分工具交给调用方执行时，使用该模式。如果外部工具已经注册到 Agent 中，`RunOptionResolver` 可以返回 `agent.WithToolExecutionFilter(...)`，声明哪些工具不在服务端执行。如果前端或上游服务通过 AG-UI `input.Tools` 动态声明工具，默认 AG-UI runner 会自动转换成 `agent.WithExternalTools(...)` 并注入 `runner.Run`。
 
 第一次请求使用 `role=user`。当模型生成需要调用方执行的 tool call 时，事件流输出 `TOOL_CALL_START`、`TOOL_CALL_ARGS` 和 `TOOL_CALL_END`，并在该 assistant tool-call 响应后结束本次 run。调用方从事件流中获取 `toolCallId` 和工具参数，执行工具后，再用 `role=tool` message 发起第二次请求。
 
@@ -765,37 +773,18 @@ server, err := agui.New(
 
 ```go
 import (
-    "context"
-
-    "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
-    aguiadapter "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
-    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 )
 
-func resolveRunOptions(
-    context.Context,
-    input *aguiadapter.RunAgentInput,
-) ([]agent.RunOption, error) {
-    externalTools, err := aguirunner.ExternalToolsFromRunAgentInput(input)
-    if err != nil {
-        return nil, err
-    }
-    return []agent.RunOption{
-        agent.WithExternalTools(externalTools),
-    }, nil
-}
-
-server, err := agui.New(
-    run,
-    agui.WithAGUIRunnerOptions(
-        aguirunner.WithRunOptionResolver(resolveRunOptions),
-    ),
-)
+server, err := agui.New(run)
 ```
 
-`ExternalToolsFromRunAgentInput` 会把 AG-UI `input.Tools` 转成只有声明的
-trpc-agent-go 工具。`WithExternalTools` 再把这些工具暴露给模型，并把执行权交给调用方。如果动态声明与服务端已有工具同名，服务端已有工具优先，动态声明不会覆盖或拦截已有工具。
+默认情况下，AG-UI runner 会把 AG-UI `input.Tools` 转成只有声明的
+trpc-agent-go 工具，通过 `WithExternalTools` 暴露给模型，并把执行权交给调用方。如果动态声明与服务端已有工具同名，服务端已有工具优先，动态声明不会覆盖或拦截已有工具。
+
+如果业务替换了默认 `RunOptionResolver`，需要自行组合
+`aguirunner.ExternalToolsFromRunAgentInput(input)` 和
+`agent.WithExternalTools(...)` 来保留这段默认行为。
 
 完整 LLMAgent 示例：服务端可参考 [examples/agui/server/externaltool/llmagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/llmagent)，前端客户端可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
