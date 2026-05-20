@@ -381,6 +381,40 @@ func TestLLMAgent_Run_SurfacePatch_ReplacesUserToolsAndPreservesFrameworkTools(t
 	require.Contains(t, m.got.Tools, testTransferToolName)
 }
 
+func TestLLMAgent_Run_SurfacePatch_AppendsUserTools(t *testing.T) {
+	m := &captureModel{}
+	agt := New(
+		"test-agent",
+		WithModel(m),
+		WithTools([]tool.Tool{
+			dummyTool{decl: &tool.Declaration{Name: "old_user_tool"}},
+		}),
+		WithSubAgents([]agent.Agent{&mockAgent{name: "child"}}),
+	)
+
+	var patch agent.SurfacePatch
+	patch.AppendTools([]tool.Tool{
+		dummyTool{decl: &tool.Declaration{Name: "frontend_tool"}},
+	})
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithSurfacePatchForNode("test-agent", patch),
+		)),
+	)
+
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.NotNil(t, m.got)
+	require.Contains(t, m.got.Tools, "old_user_tool")
+	require.Contains(t, m.got.Tools, "frontend_tool")
+	require.Contains(t, m.got.Tools, testTransferToolName)
+}
+
 func TestLLMAgent_Run_AgentToolFilterStillAppliesWithInvocationToolSurface(
 	t *testing.T,
 ) {
