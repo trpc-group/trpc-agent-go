@@ -1549,6 +1549,7 @@ func appendRunOptionTools(
 	if len(opts.AdditionalTools) == 0 && len(opts.ExternalTools) == 0 {
 		return allTools, userToolNames, hasUserToolTracking, nil
 	}
+	allTools = append([]tool.Tool(nil), allTools...)
 	if hasUserToolTracking {
 		userToolNames = copyToolNames(userToolNames)
 	}

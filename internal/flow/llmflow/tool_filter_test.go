@@ -647,6 +647,47 @@ func TestGetFilteredTools_RunOptionToolsDoNotMutateUserToolNames(
 	require.Equal(t, map[string]bool{registeredToolName: true}, userToolNames)
 }
 
+func TestGetFilteredTools_RunOptionToolsDoNotMutateToolSlice(
+	t *testing.T,
+) {
+	f := New(nil, nil, Options{})
+
+	const (
+		registeredToolName = "registered_tool"
+		runtimeToolName    = "runtime_tool"
+		externalToolName   = "external_tool"
+	)
+
+	registeredTool := &mockTool{name: registeredToolName}
+	runtimeTool := &mockTool{name: runtimeToolName}
+	externalTool := &mockTool{name: externalToolName}
+	backing := make([]tool.Tool, 1, 3)
+	backing[0] = registeredTool
+
+	mockAgent := &mockAgentWithInvocationToolSurface{
+		name:          "test-agent",
+		allTools:      backing[:1],
+		userToolNames: map[string]bool{},
+	}
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+	inv.RunOptions = agent.NewRunOptions(
+		agent.WithAdditionalTools([]tool.Tool{runtimeTool}),
+		agent.WithExternalTools([]tool.Tool{externalTool}),
+	)
+
+	filtered := f.getFilteredTools(context.Background(), inv)
+
+	require.Len(t, filtered, 3)
+	require.True(t, hasToolName(filtered, registeredToolName))
+	require.True(t, hasToolName(filtered, runtimeToolName))
+	require.True(t, hasToolName(filtered, externalToolName))
+	expandedBacking := backing[:cap(backing)]
+	require.Nil(t, expandedBacking[1])
+	require.Nil(t, expandedBacking[2])
+}
+
 // TestGetFilteredTools_WithExcludeFilter tests tool filtering using exclude filter.
 func TestGetFilteredTools_WithExcludeFilter(t *testing.T) {
 	f := New(nil, nil, Options{})
