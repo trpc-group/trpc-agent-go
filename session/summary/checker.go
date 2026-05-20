@@ -41,6 +41,8 @@ var (
 
 const tokenThresholdConversationTextStateKey = session.StateTempPrefix +
 	"summary:token_threshold_conversation_text"
+const tokenThresholdReasoningContentStateKey = session.StateTempPrefix +
+	"summary:token_threshold_reasoning_content"
 
 func getTokenCounter() model.TokenCounter {
 	defaultTokenCounterMu.RLock()
@@ -202,13 +204,14 @@ func CheckTimeThreshold(interval time.Duration) Checker {
 	}
 }
 
-// checkTokenThresholdFromText checks if the token count of the given text exceeds the threshold.
-func checkTokenThresholdFromText(
+// checkTokenThresholdFromMessage checks if the token count of the given message exceeds the threshold.
+func checkTokenThresholdFromMessage(
 	ctx context.Context,
 	tokenCount int,
-	conversationText string,
+	message model.Message,
 ) bool {
-	if conversationText == "" {
+	if strings.TrimSpace(message.Content) == "" &&
+		strings.TrimSpace(message.ReasoningContent) == "" {
 		return false
 	}
 	if ctx == nil {
@@ -218,7 +221,7 @@ func checkTokenThresholdFromText(
 	// SimpleTokenCounter.CountTokens currently never returns an error.
 	tokens, _ := getTokenCounter().CountTokens(
 		ctx,
-		model.Message{Content: conversationText},
+		message,
 	)
 	return tokens > tokenCount
 }
@@ -258,11 +261,11 @@ func checkTokenThreshold(
 	tokenCount int,
 	sess *session.Session,
 ) bool {
-	if conversationText, ok := getInjectedTokenThresholdConversationText(sess); ok {
-		return checkTokenThresholdFromText(
+	if message, ok := getInjectedTokenThresholdMessage(sess); ok {
+		return checkTokenThresholdFromMessage(
 			ctx,
 			tokenCount,
-			conversationText,
+			message,
 		)
 	}
 	delta := filterDeltaEvents(sess)
@@ -273,27 +276,29 @@ func checkTokenThreshold(
 	if len(thresholdEvents) == 0 {
 		return false
 	}
-	conversationText := extractConversationText(
+	message := extractTokenThresholdMessage(
 		thresholdEvents, nil, nil,
 	)
-	return checkTokenThresholdFromText(
+	return checkTokenThresholdFromMessage(
 		ctx,
 		tokenCount,
-		conversationText,
+		message,
 	)
 }
 
-func getInjectedTokenThresholdConversationText(
-	sess *session.Session,
-) (string, bool) {
+func getInjectedTokenThresholdMessage(sess *session.Session) (model.Message, bool) {
 	if sess == nil {
-		return "", false
+		return model.Message{}, false
 	}
-	raw, ok := sess.GetState(tokenThresholdConversationTextStateKey)
-	if !ok {
-		return "", false
+	content, hasContent := sess.GetState(tokenThresholdConversationTextStateKey)
+	reasoning, hasReasoning := sess.GetState(tokenThresholdReasoningContentStateKey)
+	if !hasContent && !hasReasoning {
+		return model.Message{}, false
 	}
-	return string(raw), true
+	return model.Message{
+		Content:          string(content),
+		ReasoningContent: string(reasoning),
+	}, true
 }
 
 // ChecksAll composes multiple checkers using AND logic.
