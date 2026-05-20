@@ -363,9 +363,18 @@ func (s *sessionSummarizer) buildCheckSession(
 	delta := filterDeltaEvents(checkSess)
 	filtered := s.filterEventsForSummary(delta)
 	thresholdEvents := filterThresholdEventsForSession(filtered, checkSess)
+	thresholdMessage := extractTokenThresholdMessage(
+		thresholdEvents,
+		s.toolCallFormatter,
+		s.toolResultFormatter,
+	)
 	checkSess.SetState(
 		tokenThresholdConversationTextStateKey,
-		[]byte(s.extractConversationText(thresholdEvents)),
+		[]byte(thresholdMessage.Content),
+	)
+	checkSess.SetState(
+		tokenThresholdReasoningContentStateKey,
+		[]byte(thresholdMessage.ReasoningContent),
 	)
 	return checkSess
 }
@@ -602,6 +611,36 @@ func extractConversationText(
 		}
 	}
 
+	return strings.Join(parts, "\n")
+}
+
+func extractTokenThresholdMessage(
+	events []event.Event,
+	toolCallFmt ToolCallFormatter,
+	toolResultFmt ToolResultFormatter,
+) model.Message {
+	return model.Message{
+		Content: extractConversationText(
+			events,
+			toolCallFmt,
+			toolResultFmt,
+		),
+		ReasoningContent: extractReasoningContent(events),
+	}
+}
+
+func extractReasoningContent(events []event.Event) string {
+	var parts []string
+	for _, e := range events {
+		if e.Response == nil {
+			continue
+		}
+		for _, choice := range e.Response.Choices {
+			if trimmed := strings.TrimSpace(choice.Message.ReasoningContent); trimmed != "" {
+				parts = append(parts, trimmed)
+			}
+		}
+	}
 	return strings.Join(parts, "\n")
 }
 
