@@ -375,6 +375,8 @@ func TestSaveArtifactTool_SupportsArtifactSave_Negatives(t *testing.T) {
 		})},
 	}
 	for _, tc := range cases {
+		tc := tc // Go 1.21 range-var scoping: rebind for safety against
+		// future t.Parallel() calls. Cheap defensive write.
 		t.Run(tc.name, func(t *testing.T) {
 			require.False(t, SupportsArtifactSave(tc.inv))
 		})

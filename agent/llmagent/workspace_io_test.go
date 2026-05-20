@@ -105,10 +105,16 @@ func TestLLMAgent_Run_PreservesExistingWorkspaceInContext(t *testing.T) {
 }
 
 func TestLLMAgent_Run_WithoutCodeExecutor_NoWorkspaceInContext(t *testing.T) {
+	// captureOK defaults to false, so require.False alone would also pass
+	// if the callback never ran. Pin "callback was invoked" explicitly via
+	// `called` so the negative assertion can't quietly turn into a no-op
+	// after future refactors of LLMAgent.Run.
+	var called bool
 	var captureOK bool
 
 	cb := agent.NewCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		called = true
 		_, captureOK = workspaceio.WorkspaceFromContext(ctx)
 		return nil, nil
 	})
@@ -129,5 +135,6 @@ func TestLLMAgent_Run_WithoutCodeExecutor_NoWorkspaceInContext(t *testing.T) {
 	for range events {
 	}
 
+	require.True(t, called, "BeforeAgent callback must run for the negative assertion below to be meaningful")
 	require.False(t, captureOK, "no Workspace should be installed when no executor is configured")
 }
