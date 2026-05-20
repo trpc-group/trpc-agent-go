@@ -4961,6 +4961,7 @@ runtime surfaces for a specific node by stable <code>nodeID</code> within a sing
 <li><code>SetFewShot([][]model.Message)</code>: overrides the node few-shot examples for this run.</li>
 <li><code>SetModel(model.Model)</code>: overrides the model instance used by the node for this run.</li>
 <li><code>SetTools([]tool.Tool)</code>: overrides the node tool surface for this run. This means replacing the tool set visible at runtime, not merely changing tool descriptions.</li>
+<li><code>AppendTools([]tool.Tool)</code>: appends tools to the node tool surface for this run. This keeps the node's existing tools and adds the supplied tools after them.</li>
 <li><code>SetSkillRepository(skill.Repository)</code>: overrides the node skill repository for this run. Passing <code>nil</code> explicitly disables the node skill surface.</li>
 </ul>
 <p>Not every node supports every surface. Common cases are:</p>
@@ -5017,7 +5018,7 @@ runtime surfaces for a specific node by stable <code>nodeID</code> within a sing
 </span><span id="__span-39-15"><a id="__codelineno-39-15" name="__codelineno-39-15"></a><span class="nx">reviewerPatch</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Reject any plan that lacks cost analysis.&quot;</span><span class="p">)</span>
 </span><span id="__span-39-16"><a id="__codelineno-39-16" name="__codelineno-39-16"></a>
 </span><span id="__span-39-17"><a id="__codelineno-39-17" name="__codelineno-39-17"></a><span class="kd">var</span><span class="w"> </span><span class="nx">toolsPatch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
-</span><span id="__span-39-18"><a id="__codelineno-39-18" name="__codelineno-39-18"></a><span class="nx">toolsPatch</span><span class="p">.</span><span class="nx">SetTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">,</span><span class="w"> </span><span class="nx">priceTool</span><span class="p">})</span>
+</span><span id="__span-39-18"><a id="__codelineno-39-18" name="__codelineno-39-18"></a><span class="nx">toolsPatch</span><span class="p">.</span><span class="nx">AppendTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">priceTool</span><span class="p">})</span>
 </span><span id="__span-39-19"><a id="__codelineno-39-19" name="__codelineno-39-19"></a>
 </span><span id="__span-39-20"><a id="__codelineno-39-20" name="__codelineno-39-20"></a><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
 </span><span id="__span-39-21"><a id="__codelineno-39-21" name="__codelineno-39-21"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
@@ -5034,6 +5035,9 @@ runtime surfaces for a specific node by stable <code>nodeID</code> within a sing
 <ul>
 <li>Different surface types are combined.</li>
 <li>For the same surface type, the later option overrides the earlier one.</li>
+<li>Tool append patches are incremental. Repeated <code>AppendTools(...)</code> calls add to
+  the effective tool set. A later <code>SetTools(...)</code> call replaces earlier tool
+  appends for that node.</li>
 </ul>
 <h3 id="composite-and-nested-structures">Composite and Nested Structures</h3>
 <p>The same pattern applies beyond a single <code>LLMAgent</code>:</p>
@@ -5131,7 +5135,7 @@ runtime surfaces for a specific node by stable <code>nodeID</code> within a sing
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 23, 2026 02:11:27 UTC">2026-04-23 02:11:27</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 20, 2026 03:56:53 UTC">2026-05-20 03:56:53</span>
   </span>
 
     
