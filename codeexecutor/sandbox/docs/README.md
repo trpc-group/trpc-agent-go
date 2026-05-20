@@ -14,6 +14,12 @@ but they do not provide local managed sandbox enforcement on every platform.
 
 On Linux, Sandbox Code Executor uses the `bwrap` executable found on `PATH`. If `bwrap` is unavailable, setup fails before the command starts.
 
+When the runtime itself runs inside Docker, Kubernetes, or a managed container
+platform, the outer container must allow the namespace and mount operations
+needed by `bwrap`. See
+[`DEPLOYMENT_INSIDE_DOCKER.md`](DEPLOYMENT_INSIDE_DOCKER.md) for recommended
+permissions, risk notes, and validation commands.
+
 ## Network
 
 Network policy is enforced as a binary boundary between isolated and host

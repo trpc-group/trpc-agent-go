@@ -1,0 +1,9 @@
+.git
+.env
+.env.*
+**/.env
+**/.env.*
+glm.sh
+**/glm.sh
+*.key
+*.pem

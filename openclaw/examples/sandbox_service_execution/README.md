@@ -21,6 +21,64 @@ go run ./examples/sandbox_service_execution \
   -scenario all
 ```
 
+## Docker validation
+
+Build the validation image from the repository root so the `openclaw` module can
+use its local `replace ../...` dependencies:
+
+```bash
+docker build \
+  -f openclaw/examples/sandbox_service_execution/Dockerfile \
+  -t openclaw-sandbox-service-execution .
+```
+
+The image contains Go, `bwrap`, `python3`, Bash, and CA certificates. It does
+not contain model credentials. Pass credentials from the host environment:
+
+```bash
+source ./glm.sh
+```
+
+### Test matrix
+
+| Container mode | Command | Expected result |
+| --- | --- | --- |
+| Default Docker | `docker run --rm -e OPENAI_API_KEY=dummy -e OPENAI_BASE_URL=http://127.0.0.1 -e MODEL_NAME=dummy openclaw-sandbox-service-execution -config ./examples/sandbox_service_execution/openclaw.yaml -scenario basic-python` | Fails during `bwrap` preflight before any model call. |
+| Minimal permissions | `docker run --rm --security-opt seccomp=unconfined --security-opt systempaths=unconfined --cap-add SYS_ADMIN -e OPENAI_BASE_URL -e OPENAI_API_KEY -e MODEL_NAME openclaw-sandbox-service-execution` | Runs `-scenario all`; all scenarios should pass when model credentials are valid. |
+| Privileged fallback | `docker run --rm --privileged -e OPENAI_BASE_URL -e OPENAI_API_KEY -e MODEL_NAME openclaw-sandbox-service-execution` | Runs `-scenario all`; should pass, but grants broader permissions to the outer container. |
+
+To run one scenario, pass flags after the image name:
+
+```bash
+docker run --rm \
+  --security-opt seccomp=unconfined \
+  --security-opt systempaths=unconfined \
+  --cap-add SYS_ADMIN \
+  -e OPENAI_BASE_URL \
+  -e OPENAI_API_KEY \
+  -e MODEL_NAME \
+  openclaw-sandbox-service-execution \
+  -config ./examples/sandbox_service_execution/openclaw.yaml \
+  -scenario network-restricted
+```
+
+For Kubernetes-style deployments, the minimal Docker permissions map to:
+
+```yaml
+securityContext:
+  capabilities:
+    add:
+      - SYS_ADMIN
+  seccompProfile:
+    type: Unconfined
+  procMount: Unmasked
+```
+
+If the platform only exposes a privileged-container switch, use
+`securityContext.privileged: true` as a fallback. On managed platforms such as
+123, prefer a service-specific whitelist for `SYS_ADMIN` plus unconfined
+seccomp before falling back to full privileged mode.
+
 The harness uses a temporary state directory and random loopback port for each
 scenario. It does not write API keys into the generated config or print secret
 values. The OpenClaw service inherits the model credentials, while sandboxed
