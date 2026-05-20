@@ -152,6 +152,20 @@ func expectEventsByRefs(
 		WillReturnRows(sqlRows)
 }
 
+func expectFullSessionEventsList(
+	mock sqlmock.Sqlmock,
+	key session.Key,
+	rows ...limitedEventRow,
+) *sqlmock.ExpectedQuery {
+	sqlRows := sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"})
+	for _, row := range rows {
+		sqlRows.AddRow(row.id, key.AppName, key.UserID, key.SessionID, row.event, row.createdAt)
+	}
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlRows)
+}
+
 func expectNoUserAnchor(
 	mock sqlmock.Sqlmock,
 	key session.Key,
@@ -2337,12 +2351,13 @@ func TestGetSession_WithAfterTime(t *testing.T) {
 
 	// Mock: Query events with afterTime filter (should filter events)
 	afterTime := time.Now().Add(-1 * time.Hour)
-	expectLimitedEventRefs(mock, key, afterTime, defaultSessionEventLimit)
-	expectNoUserAnchor(mock, key, sessState.CreatedAt)
+	expectFullSessionEventsList(mock, key)
 
 	sess, err := s.GetSession(ctx, key, session.WithEventTime(afterTime))
 	require.NoError(t, err)
 	assert.NotNil(t, sess)
+	assert.NotNil(t, sess.Events)
+	assert.Empty(t, sess.Events)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -143,6 +143,10 @@ func (s *Service) getSessionEvents(
 	if page != nil {
 		return s.getEventsList(ctx, []session.Key{key}, []time.Time{sessionCreatedAt}, limit, afterTime, page)
 	}
+	// WithEventTime is based on event.Timestamp, not the DB created_at column.
+	if !afterTime.IsZero() {
+		return s.getEventsList(ctx, []session.Key{key}, []time.Time{sessionCreatedAt}, limit, afterTime, nil)
+	}
 	effectiveLimit := limit
 	if effectiveLimit <= 0 {
 		effectiveLimit = s.opts.sessionEventLimit
@@ -679,7 +683,7 @@ func (s *Service) getLimitedSessionEvents(
 		return nil, err
 	}
 	if len(refs) == 0 && filterAfterTime.IsZero() {
-		return [][]event.Event{nil}, nil
+		return [][]event.Event{[]event.Event{}}, nil
 	}
 	filteredEvents := filterEventsByTimestamp(events, filterAfterTime)
 	if idx := firstUserEventIndex(filteredEvents); idx >= 0 {
@@ -694,7 +698,7 @@ func (s *Service) getLimitedSessionEvents(
 		return nil, err
 	}
 	if !ok {
-		return [][]event.Event{nil}, nil
+		return [][]event.Event{[]event.Event{}}, nil
 	}
 	return [][]event.Event{append([]event.Event{anchor}, filteredEvents...)}, nil
 }

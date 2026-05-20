@@ -73,6 +73,8 @@ func TestGetSession_Success(t *testing.T) {
 	sess, err := s.GetSession(ctx, key)
 	require.NoError(t, err)
 	assert.NotNil(t, sess)
+	assert.NotNil(t, sess.Events)
+	assert.Empty(t, sess.Events)
 	assert.Equal(t, key.SessionID, sess.ID)
 	assert.Equal(t, sessState.State, sess.State)
 
@@ -289,6 +291,7 @@ func TestGetSession_WithEventTimeFiltersEventTimestamp(t *testing.T) {
 	anchor := event.NewResponseEvent("inv-anchor", "author", &model.Response{
 		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "anchor"}}},
 	})
+	anchor.Timestamp = afterTime.Add(-30 * time.Minute)
 	oldByEventTime := event.NewResponseEvent("inv-old", "author", &model.Response{
 		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "old"}}},
 	})
@@ -300,26 +303,17 @@ func TestGetSession_WithEventTimeFiltersEventTimestamp(t *testing.T) {
 	anchorBytes, _ := json.Marshal(anchor)
 	oldBytes, _ := json.Marshal(oldByEventTime)
 	newBytes, _ := json.Marshal(newByEventTime)
+	anchorCreatedAt := afterTime.Add(-30 * time.Minute)
 	oldCreatedAt := afterTime.Add(time.Minute)
 	newCreatedAt := afterTime.Add(2 * time.Minute)
 
-	expectLimitedEventRefs(
+	expectFullSessionEventsList(
 		mock,
 		key,
-		afterTime,
-		defaultSessionEventLimit,
-		eventRef{id: 3, createdAt: newCreatedAt},
-		eventRef{id: 2, createdAt: oldCreatedAt},
+		limitedEventRow{id: 1, event: anchorBytes, createdAt: anchorCreatedAt},
+		limitedEventRow{id: 2, event: newBytes, createdAt: newCreatedAt},
+		limitedEventRow{id: 3, event: oldBytes, createdAt: oldCreatedAt},
 	)
-	expectEventsByRefs(
-		mock,
-		limitedEventRow{id: 3, event: newBytes, createdAt: newCreatedAt},
-		limitedEventRow{id: 2, event: oldBytes, createdAt: oldCreatedAt},
-	)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event, created_at FROM session_events")).
-		WithArgs(key.AppName, key.UserID, key.SessionID, sessState.CreatedAt, oldCreatedAt, oldCreatedAt, int64(2)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
-			AddRow(int64(1), anchorBytes, afterTime.Add(-30*time.Minute)))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "filter_key", "summary", "updated_at"}))
 
@@ -378,18 +372,11 @@ func TestGetSession_WithEventTimeUsesLoadedUserAnchor(t *testing.T) {
 	userCreatedAt := afterTime.Add(time.Minute)
 	assistantCreatedAt := afterTime.Add(2 * time.Minute)
 
-	expectLimitedEventRefs(
+	expectFullSessionEventsList(
 		mock,
 		key,
-		afterTime,
-		defaultSessionEventLimit,
-		eventRef{id: 2, createdAt: assistantCreatedAt},
-		eventRef{id: 1, createdAt: userCreatedAt},
-	)
-	expectEventsByRefs(
-		mock,
-		limitedEventRow{id: 2, event: assistantBytes, createdAt: assistantCreatedAt},
 		limitedEventRow{id: 1, event: userBytes, createdAt: userCreatedAt},
+		limitedEventRow{id: 2, event: assistantBytes, createdAt: assistantCreatedAt},
 	)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "filter_key", "summary", "updated_at"}))
@@ -517,6 +504,8 @@ func TestGetSession_WithTTL(t *testing.T) {
 	sess, err := s.GetSession(ctx, key)
 	require.NoError(t, err)
 	assert.NotNil(t, sess)
+	assert.NotNil(t, sess.Events)
+	assert.Empty(t, sess.Events)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
