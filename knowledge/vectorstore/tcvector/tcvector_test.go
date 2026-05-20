@@ -1484,19 +1484,51 @@ func TestNewWithTCSparseEncoder(t *testing.T) {
 		return newMockClient(), nil
 	})
 
-	sparseEncoder := newMockSparseEncoder()
-	vs, err := New(
-		WithDatabase("test_db"),
-		WithCollection("test_collection"),
-		WithIndexDimension(128),
-		WithTCSparseEncoder(sparseEncoder),
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if vs.sparseEncoder != sparseEncoder {
-		t.Fatalf("expected provided sparse encoder to be used")
-	}
+	t.Run("uses_provided_encoder", func(t *testing.T) {
+		sparseEncoder := newMockSparseEncoder()
+		vs, err := New(
+			WithDatabase("test_db"),
+			WithCollection("test_collection"),
+			WithIndexDimension(128),
+			WithTCSparseEncoder(sparseEncoder),
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if vs.sparseEncoder != sparseEncoder {
+			t.Fatalf("expected provided sparse encoder to be used")
+		}
+	})
+
+	t.Run("creates_default_encoder_when_not_provided", func(t *testing.T) {
+		oldNewBM25Encoder := newBM25Encoder
+		defer func() { newBM25Encoder = oldNewBM25Encoder }()
+
+		defaultEncoder := newMockSparseEncoder()
+		var receivedParams *encoder.BM25EncoderParams
+		newBM25Encoder = func(params *encoder.BM25EncoderParams) (TCSparseEncoder, error) {
+			receivedParams = params
+			return defaultEncoder, nil
+		}
+
+		vs, err := New(
+			WithDatabase("test_db"),
+			WithCollection("test_collection"),
+			WithIndexDimension(128),
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if vs.sparseEncoder != defaultEncoder {
+			t.Fatalf("expected default sparse encoder to be used")
+		}
+		if receivedParams == nil {
+			t.Fatal("expected bm25 encoder params")
+		}
+		if receivedParams.Bm25Language != defaultOptions.language {
+			t.Fatalf("expected language %q, got %q", defaultOptions.language, receivedParams.Bm25Language)
+		}
+	})
 }
 
 // containsString checks if s contains substr.
