@@ -13,11 +13,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
 )
+
+// OptimizerOptions configures optimizer-stage execution behavior.
+type OptimizerOptions struct {
+	// SurfaceParallelismEnabled enables concurrent optimization across target surfaces.
+	SurfaceParallelismEnabled bool
+	// SurfaceParallelism caps concurrent optimization across target surfaces when SurfaceParallelismEnabled is true. Zero uses GOMAXPROCS.
+	SurfaceParallelism int
+}
 
 func (e *engine) optimize(
 	ctx context.Context,
@@ -25,6 +34,7 @@ func (e *engine) optimize(
 	profile *promptiter.Profile,
 	aggregation *AggregationResult,
 	targetSurfaceSet targetSurfaceSet,
+	options OptimizerOptions,
 ) (*promptiter.PatchSet, error) {
 	if e.optimizer == nil {
 		return nil, errors.New("optimizer is nil")
@@ -36,26 +46,37 @@ func (e *engine) optimize(
 		return &promptiter.PatchSet{Patches: []promptiter.SurfacePatch{}}, nil
 	}
 	overrideIndex := buildOverrideIndex(profile)
-	patches := make([]promptiter.SurfacePatch, 0, len(aggregation.Surfaces))
-	for _, aggregatedSurface := range aggregation.Surfaces {
+	patches := make([]promptiter.SurfacePatch, len(aggregation.Surfaces))
+	parallelism := 0
+	if options.SurfaceParallelismEnabled {
+		parallelism = options.SurfaceParallelism
+		if parallelism <= 0 {
+			parallelism = runtime.GOMAXPROCS(0)
+		}
+	}
+	if err := runIndexedParallel(ctx, len(aggregation.Surfaces), parallelism, func(ctx context.Context, index int) error {
+		aggregatedSurface := aggregation.Surfaces[index]
 		if !targetSurfaceSet.contains(aggregatedSurface.SurfaceID) {
-			return nil, fmt.Errorf("aggregated surface id %q is outside target surfaces", aggregatedSurface.SurfaceID)
+			return fmt.Errorf("aggregated surface id %q is outside target surfaces", aggregatedSurface.SurfaceID)
 		}
 		surface, err := resolveProfileSurface(structure, overrideIndex, aggregatedSurface.SurfaceID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		response, err := e.optimizer.Optimize(ctx, &optimizer.Request{
 			Surface:  &surface,
 			Gradient: cloneAggregatedGradient(aggregatedSurface),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("optimize surface %q: %w", aggregatedSurface.SurfaceID, err)
+			return fmt.Errorf("optimize surface %q: %w", aggregatedSurface.SurfaceID, err)
 		}
 		if response == nil || response.Patch == nil {
-			return nil, fmt.Errorf("optimize surface %q returned empty result", aggregatedSurface.SurfaceID)
+			return fmt.Errorf("optimize surface %q returned empty result", aggregatedSurface.SurfaceID)
 		}
-		patches = append(patches, *response.Patch)
+		patches[index] = *response.Patch
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	sort.SliceStable(patches, func(i, j int) bool {
 		return patches[i].SurfaceID < patches[j].SurfaceID

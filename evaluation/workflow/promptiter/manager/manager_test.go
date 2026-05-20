@@ -983,11 +983,47 @@ func TestValidateRunRequest(t *testing.T) {
 		MaxRounds:        1,
 		TargetSurfaceIDs: []string{},
 	}), "target surface ids must not be empty")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		BackwardOptions: promptiterengine.BackwardOptions{
+			CaseParallelism: -1,
+		},
+	}), "backward case parallelism must be non-negative")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		AggregationOptions: promptiterengine.AggregationOptions{
+			SurfaceParallelism: -1,
+		},
+	}), "aggregation surface parallelism must be non-negative")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		OptimizerOptions: promptiterengine.OptimizerOptions{
+			SurfaceParallelism: -1,
+		},
+	}), "optimizer surface parallelism must be non-negative")
 	assert.NoError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train:            testEvalSetInputs("train"),
 		Validation:       testEvalSetInputs("validation"),
 		MaxRounds:        1,
 		TargetSurfaceIDs: []string{"candidate#instruction"},
+		BackwardOptions: promptiterengine.BackwardOptions{
+			CaseParallelismEnabled: true,
+			CaseParallelism:        1,
+		},
+		AggregationOptions: promptiterengine.AggregationOptions{
+			SurfaceParallelismEnabled: true,
+			SurfaceParallelism:        1,
+		},
+		OptimizerOptions: promptiterengine.OptimizerOptions{
+			SurfaceParallelismEnabled: true,
+			SurfaceParallelism:        1,
+		},
 	}))
 }
 
@@ -1013,6 +1049,18 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 			},
 		},
 		TargetSurfaceIDs: []string{"candidate#instruction"},
+		BackwardOptions: promptiterengine.BackwardOptions{
+			CaseParallelismEnabled: true,
+			CaseParallelism:        4,
+		},
+		AggregationOptions: promptiterengine.AggregationOptions{
+			SurfaceParallelismEnabled: true,
+			SurfaceParallelism:        3,
+		},
+		OptimizerOptions: promptiterengine.OptimizerOptions{
+			SurfaceParallelismEnabled: true,
+			SurfaceParallelism:        2,
+		},
 		StopPolicy: promptiterengine.StopPolicy{
 			TargetScore: &targetScore,
 		},
@@ -1029,6 +1077,9 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 	assert.Equal(t, "candidate#instruction", request.TargetSurfaceIDs[0])
 	assert.Equal(t, "prompt", *request.InitialProfile.Overrides[0].Value.Text)
 	assert.Equal(t, 0.9, *request.StopPolicy.TargetScore)
+	assert.Equal(t, promptiterengine.BackwardOptions{CaseParallelismEnabled: true, CaseParallelism: 4}, cloned.BackwardOptions)
+	assert.Equal(t, promptiterengine.AggregationOptions{SurfaceParallelismEnabled: true, SurfaceParallelism: 3}, cloned.AggregationOptions)
+	assert.Equal(t, promptiterengine.OptimizerOptions{SurfaceParallelismEnabled: true, SurfaceParallelism: 2}, cloned.OptimizerOptions)
 }
 
 func TestCloneRunRequestNil(t *testing.T) {
