@@ -888,14 +888,68 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 		defer db.Close()
 
 		s := createTestService(t, db)
-		mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event, created_at FROM session_events")).
-			WithArgs(key.AppName, key.UserID, key.SessionID, createdAt).
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at FROM session_events")).
+			WithArgs(key.AppName, key.UserID, key.SessionID, createdAt, userAnchorSearchBatchSize).
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
 
 		anchor, ok, err := s.getLastUserEventBeforeRefs(context.Background(), key, createdAt, nil)
 		assert.Error(t, err)
 		assert.False(t, ok)
 		assert.Empty(t, anchor.InvocationID)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("AnchorSearchScansBoundedBatches", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db)
+		assistant1 := event.NewResponseEvent("inv-assistant-1", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant-1"}}},
+		})
+		assistant2 := event.NewResponseEvent("inv-assistant-2", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant-2"}}},
+		})
+		user := event.NewResponseEvent("inv-user", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user"}}},
+		})
+		assistant1Bytes, _ := json.Marshal(assistant1)
+		assistant2Bytes, _ := json.Marshal(assistant2)
+		userBytes, _ := json.Marshal(user)
+		userCreatedAt := createdAt.Add(time.Minute)
+		assistant1CreatedAt := createdAt.Add(2 * time.Minute)
+		assistant2CreatedAt := createdAt.Add(3 * time.Minute)
+
+		expectPreviousEventRefs(
+			mock,
+			key,
+			createdAt,
+			nil,
+			eventRef{id: 3, createdAt: assistant2CreatedAt},
+			eventRef{id: 2, createdAt: assistant1CreatedAt},
+		)
+		expectEventsByRefs(
+			mock,
+			limitedEventRow{id: 3, event: assistant2Bytes, createdAt: assistant2CreatedAt},
+			limitedEventRow{id: 2, event: assistant1Bytes, createdAt: assistant1CreatedAt},
+		)
+		expectPreviousEventRefs(
+			mock,
+			key,
+			createdAt,
+			&eventRef{id: 2, createdAt: assistant1CreatedAt},
+			eventRef{id: 1, createdAt: userCreatedAt},
+		)
+		expectEventsByRefs(
+			mock,
+			limitedEventRow{id: 1, event: userBytes, createdAt: userCreatedAt},
+		)
+
+		anchor, ok, err := s.getLastUserEventBeforeRefs(context.Background(), key, createdAt, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, "inv-user", anchor.InvocationID)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 

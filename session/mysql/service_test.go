@@ -174,9 +174,31 @@ func expectNoUserAnchor(
 ) *sqlmock.ExpectedQuery {
 	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	args = append(args, extraArgs...)
-	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event, created_at FROM session_events")).
+	args = append(args, userAnchorSearchBatchSize)
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at FROM session_events")).
 		WithArgs(args...).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}))
+}
+
+func expectPreviousEventRefs(
+	mock sqlmock.Sqlmock,
+	key session.Key,
+	sessionCreatedAt driver.Value,
+	before *eventRef,
+	refs ...eventRef,
+) *sqlmock.ExpectedQuery {
+	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
+	if before != nil {
+		args = append(args, before.createdAt, before.createdAt, before.id)
+	}
+	args = append(args, userAnchorSearchBatchSize)
+	rows := sqlmock.NewRows([]string{"id", "created_at"})
+	for _, ref := range refs {
+		rows.AddRow(ref.id, ref.createdAt)
+	}
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at FROM session_events")).
+		WithArgs(args...).
+		WillReturnRows(rows)
 }
 
 const selectSessionStateForUpdateSQL = "SELECT state, expires_at FROM session_states WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL FOR UPDATE"

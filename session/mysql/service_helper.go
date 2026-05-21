@@ -23,6 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+const userAnchorSearchBatchSize = 64
+
 // getSession retrieves a single session with its events and summaries.
 func (s *Service) getSession(
 	ctx context.Context,
@@ -803,44 +805,72 @@ func (s *Service) getLastUserEventBeforeRefs(
 	sessionCreatedAt time.Time,
 	refs []eventRef,
 ) (event.Event, bool, error) {
-	query := fmt.Sprintf(`SELECT id, event, created_at FROM %s
-		WHERE app_name = ? AND user_id = ? AND session_id = ?
-		AND created_at >= ?
-		AND deleted_at IS NULL
-		AND JSON_SEARCH(event, 'one', 'user', NULL, '$.choices[*].message.role', '$.choices[*].delta.role') IS NOT NULL`,
-		s.tableSessionEvents)
-	args := []any{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
+	var before *eventRef
 	if len(refs) > 0 {
 		oldest := oldestEventRef(refs)
-		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
-		args = append(args, oldest.createdAt, oldest.createdAt, oldest.id)
+		before = &oldest
 	}
-	query += ` ORDER BY created_at DESC, id DESC LIMIT 1`
+	for {
+		batch, err := s.getPreviousEventRefs(
+			ctx,
+			key,
+			sessionCreatedAt,
+			before,
+			userAnchorSearchBatchSize,
+		)
+		if err != nil {
+			return event.Event{}, false, err
+		}
+		if len(batch) == 0 {
+			return event.Event{}, false, nil
+		}
+		events, err := s.getEventsByRefs(ctx, batch)
+		if err != nil {
+			return event.Event{}, false, err
+		}
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i].IsUserMessage() {
+				return events[i], true, nil
+			}
+		}
+		oldest := oldestEventRef(batch)
+		before = &oldest
+	}
+}
 
-	var anchor *event.Event
+func (s *Service) getPreviousEventRefs(
+	ctx context.Context,
+	key session.Key,
+	sessionCreatedAt time.Time,
+	before *eventRef,
+	limit int,
+) ([]eventRef, error) {
+	query := fmt.Sprintf(`SELECT id, created_at FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND created_at >= ?
+		AND deleted_at IS NULL`,
+		s.tableSessionEvents)
+	args := []any{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
+	if before != nil {
+		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+		args = append(args, before.createdAt, before.createdAt, before.id)
+	}
+	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+
+	refs := make([]eventRef, 0, limit)
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		var id int64
-		var eventBytes []byte
-		var createdAt time.Time
-		if err := rows.Scan(&id, &eventBytes, &createdAt); err != nil {
+		var ref eventRef
+		if err := rows.Scan(&ref.id, &ref.createdAt); err != nil {
 			return err
 		}
-		var evt event.Event
-		if err := json.Unmarshal(eventBytes, &evt); err != nil {
-			return fmt.Errorf("unmarshal event failed: %w", err)
-		}
-		if evt.IsUserMessage() {
-			anchor = &evt
-		}
+		refs = append(refs, ref)
 		return nil
 	}, query, args...)
 	if err != nil {
-		return event.Event{}, false, fmt.Errorf("batch get events failed: %w", err)
+		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
-	if anchor == nil {
-		return event.Event{}, false, nil
-	}
-	return *anchor, true, nil
+	return refs, nil
 }
 
 // oldestEventRef returns the earliest ref in the current bounded event window.

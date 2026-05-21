@@ -222,6 +222,7 @@ func TestGetSession_WithLimitFetchesUserAnchor(t *testing.T) {
 	anchorBytes, _ := json.Marshal(anchor)
 	evt2Bytes, _ := json.Marshal(evt2)
 	evt3Bytes, _ := json.Marshal(evt3)
+	anchorCreatedAt := sessState.CreatedAt.Add(time.Minute)
 	evt2CreatedAt := sessState.CreatedAt.Add(2 * time.Minute)
 	evt3CreatedAt := sessState.CreatedAt.Add(3 * time.Minute)
 
@@ -238,10 +239,17 @@ func TestGetSession_WithLimitFetchesUserAnchor(t *testing.T) {
 		limitedEventRow{id: 3, event: evt3Bytes, createdAt: evt3CreatedAt},
 		limitedEventRow{id: 2, event: evt2Bytes, createdAt: evt2CreatedAt},
 	)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event, created_at FROM session_events")).
-		WithArgs(key.AppName, key.UserID, key.SessionID, sessState.CreatedAt, evt2CreatedAt, evt2CreatedAt, int64(2)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
-			AddRow(int64(1), anchorBytes, sessState.CreatedAt.Add(time.Minute)))
+	expectPreviousEventRefs(
+		mock,
+		key,
+		sessState.CreatedAt,
+		&eventRef{id: 2, createdAt: evt2CreatedAt},
+		eventRef{id: 1, createdAt: anchorCreatedAt},
+	)
+	expectEventsByRefs(
+		mock,
+		limitedEventRow{id: 1, event: anchorBytes, createdAt: anchorCreatedAt},
+	)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "filter_key", "summary", "updated_at"}))
 
