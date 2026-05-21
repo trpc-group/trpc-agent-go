@@ -1768,6 +1768,26 @@ func TestTool_ensureUserMessageForCall_SkipsWhenUserExists(t *testing.T) {
 	require.Equal(t, 1, sess.GetEventCount())
 }
 
+func TestTool_ensureUserMessageForCall_AppendsWhenOnlyOtherUserExists(t *testing.T) {
+	at := NewTool(&mockAgent{name: "x", description: "x"})
+	sess := session.NewSession("app", "user", "session")
+	sess.UpdateUserSession(event.NewResponseEvent("other-inv", "user", &model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage("existing user"),
+		}},
+	}))
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("child-inv"),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("tool input")),
+	)
+
+	at.ensureUserMessageForCall(context.Background(), inv)
+	require.Equal(t, 2, sess.GetEventCount())
+	require.Equal(t, "child-inv", sess.Events[1].InvocationID)
+	require.Equal(t, "tool input", sess.Events[1].Choices[0].Message.Content)
+}
+
 func TestTool_ensureUserMessageForCall_NilCases(t *testing.T) {
 	at := NewTool(&mockAgent{name: "x", description: "x"})
 	at.ensureUserMessageForCall(context.Background(), nil)
@@ -1830,6 +1850,54 @@ func TestTool_wrapWithCallSemantics_NotifyCompletionError(t *testing.T) {
 	require.True(t, ok)
 	_, ok = <-out
 	require.False(t, ok)
+}
+
+func TestTool_wrapWithCallSemantics_FillsMissingInvocationFields(t *testing.T) {
+	at := NewTool(&mockAgent{name: "child", description: "child"})
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationID("parent-inv"),
+		agent.WithInvocationAgent(&mockAgent{name: "parent"}),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-1"}),
+		agent.WithInvocationEventFilterKey("parent-filter"),
+	)
+	var appended *event.Event
+	appender.Attach(parent, func(_ context.Context, evt *event.Event) error {
+		copied := *evt
+		appended = &copied
+		return nil
+	})
+	child := parent.Clone(
+		agent.WithInvocationID("child-inv"),
+		agent.WithInvocationAgent(&mockAgent{name: "child"}),
+		agent.WithInvocationBranch("parent/child"),
+		agent.WithInvocationEventFilterKey("child-filter"),
+	)
+
+	src := make(chan *event.Event, 1)
+	src <- event.NewResponseEvent(child.InvocationID, "child", &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("child answer"),
+		}},
+	})
+	close(src)
+
+	out := at.wrapWithCallSemantics(context.Background(), child, src)
+	got, ok := <-out
+	require.True(t, ok)
+	require.Equal(t, "req-1", got.RequestID)
+	require.Equal(t, "child-inv", got.InvocationID)
+	require.Equal(t, "parent-inv", got.ParentInvocationID)
+	require.Equal(t, "parent/child", got.Branch)
+	require.Equal(t, "child-filter", got.FilterKey)
+	_, ok = <-out
+	require.False(t, ok)
+	require.NotNil(t, appended)
+	require.Equal(t, "parent-inv", appended.ParentInvocationID)
+	require.Equal(t, "parent/child", appended.Branch)
+	require.Equal(t, "child-filter", appended.FilterKey)
 }
 
 func TestTool_wrapWithCallSemantics_ForwardsNilEvents(t *testing.T) {

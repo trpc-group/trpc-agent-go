@@ -323,10 +323,13 @@ func (at *Tool) wrapWithCompletion(ctx context.Context, inv *agent.Invocation, s
 	go func(ctx context.Context) {
 		defer close(out)
 		for evt := range src {
-			if evt != nil && evt.RequiresCompletion {
-				completionID := agent.GetAppendEventNoticeKey(evt.ID)
-				if err := inv.NotifyCompletion(ctx, completionID); err != nil {
-					log.Errorf("AgentTool: notify completion failed: %v", err)
+			if evt != nil {
+				ensureInvocationEventFields(inv, evt)
+				if evt.RequiresCompletion {
+					completionID := agent.GetAppendEventNoticeKey(evt.ID)
+					if err := inv.NotifyCompletion(ctx, completionID); err != nil {
+						log.Errorf("AgentTool: notify completion failed: %v", err)
+					}
 				}
 			}
 			out <- evt
@@ -357,6 +360,7 @@ func (at *Tool) wrapWithCallSemantics(
 		var pendingVisibleCompletion *event.Event
 		for evt := range src {
 			if evt != nil {
+				ensureInvocationEventFields(inv, evt)
 				pendingVisibleCompletion = at.updatePendingVisibleCompletionForSession(
 					ctx,
 					inv,
@@ -409,6 +413,29 @@ func (at *Tool) wrapWithCallSemantics(
 		}
 	}(runCtx)
 	return out
+}
+
+func ensureInvocationEventFields(inv *agent.Invocation, evt *event.Event) {
+	if inv == nil || evt == nil {
+		return
+	}
+	if evt.RequestID == "" {
+		evt.RequestID = inv.RunOptions.RequestID
+	}
+	if evt.InvocationID == "" {
+		evt.InvocationID = inv.InvocationID
+	}
+	if evt.ParentInvocationID == "" {
+		if parent := inv.GetParentInvocation(); parent != nil {
+			evt.ParentInvocationID = parent.InvocationID
+		}
+	}
+	if evt.Branch == "" {
+		evt.Branch = inv.Branch
+	}
+	if evt.FilterKey == "" {
+		evt.FilterKey = inv.GetEventFilterKey()
+	}
 }
 
 func (at *Tool) updatePendingVisibleCompletionForSession(
@@ -499,7 +526,8 @@ func (at *Tool) ensureUserMessageForCall(
 
 	inv.Session.EventMu.RLock()
 	for i := range inv.Session.Events {
-		if inv.Session.Events[i].IsUserMessage() {
+		if inv.Session.Events[i].InvocationID == inv.InvocationID &&
+			inv.Session.Events[i].IsUserMessage() {
 			inv.Session.EventMu.RUnlock()
 			return
 		}
