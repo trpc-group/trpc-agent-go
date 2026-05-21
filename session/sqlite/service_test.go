@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -473,6 +474,30 @@ func TestSessionSQLite_ListSessions_WithListSessionOnlyMeta(t *testing.T) {
 	require.Empty(t, list[0].Events)
 	require.Nil(t, list[0].Tracks)
 	require.Equal(t, []byte("v"), list[0].State["k"])
+}
+
+func TestSessionSQLite_ListSessions_WithListSessionPage(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app", UserID: "u1"}
+
+	for i := 0; i < 3; i++ {
+		key := session.Key{AppName: "app", UserID: "u1", SessionID: fmt.Sprintf("s%d", i)}
+		s, createErr := svc.CreateSession(ctx, key, nil)
+		require.NoError(t, createErr)
+		require.NoError(t, svc.AppendEvent(ctx, s, newUserEvent("msg")))
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	list, err := svc.ListSessions(ctx, userKey, session.WithListSessionPage(1, 1))
+	require.NoError(t, err)
+	require.Len(t, list, 1)
 }
 
 func TestSessionSQLite_DeleteSession_Hard(t *testing.T) {

@@ -371,6 +371,7 @@ func (s *Service) ListSessions(
 		opt.EventNum,
 		opt.EventTime,
 		opt.ListSessionOnlyMeta,
+		opt.ListSessionPage,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("postgres session service get session list failed: %w", err)

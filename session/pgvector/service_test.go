@@ -3205,6 +3205,43 @@ func TestListSessions_WithSessions(t *testing.T) {
 	assert.Equal(t, "sess1", sessions[0].ID)
 }
 
+func TestListSessions_WithListSessionPage(t *testing.T) {
+	s, mock, db := newTestServiceWithSliceSupport(
+		t, nil,
+	)
+	defer db.Close()
+
+	userKey := session.UserKey{
+		AppName: "app", UserID: "user",
+	}
+
+	now := time.Now()
+	makeState := func(id string) []byte {
+		b, _ := json.Marshal(SessionState{ID: id, State: session.StateMap{}})
+		return b
+	}
+
+	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery("SELECT key, value FROM user_states").
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery("SELECT session_id, state").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"session_id", "state", "created_at", "updated_at"},
+		).AddRow("sess2", makeState("sess2"), now, now))
+	mock.ExpectQuery("SELECT session_id, event").
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}))
+	mock.ExpectQuery("SELECT session_id, filter_key").
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary"}))
+
+	sessions, err := s.ListSessions(
+		context.Background(), userKey, session.WithListSessionPage(1, 1),
+	)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "sess2", sessions[0].ID)
+}
+
 func TestListSessions_WithTracks(t *testing.T) {
 	s, mock, db := newTestServiceWithSliceSupport(
 		t, nil,
