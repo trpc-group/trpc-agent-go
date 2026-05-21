@@ -6489,15 +6489,18 @@ callback 使用。</p>
 <p>默认情况下，当模型返回 <code>tool_calls</code> 时，框架会自动执行工具，然后把工具结果再发回给模型继续推理。</p>
 <p>在一些系统里，你可能希望由调用方（例如客户端、上游服务，或外部工具运行时，例如
 Model Context Protocol (MCP)）来执行工具。此时可以使用
-<code>agent.WithToolExecutionFilter(...)</code> 来中断工具的自动执行。</p>
+<code>agent.WithExternalTools(...)</code> 或 <code>agent.WithToolExecutionFilter(...)</code>
+来中断工具的自动执行。</p>
 <p><strong>核心区别：</strong></p>
 <ul>
 <li><code>agent.WithToolFilter(...)</code> 控制<strong>工具可见性</strong>（模型能看到/能调用哪些工具）</li>
 <li><code>agent.WithToolExecutionFilter(...)</code> 控制<strong>工具执行</strong>（模型请求后，框架是否自动执行）</li>
+<li><code>agent.WithAdditionalTools(...)</code> 为本次运行追加临时可见工具</li>
+<li><code>agent.WithExternalTools(...)</code> 追加临时可见工具，并声明这些工具由调用方执行</li>
 </ul>
 <h4 id="_38">基本流程</h4>
 <ol>
-<li>使用 <code>WithToolExecutionFilter</code> 发起一次 <code>runner.Run</code>，让框架<strong>不执行</strong>指定工具</li>
+<li>使用 <code>WithExternalTools</code> 发起一次 <code>runner.Run</code>，让模型看到调用方工具</li>
 <li>从事件里读取模型返回的 <code>tool_calls</code></li>
 <li>调用方在外部执行工具</li>
 <li>通过 <code>role=tool</code> 的消息把结果回填，模型继续输出最终答案</li>
@@ -6517,23 +6520,68 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
 <span class="normal"><a href="#__codelineno-48-13">13</a></span>
 <span class="normal"><a href="#__codelineno-48-14">14</a></span>
 <span class="normal"><a href="#__codelineno-48-15">15</a></span>
-<span class="normal"><a href="#__codelineno-48-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="nx">execFilter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tool</span><span class="p">.</span><span class="nx">NewExcludeToolNamesFilter</span><span class="p">(</span><span class="s">&quot;external_search&quot;</span><span class="p">)</span>
-</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a>
-</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a><span class="c1">// 第一步：模型会返回 tool_calls，但工具不会被框架执行。</span>
-</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;search ...&quot;</span><span class="p">),</span>
-</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolExecutionFilter</span><span class="p">(</span><span class="nx">execFilter</span><span class="p">),</span>
-</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a><span class="p">)</span>
-</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a>
-</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a><span class="c1">// 第二步：从事件里提取 tool_call_id + arguments（此处省略）。</span>
-</span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9"></a><span class="nx">toolCallID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;call_123&quot;</span>
-</span><span id="__span-48-10"><a id="__codelineno-48-10" name="__codelineno-48-10"></a><span class="nx">toolResultJSON</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`{&quot;status&quot;:&quot;ok&quot;,&quot;data&quot;:&quot;...&quot;}`</span>
-</span><span id="__span-48-11"><a id="__codelineno-48-11" name="__codelineno-48-11"></a>
-</span><span id="__span-48-12"><a id="__codelineno-48-12" name="__codelineno-48-12"></a><span class="c1">// 第三/四步：用 role=tool 回填工具结果，模型继续输出。</span>
-</span><span id="__span-48-13"><a id="__codelineno-48-13" name="__codelineno-48-13"></a><span class="nx">toolMsg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewToolMessage</span><span class="p">(</span><span class="nx">toolCallID</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;external_search&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">toolResultJSON</span><span class="p">)</span>
-</span><span id="__span-48-14"><a id="__codelineno-48-14" name="__codelineno-48-14"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">toolMsg</span><span class="p">,</span>
-</span><span id="__span-48-15"><a id="__codelineno-48-15" name="__codelineno-48-15"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolExecutionFilter</span><span class="p">(</span><span class="nx">execFilter</span><span class="p">),</span>
-</span><span id="__span-48-16"><a id="__codelineno-48-16" name="__codelineno-48-16"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-48-16">16</a></span>
+<span class="normal"><a href="#__codelineno-48-17">17</a></span>
+<span class="normal"><a href="#__codelineno-48-18">18</a></span>
+<span class="normal"><a href="#__codelineno-48-19">19</a></span>
+<span class="normal"><a href="#__codelineno-48-20">20</a></span>
+<span class="normal"><a href="#__codelineno-48-21">21</a></span>
+<span class="normal"><a href="#__codelineno-48-22">22</a></span>
+<span class="normal"><a href="#__codelineno-48-23">23</a></span>
+<span class="normal"><a href="#__codelineno-48-24">24</a></span>
+<span class="normal"><a href="#__codelineno-48-25">25</a></span>
+<span class="normal"><a href="#__codelineno-48-26">26</a></span>
+<span class="normal"><a href="#__codelineno-48-27">27</a></span>
+<span class="normal"><a href="#__codelineno-48-28">28</a></span>
+<span class="normal"><a href="#__codelineno-48-29">29</a></span>
+<span class="normal"><a href="#__codelineno-48-30">30</a></span>
+<span class="normal"><a href="#__codelineno-48-31">31</a></span>
+<span class="normal"><a href="#__codelineno-48-32">32</a></span>
+<span class="normal"><a href="#__codelineno-48-33">33</a></span>
+<span class="normal"><a href="#__codelineno-48-34">34</a></span>
+<span class="normal"><a href="#__codelineno-48-35">35</a></span>
+<span class="normal"><a href="#__codelineno-48-36">36</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">declarationOnlyTool</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a><span class="w">    </span><span class="nx">decl</span><span class="w"> </span><span class="o">*</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Declaration</span>
+</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a><span class="p">}</span>
+</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a>
+</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">declarationOnlyTool</span><span class="p">)</span><span class="w"> </span><span class="nx">Declaration</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Declaration</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">t</span><span class="p">.</span><span class="nx">decl</span>
+</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a><span class="p">}</span>
+</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a>
+</span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9"></a><span class="nx">externalSearch</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">declarationOnlyTool</span><span class="p">{</span>
+</span><span id="__span-48-10"><a id="__codelineno-48-10" name="__codelineno-48-10"></a><span class="w">    </span><span class="nx">decl</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Declaration</span><span class="p">{</span>
+</span><span id="__span-48-11"><a id="__codelineno-48-11" name="__codelineno-48-11"></a><span class="w">        </span><span class="nx">Name</span><span class="p">:</span><span class="w">        </span><span class="s">&quot;external_search&quot;</span><span class="p">,</span>
+</span><span id="__span-48-12"><a id="__codelineno-48-12" name="__codelineno-48-12"></a><span class="w">        </span><span class="nx">Description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Search a caller-owned system.&quot;</span><span class="p">,</span>
+</span><span id="__span-48-13"><a id="__codelineno-48-13" name="__codelineno-48-13"></a><span class="w">        </span><span class="nx">InputSchema</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Schema</span><span class="p">{</span>
+</span><span id="__span-48-14"><a id="__codelineno-48-14" name="__codelineno-48-14"></a><span class="w">            </span><span class="nx">Type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;object&quot;</span><span class="p">,</span>
+</span><span id="__span-48-15"><a id="__codelineno-48-15" name="__codelineno-48-15"></a><span class="w">            </span><span class="nx">Properties</span><span class="p">:</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="o">*</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Schema</span><span class="p">{</span>
+</span><span id="__span-48-16"><a id="__codelineno-48-16" name="__codelineno-48-16"></a><span class="w">                </span><span class="s">&quot;query&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nx">Type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;string&quot;</span><span class="p">},</span>
+</span><span id="__span-48-17"><a id="__codelineno-48-17" name="__codelineno-48-17"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-48-18"><a id="__codelineno-48-18" name="__codelineno-48-18"></a><span class="w">            </span><span class="nx">Required</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;query&quot;</span><span class="p">},</span>
+</span><span id="__span-48-19"><a id="__codelineno-48-19" name="__codelineno-48-19"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-48-20"><a id="__codelineno-48-20" name="__codelineno-48-20"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-48-21"><a id="__codelineno-48-21" name="__codelineno-48-21"></a><span class="p">}</span>
+</span><span id="__span-48-22"><a id="__codelineno-48-22" name="__codelineno-48-22"></a>
+</span><span id="__span-48-23"><a id="__codelineno-48-23" name="__codelineno-48-23"></a><span class="c1">// 第一步：模型会返回 tool_calls，但工具不会被框架执行。</span>
+</span><span id="__span-48-24"><a id="__codelineno-48-24" name="__codelineno-48-24"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;search ...&quot;</span><span class="p">),</span>
+</span><span id="__span-48-25"><a id="__codelineno-48-25" name="__codelineno-48-25"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithExternalTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">externalSearch</span><span class="p">}),</span>
+</span><span id="__span-48-26"><a id="__codelineno-48-26" name="__codelineno-48-26"></a><span class="p">)</span>
+</span><span id="__span-48-27"><a id="__codelineno-48-27" name="__codelineno-48-27"></a>
+</span><span id="__span-48-28"><a id="__codelineno-48-28" name="__codelineno-48-28"></a><span class="c1">// 第二步：从事件里提取 tool_call_id + arguments（此处省略）。</span>
+</span><span id="__span-48-29"><a id="__codelineno-48-29" name="__codelineno-48-29"></a><span class="nx">toolCallID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;call_123&quot;</span>
+</span><span id="__span-48-30"><a id="__codelineno-48-30" name="__codelineno-48-30"></a><span class="nx">toolResultJSON</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`{&quot;status&quot;:&quot;ok&quot;,&quot;data&quot;:&quot;...&quot;}`</span>
+</span><span id="__span-48-31"><a id="__codelineno-48-31" name="__codelineno-48-31"></a>
+</span><span id="__span-48-32"><a id="__codelineno-48-32" name="__codelineno-48-32"></a><span class="c1">// 第三/四步：用 role=tool 回填工具结果，模型继续输出。</span>
+</span><span id="__span-48-33"><a id="__codelineno-48-33" name="__codelineno-48-33"></a><span class="nx">toolMsg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewToolMessage</span><span class="p">(</span><span class="nx">toolCallID</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;external_search&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">toolResultJSON</span><span class="p">)</span>
+</span><span id="__span-48-34"><a id="__codelineno-48-34" name="__codelineno-48-34"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">toolMsg</span><span class="p">,</span>
+</span><span id="__span-48-35"><a id="__codelineno-48-35" name="__codelineno-48-35"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithExternalTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">externalSearch</span><span class="p">}),</span>
+</span><span id="__span-48-36"><a id="__codelineno-48-36" name="__codelineno-48-36"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<p>如果工具已经通过 <code>llmagent.WithTools(...)</code> 注册在 Agent 上，只是想在某次
+运行中改成由调用方执行，可以继续使用 <code>agent.WithToolExecutionFilter(...)</code>。
+<code>WithExternalTools</code> 更适合 AG-UI、浏览器、移动端或上游服务在每次请求中动态声明
+工具的场景。AG-UI runner 默认会把请求里的 <code>input.Tools</code> 映射为
+<code>WithExternalTools</code>。外部工具与已有工具同名时，已有工具优先，外部声明不会覆盖或拦截它。这里的已有工具包括 Agent 上注册的工具，以及通过 <code>WithAdditionalTools</code> 追加的工具。</p>
 <p><strong>完整示例：</strong> <code>examples/toolinterrupt/</code></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1">1</a></span>
 <span class="normal"><a href="#__codelineno-49-2">2</a></span>
@@ -6895,7 +6943,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月30日 02:19:38 UTC">2026-04-30 02:19:38</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月21日 01:18:09 UTC">2026-05-21 01:18:09</span>
   </span>
 
     
