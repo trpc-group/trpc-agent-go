@@ -27,7 +27,7 @@ func TestLinuxBwrapWorkspaceWriteIntegration(t *testing.T) {
 		t.Skip("bubblewrap not available")
 	}
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	if _, err := rt.linuxPreflight(); err != nil {
+	if _, _, err := rt.linuxPreflight(); err != nil {
 		t.Skipf("bubblewrap preflight unavailable: %v", err)
 	}
 	ws, err := rt.CreateWorkspace(context.Background(), "s1", codeexecutor.WorkspacePolicy{})
@@ -50,6 +50,61 @@ func TestLinuxBwrapWorkspaceWriteIntegration(t *testing.T) {
 	}
 	if strings.TrimSpace(string(data)) != "ok" {
 		t.Fatalf("workspace write failed: %q", data)
+	}
+}
+
+func TestLinuxProcMountFailureDetection(t *testing.T) {
+	for _, stderr := range []string{
+		"bwrap: Can't mount proc on /newroot/proc: Invalid argument",
+		"bwrap: Can't mount proc on /newroot/proc: Operation not permitted",
+		"bwrap: Can't mount proc on /newroot/proc: Permission denied",
+	} {
+		if !isProcMountFailure(stderr) {
+			t.Fatalf("isProcMountFailure(%q) = false, want true", stderr)
+		}
+	}
+
+	for _, stderr := range []string{
+		"bwrap: Can't bind mount /dev/null: Operation not permitted",
+		"bwrap: Can't access /newroot/proc/sysrq-trigger: Read-only file system",
+		"bwrap: Can't access /newroot/proc/sysrq-trigger: Permission denied",
+		"bwrap: Can't mount proc on /newroot/proc: No such file or directory",
+	} {
+		if isProcMountFailure(stderr) {
+			t.Fatalf("isProcMountFailure(%q) = true, want false", stderr)
+		}
+	}
+}
+
+func TestLinuxSandboxArgsToggleProcMount(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "proc-toggle", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile()
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	spec := codeexecutor.RunProgramSpec{Cmd: "/bin/true"}
+
+	withProc, err := rt.linuxSandboxArgs(profile, ws, filepath.Join(ws.Path, "work"), nil, spec, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgPair(withProc, "--proc", "/proc") {
+		t.Fatalf("args = %#v, missing --proc /proc", withProc)
+	}
+
+	withoutProc, err := rt.linuxSandboxArgs(profile, ws, filepath.Join(ws.Path, "work"), nil, spec, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasArgPair(withoutProc, "--proc", "/proc") {
+		t.Fatalf("args = %#v, unexpected --proc /proc", withoutProc)
+	}
+	if !hasArg(withoutProc, "--unshare-pid") {
+		t.Fatalf("args = %#v, missing pid isolation", withoutProc)
 	}
 }
 
@@ -92,6 +147,15 @@ func TestLinuxNoAccessMaskArgsCoverPathGlobAndSpecial(t *testing.T) {
 func hasArgPair(args []string, first, second string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == first && args[i+1] == second {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
 			return true
 		}
 	}

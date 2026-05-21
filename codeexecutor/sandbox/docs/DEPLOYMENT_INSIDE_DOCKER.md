@@ -25,9 +25,20 @@ bwrap \
   -- /bin/true
 ```
 
-Managed sandbox runs then add PID isolation, bind mounts for the workspace and
-granted paths, masks for protected paths, and `--unshare-net` when networking is
-restricted.
+If that probe fails only because the container runtime rejects mounting a fresh
+`/proc` (for example `Can't mount proc on /newroot/proc: Operation not
+permitted`), the backend automatically retries the probe without
+`--proc /proc`. When the retry succeeds, managed sandbox runs keep PID isolation
+but skip the fresh `/proc` mount.
+
+If the probe fails with `Can't access /newroot/proc/sysrq-trigger: Read-only
+file system`, upgrade the image to `bubblewrap` 0.5.0 or newer. That message
+matches an older Docker `/proc` handling issue fixed by bubblewrap 0.5.0, so the
+backend reports it as a setup error instead of using the no-proc fallback.
+
+Managed sandbox runs then add PID isolation, optional `/proc` mounting, bind
+mounts for the workspace and granted paths, masks for protected paths, and
+`--unshare-net` when networking is restricted.
 
 Default Docker settings commonly block one of these operations. Typical failure
 messages are surfaced as setup/backend errors such as `bubblewrap preflight
@@ -144,6 +155,25 @@ bwrap \
   -- /bin/true
 ```
 
+If the only failure is `Can't mount proc on /newroot/proc` with
+`Operation not permitted`, `Permission denied`, or `Invalid argument`, validate
+the automatic fallback path:
+
+```bash
+bwrap \
+  --die-with-parent \
+  --unshare-user \
+  --ro-bind / / \
+  -- /bin/true
+```
+
+The fallback is intentionally narrow. Namespace, mount, executable lookup, or
+other setup failures still make managed sandbox startup fail rather than falling
+back to unsandboxed execution.
+
+If the failure is `Can't access /newroot/proc/sysrq-trigger: Read-only file
+system`, upgrade `bubblewrap` to 0.5.0 or newer before retrying the validation.
+
 For a full service-level check, run the OpenClaw sandbox service execution
 example from the repository root:
 
@@ -171,8 +201,11 @@ permissions, and privileged fallback.
   manager. Do not bake them into Dockerfiles, images, or example configs.
 - Use `shell_env.inherit: core` plus default secret-like excludes when sandboxed
   child processes do not need model credentials.
-- The sandbox backend does not silently fall back to local execution when a
-  managed OS sandbox is requested and `bwrap` setup fails.
+- The sandbox backend may skip mounting a fresh `/proc` for known
+  restricted-container proc mount failures, but it reports the older
+  `sysrq-trigger` read-only failure as an upgrade-required setup error and does
+  not silently fall back to local execution when a managed OS sandbox is
+  requested and `bwrap` setup fails.
 - Docker, containerd, and managed Kubernetes runtimes can differ in kernel,
   seccomp, and namespace behavior. Validate on the same runtime class used in
   production.

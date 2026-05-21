@@ -43,7 +43,7 @@ source ./glm.sh
 
 | Container mode | Command | Expected result |
 | --- | --- | --- |
-| Default Docker | `docker run --rm -e OPENAI_API_KEY=dummy -e OPENAI_BASE_URL=http://127.0.0.1 -e MODEL_NAME=dummy openclaw-sandbox-service-execution -config ./examples/sandbox_service_execution/openclaw.yaml -scenario basic-python` | Fails during `bwrap` preflight before any model call. |
+| Default Docker | `docker run --rm -e OPENAI_API_KEY=dummy -e OPENAI_BASE_URL=http://127.0.0.1 -e MODEL_NAME=dummy openclaw-sandbox-service-execution -config ./examples/sandbox_service_execution/openclaw.yaml -scenario basic-python` | Usually fails during `bwrap` preflight before any model call. If the only blocked operation is mounting a fresh `/proc`, the example follows the runtime no-proc fallback and may continue. |
 | Minimal permissions | `docker run --rm --security-opt seccomp=unconfined --security-opt systempaths=unconfined --cap-add SYS_ADMIN -e OPENAI_BASE_URL -e OPENAI_API_KEY -e MODEL_NAME openclaw-sandbox-service-execution` | Runs `-scenario all`; all scenarios should pass when model credentials are valid. |
 | Privileged fallback | `docker run --rm --privileged -e OPENAI_BASE_URL -e OPENAI_API_KEY -e MODEL_NAME openclaw-sandbox-service-execution` | Runs `-scenario all`; should pass, but grants broader permissions to the outer container. |
 
@@ -93,5 +93,9 @@ environment redaction, restricted networking, timeout handling, and output
 truncation.
 
 Linux managed sandbox execution requires `bwrap` and user namespace support.
-Use `-require-os-sandbox=false` only when you want unavailable sandbox setup to
-skip scenarios instead of failing.
+When a container denies fresh `/proc` mounting with errors such as
+`Can't mount proc on /newroot/proc: Operation not permitted`, the runtime retries
+without `--proc /proc` while keeping bwrap isolation. If the error is
+`Can't access /newroot/proc/sysrq-trigger: Read-only file system`, upgrade the
+image to `bubblewrap` 0.5.0 or newer. Use `-require-os-sandbox=false` only when
+you want unavailable sandbox setup to skip scenarios instead of failing.

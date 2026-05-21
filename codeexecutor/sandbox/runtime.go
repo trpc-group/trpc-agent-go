@@ -42,9 +42,10 @@ type Runtime struct {
 	mu       sync.Mutex
 	runLocks map[string]*sync.Mutex
 
-	preflightOnce sync.Once
-	preflightErr  error
-	bwrapPath     string
+	preflightOnce  sync.Once
+	preflightErr   error
+	bwrapPath      string
+	bwrapMountProc bool
 }
 
 // NewRuntime constructs a sandbox runtime.

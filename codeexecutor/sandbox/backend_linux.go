@@ -12,6 +12,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -51,13 +52,29 @@ func (r *Runtime) osSandboxCommand(
 	spec codeexecutor.RunProgramSpec,
 ) (*exec.Cmd, string, error) {
 	_ = ctx
-	bwrap, err := r.linuxPreflight()
+	bwrap, mountProc, err := r.linuxPreflight()
 	if err != nil {
 		return nil, string(BackendLinuxBubblewrap), err
 	}
 	if err := r.prepareProtectedMasks(profile, ws); err != nil {
 		return nil, string(BackendLinuxBubblewrap), err
 	}
+	args, err := r.linuxSandboxArgs(profile, ws, cwd, env, spec, mountProc)
+	if err != nil {
+		return nil, string(BackendLinuxBubblewrap), err
+	}
+	cmd := exec.CommandContext(ctx, bwrap, args...)
+	return cmd, string(BackendLinuxBubblewrap), nil
+}
+
+func (r *Runtime) linuxSandboxArgs(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	cwd string,
+	env []string,
+	spec codeexecutor.RunProgramSpec,
+	mountProc bool,
+) ([]string, error) {
 	args := []string{
 		"--die-with-parent",
 		"--unshare-user",
@@ -65,25 +82,27 @@ func (r *Runtime) osSandboxCommand(
 		"--new-session",
 		"--ro-bind", "/", "/",
 		"--dev", "/dev",
-		"--proc", "/proc",
+	}
+	if mountProc {
+		args = append(args, "--proc", "/proc")
 	}
 	if profile.Network.Mode == NetworkRestricted {
 		args = append(args, "--unshare-net")
 	}
 	grantArgs, err := r.externalGrantArgs(profile, ws)
 	if err != nil {
-		return nil, string(BackendLinuxBubblewrap), err
+		return nil, err
 	}
 	args = append(args, grantArgs...)
 	args = append(args, "--bind", ws.Path, ws.Path)
 	protectedArgs, err := r.protectedMaskArgs(profile, ws)
 	if err != nil {
-		return nil, string(BackendLinuxBubblewrap), err
+		return nil, err
 	}
 	args = append(args, protectedArgs...)
 	denyArgs, err := r.denyReadMaskArgs(profile, ws)
 	if err != nil {
-		return nil, string(BackendLinuxBubblewrap), err
+		return nil, err
 	}
 	args = append(args, denyArgs...)
 	args = append(args, "--clearenv")
@@ -96,11 +115,10 @@ func (r *Runtime) osSandboxCommand(
 	}
 	args = append(args, "--chdir", cwd, "--", spec.Cmd)
 	args = append(args, spec.Args...)
-	cmd := exec.CommandContext(ctx, bwrap, args...)
-	return cmd, string(BackendLinuxBubblewrap), nil
+	return args, nil
 }
 
-func (r *Runtime) linuxPreflight() (string, error) {
+func (r *Runtime) linuxPreflight() (string, bool, error) {
 	r.preflightOnce.Do(func() {
 		if r.backend != BackendAuto && r.backend != BackendLinuxBubblewrap {
 			r.preflightErr = backendError(
@@ -127,28 +145,102 @@ func (r *Runtime) linuxPreflight() (string, error) {
 			)
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		probe := exec.CommandContext(
-			ctx,
-			bwrap,
-			"--die-with-parent",
-			"--unshare-user",
-			"--ro-bind", "/", "/",
-			"--proc", "/proc",
-			"--", "/bin/true",
-		)
-		if err := probe.Run(); err != nil {
+		stderr, err := runBwrapPreflightProbe(bwrap, true)
+		if err == nil {
+			r.bwrapPath = bwrap
+			r.bwrapMountProc = true
+			return
+		}
+		if isProcMountFailure(stderr) {
+			stderr, err = runBwrapPreflightProbe(bwrap, false)
+			if err == nil {
+				r.bwrapPath = bwrap
+				r.bwrapMountProc = false
+				return
+			}
+		}
+		if err != nil {
 			r.preflightErr = backendError(
 				ErrSetupFailed,
 				string(BackendLinuxBubblewrap),
-				err,
+				bwrapProbeError{err: err, stderr: stderr},
 			)
 			return
 		}
-		r.bwrapPath = bwrap
 	})
-	return r.bwrapPath, r.preflightErr
+	return r.bwrapPath, r.bwrapMountProc, r.preflightErr
+}
+
+// runBwrapPreflightProbe runs a short-lived bubblewrap probe and captures stderr.
+//
+// Strategy:
+//   - linuxPreflight first runs /bin/true under bubblewrap with --proc /proc.
+//   - The goal is to detect environments where mounting a fresh /proc fails, for
+//     example restricted Docker-style containers, so the real run can retry
+//     without --proc while keeping PID isolation.
+//   - stderr is captured instead of streamed because this is a one-shot probe with
+//     a trivial command and a short timeout.
+func runBwrapPreflightProbe(bwrap string, mountProc bool) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	args := []string{
+		"--die-with-parent",
+		"--unshare-user",
+		"--ro-bind", "/", "/",
+	}
+	if mountProc {
+		args = append(args, "--proc", "/proc")
+	}
+	args = append(args, "--", "/bin/true")
+	var stderr bytes.Buffer
+	probe := exec.CommandContext(ctx, bwrap, args...)
+	probe.Stderr = &stderr
+	err := probe.Run()
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	return stderr.String(), err
+}
+
+type bwrapProbeError struct {
+	err    error
+	stderr string
+	hint   string
+}
+
+func (e bwrapProbeError) Error() string {
+	stderr := strings.TrimSpace(e.stderr)
+	msg := e.err.Error()
+	if stderr != "" {
+		msg += ": " + stderr
+	}
+	if e.hint != "" {
+		msg += "; " + e.hint
+	}
+	return msg
+}
+
+func (e bwrapProbeError) Unwrap() error {
+	return e.err
+}
+
+func isProcMountFailure(stderr string) bool {
+	return strings.Contains(stderr, "Can't mount proc") &&
+		strings.Contains(stderr, "/newroot/proc") &&
+		containsAny(stderr, []string{
+			"Invalid argument",
+			"Operation not permitted",
+			"Permission denied",
+		})
+}
+
+func containsAny(s string, substrings []string) bool {
+	for _, substring := range substrings {
+		if strings.Contains(s, substring) {
+			return true
+		}
+	}
+	return false
 }
 
 func isWSL1() bool {

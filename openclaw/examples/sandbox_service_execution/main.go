@@ -933,24 +933,70 @@ func checkPreflight(requireOSSandbox bool) error {
 	if _, err := exec.LookPath("bash"); err != nil {
 		return fmt.Errorf("bash executable not found in PATH: %w", err)
 	}
+	stderr, err := runBwrapPreflightProbe(bwrap, true)
+	if err == nil {
+		return nil
+	}
+	if isBwrapProcMountFailure(stderr) {
+		stderr, err = runBwrapPreflightProbe(bwrap, false)
+		if err == nil {
+			fmt.Println("managed sandbox notice: bwrap fresh /proc mount unavailable; using no-proc fallback")
+			return nil
+		}
+	}
+	return sandboxUnavailable(
+		requireOSSandbox,
+		fmt.Sprintf("bubblewrap preflight failed: %s", formatBwrapProbeFailure(err, stderr)),
+	)
+}
+
+func runBwrapPreflightProbe(bwrap string, mountProc bool) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	probe := exec.CommandContext(
-		ctx,
-		bwrap,
+	args := []string{
 		"--die-with-parent",
 		"--unshare-user",
 		"--ro-bind", "/", "/",
-		"--proc", "/proc",
-		"--", "/bin/true",
-	)
-	if err := probe.Run(); err != nil {
-		return sandboxUnavailable(
-			requireOSSandbox,
-			fmt.Sprintf("bubblewrap preflight failed: %v", err),
-		)
 	}
-	return nil
+	if mountProc {
+		args = append(args, "--proc", "/proc")
+	}
+	args = append(args, "--", "/bin/true")
+	var stderr bytes.Buffer
+	probe := exec.CommandContext(ctx, bwrap, args...)
+	probe.Stderr = &stderr
+	err := probe.Run()
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	return stderr.String(), err
+}
+
+func isBwrapProcMountFailure(stderr string) bool {
+	return strings.Contains(stderr, "Can't mount proc") &&
+		strings.Contains(stderr, "/newroot/proc") &&
+		containsAny(stderr, []string{
+			"Invalid argument",
+			"Operation not permitted",
+			"Permission denied",
+		})
+}
+
+func containsAny(s string, substrings []string) bool {
+	for _, substring := range substrings {
+		if strings.Contains(s, substring) {
+			return true
+		}
+	}
+	return false
+}
+
+func formatBwrapProbeFailure(err error, stderr string) string {
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return err.Error()
+	}
+	return fmt.Sprintf("%v: %s", err, stderr)
 }
 
 func sandboxUnavailable(require bool, msg string) error {
