@@ -237,8 +237,18 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  1048576,
 		},
 		{
+			name:      "exact match - Gemini 3.5 Flash stable",
+			modelName: "gemini-3.5-flash",
+			expected:  1048576,
+		},
+		{
 			name:      "exact match - Mistral Large 3 API ID",
 			modelName: "mistral-large-2512",
+			expected:  262144,
+		},
+		{
+			name:      "exact match - Mistral Large 3 latest alias",
+			modelName: "mistral-large-latest",
 			expected:  262144,
 		},
 		{
@@ -344,6 +354,18 @@ func TestLookupContextWindow(t *testing.T) {
 			name:      "Gemini replacement exact match",
 			modelName: "gemini-3.1-pro-preview",
 			expected:  1048576,
+			ok:        true,
+		},
+		{
+			name:      "Gemini 3.5 Flash stable exact match",
+			modelName: "gemini-3.5-flash",
+			expected:  1048576,
+			ok:        true,
+		},
+		{
+			name:      "Mistral Large 3 latest alias exact match",
+			modelName: "mistral-large-latest",
+			expected:  262144,
 			ok:        true,
 		},
 		{

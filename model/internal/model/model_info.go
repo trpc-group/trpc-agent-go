@@ -157,7 +157,8 @@ var ModelContextWindows = map[string]int{
 	// have been retired from Vertex docs, so 1.5 entries fall back to the
 	// Gemini API model cards on ai.google.dev.
 
-	// Google Gemini 3.0
+	// Google Gemini 3.x
+	"gemini-3.5-flash":       1048576, // https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash
 	"gemini-3.1-pro-preview": 1048576, // https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview
 	"gemini-3-pro-preview":   1048576, // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro
 	"gemini-3-flash-preview": 1048576, // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash
@@ -246,7 +247,7 @@ var ModelContextWindows = map[string]int{
 	// Mistral Large
 	"mistral-large-3":              262144,
 	"mistral-large-2512":           262144, // https://docs.mistral.ai/models/model-cards/mistral-large-3-25-12
-	"mistral-large-latest":         131072, // tracks the latest Large 2 family snapshot (mistral-large-2411)
+	"mistral-large-latest":         262144, // latest Large 3 API alias; https://docs.mistral.ai/studio-api/conversations/function-calling
 	"mistral-large":                131072, // mistral-large-2411
 	"mistral-large-2411":           131072,
 	"mistral-large-2407":           131072,
