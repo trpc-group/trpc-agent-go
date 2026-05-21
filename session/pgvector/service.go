@@ -458,8 +458,15 @@ func (s *Service) ListSessions(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
+	if err := session.ValidateListSessionsOptions(opt); err != nil {
+		return nil, err
+	}
 	sessList, err := s.listSessions(
-		ctx, userKey, opt.EventNum, opt.EventTime,
+		ctx,
+		userKey,
+		opt.EventNum,
+		opt.EventTime,
+		opt.ListSessionOnlyMeta,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

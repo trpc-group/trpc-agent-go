@@ -1401,6 +1401,65 @@ func TestListSessions_Empty(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestListSessions_EventPageValidation(t *testing.T) {
+	s, _, db := newTestService(t, nil)
+	defer db.Close()
+
+	userKey := session.UserKey{
+		AppName: "app", UserID: "user",
+	}
+
+	_, err := s.ListSessions(
+		context.Background(), userKey,
+		session.WithGetSessionEventPage(0, 10),
+	)
+	assert.ErrorIs(t, err, session.ErrEventPageOnlyForGetSession)
+}
+
+func TestListSessions_WithListSessionOnlyMeta(t *testing.T) {
+	s, mock, db := newTestService(t, nil)
+	defer db.Close()
+
+	userKey := session.UserKey{
+		AppName: "app", UserID: "user",
+	}
+
+	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery("SELECT key, value FROM user_states").
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	tracks, err := json.Marshal([]session.Track{"alpha"})
+	require.NoError(t, err)
+	sessState := SessionState{
+		ID: "sess1",
+		State: session.StateMap{
+			"key1":   []byte(`"value1"`),
+			"tracks": tracks,
+		},
+	}
+	stateBytes, err := json.Marshal(sessState)
+	require.NoError(t, err)
+	now := time.Now()
+	mock.ExpectQuery("SELECT session_id, state").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{
+				"session_id", "state",
+				"created_at", "updated_at",
+			},
+		).AddRow("sess1", stateBytes, now, now))
+
+	sessions, err := s.ListSessions(
+		context.Background(), userKey, session.WithListSessionOnlyMeta(),
+	)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "sess1", sessions[0].ID)
+	assert.Empty(t, sessions[0].Events)
+	assert.Nil(t, sessions[0].Tracks)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestListSessions_QueryError(t *testing.T) {
 	s, mock, db := newTestService(t, nil)
 	defer db.Close()
