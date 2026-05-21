@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	enginepkg "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	managerpkg "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/manager"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 type fakeEngine struct {
@@ -58,6 +60,32 @@ type fakeManager struct {
 }
 
 type failingWriter struct{}
+
+type stubLogger struct {
+	warnfCalls []string
+}
+
+func (s *stubLogger) Debug(args ...any) {}
+
+func (s *stubLogger) Debugf(format string, args ...any) {}
+
+func (s *stubLogger) Info(args ...any) {}
+
+func (s *stubLogger) Infof(format string, args ...any) {}
+
+func (s *stubLogger) Warn(args ...any) {}
+
+func (s *stubLogger) Warnf(format string, args ...any) {
+	s.warnfCalls = append(s.warnfCalls, fmt.Sprintf(format, args...))
+}
+
+func (s *stubLogger) Error(args ...any) {}
+
+func (s *stubLogger) Errorf(format string, args ...any) {}
+
+func (s *stubLogger) Fatal(args ...any) {}
+
+func (s *stubLogger) Fatalf(format string, args ...any) {}
 
 func (f *fakeManager) Start(ctx context.Context, request *enginepkg.RunRequest) (*enginepkg.RunResult, error) {
 	if f.start != nil {
@@ -288,6 +316,12 @@ func TestHandleRunsAppliesResponseResultSlimming(t *testing.T) {
 
 func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
 	var captured *enginepkg.RunRequest
+	logger := &stubLogger{}
+	originalLogger := agentlog.Default
+	agentlog.Default = logger
+	defer func() {
+		agentlog.Default = originalLogger
+	}()
 	srv := newTestServer(t,
 		WithEngine(&fakeEngine{
 			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
@@ -324,8 +358,10 @@ func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
 					"evalCaseId": "train_case_1",
 					"metricName": "quality",
 					"severity": "P1",
-					"reason": "business reason"
-				}]
+					"reason": "business reason",
+					"unknownHintField": "ignored"
+				}],
+				"unknownEvalSetField": "ignored"
 			}],
 			"validation": [{"evalSetId": "validation", "evalCaseIds": ["validation_case_1", "validation_case_2"]}],
 			"TargetSurfaceIDs": ["candidate#instruction"],
@@ -359,6 +395,9 @@ func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
 			EvalCaseIDs: []string{"validation_case_1", "validation_case_2"},
 		},
 	}, captured.Validation)
+	require.Len(t, logger.warnfCalls, 1)
+	assert.Contains(t, logger.warnfCalls[0], "ignored unknown request field")
+	assert.Contains(t, logger.warnfCalls[0], "json: unknown field")
 }
 
 func TestHandleRunsRejectsInvalidRequest(t *testing.T) {
@@ -802,6 +841,12 @@ func TestNewExecutionContext(t *testing.T) {
 
 func TestDecodeJSONBodyRejectsInvalidPayloads(t *testing.T) {
 	respondCalls := make([]int, 0, 2)
+	logger := &stubLogger{}
+	originalLogger := agentlog.Default
+	agentlog.Default = logger
+	defer func() {
+		agentlog.Default = originalLogger
+	}()
 	respond := func(w http.ResponseWriter, r *http.Request, statusCode int, payload any) {
 		_ = w
 		_ = r
@@ -817,6 +862,8 @@ func TestDecodeJSONBodyRejectsInvalidPayloads(t *testing.T) {
 	unknownReq := httptest.NewRequest(http.MethodPost, "/runs", bytes.NewBufferString(`{"unknown":true}`))
 	_, err = decodeJSONBody[RunRequest](httptest.NewRecorder(), unknownReq, respond)
 	assert.NoError(t, err)
+	require.Len(t, logger.warnfCalls, 1)
+	assert.Contains(t, logger.warnfCalls[0], "unknown")
 	assert.Equal(t, []int{http.StatusBadRequest, http.StatusBadRequest}, respondCalls)
 }
 

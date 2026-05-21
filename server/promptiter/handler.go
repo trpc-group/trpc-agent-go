@@ -297,14 +297,41 @@ func decodeJSONBody[T any](
 ) (T, error) {
 	defer r.Body.Close()
 	var req T
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&req); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		respond(w, r, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid request body: %v", err)})
+		return req, err
+	}
+	req, err = decodeJSONPayload[T](body, true)
+	if err == nil {
+		return req, nil
+	}
+	strictErr := err
+	req, err = decodeJSONPayload[T](body, false)
+	if err != nil {
+		respond(w, r, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid request body: %v", err)})
+		return req, err
+	}
+	log.Warnf(
+		"promptiter server: ignored unknown request field for %s %s: %v",
+		r.Method,
+		r.URL.RequestURI(),
+		strictErr,
+	)
+	return req, nil
+}
+
+func decodeJSONPayload[T any](body []byte, disallowUnknownFields bool) (T, error) {
+	var req T
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	if disallowUnknownFields {
+		decoder.DisallowUnknownFields()
+	}
+	if err := decoder.Decode(&req); err != nil {
 		return req, err
 	}
 	extraErr := decoder.Decode(&struct{}{})
 	if extraErr != io.EOF {
-		respond(w, r, http.StatusBadRequest, map[string]string{"error": "invalid request body: request body must contain a single JSON object"})
 		if extraErr == nil {
 			extraErr = errors.New("request body must contain a single JSON object")
 		}
