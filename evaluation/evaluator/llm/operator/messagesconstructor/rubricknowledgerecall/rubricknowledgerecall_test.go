@@ -57,10 +57,12 @@ func TestConstructMessagesWithKnowledge(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "result")
 	assert.Contains(t, messages[0].Content, "who?")
 	assert.Contains(t, messages[0].Content, "rubric")
-	assert.Contains(t, messages[0].Content, "Score every rubric item exactly once.")
+	assert.Contains(t, messages[0].Content, "Produce exactly one rubricScores item")
+	assert.Contains(t, messages[0].Content, "Return a single valid JSON object")
+	assert.Contains(t, messages[0].Content, "rubricScores")
 	assert.NotContains(t, messages[0].Content, "Do not output JSON")
-	assert.NotContains(t, messages[0].Content, "Output Format")
-	assert.NotContains(t, messages[0].Content, "rubricScores")
+	assert.Contains(t, messages[0].Content, "Output Format")
+	assert.Contains(t, messages[0].Content, "Output Rules")
 	assert.NotContains(t, messages[0].Content, "Verdict:")
 }
 
@@ -131,6 +133,24 @@ func TestStructuredOutputReturnsRubricSchema(t *testing.T) {
 	rubricScores := properties["rubricScores"].(map[string]any)
 	assert.Equal(t, 1, rubricScores["minItems"])
 	assert.Equal(t, 1, rubricScores["maxItems"])
+}
+
+func TestStructuredOutputRequiresUsableRubricIDs(t *testing.T) {
+	constructor, ok := New().(messagesconstructor.StructuredOutputMessagesConstructor)
+	require.True(t, ok)
+	evalMetric := validEvalMetric()
+	evalMetric.Criterion.LLMJudge.Rubrics[0].ID = ""
+	_, err := constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rubric id is required")
+	evalMetric = validEvalMetric()
+	evalMetric.Criterion.LLMJudge.Rubrics = append(evalMetric.Criterion.LLMJudge.Rubrics, &llm.Rubric{
+		ID:      "r1",
+		Content: &llm.RubricContent{Text: "another rubric"},
+	})
+	_, err = constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `duplicate llm judge rubric id "r1"`)
 }
 
 func validEvalMetric() *metric.EvalMetric {

@@ -1607,7 +1607,7 @@ type RubricContent struct {
 
 `EvalCase.rubrics` adds extra evaluation criteria for a single case. Each rubric targets a configured metric through `metricName`; when that case is evaluated, the framework appends those criteria after the metric's shared rubrics. This affects only the current case and leaves the metric file's global configuration unchanged. Rubric `id` values must be unique after merging.
 
-The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in rubric evaluators read the merged criteria and use structured output to make the judge return per-rubric scores through `rubricScores`. Rubrics that participate in structured output must have non-empty and unique `id` values; otherwise evaluation fails directly. Custom rubric evaluators can read the same field.
+The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in rubric evaluators read the merged criteria and use structured output by default to make the judge return per-rubric scores through `rubricScores`. During `Evaluate`, after metric-level rubrics and `EvalCase.rubrics` are merged and before the judge model is called, each merged rubric used by structured output must have a non-empty and unique `id`. If validation fails, evaluation returns an error such as `llm judge rubric id is required for structured output` or `duplicate llm judge rubric id "accuracy"`. To debug ID conflicts, inspect the merged `criterion.llmJudge.rubrics` from the metric configuration and case-level rubrics. Custom rubric evaluators can read the same field.
 
 `template` is used only by `llm_judge_template`. It keeps template-based evaluation focused on cases where the prompt changes while the evaluation orchestration stays the same. Template evaluators do not read `rubrics`; evaluation criteria should be written directly into `template.prompt`.
 
@@ -2086,6 +2086,7 @@ import (
 // MessagesConstructor builds judge input.
 type MessagesConstructor interface {
 	// ConstructMessages builds judge input messages.
+	// LLMBaseEvaluator passes per-invocation prefix slices: actuals[:i+1] and expecteds[:i+1].
 	ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 		evalMetric *metric.EvalMetric) ([]model.Message, error)
 }
@@ -2094,12 +2095,13 @@ type MessagesConstructor interface {
 type StructuredOutputMessagesConstructor interface {
 	MessagesConstructor
 	// StructuredOutput returns the structured output schema for the judge model.
+	// LLMBaseEvaluator calls it with the same per-invocation prefix slices used for ConstructMessages.
 	StructuredOutput(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 		evalMetric *metric.EvalMetric) (*model.StructuredOutput, error)
 }
 ```
 
-`StructuredOutputMessagesConstructor` is an optional extension interface. If a concrete LLM evaluator implements it, the framework calls `StructuredOutput` after constructing judge input for each turn and passes the returned schema to the judge model or judge Runner. The default template evaluator and built-in `llm_rubric_*` evaluators use this mechanism; when the interface is not implemented, the framework does not attach structured output constraints.
+`StructuredOutputMessagesConstructor` is an optional extension interface. If a concrete LLM evaluator implements it, the framework calls `StructuredOutput` after constructing judge input for each turn and passes the returned schema to the judge model or judge Runner. The default template evaluator and built-in `llm_rubric_*` evaluators use this mechanism; when the interface is not implemented, the framework does not attach structured output constraints. Returning `(nil, nil)` from `StructuredOutput` is valid and means no structured output constraint is attached for that turn. Returning a non-nil error stops evaluation and returns that error to the caller.
 
 The framework includes multiple `MessagesConstructor` implementations for different built-in evaluators. Default selection is as follows:
 

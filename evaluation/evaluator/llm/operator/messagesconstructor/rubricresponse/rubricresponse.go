@@ -56,13 +56,29 @@ Score 0: The rubric item is applicable but the final answer fails to fulfill it,
    If a rubric item is conditional (e.g., “If … then …”), you may mark it as not applicable and use score 1 only if you can clearly determine from <user_prompt> and <final_answer> that the condition is not met.
    If you cannot determine whether the condition is met, you may not mark it as “probably not applicable.” Treat it as not fulfilled (typically score 0).
 
-# Rubric Scoring Requirements
+# Output Format
 
-Score every rubric item exactly once.
-Use the exact rubric ID from the input rubric.
-Do not add, omit, merge, split, translate, or rename rubric IDs.
-Use score 1 for pass and score 0 for fail.
-State the decisive evaluation reason based only on <user_prompt> and <final_answer>.
+Return a single valid JSON object and nothing else:
+
+{
+  "rubricScores": [
+    {
+      "id": "[The ID of the rubric item, unique within the rubric. If the rubric itself is numbered 1..N, the ID must match that numbering.]",
+      "score": 0,
+      "reason": "[Evidence: cite source-labeled decisive evidence from <user_prompt> and/or <final_answer>. Judgment: explain whether the final answer satisfies this rubric item; if the item is not applicable, state the exact evidence that makes it not applicable.]"
+    }
+  ]
+}
+
+# Output Rules
+
+Produce exactly one rubricScores item for each input rubric item, in the same order. Use the exact input rubric ID; do not add, omit, merge, split, translate, or rename IDs.
+
+Set score to 1 when the item is fulfilled or clearly not applicable. Set score to 0 when the item is applicable but not fulfilled, or when fulfillment cannot be unambiguously verified from the allowed evidence. The numeric score in the example is not a default.
+
+Write reason as one concise evaluator note containing both source-labeled evidence and judgment. Do not add separate Rubric, Evidence, Reason, or Verdict fields.
+
+Return JSON only: double-quote keys and strings, escape quotes/newlines inside strings, and do not include markdown, comments, trailing commas, summaries, or extra fields.
 
 # Your Turn
 

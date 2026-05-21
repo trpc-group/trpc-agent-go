@@ -1610,7 +1610,7 @@ type RubricContent struct {
 
 `EvalCase.rubrics` 用于给单个用例补充额外评估细则。每条 rubric 通过 `metricName` 指向一个已配置的 metric；评估该 case 时，框架会在该 metric 的公共 rubrics 之后追加这些细则，只影响当前 case，不改变指标文件中的全局配置。合并后的 rubric `id` 需要保持唯一。
 
-目标 metric 使用 `criterion.llmJudge` 承载 rubric 列表。内置 rubric evaluator 会读取合并后的细则，并使用结构化输出让裁判按 `rubricScores` 返回逐条评分。参与结构化输出的 rubric 必须具备非空且唯一的 `id`，否则评估会直接报错；自定义 rubric evaluator 按同一字段读取即可。
+目标 metric 使用 `criterion.llmJudge` 承载 rubric 列表。内置 rubric evaluator 会读取合并后的细则，并默认使用结构化输出让裁判按 `rubricScores` 返回逐条评分。每次 `Evaluate` 执行时，框架会先合并 metric 级 rubrics 与 `EvalCase.rubrics`，再在调用裁判模型前校验参与结构化输出的 merged rubric：每条 rubric 都必须具备非空且唯一的 `id`。如果校验失败，评估会返回类似 `llm judge rubric id is required for structured output` 或 `duplicate llm judge rubric id "accuracy"` 的错误。排查时请检查 metric 配置与 case 级 rubrics 合并后的 `criterion.llmJudge.rubrics` 及其 `id`。自定义 rubric evaluator 按同一字段读取即可。
 
 `template` 仅用于 `llm_judge_template`。它将模板化评估限制在“prompt 不同，但评估编排逻辑相同”的场景，不要求框架把所有评估器都表达成模板。模板评估器不读取 `rubrics`，评估标准应直接写入 `template.prompt`。
 
@@ -2089,6 +2089,7 @@ import (
 // MessagesConstructor 负责构造裁判输入
 type MessagesConstructor interface {
 	// ConstructMessages 构造裁判输入消息
+	// LLMBaseEvaluator 会传入按轮次截取的前缀切片：actuals[:i+1] 与 expecteds[:i+1]
 	ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 		evalMetric *metric.EvalMetric) ([]model.Message, error)
 }
@@ -2097,12 +2098,13 @@ type MessagesConstructor interface {
 type StructuredOutputMessagesConstructor interface {
 	MessagesConstructor
 	// StructuredOutput 返回裁判模型的结构化输出 schema
+	// LLMBaseEvaluator 会使用与 ConstructMessages 相同的前缀切片调用该方法
 	StructuredOutput(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 		evalMetric *metric.EvalMetric) (*model.StructuredOutput, error)
 }
 ```
 
-`StructuredOutputMessagesConstructor` 是可选扩展接口。若具体 LLM 评估器实现了该接口，框架会在每一轮构造完裁判输入后调用 `StructuredOutput`，并把返回的 schema 传给裁判模型或裁判 Runner。默认的模板评估器以及内置 `llm_rubric_*` 评估器都使用该机制；未实现该接口时，框架不会附加结构化输出约束。
+`StructuredOutputMessagesConstructor` 是可选扩展接口。若具体 LLM 评估器实现了该接口，框架会在每一轮构造完裁判输入后调用 `StructuredOutput`，并把返回的 schema 传给裁判模型或裁判 Runner。默认的模板评估器以及内置 `llm_rubric_*` 评估器都使用该机制；未实现该接口时，框架不会附加结构化输出约束。`StructuredOutput` 返回 `(nil, nil)` 是合法的，表示当前轮不附加结构化输出约束；如果返回非空 error，评估会停止并把该错误返回给调用方。
 
 框架内置了多种 `MessagesConstructor` 实现，分别对应不同内置评估器的打分目标。默认选择关系如下。
 

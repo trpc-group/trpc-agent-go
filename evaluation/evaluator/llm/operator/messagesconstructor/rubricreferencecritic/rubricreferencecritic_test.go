@@ -67,10 +67,12 @@ func TestConstructMessagesIncludesReferenceAnswer(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "test_rubric_text")
 	assert.NotContains(t, messages[0].Content, "guessed basketball context")
 	assert.NotContains(t, messages[0].Content, "current play")
-	assert.Contains(t, messages[0].Content, "Score every rubric item exactly once.")
+	assert.Contains(t, messages[0].Content, "Produce exactly one rubricScores item")
+	assert.Contains(t, messages[0].Content, "Return a single valid JSON object")
+	assert.Contains(t, messages[0].Content, "rubricScores")
 	assert.NotContains(t, messages[0].Content, "Do not output JSON")
-	assert.NotContains(t, messages[0].Content, "Output Format")
-	assert.NotContains(t, messages[0].Content, "rubricScores")
+	assert.Contains(t, messages[0].Content, "Output Format")
+	assert.Contains(t, messages[0].Content, "Output Rules")
 	assert.NotContains(t, messages[0].Content, "Verdict:")
 }
 

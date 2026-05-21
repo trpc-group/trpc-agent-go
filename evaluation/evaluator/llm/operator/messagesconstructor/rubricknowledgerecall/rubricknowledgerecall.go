@@ -57,7 +57,7 @@ Score 0: The rubric item is applicable, but the retrieved knowledge is missing, 
 
 * Prefer **verbatim excerpts** (you may truncate, but must not change meaning).
 * If you must paraphrase, it must be a **near-verbatim** paraphrase that can be directly located in the documents.
-* If <retrieved_knowledge> contains document IDs/titles/sectioning, you must cite the source location in Evidence (e.g., “Doc 2 / Paragraph 3”). If there is no numbering, include enough raw text to make the source identifiable.
+* If <retrieved_knowledge> contains document IDs/titles/sectioning, cite the source location inside the reason string (e.g., “Doc 2 / Paragraph 3”). If there is no numbering, include enough raw text in the reason to make the source identifiable.
 
 5. **Conditional rubric items (not applicable => score 1)**
    If a rubric item is conditional (e.g., “If … then …”):
@@ -72,15 +72,31 @@ Score 0: The rubric item is applicable, but the retrieved knowledge is missing, 
 2. Collect relevant excerpts from <retrieved_knowledge> as evidence.
 3. Judge whether the evidence is relevant and sufficient (using the sufficiency test).
 4. Choose score 1 or score 0 and state the decisive reason.
-   Note: These steps are for your internal analysis only and must not be output.
+   Note: Do not output these steps as separate sections. The final JSON reason should still include the decisive evidence and judgment.
 
-# Rubric Scoring Requirements
+# Output Format
 
-Score every rubric item exactly once.
-Use the exact rubric ID from the input rubric.
-Do not add, omit, merge, split, translate, or rename rubric IDs.
-Use score 1 for pass and score 0 for fail.
-State the decisive evaluation reason using evidence from <retrieved_knowledge> and, for not-applicable items, <user_prompt>.
+Return a single valid JSON object and nothing else:
+
+{
+  "rubricScores": [
+    {
+      "id": "[The ID of the rubric item, unique within the rubric. If the rubric is numbered 1..N, the ID must match that numbering.]",
+      "score": 0,
+      "reason": "[Evidence: cite source-labeled verbatim excerpts, or near-verbatim paraphrases, from <retrieved_knowledge>. Judgment: state whether the evidence is relevant and sufficient for this rubric item; if insufficient, state the missing key information; if not applicable, cite the part of <user_prompt> that makes it not applicable.]"
+    }
+  ]
+}
+
+# Output Rules
+
+Produce exactly one rubricScores item for each input rubric item, in the same order. Use the exact input rubric ID; do not add, omit, merge, split, translate, or rename IDs.
+
+Set score to 1 only when <retrieved_knowledge> directly supports the rubric item, or when the item is clearly not applicable to <user_prompt>. Set score to 0 when the retrieved knowledge is missing, insufficient, loosely related, irrelevant, or cannot support the required answer. The numeric score in the example is not a default.
+
+Write reason as one concise evaluator note containing both source-labeled evidence and judgment. Do not add separate Rubric, Evidence, Reason, or Verdict fields.
+
+Return JSON only: double-quote keys and strings, escape quotes/newlines inside strings, and do not include markdown, comments, trailing commas, summaries, or extra fields.
 
 # Your Turn
 

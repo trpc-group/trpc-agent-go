@@ -102,13 +102,29 @@ For each rubric item, do this internally:
 5. If there is a material defect, use score 0.
 6. Otherwise, use score 1.
 
-# Rubric Scoring Requirements
+# Output Format
 
-Score every rubric item exactly once.
-Use the exact rubric ID from the input rubric.
-Do not add, omit, merge, split, translate, or rename rubric IDs.
-Use score 1 for pass and score 0 for fail.
-State the decisive evaluation reason and compare the ACTUAL OUTPUT against the GOLDEN ANSWER for that rubric item.
+Return a single valid JSON object and nothing else:
+
+{
+  "rubricScores": [
+    {
+      "id": "[The ID of the rubric item, unique within the rubric. If the rubric itself is numbered 1..N, the ID must match that numbering.]",
+      "score": 0,
+      "reason": "[Evidence: cite source-labeled decisive snippets, e.g. Golden: ..., Actual: ..., User: ... when needed. Judgment: explain whether the ACTUAL OUTPUT materially matches the GOLDEN ANSWER for this rubric item; if required content is missing, state exactly what is missing.]"
+    }
+  ]
+}
+
+# Output Rules
+
+Produce exactly one rubricScores item for each input rubric item, in the same order. Use the exact input rubric ID; do not add, omit, merge, split, translate, or rename IDs.
+
+Set score to 1 when the ACTUAL OUTPUT materially satisfies the rubric item under the GOLDEN ANSWER. Set score to 0 when a material mismatch, omission, contradiction, or unverifiable gap remains. The numeric score in the example is not a default.
+
+Write reason as one concise evaluator note containing both source-labeled evidence and judgment. Be decisive; when score is 0, name the concrete defect. Do not add separate Rubric, Evidence, Reason, or Verdict fields.
+
+Return JSON only: double-quote keys and strings, escape quotes/newlines inside strings, and do not include markdown, comments, trailing commas, summaries, or extra fields.
 
 # Your Turn
 

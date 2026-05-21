@@ -388,7 +388,7 @@ func TestLLMBaseEvaluator_UsesJudgeRunnerAndIgnoresJudgeModelNumSamples(t *testi
 
 func TestLLMBaseEvaluator_ResolveStructuredOutput(t *testing.T) {
 	base := &LLMBaseEvaluator{}
-	output, err := base.resolveStructuredOutput(nil, nil, nil, nil)
+	output, err := base.resolveStructuredOutput(context.Background(), nil, nil, nil)
 	require.NoError(t, err)
 	assert.Nil(t, output)
 	output, err = base.resolveStructuredOutput(context.Background(), nil, nil,
