@@ -1876,12 +1876,14 @@ func TestTool_wrapWithCallSemantics_FillsMissingInvocationFields(t *testing.T) {
 	)
 
 	src := make(chan *event.Event, 1)
-	src <- event.NewResponseEvent(child.InvocationID, "child", &model.Response{
+	evt := event.NewResponseEvent(child.InvocationID, "child", &model.Response{
 		Done: true,
 		Choices: []model.Choice{{
 			Message: model.NewAssistantMessage("child answer"),
 		}},
 	})
+	evt.InvocationID = ""
+	src <- evt
 	close(src)
 
 	out := at.wrapWithCallSemantics(context.Background(), child, src)
@@ -2273,6 +2275,40 @@ func TestTool_StreamableCall_DefersCompletionToRunner(t *testing.T) {
 	}
 	require.Contains(t, contents, "done")
 	require.Len(t, parent.Session.Events, 0)
+}
+
+func TestTool_StreamableCall_DefersCompletion_FillsMissingInvocationFields(t *testing.T) {
+	const toolCallID = "call-1"
+	parent := agent.NewInvocation(
+		agent.WithInvocationID("parent-inv"),
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-stream"}),
+		agent.WithInvocationEventFilterKey("parent-filter"),
+	)
+	appender.Attach(parent, func(context.Context, *event.Event) error {
+		return nil
+	})
+	at := NewTool(&streamingMockAgent{name: "stream-agent"}, WithStreamInner(true))
+	toolCtx := agent.NewInvocationContext(context.Background(), parent)
+	ctxWithToolCallID := context.WithValue(
+		toolCtx,
+		tool.ContextKeyToolCallID{},
+		toolCallID,
+	)
+
+	reader, err := at.StreamableCall(ctxWithToolCallID, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+
+	chunk, err := reader.Recv()
+	require.NoError(t, err)
+	ev, ok := chunk.Content.(*event.Event)
+	require.True(t, ok)
+	require.Equal(t, "req-stream", ev.RequestID)
+	require.NotEmpty(t, ev.InvocationID)
+	require.Equal(t, "parent-inv", ev.ParentInvocationID)
+	require.Equal(t, "stream-agent", ev.Branch)
+	require.Contains(t, ev.FilterKey, "stream-agent-")
 }
 
 func TestTool_StreamableCall_DefersCompletion_FlushesVisibleCompletionBeforeBarrierNotification(

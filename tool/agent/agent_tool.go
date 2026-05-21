@@ -970,6 +970,9 @@ func (at *Tool) forwardSubInvocationStream(
 	emitFinalResultChunk := tool.FinalResultChunksFromContext(ctx)
 	state := streamCompletionState{}
 	for ev := range wrapped {
+		if ev != nil {
+			ensureInvocationEventFields(subInv, ev)
+		}
 		if shouldSuppressGraphExecutorBarrierEvent(subInv, ev) {
 			at.completeSuppressedBarrierStreamEvent(ctx, subInv, ev, &state)
 			continue
