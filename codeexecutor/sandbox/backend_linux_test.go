@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -73,6 +74,37 @@ func TestLinuxProcMountFailureDetection(t *testing.T) {
 		if isProcMountFailure(stderr) {
 			t.Fatalf("isProcMountFailure(%q) = true, want false", stderr)
 		}
+	}
+}
+
+func TestLinuxBwrapPreflightArgsMatchRuntimeCore(t *testing.T) {
+	withProc := buildBwrapPreflightArgs(true)
+	wantWithProc := []string{
+		"--die-with-parent",
+		"--unshare-user",
+		"--unshare-pid",
+		"--new-session",
+		"--ro-bind", "/", "/",
+		"--dev", "/dev",
+		"--proc", "/proc",
+		"--", "/bin/true",
+	}
+	if !reflect.DeepEqual(withProc, wantWithProc) {
+		t.Fatalf("buildBwrapPreflightArgs(true) = %#v, want %#v", withProc, wantWithProc)
+	}
+
+	withoutProc := buildBwrapPreflightArgs(false)
+	wantWithoutProc := []string{
+		"--die-with-parent",
+		"--unshare-user",
+		"--unshare-pid",
+		"--new-session",
+		"--ro-bind", "/", "/",
+		"--dev", "/dev",
+		"--", "/bin/true",
+	}
+	if !reflect.DeepEqual(withoutProc, wantWithoutProc) {
+		t.Fatalf("buildBwrapPreflightArgs(false) = %#v, want %#v", withoutProc, wantWithoutProc)
 	}
 }
 

@@ -174,7 +174,8 @@ func (r *Runtime) linuxPreflight() (string, bool, error) {
 // runBwrapPreflightProbe runs a short-lived bubblewrap probe and captures stderr.
 //
 // Strategy:
-//   - linuxPreflight first runs /bin/true under bubblewrap with --proc /proc.
+//   - linuxPreflight first runs /bin/true under bubblewrap with --proc /proc
+//     and the same core namespace/mount flags used by real sandbox runs.
 //   - The goal is to detect environments where mounting a fresh /proc fails, for
 //     example restricted Docker-style containers, so the real run can retry
 //     without --proc while keeping PID isolation.
@@ -183,15 +184,7 @@ func (r *Runtime) linuxPreflight() (string, bool, error) {
 func runBwrapPreflightProbe(bwrap string, mountProc bool) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	args := []string{
-		"--die-with-parent",
-		"--unshare-user",
-		"--ro-bind", "/", "/",
-	}
-	if mountProc {
-		args = append(args, "--proc", "/proc")
-	}
-	args = append(args, "--", "/bin/true")
+	args := buildBwrapPreflightArgs(mountProc)
 	var stderr bytes.Buffer
 	probe := exec.CommandContext(ctx, bwrap, args...)
 	probe.Stderr = &stderr
@@ -200,6 +193,22 @@ func runBwrapPreflightProbe(bwrap string, mountProc bool) (string, error) {
 		err = ctx.Err()
 	}
 	return stderr.String(), err
+}
+
+func buildBwrapPreflightArgs(mountProc bool) []string {
+	args := []string{
+		"--die-with-parent",
+		"--unshare-user",
+		"--unshare-pid",
+		"--new-session",
+		"--ro-bind", "/", "/",
+		"--dev", "/dev",
+	}
+	if mountProc {
+		args = append(args, "--proc", "/proc")
+	}
+	args = append(args, "--", "/bin/true")
+	return args
 }
 
 type bwrapProbeError struct {

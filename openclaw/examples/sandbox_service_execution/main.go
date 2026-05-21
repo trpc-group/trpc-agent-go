@@ -953,15 +953,7 @@ func checkPreflight(requireOSSandbox bool) error {
 func runBwrapPreflightProbe(bwrap string, mountProc bool) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	args := []string{
-		"--die-with-parent",
-		"--unshare-user",
-		"--ro-bind", "/", "/",
-	}
-	if mountProc {
-		args = append(args, "--proc", "/proc")
-	}
-	args = append(args, "--", "/bin/true")
+	args := buildBwrapPreflightArgs(mountProc)
 	var stderr bytes.Buffer
 	probe := exec.CommandContext(ctx, bwrap, args...)
 	probe.Stderr = &stderr
@@ -970,6 +962,22 @@ func runBwrapPreflightProbe(bwrap string, mountProc bool) (string, error) {
 		err = ctx.Err()
 	}
 	return stderr.String(), err
+}
+
+func buildBwrapPreflightArgs(mountProc bool) []string {
+	args := []string{
+		"--die-with-parent",
+		"--unshare-user",
+		"--unshare-pid",
+		"--new-session",
+		"--ro-bind", "/", "/",
+		"--dev", "/dev",
+	}
+	if mountProc {
+		args = append(args, "--proc", "/proc")
+	}
+	args = append(args, "--", "/bin/true")
+	return args
 }
 
 func isBwrapProcMountFailure(stderr string) bool {

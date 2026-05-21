@@ -20,7 +20,10 @@ similar to:
 bwrap \
   --die-with-parent \
   --unshare-user \
+  --unshare-pid \
+  --new-session \
   --ro-bind / / \
+  --dev /dev \
   --proc /proc \
   -- /bin/true
 ```
@@ -150,7 +153,10 @@ Then run the preflight probe:
 bwrap \
   --die-with-parent \
   --unshare-user \
+  --unshare-pid \
+  --new-session \
   --ro-bind / / \
+  --dev /dev \
   --proc /proc \
   -- /bin/true
 ```
@@ -163,7 +169,10 @@ the automatic fallback path:
 bwrap \
   --die-with-parent \
   --unshare-user \
+  --unshare-pid \
+  --new-session \
   --ro-bind / / \
+  --dev /dev \
   -- /bin/true
 ```
 
