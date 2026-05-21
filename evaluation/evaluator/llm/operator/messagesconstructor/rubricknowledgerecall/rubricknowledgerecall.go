@@ -16,6 +16,7 @@ import (
 	"text/template"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/internal/rubrics"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/internal/content"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -32,8 +33,8 @@ Only respond to the rubric items provided. Do not invent new rubric items.
 
 # Rubric
 
-"yes": The retrieved knowledge **directly supports** the key information required by the rubric item, OR the rubric item’s condition is clearly not applicable to this user question.
-"no": The rubric item is applicable, but the retrieved knowledge is missing, insufficient, only broadly on-topic, or clearly irrelevant, and therefore cannot support the rubric item.
+Score 1: The retrieved knowledge **directly supports** the key information required by the rubric item, OR the rubric item’s condition is clearly not applicable to this user question.
+Score 0: The rubric item is applicable, but the retrieved knowledge is missing, insufficient, only broadly on-topic, or clearly irrelevant, and therefore cannot support the rubric item.
 
 # Key Evaluation Principles
 
@@ -42,14 +43,14 @@ Only respond to the rubric items provided. Do not invent new rubric items.
 
 2. **Relevance first, and it must be answerable**
    Even if the retrieved knowledge contains correct facts, it must be relevant to the user’s intent and usable for satisfying the corresponding rubric item.
-   If it is merely “same topic / loosely related / generic background” but does not support the required information for the rubric item, answer "no".
+   If it is merely “same topic / loosely related / generic background” but does not support the required information for the rubric item, use score 0.
 
 3. **Sufficiency must be judged with an operational test**
    For each rubric item, use the following test to determine whether the retrieval is “sufficient”:
 
 * Imagine an answerer who can only see <retrieved_knowledge> (no external knowledge, no guessing).
-* If they could complete the rubric item using only that retrieved knowledge (i.e., produce the key conclusion/elements required), then the item may be "yes".
-* If they could not (missing key entities, steps, numbers, conditions, definitions, etc.), then it must be "no".
+* If they could complete the rubric item using only that retrieved knowledge (i.e., produce the key conclusion/elements required), then use score 1.
+* If they could not (missing key entities, steps, numbers, conditions, definitions, etc.), then use score 0.
 
 4. **Evidence must be close to the original text; no abstract fabrication**
    Evidence must come from <retrieved_knowledge>, with these requirements:
@@ -58,31 +59,28 @@ Only respond to the rubric items provided. Do not invent new rubric items.
 * If you must paraphrase, it must be a **near-verbatim** paraphrase that can be directly located in the documents.
 * If <retrieved_knowledge> contains document IDs/titles/sectioning, you must cite the source location in Evidence (e.g., “Doc 2 / Paragraph 3”). If there is no numbering, include enough raw text to make the source identifiable.
 
-5. **Conditional rubric items (not applicable => yes)**
+5. **Conditional rubric items (not applicable => score 1)**
    If a rubric item is conditional (e.g., “If … then …”):
 
-* You may return "yes" as not applicable only if you can **clearly determine from <user_prompt>** that the condition is not met.
-* If you cannot determine whether the condition is met, treat the item as applicable; if retrieval is insufficient, return "no".
-* When you return "yes" due to not-applicable, your Reason must explicitly state what part of <user_prompt> makes it not applicable.
-
-6. **No extra output**
-   You must output only the per-item evaluations in the format below. Do not add any overall summary or additional commentary.
+* You may use score 1 as not applicable only if you can **clearly determine from <user_prompt>** that the condition is not met.
+* If you cannot determine whether the condition is met, treat the item as applicable; if retrieval is insufficient, use score 0.
+* When you use score 1 due to not-applicable, your reason must explicitly state what part of <user_prompt> makes it not applicable.
 
 # Internal steps for each rubric item (for internal analysis only)
 
 1. Understand the rubric item and the key evaluation principles.
 2. Collect relevant excerpts from <retrieved_knowledge> as evidence.
 3. Judge whether the evidence is relevant and sufficient (using the sufficiency test).
-4. Output the verdict in the required format.
+4. Choose score 1 or score 0 and state the decisive reason.
    Note: These steps are for your internal analysis only and must not be output.
 
-# Output Format (repeat this format for every rubric item, starting with a new line)
+# Rubric Scoring Requirements
 
-ID: [The ID of the rubric item, unique within the rubric. If the rubric is numbered 1..N, the ID must match that numbering.]
-Rubric: [Repeat the rubric item word-for-word without any changes. Keep punctuation and capitalization exactly as-is. Do not translate or paraphrase.]
-Evidence: [Relevant verbatim excerpts (or near-verbatim paraphrases) from <retrieved_knowledge>, with source/location where possible. If there is no relevant evidence, write “none”.]
-Reason: [Explain why the evidence directly supports the rubric item, or why evidence is missing/insufficient/irrelevant; or explain why the item is not applicable, and cite which part of <user_prompt> establishes that.]
-Verdict: [yes|no]
+Score every rubric item exactly once.
+Use the exact rubric ID from the input rubric.
+Do not add, omit, merge, split, translate, or rename rubric IDs.
+Use score 1 for pass and score 0 for fail.
+State the decisive evaluation reason using evidence from <retrieved_knowledge> and, for not-applicable items, <user_prompt>.
 
 # Your Turn
 
@@ -121,6 +119,15 @@ func (e *rubricKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context
 	if len(actuals) == 0 {
 		return nil, fmt.Errorf("actuals is empty")
 	}
+	if evalMetric == nil {
+		return nil, fmt.Errorf("eval metric is nil")
+	}
+	if evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
+		return nil, fmt.Errorf("llm judge criterion is required")
+	}
+	if rubrics.Count(evalMetric) == 0 {
+		return nil, fmt.Errorf("llm judge rubrics are required")
+	}
 	actual := actuals[len(actuals)-1]
 	retrieved, err := content.ExtractKnowledgeRecall(actual.Tools)
 	if err != nil {
@@ -144,6 +151,20 @@ func (e *rubricKnowledgeRecallMessagesConstructor) ConstructMessages(ctx context
 			Content: buf.String(),
 		},
 	}, nil
+}
+
+// StructuredOutput returns the structured output schema for knowledge recall evaluation.
+func (e *rubricKnowledgeRecallMessagesConstructor) StructuredOutput(ctx context.Context,
+	actuals, expecteds []*evalset.Invocation, evalMetric *metric.EvalMetric) (*model.StructuredOutput, error) {
+	visibleRubrics, err := rubrics.ValidateStructured(evalMetric)
+	if err != nil {
+		return nil, err
+	}
+	return rubrics.ScoresOutput(
+		"rubric_knowledge_recall_scores",
+		"Per-rubric binary scores and reasons for knowledge recall evaluation.",
+		visibleRubrics,
+	), nil
 }
 
 type rubricKnowledgeRecallPromptData struct {

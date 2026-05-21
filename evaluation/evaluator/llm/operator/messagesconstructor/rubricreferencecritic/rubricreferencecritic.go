@@ -16,6 +16,7 @@ import (
 	"text/template"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/internal/rubrics"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/internal/content"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -45,8 +46,8 @@ For each rubric item, first determine what the rubric item requires by reading:
 3. the relevant part of the REFERENCE ANSWER.
 
 Then compare the ACTUAL OUTPUT against that requirement.
-Return "yes" only if the ACTUAL OUTPUT materially satisfies the current rubric item.
-If a material defect remains, return "no".
+Use score 1 only if the ACTUAL OUTPUT materially satisfies the current rubric item.
+If a material defect remains, use score 0.
 
 # Decision Rules
 
@@ -71,7 +72,7 @@ If a material defect remains, return "no".
    The ACTUAL OUTPUT does not need to mirror the REFERENCE ANSWER literally.
    It does need to preserve the same grounded meaning, decisive context, and comparable level of useful detail required by the current rubric item.
 
-5. **A "no" must be caused by a material defect**
+5. **Score 0 must be caused by a material defect**
    A defect is material only if it would make a reasonable evaluator conclude that the current rubric item is not truly satisfied.
    Typical material defects include:
    * missing required information,
@@ -85,10 +86,10 @@ If a material defect remains, return "no".
    Do not invent hidden requirements.
    Do not fail an item because of style, tone, verbosity, brevity, formatting, or ordering alone.
    Do not fail an item for extra detail unless that detail contradicts, weakens, or obscures what the current rubric item requires.
-   If the ACTUAL OUTPUT is reasonably equivalent in grounded meaning and fidelity for the current rubric item, return "yes".
+   If the ACTUAL OUTPUT is reasonably equivalent in grounded meaning and fidelity for the current rubric item, use score 1.
 
 7. **Conditional rubric items**
-   If a rubric item is conditional, you may treat it as not applicable and return "yes" only when the condition is clearly not met based on <user_prompt> and <reference_answer>.
+   If a rubric item is conditional, you may treat it as not applicable and use score 1 only when the condition is clearly not met based on <user_prompt> and <reference_answer>.
    If applicability is unclear, do not guess. Treat the item as applicable.
 
 # Internal Evaluation Procedure
@@ -98,26 +99,17 @@ For each rubric item, do this internally:
 2. Extract the decisive evidence from the REFERENCE ANSWER and, if needed, the USER REQUEST.
 3. Extract the corresponding evidence from the ACTUAL OUTPUT.
 4. Decide whether there is a material mismatch, omission, contradiction, unsupported specificity, or unverifiable gap.
-5. If there is a material defect, return "no".
-6. Otherwise, return "yes".
+5. If there is a material defect, use score 0.
+6. Otherwise, use score 1.
 
-# Output Format
+# Rubric Scoring Requirements
 
-Repeat the following block for every rubric item, starting on a new line.
-
-ID: [The ID of the rubric item, unique within the rubric. If the rubric itself is numbered 1..N, the ID must match that numbering.]
-Rubric: [Repeat the rubric item word-for-word without any changes. Keep punctuation and capitalization exactly as-is. Do not translate or paraphrase.]
-Evidence: [Quote only the decisive snippets from the REFERENCE ANSWER, the ACTUAL OUTPUT, and the USER REQUEST when needed. If something required is missing or unverifiable, explicitly state what is missing or unverifiable.]
-Reason: [State the key evaluation reason from the evaluator's perspective. Compare the ACTUAL OUTPUT against the REFERENCE ANSWER for this rubric item. Prefer one decisive material reason over a long list of minor complaints.]
-Verdict: [yes|no]
-
-# Output Constraints
-
-* Output only the rubric blocks in the exact format above.
-* Do not output JSON.
-* Do not add an overall summary.
-* Be decisive.
-* When the verdict is "no", the reason must point to a concrete mismatch, omission, unsupported specificity, contradiction, or unverifiable gap.
+Score every rubric item exactly once.
+Use the exact rubric ID from the input rubric.
+Do not add, omit, merge, split, translate, or rename rubric IDs.
+Use score 1 for pass and score 0 for fail.
+State the decisive evaluation reason based only on <user_prompt>, <reference_answer>, and <final_answer>.
+When score is 0, the reason must point to a concrete mismatch, omission, unsupported specificity, contradiction, or unverifiable gap.
 
 # Your Turn
 
@@ -172,7 +164,7 @@ func (e *rubricReferenceCriticMessagesConstructor) ConstructMessages(ctx context
 	if evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
 		return nil, fmt.Errorf("llm judge criterion is required")
 	}
-	if effectiveRubricCount(evalMetric) == 0 {
+	if rubrics.Count(evalMetric) == 0 {
 		return nil, fmt.Errorf("llm judge rubrics are required")
 	}
 	actual := actuals[len(actuals)-1]
@@ -204,23 +196,23 @@ func (e *rubricReferenceCriticMessagesConstructor) ConstructMessages(ctx context
 	}, nil
 }
 
+// StructuredOutput returns the structured output schema for reference-aware rubric criticism.
+func (e *rubricReferenceCriticMessagesConstructor) StructuredOutput(ctx context.Context,
+	actuals, expecteds []*evalset.Invocation, evalMetric *metric.EvalMetric) (*model.StructuredOutput, error) {
+	visibleRubrics, err := rubrics.ValidateStructured(evalMetric)
+	if err != nil {
+		return nil, err
+	}
+	return rubrics.ScoresOutput(
+		"rubric_reference_critic_scores",
+		"Per-rubric binary scores and reasons for rubric reference critic evaluation.",
+		visibleRubrics,
+	), nil
+}
+
 type rubricReferenceCriticPromptData struct {
 	UserInput             string
 	ExpectedFinalResponse string
 	ActualFinalResponse   string
 	Rubrics               string
-}
-
-func effectiveRubricCount(evalMetric *metric.EvalMetric) int {
-	if evalMetric == nil || evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
-		return 0
-	}
-	count := 0
-	for _, rubric := range evalMetric.Criterion.LLMJudge.Rubrics {
-		if rubric == nil || rubric.Content == nil {
-			continue
-		}
-		count++
-	}
-	return count
 }

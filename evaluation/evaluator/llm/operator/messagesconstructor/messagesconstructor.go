@@ -24,3 +24,11 @@ type MessagesConstructor interface {
 	ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 		evalMetric *metric.EvalMetric) ([]model.Message, error)
 }
+
+// StructuredOutputMessagesConstructor extends MessagesConstructor with a structured output contract.
+type StructuredOutputMessagesConstructor interface {
+	MessagesConstructor
+	// StructuredOutput returns the structured output schema for the judge model.
+	StructuredOutput(ctx context.Context, actuals, expecteds []*evalset.Invocation,
+		evalMetric *metric.EvalMetric) (*model.StructuredOutput, error)
+}

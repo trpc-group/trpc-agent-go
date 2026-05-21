@@ -106,12 +106,20 @@ func (f *fakeModel) Info() model.Info {
 }
 
 type fakeJudgeRunner struct {
-	events   []*event.Event
-	runCalls int
+	events                []*event.Event
+	runCalls              int
+	structuredOutputNames []string
 }
 
-func (f *fakeJudgeRunner) Run(_ context.Context, _ string, _ string, _ model.Message, _ ...agent.RunOption) (<-chan *event.Event, error) {
+func (f *fakeJudgeRunner) Run(_ context.Context, _ string, _ string, _ model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
 	f.runCalls++
+	runOpts := &agent.RunOptions{}
+	for _, opt := range opts {
+		opt(runOpts)
+	}
+	if runOpts.StructuredOutput != nil && runOpts.StructuredOutput.JSONSchema != nil {
+		f.structuredOutputNames = append(f.structuredOutputNames, runOpts.StructuredOutput.JSONSchema.Name)
+	}
 	ch := make(chan *event.Event, len(f.events))
 	for _, e := range f.events {
 		ch <- e
@@ -248,6 +256,26 @@ func (s *scriptedLLMEvaluator) AggregateInvocations(_ context.Context, results [
 	}, nil
 }
 
+type structuredLLMEvaluator struct {
+	scriptedLLMEvaluator
+	structuredOutput *model.StructuredOutput
+	structuredErr    error
+	structuredCalls  int
+	actualLens       []int
+	expectedLens     []int
+}
+
+func (s *structuredLLMEvaluator) StructuredOutput(_ context.Context, actuals, expecteds []*evalset.Invocation,
+	_ *metric.EvalMetric) (*model.StructuredOutput, error) {
+	s.structuredCalls++
+	s.actualLens = append(s.actualLens, len(actuals))
+	s.expectedLens = append(s.expectedLens, len(expecteds))
+	if s.structuredErr != nil {
+		return nil, s.structuredErr
+	}
+	return s.structuredOutput, nil
+}
+
 func TestLLMBaseEvaluator_ErrorPaths(t *testing.T) {
 	provider.Register("llm-test-provider", func(_ *provider.Options) (model.Model, error) {
 		return &fakeModel{responses: []*model.Response{{
@@ -360,60 +388,102 @@ func TestLLMBaseEvaluator_UsesJudgeRunnerAndIgnoresJudgeModelNumSamples(t *testi
 
 func TestLLMBaseEvaluator_ResolveStructuredOutput(t *testing.T) {
 	base := &LLMBaseEvaluator{}
-	output, err := base.resolveStructuredOutput(nil, nil)
+	output, err := base.resolveStructuredOutput(nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Nil(t, output)
-	output, err = base.resolveStructuredOutput(context.Background(), &metric.EvalMetric{MetricName: "final_response"})
+	output, err = base.resolveStructuredOutput(context.Background(), nil, nil,
+		&metric.EvalMetric{MetricName: "final_response"})
 	require.NoError(t, err)
 	assert.Nil(t, output)
-	output, err = base.resolveStructuredOutput(context.Background(), &metric.EvalMetric{
-		EvaluatorName: templateEvaluatorName,
-		Criterion: &criterion.Criterion{
-			LLMJudge: &llm.LLMCriterion{},
-		},
-	})
-	require.NoError(t, err)
-	assert.Nil(t, output)
-	output, err = base.resolveStructuredOutput(context.Background(), &metric.EvalMetric{
-		EvaluatorName: templateEvaluatorName,
-		Criterion: &criterion.Criterion{
-			LLMJudge: &llm.LLMCriterion{
-				Template: &llm.JudgeTemplateOptions{
-					ResponseScorerName: "single_score",
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	require.NotNil(t, output.JSONSchema)
-	assert.Equal(t, "single_score_result", output.JSONSchema.Name)
 }
 
-func TestLLMBaseEvaluator_ResolveStructuredOutputRejectsUnknownScorer(t *testing.T) {
-	base := &LLMBaseEvaluator{}
-	output, err := base.resolveStructuredOutput(context.Background(), &metric.EvalMetric{
-		EvaluatorName: templateEvaluatorName,
-		Criterion: &criterion.Criterion{
-			LLMJudge: &llm.LLMCriterion{
-				Template: &llm.JudgeTemplateOptions{
-					ResponseScorerName: "missing",
-				},
-			},
+func TestLLMBaseEvaluator_ResolveStructuredOutputUsesProvider(t *testing.T) {
+	expected := &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{
+			Name:   "custom_schema",
+			Schema: map[string]any{"type": "object"},
 		},
-	})
-	require.Error(t, err)
-	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), `unsupported response scorer "missing"`)
-}
-
-func TestLLMBaseEvaluator_EvaluateRejectsTemplateStructuredOutputError(t *testing.T) {
-	base := &LLMBaseEvaluator{LLMEvaluator: &scriptedLLMEvaluator{scoreValue: 1}}
-	evalMetric := buildEvalMetric("unknown-provider", 1)
-	evalMetric.EvaluatorName = templateEvaluatorName
-	evalMetric.Criterion.LLMJudge.Template = &llm.JudgeTemplateOptions{
-		ResponseScorerName: "missing",
 	}
+	stub := &structuredLLMEvaluator{structuredOutput: expected}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	actuals := []*evalset.Invocation{{InvocationID: "a"}}
+	expecteds := []*evalset.Invocation{{InvocationID: "b"}}
+	output, err := base.resolveStructuredOutput(context.Background(), actuals, expecteds,
+		&metric.EvalMetric{MetricName: "final_response"})
+	require.NoError(t, err)
+	assert.Same(t, expected, output)
+	assert.Equal(t, 1, stub.structuredCalls)
+	assert.Equal(t, []int{1}, stub.actualLens)
+	assert.Equal(t, []int{1}, stub.expectedLens)
+}
+
+func TestLLMBaseEvaluator_ResolveStructuredOutputRespectsProviderNil(t *testing.T) {
+	base := &LLMBaseEvaluator{LLMEvaluator: &structuredLLMEvaluator{}}
+	output, err := base.resolveStructuredOutput(context.Background(), nil, nil,
+		&metric.EvalMetric{MetricName: "final_response"})
+	require.NoError(t, err)
+	assert.Nil(t, output)
+}
+
+func TestLLMBaseEvaluator_EvaluateResolvesStructuredOutputAfterConstructMessages(t *testing.T) {
+	stub := &structuredLLMEvaluator{
+		scriptedLLMEvaluator: scriptedLLMEvaluator{constructErr: assert.AnError},
+	}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{}},
+		[]*evalset.Invocation{{}},
+		buildEvalMetric("unknown-provider", 1),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "construct messages")
+	assert.Equal(t, 0, stub.structuredCalls)
+}
+
+func TestLLMBaseEvaluator_EvaluateResolvesStructuredOutputPerInvocation(t *testing.T) {
+	r := &fakeJudgeRunner{
+		events: []*event.Event{
+			event.NewResponseEvent("inv", "judge", &model.Response{
+				Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+				Done:    true,
+			}, event.WithStructuredOutputPayload(map[string]any{"score": 1})),
+		},
+	}
+	stub := &structuredLLMEvaluator{
+		scriptedLLMEvaluator: scriptedLLMEvaluator{scoreValue: 1},
+		structuredOutput: &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:   "custom_schema",
+				Schema: map[string]any{"type": "object"},
+				Strict: true,
+			},
+		},
+	}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unused-provider", 1)
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{Runner: r}
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{InvocationID: "a"}, {InvocationID: "b"}},
+		[]*evalset.Invocation{{InvocationID: "c"}, {InvocationID: "d"}},
+		evalMetric,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []int{1, 2}, stub.actualLens)
+	assert.Equal(t, []int{1, 2}, stub.expectedLens)
+	assert.Equal(t, []string{"custom_schema", "custom_schema"}, r.structuredOutputNames)
+}
+
+func TestLLMBaseEvaluator_EvaluateRejectsStructuredOutputError(t *testing.T) {
+	stub := &structuredLLMEvaluator{
+		scriptedLLMEvaluator: scriptedLLMEvaluator{scoreValue: 1},
+		structuredErr:        assert.AnError,
+	}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
 	_, err := base.Evaluate(
 		context.Background(),
 		[]*evalset.Invocation{{}},
@@ -492,56 +562,4 @@ func TestLLMBaseEvaluator_EvaluateUsesDefaultNumSamplesWhenNil(t *testing.T) {
 		evalMetric,
 	)
 	require.NoError(t, err)
-}
-
-func TestLLMBaseEvaluator_ResolveStructuredOutputForTemplateEvaluator(t *testing.T) {
-	base := &LLMBaseEvaluator{}
-	evalMetric := &metric.EvalMetric{
-		MetricName:    "answer_quality",
-		EvaluatorName: templateEvaluatorName,
-		Threshold:     0.5,
-		Criterion: &criterion.Criterion{
-			LLMJudge: &llm.LLMCriterion{
-				Template: &llm.JudgeTemplateOptions{
-					ResponseScorerName: "single_score",
-				},
-			},
-		},
-	}
-
-	out, err := base.resolveStructuredOutput(context.Background(), evalMetric)
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	require.NotNil(t, out.JSONSchema)
-	assert.Equal(t, "single_score_result", out.JSONSchema.Name)
-}
-
-func TestLLMBaseEvaluator_ResolveStructuredOutputRejectsUnsupportedScorer(t *testing.T) {
-	base := &LLMBaseEvaluator{}
-	evalMetric := &metric.EvalMetric{
-		MetricName:    "answer_quality",
-		EvaluatorName: templateEvaluatorName,
-		Criterion: &criterion.Criterion{
-			LLMJudge: &llm.LLMCriterion{
-				Template: &llm.JudgeTemplateOptions{
-					ResponseScorerName: "missing",
-				},
-			},
-		},
-	}
-
-	_, err := base.resolveStructuredOutput(context.Background(), evalMetric)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `unsupported response scorer "missing"`)
-}
-
-func TestResolveEvaluatorNamePrefersEvaluatorName(t *testing.T) {
-	assert.Equal(t, "configured", resolveEvaluatorName(&metric.EvalMetric{
-		MetricName:    "metric-instance",
-		EvaluatorName: "configured",
-	}))
-	assert.Equal(t, "metric-instance", resolveEvaluatorName(&metric.EvalMetric{
-		MetricName: "metric-instance",
-	}))
-	assert.Equal(t, "", resolveEvaluatorName(nil))
 }

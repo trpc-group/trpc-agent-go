@@ -17,6 +17,7 @@ import (
 	"text/template"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/internal/rubrics"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/internal/content"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -32,8 +33,8 @@ Only respond to the rubric items provided. Do not invent new rubric items.
 
 # Rubric
 
-"yes": The final answer fulfills the rubric item, OR the rubric item’s condition was not applicable to the response.
-"no": The rubric item is applicable but the final answer fails to fulfill it, OR the rubric item requires a fact/conclusion that cannot be unambiguously verified from <user_prompt> and <final_answer> (i.e., it is ambiguous or lacks checkable information).
+Score 1: The final answer fulfills the rubric item, OR the rubric item’s condition was not applicable to the response.
+Score 0: The rubric item is applicable but the final answer fails to fulfill it, OR the rubric item requires a fact/conclusion that cannot be unambiguously verified from <user_prompt> and <final_answer> (i.e., it is ambiguous or lacks checkable information).
 
 # Key Evaluation Principles
 
@@ -51,19 +52,17 @@ Only respond to the rubric items provided. Do not invent new rubric items.
    As long as the rubric item is still satisfied, accept different wording, formatting, and paraphrases.
    For numbers, accept numerically equivalent expressions (different representations), and allow minor rounding/precision differences as long as they do not change the final conclusion.
 
-4. **Conditional rubric items (not applicable => yes)**
-   If a rubric item is conditional (e.g., “If … then …”), you may mark it as not applicable and return "yes" only if you can clearly determine from <user_prompt> and <final_answer> that the condition is not met.
-   If you cannot determine whether the condition is met, you may not mark it as “probably not applicable.” Treat it as not fulfilled (typically "no").
+4. **Conditional rubric items (not applicable => score 1)**
+   If a rubric item is conditional (e.g., “If … then …”), you may mark it as not applicable and use score 1 only if you can clearly determine from <user_prompt> and <final_answer> that the condition is not met.
+   If you cannot determine whether the condition is met, you may not mark it as “probably not applicable.” Treat it as not fulfilled (typically score 0).
 
-# Output Format (repeat this format for every rubric item, starting on a new line)
+# Rubric Scoring Requirements
 
-ID: [The ID of the rubric item, unique within the rubric. If the rubric itself is numbered 1..N, the ID must match that numbering.]
-Rubric: [Repeat the rubric item word-for-word without any changes. Keep punctuation and capitalization exactly as-is. Do not translate or paraphrase.]
-Evidence: [List the evidence text snippets relevant to this rubric item from <user_prompt> and/or <final_answer>. If no evidence is required to decide, explain why. If it cannot be unambiguously verified, explain why it cannot be verified.]
-Reason: [Explain your reasoning: how the evidence supports/contradicts the final answer, or why the rubric item is not applicable.]
-Verdict: [yes|no]
-
-REMEMBER: Your answer will help improve the AI agent. It is important to determine whether rubric items are fulfilled correctly. Even answering "no" can improve the agent! Respond in pure text, not json.
+Score every rubric item exactly once.
+Use the exact rubric ID from the input rubric.
+Do not add, omit, merge, split, translate, or rename rubric IDs.
+Use score 1 for pass and score 0 for fail.
+State the decisive evaluation reason based only on <user_prompt> and <final_answer>.
 
 # Your Turn
 
@@ -105,6 +104,15 @@ func (e *rubricResponseMessagesConstructor) ConstructMessages(ctx context.Contex
 	if len(actuals) == 0 {
 		return nil, fmt.Errorf("actuals is empty")
 	}
+	if evalMetric == nil {
+		return nil, fmt.Errorf("eval metric is nil")
+	}
+	if evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
+		return nil, fmt.Errorf("llm judge criterion is required")
+	}
+	if rubrics.Count(evalMetric) == 0 {
+		return nil, fmt.Errorf("llm judge rubrics are required")
+	}
 	actual := actuals[len(actuals)-1]
 	data := rubricResponsePromptData{
 		UserInput:     content.ExtractTextFromContent(actual.UserContent),
@@ -121,6 +129,20 @@ func (e *rubricResponseMessagesConstructor) ConstructMessages(ctx context.Contex
 			Content: buf.String(),
 		},
 	}, nil
+}
+
+// StructuredOutput returns the structured output schema for rubric response evaluation.
+func (e *rubricResponseMessagesConstructor) StructuredOutput(ctx context.Context,
+	actuals, expecteds []*evalset.Invocation, evalMetric *metric.EvalMetric) (*model.StructuredOutput, error) {
+	visibleRubrics, err := rubrics.ValidateStructured(evalMetric)
+	if err != nil {
+		return nil, err
+	}
+	return rubrics.ScoresOutput(
+		"rubric_response_scores",
+		"Per-rubric binary scores and reasons for rubric response evaluation.",
+		visibleRubrics,
+	), nil
 }
 
 // rubricResponsePromptData feeds values into the judge prompt template.

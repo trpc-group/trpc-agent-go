@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -36,7 +37,7 @@ func testRubricCriticEvalMetric() *metric.EvalMetric {
 	}
 }
 
-func TestConstructMessagesBuildsCriticPrompt(t *testing.T) {
+func TestConstructMessagesBuildsStructuredPrompt(t *testing.T) {
 	constructor := New()
 	actual := &evalset.Invocation{
 		UserContent:   &model.Message{Content: "What is the capital of France?"},
@@ -60,9 +61,61 @@ func TestConstructMessagesBuildsCriticPrompt(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "llm_rubric_critic")
 	assert.Contains(t, messages[0].Content, "<reference_answer>")
 	assert.Contains(t, messages[0].Content, "The final answer states the correct city.")
-	assert.Contains(t, messages[0].Content, "Verdict:")
-	assert.Contains(t, messages[0].Content, "Reason:")
+	assert.Contains(t, messages[0].Content, "Score every rubric item exactly once.")
+	assert.Contains(t, messages[0].Content, "score 1")
 	assert.Contains(t, messages[0].Content, "Semantic equivalence")
+	assert.NotContains(t, messages[0].Content, "Do not output JSON")
+	assert.NotContains(t, messages[0].Content, "Output Format")
+	assert.NotContains(t, messages[0].Content, "rubricScores")
+	assert.NotContains(t, messages[0].Content, "Verdict:")
+}
+
+func TestStructuredOutputReturnsRubricSchema(t *testing.T) {
+	constructor, ok := New().(messagesconstructor.StructuredOutputMessagesConstructor)
+	require.True(t, ok)
+	output, err := constructor.StructuredOutput(context.Background(), nil, nil, testRubricCriticEvalMetric())
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "rubric_critic_scores", output.JSONSchema.Name)
+	schema := output.JSONSchema.Schema
+	properties := schema["properties"].(map[string]any)
+	rubricScores := properties["rubricScores"].(map[string]any)
+	assert.Equal(t, 1, rubricScores["minItems"])
+	assert.Equal(t, 1, rubricScores["maxItems"])
+}
+
+func TestConstructMessagesAllowsRubricIDsForStructuredOutputValidation(t *testing.T) {
+	constructor := New()
+	evalMetric := testRubricCriticEvalMetric()
+	evalMetric.Criterion.LLMJudge.Rubrics[0].ID = ""
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{{FinalResponse: &model.Message{Content: "answer"}}},
+		[]*evalset.Invocation{{FinalResponse: &model.Message{Content: "reference"}}},
+		evalMetric,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+}
+
+func TestStructuredOutputRequiresUsableRubricIDs(t *testing.T) {
+	constructor := New()
+	evalMetric := testRubricCriticEvalMetric()
+	evalMetric.Criterion.LLMJudge.Rubrics[0].ID = ""
+	structured, ok := constructor.(messagesconstructor.StructuredOutputMessagesConstructor)
+	require.True(t, ok)
+	_, err := structured.StructuredOutput(context.Background(), nil, nil, evalMetric)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rubric id is required")
+	evalMetric = testRubricCriticEvalMetric()
+	evalMetric.Criterion.LLMJudge.Rubrics = append(evalMetric.Criterion.LLMJudge.Rubrics, &llm.Rubric{
+		ID:      "1",
+		Content: &llm.RubricContent{Text: "The answer is concise."},
+	})
+	_, err = structured.StructuredOutput(context.Background(), nil, nil, evalMetric)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `duplicate llm judge rubric id "1"`)
 }
 
 func TestConstructMessagesRequiresExpecteds(t *testing.T) {

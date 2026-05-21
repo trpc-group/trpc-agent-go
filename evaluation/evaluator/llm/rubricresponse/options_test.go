@@ -20,7 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator/average"
 	rmessagesconstructor "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/rubricresponse"
-	rresponsescorer "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer/rubricresponse"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer/rubricscores"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/samplesaggregator/majorityvote"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -63,7 +63,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	require.NotNil(t, opts.invocationsAggregator)
 
 	assert.IsType(t, rmessagesconstructor.New(), opts.messagesConstructor)
-	assert.IsType(t, rresponsescorer.New(), opts.responsescorer)
+	assert.IsType(t, rubricscores.New(), opts.responsescorer)
 	assert.IsType(t, majorityvote.New(), opts.samplesAggregator)
 	assert.IsType(t, average.New(), opts.invocationsAggregator)
 }
