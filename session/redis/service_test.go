@@ -779,6 +779,39 @@ func TestService_ListSessions_WithOptions(t *testing.T) {
 	assert.Len(t, sessions2, 3)
 }
 
+func TestService_ListSessions_WithListSessionPage(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "testapp",
+		UserID:  "user123",
+	}
+
+	for _, id := range []string{"session0", "session1", "session2"} {
+		_, err := service.CreateSession(ctx, session.Key{
+			AppName:   userKey.AppName,
+			UserID:    userKey.UserID,
+			SessionID: id,
+		}, session.StateMap{})
+		require.NoError(t, err)
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	sessions, err := service.ListSessions(
+		ctx, userKey, session.WithListSessionPage(1, 2),
+	)
+	require.NoError(t, err)
+	require.Len(t, sessions, 2)
+	assert.Equal(t, "session1", sessions[0].ID)
+	assert.Equal(t, "session0", sessions[1].ID)
+}
+
 func TestService_ListSessions_WithListSessionOnlyMeta(t *testing.T) {
 	tests := []struct {
 		name        string

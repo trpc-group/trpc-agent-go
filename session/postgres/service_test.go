@@ -1157,6 +1157,45 @@ func TestListSessions_WithMultipleSessions(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestListSessions_WithListSessionPage(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	userKey := session.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM app_states")).
+		WithArgs(userKey.AppName, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM user_states")).
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	sessState := SessionState{ID: "session-2"}
+	stateBytes, _ := json.Marshal(sessState)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, state, created_at, updated_at FROM session_states")).
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg(), 1, 1).
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "state", "created_at", "updated_at"}).
+			AddRow("session-2", stateBytes, time.Now(), time.Now()))
+
+	mock.ExpectQuery("SELECT session_id, event FROM").
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary FROM session_summaries")).
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary"}))
+
+	sessions, err := s.ListSessions(ctx, userKey, session.WithListSessionPage(1, 1))
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "session-2", sessions[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestDeleteSession_Success(t *testing.T) {
 	s, mock, db := setupMockService(t, nil)
 	defer db.Close()
