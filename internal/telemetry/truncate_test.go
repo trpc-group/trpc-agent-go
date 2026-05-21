@@ -168,3 +168,17 @@ func TestTruncateTelemetryJSONBytesCapsLargePayload(t *testing.T) {
 	require.Equal(t, true, decoded["truncated"])
 	require.Greater(t, decoded["original_bytes"], float64(maxTelemetryJSONBytes))
 }
+
+func TestTruncateTelemetryJSONBytesBoundaries(t *testing.T) {
+	raw := []byte(`{"ok":true}`)
+	require.Equal(t, string(raw), truncateTelemetryJSONBytes(raw))
+
+	tinyLimitPrefix := validUTF8BytesPrefix([]byte("abc"), 4)
+	require.Equal(t, "abc", tinyLimitPrefix)
+	require.Equal(t, "", validUTF8BytesPrefix([]byte("abc"), 0))
+	require.Equal(t, "", validUTF8BytesPrefix([]byte{0xe4, 0xbd, 0xa0}, 1))
+
+	got := truncateTelemetryJSONBytes([]byte(`{"payload":"` + strings.Repeat("x", maxTelemetryJSONBytes*2) + `"}`))
+	require.LessOrEqual(t, len(got), maxTelemetryJSONBytes)
+	require.Contains(t, got, `"truncated":true`)
+}

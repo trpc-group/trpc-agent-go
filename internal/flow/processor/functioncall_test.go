@@ -1852,6 +1852,16 @@ func TestBuildDefaultToolMessage_TruncatesLargeResult(t *testing.T) {
 	require.Contains(t, payload["content_prefix"], `"payload"`)
 }
 
+func TestBuildDefaultToolMessage_DefaultHelper(t *testing.T) {
+	msg, err := buildDefaultToolMessage("call-default", map[string]string{
+		"status": "ok",
+	})
+	require.NoError(t, err)
+	require.Equal(t, model.RoleTool, msg.Role)
+	require.Equal(t, "call-default", msg.ToolID)
+	require.JSONEq(t, `{"status":"ok"}`, msg.Content)
+}
+
 func TestBuildDefaultToolMessage_DisableLimit(t *testing.T) {
 	result := map[string]string{"payload": strings.Repeat("x", 128)}
 	msg, err := buildDefaultToolMessageWithLimit("call-full", result, -1)
@@ -1859,6 +1869,45 @@ func TestBuildDefaultToolMessage_DisableLimit(t *testing.T) {
 	want, err := json.Marshal(result)
 	require.NoError(t, err)
 	require.Equal(t, string(want), msg.Content)
+}
+
+func TestFunctionCallResponseProcessor_DefaultToolMessageMaxBytesOption(t *testing.T) {
+	defaultProcessor := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithDefaultToolMessageMaxBytes(0),
+	)
+	require.Equal(t, DefaultToolMessageMaxBytes, defaultProcessor.toolMessageMaxBytes)
+
+	customProcessor := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithDefaultToolMessageMaxBytes(32),
+	)
+	require.Equal(t, 32, customProcessor.toolMessageMaxBytes)
+
+	unlimitedProcessor := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithDefaultToolMessageMaxBytes(-1),
+	)
+	require.Equal(t, -1, unlimitedProcessor.toolMessageMaxBytes)
+}
+
+func TestDefaultToolMessagePrefixHelpers(t *testing.T) {
+	require.Equal(t, "abc", validToolMessagePrefix([]byte("abc"), 4))
+	require.Equal(t, "", validToolMessagePrefix([]byte("abc"), 0))
+	require.Equal(t, "", validToolMessagePrefix([]byte{0xe4, 0xbd, 0xa0}, 1))
+
+	require.Equal(t, "abc", validUTF8StringPrefix("abc", 4))
+	require.Equal(t, "", validUTF8StringPrefix("abc", 0))
+	require.Equal(t, "", validUTF8StringPrefix(string([]byte{0xe4, 0xbd, 0xa0}), 1))
+}
+
+func TestTruncateDefaultToolMessageContent_TinyLimit(t *testing.T) {
+	got := truncateDefaultToolMessageContent([]byte(`{"payload":"`+strings.Repeat("x", 16)+`"}`), 1)
+	require.Contains(t, got, `"truncated":true`)
+	require.Contains(t, got, `"original_bytes":`)
 }
 
 func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithSingleMessage(t *testing.T) {
