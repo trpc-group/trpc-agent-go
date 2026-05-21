@@ -141,6 +141,7 @@ func (s *Service) listSessions(
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
 ) ([]*session.Session, error) {
 	appState, err := s.ListAppStates(ctx, key.AppName)
 	if err != nil {
@@ -197,6 +198,22 @@ ORDER BY updated_at DESC`
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate session states: %w", err)
+	}
+
+	if listOnlyMeta {
+		out := make([]*session.Session, 0, len(sessStates))
+		for _, st := range sessStates {
+			sess := session.NewSession(
+				key.AppName,
+				key.UserID,
+				st.ID,
+				session.WithSessionState(st.State),
+				session.WithSessionCreatedAt(st.CreatedAt),
+				session.WithSessionUpdatedAt(st.UpdatedAt),
+			)
+			out = append(out, mergeState(appState, userState, sess))
+		}
+		return out, nil
 	}
 
 	sessionKeys := make([]session.Key, 0, len(sessStates))

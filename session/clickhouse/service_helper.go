@@ -111,6 +111,7 @@ func (s *Service) listSessions(
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
 ) ([]*session.Session, error) {
 	// Query app state
 	appState, err := s.ListAppStates(ctx, key.AppName)
@@ -154,6 +155,20 @@ func (s *Service) listSessions(
 		state.CreatedAt = createdAt
 		state.UpdatedAt = updatedAt
 		sessStates = append(sessStates, &state)
+	}
+
+	if listOnlyMeta {
+		sessions := make([]*session.Session, 0, len(sessStates))
+		for _, sessState := range sessStates {
+			sess := session.NewSession(
+				key.AppName, key.UserID, sessState.ID,
+				session.WithSessionState(sessState.State),
+				session.WithSessionCreatedAt(sessState.CreatedAt),
+				session.WithSessionUpdatedAt(sessState.UpdatedAt),
+			)
+			sessions = append(sessions, mergeState(appState, userState, sess))
+		}
+		return sessions, nil
 	}
 
 	// Build session keys and created_at times for batch loading

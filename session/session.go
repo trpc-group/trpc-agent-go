@@ -622,7 +622,6 @@ func WithEventTime(time time.Time) Option {
 
 // WithListSessionOnlyMeta requests ListSessions to return only session metadata
 // without events or tracks. Callers should only use this option with ListSessions.
-// The optimization is currently implemented by the in-memory and redis session services.
 func WithListSessionOnlyMeta() Option {
 	return func(o *Options) {
 		o.ListSessionOnlyMeta = true
