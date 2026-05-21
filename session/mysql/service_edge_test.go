@@ -191,7 +191,7 @@ func TestListSessions(t *testing.T) {
 			WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		sessions, err := s.listSessions(context.Background(), userKey, 0, time.Time{})
+		sessions, err := s.listSessions(context.Background(), userKey, 0, time.Time{}, false)
 		assert.Error(t, err)
 		assert.Nil(t, sessions)
 		assert.Contains(t, err.Error(), "unmarshal session state failed")
