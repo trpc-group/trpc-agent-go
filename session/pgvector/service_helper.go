@@ -154,6 +154,7 @@ func (s *Service) listSessions(
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
 ) ([]*session.Session, error) {
 	appState, err := s.ListAppStates(ctx, key.AppName)
 	if err != nil {
@@ -211,6 +212,24 @@ func (s *Service) listSessions(
 		return nil, fmt.Errorf(
 			"list session states failed: %w", err,
 		)
+	}
+
+	if listOnlyMeta {
+		sessions := make(
+			[]*session.Session, 0, len(sessStates),
+		)
+		for _, st := range sessStates {
+			sess := session.NewSession(
+				key.AppName, key.UserID, st.ID,
+				session.WithSessionState(st.State),
+				session.WithSessionCreatedAt(st.CreatedAt),
+				session.WithSessionUpdatedAt(st.UpdatedAt),
+			)
+			sessions = append(sessions,
+				mergeState(appState, userState, sess),
+			)
+		}
+		return sessions, nil
 	}
 
 	sessionKeys := make(
