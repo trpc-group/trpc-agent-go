@@ -462,6 +462,7 @@ func (s *Service) ListSessions(
 		opt.EventNum,
 		opt.EventTime,
 		opt.ListSessionOnlyMeta,
+		opt.ListSessionPage,
 	)
 }
 

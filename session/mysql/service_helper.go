@@ -136,6 +136,7 @@ func (s *Service) listSessions(
 	limit int,
 	afterTime time.Time,
 	listOnlyMeta bool,
+	page *session.ListSessionPage,
 ) ([]*session.Session, error) {
 	// Query app state
 	appState, err := s.ListAppStates(ctx, key.AppName)
@@ -155,8 +156,12 @@ func (s *Service) listSessions(
 		WHERE app_name = ? AND user_id = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL
-		ORDER BY updated_at DESC`, s.tableSessionStates)
+		ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 	listArgs := []any{key.AppName, key.UserID, time.Now()}
+	if page != nil && page.Limit > 0 {
+		listQuery += " LIMIT ? OFFSET ?"
+		listArgs = append(listArgs, page.Limit, page.Offset)
+	}
 
 	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		// rows.Next() is already called by the Query loop
