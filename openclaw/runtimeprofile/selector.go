@@ -74,6 +74,9 @@ func newSelectorResolver(
 			ErrConfigInvalid,
 		)
 	}
+	if len(aliases) == 0 {
+		aliases = resolverProfileAliases(base)
+	}
 	return &SelectorResolver{
 		base:      base,
 		selectors: cleaned,
@@ -125,6 +128,15 @@ func (r *SelectorResolver) Resolve(
 			profileID,
 		)
 	}
+	if resolvedID := strings.TrimSpace(profile.ID); resolvedID != "" &&
+		r.canonicalProfileID(resolvedID) != selected {
+		return Profile{}, fmt.Errorf(
+			"%w: selected profile %q resolved to profile %q",
+			ErrProfileSelectorDenied,
+			profileID,
+			resolvedID,
+		)
+	}
 	return profile, nil
 }
 
@@ -137,6 +149,32 @@ func (r *SelectorResolver) canonicalProfileID(profileID string) string {
 		return effectiveID
 	}
 	return profileID
+}
+
+func resolverProfileAliases(base Resolver) map[string]string {
+	resolver, ok := base.(*MapResolver)
+	if !ok || resolver == nil || len(resolver.profiles) == 0 {
+		return nil
+	}
+	aliases := make(map[string]string, len(resolver.profiles))
+	for alias, key := range resolver.profiles {
+		alias = strings.TrimSpace(alias)
+		if alias == "" {
+			continue
+		}
+		profile, ok := resolver.cache[key]
+		if !ok {
+			continue
+		}
+		effectiveID := strings.TrimSpace(profile.ID)
+		if effectiveID == "" {
+			effectiveID = strings.TrimSpace(key.id)
+		}
+		if effectiveID != "" {
+			aliases[alias] = effectiveID
+		}
+	}
+	return aliases
 }
 
 // ProfileIDs implements Catalog when the base resolver also implements it.

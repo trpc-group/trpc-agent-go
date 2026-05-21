@@ -126,6 +126,30 @@ func TestSelectorResolverAllowsProfileKeyAlias(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, profileID, profile.ID)
 	require.Equal(t, "tenant-alpha-app", profile.AppName)
+
+	base := NewMapResolver(Config{
+		Profiles: map[string]Profile{
+			profileKey: {
+				ID:      profileID,
+				AppName: "tenant-alpha-app",
+			},
+		},
+	})
+	resolver, err = NewSelectorResolver(base, []Selector{
+		{
+			ProfileID: profileKey,
+			Tenants:   []string{"tenant-a"},
+		},
+	})
+	require.NoError(t, err)
+
+	profile, err = resolver.Resolve(context.Background(), Request{
+		ProfileID: profileKey,
+		TenantID:  "tenant-a",
+	})
+	require.NoError(t, err)
+	require.Equal(t, profileID, profile.ID)
+	require.Equal(t, "tenant-alpha-app", profile.AppName)
 }
 
 func TestSelectProfileIDUsesProfileAlias(t *testing.T) {
@@ -160,6 +184,56 @@ func TestSelectorResolverRejectsStaleSelectorProfile(t *testing.T) {
 	_, err = resolver.Resolve(context.Background(), Request{UserID: "user-a"})
 	require.ErrorIs(t, err, ErrProfileSelectorDenied)
 	require.False(t, errors.Is(err, ErrProfileNotFound))
+}
+
+func TestSelectorResolverRejectsFallbackProfile(t *testing.T) {
+	t.Parallel()
+
+	base := NewMapResolver(Config{
+		Default:           testProfileDefault,
+		FallbackToDefault: true,
+		Profiles: map[string]Profile{
+			testProfileDefault: {
+				AppName: "default-app",
+			},
+		},
+	})
+	resolver, err := NewSelectorResolver(base, []Selector{
+		{
+			ProfileID: testProfileRetail,
+			Users:     []string{"user-a"},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = resolver.Resolve(context.Background(), Request{UserID: "user-a"})
+	require.ErrorIs(t, err, ErrProfileSelectorDenied)
+	require.Contains(t, err.Error(), "resolved to profile")
+}
+
+func TestSelectorResolverAllowsCustomProfileWithoutID(t *testing.T) {
+	t.Parallel()
+
+	base := ResolverFunc(func(
+		context.Context,
+		Request,
+	) (Profile, error) {
+		return Profile{AppName: "custom-app"}, nil
+	})
+	resolver, err := NewSelectorResolver(base, []Selector{
+		{
+			ProfileID: testProfileRetail,
+			Users:     []string{"user-a"},
+		},
+	})
+	require.NoError(t, err)
+
+	profile, err := resolver.Resolve(
+		context.Background(),
+		Request{UserID: "user-a"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "custom-app", profile.AppName)
 }
 
 func TestSelectorResolverPropagatesBaseError(t *testing.T) {
