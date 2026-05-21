@@ -29,7 +29,7 @@ func newAgent(modelInstance model.Model, generationConfig model.GenerationConfig
 	return llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
-		llmagent.WithTools(demotool.NewTools()),
+		llmagent.WithTools(demotool.NewInternalTools()),
 		llmagent.WithEnableParallelTools(true),
 		llmagent.WithGenerationConfig(generationConfig),
 		llmagent.WithInstruction(agentInstruction),
