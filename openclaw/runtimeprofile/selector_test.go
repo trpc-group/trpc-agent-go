@@ -118,6 +118,14 @@ func TestSelectorResolverAllowsProfileKeyAlias(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, profileID, profile.ID)
 	require.Equal(t, "tenant-alpha-app", profile.AppName)
+
+	profile, err = resolver.Resolve(context.Background(), Request{
+		ProfileID: profileKey,
+		TenantID:  "tenant-a",
+	})
+	require.NoError(t, err)
+	require.Equal(t, profileID, profile.ID)
+	require.Equal(t, "tenant-alpha-app", profile.AppName)
 }
 
 func TestSelectProfileIDUsesProfileAlias(t *testing.T) {
