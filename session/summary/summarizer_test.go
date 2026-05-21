@@ -318,6 +318,122 @@ func TestSessionSummarizer_PlaceholderReplacement(t *testing.T) {
 	})
 }
 
+func TestSessionSummarizer_DetailedContinuityPrompt(t *testing.T) {
+	t.Run("strips analysis and appends verbatim user messages", func(t *testing.T) {
+		response := "<analysis>private scratch</analysis>\n<summary>kept summary</summary>"
+		s := NewSummarizer(
+			&staticResponseModel{content: response},
+			WithDetailedContinuityPrompt(),
+		)
+		textPart := "content part text"
+		sess := &session.Session{
+			ID: "detailed",
+			Events: []event.Event{
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "first\nmessage"},
+					}}},
+					Timestamp: time.Now().Add(-2 * time.Second),
+				},
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ContentParts: []model.ContentPart{
+								{Type: model.ContentTypeText, Text: &textPart},
+								{Type: model.ContentTypeFile, File: &model.File{Name: "notes.txt"}},
+							},
+						},
+					}}},
+					Timestamp: time.Now().Add(-1 * time.Second),
+				},
+			},
+		}
+
+		summary, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, summary, "kept summary")
+		assert.NotContains(t, summary, "private scratch")
+		assert.NotContains(t, summary, "<analysis>")
+		assert.NotContains(t, summary, "<summary>")
+		assert.Contains(t, summary, preservedUserMessagesStart)
+		assert.Equal(
+			t,
+			[]string{
+				"first\nmessage",
+				"content part text\n[file attachment: notes.txt]",
+			},
+			extractPreservedUserMessages(summary),
+		)
+	})
+
+	t.Run("carries previous appendix and strips it from model input", func(t *testing.T) {
+		m := &recordingStaticModel{content: "new summary"}
+		s := NewSummarizer(m, WithDetailedContinuityPrompt())
+		previous := appendPreservedUserMessages("old summary", []string{"old ask"})
+		sess := &session.Session{
+			ID: "rolling",
+			Events: []event.Event{
+				{
+					Author: "system",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: previous},
+					}}},
+					Timestamp: time.Now().Add(-3 * time.Second),
+				},
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "new ask"},
+					}}},
+					Timestamp: time.Now().Add(-2 * time.Second),
+				},
+			},
+		}
+
+		summary, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Equal(
+			t,
+			[]string{"old ask", "new ask"},
+			extractPreservedUserMessages(summary),
+		)
+		assert.Contains(t, m.lastPrompt, "old summary")
+		assert.NotContains(t, m.lastPrompt, preservedUserMessagesStart)
+	})
+
+	t.Run("honors hook-provided user messages", func(t *testing.T) {
+		s := NewSummarizer(
+			&staticResponseModel{content: "hook summary"},
+			WithDetailedContinuityPrompt(),
+			WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+				in.UserMessages = []string{"Speaker Alice: redacted request"}
+				return nil
+			}),
+		)
+		sess := &session.Session{
+			ID: "hooked-user-messages",
+			Events: []event.Event{{
+				Author: "user",
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "raw secret request"},
+				}}},
+				Timestamp: time.Now(),
+			}},
+		}
+
+		summary, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Equal(
+			t,
+			[]string{"Speaker Alice: redacted request"},
+			extractPreservedUserMessages(summary),
+		)
+		assert.NotContains(t, summary, "raw secret request")
+	})
+}
+
 // fakeModel is a minimal model that returns the conversation content back to simulate LLM.
 type fakeModel struct{}
 
@@ -342,6 +458,33 @@ func (f *fakeModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 		content = "Summary: " + content
 	}
 	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: content}}}}
+	close(ch)
+	return ch, nil
+}
+
+type recordingStaticModel struct {
+	content    string
+	lastPrompt string
+}
+
+func (m *recordingStaticModel) Info() model.Info {
+	return model.Info{Name: "recording-static"}
+}
+
+func (m *recordingStaticModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	if len(req.Messages) > 0 {
+		m.lastPrompt = req.Messages[len(req.Messages)-1].Content
+	}
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{Content: m.content},
+		}},
+	}
 	close(ch)
 	return ch, nil
 }

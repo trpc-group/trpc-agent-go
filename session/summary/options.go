@@ -59,6 +59,31 @@ func WithSystemPrompt(prompt string) Option {
 	}
 }
 
+// WithDetailedContinuityPrompt enables a structured summary prompt designed
+// for continuing long-running technical work after context compaction. It also
+// strips the model's <analysis> scratchpad from the persisted summary and
+// appends a framework-generated verbatim user-message appendix.
+//
+// If WithPrompt is also supplied, that custom prompt is used instead, while
+// the output cleanup and user-message preservation behavior remain enabled.
+func WithDetailedContinuityPrompt() Option {
+	return func(s *sessionSummarizer) {
+		s.detailedPrompt = true
+		s.stripSummaryAnalysis = true
+		s.preserveUserMessages = true
+	}
+}
+
+// WithPreserveUserMessages controls whether summaries include a
+// framework-generated verbatim appendix of all user messages covered by the
+// rolling summary. This is independent from prompt wording and is useful when
+// callers need exact user intent to survive compaction.
+func WithPreserveUserMessages(preserve bool) Option {
+	return func(s *sessionSummarizer) {
+		s.preserveUserMessages = preserve
+	}
+}
+
 // WithMaxSummaryWords sets the maximum word count for summaries.
 // A value <= 0 means no word limit. The word limit will be included in the
 // prompt to guide the model's generation rather than truncating the output.

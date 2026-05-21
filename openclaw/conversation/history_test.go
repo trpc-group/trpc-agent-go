@@ -660,6 +660,31 @@ func TestPreSummaryHookUsesConversationProjection(t *testing.T) {
 	require.Contains(t, ctx.Text, "Alice: hello")
 	require.Contains(t, ctx.Text, "Assistant: hi")
 	require.NotContains(t, ctx.Text, "fallback")
+	require.Equal(t, []string{"Alice: hello"}, ctx.UserMessages)
+}
+
+func TestBuildSummaryUserMessages(t *testing.T) {
+	t.Parallel()
+
+	events := []event.Event{
+		userEventWithQuote(
+			"u1",
+			"Alice",
+			"what changed",
+			"previous question",
+			time.Now(),
+		),
+		assistantEvent("updated answer", time.Now()),
+	}
+
+	require.Equal(
+		t,
+		[]string{"Alice (replying to: previous question): what changed"},
+		BuildSummaryUserMessages(events),
+	)
+	require.Nil(t, BuildSummaryUserMessages([]event.Event{
+		assistantEvent("updated answer", time.Now()),
+	}))
 }
 
 func TestPluginPersistsRuntimeAnnotation(t *testing.T) {
