@@ -11,6 +11,7 @@ package extension
 
 import (
 	"fmt"
+	"runtime/debug"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -92,10 +93,33 @@ func Collect(extensions []Extension) (*Bundle, error) {
 		seen[name] = struct{}{}
 
 		r := newRegistry(name, bundle.AgentCallbacks, bundle.ModelCallbacks, bundle.ToolCallbacks)
-		e.Register(r)
+		if err := safeRegister(e, r, name, i); err != nil {
+			return nil, err
+		}
 		bundle.Tools = append(bundle.Tools, r.tools...)
 	}
 	return bundle, nil
+}
+
+func safeRegister(
+	e Extension,
+	r *Registry,
+	name string,
+	index int,
+) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf(
+				"extension: panic during register %q at index %d: %v\n%s",
+				name,
+				index,
+				recovered,
+				string(debug.Stack()),
+			)
+		}
+	}()
+	e.Register(r)
+	return nil
 }
 
 // IsEmpty reports whether b carries no contributions. Convenience

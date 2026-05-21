@@ -87,6 +87,32 @@ func TestCollect_RejectsDuplicateNames(t *testing.T) {
 		"duplicate detection must call out the colliding name so the user knows which install to remove")
 }
 
+func TestCollect_ConvertsRegisterPanicToError(t *testing.T) {
+	calledAfterPanic := false
+
+	bundle, err := Collect([]Extension{
+		fakeExt{name: "ok", register: func(r *Registry) {
+			r.Tools(fakeTool{name: "ok-tool"})
+		}},
+		fakeExt{name: "boom", register: func(*Registry) {
+			panic("register failed")
+		}},
+		fakeExt{name: "after", register: func(*Registry) {
+			calledAfterPanic = true
+		}},
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, bundle,
+		"panicking Register must discard the partially-built bundle")
+	assert.False(t, calledAfterPanic,
+		"Collect must stop immediately after a Register panic")
+	assert.Contains(t, err.Error(), `panic during register "boom" at index 1`)
+	assert.Contains(t, err.Error(), "register failed")
+	assert.Contains(t, err.Error(), "goroutine",
+		"error should include a stack trace for construction-time diagnostics")
+}
+
 func TestCollect_PreservesToolInstallOrder(t *testing.T) {
 	a := fakeTool{name: "alpha"}
 	b := fakeTool{name: "beta"}
