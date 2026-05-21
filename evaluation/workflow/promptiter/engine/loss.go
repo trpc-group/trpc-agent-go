@@ -18,7 +18,14 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
+	iloss "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/loss"
 )
+
+type lossHintMetricKey struct {
+	evalSetID  string
+	evalCaseID string
+	metricName string
+}
 
 func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
 	if result == nil {
@@ -67,25 +74,134 @@ func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
 			if len(caseLoss.TerminalLosses) == 0 {
 				continue
 			}
-			sort.SliceStable(caseLoss.TerminalLosses, func(i, j int) bool {
-				if caseLoss.TerminalLosses[i].MetricName != caseLoss.TerminalLosses[j].MetricName {
-					return caseLoss.TerminalLosses[i].MetricName < caseLoss.TerminalLosses[j].MetricName
-				}
-				if caseLoss.TerminalLosses[i].StepID != caseLoss.TerminalLosses[j].StepID {
-					return caseLoss.TerminalLosses[i].StepID < caseLoss.TerminalLosses[j].StepID
-				}
-				return caseLoss.TerminalLosses[i].Loss < caseLoss.TerminalLosses[j].Loss
-			})
 			losses = append(losses, caseLoss)
 		}
 	}
-	sort.SliceStable(losses, func(i, j int) bool {
-		if losses[i].EvalSetID != losses[j].EvalSetID {
-			return losses[i].EvalSetID < losses[j].EvalSetID
-		}
-		return losses[i].EvalCaseID < losses[j].EvalCaseID
-	})
+	sortCaseLosses(losses)
 	return losses, nil
+}
+
+func mergeLossHints(
+	losses []promptiter.CaseLoss,
+	result *EvaluationResult,
+	inputs []EvalSetInput,
+) ([]promptiter.CaseLoss, error) {
+	hintIndex := indexLossHints(inputs)
+	if len(hintIndex) == 0 {
+		return losses, nil
+	}
+	if result == nil {
+		return nil, errors.New("evaluation result is nil")
+	}
+	caseIndex := indexCaseResults(result)
+	lossIndex, stepIndex := indexLossHintTargets(losses)
+	for caseKey, hints := range hintIndex {
+		evalCase, ok := caseIndex[caseKey]
+		if !ok {
+			return nil, fmt.Errorf(
+				"loss hint case %q from eval set %q is missing from training result",
+				caseKey.evalCaseID,
+				caseKey.evalSetID,
+			)
+		}
+		for _, hint := range hints {
+			metric, ok := findMetricResult(evalCase.Metrics, hint.MetricName)
+			if !ok {
+				return nil, fmt.Errorf(
+					"loss hint metric %q for eval case %q from eval set %q is missing from training result",
+					hint.MetricName,
+					caseKey.evalCaseID,
+					caseKey.evalSetID,
+				)
+			}
+			if metric.Status != status.EvalStatusFailed {
+				continue
+			}
+			metricKey := lossHintMetricKey{
+				evalSetID:  caseKey.evalSetID,
+				evalCaseID: caseKey.evalCaseID,
+				metricName: hint.MetricName,
+			}
+			stepIDs := stepIndex[metricKey]
+			if len(stepIDs) == 0 {
+				continue
+			}
+			lossPosition, ok := lossIndex[caseKey]
+			if !ok {
+				continue
+			}
+			for _, stepID := range stepIDs {
+				losses[lossPosition].TerminalLosses = append(losses[lossPosition].TerminalLosses,
+					promptiter.TerminalLoss{
+						EvalSetID:  caseKey.evalSetID,
+						EvalCaseID: caseKey.evalCaseID,
+						MetricName: hint.MetricName,
+						Severity:   hint.Severity,
+						StepID:     stepID,
+						Loss:       hint.Reason,
+					})
+			}
+		}
+	}
+	sortCaseLosses(losses)
+	return losses, nil
+}
+
+func indexLossHints(inputs []EvalSetInput) map[caseResultKey][]LossHint {
+	index := make(map[caseResultKey][]LossHint)
+	for _, input := range inputs {
+		for _, hint := range input.LossHints {
+			hint.EvalCaseID = strings.TrimSpace(hint.EvalCaseID)
+			hint.MetricName = strings.TrimSpace(hint.MetricName)
+			hint.Reason = strings.TrimSpace(hint.Reason)
+			key := caseResultKey{
+				evalSetID:  input.EvalSetID,
+				evalCaseID: hint.EvalCaseID,
+			}
+			index[key] = append(index[key], hint)
+		}
+	}
+	return index
+}
+
+func indexLossHintTargets(
+	losses []promptiter.CaseLoss,
+) (map[caseResultKey]int, map[lossHintMetricKey][]string) {
+	lossIndex := make(map[caseResultKey]int, len(losses))
+	stepIndex := make(map[lossHintMetricKey][]string)
+	seenSteps := make(map[lossHintMetricKey]map[string]struct{})
+	for index := range losses {
+		caseKey := caseResultKey{
+			evalSetID:  losses[index].EvalSetID,
+			evalCaseID: losses[index].EvalCaseID,
+		}
+		lossIndex[caseKey] = index
+		for _, terminalLoss := range losses[index].TerminalLosses {
+			metricKey := lossHintMetricKey{
+				evalSetID:  terminalLoss.EvalSetID,
+				evalCaseID: terminalLoss.EvalCaseID,
+				metricName: terminalLoss.MetricName,
+			}
+			if _, ok := seenSteps[metricKey]; !ok {
+				seenSteps[metricKey] = make(map[string]struct{})
+			}
+			if _, ok := seenSteps[metricKey][terminalLoss.StepID]; ok {
+				continue
+			}
+			seenSteps[metricKey][terminalLoss.StepID] = struct{}{}
+			stepIndex[metricKey] = append(stepIndex[metricKey], terminalLoss.StepID)
+		}
+	}
+	return lossIndex, stepIndex
+}
+
+func findMetricResult(metrics []MetricResult, metricName string) (MetricResult, bool) {
+	for _, metric := range metrics {
+		if metric.MetricName == metricName {
+			return metric, true
+		}
+	}
+	return MetricResult{}, false
 }
 
 func traceTerminalStepIDs(trace *atrace.Trace) ([]string, error) {
@@ -146,4 +262,31 @@ func sortStepIDs(stepIDs map[string]struct{}, stepOrder map[string]int) []string
 		return stepOrder[ids[i]] < stepOrder[ids[j]]
 	})
 	return ids
+}
+
+func sortCaseLosses(losses []promptiter.CaseLoss) {
+	for index := range losses {
+		sort.SliceStable(losses[index].TerminalLosses, func(i, j int) bool {
+			return terminalLossLess(losses[index].TerminalLosses[i], losses[index].TerminalLosses[j])
+		})
+	}
+	sort.SliceStable(losses, func(i, j int) bool {
+		if losses[i].EvalSetID != losses[j].EvalSetID {
+			return losses[i].EvalSetID < losses[j].EvalSetID
+		}
+		return losses[i].EvalCaseID < losses[j].EvalCaseID
+	})
+}
+
+func terminalLossLess(left promptiter.TerminalLoss, right promptiter.TerminalLoss) bool {
+	if iloss.SeverityRank(left.Severity) != iloss.SeverityRank(right.Severity) {
+		return iloss.SeverityRank(left.Severity) < iloss.SeverityRank(right.Severity)
+	}
+	if left.MetricName != right.MetricName {
+		return left.MetricName < right.MetricName
+	}
+	if left.StepID != right.StepID {
+		return left.StepID < right.StepID
+	}
+	return left.Loss < right.Loss
 }
