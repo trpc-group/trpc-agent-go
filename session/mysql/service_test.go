@@ -1916,7 +1916,7 @@ func TestGetSession_WithEvents(t *testing.T) {
 
 	// Mock: Query events (multiple rows)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
 			AddRow(int64(1), key.AppName, key.UserID, key.SessionID, event1Bytes, time.Now()).
 			AddRow(int64(2), key.AppName, key.UserID, key.SessionID, event2Bytes, time.Now()))
@@ -1929,7 +1929,7 @@ func TestGetSession_WithEvents(t *testing.T) {
 
 	// Mock: Query summaries (multiple rows)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries")).
-		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "filter_key", "summary", "updated_at"}).
 			AddRow(key.AppName, key.UserID, key.SessionID, "filter1", sum1Bytes, time.Now()).
 			AddRow(key.AppName, key.UserID, key.SessionID, "filter2", sum2Bytes, time.Now()))
@@ -2278,7 +2278,7 @@ func TestGetSession_WithAfterTime(t *testing.T) {
 	// Mock: Query events with afterTime filter (should filter events)
 	afterTime := time.Now().Add(-1 * time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}))
 
 	sess, err := s.GetSession(ctx, key, session.WithEventTime(afterTime))

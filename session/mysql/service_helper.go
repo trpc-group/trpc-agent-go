@@ -547,10 +547,14 @@ func (s *Service) getEventsList(
 		afterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
 
+	// TDSQL proxy cannot extract shardkey from tuple comparison;
+	// add explicit user_id for shard routing. Harmless on MySQL.
 	query := fmt.Sprintf(`SELECT id, app_name, user_id, session_id, event, created_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
+		AND user_id = ?
 		AND deleted_at IS NULL`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
+	args = append(args, sessionKeys[0].UserID)
 
 	sessionCreatedAtMap := make(map[string]time.Time, len(sessionKeys))
 	for i, key := range sessionKeys {
@@ -678,8 +682,10 @@ func (s *Service) getPagedEvents(
 		args[i] = ref.id
 	}
 
-	eventsQuery := fmt.Sprintf(`SELECT id, event FROM %s WHERE id IN (%s)`,
+	// TDSQL PK is (id, user_id); include user_id for shard routing.
+	eventsQuery := fmt.Sprintf(`SELECT id, event FROM %s WHERE id IN (%s) AND user_id = ?`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
+	args = append(args, key.UserID)
 
 	eventsByID := make(map[int64]event.Event, len(refs))
 	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
@@ -836,10 +842,13 @@ func (s *Service) getSummariesList(
 		args = append(args, key.AppName, key.UserID, key.SessionID)
 	}
 
-	args = append(args, time.Now())
+	// TDSQL proxy cannot extract shardkey from tuple comparison;
+	// add explicit user_id for shard routing. Harmless on MySQL.
+	args = append(args, sessionKeys[0].UserID, time.Now())
 
 	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
+		AND user_id = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL`,
 		s.tableSessionSummaries, strings.Join(placeholders, ","))
