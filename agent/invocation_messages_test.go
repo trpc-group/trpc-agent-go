@@ -271,6 +271,96 @@ func (s *stubTool) Declaration() *tool.Declaration {
 	return s.decl
 }
 
+func TestWithAdditionalTools(t *testing.T) {
+	const toolName = "runtime_tool"
+
+	runtimeTool := &stubTool{
+		decl: &tool.Declaration{Name: toolName},
+	}
+
+	var ro RunOptions
+	WithAdditionalTools([]tool.Tool{runtimeTool})(&ro)
+
+	require.Equal(t, []tool.Tool{runtimeTool}, ro.AdditionalTools)
+	require.Empty(t, ro.ExternalTools)
+	require.Empty(t, ro.ExternalToolNames)
+}
+
+func TestWithExternalTools(t *testing.T) {
+	const (
+		externalToolName = "external_tool"
+		internalToolName = "internal_tool"
+		deniedToolName   = "denied_tool"
+	)
+
+	externalTool := &stubTool{
+		decl: &tool.Declaration{Name: externalToolName},
+	}
+	internalTool := &stubTool{
+		decl: &tool.Declaration{Name: internalToolName},
+	}
+	deniedTool := &stubTool{
+		decl: &tool.Declaration{Name: deniedToolName},
+	}
+
+	ro := NewRunOptions(
+		WithExternalTools([]tool.Tool{externalTool}),
+		WithToolExecutionFilter(
+			tool.NewIncludeToolNamesFilter(internalToolName),
+		),
+	)
+
+	require.Equal(t, []tool.Tool{externalTool}, ro.ExternalTools)
+	require.Empty(t, ro.ExternalToolNames)
+
+	ctx := context.Background()
+	require.False(t, ro.ShouldExecuteTool(ctx, externalTool))
+	require.True(t, ro.ShouldExecuteTool(ctx, internalTool))
+	require.False(t, ro.ShouldExecuteTool(ctx, deniedTool))
+}
+
+func TestWithExternalTools_DoesNotShadowDifferentToolWithSameName(
+	t *testing.T,
+) {
+	const toolName = "client_tool"
+
+	externalTool := &stubTool{
+		decl: &tool.Declaration{Name: toolName},
+	}
+	registeredTool := &stubTool{
+		decl: &tool.Declaration{Name: toolName},
+	}
+
+	ro := NewRunOptions(
+		WithExternalTools([]tool.Tool{externalTool}),
+	)
+
+	ctx := context.Background()
+	require.False(t, ro.ShouldExecuteTool(ctx, externalTool))
+	require.True(t, ro.ShouldExecuteTool(ctx, registeredTool))
+
+	ro.ExternalToolNames = map[string]bool{toolName: true}
+	require.False(t, ro.ShouldExecuteTool(ctx, registeredTool))
+}
+
+func TestWithExternalTools_DoesNotUseDeclarationAsIdentity(
+	t *testing.T,
+) {
+	const toolName = "client_tool"
+
+	sharedDecl := &tool.Declaration{Name: toolName}
+	externalTool := &stubTool{decl: sharedDecl}
+	registeredTool := &stubTool{decl: sharedDecl}
+
+	ro := NewRunOptions(
+		WithExternalTools([]tool.Tool{externalTool}),
+	)
+
+	ctx := context.Background()
+	require.False(t, ro.ShouldExecuteTool(ctx, externalTool))
+	require.True(t, ro.ShouldExecuteTool(ctx, registeredTool))
+}
+
 func TestWithToolExecutionFilter(t *testing.T) {
 	const (
 		allowedToolName = "tool1"

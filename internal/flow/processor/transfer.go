@@ -25,9 +25,8 @@ import (
 )
 
 const (
-	swarmTeamNameKey          = "swarm_team_name"
-	swarmActiveAgentKeyPrefix = "swarm_active_agent:"
-	swarmTraceNodeIDKey       = "__swarm_trace_node_id__"
+	swarmTeamNameKey    = "swarm_team_name"
+	swarmTraceNodeIDKey = "__swarm_trace_node_id__"
 )
 
 // TransferResponseProcessor handles agent transfer operations after LLM responses.
@@ -75,6 +74,8 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	targetAgentName := transferInfo.TargetAgentName
 	var nodeTimeout time.Duration
 	var transferCustomizer itransfer.InvocationCustomizer
+	var transferCompletionHandler itransfer.CompletionObserver
+	var transferTerminalErrorHandler itransfer.TerminalErrorObserver
 
 	// Look up the target agent from the current agent's sub-agents.
 	var targetAgent agent.Agent
@@ -123,6 +124,8 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		}
 		nodeTimeout = targetTimeout
 		transferCustomizer = transferInvocationCustomizerFor(controller)
+		transferCompletionHandler = transferCompletionHandlerFor(controller)
+		transferTerminalErrorHandler = transferTerminalErrorHandlerFor(controller)
 	}
 
 	targetInvocation, targetMessageBeforeCustomize, err := prepareTransferTargetInvocation(
@@ -222,20 +225,17 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		return
 	}
 
-	// Forward all events from the target agent.
-	for targetEvent := range targetEventChan {
-		if targetEvent != nil && targetEvent.Response != nil && targetEvent.Response.Done {
-			p.saveActiveAgent(ctx, invocation, targetAgent, targetEvent)
-		}
-		if err := event.EmitEvent(ctx, ch, targetEvent); err != nil {
-			return
-		}
-		log.DebugfContext(
-			ctx,
-			"Transfer response processor: forwarded event from "+
-				"target agent %s",
-			targetAgent.Info().Name,
-		)
+	if !forwardTransferTargetEvents(
+		ctx,
+		invocation,
+		targetInvocation,
+		targetAgent,
+		targetEventChan,
+		ch,
+		transferCompletionHandler,
+		transferTerminalErrorHandler,
+	) {
+		return
 	}
 
 	// Clear the transfer info and end the original invocation to stop further LLM calls.
@@ -248,6 +248,98 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	)
 	invocation.TransferInfo = nil
 	invocation.EndInvocation = p.endInvocationAfterTransfer
+}
+
+type transferForwardResult struct {
+	completed       bool
+	delegated       bool
+	terminalErrored bool
+}
+
+func forwardTransferTargetEvents(
+	ctx context.Context,
+	source *agent.Invocation,
+	target *agent.Invocation,
+	targetAgent agent.Agent,
+	events <-chan *event.Event,
+	out chan<- *event.Event,
+	completionHandler itransfer.CompletionObserver,
+	terminalErrorHandler itransfer.TerminalErrorObserver,
+) bool {
+	result := transferForwardResult{}
+	for targetEvent := range events {
+		result.observe(targetEvent, target.InvocationID)
+		if result.shouldNotifyTerminalError(
+			terminalErrorHandler,
+			targetEvent,
+			target.InvocationID,
+		) {
+			terminalErrorHandler.OnTransferTerminalError(
+				ctx,
+				source,
+				target,
+				targetEvent,
+			)
+		}
+		if result.shouldNotifyCompletion(completionHandler, targetEvent, target.InvocationID) {
+			result.completed = true
+			completionHandler.OnTransferComplete(ctx, source, target, targetEvent)
+		}
+		if err := event.EmitEvent(ctx, out, targetEvent); err != nil {
+			return false
+		}
+		log.DebugfContext(
+			ctx,
+			"Transfer response processor: forwarded event from "+
+				"target agent %s",
+			targetAgent.Info().Name,
+		)
+	}
+	if completionHandler != nil && result.needsSyntheticCompletion() {
+		completionHandler.OnTransferComplete(
+			ctx,
+			source,
+			target,
+			syntheticTransferCompletionEvent(target),
+		)
+	}
+	return true
+}
+
+func (r *transferForwardResult) observe(evt *event.Event, invocationID string) {
+	if isTransferDelegationEvent(evt) {
+		r.delegated = true
+	}
+	if isTransferTerminalErrorEvent(evt, invocationID) {
+		r.terminalErrored = true
+	}
+}
+
+func (r transferForwardResult) shouldNotifyCompletion(
+	handler itransfer.CompletionObserver,
+	evt *event.Event,
+	invocationID string,
+) bool {
+	return handler != nil &&
+		evt != nil &&
+		evt.InvocationID == invocationID &&
+		evt.Response != nil &&
+		!r.terminalErrored &&
+		evt.Response.Done
+}
+
+func (r transferForwardResult) shouldNotifyTerminalError(
+	handler itransfer.TerminalErrorObserver,
+	evt *event.Event,
+	invocationID string,
+) bool {
+	return handler != nil &&
+		r.terminalErrored &&
+		isTransferTerminalErrorEvent(evt, invocationID)
+}
+
+func (r transferForwardResult) needsSyntheticCompletion() bool {
+	return !r.completed && !r.delegated && !r.terminalErrored
 }
 
 func prepareTransferTargetInvocation(
@@ -301,39 +393,12 @@ func shouldEmitTransferMessageEcho(
 	return hasTransferMessage || !reflect.DeepEqual(beforeCustomize, afterCustomize)
 }
 
-// saveActiveAgent saves the target agent to session state for Swarm cross-request transfer
-// by attaching a StateDelta to the final response event.
-func (p *TransferResponseProcessor) saveActiveAgent(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	targetAgent agent.Agent,
-	targetEvent *event.Event,
-) {
-	if invocation == nil || invocation.Session == nil || targetEvent == nil {
-		return
-	}
-
-	// Check if this session belongs to a Swarm Team with cross-request transfer enabled.
-	// In Swarm mode with cross-request transfer, Team.runSwarm() sets SwarmTeamNameKey in session state.
-	// This works for both direct Team transfers and member-to-member transfers.
-	teamNameBytes, ok := invocation.Session.GetState(swarmTeamNameKey)
-	if !ok || len(teamNameBytes) == 0 {
-		// Not a Swarm team session with cross-request transfer enabled, skip.
-		return
-	}
-	teamName := string(teamNameBytes)
-
-	if targetEvent.StateDelta == nil {
-		targetEvent.StateDelta = make(map[string][]byte)
-	}
-	// Save the target agent name for cross-request transfer.
-	// Next user message will start from this agent.
-	targetEvent.StateDelta[swarmActiveAgentKey(teamName)] = []byte(targetAgent.Info().Name)
-}
-
 func transferTargetTraceNodeID(invocation *agent.Invocation, targetAgent agent.Agent) string {
 	if invocation == nil || targetAgent == nil {
 		return ""
+	}
+	if root := agent.InvocationTeamMemberTraceRoot(invocation); root != "" {
+		return istructure.JoinNodeID(root, targetAgent.Info().Name)
 	}
 	if invocation.Session != nil {
 		if traceRootBytes, ok := invocation.Session.GetState(swarmTraceNodeIDKey); ok && len(traceRootBytes) > 0 {
@@ -359,6 +424,29 @@ func transferTargetSurfaceRootNodeID(invocation *agent.Invocation, targetAgent a
 	return transferTargetTraceNodeID(invocation, targetAgent)
 }
 
+func isTransferDelegationEvent(evt *event.Event) bool {
+	if evt == nil {
+		return false
+	}
+	return evt.Object == model.ObjectTypeTransfer || evt.ContainsTag(event.TransferTag)
+}
+
+func isTransferTerminalErrorEvent(evt *event.Event, invocationID string) bool {
+	return evt != nil && evt.InvocationID == invocationID && evt.IsTerminalError()
+}
+
+func syntheticTransferCompletionEvent(invocation *agent.Invocation) *event.Event {
+	invocationID := ""
+	author := ""
+	if invocation != nil {
+		invocationID = invocation.InvocationID
+		author = invocation.AgentName
+	}
+	evt := event.NewResponseEvent(invocationID, author, &model.Response{Done: true})
+	itransfer.MarkSyntheticCompletionEvent(evt)
+	return evt
+}
+
 func parentTraceNodeID(nodeID string) string {
 	if nodeID == "" {
 		return ""
@@ -370,13 +458,6 @@ func parentTraceNodeID(nodeID string) string {
 	return nodeID[:lastSlash]
 }
 
-func swarmActiveAgentKey(teamName string) string {
-	if teamName == "" {
-		return swarmActiveAgentKeyPrefix
-	}
-	return swarmActiveAgentKeyPrefix + teamName
-}
-
 func transferInvocationCustomizerFor(
 	controller agent.TransferController,
 ) itransfer.InvocationCustomizer {
@@ -385,4 +466,24 @@ func transferInvocationCustomizerFor(
 		return nil
 	}
 	return customizer
+}
+
+func transferCompletionHandlerFor(
+	controller agent.TransferController,
+) itransfer.CompletionObserver {
+	handler, ok := controller.(itransfer.CompletionObserver)
+	if !ok {
+		return nil
+	}
+	return handler
+}
+
+func transferTerminalErrorHandlerFor(
+	controller agent.TransferController,
+) itransfer.TerminalErrorObserver {
+	handler, ok := controller.(itransfer.TerminalErrorObserver)
+	if !ok {
+		return nil
+	}
+	return handler
 }

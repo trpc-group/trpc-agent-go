@@ -210,7 +210,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
-	if deferred && !unknown {
+	if deferred {
 		invocation.EndInvocation = true
 	}
 
@@ -239,10 +239,6 @@ func (p *FunctionCallResponseProcessor) toolExecutionDecision(
 	if invocation == nil {
 		return false, true, false
 	}
-	filter := invocation.RunOptions.ToolExecutionFilter
-	if filter == nil {
-		return false, true, false
-	}
 	if req == nil || req.Tools == nil || rsp == nil {
 		return false, true, false
 	}
@@ -255,7 +251,7 @@ func (p *FunctionCallResponseProcessor) toolExecutionDecision(
 			unknown = true
 			continue
 		}
-		if filter(ctx, tl) {
+		if invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 			executable = true
 			continue
 		}
@@ -360,13 +356,10 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 		toolResults,
 	)
 
-	if len(toolCallResponsesEvents) == 0 &&
-		invocation != nil &&
-		invocation.RunOptions.ToolExecutionFilter != nil {
-		filter := invocation.RunOptions.ToolExecutionFilter
+	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
-			if ok && !filter(ctx, tl) {
+			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 				return nil, nil
 			}
 		}
@@ -548,13 +541,10 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		invocation,
 		toolResults,
 	)
-	if len(toolCallResponsesEvents) == 0 &&
-		invocation != nil &&
-		invocation.RunOptions.ToolExecutionFilter != nil {
-		filter := invocation.RunOptions.ToolExecutionFilter
+	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
-			if ok && !filter(ctx, tl) {
+			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 				return nil, nil
 			}
 		}
@@ -1423,10 +1413,9 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 			return toolCall, nil, true, fmt.Errorf("executeToolCall: %s", ErrorToolNotFound)
 		}
 	}
-	if invocation != nil && invocation.RunOptions.ToolExecutionFilter != nil {
-		if !invocation.RunOptions.ToolExecutionFilter(ctx, tl) {
-			return toolCall, nil, true, nil
-		}
+	if invocation != nil &&
+		!invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
+		return toolCall, nil, true, nil
 	}
 	return toolCall, tl, false, nil
 }
