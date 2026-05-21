@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -71,6 +72,20 @@ type EvalSetInput struct {
 	EvalSetID string `json:"evalSetId"`
 	// EvalCaseIDs limits this eval set to specific eval cases when set.
 	EvalCaseIDs []string `json:"evalCaseIds,omitempty"`
+	// LossHints stores operator-provided loss reasons keyed by failed eval case and metric.
+	LossHints []LossHint `json:"lossHints,omitempty"`
+}
+
+// LossHint carries operator-provided context for one failed metric on one eval case.
+type LossHint struct {
+	// EvalCaseID identifies the eval case to receive this hint.
+	EvalCaseID string `json:"evalCaseId"`
+	// MetricName identifies the failed metric to receive this hint.
+	MetricName string `json:"metricName"`
+	// Severity indicates how urgently this hint should influence optimization when set.
+	Severity promptiter.LossSeverity `json:"severity,omitempty"`
+	// Reason stores the manual loss text used by gradient computation.
+	Reason string `json:"reason"`
 }
 
 // RunStatus identifies the lifecycle state of one PromptIter run view.
@@ -388,6 +403,10 @@ func (e *engine) executeRound(
 	if err != nil {
 		return nil, 0, fmt.Errorf("extract train losses round %d: %w", roundNumber, err)
 	}
+	losses, err = mergeLossHints(losses, trainResult, request.Train)
+	if err != nil {
+		return nil, 0, fmt.Errorf("merge train loss hints round %d: %w", roundNumber, err)
+	}
 	roundResult.Losses = losses
 	if err := appendRunEvent(ctx, observer, EventKindRoundLosses, roundNumber, losses); err != nil {
 		return nil, 0, err
@@ -504,8 +523,66 @@ func validateEvalSetInputs(role string, inputs []EvalSetInput) error {
 		if slices.Contains(input.EvalCaseIDs, "") {
 			return fmt.Errorf("%seval case id for eval set %q is empty", prefix, input.EvalSetID)
 		}
+		selectedCaseIDs := make(map[string]struct{}, len(input.EvalCaseIDs))
+		for _, evalCaseID := range input.EvalCaseIDs {
+			selectedCaseIDs[evalCaseID] = struct{}{}
+		}
+		for _, hint := range input.LossHints {
+			hintEvalCaseID := strings.TrimSpace(hint.EvalCaseID)
+			switch {
+			case hintEvalCaseID == "":
+				return fmt.Errorf("%sloss hint eval case id for eval set %q is empty", prefix, input.EvalSetID)
+			case strings.TrimSpace(hint.MetricName) == "":
+				return fmt.Errorf(
+					"%sloss hint metric name for eval set %q case %q is empty",
+					prefix,
+					input.EvalSetID,
+					hint.EvalCaseID,
+				)
+			case strings.TrimSpace(hint.Reason) == "":
+				return fmt.Errorf(
+					"%sloss hint reason for eval set %q case %q metric %q is empty",
+					prefix,
+					input.EvalSetID,
+					hint.EvalCaseID,
+					hint.MetricName,
+				)
+			case !isValidLossHintSeverity(hint.Severity):
+				return fmt.Errorf(
+					"%sloss hint severity %q for eval set %q case %q metric %q is invalid",
+					prefix,
+					hint.Severity,
+					input.EvalSetID,
+					hint.EvalCaseID,
+					hint.MetricName,
+				)
+			}
+			if len(selectedCaseIDs) > 0 {
+				if _, ok := selectedCaseIDs[hintEvalCaseID]; !ok {
+					return fmt.Errorf(
+						"%sloss hint eval case %q is not selected for eval set %q",
+						prefix,
+						hint.EvalCaseID,
+						input.EvalSetID,
+					)
+				}
+			}
+		}
 	}
 	return nil
+}
+
+func isValidLossHintSeverity(severity promptiter.LossSeverity) bool {
+	switch severity {
+	case "",
+		promptiter.LossSeverityP0,
+		promptiter.LossSeverityP1,
+		promptiter.LossSeverityP2,
+		promptiter.LossSeverityP3:
+		return true
+	default:
+		return false
+	}
 }
 
 func runIndexedParallel(
