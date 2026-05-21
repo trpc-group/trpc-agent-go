@@ -1019,6 +1019,12 @@ func (s *Service) deleteSessions(ctx context.Context, tx *sql.Tx, keys []session
 		args = append(args, keys[0].UserID)
 	}
 
+	// Recheck expiry to prevent deleting renewed sessions between scan and delete
+	// (two-phase cleanup has no row lock across phases). Redundant but safe for
+	// single-phase MySQL cleanup where FOR UPDATE already holds the lock.
+	whereClause += " AND expires_at IS NOT NULL AND expires_at <= ?"
+	args = append(args, now)
+
 	if s.opts.softDelete {
 		return s.softDeleteSessions(ctx, tx, whereClause, args, now)
 	}
@@ -1274,18 +1280,19 @@ func (s *Service) tdsqlCleanupExpiredUserStates(ctx context.Context, now time.Ti
 		}
 		idClause := strings.Join(placeholders, ",")
 
+		// Recheck expiry to prevent deleting renewed user states between scan and delete.
 		var err error
 		if s.opts.softDelete {
 			args = append([]any{now}, args...)
-			args = append(args, userID)
+			args = append(args, userID, now)
 			_, err = s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE id IN (%s) AND user_id = ?`,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
 					s.tableUserStates, idClause),
 				args...)
 		} else {
-			args = append(args, userID)
+			args = append(args, userID, now)
 			_, err = s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`DELETE FROM %s WHERE id IN (%s) AND user_id = ?`,
+				fmt.Sprintf(`DELETE FROM %s WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
 					s.tableUserStates, idClause),
 				args...)
 		}
