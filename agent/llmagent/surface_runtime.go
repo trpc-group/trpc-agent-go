@@ -194,7 +194,6 @@ func (a *LLMAgent) InvocationToolSurface(
 
 	allTools := append([]tool.Tool(nil), userTools...)
 	allTools = appendKnowledgeTools(allTools, &options)
-
 	effectiveSkills := a.skillRepositoryForInvocation(inv)
 	effectiveExec := a.codeExecutorForInvocation(inv)
 	workspaceExecEnabled := workspaceExecSurfaceEnabled(&options) &&
@@ -243,6 +242,7 @@ func (a *LLMAgent) InvocationToolSurface(
 		allTools = append(allTools, toolawaitreply.New())
 	}
 	if len(subAgents) == 0 {
+		allTools = appendExtensionTools(allTools, &options)
 		return allTools, userToolNames
 	}
 	agentInfos := make([]agent.Info, len(subAgents))
@@ -250,6 +250,16 @@ func (a *LLMAgent) InvocationToolSurface(
 		agentInfos[i] = subAgent.Info()
 	}
 	allTools = append(allTools, transfer.New(agentInfos))
+	// Extension-contributed tools (WithExtensions →
+	// extension.Registry.Tools) sit at the same logical layer as
+	// other framework-managed auto-injected tools: not folded into
+	// userToolNames, yet present on the outbound tool surface.
+	//
+	// Append them after every framework tool (knowledge, workspace,
+	// skills, session recall, await_user_reply and transfer) so
+	// earlier-wins dedup also protects later framework declarations
+	// from extension name collisions.
+	allTools = appendExtensionTools(allTools, &options)
 	return allTools, userToolNames
 }
 

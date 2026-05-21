@@ -143,6 +143,21 @@ func NewCallbacks(opts ...CallbacksOption) *Callbacks {
 	return c
 }
 
+// Clone returns an independent copy of c, including callback lists
+// and execution options.
+func (c *Callbacks) Clone() *Callbacks {
+	if c == nil {
+		return nil
+	}
+	out := &Callbacks{
+		BeforeAgent:        append([]BeforeAgentCallbackStructured(nil), c.BeforeAgent...),
+		AfterAgent:         append([]AfterAgentCallbackStructured(nil), c.AfterAgent...),
+		continueOnError:    c.continueOnError,
+		continueOnResponse: c.continueOnResponse,
+	}
+	return out
+}
+
 // RegisterBeforeAgent registers a before agent callback.
 // Supports both old and new callback function signatures.
 // Old signatures are automatically wrapped into new signatures.
