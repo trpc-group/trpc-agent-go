@@ -1401,7 +1401,7 @@ Uses heuristic rules: approximately `N` UTF-8 characters per token, where `N` ca
 estimatedTokens = countedUTF8Runes / N
 ```
 
-Therefore, `WithApproxRunesPerToken(1.5)` means approximately `1.5` characters per token. Passing `10.0/15` means approximately `0.67` characters per token, which is about `1.5` tokens per character.
+Therefore, `WithApproxRunesPerToken(1.5)` means approximately `1.5` characters per token. Passing `2.0/3.0` means approximately `0.67` characters per token, which is about `1.5` tokens per character.
 
 **Usage:**
 

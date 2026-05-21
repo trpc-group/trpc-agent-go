@@ -1389,7 +1389,7 @@ Token 计数器用于估算文本内容的 token 数量。框架提供了 `Simpl
 estimatedTokens = countedUTF8Runes / N
 ```
 
-因此 `WithApproxRunesPerToken(1.5)` 表示约 `1.5` 字符/token；如果传入 `10.0/15`，则表示约 `0.67` 字符/token，等价于约 `1.5` token/字符。
+因此 `WithApproxRunesPerToken(1.5)` 表示约 `1.5` 字符/token；如果传入 `2.0/3.0`，则表示约 `0.67` 字符/token，等价于约 `1.5` token/字符。
 
 **使用方式：**
 

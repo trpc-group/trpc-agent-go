@@ -27,7 +27,7 @@ type SimpleTokenCounterOption func(*simpleTokenCounterOptions)
 
 // WithApproxRunesPerToken sets the approximate runes per token heuristic.
 // The value is a divisor: estimated tokens = counted UTF-8 runes / v.
-// For example, v=1.5 means roughly 1.5 runes per token, while v=10.0/15
+// For example, v=1.5 means roughly 1.5 runes per token, while v=2.0/3.0
 // means roughly 0.67 runes per token, or about 1.5 tokens per rune.
 // This is a heuristic and may vary across languages and models.
 //

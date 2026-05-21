@@ -610,7 +610,7 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 - **全局影响**：`SetTokenCounter` 会影响当前进程中所有的 `CheckTokenThreshold` 评估，建议在应用初始化时一次性设置
 - **默认计数器**：如果不设置，将使用默认的 `SimpleTokenCounter`（约每 token 对应 4 个字符）
-- **参数语义**：`WithApproxRunesPerToken(v)` 中的 `v` 是字符/token。传入 `10.0/15` 表示约 `0.67` 字符/token，等价于约 `1.5` token/字符
+- **参数语义**：`WithApproxRunesPerToken(v)` 中的 `v` 是字符/token。传入 `2.0/3.0` 表示约 `0.67` 字符/token，等价于约 `1.5` token/字符
 
 ## 跳过最近事件
 

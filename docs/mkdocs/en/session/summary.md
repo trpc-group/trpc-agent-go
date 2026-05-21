@@ -619,7 +619,7 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 - **Global effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process; set it once during application initialization
 - **Default counter**: If not set, the default `SimpleTokenCounter` is used (approximately 4 characters per token)
-- **Parameter meaning**: `v` in `WithApproxRunesPerToken(v)` is characters per token. Passing `10.0/15` means about `0.67` characters per token, which is about `1.5` tokens per character
+- **Parameter meaning**: `v` in `WithApproxRunesPerToken(v)` is characters per token. Passing `2.0/3.0` means about `0.67` characters per token, which is about `1.5` tokens per character
 
 ## Skip Recent Events
 
