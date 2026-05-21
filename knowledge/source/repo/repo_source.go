@@ -32,10 +32,9 @@ const defaultRepoSourceName = "Repository Source"
 
 // Source represents a knowledge source for a code repository.
 type Source struct {
-	repositories   []Repository
-	inputs         []string
-	dirs           []string
-	repoURLs       []string
+	repository     Repository
+	hasRepository  bool
+	multiRepoError bool
 	name           string
 	metadata       map[string]any
 	readers        map[string]reader.Reader
@@ -44,30 +43,24 @@ type Source struct {
 	transformers   []transform.Transformer
 	skipDirs       []string
 	skipSuffixes   []string
-	branch         string
-	tag            string
-	commit         string
-	repoName       string
-	repoURL        string
-	subdir         string
 }
 
 // Repository describes one repository input and its version/scope configuration.
 type Repository struct {
-	URL      string
-	Dir      string
-	Branch   string
-	Tag      string
-	Commit   string
-	Subdir   string
-	RepoName string
-	RepoURL  string
+	URL         string
+	Dir         string
+	Branch      string
+	Tag         string
+	Commit      string
+	Subdir      string
+	RepoName    string
+	Description string
+	RepoURL     string
 }
 
 // New creates a new repository knowledge source.
-func New(inputs []string, opts ...Option) *Source {
+func New(opts ...Option) *Source {
 	s := &Source{
-		inputs:    inputs,
 		name:      defaultRepoSourceName,
 		metadata:  make(map[string]any),
 		recursive: true,
@@ -90,15 +83,13 @@ func (s *Source) initializeReaders() {
 
 // ReadDocuments reads all repository inputs and returns documents.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
-	repositories := s.resolvedRepositories()
-	if len(repositories) == 0 {
-		return nil, nil
+	if s.multiRepoError {
+		return nil, fmt.Errorf("repo source supports only one repository per source")
 	}
-	if len(repositories) > 1 {
-		return nil, fmt.Errorf("repo source supports only one repository per source, got %d", len(repositories))
+	repository, ok := s.resolvedRepository()
+	if !ok {
+		return nil, fmt.Errorf("repo source %q has no repository configured; use WithRepository(...)", s.name)
 	}
-
-	repository := repositories[0]
 	repoRoot, repoInfo, cleanup, err := s.resolveRepository(ctx, repository)
 	if err != nil {
 		return nil, err
@@ -108,9 +99,6 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 	}
 
 	subdir := repository.Subdir
-	if subdir == "" {
-		subdir = s.subdir
-	}
 	rootToScan, err := resolveScanRoot(repoRoot, subdir)
 	if err != nil {
 		return nil, err
@@ -232,36 +220,11 @@ func (s *Source) classifyFiles(repoRoot string, filePaths []string) (*fileClassi
 	return fc, nil
 }
 
-func (s *Source) resolvedRepositories() []Repository {
-	if len(s.repositories) > 0 {
-		return slices.Clone(s.repositories)
+func (s *Source) resolvedRepository() (Repository, bool) {
+	if !s.hasRepository {
+		return Repository{}, false
 	}
-	inputs := s.resolvedInputs()
-	repositories := make([]Repository, 0, len(inputs))
-	for _, input := range inputs {
-		repo := Repository{
-			Branch:   s.branch,
-			Tag:      s.tag,
-			Commit:   s.commit,
-			Subdir:   s.subdir,
-			RepoName: s.repoName,
-			RepoURL:  s.repoURL,
-		}
-		if looksLikeGitURL(input) {
-			repo.URL = input
-		} else {
-			repo.Dir = input
-		}
-		repositories = append(repositories, repo)
-	}
-	return repositories
-}
-
-func (s *Source) resolvedInputs() []string {
-	if len(s.dirs) == 0 && len(s.repoURLs) == 0 {
-		return slices.Clone(s.inputs)
-	}
-	return append(slices.Clone(s.repoURLs), s.dirs...)
+	return s.repository, true
 }
 
 // Name returns the source name.
@@ -273,6 +236,24 @@ func (s *Source) Type() string { return source.TypeRepo }
 // GetMetadata returns source metadata.
 func (s *Source) GetMetadata() map[string]any {
 	return maps.Clone(s.metadata)
+}
+
+// RepositoryDescriptor exposes the configured repository name/description for
+// tool-layer prompt construction. It is intentionally source-level metadata and
+// is not copied into per-chunk document metadata.
+func (s *Source) RepositoryDescriptor() (name, description string, ok bool) {
+	repository, ok := s.resolvedRepository()
+	if !ok {
+		return "", "", false
+	}
+	rawInput := repository.URL
+	if rawInput == "" {
+		rawInput = repository.Dir
+	}
+	if rawInput == "" && repository.RepoName == "" {
+		return "", "", false
+	}
+	return chooseRepoName(repository.RepoName, rawInput, rawInput), repository.Description, true
 }
 
 type repoInfo struct {
@@ -307,6 +288,12 @@ func isCodeFileType(fileType string) bool {
 }
 
 func (s *Source) resolveRepository(ctx context.Context, repository Repository) (string, *repoInfo, func(), error) {
+	if repository.URL == "" && repository.Dir == "" {
+		return "", nil, nil, fmt.Errorf("repository must set either URL or Dir")
+	}
+	if repository.URL != "" && repository.Dir != "" {
+		return "", nil, nil, fmt.Errorf("repository must not set both URL and Dir")
+	}
 	if repository.URL != "" {
 		tmpDir, err := os.MkdirTemp("", "trpc-agent-go-repo-*")
 		if err != nil {
@@ -370,11 +357,8 @@ func cloneRemoteRepository(ctx context.Context, repository Repository, tmpDir st
 			return "", fmt.Errorf("failed to clone repo at %s %q: %w", kind, target, err)
 		}
 	case checkoutTargetCommit:
-		if err := runGit(ctx, "", "clone", "--depth", "1", repository.URL, tmpDir); err != nil {
+		if err := runGit(ctx, "", "clone", repository.URL, tmpDir); err != nil {
 			return "", fmt.Errorf("failed to clone repo before checking out commit %q: %w", target, err)
-		}
-		if err := runGit(ctx, tmpDir, "fetch", "--depth", "1", "origin", target); err != nil {
-			return "", fmt.Errorf("failed to fetch commit %q: %w", target, err)
 		}
 		if err := runGit(ctx, tmpDir, "checkout", target); err != nil {
 			return "", fmt.Errorf("failed to checkout commit %q: %w", target, err)

@@ -18,10 +18,11 @@ import (
 const defaultDelay = 100 * time.Millisecond
 
 type options struct {
-	candidates []model.Model
-	name       string
-	delay      time.Duration
-	delays     []time.Duration
+	candidates    []model.Model
+	name          string
+	contextWindow int
+	delay         time.Duration
+	delays        []time.Duration
 }
 
 func newOptions(opt ...Option) options {
@@ -49,6 +50,17 @@ func WithCandidates(candidates ...model.Model) Option {
 func WithName(name string) Option {
 	return func(o *options) {
 		o.name = name
+	}
+}
+
+// WithContextWindow sets the model context window size in tokens for this
+// hedge wrapper. If unset, the wrapper reports a context window only when all
+// candidate models report the same positive context window.
+func WithContextWindow(tokens int) Option {
+	return func(o *options) {
+		if tokens > 0 {
+			o.contextWindow = tokens
+		}
 	}
 }
 

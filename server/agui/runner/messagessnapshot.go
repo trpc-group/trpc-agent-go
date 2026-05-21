@@ -16,9 +16,11 @@ import (
 	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/reduce"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -129,18 +131,57 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	if err != nil {
 		return nil, nil, fmt.Errorf("get track events: %w", err)
 	}
-	messages, err := reduce.Reduce(sessionKey.AppName, sessionKey.UserID, trackEvents.Events)
+	eventsForReduce, safeForFollow := trimTrackEventsToHistoryStart(trackEvents.Events)
+	messages, err := reduce.Reduce(
+		sessionKey.AppName,
+		sessionKey.UserID,
+		eventsForReduce,
+		reduce.WithRunLifecycleEvents(r.messagesSnapshotRunLifecycleEventsEnabled),
+	)
 	if err != nil {
 		err = fmt.Errorf("reduce track events: %w", err)
 	}
 	event := aguievents.NewMessagesSnapshotEvent(messages)
 	if r.eventSourceMetadataEnabled {
-		metadata := source.BuildSnapshotMetadata(trackEvents.Events)
+		metadata := source.BuildSnapshotMetadata(eventsForReduce)
 		if !metadata.IsZero() {
 			event.GetBaseEvent().RawEvent = metadata
 		}
 	}
+	if !safeForFollow {
+		trackEvents = nil
+	}
 	return event, trackEvents, err
+}
+
+func trimTrackEventsToHistoryStart(events []session.TrackEvent) ([]session.TrackEvent, bool) {
+	if len(events) == 0 {
+		return events, true
+	}
+	for i, event := range events {
+		if isUserMessageTrackEvent(event) {
+			return events[i:], true
+		}
+	}
+	return nil, false
+}
+
+func isUserMessageTrackEvent(trackEvent session.TrackEvent) bool {
+	if len(trackEvent.Payload) == 0 {
+		return false
+	}
+	evt, err := aguievents.EventFromJSON(trackEvent.Payload)
+	if err != nil {
+		return false
+	}
+	switch e := evt.(type) {
+	case *aguievents.CustomEvent:
+		return e.Name == multimodal.CustomEventNameUserMessage
+	case *aguievents.TextMessageStartEvent:
+		return e.Role != nil && *e.Role == string(types.RoleUser)
+	default:
+		return false
+	}
 }
 
 func (r *runner) messagesSnapshotFollow(

@@ -85,6 +85,8 @@ type options struct {
 	tailoringStrategy model.TailoringStrategy
 	// maxInputTokens is the max input tokens for token tailoring.
 	maxInputTokens int
+	// contextWindow is the model context window size in tokens.
+	contextWindow int
 	// tokenTailoringConfig allows customization of token tailoring parameters.
 	tokenTailoringConfig *model.TokenTailoringConfig
 
@@ -97,6 +99,9 @@ type options struct {
 	// When enabled, cache control will be applied to the last assistant message
 	// to maximize cache reuse in subsequent turns.
 	cacheMessages bool
+	// showToolCallDelta controls whether to expose tool call argument deltas in
+	// streaming responses.
+	showToolCallDelta bool
 }
 
 var (
@@ -206,6 +211,16 @@ func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	}
 }
 
+// WithShowToolCallDelta controls whether to expose tool call argument deltas in
+// streaming responses. When enabled, input_json_delta chunks from Anthropic will
+// be forwarded via Response.Choices[].Delta.ToolCalls so callers can reconstruct
+// arguments incrementally.
+func WithShowToolCallDelta(show bool) Option {
+	return func(opts *options) {
+		opts.showToolCallDelta = show
+	}
+}
+
 // WithHTTPClientOptions sets the HTTP client options for the Anthropic client.
 func WithHTTPClientOptions(httpOpts ...HTTPClientOption) Option {
 	return func(opts *options) {
@@ -228,6 +243,16 @@ func WithEnableTokenTailoring(enabled bool) Option {
 func WithMaxInputTokens(limit int) Option {
 	return func(opts *options) {
 		opts.maxInputTokens = limit
+	}
+}
+
+// WithContextWindow sets the model context window size in tokens for this
+// model instance.
+func WithContextWindow(tokens int) Option {
+	return func(opts *options) {
+		if tokens > 0 {
+			opts.contextWindow = tokens
+		}
 	}
 }
 

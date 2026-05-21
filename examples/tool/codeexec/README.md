@@ -20,6 +20,9 @@ export OPENAI_API_KEY="your-api-key"
 
 # Or using OpenAI
 export OPENAI_API_KEY="your-openai-api-key"
+
+# if use e2b executor
+export E2B_API_KEY="e2b_xxx"
 ```
 
 ### 3. Run
@@ -28,7 +31,7 @@ export OPENAI_API_KEY="your-openai-api-key"
 
 ```bash
 cd tool/codeexec
-./codeexec-demo -model deepseek-chat
+./codeexec-demo -model deepseek-v4-flash
 ```
 
 #### Jupyter executor (requires `python` + `jupyter_kernel_gateway`)
@@ -43,7 +46,7 @@ Run with Jupyter backend:
 
 ```bash
 cd tool/codeexec
-./codeexec-demo -model deepseek-chat -executor jupyter
+./codeexec-demo -model deepseek-v4-flash -executor jupyter
 ```
 
 > Note: The demo will start a local Jupyter Kernel Gateway subprocess and will call `Close()` on exit to clean it up.

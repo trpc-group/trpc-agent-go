@@ -65,6 +65,18 @@ func Test_Model_Info(t *testing.T) {
 	assert.Equal(t, "llama3.2:latest", info.Name)
 }
 
+func TestNew_DoesNotPersistRegistryFallbackOnShowError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "show failed", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	m := New("gpt-4", WithHost(srv.URL))
+	assert.Zero(t, m.contextWindow)
+
+	assert.Zero(t, m.Info().ContextWindow)
+}
+
 func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
 	t.Run("request callback", func(t *testing.T) {
 		callbackCalled := false
@@ -427,7 +439,7 @@ func Test_convertMessage(t *testing.T) {
 // Test_convertTools tests tool conversion.
 func Test_convertTools(t *testing.T) {
 	toolsMap := map[string]tool.Tool{
-		"get_weather": stubTool{
+		"b-key": stubTool{
 			decl: &tool.Declaration{
 				Name:        "get_weather",
 				Description: "Get weather info",
@@ -439,12 +451,21 @@ func Test_convertTools(t *testing.T) {
 				},
 			},
 		},
+		"a-key": stubTool{
+			decl: &tool.Declaration{
+				Name:        "search_city",
+				Description: "Search city info",
+			},
+		},
+		"c-key": stubTool{},
+		"skip":  nil,
 	}
 
 	result := convertTools(toolsMap)
-	assert.Equal(t, 1, len(result))
+	assert.Equal(t, 2, len(result))
 	assert.Equal(t, functionToolType, result[0].Type)
-	assert.Equal(t, "get_weather", result[0].Function.Name)
+	assert.Equal(t, "search_city", result[0].Function.Name)
+	assert.Equal(t, "get_weather", result[1].Function.Name)
 }
 
 // Test_buildToolDescription tests tool description building.
@@ -967,6 +988,18 @@ func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Mes
 	return append([]model.Message{messages[0]}, messages[2:]...), nil
 }
 
+type overflowTailoringStrategy struct {
+	tailored []model.Message
+}
+
+func (s overflowTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return s.tailored, errors.New("minimal protected context exceeds token budget")
+}
+
 // TestWithTokenTailoring tests token tailoring functionality.
 func TestWithTokenTailoring(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1011,6 +1044,28 @@ func TestWithTokenTailoring(t *testing.T) {
 	require.NotNil(t, capturedReq)
 	// After tailoring, messages should be reduced (1 message after tailoring).
 	require.Len(t, capturedReq.Messages, 1)
+}
+
+func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
+	tailored := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := &Model{
+		name:                 "test-model",
+		enableTokenTailoring: true,
+		maxInputTokens:       1,
+		tailoringStrategy:    overflowTailoringStrategy{tailored: tailored},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("old"),
+		model.NewUserMessage("q"),
+	}}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, tailored, req.Messages)
 }
 
 // TestWithEnableTokenTailoring_SimpleMode tests simple token tailoring mode.

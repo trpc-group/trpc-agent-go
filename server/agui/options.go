@@ -38,6 +38,7 @@ type options struct {
 	messagesSnapshotEnabled bool
 	cancelPath              string
 	cancelEnabled           bool
+	heartbeatInterval       time.Duration
 	appName                 string
 	sessionService          session.Service
 }
@@ -135,6 +136,13 @@ func WithPostRunFinalizationTimeout(d time.Duration) Option {
 	}
 }
 
+// WithHeartbeatInterval sets how often the SSE transport sends heartbeat frames.
+func WithHeartbeatInterval(d time.Duration) Option {
+	return func(o *options) {
+		o.heartbeatInterval = d
+	}
+}
+
 // WithGraphNodeLifecycleActivityEnabled controls whether the AG-UI server emits graph node lifecycle activity events.
 func WithGraphNodeLifecycleActivityEnabled(enabled bool) Option {
 	return func(o *options) {
@@ -181,6 +189,14 @@ func WithToolResultInputTranslationEnabled(enabled bool) Option {
 	}
 }
 
+// WithToolCallDeltaStreamingEnabled controls whether partial tool-call
+// arguments are emitted before the final tool call response.
+func WithToolCallDeltaStreamingEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithToolCallDeltaStreamingEnabled(enabled))
+	}
+}
+
 // WithStreamingToolResultActivityEnabled controls whether partial tool-result
 // chunks are emitted as activity events while only the final tool result is
 // retained on the tool-result path and in message snapshots.
@@ -215,6 +231,14 @@ func WithMessagesSnapshotFollowEnabled(enabled bool) Option {
 func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotFollowMaxDuration(d))
+	}
+}
+
+// WithMessagesSnapshotRunLifecycleEventsEnabled controls whether persisted RUN_* events
+// are included as activity messages in MESSAGES_SNAPSHOT.
+func WithMessagesSnapshotRunLifecycleEventsEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotRunLifecycleEventsEnabled(enabled))
 	}
 }
 

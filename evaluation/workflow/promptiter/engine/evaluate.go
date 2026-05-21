@@ -41,8 +41,8 @@ type EvaluationOptions struct {
 
 // EvaluationRequest describes one evaluation execution requested by the engine.
 type EvaluationRequest struct {
-	// EvalSetIDs identifies the evaluation sets to execute.
-	EvalSetIDs []string
+	// EvalSets identifies the evaluation sets and case filters to execute.
+	EvalSets []EvalSetInput
 	// Profile is the normalized candidate profile being evaluated.
 	Profile *promptiter.Profile
 	// Teacher is the optional runner used by the evaluation runtime.
@@ -108,27 +108,24 @@ func (e *engine) evaluate(
 	if structure == nil {
 		return nil, errors.New("structure state is nil")
 	}
-	if len(request.EvalSetIDs) == 0 {
-		return nil, errors.New("evaluation set ids are empty")
+	if err := validateEvalSetInputs("", request.EvalSets); err != nil {
+		return nil, err
 	}
 	if e.agentEvaluator == nil {
 		return nil, errors.New("agent evaluator is nil")
 	}
-	if slices.Contains(request.EvalSetIDs, "") {
-		return nil, errors.New("evaluation set id is empty")
-	}
-	results := make([]EvalSetResult, 0, len(request.EvalSetIDs))
+	results := make([]EvalSetResult, 0, len(request.EvalSets))
 	totalScore := 0.0
-	for _, evalSetID := range request.EvalSetIDs {
-		options, err := buildEvaluationCallOptions(structure, request)
+	for _, input := range request.EvalSets {
+		options, err := buildEvaluationCallOptions(structure, request, input)
 		if err != nil {
 			return nil, err
 		}
-		genericResult, err := e.agentEvaluator.Evaluate(ctx, evalSetID, options...)
+		genericResult, err := e.agentEvaluator.Evaluate(ctx, input.EvalSetID, options...)
 		if err != nil {
 			return nil, err
 		}
-		evalSetResult, err := adaptEvaluationSetResult(structure, evalSetID, genericResult)
+		evalSetResult, err := adaptEvaluationSetResult(structure, input.EvalSetID, genericResult)
 		if err != nil {
 			return nil, err
 		}
@@ -154,6 +151,7 @@ func evaluationScore(result *EvaluationResult) (float64, error) {
 func buildEvaluationCallOptions(
 	structure *structureState,
 	request *EvaluationRequest,
+	input EvalSetInput,
 ) ([]evaluation.Option, error) {
 	if request == nil {
 		return nil, errors.New("evaluation request is nil")
@@ -162,7 +160,7 @@ func buildEvaluationCallOptions(
 	if err != nil {
 		return nil, err
 	}
-	options := make([]evaluation.Option, 0, 7)
+	options := make([]evaluation.Option, 0, 8)
 	options = append(options, evaluation.WithRunDetailsEnabled(true))
 	options = append(options, evaluation.WithRunOptions(runOptions...))
 	if request.Teacher != nil {
@@ -180,6 +178,9 @@ func buildEvaluationCallOptions(
 	}
 	if request.Options.EvalCaseParallelEvaluationEnabled {
 		options = append(options, evaluation.WithEvalCaseParallelEvaluationEnabled(true))
+	}
+	if len(input.EvalCaseIDs) > 0 {
+		options = append(options, evaluation.WithEvalCaseIDs(input.EvalCaseIDs...))
 	}
 	return options, nil
 }
@@ -518,7 +519,7 @@ func validateTraceAgainstStructure(
 			if surfaceID == "" {
 				return fmt.Errorf("execution trace step %q applied surface id is empty", step.StepID)
 			}
-			if _, ok := structure.surfaceIndex[surfaceID]; !ok {
+			if _, ok := structure.knownSurfaceIDs[surfaceID]; !ok {
 				return fmt.Errorf(
 					"execution trace step %q references unknown surface id %q",
 					step.StepID,

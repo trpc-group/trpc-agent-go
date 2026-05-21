@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -29,10 +30,12 @@ import (
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	llmtemplateevaluator "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/template"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	criteriontext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
@@ -120,6 +123,7 @@ type fakeEvaluator struct {
 
 	receivedActuals   []*evalset.Invocation
 	receivedExpecteds []*evalset.Invocation
+	receivedMetric    *metric.EvalMetric
 }
 
 func (f *fakeEvaluator) Name() string {
@@ -136,6 +140,7 @@ func (f *fakeEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*eval
 	}
 	f.receivedActuals = actuals
 	f.receivedExpecteds = expecteds
+	f.receivedMetric = evalMetric
 	return f.result, nil
 }
 
@@ -3730,4 +3735,614 @@ func TestEvaluatePerCaseScenarioRunsConfiguredMetric(t *testing.T) {
 	assert.Equal(t, status.EvalStatusPassed, result.OverallEvalMetricResults[0].EvalStatus)
 	assert.Equal(t, inferenceResult.Inferences, fakeEval.receivedActuals)
 	assert.Len(t, fakeEval.receivedExpecteds, 1)
+}
+
+func TestBuildCaseEffectiveMetricAppendsCaseRubrics(t *testing.T) {
+	judgeRunner := &fakeRunner{}
+	globalMetric := &metric.EvalMetric{
+		MetricName: "llm_rubric_response",
+		Threshold:  1,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				JudgeRunnerOptions: &criterionllm.JudgeRunnerOptions{Runner: judgeRunner},
+				Rubrics: []*criterionllm.Rubric{
+					{ID: "global", Content: &criterionllm.RubricContent{Text: "Global requirement."}},
+				},
+			},
+		},
+	}
+	rubricsByMetric, err := buildCaseRubricIndex("case-1", []*metric.EvalMetric{globalMetric}, []*evalset.EvalCaseRubric{
+		{
+			MetricName: "llm_rubric_response",
+			Content:    &evalset.EvalCaseRubricContent{Text: " Case requirement. "},
+		},
+	})
+	assert.NoError(t, err)
+	gotMetric, err := buildCaseEffectiveMetric("case-1", globalMetric, rubricsByMetric["llm_rubric_response"])
+	assert.NoError(t, err)
+	if !assert.NotNil(t, gotMetric) {
+		return
+	}
+	require.NotNil(t, gotMetric.Criterion)
+	require.NotNil(t, gotMetric.Criterion.LLMJudge)
+	require.NotNil(t, gotMetric.Criterion.LLMJudge.JudgeRunnerOptions)
+	assert.Same(t, judgeRunner, gotMetric.Criterion.LLMJudge.JudgeRunnerOptions.Runner)
+	assert.Len(t, globalMetric.Criterion.LLMJudge.Rubrics, 1)
+	if assert.Len(t, gotMetric.Criterion.LLMJudge.Rubrics, 2) {
+		caseRubric := gotMetric.Criterion.LLMJudge.Rubrics[1]
+		assert.Equal(t, "case_rubric_1", caseRubric.ID)
+		assert.Empty(t, caseRubric.Type)
+		assert.Equal(t, "Case requirement.", caseRubric.Content.Text)
+	}
+}
+
+func TestEvaluatePerCaseUsesCaseEffectiveMetric(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-rubric"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	evalCase := makeEvalCase(appName, caseID, "prompt")
+	evalCase.Rubrics = []*evalset.EvalCaseRubric{
+		{
+			MetricName:  "domain_policy_check",
+			ID:          "case:policy-edge",
+			Description: "Case-specific policy edge.",
+			Type:        "CASE_RUBRIC",
+			Content:     &evalset.EvalCaseRubricContent{Text: "The answer must mention manual review."},
+		},
+	}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: "custom_domain_rubric",
+		result: &evaluator.EvaluateResult{
+			OverallScore:  1,
+			OverallStatus: status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{
+				{Score: 1, Status: status.EvalStatusPassed},
+			},
+		},
+	}
+	assert.NoError(t, reg.Register(fakeEval.name, fakeEval))
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-1")
+	configuredMetric := &metric.EvalMetric{
+		MetricName:    "domain_policy_check",
+		EvaluatorName: fakeEval.name,
+		Threshold:     0.5,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Rubrics: []*criterionllm.Rubric{
+					{ID: "global:policy", Content: &criterionllm.RubricContent{Text: "The answer must comply with policy."}},
+				},
+			},
+		},
+	}
+	inferenceResult := makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	result, err := svc.evaluatePerCase(ctx, inferenceResult, &service.EvaluateConfig{
+		EvalMetrics: []*metric.EvalMetric{configuredMetric},
+	}, &service.Options{
+		EvalSetManager: mgr,
+		Registry:       reg,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusPassed, result.FinalEvalStatus)
+	assert.Len(t, configuredMetric.Criterion.LLMJudge.Rubrics, 1)
+	require.NotNil(t, fakeEval.receivedMetric)
+	assert.NotSame(t, configuredMetric, fakeEval.receivedMetric)
+	if assert.Len(t, fakeEval.receivedMetric.Criterion.LLMJudge.Rubrics, 2) {
+		assert.Equal(t, "global:policy", fakeEval.receivedMetric.Criterion.LLMJudge.Rubrics[0].ID)
+		assert.Equal(t, "case:policy-edge", fakeEval.receivedMetric.Criterion.LLMJudge.Rubrics[1].ID)
+	}
+	if assert.Len(t, result.OverallEvalMetricResults, 1) {
+		require.NotNil(t, result.OverallEvalMetricResults[0].Criterion)
+		require.NotNil(t, result.OverallEvalMetricResults[0].Criterion.LLMJudge)
+		assert.Len(t, result.OverallEvalMetricResults[0].Criterion.LLMJudge.Rubrics, 2)
+	}
+	if assert.Len(t, result.EvalMetricResultPerInvocation, 1) && assert.Len(t, result.EvalMetricResultPerInvocation[0].EvalMetricResults, 1) {
+		require.NotNil(t, result.EvalMetricResultPerInvocation[0].EvalMetricResults[0].Criterion)
+		require.NotNil(t, result.EvalMetricResultPerInvocation[0].EvalMetricResults[0].Criterion.LLMJudge)
+		assert.Len(t, result.EvalMetricResultPerInvocation[0].EvalMetricResults[0].Criterion.LLMJudge.Rubrics, 2)
+	}
+}
+
+func TestEvaluatePerCaseBindsCaseRubricByMetricNameWhenEvaluatorNameDiffers(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-custom-metric"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	evalCase := makeEvalCase(appName, caseID, "prompt")
+	evalCase.Rubrics = []*evalset.EvalCaseRubric{
+		{MetricName: "answer_quality", ID: "case:quality", Content: &evalset.EvalCaseRubricContent{Text: "The answer must be concise."}},
+	}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: "llm_rubric_response",
+		result: &evaluator.EvaluateResult{
+			OverallScore:         1,
+			OverallStatus:        status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 1, Status: status.EvalStatusPassed}},
+		},
+	}
+	assert.NoError(t, reg.Register(fakeEval.name, fakeEval))
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-1")
+	inferenceResult := makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	result, err := svc.evaluatePerCase(ctx, inferenceResult, &service.EvaluateConfig{
+		EvalMetrics: []*metric.EvalMetric{
+			{
+				MetricName:    "answer_quality",
+				EvaluatorName: "llm_rubric_response",
+				Criterion:     &criterion.Criterion{LLMJudge: &criterionllm.LLMCriterion{}},
+			},
+		},
+	}, &service.Options{EvalSetManager: mgr, Registry: reg})
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusPassed, result.FinalEvalStatus)
+	require.NotNil(t, fakeEval.receivedMetric)
+	if assert.Len(t, fakeEval.receivedMetric.Criterion.LLMJudge.Rubrics, 1) {
+		assert.Equal(t, "case:quality", fakeEval.receivedMetric.Criterion.LLMJudge.Rubrics[0].ID)
+	}
+}
+
+func TestEvaluatePerCaseTemplateEvaluatorKeepsCaseRubricInEffectiveCriterion(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-template"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	evalCase := makeEvalCase(appName, caseID, "prompt")
+	evalCase.Rubrics = []*evalset.EvalCaseRubric{
+		{MetricName: "llm_rubric_response", ID: "case:template", Content: &evalset.EvalCaseRubricContent{Text: "The answer must mention manual review."}},
+	}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: llmtemplateevaluator.EvaluatorName,
+		result: &evaluator.EvaluateResult{
+			OverallScore:         1,
+			OverallStatus:        status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 1, Status: status.EvalStatusPassed}},
+		},
+	}
+	assert.NoError(t, reg.Register(fakeEval.name, fakeEval))
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-1")
+	inferenceResult := makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	result, err := svc.evaluatePerCase(ctx, inferenceResult, &service.EvaluateConfig{
+		EvalMetrics: []*metric.EvalMetric{
+			{
+				MetricName:    "llm_rubric_response",
+				EvaluatorName: llmtemplateevaluator.EvaluatorName,
+				Criterion:     &criterion.Criterion{LLMJudge: &criterionllm.LLMCriterion{}},
+			},
+		},
+	}, &service.Options{EvalSetManager: mgr, Registry: reg})
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusPassed, result.FinalEvalStatus)
+	if assert.Len(t, result.OverallEvalMetricResults, 1) {
+		require.NotNil(t, result.OverallEvalMetricResults[0].Criterion)
+		require.NotNil(t, result.OverallEvalMetricResults[0].Criterion.LLMJudge)
+		if assert.Len(t, result.OverallEvalMetricResults[0].Criterion.LLMJudge.Rubrics, 1) {
+			assert.Equal(t, "case:template", result.OverallEvalMetricResults[0].Criterion.LLMJudge.Rubrics[0].ID)
+		}
+	}
+}
+
+func TestBuildCaseRubricIndexValidation(t *testing.T) {
+	baseMetric := func() *metric.EvalMetric {
+		return &metric.EvalMetric{
+			MetricName: "llm_rubric_response",
+			Criterion: &criterion.Criterion{
+				LLMJudge: &criterionllm.LLMCriterion{
+					Rubrics: []*criterionllm.Rubric{
+						{ID: "global", Content: &criterionllm.RubricContent{Text: "Global requirement."}},
+					},
+				},
+			},
+		}
+	}
+	caseRubric := func(metricName, id, text string) *evalset.EvalCaseRubric {
+		return &evalset.EvalCaseRubric{
+			MetricName: metricName,
+			ID:         id,
+			Content:    &evalset.EvalCaseRubricContent{Text: text},
+		}
+	}
+	tests := []struct {
+		name    string
+		metrics []*metric.EvalMetric
+		rubrics []*evalset.EvalCaseRubric
+		wantErr string
+	}{
+		{
+			name:    "nil rubric",
+			metrics: []*metric.EvalMetric{baseMetric()},
+			rubrics: []*evalset.EvalCaseRubric{nil},
+			wantErr: "rubric is nil",
+		},
+		{
+			name:    "empty metric name",
+			metrics: []*metric.EvalMetric{baseMetric()},
+			rubrics: []*evalset.EvalCaseRubric{caseRubric(" ", "case", "Case requirement.")},
+			wantErr: "metricName is empty",
+		},
+		{
+			name:    "missing target metric",
+			metrics: []*metric.EvalMetric{baseMetric()},
+			rubrics: []*evalset.EvalCaseRubric{caseRubric("missing", "case", "Case requirement.")},
+			wantErr: "metric missing not found",
+		},
+		{
+			name:    "no usable metrics",
+			metrics: []*metric.EvalMetric{nil, {}},
+			rubrics: []*evalset.EvalCaseRubric{caseRubric("llm_rubric_response", "case", "Case requirement.")},
+			wantErr: "metric llm_rubric_response not found",
+		},
+		{
+			name:    "empty rubric text",
+			metrics: []*metric.EvalMetric{baseMetric()},
+			rubrics: []*evalset.EvalCaseRubric{caseRubric("llm_rubric_response", "case", " ")},
+			wantErr: "content.text is empty",
+		},
+		{
+			name:    "nil rubric content",
+			metrics: []*metric.EvalMetric{baseMetric()},
+			rubrics: []*evalset.EvalCaseRubric{{MetricName: "llm_rubric_response"}},
+			wantErr: "content is nil",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := buildCaseRubricIndex("case-1", tc.metrics, tc.rubrics)
+			assert.ErrorContains(t, err, tc.wantErr)
+			assert.Nil(t, got)
+		})
+	}
+}
+
+func TestBuildCaseRubricIndexIgnoresUnrelatedMetricShape(t *testing.T) {
+	got, err := buildCaseRubricIndex("case-1", []*metric.EvalMetric{
+		nil,
+		{},
+		{MetricName: "duplicate"},
+		{MetricName: "duplicate"},
+	}, []*evalset.EvalCaseRubric{
+		{
+			MetricName: "duplicate",
+			ID:         "case",
+			Content:    &evalset.EvalCaseRubricContent{Text: "Case requirement."},
+		},
+	})
+	assert.NoError(t, err)
+	if assert.Len(t, got, 1) {
+		assert.Len(t, got["duplicate"], 1)
+	}
+}
+
+func TestBuildCaseEffectiveMetricValidation(t *testing.T) {
+	originalMetric := &metric.EvalMetric{MetricName: "plain_metric"}
+	got, err := buildCaseEffectiveMetric("case-1", originalMetric, nil)
+	assert.NoError(t, err)
+	assert.Same(t, originalMetric, got)
+	caseRubric := &criterionllm.Rubric{
+		ID:      "global",
+		Content: &criterionllm.RubricContent{Text: "Case requirement."},
+	}
+	_, err = buildCaseEffectiveMetric("case-1", &metric.EvalMetric{MetricName: "llm_rubric_response"}, []*criterionllm.Rubric{caseRubric})
+	assert.ErrorContains(t, err, "llmJudge criterion is required as rubric container")
+	evalMetric := &metric.EvalMetric{
+		MetricName: "llm_rubric_response",
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Rubrics: []*criterionllm.Rubric{
+					{ID: "global", Content: &criterionllm.RubricContent{Text: "Global requirement."}},
+				},
+			},
+		},
+	}
+	got, err = buildCaseEffectiveMetric("case-1", evalMetric, []*criterionllm.Rubric{caseRubric})
+	assert.ErrorContains(t, err, "duplicate rubric id global")
+	assert.Nil(t, got)
+}
+
+func TestEvaluatePerCaseSkipsMissingEvaluatorWithCaseRubric(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-missing-evaluator"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	evalCase := makeEvalCase(appName, caseID, "prompt")
+	evalCase.Rubrics = []*evalset.EvalCaseRubric{
+		{MetricName: "missing_metric", ID: "case:rubric", Content: &evalset.EvalCaseRubricContent{Text: "Case requirement."}},
+	}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	reg := registry.New()
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-1")
+	inferenceResult := makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	result, err := svc.evaluatePerCase(ctx, inferenceResult, &service.EvaluateConfig{
+		EvalMetrics: []*metric.EvalMetric{
+			{MetricName: "missing_metric"},
+		},
+	}, &service.Options{
+		EvalSetManager: mgr,
+		Registry:       reg,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusNotEvaluated, result.FinalEvalStatus)
+	assert.Empty(t, result.OverallEvalMetricResults)
+	if assert.Len(t, result.EvalMetricResultPerInvocation, 1) {
+		assert.Empty(t, result.EvalMetricResultPerInvocation[0].EvalMetricResults)
+	}
+}
+
+func TestLocalEvaluateCaseRubricValidationFailureReturnsCaseResult(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-invalid-rubric"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	evalCase := makeEvalCase(appName, caseID, "prompt")
+	evalCase.Rubrics = []*evalset.EvalCaseRubric{
+		{MetricName: "missing_metric", ID: "case:rubric", Content: &evalset.EvalCaseRubricContent{Text: "Case requirement."}},
+	}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	svc := newLocalService(t, &fakeRunner{}, mgr, registry.New(), "session-1")
+	inferenceResult := makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	result, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{inferenceResult},
+		EvaluateConfig:   &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}},
+	})
+	assert.NoError(t, err)
+	if assert.Len(t, result.EvalCaseResults, 1) {
+		assert.Equal(t, status.EvalStatusFailed, result.EvalCaseResults[0].FinalEvalStatus)
+		assert.Contains(t, result.EvalCaseResults[0].ErrorMessage, "metric missing_metric not found")
+	}
+}
+
+func TestLookupMetricEvaluatorUsesEvaluatorNameWhenPresent(t *testing.T) {
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: "llm_judge_template",
+		result: &evaluator.EvaluateResult{
+			OverallScore:         1,
+			OverallStatus:        status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 1, Status: status.EvalStatusPassed}},
+		},
+	}
+	assert.NoError(t, reg.Register(fakeEval.name, fakeEval))
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: fakeEval.name,
+		Threshold:     0.5,
+	}
+	result, err := lookupMetricEvaluator(reg, evalMetric)
+	assert.NoError(t, err)
+	assert.Equal(t, fakeEval, result)
+}
+
+func TestMaterializeResultCriterionInstantiatesTemplatePrompt(t *testing.T) {
+	ctx := context.Background()
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: llmtemplateevaluator.EvaluatorName,
+		Threshold:     1.0,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}\nAnswer: {{answer}}\nReference: {{reference}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						{
+							TemplateVariable: "question",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldUserContent,
+							},
+						},
+						{
+							TemplateVariable: "answer",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldFinalResponse,
+							},
+						},
+						{
+							TemplateVariable: "reference",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeExpected,
+								Field: criterionllm.TemplateVariableFieldFinalResponse,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	actuals := []*evalset.Invocation{{
+		UserContent:   &model.Message{Role: model.RoleUser, Content: "What is the capital of France?"},
+		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "Paris"},
+	}}
+	expecteds := []*evalset.Invocation{{
+		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "Paris"},
+	}}
+
+	got, err := materializeResultCriterion(ctx, evalMetric, actuals, expecteds)
+	assert.NoError(t, err)
+	if assert.NotNil(t, got) && assert.NotNil(t, got.LLMJudge) && assert.NotNil(t, got.LLMJudge.Template) {
+		assert.Equal(t,
+			"Question: What is the capital of France?\nAnswer: Paris\nReference: Paris",
+			got.LLMJudge.Template.Prompt,
+		)
+	}
+	assert.Equal(t,
+		"Question: {{question}}\nAnswer: {{answer}}\nReference: {{reference}}",
+		evalMetric.Criterion.LLMJudge.Template.Prompt,
+	)
+}
+
+func TestMaterializeOverallCriterionKeepsTemplatePrompt(t *testing.T) {
+	ctx := context.Background()
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: llmtemplateevaluator.EvaluatorName,
+		Threshold:     1.0,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}\nAnswer: {{answer}}\nReference: {{reference}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						{
+							TemplateVariable: "question",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldUserContent,
+							},
+						},
+						{
+							TemplateVariable: "answer",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldFinalResponse,
+							},
+						},
+						{
+							TemplateVariable: "reference",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeExpected,
+								Field: criterionllm.TemplateVariableFieldFinalResponse,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	actuals := []*evalset.Invocation{{
+		UserContent:   &model.Message{Role: model.RoleUser, Content: "What is the capital of France?"},
+		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "Paris"},
+	}}
+	expecteds := []*evalset.Invocation{{
+		FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "Paris"},
+	}}
+
+	got, err := materializeOverallCriterion(ctx, evalMetric, actuals, expecteds)
+	assert.NoError(t, err)
+	if assert.NotNil(t, got) && assert.NotNil(t, got.LLMJudge) && assert.NotNil(t, got.LLMJudge.Template) {
+		assert.Equal(t,
+			"Question: {{question}}\nAnswer: {{answer}}\nReference: {{reference}}",
+			got.LLMJudge.Template.Prompt,
+		)
+	}
+}
+
+func TestMaterializeResultCriterionHandlesErrorsAndNonTemplateEvaluator(t *testing.T) {
+	ctx := context.Background()
+	got, err := materializeResultCriterion(ctx, nil, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "clone eval metric")
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: "llm_rubric_critic",
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}",
+					ResponseScorerName: "single_score",
+				},
+			},
+		},
+	}
+	got, err = materializeResultCriterion(ctx, evalMetric, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.LLMJudge)
+	require.NotNil(t, got.LLMJudge.Template)
+	assert.Equal(t, "Question: {{question}}", got.LLMJudge.Template.Prompt)
+}
+
+func TestMaterializeResultCriterionRejectsTemplateConstructionError(t *testing.T) {
+	ctx := context.Background()
+	evalMetric := &metric.EvalMetric{
+		MetricName:    "answer_quality_against_reference",
+		EvaluatorName: llmtemplateevaluator.EvaluatorName,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					Prompt:             "Question: {{question}}",
+					ResponseScorerName: "single_score",
+					VariableBindings: []*criterionllm.TemplateVariableBinding{
+						{
+							TemplateVariable: "question",
+							Source: &criterionllm.TemplateVariableSource{
+								Scope: criterionllm.TemplateVariableScopeActual,
+								Field: criterionllm.TemplateVariableFieldUserContent,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	got, err := materializeResultCriterion(ctx, evalMetric, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "construct template messages")
+}
+
+func TestMaterializeOverallCriterionCloneError(t *testing.T) {
+	got, err := materializeOverallCriterion(context.Background(), nil, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "clone eval metric")
+}
+
+func TestMaterializedPrompt(t *testing.T) {
+	assert.Empty(t, materializedPrompt(nil))
+	assert.Equal(t, "single", materializedPrompt([]model.Message{{
+		Role:    model.RoleUser,
+		Content: "single",
+	}}))
+	assert.Equal(t,
+		"[user]\nquestion\n\n[assistant]\nanswer",
+		materializedPrompt([]model.Message{
+			{Role: model.RoleUser, Content: "question"},
+			{Role: model.RoleAssistant, Content: "answer"},
+		}),
+	)
+}
+
+func TestResolveEvaluatorName(t *testing.T) {
+	assert.Empty(t, resolveEvaluatorName(nil))
+	assert.Equal(t, "metric_only", resolveEvaluatorName(&metric.EvalMetric{
+		MetricName: "metric_only",
+	}))
+	assert.Equal(t, "llm_judge_template", resolveEvaluatorName(&metric.EvalMetric{
+		MetricName:    "metric_only",
+		EvaluatorName: "llm_judge_template",
+	}))
 }

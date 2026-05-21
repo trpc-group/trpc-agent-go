@@ -31,15 +31,16 @@ const (
 
 // Server exposes a control-plane HTTP API for a single PromptIter target app.
 type Server struct {
-	appName       string
-	basePath      string
-	structurePath string
-	runsPath      string
-	asyncRunsPath string
-	timeout       time.Duration
-	engine        engine.Engine
-	manager       manager.Manager
-	handler       http.Handler
+	appName                string
+	basePath               string
+	structurePath          string
+	runsPath               string
+	asyncRunsPath          string
+	timeout                time.Duration
+	engine                 engine.Engine
+	manager                manager.Manager
+	responseResultSlimming engine.RunResultSlimming
+	handler                http.Handler
 }
 
 // New creates a new PromptIter HTTP server.
@@ -69,14 +70,15 @@ func New(opts ...Option) (*Server, error) {
 		return nil, fmt.Errorf("promptiter server: join async runs path: %w", err)
 	}
 	server := &Server{
-		appName:       options.appName,
-		basePath:      appBasePath,
-		structurePath: structurePath,
-		runsPath:      runsPath,
-		asyncRunsPath: asyncRunsPath,
-		timeout:       options.timeout,
-		engine:        options.engine,
-		manager:       options.manager,
+		appName:                options.appName,
+		basePath:               appBasePath,
+		structurePath:          structurePath,
+		runsPath:               runsPath,
+		asyncRunsPath:          asyncRunsPath,
+		timeout:                options.timeout,
+		engine:                 options.engine,
+		manager:                options.manager,
+		responseResultSlimming: options.responseResultSlimming,
 	}
 	server.setupHandler()
 	return server, nil

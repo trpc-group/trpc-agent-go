@@ -78,7 +78,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/team"
 )
 
-modelInstance := openai.New("deepseek-chat")
+modelInstance := openai.New("deepseek-v4-flash")
 
 coder := llmagent.New(
     "coder",
@@ -151,7 +151,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/team"
 )
 
-modelInstance := openai.New("deepseek-chat")
+modelInstance := openai.New("deepseek-v4-flash")
 
 backendDev := llmagent.New(
     "backend_dev",
@@ -367,6 +367,59 @@ Session State 实现，因此需要复用同一个 session。
 - `WithCrossRequestTransfer(true)` 是 Swarm 专属的 owner 语义。只要没有新的
   transfer，后续用户消息都会继续落到当前 active member。
 - `await_user_reply` 是一次性路由。它只消费下一条用户消息，消费后会自动清掉。
+
+### 独立成员历史（可选）
+
+默认情况下，Swarm 成员事件会持久化到 root session。如果成员需要私有历史，可以开启独立成员 session：
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmIndependentAgents(),
+)
+```
+
+开启后，入口成员继续使用 root session；其他成员使用由 root session、team name 和成员名派生出的稳定成员 session。成员事件仍然会输出给调用方，但独立成员的 transcript 会持久化到对应成员 session，而不是 root session。Runner completion event 仍然只是 root run 的结束标记；成员最终回复请消费被转发出来的成员事件。
+
+这个 option 只控制历史隔离。如果希望最后一次 transfer 的目标成员继续接收后续用户输入，需要同时配置 `team.WithCrossRequestTransfer(true)`。两者同时开启时，下一条用户输入会在该成员运行前持久化到 active member session。
+
+### 改写 handoff 输入（可选）
+
+默认情况下，Swarm 成员通过 `transfer_to_agent` 交接时，目标成员收到的用户输入就是工具调用中的 `message` 字段。如果业务希望用原始用户输入、模板或其他上下文重新构造目标成员的首轮输入，可以配置 `team.WithSwarmHandoffInputBuilder`：
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmHandoffInputBuilder(func(
+        ctx context.Context,
+        args team.SwarmHandoffInputArgs,
+    ) (model.Message, error) {
+        if args.ToAgentName == "refund_agent" {
+            return model.NewUserMessage(
+                "退款处理请求：\n" + args.RootInput.Content,
+            ), nil
+        }
+        return model.NewUserMessage(args.TransferMessage), nil
+    }),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+`SwarmHandoffInputArgs` 提供以下字段：
+
+- `FromAgentName`：发起 handoff 的成员名。
+- `ToAgentName`：接收 handoff 的成员名。
+- `RootInput`：本轮用户最初输入。
+- `ParentInput`：发起 handoff 的当前成员输入。
+- `TransferMessage`：`transfer_to_agent` 工具调用里携带的 message。
+
+该选项只改写目标成员本次 handoff 的当前输入；不会改写发起方成员的上下文，也不会阻止目标成员读取已有会话历史。
 
 ### 动态成员（运行时增删）
 

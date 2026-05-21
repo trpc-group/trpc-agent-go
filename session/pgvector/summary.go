@@ -44,6 +44,12 @@ func (s *Service) CreateSessionSummary(
 			"check session key failed: %w", err,
 		)
 	}
+	if !isummary.NewSummaryDispatchPolicy(
+		s.opts.summaryFilterAllowlist,
+		s.opts.shouldCascadeFullSessionSummary(),
+	).AllowsFilterKey(filterKey) {
+		return nil
+	}
 
 	updated, err := isummary.SummarizeSession(
 		ctx, s.opts.summarizer,
@@ -127,8 +133,17 @@ func (s *Service) EnqueueSummaryJob(
 			ctx, sess, filterKey, force,
 		)
 	}
+	// Fallback to synchronous processing with the same detached context that
+	// async workers use.
 	return isummary.CreateSessionSummaryWithCascade(
-		ctx, sess, filterKey, force,
+		isummary.DetachContext(ctx),
+		sess,
+		filterKey,
+		force,
+		isummary.NewSummaryDispatchPolicy(
+			s.opts.summaryFilterAllowlist,
+			s.opts.shouldCascadeFullSessionSummary(),
+		),
 		s.CreateSessionSummary,
 	)
 }

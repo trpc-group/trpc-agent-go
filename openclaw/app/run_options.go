@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 const (
@@ -178,7 +179,7 @@ type runOptions struct {
 	OpenAIBaseURL       string
 	GenerationConfig    *model.GenerationConfig
 	ModelConfig         *yaml.Node
-	KnowledgesConfig    map[string]*yaml.Node
+	KnowledgesConfig    []knowledgeEntry
 	SkillsRoot          string
 	SkillsExtraDir      string
 	SkillsDebug         bool
@@ -199,9 +200,10 @@ type runOptions struct {
 	DebugRecorderDir     string
 	DebugRecorderMode    string
 
-	AllowUsers     string
-	RequireMention bool
-	Mention        string
+	AllowUsers      string
+	RequireMention  bool
+	Mention         string
+	RuntimeProfiles *runtimeprofile.Config
 
 	Channels []pluginSpec
 
@@ -922,17 +924,18 @@ type fileConfig struct {
 
 	DebugRecorder *debugRecorderConfig `yaml:"debug_recorder,omitempty"`
 
-	HTTP          *httpConfig          `yaml:"http,omitempty"`
-	Admin         *adminConfig         `yaml:"admin,omitempty"`
-	Observability *observabilityConfig `yaml:"observability,omitempty"`
-	A2A           *a2aConfig           `yaml:"a2a,omitempty"`
-	Agent         *agentRunConfig      `yaml:"agent,omitempty"`
-	Model         *modelConfig         `yaml:"model,omitempty"`
-	Knowledges    *knowledgesConfig    `yaml:"knowledges,omitempty"`
-	Gateway       *gatewayConfig       `yaml:"gateway,omitempty"`
-	Channels      []filePluginSpec     `yaml:"channels,omitempty"`
-	Skills        *skillsConfig        `yaml:"skills,omitempty"`
-	Tools         *toolsConfig         `yaml:"tools,omitempty"`
+	HTTP            *httpConfig            `yaml:"http,omitempty"`
+	Admin           *adminConfig           `yaml:"admin,omitempty"`
+	Observability   *observabilityConfig   `yaml:"observability,omitempty"`
+	A2A             *a2aConfig             `yaml:"a2a,omitempty"`
+	Agent           *agentRunConfig        `yaml:"agent,omitempty"`
+	Model           *modelConfig           `yaml:"model,omitempty"`
+	Knowledges      *knowledgesConfig      `yaml:"knowledges,omitempty"`
+	Gateway         *gatewayConfig         `yaml:"gateway,omitempty"`
+	RuntimeProfiles *runtimeprofile.Config `yaml:"runtime_profiles,omitempty"`
+	Channels        []filePluginSpec       `yaml:"channels,omitempty"`
+	Skills          *skillsConfig          `yaml:"skills,omitempty"`
+	Tools           *toolsConfig           `yaml:"tools,omitempty"`
 
 	Session *sessionConfig `yaml:"session,omitempty"`
 	Memory  *memoryConfig  `yaml:"memory,omitempty"`
@@ -1111,13 +1114,21 @@ type memoryConfig struct {
 }
 
 type knowledgesConfig struct {
-	Entries []knowledgeEntryConfig `yaml:"entries,omitempty"`
+	Providers []knowledgeProviderConfig `yaml:"providers,omitempty"`
+
+	// Entries is the deprecated field name (pre-v0.0.4). Kept here so
+	// that KnownFields(true) does not reject it with a confusing
+	// "field entries not found" error; instead we return a clear
+	// migration message in fileConfig.apply.
+	Entries []rawYAMLNode `yaml:"entries,omitempty"`
 }
 
-type knowledgeEntryConfig struct {
+type knowledgeProviderConfig struct {
+	Type        string       `yaml:"type,omitempty"`
 	Name        string       `yaml:"name,omitempty"`
-	Embedder    *rawYAMLNode `yaml:"embedder,omitempty"`
-	VectorStore *rawYAMLNode `yaml:"vector_store,omitempty"`
+	Description string       `yaml:"description,omitempty"`
+	MaxResults  *int         `yaml:"max_results,omitempty"`
+	Config      *rawYAMLNode `yaml:"config,omitempty"`
 }
 
 type pluginSpec struct {
@@ -1472,7 +1483,15 @@ func (cfg *fileConfig) apply(
 		}
 	}
 	if cfg.Knowledges != nil {
-		knowledges, err := convertKnowledgeConfigs(cfg.Knowledges.Entries)
+		if len(cfg.Knowledges.Entries) > 0 {
+			return fmt.Errorf(
+				"knowledges.entries is no longer supported; " +
+					"rename it to knowledges.providers and wrap " +
+					"embedder/vector_store under a 'config' key " +
+					"(see README for the new format)",
+			)
+		}
+		knowledges, err := convertKnowledgeConfigs(cfg.Knowledges.Providers)
 		if err != nil {
 			return err
 		}
@@ -1498,6 +1517,12 @@ func (cfg *fileConfig) apply(
 				csvDelimiter,
 			)
 		}
+	}
+	if cfg.RuntimeProfiles != nil {
+		if err := validateRuntimeProfiles(cfg.RuntimeProfiles); err != nil {
+			return err
+		}
+		opts.RuntimeProfiles = cfg.RuntimeProfiles
 	}
 
 	if len(cfg.Channels) > 0 {
@@ -1867,72 +1892,57 @@ func convertSkillConfigs(
 }
 
 func convertKnowledgeConfigs(
-	entries []knowledgeEntryConfig,
-) (map[string]*yaml.Node, error) {
-	if len(entries) == 0 {
+	providers []knowledgeProviderConfig,
+) ([]knowledgeEntry, error) {
+	if len(providers) == 0 {
 		return nil, nil
 	}
 
-	out := make(map[string]*yaml.Node, len(entries))
-	for i := range entries {
-		entry := entries[i]
-		name := strings.TrimSpace(entry.Name)
+	seen := make(map[string]bool, len(providers))
+	out := make([]knowledgeEntry, 0, len(providers))
+
+	for i, p := range providers {
+		name := strings.TrimSpace(p.Name)
 		if name == "" {
-			return nil, fmt.Errorf("knowledges.entries[%d].name is empty", i)
+			return nil, fmt.Errorf(
+				"knowledges.providers[%d].name is empty", i,
+			)
 		}
-		if _, exists := out[name]; exists {
-			return nil, fmt.Errorf("duplicate knowledge name: %s", name)
+		if seen[name] {
+			return nil, fmt.Errorf(
+				"duplicate knowledge name: %s", name,
+			)
+		}
+		seen[name] = true
+
+		typeName := strings.ToLower(strings.TrimSpace(p.Type))
+		if typeName == "" {
+			typeName = "builtin"
 		}
 
-		node := &yaml.Node{
-			Kind: yaml.MappingNode,
-			Tag:  "!!map",
+		var maxResults int
+		if p.MaxResults != nil && *p.MaxResults > 0 {
+			maxResults = *p.MaxResults
 		}
-		if entry.Embedder != nil && entry.Embedder.Node != nil {
-			node.Content = append(
-				node.Content,
-				&yaml.Node{
-					Kind:  yaml.ScalarNode,
-					Tag:   "!!str",
-					Value: "embedder",
-				},
-				cloneYAMLNode(entry.Embedder.Node),
-			)
+
+		var config *yaml.Node
+		if p.Config != nil {
+			config = p.Config.Node
 		}
-		if entry.VectorStore != nil && entry.VectorStore.Node != nil {
-			node.Content = append(
-				node.Content,
-				&yaml.Node{
-					Kind:  yaml.ScalarNode,
-					Tag:   "!!str",
-					Value: "vector_store",
-				},
-				cloneYAMLNode(entry.VectorStore.Node),
-			)
-		}
-		if len(node.Content) == 0 {
-			continue
-		}
-		out[name] = node
+
+		out = append(out, knowledgeEntry{
+			Type:        typeName,
+			Name:        name,
+			Description: strings.TrimSpace(p.Description),
+			MaxResults:  maxResults,
+			Config:      config,
+		})
 	}
+
 	if len(out) == 0 {
 		return nil, nil
 	}
 	return out, nil
-}
-
-func cloneYAMLNode(node *yaml.Node) *yaml.Node {
-	if node == nil {
-		return nil
-	}
-	cloned := *node
-	if len(node.Content) > 0 {
-		cloned.Content = make([]*yaml.Node, 0, len(node.Content))
-		for _, child := range node.Content {
-			cloned.Content = append(cloned.Content, cloneYAMLNode(child))
-		}
-	}
-	return &cloned
 }
 
 func applySessionSummary(

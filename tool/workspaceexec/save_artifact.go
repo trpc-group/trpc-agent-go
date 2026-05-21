@@ -14,18 +14,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
-
-const defaultWorkspaceArtifactMaxBytes = 64 * 1024 * 1024
 
 // SaveArtifactTool persists an existing workspace file as an artifact.
 type SaveArtifactTool struct {
@@ -108,18 +105,18 @@ func (t *SaveArtifactTool) Call(
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, err
 	}
-	rel, err := normalizeArtifactPath(in.Path)
+	rel, err := workspacefacade.NormalizeArtifactPath(in.Path)
 	if err != nil {
 		return nil, err
 	}
-	reason := artifactSaveSkipReason(ctx)
+	reason := workspacefacade.ArtifactSaveSkipReason(ctx)
 	if reason != "" {
 		return nil, fmt.Errorf(
 			"workspace_save_artifact requires artifact service and session info: %s",
 			reason,
 		)
 	}
-	ctxIO := withArtifactContext(ctx)
+	ctxIO := workspacefacade.WithArtifactContext(ctx)
 	eng, err := t.exec.liveEngine()
 	if err != nil {
 		return nil, err
@@ -131,12 +128,12 @@ func (t *SaveArtifactTool) Call(
 	manifest, err := eng.FS().CollectOutputs(ctxIO, ws, codeexecutor.OutputSpec{
 		Globs:         []string{rel},
 		MaxFiles:      1,
-		MaxFileBytes:  defaultWorkspaceArtifactMaxBytes,
-		MaxTotalBytes: defaultWorkspaceArtifactMaxBytes,
+		MaxFileBytes:  workspacefacade.DefaultArtifactMaxBytes,
+		MaxTotalBytes: workspacefacade.DefaultArtifactMaxBytes,
 		Save:          true,
 		Inline:        false,
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
 		return nil, err
 	}
 	if len(manifest.Files) == 0 {
@@ -202,111 +199,12 @@ func (t *SaveArtifactTool) StateDelta(
 	}
 }
 
-const (
-	saveReasonNoInvocation = "invocation is missing from context"
-	saveReasonNoService    = "artifact service is not configured"
-	saveReasonNoSession    = "session is missing from invocation"
-	saveReasonNoSessionIDs = "session app/user/session IDs are missing"
-)
-
 // SupportsArtifactSave reports whether the current invocation can
-// persist artifacts for workspace tools.
+// persist artifacts for workspace tools. It forwards to
+// workspacefacade.ArtifactSaveSkipReasonInv so the predicate stays in
+// sync with workspacefacade.ArtifactSaveSkipReason (used by Call).
 func SupportsArtifactSave(inv *agent.Invocation) bool {
-	if inv == nil || inv.ArtifactService == nil || inv.Session == nil {
-		return false
-	}
-	if inv.Session.AppName == "" || inv.Session.UserID == "" ||
-		inv.Session.ID == "" {
-		return false
-	}
-	return true
-}
-
-func artifactSaveSkipReason(ctx context.Context) string {
-	inv, ok := agent.InvocationFromContext(ctx)
-	if !ok || inv == nil {
-		return saveReasonNoInvocation
-	}
-	if inv.ArtifactService == nil {
-		return saveReasonNoService
-	}
-	if inv.Session == nil {
-		return saveReasonNoSession
-	}
-	if !SupportsArtifactSave(inv) {
-		return saveReasonNoSessionIDs
-	}
-	return ""
-}
-
-func withArtifactContext(ctx context.Context) context.Context {
-	ctxIO := ctx
-	if inv, ok := agent.InvocationFromContext(ctx); ok &&
-		inv != nil && inv.ArtifactService != nil &&
-		inv.Session != nil {
-		ctxIO = codeexecutor.WithArtifactService(ctxIO, inv.ArtifactService)
-		ctxIO = codeexecutor.WithArtifactSession(ctxIO, artifact.SessionInfo{
-			AppName:   inv.Session.AppName,
-			UserID:    inv.Session.UserID,
-			SessionID: inv.Session.ID,
-		})
-	}
-	return ctxIO
-}
-
-func normalizeArtifactPath(raw string) (string, error) {
-	s := strings.TrimSpace(raw)
-	s = strings.ReplaceAll(s, "\\", "/")
-	if s == "" {
-		return "", errors.New("path is required")
-	}
-	if hasGlobMeta(s) {
-		return "", errors.New("path must not contain glob patterns")
-	}
-	if isWorkspaceEnvPath(s) {
-		out := codeexecutor.NormalizeGlobs([]string{s})
-		if len(out) == 0 {
-			return "", errors.New("invalid path")
-		}
-		s = out[0]
-	}
-	if strings.HasPrefix(s, "/") {
-		rel := strings.TrimPrefix(path.Clean(s), "/")
-		if rel == "" || rel == "." {
-			return "", errors.New("path must point to a file inside the workspace")
-		}
-		if !isAllowedPublishArtifactPath(rel) {
-			return "", fmt.Errorf(
-				"path must stay under supported artifact roots such as work/, out/, or runs/: %q",
-				raw,
-			)
-		}
-		return rel, nil
-	}
-	rel := path.Clean(s)
-	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-		return "", errors.New("path must stay within the workspace")
-	}
-	if !isAllowedPublishArtifactPath(rel) {
-		return "", fmt.Errorf(
-			"path must stay under supported artifact roots such as work/, out/, or runs/: %q",
-			raw,
-		)
-	}
-	return rel, nil
-}
-
-func isAllowedPublishArtifactPath(rel string) bool {
-	switch {
-	case rel == codeexecutor.DirWork || strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
-		return true
-	case rel == codeexecutor.DirOut || strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
-		return true
-	case rel == codeexecutor.DirRuns || strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
-		return true
-	default:
-		return false
-	}
+	return workspacefacade.ArtifactSaveSkipReasonInv(inv) == ""
 }
 
 var _ tool.Tool = (*SaveArtifactTool)(nil)

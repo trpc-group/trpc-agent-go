@@ -36,7 +36,7 @@ import (
 )
 
 const (
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 
 	remoteAgentName = "remote_interrupt_graph"
 	parentAgentName = "parent_interrupt_graph"

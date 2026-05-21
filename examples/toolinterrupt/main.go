@@ -31,7 +31,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 var (
@@ -48,14 +47,19 @@ var (
 )
 
 const (
-	defaultModelName = "deepseek-chat"
+	defaultModelName = "deepseek-v4-flash"
 
 	appName   = "tool-interrupt-demo"
 	agentName = "tool-interrupt-agent"
 	userID    = "demo-user"
 
-	externalToolName = "external_search"
-	externalToolDesc = "Search an external system for information."
+	externalToolName  = "external_search"
+	externalToolDesc  = "Search an external system for information."
+	externalQueryArg  = "query"
+	externalQueryDesc = "Search query."
+
+	jsonSchemaTypeObject = "object"
+	jsonSchemaTypeString = "string"
 
 	maxTokens   = 1500
 	temperature = 0.2
@@ -97,7 +101,7 @@ type toolInterruptDemo struct {
 	runner    runner.Runner
 	sessionID string
 
-	execFilter tool.FilterFunc
+	externalTools []tool.Tool
 }
 
 func (d *toolInterruptDemo) run() error {
@@ -121,12 +125,6 @@ func (d *toolInterruptDemo) setup(_ context.Context) error {
 		Stream:      d.streaming,
 	}
 
-	toolDef := function.NewFunctionTool(
-		externalSearchTool,
-		function.WithName(externalToolName),
-		function.WithDescription(externalToolDesc),
-	)
-
 	ag := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
@@ -135,7 +133,6 @@ func (d *toolInterruptDemo) setup(_ context.Context) error {
 		),
 		llmagent.WithInstruction(agentInstruction),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithTools([]tool.Tool{toolDef}),
 	)
 
 	d.runner = runner.NewRunner(
@@ -145,7 +142,7 @@ func (d *toolInterruptDemo) setup(_ context.Context) error {
 	)
 
 	d.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
-	d.execFilter = tool.NewExcludeToolNamesFilter(externalToolName)
+	d.externalTools = []tool.Tool{newExternalSearchDeclaration()}
 
 	fmt.Printf("✅ Demo ready! Session: %s\n\n", d.sessionID)
 	return nil
@@ -229,7 +226,7 @@ func (d *toolInterruptDemo) runOnce(
 		userID,
 		d.sessionID,
 		message,
-		agent.WithToolExecutionFilter(d.execFilter),
+		agent.WithExternalTools(d.externalTools),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("runner.Run failed: %w", err)
@@ -371,6 +368,33 @@ func runExternalSearch(args []byte) (string, error) {
 		return "", fmt.Errorf("marshal tool result: %w", err)
 	}
 	return string(b), nil
+}
+
+type declarationOnlyTool struct {
+	declaration *tool.Declaration
+}
+
+func (t *declarationOnlyTool) Declaration() *tool.Declaration {
+	return t.declaration
+}
+
+func newExternalSearchDeclaration() tool.Tool {
+	return &declarationOnlyTool{
+		declaration: &tool.Declaration{
+			Name:        externalToolName,
+			Description: externalToolDesc,
+			InputSchema: &tool.Schema{
+				Type: jsonSchemaTypeObject,
+				Properties: map[string]*tool.Schema{
+					externalQueryArg: {
+						Type:        jsonSchemaTypeString,
+						Description: externalQueryDesc,
+					},
+				},
+				Required: []string{externalQueryArg},
+			},
+		},
+	}
 }
 
 func intPtr(i int) *int {

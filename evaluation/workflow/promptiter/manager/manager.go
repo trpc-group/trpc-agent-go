@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 
 	"github.com/google/uuid"
@@ -35,11 +36,12 @@ type Manager interface {
 }
 
 type manager struct {
-	engine      engine.Engine
-	store       store.Store
-	mu          sync.Mutex
-	cancelFuncs map[string]context.CancelFunc
-	closed      bool
+	engine               engine.Engine
+	store                store.Store
+	storedResultSlimming engine.RunResultSlimming
+	mu                   sync.Mutex
+	cancelFuncs          map[string]context.CancelFunc
+	closed               bool
 }
 
 // New creates a PromptIter run manager.
@@ -49,9 +51,10 @@ func New(engine engine.Engine, opts ...Option) (Manager, error) {
 		return nil, errors.New("promptiter manager: engine must not be nil")
 	}
 	return &manager{
-		engine:      engine,
-		store:       options.store,
-		cancelFuncs: make(map[string]context.CancelFunc),
+		engine:               engine,
+		store:                options.store,
+		storedResultSlimming: options.storedResultSlimming,
+		cancelFuncs:          make(map[string]context.CancelFunc),
 	}, nil
 }
 
@@ -70,7 +73,7 @@ func (m *manager) Start(ctx context.Context, request *engine.RunRequest) (*engin
 		m.mu.Unlock()
 		return nil, errors.New("promptiter manager is closed")
 	}
-	if err := m.store.Create(ctx, run); err != nil {
+	if err := m.store.Create(ctx, m.slimStoredRun(run)); err != nil {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("create run %q: %w", runID, err)
 	}
@@ -102,7 +105,7 @@ func (m *manager) Cancel(ctx context.Context, runID string) error {
 	if run.Status == engine.RunStatusQueued || run.Status == engine.RunStatusRunning {
 		run.Status = engine.RunStatusCanceled
 		run.ErrorMessage = "run canceled"
-		if err := m.store.Update(ctx, run); err != nil {
+		if err := m.store.Update(ctx, m.slimStoredRun(run)); err != nil {
 			return err
 		}
 	}
@@ -136,7 +139,7 @@ func (m *manager) run(ctx context.Context, runID string, request *engine.RunRequ
 		return
 	}
 	run.Status = engine.RunStatusRunning
-	if err := m.store.Update(context.Background(), run); err != nil {
+	if err := m.store.Update(context.Background(), m.slimStoredRun(run)); err != nil {
 		m.clearCancel(runID)
 		return
 	}
@@ -155,25 +158,32 @@ func (m *manager) run(ctx context.Context, runID string, request *engine.RunRequ
 			observer.run.Status = engine.RunStatusFailed
 			observer.run.ErrorMessage = err.Error()
 		}
-		_ = m.store.Update(context.Background(), observer.run)
+		_ = m.store.Update(context.Background(), m.slimStoredRun(observer.run))
 		m.clearCancel(runID)
 		return
 	}
 	if result == nil {
 		observer.run.Status = engine.RunStatusFailed
 		observer.run.ErrorMessage = "engine returned nil run"
-		_ = m.store.Update(context.Background(), observer.run)
+		_ = m.store.Update(context.Background(), m.slimStoredRun(observer.run))
 		m.clearCancel(runID)
 		return
 	}
 	result.ID = runID
 	result.Status = engine.RunStatusSucceeded
-	if err := m.store.Update(context.Background(), result); err != nil {
+	if err := m.store.Update(context.Background(), m.slimStoredRun(result)); err != nil {
 		observer.run.Status = engine.RunStatusFailed
 		observer.run.ErrorMessage = err.Error()
-		_ = m.store.Update(context.Background(), observer.run)
+		_ = m.store.Update(context.Background(), m.slimStoredRun(observer.run))
 	}
 	m.clearCancel(runID)
+}
+
+func (m *manager) slimStoredRun(run *engine.RunResult) *engine.RunResult {
+	if m == nil {
+		return run
+	}
+	return slimRunResult(run, m.storedResultSlimming)
 }
 
 func (m *manager) clearCancel(runID string) {
@@ -183,17 +193,26 @@ func (m *manager) clearCancel(runID string) {
 }
 
 func validateRunRequest(request *engine.RunRequest) error {
-	switch {
-	case request == nil:
+	if request == nil {
 		return errors.New("run request is nil")
-	case len(request.TrainEvalSetIDs) == 0:
-		return errors.New("train evaluation set ids are empty")
-	case len(request.ValidationEvalSetIDs) == 0:
-		return errors.New("validation evaluation set ids are empty")
+	}
+	if err := validateEvalSetInputs("train", request.Train); err != nil {
+		return err
+	}
+	if err := validateEvalSetInputs("validation", request.Validation); err != nil {
+		return err
+	}
+	switch {
 	case request.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than 0")
 	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
+	case request.BackwardOptions.CaseParallelism < 0:
+		return errors.New("backward case parallelism must be non-negative")
+	case request.AggregationOptions.SurfaceParallelism < 0:
+		return errors.New("aggregation surface parallelism must be non-negative")
+	case request.OptimizerOptions.SurfaceParallelism < 0:
+		return errors.New("optimizer surface parallelism must be non-negative")
 	default:
 		return nil
 	}
@@ -204,8 +223,8 @@ func cloneRunRequest(request *engine.RunRequest) *engine.RunRequest {
 		return nil
 	}
 	cloned := *request
-	cloned.TrainEvalSetIDs = append([]string(nil), request.TrainEvalSetIDs...)
-	cloned.ValidationEvalSetIDs = append([]string(nil), request.ValidationEvalSetIDs...)
+	cloned.Train = cloneEvalSetInputs(request.Train)
+	cloned.Validation = cloneEvalSetInputs(request.Validation)
 	cloned.InitialProfile = iprofile.Clone(request.InitialProfile)
 	cloned.TargetSurfaceIDs = append([]string(nil), request.TargetSurfaceIDs...)
 	if request.StopPolicy.TargetScore != nil {
@@ -213,4 +232,34 @@ func cloneRunRequest(request *engine.RunRequest) *engine.RunRequest {
 		cloned.StopPolicy.TargetScore = &targetScore
 	}
 	return &cloned
+}
+
+func validateEvalSetInputs(role string, inputs []engine.EvalSetInput) error {
+	prefix := role + " "
+	if len(inputs) == 0 {
+		return fmt.Errorf("%sevaluation sets are empty", prefix)
+	}
+	for _, input := range inputs {
+		if input.EvalSetID == "" {
+			return fmt.Errorf("%sevaluation set id is empty", prefix)
+		}
+		if slices.Contains(input.EvalCaseIDs, "") {
+			return fmt.Errorf("%seval case id for eval set %q is empty", prefix, input.EvalSetID)
+		}
+	}
+	return nil
+}
+
+func cloneEvalSetInputs(inputs []engine.EvalSetInput) []engine.EvalSetInput {
+	if inputs == nil {
+		return nil
+	}
+	cloned := make([]engine.EvalSetInput, 0, len(inputs))
+	for _, input := range inputs {
+		cloned = append(cloned, engine.EvalSetInput{
+			EvalSetID:   input.EvalSetID,
+			EvalCaseIDs: append([]string(nil), input.EvalCaseIDs...),
+		})
+	}
+	return cloned
 }

@@ -12,6 +12,8 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -473,6 +475,25 @@ func TestSkillPathHelpers(t *testing.T) {
 		require.Empty(t, rel)
 	})
 
+	t.Run("relative path resolves symlink root vs real path", func(t *testing.T) {
+		dir := t.TempDir()
+		root := filepath.Join(dir, "skills-root")
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "my-skill"), 0o700))
+
+		link := filepath.Join(dir, "skills-link")
+		require.NoError(t, os.Symlink(root, link))
+
+		skillDir := filepath.Join(root, "my-skill")
+
+		rel, ok := relativeSkillPath(link, skillDir)
+		require.True(t, ok)
+		require.Equal(t, "my-skill", rel)
+
+		rel, ok = relativeSkillPath(root, filepath.Join(link, "my-skill"))
+		require.True(t, ok)
+		require.Equal(t, "my-skill", rel)
+	})
+
 	t.Run("overview suffix and path hints honor configured fields", func(t *testing.T) {
 		ctx := context.Background()
 		dirOnly := &SkillsRequestProcessor{directoryHints: true}
@@ -603,14 +624,16 @@ func TestSkillsRequestProcessor_KnowledgeOnlyGuidance(t *testing.T) {
 	require.NotEmpty(t, req.Messages)
 	sys := req.Messages[0].Content
 	require.Contains(t, sys, skillsOverviewHeader)
-	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill discovery and knowledge loading only")
-	require.Contains(t, sys, "Built-in skill execution tools are unavailable")
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, "skill discovery and knowledge loading only")
+	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.NotContains(t, sys, "skill_run runs with CWD")
 	require.NotContains(t, sys, ".venv/")
 	require.Contains(t, sys, "Use skills for progressive disclosure only")
 	require.Contains(t, sys, "inspect only the documentation needed")
+	require.Contains(t, sys, "workspace_exec is registered")
+	require.Contains(t, sys, "If no execution tool is registered")
 }
 
 func TestSkillsRequestProcessor_KnowledgeOnlyGuidance_Disabled(t *testing.T) {
@@ -652,8 +675,8 @@ func TestSkillsRequestProcessor_LoadOnlyGuidance(t *testing.T) {
 	require.NotEmpty(t, req.Messages)
 	sys := req.Messages[0].Content
 	require.Contains(t, sys, skillsOverviewHeader)
-	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill discovery and knowledge loading only")
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, "skill discovery and knowledge loading only")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, "skill_load.docs or include_all_docs")
 	require.NotContains(t, sys, "skill_list_docs")

@@ -39,6 +39,12 @@ func (s *Service) CreateSessionSummary(
 	if err := key.CheckSessionKey(); err != nil {
 		return fmt.Errorf("check session key failed: %w", err)
 	}
+	if !isummary.NewSummaryDispatchPolicy(
+		s.opts.summaryFilterAllowlist,
+		s.opts.shouldCascadeFullSessionSummary(),
+	).AllowsFilterKey(filterKey) {
+		return nil
+	}
 
 	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil || !updated {
@@ -100,8 +106,19 @@ func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, 
 		return s.asyncWorker.EnqueueJob(ctx, sess, filterKey, force)
 	}
 
-	// Fallback to synchronous processing.
-	return isummary.CreateSessionSummaryWithCascade(ctx, sess, filterKey, force, s.CreateSessionSummary)
+	// Fallback to synchronous processing with the same detached context that
+	// async workers use.
+	return isummary.CreateSessionSummaryWithCascade(
+		isummary.DetachContext(ctx),
+		sess,
+		filterKey,
+		force,
+		isummary.NewSummaryDispatchPolicy(
+			s.opts.summaryFilterAllowlist,
+			s.opts.shouldCascadeFullSessionSummary(),
+		),
+		s.CreateSessionSummary,
+	)
 }
 
 // GetSessionSummaryText gets the summary text for a session.

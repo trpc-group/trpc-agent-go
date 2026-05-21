@@ -605,6 +605,100 @@ The main `tool/claudecode` options focus on working directory, read-only mode, a
 
 `WithBaseDir` defines the working scope for `Read`, `Write`, `Edit`, `Glob`, and `Grep`, and also determines the default working directory for `Bash`. When read-only mode is enabled, the toolset keeps only read, search, command, and web capabilities. When read-only mode is disabled, it also exposes `Write`, `Edit`, and `NotebookEdit`.
 
+### Todo Tool
+
+The Todo tool gives an Agent a structured, persistent checklist for multi-step work. The model calls `todo_write` to publish or update its current plan; the list is persisted on the session, surfaced to the frontend in the tool result, and (by default) followed by a short nudge that reminds the model to keep marking items as it goes.
+
+Reach for it when:
+
+- the task spans several non-trivial steps and the model tends to drop one;
+- the user (or a downstream UI) needs visible progress while the agent works;
+- the same conversation may pause for input and later pick the plan back up.
+
+#### Basic Usage
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/todo"
+)
+
+todoTool := todo.New()
+
+agent := llmagent.New("todo-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction(todo.DefaultToolPrompt),
+    llmagent.WithTools([]tool.Tool{todoTool}),
+)
+```
+
+`todo.DefaultToolPrompt` is a ready-made system-instruction snippet that teaches the model when to call `todo_write` and how to phrase items. You can replace it with your own copy; the runtime checks below stay the same.
+
+#### Tool Result
+
+`todo_write` returns a structured result instead of free-form text, so any caller — terminal, AG-UI, a custom HTTP frontend — can render the same data without parsing prose:
+
+```go
+type Output struct {
+    Message  string `json:"message"`             // default nudge + hook output
+    Todos    []Item `json:"todos"`               // current list after this write
+    OldTodos []Item `json:"oldTodos,omitempty"`  // list before this write
+}
+```
+
+`Todos` and `OldTodos` ride directly on the tool-result event, so an AG-UI client (or any frontend that consumes `tool_call_result`) can decode them and render both the new state and the diff without going back to the session store. The terminal demo in `examples/todo/` inlines a small ASCII formatter; rich frontends are free to render the same structured data in whatever style fits.
+
+#### Cross-turn Persistence and Branch Isolation
+
+Each write is published as a session state delta, so the list survives across `Runner.Run` calls and across processes when the session service is durable.
+
+The list is keyed by `Invocation.Branch`, which defaults to the agent's name when no explicit branch has been set (so a sub-agent or agent-tool reads and writes its own list and never overwrites the parent's plan). For the basic wiring above (`llmagent.New("todo-assistant", ...)`) the canonical read is therefore:
+
+```go
+items, err := todo.GetTodos(sess, "todo-assistant") // the agent name
+// items == nil + err == nil → no list yet
+// len(items) == 0           → list explicitly cleared
+```
+
+If you have configured a custom branch (for example via `WithInvocationBranch`, or by running this Agent as a sub-agent of a parent), pass that branch value instead. An empty `branch` only reads the top-level slot when `Invocation.Branch` was explicitly set to `""`.
+
+#### Input Validation
+
+Every call is validated against the rules below; if any rule fails the call is rejected and the session state is not modified:
+
+- The `todos` field is **required** and must be an array. A missing field or a literal `null` is rejected — it is _not_ silently treated as "clear all". To clear the list, send `{"todos": []}`.
+- Every item must carry a non-empty `content`, a non-empty `activeForm`, and a valid `status` (`pending` / `in_progress` / `completed`).
+- **At most one** item may be `in_progress` at a time.
+- `content` strings must be unique across the list (exact match — no trim / case-fold / unicode normalisation).
+
+Stylistic guidance — for example "keep exactly one item `in_progress` while actively working", item phrasing, or when `todo_write` is worth a call — lives in `todo.DefaultToolPrompt` rather than in these checks, so you can adjust the prompt for your domain or model family without changing the tool.
+
+#### Customization
+
+```go
+todoTool := todo.New(
+    // Persist the list under a different state-key namespace. The
+    // default already isolates by branch, so most users do not need
+    // this.
+    todo.WithStateKeyPrefix("temp:plan"),
+    // By default the list is cleared once every item is completed,
+    // so the next planning cycle starts from scratch. Set false to
+    // keep the completed items visible.
+    todo.WithClearOnAllDone(false),
+    // Replace the default "after each write" nudge string.
+    todo.WithNudgeMessage("Keep going; mark items as you finish them."),
+    // Append extra guidance derived from the diff between the
+    // previous list and the one just submitted (custom prompts,
+    // telemetry, metrics, ...). Hooks are expected to be read-only.
+    todo.WithNudgeHook(func(ctx context.Context, oldTodos, submitted []todo.Item) string {
+        return ""
+    }),
+)
+```
+
+A complete runnable demo, including the multi-turn pause/resume scenario and an ASCII renderer, lives in [`examples/todo/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todo).
+
 ## MCP Tools
 
 MCP (Model Context Protocol) is an open protocol that standardizes how applications provide context to LLMs. MCP tools are based on JSON-RPC 2.0 and provide standardized integration with external services for Agents.
@@ -723,6 +817,47 @@ mcpToolSet := mcp.NewMCPToolSet(
     },
 )
 ```
+
+#### Per-Request HTTP Headers
+
+For SSE and Streamable HTTP transports, `mcp.WithHTTPBeforeRequest` from the
+upstream MCP client can inject headers for each outgoing MCP request from the
+current call context. This is useful when one long-lived MCP ToolSet serves
+multiple logged-in users and each tool call needs a user-specific token or
+signature. Pass the hook through `WithMCPOptions`:
+
+```go
+import (
+    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+mcpToolSet := toolmcp.NewMCPToolSet(
+    toolmcp.ConnectionConfig{
+        Transport: "streamable_http",
+        ServerURL: "http://localhost:3000/mcp",
+    },
+    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+        func(ctx context.Context, req *http.Request) error {
+            token, ok := tokenFromContext(ctx)
+            if !ok {
+                return nil
+            }
+            req.Header.Set("Authorization", "Bearer "+token)
+            return nil
+        },
+    )),
+)
+```
+
+Static headers configured through `ConnectionConfig.Headers` are applied
+first; the before-request hook runs on every HTTP request and can override
+those values for the same header name.
+
+If you mount that ToolSet through `llmagent.WithToolSets(...)` and need
+`initialize` / `tools/list` to also observe request-scoped headers, pair it
+with `llmagent.WithRefreshToolSetsOnRun(true)` or pre-load tools with
+`toolSet.Tools(ctx)` and pass them via `llmagent.WithTools(...)`.
 
 ### Session Reconnection Support
 
@@ -1078,12 +1213,53 @@ The key design point is:
 - `mcpbroker` does not manage a full OAuth session state machine
 
 When `WithAllowAdHocHTTP(true)` is enabled, URL selectors may come from
-model-visible context. In production, validate `req.IsAdHoc` and `req.BaseURL`
-inside your `HTTPHeaderInjector` before returning sensitive headers.
+model-visible context. Split the responsibilities:
+
+- `HTTPHeaderInjector` only decides **whether and to whom** sensitive headers
+  should be injected. Use `req.IsAdHoc` and `req.BaseURL` to filter at a coarse
+  level (e.g. return `nil` for unknown base URLs so tokens are not leaked to
+  untrusted targets).
+- URL allowlists / domain checks and other **network egress policy** belong in
+  `tmcp.WithHTTPBeforeRequest` returned from `WithClientOptionsProvider`. See
+  the next section.
 
 See:
 
 - `examples/mcpbroker/authhooks`
+
+#### Client options (`WithClientOptionsProvider`)
+
+Beyond header injection and error interception, `WithClientOptionsProvider` runs **after** target resolution and `WithHTTPHeaderInjector`, but **before** the underlying `trpc-mcp-go` client is created. Business code returns `tmcp.ClientOption` / `tmcp.StdioClientOption` values.
+
+- **Order**: default HTTP headers (including injected headers) are applied first; provider HTTP options are appended next, so hooks like `WithHTTPBeforeRequest` can enforce URL policy, audit, or override headers.
+- **`ClientOptionsRequest`**: includes `Selector`, `ServerName`, `Origin` (`mcpbroker.OriginCode` / `mcpbroker.OriginAdhoc`), `TargetType`, `Phase` (e.g. `mcpbroker.PhaseListTools`), `ToolName` (for `mcp_call`), and a defensive copy of `Config` for this call.
+- **Return values**: `(nil, nil)` means “no extra options”; a non-nil `error` aborts before connect (good for URL deny contracts).
+- **stdio**: for named stdio targets, populate `ClientOptions.Stdio` (e.g. `WithStdioCapabilities`).
+
+There is **no built-in** URL blocklist (to avoid accidental breakage); use `tmcp.WithHTTPBeforeRequest` (or similar) inside the provider when you need egress control.
+
+Example (illustrative):
+
+```go
+mcpbroker.New(
+    mcpbroker.WithAllowAdHocHTTP(true),
+    mcpbroker.WithClientOptionsProvider(func(ctx context.Context, req *mcpbroker.ClientOptionsRequest) (*mcpbroker.ClientOptions, error) {
+        if req.Origin == mcpbroker.OriginAdhoc {
+            return &mcpbroker.ClientOptions{
+                HTTP: []tmcp.ClientOption{
+                    tmcp.WithHTTPBeforeRequest(func(ctx context.Context, httpReq *http.Request) error {
+                        if !hostAllowed(httpReq.URL) {
+                            return fmt.Errorf("MCP endpoint not allowed: %s", httpReq.URL.Host)
+                        }
+                        return nil
+                    }),
+                },
+            }, nil
+        }
+        return nil, nil
+    }),
+)
+```
 
 ## Agent Tool (AgentTool)
 
@@ -1121,6 +1297,8 @@ mathTool := agenttool.NewTool(
     agenttool.WithStreamInner(true),
     // hide child assistant prose while still forwarding inner tool progress.
     agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
+    // return only the child Agent's final assistant message as the tool result.
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
 )
 
 // 3) Use in parent Agent
@@ -1160,6 +1338,57 @@ if ev.Author != parentName && ev.Response != nil &&
 }
 ```
 
+### Tool Result Response Modes
+
+AgentTool always executes the child Agent as an event stream. The response mode
+only controls the value returned to the parent Agent as the tool result. It does
+not change child session storage, event filter keys, or inner streaming.
+
+By default, AgentTool preserves its legacy behavior: every non-empty assistant
+message emitted by the child Agent is appended into one tool-result string.
+This is useful for compatibility, but it can be surprising for long-running
+child Agents that emit progress, drafts, or intermediate assistant messages.
+Those intermediate assistant messages can become part of the parent Agent's
+`tool.response`.
+
+Use `WithResponseMode(agenttool.ResponseModeFinalOnly)` when the child Agent is
+used as an isolated worker and the parent Agent should only see the child's
+final answer:
+
+```go
+childTool := agenttool.NewTool(
+    childAgent,
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
+)
+```
+
+In final-only mode, AgentTool:
+
+- ignores partial assistant chunks
+- ignores non-assistant messages, empty assistant messages, and tool messages
+- returns the last complete child assistant message
+- returns an empty string when the child Agent completes without a complete
+  assistant message
+- still returns child Agent errors as `agent error: ...`
+
+This is different from `WithSkipSummarization(true)`. `WithSkipSummarization`
+controls whether the parent flow performs an extra outer summarization call
+after the tool response. `WithResponseMode` controls what the tool response
+contains in the first place.
+
+Example with both settings:
+
+```go
+childTool := agenttool.NewTool(
+    childAgent,
+    // Keep the child Agent's chain-of-work out of the tool result.
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
+    // End the parent turn after tool.response instead of asking the parent
+    // model to summarize the result again.
+    agenttool.WithSkipSummarization(true),
+)
+```
+
 ### Options
 
 - WithSkipSummarization(bool):
@@ -1180,6 +1409,13 @@ if ev.Author != parentName && ev.Response != nil &&
     keeping inner tool calls, tool completions, and the aggregated final tool
     response
 
+- WithResponseMode(ResponseMode):
+
+  - `ResponseModeDefault` (default): keep legacy concatenation of child
+    assistant messages into the tool result
+  - `ResponseModeFinalOnly`: return only the last complete child assistant
+    message as the tool result
+
 - WithHistoryScope(HistoryScope):
   - `HistoryScopeIsolated` (default): Keep the child Agent fully isolated; it only sees the current tool arguments (no inherited history).
   - `HistoryScopeParentBranch`: Inherit parent conversation history by using a hierarchical filter key `parent/child-uuid`. This allows the content processor to include parent events via prefix matching while keeping child events isolated under a sub-branch. Typical use cases: “edit/optimize/continue previous output”.
@@ -1192,6 +1428,7 @@ child := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     agenttool.WithStreamInner(true),
     agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
     agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
 )
 ```
@@ -1204,6 +1441,10 @@ child := agenttool.NewTool(
   `WithInnerTextMode(agenttool.InnerTextModeExclude)` when users should see
   inner progress without seeing duplicated child prose
 - Model compatibility: Some providers require a tool message after tool_calls; AgentTool automatically supplies the aggregated content
+- Child context isolation and tool-result shaping are separate concerns.
+  `WithHistoryScope(agenttool.HistoryScopeIsolated)` controls what the child
+  can read. `WithResponseMode(agenttool.ResponseModeFinalOnly)` controls what
+  the parent receives as the tool result.
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
 ## Tool Integration and Usage
@@ -1636,7 +1877,7 @@ tools automatically, then sends the tool results back to the model.
 In some systems, you may want the caller (for example, a client, an upstream
 service, or an external tool runtime such as Model Context Protocol (MCP)) to
 execute tools instead. You can interrupt tool execution with
-`agent.WithToolExecutionFilter(...)`.
+`agent.WithExternalTools(...)` or `agent.WithToolExecutionFilter(...)`.
 
 **Key idea:**
 
@@ -1644,21 +1885,44 @@ execute tools instead. You can interrupt tool execution with
   see and call).
 - `agent.WithToolExecutionFilter(...)` controls **tool execution** (what the
   framework will auto-run after the model requests it).
+- `agent.WithAdditionalTools(...)` appends temporary tools for one run.
+- `agent.WithExternalTools(...)` appends temporary tools and marks them as
+  caller-executed.
 
 #### Basic Flow
 
-1. Run the agent with `WithToolExecutionFilter` so the framework does **not**
-   execute selected tools.
+1. Run the agent with `WithExternalTools` so the model can see caller-owned
+   tools.
 2. Read `tool_calls` from the model response.
 3. Execute the tool externally.
 4. Send a `role=tool` message back so the model can continue.
 
 ```go
-execFilter := tool.NewExcludeToolNamesFilter("external_search")
+type declarationOnlyTool struct {
+    decl *tool.Declaration
+}
+
+func (t *declarationOnlyTool) Declaration() *tool.Declaration {
+    return t.decl
+}
+
+externalSearch := &declarationOnlyTool{
+    decl: &tool.Declaration{
+        Name:        "external_search",
+        Description: "Search a caller-owned system.",
+        InputSchema: &tool.Schema{
+            Type: "object",
+            Properties: map[string]*tool.Schema{
+                "query": {Type: "string"},
+            },
+            Required: []string{"query"},
+        },
+    },
+}
 
 // Step 1: model returns tool_calls, but the tool is NOT executed.
 ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("search ..."),
-    agent.WithToolExecutionFilter(execFilter),
+    agent.WithExternalTools([]tool.Tool{externalSearch}),
 )
 
 // Step 2: extract tool_call_id + arguments from events (omitted).
@@ -1668,9 +1932,19 @@ toolResultJSON := `{"status":"ok","data":"..."}`
 // Step 3/4: send tool result as role=tool, then model continues.
 toolMsg := model.NewToolMessage(toolCallID, "external_search", toolResultJSON)
 ch, err = r.Run(ctx, userID, sessionID, toolMsg,
-    agent.WithToolExecutionFilter(execFilter),
+    agent.WithExternalTools([]tool.Tool{externalSearch}),
 )
 ```
+
+If the tool is already registered on the Agent with `llmagent.WithTools(...)`
+and only its per-run execution policy should change, continue to use
+`agent.WithToolExecutionFilter(...)`. `WithExternalTools` is better for AG-UI,
+browser, mobile, or upstream-service callers that declare tools dynamically on
+each request. The AG-UI runner maps request `input.Tools` to `WithExternalTools`
+by default. If an external tool has the same name as an existing tool, the
+existing tool wins; the external declaration does not override or intercept it.
+This includes tools registered on the Agent and tools added with
+`WithAdditionalTools`.
 
 **Complete example:** `examples/toolinterrupt/`
 
@@ -1844,7 +2118,7 @@ func main() {
     )
 
     // 2. Create model and Agent.
-    llmModel := openai.New("DeepSeek-V3-Online-64K")
+    llmModel := openai.New("deepseek-v4-flash")
     agent := llmagent.New("calculator-assistant",
         llmagent.WithModel(llmModel),
         llmagent.WithInstruction("You are a math assistant."),
@@ -1904,7 +2178,7 @@ cd examples/mcp_tool
 cd streamalbe_server && go run main.go &
 
 # Run the main program.
-go run main.go -model="deepseek-chat"
+go run main.go -model="deepseek-v4-flash"
 ```
 
 ## Summary

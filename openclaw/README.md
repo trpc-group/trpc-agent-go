@@ -264,15 +264,16 @@ model:
 # This only configures the embedder and vector store. Content loading
 # can be triggered separately at runtime.
 knowledges:
-  entries:
+  providers:
     - name: "docs"
-      embedder:
-        type: "openai"
-        model: "text-embedding-3-small"
-        dimensions: 1536
-      vector_store:
-        type: "inmemory"
-        max_results: 5
+      max_results: 5
+      config:
+        embedder:
+          type: "openai"
+          model: "text-embedding-3-small"
+          dimensions: 1536
+        vector_store:
+          type: "inmemory"
 
 tools:
   # Optional; default is serial execution.
@@ -332,21 +333,22 @@ Notes:
 
   ```yaml
   knowledges:
-    entries:
+    providers:
       - name: "trpc_agent_go"
-        embedder:
-          type: "openai"
-          model: "text-embedding-3-small"
-          base_url: "${OPENAI_BASE_URL}"
-          api_key: "${OPENAI_API_KEY}"
-          dimensions: 1536
-        vector_store:
-          type: "pgvector"
-          url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
-          table: "trpc_agent_go"
-          index_dimension: 1536
-          enable_tsvector: true
-          max_results: 5
+        max_results: 5
+        config:
+          embedder:
+            type: "openai"
+            model: "text-embedding-3-small"
+            base_url: "${OPENAI_BASE_URL}"
+            api_key: "${OPENAI_API_KEY}"
+            dimensions: 1536
+          vector_store:
+            type: "pgvector"
+            url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
+            table: "trpc_agent_go"
+            index_dimension: 1536
+            enable_tsvector: true
   ```
 
   Use identifier-safe table names such as `trpc_agent_go`; do not use raw
@@ -1108,6 +1110,24 @@ borrows a few design ideas from OpenClaw:
 - Optional load-time gating via `metadata.openclaw.requires.*`.
 - `{baseDir}` placeholder substitution for better OpenClaw skill
   compatibility.
+
+### Durable capabilities
+
+Local skills are the default place to teach OpenClaw reusable capabilities.
+When a user wants the agent to remember a workflow, connect to a tool or API,
+reuse an MCP server, follow a team process, or preserve a domain rule for
+future tasks, prefer creating or updating a skill instead of adding
+case-specific runtime logic.
+
+Use memory for lightweight facts, preferences, and simple standing rules.
+Use a skill when the remembered item needs an operational workflow, tools,
+examples, references, or recovery paths.
+
+Use application code and runtime config for stable boundaries such as
+permissions, secret handling, file access, validation, and lifecycle
+management. Use skills for the evolving context: when the capability should
+trigger, how to operate it, which examples matter, and how to recover from
+common failures.
 
 ### Bundled skills
 

@@ -31,7 +31,7 @@ cd examples/runwithmessages
 export OPENAI_API_KEY="your-api-key"
 # Optional: export OPENAI_BASE_URL="https://api.openai.com/v1" (or another endpoint)
 
-go run main.go -model deepseek-chat -streaming=true
+go run main.go -model deepseek-v4-flash -streaming=true
 ```
 
 Chat commands:
@@ -75,7 +75,7 @@ Notes:
 
 - Change the initial system message to guide behavior.
 - Toggle `-streaming=false` to get full responses in one piece.
-- Replace the model via `-model` (e.g., `gpt-4o-mini`, `deepseek-chat`).
+- Replace the model via `-model` (e.g., `gpt-4o-mini`, `deepseek-v4-flash`).
 
 ---
 

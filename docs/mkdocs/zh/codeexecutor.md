@@ -64,8 +64,8 @@ func main() {
 ### `WithCodeExecutor` 与围栏代码自动执行
 
 `llmagent.WithCodeExecutor(...)` 和响应阶段的围栏代码自动执行是
-**两个独立开关**。一开始就把它们彻底区分开，可以避免后面一大堆
-"我只是配了个 executor，怎么就自动跑代码了"之类的困惑。
+**两个独立开关**。先分清二者，能避免「只配了 executor，却自动执行了
+回复里代码块」这类常见困惑。
 
 - `WithCodeExecutor(...)` 提供的是**运行时**（runtime），给那些依赖
   执行器的工具（最典型的就是 `workspace_exec`）执行命令用。它本身
@@ -101,10 +101,10 @@ agent := llmagent.New(
 注入本地 `CodeExecutor` 时（见 Agent Skills 指南），这个隐式 executor
 的用途被严格收敛为 "只是给 `workspace_exec` 供电"：如果你没有显式
 调用过 `WithEnableCodeExecutionResponseProcessor(...)`，框架会自动
-把 `EnableCodeExecutionResponseProcessor` 置为 `false`，避免在你原
-本没开的能力上悄悄加戏。相对地，**显式** `WithCodeExecutor(...)`
-会让这个开关保留框架默认值，不会被 skills 逻辑偷偷改，从而不影响
-你原有的行为。
+把 `EnableCodeExecutionResponseProcessor` 置为 `false`，避免在未经你
+配置时自动打开额外能力。相对地，**显式** `WithCodeExecutor(...)` 时该
+开关保持框架默认，且不会被 skills 的隐式逻辑改写，从而不影响你原有
+行为。
 
 ## 怎么选后端
 
@@ -142,6 +142,27 @@ agent := llmagent.New(
 - 写中间文件：`work/`
 - 写结果文件：`out/`
 
+## 哪些文件会保留
+
+通常有两类情况：
+
+- 仍然命中同一个物理 workspace
+- 后续换成了一个新的 workspace
+
+在同一个物理 workspace 中：
+
+- `work/`、`out/` 里的文件通常还能继续用
+- 之前写出的结果文件可以直接再次读取
+
+如果换成了新的 workspace：
+
+- 用户会话里的文件输入通常可以根据消息历史重新放回 `work/inputs/`
+- 旧的 `out/**` 不会自动恢复
+- 旧的 `work/**` 也不应该假设还能继续存在
+
+如果你需要跨新 workspace 稳定复用某个文件，建议把它保存为 artifact，
+或者让业务层自己管理持久化。
+
 ## 用户上传的文件会出现在哪里
 
 在支持会话文件自动 stage 的执行路径里，框架会在执行前把这些文件物化到：
@@ -178,7 +199,7 @@ msg.AddFileIDWithName("artifact://uploads/report.pdf@1", "report.pdf")
 
 执行前，框架会解析这个引用，并把文件写到 `work/inputs/` 下。
 
-## 示例：先上传 artifact，再交给执行环境
+### 完整示例：先上传，再交给执行环境
 
 下面的示例演示“先上传，再执行时自动 stage”的完整链路：
 
@@ -274,6 +295,17 @@ func main() {
 
 否则执行前解析 `artifact://...` 时，找不到对应 artifact。
 
+## provider 文件 ID 与 artifact 引用的区别
+
+有些模型厂商支持原生 `file_id`。这类 ID 能不能在执行器侧重新读取，取决于
+具体模型实现是否支持下载。
+
+如果你希望文件能稳定地被执行器读取，通常更建议使用：
+
+- `artifact://...`
+
+因为这条链路由框架自己的 artifact service 管理，不依赖模型厂商的文件下载能力。
+
 ## 与工作区工具的配合
 
 暴露 `workspace_exec` 一类工作区工具后，常见使用方式如下：
@@ -285,21 +317,21 @@ func main() {
 目录约定的作用，是让模型和工具在稳定路径上协作，而不需要暴露底层
 staging 过程。
 
-## Workspace Bootstrap：在用户命令前先把 workspace 准备好
+## Workspace init hooks
 
-有些 workspace 在执行用户命令之前就需要固定的前置状态：一份预置的配置文件、
-一个钉死版本的 Python 虚拟环境、一次性的 `pip install` 等。让模型自己在对话里
-反复做这些事既容易出错，也会浪费 prompt token。框架允许你在 agent 构造期声明
-一次，由 `workspace_exec` 在运行前自动收敛到期望状态。
+Init hook 在 `WorkspaceManager.CreateWorkspace` **成功返回之后**、**在把 `Workspace` 交还给调用方之前**执行。通过常见的 `WorkspaceRegistry` 做会话级去重时，这通常对应**每个逻辑 workspace id 各一次**（多数情况下即每个 agent 会话工作区一次）。在 **trusted-local** 等会复用同一条物理目录的模式下，不同会话若仍走一次新的「工作区获取」，init 仍可能再跑；不要理解成「整个磁盘目录一生只跑一遍」。
 
-用 `codeexecutor.WorkspaceBootstrapSpec` 列出要准备的文件和命令，再通过
-`llmagent.WithWorkspaceBootstrap(...)` 挂到 agent 上即可。每个 workspace 在第
-一次调用 `workspace_exec` 时完成收敛，后续调用会直接跳过已经满足的部分。
+适合先用 `InputSpec` 拉固定输入（`artifact://`、`host://` 等），再跑确定性初始化命令（例如
+`pip install`）。使用 `codeexecutor.NewWorkspaceInitExecutor` 包装 `CodeExecutor`；若执行器不实现
+`EngineProvider` 等，构造会**返回 error**，应对返回值做显式处理。
+
+基于制品的输入要求在调用 `CreateWorkspace` 时的 `context` 上带有 artifact service 与（如适用）会话信息，要求与
+`WorkspaceFS.StageInputs` 一致。常规的 llmagent workspace 工具链会从当前 `agent.Invocation` 注入这些信息，
+下面的示例无需手写 context 装配。
 
 ```go
-package main
-
 import (
+    "fmt"
     "time"
 
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -307,132 +339,316 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 )
 
-func newAgent() *llmagent.LLMAgent {
-    bootstrap := codeexecutor.WorkspaceBootstrapSpec{
-        Files: []codeexecutor.WorkspaceFile{
-            {
-                Target:  "work/config.json",
-                Content: []byte(`{"threshold": 0.8}`),
-            },
-            {
-                Target: "work/requirements.txt",
-                Content: []byte(
-                    "numpy==1.26.4\npandas==2.2.2\n",
-                ),
-            },
-        },
-        Commands: []codeexecutor.WorkspaceCommand{
-            {
-                Cmd: "bash",
-                Args: []string{
-                    "-lc",
-                    "python3 -m venv .venv && " +
-                        ".venv/bin/pip install -q -r work/requirements.txt",
+func newAnalystAgent() (*llmagent.LLMAgent, error) {
+    exec, err := codeexecutor.NewWorkspaceInitExecutor(
+        local.New(),
+        codeexecutor.NewWorkspaceInitHook(codeexecutor.WorkspaceInitSpec{
+            Inputs: []codeexecutor.InputSpec{
+                {
+                    From: "artifact://app/requirements.txt@3",
+                    To:   "work/requirements.txt",
+                    Mode: "copy",
                 },
-                MarkerPath: ".venv/bin/pip",
-                // FingerprintInputs 把 requirements.txt 的内容
-                // 纳入命令 fingerprint，pin 的版本号变了时会自动
-                // 重装。如果不设这个字段，首次装完之后 marker 一直
-                // 存在，哪怕后续改了 requirements.txt 也不会重跑。
-                FingerprintInputs: []string{"work/requirements.txt"},
-                Timeout:           2 * time.Minute,
             },
-        },
+            Commands: []codeexecutor.WorkspaceInitCommand{
+                {
+                    Name: "install-deps",
+                    Cmd:  "bash",
+                    Args: []string{
+                        "-lc",
+                        "python3 -m venv .venv && " +
+                            ".venv/bin/pip install -q -r work/requirements.txt",
+                    },
+                    Timeout: 2 * time.Minute,
+                },
+            },
+        }),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("workspace init executor: %w", err)
     }
-
     return llmagent.New(
         "analyst",
-        llmagent.WithCodeExecutor(local.New()),
-        llmagent.WithWorkspaceBootstrap(bootstrap),
-    )
+        llmagent.WithCodeExecutor(exec),
+    ), nil
 }
 ```
 
-### 字段说明
-
-`WorkspaceFile`：
-
-- `Target`：workspace 相对目标路径（必填）。父目录会自动创建。
-- `Content`：要写入的字节内容。
-- `Input`：另一种写法，传 `codeexecutor.InputSpec`，支持 `artifact://`、
-  `host://`、`workspace://`、`skill://` 这几类 URI。`Content` 和 `Input`
-  二选一。
-- `Mode`：文件权限（八进制），默认 `0o644`。
-- `Key`：用于幂等性的稳定标识；不填时从 `Target` 推导。
-- `Optional`：置 true 时，provider 失败只会记 warning，不会阻断 workspace 准备。
-
-`WorkspaceCommand`：
-
-- `Cmd` / `Args` / `Env` / `Cwd`：标准命令参数。`Cwd` 为 workspace 相对路径，
-  默认在 workspace 根目录。
-- `Timeout`：单次调用的最长耗时。
-- `MarkerPath`：workspace 相对文件，**存在即代表命令已经跑过**。这是让命令在
-  被误删后能自动重跑的最简单方式。不设 marker 时，reconciler 只能靠 fingerprint
-  跳过。
-- `ObservedPaths`：当成功状态由多个文件决定时，可以替代 `MarkerPath`。
-- `FingerprintInputs` / `FingerprintSalt`：把外部输入纳入命令的 fingerprint，
-  输入变化时会重跑命令。**命令 fingerprint 不会自动对命令行里引用到的文件
-  做哈希**，所以像 `pip install -r work/requirements.txt` 这种命令必须把
-  `work/requirements.txt` 显式列进这里——否则第一次装完 marker 就一直在，
-  后续改 `requirements.txt` 也不会触发重装。
-- `Key`：稳定标识；不填时从 `Cmd`/`Args` 推导。
-- `Optional`：语义同上。
-
-### 执行顺序与幂等性
-
-- 先 stage 所有文件，再执行所有命令；两组内部都按声明顺序。
-- 每条 requirement 都会计算 fingerprint（文件按内容，命令按命令行 + 可选输入）。
-  后续调用时，reconciler 会同时校验 fingerprint **和** 磁盘上的 sentinel，
-  所以用户在 `workspace_exec` 里 `rm -rf` 掉某个产物后，下一次调用会重新补上，
-  不会出现 "metadata 说准备好了，但文件其实已经没了" 的假阳性。
-- 同一个 workspace 的 reconcile 过程会在进程内串行化，两个并行的
-  `workspace_exec` 调用不会在准备阶段互相踩踏。
-- 未设置 `Optional` 的条目（即默认必需）在失败时，`workspace_exec` 会在用户
-  命令执行前就返回错误；`Optional: true` 的条目只会降级为 warning。
-
-### 关闭开关
-
-如果因为兼容或回归测试原因需要保留旧的"只 stage 会话文件"行为，可以显式传
-`llmagent.WithWorkspacePreparersDisabled(true)`。正常使用下不需要这个开关。
+若后续改了 pin 过的依赖或其他初始化输入，需要换一个**新的逻辑 workspace**（例如新会话 id），或由你自己的流程再跑安装；
+init hook 不会在磁盘文件变化后自动按文件再执行。
 
 ### 与 `skill_load` 的关系
 
-通过 `skill_load` 加载的技能会通过同一条 reconcile 路径被 materialize 到
-`skills/<name>`。你**不需要**为技能往 `WorkspaceBootstrapSpec` 里加任何东西
-——`workspace_exec` 运行时会自动从 session state 里读取当前 session 已加载的
-技能并准备好。`WorkspaceBootstrapSpec` 只负责与会话状态无关的固定前置物料。
+通过 `skill_load` 加载的技能会在 `workspace_exec` 执行时按当前会话
+写入 `skills/<name>`。不必在 init hook 的 `Inputs` 里重复声明技能来源；init hook 负责
+与会话无关、且希望在任意工具运行前就位的那份固定物料与初始化命令。
 
-## 哪些文件会保留
+## 应用代码访问 workspace
 
-通常有两类情况：
+模型通过 `workspace_exec` 操作 workspace；**应用代码**有时也需要从
+agent 跑完后的 workspace 里读出东西——例如 `AfterAgent` 把约定路径
+下的产物回写到自己的 profile store，或者 `AfterTool` 把某次工具产
+生的中间文件镜像出去；某些场景下还会需要在 callback 里直接跑一条
+命令做校验或后处理。
 
-- 仍然命中同一个物理 workspace
-- 后续换成了一个新的 workspace
+`codeexecutor/workspaceio` 提供 facade `Workspace`。在
+`WithCodeExecutor(...)` 配过的前提下，`LLMAgent.Run` 入口就把它注入
+ctx，**任何**带 ctx 的钩子点都能直接拿到——`BeforeAgent` /
+`AfterAgent` / `BeforeTool` / `AfterTool` / `BeforeModel` /
+`AfterModel` / 你自己实现的工具内部均可。
 
-在同一个物理 workspace 中：
+它是 `codeexecutor.WorkspaceFS` + `ProgramRunner` 的薄封装：截断、
+总量、原子性、非零 exit code 这类策略框架不替你做主——读完之后怎么
+校验、超限怎么拒绝、命令失败怎么处理，都在 callback 里按需写。详
+见后文 *调用方负责的策略*。
 
-- `work/`、`out/` 里的文件通常还能继续用
-- 之前写出的结果文件可以直接再次读取
+> **关于 `codeexecutor.Workspace` 和 `workspaceio.Workspace` 同名**
+> ：前者是 v1 起公开的 workspace descriptor（`{ID, Path}`，无方法），
+> 后者是本节的 facade。两者通过 import path 区分，编译器零歧义；
+> 业务代码极少同行引用 descriptor。如确需同时 import：
+>
+> ```go
+> import (
+>     "trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+>     wsio "trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
+> )
+> ```
 
-如果换成了新的 workspace：
+### 在 callback 里读写
 
-- 用户会话里的文件输入通常可以根据消息历史重新放回 `work/inputs/`
-- 旧的 `out/**` 不会自动恢复
-- 旧的 `work/**` 也不应该假设还能继续存在
+`Workspace` 主要的两类用法：
 
-如果你需要跨新 workspace 稳定复用某个文件，建议把它保存为 artifact，
-或者让业务层自己管理持久化。
+- **`AfterAgent`**：本轮跑完，把约定路径下的产物
+  （`skills/*/SKILL.md`、`out/report.pdf` 等）整体回写到自己的 store。
+  失败时 workspace 状态不可信，跳过。
+- **`AfterTool` + `args.ToolName` 特判**：只关心某个工具产生的产物
+  时（`workspace_exec` 跑完后镜像它写出的文件、某个自定义 skill 工
+  具结束后取中间结果），按工具名过滤再读，避免每次工具调用都触发
+  一次 `Collect`。
 
-## provider 文件 ID 与 artifact 引用的区别
+下面示例里 `myStore.Save(...)` 和 `mirror(ctx, files)` 是你自己实现
+的接口——文档不绑死它们的签名，按你的存储形态自己定。
 
-有些模型厂商支持原生 `file_id`。这类 ID 能不能在执行器侧重新读取，取决于
-具体模型实现是否支持下载。
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
 
-如果你希望文件能稳定地被执行器读取，通常更建议使用：
+agentCB := agent.NewCallbacks()
+agentCB.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if args.Error != nil {
+        return nil, nil // 失败时 workspace 状态不可信，跳过镜像
+    }
+    ws, ok := workspaceio.WorkspaceFromContext(ctx)
+    if !ok {
+        return nil, nil
+    }
+    files, err := ws.Collect(ctx, "skills/*/SKILL.md")
+    if err != nil {
+        return nil, err
+    }
+    for _, f := range files {
+        if f.Truncated {
+            return nil, fmt.Errorf("%s 被 backend 截断", f.Path)
+        }
+        if err := myStore.Save(ctx, args.Invocation, f); err != nil {
+            return nil, err
+        }
+    }
+    return nil, nil
+})
 
-- `artifact://...`
+toolCB := tool.NewCallbacks()
+toolCB.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+    // 只在目标工具结束后镜像，避免对每个工具调用都全量扫 workspace。
+    if args.ToolName != "workspace_exec" {
+        return nil, nil
+    }
+    ws, ok := workspaceio.WorkspaceFromContext(ctx)
+    if !ok {
+        return nil, nil
+    }
+    files, err := ws.Collect(ctx, "out/**/*.json")
+    if err != nil {
+        return nil, err
+    }
+    return nil, mirror(ctx, files)
+})
 
-因为这条链路由框架自己的 artifact service 管理，不依赖模型厂商的文件下载能力。
+agent := llmagent.New("demo",
+    llmagent.WithCodeExecutor(local.New()),
+    llmagent.WithAgentCallbacks(agentCB),
+    llmagent.WithToolCallbacks(toolCB),
+)
+```
+
+> 不建议在 `BeforeAgent` 里用 `PutFiles` 把外部 profile / skill 文
+> 件投影进 workspace ——那是「workspace 初始化」职责，应当走
+> `codeexecutor.WorkspaceInitHook`（见前文 *Workspace init hooks*
+> 章节，用 `InputSpec` 配合 `skill://` / `artifact://` / `host://`
+> 等 scheme 在工作区创建时一次完成），而不是借 `Workspace` 在
+> callback 里偷做。`Workspace` 的设计点是「读出 agent 跑出来的东
+> 西」「把 workspace 文件转成 artifact」「在 callback 里跑一条命
+> 令做校验/后处理」，不是为初始化路径服务的。
+
+### 可用方法（`path` 一律相对 workspace 根）
+
+- `Collect(ctx, patterns...)` — 按模式批量读，返回 `[]*File`（`Path` /
+  `Data` / `MIMEType` / `SizeBytes` / `Truncated`）。模式语法与
+  `codeexecutor.WorkspaceFS.Collect` 一致：字面量路径
+  （`skills/echoer/SKILL.md`）、通配（`out/*.json`、`runs/**/result.md`）
+  都是合法 pattern。单文件读也用这个入口（传字面量 pattern，取
+  `result[0]`）。
+- `PutFiles(ctx, files...)` — 写入 1～N 份 `codeexecutor.PutFile`，
+  自动建父目录。单文件写也用这个入口（传一个 `PutFile`）。
+  `PutFile.Mode == 0` 时回落到 backend 默认（local 是 0o644）；要
+  0o755 用 `codeexecutor.DefaultExecFileMode`。
+- `SaveArtifact(ctx, relPath, opts...)` — 把 workspace 文件持久化为
+  artifact（需要 Runner 配 `artifact.Service`），返回 `*ArtifactRef`。
+- `StageInputs(ctx, specs)` — 按 `artifact://` / `host://` /
+  `workspace://` / `skill://` 把外部输入拉进 workspace。
+- `RunProgram(ctx, spec)` — 在 workspace 里跑一条命令（`spec.Cwd` 相
+  对 workspace 根，不能越界），返回 `codeexecutor.RunResult`
+  （`Stdout` / `Stderr` / `ExitCode` / `Duration` / `TimedOut`）。
+  **非零 exit code 不是 error**，按 Go `os/exec` 惯例通过
+  `RunResult.ExitCode` 报告——调用方自己看 `ExitCode` / `TimedOut`
+  决定怎么处理。`error` 仅在「框架层失败」时返回（没配 executor、
+  backend 拒绝、launch 失败、内部超时）。
+
+`Workspace` 没有内部锁，并发使用要自行串行化。
+
+### `RunProgram` 怎么写 `Cmd` / `Args`
+
+`Cmd` 是可执行文件名（**不走 shell 解析**），`Args` 是传给它的参数
+列表。`workspace_exec` LLM 工具底层也是同一条 `ProgramRunner.RunProgram`
+路径——两种形态够用。
+
+**跑一行 shell**（跟 `workspace_exec` 接收 LLM 命令时完全一致）：
+
+```go
+res, err := ws.RunProgram(ctx, codeexecutor.RunProgramSpec{
+    Cmd:     "sh",
+    Args:    []string{"-lc", "ls -la work && cat out/report.md"},
+    Cwd:     "",                  // 留空就是 workspace 根
+    Timeout: 30 * time.Second,
+})
+if err != nil {
+    return err
+}
+if res.ExitCode != 0 || res.TimedOut {
+    return fmt.Errorf("post-check failed: exit=%d timed_out=%v: %s",
+        res.ExitCode, res.TimedOut, res.Stderr)
+}
+```
+
+**直接跑某个程序**（不开 shell，参数零转义、更可控）：
+
+```go
+res, err := ws.RunProgram(ctx, codeexecutor.RunProgramSpec{
+    Cmd:  "go",
+    Args: []string{"vet", "./..."},
+    Cwd:  "work",                 // 在 ${WORK} 下执行
+    Env:  map[string]string{"GOFLAGS": "-count=1"}, // 追加/覆盖，不替换整个 env
+})
+```
+
+其余字段：
+
+- `Stdin` — 字符串，启动后由框架喂给 stdin，跑完即关；跑交互式程序请用
+  `workspace_exec` LLM 工具或自己起 session。
+- `Timeout` — 单次执行墙钟超时；超时后 `RunResult.TimedOut = true`，
+  `error` 仍为 `nil`。
+- `Env` — 追加/覆盖一组环境变量；workspace 已注入 `${WORK}` / `${OUT}`
+  / `${RUNS}` / `${WORKSPACE_DIR}` 这几个根目录路径，可在 `Args` 里直
+  接引用。
+
+### `*File`：读出来的文件长什么样
+
+`Collect` 返回的 `*File` 是后端无关的快照：
+
+```go
+type File struct {
+    Path      string // workspace 相对路径，例如 "skills/echoer/SKILL.md"
+    Data      []byte // 拷贝过的字节，调用方可随意 mutate
+    MIMEType  string // 后端检测的 MIME；空表示后端没填
+    SizeBytes int64  // 文件实际大小；可能 > len(Data) 当 Truncated=true
+    Truncated bool   // 后端读到内部上限被截断；框架不会因此报错
+}
+```
+
+实际用法就两类：
+
+- **Mirror 到外部存储**：`os.WriteFile(dst, f.Data, 0o644)` /
+  `s3.PutObject(key, bytes.NewReader(f.Data))`；`f.Path` 直接当目标
+  key / 子路径。
+- **结构性校验**：`bytes.Contains(f.Data, []byte("# "))`、
+  `yaml.Unmarshal(f.Data, &frontmatter)` 之类，校验失败就拒绝镜像。
+
+### `*ArtifactRef` + `WithSaveArtifactMaxBytes`：把 workspace 产物公开给后续轮次
+
+`SaveArtifact` 适用于"模型这一轮在 `out/` 写出了一份要被后面引用的
+产物（生成的 PDF、合成数据集、训练 checkpoint ...）"。返回的
+`ArtifactRef` 字段名和 LLM 工具 `workspace_save_artifact` 输出一致：
+
+```go
+ref, err := ws.SaveArtifact(ctx, "out/report.pdf",
+    workspaceio.WithSaveArtifactMaxBytes(8 * 1024 * 1024))
+if err != nil {
+    return err
+}
+
+// ref.Ref       == "artifact://out/report.pdf@3"  // 拼好的引用串
+// ref.SavedAs   == "out/report.pdf"               // artifact key
+// ref.Version   == 3
+// ref.SizeBytes == 4_812_345
+
+// 把引用回写到 session state，让下一轮的 prompt 可以直接用 ref.Ref
+args.Invocation.Session.AppendStateValue("last_report", ref.Ref)
+```
+
+`WithSaveArtifactMaxBytes` 在后端**读取阶段**就生效（不是读完再判长
+度），超限直接报错——比"读出来再丢弃"省内存、也能更早失败。典型
+场景：
+
+- **可能过大的产物**（生成的数据集、模型权重、视频）— 设 8 MiB /
+  32 MiB 让后端早失败，不要把 GiB 级数据塞进 artifact service。
+- **审计 / 合规边界** — 把"单 artifact 体量"钉死成业务约束，防止
+  agent 出 bug 产生超大产物。
+
+不传时默认 `64 MiB`，够大多数文档 / 小数据，一般场景不用关心。
+
+### 调用方负责的策略
+
+框架不替你做主，下面这些都在你的 callback 里自己写。
+
+**读到内容后怎么处理**
+
+- *失败时是否镜像？* 默认行为：示例 `args.Error != nil` 时直接
+  `return`——workspace 在失败时状态不可信。**要事故快照**就反过来，
+  错误也照镜。
+- *单文件被截断了怎么办？* 默认行为：backend 单文件读有内部上限
+  （一般几 MiB），命中后置 `File.Truncated = true` 并照常返回，**不**
+  自动报错。**要严格语义**自己加 `if f.Truncated { return error }`。
+- *扫出来太多 / 太大怎么办？* 默认行为：`Collect` 不限返回数量、
+  也不限总字节。**要预算**就在结果上 `len(files)` / 累加
+  `SizeBytes` 自己卡，超了拒绝。
+- *`RunProgram` 退出码非零怎么办？* 默认行为：通过 `RunResult.ExitCode`
+  / `TimedOut` 报告，**不**作为 error 返回。要把非零 exit 当失败处
+  理就自己 `if res.ExitCode != 0 { return error }`。
+
+**写到自己的 store 时**
+
+- *需要 all-or-nothing？* `Collect` + 循环 `Save` **不是事务**。要原
+  子性就先写临时位置最后 rename，或用支持事务的存储。
+
+**callback 返回 error 会发生什么**
+
+- 从 `AfterAgent` / `AfterTool` 返回非 `nil` 会**终止当前 invocation**。
+  flush 想做 best-effort 的话自己 log 后吞掉。
+
+完整可运行示例：[examples/workspace_io](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/workspace_io)。
 
 ## 环境变量与执行环境
 

@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Model name")
+	modelName = flag.String("model", "deepseek-v4-flash", "Model name")
 )
 
 func main() {

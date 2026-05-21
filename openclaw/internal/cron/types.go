@@ -15,10 +15,12 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 const (
 	ScheduleKindAt    = "at"
+	ScheduleKindAfter = "after"
 	ScheduleKindEvery = "every"
 	ScheduleKindCron  = "cron"
 )
@@ -37,6 +39,8 @@ const (
 	runtimeStateRemaining    = "openclaw.cron.remaining_runs"
 	runtimeStateIsFinalRun   = "openclaw.cron.is_final_run"
 )
+
+const cronDeliverySkipMessageToolTarget = "duplicate_message_tool_text"
 
 const cronSessionPrefix = "cron:"
 
@@ -82,6 +86,19 @@ type ExecutionStats struct {
 	DeliveryFailureCount int `json:"delivery_failure_count,omitempty"`
 }
 
+// RuntimeProfileRef stores the profile identity captured when a job is
+// created. Scheduled jobs persist selector metadata, not secrets or full
+// policy blobs, so profile IDs must remain resolvable by the configured
+// resolver when the job runs later.
+type RuntimeProfileRef struct {
+	ID        string `json:"id,omitempty"`
+	Version   string `json:"version,omitempty"`
+	AppName   string `json:"app_name,omitempty"`
+	Channel   string `json:"channel,omitempty"`
+	TenantID  string `json:"tenant_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
 type scheduledRunTemplateData struct {
 	Cron cronRunTemplateData
 }
@@ -106,6 +123,7 @@ type Job struct {
 	UserID     string                  `json:"user_id"`
 	TimeoutSec int                     `json:"timeout_sec,omitempty"`
 	Delivery   outbound.DeliveryTarget `json:"delivery,omitempty"`
+	Profile    *RuntimeProfileRef      `json:"profile,omitempty"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
@@ -115,6 +133,31 @@ type Job struct {
 	LastStatus string `json:"last_status,omitempty"`
 	LastError  string `json:"last_error,omitempty"`
 	LastOutput string `json:"last_output,omitempty"`
+}
+
+func runtimeProfileRefFromProfile(
+	profile runtimeprofile.Profile,
+) RuntimeProfileRef {
+	return RuntimeProfileRef{
+		ID:      strings.TrimSpace(profile.ID),
+		Version: strings.TrimSpace(profile.Version),
+		AppName: strings.TrimSpace(profile.AppName),
+	}
+}
+
+func (r *RuntimeProfileRef) profile() runtimeprofile.Profile {
+	if r == nil {
+		return runtimeprofile.Profile{}
+	}
+	return runtimeprofile.Profile{
+		ID:      strings.TrimSpace(r.ID),
+		Version: strings.TrimSpace(r.Version),
+		AppName: strings.TrimSpace(r.AppName),
+	}
+}
+
+func (r *RuntimeProfileRef) hasProfile() bool {
+	return runtimeprofile.HasProfile(r.profile())
 }
 
 func (j *Job) clone() *Job {
@@ -133,6 +176,10 @@ func (j *Job) clone() *Job {
 	if j.Policy.EndsAt != nil {
 		endsAt := *j.Policy.EndsAt
 		out.Policy.EndsAt = &endsAt
+	}
+	if j.Profile != nil {
+		profile := *j.Profile
+		out.Profile = &profile
 	}
 	return &out
 }
@@ -153,9 +200,18 @@ func IsRunSessionID(sessionID string) bool {
 	)
 }
 
+func normalizeScheduleKind(kind string) string {
+	switch value := strings.ToLower(strings.TrimSpace(kind)); value {
+	case ScheduleKindAfter:
+		return ScheduleKindAt
+	default:
+		return value
+	}
+}
+
 // ScheduleSummary returns a stable human-readable schedule summary.
 func ScheduleSummary(schedule Schedule) string {
-	switch strings.ToLower(strings.TrimSpace(schedule.Kind)) {
+	switch normalizeScheduleKind(schedule.Kind) {
 	case ScheduleKindAt:
 		return "at " + strings.TrimSpace(schedule.At)
 	case ScheduleKindEvery:

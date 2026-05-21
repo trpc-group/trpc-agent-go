@@ -19,6 +19,14 @@ import (
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 )
 
+func TestWithContextWindow(t *testing.T) {
+	m := New("claude-test", WithContextWindow(204800))
+	require.Equal(t, 204800, m.Info().ContextWindow)
+
+	m = New("claude-test", WithContextWindow(0))
+	require.Zero(t, m.Info().ContextWindow)
+}
+
 func TestWithTokenTailoringConfig(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -146,4 +154,14 @@ func TestWithTokenCounter_Nil(t *testing.T) {
 	opt := defaultOptions
 	WithTokenCounter(nil)(&opt)
 	assert.NotNil(t, opt.tokenCounter, "tokenCounter is nil")
+}
+
+func TestWithShowToolCallDelta(t *testing.T) {
+	opt := defaultOptions
+	WithShowToolCallDelta(true)(&opt)
+	assert.True(t, opt.showToolCallDelta)
+
+	opt = defaultOptions
+	WithShowToolCallDelta(false)(&opt)
+	assert.False(t, opt.showToolCallDelta)
 }

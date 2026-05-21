@@ -18,9 +18,10 @@ import (
 )
 
 type structureState struct {
-	snapshot     *astructure.Snapshot
-	nodeIndex    map[string]astructure.Node
-	surfaceIndex map[string]astructure.Surface
+	snapshot        *astructure.Snapshot
+	nodeIndex       map[string]astructure.Node
+	surfaceIndex    map[string]astructure.Surface
+	knownSurfaceIDs map[string]struct{}
 }
 
 func newStructureState(snapshot *astructure.Snapshot) (*structureState, error) {
@@ -51,6 +52,10 @@ func newStructureState(snapshot *astructure.Snapshot) (*structureState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build surface index: %w", err)
 	}
+	knownSurfaceIDs, err := buildKnownSurfaceIDs(snapshot.Surfaces, nodeIndex)
+	if err != nil {
+		return nil, err
+	}
 	seenNodeTypes := make(map[string]struct{}, len(supportedSurfaces))
 	for _, surface := range supportedSurfaces {
 		if _, ok := nodeIndex[surface.NodeID]; !ok {
@@ -67,8 +72,32 @@ func newStructureState(snapshot *astructure.Snapshot) (*structureState, error) {
 		seenNodeTypes[nodeTypeKey] = struct{}{}
 	}
 	return &structureState{
-		snapshot:     snapshot,
-		nodeIndex:    nodeIndex,
-		surfaceIndex: surfaceIndex,
+		snapshot:        snapshot,
+		nodeIndex:       nodeIndex,
+		surfaceIndex:    surfaceIndex,
+		knownSurfaceIDs: knownSurfaceIDs,
 	}, nil
+}
+
+func buildKnownSurfaceIDs(
+	surfaces []astructure.Surface,
+	nodeIndex map[string]astructure.Node,
+) (map[string]struct{}, error) {
+	known := make(map[string]struct{}, len(surfaces))
+	for _, surface := range surfaces {
+		if surface.SurfaceID == "" {
+			return nil, errors.New("surface id is empty")
+		}
+		if surface.NodeID == "" {
+			return nil, errors.New("surface node id is empty")
+		}
+		if _, ok := nodeIndex[surface.NodeID]; !ok {
+			return nil, fmt.Errorf("surface %q references unknown node id %q", surface.SurfaceID, surface.NodeID)
+		}
+		if _, ok := known[surface.SurfaceID]; ok {
+			return nil, fmt.Errorf("duplicate surface id %q", surface.SurfaceID)
+		}
+		known[surface.SurfaceID] = struct{}{}
+	}
+	return known, nil
 }

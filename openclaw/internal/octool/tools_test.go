@@ -30,6 +30,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
 	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -67,6 +69,43 @@ func TestExecTool_Foreground(t *testing.T) {
 	require.Equal(t, 0, res.ExitCode)
 }
 
+func TestExecTool_RuntimeProfileWorkspacePolicy(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	root := t.TempDir()
+	allowed := filepath.Join(root, "allowed")
+	denied := filepath.Join(root, "denied")
+	require.NoError(t, os.MkdirAll(allowed, 0o755))
+	require.NoError(t, os.MkdirAll(denied, 0o755))
+
+	ctx := runtimeprofile.WithProfile(
+		context.Background(),
+		runtimeprofile.Profile{
+			Workspace: runtimeprofile.WorkspacePolicy{
+				Workdir:      allowed,
+				AllowedRoots: []string{allowed},
+			},
+		},
+	)
+	mgr := NewManager()
+	tool := newExecCommandTool(mgr)
+
+	out, err := tool.Call(ctx, mustJSON(t, map[string]any{
+		"command": "pwd",
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	require.Contains(t, filepath.Clean(res.Output), allowed)
+
+	_, err = tool.Call(ctx, mustJSON(t, map[string]any{
+		"command": "pwd",
+		"workdir": denied,
+	}))
+	require.ErrorIs(t, err, runtimeprofile.ErrWorkspaceDenied)
+}
+
 func TestExecTool_UsesManagerBaseEnv(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
@@ -87,6 +126,36 @@ func TestExecTool_UsesManagerBaseEnv(t *testing.T) {
 	res := out.(execResult)
 	require.Equal(t, "exited", res.Status)
 	require.Contains(t, strings.TrimSpace(res.Output), "ok")
+}
+
+func TestExecTool_UsesIdentityEnvFromContext(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager()
+	tool := newExecCommandTool(mgr)
+
+	ctx := identity.NewContext(context.Background(), &identity.Identity{
+		EnvVars: map[string]string{
+			"OPENCLAW_IDENTITY_ENV":   "ctx-value",
+			"OPENCLAW_CONTEXT_TARGET": "from-context",
+		},
+	})
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf '%s|%s' \"$OPENCLAW_IDENTITY_ENV\" \"$OPENCLAW_CONTEXT_TARGET\"",
+		"env": map[string]string{
+			"OPENCLAW_CONTEXT_TARGET": "explicit",
+		},
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.Contains(t, strings.TrimSpace(res.Output), "ctx-value|explicit")
 }
 
 func TestExecTool_RedactsSensitiveEnvValueOutput(t *testing.T) {

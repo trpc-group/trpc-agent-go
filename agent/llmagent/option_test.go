@@ -118,6 +118,12 @@ func TestWithContextCompactionOptions(t *testing.T) {
 	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
 	WithContextCompactionOversizedToolResultMaxTokens(-1)(opts)
 	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
+
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	WithContextCompactionTokenCounter(counter)(opts)
+	require.Same(t, counter, opts.ContextCompactionTokenCounter)
+	WithContextCompactionTokenCounter(nil)(opts)
+	require.Same(t, counter, opts.ContextCompactionTokenCounter)
 }
 
 func TestWithMessageFilterMode(t *testing.T) {
@@ -350,6 +356,20 @@ func TestNew_DefaultGenerationConfigKeepsLegacyNonStreaming(t *testing.T) {
 	require.False(t, a.genConfig.Stream)
 }
 
+func TestWithModelSelector(t *testing.T) {
+	selector := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+		return inv.Model, nil
+	}
+	a := New("test-agent", WithModelSelector(selector))
+	require.NotNil(t, a.modelSelector)
+	expected := newDummyModel()
+	got, err := a.modelSelector(context.Background(), &agent.Invocation{
+		Model: expected,
+	})
+	require.NoError(t, err)
+	require.Same(t, expected, got)
+}
+
 func TestLLMAgent_Run_DefaultGenerationConfigUsesPublicStreamingBehavior(
 	t *testing.T,
 ) {
@@ -511,6 +531,15 @@ func TestWithPreloadSessionRecallSearchMode(t *testing.T) {
 
 	WithPreloadSessionRecallSearchMode(session.SearchMode("invalid"))(opts)
 	require.Equal(t, session.SearchModeHybrid, opts.PreloadSessionRecallSearchMode)
+}
+
+func TestWithEnableOnDemandSession(t *testing.T) {
+	opts := &Options{}
+	WithEnableOnDemandSession(true)(opts)
+	require.True(t, opts.EnableOnDemandSession)
+
+	WithEnableOnDemandSession(false)(opts)
+	require.False(t, opts.EnableOnDemandSession)
 }
 
 func TestWithSkillRunAllowedCommands_CopiesSlice(t *testing.T) {

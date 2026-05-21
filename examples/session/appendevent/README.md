@@ -65,12 +65,12 @@ go run main.go helper.go
 ### Command Line Options
 
 ```bash
-go run main.go helper.go -model deepseek-chat -streaming=true
+go run main.go helper.go -model deepseek-v4-flash -streaming=true
 ```
 
 | Option       | Description              | Default         |
 | ------------ | ------------------------ | --------------- |
-| `-model`     | Name of the model to use | `deepseek-chat` |
+| `-model`     | Name of the model to use | `deepseek-v4-flash` |
 | `-streaming` | Enable streaming mode    | `true`          |
 
 ## Commands

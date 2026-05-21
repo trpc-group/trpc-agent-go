@@ -59,7 +59,7 @@ import (
 
 func main() {
 	// 1. Create model.
-	llmModel := openai.New("DeepSeek-V3-Online-64K")
+	llmModel := openai.New("deepseek-v4-flash")
 
 	// 2. Create Agent.
 	a := llmagent.New("assistant",
@@ -723,8 +723,23 @@ func rewriteUserMessage(
         return []model.Message{args.OriginalMessage}, nil
     }
     if needsContext(raw) {
+        const toolCallID = "call_business_context"
+        businessContext := loadBusinessContext(raw)
         return []model.Message{
             model.NewUserMessage("Please interpret the following request with the business context below."),
+            {
+                Role:    model.RoleAssistant,
+                Content: "I will load the business context before refining the user request.",
+                ToolCalls: []model.ToolCall{{
+                    Type: "function",
+                    ID:   toolCallID,
+                    Function: model.FunctionDefinitionParam{
+                        Name:      "load_business_context",
+                        Arguments: []byte(`{"source":"crm"}`),
+                    },
+                }},
+            },
+            model.NewToolMessage(toolCallID, "load_business_context", businessContext),
             model.NewUserMessage(raw),
         }, nil
     }

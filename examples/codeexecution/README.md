@@ -49,7 +49,7 @@ Executes code against a Jupyter kernel, preserving variable state across snippet
 
 | Argument | Description              | Default Value   |
 | -------- | ------------------------ | --------------- |
-| `-model` | Name of the model to use | `deepseek-chat` |
+| `-model` | Name of the model to use | `deepseek-v4-flash` |
 
 ## Usage
 
@@ -66,7 +66,7 @@ go run main.go
 ```bash
 export OPENAI_API_KEY="your-api-key"
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 ## Example Output
@@ -75,7 +75,7 @@ When you run the example, you might see output like:
 
 ````
 Creating LLMAgent with configuration:
-- Model Name: deepseek-chat
+- Model Name: deepseek-v4-flash
 - OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment
 
 === LLMAgent Execution ===

@@ -10,6 +10,7 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -71,12 +72,16 @@ type innerTextModePreference interface {
 }
 
 type toolEventStateDelta struct {
-	tool   tool.Tool
-	args   []byte
-	choice model.Choice
+	tool            tool.Tool
+	invocation      *agent.Invocation
+	sessionBaseline session.StateMap
+	args            []byte
+	choice          model.Choice
 }
 
 type resolvedToolContextKey struct{}
+type stateDeltaSessionBaselineContextKey struct{}
+type executingToolArgsContextKey struct{}
 
 // toolResult holds the result of a single tool execution.
 type toolResult struct {
@@ -84,6 +89,7 @@ type toolResult struct {
 	event      *event.Event
 	err        error
 	stateDelta *toolEventStateDelta
+	toolArgs   []byte
 }
 
 // Default message used when transferring to a sub-agent without an explicit message.
@@ -204,7 +210,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
-	if deferred && !unknown {
+	if deferred {
 		invocation.EndInvocation = true
 	}
 
@@ -233,10 +239,6 @@ func (p *FunctionCallResponseProcessor) toolExecutionDecision(
 	if invocation == nil {
 		return false, true, false
 	}
-	filter := invocation.RunOptions.ToolExecutionFilter
-	if filter == nil {
-		return false, true, false
-	}
 	if req == nil || req.Tools == nil || rsp == nil {
 		return false, true, false
 	}
@@ -249,7 +251,7 @@ func (p *FunctionCallResponseProcessor) toolExecutionDecision(
 			unknown = true
 			continue
 		}
-		if filter(ctx, tl) {
+		if invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 			executable = true
 			continue
 		}
@@ -347,29 +349,25 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 		if err != nil {
 			return nil, err
 		}
-		if result.event != nil {
-			toolResults = append(toolResults, result)
-		}
+		toolResults = append(toolResults, result)
 	}
 	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
 		invocation,
 		toolResults,
 	)
 
-	if len(toolCallResponsesEvents) == 0 &&
-		invocation != nil &&
-		invocation.RunOptions.ToolExecutionFilter != nil {
-		filter := invocation.RunOptions.ToolExecutionFilter
+	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
-			if ok && !filter(ctx, tl) {
+			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 				return nil, nil
 			}
 		}
 	}
 
 	mergedEvent := p.buildMergedParallelEvent(
-		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
+		ctx, invocation, llmResponse, tools, toolCalls, toolResults,
+		toolCallResponsesEvents,
 	)
 	return mergedEvent, nil
 }
@@ -446,16 +444,18 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		tools,
 		toolCall,
 		index,
+		modifiedArgs,
 		skipSummarization,
 	)
 	if toolEvent == nil {
-		return toolResult{index: index}, nil
+		return toolResult{index: index, toolArgs: modifiedArgs}, nil
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 	var stateDelta *toolEventStateDelta
 	if err == nil {
 		stateDelta = p.buildToolEventStateDelta(
 			ctx,
+			invocation,
 			modifiedArgs,
 			choices,
 		)
@@ -494,6 +494,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		index:      index,
 		event:      toolEvent,
 		stateDelta: stateDelta,
+		toolArgs:   modifiedArgs,
 	}, nil
 }
 
@@ -513,8 +514,16 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	for i, tc := range toolCalls {
 		wg.Add(1)
 		runCtx := agent.CloneContext(ctx)
+		runInv := invocation
+		if invocation != nil {
+			runInv = newParallelInvocationView(invocation)
+			if runCtx == nil {
+				runCtx = context.Background()
+			}
+			runCtx = agent.NewInvocationContext(runCtx, runInv)
+		}
 		go p.runParallelToolCall(
-			runCtx, &wg, invocation, llmResponse, tools, eventChan, resultChan, i, tc,
+			runCtx, &wg, runInv, llmResponse, tools, eventChan, resultChan, i, tc,
 		)
 	}
 
@@ -528,23 +537,21 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	toolResults, err := p.collectParallelToolResults(
 		ctx, resultChan, len(toolCalls),
 	)
-	if len(toolResults) == 0 &&
-		invocation != nil &&
-		invocation.RunOptions.ToolExecutionFilter != nil {
-		filter := invocation.RunOptions.ToolExecutionFilter
-		for _, tc := range toolCalls {
-			tl, ok := tools[tc.Function.Name]
-			if ok && !filter(ctx, tl) {
-				return nil, nil
-			}
-		}
-	}
 	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
 		invocation,
 		toolResults,
 	)
+	if len(toolCallResponsesEvents) == 0 && invocation != nil {
+		for _, tc := range toolCalls {
+			tl, ok := tools[tc.Function.Name]
+			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
+				return nil, nil
+			}
+		}
+	}
 	mergedEvent := p.buildMergedParallelEvent(
-		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
+		ctx, invocation, llmResponse, tools, toolCalls, toolResults,
+		toolCallResponsesEvents,
 	)
 	return mergedEvent, err
 }
@@ -562,6 +569,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	tc model.ToolCall,
 ) {
 	defer wg.Done()
+	toolArgs := tc.Function.Arguments
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithValue(ctx, executingToolArgsContextKey{}, &toolArgs)
 	// Recover from panics to avoid breaking sibling goroutines.
 	defer func() {
 		if r := recover(); r != nil {
@@ -581,10 +593,15 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			errorEvent := newToolCallResponseEvent(
 				invocation, llmResponse, []model.Choice{*errorChoice},
 			)
+			annotateToolCallArgs(errorEvent, tc, toolArgs)
 			if tc.Function.Name == transfer.TransferToolName {
 				errorEvent.Tag = event.TransferTag
 			}
-			p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent})
+			p.sendToolResult(ctx, resultChan, toolResult{
+				index:    index,
+				event:    errorEvent,
+				toolArgs: toolArgs,
+			})
 		}
 	}()
 	// Trace the tool execution for observability.
@@ -603,6 +620,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			index,
 			eventChan,
 		)
+	toolArgs = modifiedArgs
 	// Handle errors based on whether they are ignorable or critical.
 	if err != nil {
 		log.ErrorfContext(
@@ -621,6 +639,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		errorEvent := newToolCallResponseEvent(
 			invocation, llmResponse, []model.Choice{*errorChoice},
 		)
+		annotateToolCallArgs(errorEvent, tc, modifiedArgs)
 		errorEvent = p.decorateToolCallResponseEvent(
 			errorEvent,
 			tools,
@@ -632,7 +651,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		if !shouldIgnoreError {
 			returnErr = err
 		}
-		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: returnErr})
+		p.sendToolResult(ctx, resultChan, toolResult{
+			index:    index,
+			event:    errorEvent,
+			err:      returnErr,
+			toolArgs: modifiedArgs,
+		})
 		return
 	}
 
@@ -644,10 +668,14 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		tools,
 		tc,
 		index,
+		modifiedArgs,
 		skipSummarization,
 	)
 	if toolCallResponseEvent == nil {
-		p.sendToolResult(ctx, resultChan, toolResult{index: index})
+		p.sendToolResult(ctx, resultChan, toolResult{
+			index:    index,
+			toolArgs: modifiedArgs,
+		})
 		return
 	}
 	// Include declaration for telemetry even when tool is missing.
@@ -671,6 +699,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}
 	stateDelta := p.buildToolEventStateDelta(
 		ctx,
+		invocation,
 		modifiedArgs,
 		choices,
 	)
@@ -692,6 +721,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			index:      index,
 			event:      toolCallResponseEvent,
 			stateDelta: stateDelta,
+			toolArgs:   modifiedArgs,
 		},
 	)
 }
@@ -703,6 +733,7 @@ func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
 	tools map[string]tool.Tool,
 	toolCall model.ToolCall,
 	index int,
+	toolArgs []byte,
 	skipSummarization bool,
 ) *event.Event {
 	if len(choices) == 0 {
@@ -715,6 +746,7 @@ func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
 				llmResponse,
 				toolCall,
 				index,
+				toolArgs,
 			),
 			tools,
 			toolCall,
@@ -722,8 +754,10 @@ func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
 		)
 	}
 	annotateToolChoicesWithName(choices, toolCall.Function.Name)
+	ev := newToolCallResponseEvent(invocation, llmResponse, choices)
+	annotateToolCallArgs(ev, toolCall, toolArgs)
 	return p.decorateToolCallResponseEvent(
-		newToolCallResponseEvent(invocation, llmResponse, choices),
+		ev,
 		tools,
 		toolCall,
 		skipSummarization,
@@ -737,6 +771,45 @@ func annotateToolChoicesWithName(choices []model.Choice, toolName string) {
 			choices[i].Message.ToolName = toolName
 		}
 	}
+}
+
+func annotateToolCallArgs(
+	ev *event.Event,
+	toolCall model.ToolCall,
+	toolArgs []byte,
+) {
+	if toolArgs == nil {
+		toolArgs = toolCall.Function.Arguments
+	}
+	if err := setToolCallArgs(ev, toolCall.ID, toolArgs); err != nil {
+		log.Warnf("Failed to set tool call args extension: %v", err)
+	}
+}
+
+func setToolCallArgs(
+	ev *event.Event,
+	toolCallID string,
+	toolArgs []byte,
+) error {
+	if ev == nil || toolCallID == "" {
+		return nil
+	}
+	args, _, err := event.GetExtension[map[string]string](
+		ev,
+		event.ToolCallArgsExtensionKey,
+	)
+	if err != nil {
+		return err
+	}
+	if args == nil {
+		args = make(map[string]string)
+	}
+	args[toolCallID] = string(toolArgs)
+	return event.SetExtension(
+		ev,
+		event.ToolCallArgsExtensionKey,
+		args,
+	)
 }
 
 func (p *FunctionCallResponseProcessor) decorateToolCallResponseEvent(
@@ -819,6 +892,7 @@ func (p *FunctionCallResponseProcessor) annotateSkipSummarization(
 
 func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	args []byte,
 	choices []model.Choice,
 ) *toolEventStateDelta {
@@ -829,10 +903,128 @@ func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	if !ok {
 		return nil
 	}
+	stateDeltaInv := newStateDeltaSnapshot(ctx, invocation)
 	return &toolEventStateDelta{
-		tool:   tl,
-		args:   args,
-		choice: choices[0],
+		tool:            tl,
+		invocation:      stateDeltaInv,
+		sessionBaseline: stateDeltaSessionBaseline(ctx),
+		args:            args,
+		choice:          choices[0],
+	}
+}
+
+func newStateDeltaSnapshot(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) *agent.Invocation {
+	if ctx == nil {
+		return cloneStateDeltaSession(invocationView(invocation))
+	}
+	ctxInv, hasCtxInv := agent.InvocationFromContext(ctx)
+	if !hasCtxInv || ctxInv == nil {
+		return cloneStateDeltaSession(invocationView(invocation))
+	}
+	if invocation == nil || ctxInv == invocation {
+		return cloneStateDeltaSession(invocationView(ctxInv))
+	}
+	view := ctxInv.View()
+	preserveStateDeltaInvocationDefaults(view, invocation)
+	return cloneStateDeltaSession(view)
+}
+
+func newParallelInvocationView(
+	invocation *agent.Invocation,
+) *agent.Invocation {
+	return cloneStateDeltaSession(invocationView(invocation))
+}
+
+func invocationView(invocation *agent.Invocation) *agent.Invocation {
+	if invocation == nil {
+		return nil
+	}
+	return invocation.View()
+}
+
+func cloneStateDeltaSession(invocation *agent.Invocation) *agent.Invocation {
+	if invocation != nil && invocation.Session != nil {
+		invocation.Session = invocation.Session.Clone()
+	}
+	return invocation
+}
+
+func withStateDeltaSessionBaseline(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	var baseline session.StateMap
+	baselineSession := stateDeltaBaselineSession(ctx, invocation)
+	if baselineSession != nil {
+		baseline = baselineSession.SnapshotState()
+	}
+	return context.WithValue(
+		ctx,
+		stateDeltaSessionBaselineContextKey{},
+		baseline,
+	)
+}
+
+func stateDeltaBaselineSession(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) *session.Session {
+	if ctx != nil {
+		if ctxInv, ok := agent.InvocationFromContext(ctx); ok &&
+			ctxInv != nil &&
+			ctxInv.Session != nil {
+			return ctxInv.Session
+		}
+	}
+	if invocation == nil {
+		return nil
+	}
+	return invocation.Session
+}
+
+func stateDeltaSessionBaseline(ctx context.Context) session.StateMap {
+	if ctx == nil {
+		return nil
+	}
+	baseline, _ := ctx.Value(
+		stateDeltaSessionBaselineContextKey{},
+	).(session.StateMap)
+	return baseline
+}
+
+func preserveStateDeltaInvocationDefaults(
+	view *agent.Invocation,
+	base *agent.Invocation,
+) {
+	if view == nil || base == nil {
+		return
+	}
+	view.Agent = base.Agent
+	view.AgentName = base.AgentName
+	view.InvocationID = base.InvocationID
+	view.Branch = base.Branch
+	view.Model = base.Model
+	view.Message = base.Message
+	view.RunOptions = base.RunOptions
+	view.TransferInfo = base.TransferInfo
+	view.Plugins = base.Plugins
+	view.StructuredOutput = base.StructuredOutput
+	view.StructuredOutputType = base.StructuredOutputType
+	view.MemoryService = base.MemoryService
+	view.ArtifactService = base.ArtifactService
+	view.MaxLLMCalls = base.MaxLLMCalls
+	view.MaxToolIterations = base.MaxToolIterations
+	if view.Session == nil {
+		view.Session = base.Session
+	}
+	if view.SessionService == nil {
+		view.SessionService = base.SessionService
 	}
 }
 
@@ -871,10 +1063,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 	invocation *agent.Invocation,
 	results []toolResult,
 ) []*event.Event {
-	var (
-		stateDeltaInv     *agent.Invocation
-		pendingStateDelta []*event.Event
-	)
+	var priorStateDelta []*event.Event
 	events := make([]*event.Event, 0, len(results))
 	for i := 0; i < len(results); i++ {
 		result := results[i]
@@ -882,15 +1071,16 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 			continue
 		}
 		if result.stateDelta != nil {
-			if stateDeltaInv == nil {
-				stateDeltaInv = newStateDeltaInvocationView(invocation)
-				if stateDeltaInv != nil && stateDeltaInv.Session != nil {
-					for j := 0; j < len(pendingStateDelta); j++ {
-						stateDeltaInv.Session.ApplyEventStateDelta(
-							pendingStateDelta[j],
-						)
-					}
-				}
+			stateDeltaInv := stateDeltaInvocationView(
+				invocation,
+				result.stateDelta,
+			)
+			if stateDeltaInv != nil && stateDeltaInv.Session != nil {
+				applyPriorStateDeltas(
+					stateDeltaInv.Session,
+					result.stateDelta.sessionBaseline,
+					priorStateDelta,
+				)
 			}
 			p.attachStateDelta(
 				stateDeltaInv,
@@ -900,19 +1090,74 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 				result.event,
 			)
 		}
-		if stateDeltaInv != nil &&
-			stateDeltaInv.Session != nil &&
-			len(result.event.StateDelta) > 0 {
-			stateDeltaInv.Session.ApplyEventStateDelta(result.event)
-		} else if len(result.event.StateDelta) > 0 {
-			pendingStateDelta = append(
-				pendingStateDelta,
+		if len(result.event.StateDelta) > 0 {
+			priorStateDelta = append(
+				priorStateDelta,
 				result.event,
 			)
 		}
 		events = append(events, result.event)
 	}
 	return events
+}
+
+func applyPriorStateDeltas(
+	sess *session.Session,
+	baseline session.StateMap,
+	events []*event.Event,
+) {
+	if sess == nil || len(events) == 0 {
+		return
+	}
+	changed := changedSessionKeys(baseline, sess.SnapshotState())
+	for i := 0; i < len(events); i++ {
+		applyReplayableStateDelta(sess, changed, events[i])
+	}
+}
+
+func changedSessionKeys(
+	baseline session.StateMap,
+	current session.StateMap,
+) map[string]bool {
+	changed := map[string]bool{}
+	for key, currentValue := range current {
+		baselineValue, ok := baseline[key]
+		if !ok || !bytes.Equal(currentValue, baselineValue) {
+			changed[key] = true
+		}
+	}
+	for key := range baseline {
+		if _, ok := current[key]; !ok {
+			changed[key] = true
+		}
+	}
+	return changed
+}
+
+func applyReplayableStateDelta(
+	sess *session.Session,
+	changed map[string]bool,
+	e *event.Event,
+) {
+	if e == nil {
+		return
+	}
+	for key, value := range e.StateDelta {
+		if changed[key] {
+			continue
+		}
+		sess.SetState(key, value)
+	}
+}
+
+func stateDeltaInvocationView(
+	invocation *agent.Invocation,
+	stateDelta *toolEventStateDelta,
+) *agent.Invocation {
+	if stateDelta != nil && stateDelta.invocation != nil {
+		return stateDelta.invocation.View()
+	}
+	return newStateDeltaInvocationView(invocation)
 }
 
 // lookupDeclaration returns a declaration or a safe placeholder.
@@ -942,8 +1187,17 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 	llmResponse *model.Response,
 	tools map[string]tool.Tool,
 	toolCalls []model.ToolCall,
+	toolResults []toolResult,
 	toolCallEvents []*event.Event,
 ) *event.Event {
+	toolArgsByIndex := make(map[int][]byte, len(toolResults))
+	for _, result := range toolResults {
+		if result.index >= 0 && result.index < len(toolCalls) &&
+			result.toolArgs != nil {
+			toolArgsByIndex[result.index] = result.toolArgs
+		}
+	}
+
 	var mergedEvent *event.Event
 	if len(toolCallEvents) == 0 {
 		minimal := make([]model.Choice, 0, len(toolCalls))
@@ -960,6 +1214,9 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 		}
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallEvents)
+	}
+	for i, tc := range toolCalls {
+		annotateToolCallArgs(mergedEvent, tc, toolArgsByIndex[i])
 	}
 	if len(toolCallEvents) > 1 {
 		_, span, startedSpan := itrace.StartSpan(
@@ -1156,10 +1413,9 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 			return toolCall, nil, true, fmt.Errorf("executeToolCall: %s", ErrorToolNotFound)
 		}
 	}
-	if invocation != nil && invocation.RunOptions.ToolExecutionFilter != nil {
-		if !invocation.RunOptions.ToolExecutionFilter(ctx, tl) {
-			return toolCall, nil, true, nil
-		}
+	if invocation != nil &&
+		!invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
+		return toolCall, nil, true, nil
 	}
 	return toolCall, tl, false, nil
 }
@@ -1249,7 +1505,7 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 		case result, ok := <-resultChan:
 			if !ok {
 				// Channel closed, all results received.
-				return p.filterNilToolResults(results), err
+				return p.compactToolResults(results), err
 			}
 			if result.index >= 0 && result.index < len(results) {
 				results[result.index] = result
@@ -1270,7 +1526,7 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 				ctx,
 				"Context cancelled while waiting for tool results",
 			)
-			return p.filterNilToolResults(results), nil
+			return p.compactToolResults(results), nil
 		}
 	}
 }
@@ -1481,6 +1737,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
 	}
+	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	toolDeclaration := tl.Declaration()
 	ctx, toolCall, customResult, err := p.runBeforeToolPluginCallbacks(
 		ctx,
@@ -1491,7 +1748,9 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	if err != nil {
 		return ctx, nil, toolCall.Function.Arguments, false, false, err
 	}
+	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	if customResult != nil {
+		ctx = withStateDeltaSessionBaseline(ctx, invocation)
 		return ctx, customResult, toolCall.Function.Arguments, false,
 			false, nil
 	}
@@ -1503,6 +1762,8 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	if err != nil {
 		return ctx, nil, toolCall.Function.Arguments, false, false, err
 	}
+	ctx = withStateDeltaSessionBaseline(ctx, invocation)
+	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	if customResult != nil {
 		return ctx, customResult, toolCall.Function.Arguments, false,
 			false, nil
@@ -1573,6 +1834,17 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 	return ctx, toolResult, toolCall.Function.Arguments,
 		suppressDefaultToolMessage, skipSummarization || localSkip, toolErr
+}
+
+func rememberExecutingToolArgs(ctx context.Context, args []byte) {
+	if ctx == nil {
+		return
+	}
+	tracker, ok := ctx.Value(executingToolArgsContextKey{}).(*[]byte)
+	if !ok || tracker == nil {
+		return
+	}
+	*tracker = args
 }
 
 // afterCallbackReplacedResult returns true when the after-tool callback has
@@ -2011,15 +2283,15 @@ func marshalChunkToText(content any) string {
 	}
 }
 
-// filterNilToolResults filters out nil events while preserving order.
-// Pre-allocates capacity to avoid multiple memory allocations.
-func (p *FunctionCallResponseProcessor) filterNilToolResults(
+// compactToolResults keeps received tool results while preserving order.
+// Results without an event may still carry executed args for merged metadata.
+func (p *FunctionCallResponseProcessor) compactToolResults(
 	results []toolResult,
 ) []toolResult {
-	// Pre-allocate with capacity to reduce allocations
 	filtered := make([]toolResult, 0, len(results))
 	for _, result := range results {
-		if result.event != nil {
+		if result.event != nil || result.toolArgs != nil ||
+			result.err != nil || result.stateDelta != nil {
 			filtered = append(filtered, result)
 		}
 	}
@@ -2051,12 +2323,15 @@ func newMinimalToolCallResponseEvent(
 	functionCallResponse *model.Response,
 	toolCall model.ToolCall,
 	index int,
+	toolArgs []byte,
 ) *event.Event {
-	return newToolCallResponseEvent(
+	ev := newToolCallResponseEvent(
 		invocation,
 		functionCallResponse,
 		[]model.Choice{newMinimalToolChoice(toolCall, index)},
 	)
+	annotateToolCallArgs(ev, toolCall, toolArgs)
+	return ev
 }
 
 func newMinimalToolChoice(
@@ -2084,12 +2359,22 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 
 	mergedChoices := collectMergedChoices(es)
 	mergedDelta := collectStateDelta(es)
+	mergedToolArgs := collectToolCallArgs(es)
 	baseEvent := findBaseEvent(es)
 	resp := buildMergedToolResponse(baseEvent, mergedChoices)
 	mergedEvent := buildMergedEvent(baseEvent, resp)
 
 	if len(mergedDelta) > 0 {
 		mergedEvent.StateDelta = mergedDelta
+	}
+	if len(mergedToolArgs) > 0 {
+		if err := event.SetExtension(
+			mergedEvent,
+			event.ToolCallArgsExtensionKey,
+			mergedToolArgs,
+		); err != nil {
+			log.Warnf("Failed to merge tool call args extension: %v", err)
+		}
 	}
 	if shouldSkipSummarization(es) {
 		markSkipSummarization(mergedEvent)
@@ -2128,6 +2413,30 @@ func collectStateDelta(es []*event.Event) map[string][]byte {
 		}
 	}
 	return mergedDelta
+}
+
+func collectToolCallArgs(es []*event.Event) map[string]string {
+	var merged map[string]string
+	for _, e := range es {
+		args, ok, err := event.GetExtension[map[string]string](
+			e,
+			event.ToolCallArgsExtensionKey,
+		)
+		if err != nil {
+			log.Warnf("Failed to decode tool call args extension: %v", err)
+			continue
+		}
+		if !ok || len(args) == 0 {
+			continue
+		}
+		if merged == nil {
+			merged = make(map[string]string)
+		}
+		for toolCallID, toolArgs := range args {
+			merged[toolCallID] = toolArgs
+		}
+	}
+	return merged
 }
 
 // findBaseEvent finds a valid base event for metadata.

@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -176,6 +177,7 @@ func startBrokerHTTPServerWithOptions(t *testing.T, opts brokerHTTPServerOptions
 }
 
 func (s *brokerHTTPServer) Close() {
+	s.server.CloseClientConnections()
 	s.server.Close()
 }
 
@@ -401,6 +403,38 @@ func TestNamedStdioServer_ListTools(t *testing.T) {
 	require.Equal(t, "add", output.Tools[0].Name)
 	require.Equal(t, "echo", output.Tools[1].Name)
 	require.Equal(t, "local_stdio.add", output.Tools[0].Selector)
+}
+
+func TestClientOptionsProvider_StdioMetadataAndDoesNotBreakStdio(t *testing.T) {
+	var sawStdio bool
+
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"local_stdio": {
+				Command: "go",
+				Args:    []string{"run", stdioServerDir(t)},
+				Timeout: 10 * time.Second,
+			},
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			require.Equal(t, TargetTypeStdio, req.TargetType)
+			require.Equal(t, OriginCode, req.Origin)
+			require.Equal(t, PhaseListTools, req.Phase)
+			sawStdio = true
+			return &ClientOptions{
+				Stdio: []tmcp.StdioClientOption{
+					tmcp.WithStdioCapabilities(map[string]any{"mcpbroker_test": true}),
+				},
+			}, nil
+		}),
+	)
+
+	output, err := broker.listTools(context.Background(), listToolsInput{
+		Selector: "local_stdio",
+	})
+	require.NoError(t, err)
+	require.True(t, sawStdio)
+	require.Len(t, output.Tools, 2)
 }
 
 func TestNamedHTTPServer_ListToolsAndCallTool(t *testing.T) {
@@ -654,7 +688,7 @@ func TestNamedHTTPServer_HeaderInjectorAddsAuthorization(t *testing.T) {
 			},
 		}),
 		WithHTTPHeaderInjector(func(ctx context.Context, req *HeaderInjectRequest) (map[string]string, error) {
-			if req.BaseURL != server.URL || req.Phase != phaseListTools {
+			if req.BaseURL != server.URL || req.Phase != PhaseListTools {
 				return nil, nil
 			}
 			token, _ := ctx.Value(tokenKey).(string)
@@ -700,6 +734,247 @@ func TestAdHocHTTPServer_HeaderInjectorCanInjectAuthorization(t *testing.T) {
 	require.Equal(t, "Bearer adhoc-token", server.LastAuthorization())
 }
 
+func TestClientOptionsProvider_AdHocReceivesMetadataAndCanAdjustHTTP(t *testing.T) {
+	server := startBrokerHTTPServerWithOptions(t, brokerHTTPServerOptions{
+		RequiredAuth: "Bearer provider-token",
+	})
+	defer server.Close()
+
+	var captured *ClientOptionsRequest
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithHTTPHeaderInjector(func(ctx context.Context, req *HeaderInjectRequest) (map[string]string, error) {
+			return map[string]string{"Authorization": "Bearer wrong-token"}, nil
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			captured = req
+			return &ClientOptions{
+				HTTP: []tmcp.ClientOption{
+					tmcp.WithHTTPBeforeRequest(func(ctx context.Context, httpReq *http.Request) error {
+						httpReq.Header.Set("Authorization", "Bearer provider-token")
+						return nil
+					}),
+				},
+			}, nil
+		}),
+	)
+
+	output, err := broker.listTools(context.Background(), listToolsInput{Selector: server.URL})
+	require.NoError(t, err)
+	require.Len(t, output.Tools, 2)
+
+	require.NotNil(t, captured)
+	require.Equal(t, OriginAdhoc, captured.Origin)
+	require.Equal(t, TargetTypeHTTP, captured.TargetType)
+	require.Equal(t, PhaseListTools, captured.Phase)
+	require.Equal(t, server.URL, captured.BaseURL)
+	require.Empty(t, captured.ServerName)
+	require.Equal(t, server.URL, captured.Selector)
+
+	require.Equal(t, "Bearer provider-token", server.LastAuthorization())
+}
+
+func TestClientOptionsProvider_NamedServerMetadata(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	var captured *ClientOptionsRequest
+
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"http_named": {
+				ServerURL: server.URL,
+				Transport: "streamable_http",
+				Timeout:   5 * time.Second,
+			},
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			captured = req
+			return nil, nil
+		}),
+	)
+
+	_, err := broker.listTools(context.Background(), listToolsInput{Selector: "http_named"})
+	require.NoError(t, err)
+
+	require.NotNil(t, captured)
+	require.Equal(t, OriginCode, captured.Origin)
+	require.Equal(t, "http_named", captured.ServerName)
+	require.Equal(t, "http_named", captured.Selector)
+	require.Equal(t, server.URL, captured.BaseURL)
+	require.Equal(t, PhaseListTools, captured.Phase)
+}
+
+func TestClientOptionsProvider_InspectToolsMetadata(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	var captured *ClientOptionsRequest
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			captured = req
+			return nil, nil
+		}),
+	)
+
+	output, err := broker.inspectTools(context.Background(), inspectToolsInput{
+		Selector: server.URL,
+		Tools:    []string{"echo"},
+	})
+	require.NoError(t, err)
+	require.Len(t, output.Tools, 1)
+
+	require.NotNil(t, captured)
+	require.Equal(t, OriginAdhoc, captured.Origin)
+	require.Equal(t, TargetTypeHTTP, captured.TargetType)
+	require.Equal(t, PhaseInspectTools, captured.Phase)
+	require.Equal(t, server.URL, captured.BaseURL)
+	require.Equal(t, server.URL, captured.Selector)
+	require.Empty(t, captured.ServerName)
+	require.Empty(t, captured.ToolName)
+}
+
+func TestClientOptionsProvider_CallToolMetadata(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	var captured *ClientOptionsRequest
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			captured = req
+			return nil, nil
+		}),
+	)
+
+	selector := server.URL + ".echo"
+	callOutput, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  selector,
+		Arguments: map[string]any{"text": "hello"},
+	})
+	require.NoError(t, err)
+	require.Len(t, callOutput.Content, 1)
+
+	require.NotNil(t, captured)
+	require.Equal(t, OriginAdhoc, captured.Origin)
+	require.Equal(t, TargetTypeHTTP, captured.TargetType)
+	require.Equal(t, PhaseCallTool, captured.Phase)
+	require.Equal(t, "echo", captured.ToolName)
+	require.Equal(t, server.URL, captured.BaseURL)
+	require.Equal(t, selector, captured.Selector)
+	require.Empty(t, captured.ServerName)
+}
+
+func TestClientOptionsProvider_RequestConfigIsDefensivelyCloned(t *testing.T) {
+	server := startBrokerHTTPServerWithOptions(t, brokerHTTPServerOptions{
+		RequiredAuth: "Bearer original-token",
+	})
+	defer server.Close()
+
+	configuredHeaders := map[string]string{"Authorization": "Bearer original-token"}
+
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"http_named": {
+				ServerURL: server.URL,
+				Transport: "streamable_http",
+				Headers:   configuredHeaders,
+				Timeout:   5 * time.Second,
+			},
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			require.Equal(t, server.URL, req.Config.ServerURL)
+			require.Equal(t, "Bearer original-token", req.Config.Headers["Authorization"])
+			req.Config.ServerURL = "http://provider-mutation.invalid"
+			req.Config.Headers["Authorization"] = "Bearer mutated-token"
+			req.Config.Headers["X-Provider-Injected"] = "yes"
+			return nil, nil
+		}),
+	)
+
+	output, err := broker.listTools(context.Background(), listToolsInput{Selector: "http_named"})
+	require.NoError(t, err)
+	require.Len(t, output.Tools, 2)
+
+	require.Equal(t, "Bearer original-token", server.LastAuthorization(),
+		"mutation through req.Config.Headers must not affect the real request headers")
+	require.Equal(t, map[string]string{"Authorization": "Bearer original-token"}, configuredHeaders,
+		"mutation through req.Config.Headers must not affect the broker's stored server config")
+}
+
+func TestClientOptionsProvider_ErrorStopsBeforeConnect(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	denyErr := errors.New("MCP endpoint denied by policy")
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			require.Equal(t, OriginAdhoc, req.Origin)
+			return nil, denyErr
+		}),
+	)
+
+	_, err := broker.listTools(context.Background(), listToolsInput{Selector: server.URL})
+	require.ErrorIs(t, err, denyErr)
+	require.Equal(t, 0, server.MethodCount("initialize"), "provider error must abort before MCP initialize")
+}
+
+func TestClientOptionsProvider_PanicIsRecoveredAsError(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			panic("provider blew up")
+		}),
+	)
+
+	_, err := broker.listTools(context.Background(), listToolsInput{Selector: server.URL})
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrClientOptionsProviderPanicked,
+		"panic must surface as an error wrapping the sentinel for errors.Is detection")
+	require.Contains(t, err.Error(), "provider blew up",
+		"recovered panic value must be preserved in the error message")
+	require.Equal(t, 0, server.MethodCount("initialize"),
+		"panicking provider must abort before MCP initialize")
+}
+
+func TestClientOptionsProvider_NilOptionEntriesAreFilteredOut(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	var beforeRequestCalled bool
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			return &ClientOptions{
+				HTTP: []tmcp.ClientOption{
+					nil,
+					tmcp.WithHTTPBeforeRequest(func(ctx context.Context, httpReq *http.Request) error {
+						beforeRequestCalled = true
+						return nil
+					}),
+					nil,
+				},
+			}, nil
+		}),
+	)
+
+	output, err := broker.listTools(context.Background(), listToolsInput{Selector: server.URL})
+	require.NoError(t, err, "nil entries in HTTP options must not crash trpc-mcp-go")
+	require.Len(t, output.Tools, 2)
+	require.True(t, beforeRequestCalled,
+		"non-nil HTTP option must still execute after nil filtering")
+}
+
 func TestNamedHTTPServer_HeaderInjectorCanonicalizesOverrides(t *testing.T) {
 	server := startBrokerHTTPServerWithOptions(t, brokerHTTPServerOptions{
 		RequiredAuth: "Bearer injected-token",
@@ -735,7 +1010,7 @@ func TestErrorInterceptor_CanWrapListToolsError(t *testing.T) {
 	broker := New(
 		WithAllowAdHocHTTP(true),
 		WithErrorInterceptor(func(ctx context.Context, req *BrokerErrorRequest) (*BrokerErrorDecision, error) {
-			require.Equal(t, phaseListTools, req.Phase)
+			require.Equal(t, PhaseListTools, req.Phase)
 			require.Equal(t, server.URL, req.BaseURL)
 			return &BrokerErrorDecision{
 				Handled:   true,
@@ -760,7 +1035,7 @@ func TestErrorInterceptor_CanWrapCallError(t *testing.T) {
 	broker := New(
 		WithAllowAdHocHTTP(true),
 		WithErrorInterceptor(func(ctx context.Context, req *BrokerErrorRequest) (*BrokerErrorDecision, error) {
-			require.Equal(t, phaseCallTool, req.Phase)
+			require.Equal(t, PhaseCallTool, req.Phase)
 			require.Equal(t, "echo", req.ToolName)
 			return &BrokerErrorDecision{
 				Handled:   true,
@@ -991,7 +1266,7 @@ func TestResolveTargetValidation(t *testing.T) {
 
 	target, err := New(WithAllowAdHocHTTP(true)).resolveTarget(targetInput{URL: "https://example.com/mcp"})
 	require.NoError(t, err)
-	require.Equal(t, "adhoc", target.Origin)
+	require.Equal(t, OriginAdhoc, target.Origin)
 	require.Equal(t, targetTypeHTTP, target.TargetType)
 }
 
@@ -1075,7 +1350,7 @@ func TestErrorInterceptorBranches(t *testing.T) {
 	ctx := context.Background()
 	broker := New()
 	target := resolvedTarget{TargetType: targetTypeHTTP, Config: legacymcp.ConnectionConfig{Transport: "streamable"}}
-	meta := operationMetadata{Selector: "https://example.com/mcp", BaseURL: "https://example.com/mcp", Phase: phaseListTools}
+	meta := operationMetadata{Selector: "https://example.com/mcp", BaseURL: "https://example.com/mcp", Phase: PhaseListTools}
 
 	handled, err := interceptHTTPOperationError(ctx, broker, target, meta, nil)
 	require.False(t, handled)
@@ -1209,4 +1484,255 @@ func TestNormalizeConnectionConfigValidation(t *testing.T) {
 	}, true)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ad-hoc MCP only supports HTTP")
+}
+
+// =============================================================================
+// Ad-hoc HTTP timeout tests (WithAdHocHTTPTimeout)
+// =============================================================================
+
+// startSlowHTTPMCPServer starts a real MCP HTTP server whose `slow_echo` tool
+// sleeps for delay before returning. Callers receive the URL suffix /mcp.
+func startSlowHTTPMCPServer(t *testing.T, delay time.Duration) string {
+	t.Helper()
+	srv := tmcp.NewServer("slow-mcp", "1.0.0", tmcp.WithServerPath("/mcp"))
+	slowTool := tmcp.NewTool(
+		"slow_echo",
+		tmcp.WithDescription("Sleeps then echoes the input."),
+		tmcp.WithString("text", tmcp.Required(), tmcp.Description("Text.")),
+	)
+	srv.RegisterTool(slowTool, func(ctx context.Context, req *tmcp.CallToolRequest) (*tmcp.CallToolResult, error) {
+		select {
+		case <-time.After(delay):
+			text, _ := req.Params.Arguments["text"].(string)
+			return tmcp.NewTextResult("echo: " + text), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+
+	httpSrv := httptest.NewServer(srv.HTTPHandler())
+	t.Cleanup(func() {
+		httpSrv.CloseClientConnections()
+		httpSrv.Close()
+	})
+	return httpSrv.URL + "/mcp"
+}
+
+func TestAdHocHTTPTimeout_BoundsSlowCall(t *testing.T) {
+	url := startSlowHTTPMCPServer(t, 2*time.Second)
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithAdHocHTTPTimeout(150*time.Millisecond),
+	)
+
+	start := time.Now()
+	_, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  url + "#tool=slow_echo",
+		Arguments: map[string]any{"text": "hi"},
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "expected deadline exceeded, got nil after %v", elapsed)
+	require.Contains(t, err.Error(), "deadline exceeded",
+		"unexpected error: %v (elapsed=%v)", err, elapsed)
+	require.Less(t, elapsed, 1*time.Second,
+		"expected cut near 150ms, took %v - timeout not enforced for ad-hoc?", elapsed)
+}
+
+func TestAdHocHTTPTimeout_ZeroIsNoOp(t *testing.T) {
+	url := startSlowHTTPMCPServer(t, 300*time.Millisecond)
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithAdHocHTTPTimeout(0), // explicit no-op
+	)
+
+	start := time.Now()
+	out, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  url + "#tool=slow_echo",
+		Arguments: map[string]any{"text": "hi"},
+	})
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "expected success with Timeout=0 (elapsed=%v)", elapsed)
+	require.GreaterOrEqual(t, elapsed, 250*time.Millisecond,
+		"call returned too fast (%v); server should have slept ~300ms", elapsed)
+	require.NotEmpty(t, out.Content, "expected non-empty MCP tool content")
+}
+
+func TestAdHocHTTPTimeout_DefaultIsNoBound(t *testing.T) {
+	url := startSlowHTTPMCPServer(t, 300*time.Millisecond)
+
+	broker := New(WithAllowAdHocHTTP(true)) // option not called
+
+	start := time.Now()
+	out, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  url + "#tool=slow_echo",
+		Arguments: map[string]any{"text": "hi"},
+	})
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "expected success without WithAdHocHTTPTimeout (elapsed=%v)", elapsed)
+	require.GreaterOrEqual(t, elapsed, 250*time.Millisecond,
+		"call returned too fast (%v); server should have slept ~300ms", elapsed)
+	require.NotEmpty(t, out.Content)
+}
+
+func TestAdHocHTTPTimeout_DoesNotAffectNamedServers(t *testing.T) {
+	namedSrv := startBrokerHTTPServer(t)
+	defer namedSrv.Close()
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		// Hostile-low ad-hoc timeout. If it leaks into the named path,
+		// the named server listTools call below would fail.
+		WithAdHocHTTPTimeout(1*time.Millisecond),
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"named": {
+				Transport: "streamable",
+				ServerURL: namedSrv.URL,
+				Timeout:   5 * time.Second,
+			},
+		}),
+	)
+
+	out, err := broker.listTools(context.Background(), listToolsInput{Selector: "named"})
+	require.NoError(t, err,
+		"named-server listTools must not be bounded by WithAdHocHTTPTimeout: %v", err)
+	require.NotEmpty(t, out.Tools)
+}
+
+func TestAdHocHTTPTimeout_NegativeIsClampedToZero(t *testing.T) {
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithAdHocHTTPTimeout(-5*time.Second),
+	)
+	require.Equal(t, time.Duration(0), broker.options.adhocHTTPTimeout,
+		"negative values must be clamped to 0 to avoid breaking normalizeConnectionConfig")
+}
+
+// startStagedSlowHTTPMCPServer starts an MCP HTTP server that introduces a
+// per-JSON-RPC-method delay before delegating to the real MCP handler. The
+// delays map keys are JSON-RPC method names (e.g. "tools/list", "tools/call",
+// "initialize"); methods absent from the map respond immediately.
+func startStagedSlowHTTPMCPServer(t *testing.T, delays map[string]time.Duration) string {
+	t.Helper()
+
+	srv := tmcp.NewServer("staged-slow-mcp", "1.0.0", tmcp.WithServerPath("/mcp"))
+	echoTool := tmcp.NewTool(
+		"echo",
+		tmcp.WithDescription("Echo text back."),
+		tmcp.WithString("text", tmcp.Required(), tmcp.Description("Text.")),
+	)
+	srv.RegisterTool(echoTool, func(ctx context.Context, req *tmcp.CallToolRequest) (*tmcp.CallToolResult, error) {
+		text, _ := req.Params.Arguments["text"].(string)
+		return tmcp.NewTextResult("echo: " + text), nil
+	})
+
+	baseHandler := srv.HTTPHandler()
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && len(delays) > 0 {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+
+			var rpc struct {
+				Method string `json:"method"`
+			}
+			if err := json.Unmarshal(body, &rpc); err == nil {
+				if delay := delays[rpc.Method]; delay > 0 {
+					select {
+					case <-time.After(delay):
+					case <-r.Context().Done():
+						return
+					}
+				}
+			}
+		}
+		baseHandler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(func() {
+		httpSrv.CloseClientConnections()
+		httpSrv.Close()
+	})
+	return httpSrv.URL + "/mcp"
+}
+
+// TestAdHocHTTPTimeout_BoundsSSEStartup verifies that the timeout reaches the
+// SSE transport, even though trpc-mcp-go's SSE client detaches the long-lived
+// stream context. The startup path (waiting for the "endpoint" event) still
+// observes the caller-supplied ctx deadline, so a stalled SSE endpoint cannot
+// hold the broker call past the configured budget.
+func TestAdHocHTTPTimeout_BoundsSSEStartup(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Hold the GET open without ever sending an "endpoint" event.
+		// trpc-mcp-go's SSE client must time out via the broker ctx.
+		<-r.Context().Done()
+	}))
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithAdHocHTTPTimeout(300*time.Millisecond),
+	)
+
+	start := time.Now()
+	_, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  srv.URL + "/sse#tool=anything",
+		Transport: "sse",
+		Arguments: map[string]any{},
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "expected timeout error from stalled SSE endpoint")
+	require.Less(t, elapsed, 1*time.Second,
+		"WithAdHocHTTPTimeout must bound SSE ad-hoc operations; took %v", elapsed)
+}
+
+// TestAdHocHTTPTimeout_BoundsTotalOperationAcrossRPCs verifies that the
+// configured timeout bounds the total wall-clock of a single mcp_call
+// operation, not each underlying MCP RPC independently. The mcp_call path
+// issues ListTools (for argument validation) followed by CallTool; if the
+// broker accidentally gave each RPC its own fresh timeout budget, the total
+// elapsed time would exceed the configured upper bound.
+func TestAdHocHTTPTimeout_BoundsTotalOperationAcrossRPCs(t *testing.T) {
+	url := startStagedSlowHTTPMCPServer(t, map[string]time.Duration{
+		"tools/list": 200 * time.Millisecond,
+		"tools/call": 200 * time.Millisecond,
+	})
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithAdHocHTTPTimeout(300*time.Millisecond),
+	)
+
+	start := time.Now()
+	_, err := broker.callTool(context.Background(), callToolInput{
+		Selector:  url + "#tool=echo",
+		Arguments: map[string]any{"text": "hi"},
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "expected per-call timeout to fire across ListTools+CallTool")
+	require.Contains(t, err.Error(), "deadline exceeded")
+	require.Less(t, elapsed, 500*time.Millisecond,
+		"per-call budget must bound the total wall-clock across all internal RPCs; got %v", elapsed)
 }

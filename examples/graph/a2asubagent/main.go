@@ -45,8 +45,8 @@ import (
 )
 
 const (
-	// Default model name for deepseek-chat.
-	defaultModelName = "deepseek-chat"
+	// Default model name for deepseek-v4-flash.
+	defaultModelName = "deepseek-v4-flash"
 	// Default A2A server host.
 	defaultA2AHost = "0.0.0.0:8888"
 )

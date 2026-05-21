@@ -52,6 +52,9 @@ type Event struct {
     // StateDelta contains state changes to be written to the session.
     StateDelta map[string][]byte `json:"stateDelta,omitempty"`
 
+    // Extensions stores optional event metadata.
+    Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
+
     // StructuredOutput carries a typed, in-memory structured payload (not serialized).
     StructuredOutput any `json:"-"`
 
@@ -184,8 +187,30 @@ type Usage struct {
     // Total number of tokens used in response.
     TotalTokens int `json:"total_tokens"`
 
+    // Details of prompt token usage.
+    PromptTokensDetails PromptTokensDetails `json:"prompt_tokens_details"`
+
+    // Details of completion token usage.
+    CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+
     // Timing statistics (optional).
     TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+}
+
+type PromptTokensDetails struct {
+    // Number of cached tokens in the prompt.
+    CachedTokens int `json:"cached_tokens"`
+
+    // Number of tokens used to create the cache (Anthropic).
+    CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+
+    // Number of tokens read from cache (Anthropic).
+    CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+    // Number of tokens generated for reasoning.
+    ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 }
 
 type TimingInfo struct {
@@ -212,6 +237,8 @@ type TimingInfo struct {
     ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 ```
+
+`CompletionTokensDetails.ReasoningTokens` corresponds to OpenAI-compatible `completion_tokens_details.reasoning_tokens`. It can be `0` when the model does not use reasoning tokens or the provider does not report them.
 
 ### Event Types
 
@@ -393,6 +420,37 @@ if evt.Response != nil && evt.Object == model.ObjectTypeToolResponse && len(evt.
 ```
 
 Tip: For custom events, always use `event.New(...)` with `WithResponse`, `WithBranch`, etc., to ensure IDs and timestamps are set consistently.
+
+### Tool Call Arguments on Tool Responses
+
+Tool response events can carry the final tool-call arguments in
+`Event.Extensions`. This is useful when an event consumer needs to render a
+business-specific display name for a tool result, but that name depends on the
+arguments used for the original tool call.
+
+Use `event.ToolCallArgsExtensionKey` to read a `map[string]string`, where the
+key is the tool call ID and the value is the JSON argument string:
+
+```go
+argsByID, ok, err := event.GetExtension[map[string]string](
+    evt,
+    event.ToolCallArgsExtensionKey,
+)
+if err != nil {
+    // Extension payload had an unexpected shape.
+    return err
+}
+if ok {
+    argsJSON := argsByID[toolCallID]
+    // Use argsJSON to compute a display name, e.g. "Query game time".
+}
+```
+
+The stored arguments are the final arguments used by the framework after
+`BeforeTool` callbacks and argument repair. When parallel tool calls are merged
+into one `tool.response` event, the same extension map can contain entries for
+multiple tool call IDs. Treat this extension as optional so older or custom
+events without it remain compatible.
 
 ### GraphAgent Node-emitted Events (non-LLM output)
 

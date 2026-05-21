@@ -2193,7 +2193,7 @@ func TestExecutor_HandleCommandRouting_SetsStepMark(t *testing.T) {
 		nil,
 		ec,
 		taskID,
-		"",
+		nil,
 		targetNode,
 		step,
 	)
@@ -2492,6 +2492,48 @@ func (s *recordingSaver) DeleteLineage(
 }
 
 func (s *recordingSaver) Close() error { return nil }
+
+func TestExecutor_DAGCheckpointPendingWriteTaskIDUsesExecutionStep(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("start", func(context.Context, State) (any, error) {
+		return nil, nil
+	})
+	sg.AddNode("next", func(context.Context, State) (any, error) {
+		return nil, nil
+	})
+	sg.SetEntryPoint("start")
+	sg.AddEdge("start", "next")
+	sg.SetFinishPoint("next")
+	graph, err := sg.Compile()
+	require.NoError(t, err)
+	saver := newRecordingSaver()
+	exec, err := NewExecutor(
+		graph,
+		WithExecutionEngine(ExecutionEngineDAG),
+		WithCheckpointSaver(saver),
+	)
+	require.NoError(t, err)
+	events, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: "dag-pending-write-task-id"},
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	var taskIDs []string
+	saver.mu.Lock()
+	for _, tuple := range saver.tuples {
+		for _, write := range tuple.PendingWrites {
+			taskIDs = append(taskIDs, write.TaskID)
+		}
+	}
+	saver.mu.Unlock()
+	require.Contains(t, taskIDs, "start-0")
+	for _, taskID := range taskIDs {
+		require.NotContains(t, taskID, "-dag-")
+	}
+}
 
 func (s *recordingSaver) findLoopCheckpointWithBarrierSet(
 	channelName string,
@@ -2840,7 +2882,7 @@ func TestExecutor_NewNodeExecutionContext_PreservesBusinessCurrentTraceStepID(t 
 		Input:  State{"current_trace_step_id": "business"},
 	}
 	disabledInv := &agent.Invocation{InvocationID: "inv-disabled", AgentName: "graph"}
-	nodeCtx := exec.initializeNodeContext(context.Background(), disabledInv, ec, task, 1)
+	nodeCtx := exec.initializeNodeContext(context.Background(), disabledInv, ec, task, 1, false)
 	require.Equal(t, "business", nodeCtx.stateCopy["current_trace_step_id"])
 	_, ok := nodeCtx.stateCopy[currentTraceStepIDStateKey]
 	require.False(t, ok)
@@ -2849,7 +2891,7 @@ func TestExecutor_NewNodeExecutionContext_PreservesBusinessCurrentTraceStepID(t 
 		AgentName:    "graph",
 		RunOptions:   agent.RunOptions{ExecutionTraceEnabled: true},
 	}
-	nodeCtx = exec.initializeNodeContext(context.Background(), enabledInv, ec, task, 1)
+	nodeCtx = exec.initializeNodeContext(context.Background(), enabledInv, ec, task, 1, false)
 	require.Equal(t, "business", nodeCtx.stateCopy["current_trace_step_id"])
 	require.Equal(t, nodeCtx.traceStepID, nodeCtx.stateCopy[currentTraceStepIDStateKey])
 }

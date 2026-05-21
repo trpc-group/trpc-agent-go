@@ -30,6 +30,28 @@ import (
 
 const ApiKey = "*****"
 
+type overflowTailoringStrategy struct {
+	tailored []model.Message
+}
+
+func (s overflowTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return s.tailored, errors.New("minimal protected context exceeds token budget")
+}
+
+func TestWithContextWindow(t *testing.T) {
+	m, err := New("test-model", WithAPIKey("test-key"), WithContextWindow(204800))
+	require.NoError(t, err)
+	require.Equal(t, 204800, m.Info().ContextWindow)
+
+	m, err = New("test-model", WithAPIKey("test-key"), WithContextWindow(0))
+	require.NoError(t, err)
+	require.Zero(t, m.Info().ContextWindow)
+}
+
 func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
 	t.Run("request callback", func(t *testing.T) {
 		callbackCalled := false
@@ -695,6 +717,28 @@ func TestModel_TokenTailoring(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
+	tailored := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := &Model{
+		name:                 "test-model",
+		enableTokenTailoring: true,
+		maxInputTokens:       1,
+		tailoringStrategy:    overflowTailoringStrategy{tailored: tailored},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("old"),
+		model.NewUserMessage("q"),
+	}}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, tailored, req.Messages)
 }
 
 func TestModel_TokenTailoring_Integration(t *testing.T) {
@@ -3602,8 +3646,9 @@ func TestGenerateContent_WithExtraFields(t *testing.T) {
 		var req map[string]any
 		json.NewDecoder(r.Body).Decode(&req)
 
-		// Verify extra fields are present
-		assert.Equal(t, "custom_value", req["custom_field"])
+		// Verify extra fields are present and request-level fields take precedence.
+		assert.Equal(t, "request_value", req["custom_field"])
+		assert.Equal(t, "cache-1", req["prompt_cache_key"])
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ChatCompletionResponse{
@@ -3638,6 +3683,10 @@ func TestGenerateContent_WithExtraFields(t *testing.T) {
 	request := &model.Request{
 		Messages: []model.Message{
 			{Role: "user", Content: "Hello"},
+		},
+		ExtraFields: map[string]any{
+			"custom_field":     "request_value",
+			"prompt_cache_key": "cache-1",
 		},
 	}
 

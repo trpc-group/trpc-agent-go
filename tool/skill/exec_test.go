@@ -201,6 +201,63 @@ func TestExecTool_EditorText(t *testing.T) {
 	require.Contains(t, out.Result.Stdout, "note body")
 }
 
+func TestExecTool_PartialMetadataCommitReturnsFiles(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skillrepo.NewFSRepository(root)
+	require.NoError(t, err)
+
+	runTool := NewRunTool(repo, localexec.New())
+	execTool := NewExecTool(runTool)
+	pollTool := NewPollSessionTool(execTool)
+
+	args, err := jsonMarshal(execInput{
+		runInput: runInput{
+			Skill: testSkillName,
+			Command: "rm -rf " + codeexecutor.MetaFileName +
+				"; mkdir " + codeexecutor.MetaFileName +
+				"; mkdir -p out; echo " + contentHi +
+				" > " + outATxt,
+			Cwd: "$" + codeexecutor.WorkspaceEnvDirKey,
+			Outputs: &codeexecutor.OutputSpec{
+				Globs:  []string{outGlobTxt},
+				Inline: true,
+				Save:   false,
+			},
+			Timeout: timeoutSecSmall,
+		},
+		YieldMS: 1_000,
+	})
+	require.NoError(t, err)
+
+	reader, err := execTool.StreamableCall(context.Background(), args)
+	require.NoError(t, err)
+	_, out := drainExecStream(t, reader)
+	for attempt := 0; attempt < 5 &&
+		out.Status == codeexecutor.ProgramStatusRunning; attempt++ {
+		pollArgs, err := jsonMarshal(sessionPollInput{
+			SessionID: out.SessionID,
+			YieldMS:   500,
+		})
+		require.NoError(t, err)
+		reader, err = pollTool.StreamableCall(
+			context.Background(),
+			pollArgs,
+		)
+		require.NoError(t, err)
+		_, out = drainExecStream(t, reader)
+	}
+
+	require.Equal(t, codeexecutor.ProgramStatusExited, out.Status)
+	require.NotNil(t, out.Result)
+	require.Equal(t, 0, out.Result.ExitCode)
+	require.Len(t, out.Result.OutputFiles, 1)
+	require.Equal(t, outATxt, out.Result.OutputFiles[0].Name)
+	require.Contains(t, out.Result.OutputFiles[0].Content, contentHi)
+	require.Contains(t, out.Result.Warnings, warnPartialOutputCommit)
+}
+
 func TestKillSessionTool_RemovesSession(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)

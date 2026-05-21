@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +32,8 @@ import (
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modeltelemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -63,6 +64,9 @@ const (
 	// VariantHunyuan is the Hunyuan variant with specific file handling.
 	VariantHunyuan Variant = "hunyuan"
 	// VariantDeepSeek is the DeepSeek variant with specific base_url handling.
+	// It backfills empty reasoning_content for assistant history messages by
+	// default, including when inferred from the default DeepSeek base URL. Use
+	// WithReasoningContentBackfill(false) to disable this behavior.
 	VariantDeepSeek Variant = "deepseek"
 	// VariantQwen is the Qwen variant with specific base_url handling.
 	VariantQwen Variant = "qwen"
@@ -76,7 +80,9 @@ var defaultThinkingValueConvertor = func(enabled bool) any {
 	return enabled
 }
 
-// deepSeekThinkingValueConvertor converts to DeepSeek 3.2 format: {"type": "enabled"/"disabled"}.
+// deepSeekThinkingValueConvertor converts to the DeepSeek thinking-toggle
+// format introduced in v3.2 and reused by v4 (e.g. deepseek-v4-pro /
+// deepseek-v4-flash): {"type": "enabled"/"disabled"}.
 var deepSeekThinkingValueConvertor = func(enabled bool) any {
 	const (
 		thinkingTypeEnabled  = "enabled"
@@ -117,6 +123,9 @@ type variantConfig struct {
 	// defaultOptimizeForCache controls the default value for cache optimization
 	// when WithOptimizeForCache is not explicitly set.
 	defaultOptimizeForCache bool
+	// defaultReasoningContentBackfill controls replay-time empty
+	// reasoning_content backfill for assistant messages.
+	defaultReasoningContentBackfill bool
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -148,9 +157,11 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                deepSeekAPIKeyName,
 		defaultBaseURL:            defaultDeepSeekBaseURL,
-		// DeepSeek 3.2 uses {"thinking": {"type": "enabled"}} format.
-		thinkingEnabledKey:     "thinking",
-		thinkingValueConvertor: deepSeekThinkingValueConvertor,
+		// DeepSeek v3.2+ (incl. v4-pro / v4-flash) uses
+		// {"thinking": {"type": "enabled"/"disabled"}} format.
+		thinkingEnabledKey:              "thinking",
+		thinkingValueConvertor:          deepSeekThinkingValueConvertor,
+		defaultReasoningContentBackfill: true,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
@@ -228,6 +239,7 @@ type Model struct {
 	chatResponseCallback       ChatResponseCallbackFunc
 	chatChunkCallback          ChatChunkCallbackFunc
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	chatTelemetry              bool
 	extraFields                map[string]any
 	variant                    Variant
 	variantConfig              variantConfig
@@ -237,6 +249,7 @@ type Model struct {
 	batchBaseURL               string
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
+	contextWindow              int                     // Context window for this model instance.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
@@ -265,6 +278,9 @@ func New(name string, opts ...Option) *Model {
 	cfg, cfgOK := variantConfigs[o.Variant]
 	if !o.optimizeForCacheSet {
 		o.OptimizeForCache = cfgOK && cfg.defaultOptimizeForCache
+	}
+	if !o.reasoningContentBackfillSet {
+		o.ReasoningContentBackfill = cfgOK && cfg.defaultReasoningContentBackfill
 	}
 
 	// Set default API key and base URL if not specified.
@@ -308,6 +324,7 @@ func New(name string, opts ...Option) *Model {
 		chatResponseCallback:       o.ChatResponseCallback,
 		chatChunkCallback:          o.ChatChunkCallback,
 		chatStreamCompleteCallback: o.ChatStreamCompleteCallback,
+		chatTelemetry:              o.ChatTelemetry,
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
 		variantConfig:              variantConfigs[o.Variant],
@@ -316,6 +333,7 @@ func New(name string, opts ...Option) *Model {
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
 		enableTokenTailoring:       o.EnableTokenTailoring,
+		contextWindow:              o.ContextWindow,
 		tokenCounter:               o.TokenCounter,
 		tailoringStrategy:          o.TailoringStrategy,
 		maxInputTokens:             o.MaxInputTokens,
@@ -353,7 +371,8 @@ func isDeepSeekBaseURL(raw string) bool {
 // Info implements the model.Model interface.
 func (m *Model) Info() model.Info {
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
 	}
 }
 
@@ -442,6 +461,7 @@ func (m *Model) GenerateContent(
 	if err != nil {
 		return nil, err
 	}
+	reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
@@ -450,10 +470,20 @@ func (m *Model) GenerateContent(
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
+		defer reporter.End()
+		emit := func(resp *model.Response) bool {
+			reporter.TrackResponse(resp)
+			select {
+			case responseChan <- resp:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 		if request.Stream {
-			m.handleStreamingResponse(ctx, *chatRequest, responseChan, opts...)
+			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
 		} else {
-			m.handleNonStreamingResponse(ctx, *chatRequest, responseChan, opts...)
+			m.handleNonStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
 		}
 	}()
 	return responseChan, nil
@@ -469,12 +499,15 @@ func (m *Model) GenerateContentIter(
 		return nil, err
 	}
 	return func(yield func(*model.Response) bool) {
+		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
+		defer reporter.End()
 		m.runChatRequestCallback(ctx, chatRequest)
 		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
 				return false
 			}
+			reporter.TrackResponse(resp)
 			return yield(resp)
 		}
 		if request.Stream {
@@ -521,36 +554,74 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	// Determine max input tokens using priority: user config > auto calculation > default.
 	maxInputTokens := m.maxInputTokens
-	if maxInputTokens <= 0 {
+	outputReserveTokens := m.effectiveOutputReserveTokens(request)
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	autoBudget := maxInputTokens <= 0
+	if autoBudget {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
 				contextWindow,
 				m.protocolOverheadTokens,
-				m.reserveOutputTokens,
+				outputReserveTokens,
 				m.inputTokensFloor,
 				m.safetyMarginRatio,
 				m.maxInputTokensRatio,
 			)
 		} else {
 			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
+			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
+				contextWindow,
+				imodel.DefaultProtocolOverheadTokens,
+				outputReserveTokens,
+				imodel.DefaultInputTokensFloor,
+				imodel.DefaultSafetyMarginRatio,
+				imodel.DefaultMaxInputTokensRatio,
+			)
 		}
+	}
+
+	maxInputTokens = min(maxInputTokens, m.hardInputBudget(contextWindow, outputReserveTokens))
+	if autoBudget {
 		log.DebugfContext(
 			ctx,
 			"auto-calculated max input tokens: model=%s, "+
-				"contextWindow=%d, maxInputTokens=%d",
+				"contextWindow=%d, reserveOutputTokens=%d, maxInputTokens=%d",
 			m.name,
 			contextWindow,
+			outputReserveTokens,
 			maxInputTokens,
 		)
+		toolsTokens := m.estimateToolsTokens(ctx, request.Tools)
+		if toolsTokens > 0 {
+			maxInputTokens = max(maxInputTokens-toolsTokens, 0)
+			log.DebugfContext(
+				ctx,
+				"adjusted max input tokens after tools budget: model=%s, "+
+					"toolsTokens=%d, maxInputTokens=%d",
+				m.name,
+				toolsTokens,
+				maxInputTokens,
+			)
+		}
 	}
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
+		if len(tailored) > 0 {
+			log.WarnContext(
+				ctx,
+				"token tailoring returned best-effort messages in openai.Model",
+				err,
+			)
+			request.Messages = tailored
+			return
+		}
 		log.WarnContext(
 			ctx,
 			"token tailoring failed in openai.Model",
@@ -560,6 +631,63 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	}
 
 	request.Messages = tailored
+}
+
+func (m *Model) effectiveOutputReserveTokens(request *model.Request) int {
+	reserve := m.reserveOutputTokens
+	if reserve <= 0 {
+		reserve = imodel.DefaultReserveOutputTokens
+	}
+	if request == nil {
+		return reserve
+	}
+	if request.MaxTokens != nil && *request.MaxTokens > reserve {
+		reserve = *request.MaxTokens
+	}
+	if request.ThinkingTokens != nil && *request.ThinkingTokens > reserve {
+		reserve = *request.ThinkingTokens
+	}
+	return reserve
+}
+
+func (m *Model) hardInputBudget(contextWindow, outputReserveTokens int) int {
+	protocolOverheadTokens := m.protocolOverheadTokens
+	if protocolOverheadTokens <= 0 {
+		protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
+	}
+	safetyMarginRatio := m.safetyMarginRatio
+	if safetyMarginRatio <= 0 {
+		safetyMarginRatio = imodel.DefaultSafetyMarginRatio
+	}
+	safetyMargin := int(float64(contextWindow) * safetyMarginRatio)
+	return max(contextWindow-outputReserveTokens-protocolOverheadTokens-safetyMargin, 0)
+}
+
+func (m *Model) estimateToolsTokens(
+	ctx context.Context,
+	tools map[string]tool.Tool,
+) int {
+	if len(tools) == 0 || m.tokenCounter == nil {
+		return 0
+	}
+	converted := m.convertTools(tools)
+	if len(converted) == 0 {
+		return 0
+	}
+	raw, err := json.Marshal(converted)
+	if err != nil {
+		log.WarnContext(ctx, "failed to marshal tools for token tailoring", err)
+		return 0
+	}
+	tokens, err := m.tokenCounter.CountTokens(ctx, model.Message{
+		Role:    model.RoleSystem,
+		Content: string(raw),
+	})
+	if err != nil {
+		log.WarnContext(ctx, "failed to count tools tokens for token tailoring", err)
+		return 0
+	}
+	return tokens
 }
 
 // buildChatRequest converts our Request to OpenAI request params and options.
@@ -575,15 +703,22 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 		request.StructuredOutput.Type == model.StructuredOutputJSONSchema &&
 		request.StructuredOutput.JSONSchema != nil {
 		js := request.StructuredOutput.JSONSchema
-		chatRequest.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
-				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name:        js.Name,
-					Schema:      js.Schema,
-					Strict:      openai.Bool(js.Strict),
-					Description: openai.String(js.Description),
+		if m.variant == VariantDeepSeek {
+			jsonObject := shared.NewResponseFormatJSONObjectParam()
+			chatRequest.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONObject: &jsonObject,
+			}
+		} else {
+			chatRequest.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+						Name:        js.Name,
+						Schema:      js.Schema,
+						Strict:      openai.Bool(js.Strict),
+						Description: openai.String(js.Description),
+					},
 				},
-			},
+			}
 		}
 		if len(request.Tools) > 0 {
 			// Parallel tool calls can interfere with strict JSON schema
@@ -619,8 +754,12 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
 	opts := m.buildThinkingOption(request)
-	// Add extra fields to the request
+	// Add model-level extra fields to the request.
 	for key, value := range m.extraFields {
+		opts = append(opts, openaiopt.WithJSONSet(key, value))
+	}
+	// Add request-level extra fields after model-level fields so they take precedence.
+	for key, value := range request.ExtraFields {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
 
@@ -634,6 +773,12 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 }
 
 // buildThinkingOption converts our Request to OpenAI request RequestOption.
+//
+// Note on default behavior: when request.ThinkingEnabled is nil, this function
+// does not emit any thinking-toggle field in the outgoing request. The
+// upstream provider then applies its server-side default (e.g. DeepSeek v4
+// defaults to thinking "enabled"). Callers that want a deterministic on/off
+// behavior must set ThinkingEnabled explicitly.
 func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestOption {
 	var opts []openaiopt.RequestOption
 	if request.ThinkingTokens != nil {
@@ -657,15 +802,16 @@ func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestO
 }
 
 // shouldBackfillReasoningContent reports whether replay should emit
-// model.ReasoningContentKey as an empty string for assistant tool-call
-// messages. Some providers require the key to be present during tool-call
-// replay even when no reasoning text was returned.
+// model.ReasoningContentKey as an empty string for assistant messages. Some
+// providers require the key to be present for every assistant message in
+// thinking mode even when no reasoning text was returned.
 func (m *Model) shouldBackfillReasoningContent(
 	msg model.Message,
 ) bool {
 	return m.reasoningContentBackfill &&
+		msg.Role == model.RoleAssistant &&
 		msg.ReasoningContent == "" &&
-		len(msg.ToolCalls) > 0
+		(msg.Content != "" || len(msg.ContentParts) > 0 || len(msg.ToolCalls) > 0)
 }
 
 // convertMessages converts our Message format to OpenAI's format.
@@ -697,8 +843,8 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 				Content:   m.convertAssistantMessageContent(msg),
 				ToolCalls: m.convertToolCalls(msg.ToolCalls),
 			}
-			// Pass reasoning_content to API if present (required by DeepSeek for
-			// tool call scenarios within the same request turn).
+			// Pass reasoning_content to API if present, or when provider replay
+			// requires the field for assistant history in thinking mode.
 			if msg.ReasoningContent != "" ||
 				m.shouldBackfillReasoningContent(msg) {
 				assistantMsg.SetExtraFields(map[string]any{
@@ -848,6 +994,16 @@ func onlyInternalFileContentParts(parts []model.ContentPart) bool {
 	return true
 }
 
+func fileURLFallbackText(file *model.File) string {
+	if file == nil ||
+		strings.TrimSpace(file.URL) == "" ||
+		len(file.Data) != 0 ||
+		isProviderFileID(file.FileID) {
+		return ""
+	}
+	return model.FileURLText(file)
+}
+
 func userTextPart(text string) openai.ChatCompletionContentPartUnionParam {
 	return openai.ChatCompletionContentPartUnionParam{
 		OfText: &openai.ChatCompletionContentPartTextParam{
@@ -856,16 +1012,24 @@ func userTextPart(text string) openai.ChatCompletionContentPartUnionParam {
 	}
 }
 
+func appendFileURLFallbackText(
+	dst *[]openai.ChatCompletionContentPartUnionParam,
+	file *model.File,
+) bool {
+	text := fileURLFallbackText(file)
+	if text == "" {
+		return false
+	}
+	*dst = append(*dst, userTextPart(text))
+	return true
+}
+
 func (m *Model) appendUserContentParts(
 	dst *[]openai.ChatCompletionContentPartUnionParam,
 	parts []model.ContentPart,
 ) map[string]any {
 	var extraFields map[string]any
 	for _, part := range parts {
-		if m.variantConfig.textOnlyMessageContent &&
-			part.Type != model.ContentTypeText {
-			continue
-		}
 		if part.Type == model.ContentTypeFile &&
 			m.omitFileContentParts {
 			continue
@@ -875,8 +1039,18 @@ func (m *Model) appendUserContentParts(
 			isInternalOnlyFile(part.File) {
 			continue
 		}
+		if m.variantConfig.textOnlyMessageContent &&
+			part.Type != model.ContentTypeText {
+			if part.Type == model.ContentTypeFile {
+				appendFileURLFallbackText(dst, part.File)
+			}
+			continue
+		}
 		if part.Type == model.ContentTypeFile &&
 			m.variantConfig.skipFileTypeInContent {
+			if appendFileURLFallbackText(dst, part.File) {
+				continue
+			}
 			extraFields = appendFileID(extraFields, part)
 			continue
 		}
@@ -902,6 +1076,9 @@ func (m *Model) omittedContentHint(parts []model.ContentPart) string {
 		case model.ContentTypeAudio:
 			audioCount++
 		case model.ContentTypeFile:
+			if fileURLFallbackText(part.File) != "" {
+				continue
+			}
 			fileCount++
 		}
 	}
@@ -1090,6 +1267,13 @@ func (m *Model) convertContentPart(part model.ContentPart) *openai.ChatCompletio
 		if part.File != nil {
 			params, ok := fileToParamsOK(part.File)
 			if !ok {
+				if text := fileURLFallbackText(part.File); text != "" {
+					return &openai.ChatCompletionContentPartUnionParam{
+						OfText: &openai.ChatCompletionContentPartTextParam{
+							Text: text,
+						},
+					}
+				}
 				return nil
 			}
 			return &openai.ChatCompletionContentPartUnionParam{
@@ -1122,7 +1306,8 @@ func isInternalOnlyFile(file *model.File) bool {
 		return false
 	}
 	return fileref.IsInternalFileRef(file.FileID) &&
-		len(file.Data) == 0
+		len(file.Data) == 0 &&
+		strings.TrimSpace(file.URL) == ""
 }
 
 func safeFileHintName(file *model.File) string {
@@ -1198,18 +1383,9 @@ func (m *Model) convertToolCalls(toolCalls []model.ToolCall) []openai.ChatComple
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletionToolParam {
-	// Extract and sort tool names for stable ordering to improve cache hit rate
-	toolNames := make([]string, 0, len(tools))
-	for name := range tools {
-		toolNames = append(toolNames, name)
-	}
-	sort.Strings(toolNames)
-
-	// Build tools in sorted order
 	var result []openai.ChatCompletionToolParam
-	for _, name := range toolNames {
-		tool := tools[name]
-		declaration := tool.Declaration()
+	for _, t := range toolorder.SortedTools(tools) {
+		declaration := t.Declaration()
 		// Convert the InputSchema to JSON to correctly map to OpenAI's expected format
 		schemaBytes, err := json.Marshal(declaration.InputSchema)
 		if err != nil {
@@ -1253,24 +1429,6 @@ func buildToolDescription(declaration *tool.Declaration) string {
 	}
 	desc += "\nOutput schema: " + string(schemaJSON)
 	return desc
-}
-
-// handleStreamingResponse handles streaming chat completion responses.
-func (m *Model) handleStreamingResponse(
-	ctx context.Context,
-	chatRequest openai.ChatCompletionNewParams,
-	responseChan chan<- *model.Response,
-	opts ...openaiopt.RequestOption,
-) {
-	emitter := func(resp *model.Response) bool {
-		select {
-		case responseChan <- resp:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
-	m.handleStreamingResponseWithEmitter(ctx, chatRequest, emitter, opts...)
 }
 
 // responseEmitter emits a response and returns false to stop streaming.
@@ -2075,11 +2233,6 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 				[]model.ToolCall, 0,
 				len(chunk.Choices[0].Delta.ToolCalls))
 			for _, toolCall := range chunk.Choices[0].Delta.ToolCalls {
-				var indexPtr *int
-				if toolCall.Index != 0 {
-					index := int(toolCall.Index)
-					indexPtr = &index
-				}
 				toolCalls = append(toolCalls, model.ToolCall{
 					Type: string(toolCall.Type),
 					Function: model.FunctionDefinitionParam{
@@ -2087,7 +2240,7 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 						Arguments: []byte(toolCall.Function.Arguments),
 					},
 					ID:    toolCall.ID,
-					Index: indexPtr,
+					Index: toolCallDeltaIndexPointer(toolCall),
 				})
 			}
 		}
@@ -2107,6 +2260,14 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 	}
 
 	return response
+}
+
+func toolCallDeltaIndexPointer(toolCall openai.ChatCompletionChunkChoiceDeltaToolCall) *int {
+	if toolCall.Index == 0 && !toolCall.JSON.Index.Valid() {
+		return nil
+	}
+	index := int(toolCall.Index)
+	return &index
 }
 
 // emitStreamingFinalResponse emits the final response with accumulated data.
@@ -2270,23 +2431,6 @@ func (m *Model) createFinalResponse(
 	}
 
 	return finalResponse
-}
-
-// handleNonStreamingResponse handles non-streaming chat completion responses.
-func (m *Model) handleNonStreamingResponse(
-	ctx context.Context,
-	chatRequest openai.ChatCompletionNewParams,
-	responseChan chan<- *model.Response,
-	opts ...openaiopt.RequestOption,
-) {
-	m.handleNonStreamingResponseWithEmitter(ctx, chatRequest, func(resp *model.Response) bool {
-		select {
-		case responseChan <- resp:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}, opts...)
 }
 
 // handleNonStreamingResponseWithEmitter handles non-streaming chat completion responses.

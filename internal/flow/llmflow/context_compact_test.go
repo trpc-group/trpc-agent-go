@@ -167,11 +167,15 @@ func (p *unsafeTailRequestProcessor) ProcessRequest(
 }
 
 type compactingModel struct {
-	name string
+	name   string
+	window int
 }
 
 func (m *compactingModel) Info() model.Info {
-	return model.Info{Name: m.name}
+	return model.Info{
+		Name:          m.name,
+		ContextWindow: m.window,
+	}
 }
 
 func (m *compactingModel) GenerateContent(
@@ -1097,6 +1101,29 @@ func TestContextCompactionThreshold(t *testing.T) {
 		)
 		require.Equal(t, 5734, contextCompactionThreshold(inv, 0))
 	})
+
+	t.Run("uses model instance window", func(t *testing.T) {
+		inv := agent.NewInvocation(
+			agent.WithInvocationModel(&compactingModel{
+				name:   "compact-threshold-instance",
+				window: 40000,
+			}),
+		)
+		require.Equal(t, 20000, contextCompactionThreshold(inv, 0.5))
+	})
+
+	t.Run("run option overrides model instance window", func(t *testing.T) {
+		inv := agent.NewInvocation(
+			agent.WithInvocationModel(&compactingModel{
+				name:   "compact-threshold-run-option",
+				window: 40000,
+			}),
+			agent.WithInvocationRunOptions(
+				agent.NewRunOptions(agent.WithModelContextWindow(10000)),
+			),
+		)
+		require.Equal(t, 5000, contextCompactionThreshold(inv, 0.5))
+	})
 }
 
 func TestShouldSyncCompactContext(t *testing.T) {
@@ -1109,16 +1136,40 @@ func TestShouldSyncCompactContext(t *testing.T) {
 
 	require.False(t, shouldSyncCompactContext(context.Background(), nil, &model.Request{
 		Messages: []model.Message{model.NewUserMessage("hello")},
-	}, 0.5))
-	require.False(t, shouldSyncCompactContext(context.Background(), inv, nil, 0.5))
-	require.False(t, shouldSyncCompactContext(context.Background(), inv, &model.Request{}, 0.5))
+	}, 0.5, nil))
+	require.False(t, shouldSyncCompactContext(context.Background(), inv, nil, 0.5, nil))
+	require.False(t, shouldSyncCompactContext(context.Background(), inv, &model.Request{}, 0.5, nil))
 
 	require.False(t, shouldSyncCompactContext(context.Background(), inv, &model.Request{
 		Messages: []model.Message{model.NewUserMessage(strings.Repeat("a", 100))},
-	}, 0.5))
+	}, 0.5, nil))
 	require.True(t, shouldSyncCompactContext(context.Background(), inv, &model.Request{
 		Messages: []model.Message{model.NewUserMessage(strings.Repeat("a", 5000))},
-	}, 0.5))
+	}, 0.5, nil))
+
+	customCounterInv := agent.NewInvocation(
+		agent.WithInvocationModel(&compactingModel{
+			name:   "compact-threshold-custom-counter",
+			window: 10000,
+		}),
+	)
+	customCounterReq := &model.Request{
+		Messages: []model.Message{model.NewUserMessage(strings.Repeat("a", 12000))},
+	}
+	require.False(t, shouldSyncCompactContext(
+		context.Background(),
+		customCounterInv,
+		customCounterReq,
+		0.5,
+		nil,
+	))
+	require.True(t, shouldSyncCompactContext(
+		context.Background(),
+		customCounterInv,
+		customCounterReq,
+		0.5,
+		model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1)),
+	))
 }
 
 func TestCloneRequestForContextCompaction_DeepCopiesMutableFields(t *testing.T) {

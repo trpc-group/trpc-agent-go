@@ -598,6 +598,97 @@ agent := llmagent.New(
 
 `WithBaseDir` 定义了 `Read`、`Write`、`Edit`、`Glob`、`Grep` 等文件相关工具的工作范围，也决定了 `Bash` 的默认执行目录。启用只读模式后，工具集只保留读取、检索、命令执行和 Web 相关能力；关闭只读模式后，会额外暴露 `Write`、`Edit` 与 `NotebookEdit`。
 
+### Todo 工具
+
+Todo 工具为 Agent 提供一份结构化、可跨轮持久化的任务清单。模型通过 `todo_write` 发布或更新当前计划；清单会被持久化到 session、随 tool result 事件返回给前端，并在每次写入后默认追加一段简短提示，督促模型边推进边更新状态。
+
+适合下面这些场景：
+
+- 任务跨多个非平凡步骤，模型容易漏掉某一步；
+- 用户或下游 UI 需要在 Agent 工作过程中看到可见的进度；
+- 同一会话可能中途暂停（例如向用户追问信息），后续再续上原计划继续推进。
+
+#### 基础用法
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/todo"
+)
+
+todoTool := todo.New()
+
+agent := llmagent.New("todo-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction(todo.DefaultToolPrompt),
+    llmagent.WithTools([]tool.Tool{todoTool}),
+)
+```
+
+`todo.DefaultToolPrompt` 是开箱即用的 system instruction 片段，告诉模型何时调用 `todo_write` 以及如何撰写条目；你也可以替换成自己的版本，下文的运行时校验规则不受影响。
+
+#### 工具返回结构
+
+`todo_write` 返回的是结构化结果而不是自由文本，因此终端、AG-UI、自研 HTTP 前端等任何调用方都可以直接消费：
+
+```go
+type Output struct {
+    Message  string `json:"message"`             // 默认 nudge + hook 输出
+    Todos    []Item `json:"todos"`               // 本次写入后的当前清单
+    OldTodos []Item `json:"oldTodos,omitempty"`  // 本次写入前的清单
+}
+```
+
+`Todos` 和 `OldTodos` 会直接挂在 tool result 事件上，AG-UI 客户端（或任何消费 `tool_call_result` 的前端）解码后即可渲染最新状态和 diff，不需要回查 session。`examples/todo/` 中的终端示例内联了一个小型 ASCII 格式化函数；富前端可以按自己的风格渲染同一份结构化数据。
+
+#### 跨轮持久化与 Branch 隔离
+
+每次写入都会作为 session state delta 发布，因此清单可以跨 `Runner.Run` 调用持久化；当后端 session service 是持久化实现时，跨进程同样有效。
+
+清单按 `Invocation.Branch` 分键存储；当调用方没有显式设置 branch 时，框架会自动把它补成该 Agent 的名称（因此子 Agent 或 agent-tool 会读写自己的清单，不会覆盖父 Agent 的计划）。对应上面的基础接入（`llmagent.New("todo-assistant", ...)`），服务端读取应当写成：
+
+```go
+items, err := todo.GetTodos(sess, "todo-assistant") // 即 agent 名称
+// items == nil + err == nil → 还没有清单
+// len(items) == 0           → 清单已被显式清空
+```
+
+如果你配置了自定义 branch（例如通过 `WithInvocationBranch`，或把当前 Agent 作为子 Agent 运行在父 Agent 下），就传入对应的 branch 值。只有当 `Invocation.Branch` 被显式置为 `""` 时，传空字符串才会命中顶层槽位。
+
+#### 输入校验
+
+每次调用都会经过下面这组检查；任意一条不满足都会让本次调用直接失败，session 状态不会被修改：
+
+- `todos` 字段**必填**且必须是数组。缺失字段或字面量 `null` 会被直接拒绝，**不会**被当作"清空全部"。要清空清单请显式发送 `{"todos": []}`。
+- 每个条目必须包含非空的 `content`、非空的 `activeForm`，以及合法的 `status`（`pending` / `in_progress` / `completed`）。
+- 同一时刻**最多一个**条目处于 `in_progress`。
+- `content` 在清单内必须唯一（精确字符串匹配，不做 trim / 大小写归一 / Unicode 归一）。
+
+风格性建议——例如"实际工作期间始终恰好一个 `in_progress`"、条目措辞、何时值得调用 `todo_write` 等——放在 `todo.DefaultToolPrompt` 里，不在上述检查中强制；因此你可以根据自身业务或所用模型族调整 prompt，不需要改工具。
+
+#### 自定义
+
+```go
+todoTool := todo.New(
+    // 把清单存到自定义 state-key 命名空间下；默认布局已经按 branch
+    // 隔离，大多数场景不需要改这个。
+    todo.WithStateKeyPrefix("temp:plan"),
+    // 默认情况下，所有条目变成 completed 后清单会被清空，让下一轮
+    // 规划从零开始。设为 false 可以保留已完成条目。
+    todo.WithClearOnAllDone(false),
+    // 替换每次写入后默认追加的 nudge 文案。
+    todo.WithNudgeMessage("继续推进；完成一项就更新一项。"),
+    // 根据本次提交的清单和上一份清单的 diff 追加额外提示
+    // (例如自定义 prompt、埋点、指标计算)。Hook 期望是只读的。
+    todo.WithNudgeHook(func(ctx context.Context, oldTodos, submitted []todo.Item) string {
+        return ""
+    }),
+)
+```
+
+完整可运行示例（包含多轮暂停/续接场景与 ASCII 渲染器）见 [`examples/todo/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todo)。
+
 ## MCP Tools 协议工具
 
 MCP（Model Context Protocol）是一个开放协议，标准化了应用程序向 LLM 提供上下文的方式。MCP 工具基于 JSON-RPC 2.0 协议，为 Agent 提供了与外部服务的标准化集成能力。
@@ -721,6 +812,47 @@ if err := mcpToolSet.Init(ctx); err != nil {
     return fmt.Errorf("初始化 Streamable MCP 工具集失败: %w", err)
 }
 ```
+
+#### 按请求 HTTP Header
+
+对 SSE 和 Streamable HTTP 传输，可以使用上游 MCP 客户端提供的
+`mcp.WithHTTPBeforeRequest`，在每一次 MCP HTTP 请求发出前，从当前调用
+的 context 动态注入 header。一个长生命周期 MCP ToolSet 服务多个已登录
+用户时，可以用它按用户注入 token、JWT 或业务签名。把 hook 通过
+`WithMCPOptions` 传入即可：
+
+```go
+import (
+    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+    toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+mcpToolSet := toolmcp.NewMCPToolSet(
+    toolmcp.ConnectionConfig{
+        Transport: "streamable_http",
+        ServerURL: "http://localhost:3000/mcp",
+    },
+    toolmcp.WithMCPOptions(tmcp.WithHTTPBeforeRequest(
+        func(ctx context.Context, req *http.Request) error {
+            token, ok := tokenFromContext(ctx)
+            if !ok {
+                return nil
+            }
+            req.Header.Set("Authorization", "Bearer "+token)
+            return nil
+        },
+    )),
+)
+```
+
+`ConnectionConfig.Headers` 提供的静态 header 会先生效；之后每次 HTTP
+请求都会走一遍 before-request hook，hook 内对同名 header 的 `Set` 会
+覆盖静态值。
+
+如果你是通过 `llmagent.WithToolSets(...)` 挂载这个 ToolSet，并且希望
+`initialize` / `tools/list` 也能拿到请求级 header，建议同时配合
+`llmagent.WithRefreshToolSetsOnRun(true)`，或者先手动 `toolSet.Tools(ctx)`，
+再通过 `llmagent.WithTools(...)` 注入。
 
 ### 会话重连支持
 
@@ -1060,12 +1192,52 @@ broker := mcpbroker.New(
 - `mcpbroker` 本身不管理复杂的 OAuth session 状态机
 
 开启 `WithAllowAdHocHTTP(true)` 后，URL selector 可能来自模型可见上下文。
-生产环境中应在 `HTTPHeaderInjector` 里基于 `req.IsAdHoc` 和 `req.BaseURL`
-做 allowlist / URL 校验，再返回敏感 Header。
+两类职责建议分开处理：
+
+- `HTTPHeaderInjector` 只决定**是否、向谁**注入敏感 Header。可以基于
+  `req.IsAdHoc` 和 `req.BaseURL` 做粗粒度判断，例如对未知 BaseURL 直接返回
+  `nil`，避免向不可信目标泄露 token。
+- 出站 URL allowlist / 域名校验等**网络出站策略**放到
+  `WithClientOptionsProvider` 返回的 `tmcp.WithHTTPBeforeRequest` 里实现，
+  详见下一节。
 
 完整示例可参考：
 
 - `examples/mcpbroker/authhooks`
+
+#### 底层 Client 选项（`WithClientOptionsProvider`）
+
+除 Header 注入与错误拦截外，可用 `WithClientOptionsProvider` 在**解析目标并完成 `WithHTTPHeaderInjector` 之后、创建底层 MCP 客户端之前**，由业务返回 `trpc-mcp-go` 原生的 `tmcp.ClientOption` / `tmcp.StdioClientOption`。
+
+- **顺序**：默认的 HTTP Header（含注入结果）先应用，再追加 provider 返回的 HTTP options，便于在 `WithHTTPBeforeRequest` 等钩子里做 URL 校验、审计或覆盖 Header。
+- **`ClientOptionsRequest`**：携带 `Selector`、`ServerName`、`Origin`（`mcpbroker.OriginCode` / `mcpbroker.OriginAdhoc`）、`TargetType`、`Phase`（如 `mcpbroker.PhaseListTools`）、`ToolName`（调用阶段）、以及本次调用的配置副本 `Config`。
+- **返回值**：`nil, nil` 表示不追加；返回 `error` 会在建连前失败（适合 URL policy 拒绝等契约）。
+- **`stdio`**：命名 stdio 目标时，向 `ClientOptions.Stdio` 传入选项即可（例如 `WithStdioCapabilities`）。
+
+框架**不内置**易误杀的 URL 全局拒绝列表；若需限制 ad-hoc 出站，可在 provider 里结合 `tmcp.WithHTTPBeforeRequest` 自行实现策略。
+
+示例（仅说明形态，按业务调整）：
+
+```go
+mcpbroker.New(
+    mcpbroker.WithAllowAdHocHTTP(true),
+    mcpbroker.WithClientOptionsProvider(func(ctx context.Context, req *mcpbroker.ClientOptionsRequest) (*mcpbroker.ClientOptions, error) {
+        if req.Origin == mcpbroker.OriginAdhoc {
+            return &mcpbroker.ClientOptions{
+                HTTP: []tmcp.ClientOption{
+                    tmcp.WithHTTPBeforeRequest(func(ctx context.Context, httpReq *http.Request) error {
+                        if !hostAllowed(httpReq.URL) {
+                            return fmt.Errorf("MCP endpoint not allowed: %s", httpReq.URL.Host)
+                        }
+                        return nil
+                    }),
+                },
+            }, nil
+        }
+        return nil, nil
+    }),
+)
+```
 
 ## Agent 工具 (AgentTool)
 
@@ -1099,6 +1271,7 @@ mathTool := agenttool.NewTool(
     agenttool.WithSkipSummarization(false), // 可选，默认 false，当设置为 true 时会跳过外层模型总结，在 tool.response 后直接结束本轮
     agenttool.WithStreamInner(true),        // 开启：把子 Agent 的流式事件转发给父流程
     agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude), // 隐藏子 Agent 正文，仅保留内部进度
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),  // 工具结果只返回子 Agent 最后一条完整 assistant 消息
 )
 
 // 3) 在父 Agent 中使用该工具
@@ -1136,6 +1309,51 @@ if ev.Author != parentName && ev.Response != nil &&
 }
 ```
 
+### 工具结果响应模式
+
+AgentTool 内部始终是以事件流的形式运行子 Agent。响应模式只控制
+AgentTool 最终作为“工具结果”返回给父 Agent 的内容；它不会改变
+子 Agent 的 session 写入、事件过滤键，也不会改变内部流式转发行为。
+
+默认情况下，AgentTool 保持历史兼容行为：子 Agent 产生的每一条非空
+assistant 消息都会被追加到同一个工具结果字符串里。这个行为对存量调用方最安全，
+但长任务子 Agent 往往会输出进度、草稿或中间结论，这些中间 assistant 内容也会
+进入父 Agent 看到的 `tool.response`。
+
+当子 Agent 的目标是“隔离上下文、独立完成任务、只把最终答案交给父 Agent”
+时，可以使用 `WithResponseMode(agenttool.ResponseModeFinalOnly)`：
+
+```go
+childTool := agenttool.NewTool(
+    childAgent,
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
+)
+```
+
+在 final-only 模式下，AgentTool 会：
+
+- 忽略 partial assistant 增量
+- 忽略非 assistant 消息、空 assistant 消息以及 tool 消息
+- 返回子 Agent 最后一条完整 assistant 消息
+- 如果子 Agent 结束时没有完整 assistant 消息，则返回空字符串
+- 子 Agent 报错时仍返回 `agent error: ...`
+
+它和 `WithSkipSummarization(true)` 不是一回事。`WithSkipSummarization`
+控制的是父流程拿到工具响应后，是否再调用一次外层模型做总结；
+`WithResponseMode` 控制的是工具响应本身应该包含哪些子 Agent 内容。
+
+组合示例：
+
+```go
+childTool := agenttool.NewTool(
+    childAgent,
+    // 不把子 Agent 的中间推理/进度 assistant 文本拼进工具结果。
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
+    // 父流程拿到 tool.response 后直接结束本轮，不再额外总结。
+    agenttool.WithSkipSummarization(true),
+)
+```
+
 ### 选项说明
 
 - WithSkipSummarization(bool)：
@@ -1153,6 +1371,11 @@ if ev.Author != parentName && ev.Response != nil &&
   - `InnerTextModeInclude`：实际默认行为，开启内部转发时继续展示子 Agent 的 assistant 文本
   - `InnerTextModeExclude`：隐藏子 Agent 的 assistant 文本，但继续保留内部 tool call、tool.done，以及聚合后的最终工具响应
 
+- WithResponseMode(ResponseMode)：
+
+  - `ResponseModeDefault`（默认）：保持历史兼容行为，把子 Agent 的 assistant 消息拼接成工具结果
+  - `ResponseModeFinalOnly`：只把子 Agent 最后一条完整 assistant 消息作为工具结果返回
+
 - WithHistoryScope(HistoryScope)：
   - `HistoryScopeIsolated`（默认）：保持子调用完全隔离，只读取本次工具参数（不继承父历史）。
   - `HistoryScopeParentBranch`：通过分层过滤键 `父键/子名-UUID（Universally Unique Identifier，通用唯一识别码）` 继承父会话历史；内容处理器会基于前缀匹配纳入父事件，同时子事件仍写入独立子分支。典型场景：基于上一轮产出进行“编辑/优化/续写”。
@@ -1165,6 +1388,7 @@ child := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     agenttool.WithStreamInner(true),
     agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
+    agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
     agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
 )
 ```
@@ -1175,6 +1399,9 @@ child := agenttool.NewTool(
 - 内容去重：如果已转发子 Agent 的增量内容，默认不要再把最终 `tool.response` 的聚合内容打印出来
 - “只看进度”体验：当你希望用户看到内部进度、但不想重复看到子 Agent 正文时，可组合使用 `WithStreamInner(true)` 和 `WithInnerTextMode(agenttool.InnerTextModeExclude)`
 - 模型兼容性：一些模型要求工具调用后必须跟随工具消息，AgentTool 已自动填充聚合后的工具内容满足此要求
+- 子 Agent 上下文隔离和工具结果裁剪是两件事：
+  `WithHistoryScope(agenttool.HistoryScopeIsolated)` 控制子 Agent 能读到什么；
+  `WithResponseMode(agenttool.ResponseModeFinalOnly)` 控制父 Agent 作为工具结果收到什么。
 - `WithSkipSummarization(true)` 只会跳过额外的外层总结型 LLM 调用，不会把 `tool.response` 变成 assistant final response；如果你需要真正的终止信号，仍应持续消费到 `runner.completion`
 
 ## 工具集成与使用
@@ -1595,26 +1822,49 @@ r := runner.NewRunner(
 
 在一些系统里，你可能希望由调用方（例如客户端、上游服务，或外部工具运行时，例如
 Model Context Protocol (MCP)）来执行工具。此时可以使用
-`agent.WithToolExecutionFilter(...)` 来中断工具的自动执行。
+`agent.WithExternalTools(...)` 或 `agent.WithToolExecutionFilter(...)`
+来中断工具的自动执行。
 
 **核心区别：**
 
 - `agent.WithToolFilter(...)` 控制**工具可见性**（模型能看到/能调用哪些工具）
 - `agent.WithToolExecutionFilter(...)` 控制**工具执行**（模型请求后，框架是否自动执行）
+- `agent.WithAdditionalTools(...)` 为本次运行追加临时可见工具
+- `agent.WithExternalTools(...)` 追加临时可见工具，并声明这些工具由调用方执行
 
 #### 基本流程
 
-1. 使用 `WithToolExecutionFilter` 发起一次 `runner.Run`，让框架**不执行**指定工具
+1. 使用 `WithExternalTools` 发起一次 `runner.Run`，让模型看到调用方工具
 2. 从事件里读取模型返回的 `tool_calls`
 3. 调用方在外部执行工具
 4. 通过 `role=tool` 的消息把结果回填，模型继续输出最终答案
 
 ```go
-execFilter := tool.NewExcludeToolNamesFilter("external_search")
+type declarationOnlyTool struct {
+    decl *tool.Declaration
+}
+
+func (t *declarationOnlyTool) Declaration() *tool.Declaration {
+    return t.decl
+}
+
+externalSearch := &declarationOnlyTool{
+    decl: &tool.Declaration{
+        Name:        "external_search",
+        Description: "Search a caller-owned system.",
+        InputSchema: &tool.Schema{
+            Type: "object",
+            Properties: map[string]*tool.Schema{
+                "query": {Type: "string"},
+            },
+            Required: []string{"query"},
+        },
+    },
+}
 
 // 第一步：模型会返回 tool_calls，但工具不会被框架执行。
 ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("search ..."),
-    agent.WithToolExecutionFilter(execFilter),
+    agent.WithExternalTools([]tool.Tool{externalSearch}),
 )
 
 // 第二步：从事件里提取 tool_call_id + arguments（此处省略）。
@@ -1624,9 +1874,15 @@ toolResultJSON := `{"status":"ok","data":"..."}`
 // 第三/四步：用 role=tool 回填工具结果，模型继续输出。
 toolMsg := model.NewToolMessage(toolCallID, "external_search", toolResultJSON)
 ch, err = r.Run(ctx, userID, sessionID, toolMsg,
-    agent.WithToolExecutionFilter(execFilter),
+    agent.WithExternalTools([]tool.Tool{externalSearch}),
 )
 ```
+
+如果工具已经通过 `llmagent.WithTools(...)` 注册在 Agent 上，只是想在某次
+运行中改成由调用方执行，可以继续使用 `agent.WithToolExecutionFilter(...)`。
+`WithExternalTools` 更适合 AG-UI、浏览器、移动端或上游服务在每次请求中动态声明
+工具的场景。AG-UI runner 默认会把请求里的 `input.Tools` 映射为
+`WithExternalTools`。外部工具与已有工具同名时，已有工具优先，外部声明不会覆盖或拦截它。这里的已有工具包括 Agent 上注册的工具，以及通过 `WithAdditionalTools` 追加的工具。
 
 **完整示例：** `examples/toolinterrupt/`
 
@@ -1798,7 +2054,7 @@ func main() {
     )
 
     // 2. 创建模型和 Agent
-    llmModel := openai.New("DeepSeek-V3-Online-64K")
+    llmModel := openai.New("deepseek-v4-flash")
     agent := llmagent.New("calculator-assistant",
         llmagent.WithModel(llmModel),
         llmagent.WithInstruction("你是一个数学助手"),
@@ -1858,7 +2114,7 @@ cd examples/mcp_tool
 cd streamalbe_server && go run main.go &
 
 # 运行主程序
-go run main.go -model="deepseek-chat"
+go run main.go -model="deepseek-v4-flash"
 ```
 
 ## 总结

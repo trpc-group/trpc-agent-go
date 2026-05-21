@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -45,6 +46,7 @@ func resetForTest(t *testing.T) {
 	channelFactories = map[string]ChannelFactory{}
 	sessionFactories = map[string]SessionBackendFactory{}
 	memoryFactories = map[string]MemoryBackendFactory{}
+	knowledgeFactories = map[string]KnowledgeProviderFactory{}
 	toolFactories = map[string]ToolProviderFactory{}
 	toolSetFactories = map[string]ToolSetProviderFactory{}
 	modelFactories = map[string]ModelFactory{}
@@ -183,6 +185,27 @@ func TestRegisterAndLookup_MoreKinds(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, memoryCalled)
 
+	knowledgeCalled := false
+	require.NoError(t, RegisterKnowledgeProvider(
+		"knowledge",
+		func(
+			_ KnowledgeProviderDeps,
+			_ PluginSpec,
+		) (knowledge.Knowledge, error) {
+			knowledgeCalled = true
+			return nil, nil
+		},
+	))
+
+	knowledgeFactory, ok := LookupKnowledgeProvider("knowledge")
+	require.True(t, ok)
+	_, err = knowledgeFactory(
+		KnowledgeProviderDeps{},
+		PluginSpec{},
+	)
+	require.NoError(t, err)
+	require.True(t, knowledgeCalled)
+
 	providerCalled := false
 	require.NoError(t, RegisterToolProvider(
 		"p",
@@ -211,6 +234,42 @@ func TestRegisterToolProvider_DuplicateFails(t *testing.T) {
 	require.Error(t, RegisterToolProvider(
 		"p",
 		func(ToolProviderDeps, PluginSpec) ([]tool.Tool, error) {
+			return nil, nil
+		},
+	))
+}
+
+func TestRegisterKnowledgeProvider_ValidatesInputs(t *testing.T) {
+	resetForTest(t)
+
+	require.Error(t, RegisterKnowledgeProvider(
+		"",
+		func(
+			KnowledgeProviderDeps,
+			PluginSpec,
+		) (knowledge.Knowledge, error) {
+			return nil, nil
+		},
+	))
+
+	var nilFactory KnowledgeProviderFactory
+	require.Error(t, RegisterKnowledgeProvider("knowledge", nilFactory))
+
+	require.NoError(t, RegisterKnowledgeProvider(
+		"knowledge",
+		func(
+			KnowledgeProviderDeps,
+			PluginSpec,
+		) (knowledge.Knowledge, error) {
+			return nil, nil
+		},
+	))
+	require.Error(t, RegisterKnowledgeProvider(
+		"knowledge",
+		func(
+			KnowledgeProviderDeps,
+			PluginSpec,
+		) (knowledge.Knowledge, error) {
 			return nil, nil
 		},
 	))
@@ -248,6 +307,27 @@ func TestTypes(t *testing.T) {
 	))
 
 	require.Equal(t, []string{"a", "b"}, Types("toolset provider"))
+
+	require.NoError(t, RegisterKnowledgeProvider(
+		"b",
+		func(
+			_ KnowledgeProviderDeps,
+			_ PluginSpec,
+		) (knowledge.Knowledge, error) {
+			return nil, nil
+		},
+	))
+	require.NoError(t, RegisterKnowledgeProvider(
+		"a",
+		func(
+			_ KnowledgeProviderDeps,
+			_ PluginSpec,
+		) (knowledge.Knowledge, error) {
+			return nil, nil
+		},
+	))
+
+	require.Equal(t, []string{"a", "b"}, Types("knowledge provider"))
 
 	require.Nil(t, Types("unknown kind"))
 }

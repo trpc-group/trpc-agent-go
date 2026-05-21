@@ -1,0 +1,116 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package xml defines XML-based content criteria.
+package xml
+
+import (
+	"encoding/xml"
+	"fmt"
+	"io"
+	"strings"
+)
+
+// CompareFunc defines custom XML comparison logic.
+type CompareFunc func(actual, expected string) (bool, error)
+
+// XMLMatchStrategy enumerates supported XML matching strategies.
+type XMLMatchStrategy string
+
+const (
+	// XMLMatchStrategySkip skips XML value matching.
+	XMLMatchStrategySkip XMLMatchStrategy = "skip"
+)
+
+// XMLCriterion validates XML content.
+type XMLCriterion struct {
+	// Ignore skips XML validation when true.
+	Ignore bool `json:"ignore,omitempty"`
+	// Valid validates that the actual content is a well-formed XML document.
+	Valid bool `json:"valid,omitempty"`
+	// MatchStrategy selects the XML matching rule.
+	MatchStrategy XMLMatchStrategy `json:"matchStrategy,omitempty"`
+	// Compare overrides default validation when provided.
+	Compare CompareFunc `json:"-"`
+}
+
+// New creates an XMLCriterion with the provided options.
+func New(opt ...Option) *XMLCriterion {
+	opts := newOptions(opt...)
+	return &XMLCriterion{
+		Ignore:        opts.ignore,
+		Valid:         opts.valid,
+		MatchStrategy: opts.matchStrategy,
+		Compare:       opts.compare,
+	}
+}
+
+// Match compares or validates XML content using the configured rule.
+func (c *XMLCriterion) Match(actual, expected string) (bool, error) {
+	if c.Ignore {
+		return true, nil
+	}
+	if c.Compare != nil {
+		return c.Compare(actual, expected)
+	}
+	if c.MatchStrategy == "" {
+		return false, fmt.Errorf("xml match strategy is empty")
+	}
+	if c.MatchStrategy != XMLMatchStrategySkip {
+		return false, fmt.Errorf("invalid match strategy %s", c.MatchStrategy)
+	}
+	if c.Valid {
+		return matchValid(actual)
+	}
+	return true, nil
+}
+
+func matchValid(content string) (bool, error) {
+	if strings.TrimSpace(content) == "" {
+		return false, fmt.Errorf("xml content is empty")
+	}
+	decoder := xml.NewDecoder(strings.NewReader(content))
+	var depth int
+	var rootCount int
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return false, err
+		}
+		switch t := token.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				rootCount++
+				if rootCount > 1 {
+					return false, fmt.Errorf("xml content must contain a single root element")
+				}
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+			if depth < 0 {
+				return false, fmt.Errorf("xml content has unexpected closing element")
+			}
+		case xml.CharData:
+			if depth == 0 && strings.TrimSpace(string(t)) != "" {
+				return false, fmt.Errorf("xml content has non-whitespace text outside the root element")
+			}
+		}
+	}
+	if rootCount == 0 {
+		return false, fmt.Errorf("xml content must contain a root element")
+	}
+	if depth != 0 {
+		return false, fmt.Errorf("xml content has unclosed elements")
+	}
+	return true, nil
+}

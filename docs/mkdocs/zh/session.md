@@ -1862,6 +1862,20 @@ err := sessionService.CreateSessionSummary(
 
 框架提供两种模式来管理发送给 LLM 的对话上下文：
 
+先区分三类上下文减载机制：
+
+| 机制 | 所在层 | 改动对象 | 典型用途 |
+| --- | --- | --- | --- |
+| Summary | Session Service + prompt assembly | 用 LLM 生成可持久化历史摘要；开启 `WithAddSessionSummary(true)` 后，请求中注入摘要，并只拼接摘要时间点之后的增量事件 | 长会话保留语义连续性 |
+| Context compaction | Agent prompt assembly | 不调用 LLM、不删整轮消息，只改写 `tool result` 内容 | 清理搜索结果、日志、网页抓取等超长工具输出 |
+| Token tailoring | Model provider | 模型调用前按 token budget 删除或保留消息轮次 | 最后一层兜底，保证请求落入 context window |
+
+调用顺序上，agent 先组装 prompt；如果启用了 `WithAddSessionSummary(true)`，
+则注入 summary；随后按需压缩 `tool result`。如果开启了摘要注入且请求仍接近
+context window，必要时再同步刷新一次 summary 并重建请求；最后由模型层
+token tailoring 裁剪消息列表。context compaction 缩小消息内部的工具输出，
+token tailoring 删减消息轮次，summary 则用新的语义摘要替代一段历史。
+
 #### 模式 1：启用摘要注入（推荐）
 
 ```go
@@ -1875,7 +1889,15 @@ llmagent.WithAddSessionSummary(true)
 - 保证完整上下文：浓缩历史 + 完整新对话
 - **`WithMaxHistoryRuns` 参数被忽略**
 
-**可选：Prompt 侧上下文压缩**
+**Context compaction 细节**
+
+Context compaction 不是 summary 的同义词，也不是 token tailoring。它只处理
+`tool result` 这种容易异常膨胀的内容，不会把普通 user/assistant 消息做
+LLM 摘要，也不会像 token tailoring 那样直接丢弃完整消息轮次。
+
+> **命名说明**：`WithEnableContextCompaction(true)` 中的 "compaction"
+> 指 prompt-side tool result compaction/pruning；如果需要语义摘要，仍然由
+> `WithAddSessionSummary(true)` 和会话摘要器负责。
 
 当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前执行 Pass 1 压缩；如果同时显式配置正数的 `ContextCompactionOversizedToolResultMaxTokens`，还会执行 Pass 2：
 
@@ -1884,17 +1906,23 @@ llmagent.WithAddSessionSummary(true)
 - 最近 `ContextCompactionKeepRecentRequests` 个已完成 request 不受 Pass 1 影响（如果同时开启了 Pass 2，仍会受 Pass 2 截断）
 - 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
 - 模型层的 token tailoring 仍然作为最后兜底
+- Context compaction 默认使用 `SimpleTokenCounter`。中文内容较多或 provider
+  tokenization 特殊时，建议通过 `WithContextCompactionTokenCounter(...)`
+  传入与 token tailoring 相同的自定义 counter。
 
 ```go
+counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1.6))
+
 agent := llmagent.New(
     "my-agent",
     llmagent.WithModel(modelInstance),
     llmagent.WithAddSessionSummary(true),
-    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableContextCompaction(true), // 只压 tool result，不生成摘要
     llmagent.WithContextCompactionThresholdRatio(0.7),
     llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: 旧 tool result → 占位符
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: 任意超大 result → 首尾保留截断
     llmagent.WithContextCompactionKeepRecentRequests(1),
+    llmagent.WithContextCompactionTokenCounter(counter),
 )
 ```
 
@@ -1971,22 +1999,24 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 
 > **Context Window 注册**
 >
-> `WithContextThreshold` 和 Token Tailoring 都依赖框架内置的模型 context window 注册表。注册表已包含大量常见模型（OpenAI、Anthropic、Google、DeepSeek、Qwen 等），但不一定覆盖所有模型——特别是私有部署、微调变体或较新发布的模型。如果你的模型未被识别（context window 解析为 0 或回退到默认值），请在启动时手动注册：
+> `WithContextThreshold` 和 Token Tailoring 都需要模型 context window。内置模型名会自动解析。对于私有部署、微调变体、租户自定义模型或 endpoint ID，优先使用模型实例或单次运行配置，避免不同用户覆盖同一个进程级注册表：
 >
 > ```go
-> import "trpc.group/trpc-go/trpc-agent-go/model"
+> modelInstance := openai.New(
+>     "my-custom-model",
+>     openai.WithContextWindow(32768),
+> )
 >
-> func init() {
->     // 注册单个模型
->     model.RegisterModelContextWindow("my-custom-model", 32768)
->
->     // 或批量注册多个模型
->     model.RegisterModelContextWindows(map[string]int{
->         "my-custom-model-32k":  32768,
->         "my-custom-model-128k": 131072,
->     })
-> }
+> eventChan, err := r.Run(
+>     ctx,
+>     userID,
+>     sessionID,
+>     userMessage,
+>     agent.WithModelContextWindow(32768),
+> )
 > ```
+>
+> 只有当模型名在当前进程中有稳定全局含义时，才使用 `model.RegisterModelContextWindow` 或 `model.RegisterModelContextWindows`。
 >
 > 模型名匹配不区分大小写，注册表也支持前缀匹配（例如注册 `"my-model"` 会匹配 `"my-model-v2"`）。
 
@@ -2374,12 +2404,51 @@ evt.FilterKey = "user-messages"
 
 **技术细节：** 框架使用前缀匹配机制（`strings.HasPrefix`）来判断事件是否应该被包含在上下文中。详见 `ContentRequestProcessor` 的过滤逻辑。
 
+#### 限制摘要目标
+
+默认情况下，当某个非空分支 `FilterKey` 触发摘要时，session service 会同时刷新该分支摘要和全量会话摘要（`SummaryFilterKeyAllContents`）。如果某些分支不需要摘要，可以通过 allowlist 控制范围，并按需关闭全量摘要级联：
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(summarizer),
+    inmemory.WithSummaryFilterAllowlist(
+        "my-app/user-messages",
+        "my-app/tool-calls",
+    ),
+    inmemory.WithCascadeFullSessionSummary(false),
+)
+```
+
+- `WithSummaryFilterAllowlist(...)` 只控制非空分支摘要目标，不会阻止 `session.SummaryFilterKeyAllContents` 这个全量摘要目标。
+- `WithCascadeFullSessionSummary(...)` 控制非空分支触发摘要时，是否同时刷新全量会话摘要。
+- 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入空 allowlist，并保持默认 cascade 开启：
+
+```go
+sessionService, err := mysql.NewService(
+    mysql.WithMySQLClientDSN(dsn),
+    mysql.WithSummarizer(summarizer),
+    mysql.WithSummaryFilterAllowlist(""),
+)
+```
+
+- `mysql.WithSummaryFilterAllowlist("")` 和 `mysql.WithSummaryFilterAllowlist()` 都表示“不允许任何 branch key”；在默认 cascade 行为下，仍然会刷新全量会话摘要。
+- 如果同时设置 `mysql.WithCascadeFullSessionSummary(false)`，非空 branch 触发时就没有任何摘要目标，因此不会生成摘要。
+- allowlist 使用带分隔符的层级匹配，不是原始字符串前缀匹配。框架内部会先给两边补上 filter key 分隔符（`"/"`），再判断两者是否处于同一条祖先/子孙层级路径上。
+- 例子：
+  - 放行 `my-app/tool` 时，会匹配 `my-app/tool` 和 `my-app/tool/search`。
+  - 放行 `my-app/tool/search` 时，也会匹配 `my-app/tool`。
+  - 放行 `my-app/tool` 时，不会匹配 `my-app/toolbox`。
+  - 放行 `my-app/tool` 时，不会匹配 `other-app/tool`。
+- 即使配置了 allowlist，`session.SummaryFilterKeyAllContents` 仍然可以被直接用于生成全量会话摘要。
+- 不配置 allowlist 时会保持兼容行为，所有分支 `FilterKey` 都可以触发摘要。
+- 显式传入空 allowlist 会阻止 branch 摘要目标；如果 cascade 开启，branch 触发时仍会刷新全量会话摘要。
+
 #### 完整示例
 
 参考以下示例查看完整的 FilterKey 使用场景：
 
 - [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook 基础用法
-- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - 按 FilterKey 生成摘要
+- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - 按 FilterKey 生成摘要、allowlist 控制与全量摘要级联开关
 
 ### 性能考虑
 

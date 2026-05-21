@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -41,7 +42,7 @@ const (
 	skillsCapabilityHeader      = "Skill tool availability:"
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
 	skillRootsHeader            = "Skill roots:"
-	workspaceExecGuidanceHeader = "Executor workspace guidance:"
+	workspaceExecGuidanceHeader = "Workspace shell guidance:"
 )
 
 // createTestSkill makes a minimal skill folder with SKILL.md.
@@ -326,6 +327,212 @@ func TestLLMAgent_WorkspaceSaveArtifactOmittedWithoutInvocationCapability(
 	require.Nil(t, findTool(tools, "workspace_save_artifact"))
 }
 
+func TestLLMAgent_InvocationWorkspaceRegistry_NoSessionIsNotShared(
+	t *testing.T,
+) {
+	a := New("tester", WithCodeExecutor(localexec.New()))
+
+	inv1 := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("write")),
+	)
+	out := callInvocationWorkspaceExec(
+		t, a, inv1,
+		"mkdir -p out && printf leaked > out/leak.txt",
+	)
+	require.Equal(t, float64(0), out["exit_code"])
+
+	inv2 := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("read")),
+	)
+	out = callInvocationWorkspaceExec(t, a, inv2, "cat out/leak.txt")
+	require.NotEqual(t, float64(0), out["exit_code"])
+	require.NotContains(t, out["output"], "leaked")
+}
+
+func TestLLMAgent_InvocationWorkspaceRegistry_ReusesSameSessionExecutor(
+	t *testing.T,
+) {
+	a := New("tester", WithCodeExecutor(localexec.New()))
+
+	inv1 := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("write")),
+		agent.WithInvocationSession(&session.Session{ID: "sess-reuse"}),
+	)
+	out := callInvocationWorkspaceExec(
+		t, a, inv1,
+		"mkdir -p out && printf shared > out/shared.txt",
+	)
+	require.Equal(t, float64(0), out["exit_code"])
+
+	inv2 := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("read")),
+		agent.WithInvocationSession(&session.Session{ID: "sess-reuse"}),
+	)
+	out = callInvocationWorkspaceExec(t, a, inv2, "cat out/shared.txt")
+	require.Equal(t, float64(0), out["exit_code"])
+	require.Equal(t, "shared", out["output"])
+}
+
+func TestLLMAgent_InvocationWorkspaceRegistry_IsolatedByExecutor(
+	t *testing.T,
+) {
+	defaultExec := localexec.New()
+	overrideExec := localexec.New()
+	a := New("tester", WithCodeExecutor(defaultExec))
+
+	invDefault := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("default write")),
+		agent.WithInvocationSession(&session.Session{ID: "sess-exec"}),
+	)
+	out := callInvocationWorkspaceExec(
+		t, a, invDefault,
+		"mkdir -p out && printf default > out/default.txt",
+	)
+	require.Equal(t, float64(0), out["exit_code"])
+
+	invOverride := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("override read")),
+		agent.WithInvocationSession(&session.Session{ID: "sess-exec"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithCodeExecutor(overrideExec),
+		)),
+	)
+	out = callInvocationWorkspaceExec(t, a, invOverride, "cat out/default.txt")
+	require.NotEqual(t, float64(0), out["exit_code"])
+	require.NotEqual(t, "default", out["output"])
+
+	out = callInvocationWorkspaceExec(
+		t, a, invOverride,
+		"mkdir -p out && printf override > out/override.txt",
+	)
+	require.Equal(t, float64(0), out["exit_code"])
+
+	invOverrideAgain := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("override read again")),
+		agent.WithInvocationSession(&session.Session{ID: "sess-exec"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithCodeExecutor(overrideExec),
+		)),
+	)
+	out = callInvocationWorkspaceExec(t, a, invOverrideAgain, "cat out/override.txt")
+	require.Equal(t, float64(0), out["exit_code"])
+	require.Equal(t, "override", out["output"])
+}
+
+func TestLLMAgent_WorkspaceRegistryKey_NonComparableExecutor(t *testing.T) {
+	exec := nonComparableExec{tags: []string{"slice"}}
+
+	_, ok := workspaceRegistryKeyForExecutor(exec)
+	require.False(t, ok)
+
+	reg := codeexecutor.NewWorkspaceRegistry()
+	require.Nil(t, workspaceRegistryMap(exec, reg))
+
+	a := New("tester")
+	got, ok := a.ensureWorkspaceRegistryForExecutor(exec)
+	require.False(t, ok)
+	require.Nil(t, got)
+}
+
+func TestLLMAgent_WorkspaceRegistryForInvocation_NonComparableExecutorFallback(
+	t *testing.T,
+) {
+	a := New("tester")
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "sess"}),
+	)
+	exec := nonComparableExec{tags: []string{"slice"}}
+
+	reg1 := a.workspaceRegistryForInvocation(inv, exec)
+	reg2 := a.workspaceRegistryForInvocation(inv, exec)
+
+	require.NotNil(t, reg1)
+	require.NotNil(t, reg2)
+	require.NotSame(t, reg1, reg2)
+}
+
+func TestLLMAgent_WorkspaceRegistryForKeyLocked_InitializesCacheFromDefault(
+	t *testing.T,
+) {
+	exec := &stubExec{}
+	defaultReg := codeexecutor.NewWorkspaceRegistry()
+	a := &LLMAgent{
+		codeExecutor:      exec,
+		workspaceRegistry: defaultReg,
+	}
+	key, ok := workspaceRegistryKeyForExecutor(exec)
+	require.True(t, ok)
+
+	reg := a.workspaceRegistryForKeyLocked(key)
+
+	require.Same(t, defaultReg, reg)
+	require.Same(t, defaultReg, a.workspaceRegistries[key])
+}
+
+func TestLLMAgent_WorkspaceRegistryForKeyLocked_StoresPrimaryRegistry(
+	t *testing.T,
+) {
+	exec := &stubExec{}
+	a := &LLMAgent{}
+	key, ok := workspaceRegistryKeyForExecutor(exec)
+	require.True(t, ok)
+
+	reg := a.workspaceRegistryForKeyLocked(key)
+
+	require.NotNil(t, reg)
+	require.Same(t, reg, a.workspaceRegistry)
+	require.Same(t, reg, a.workspaceRegistries[key])
+}
+
+func TestLLMAgent_RefreshToolsLocked_ReusesExecutorRegistry(t *testing.T) {
+	exec := &stubExec{}
+	a := New("tester", WithCodeExecutor(exec))
+	initialReg := a.workspaceRegistry
+	require.NotNil(t, initialReg)
+
+	a.mu.Lock()
+	a.workspaceRegistries = nil
+	a.refreshToolsLocked()
+	key, ok := workspaceRegistryKeyForExecutor(exec)
+	refreshedReg := a.workspaceRegistry
+	var cachedReg *codeexecutor.WorkspaceRegistry
+	if ok {
+		cachedReg = a.workspaceRegistries[key]
+	}
+	a.mu.Unlock()
+
+	require.True(t, ok)
+	require.Same(t, initialReg, refreshedReg)
+	require.Same(t, initialReg, cachedReg)
+	require.NotNil(t, findTool(a.Tools(), "workspace_exec"))
+}
+
+func callInvocationWorkspaceExec(
+	t *testing.T,
+	a *LLMAgent,
+	inv *agent.Invocation,
+	command string,
+) map[string]any {
+	t.Helper()
+	tools, _ := a.InvocationToolSurface(context.Background(), inv)
+	tl := findTool(tools, "workspace_exec")
+	require.NotNil(t, tl)
+	args := map[string]any{
+		"command": command,
+		"timeout": 5,
+	}
+	b, err := json.Marshal(args)
+	require.NoError(t, err)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	res, err := tl.(tool.CallableTool).Call(ctx, b)
+	require.NoError(t, err)
+	jb, err := json.Marshal(res)
+	require.NoError(t, err)
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(jb, &out))
+	return out
+}
+
 func TestLLMAgent_SkillRunUsesDefaultExecutorWhenNoExplicitExecutor(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
@@ -549,6 +756,25 @@ func (s *stubExec) Engine() codeexecutor.Engine {
 	fs := &stubFS{}
 	rr := &stubRunner{s: s}
 	return codeexecutor.NewEngine(mgr, fs, rr)
+}
+
+type nonComparableExec struct {
+	tags []string
+}
+
+func (n nonComparableExec) ExecuteCode(
+	_ context.Context,
+	_ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (n nonComparableExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+func (n nonComparableExec) Engine() codeexecutor.Engine {
+	return codeexecutor.NewEngine(&stubMgr{}, &stubFS{}, &stubRunner{s: &stubExec{}})
 }
 
 type stubMgr struct{}
@@ -834,11 +1060,13 @@ func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_WiresPrompt(
 		}
 	}
 	require.NotEmpty(t, sys)
-	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill discovery and knowledge loading only")
-	require.Contains(t, sys, "Built-in skill execution tools are unavailable")
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, "skill discovery and knowledge loading only")
+	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.NotContains(t, sys, "skill_run runs with CWD")
+	require.Contains(t, sys, "workspace_exec is registered")
+	require.Contains(t, sys, "If no execution tool is registered")
 }
 
 func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_GuidanceDisabled(
@@ -1083,8 +1311,8 @@ func TestLLMAgent_WithAllowedSkillTools_LoadOnly_WiresPrompt(
 		}
 	}
 	require.NotEmpty(t, sys)
-	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill discovery and knowledge loading only")
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, "skill discovery and knowledge loading only")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, "skill_load.docs or include_all_docs")
 	require.NotContains(t, sys, "skill_list_docs")
@@ -1835,10 +2063,22 @@ func TestLLMAgent_WorkspaceExecGuidanceWithoutSkillsRepo(t *testing.T) {
 
 	sys := findSystemMessageContaining(req, workspaceExecGuidanceHeader)
 	require.NotEmpty(t, sys)
-	require.Contains(t, sys, "default general shell runner")
-	require.Contains(t, sys, "workspace is its scope, not its capability limit")
+	require.Contains(t, sys, "shell command tool for the current workspace")
+	require.Contains(t, sys, "Prefer task-specific tools")
+	require.Contains(t, sys, "general shell fallback tool")
+	require.Contains(t, sys, "no suitable specialized tool is available")
+	require.Contains(t, sys, "specialized tool fails")
+	require.Contains(t, sys, "workspace or shell environment")
+	require.Contains(t, sys, "explicitly asks for shell execution")
+	require.Contains(t, sys, "external information retrieval")
+	require.Contains(t, sys, "cannot access the required source")
+	require.Contains(t, sys, "Command paths are resolved relative to cwd")
+	require.Contains(t, sys, "Choose one path base per command")
 	require.Contains(t, sys, "Prefer work/, out/, and runs/")
-	require.Contains(t, sys, "verify first before claiming the limitation")
+	require.Contains(t, sys, "check it only when that environment matters")
+	require.NotContains(t, sys, "curl")
+	require.NotContains(t, sys, "sufficient")
+	require.NotContains(t, sys, "insufficient")
 	require.NotContains(t, sys, "workspace_save_artifact")
 	require.NotContains(t, sys, "skills/")
 	require.NotContains(t, sys, "workspace_write_stdin")

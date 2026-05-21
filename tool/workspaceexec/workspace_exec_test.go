@@ -74,11 +74,10 @@ func TestExecTool_Declaration_DescribesGeneralShellUsage(t *testing.T) {
 
 	decl := tl.Declaration()
 	require.NotNil(t, decl)
-	require.Contains(t, decl.Description, "default general shell runner")
-	require.Contains(t, decl.Description, "does not depend on a specific skill")
-	require.Contains(t, decl.Description, "curl")
-	require.Contains(t, decl.Description, "environment-dependent network commands")
-	require.Contains(t, decl.Description, "work/inputs")
+	require.Contains(t, decl.Description, "Execute a shell command in the current workspace.")
+	require.NotContains(t, decl.Description, "curl")
+	require.NotContains(t, decl.Description, "network")
+	require.NotContains(t, decl.Description, "git")
 }
 
 func TestExecTool_AutoStagesInvocationMessageFiles(t *testing.T) {
@@ -457,14 +456,6 @@ func TestExecTool_HelperFunctions(t *testing.T) {
 	require.True(t, firstBoolValue(nil, boolPtr(true)))
 	require.Equal(t, "", firstNonEmpty("", "   "))
 	require.Equal(t, "abc", firstNonEmpty("", " abc "))
-
-	require.True(t, hasEnvPrefix("$WORK_DIR/demo", codeexecutor.EnvWorkDir))
-	require.True(t, hasEnvPrefix("${OUTPUT_DIR}/demo", codeexecutor.EnvOutputDir))
-	require.False(t, hasEnvPrefix("$OUTPUT_DIR_demo", codeexecutor.EnvOutputDir))
-
-	require.True(t, isWorkspaceEnvPath("$WORK_DIR/demo"))
-	require.True(t, isWorkspaceEnvPath("${SKILLS_DIR}/demo"))
-	require.False(t, isWorkspaceEnvPath("/tmp/demo"))
 
 	require.True(t, isAllowedWorkspacePath("skills/demo"))
 	require.True(t, isAllowedWorkspacePath("work/demo"))

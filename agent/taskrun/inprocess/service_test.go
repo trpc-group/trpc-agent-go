@@ -24,6 +24,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+const (
+	firstPersistAttempt        = 1
+	runningStatePersistAttempt = 2
+	testPersistBoom            = "persist boom"
+	shortRunTimeout            = 10 * time.Millisecond
+)
+
 type captureRunner struct {
 	mu        sync.Mutex
 	userID    string
@@ -152,10 +159,105 @@ func (s *failOnSaveStore) Save(ctx context.Context, runs []Run) error {
 
 	s.saves++
 	if s.saves == s.failAt {
-		return errors.New("persist boom")
+		return errors.New(testPersistBoom)
 	}
 	s.runs = cloneRuns(runs)
 	return nil
+}
+
+type blockingFailStore struct {
+	mu          sync.Mutex
+	enteredOnce sync.Once
+	releaseOnce sync.Once
+	failAt      int
+	saves       int
+	runs        []Run
+	entered     chan struct{}
+	release     chan struct{}
+}
+
+func newBlockingFailStore(failAt int) *blockingFailStore {
+	return &blockingFailStore{
+		failAt:  failAt,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (s *blockingFailStore) Load(ctx context.Context) ([]Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return cloneRuns(s.runs), nil
+}
+
+func (s *blockingFailStore) Save(ctx context.Context, runs []Run) error {
+	s.mu.Lock()
+	s.saves++
+	shouldFail := s.saves == s.failAt
+	if !shouldFail {
+		s.runs = cloneRuns(runs)
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+
+	s.enteredOnce.Do(func() {
+		close(s.entered)
+	})
+	select {
+	case <-s.release:
+		return errors.New(testPersistBoom)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *blockingFailStore) unblock() {
+	s.releaseOnce.Do(func() {
+		close(s.release)
+	})
+}
+
+type waitResult struct {
+	run *Run
+	err error
+}
+
+func requireRegisteredWaiter(t *testing.T, svc *Service, runID string) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+
+		return len(svc.waiters[runID]) > 0
+	}, time.Second, 10*time.Millisecond)
+}
+
+func requireRunnerStarted(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("task run did not start in time")
+	}
+}
+
+func requireWaitResult(
+	t *testing.T,
+	ch <-chan waitResult,
+) waitResult {
+	t.Helper()
+
+	select {
+	case result := <-ch:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("wait did not return after terminal transition")
+	}
+	return waitResult{}
 }
 
 func TestServiceSpawnCompletesRun(t *testing.T) {
@@ -375,6 +477,101 @@ func TestServiceCancelAndWait(t *testing.T) {
 	require.Equal(t, StatusCanceled, final.Status)
 }
 
+func TestServiceTimeoutWithoutEventErrorDoesNotComplete(t *testing.T) {
+	t.Parallel()
+
+	runner := &blockingRunner{started: make(chan struct{})}
+	svc, err := NewService(runner)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "wait for timeout",
+		Timeout:         shortRunTimeout,
+	})
+	require.NoError(t, err)
+	requireRunnerStarted(t, runner.started)
+
+	final, err := svc.Wait(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, StatusCompleted, final.Status)
+	require.Equal(t, StatusFailed, final.Status)
+	require.Contains(t, final.Error, context.DeadlineExceeded.Error())
+	require.Contains(t, final.Summary, context.DeadlineExceeded.Error())
+}
+
+func TestServiceParentCancelWithoutEventErrorCancelsRun(t *testing.T) {
+	t.Parallel()
+
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	runner := &blockingRunner{started: make(chan struct{})}
+	svc, err := NewService(runner)
+	require.NoError(t, err)
+	svc.Start(parentCtx)
+	t.Cleanup(func() {
+		parentCancel()
+		require.NoError(t, svc.Close())
+	})
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "wait for parent cancellation",
+	})
+	require.NoError(t, err)
+	requireRunnerStarted(t, runner.started)
+
+	parentCancel()
+	final, err := svc.Wait(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, StatusCompleted, final.Status)
+	require.Equal(t, StatusCanceled, final.Status)
+	require.Empty(t, final.Error)
+	require.Equal(t, statusCanceledSummary, final.Summary)
+}
+
+func TestServiceCancelPersistFailureWakesWaiters(t *testing.T) {
+	t.Parallel()
+
+	store := &failOnSaveStore{failAt: firstPersistAttempt}
+	svc, err := NewService(&captureRunner{reply: "ok"}, WithStore(store))
+	require.NoError(t, err)
+	svc.Start(context.Background())
+
+	now := time.Now()
+	run := Run{
+		ID:              "cancel-persist-failure",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "cancel queued work",
+		Status:          StatusQueued,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	svc.mu.Lock()
+	svc.runs[run.ID] = runPtr(run)
+	svc.mu.Unlock()
+
+	waitCh := make(chan waitResult, 1)
+	go func() {
+		final, waitErr := svc.Wait(context.Background(), run.ID)
+		waitCh <- waitResult{run: final, err: waitErr}
+	}()
+	requireRegisteredWaiter(t, svc, run.ID)
+
+	_, _, err = svc.Cancel(context.Background(), run.ID)
+	require.ErrorContains(t, err, testPersistBoom)
+
+	result := requireWaitResult(t, waitCh)
+	require.NoError(t, result.err)
+	require.Equal(t, StatusCanceled, result.run.Status)
+}
+
 func TestServiceScopesAndErrors(t *testing.T) {
 	t.Parallel()
 
@@ -518,7 +715,7 @@ func TestServiceMarksRunFailedWhenPersistingRunningStateFails(
 ) {
 	t.Parallel()
 
-	store := &failOnSaveStore{failAt: 2}
+	store := &failOnSaveStore{failAt: runningStatePersistAttempt}
 	svc, err := NewService(
 		&captureRunner{reply: "ok"},
 		WithStore(store),
@@ -537,8 +734,48 @@ func TestServiceMarksRunFailedWhenPersistingRunningStateFails(
 		got, getErr := svc.Get(context.Background(), run.ID)
 		return getErr == nil &&
 			got.Status == StatusFailed &&
-			strings.Contains(got.Error, "persist boom")
+			strings.Contains(got.Error, testPersistBoom)
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestServiceRunningPersistFailureWakesWaiters(t *testing.T) {
+	t.Parallel()
+
+	store := newBlockingFailStore(runningStatePersistAttempt)
+	defer store.unblock()
+	svc, err := NewService(
+		&captureRunner{reply: "ok"},
+		WithStore(store),
+	)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "fail running persistence",
+	})
+	require.NoError(t, err)
+
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		t.Fatal("persist did not reach the failing save")
+	}
+
+	waitCh := make(chan waitResult, 1)
+	go func() {
+		final, waitErr := svc.Wait(context.Background(), run.ID)
+		waitCh <- waitResult{run: final, err: waitErr}
+	}()
+	requireRegisteredWaiter(t, svc, run.ID)
+
+	store.unblock()
+
+	result := requireWaitResult(t, waitCh)
+	require.NoError(t, result.err)
+	require.Equal(t, StatusFailed, result.run.Status)
+	require.Contains(t, result.run.Error, testPersistBoom)
 }
 
 func TestServiceWaitHonorsContext(t *testing.T) {

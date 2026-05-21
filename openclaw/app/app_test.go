@@ -60,6 +60,7 @@ import (
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	langfuseobs "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 )
 
@@ -212,6 +213,20 @@ func createAppTestSkill(t *testing.T) string {
 	return root
 }
 
+func createNamedAppTestSkill(t *testing.T, root string, name string) {
+	t.Helper()
+
+	dir := filepath.Join(root, name)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	data := "---\nname: " + name + "\n" +
+		"description: " + name + " skill\n---\nbody\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "SKILL.md"),
+		[]byte(data),
+		0o600,
+	))
+}
+
 func runAgentAndCapture(
 	t *testing.T,
 	agt agent.Agent,
@@ -224,6 +239,17 @@ func runAgentAndCapture(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
 		agent.WithInvocationSession(sess),
 	)
+	return runInvocationAndCapture(t, agt, mdl, inv)
+}
+
+func runInvocationAndCapture(
+	t *testing.T,
+	agt agent.Agent,
+	mdl *captureRequestModel,
+	inv *agent.Invocation,
+) *model.Request {
+	t.Helper()
+
 	ch, err := agt.Run(context.Background(), inv)
 	require.NoError(t, err)
 	for evt := range ch {
@@ -580,6 +606,11 @@ func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
+	require.Contains(
+		t,
+		decl.Description,
+		"same assistant message must call exec_command",
+	)
 	require.NotContains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
 }
 
@@ -595,6 +626,11 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+	require.Contains(
+		t,
+		decl.Description,
+		"same assistant message must call exec_command",
+	)
 }
 
 func TestBuildOpenClawTools_IncludesConversationHistoryTool(
@@ -1484,15 +1520,12 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 		sys,
 		"Each entry includes a path to that skill's SKILL.md on disk.",
 	)
-	// With the bare WithSkills(repo) default profile now being
-	// knowledge_only (skill_load + doc helpers, no skill_run / skill_exec),
-	// suppressing the skill protocol guidance via an explicit empty
-	// SkillsToolingGuide no longer also hides the built-in capability
-	// disclosure block. The overview thus carries the
-	// "Skill tool availability:" header describing the knowledge-only
-	// surface.
-	require.Contains(t, sys, "Skill tool availability:")
-	require.Contains(
+	// Suppressing the skill tooling guidance leaves only the overview;
+	// skill_load-capable configurations no longer inject a separate
+	// negative capability block because execution may still be available
+	// through other registered tools such as workspace_exec.
+	require.NotContains(t, sys, "Skill tool availability:")
+	require.NotContains(
 		t,
 		sys,
 		"This configuration supports skill discovery and "+
@@ -1550,6 +1583,17 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
+		"A preamble-only skill response is invalid",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Do not stop after announcing the skill-backed "+
+			"next step",
+	)
+	require.Contains(
+		t,
+		sys,
 		"Never say that you could read or load a matching skill later",
 	)
 	require.Contains(
@@ -1568,6 +1612,30 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
+		"prefer creating or updating a local skill over "+
+			"treating it as a one-off answer.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"For lightweight facts, preferences, or simple "+
+			"standing rules, use memory instead.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Use platform code and tools for stable safety "+
+			"boundaries",
+	)
+	require.Contains(
+		t,
+		sys,
+		"choose a writable user-managed skill root",
+	)
+	require.Contains(t, sys, "not bundled skills unless")
+	require.Contains(
+		t,
+		sys,
 		"Keep exploring nearby runtime facts, retries, "+
 			"and recovery paths",
 	)
@@ -1579,6 +1647,217 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.NotContains(t, sys, "Skill tool availability:")
 	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
 	require.NotContains(t, sys, "Only describe a blocker")
+}
+
+func TestNewAgent_RuntimeProfileSkillFilter(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	createNamedAppTestSkill(t, root, "alpha")
+	createNamedAppTestSkill(t, root, "beta")
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	ctx := runtimeprofile.WithProfile(
+		context.Background(),
+		runtimeprofile.Profile{
+			Skills: runtimeprofile.SkillPolicy{
+				Include: []string{"alpha"},
+			},
+		},
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	ch, err := agt.Run(ctx, inv)
+	require.NoError(t, err)
+	for evt := range ch {
+		if evt == nil || !evt.RequiresCompletion {
+			continue
+		}
+		key := agent.GetAppendEventNoticeKey(evt.ID)
+		require.NotNil(
+			t,
+			inv.AddNoticeChannel(context.Background(), key),
+		)
+		require.NoError(t, inv.NotifyCompletion(context.Background(), key))
+	}
+
+	sys := joinSystemMessages(mdl.got)
+	require.Contains(t, sys, "alpha")
+	require.NotContains(t, sys, "beta")
+}
+
+func TestNewAgent_RuntimeProfileSkillRoots(t *testing.T) {
+	t.Parallel()
+
+	alphaRoot := t.TempDir()
+	betaRoot := t.TempDir()
+	createNamedAppTestSkill(t, alphaRoot, "alpha")
+	createNamedAppTestSkill(t, betaRoot, "beta")
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:            "demo",
+		SkillsRoot:         alphaRoot,
+		SkillsExtraDirs:    []string{betaRoot},
+		StateDir:           t.TempDir(),
+		SkillsAllowBundled: []string{"none"},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	ctx := runtimeprofile.WithProfile(
+		context.Background(),
+		runtimeprofile.Profile{
+			Skills: runtimeprofile.SkillPolicy{
+				Roots: []string{alphaRoot},
+			},
+		},
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	ch, err := agt.Run(ctx, inv)
+	require.NoError(t, err)
+	for evt := range ch {
+		if evt == nil || !evt.RequiresCompletion {
+			continue
+		}
+		key := agent.GetAppendEventNoticeKey(evt.ID)
+		require.NotNil(
+			t,
+			inv.AddNoticeChannel(context.Background(), key),
+		)
+		require.NoError(t, inv.NotifyCompletion(context.Background(), key))
+	}
+
+	sys := joinSystemMessages(mdl.got)
+	require.Contains(t, sys, "alpha")
+	require.NotContains(t, sys, "beta")
+}
+
+func TestNewAgent_OpenClawPostToolPrompt_AppliedAfterToolResult(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const (
+		userRequest = "write meeting notes to iWiki"
+		toolCallID  = "call_write_iwiki"
+		toolName    = "write_iwiki"
+		toolResult  = `{"status":"created","url":"https://iwiki.example/doc"}`
+	)
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	userMsg := model.NewUserMessage(userRequest)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(userMsg))
+	sess := session.NewSession("demo", "user", "sess")
+	sess.Events = []event.Event{
+		*event.NewResponseEvent(
+			inv.InvocationID,
+			"user",
+			&model.Response{
+				Choices: []model.Choice{{
+					Message: userMsg,
+				}},
+			},
+		),
+		*event.NewResponseEvent(
+			inv.InvocationID,
+			defaultAgentName,
+			&model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							Type: "function",
+							ID:   toolCallID,
+							Function: model.FunctionDefinitionParam{
+								Name: toolName,
+								Arguments: []byte(
+									`{"title":"notes"}`,
+								),
+							},
+						}},
+					},
+				}},
+			},
+		),
+		*event.NewResponseEvent(
+			inv.InvocationID,
+			defaultAgentName,
+			&model.Response{
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						toolCallID,
+						toolName,
+						toolResult,
+					),
+				}},
+			},
+		),
+	}
+	inv.Session = sess
+
+	req := runInvocationAndCapture(t, agt, mdl, inv)
+	system := joinSystemMessages(req)
+	require.Contains(t, system, openClawPostToolPrompt)
+	require.Contains(t, system, "same assistant turn")
+	require.Contains(
+		t,
+		system,
+		"Do not answer only with what you will do next.",
+	)
+	require.Contains(t, system, "Do not claim that a document")
+	require.Contains(
+		t,
+		system,
+		"Only return a blocker when no safe next step remains.",
+	)
+	require.Contains(t, system, "return `MEDIA:` or `MEDIA_DIR:` lines")
+	require.NotContains(t, system, "WECOM_FILE")
+	require.NotContains(t, system, "WECOM_MEDIA")
+	require.Contains(t, system, "For docs and iWiki")
+	require.NotContains(t, system, "Final Answer Requirement:")
+}
+
+func TestNewAgent_OpenClawPostToolPrompt_NotAppliedWithoutToolResult(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		session.NewSession("demo", "user", "sess"),
+	)
+	system := joinSystemMessages(req)
+	require.NotContains(t, system, openClawPostToolPrompt)
 }
 
 func TestNewAgent_LocalExecKeepsExecCommandButOmitsWorkspaceExec(
@@ -1924,6 +2203,13 @@ func TestNewAgent_KnowledgeOnlyProfileHidesSkillRun(t *testing.T) {
 		"Before the first matching load, start with one "+
 			"brief user-visible preamble",
 	)
+	require.Contains(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad).
+			Description,
+		"same assistant message must include the required "+
+			"tool call",
+	)
 }
 
 func TestNewAgent_KnowledgeOnlyProfileUsesToolingGuidance(
@@ -2000,6 +2286,11 @@ func TestNewAgent_FullProfileUsesToolingGuidance(t *testing.T) {
 				t,
 				content,
 				strings.TrimSpace(openClawToolingGuidance),
+			)
+			require.Contains(
+				t,
+				content,
+				artifactCompletionRule,
 			)
 		})
 	}
@@ -2341,8 +2632,8 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			name:      "knowledges",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
-				KnowledgesConfig: map[string]*yaml.Node{
-					"docs": yamlNode(t, `
+				KnowledgesConfig: []knowledgeEntry{
+					builtinKnowledgeEntry(t, "docs", `
 vector_store:
   type: inmemory
 `),
@@ -2872,7 +3163,7 @@ func TestResolveWorkspaceSkillsRoot_CwdSkills(t *testing.T) {
 	require.Equal(t, filepath.Join(cwd, defaultSkillsDir), got)
 }
 
-func TestResolveWorkspaceSkillsRoot_RepoBundled(t *testing.T) {
+func TestResolveWorkspaceSkillsRoot_IgnoresRepoBundled(t *testing.T) {
 	cwd := t.TempDir()
 	require.NoError(t, os.MkdirAll(
 		filepath.Join(cwd, appName, defaultSkillsDir),
@@ -2880,7 +3171,7 @@ func TestResolveWorkspaceSkillsRoot_RepoBundled(t *testing.T) {
 	))
 
 	got := resolveWorkspaceSkillsRoot(cwd, "")
-	require.Equal(t, filepath.Join(cwd, appName, defaultSkillsDir), got)
+	require.Equal(t, filepath.Join(cwd, defaultSkillsDir), got)
 }
 
 func TestResolveSkillRoots_IncludesExpectedRoots(t *testing.T) {
@@ -2943,6 +3234,20 @@ func TestResolveSkillRoots_UsesInstalledBundledSkills(t *testing.T) {
 		roots,
 		filepath.Join(cwd, appName, defaultSkillsDir),
 	)
+}
+
+func TestResolveSkillRoots_SeparatesRepoBundledSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := t.TempDir()
+	stateDir := t.TempDir()
+	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
+	require.NoError(t, os.MkdirAll(repoBundled, 0o700))
+
+	roots := resolveSkillRoots(cwd, agentConfig{StateDir: stateDir})
+	require.Contains(t, roots, filepath.Join(cwd, defaultSkillsDir))
+	require.Contains(t, roots, repoBundled)
 }
 
 func TestResolveBundledSkillsRoot_RepoFallback(t *testing.T) {
@@ -3775,6 +4080,84 @@ func TestInProcGatewayClient_StreamMessage_StatusError(t *testing.T) {
 	)
 }
 
+func TestInProcGatewayClient_StreamMessageWithOptions_ProgressAfterText(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const firstDelta = "checking "
+
+	srv, err := gateway.New(&inProcGWTestRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: firstDelta},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name: "demo_tool",
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("done"),
+					}},
+					Done: true,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	stream, err := c.StreamMessageWithOptions(
+		context.Background(),
+		gwclient.MessageRequest{
+			From: "u1",
+			Text: "hi",
+		},
+		&gwclient.MessageStreamOptions{
+			ProgressAfterTextDelta: true,
+		},
+	)
+	require.NoError(t, err)
+
+	var events []gwclient.StreamEvent
+	for evt := range stream {
+		events = append(events, evt)
+	}
+	require.Len(t, events, 7)
+	require.Equal(t, gwproto.StreamEventTypeMessageDelta, events[2].Type)
+	require.Equal(t, firstDelta, events[2].Delta)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[3].Type)
+	require.Equal(t, "Running local tool", events[3].Summary)
+	require.Equal(t, "demo_tool", events[3].ToolName)
+	require.Equal(t, gwproto.StreamToolStatusRunning, events[3].ToolStatus)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, events[4].Type)
+	require.Equal(t, gwproto.StreamProgressStageSummarizing, events[4].Stage)
+}
+
 func TestInProcGatewayClient_NilServerFails(t *testing.T) {
 	t.Parallel()
 
@@ -4160,6 +4543,247 @@ func TestInProcGatewayClient_ForgetUser_ClearsIndexedStorageScopes(
 
 	_, err = os.Stat(saved.Path)
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestInProcGatewayClient_ForgetUser_DeletesRuntimeProfileAppState(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	ctx := context.Background()
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	sessSvc := sessioninmemory.NewSessionService()
+	memSvc := meminmemory.NewMemoryService()
+	stateDir := t.TempDir()
+	uploadStore, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	const (
+		channelName  = "demo"
+		profileApp   = "retail-app"
+		otherApp     = "other-app"
+		userID       = "u1"
+		storageUser  = "profile-scope"
+		sessionID    = "demo:thread:room-1"
+		userSession  = "dm:profile"
+		uploadName   = "profile.txt"
+		uploadBody   = "profile upload"
+		otherContent = "keep"
+	)
+	require.NoError(
+		t,
+		conversationscope.RememberIndexedStorageUser(
+			ctx,
+			sessSvc,
+			profileApp,
+			userID,
+			storageUser,
+		),
+	)
+	_, err = sessSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   profileApp,
+			UserID:    userID,
+			SessionID: userSession,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	_, err = sessSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   profileApp,
+			UserID:    storageUser,
+			SessionID: sessionID,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	err = memSvc.AddMemory(
+		ctx,
+		memory.UserKey{AppName: profileApp, UserID: userID},
+		"remember profile",
+		nil,
+	)
+	require.NoError(t, err)
+	err = memSvc.AddMemory(
+		ctx,
+		memory.UserKey{AppName: profileApp, UserID: storageUser},
+		"remember profile scope",
+		nil,
+	)
+	require.NoError(t, err)
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+	rec, err := debugrecorder.New(stateDir, mode)
+	require.NoError(t, err)
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		AppName:   profileApp,
+		Channel:   channelName,
+		UserID:    userID,
+		SessionID: userSession,
+	})
+	require.NoError(t, err)
+	traceDir := trace.Dir()
+	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
+
+	saved, err := uploadStore.Save(
+		ctx,
+		uploads.Scope{
+			Channel:   channelName,
+			UserID:    storageUser,
+			SessionID: sessionID,
+		},
+		uploadName,
+		[]byte(uploadBody),
+	)
+	require.NoError(t, err)
+
+	memoryRoot, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(memoryRoot)
+	require.NoError(t, err)
+	profileMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		profileApp,
+		userID,
+	)
+	require.NoError(t, err)
+	profileStorageMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		profileApp,
+		storageUser,
+	)
+	require.NoError(t, err)
+	otherMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		otherApp,
+		userID,
+	)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		otherMemoryPath,
+		[]byte(otherContent),
+		0o600,
+	))
+
+	c := newInProcGatewayClient(
+		srv,
+		appName,
+		sessSvc,
+		memSvc,
+		stateDir,
+		uploadStore,
+	)
+	c.SetMemoryFileStore(memoryStore)
+	c.SetRuntimeProfileAppNames([]string{
+		" ",
+		profileApp,
+		profileApp,
+	})
+
+	require.NoError(t, c.ForgetUser(ctx, channelName, userID))
+
+	userSessions, err := sessSvc.ListSessions(ctx, session.UserKey{
+		AppName: profileApp,
+		UserID:  userID,
+	})
+	require.NoError(t, err)
+	require.Empty(t, userSessions)
+
+	storageSessions, err := sessSvc.ListSessions(ctx, session.UserKey{
+		AppName: profileApp,
+		UserID:  storageUser,
+	})
+	require.NoError(t, err)
+	require.Empty(t, storageSessions)
+
+	indexedStorageUsers, err := conversationscope.ListIndexedStorageUsers(
+		ctx,
+		sessSvc,
+		profileApp,
+		userID,
+	)
+	require.NoError(t, err)
+	require.Empty(t, indexedStorageUsers)
+
+	memories, err := memSvc.ReadMemories(
+		ctx,
+		memory.UserKey{AppName: profileApp, UserID: userID},
+		10,
+	)
+	require.NoError(t, err)
+	require.Empty(t, memories)
+	memories, err = memSvc.ReadMemories(
+		ctx,
+		memory.UserKey{AppName: profileApp, UserID: storageUser},
+		10,
+	)
+	require.NoError(t, err)
+	require.Empty(t, memories)
+
+	_, err = os.Stat(traceDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(saved.Path)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(profileMemoryPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(profileStorageMemoryPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(otherMemoryPath)
+	require.NoError(t, err)
+}
+
+func TestInProcGatewayClient_ForgetUser_UsesRuntimeProfileCatalog(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	ctx := context.Background()
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	sessSvc := sessioninmemory.NewSessionService()
+	const (
+		channelName = "demo"
+		profileApp  = "catalog-app"
+		userID      = "u1"
+		sessionID   = "dm:catalog"
+	)
+	_, err = sessSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   profileApp,
+			UserID:    userID,
+			SessionID: sessionID,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, sessSvc, nil, "")
+	c.SetRuntimeProfileCatalog(runtimeprofile.StaticStore{
+		Config: runtimeprofile.Config{
+			Profiles: map[string]runtimeprofile.Profile{
+				"catalog": {
+					AppName: profileApp,
+				},
+			},
+		},
+	})
+
+	require.NoError(t, c.ForgetUser(ctx, channelName, userID))
+
+	sessions, err := sessSvc.ListSessions(ctx, session.UserKey{
+		AppName: profileApp,
+		UserID:  userID,
+	})
+	require.NoError(t, err)
+	require.Empty(t, sessions)
 }
 
 func TestInProcGatewayClient_ForgetUser_ValidationErrors(t *testing.T) {
@@ -4651,6 +5275,35 @@ func TestInProcGatewayClient_ForgetUser_ListSessionsError(t *testing.T) {
 	require.Contains(t, err.Error(), "list boom")
 }
 
+func TestInProcGatewayClient_ForgetUser_RuntimeProfileCatalogError(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	wantErr := errors.New("catalog boom")
+	c := newInProcGatewayClient(
+		srv,
+		appName,
+		sessioninmemory.NewSessionService(),
+		nil,
+		"",
+	)
+	c.SetRuntimeProfileCatalog(runtimeprofile.NewCachedResolver(
+		runtimeprofile.StoreFunc(func(
+			context.Context,
+		) (runtimeprofile.Config, error) {
+			return runtimeprofile.Config{}, wantErr
+		}),
+	))
+
+	err = c.ForgetUser(context.Background(), "telegram", "u1")
+	require.ErrorIs(t, err, wantErr)
+	require.Contains(t, err.Error(), "forget: list runtime profile app names")
+}
+
 func TestInProcGatewayClient_ForgetUser_DeleteSessionError(t *testing.T) {
 	t.Parallel()
 
@@ -4830,6 +5483,60 @@ func TestDeleteDebugTraces_MissingDirNoError(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDeleteDebugTraces_UsesRuntimeProfileEvent(t *testing.T) {
+	t.Parallel()
+
+	const (
+		debugEventsFileName   = "events.jsonl"
+		malformedEventContent = "{bad-json\n"
+	)
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "s1",
+	})
+	require.NoError(t, err)
+	traceDir := trace.Dir()
+	require.NoError(t, trace.Record(
+		debugrecorder.KindRuntimeProfile,
+		runtimeprofile.TraceFields(runtimeprofile.Profile{
+			AppName: " ",
+		}),
+	))
+	require.NoError(t, trace.Record(
+		debugrecorder.KindRuntimeProfile,
+		runtimeprofile.TraceFields(runtimeprofile.Profile{
+			AppName: "profile-app",
+		}),
+	))
+	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
+
+	raw, err := debugrecorder.ReadEventsFile(traceDir)
+	require.NoError(t, err)
+	rawPath := filepath.Join(traceDir, debugEventsFileName)
+	require.NoError(t, os.WriteFile(
+		rawPath,
+		append([]byte(malformedEventContent), raw...),
+		0o600,
+	))
+
+	err = deleteDebugTraces(
+		context.Background(),
+		rec.Dir(),
+		"telegram",
+		"profile-app",
+		"u1",
+	)
+	require.NoError(t, err)
+
+	_, err = os.Stat(traceDir)
+	require.True(t, errors.Is(err, os.ErrNotExist))
+}
+
 func TestDeleteDebugTraces_IgnoresBadMeta(t *testing.T) {
 	t.Parallel()
 
@@ -4950,6 +5657,7 @@ type inProcGWTestRunner struct {
 	reply     string
 	requestID string
 	usage     *model.Usage
+	events    []*event.Event
 }
 
 func (r *inProcGWTestRunner) Run(
@@ -4959,6 +5667,15 @@ func (r *inProcGWTestRunner) Run(
 	_ model.Message,
 	_ ...agent.RunOption,
 ) (<-chan *event.Event, error) {
+	if len(r.events) > 0 {
+		ch := make(chan *event.Event, len(r.events))
+		for _, evt := range r.events {
+			ch <- evt
+		}
+		close(ch)
+		return ch, nil
+	}
+
 	reply := r.reply
 	if reply == "" {
 		reply = "ok"

@@ -60,9 +60,9 @@ const (
 	// Use this for debugging or when you need to retain thinking chains.
 	ReasoningContentModeKeepAll = processor.ReasoningContentModeKeepAll
 	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from
-	// messages that belong to previous request turns. Messages within the current
-	// request retain their reasoning_content (for tool call scenarios).
-	// This is the default mode, recommended for DeepSeek models.
+	// ordinary previous request turns. Messages within the current request and
+	// previous requests that performed tool calls retain their reasoning_content.
+	// This is the default mode, recommended for DeepSeek thinking mode.
 	ReasoningContentModeDiscardPreviousTurns = processor.ReasoningContentModeDiscardPreviousTurns
 	// ReasoningContentModeDiscardAll discards all reasoning_content from history.
 	// Use this for maximum bandwidth savings when reasoning history is not needed.
@@ -176,6 +176,8 @@ type Options struct {
 	Model model.Model
 	// Models is a map of models that can be switched by name at runtime.
 	Models map[string]model.Model
+	// ModelSelector selects the default model for each LLMAgent LLM call.
+	ModelSelector agent.ModelSelector
 	// Description is a description of the agent.
 	Description string
 	// Instruction is the instruction template for the agent.
@@ -332,6 +334,9 @@ type Options struct {
 	// Default is 0; the recommended value to pass when opting in is
 	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
+	// ContextCompactionTokenCounter estimates request and tool-result size for
+	// context compaction. When nil, SimpleTokenCounter is used.
+	ContextCompactionTokenCounter model.TokenCounter
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	summaryFormatter func(summary string) string
@@ -478,7 +483,8 @@ type Options struct {
 
 	// ReasoningContentMode controls how reasoning_content is handled in
 	// multi-turn conversations. This is particularly important for DeepSeek
-	// models where reasoning_content should be discarded from previous turns.
+	// models where ordinary previous-turn reasoning can be discarded, but
+	// tool-call reasoning must be replayed.
 	ReasoningContentMode string
 
 	toolFilter tool.FilterFunc
@@ -506,6 +512,10 @@ type Options struct {
 	// retrieval mode is used for query-time session recall.
 	// Default is session.SearchModeHybrid.
 	PreloadSessionRecallSearchMode session.SearchMode
+	// EnableOnDemandSession enables invocation-scoped
+	// session_search / session_load exposure and injects
+	// a small overview prompt.
+	EnableOnDemandSession bool
 
 	// postToolPromptEnabled controls whether the post-tool dynamic prompt
 	// injection is enabled. When nil (default), injection is enabled to
@@ -578,6 +588,16 @@ func WithModel(model model.Model) Option {
 func WithModels(models map[string]model.Model) Option {
 	return func(opts *Options) {
 		opts.Models = models
+	}
+}
+
+// WithModelSelector sets the default model selector for this LLMAgent.
+// The selector is used only when a run-level selector or explicit run/surface
+// model override is not present. Returning nil with nil error keeps the base
+// model for the call.
+func WithModelSelector(selector agent.ModelSelector) Option {
+	return func(opts *Options) {
+		opts.ModelSelector = selector
 	}
 }
 
@@ -1335,6 +1355,16 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 	}
 }
 
+// WithContextCompactionTokenCounter sets the token counter used by context
+// compaction to evaluate request thresholds and tool-result budgets.
+func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
+	return func(opts *Options) {
+		if counter != nil {
+			opts.ContextCompactionTokenCounter = counter
+		}
+	}
+}
+
 // WithPreserveSameBranch controls whether messages from the same invocation
 // branch lineage (ancestor/descendant) should preserve their original roles
 // instead of being rewritten into user context when used as history.
@@ -1423,11 +1453,13 @@ func WithMessageBranchFilterMode(mode string) Option {
 
 // WithReasoningContentMode controls how reasoning_content is handled in
 // multi-turn conversations. This is particularly important for DeepSeek models
-// where reasoning_content should be discarded from previous request turns.
+// where ordinary previous-turn reasoning_content may be omitted, but tool-call
+// reasoning_content must be replayed in later turns.
 //
 // Available modes:
 //   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from
-//     previous requests, keep for current request (default, recommended).
+//     ordinary previous requests, keep for the current request and previous
+//     requests that performed tool calls (default, recommended).
 //   - ReasoningContentModeKeepAll: Keep all reasoning_content (for debugging).
 //   - ReasoningContentModeDiscardAll: Discard all reasoning_content from history.
 func WithReasoningContentMode(mode string) Option {
@@ -1525,6 +1557,14 @@ func WithPreloadSessionRecallSearchMode(
 		default:
 			opts.PreloadSessionRecallSearchMode = session.SearchModeHybrid
 		}
+	}
+}
+
+// WithEnableOnDemandSession enables or disables invocation-scoped on-demand
+// session recall tools and their lightweight overview prompt.
+func WithEnableOnDemandSession(enable bool) Option {
+	return func(opts *Options) {
+		opts.EnableOnDemandSession = enable
 	}
 }
 

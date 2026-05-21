@@ -21,11 +21,13 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 const (
@@ -193,6 +195,9 @@ func execToolDescription(hasMemoryFile bool) string {
 	parts := []string{
 		"Execute a host shell command. Use this for general local shell work.",
 		"Interactive commands can continue with write_stdin.",
+		"If you say you will run, inspect, create, write, or verify " +
+			"something with host shell work, the same assistant " +
+			"message must call exec_command or the required tool.",
 		"Protected shell and credential paths may be blocked by policy.",
 		"Sensitive env values may be redacted from returned output.",
 		"Do not use this just to inspect a PDF or spreadsheet already " +
@@ -273,6 +278,10 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	workdir, err = runtimeprofile.ResolveWorkdir(ctx, workdir)
+	if err != nil {
+		return nil, err
+	}
 
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
@@ -280,8 +289,11 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 	env := mergeExecEnv(
 		in.Env,
 		mergeExecEnv(
-			uploadEnvFromContext(ctx, t.uploads),
-			memoryFileEnvFromContext(ctx, t.memoryStore),
+			identity.EnvVarsFromContext(ctx),
+			mergeExecEnv(
+				uploadEnvFromContext(ctx, t.uploads),
+				memoryFileEnvFromContext(ctx, t.memoryStore),
+			),
 		),
 	)
 

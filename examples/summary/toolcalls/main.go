@@ -40,7 +40,7 @@ const (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Model name to use")
+	modelName = flag.String("model", "deepseek-v4-flash", "Model name to use")
 	steps     = flag.Int("steps", 5, "Sequential tool calls required in one turn")
 	query     = flag.String("query",
 		"Plan and execute the task using the required step tool calls.",

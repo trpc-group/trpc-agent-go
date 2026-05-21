@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	clength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
 )
 
 // CompareFunc defines custom text comparison logic.
@@ -27,6 +29,8 @@ type TextCriterion struct {
 	CaseInsensitive bool `json:"caseInsensitive,omitempty"`
 	// MatchStrategy selects the comparison rule.
 	MatchStrategy TextMatchStrategy `json:"matchStrategy,omitempty"`
+	// Length validates text length.
+	Length *clength.LengthCriterion `json:"length,omitempty"`
 	// CompareName selects a registered comparison implementation by name.
 	CompareName string `json:"compareName,omitempty"`
 	// Compare overrides built-in strategies.
@@ -43,6 +47,8 @@ const (
 	TextMatchStrategyContains TextMatchStrategy = "contains"
 	// TextMatchStrategyRegex matches strings that match the regex.
 	TextMatchStrategyRegex TextMatchStrategy = "regex"
+	// TextMatchStrategySkip skips built-in string matching.
+	TextMatchStrategySkip TextMatchStrategy = "skip"
 )
 
 // New creates a new TextCriterion with the provided options.
@@ -52,6 +58,7 @@ func New(opt ...Option) *TextCriterion {
 		Ignore:          opts.ignore,
 		CaseInsensitive: opts.caseInsensitive,
 		MatchStrategy:   opts.matchStrategy,
+		Length:          opts.length,
 		CompareName:     opts.compareName,
 		Compare:         opts.compare,
 	}
@@ -64,6 +71,18 @@ func (t *TextCriterion) Match(source, target string) (bool, error) {
 	}
 	if t.Compare != nil {
 		return t.Compare(source, target)
+	}
+	if t.Length != nil {
+		ok, err := t.Length.Match(source)
+		if err != nil {
+			return false, fmt.Errorf("length mismatch: %w", err)
+		}
+		if !ok {
+			return false, fmt.Errorf("length mismatch")
+		}
+	}
+	if t.MatchStrategy == TextMatchStrategySkip {
+		return true, nil
 	}
 	if t.CaseInsensitive {
 		source = strings.ToLower(source)

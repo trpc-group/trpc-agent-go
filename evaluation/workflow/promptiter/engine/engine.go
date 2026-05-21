@@ -13,7 +13,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
+	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
@@ -35,10 +37,10 @@ type Engine interface {
 
 // RunRequest carries the inputs required to start PromptIter optimization.
 type RunRequest struct {
-	// TrainEvalSetIDs identifies evaluation sets used to generate gradients.
-	TrainEvalSetIDs []string
-	// ValidationEvalSetIDs identifies evaluation sets used for patch acceptance checks.
-	ValidationEvalSetIDs []string
+	// Train identifies evaluation data used to generate gradients.
+	Train []EvalSetInput `json:"train"`
+	// Validation identifies evaluation data used for patch acceptance checks.
+	Validation []EvalSetInput `json:"validation"`
 	// InitialProfile is the baseline profile for round one optimization.
 	InitialProfile *promptiter.Profile
 	// Teacher executes trace generation requests for evaluation.
@@ -47,6 +49,12 @@ type RunRequest struct {
 	Judge runner.Runner
 	// EvaluationOptions configures how training and validation runs are executed.
 	EvaluationOptions EvaluationOptions
+	// BackwardOptions configures backward-stage execution.
+	BackwardOptions BackwardOptions
+	// AggregationOptions configures aggregation-stage execution.
+	AggregationOptions AggregationOptions
+	// OptimizerOptions configures optimizer-stage execution.
+	OptimizerOptions OptimizerOptions
 	// AcceptancePolicy controls minimum quality gain required to accept patching.
 	AcceptancePolicy AcceptancePolicy
 	// StopPolicy controls termination conditions between rounds.
@@ -55,6 +63,14 @@ type RunRequest struct {
 	MaxRounds int
 	// TargetSurfaceIDs limits this run to optimizing only the listed surfaces.
 	TargetSurfaceIDs []string
+}
+
+// EvalSetInput identifies one evaluation set and optional case filters for a PromptIter run.
+type EvalSetInput struct {
+	// EvalSetID identifies the eval set to execute.
+	EvalSetID string `json:"evalSetId"`
+	// EvalCaseIDs limits this eval set to specific eval cases when set.
+	EvalCaseIDs []string `json:"evalCaseIds,omitempty"`
 }
 
 // RunStatus identifies the lifecycle state of one PromptIter run view.
@@ -151,14 +167,15 @@ func New(ctx context.Context,
 		return nil, errors.New("aggregator is nil")
 	case optimizer == nil:
 		return nil, errors.New("optimizer is nil")
+	default:
+		return &engine{
+			targetAgent:    targetAgent,
+			backwarder:     backwarder,
+			aggregator:     aggregator,
+			optimizer:      optimizer,
+			agentEvaluator: agentEvaluator,
+		}, nil
 	}
-	return &engine{
-		targetAgent:    targetAgent,
-		backwarder:     backwarder,
-		aggregator:     aggregator,
-		optimizer:      optimizer,
-		agentEvaluator: agentEvaluator,
-	}, nil
 }
 
 // Describe returns the structure snapshot used for the current optimization session.
@@ -207,7 +224,7 @@ func (e *engine) run(
 	acceptedProfile := initialProfile
 	acceptedValidationScore := 0.0
 	baselineValidation, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
-		request.ValidationEvalSetIDs,
+		request.Validation,
 		acceptedProfile,
 		request.Teacher,
 		request.Judge,
@@ -295,17 +312,26 @@ func (e *engine) run(
 }
 
 func (e *engine) validateRunRequest(request *RunRequest) error {
-	switch {
-	case request == nil:
+	if request == nil {
 		return errors.New("run request is nil")
-	case len(request.TrainEvalSetIDs) == 0:
-		return errors.New("train evaluation set ids are empty")
-	case len(request.ValidationEvalSetIDs) == 0:
-		return errors.New("validation evaluation set ids are empty")
+	}
+	if err := validateEvalSetInputs("train", request.Train); err != nil {
+		return err
+	}
+	if err := validateEvalSetInputs("validation", request.Validation); err != nil {
+		return err
+	}
+	switch {
 	case request.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than 0")
 	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
+	case request.BackwardOptions.CaseParallelism < 0:
+		return errors.New("backward case parallelism must be non-negative")
+	case request.AggregationOptions.SurfaceParallelism < 0:
+		return errors.New("aggregation surface parallelism must be non-negative")
+	case request.OptimizerOptions.SurfaceParallelism < 0:
+		return errors.New("optimizer surface parallelism must be non-negative")
 	case e.targetAgent == nil:
 		return errors.New("target agent is nil")
 	case e.agentEvaluator == nil:
@@ -345,7 +371,7 @@ func (e *engine) executeRound(
 		InputProfile: iprofile.Clone(acceptedProfile),
 	}
 	trainResult, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
-		request.TrainEvalSetIDs,
+		request.Train,
 		acceptedProfile,
 		request.Teacher,
 		request.Judge,
@@ -366,7 +392,15 @@ func (e *engine) executeRound(
 	if err := appendRunEvent(ctx, observer, EventKindRoundLosses, roundNumber, losses); err != nil {
 		return nil, 0, err
 	}
-	backwardResult, err := e.backward(ctx, structure, acceptedProfile, trainResult, losses, targetSurfaceSet)
+	backwardResult, err := e.backward(
+		ctx,
+		structure,
+		acceptedProfile,
+		trainResult,
+		losses,
+		targetSurfaceSet,
+		request.BackwardOptions,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("backward round %d: %w", roundNumber, err)
 	}
@@ -374,7 +408,13 @@ func (e *engine) executeRound(
 	if err := appendRunEvent(ctx, observer, EventKindRoundBackward, roundNumber, backwardResult); err != nil {
 		return nil, 0, err
 	}
-	aggregationResult, err := e.aggregate(ctx, structure, backwardResult, targetSurfaceSet)
+	aggregationResult, err := e.aggregate(
+		ctx,
+		structure,
+		backwardResult,
+		targetSurfaceSet,
+		request.AggregationOptions,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("aggregate round %d: %w", roundNumber, err)
 	}
@@ -382,7 +422,14 @@ func (e *engine) executeRound(
 	if err := appendRunEvent(ctx, observer, EventKindRoundAggregation, roundNumber, aggregationResult); err != nil {
 		return nil, 0, err
 	}
-	patchSet, err := e.optimize(ctx, structure, acceptedProfile, aggregationResult, targetSurfaceSet)
+	patchSet, err := e.optimize(
+		ctx,
+		structure,
+		acceptedProfile,
+		aggregationResult,
+		targetSurfaceSet,
+		request.OptimizerOptions,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("optimize round %d: %w", roundNumber, err)
 	}
@@ -399,7 +446,7 @@ func (e *engine) executeRound(
 		return nil, 0, err
 	}
 	validationResult, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
-		request.ValidationEvalSetIDs,
+		request.Validation,
 		outputProfile,
 		request.Teacher,
 		request.Judge,
@@ -427,20 +474,77 @@ func (e *engine) executeRound(
 }
 
 func (e *engine) newEvaluationRequest(
-	evalSetIDs []string,
+	inputs []EvalSetInput,
 	profile *promptiter.Profile,
 	teacher runner.Runner,
 	judge runner.Runner,
 	options EvaluationOptions,
 ) *EvaluationRequest {
 	return &EvaluationRequest{
-		EvalSetIDs: append(
-			[]string(nil),
-			evalSetIDs...,
-		),
-		Profile: profile,
-		Teacher: teacher,
-		Judge:   judge,
-		Options: options,
+		EvalSets: inputs,
+		Profile:  profile,
+		Teacher:  teacher,
+		Judge:    judge,
+		Options:  options,
 	}
+}
+
+func validateEvalSetInputs(role string, inputs []EvalSetInput) error {
+	prefix := ""
+	if role != "" {
+		prefix = role + " "
+	}
+	if len(inputs) == 0 {
+		return fmt.Errorf("%sevaluation sets are empty", prefix)
+	}
+	for _, input := range inputs {
+		if input.EvalSetID == "" {
+			return fmt.Errorf("%sevaluation set id is empty", prefix)
+		}
+		if slices.Contains(input.EvalCaseIDs, "") {
+			return fmt.Errorf("%seval case id for eval set %q is empty", prefix, input.EvalSetID)
+		}
+	}
+	return nil
+}
+
+func runIndexedParallel(
+	ctx context.Context,
+	count int,
+	parallelism int,
+	fn func(context.Context, int) error,
+) error {
+	if parallelism <= 1 || count <= 1 {
+		for index := range count {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := fn(ctx, index); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	group, groupCtx := errgroup.WithContext(ctx)
+	indexErrors := make([]error, count)
+	group.SetLimit(parallelism)
+	for index := range count {
+		if err := groupCtx.Err(); err != nil {
+			break
+		}
+		index := index
+		group.Go(func() error {
+			if err := groupCtx.Err(); err != nil {
+				return err
+			}
+			if err := fn(groupCtx, index); err != nil {
+				indexErrors[index] = err
+				return err
+			}
+			return nil
+		})
+	}
+	waitErr := group.Wait()
+	indexErrors = append(indexErrors, waitErr, ctx.Err())
+	return errors.Join(indexErrors...)
 }

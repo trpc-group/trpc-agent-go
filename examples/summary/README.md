@@ -13,9 +13,42 @@ This example demonstrates LLM-driven session summarization integrated with the f
 - Simple trigger configuration using event-count threshold.
 - Prompt construction that injects the latest summary and recent events.
 - Context-aware routing can be found in `examples/summary/contextaware`.
+- FilterKey summary dispatch policy, including allowlists and full-session cascade control, can be found in `examples/summary/filterkey`.
 - Summary injection mode comparison can be found in `examples/summary/injection`.
 - Backend-specific persistence:
   - Summary text is stored in `sess.Summaries[filterKey]` for both backends.
+
+## Summary + Progressive Disclosure
+
+This example uses `inmemory`, so it demonstrates summary generation and summary
+injection only. It does **not** surface `session_search` / `session_load`.
+
+If you want the model to recover hidden details on demand after summary or
+context compaction, switch to a backend that supports both search and anchor
+window loading, such as `session/pgvector`, and enable the progressive-
+disclosure path:
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(llm),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithEnableOnDemandSession(true),
+)
+```
+
+Practical scope choices:
+
+- `current_hidden`: for details hidden behind the current summary boundary
+- `current_session`: for current-session details or tool results hidden by
+  request projection / context compaction
+- `other_sessions`: for recalling another session of the same user
+
+Current recall behavior:
+
+- searchable/loadable: user messages, assistant messages, tool results
+- not indexed: raw tool-call requests, partial events
 
 ## Prerequisites
 
@@ -43,7 +76,7 @@ go run main.go -events 0 -tokens 0 -time-sec 0
 
 Command-line flags:
 
-- `-model`: Model name to use for both chat and summarization. Default: `deepseek-chat`.
+- `-model`: Model name to use for both chat and summarization. Default: `deepseek-v4-flash`.
 - `-streaming`: Enable streaming mode for responses. Default: `true`.
 - `-events`: Event count threshold to trigger summarization. Default: `1`.
 - `-tokens`: Token-count threshold to trigger summarization (0=disabled). Default: `0`.
@@ -65,7 +98,7 @@ Example output:
 
 ```
 📝 Session Summarization Chat
-Model: deepseek-chat
+Model: deepseek-v4-flash
 Service: inmemory
 EventThreshold: 1
 TokenThreshold: 0

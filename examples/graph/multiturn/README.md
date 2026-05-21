@@ -30,7 +30,7 @@ Finish: chat
 
 ```bash
 cd examples/graph/multiturn
-go run . -model deepseek-chat
+go run . -model deepseek-v4-flash
 ```
 
 Then chat interactively:
@@ -52,7 +52,7 @@ Notes:
 ## Requirements
 
 - Go 1.21+
-- Network access and a compatible LLM model (default: `deepseek-chat`). Set any required API keys (e.g., `OPENAI_API_KEY`).
+- Network access and a compatible LLM model (default: `deepseek-v4-flash`). Set any required API keys (e.g., `OPENAI_API_KEY`).
 
 ## Key Files
 

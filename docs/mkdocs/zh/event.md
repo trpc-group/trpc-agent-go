@@ -52,6 +52,9 @@ type Event struct {
     // StateDelta 是需要写入会话状态的增量（例如 Processor 产出的状态变更）
     StateDelta map[string][]byte `json:"stateDelta,omitempty"`
 
+    // Extensions 存放事件上的可选元数据
+    Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
+
     // StructuredOutput 携带类型化的内存内结构化输出，不参与序列化
     StructuredOutput any `json:"-"`
 
@@ -181,8 +184,30 @@ type Usage struct {
     // 响应中使用的总 Token 数量.
     TotalTokens int `json:"total_tokens"`
 
+    // 提示词 token 用量详情.
+    PromptTokensDetails PromptTokensDetails `json:"prompt_tokens_details"`
+
+    // 补全 token 用量详情.
+    CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+
     // 时间统计信息（可选）
     TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+}
+
+type PromptTokensDetails struct {
+    // 提示词中的缓存 token 数量.
+    CachedTokens int `json:"cached_tokens"`
+
+    // 创建缓存使用的 token 数量（Anthropic）.
+    CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+
+    // 从缓存读取的 token 数量（Anthropic）.
+    CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+    // 推理过程生成的 token 数量.
+    ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 }
 
 type TimingInfo struct {
@@ -209,6 +234,8 @@ type TimingInfo struct {
     ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 ```
+
+`CompletionTokensDetails.ReasoningTokens` 对应 OpenAI-compatible 返回中的 `completion_tokens_details.reasoning_tokens`。当模型没有使用 reasoning tokens 或服务方未上报时，该值可能为 `0`。
 
 ### Event 类型
 
@@ -387,6 +414,35 @@ if evt.Response != nil && evt.Object == model.ObjectTypeToolResponse && len(evt.
 ```
 
 提示：自定义事件时，优先使用 `event.New(...)` 搭配 `WithResponse`、`WithBranch` 等，以保证 ID 和时间戳等元数据一致。
+
+### 工具响应中的工具调用参数
+
+工具响应事件可以通过 `Event.Extensions` 携带最终的工具调用参数。这个能力适合
+事件消费方根据工具调用参数计算业务展示名称，例如同一个 `gametime` 工具根据
+`query` 或 `set` 参数显示为“查询游戏时长”或“设置游戏时长”。
+
+使用 `event.ToolCallArgsExtensionKey` 可以读取一个 `map[string]string`，
+其中 key 是 tool call ID，value 是 JSON 参数字符串：
+
+```go
+argsByID, ok, err := event.GetExtension[map[string]string](
+    evt,
+    event.ToolCallArgsExtensionKey,
+)
+if err != nil {
+    // 扩展数据结构不符合预期
+    return err
+}
+if ok {
+    argsJSON := argsByID[toolCallID]
+    // 使用 argsJSON 计算展示名称，例如“查询游戏时长”
+}
+```
+
+这里保存的是框架最终执行工具时使用的参数，已经包含 `BeforeTool` 回调或参数
+修复后的结果。当多个并行工具调用被合并到同一个 `tool.response` 事件时，
+这个扩展 map 中可能同时包含多个 tool call ID。消费方应把该扩展视为可选，
+以兼容旧事件或自定义事件。
 
 ### GraphAgent 节点自定义事件（非 LLM 输出）
 

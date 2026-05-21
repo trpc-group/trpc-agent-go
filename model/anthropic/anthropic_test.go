@@ -11,6 +11,7 @@ package anthropic
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -175,7 +176,8 @@ func Test_convertUserMessage(t *testing.T) {
 			{Type: model.ContentTypeText, Text: &p2},
 		},
 	}
-	out := convertUserMessage(msg)
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
 	assert.Equal(t, 3, len(out.Content))
 	// Validate text blocks order and content.
 	assert.NotNil(t, out.Content[0].OfText)
@@ -205,7 +207,8 @@ func Test_convertAssistantMessageContent(t *testing.T) {
 			},
 		},
 	}
-	out := convertAssistantMessageContent(msg)
+	out, err := convertAssistantMessageContent(msg)
+	require.NoError(t, err)
 	// Expect: 1 head text + 1 part text + 1 tool use.
 	assert.Equal(t, 3, len(out.Content))
 	assert.NotNil(t, out.Content[0].OfText)
@@ -225,7 +228,8 @@ func Test_convertSystemMessageContent(t *testing.T) {
 			{Type: model.ContentTypeText, Text: &p},
 		},
 	}
-	blocks := convertSystemMessageContent(msg)
+	blocks, err := convertSystemMessageContent(msg)
+	require.NoError(t, err)
 	assert.Equal(t, 2, len(blocks))
 	assert.Equal(t, "sys", blocks[0].Text)
 	assert.Equal(t, p, blocks[1].Text)
@@ -457,12 +461,6 @@ func Test_convertMessages_AllEmptyDropped(t *testing.T) {
 		{
 			Role:    model.RoleUser,
 			Content: "",
-			ContentParts: []model.ContentPart{
-				{
-					Type: model.ContentTypeImage,
-					Text: nil,
-				},
-			},
 		},
 		{
 			Role:    model.RoleSystem,
@@ -510,7 +508,8 @@ func Test_convertAssistantMessageContent_TwoToolCalls(t *testing.T) {
 			},
 		},
 	}
-	out := convertAssistantMessageContent(msg)
+	out, err := convertAssistantMessageContent(msg)
+	require.NoError(t, err)
 	// 1 head text + 2 tool uses.
 	assert.Equal(t, 3, len(out.Content))
 	assert.NotNil(t, out.Content[0].OfText)
@@ -525,11 +524,13 @@ func Test_convertUserMessage_OnlyTextParts(t *testing.T) {
 		Role:    model.RoleUser,
 		Content: "",
 		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText},
 			{Type: model.ContentTypeText, Text: &a},
 			{Type: model.ContentTypeText, Text: &b},
 		},
 	}
-	out := convertUserMessage(msg)
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
 	assert.Equal(t, 2, len(out.Content))
 	assert.NotNil(t, out.Content[0].OfText)
 	assert.Equal(t, a, out.Content[0].OfText.Text)
@@ -537,16 +538,495 @@ func Test_convertUserMessage_OnlyTextParts(t *testing.T) {
 	assert.Equal(t, b, out.Content[1].OfText.Text)
 }
 
-func Test_convertUserMessage_NonTextPartsIgnored(t *testing.T) {
-	msg := model.Message{
-		Role:    model.RoleUser,
-		Content: "",
-		ContentParts: []model.ContentPart{
-			{Type: model.ContentTypeImage},
+func Test_convertMessages_MultimodalErrorPropagation(t *testing.T) {
+	tests := []struct {
+		name    string
+		message model.Message
+		want    string
+	}{
+		{
+			name: "system",
+			message: model.Message{
+				Role:         model.RoleSystem,
+				ContentParts: []model.ContentPart{{Type: model.ContentTypeImage}},
+			},
+			want: "system content part 0",
+		},
+		{
+			name: "assistant",
+			message: model.Message{
+				Role:         model.RoleAssistant,
+				ContentParts: []model.ContentPart{{Type: model.ContentTypeImage}},
+			},
+			want: "assistant content part 0",
+		},
+		{
+			name: "user",
+			message: model.Message{
+				Role:         model.RoleUser,
+				ContentParts: []model.ContentPart{{Type: model.ContentTypeImage}},
+			},
+			want: "convert user content part 0",
+		},
+		{
+			name: "default role",
+			message: model.Message{
+				Role:         model.Role("custom"),
+				ContentParts: []model.ContentPart{{Type: model.ContentTypeImage}},
+			},
+			want: "convert user content part 0",
 		},
 	}
-	out := convertUserMessage(msg)
-	assert.Equal(t, 0, len(out.Content))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := convertMessages([]model.Message{tt.message})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func Test_convertUserMessage_ImageURL(t *testing.T) {
+	msg := model.Message{
+		Role:    model.RoleUser,
+		Content: "inspect",
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL: "https://example.com/image.png",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 2)
+	require.NotNil(t, out.Content[0].OfText)
+	require.NotNil(t, out.Content[1].OfImage)
+	require.NotNil(t, out.Content[1].OfImage.Source.OfURL)
+	assert.Equal(t, "inspect", out.Content[0].OfText.Text)
+	assert.Equal(t, "https://example.com/image.png", out.Content[1].OfImage.Source.OfURL.URL)
+}
+
+func Test_convertUserMessage_ImageURLWithoutMediaType(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL: "https://example.com/image",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfImage)
+	require.NotNil(t, out.Content[0].OfImage.Source.OfURL)
+	assert.Equal(t, "https://example.com/image", out.Content[0].OfImage.Source.OfURL.URL)
+}
+
+func Test_convertUserMessage_ImageURLUnsupportedFormatFallbackText(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL:    "https://example.com/icon.svg",
+					Format: "image/svg+xml",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfText)
+	assert.Equal(t, "Image URL (image/svg+xml): https://example.com/icon.svg", out.Content[0].OfText.Text)
+}
+
+func Test_convertUserMessage_ImageURLUnsupportedExtensionFallbackText(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL: "https://example.com/icon.svg",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfText)
+	assert.Equal(t, "Image URL: https://example.com/icon.svg", out.Content[0].OfText.Text)
+}
+
+func Test_convertUserMessage_ImageData(t *testing.T) {
+	data := []byte("image-bytes")
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data:   data,
+					Format: "png",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfImage)
+	require.NotNil(t, out.Content[0].OfImage.Source.OfBase64)
+	assert.Equal(t, "image/png", string(out.Content[0].OfImage.Source.OfBase64.MediaType))
+	assert.Equal(t, base64.StdEncoding.EncodeToString(data), out.Content[0].OfImage.Source.OfBase64.Data)
+}
+
+func Test_convertUserMessage_ImageDataDetectsMediaType(t *testing.T) {
+	data := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0, 'I', 'H', 'D', 'R'}
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data: data,
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfImage)
+	require.NotNil(t, out.Content[0].OfImage.Source.OfBase64)
+	assert.Equal(t, "image/png", string(out.Content[0].OfImage.Source.OfBase64.MediaType))
+	assert.Equal(t, base64.StdEncoding.EncodeToString(data), out.Content[0].OfImage.Source.OfBase64.Data)
+}
+
+func Test_convertUserMessage_FilePDFData(t *testing.T) {
+	data := []byte("%PDF-1.7\n")
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "report.pdf",
+					Data:     data,
+					MimeType: "application/pdf",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfDocument)
+	require.NotNil(t, out.Content[0].OfDocument.Source.OfBase64)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(data), out.Content[0].OfDocument.Source.OfBase64.Data)
+	assert.Equal(t, "report.pdf", out.Content[0].OfDocument.Title.Value)
+}
+
+func Test_convertUserMessage_FileDataWithURLUsesData(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Data: []byte("hello"),
+					URL:  "https://example.com/report.pdf",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfDocument)
+	require.NotNil(t, out.Content[0].OfDocument.Source.OfText)
+	assert.Equal(t, "hello", out.Content[0].OfDocument.Source.OfText.Data)
+}
+
+func Test_convertUserMessage_FilePDFURL(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "report.pdf",
+					URL:      "https://example.com/report.pdf?sign=1",
+					MimeType: "application/pdf",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfDocument)
+	require.NotNil(t, out.Content[0].OfDocument.Source.OfURL)
+	assert.Equal(t, "https://example.com/report.pdf?sign=1", out.Content[0].OfDocument.Source.OfURL.URL)
+	assert.Equal(t, "report.pdf", out.Content[0].OfDocument.Title.Value)
+}
+
+func Test_convertUserMessage_FilePDFURLByName(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name: "report.pdf",
+					URL:  "https://example.com/download?sign=1",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfDocument)
+	require.NotNil(t, out.Content[0].OfDocument.Source.OfURL)
+	assert.Equal(t, "https://example.com/download?sign=1", out.Content[0].OfDocument.Source.OfURL.URL)
+	assert.Equal(t, "report.pdf", out.Content[0].OfDocument.Title.Value)
+}
+
+func Test_convertUserMessage_FileURLFallbackText(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "data.json",
+					URL:      "https://example.com/data.json",
+					MimeType: "application/json",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfText)
+	assert.Equal(t, "File URL: data.json (application/json): https://example.com/data.json", out.Content[0].OfText.Text)
+}
+
+func Test_convertUserMessage_FileImageURLFallbackText(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "photo.png",
+					URL:      "https://example.com/photo.png",
+					MimeType: "image/png",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfText)
+	assert.Equal(t, "File URL: photo.png (image/png): https://example.com/photo.png", out.Content[0].OfText.Text)
+}
+
+func Test_convertUserMessage_FileImageData(t *testing.T) {
+	data := []byte("image-bytes")
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "photo.png",
+					Data:     data,
+					MimeType: "image/png",
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfImage)
+	require.NotNil(t, out.Content[0].OfImage.Source.OfBase64)
+	assert.Equal(t, "image/png", string(out.Content[0].OfImage.Source.OfBase64.MediaType))
+	assert.Equal(t, base64.StdEncoding.EncodeToString(data), out.Content[0].OfImage.Source.OfBase64.Data)
+}
+
+func Test_convertUserMessage_FileTextData(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name: "notes.txt",
+					Data: []byte("hello"),
+				},
+			},
+		},
+	}
+	out, err := convertUserMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, out.Content, 1)
+	require.NotNil(t, out.Content[0].OfDocument)
+	require.NotNil(t, out.Content[0].OfDocument.Source.OfText)
+	assert.Equal(t, "hello", out.Content[0].OfDocument.Source.OfText.Data)
+	assert.Equal(t, "notes.txt", out.Content[0].OfDocument.Title.Value)
+}
+
+func Test_convertUserMessage_FileTextLikeDataFallbackText(t *testing.T) {
+	tests := []struct {
+		name     string
+		file     *model.File
+		wantText string
+	}{
+		{
+			name: "CSV",
+			file: &model.File{
+				Name:     "data.csv",
+				Data:     []byte("name,age\nAlice,30\n"),
+				MimeType: "text/csv",
+			},
+			wantText: "File: data.csv (text/csv)\n\nname,age\nAlice,30\n",
+		},
+		{
+			name: "HTML",
+			file: &model.File{
+				Name:     "page.html",
+				Data:     []byte("<h1>Hello</h1>"),
+				MimeType: "text/html",
+			},
+			wantText: "File: page.html (text/html)\n\n<h1>Hello</h1>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeFile,
+						File: tt.file,
+					},
+				},
+			}
+			out, err := convertUserMessage(msg)
+			require.NoError(t, err)
+			require.Len(t, out.Content, 1)
+			require.NotNil(t, out.Content[0].OfText)
+			assert.Equal(t, tt.wantText, out.Content[0].OfText.Text)
+		})
+	}
+}
+
+func Test_convertMessages_ImageOnlyUserPreserved(t *testing.T) {
+	msgs := []model.Message{
+		{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeImage,
+					Image: &model.Image{
+						URL: "https://example.com/image.png",
+					},
+				},
+			},
+		},
+	}
+	converted, systemPrompts, err := convertMessages(msgs)
+	require.NoError(t, err)
+	assert.Empty(t, systemPrompts)
+	require.Len(t, converted, 1)
+	require.Len(t, converted[0].Content, 1)
+	assert.NotNil(t, converted[0].Content[0].OfImage)
+}
+
+func Test_convertUserMessage_UnsupportedMultimodalParts(t *testing.T) {
+	tests := []struct {
+		name string
+		part model.ContentPart
+		want string
+	}{
+		{
+			name: "nil image",
+			part: model.ContentPart{Type: model.ContentTypeImage},
+			want: "image payload is nil",
+		},
+		{
+			name: "audio",
+			part: model.ContentPart{Type: model.ContentTypeAudio, Audio: &model.Audio{Data: []byte("audio"), Format: "mp3"}},
+			want: "audio content is not supported",
+		},
+		{
+			name: "file id",
+			part: model.ContentPart{Type: model.ContentTypeFile, File: &model.File{FileID: "file_123"}},
+			want: "file_id content is not supported",
+		},
+		{
+			name: "unsupported file media type",
+			part: model.ContentPart{Type: model.ContentTypeFile, File: &model.File{Name: "data.json", Data: []byte("{}"), MimeType: "application/json"}},
+			want: "unsupported file media type",
+		},
+		{
+			name: "unknown content type",
+			part: model.ContentPart{Type: model.ContentType("unknown")},
+			want: "unsupported content type",
+		},
+		{
+			name: "empty image data",
+			part: model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{}},
+			want: "image data is empty",
+		},
+		{
+			name: "nil file",
+			part: model.ContentPart{Type: model.ContentTypeFile},
+			want: "file payload is nil",
+		},
+		{
+			name: "empty file",
+			part: model.ContentPart{Type: model.ContentTypeFile, File: &model.File{}},
+			want: "file data is empty",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := convertUserMessage(model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{tt.part}})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func Test_convertNonUserMessage_UnsupportedMultimodalParts(t *testing.T) {
+	imagePart := model.ContentPart{
+		Type: model.ContentTypeImage,
+		Image: &model.Image{
+			URL: "https://example.com/image.png",
+		},
+	}
+	_, err := convertAssistantMessageContent(model.Message{Role: model.RoleAssistant, ContentParts: []model.ContentPart{imagePart}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "assistant content part 0")
+	_, err = convertSystemMessageContent(model.Message{Role: model.RoleSystem, ContentParts: []model.ContentPart{imagePart}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "system content part 0")
 }
 
 func Test_convertSystemMessageContent_OnlyParts(t *testing.T) {
@@ -566,7 +1046,8 @@ func Test_convertSystemMessageContent_OnlyParts(t *testing.T) {
 			},
 		},
 	}
-	blocks := convertSystemMessageContent(msg)
+	blocks, err := convertSystemMessageContent(msg)
+	require.NoError(t, err)
 	assert.Equal(t, 2, len(blocks))
 	assert.Equal(t, a, blocks[0].Text)
 	assert.Equal(t, b, blocks[1].Text)
@@ -574,7 +1055,8 @@ func Test_convertSystemMessageContent_OnlyParts(t *testing.T) {
 
 func Test_convertSystemMessageContent_Empty(t *testing.T) {
 	msg := model.Message{Role: model.RoleSystem}
-	blocks := convertSystemMessageContent(msg)
+	blocks, err := convertSystemMessageContent(msg)
+	require.NoError(t, err)
 	assert.Equal(t, 0, len(blocks))
 }
 
@@ -631,54 +1113,104 @@ func Test_buildStreamingPartialResponse_TextAndThinkingAndStop(t *testing.T) {
 
 	// Text delta empty -> skip.
 	e1 := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`)
-	resp, err := buildStreamingPartialResponse(acc, e1)
+	resp, err := buildStreamingPartialResponse(acc, e1, false)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 
 	// Text delta non-empty -> content delta.
 	e2 := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"abc"}}`)
-	resp, err = buildStreamingPartialResponse(acc, e2)
+	resp, err = buildStreamingPartialResponse(acc, e2, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.Equal(t, "abc", resp.Choices[0].Delta.Content)
 
 	// Thinking delta non-empty -> reasoning delta.
 	e3 := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"think"}}`)
-	resp, err = buildStreamingPartialResponse(acc, e3)
+	resp, err = buildStreamingPartialResponse(acc, e3, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.Equal(t, "think", resp.Choices[0].Delta.ReasoningContent)
 
 	// Message delta with stop_reason -> finish reason set.
 	e4 := anthropicStreamEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":""},"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":0,"output_tokens":0,"server_tool_use":{"web_search_requests":0}}}`)
-	resp, err = buildStreamingPartialResponse(acc, e4)
+	resp, err = buildStreamingPartialResponse(acc, e4, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.NotNil(t, resp.Choices[0].FinishReason)
 
 	// Unknown type should be skipped.
 	e5 := anthropicStreamEvent("unknown", `{"type":"unknown"}`)
-	resp, err = buildStreamingPartialResponse(acc, e5)
+	resp, err = buildStreamingPartialResponse(acc, e5, false)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 
 	// Content block delta with input_json_delta should be skipped.
 	e6 := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}`)
-	resp, err = buildStreamingPartialResponse(acc, e6)
+	acc.Content = []anthropic.ContentBlockUnion{
+		anthropicContentUnion("tool_use", `{"type":"tool_use","id":"id1","name":"fn","input":{}}`),
+	}
+	resp, err = buildStreamingPartialResponse(acc, e6, false)
+	assert.NoError(t, err)
+	assert.Nil(t, resp)
+
+	// Content block delta with input_json_delta should be emitted when enabled.
+	resp, err = buildStreamingPartialResponse(acc, e6, true)
+	assert.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices[0].Delta.ToolCalls, 1)
+	assert.Equal(t, "id1", resp.Choices[0].Delta.ToolCalls[0].ID)
+	assert.Equal(t, "fn", resp.Choices[0].Delta.ToolCalls[0].Function.Name)
+	assert.Equal(t, "{}", string(resp.Choices[0].Delta.ToolCalls[0].Function.Arguments))
+	require.NotNil(t, resp.Choices[0].Delta.ToolCalls[0].Index)
+	assert.Equal(t, 0, *resp.Choices[0].Delta.ToolCalls[0].Index)
+
+	// Input JSON delta without a resolved tool_use block should be skipped.
+	acc.Content = []anthropic.ContentBlockUnion{
+		anthropicContentUnion("text", `{"type":"text","text":"not a tool"}`),
+	}
+	resp, err = buildStreamingPartialResponse(acc, e6, true)
+	assert.NoError(t, err)
+	assert.Nil(t, resp)
+	e6OutOfRange := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}`)
+	resp, err = buildStreamingPartialResponse(acc, e6OutOfRange, true)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 
 	// Thinking delta empty should be skipped.
 	e7 := anthropicStreamEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}`)
-	resp, err = buildStreamingPartialResponse(acc, e7)
+	resp, err = buildStreamingPartialResponse(acc, e7, false)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
 
 	// Message delta with empty stop_reason should be skipped.
 	e8 := anthropicStreamEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"","stop_sequence":""},"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":0,"output_tokens":0,"server_tool_use":{"web_search_requests":0}}}`)
-	resp, err = buildStreamingPartialResponse(acc, e8)
+	resp, err = buildStreamingPartialResponse(acc, e8, false)
 	assert.NoError(t, err)
 	assert.Nil(t, resp)
+}
+
+func Test_buildStreamingPartialResponse_ToolCallDeltaIndexUsesToolCallOrdinal(t *testing.T) {
+	acc := anthropic.Message{
+		ID:    "acc1",
+		Model: anthropic.Model("claude-test"),
+		Content: []anthropic.ContentBlockUnion{
+			anthropicContentUnion("text", `{"type":"text","text":"before"}`),
+			anthropicContentUnion("tool_use", `{"type":"tool_use","id":"id1","name":"fn","input":{}}`),
+		},
+	}
+	event := anthropicStreamEvent(
+		"content_block_delta",
+		`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"a\":1}"}}`,
+	)
+	resp, err := buildStreamingPartialResponse(acc, event, true)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices[0].Delta.ToolCalls, 1)
+	require.NotNil(t, resp.Choices[0].Delta.ToolCalls[0].Index)
+	assert.Equal(t, 0, *resp.Choices[0].Delta.ToolCalls[0].Index)
+	assert.Equal(t, "id1", resp.Choices[0].Delta.ToolCalls[0].ID)
+	assert.Equal(t, "fn", resp.Choices[0].Delta.ToolCalls[0].Function.Name)
+	assert.Equal(t, `{"a":1}`, string(resp.Choices[0].Delta.ToolCalls[0].Function.Arguments))
 }
 
 func Test_buildStreamingFinalResponse_Aggregation(t *testing.T) {
@@ -761,10 +1293,161 @@ func Test_buildChatRequest_ThinkingIgnoredWhenTokensNil(t *testing.T) {
 	}
 	chatReq, err := m.buildChatRequest(req)
 	assert.NoError(t, err)
-	// When tokens are nil, thinking should not be set.
-	// The SDK union has both enabled/disabled variants omitted by default.
-	// We assert nothing and only ensure no error and a valid request.
-	_ = chatReq
+	assert.Nil(t, chatReq.Thinking.OfAdaptive)
+	assert.Nil(t, chatReq.Thinking.OfEnabled)
+	assert.Nil(t, chatReq.Thinking.OfDisabled)
+}
+
+func Test_buildChatRequest_AdaptiveThinkingModels(t *testing.T) {
+	thinking := true
+	thinkingTokens := 1024
+	effort := "medium"
+	for _, modelName := range []string{
+		claudeMythosPreview,
+		claudeOpus47,
+		claudeOpus46,
+		claudeOpus46Alias,
+		claudeSonnet46,
+		claudeSonnet46Alias,
+		claudeOpus46 + "-20260427",
+	} {
+		t.Run(modelName, func(t *testing.T) {
+			m := New(modelName)
+			req := &model.Request{
+				Messages: []model.Message{model.NewUserMessage("u")},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &thinking,
+					ThinkingTokens:  &thinkingTokens,
+					ReasoningEffort: &effort,
+				},
+			}
+			chatReq, err := m.buildChatRequest(req)
+			require.NoError(t, err)
+			require.NotNil(t, chatReq.Thinking.OfAdaptive)
+			assert.Nil(t, chatReq.Thinking.OfEnabled)
+			assert.Nil(t, chatReq.Thinking.OfDisabled)
+			assert.Equal(t, defaultThinkingDisplay, chatReq.Thinking.OfAdaptive.Display)
+			assert.Equal(t, anthropic.OutputConfigEffort(effort), chatReq.OutputConfig.Effort)
+			payload := marshalChatRequestMap(t, chatReq)
+			thinkingPayload, ok := payload["thinking"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "adaptive", thinkingPayload["type"])
+			assert.Equal(t, "summarized", thinkingPayload["display"])
+			assert.NotContains(t, thinkingPayload, "budget_tokens")
+			outputConfigPayload, ok := payload["output_config"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, effort, outputConfigPayload["effort"])
+		})
+	}
+}
+
+func Test_buildChatRequest_DisabledThinking(t *testing.T) {
+	thinking := false
+	for _, modelName := range []string{claudeOpus47, claudeOpus46, claudeSonnet46} {
+		t.Run(modelName, func(t *testing.T) {
+			m := New(modelName)
+			req := &model.Request{
+				Messages: []model.Message{model.NewUserMessage("u")},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &thinking,
+				},
+			}
+			chatReq, err := m.buildChatRequest(req)
+			require.NoError(t, err)
+			require.NotNil(t, chatReq.Thinking.OfDisabled)
+			assert.Nil(t, chatReq.Thinking.OfAdaptive)
+			assert.Nil(t, chatReq.Thinking.OfEnabled)
+			payload := marshalChatRequestMap(t, chatReq)
+			thinkingPayload, ok := payload["thinking"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "disabled", thinkingPayload["type"])
+		})
+	}
+}
+
+func Test_buildChatRequest_LegacyDisabledThinkingLeavesThinkingUnset(t *testing.T) {
+	thinking := false
+	m := New("claude-3-haiku-20240307")
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("u")},
+		GenerationConfig: model.GenerationConfig{
+			ThinkingEnabled: &thinking,
+		},
+	}
+	chatReq, err := m.buildChatRequest(req)
+	require.NoError(t, err)
+	assert.Nil(t, chatReq.Thinking.OfAdaptive)
+	assert.Nil(t, chatReq.Thinking.OfEnabled)
+	assert.Nil(t, chatReq.Thinking.OfDisabled)
+	payload := marshalChatRequestMap(t, chatReq)
+	assert.NotContains(t, payload, "thinking")
+}
+
+func Test_buildChatRequest_MythosDisabledThinkingReturnsError(t *testing.T) {
+	thinking := false
+	m := New(claudeMythosPreview)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("u")},
+		GenerationConfig: model.GenerationConfig{
+			ThinkingEnabled: &thinking,
+		},
+	}
+	chatReq, err := m.buildChatRequest(req)
+	require.Error(t, err)
+	assert.Nil(t, chatReq)
+	assert.Contains(t, err.Error(), "thinking cannot be disabled")
+}
+
+func Test_buildChatRequest_NilThinkingEnabledLeavesThinkingUnset(t *testing.T) {
+	for _, modelName := range []string{claudeMythosPreview, claudeOpus47, "claude-test"} {
+		t.Run(modelName, func(t *testing.T) {
+			m := New(modelName)
+			req := &model.Request{
+				Messages: []model.Message{model.NewUserMessage("u")},
+			}
+			chatReq, err := m.buildChatRequest(req)
+			require.NoError(t, err)
+			assert.Nil(t, chatReq.Thinking.OfAdaptive)
+			assert.Nil(t, chatReq.Thinking.OfEnabled)
+			assert.Nil(t, chatReq.Thinking.OfDisabled)
+			payload := marshalChatRequestMap(t, chatReq)
+			assert.NotContains(t, payload, "thinking")
+		})
+	}
+}
+
+func Test_buildChatRequest_LegacyThinkingUsesBudgetTokens(t *testing.T) {
+	thinking := true
+	thinkingTokens := 1024
+	m := New("claude-test")
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("u")},
+		GenerationConfig: model.GenerationConfig{
+			ThinkingEnabled: &thinking,
+			ThinkingTokens:  &thinkingTokens,
+		},
+	}
+	chatReq, err := m.buildChatRequest(req)
+	require.NoError(t, err)
+	require.NotNil(t, chatReq.Thinking.OfEnabled)
+	assert.Nil(t, chatReq.Thinking.OfAdaptive)
+	assert.Nil(t, chatReq.Thinking.OfDisabled)
+	assert.Equal(t, int64(thinkingTokens), chatReq.Thinking.OfEnabled.BudgetTokens)
+	payload := marshalChatRequestMap(t, chatReq)
+	thinkingPayload, ok := payload["thinking"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "enabled", thinkingPayload["type"])
+	assert.Equal(t, float64(thinkingTokens), thinkingPayload["budget_tokens"])
+	assert.NotContains(t, thinkingPayload, "display")
+}
+
+func marshalChatRequestMap(t *testing.T, chatReq *anthropic.MessageNewParams) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(chatReq)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(raw, &payload))
+	return payload
 }
 
 func Test_convertTools_Multiple(t *testing.T) {
@@ -1061,6 +1744,7 @@ func Test_HandleStreamingResponse_ToolInputDeltaOverridesStartInput(t *testing.T
 	m := New(
 		"claude-test",
 		WithHTTPClientOptions(),
+		WithShowToolCallDelta(true),
 		WithChatStreamCompleteCallback(func(_ context.Context, _ *anthropic.MessageNewParams, acc *anthropic.Message, err error) {
 			assert.NoError(t, err)
 			callbackAcc = acc
@@ -1073,11 +1757,20 @@ func Test_HandleStreamingResponse_ToolInputDeltaOverridesStartInput(t *testing.T
 	})
 	require.NoError(t, err)
 	var final *model.Response
+	var toolCallDeltas []model.ToolCall
 	for resp := range ch {
+		if len(resp.Choices) > 0 {
+			toolCallDeltas = append(toolCallDeltas, resp.Choices[0].Delta.ToolCalls...)
+		}
 		if resp.Done {
 			final = resp
 		}
 	}
+	require.Len(t, toolCallDeltas, 2)
+	assert.Equal(t, "toolu_1", toolCallDeltas[0].ID)
+	assert.Equal(t, "lookup", toolCallDeltas[0].Function.Name)
+	assert.Equal(t, `{"a":1,`, string(toolCallDeltas[0].Function.Arguments))
+	assert.Equal(t, `"b":2}`, string(toolCallDeltas[1].Function.Arguments))
 	require.NotNil(t, final)
 	require.Nil(t, final.Error)
 	require.Len(t, final.Choices, 1)
@@ -1093,6 +1786,63 @@ func Test_HandleStreamingResponse_ToolInputDeltaOverridesStartInput(t *testing.T
 	toolUse, ok := callbackAcc.Content[0].AsAny().(anthropic.ToolUseBlock)
 	require.True(t, ok)
 	assert.JSONEq(t, `{"a":1,"b":2}`, string(toolUse.Input))
+}
+
+func Test_HandleStreamingResponse_ToolInputDeltaHiddenByDefault(t *testing.T) {
+	sse := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_sse_tool_1","type":"message","role":"assistant","model":"claude-3-sonnet","content":[],"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":3,"output_tokens":0,"server_tool_use":{"web_search_requests":0}}}}`,
+		"",
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"lookup","input":{"a":1}}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"a\":1,"}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"b\":2}"}}`,
+		"",
+		"event: content_block_stop",
+		`data: {"type":"content_block_stop","index":0}`,
+		"",
+		"event: message_delta",
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":""},"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":3,"output_tokens":5,"server_tool_use":{"web_search_requests":0}}}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(sse))}, nil
+		})}
+	}
+	m := New("claude-test", WithHTTPClientOptions())
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("U")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	require.NoError(t, err)
+	var final *model.Response
+	var toolCallDeltas []model.ToolCall
+	for resp := range ch {
+		if len(resp.Choices) > 0 {
+			toolCallDeltas = append(toolCallDeltas, resp.Choices[0].Delta.ToolCalls...)
+		}
+		if resp.Done {
+			final = resp
+		}
+	}
+	assert.Empty(t, toolCallDeltas)
+	require.NotNil(t, final)
+	require.Nil(t, final.Error)
+	require.Len(t, final.Choices, 1)
+	require.Len(t, final.Choices[0].Message.ToolCalls, 1)
+	assert.JSONEq(t, `{"a":1,"b":2}`, string(final.Choices[0].Message.ToolCalls[0].Function.Arguments))
 }
 
 func Test_HandleStreamingResponse_ToolInputPreservesStartInputWithoutDelta(t *testing.T) {
@@ -1607,6 +2357,18 @@ func (testStubStrategy) TailorMessages(
 	return append([]model.Message{messages[0]}, messages[2:]...), nil
 }
 
+type overflowTailoringStrategy struct {
+	tailored []model.Message
+}
+
+func (s overflowTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return s.tailored, errors.New("minimal protected context exceeds token budget")
+}
+
 // TestWithTokenTailoring tests token tailoring functionality in Anthropic.
 func TestWithTokenTailoring(t *testing.T) {
 	// Capture the built Anthropic request to check messages count reflects tailoring.
@@ -1638,6 +2400,28 @@ func TestWithTokenTailoring(t *testing.T) {
 	require.NotNil(t, captured, "expected request callback to capture request")
 	// After tailoring, messages should be reduced (1 message after tailoring).
 	require.Len(t, captured.Messages, 1, "expected 1 message after tailoring, got %d", len(captured.Messages))
+}
+
+func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
+	tailored := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := &Model{
+		name:                 "test-model",
+		enableTokenTailoring: true,
+		maxInputTokens:       1,
+		tailoringStrategy:    overflowTailoringStrategy{tailored: tailored},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("old"),
+		model.NewUserMessage("q"),
+	}}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, tailored, req.Messages)
 }
 
 // TestWithEnableTokenTailoring_SimpleMode tests simple token tailoring mode.

@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -61,6 +62,113 @@ func TestToolAddSupportsAliasesAndCurrentChat(t *testing.T) {
 	require.Equal(t, "1m", job.Schedule.Every)
 	require.Equal(t, "telegram", job.Delivery.Channel)
 	require.Equal(t, "12345", job.Delivery.Target)
+}
+
+func TestToolAddCapturesRuntimeProfile(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		nil,
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	invCtx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+	ctx := runtimeprofile.WithProfile(invCtx, runtimeprofile.Profile{
+		ID:      "retail",
+		Version: "v2",
+		AppName: "retail-app",
+	})
+	ctx = runtimeprofile.WithRequest(ctx, runtimeprofile.Request{
+		Channel:   "wecom",
+		TenantID:  "tenant-a",
+		SessionID: "session-a",
+	})
+
+	args, err := json.Marshal(map[string]any{
+		"action":        "add",
+		"task":          "collect system resources",
+		"schedule_kind": "every",
+		"interval":      "1m",
+		"headless":      true,
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	require.NotNil(t, job.Profile)
+	require.Equal(t, "retail", job.Profile.ID)
+	require.Equal(t, "v2", job.Profile.Version)
+	require.Equal(t, "retail-app", job.Profile.AppName)
+	require.Equal(t, "wecom", job.Profile.Channel)
+	require.Equal(t, "tenant-a", job.Profile.TenantID)
+	require.Equal(t, "session-a", job.Profile.SessionID)
+}
+
+func TestToolAddRejectsAnonymousRuntimeProfile(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		nil,
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	invCtx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+	ctx := runtimeprofile.WithProfile(invCtx, runtimeprofile.Profile{
+		Prompt: runtimeprofile.Prompt{
+			Instruction: "tenant instruction",
+		},
+	})
+
+	args, err := json.Marshal(map[string]any{
+		"action":        "add",
+		"task":          "collect system resources",
+		"schedule_kind": "every",
+		"interval":      "1m",
+		"headless":      true,
+	})
+	require.NoError(t, err)
+
+	_, err = tool.Call(ctx, args)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errProfileIDRequired)
+
+	ctxWhitespace := runtimeprofile.WithProfile(
+		invCtx,
+		runtimeprofile.Profile{
+			ID: "   ",
+			Prompt: runtimeprofile.Prompt{
+				Instruction: "tenant instruction",
+			},
+		},
+	)
+	_, err = tool.Call(ctxWhitespace, args)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errProfileIDRequired)
 }
 
 func TestToolAddSupportsExecutionPolicyAndHeadless(t *testing.T) {
@@ -229,10 +337,12 @@ func TestToolAddFailsWithoutResolvableDeliveryTarget(t *testing.T) {
 func TestToolAddSupportsRunAtAlias(t *testing.T) {
 	t.Parallel()
 
+	now := time.Date(2026, 3, 7, 8, 0, 0, 0, time.FixedZone("CST", 8*60*60))
 	svc, err := NewService(
 		t.TempDir(),
 		&stubRunner{reply: "ok"},
 		outbound.NewRouter(),
+		WithClock(func() time.Time { return now }),
 	)
 	require.NoError(t, err)
 
@@ -263,6 +373,605 @@ func TestToolAddSupportsRunAtAlias(t *testing.T) {
 	require.Equal(t, "send a reminder", job.Message)
 	require.Equal(t, ScheduleKindAt, job.Schedule.Kind)
 	require.Equal(t, "2026-03-07T09:00:00+08:00", job.Schedule.At)
+}
+
+func TestToolAddSupportsRelativeDelayOneShot(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 15, 11, 3, 0, 0, time.FixedZone("CST", 8*60*60))
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"action":  "add",
+		"message": "send a reminder",
+		"after":   "30m",
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	expectedAt := now.Add(30 * time.Minute)
+	require.Equal(t, ScheduleKindAt, job.Schedule.Kind)
+	require.Equal(t, expectedAt.Format(time.RFC3339), job.Schedule.At)
+	require.NotNil(t, job.NextRunAt)
+	require.True(t, job.NextRunAt.Equal(expectedAt))
+	require.Equal(t, "send a reminder", job.Message)
+}
+
+func TestToolAddSupportsMillisecondRelativeDelay(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(
+		2026,
+		time.May,
+		15,
+		11,
+		3,
+		0,
+		int(250*time.Millisecond),
+		time.FixedZone("CST", 8*60*60),
+	)
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	delayMS := int64(1500)
+	args, err := json.Marshal(map[string]any{
+		"action":  "add",
+		"message": "send a reminder",
+		"delayMs": delayMS,
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	expectedAt := now.Add(time.Duration(delayMS) * time.Millisecond)
+	require.Equal(t, expectedAt.Format(time.RFC3339Nano), job.Schedule.At)
+	require.NotNil(t, job.NextRunAt)
+	require.True(t, job.NextRunAt.Equal(expectedAt))
+}
+
+func TestToolAddRejectsOverflowingMillisecondDelay(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"action":   "add",
+		"message":  "send a reminder",
+		"delay_ms": maxDelayMilliseconds + 1,
+	})
+	require.NoError(t, err)
+
+	_, err = tool.Call(ctx, args)
+	require.ErrorContains(t, err, errAfterMSDelayTooLarge)
+}
+
+func TestToolAddSupportsFractionalRelativeDelay(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 15, 11, 3, 0, 0, time.FixedZone("CST", 8*60*60))
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"action":  "add",
+		"message": "send a reminder",
+		"after":   "1.5s",
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	expectedAt := now.Add(1500 * time.Millisecond)
+	require.Equal(t, expectedAt.Format(time.RFC3339Nano), job.Schedule.At)
+	require.NotNil(t, job.NextRunAt)
+	require.True(t, job.NextRunAt.Equal(expectedAt))
+}
+
+func TestToolAddSupportsRelativeDelayAliases(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(
+		2026,
+		time.May,
+		15,
+		11,
+		3,
+		0,
+		int(250*time.Millisecond),
+		time.FixedZone("CST", 8*60*60),
+	)
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	delayMS := int64(750)
+	args, err := json.Marshal(map[string]any{
+		"action":        "add",
+		"message":       "send a reminder",
+		"schedule_kind": ScheduleKindAfter,
+		"afterMs":       delayMS,
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	expectedAt := now.Add(time.Duration(delayMS) * time.Millisecond)
+	require.Equal(t, ScheduleKindAt, job.Schedule.Kind)
+	require.Equal(t, expectedAt.Format(time.RFC3339Nano), job.Schedule.At)
+	require.NotNil(t, job.NextRunAt)
+	require.True(t, job.NextRunAt.Equal(expectedAt))
+}
+
+func TestToolAddRejectsInvalidRelativeDelayInputs(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	const reminderMessage = "send a reminder"
+	tests := []struct {
+		name     string
+		args     map[string]any
+		errorMsg string
+	}{
+		{
+			name: "duration and milliseconds",
+			args: map[string]any{
+				"after":    "30m",
+				"after_ms": int64(1000),
+			},
+			errorMsg: "cron: after and after_ms cannot both be set",
+		},
+		{
+			name: "duplicate millisecond aliases",
+			args: map[string]any{
+				"after_ms": int64(1000),
+				"delayMs":  int64(2000),
+			},
+			errorMsg: "cron: only one after_ms alias can be set",
+		},
+		{
+			name: "duplicate duration aliases",
+			args: map[string]any{
+				"after": "30m",
+				"delay": "20m",
+			},
+			errorMsg: errAfterAliasConflict,
+		},
+		{
+			name: "invalid duration",
+			args: map[string]any{
+				"after": "tomorrow",
+			},
+			errorMsg: "cron: invalid after delay",
+		},
+		{
+			name: "zero duration",
+			args: map[string]any{
+				"delay": "0s",
+			},
+			errorMsg: "cron: after delay must be positive",
+		},
+		{
+			name: "zero milliseconds",
+			args: map[string]any{
+				"after_ms": int64(0),
+			},
+			errorMsg: "cron: after_ms delay must be positive",
+		},
+		{
+			name: "recurring schedule kind",
+			args: map[string]any{
+				"after":         "30m",
+				"schedule_kind": ScheduleKindEvery,
+			},
+			errorMsg: "cron: schedule_kind must be empty, at, or after",
+		},
+		{
+			name: "absolute schedule",
+			args: map[string]any{
+				"after": "30m",
+				"at":    "2026-05-15T12:00:00+08:00",
+			},
+			errorMsg: errAfterWithSchedule,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			args := map[string]any{
+				"action":  "add",
+				"message": reminderMessage,
+			}
+			for key, value := range tt.args {
+				args[key] = value
+			}
+			payload, err := json.Marshal(args)
+			require.NoError(t, err)
+
+			_, err = tool.Call(ctx, payload)
+			require.ErrorContains(t, err, tt.errorMsg)
+		})
+	}
+}
+
+func TestToolAddKeepsPastRunAtCompatibility(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 15, 11, 3, 0, 0, time.FixedZone("CST", 8*60*60))
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"action": "add",
+		"prompt": "send a reminder",
+		"run_at": "2026-05-15T09:52:25+08:00",
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	pastAt, err := time.Parse(time.RFC3339, "2026-05-15T09:52:25+08:00")
+	require.NoError(t, err)
+	require.Equal(t, ScheduleKindAt, job.Schedule.Kind)
+	require.Equal(t, pastAt.Format(time.RFC3339), job.Schedule.At)
+	require.NotNil(t, job.NextRunAt)
+	require.True(t, job.NextRunAt.Equal(pastAt))
+}
+
+func TestToolAddRejectsAfterWithRecurringSchedule(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+	args, err := json.Marshal(map[string]any{
+		"action":  "add",
+		"message": "send a reminder",
+		"after":   "30m",
+		"every":   "30m",
+	})
+	require.NoError(t, err)
+
+	_, err = tool.Call(ctx, args)
+	require.ErrorContains(t, err, errAfterWithSchedule)
+}
+
+func TestToolAddAllowsDelayWithTimezone(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 15, 11, 3, 0, 0, time.FixedZone("CST", 8*60*60))
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+	args, err := json.Marshal(map[string]any{
+		"action":   "add",
+		"message":  "send a reminder",
+		"delay":    "30m",
+		"timezone": "Asia/Shanghai",
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	require.Equal(t, ScheduleKindAt, job.Schedule.Kind)
+	require.Empty(t, job.Schedule.Timezone)
+	require.Equal(
+		t,
+		now.Add(30*time.Minute).Format(time.RFC3339),
+		job.Schedule.At,
+	)
+}
+
+func TestToolUpdateTimezonePreservesExistingSchedule(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	job, err := svc.Add(&Job{
+		Name:    "mine",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:     ScheduleKindCron,
+			CronExpr: "0 9 * * *",
+		},
+		Message: "send a reminder",
+		UserID:  "user-1",
+	})
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+	args, err := json.Marshal(map[string]any{
+		"action":   "update",
+		"job_id":   job.ID,
+		"timezone": "UTC",
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	updated, ok := result.(*Job)
+	require.True(t, ok)
+	require.Equal(t, ScheduleKindCron, updated.Schedule.Kind)
+	require.Equal(t, "0 9 * * *", updated.Schedule.CronExpr)
+	require.Equal(t, "UTC", updated.Schedule.Timezone)
+}
+
+func TestToolUpdateSupportsRelativeDelay(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 15, 11, 3, 0, 0, time.FixedZone("CST", 8*60*60))
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+
+	job, err := svc.Add(&Job{
+		Name:    "mine",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "send a reminder",
+		UserID:  "user-1",
+	})
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+	args, err := json.Marshal(map[string]any{
+		"action": "update",
+		"job_id": job.ID,
+		"after":  "30m",
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	updated, ok := result.(*Job)
+	require.True(t, ok)
+	require.Equal(t, ScheduleKindAt, updated.Schedule.Kind)
+	require.Equal(
+		t,
+		now.Add(30*time.Minute).Format(time.RFC3339),
+		updated.Schedule.At,
+	)
+}
+
+func TestToolUpdateRejectsInvalidRelativeDelay(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	job, err := svc.Add(&Job{
+		Name:    "mine",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "send a reminder",
+		UserID:  "user-1",
+	})
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+	args, err := json.Marshal(map[string]any{
+		"action":        "update",
+		"job_id":        job.ID,
+		"after":         "30m",
+		"schedule_kind": ScheduleKindEvery,
+	})
+	require.NoError(t, err)
+
+	_, err = tool.Call(ctx, args)
+	require.ErrorContains(
+		t,
+		err,
+		"cron: schedule_kind must be empty, at, or after",
+	)
 }
 
 func TestToolAddInfersScheduleKindFromEvery(t *testing.T) {
@@ -615,7 +1324,9 @@ func TestTool_StatusUpdateRunAndHelpers(t *testing.T) {
 		Task: " message ",
 	}))
 	require.Equal(t, "1m", resolveEvery(toolInput{Duration: " 1m "}))
-	require.Equal(t, "2026", resolveAt(toolInput{RunAt: "2026"}))
+	at, err := resolveAt(toolInput{RunAt: "2026"}, time.Now())
+	require.NoError(t, err)
+	require.Equal(t, "2026", at)
 	require.Equal(t, "job-1", resolveJobID(toolInput{JobIDOld: "job-1"}))
 	require.True(t, hasScheduleInput(toolInput{CronExpr: "*/1 * * * *"}))
 	require.Equal(

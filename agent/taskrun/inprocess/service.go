@@ -284,6 +284,7 @@ func (s *Service) Cancel(
 		return run, changed, err
 	}
 	if err := s.persist(ctx); err != nil {
+		s.wake(run.ID)
 		return nil, false, err
 	}
 	s.notify(ctx, *run)
@@ -456,7 +457,10 @@ func (s *Service) runChild(
 	for evt := range events {
 		result.consume(evt)
 	}
-	return result.err
+	if result.err != nil {
+		return result.err
+	}
+	return ctxErr(ctx)
 }
 
 func runtimeStateForRun(
@@ -523,6 +527,10 @@ func (s *Service) finishRun(
 		run.Status = StatusCanceled
 		run.Error = ""
 		run.Summary = summarizeText(statusCanceledSummary, 0)
+	case errors.Is(runErr, context.DeadlineExceeded):
+		run.Status = StatusFailed
+		run.Error = runErr.Error()
+		run.Summary = summarizeText(run.Error, defaultStoredSummaryRunes)
 	case runErr != nil:
 		run.Status = StatusFailed
 		run.Error = runErr.Error()
@@ -577,15 +585,19 @@ func (s *Service) failPersistedRun(
 	now time.Time,
 ) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	delete(s.running, runID)
+	changed := false
 	if run := s.runs[runID]; run != nil {
 		run.Status = StatusFailed
 		run.Error = err.Error()
 		run.Summary = summarizeText(run.Error, defaultStoredSummaryRunes)
 		run.UpdatedAt = now
 		run.FinishedAt = cloneTime(now)
+		changed = true
+	}
+	s.mu.Unlock()
+	if changed {
+		s.wake(runID)
 	}
 }
 

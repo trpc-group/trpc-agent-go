@@ -80,7 +80,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/team"
 )
 
-modelInstance := openai.New("deepseek-chat")
+modelInstance := openai.New("deepseek-v4-flash")
 
 coder := llmagent.New(
     "coder",
@@ -156,7 +156,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/team"
 )
 
-modelInstance := openai.New("deepseek-chat")
+modelInstance := openai.New("deepseek-v4-flash")
 
 backendDev := llmagent.New(
     "backend_dev",
@@ -397,6 +397,68 @@ This is different from `await_user_reply` plus
   member keeps owning future user turns until another transfer happens.
 - `await_user_reply` is a one-shot route. It is consumed by exactly one future
   user turn and then cleared automatically.
+
+### Independent member history (optional)
+
+By default, Swarm member events are persisted in the root session. If members
+need private history, enable independent member sessions:
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmIndependentAgents(),
+)
+```
+
+With this enabled, the entry member continues to use the root session. Other
+members use stable sessions derived from the root session, team name, and
+member name. Member events are still emitted to the caller, but isolated member
+transcripts are persisted into their member sessions instead of the root
+session. The runner completion event remains a root-run marker; consume the
+forwarded member event for the member's final reply.
+
+This option only controls history isolation. If the last transfer target should
+receive future user messages, combine it with `team.WithCrossRequestTransfer(true)`.
+When both options are enabled, the next user message is persisted to the active
+member session before that member runs.
+
+### Rewrite handoff input (optional)
+
+By default, when a Swarm member hands off with `transfer_to_agent`, the target member receives the tool call's `message` field as its user input. If your application needs to construct the target member's first input from the original user input, a template, or other context, configure `team.WithSwarmHandoffInputBuilder`:
+
+```go
+tm, err := team.NewSwarm(
+    "support",
+    "main_agent",
+    []agent.Agent{mainAgent, refundAgent},
+    team.WithSwarmHandoffInputBuilder(func(
+        ctx context.Context,
+        args team.SwarmHandoffInputArgs,
+    ) (model.Message, error) {
+        if args.ToAgentName == "refund_agent" {
+            return model.NewUserMessage(
+                "Refund request:\n" + args.RootInput.Content,
+            ), nil
+        }
+        return model.NewUserMessage(args.TransferMessage), nil
+    }),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+`SwarmHandoffInputArgs` provides:
+
+- `FromAgentName`: the member that initiated the handoff.
+- `ToAgentName`: the member that receives the handoff.
+- `RootInput`: the original user input for the current run.
+- `ParentInput`: the current input of the member that initiated the handoff.
+- `TransferMessage`: the `message` field from the `transfer_to_agent` call.
+
+This option only rewrites the target member's current input for this handoff. It does not rewrite the source member's context or prevent the target member from reading existing conversation history.
 
 ### Dynamic members (runtime)
 

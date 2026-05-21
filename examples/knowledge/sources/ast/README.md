@@ -11,14 +11,14 @@ This example shows how the knowledge module handles:
 - **Proto Source**: Local Proto files are loaded through an additional directory source
 - **Proto AST Parsing**: Proto files are parsed semantically through the Proto reader underneath repo source
 - **trpc_ast_* Prefix**: Metadata uses `trpc_ast_` prefix aligned with trpc-ast-rag conventions
-- **Git URL Support**: Demonstrates that [`repo.New()`](main.go:87) can clone and ingest a Git URL directly
+- **Git URL Support**: Demonstrates that [`repo.New(...)`](main.go:87) can clone and ingest a Git URL directly
 
 ## Usage
 
 ```bash
 export OPENAI_API_KEY=sk-xxxx
 export OPENAI_BASE_URL=https://api.openai.com/v1
-export MODEL_NAME=deepseek-chat
+export MODEL_NAME=deepseek-v4-flash
 go run main.go
 
 # force mock embedder for chunk preview without real embeddings
@@ -46,15 +46,14 @@ When using the mock embedder, semantic similarity is **not reliable**, but AST p
 
 ### 1. Repo Source for Mixed-language Repository
 
-Uses [`repo.New()`](main.go:103) to load one remote Git repository:
+Uses [`repo.New(...)`](main.go:103) to load one remote Git repository:
 
 ```go
 src := repo.New(
-    []string{
-        "https://github.com/trpc-group/trpc-go",
-        util.ExampleDataPath("ast/proto-lib"),
-    },
-    repo.WithRecursive(true),
+    repo.WithRepository(repo.Repository{
+        URL:    "https://github.com/trpc-group/trpc-go",
+        Branch: "main",
+    }),
     repo.WithFileExtensions([]string{".go", ".proto", ".md"}),
 )
 ```
@@ -217,7 +216,7 @@ This example intentionally focuses on repo source as the single ingestion entryp
 
 ```go
 // One repo source handles one repository
-repo.New(nil,
+repo.New(
   repo.WithRepository(repo.Repository{URL: "https://github.com/trpc-group/trpc-go", Branch: "main"}),
   repo.WithFileExtensions([]string{".go", ".md"}),
 )

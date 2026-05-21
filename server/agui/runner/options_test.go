@@ -79,7 +79,9 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.False(t, opts.ReasoningContentEnabled)
 	assert.False(t, opts.EventSourceMetadataEnabled)
 	assert.False(t, opts.ToolResultInputTranslationEnabled)
+	assert.False(t, opts.ToolCallDeltaStreamingEnabled)
 	assert.False(t, opts.StreamingToolResultActivityEnabled)
+	assert.False(t, opts.MessagesSnapshotRunLifecycleEventsEnabled)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -149,9 +151,19 @@ func TestWithToolResultInputTranslationEnabled(t *testing.T) {
 	assert.True(t, opts.ToolResultInputTranslationEnabled)
 }
 
+func TestWithToolCallDeltaStreamingEnabled(t *testing.T) {
+	opts := NewOptions(WithToolCallDeltaStreamingEnabled(true))
+	assert.True(t, opts.ToolCallDeltaStreamingEnabled)
+}
+
 func TestWithStreamingToolResultActivityEnabled(t *testing.T) {
 	opts := NewOptions(WithStreamingToolResultActivityEnabled(true))
 	assert.True(t, opts.StreamingToolResultActivityEnabled)
+}
+
+func TestWithMessagesSnapshotRunLifecycleEventsEnabled(t *testing.T) {
+	opts := NewOptions(WithMessagesSnapshotRunLifecycleEventsEnabled(true))
+	assert.True(t, opts.MessagesSnapshotRunLifecycleEventsEnabled)
 }
 
 func TestWithPostRunFinalizationTimeout(t *testing.T) {

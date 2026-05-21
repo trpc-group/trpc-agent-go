@@ -17,8 +17,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	criterionlength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
 	criterionrouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	criterionxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -26,13 +28,17 @@ import (
 func TestFinalResponseCriterion_JSONRoundTrip(t *testing.T) {
 	c := &FinalResponseCriterion{
 		CompareName: "trim_equal",
-		Text:        &text.TextCriterion{MatchStrategy: text.TextMatchStrategyContains},
+		Text: &text.TextCriterion{
+			MatchStrategy: text.TextMatchStrategyContains,
+			Length:        &criterionlength.LengthCriterion{Min: intPtr(1), Max: intPtr(10)},
+		},
 		Rouge: &criterionrouge.RougeCriterion{
 			RougeType:     "rouge1",
 			Measure:       criterionrouge.RougeMeasureF1,
 			UseStemmer:    true,
 			TokenizerName: "whitespace",
 		},
+		XML: &criterionxml.XMLCriterion{Valid: true, MatchStrategy: criterionxml.XMLMatchStrategySkip},
 	}
 	data, err := json.Marshal(c)
 	assert.NoError(t, err)
@@ -48,6 +54,16 @@ func TestFinalResponseCriterion_JSONRoundTrip(t *testing.T) {
 	assert.Equal(t, criterionrouge.RougeMeasureF1, decoded.Rouge.Measure)
 	assert.True(t, decoded.Rouge.UseStemmer)
 	assert.Equal(t, "whitespace", decoded.Rouge.TokenizerName)
+	assert.NotNil(t, decoded.Text.Length)
+	if assert.NotNil(t, decoded.Text.Length.Min) {
+		assert.Equal(t, 1, *decoded.Text.Length.Min)
+	}
+	if assert.NotNil(t, decoded.Text.Length.Max) {
+		assert.Equal(t, 10, *decoded.Text.Length.Max)
+	}
+	assert.NotNil(t, decoded.XML)
+	assert.True(t, decoded.XML.Valid)
+	assert.Equal(t, criterionxml.XMLMatchStrategySkip, decoded.XML.MatchStrategy)
 }
 
 // TestFinalResponseCriterion_EmptyCriteriaError verifies that missing sub-criteria returns an error.
@@ -58,7 +74,7 @@ func TestFinalResponseCriterion_EmptyCriteriaError(t *testing.T) {
 	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "must configure text, json, or rouge")
+	assert.Contains(t, err.Error(), "must configure text, json, rouge, or xml")
 }
 
 // TestFinalResponseCriterion_TextMismatch verifies mismatch reporting for text criteria.
@@ -73,10 +89,10 @@ func TestFinalResponseCriterion_TextMismatch(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestFinalResponseCriterion_JSONMatch verifies successful JSON matching when values are equivalent.
+// TestFinalResponseCriterion_JSONMatch verifies successful JSON validity matching.
 func TestFinalResponseCriterion_JSONMatch(t *testing.T) {
 	criterion := &FinalResponseCriterion{
-		JSON: criterionjson.New(),
+		JSON: &criterionjson.JSONCriterion{Valid: true},
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1,"b":[2,3]}`}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"b":[2,3],"a":1}`}}
@@ -88,7 +104,7 @@ func TestFinalResponseCriterion_JSONMatch(t *testing.T) {
 // TestFinalResponseCriterion_JSONParseError verifies JSON parsing failures are returned as errors.
 func TestFinalResponseCriterion_JSONParseError(t *testing.T) {
 	criterion := &FinalResponseCriterion{
-		JSON: criterionjson.New(),
+		JSON: &criterionjson.JSONCriterion{Valid: true},
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `not json`}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `{}`}}
@@ -97,11 +113,178 @@ func TestFinalResponseCriterion_JSONParseError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestFinalResponseCriterion_JSONValidOnly verifies JSON validity checks do not require expected JSON.
+func TestFinalResponseCriterion_JSONValidOnly(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		JSON: &criterionjson.JSONCriterion{Valid: true, MatchStrategy: criterionjson.JSONMatchStrategySkip},
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
+	expected := &evalset.Invocation{}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+// TestFinalResponseCriterion_JSONValidOnlyInvalid verifies invalid JSON is reported.
+func TestFinalResponseCriterion_JSONValidOnlyInvalid(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		JSON: &criterionjson.JSONCriterion{Valid: true, MatchStrategy: criterionjson.JSONMatchStrategySkip},
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{} {}`}}
+	expected := &evalset.Invocation{}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "json mismatch")
+}
+
+// TestFinalResponseCriterion_JSONDisabled verifies that valid=false disables JSON validity-only checks.
+func TestFinalResponseCriterion_JSONDisabled(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		JSON: &criterionjson.JSONCriterion{Valid: false, MatchStrategy: criterionjson.JSONMatchStrategySkip},
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `not json`}}
+	expected := &evalset.Invocation{}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+// TestFinalResponseCriterion_JSONCompareRunsWithSkipMatchStrategy verifies skip does not bypass custom comparison.
+func TestFinalResponseCriterion_JSONCompareRunsWithSkipMatchStrategy(t *testing.T) {
+	called := false
+	criterion := &FinalResponseCriterion{
+		JSON: &criterionjson.JSONCriterion{
+			MatchStrategy: criterionjson.JSONMatchStrategySkip,
+			Compare: func(actual, expected any) (bool, error) {
+				called = true
+				return true, nil
+			},
+		},
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `not json`}}
+	expected := &evalset.Invocation{}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
+// TestFinalResponseCriterion_TextLength verifies text length validation composes with default exact matching.
+func TestFinalResponseCriterion_TextLength(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		Text: &text.TextCriterion{Length: &criterionlength.LengthCriterion{Min: intPtr(2), Max: intPtr(4)}},
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: "你好"}}
+	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: "你好"}}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+// TestFinalResponseCriterion_TextLengthOnly verifies text length can run without text matching.
+func TestFinalResponseCriterion_TextLengthOnly(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		Text: &text.TextCriterion{
+			Length:        &criterionlength.LengthCriterion{Min: intPtr(2), Max: intPtr(4)},
+			MatchStrategy: text.TextMatchStrategySkip,
+		},
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: "abcd"}}
+	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: "different"}}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+// TestFinalResponseCriterion_LengthMismatch verifies text length mismatch reporting.
+func TestFinalResponseCriterion_LengthMismatch(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		Text: &text.TextCriterion{Length: &criterionlength.LengthCriterion{Min: intPtr(3)}},
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: "ab"}}
+	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: "ab"}}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "length mismatch")
+}
+
+// TestFinalResponseCriterion_XMLOnly verifies XML validation can run without expected content.
+func TestFinalResponseCriterion_XMLOnly(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		XML: criterionxml.New(criterionxml.WithValid(true), criterionxml.WithMatchStrategy(criterionxml.XMLMatchStrategySkip)),
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `<root><child /></root>`}}
+	expected := &evalset.Invocation{}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+// TestFinalResponseCriterion_XMLMismatch verifies XML mismatch reporting.
+func TestFinalResponseCriterion_XMLMismatch(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		XML: criterionxml.New(criterionxml.WithValid(true), criterionxml.WithMatchStrategy(criterionxml.XMLMatchStrategySkip)),
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `<root>`}}
+	expected := &evalset.Invocation{}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "xml mismatch")
+}
+
+// TestFinalResponseCriterion_JSONDisabledXMLValid verifies JSON can be disabled while XML validation runs.
+func TestFinalResponseCriterion_JSONDisabledXMLValid(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		JSON: &criterionjson.JSONCriterion{MatchStrategy: criterionjson.JSONMatchStrategySkip},
+		XML:  criterionxml.New(criterionxml.WithValid(true), criterionxml.WithMatchStrategy(criterionxml.XMLMatchStrategySkip)),
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `<root/>`}}
+	expected := &evalset.Invocation{}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+// TestFinalResponseCriterion_XMLCompare verifies XML custom comparison uses expected content.
+func TestFinalResponseCriterion_XMLCompare(t *testing.T) {
+	called := false
+	criterion := &FinalResponseCriterion{
+		XML: criterionxml.New(criterionxml.WithMatchStrategy(criterionxml.XMLMatchStrategySkip), criterionxml.WithCompare(func(actual, expected string) (bool, error) {
+			called = true
+			return actual == expected, nil
+		})),
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `<root/>`}}
+	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `<root/>`}}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
+// TestFinalResponseCriterion_XMLCompareWithMissingExpectedUsesEmptyContent verifies missing expected content is passed through.
+func TestFinalResponseCriterion_XMLCompareWithMissingExpectedUsesEmptyContent(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		XML: criterionxml.New(criterionxml.WithMatchStrategy(criterionxml.XMLMatchStrategySkip), criterionxml.WithCompare(func(actual, expected string) (bool, error) {
+			return actual == expected, nil
+		})),
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `<root/>`}}
+	expected := &evalset.Invocation{}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "xml mismatch")
+}
+
 // TestFinalResponseCriterion_TextAndJSONCriteria_BothPass verifies that both text and JSON criteria can pass together.
 func TestFinalResponseCriterion_TextAndJSONCriteria_BothPass(t *testing.T) {
 	criterion := &FinalResponseCriterion{
 		Text: &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
-		JSON: criterionjson.New(),
+		JSON: &criterionjson.JSONCriterion{Valid: true},
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
@@ -114,7 +297,7 @@ func TestFinalResponseCriterion_TextAndJSONCriteria_BothPass(t *testing.T) {
 func TestFinalResponseCriterion_TextAndJSONCriteria_TextFails(t *testing.T) {
 	criterion := &FinalResponseCriterion{
 		Text: &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
-		JSON: criterionjson.New(),
+		JSON: &criterionjson.JSONCriterion{Valid: true},
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: "{\n  \"a\": 1\n}"}}
@@ -128,10 +311,10 @@ func TestFinalResponseCriterion_TextAndJSONCriteria_TextFails(t *testing.T) {
 func TestFinalResponseCriterion_TextAndJSONCriteria_JSONFails(t *testing.T) {
 	criterion := &FinalResponseCriterion{
 		Text: &text.TextCriterion{MatchStrategy: text.TextMatchStrategyContains},
-		JSON: criterionjson.New(),
+		JSON: &criterionjson.JSONCriterion{Valid: true},
 	}
-	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
-	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `"a"`}}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `not json`}}
+	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `not`}}
 	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
@@ -172,13 +355,15 @@ func TestFinalResponseCriterion_NewAppliesOptions(t *testing.T) {
 		return actual == nil && expected == nil, nil
 	}
 	textCriterion := &text.TextCriterion{MatchStrategy: text.TextMatchStrategyContains}
-	jsonCriterion := criterionjson.New()
+	jsonCriterion := criterionjson.New(criterionjson.WithValid(true))
 	rougeCriterion := &criterionrouge.RougeCriterion{RougeType: "rouge1", Measure: criterionrouge.RougeMeasureF1}
+	xmlCriterion := criterionxml.New(criterionxml.WithValid(true), criterionxml.WithMatchStrategy(criterionxml.XMLMatchStrategySkip))
 
 	criterion := New(
 		WithTextCriterion(textCriterion),
 		WithJSONCriterion(jsonCriterion),
 		WithRougeCriterion(rougeCriterion),
+		WithXMLCriterion(xmlCriterion),
 		WithCompareName("always_pass"),
 		WithCompare(compare),
 	)
@@ -186,6 +371,7 @@ func TestFinalResponseCriterion_NewAppliesOptions(t *testing.T) {
 	assert.Same(t, textCriterion, criterion.Text)
 	assert.Same(t, jsonCriterion, criterion.JSON)
 	assert.Same(t, rougeCriterion, criterion.Rouge)
+	assert.Same(t, xmlCriterion, criterion.XML)
 	assert.Equal(t, "always_pass", criterion.CompareName)
 
 	ok, err := criterion.Match(context.Background(), nil, nil)
@@ -229,19 +415,53 @@ func TestFinalResponseCriterion_OneFinalResponseNil(t *testing.T) {
 	assert.Contains(t, err.Error(), "actual or expected final response is nil")
 }
 
+// TestFinalResponseCriterion_IgnoredCriteriaDoNotRequireFinalResponses verifies ignored criteria are skipped.
+func TestFinalResponseCriterion_IgnoredCriteriaDoNotRequireFinalResponses(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		JSON: &criterionjson.JSONCriterion{Ignore: true},
+		Text: &text.TextCriterion{Ignore: true, Length: &criterionlength.LengthCriterion{Ignore: true}},
+		XML:  &criterionxml.XMLCriterion{Ignore: true},
+	}
+	actual := &evalset.Invocation{}
+	expected := &evalset.Invocation{}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
 // TestFinalResponseCriterion_TextAndJSONCriteria_BothFail verifies aggregation of mismatches across criteria.
 func TestFinalResponseCriterion_TextAndJSONCriteria_BothFail(t *testing.T) {
 	criterion := &FinalResponseCriterion{
 		Text: &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
-		JSON: criterionjson.New(),
+		JSON: &criterionjson.JSONCriterion{Valid: true},
 	}
-	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
-	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":2}`}}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `not json`}}
+	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `expected`}}
 	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "json mismatch")
 	assert.Contains(t, err.Error(), "text mismatch")
+	assert.Contains(t, err.Error(), "; ")
+}
+
+// TestFinalResponseCriterion_MultipleCriteriaFail verifies aggregation of new criteria.
+func TestFinalResponseCriterion_MultipleCriteriaFail(t *testing.T) {
+	criterion := &FinalResponseCriterion{
+		Text: &text.TextCriterion{
+			MatchStrategy: text.TextMatchStrategyExact,
+			Length:        &criterionlength.LengthCriterion{Min: intPtr(10)},
+		},
+		XML: criterionxml.New(criterionxml.WithValid(true), criterionxml.WithMatchStrategy(criterionxml.XMLMatchStrategySkip)),
+	}
+	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `short`}}
+	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `expected`}}
+	ok, err := criterion.Match(context.Background(), actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "text mismatch")
+	assert.Contains(t, err.Error(), "length mismatch")
+	assert.Contains(t, err.Error(), "xml mismatch")
 	assert.Contains(t, err.Error(), "; ")
 }
 
@@ -274,23 +494,19 @@ func TestMatchContentAsJSON_Ignored(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestMatchContentAsJSON_CustomCompareFalseNoError verifies handling when a custom compare returns false without error.
-func TestMatchContentAsJSON_CustomCompareFalseNoError(t *testing.T) {
-	criterion := &criterionjson.JSONCriterion{
-		Compare: func(actual, expected any) (bool, error) {
-			return false, nil
-		},
-	}
-	err := matchContentAsJSON(`{"a":1}`, `{"a":1}`, criterion)
-	assert.EqualError(t, err, "json mismatch")
+// TestMatchContentAsJSON_SkipMatchStrategy verifies JSON matching can be skipped without parsing content.
+func TestMatchContentAsJSON_SkipMatchStrategy(t *testing.T) {
+	criterion := &criterionjson.JSONCriterion{MatchStrategy: criterionjson.JSONMatchStrategySkip}
+	err := matchContentAsJSON(`not json`, `not checked`, criterion)
+	assert.NoError(t, err)
 }
 
-// TestMatchContentAsJSON_ExpectedParseError verifies error reporting when expected JSON is invalid.
-func TestMatchContentAsJSON_ExpectedParseError(t *testing.T) {
-	criterion := criterionjson.New()
-	err := matchContentAsJSON(`{"a":1}`, `not json`, criterion)
+// TestMatchContentAsJSON_ActualParseError verifies error reporting when actual JSON is invalid.
+func TestMatchContentAsJSON_ActualParseError(t *testing.T) {
+	criterion := &criterionjson.JSONCriterion{Valid: true}
+	err := matchContentAsJSON(`not json`, `{"a":1}`, criterion)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "parse expected final response as json")
+	assert.Contains(t, err.Error(), "parse actual raw json")
 }
 
 // TestMatchContentAsRouge_Ignored verifies that nil or ignored criteria do not error.
@@ -324,4 +540,8 @@ func TestMatchContentAsRouge_Failed(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "rouge mismatch")
 	assert.Contains(t, err.Error(), "rouge1")
+}
+
+func intPtr(v int) *int {
+	return &v
 }

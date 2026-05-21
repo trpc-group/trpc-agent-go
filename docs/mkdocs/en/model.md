@@ -27,7 +27,7 @@ import (
 
 func main() {
     // 1. Create model instance.
-    modelInstance := openai.New("deepseek-chat",
+    modelInstance := openai.New("deepseek-v4-flash",
         openai.WithExtraFields(map[string]interface{}{
             "tool_choice": "auto", // Automatically select tools.
         }),
@@ -77,7 +77,7 @@ The Model module supports multiple usage methods and platform integration. The f
 cd examples/runner
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 #### Platform Integration Configuration
@@ -118,7 +118,7 @@ go run main.go -model gpt-4o-mini
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 export OPENAI_API_KEY="your-api-key"
 cd examples/runner
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-v4-flash
 ```
 
 **Code Configuration Method**
@@ -126,7 +126,7 @@ go run main.go -model deepseek-chat
 Configuration method when directly using Model in your own code:
 
 ```go
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
 )
@@ -205,14 +205,23 @@ type GenerationConfig struct {
     // Presence penalty.
     PresencePenalty *float64 `json:"presence_penalty,omitempty"`
 
-    // Reasoning effort level ("low", "medium", "high").
+    // Reasoning effort level. Accepted values depend on the provider:
+    //   - OpenAI o-series: "low", "medium", "high".
+    //   - Anthropic adaptive thinking: "low", "medium", "high", "max",
+    //     and "xhigh" on models that support it.
+    //   - DeepSeek v4 (deepseek-v4-pro / deepseek-v4-flash): "high", "max"
+    //     (server maps "low"/"medium" -> "high" and "xhigh" -> "max" for
+    //     backward compatibility).
+    // OpenAI-compatible providers forward this field to the selected backend
+    // model; use values supported by that backend.
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
     // Whether to enable thinking mode.
-    ThinkingEnabled *bool `json:"-"`
+    // nil means no thinking-toggle field is emitted, so the provider default applies.
+    ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
 
     // Maximum token count for thinking mode.
-    ThinkingTokens *int `json:"-"`
+    ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 ```
 
@@ -253,7 +262,29 @@ type ResponseError struct {
     Param   string    `json:"param,omitempty"`
     Code    string    `json:"code,omitempty"`
 }
+
+// Usage represents token usage information.
+type Usage struct {
+    PromptTokens            int                     `json:"prompt_tokens"`
+    CompletionTokens        int                     `json:"completion_tokens"`
+    TotalTokens             int                     `json:"total_tokens"`
+    PromptTokensDetails     PromptTokensDetails     `json:"prompt_tokens_details"`
+    CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
+    TimingInfo              *TimingInfo             `json:"timing_info,omitempty"`
+}
+
+type PromptTokensDetails struct {
+    CachedTokens        int `json:"cached_tokens"`
+    CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+    CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+    ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+}
 ```
+
+For OpenAI-compatible providers, `completion_tokens_details.reasoning_tokens` is mapped to `Usage.CompletionTokensDetails.ReasoningTokens`. The value may be `0` when the provider does not spend or report reasoning tokens; for reasoning models, set `ReasoningEffort` and/or `ThinkingEnabled` when you want to request reasoning behavior.
 
 ## OpenAI Model
 
@@ -271,7 +302,10 @@ Since the framework supports different models compatible with the OpenAI API, yo
 **2. DeepSeek**
 
 - Base URL: `https://api.deepseek.com`
-- Model Names: `deepseek-chat`, `deepseek-reasoner`
+- Model Names: `deepseek-v4-flash`, `deepseek-v4-pro`
+
+`deepseek-chat` and `deepseek-reasoner` are deprecated compatibility aliases;
+prefer the explicit DeepSeek v4 model names for new code.
 
 **3. Tencent Hunyuan**
 
@@ -318,7 +352,7 @@ import (
 
 func main() {
     // Create model instance.
-    llm := openai.New("deepseek-chat")
+    llm := openai.New("deepseek-v4-flash")
 
     // Build request.
     temperature := 0.7
@@ -462,7 +496,7 @@ request := &model.Request{
 
 ```go
 // Set pre-request callback function.
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithChatRequestCallback(func(ctx context.Context, req *openai.ChatCompletionNewParams) {
         // Called before request is sent.
         log.Printf("Sending request: model=%s, message count=%d", req.Model, len(req.Messages))
@@ -516,7 +550,7 @@ import (
     oaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-model := oaimodel.New("deepseek-chat",
+model := oaimodel.New("deepseek-v4-flash",
     oaimodel.WithChatRequestCallback(func(ctx context.Context, req *openai.ChatCompletionNewParams) {
         // Dynamically set extra fields based on runtime context.
         userID, _ := ctx.Value("user_id").(string)
@@ -528,26 +562,63 @@ model := oaimodel.New("deepseek-chat",
 )
 ```
 
-**Difference between `SetExtraFields` in callback and `WithExtraFields`**:
+**Difference between request-body customization approaches**:
 
-| Aspect | `WithExtraFields` | `SetExtraFields` in `WithChatRequestCallback` |
-| --- | --- | --- |
-| Timing | Set once at model creation | Called before every request |
-| Dynamism | Static values only | Dynamic values based on `ctx` or runtime state |
-| Mechanism | Injected via `openaiopt.WithJSONSet` (RequestOption layer) | Set on the `ChatCompletionNewParams` struct (serialization layer) |
-| Same key conflict | `WithExtraFields` wins (applied later, overwrites same keys) | Overwritten by `WithExtraFields` if same key exists |
+| Aspect | `WithExtraFields` | `agent.WithModelRequestExtraFields` | `SetExtraFields` in `WithChatRequestCallback` |
+| --- | --- | --- | --- |
+| Timing | Set once at model creation | Set on one `runner.Run(...)` call | Called before every model request |
+| Dynamism | Static values only | Dynamic values known at run time | Dynamic values based on `ctx` or runtime state |
+| Mechanism | Injected via `openaiopt.WithJSONSet` (RequestOption layer) | Copied into `model.Request.ExtraFields`, then injected by supported adapters | Set on the `ChatCompletionNewParams` struct (serialization layer) |
+| Same key conflict | Overwritten by request-level extra fields | Takes precedence over model-level extra fields | Overwritten by RequestOption-layer extra fields if the same key exists |
 
-When both are used with **different keys**, all fields appear in the final
-JSON body without conflict. When both set the **same key**,
-`WithExtraFields` takes precedence because `WithJSONSet` is applied after
-struct serialization.
+When multiple approaches use **different keys**, all fields appear in the final
+JSON body without conflict. When they set the **same key**, request-level extra
+fields passed with `agent.WithModelRequestExtraFields` take precedence in
+OpenAI-compatible adapters.
 
-For most dynamic per-request customization, `SetExtraFields` in the callback
-is the recommended approach.
+##### Request-scoped extra fields from Runner
+
+Use `agent.WithModelRequestExtraFields` when a provider-specific top-level
+request body field should vary per `runner.Run(...)` call, for example
+`prompt_cache_key` on OpenAI-compatible endpoints:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+func runOnce(ctx context.Context, r runner.Runner, cacheKey string) error {
+    events, err := r.Run(
+        ctx,
+        "user-001",
+        "session-001",
+        model.NewUserMessage("Hello"),
+        agent.WithModelRequestExtraFields(map[string]any{
+            "prompt_cache_key": cacheKey,
+        }),
+    )
+    if err != nil {
+        return err
+    }
+    for range events {
+    }
+    return nil
+}
+```
+
+This option applies to every model call created during that run, including
+normal LLM agents, graph LLM nodes, and requests routed through failover or
+hedge models. The built-in OpenAI and HuggingFace/OpenAI-compatible adapters
+merge these fields into the top-level JSON request body. Other provider
+adapters ignore the field unless they add an explicit provider-specific mapping.
 
 #### 2. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. This section shows static switching for OpenAI and OpenAI-compatible model instances at the agent level and per-request level. To select a model separately for each LLM call within the same `runner.Run(...)`, use [ModelSelector](#modelselector).
 
 ##### Agent-level Switching
 
@@ -595,18 +666,16 @@ import (
 )
 
 // Create multiple model instances.
-gpt4 := openai.New("gpt-4o")
-gpt4mini := openai.New("gpt-4o-mini")
-deepseek := openai.New("deepseek-chat")
+strong := openai.New("gpt-4o")
+fast := openai.New("gpt-4o-mini")
 
 // Register all models when creating the Agent.
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
-        "smart": gpt4,
-        "fast":  gpt4mini,
-        "cheap": deepseek,
+        "smart": strong,
+        "fast":  fast,
     }),
-    llmagent.WithModel(gpt4mini), // Specify initial model.
+    llmagent.WithModel(fast), // Specify initial model.
     llmagent.WithInstruction("You are an intelligent assistant."),
 )
 
@@ -617,7 +686,7 @@ if err != nil {
 }
 
 // Switch to another model.
-err = agent.SetModelByName("cheap")
+err = agent.SetModelByName("fast")
 if err != nil {
     log.Fatal(err)
 }
@@ -638,11 +707,11 @@ if err := agent.SetModelByName(modelName); err != nil {
 // Select model based on time of day (cost optimization).
 hour := time.Now().Hour()
 if hour >= 22 || hour < 8 {
-    // Use cheap model at night.
-    agent.SetModelByName("cheap")
-} else {
-    // Use fast model during the day.
+    // Use fast model at night.
     agent.SetModelByName("fast")
+} else {
+    // Use smart model during the day.
+    agent.SetModelByName("smart")
 }
 ```
 
@@ -674,9 +743,9 @@ Use `agent.WithModelName` to specify a pre-registered model name for a single re
 // Pre-register multiple models when creating the Agent.
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
-        "smart": openai.New("gpt-4o"),
-        "fast":  openai.New("gpt-4o-mini"),
-        "cheap": openai.New("deepseek-chat"),
+        "smart":  openai.New("gpt-4o"),
+        "fast":   openai.New("gpt-4o-mini"),
+        "vision": openai.New("gpt-4o"),
     }),
     llmagent.WithModel(openai.New("gpt-4o-mini")), // Default model.
 )
@@ -703,9 +772,9 @@ if isComplexQuery(message) {
 
 eventChan, err := runner.Run(ctx, userID, sessionID, message, opts...)
 
-// Use specialized reasoning model for reasoning tasks.
-eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
-    agent.WithModelName("deepseek-reasoner"),
+// Use a specialized model for a specific task.
+eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
+    agent.WithModelName("vision"),
 )
 ```
 
@@ -1136,7 +1205,7 @@ All methods affect streaming too because the same client is used for
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/model/openai"
 
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     openai.WithHeaders(map[string]string{
         "X-Custom-Header": "custom-value",
         "X-Request-ID":    "req-123",
@@ -1156,7 +1225,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     // If your provider needs extra headers
     openai.WithOpenAIOptions(
         openaiopt.WithHeader("X-Custom-Header", "custom-value"),
@@ -1171,7 +1240,7 @@ For complex logic, middleware lets you modify headers conditionally
 (for example, by URL path or context values):
 
 ```go
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     openai.WithOpenAIOptions(
         openaiopt.WithMiddleware(
             func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
@@ -1226,7 +1295,7 @@ import (
 
 const streamContentType = "text/event-stream"
 
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     openai.WithOpenAIOptions(
         openaiopt.WithMiddleware(
             func(
@@ -1296,7 +1365,7 @@ func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
     return rt.base.RoundTrip(req)
 }
 
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     openai.WithHTTPClientOptions(
         openai.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
     ),
@@ -1432,7 +1501,7 @@ func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model
 }
 
 // Use custom counter when creating a model
-llm := openai.New("deepseek-chat",
+llm := openai.New("deepseek-v4-flash",
     openai.WithTokenCounter(&MyCustomCounter{}),
 )
 ```
@@ -1474,7 +1543,7 @@ import (
 )
 
 // Enable token tailoring with automatic configuration
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true),
 )
 ```
@@ -1483,7 +1552,7 @@ model := openai.New("deepseek-chat",
 
 ```go
 // Custom token limit and strategy
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true),               // Required: enable token tailoring
     openai.WithMaxInputTokens(10000),                    // Custom token limit
     openai.WithTokenCounter(customCounter),              // Optional: custom counter
@@ -1493,36 +1562,46 @@ model := openai.New("deepseek-chat",
 
 **Token Calculation Formula**:
 
-The framework automatically calculates "maxInputTokens" based on the model's context window:
+The framework automatically calculates `maxInputTokens` based on the model's
+context window. For OpenAI-compatible models, the automatic budget also accounts
+for request-scoped output limits and tool definitions:
 
 > **Context Window Registration**
 >
-> Both Token Tailoring and session summary `WithContextThreshold` rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with `model.RegisterModelContextWindow("my-model", 32768)` or `model.RegisterModelContextWindows(map[string]int{...})`. See the [Session Summary documentation](session/summary.md) for a full example.
+> Token Tailoring and session summary `WithContextThreshold` both need a model context window. Built-in model names are resolved automatically. For private deployments, tenant-provided models, or endpoint IDs, prefer model-instance configuration such as `openai.WithContextWindow(32768)` or the unified `provider.WithContextWindow(32768)`. For one-off runs, use `agent.WithModelContextWindow(32768)`. Use `model.RegisterModelContextWindow("my-model", 32768)` only when the name has a stable process-wide meaning. See the [Session Summary documentation](session/summary.md) for a full example.
 
-```
-safetyMargin = contextWindow × 10%
-calculatedMax = contextWindow - 2048 (output reserve) - 512 (protocol overhead) - safetyMargin
-ratioLimit = contextWindow × 100% (max input ratio)
-maxInputTokens = max(min(calculatedMax, ratioLimit), 1024 (minimum))
+```text
+outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
+safetyMargin = contextWindow × SafetyMarginRatio
+calculatedMax = contextWindow - outputReserve - ProtocolOverheadTokens - safetyMargin
+ratioLimit = contextWindow × MaxInputTokensRatio
+messageBudget = min(max(min(calculatedMax, ratioLimit), InputTokensFloor), calculatedMax)
+maxInputTokens = max(messageBudget - estimatedToolsTokens, 0)
 ```
 
 For example, "gpt-4o" (contextWindow = 128000):
 
-```
+```text
 safetyMargin = 128000 × 0.10 = 12800 tokens
-calculatedMax = 128000 - 2048 - 512 - 12800 = 112640 tokens
+outputReserve = max(2048, request.MaxTokens, request.ThinkingTokens)
+calculatedMax = 128000 - outputReserve - 512 - 12800
 ratioLimit = 128000 × 1.0 = 128000 tokens
-maxInputTokens = 112640 tokens (approximately 88% of context window)
+maxInputTokens = messageBudget - estimatedToolsTokens
 ```
+
+If `WithMaxInputTokens` is set explicitly, the framework keeps that value as the
+configured message budget and does not subtract the estimated `Tools` schema
+budget from it. The explicit value is still clamped to the context-safe hard
+budget after output reserves and safety margin are applied.
 
 **Default Budget Parameters**:
 
 The framework uses the following default values for token allocation (**it is recommended to keep the defaults**):
 
 - **Protocol Overhead (ProtocolOverheadTokens)**: 512 tokens - reserved for request/response formatting
-- **Output Reserve (ReserveOutputTokens)**: 2048 tokens - reserved for output generation
+- **Output Reserve (ReserveOutputTokens)**: 2048 tokens - minimum reserve for output generation; OpenAI-compatible requests reserve the larger value among this setting, `GenerationConfig.MaxTokens`, and `GenerationConfig.ThinkingTokens`
 - **Input Floor (InputTokensFloor)**: 1024 tokens - ensures proper model processing
-- **Output Floor (OutputTokensFloor)**: 256 tokens - ensures meaningful responses
+- **Output Floor (OutputTokensFloor)**: deprecated and no longer used to auto-calculate output `MaxTokens`
 - **Safety Margin Ratio (SafetyMarginRatio)**: 10% - buffer for token counting inaccuracies
 - **Max Input Ratio (MaxInputTokensRatio)**: 100% - maximum input ratio of context window
 
@@ -1553,7 +1632,7 @@ func (s *CustomStrategy) Tailor(
     return messages, nil
 }
 
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true),
     openai.WithTailoringStrategy(&CustomStrategy{}),
 )
@@ -1564,7 +1643,7 @@ model := openai.New("deepseek-chat",
 If the default token allocation strategy does not meet your needs, you can customize the budget parameters using `WithTokenTailoringConfig`. **Note: It is recommended to keep the default values unless you have specific requirements.**
 
 ```go
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithEnableTokenTailoring(true),
     openai.WithTokenTailoringConfig(&model.TokenTailoringConfig{
         ProtocolOverheadTokens: 1024,   // Custom protocol overhead
@@ -1640,7 +1719,7 @@ model := openai.New("hunyuan-model",
 )
 
 // Use the DeepSeek platform
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
     openai.WithVariant(openai.VariantDeepSeek), // Specify the DeepSeek variant
@@ -1682,7 +1761,7 @@ export DEEPSEEK_API_KEY="your-api-key"
 import "trpc.group/trpc-go/trpc-agent-go/model"
 
 // DeepSeek
-model := openai.New("deepseek-chat",
+model := openai.New("deepseek-v4-flash",
     openai.WithVariant(openai.VariantDeepSeek), // Automatically reads DEEPSEEK_API_KEY
 )
 ```
@@ -1883,6 +1962,57 @@ request := &model.Request{
 }
 ```
 
+### Multimodal Input
+
+The Anthropic Model supports images and files in `user` messages:
+
+- Images: Provide an image URL or raw image data. Supported MIME types are `image/jpeg`, `image/png`, `image/gif`, and `image/webp`. Images are sent as Anthropic image blocks.
+- PDFs: Provide a URL that Claude can access or raw data, using `application/pdf`. PDFs are sent as Anthropic document blocks.
+- Text content: Use raw data only. `text/plain` is sent as an Anthropic document block; text-based MIME types such as `text/csv` or `text/html` are sent as Anthropic text blocks.
+- Other formats: Office documents, JSON, and other formats are not parsed automatically. Convert them to text or PDF first. Audio and `FileID` are not supported. Non-PDF file URLs are sent as URL text only.
+
+```go
+import (
+    "context"
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+func main() {
+    llm := anthropic.New("claude-sonnet-4-6")
+    imageData, _ := os.ReadFile("diagram.png")
+    request := &model.Request{
+        Messages: []model.Message{
+            model.NewSystemMessage("You are a professional document and image analysis assistant."),
+            {
+                Role:    model.RoleUser,
+                Content: "Summarize the key information from the image and PDF.",
+                ContentParts: []model.ContentPart{
+                    {
+                        Type: model.ContentTypeImage,
+                        Image: &model.Image{
+                            Data:   imageData,
+                            Format: "png",
+                        },
+                    },
+                    {
+                        Type: model.ContentTypeFile,
+                        File: &model.File{
+                            Name:     "report.pdf",
+                            URL:      "https://example.com/report.pdf",
+                            MimeType: "application/pdf",
+                        },
+                    },
+                },
+            },
+        },
+    }
+    _, _ = llm.GenerateContent(context.Background(), request)
+}
+```
+
 ### Advanced features
 
 #### 1. Callback Functions
@@ -1920,7 +2050,7 @@ model := anthropic.New(
 
 #### 2. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. This section shows static switching for Anthropic model instances at the agent level and per-request level. To select a model separately for each LLM call within the same `runner.Run(...)`, use [ModelSelector](#modelselector).
 
 ##### Agent-level Switching
 
@@ -2282,7 +2412,37 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to [Token Tailoring under OpenAI Model](#3-token-tailoring).
+For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to [Token Tailoring under OpenAI Model](#7-token-tailoring).
+
+#### 5. Streaming Tool Call Deltas: ShowToolCallDelta
+
+By default, the Anthropic adapter accumulates tool-call arguments internally and returns the complete arguments once the model finishes the tool call, through `Response.Choices[0].Message.ToolCalls` in the final response.
+
+`WithShowToolCallDelta` exposes Anthropic `input_json_delta` chunks during streaming. Enable this option when tool arguments are long, or when the frontend needs to display argument generation progress:
+
+```go
+llm := anthropic.New(
+    "claude-sonnet-4-0",
+    anthropic.WithShowToolCallDelta(true),
+)
+```
+
+When `WithShowToolCallDelta(true)` is enabled:
+
+- Streaming responses may include `Response.Choices[0].Delta.ToolCalls`.
+- `Delta.ToolCalls[*].Function.Arguments` is the newly produced argument string fragment, and is usually not complete JSON.
+- `Delta.ToolCalls[*].ID` and `Index` can be used to join fragments for the same tool call.
+- The final response still returns the complete tool call in `Response.Choices[0].Message.ToolCalls`, so existing tool execution logic can continue to use the final response unchanged.
+
+Typical handling pattern:
+
+1. Read `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments` on each
+   partial response.
+2. Group chunks by tool call `ID` or `Index`, and append the `Arguments`
+   fragments in order.
+3. Treat the accumulated value as the tool argument JSON. For progressive
+   rendering, render the string as it grows and unmarshal it only after it
+   becomes valid JSON.
 
 ## Provider
 
@@ -2315,7 +2475,7 @@ import (
 )
 
 providerName := "openai"        // provider supports openai and anthropic.
-modelName := "deepseek-chat"
+modelName := "deepseek-v4-flash"
 
 modelInstance, err := provider.Model(
     providerName,
@@ -2349,7 +2509,7 @@ config := &model.TokenTailoringConfig{
 
 modelInstance, err := provider.Model(
     "openai",
-    "deepseek-chat",
+    "deepseek-v4-flash",
     provider.WithAPIKey(c.apiKey),
     provider.WithEnableTokenTailoring(true),
     provider.WithTokenTailoringConfig(config),
@@ -2391,7 +2551,7 @@ primary := openai.New(
     openai.WithBaseURL("https://api.openai.com/v1"),
 )
 backup := openai.New(
-    "deepseek-chat",
+    "deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
 )
 
@@ -2429,7 +2589,7 @@ primary := openai.New(
     openai.WithBaseURL("https://api.openai.com/v1"),
 )
 backup := openai.New(
-    "deepseek-chat",
+    "deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
 )
 
@@ -2442,7 +2602,7 @@ if err != nil {
 }
 ```
 
-`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
+`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. If the hedge wrapper is used with context-threshold summary or token tailoring and the candidates have different or unknown context windows, set a stable wrapper window with `hedge.WithContextWindow(...)`; otherwise the wrapper reports the shared candidate window only when all candidates expose the same positive value. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
 
 **Scheduling And Commit Rules**:
 
@@ -2498,3 +2658,41 @@ This configuration means:
 - `candidate[2]` starts at `0ms`.
 
 This is the all-at-once case where every candidate launches immediately when the request begins. In fixed-interval form, the same setup can be written as `WithDelay(0)`.
+
+## ModelSelector
+
+`ModelSelector` dynamically selects a model for each framework-managed LLM call within the same `runner.Run(...)`.
+
+```go
+selectModel := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+    if shouldUseAnotherModel(inv) {
+        return anotherModel, nil
+    }
+    return nil, nil
+}
+
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithModelSelector(selectModel),
+)
+```
+
+If an `LLMAgent` has its own fixed model selection policy, configure it when creating the agent:
+
+```go
+a := llmagent.New(
+    "assistant",
+    llmagent.WithModel(defaultModel),
+    llmagent.WithModelSelector(selectModel),
+)
+```
+
+Notes:
+
+- When both are configured, `agent.WithModelSelector(...)` takes precedence over `llmagent.WithModelSelector(...)`.
+- If selector returns `nil, nil`, the model is not switched and the current `inv.Model` is kept; returning an error terminates the current LLM call.
+
+For a complete example, see [examples/model/selector](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/selector).

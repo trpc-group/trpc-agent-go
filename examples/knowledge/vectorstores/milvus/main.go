@@ -12,7 +12,7 @@
 // Required environment variables:
 //   - OPENAI_API_KEY: Your OpenAI API key for LLM and embeddings
 //   - OPENAI_BASE_URL: (Optional) Custom OpenAI API endpoint
-//   - MODEL_NAME: (Optional) Model name to use, defaults to deepseek-chat
+//   - MODEL_NAME: (Optional) Model name to use, defaults to deepseek-v4-flash
 //   - MILVUS_ADDRESS: Milvus server address (e.g., localhost:19530)
 //   - MILVUS_USERNAME: (Optional) Milvus username
 //   - MILVUS_PASSWORD: (Optional) Milvus password
@@ -51,7 +51,7 @@ import (
 )
 
 var (
-	modelName  = util.GetEnvOrDefault("MODEL_NAME", "deepseek-chat")
+	modelName  = util.GetEnvOrDefault("MODEL_NAME", "deepseek-v4-flash")
 	address    = util.GetEnvOrDefault("MILVUS_ADDRESS", "localhost:19530")
 	username   = util.GetEnvOrDefault("MILVUS_USERNAME", "")
 	password   = util.GetEnvOrDefault("MILVUS_PASSWORD", "")

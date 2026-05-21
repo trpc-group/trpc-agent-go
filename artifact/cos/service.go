@@ -102,6 +102,29 @@ func NewService(name, bucketURL string, opts ...Option) (*Service, error) {
 	}, nil
 }
 
+// ObjectKey returns the COS object key for an artifact version.
+func (*Service) ObjectKey(
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	version int,
+) (string, error) {
+	if err := validateSessionInfo(sessionInfo); err != nil {
+		return "", err
+	}
+	if err := validateFilename(filename); err != nil {
+		return "", err
+	}
+	if version < 0 {
+		return "", fmt.Errorf("cos artifact: version cannot be negative: %d", version)
+	}
+	objectName, _ := buildObjectNameCandidates(
+		sessionInfo,
+		filename,
+		version,
+	)
+	return objectName, nil
+}
+
 // SaveArtifact saves an artifact to Tencent Cloud Object Storage.
 func (s *Service) SaveArtifact(
 	ctx context.Context,
@@ -135,11 +158,14 @@ func (s *Service) SaveArtifact(
 		version = maxVersion + 1
 	}
 
-	objectName, _ := buildObjectNameCandidates(
+	objectName, err := s.ObjectKey(
 		sessionInfo,
 		filename,
 		version,
 	)
+	if err != nil {
+		return 0, err
+	}
 
 	// Upload the artifact data
 	reader := bytes.NewReader(art.Data)

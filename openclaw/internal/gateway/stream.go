@@ -15,8 +15,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -31,14 +34,103 @@ const (
 	traceStatusError    = "error"
 	traceStatusCanceled = "canceled"
 
-	streamToolExecCommand    = "exec_command"
-	streamToolReadDocument   = "read_document"
-	streamToolReadSheet      = "read_spreadsheet"
-	streamToolReadFile       = "fs_read_file"
-	streamToolSaveFile       = "fs_save_file"
-	streamToolListDir        = "fs_list_dir"
-	streamToolSearch         = "fs_search"
-	streamToolApplyPatch     = "apply_patch"
+	streamToolExecCommand  = "exec_command"
+	streamToolReadDocument = "read_document"
+	streamToolReadSheet    = "read_spreadsheet"
+	streamToolReadFile     = "fs_read_file"
+	streamToolSaveFile     = "fs_save_file"
+	streamToolListDir      = "fs_list_dir"
+	streamToolSearch       = "fs_search"
+	streamToolApplyPatch   = "apply_patch"
+
+	streamToolArgCommand   = "command"
+	streamToolArgPath      = "path"
+	streamToolArgQuery     = "query"
+	streamToolArgPattern   = "pattern"
+	streamToolArgSkill     = "skill"
+	streamToolArgDocs      = "docs"
+	streamToolArgAction    = "action"
+	streamToolArgOperation = "operation"
+	streamToolArgURL       = "url"
+	streamToolArgURLs      = "urls"
+	streamToolArgFile      = "file"
+	streamToolArgFilePath  = "file_path"
+	streamToolArgFileName  = "file_name"
+	streamToolArgFilename  = "filename"
+	streamToolArgID        = "id"
+	streamToolArgName      = "name"
+	streamToolArgTitle     = "title"
+	streamToolArgTarget    = "target"
+	streamToolArgElement   = "element"
+	streamToolArgSelector  = "selector"
+	streamToolArgRef       = "ref"
+	streamToolArgKey       = "key"
+	streamToolArgJobID     = "job_id"
+	streamToolArgSession   = "session_id"
+	streamToolArgRow       = "row"
+	streamToolArgStartRow  = "start_row"
+	streamToolArgEndRow    = "end_row"
+	streamToolArgSheet     = "sheet"
+
+	streamToolDetailRowsPrefix  = "rows "
+	streamToolDetailRowPrefix   = "row "
+	streamToolDetailPagePrefix  = "page "
+	streamToolDetailSheetPrefix = "sheet "
+	streamToolDetailJobPrefix   = "job "
+	streamToolDetailSessPrefix  = "session "
+	streamToolDetailRefPrefix   = "ref "
+	streamToolDetailKeyPrefix   = "key "
+	streamToolDetailSeparator   = " "
+	streamToolDetailMaxRunes    = 96
+	streamToolDetailMaxParts    = 2
+	streamToolPathEllipsis      = "..."
+	streamToolPathSeparator     = "/"
+
+	streamCommandCD        = "cd"
+	streamCommandSet       = "set"
+	streamCommandExport    = "export"
+	streamCommandSource    = "source"
+	streamCommandDot       = "."
+	streamCommandFor       = "for"
+	streamCommandShellLoop = "shell loop"
+	streamCommandBash      = "bash"
+	streamCommandSh        = "sh"
+	streamCommandZsh       = "zsh"
+	streamCommandGo        = "go"
+	streamCommandGit       = "git"
+	streamCommandRG        = "rg"
+	streamCommandSed       = "sed"
+	streamCommandCat       = "cat"
+	streamCommandHead      = "head"
+	streamCommandTail      = "tail"
+	streamCommandLS        = "ls"
+	streamCommandFind      = "find"
+	streamCommandPytest    = "pytest"
+	streamCommandPython    = "python"
+	streamCommandPython3   = "python3"
+	streamCommandNPM       = "npm"
+	streamCommandPNPM      = "pnpm"
+	streamCommandYarn      = "yarn"
+	streamCommandBun       = "bun"
+
+	streamCommandModuleFlag = "-m"
+	streamCommandShellFlag  = "-c"
+	streamCommandShellLogin = "-lc"
+	streamCommandArgLimit   = 4
+
+	streamSecretToken         = "token"
+	streamSecretSecret        = "secret"
+	streamSecretPassword      = "password"
+	streamSecretAuthorization = "authorization"
+	streamSecretBearer        = "bearer"
+	streamSecretAPIKey        = "api_key"
+	streamSecretAPIKeyFlat    = "apikey"
+	streamSecretCookie        = "cookie"
+	streamSecretKeySuffix     = "_key"
+	streamSecretOpenAIKey     = "sk-"
+	streamSecretGitHubToken   = "ghp_"
+	streamSecretTencentToken  = "tgit_"
+
 	progressSummaryPrepare   = "Preparing request"
 	progressSummaryDoc       = "Reading document"
 	progressSummarySheet     = "Reading spreadsheet"
@@ -57,9 +149,53 @@ type streamOutcome struct {
 }
 
 type progressState struct {
-	startedAt time.Time
-	stage     gwproto.StreamProgressStage
-	summary   string
+	startedAt  time.Time
+	stage      gwproto.StreamProgressStage
+	summary    string
+	toolName   string
+	toolDetail string
+	toolCallID string
+	toolStatus gwproto.StreamToolStatus
+}
+
+type streamToolArgKind int
+
+const (
+	streamToolArgKindText streamToolArgKind = iota
+	streamToolArgKindPath
+	streamToolArgKindURL
+)
+
+type streamToolDetailArg struct {
+	key    string
+	prefix string
+	kind   streamToolArgKind
+}
+
+var streamGenericToolDetailArgs = []streamToolDetailArg{
+	{key: streamToolArgSkill},
+	{key: streamToolArgDocs, kind: streamToolArgKindPath},
+	{key: streamToolArgAction},
+	{key: streamToolArgOperation},
+	{key: streamToolArgQuery},
+	{key: streamToolArgPattern},
+	{key: streamToolArgURL, kind: streamToolArgKindURL},
+	{key: streamToolArgURLs, kind: streamToolArgKindURL},
+	{key: streamToolArgPath, kind: streamToolArgKindPath},
+	{key: streamToolArgFilePath, kind: streamToolArgKindPath},
+	{key: streamToolArgFileName, kind: streamToolArgKindPath},
+	{key: streamToolArgFile, kind: streamToolArgKindPath},
+	{key: streamToolArgFilename, kind: streamToolArgKindPath},
+	{key: streamToolArgID},
+	{key: streamToolArgName},
+	{key: streamToolArgTitle},
+	{key: streamToolArgTarget},
+	{key: streamToolArgElement},
+	{key: streamToolArgSelector},
+	{key: streamToolArgRef, prefix: streamToolDetailRefPrefix},
+	{key: streamToolArgKey, prefix: streamToolDetailKeyPrefix},
+	{key: streamToolArgJobID, prefix: streamToolDetailJobPrefix},
+	{key: streamToolArgSession, prefix: streamToolDetailSessPrefix},
 }
 
 // StreamMessage processes a request and returns a stream of gateway
@@ -67,6 +203,24 @@ type progressState struct {
 func (s *Server) StreamMessage(
 	ctx context.Context,
 	req gwproto.MessageRequest,
+) (<-chan gwproto.StreamEvent, *gwproto.APIError, int) {
+	return s.streamMessage(ctx, req, nil)
+}
+
+// StreamMessageWithOptions processes a request with opt-in stream behavior
+// controls and returns a stream of gateway events.
+func (s *Server) StreamMessageWithOptions(
+	ctx context.Context,
+	req gwproto.MessageRequest,
+	opts *gwproto.MessageStreamOptions,
+) (<-chan gwproto.StreamEvent, *gwproto.APIError, int) {
+	return s.streamMessage(ctx, req, opts)
+}
+
+func (s *Server) streamMessage(
+	ctx context.Context,
+	req gwproto.MessageRequest,
+	opts *gwproto.MessageStreamOptions,
 ) (<-chan gwproto.StreamEvent, *gwproto.APIError, int) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -93,6 +247,7 @@ func (s *Server) StreamMessage(
 	prepared, earlyRsp, earlyStatus := s.prepareMessageRun(
 		ctx,
 		req,
+		opts,
 		trace,
 	)
 	if earlyRsp != nil {
@@ -172,7 +327,7 @@ func (s *Server) handleMessagesStream(
 		return
 	}
 
-	var req gwproto.MessageRequest
+	var req streamMessageRequest
 	if err := s.decodeJSON(r, &req); err != nil {
 		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
@@ -181,7 +336,11 @@ func (s *Server) handleMessagesStream(
 		return
 	}
 
-	events, apiErr, status := s.StreamMessage(r.Context(), req)
+	events, apiErr, status := s.streamMessage(
+		r.Context(),
+		req.MessageRequest,
+		req.StreamOptions,
+	)
 	if apiErr != nil {
 		s.writeError(w, *apiErr, status)
 		return
@@ -198,6 +357,11 @@ func (s *Server) handleMessagesStream(
 			return
 		}
 	}
+}
+
+type streamMessageRequest struct {
+	gwproto.MessageRequest
+	StreamOptions *gwproto.MessageStreamOptions `json:"stream_options,omitempty"`
 }
 
 func writeSSEEvent(
@@ -260,8 +424,10 @@ func (s *Server) streamLocked(
 		out,
 		run,
 		&progress,
-		gwproto.StreamProgressStagePreparing,
-		progressSummaryPrepare,
+		progressUpdate{
+			stage:   gwproto.StreamProgressStagePreparing,
+			summary: progressSummaryPrepare,
+		},
 	) {
 		return streamOutcome{
 			status: traceStatusError,
@@ -269,7 +435,24 @@ func (s *Server) streamLocked(
 		}
 	}
 
-	ctx, runOpts := s.resolveRunOptions(ctx, run)
+	ctx, runOpts, err := s.resolveRunOptions(ctx, run)
+	if err != nil {
+		apiErr := gwproto.APIError{
+			Type:    errTypeInternal,
+			Message: err.Error(),
+		}
+		_ = sendStreamEvent(ctx, out, gwproto.StreamEvent{
+			Type:      gwproto.StreamEventTypeRunError,
+			SessionID: run.sessionID,
+			RequestID: run.requestID,
+			Error:     &apiErr,
+		})
+		return streamOutcome{
+			status: traceStatusError,
+			errMsg: err.Error(),
+		}
+	}
+	recordRuntimeProfile(debugrecorder.TraceFromContext(ctx), ctx)
 	events, err := s.runner.Run(
 		ctx,
 		run.userID,
@@ -307,20 +490,18 @@ func (s *Server) streamLocked(
 			continue
 		}
 
-		if !sentText {
-			if update, ok := progressUpdateFromRunnerEvent(evt); ok {
-				if !sendProgressUpdate(
-					ctx,
-					out,
-					run,
-					&progress,
-					update.stage,
-					update.summary,
-				) {
-					return streamOutcome{
-						status: traceStatusError,
-						errMsg: contextErrMessage(ctx),
-					}
+		if update, ok := progressUpdateFromRunnerEvent(evt); ok &&
+			shouldSendProgressForEvent(run.streamOptions, sentText) {
+			if !sendProgressUpdate(
+				ctx,
+				out,
+				run,
+				&progress,
+				update,
+			) {
+				return streamOutcome{
+					status: traceStatusError,
+					errMsg: contextErrMessage(ctx),
 				}
 			}
 		}
@@ -531,6 +712,16 @@ func (s *Server) streamLocked(
 	return streamOutcome{status: traceStatusOK}
 }
 
+func shouldSendProgressForEvent(
+	opts *gwproto.MessageStreamOptions,
+	sentText bool,
+) bool {
+	if !sentText {
+		return true
+	}
+	return opts != nil && opts.ProgressAfterTextDelta
+}
+
 func sendStreamEvent(
 	ctx context.Context,
 	out chan<- gwproto.StreamEvent,
@@ -545,8 +736,12 @@ func sendStreamEvent(
 }
 
 type progressUpdate struct {
-	stage   gwproto.StreamProgressStage
-	summary string
+	stage      gwproto.StreamProgressStage
+	summary    string
+	toolName   string
+	toolDetail string
+	toolCallID string
+	toolStatus gwproto.StreamToolStatus
 }
 
 func progressUpdateFromRunnerEvent(
@@ -563,10 +758,7 @@ func progressUpdateFromRunnerEvent(
 		return progressFromToolCall(toolCall)
 	}
 	if evt.Object == model.ObjectTypeToolResponse {
-		return progressUpdate{
-			stage:   gwproto.StreamProgressStageSummarizing,
-			summary: progressSummaryAnswering,
-		}, true
+		return progressFromToolResult(evt.Response), true
 	}
 	return progressUpdate{}, false
 }
@@ -586,35 +778,312 @@ func firstToolCall(rsp *model.Response) (model.ToolCall, bool) {
 	return model.ToolCall{}, false
 }
 
+func firstToolResult(rsp *model.Response) (model.Message, bool) {
+	if rsp == nil {
+		return model.Message{}, false
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Message.ToolID != "" || choice.Message.ToolName != "" {
+			return choice.Message, true
+		}
+		if choice.Delta.ToolID != "" || choice.Delta.ToolName != "" {
+			return choice.Delta, true
+		}
+	}
+	return model.Message{}, false
+}
+
 func progressFromToolCall(
 	toolCall model.ToolCall,
 ) (progressUpdate, bool) {
 	name := strings.TrimSpace(toolCall.Function.Name)
+	update := progressUpdate{
+		toolName:   name,
+		toolDetail: toolDetailFromToolCall(toolCall),
+		toolCallID: strings.TrimSpace(toolCall.ID),
+		toolStatus: gwproto.StreamToolStatusRunning,
+	}
 	switch name {
 	case streamToolReadDocument:
-		return progressUpdate{
-			stage:   gwproto.StreamProgressStageReadingDocument,
-			summary: readDocumentProgressSummary(toolCall),
-		}, true
+		update.stage = gwproto.StreamProgressStageReadingDocument
+		update.summary = readDocumentProgressSummary(toolCall)
+		return update, true
 	case streamToolReadSheet:
-		return progressUpdate{
-			stage:   gwproto.StreamProgressStageReadingSpreadsheet,
-			summary: readSpreadsheetProgressSummary(toolCall),
-		}, true
+		update.stage = gwproto.StreamProgressStageReadingSpreadsheet
+		update.summary = readSpreadsheetProgressSummary(toolCall)
+		return update, true
 	case streamToolExecCommand:
-		return progressUpdate{
-			stage:   gwproto.StreamProgressStageRunningTool,
-			summary: execCommandProgressSummary(toolCall),
-		}, true
+		update.stage = gwproto.StreamProgressStageRunningTool
+		update.summary = execCommandProgressSummary(toolCall)
+		return update, true
 	default:
 		if name == "" {
 			return progressUpdate{}, false
 		}
-		return progressUpdate{
-			stage:   gwproto.StreamProgressStageRunningTool,
-			summary: "Running " + name,
-		}, true
+		update.stage = gwproto.StreamProgressStageRunningTool
+		update.summary = progressSummaryTool
+		return update, true
 	}
+}
+
+func progressFromToolResult(rsp *model.Response) progressUpdate {
+	update := progressUpdate{
+		stage:   gwproto.StreamProgressStageSummarizing,
+		summary: progressSummaryAnswering,
+	}
+	if rsp == nil || rsp.IsPartial {
+		return update
+	}
+	msg, ok := firstToolResult(rsp)
+	if !ok {
+		return update
+	}
+	update.toolName = strings.TrimSpace(msg.ToolName)
+	update.toolCallID = strings.TrimSpace(msg.ToolID)
+	if update.toolName != "" || update.toolCallID != "" {
+		update.toolStatus = gwproto.StreamToolStatusCompleted
+	}
+	return update
+}
+
+func toolDetailFromToolCall(toolCall model.ToolCall) string {
+	name := strings.TrimSpace(toolCall.Function.Name)
+	switch name {
+	case streamToolExecCommand:
+		return execCommandToolDetail(toolCall)
+	case streamToolReadDocument:
+		return readDocumentToolDetail(toolCall)
+	case streamToolReadSheet:
+		return readSpreadsheetToolDetail(toolCall)
+	case streamToolReadFile, streamToolSaveFile, streamToolListDir:
+		return toolPathDetail(toolCall)
+	case streamToolSearch:
+		return searchToolDetail(toolCall)
+	default:
+		return genericToolDetail(toolCall)
+	}
+}
+
+func execCommandToolDetail(toolCall model.ToolCall) string {
+	var args struct {
+		Command string `json:"command,omitempty"`
+	}
+	if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+		return ""
+	}
+	return sanitizeStreamToolDetail(shellCommandDetail(args.Command))
+}
+
+func readDocumentToolDetail(toolCall model.ToolCall) string {
+	var args struct {
+		Page *int   `json:"page,omitempty"`
+		Path string `json:"path,omitempty"`
+	}
+	if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+		return ""
+	}
+	details := make([]string, 0, 2)
+	if path := safePathDetail(args.Path); path != "" {
+		details = append(details, path)
+	}
+	if args.Page != nil && *args.Page > 0 {
+		details = append(
+			details,
+			fmt.Sprintf("%s%d", streamToolDetailPagePrefix, *args.Page),
+		)
+	}
+	return sanitizeStreamToolDetail(
+		strings.Join(details, streamToolDetailSeparator),
+	)
+}
+
+func readSpreadsheetToolDetail(toolCall model.ToolCall) string {
+	var args struct {
+		Path     string `json:"path,omitempty"`
+		Row      *int   `json:"row,omitempty"`
+		StartRow *int   `json:"start_row,omitempty"`
+		EndRow   *int   `json:"end_row,omitempty"`
+		Sheet    string `json:"sheet,omitempty"`
+	}
+	if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+		return ""
+	}
+	details := make([]string, 0, 3)
+	if path := safePathDetail(args.Path); path != "" {
+		details = append(details, path)
+	}
+	if sheet := safeDetailToken(args.Sheet); sheet != "" {
+		details = append(details, streamToolDetailSheetPrefix+sheet)
+	}
+	switch {
+	case args.Row != nil && *args.Row > 0:
+		details = append(
+			details,
+			fmt.Sprintf("%s%d", streamToolDetailRowPrefix, *args.Row),
+		)
+	case args.StartRow != nil && *args.StartRow > 0 &&
+		args.EndRow != nil && *args.EndRow >= *args.StartRow:
+		details = append(
+			details,
+			fmt.Sprintf(
+				"%s%d-%d",
+				streamToolDetailRowsPrefix,
+				*args.StartRow,
+				*args.EndRow,
+			),
+		)
+	case args.StartRow != nil && *args.StartRow > 0:
+		details = append(
+			details,
+			fmt.Sprintf("%s%d", streamToolDetailRowPrefix, *args.StartRow),
+		)
+	}
+	return sanitizeStreamToolDetail(
+		strings.Join(details, streamToolDetailSeparator),
+	)
+}
+
+func toolPathDetail(toolCall model.ToolCall) string {
+	for _, key := range []string{
+		streamToolArgPath,
+		streamToolArgFilePath,
+		streamToolArgFileName,
+		streamToolArgFile,
+		streamToolArgFilename,
+	} {
+		path, ok := stringArgFromToolCall(toolCall, key)
+		if ok {
+			return sanitizeStreamToolDetail(safePathDetail(path))
+		}
+	}
+	return ""
+}
+
+func searchToolDetail(toolCall model.ToolCall) string {
+	for _, key := range []string{
+		streamToolArgQuery,
+		streamToolArgPattern,
+	} {
+		if value, ok := stringArgFromToolCall(toolCall, key); ok {
+			return sanitizeStreamToolDetail(safeDetailToken(value))
+		}
+	}
+	return ""
+}
+
+func genericToolDetail(toolCall model.ToolCall) string {
+	args, ok := toolCallArgs(toolCall)
+	if !ok {
+		return ""
+	}
+	parts := make([]string, 0, streamToolDetailMaxParts)
+	for _, candidate := range streamGenericToolDetailArgs {
+		if len(parts) >= streamToolDetailMaxParts {
+			break
+		}
+		for _, value := range stringValuesFromMap(args, candidate.key) {
+			if len(parts) >= streamToolDetailMaxParts {
+				break
+			}
+			detail := toolDetailArgValue(candidate.kind, value)
+			if detail == "" {
+				continue
+			}
+			part := candidate.prefix + detail
+			if containsToolDetailPart(parts, part) {
+				continue
+			}
+			parts = append(parts, part)
+		}
+	}
+	return sanitizeStreamToolDetail(
+		strings.Join(parts, streamToolDetailSeparator),
+	)
+}
+
+func toolDetailArgValue(kind streamToolArgKind, value string) string {
+	switch kind {
+	case streamToolArgKindPath:
+		return safePathDetail(value)
+	case streamToolArgKindURL:
+		return safeURLDetail(value)
+	default:
+		return safeDetailToken(value)
+	}
+}
+
+func containsToolDetailPart(parts []string, part string) bool {
+	for _, existing := range parts {
+		if existing == part {
+			return true
+		}
+	}
+	return false
+}
+
+func stringArgFromToolCall(
+	toolCall model.ToolCall,
+	key string,
+) (string, bool) {
+	args, ok := toolCallArgs(toolCall)
+	if !ok {
+		return "", false
+	}
+	return stringArgFromMap(args, key)
+}
+
+func toolCallArgs(toolCall model.ToolCall) (map[string]any, bool) {
+	var args map[string]any
+	if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+		return nil, false
+	}
+	return args, true
+}
+
+func stringArgFromMap(args map[string]any, key string) (string, bool) {
+	values := stringValuesFromMap(args, key)
+	if len(values) == 0 {
+		return "", false
+	}
+	return values[0], true
+}
+
+func stringValuesFromMap(args map[string]any, key string) []string {
+	if isSensitiveToolArgKey(key) {
+		return nil
+	}
+	raw, ok := args[key]
+	if !ok {
+		return nil
+	}
+	switch value := raw.(type) {
+	case string:
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil
+		}
+		return []string{value}
+	case []any:
+		return stringValuesFromList(value)
+	default:
+		return nil
+	}
+}
+
+func stringValuesFromList(values []any) []string {
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value, ok := raw.(string)
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }
 
 func execCommandProgressSummary(toolCall model.ToolCall) string {
@@ -627,7 +1096,7 @@ func execCommandProgressSummary(toolCall model.ToolCall) string {
 		return defaultSummary
 	}
 
-	command := normalizeExecCommand(args.Command)
+	command := normalizeExecCommand(shellCommandDetail(args.Command))
 	switch {
 	case command == "":
 		return defaultSummary
@@ -637,9 +1106,13 @@ func execCommandProgressSummary(toolCall model.ToolCall) string {
 		strings.HasPrefix(command, "python -m pytest"):
 		return progressSummaryPytest
 	case strings.HasPrefix(command, "npm test"),
+		strings.HasPrefix(command, "npm run test"),
 		strings.HasPrefix(command, "pnpm test"),
+		strings.HasPrefix(command, "pnpm run test"),
 		strings.HasPrefix(command, "yarn test"),
-		strings.HasPrefix(command, "bun test"):
+		strings.HasPrefix(command, "yarn run test"),
+		strings.HasPrefix(command, "bun test"),
+		strings.HasPrefix(command, "bun run test"):
 		return progressSummaryNPMTest
 	case strings.HasPrefix(command, "git "):
 		return progressSummaryGit
@@ -671,6 +1144,510 @@ func looksLikeWorkspaceInspection(command string) bool {
 		}
 	}
 	return false
+}
+
+func shellCommandDetail(command string) string {
+	for _, segment := range shellCommandSegments(command) {
+		detail := shellCommandSegmentDetail(segment)
+		if detail != "" {
+			return detail
+		}
+	}
+	return ""
+}
+
+func shellCommandSegments(command string) []string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil
+	}
+	segments := splitShellSegments(command)
+	return segments
+}
+
+func shellCommandSegmentDetail(segment string) string {
+	fields := cleanCommandFields(segment)
+	fields = trimShellCommandPrefix(fields)
+	if len(fields) == 0 {
+		return ""
+	}
+	command := safeCommandName(fields[0])
+	if command == "" || skipShellSetupCommand(command) {
+		return ""
+	}
+	switch command {
+	case streamCommandFor:
+		return streamCommandShellLoop
+	case streamCommandBash, streamCommandSh, streamCommandZsh:
+		return shellWrapperCommandDetail(fields[1:])
+	case streamCommandGo:
+		return commandWithSafeArgs(
+			command,
+			fields[1:],
+			streamCommandArgLimit,
+		)
+	case streamCommandGit:
+		return commandWithSafeArgs(
+			command,
+			fields[1:],
+			streamCommandArgLimit,
+		)
+	case streamCommandRG:
+		return commandWithSafeArgs(
+			command,
+			fields[1:],
+			streamCommandArgLimit,
+		)
+	case streamCommandSed, streamCommandCat,
+		streamCommandHead, streamCommandTail:
+		return commandWithPathArg(command, fields[1:])
+	case streamCommandLS, streamCommandFind:
+		return commandWithPathArg(command, fields[1:])
+	case streamCommandPytest:
+		return commandWithSafeArgs(
+			command,
+			fields[1:],
+			streamCommandArgLimit,
+		)
+	case streamCommandPython, streamCommandPython3:
+		return pythonCommandDetail(command, fields[1:])
+	case streamCommandNPM, streamCommandPNPM,
+		streamCommandYarn, streamCommandBun:
+		return packageCommandDetail(command, fields[1:])
+	default:
+		return commandWithSafeArgs(
+			command,
+			fields[1:],
+			streamCommandArgLimit,
+		)
+	}
+}
+
+func splitShellSegments(command string) []string {
+	runes := []rune(command)
+	segments := make([]string, 0, 1)
+	var builder strings.Builder
+	var quote rune
+	escaped := false
+	for i := 0; i < len(runes); i++ {
+		char := runes[i]
+		if escaped {
+			builder.WriteRune(char)
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			builder.WriteRune(char)
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if char == quote {
+				quote = 0
+			}
+			builder.WriteRune(char)
+			continue
+		}
+		switch char {
+		case '\'', '"':
+			quote = char
+			builder.WriteRune(char)
+		case '\n', ';', '|':
+			segments = appendShellSegment(segments, builder.String())
+			builder.Reset()
+		case '&':
+			if i+1 < len(runes) && runes[i+1] == '&' {
+				segments = appendShellSegment(segments, builder.String())
+				builder.Reset()
+				i++
+				continue
+			}
+			builder.WriteRune(char)
+		default:
+			builder.WriteRune(char)
+		}
+	}
+	segments = appendShellSegment(segments, builder.String())
+	return segments
+}
+
+func appendShellSegment(segments []string, segment string) []string {
+	if segment = strings.TrimSpace(segment); segment != "" {
+		segments = append(segments, segment)
+	}
+	return segments
+}
+
+func shellFields(segment string) []string {
+	fields := make([]string, 0, 4)
+	var builder strings.Builder
+	var quote rune
+	escaped := false
+	for _, char := range segment {
+		switch {
+		case escaped:
+			builder.WriteRune(char)
+			escaped = false
+		case char == '\\':
+			escaped = true
+		case quote != 0:
+			if char == quote {
+				quote = 0
+				continue
+			}
+			builder.WriteRune(char)
+		case char == '\'' || char == '"':
+			quote = char
+		case unicode.IsSpace(char):
+			fields = appendShellField(fields, builder.String())
+			builder.Reset()
+		default:
+			builder.WriteRune(char)
+		}
+	}
+	fields = appendShellField(fields, builder.String())
+	return fields
+}
+
+func appendShellField(fields []string, field string) []string {
+	if field = strings.TrimSpace(field); field != "" {
+		fields = append(fields, field)
+	}
+	return fields
+}
+
+func trimShellCommandPrefix(fields []string) []string {
+	for len(fields) > 0 {
+		first := strings.TrimSpace(fields[0])
+		switch {
+		case isShellEnvAssignment(first):
+			fields = fields[1:]
+		default:
+			return fields
+		}
+	}
+	return fields
+}
+
+func isShellEnvAssignment(field string) bool {
+	if field == "" || strings.HasPrefix(field, "-") {
+		return false
+	}
+	eq := strings.Index(field, "=")
+	if eq <= 0 {
+		return false
+	}
+	name := field[:eq]
+	for _, char := range name {
+		if char == '_' ||
+			char >= 'a' && char <= 'z' ||
+			char >= 'A' && char <= 'Z' ||
+			char >= '0' && char <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func cleanCommandFields(segment string) []string {
+	return shellFields(segment)
+}
+
+func safeCommandName(name string) string {
+	name = strings.TrimSpace(filepath.Base(name))
+	name = strings.ToLower(strings.Trim(name, "\"'"))
+	if looksSensitiveValue(name) {
+		return ""
+	}
+	return safeDetailToken(name)
+}
+
+func skipShellSetupCommand(command string) bool {
+	switch command {
+	case streamCommandCD, streamCommandSet, streamCommandExport,
+		streamCommandSource, streamCommandDot:
+		return true
+	default:
+		return false
+	}
+}
+
+func commandWithSafeArgs(
+	command string,
+	args []string,
+	limit int,
+) string {
+	parts := []string{command}
+	skipCount := 0
+	for _, arg := range args {
+		if skipCount > 0 {
+			skipCount--
+			continue
+		}
+		if isSensitiveCommandFlag(arg) {
+			skipCount = 1
+			continue
+		}
+		if isSensitiveCommandKeyToken(arg) {
+			skipCount = 2
+			continue
+		}
+		if len(parts)-1 >= limit {
+			break
+		}
+		if token := safeCommandArgDetail(arg); token != "" {
+			parts = append(parts, token)
+		}
+	}
+	return strings.Join(parts, streamToolDetailSeparator)
+}
+
+func isSensitiveCommandFlag(arg string) bool {
+	arg = strings.TrimSpace(strings.Trim(arg, "\"'"))
+	if !strings.HasPrefix(arg, "-") {
+		return false
+	}
+	flag := strings.TrimLeft(arg, "-")
+	flag, _, _ = strings.Cut(flag, "=")
+	return isSensitiveToolArgKey(flag)
+}
+
+func isSensitiveCommandKeyToken(arg string) bool {
+	arg = strings.TrimSpace(strings.Trim(arg, "\"'"))
+	if !strings.HasSuffix(arg, ":") {
+		return false
+	}
+	key := strings.TrimSuffix(arg, ":")
+	return isSensitiveToolArgKey(key)
+}
+
+func commandWithPathArg(command string, args []string) string {
+	if path := lastSafePathArg(args); path != "" {
+		return strings.Join(
+			[]string{command, path},
+			streamToolDetailSeparator,
+		)
+	}
+	return command
+}
+
+func shellWrapperCommandDetail(args []string) string {
+	for i, arg := range args {
+		switch arg {
+		case streamCommandShellFlag, streamCommandShellLogin:
+			if i+1 >= len(args) {
+				return ""
+			}
+			return shellCommandDetail(strings.Join(args[i+1:], " "))
+		}
+	}
+	return ""
+}
+
+func pythonCommandDetail(command string, args []string) string {
+	if len(args) >= 2 &&
+		args[0] == streamCommandModuleFlag &&
+		args[1] == streamCommandPytest {
+		rest := append([]string{streamCommandPytest}, args[2:]...)
+		return commandWithSafeArgs(
+			streamCommandPytest,
+			rest[1:],
+			streamCommandArgLimit,
+		)
+	}
+	return commandWithSafeArgs(command, args, streamCommandArgLimit)
+}
+
+func packageCommandDetail(command string, args []string) string {
+	if len(args) == 0 {
+		return command
+	}
+	return commandWithSafeArgs(command, args, streamCommandArgLimit)
+}
+
+func safeCommandArgDetail(arg string) string {
+	arg = strings.TrimSpace(strings.Trim(arg, "\"'"))
+	if arg == "" || looksSensitiveCommandArg(arg) {
+		return ""
+	}
+	if strings.HasPrefix(arg, "-") && strings.Contains(arg, "=") {
+		return ""
+	}
+	if strings.Contains(arg, "://") {
+		return safeURLDetail(arg)
+	}
+	if path := safePathDetail(arg); path != "" {
+		return path
+	}
+	return safeDetailToken(arg)
+}
+
+func lastSafePathArg(args []string) string {
+	for i := len(args) - 1; i >= 0; i-- {
+		arg := strings.TrimSpace(args[i])
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if path := safePathDetail(arg); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func safePathDetail(path string) string {
+	path = strings.TrimSpace(strings.Trim(path, "\"'"))
+	if path == "" || looksSensitiveValue(path) {
+		return ""
+	}
+	if path == "./..." {
+		return path
+	}
+	clean := filepath.ToSlash(filepath.Clean(path))
+	if clean == "." || clean == ".." {
+		return clean
+	}
+	trimmed := strings.Trim(clean, streamToolPathSeparator)
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.Split(trimmed, streamToolPathSeparator)
+	if len(parts) > 3 {
+		parts = append([]string{streamToolPathEllipsis}, parts[len(parts)-3:]...)
+	}
+	return safeDetailToken(strings.Join(parts, streamToolPathSeparator))
+}
+
+func safeURLDetail(rawURL string) string {
+	rawURL = strings.TrimSpace(strings.Trim(rawURL, "\"'"))
+	if rawURL == "" || looksSensitiveValue(rawURL) {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return safePathDetail(rawURL)
+	}
+	parts := []string{parsed.Host}
+	if path := safePathDetail(parsed.Path); path != "" && path != "." {
+		parts = append(parts, path)
+	}
+	return safeDetailToken(
+		strings.Join(parts, streamToolPathSeparator),
+	)
+}
+
+func safeDetailToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" ||
+		len([]rune(value)) > streamToolDetailMaxRunes ||
+		looksSensitiveValue(value) {
+		return ""
+	}
+	for _, char := range value {
+		if isSafeToolDetailRune(char) {
+			continue
+		}
+		return ""
+	}
+	return value
+}
+
+func sanitizeStreamToolDetail(detail string) string {
+	return safeDetailToken(detail)
+}
+
+func isSafeToolDetailRune(char rune) bool {
+	switch {
+	case unicode.IsLetter(char), unicode.IsDigit(char):
+		return true
+	case char == '_', char == '-', char == '.', char == '/',
+		char == ':', char == ' ', char == '*', char == '#',
+		char == '@', char == '[', char == ']':
+		return true
+	default:
+		return false
+	}
+}
+
+func looksSensitiveCommandArg(arg string) bool {
+	if looksSensitiveValue(arg) {
+		return true
+	}
+	if !strings.HasPrefix(arg, "-") || !strings.Contains(arg, "=") {
+		return false
+	}
+	key, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+	return isSensitiveToolArgKey(key)
+}
+
+func isSensitiveToolArgKey(key string) bool {
+	key = normalizeSensitiveKey(key)
+	if key == "" {
+		return false
+	}
+	return strings.Contains(key, streamSecretToken) ||
+		strings.Contains(key, streamSecretSecret) ||
+		strings.Contains(key, streamSecretPassword) ||
+		strings.Contains(key, streamSecretAuthorization) ||
+		strings.Contains(key, streamSecretBearer) ||
+		strings.Contains(key, streamSecretAPIKey) ||
+		strings.Contains(key, streamSecretAPIKeyFlat) ||
+		strings.Contains(key, streamSecretCookie) ||
+		strings.HasSuffix(key, streamSecretKeySuffix)
+}
+
+func normalizeSensitiveKey(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.ReplaceAll(key, "-", "_")
+	return key
+}
+
+func looksSensitiveValue(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return false
+	}
+	return value == streamSecretBearer ||
+		strings.Contains(value, streamSecretBearer) ||
+		strings.HasPrefix(value, streamSecretOpenAIKey) ||
+		strings.HasPrefix(value, streamSecretGitHubToken) ||
+		strings.HasPrefix(value, streamSecretTencentToken) ||
+		looksLikeJWT(value)
+}
+
+func looksLikeJWT(value string) bool {
+	if len(value) < 32 {
+		return false
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if len(part) < 8 || !isBase64URLLike(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isBase64URLLike(value string) bool {
+	for _, char := range value {
+		switch {
+		case char >= 'a' && char <= 'z':
+			continue
+		case char >= 'A' && char <= 'Z':
+			continue
+		case char >= '0' && char <= '9':
+			continue
+		case char == '-', char == '_':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func readDocumentProgressSummary(toolCall model.ToolCall) string {
@@ -727,24 +1704,36 @@ func sendProgressUpdate(
 	out chan<- gwproto.StreamEvent,
 	run preparedMessageRun,
 	state *progressState,
-	stage gwproto.StreamProgressStage,
-	summary string,
+	update progressUpdate,
 ) bool {
-	if state == nil || stage == "" {
+	if state == nil || update.stage == "" {
 		return true
 	}
-	if state.stage == stage && state.summary == summary {
+	if state.stage == update.stage &&
+		state.summary == update.summary &&
+		state.toolName == update.toolName &&
+		state.toolDetail == update.toolDetail &&
+		state.toolCallID == update.toolCallID &&
+		state.toolStatus == update.toolStatus {
 		return true
 	}
-	state.stage = stage
-	state.summary = summary
+	state.stage = update.stage
+	state.summary = update.summary
+	state.toolName = update.toolName
+	state.toolDetail = update.toolDetail
+	state.toolCallID = update.toolCallID
+	state.toolStatus = update.toolStatus
 	return sendStreamEvent(ctx, out, gwproto.StreamEvent{
-		Type:      gwproto.StreamEventTypeRunProgress,
-		SessionID: run.sessionID,
-		RequestID: run.requestID,
-		Stage:     stage,
-		Summary:   summary,
-		ElapsedMS: time.Since(state.startedAt).Milliseconds(),
+		Type:       gwproto.StreamEventTypeRunProgress,
+		SessionID:  run.sessionID,
+		RequestID:  run.requestID,
+		Stage:      update.stage,
+		Summary:    update.summary,
+		ToolName:   update.toolName,
+		ToolDetail: update.toolDetail,
+		ToolCallID: update.toolCallID,
+		ToolStatus: update.toolStatus,
+		ElapsedMS:  time.Since(state.startedAt).Milliseconds(),
 	})
 }
 

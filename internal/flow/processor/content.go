@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -93,10 +94,10 @@ const (
 	ReasoningContentModeKeepAll = "keep_all"
 
 	// ReasoningContentModeDiscardPreviousTurns discards reasoning_content from
-	// messages that belong to previous request turns. Messages within the current
-	// request retain their reasoning_content (for tool call scenarios where the
-	// model needs to reference its previous reasoning). This is the default mode
-	// and recommended for DeepSeek models according to their API documentation.
+	// ordinary previous request turns. Messages within the current request retain
+	// their reasoning_content, and previous requests that performed tool calls
+	// also retain it because DeepSeek thinking mode requires tool-call reasoning
+	// to be replayed in later turns.
 	// Reference: https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
 	ReasoningContentModeDiscardPreviousTurns = "discard_previous_turns"
 
@@ -135,8 +136,9 @@ type ContentRequestProcessor struct {
 	// TimelineFilterMode controls whether to append history messages to the request.
 	TimelineFilterMode string
 	// ReasoningContentMode controls how reasoning_content is handled in multi-turn
-	// conversations. Default is ReasoningContentModeDiscardPreviousTurns, which is
-	// recommended for DeepSeek thinking mode.
+	// conversations. Default is ReasoningContentModeDiscardPreviousTurns, which
+	// keeps reasoning needed for tool-call replay while dropping ordinary older
+	// reasoning history.
 	ReasoningContentMode string
 	// PreloadMemory controls framework-side memory preload.
 	// When > 0, it acts as an adaptive preload budget:
@@ -273,11 +275,13 @@ func WithPreserveForeignMessages(preserve bool) ContentOption {
 
 // WithReasoningContentMode sets how reasoning_content is handled in multi-turn
 // conversations. This is particularly important for DeepSeek models where
-// reasoning_content should be discarded from previous request turns.
+// ordinary previous-turn reasoning_content may be omitted, but tool-call
+// reasoning_content must be replayed in later turns.
 //
 // Available modes:
 //   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from
-//     previous requests, keep for current request (default, recommended).
+//     ordinary previous requests, keep for the current request and previous
+//     requests that performed tool calls (default, recommended).
 //   - ReasoningContentModeKeepAll: Keep all reasoning_content.
 //   - ReasoningContentModeDiscardAll: Discard all reasoning_content from history.
 func WithReasoningContentMode(mode string) ContentOption {
@@ -386,6 +390,17 @@ func WithContextCompactionToolResultMaxTokens(tokens int) ContentOption {
 func WithContextCompactionOversizedToolResultMaxTokens(tokens int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ContextCompactionConfig.OversizedToolResultMaxTokens = tokens
+	}
+}
+
+// WithContextCompactionTokenCounter sets the token counter used by context
+// compaction for request thresholds and tool-result budgets.
+func WithContextCompactionTokenCounter(counter model.TokenCounter) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		if counter == nil {
+			return
+		}
+		p.ContextCompactionConfig.TokenCounter = counter
 	}
 }
 
@@ -900,6 +915,8 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	// Get current request ID for reasoning content filtering.
 	currentRequestID := inv.RunOptions.RequestID
 
+	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
+
 	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
 	for _, evt := range resultEvents {
@@ -912,9 +929,14 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 			for _, choice := range ev.Choices {
 				msg := choice.Message
 				// Apply reasoning content stripping based on mode.
-				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				msg = p.processReasoningContent(
+					msg,
+					evt.RequestID,
+					currentRequestID,
+					requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
+				)
 				msg = p.projectEventMessage(inv, evt, msg)
-				if isEmptyAssistantMessage(msg) {
+				if message.IsEmptyAssistantMessage(msg) {
 					continue
 				}
 				messages = append(messages, msg)
@@ -991,10 +1013,11 @@ func compactedCurrentInvocationMessage(
 	switch {
 	case len(msg.ToolCalls) > 0:
 		return model.Message{
-			Role:         msg.Role,
-			Content:      msg.Content,
-			ContentParts: msg.ContentParts,
-			ToolCalls:    msg.ToolCalls,
+			Role:             msg.Role,
+			Content:          msg.Content,
+			ContentParts:     msg.ContentParts,
+			ReasoningContent: msg.ReasoningContent,
+			ToolCalls:        msg.ToolCalls,
 		}, true
 	case msg.Role == model.RoleTool && msg.ToolID != "":
 		return model.Message{
@@ -1233,6 +1256,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	msg model.Message,
 	messageRequestID string,
 	currentRequestID string,
+	requestHasToolCalls bool,
 ) model.Message {
 	// Only process assistant messages with reasoning content.
 	if msg.Role != model.RoleAssistant || msg.ReasoningContent == "" {
@@ -1243,14 +1267,17 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	case ReasoningContentModeDiscardAll:
 		// Discard all reasoning_content.
 		msg.ReasoningContent = ""
+		msg.ReasoningSignature = ""
 	case ReasoningContentModeKeepAll:
 		// Keep all reasoning_content: do nothing.
 	default:
 		// ReasoningContentModeDiscardPreviousTurns or empty (default):
-		// Discard reasoning_content from previous requests only.
-		// Current request messages retain their reasoning_content.
-		if messageRequestID != currentRequestID {
+		// Discard reasoning_content from ordinary previous requests.
+		// Current request messages and requests with tool calls retain their
+		// reasoning_content for provider replay requirements.
+		if messageRequestID != currentRequestID && !requestHasToolCalls {
 			msg.ReasoningContent = ""
+			msg.ReasoningSignature = ""
 		}
 	}
 	return msg
@@ -1265,16 +1292,6 @@ func (p *ContentRequestProcessor) projectEventMessage(
 		return msg
 	}
 	return p.EventMessageProjector(inv, evt, msg)
-}
-
-func isEmptyAssistantMessage(msg model.Message) bool {
-	if msg.Role != model.RoleAssistant {
-		return false
-	}
-	return msg.Content == "" &&
-		len(msg.ContentParts) == 0 &&
-		len(msg.ToolCalls) == 0 &&
-		msg.ReasoningContent == ""
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.
@@ -1361,11 +1378,17 @@ func (p *ContentRequestProcessor) projectCurrentInvocationMessages(
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
 	currentRequestID := inv.RunOptions.RequestID
+	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
 	var messages []model.Message
 	for _, evt := range resultEvents {
 		messages = append(
 			messages,
-			p.projectMessagesForEvent(inv, evt, currentRequestID)...,
+			p.projectMessagesForEvent(
+				inv,
+				evt,
+				currentRequestID,
+				toolCallRequestIDs,
+			)...,
 		)
 	}
 	return messages
@@ -1375,6 +1398,7 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 	inv *agent.Invocation,
 	evt event.Event,
 	currentRequestID string,
+	toolCallRequestIDs map[string]struct{},
 ) []model.Message {
 	ev := evt
 	if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
@@ -1387,14 +1411,41 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 	var messages []model.Message
 	for _, choice := range ev.Choices {
 		msg := choice.Message
-		msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+		msg = p.processReasoningContent(
+			msg,
+			evt.RequestID,
+			currentRequestID,
+			requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
+		)
 		msg = p.projectEventMessage(inv, evt, msg)
-		if isEmptyAssistantMessage(msg) {
+		if message.IsEmptyAssistantMessage(msg) {
 			continue
 		}
 		messages = append(messages, msg)
 	}
 	return messages
+}
+
+func requestIDsWithToolCalls(events []event.Event) map[string]struct{} {
+	requestIDs := make(map[string]struct{})
+	for _, evt := range events {
+		if evt.RequestID == "" || len(evt.Choices) == 0 {
+			continue
+		}
+		for _, choice := range evt.Choices {
+			if len(choice.Message.ToolCalls) == 0 {
+				continue
+			}
+			requestIDs[evt.RequestID] = struct{}{}
+			break
+		}
+	}
+	return requestIDs
+}
+
+func requestHasToolCalls(requestIDs map[string]struct{}, requestID string) bool {
+	_, ok := requestIDs[requestID]
+	return ok
 }
 
 func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
@@ -1407,10 +1458,11 @@ func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 
 	var cloned bool
 	for i := range messages {
-		msg, truncated, _ := truncateOversizedToolResultMessage(
+		msg, truncated, _ := truncateOversizedToolResultMessageWithCounter(
 			context.Background(),
 			messages[i],
 			p.ContextCompactionConfig.OversizedToolResultMaxTokens,
+			p.ContextCompactionConfig.TokenCounter,
 		)
 		if !truncated {
 			continue
@@ -1853,25 +1905,10 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	events []event.Event,
 ) []event.Event {
-	functionCallIDToResponseEventIndex := make(map[string]int)
-
-	// Map function response IDs to event indices.
-	for i, evt := range events {
-		// Create a local copy to avoid implicit memory aliasing.
-		// This bug is fixed in go 1.22.
-		// See: https://tip.golang.org/doc/go1.22#language
-		evt := evt
-
-		if evt.IsToolResultResponse() {
-			responseIDs := evt.GetToolResultIDs()
-			for _, responseID := range responseIDs {
-				functionCallIDToResponseEventIndex[responseID] = i
-			}
-		}
-	}
+	responseMatchesByCallEvent := toolResponseMatchesByCallEvent(events)
 
 	var resultEvents []event.Event
-	for _, evt := range events {
+	for i, evt := range events {
 		// Create a local copy to avoid implicit memory aliasing.
 		// This bug is fixed in go 1.22.
 		// See: https://tip.golang.org/doc/go1.22#language
@@ -1881,40 +1918,18 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 			// Function response should be handled with function call below.
 			continue
 		} else if evt.IsToolCallResponse() {
-			functionCallIDs := evt.GetToolCallIDs()
-			var responseEventIndices []int
-			for _, callID := range functionCallIDs {
-				if idx, exists := functionCallIDToResponseEventIndex[callID]; exists {
-					responseEventIndices = append(responseEventIndices, idx)
-				}
-			}
-			// When tools run in parallel they commonly return all results inside one response event.
-			// If we pushed the same event once per tool ID, the LLM would see duplicated tool
-			// messages and reject the request. Keep only the first occurrence of each event index
-			// while preserving their original order.
-			seenIdx := make(map[int]struct{}, len(functionCallIDs))
-			uniqueIndices := responseEventIndices[:0]
-			// Reuse the existing slice to deduplicate in place and maintain the original order.
-			for _, idx := range responseEventIndices {
-				if _, seen := seenIdx[idx]; seen {
-					continue
-				}
-				seenIdx[idx] = struct{}{}
-				uniqueIndices = append(uniqueIndices, idx)
-			}
-			responseEventIndices = uniqueIndices
-
+			responseMatches := responseMatchesByCallEvent[i]
 			resultEvents = append(resultEvents, evt)
 
-			if len(responseEventIndices) == 0 {
+			if len(responseMatches) == 0 {
 				continue
-			} else if len(responseEventIndices) == 1 {
-				resultEvents = append(resultEvents, events[responseEventIndices[0]])
+			} else if len(responseMatches) == 1 {
+				resultEvents = append(resultEvents, filterToolResponseEvent(events, responseMatches[0]))
 			} else {
 				// Merge multiple async function responses.
 				var responseEvents []event.Event
-				for _, idx := range responseEventIndices {
-					responseEvents = append(responseEvents, events[idx])
+				for _, match := range responseMatches {
+					responseEvents = append(responseEvents, filterToolResponseEvent(events, match))
 				}
 				mergedEvent := p.mergeFunctionResponseEvents(responseEvents)
 				resultEvents = append(resultEvents, mergedEvent)
@@ -1925,6 +1940,101 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	}
 
 	return resultEvents
+}
+
+type pendingToolCallRound struct {
+	eventIndex int
+	pendingIDs map[string]struct{}
+}
+
+type matchedToolResponseEvent struct {
+	eventIndex    int
+	choiceIndices []int
+}
+
+// toolResponseMatchesByCallEvent matches tool-result choices to the nearest
+// preceding tool-call round that is still waiting for the result ID.
+func toolResponseMatchesByCallEvent(events []event.Event) map[int][]matchedToolResponseEvent {
+	responseMatchesByCallEvent := make(map[int][]matchedToolResponseEvent)
+	var pendingCallRounds []pendingToolCallRound
+	for i, evt := range events {
+		evt := evt
+		if evt.IsToolCallResponse() {
+			ids := evt.GetToolCallIDs()
+			if len(ids) == 0 {
+				continue
+			}
+			pendingCallRounds = append(pendingCallRounds, pendingToolCallRound{
+				eventIndex: i,
+				pendingIDs: toStringSet(ids),
+			})
+			continue
+		}
+		if !evt.IsToolResultResponse() {
+			continue
+		}
+		for choiceIndex, choice := range evt.Response.Choices {
+			responseID := choice.Message.ToolID
+			if responseID == "" {
+				responseID = choice.Delta.ToolID
+			}
+			if responseID == "" {
+				continue
+			}
+			for j := len(pendingCallRounds) - 1; j >= 0; j-- {
+				if _, ok := pendingCallRounds[j].pendingIDs[responseID]; !ok {
+					continue
+				}
+				delete(pendingCallRounds[j].pendingIDs, responseID)
+				responseMatchesByCallEvent[pendingCallRounds[j].eventIndex] = appendToolResponseChoice(
+					responseMatchesByCallEvent[pendingCallRounds[j].eventIndex],
+					i,
+					choiceIndex,
+				)
+				break
+			}
+		}
+	}
+	return responseMatchesByCallEvent
+}
+
+// appendToolResponseChoice records one matching choice while coalescing choices
+// from the same response event into one match.
+func appendToolResponseChoice(
+	matches []matchedToolResponseEvent,
+	eventIndex int,
+	choiceIndex int,
+) []matchedToolResponseEvent {
+	for i := range matches {
+		if matches[i].eventIndex != eventIndex {
+			continue
+		}
+		matches[i].choiceIndices = append(matches[i].choiceIndices, choiceIndex)
+		return matches
+	}
+	return append(matches, matchedToolResponseEvent{
+		eventIndex:    eventIndex,
+		choiceIndices: []int{choiceIndex},
+	})
+}
+
+// filterToolResponseEvent clones a matched response event with only the tool
+// result choices that belong to the current tool-call round.
+func filterToolResponseEvent(events []event.Event, match matchedToolResponseEvent) event.Event {
+	evt := events[match.eventIndex]
+	if evt.Response == nil || len(match.choiceIndices) == 0 {
+		return evt
+	}
+	response := *evt.Response
+	response.Choices = make([]model.Choice, 0, len(match.choiceIndices))
+	for _, choiceIndex := range match.choiceIndices {
+		if choiceIndex < 0 || choiceIndex >= len(evt.Response.Choices) {
+			continue
+		}
+		response.Choices = append(response.Choices, evt.Response.Choices[choiceIndex])
+	}
+	evt.Response = &response
+	return evt
 }
 
 // mergeFunctionResponseEvents merges a list of function_response events into one event.
@@ -1959,6 +2069,15 @@ func toMap(ids []string) map[string]bool {
 	m := make(map[string]bool)
 	for _, id := range ids {
 		m[id] = true
+	}
+	return m
+}
+
+// toStringSet converts IDs to a set for membership checks.
+func toStringSet(ids []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		m[id] = struct{}{}
 	}
 	return m
 }
@@ -2110,9 +2229,10 @@ func formatMemoryContent(memories []*memory.Entry) string {
 		if mem.Memory.Location != "" {
 			meta = append(meta, fmt.Sprintf("at=%s", mem.Memory.Location))
 		}
-		if len(mem.Memory.Topics) > 0 {
-			meta = append(meta, fmt.Sprintf("topics=%s", strings.Join(mem.Memory.Topics, ", ")))
-		}
+		// Do not render topic labels in the preload prompt. The memory_add
+		// tool expects topics as []string, and showing inline
+		// "topics=foo, bar" text can lead models to copy a scalar value into
+		// tool arguments.
 		if len(meta) > 0 {
 			fmt.Fprintf(&sb, " (%s)", strings.Join(meta, "; "))
 		}

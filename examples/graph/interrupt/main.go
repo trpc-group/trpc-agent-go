@@ -42,7 +42,7 @@ import (
 
 const (
 	// Default configuration values.
-	defaultModelName     = "deepseek-chat"
+	defaultModelName     = "deepseek-v4-flash"
 	defaultUserID        = "interrupt-user"
 	defaultAppName       = "interrupt-workflow"
 	defaultDBPath        = "interrupt-checkpoints.db"

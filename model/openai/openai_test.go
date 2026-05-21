@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,9 +30,18 @@ import (
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	semconvmetrics "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+	telemetrytrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/stretchr/testify/assert"
@@ -470,6 +480,318 @@ func TestModel_GenerateContentIter_Streaming(t *testing.T) {
 	require.True(t, sawHello)
 }
 
+func TestModel_ChatTelemetry_DefaultDisabledAndExplicitFalse(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		opts []Option
+	}{
+		{name: "default disabled"},
+		{name: "explicit false", opts: []Option{WithChatTelemetry(false)}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := useOpenAIChatTelemetrySpanRecorder(t)
+			server := newOpenAIChatTelemetryNonStreamingServer(t)
+			defer server.Close()
+
+			opts := []Option{WithBaseURL(server.URL), WithAPIKey("test-key")}
+			opts = append(opts, tt.opts...)
+			m := New("gpt-3.5-turbo", opts...)
+
+			ch, err := m.GenerateContent(context.Background(), &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+			})
+			require.NoError(t, err)
+			for range ch {
+			}
+
+			require.Empty(t, recorder.Ended())
+		})
+	}
+}
+
+func TestModel_ChatTelemetry_OptInNonStreamingTraceAndMetrics(t *testing.T) {
+	recorder := useOpenAIChatTelemetrySpanRecorder(t)
+	reader := useOpenAIChatTelemetryMeter(t)
+	server := newOpenAIChatTelemetryNonStreamingServer(t)
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatTelemetry(true),
+	)
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	})
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, itelemetry.NewChatSpanName("gpt-3.5-turbo"), spans[0].Name())
+	attrs := spanAttributes(spans[0].Attributes())
+	require.Equal(t, itelemetry.OperationChat, attrs[semconvtrace.KeyGenAIOperationName].AsString())
+	require.Equal(t, "gpt-3.5-turbo", attrs[semconvtrace.KeyGenAIRequestModel].AsString())
+	require.Equal(t, "telemetry-non-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
+	require.Equal(t, int64(3), attrs[semconvtrace.KeyGenAIUsageInputTokens].AsInt64())
+	require.Equal(t, int64(2), attrs[semconvtrace.KeyGenAIUsageOutputTokens].AsInt64())
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.True(t, metricContainsRequestCount(rm))
+}
+
+func TestModel_ChatTelemetry_OptInStreamingTrace(t *testing.T) {
+	recorder := useOpenAIChatTelemetrySpanRecorder(t)
+	server := newOpenAIChatTelemetryStreamingServer(t)
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatTelemetry(true),
+	)
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	})
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, itelemetry.NewChatSpanName("gpt-3.5-turbo"), spans[0].Name())
+	attrs := spanAttributes(spans[0].Attributes())
+	require.Equal(t, itelemetry.OperationChat, attrs[semconvtrace.KeyGenAIOperationName].AsString())
+	require.Equal(t, "gpt-3.5-turbo", attrs[semconvtrace.KeyGenAIRequestModel].AsString())
+	require.Equal(t, "telemetry-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
+	require.True(t, attrs[semconvtrace.KeyGenAIRequestIsStream].AsBool())
+}
+
+func TestModel_ChatTelemetry_OptInGenerateContentIterTrace(t *testing.T) {
+	recorder := useOpenAIChatTelemetrySpanRecorder(t)
+	server := newOpenAIChatTelemetryNonStreamingServer(t)
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatTelemetry(true),
+	)
+	seq, err := m.GenerateContentIter(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+	})
+	require.NoError(t, err)
+	seq(func(resp *model.Response) bool {
+		return true
+	})
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, itelemetry.NewChatSpanName("gpt-3.5-turbo"), spans[0].Name())
+	attrs := spanAttributes(spans[0].Attributes())
+	require.Equal(t, itelemetry.OperationChat, attrs[semconvtrace.KeyGenAIOperationName].AsString())
+	require.Equal(t, "telemetry-non-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
+}
+
+func newOpenAIChatTelemetryNonStreamingServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "telemetry-non-stream",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "gpt-3.5-turbo",
+			"choices": [
+				{
+					"index": 0,
+					"message": {"role": "assistant", "content": "ok"},
+					"finish_reason": "stop"
+				}
+			],
+			"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+		}`)
+	}))
+}
+
+func newOpenAIChatTelemetryStreamingServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunks := []string{
+			`data: {"id":"telemetry-stream","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+			`data: {"id":"telemetry-stream","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+}
+
+func useOpenAIChatTelemetrySpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	originalProvider := telemetrytrace.TracerProvider
+	originalTracer := telemetrytrace.Tracer
+	telemetrytrace.TracerProvider = provider
+	telemetrytrace.Tracer = provider.Tracer(itelemetry.InstrumentName)
+	t.Cleanup(func() {
+		telemetrytrace.TracerProvider = originalProvider
+		telemetrytrace.Tracer = originalTracer
+		_ = provider.Shutdown(context.Background())
+	})
+	return recorder
+}
+
+func useOpenAIChatTelemetryMeter(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalChatMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	originalTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	originalOperationDuration := itelemetry.ChatMetricGenAIClientOperationDuration
+	originalServerTTFT := itelemetry.ChatMetricGenAIServerTimeToFirstToken
+	originalClientTTFT := itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken
+	originalTimePerToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
+	originalTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
+	t.Cleanup(func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalChatMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+		itelemetry.ChatMetricGenAIClientTokenUsage = originalTokenUsage
+		itelemetry.ChatMetricGenAIClientOperationDuration = originalOperationDuration
+		itelemetry.ChatMetricGenAIServerTimeToFirstToken = originalServerTTFT
+		itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = originalClientTTFT
+		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = originalTimePerToken
+		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = originalTokenPerTime
+		_ = provider.Shutdown(context.Background())
+	})
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter(semconvmetrics.MetricTRPCAgentGoClientRequestCnt)
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	itelemetry.ChatMetricGenAIClientTokenUsage = nil
+	itelemetry.ChatMetricGenAIClientOperationDuration = nil
+	itelemetry.ChatMetricGenAIServerTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = nil
+	return reader
+}
+
+func spanAttributes(attrs []attribute.KeyValue) map[string]attribute.Value {
+	out := make(map[string]attribute.Value, len(attrs))
+	for _, attr := range attrs {
+		out[string(attr.Key)] = attr.Value
+	}
+	return out
+}
+
+func metricContainsRequestCount(rm metricdata.ResourceMetrics) bool {
+	for _, sm := range rm.ScopeMetrics {
+		for _, metric := range sm.Metrics {
+			if metric.Name != semconvmetrics.MetricTRPCAgentGoClientRequestCnt {
+				continue
+			}
+			sum, ok := metric.Data.(metricdata.Sum[int64])
+			if !ok {
+				return false
+			}
+			for _, point := range sum.DataPoints {
+				if point.Value == 1 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func TestModel_StreamingSkipsProviderSpecificNonJSONEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		chunks := []string{
+			`: keep-alive`,
+			`data: : OPENROUTER PROCESSING`,
+			"event: ping\n" + `data: provider progress`,
+			`data: {"id":"provider-events","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+			`data: : keep-alive`,
+			`data: {"id":"provider-events","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}`,
+			`data: {"id":"provider-events","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hi"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	responseChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var final *model.Response
+	for resp := range responseChan {
+		require.Nil(t, resp.Error)
+		if resp.Done {
+			final = resp
+			continue
+		}
+	}
+
+	require.NotNil(t, final)
+	require.True(t, final.Done)
+	require.NotEmpty(t, final.Choices)
+	require.Equal(t, "hello world", final.Choices[0].Message.Content)
+}
+
 func TestModel_GenerateContentIter_StreamingContextCancellationRunsCallback(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
@@ -584,6 +906,14 @@ func TestOptions_Validation(t *testing.T) {
 			assert.Equal(t, o.BaseURL, m.baseURL, "expected base url %s, got %s", o.BaseURL, m.baseURL)
 		})
 	}
+}
+
+func TestWithContextWindow(t *testing.T) {
+	m := New("test-model", WithContextWindow(204800))
+	require.Equal(t, 204800, m.Info().ContextWindow)
+
+	m = New("test-model", WithContextWindow(0))
+	require.Zero(t, m.Info().ContextWindow)
 }
 
 // stubTool implements tool.Tool for testing purposes.
@@ -803,7 +1133,134 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 			)
 		})
 
-	t.Run("assistant message without tool calls is not backfilled",
+	t.Run("deepseek backfills assistant tool call by default",
+		func(t *testing.T) {
+			msgs := []model.Message{
+				{
+					Role:    model.RoleAssistant,
+					Content: "Calling a tool.",
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-deepseek-default",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "calculator",
+								Arguments: []byte(`{"expression":"2+2"}`),
+							},
+						},
+					},
+				},
+			}
+
+			converted := New(
+				"deepseek-v4-pro",
+				WithVariant(VariantDeepSeek),
+			).convertMessages(msgs)
+			require.Len(t, converted, 1)
+			require.NotNil(t, converted[0].OfAssistant)
+
+			data, err := json.Marshal(converted[0].OfAssistant)
+			require.NoError(t, err)
+
+			var parsed map[string]any
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
+				t,
+				ok,
+				"DeepSeek should backfill reasoning_content by default",
+			)
+			assert.Equal(t, "", reasoningValue)
+		})
+
+	t.Run("deepseek backfill can be explicitly disabled",
+		func(t *testing.T) {
+			msgs := []model.Message{
+				{
+					Role:    model.RoleAssistant,
+					Content: "Calling a tool.",
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-deepseek-disabled",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "calculator",
+								Arguments: []byte(`{"expression":"2+2"}`),
+							},
+						},
+					},
+				},
+			}
+
+			converted := New(
+				"deepseek-v4-pro",
+				WithVariant(VariantDeepSeek),
+				WithReasoningContentBackfill(false),
+			).convertMessages(msgs)
+			require.Len(t, converted, 1)
+			require.NotNil(t, converted[0].OfAssistant)
+
+			data, err := json.Marshal(converted[0].OfAssistant)
+			require.NoError(t, err)
+
+			var parsed map[string]any
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			_, ok := parsed[model.ReasoningContentKey]
+			assert.False(
+				t,
+				ok,
+				"explicit false should disable DeepSeek reasoning_content backfill",
+			)
+		})
+
+	t.Run("deepseek inferred from base URL backfills by default",
+		func(t *testing.T) {
+			msgs := []model.Message{
+				{
+					Role:    model.RoleAssistant,
+					Content: "Calling a tool.",
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-deepseek-inferred",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "calculator",
+								Arguments: []byte(`{"expression":"2+2"}`),
+							},
+						},
+					},
+				},
+			}
+
+			converted := New(
+				"deepseek-v4-pro",
+				WithBaseURL(defaultDeepSeekBaseURL),
+			).convertMessages(msgs)
+			require.Len(t, converted, 1)
+			require.NotNil(t, converted[0].OfAssistant)
+
+			data, err := json.Marshal(converted[0].OfAssistant)
+			require.NoError(t, err)
+
+			var parsed map[string]any
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
+				t,
+				ok,
+				"DeepSeek inferred from base URL should backfill "+
+					"reasoning_content by default",
+			)
+			assert.Equal(t, "", reasoningValue)
+		})
+
+	t.Run("assistant message without tool calls backfills empty reasoning_content",
 		func(t *testing.T) {
 			msgs := []model.Message{
 				{
@@ -826,12 +1283,14 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 			err = json.Unmarshal(data, &parsed)
 			require.NoError(t, err)
 
-			_, ok := parsed[model.ReasoningContentKey]
-			assert.False(
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
 				t,
 				ok,
-				"reasoning_content should stay absent without tool calls",
+				"reasoning_content should be present when backfill "+
+					"is enabled",
 			)
+			assert.Equal(t, "", reasoningValue)
 		})
 
 	t.Run("assistant message with tool calls and reasoning_content", func(t *testing.T) {
@@ -1809,6 +2268,33 @@ func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Mes
 	return append([]model.Message{messages[0]}, messages[2:]...), nil
 }
 
+type overflowTailoringStrategy struct {
+	tailored []model.Message
+}
+
+func (s overflowTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return s.tailored, errors.New("minimal protected context exceeds token budget")
+}
+
+type captureMaxTokensStrategy struct {
+	maxTokens int
+	called    bool
+}
+
+func (s *captureMaxTokensStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	s.maxTokens = maxTokens
+	s.called = true
+	return messages, nil
+}
+
 // TestWithTokenTailoring ensures messages are tailored before request is built.
 func TestWithTokenTailoring(t *testing.T) {
 	// Capture the built OpenAI request to check messages count reflects tailoring.
@@ -1840,6 +2326,190 @@ func TestWithTokenTailoring(t *testing.T) {
 	require.NotNil(t, captured, "expected request callback to capture request")
 	// After tailoring, OpenAI messages should be 1 user message (system omitted in this test).
 	require.Len(t, captured.Messages, 1, "expected 1 message after tailoring, got %d", len(captured.Messages))
+}
+
+func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
+	tailored := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := New("test-model",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(1),
+		WithTailoringStrategy(overflowTailoringStrategy{tailored: tailored}),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("old"),
+		model.NewUserMessage("q"),
+	}}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, tailored, req.Messages)
+}
+
+func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(strategy),
+	)
+	maxCompletionTokens := 65536
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &maxCompletionTokens,
+		},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	contextWindow := imodel.ResolveContextWindow("gpt-4o-mini")
+	want := imodel.CalculateMaxInputTokensWithParams(
+		contextWindow,
+		imodel.DefaultProtocolOverheadTokens,
+		maxCompletionTokens,
+		imodel.DefaultInputTokensFloor,
+		imodel.DefaultSafetyMarginRatio,
+		imodel.DefaultMaxInputTokensRatio,
+	)
+	require.Equal(t, want, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_ClampsFloorToAvailableBudget(t *testing.T) {
+	modelName := strings.ToLower("token-tailoring-small-context-" +
+		strings.ReplaceAll(t.Name(), "/", "-"))
+	model.RegisterModelContextWindow(modelName, 4096)
+	t.Cleanup(func() {
+		imodel.ModelMutex.Lock()
+		defer imodel.ModelMutex.Unlock()
+		delete(imodel.ModelContextWindows, modelName)
+	})
+	strategy := &captureMaxTokensStrategy{}
+	m := New(modelName,
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(strategy),
+	)
+	maxCompletionTokens := 65536
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &maxCompletionTokens,
+		},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.True(t, strategy.called)
+	require.Zero(t, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_SubtractsToolsBudgetForAutoLimit(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		Tools: map[string]tool.Tool{
+			"search": stubTool{decl: &tool.Declaration{
+				Name:        "search",
+				Description: strings.Repeat("tool description ", 10),
+				InputSchema: &tool.Schema{
+					Type: "object",
+					Properties: map[string]*tool.Schema{
+						"query": {
+							Type:        "string",
+							Description: strings.Repeat("query description ", 10),
+						},
+					},
+				},
+			}},
+		},
+	}
+	toolsTokens := m.estimateToolsTokens(context.Background(), req.Tools)
+	require.Greater(t, toolsTokens, 0)
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	contextWindow := imodel.ResolveContextWindow("gpt-4o-mini")
+	want := imodel.CalculateMaxInputTokensWithParams(
+		contextWindow,
+		imodel.DefaultProtocolOverheadTokens,
+		imodel.DefaultReserveOutputTokens,
+		imodel.DefaultInputTokensFloor,
+		imodel.DefaultSafetyMarginRatio,
+		imodel.DefaultMaxInputTokensRatio,
+	)
+	want = min(want, m.hardInputBudget(contextWindow, imodel.DefaultReserveOutputTokens))
+	require.Equal(t, max(want-toolsTokens, 0), strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_KeepsExplicitLimitBeforeToolsBudget(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(512),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		Tools: map[string]tool.Tool{
+			"search": stubTool{decl: &tool.Declaration{
+				Name:        "search",
+				Description: strings.Repeat("tool description ", 10),
+				InputSchema: &tool.Schema{
+					Type: "object",
+					Properties: map[string]*tool.Schema{
+						"query": {
+							Type:        "string",
+							Description: strings.Repeat("query description ", 10),
+						},
+					},
+				},
+			}},
+		},
+	}
+	require.Greater(t, m.estimateToolsTokens(context.Background(), req.Tools), 0)
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.True(t, strategy.called)
+	require.Equal(t, 512, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_ClampsExplicitLimitToHardBudget(t *testing.T) {
+	modelName := strings.ToLower("token-tailoring-explicit-small-context-" +
+		strings.ReplaceAll(t.Name(), "/", "-"))
+	model.RegisterModelContextWindow(modelName, 4096)
+	t.Cleanup(func() {
+		imodel.ModelMutex.Lock()
+		defer imodel.ModelMutex.Unlock()
+		delete(imodel.ModelContextWindows, modelName)
+	})
+	strategy := &captureMaxTokensStrategy{}
+	m := New(modelName,
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(8192),
+		WithTailoringStrategy(strategy),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.True(t, strategy.called)
+	require.Equal(t,
+		m.hardInputBudget(4096, imodel.DefaultReserveOutputTokens),
+		strategy.maxTokens,
+	)
 }
 
 // TestWithEnableTokenTailoring_SimpleMode tests the simple mode of token tailoring.
@@ -3889,6 +4559,40 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		}
 		assert.False(t, chatReq.ParallelToolCalls.Value)
 	})
+
+	t.Run("DeepSeek structured output uses json object response format", func(t *testing.T) {
+		deepSeekModel := New(
+			"deepseek-v4-flash",
+			WithAPIKey("test-key"),
+			WithVariant(VariantDeepSeek),
+		)
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("Return JSON with an ok field."),
+			},
+			StructuredOutput: &model.StructuredOutput{
+				Type: model.StructuredOutputJSONSchema,
+				JSONSchema: &model.JSONSchemaConfig{
+					Name: "output",
+					Schema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"ok": map[string]any{"type": "boolean"},
+						},
+						"required": []string{"ok"},
+					},
+					Strict: true,
+				},
+			},
+		}
+
+		chatReq, _ := deepSeekModel.buildChatRequest(req)
+		require.NotNil(t, chatReq.ResponseFormat.OfJSONObject)
+		require.Nil(t, chatReq.ResponseFormat.OfJSONSchema)
+		typePtr := chatReq.ResponseFormat.GetType()
+		require.NotNil(t, typePtr)
+		assert.Equal(t, "json_object", *typePtr)
+	})
 }
 
 // TestConvertUserMessageContent_WithImage tests image content conversion.
@@ -4088,11 +4792,17 @@ func TestInverseOPENAISKDAddChunkUsage(t *testing.T) {
 			PromptTokens:     100,
 			CompletionTokens: 50,
 			TotalTokens:      150,
+			CompletionTokensDetails: model.CompletionTokensDetails{
+				ReasoningTokens: 12,
+			},
 		}
 		delta := model.Usage{
 			PromptTokens:     10,
 			CompletionTokens: 5,
 			TotalTokens:      15,
+			CompletionTokensDetails: model.CompletionTokensDetails{
+				ReasoningTokens: 2,
+			},
 		}
 
 		result := inverseOpenAISDKAddChunkUsage(currentUsage, delta)
@@ -4100,6 +4810,7 @@ func TestInverseOPENAISKDAddChunkUsage(t *testing.T) {
 		assert.Equal(t, 90, result.PromptTokens, "expected prompt tokens to be 90 (100 - 10)")
 		assert.Equal(t, 45, result.CompletionTokens, "expected completion tokens to be 45 (50 - 5)")
 		assert.Equal(t, 135, result.TotalTokens, "expected total tokens to be 135 (150 - 15)")
+		assert.Equal(t, 10, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 10 (12 - 2)")
 	})
 
 	t.Run("handles zero delta", func(t *testing.T) {
@@ -4151,6 +4862,9 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 			PromptTokensDetails: model.PromptTokensDetails{
 				CachedTokens: 20,
 			},
+			CompletionTokensDetails: model.CompletionTokensDetails{
+				ReasoningTokens: 15,
+			},
 		}
 
 		result := modelUsageToCompletionUsage(modelUsage)
@@ -4159,6 +4873,7 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 		assert.Equal(t, int64(50), result.CompletionTokens, "expected completion tokens to be 50")
 		assert.Equal(t, int64(150), result.TotalTokens, "expected total tokens to be 150")
 		assert.Equal(t, int64(20), result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 20")
+		assert.Equal(t, int64(15), result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 15")
 	})
 
 	t.Run("converts zero values", func(t *testing.T) {
@@ -4169,6 +4884,9 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 			PromptTokensDetails: model.PromptTokensDetails{
 				CachedTokens: 0,
 			},
+			CompletionTokensDetails: model.CompletionTokensDetails{
+				ReasoningTokens: 0,
+			},
 		}
 
 		result := modelUsageToCompletionUsage(modelUsage)
@@ -4177,6 +4895,7 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 		assert.Equal(t, int64(0), result.CompletionTokens, "expected completion tokens to be 0")
 		assert.Equal(t, int64(0), result.TotalTokens, "expected total tokens to be 0")
 		assert.Equal(t, int64(0), result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
+		assert.Equal(t, int64(0), result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 0")
 	})
 
 	t.Run("roundtrip conversion", func(t *testing.T) {
@@ -4186,6 +4905,9 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 			TotalTokens:      579,
 			PromptTokensDetails: model.PromptTokensDetails{
 				CachedTokens: 78,
+			},
+			CompletionTokensDetails: model.CompletionTokensDetails{
+				ReasoningTokens: 90,
 			},
 		}
 
@@ -4197,6 +4919,7 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 		assert.Equal(t, originalUsage.CompletionTokens, backToModel.CompletionTokens, "expected completion tokens to match after roundtrip")
 		assert.Equal(t, originalUsage.TotalTokens, backToModel.TotalTokens, "expected total tokens to match after roundtrip")
 		assert.Equal(t, originalUsage.PromptTokensDetails.CachedTokens, backToModel.PromptTokensDetails.CachedTokens, "expected cached tokens to match after roundtrip")
+		assert.Equal(t, originalUsage.CompletionTokensDetails.ReasoningTokens, backToModel.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to match after roundtrip")
 	})
 }
 
@@ -4210,6 +4933,9 @@ func TestCompletionUsageToModelUsage(t *testing.T) {
 			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
 				CachedTokens: int64(30),
 			},
+			CompletionTokensDetails: openai.CompletionUsageCompletionTokensDetails{
+				ReasoningTokens: int64(25),
+			},
 		}
 
 		result := completionUsageToModelUsage(openaiUsage)
@@ -4218,6 +4944,7 @@ func TestCompletionUsageToModelUsage(t *testing.T) {
 		assert.Equal(t, 75, result.CompletionTokens, "expected completion tokens to be 75")
 		assert.Equal(t, 275, result.TotalTokens, "expected total tokens to be 275")
 		assert.Equal(t, 30, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 30")
+		assert.Equal(t, 25, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 25")
 	})
 
 	t.Run("converts zero values", func(t *testing.T) {
@@ -4228,6 +4955,9 @@ func TestCompletionUsageToModelUsage(t *testing.T) {
 			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
 				CachedTokens: int64(0),
 			},
+			CompletionTokensDetails: openai.CompletionUsageCompletionTokensDetails{
+				ReasoningTokens: int64(0),
+			},
 		}
 
 		result := completionUsageToModelUsage(openaiUsage)
@@ -4236,6 +4966,7 @@ func TestCompletionUsageToModelUsage(t *testing.T) {
 		assert.Equal(t, 0, result.CompletionTokens, "expected completion tokens to be 0")
 		assert.Equal(t, 0, result.TotalTokens, "expected total tokens to be 0")
 		assert.Equal(t, 0, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
+		assert.Equal(t, 0, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 0")
 	})
 }
 
@@ -4316,12 +5047,60 @@ func TestBuildChatRequest_WithExtraFields(t *testing.T) {
 			model.NewUserMessage("test"),
 		},
 		GenerationConfig: model.GenerationConfig{},
+		ExtraFields: map[string]any{
+			"prompt_cache_key": "cache-1",
+		},
 	}
 
 	chatReq, reqOpts := m.buildChatRequest(req)
 	assert.Equal(t, "gpt-3.5-turbo", chatReq.Model, "expected model to be gpt-3.5-turbo")
-	// Extra fields should be included in reqOpts
-	assert.NotEmpty(t, reqOpts, "expected request options to be present")
+	// Extra fields should be included in reqOpts.
+	assert.Len(t, reqOpts, 3, "expected model and request extra fields to be present")
+}
+
+func TestModel_GenerateContent_RequestExtraFieldsOverrideModelExtraFields(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-3.5-turbo",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithExtraFields(map[string]any{
+			"model_field":      "model_value",
+			"prompt_cache_key": "model-cache",
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		ExtraFields: map[string]any{
+			"prompt_cache_key": "request-cache",
+		},
+	}
+
+	responseChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	require.NotNil(t, captured)
+	assert.Equal(t, "model_value", captured["model_field"])
+	assert.Equal(t, "request-cache", captured["prompt_cache_key"])
 }
 
 // TestNew_WithAllOptions tests creating a model with all available options.
@@ -5058,6 +5837,80 @@ func TestEmptyChunkHandling(t *testing.T) {
 		}
 		assert.Equal(t, 1, *tc.Index)
 		assert.Equal(t, "function", tc.Type)
+		assert.Equal(t, "generate_document", tc.Function.Name)
+		assert.Equal(t, "{\"content\":\"partial\"}",
+			string(tc.Function.Arguments))
+	})
+
+	t.Run("createPartialResponse preserves tool call index zero", func(t *testing.T) {
+		mWithToolDelta := &Model{
+			showToolCallDelta: true,
+		}
+		chunk := parseChunkWithExtraFields(t, `{
+			"id": "chunk-tool-zero",
+			"model": "test-model",
+			"choices": [{
+				"delta": {
+					"tool_calls": [{
+						"index": 0,
+						"id": "call-zero",
+						"type": "function",
+						"function": {
+							"name": "generate_document",
+							"arguments": "{\"content\":\"partial\"}"
+						}
+					}]
+				}
+			}]
+		}`)
+
+		response := mWithToolDelta.createPartialResponse(chunk)
+		require.NotNil(t, response)
+		require.Len(t, response.Choices, 1)
+		deltaMsg := response.Choices[0].Delta
+		require.Len(t, deltaMsg.ToolCalls, 1)
+		tc := deltaMsg.ToolCalls[0]
+		require.NotNil(t, tc.Index)
+		assert.Equal(t, 0, *tc.Index)
+		assert.Equal(t, "call-zero", tc.ID)
+		assert.Equal(t, "generate_document", tc.Function.Name)
+		assert.Equal(t, "{\"content\":\"partial\"}",
+			string(tc.Function.Arguments))
+	})
+
+	t.Run("createPartialResponse keeps omitted tool call index nil", func(t *testing.T) {
+		mWithToolDelta := &Model{
+			showToolCallDelta: true,
+		}
+		chunk := openai.ChatCompletionChunk{
+			ID:    "chunk-tool-no-index",
+			Model: "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								ID:   "call-no-index",
+								Type: "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "generate_document",
+									Arguments: "{\"content\":\"partial\"}",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		response := mWithToolDelta.createPartialResponse(chunk)
+		require.NotNil(t, response)
+		require.Len(t, response.Choices, 1)
+		deltaMsg := response.Choices[0].Delta
+		require.Len(t, deltaMsg.ToolCalls, 1)
+		tc := deltaMsg.ToolCalls[0]
+		assert.Nil(t, tc.Index)
+		assert.Equal(t, "call-no-index", tc.ID)
 		assert.Equal(t, "generate_document", tc.Function.Name)
 		assert.Equal(t, "{\"content\":\"partial\"}",
 			string(tc.Function.Arguments))
@@ -7694,6 +8547,112 @@ func TestAppendUserContentParts_SkipsInternalFiles(t *testing.T) {
 	})
 	require.Nil(t, fields)
 	require.Empty(t, dst)
+}
+
+func TestConvertContentPart_FileURLFallsBackToText(t *testing.T) {
+	m := &Model{}
+	part := model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:     "report.pdf",
+			URL:      "https://example.com/report.pdf",
+			MimeType: "application/pdf",
+		},
+	}
+	got := m.convertContentPart(part)
+	require.NotNil(t, got)
+	require.NotNil(t, got.OfText)
+	require.Nil(t, got.OfFile)
+	require.Equal(t, "File URL: report.pdf (application/pdf): https://example.com/report.pdf", got.OfText.Text)
+}
+
+func TestAppendUserContentParts_FileURLPreservedForTextOnlyVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{textOnlyMessageContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Len(t, dst, 1)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, "File URL: report.pdf (application/pdf): https://example.com/report.pdf", dst[0].OfText.Text)
+}
+
+func TestAppendUserContentParts_FileURLWithDataSkippedForTextOnlyVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{textOnlyMessageContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				Data:     []byte("pdf"),
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Empty(t, dst)
+}
+
+func TestAppendUserContentParts_FileURLPreservedForSkipFileTypeVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{skipFileTypeInContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Len(t, dst, 1)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, "File URL: report.pdf (application/pdf): https://example.com/report.pdf", dst[0].OfText.Text)
+}
+
+func TestAppendUserContentParts_FileURLWithDataSkippedForSkipFileTypeVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{skipFileTypeInContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				Data:     []byte("pdf"),
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Empty(t, dst)
+}
+
+func TestOmittedContentHint_FileURLFallbackNotCounted(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{textOnlyMessageContent: true}}
+	got := m.omittedContentHint([]model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Empty(t, got)
 }
 
 // TestChatRequestCallbackSynchronous verifies that

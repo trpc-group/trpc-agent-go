@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	ssummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 type fakeSummarizer struct {
@@ -178,6 +179,50 @@ func TestMemoryService_EnqueueSummaryJob_AsyncEnabled_Default(t *testing.T) {
 	sum, ok := got.Summaries[""]
 	require.True(t, ok)
 	require.Equal(t, "async-summary", sum.Summary)
+}
+
+func TestMemoryService_CreateSessionSummary_FilterAllowlistAndCascade(t *testing.T) {
+	s := NewSessionService(
+		WithSummarizer(&fakeSummarizer{allow: true, out: "branch-summary"}),
+		WithSummaryFilterAllowlist("branch"),
+		WithCascadeFullSessionSummary(false),
+	)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	allowed := event.New("inv-1", "author")
+	allowed.Timestamp = time.Now().Add(-time.Minute)
+	allowed.FilterKey = "branch"
+	allowed.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "allowed"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, allowed))
+
+	disallowed := event.New("inv-2", "author")
+	disallowed.Timestamp = time.Now()
+	disallowed.FilterKey = "other"
+	disallowed.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "other"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, disallowed))
+
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "other", false))
+
+	got, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	_, ok := got.Summaries["other"]
+	require.False(t, ok)
+
+	sessWithEvents, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sessWithEvents)
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sessWithEvents, "branch", false))
+
+	got, err = s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, got.Summaries["branch"])
+	require.Equal(t, "branch-summary", got.Summaries["branch"].Summary)
+	_, ok = got.Summaries[""]
+	require.False(t, ok)
 }
 
 func TestMemoryService_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {
@@ -902,6 +947,34 @@ func TestMemoryService_CreateSessionSummary_ContextAwareGateReceivesContext(t *t
 	assert.Equal(t, "provider-summary", text)
 }
 
+func TestMemoryService_CreateSessionSummary_DynamicSummarizerUsesContext(t *testing.T) {
+	s := NewSessionService(WithSummarizer(ssummary.NewDynamicSummarizer(
+		func(ctx context.Context, _ *session.Session) (ssummary.SessionSummarizer, error) {
+			trace, _ := ctx.Value(traceIDKey).(string)
+			return &fakeSummarizer{allow: true, out: "dynamic-" + trace}, nil
+		},
+	)))
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-dynamic-sync"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e := event.New("inv", "user")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role:    model.RoleUser,
+		Content: "hello",
+	}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	ctx := context.WithValue(context.Background(), traceIDKey, "trace-dynamic-sync")
+	require.NoError(t, s.CreateSessionSummary(ctx, sess, "", false))
+
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	assert.Equal(t, "dynamic-trace-dynamic-sync", text)
+}
+
 func TestMemoryService_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 	captureSummarizer := &ctxCaptureSummarizer{done: make(chan struct{})}
 	s := NewSessionService(
@@ -980,4 +1053,38 @@ func TestMemoryService_EnqueueSummaryJob_ContextAwareGateReceivesContext(t *test
 	assert.Equal(t, "trace-provider", resolved.capturedVal)
 	require.NotNil(t, resolved.sess)
 	assert.Len(t, resolved.sess.Events, 1)
+}
+
+func TestMemoryService_EnqueueSummaryJob_DynamicSummarizerUsesContext(t *testing.T) {
+	s := NewSessionService(
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSummarizer(ssummary.NewDynamicSummarizer(
+			func(ctx context.Context, _ *session.Session) (ssummary.SessionSummarizer, error) {
+				trace, _ := ctx.Value(traceIDKey).(string)
+				return &fakeSummarizer{allow: true, out: "dynamic-" + trace}, nil
+			},
+		)),
+	)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-dynamic-async"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e := event.New("inv", "user")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role:    model.RoleUser,
+		Content: "hello",
+	}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	ctx := context.WithValue(context.Background(), traceIDKey, "trace-dynamic-async")
+	require.NoError(t, s.EnqueueSummaryJob(ctx, sess, "", false))
+
+	require.Eventually(t, func() bool {
+		text, ok := s.GetSessionSummaryText(context.Background(), sess)
+		return ok && text == "dynamic-trace-dynamic-async"
+	}, 2*time.Second, 50*time.Millisecond)
 }

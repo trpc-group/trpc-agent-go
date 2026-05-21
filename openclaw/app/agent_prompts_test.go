@@ -11,6 +11,7 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,6 +25,16 @@ func TestResolveAgentPrompts_DefaultInstruction(t *testing.T) {
 	prompts, err := resolveAgentPromptsForDir(runOptions{}, t.TempDir())
 	require.NoError(t, err)
 	require.Equal(t, defaultAgentInstruction, prompts.Instruction)
+	require.Contains(
+		t,
+		prompts.Instruction,
+		"A preamble-only response such as `I will ...`",
+	)
+	require.Contains(
+		t,
+		prompts.Instruction,
+		"produce the requested content in the same turn",
+	)
 	require.Empty(t, prompts.SystemPrompt)
 }
 
@@ -47,17 +58,12 @@ func TestResolveAgentPrompts_UsesCurrentWorkingDirectory(t *testing.T) {
 }
 
 func TestResolveAgentPrompts_GetwdError(t *testing.T) {
-	root := t.TempDir()
-
-	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(root))
-	require.NoError(t, os.RemoveAll(root))
-	t.Cleanup(func() {
-		require.NoError(t, os.Chdir(cwd))
-	})
-
-	_, err = resolveAgentPrompts(runOptions{})
+	_, err := resolveAgentPromptsWithGetwd(
+		runOptions{},
+		func() (string, error) {
+			return "", errors.New("getwd failed")
+		},
+	)
 	require.Error(t, err)
 }
 

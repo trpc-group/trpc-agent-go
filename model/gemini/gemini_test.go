@@ -27,6 +27,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+type overflowTailoringStrategy struct {
+	tailored []model.Message
+}
+
+func (s overflowTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return s.tailored, errors.New("minimal protected context exceeds token budget")
+}
+
 func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
 	t.Run("request callback", func(t *testing.T) {
 		callbackCalled := false
@@ -117,6 +129,28 @@ func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
 		})
 		assert.True(t, callbackCalled)
 	})
+}
+
+func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
+	tailored := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := &Model{
+		name:                 "test-model",
+		enableTokenTailoring: true,
+		maxInputTokens:       1,
+		tailoringStrategy:    overflowTailoringStrategy{tailored: tailored},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("old"),
+		model.NewUserMessage("q"),
+	}}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, tailored, req.Messages)
 }
 
 func TestModel_convertMessages(t *testing.T) {
@@ -248,6 +282,60 @@ func TestModel_convertMessages(t *testing.T) {
 			want: []*genai.Content{
 				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromBytes([]byte(fileURL), ""),
+				}, genai.RoleUser),
+			},
+		},
+		{
+			name: "file URL",
+			fields: fields{
+				m: &Model{},
+			},
+			args: args{
+				messages: []model.Message{
+					{
+						Role: model.RoleUser,
+						ContentParts: []model.ContentPart{
+							{
+								Type: model.ContentTypeFile,
+								File: &model.File{
+									Name:     "report.pdf",
+									URL:      "https://example.com/report.pdf",
+									MimeType: "application/pdf",
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []*genai.Content{
+				genai.NewContentFromParts([]*genai.Part{
+					{Text: "File URL: report.pdf (application/pdf): https://example.com/report.pdf"},
+				}, genai.RoleUser),
+			},
+		},
+		{
+			name: "empty file without URL",
+			fields: fields{
+				m: &Model{},
+			},
+			args: args{
+				messages: []model.Message{
+					{
+						Role: model.RoleUser,
+						ContentParts: []model.ContentPart{
+							{
+								Type: model.ContentTypeFile,
+								File: &model.File{
+									MimeType: "application/pdf",
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []*genai.Content{
+				genai.NewContentFromParts([]*genai.Part{
+					genai.NewPartFromBytes(nil, "application/pdf"),
 				}, genai.RoleUser),
 			},
 		},
