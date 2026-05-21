@@ -18,6 +18,7 @@ import (
 	"io"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -51,6 +52,10 @@ const (
 // funcRespCompletionTimeout is the default wait duration for ensuring a
 // tool.response event has been processed by the session persistence layer.
 const funcRespCompletionTimeout = 5 * time.Second
+
+// DefaultToolMessageMaxBytes bounds the default tool message content persisted
+// into session events.
+const DefaultToolMessageMaxBytes = 1024 * 1024
 
 // summarizationSkipper is implemented by tools that can indicate whether
 // the flow should skip a post-tool summarization step. This allows tools
@@ -113,6 +118,7 @@ type FunctionCallResponseProcessor struct {
 	enableParallelTools bool
 	toolCallbacks       *tool.Callbacks
 	toolRetryPolicy     *tool.RetryPolicy
+	toolMessageMaxBytes int
 }
 
 // FunctionCallResponseProcessorOption configures a function-call response processor.
@@ -129,6 +135,17 @@ func WithToolCallRetryPolicy(policy *tool.RetryPolicy) FunctionCallResponseProce
 	}
 }
 
+// WithDefaultToolMessageMaxBytes sets the maximum default tool message content
+// bytes. A negative value disables the limit; zero keeps the package default.
+func WithDefaultToolMessageMaxBytes(limit int) FunctionCallResponseProcessorOption {
+	return func(p *FunctionCallResponseProcessor) {
+		if limit == 0 {
+			return
+		}
+		p.toolMessageMaxBytes = limit
+	}
+}
+
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
 func NewFunctionCallResponseProcessor(
 	enableParallelTools bool,
@@ -138,6 +155,7 @@ func NewFunctionCallResponseProcessor(
 	processor := &FunctionCallResponseProcessor{
 		enableParallelTools: enableParallelTools,
 		toolCallbacks:       toolCallbacks,
+		toolMessageMaxBytes: DefaultToolMessageMaxBytes,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -1304,7 +1322,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		}
 	}
 	if suppressDefaultToolMessage {
-		defaultMsg, err := buildDefaultToolMessage(toolCall.ID, result)
+		defaultMsg, err := p.buildDefaultToolMessage(toolCall.ID, result)
 		if err != nil {
 			log.WarnfContext(
 				ctx,
@@ -1343,7 +1361,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			skipSummarization, nil
 	}
 
-	defaultMsg, err := buildDefaultToolMessage(toolCall.ID, result)
+	defaultMsg, err := p.buildDefaultToolMessage(toolCall.ID, result)
 	if err != nil {
 		// Marshal failures (for example, NaN in floats) do not
 		// affect the overall flow. Downgrade to warning to avoid
@@ -1978,6 +1996,21 @@ func buildDefaultToolMessage(
 	toolCallID string,
 	result any,
 ) (model.Message, error) {
+	return buildDefaultToolMessageWithLimit(toolCallID, result, DefaultToolMessageMaxBytes)
+}
+
+func (p *FunctionCallResponseProcessor) buildDefaultToolMessage(
+	toolCallID string,
+	result any,
+) (model.Message, error) {
+	return buildDefaultToolMessageWithLimit(toolCallID, result, p.toolMessageMaxBytes)
+}
+
+func buildDefaultToolMessageWithLimit(
+	toolCallID string,
+	result any,
+	maxBytes int,
+) (model.Message, error) {
 	// Preserve legacy tool message serialization for default fallback content.
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
@@ -1985,9 +2018,72 @@ func buildDefaultToolMessage(
 	}
 	return model.Message{
 		Role:    model.RoleTool,
-		Content: string(resultBytes),
+		Content: truncateDefaultToolMessageContent(resultBytes, maxBytes),
 		ToolID:  toolCallID,
 	}, nil
+}
+
+type truncatedToolMessageContent struct {
+	Truncated     bool   `json:"truncated"`
+	OriginalBytes int    `json:"original_bytes"`
+	ContentPrefix string `json:"content_prefix,omitempty"`
+}
+
+func truncateDefaultToolMessageContent(resultBytes []byte, maxBytes int) string {
+	if maxBytes < 0 || len(resultBytes) <= maxBytes {
+		return string(resultBytes)
+	}
+	prefix := validToolMessagePrefix(resultBytes, maxBytes)
+	for {
+		bts, err := json.Marshal(truncatedToolMessageContent{
+			Truncated:     true,
+			OriginalBytes: len(resultBytes),
+			ContentPrefix: prefix,
+		})
+		if err != nil {
+			return fmt.Sprintf(
+				`{"truncated":true,"original_bytes":%d}`,
+				len(resultBytes),
+			)
+		}
+		if len(bts) <= maxBytes || prefix == "" {
+			return string(bts)
+		}
+		over := len(bts) - maxBytes
+		nextLen := len(prefix) - over
+		if nextLen < 0 {
+			nextLen = 0
+		}
+		prefix = validUTF8StringPrefix(prefix, nextLen)
+	}
+}
+
+func validToolMessagePrefix(b []byte, limit int) string {
+	if limit >= len(b) {
+		return string(b)
+	}
+	if limit <= 0 {
+		return ""
+	}
+	prefix := b[:limit]
+	for len(prefix) > 0 && !utf8.Valid(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return string(prefix)
+}
+
+func validUTF8StringPrefix(s string, limit int) string {
+	if limit >= len(s) {
+		return s
+	}
+	if limit <= 0 {
+		return ""
+	}
+	prefix := s[:limit]
+	for len(prefix) > 0 && !utf8.ValidString(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return prefix
 }
 
 type structuredStreamErrorOptIn interface {

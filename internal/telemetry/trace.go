@@ -166,7 +166,7 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 		if err != nil {
 			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIWorkflowRequest, fmt.Sprintf("<not json serializable: %v>", err)))
 		} else {
-			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIWorkflowRequest, string(request)))
+			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIWorkflowRequest, truncateTelemetryJSONBytes(request)))
 		}
 	}
 	if workflow.Response != nil {
@@ -174,7 +174,7 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 		if err != nil {
 			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIWorkflowResponse, fmt.Sprintf("<not json serializable>: %v", err)))
 		} else {
-			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIWorkflowResponse, string(response)))
+			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIWorkflowResponse, truncateTelemetryJSONBytes(response)))
 		}
 	}
 	if workflow.Error != nil {
@@ -234,7 +234,7 @@ func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Dec
 			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIToolCallID, callIDs[0]))
 		}
 		if bts, err := json.Marshal(rspEvent.Response); err == nil {
-			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIToolCallResult, string(bts)))
+			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIToolCallResult, truncateTelemetryJSONBytes(bts)))
 		} else {
 			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIToolCallResult, "<not json serializable>"))
 		}
@@ -273,7 +273,7 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 		span.SetAttributes(attribute.String(semconvtrace.KeyEventID, rspEvent.ID))
 
 		if bts, err := json.Marshal(rspEvent.Response); err == nil {
-			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIToolCallResult, string(bts)))
+			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIToolCallResult, truncateTelemetryJSONBytes(bts)))
 		} else {
 			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIToolCallResult, "<not json serializable>"))
 		}
@@ -335,14 +335,14 @@ func traceBeforeInvokeAgentInvocation(span trace.Span, invoke *agent.Invocation)
 func setInvokeAgentInputMessageAttributes(span trace.Span, msg model.Message) {
 	if bts, err := marshalTelemetryMessages([]model.Message{msg}); err == nil {
 		span.SetAttributes(
-			attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
+			attribute.String(semconvtrace.KeyGenAIInputMessages, truncateTelemetryJSONBytes(bts)),
 		)
 	} else {
 		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
 	}
 	if bts, err := marshalOTelTelemetryMessages([]model.Message{msg}); err == nil {
 		span.SetAttributes(
-			attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, string(bts)),
+			attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, truncateTelemetryJSONBytes(bts)),
 		)
 	} else {
 		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>"))
@@ -430,12 +430,12 @@ func TraceAfterInvokeAgent(
 	if len(rsp.Choices) > 0 {
 		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			span.SetAttributes(
-				attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)),
+				attribute.String(semconvtrace.KeyGenAIOutputMessages, truncateTelemetryJSONBytes(bts)),
 			)
 		}
 		if bts, err := marshalOTelTelemetryChoices(rsp.Choices); err == nil {
 			span.SetAttributes(
-				attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, string(bts)),
+				attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, truncateTelemetryJSONBytes(bts)),
 			)
 		}
 		var finishReasons []string
@@ -586,7 +586,7 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 
 	// Add request body
 	if bts, err := json.Marshal(telemetryRequestForMarshal(req)); err == nil {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMRequest, string(bts)))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMRequest, truncateTelemetryJSONBytes(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMRequest, "<not json serializable>"))
 	}
@@ -600,19 +600,19 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 
 		if len(definitions) > 0 {
 			if bts, err := json.Marshal(definitions); err == nil {
-				attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIRequestToolDefinitions, string(bts)))
+				attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIRequestToolDefinitions, truncateTelemetryJSONBytes(bts)))
 			}
 		}
 	}
 
 	// Add messages
 	if bts, err := marshalTelemetryMessages(req.Messages); err == nil {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, truncateTelemetryJSONBytes(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
 	}
 	if bts, err := marshalOTelTelemetryMessages(req.Messages); err == nil {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, string(bts)))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, truncateTelemetryJSONBytes(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>"))
 	}
@@ -660,10 +660,10 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 	// Add choices attributes
 	if len(rsp.Choices) > 0 {
 		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
-			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)))
+			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessages, truncateTelemetryJSONBytes(bts)))
 		}
 		if bts, err := marshalOTelTelemetryChoices(rsp.Choices); err == nil {
-			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, string(bts)))
+			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, truncateTelemetryJSONBytes(bts)))
 		}
 
 		// Extract finish reasons
@@ -680,7 +680,7 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 
 	// Add response body
 	if bts, err := json.Marshal(telemetryResponseForMarshal(rsp)); err == nil {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMResponse, string(bts)))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMResponse, truncateTelemetryJSONBytes(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMResponse, "<not json serializable>"))
 	}

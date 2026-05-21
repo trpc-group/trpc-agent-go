@@ -1832,6 +1832,34 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T)
 	assert.Equal(t, string(wantBytes), choices[0].Message.Content)
 }
 
+func TestBuildDefaultToolMessage_TruncatesLargeResult(t *testing.T) {
+	msg, err := buildDefaultToolMessageWithLimit(
+		"call-large",
+		map[string]string{"payload": strings.Repeat("x", 512)},
+		256,
+	)
+	require.NoError(t, err)
+	require.Equal(t, model.RoleTool, msg.Role)
+	require.Equal(t, "call-large", msg.ToolID)
+	require.LessOrEqual(t, len(msg.Content), 256)
+	require.Contains(t, msg.Content, `"truncated":true`)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(msg.Content), &payload))
+	require.Equal(t, true, payload["truncated"])
+	require.Greater(t, payload["original_bytes"], float64(256))
+	require.Contains(t, payload["content_prefix"], `"payload"`)
+}
+
+func TestBuildDefaultToolMessage_DisableLimit(t *testing.T) {
+	result := map[string]string{"payload": strings.Repeat("x", 128)}
+	msg, err := buildDefaultToolMessageWithLimit("call-full", result, -1)
+	require.NoError(t, err)
+	want, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.Equal(t, string(want), msg.Content)
+}
+
 func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithSingleMessage(t *testing.T) {
 	ctx := context.Background()
 

@@ -355,6 +355,11 @@ type Options struct {
 	//   - <= 0: no limit is applied (default, preserves existing behavior).
 	MaxToolIterations int
 
+	// DefaultToolMessageMaxBytes bounds default tool result messages persisted
+	// into session events. 0 uses the framework default; a negative value
+	// disables the limit.
+	DefaultToolMessageMaxBytes int
+
 	// PreserveSameBranch controls whether the content request processor
 	// should preserve original roles (assistant/tool) for events that
 	// belong to the same invocation branch lineage (ancestor/descendant).
@@ -1098,6 +1103,14 @@ func WithToolCallbacks(callbacks *tool.Callbacks) Option {
 func WithToolCallRetryPolicy(policy *tool.RetryPolicy) Option {
 	return func(opts *Options) {
 		opts.ToolCallRetryPolicy = policy
+	}
+}
+
+// WithDefaultToolMessageMaxBytes sets the maximum default tool result message
+// bytes stored in session events. Use a negative value to disable the limit.
+func WithDefaultToolMessageMaxBytes(limit int) Option {
+	return func(opts *Options) {
+		opts.DefaultToolMessageMaxBytes = limit
 	}
 }
 

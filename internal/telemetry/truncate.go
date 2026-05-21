@@ -10,6 +10,7 @@
 package telemetry
 
 import (
+	"encoding/json"
 	"fmt"
 	"unicode/utf8"
 
@@ -20,6 +21,7 @@ const (
 	maxTelemetryStringBytes  = 64 * 1024
 	maxTelemetryRawJSONBytes = 64 * 1024
 	maxTelemetryBinaryBytes  = 8 * 1024
+	maxTelemetryJSONBytes    = 256 * 1024
 )
 
 // truncateTelemetryModelMessages returns a copy of messages with large fields
@@ -106,6 +108,48 @@ func telemetryTruncatedMarker(size int) string {
 	return fmt.Sprintf("...<truncated: %d bytes>", size)
 }
 
+type truncatedTelemetryJSON struct {
+	Truncated     bool   `json:"truncated"`
+	OriginalBytes int    `json:"original_bytes"`
+	ContentPrefix string `json:"content_prefix,omitempty"`
+}
+
+func truncateTelemetryJSONBytes(b []byte) string {
+	if len(b) <= maxTelemetryJSONBytes {
+		return string(b)
+	}
+	prefix := validUTF8BytesPrefix(b, maxTelemetryJSONBytes)
+	for {
+		out, err := jsonMarshalTruncatedTelemetryJSON(len(b), prefix)
+		if err != nil {
+			return fmt.Sprintf(
+				`{"truncated":true,"original_bytes":%d}`,
+				len(b),
+			)
+		}
+		if len(out) <= maxTelemetryJSONBytes || prefix == "" {
+			return string(out)
+		}
+		over := len(out) - maxTelemetryJSONBytes
+		nextLen := len(prefix) - over
+		if nextLen < 0 {
+			nextLen = 0
+		}
+		prefix = validUTF8Prefix(prefix, nextLen)
+	}
+}
+
+func jsonMarshalTruncatedTelemetryJSON(
+	originalBytes int,
+	prefix string,
+) ([]byte, error) {
+	return json.Marshal(truncatedTelemetryJSON{
+		Truncated:     true,
+		OriginalBytes: originalBytes,
+		ContentPrefix: prefix,
+	})
+}
+
 // validUTF8Prefix returns a byte-limited string prefix without cutting through a
 // UTF-8 rune.
 func validUTF8Prefix(s string, limit int) string {
@@ -117,6 +161,20 @@ func validUTF8Prefix(s string, limit int) string {
 		prefix = prefix[:len(prefix)-1]
 	}
 	return prefix
+}
+
+func validUTF8BytesPrefix(b []byte, limit int) string {
+	if limit >= len(b) {
+		return string(b)
+	}
+	if limit <= 0 {
+		return ""
+	}
+	prefix := b[:limit]
+	for len(prefix) > 0 && !utf8.Valid(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return string(prefix)
 }
 
 // truncateTelemetryContentParts returns a copy of content parts with text and
