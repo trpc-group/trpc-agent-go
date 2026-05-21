@@ -32,47 +32,45 @@ type Extension interface {
 	Register(r *Registry)
 }
 
-// Bundle is the aggregated result of running Register on every
-// extension passed to a consuming agent. Fields may be nil/empty
-// when no extension contributed to the corresponding surface, so
-// callers should nil-check before iterating.
+// Contributions is the aggregated result of running Register on
+// every extension passed to a consuming agent.
 //
-// Callbacks are exposed as the standard *agent.Callbacks /
-// *model.Callbacks / *tool.Callbacks containers so consuming agents
-// can merge them with user-registered callbacks using the same
-// helpers they already apply elsewhere. Tools is a plain []tool.Tool
-// in install order; name dedup is the consuming agent's
-// responsibility because the natural dedup point varies by
-// implementation (registerTools vs. InvocationToolSurface vs.
-// per-invocation filter).
-type Bundle struct {
-	AgentCallbacks *agent.Callbacks
-	ModelCallbacks *model.Callbacks
-	ToolCallbacks  *tool.Callbacks
-	Tools          []tool.Tool
+// The concrete storage is intentionally opaque. Consuming agents
+// should use the accessor methods below instead of depending on
+// the internal representation, which leaves this package room to
+// evolve how extension contributions are stored without changing
+// the public Extension / Registry authoring contract.
+type Contributions struct {
+	agentCallbacks *agent.Callbacks
+	modelCallbacks *model.Callbacks
+	toolCallbacks  *tool.Callbacks
+	tools          []tool.Tool
 }
 
 // Collect runs Register on every extension in install order and
-// returns the aggregated Bundle. It enforces two invariants that
+// returns the aggregated Contributions. It enforces two invariants that
 // every consuming agent would otherwise have to re-implement:
 //
 //   - no nil extensions
 //   - no two extensions sharing the same Name (case-sensitive)
 //
 // Both violations are returned as a non-nil error and the partially-
-// built Bundle is discarded; consuming agents should treat any
+// built Contributions is discarded; consuming agents should treat any
 // non-nil error from Collect as fatal-during-construction.
+// A panic from Extension.Register is also converted into an error
+// that includes the extension name, index and stack trace; later
+// extensions are not registered after such a panic.
 //
 // When extensions is empty the function returns (nil, nil) so the
-// nil-Bundle short-circuit path on the consumer side stays simple.
-func Collect(extensions []Extension) (*Bundle, error) {
+// nil-Contributions short-circuit path on the consumer side stays simple.
+func Collect(extensions []Extension) (*Contributions, error) {
 	if len(extensions) == 0 {
 		return nil, nil
 	}
-	bundle := &Bundle{
-		AgentCallbacks: agent.NewCallbacks(),
-		ModelCallbacks: model.NewCallbacks(),
-		ToolCallbacks:  tool.NewCallbacks(),
+	contrib := &Contributions{
+		agentCallbacks: agent.NewCallbacks(),
+		modelCallbacks: model.NewCallbacks(),
+		toolCallbacks:  tool.NewCallbacks(),
 	}
 	seen := make(map[string]struct{}, len(extensions))
 	for i, e := range extensions {
@@ -92,13 +90,13 @@ func Collect(extensions []Extension) (*Bundle, error) {
 		}
 		seen[name] = struct{}{}
 
-		r := newRegistry(name, bundle.AgentCallbacks, bundle.ModelCallbacks, bundle.ToolCallbacks)
+		r := newRegistry(name, contrib.agentCallbacks, contrib.modelCallbacks, contrib.toolCallbacks)
 		if err := safeRegister(e, r, name, i); err != nil {
 			return nil, err
 		}
-		bundle.Tools = append(bundle.Tools, r.tools...)
+		contrib.tools = append(contrib.tools, r.tools...)
 	}
-	return bundle, nil
+	return contrib, nil
 }
 
 func safeRegister(
@@ -122,30 +120,71 @@ func safeRegister(
 	return nil
 }
 
-// IsEmpty reports whether b carries no contributions. Convenience
+// AgentCallbacks returns an independent copy of the contributed
+// agent callback chain, or nil when no extension contributed agent
+// callbacks.
+func (c *Contributions) AgentCallbacks() *agent.Callbacks {
+	if c == nil || !hasAgentContent(c.agentCallbacks) {
+		return nil
+	}
+	return c.agentCallbacks.Clone()
+}
+
+// ModelCallbacks returns an independent copy of the contributed
+// model callback chain, or nil when no extension contributed model
+// callbacks.
+func (c *Contributions) ModelCallbacks() *model.Callbacks {
+	if c == nil || !hasModelContent(c.modelCallbacks) {
+		return nil
+	}
+	return c.modelCallbacks.Clone()
+}
+
+// ToolCallbacks returns an independent copy of the contributed tool
+// callback chain, or nil when no extension contributed tool
+// callbacks.
+func (c *Contributions) ToolCallbacks() *tool.Callbacks {
+	if c == nil || !hasToolContent(c.toolCallbacks) {
+		return nil
+	}
+	return c.toolCallbacks.Clone()
+}
+
+// Tools returns a shallow copy of the contributed tools in install
+// order. Tool values themselves are not cloned; consuming agents
+// should treat tool.Tool implementations as immutable after
+// construction.
+func (c *Contributions) Tools() []tool.Tool {
+	if c == nil || len(c.tools) == 0 {
+		return nil
+	}
+	return append([]tool.Tool(nil), c.tools...)
+}
+
+// IsEmpty reports whether c carries no contributions. Convenience
 // helper for consumers that want to skip the merge pipeline
 // entirely when no extension actually populated anything.
-func (b *Bundle) IsEmpty() bool {
-	if b == nil {
+func (c *Contributions) IsEmpty() bool {
+	if c == nil {
 		return true
 	}
-	if len(b.Tools) > 0 {
+	if len(c.tools) > 0 {
 		return false
 	}
-	if hasAgentContent(b.AgentCallbacks) {
+	if hasAgentContent(c.agentCallbacks) {
 		return false
 	}
-	if hasModelContent(b.ModelCallbacks) {
+	if hasModelContent(c.modelCallbacks) {
 		return false
 	}
-	if hasToolContent(b.ToolCallbacks) {
+	if hasToolContent(c.toolCallbacks) {
 		return false
 	}
 	return true
 }
 
 // hasAgentContent / hasModelContent / hasToolContent are tiny
-// content predicates. They live next to Bundle because consumers
+// content predicates. They live next to Contributions because consumers
 // frequently need to ask "did any extension populate this slot?"
 // before deciding whether to allocate a merged callback chain on
 // the user-side; centralising the answer keeps the per-agent

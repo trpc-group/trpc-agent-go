@@ -16,9 +16,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// applyExtensionBundle merges an extension.Bundle into options so
-// downstream constructors see one unified callback chain and one
-// unified extension-tool slice.
+// applyExtensionContributions merges extension contributions into
+// options so downstream constructors see one unified callback chain
+// and one unified extension-tool slice.
 //
 // Three contracts worth pinning down:
 //
@@ -40,37 +40,41 @@ import (
 //     runtime — both code paths must see the same set of extension
 //     tools.
 //
-//   - A nil/empty bundle is a no-op. extension.Collect already
+//   - Nil/empty contributions are a no-op. extension.Collect already
 //     returns nil for empty input, so this helper does not need to
 //     special-case "no extensions configured".
-func applyExtensionBundle(options *Options, bundle *extension.Bundle) {
-	if bundle == nil || options == nil {
+func applyExtensionContributions(options *Options, contrib *extension.Contributions) {
+	if contrib == nil || options == nil {
 		return
 	}
-	if hasAgentContent(bundle.AgentCallbacks) {
+	agentCallbacks := contrib.AgentCallbacks()
+	if hasAgentContent(agentCallbacks) {
 		options.AgentCallbacks = mergeAgentCallbacks(
-			options.AgentCallbacks, bundle.AgentCallbacks,
+			options.AgentCallbacks, agentCallbacks,
 		)
 	}
-	if hasModelContent(bundle.ModelCallbacks) {
+	modelCallbacks := contrib.ModelCallbacks()
+	if hasModelContent(modelCallbacks) {
 		options.ModelCallbacks = mergeModelCallbacks(
-			options.ModelCallbacks, bundle.ModelCallbacks,
+			options.ModelCallbacks, modelCallbacks,
 		)
 	}
-	if hasToolContent(bundle.ToolCallbacks) {
+	toolCallbacks := contrib.ToolCallbacks()
+	if hasToolContent(toolCallbacks) {
 		options.ToolCallbacks = mergeToolCallbacks(
-			options.ToolCallbacks, bundle.ToolCallbacks,
+			options.ToolCallbacks, toolCallbacks,
 		)
 	}
-	options.extensionContributedTools = bundle.Tools
+	options.extensionContributedTools = contrib.Tools()
 }
 
 // appendExtensionTools surfaces tools that agent-scoped extensions
 // contributed via extension.Registry.Tools during Register.
 //
 // The cached slice on options.extensionContributedTools was
-// populated once during New() (or rather, during applyExtensionBundle
-// called from New). This function is cheap enough to call from every
+// populated once during New() (or rather, during
+// applyExtensionContributions called from New). This function is
+// cheap enough to call from every
 // tool-surface builder (Tools, InvocationToolSurface, and friends),
 // which keeps tools in sync across construction, per-invocation
 // framework tools and the AddToolSet / refreshToolsLocked hot-reload

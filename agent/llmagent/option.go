@@ -536,10 +536,11 @@ type Options struct {
 
 	// extensions holds the agent-scoped extensions registered via
 	// WithExtensions. They are folded into a single
-	// extension.Bundle during New() and their callbacks are merged
-	// into AgentCallbacks / ModelCallbacks / ToolCallbacks (after
-	// any user-provided callbacks); the tools they contribute via
-	// extension.Registry.Tools land in extensionContributedTools.
+	// extension.Contributions during New() and their callbacks are
+	// merged into AgentCallbacks / ModelCallbacks / ToolCallbacks
+	// (after any user-provided callbacks); the tools they
+	// contribute via extension.Registry.Tools land in
+	// extensionContributedTools.
 	//
 	// Kept private so callers go through WithExtensions and the
 	// invariants documented there (de-dup by name, agent-scope

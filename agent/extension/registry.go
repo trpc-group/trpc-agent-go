@@ -20,13 +20,13 @@ import (
 
 // Registry is the per-extension view handed to Extension.Register.
 // It looks like a small fan-out API but is actually a thin facade
-// over the Bundle-wide callback containers — every Register* call
+// over the Contributions-wide callback containers — every Register* call
 // appends into the same *agent.Callbacks / *model.Callbacks /
 // *tool.Callbacks that Collect built once. Tools, on the other
 // hand, are accumulated per-Registry first and merged into the
-// Bundle by Collect after Register returns; this preserves the
+// Contributions by Collect after Register returns; this preserves the
 // install-order tool layout used by LLMAgent's earlier-wins
-// dedup rule (see Bundle.Tools docstring).
+// dedup rule.
 //
 // All callback methods accept the *Structured* callback variants
 // (BeforeAgentCallbackStructured, etc.). Errors returned by an
@@ -47,7 +47,7 @@ type Registry struct {
 
 // newRegistry is the package-internal Registry constructor used by
 // Collect. The callback containers are shared across all Registry
-// instances Collect creates for a single Bundle, so the merged
+// instances Collect creates for a single Contributions value, so the merged
 // callback order across extensions matches install order naturally
 // without an extra merge step.
 func newRegistry(

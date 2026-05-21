@@ -37,7 +37,7 @@ func (f fakeExt) Register(r *Registry) { f.register(r) }
 // fakeTool implements tool.Tool to give Tools(...) something to
 // accept. The Tool interface only needs Declaration() in many code
 // paths but we satisfy the runtime-callable contract too so the
-// Bundle.Tools slice is usable end-to-end if a downstream test
+// Contributions.Tools slice is usable end-to-end if a downstream test
 // wants to call it.
 type fakeTool struct{ name string }
 
@@ -45,12 +45,12 @@ func (f fakeTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: f.name}
 }
 
-func TestCollect_Empty_ReturnsNilBundle(t *testing.T) {
+func TestCollect_Empty_ReturnsNilContributions(t *testing.T) {
 	b, err := Collect(nil)
 	require.NoError(t, err, "empty input must not error")
 	assert.Nil(t, b,
 		"Collect(nil) must return nil so consumers can short-circuit the merge pipeline; "+
-			"returning an empty *Bundle would force every consumer to add an IsEmpty() guard.")
+			"returning an empty *Contributions would force every consumer to add an IsEmpty() guard.")
 
 	b2, err := Collect([]Extension{})
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestCollect_RejectsDuplicateNames(t *testing.T) {
 func TestCollect_ConvertsRegisterPanicToError(t *testing.T) {
 	calledAfterPanic := false
 
-	bundle, err := Collect([]Extension{
+	contrib, err := Collect([]Extension{
 		fakeExt{name: "ok", register: func(r *Registry) {
 			r.Tools(fakeTool{name: "ok-tool"})
 		}},
@@ -103,8 +103,8 @@ func TestCollect_ConvertsRegisterPanicToError(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.Nil(t, bundle,
-		"panicking Register must discard the partially-built bundle")
+	assert.Nil(t, contrib,
+		"panicking Register must discard the partially-built contributions")
 	assert.False(t, calledAfterPanic,
 		"Collect must stop immediately after a Register panic")
 	assert.Contains(t, err.Error(), `panic during register "boom" at index 1`)
@@ -118,22 +118,50 @@ func TestCollect_PreservesToolInstallOrder(t *testing.T) {
 	b := fakeTool{name: "beta"}
 	g := fakeTool{name: "gamma"}
 
-	bundle, err := Collect([]Extension{
+	contrib, err := Collect([]Extension{
 		fakeExt{name: "ext1", register: func(r *Registry) { r.Tools(a, b) }},
 		fakeExt{name: "ext2", register: func(r *Registry) { r.Tools(g) }},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, bundle)
-	require.Len(t, bundle.Tools, 3,
+	require.NotNil(t, contrib)
+	require.Len(t, contrib.Tools(), 3,
 		"Collect must preserve every tool — dedup is the consuming agent's job, not Registry's")
-	assert.Equal(t, "alpha", bundle.Tools[0].Declaration().Name,
+	assert.Equal(t, "alpha", contrib.Tools()[0].Declaration().Name,
 		"install order must be preserved so LLMAgent's earlier-wins dedup is deterministic")
-	assert.Equal(t, "beta", bundle.Tools[1].Declaration().Name)
-	assert.Equal(t, "gamma", bundle.Tools[2].Declaration().Name)
+	assert.Equal(t, "beta", contrib.Tools()[1].Declaration().Name)
+	assert.Equal(t, "gamma", contrib.Tools()[2].Declaration().Name)
+}
+
+func TestContributions_AccessorsReturnCopies(t *testing.T) {
+	contrib, err := Collect([]Extension{
+		fakeExt{
+			name: "ext",
+			register: func(r *Registry) {
+				r.Tools(fakeTool{name: "alpha"})
+				r.BeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+					return nil, nil
+				})
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, contrib)
+
+	tools := contrib.Tools()
+	require.Len(t, tools, 1)
+	tools[0] = fakeTool{name: "mutated"}
+	assert.Equal(t, "alpha", contrib.Tools()[0].Declaration().Name,
+		"Tools must return a copy so consumers cannot mutate stored contributions")
+
+	modelCallbacks := contrib.ModelCallbacks()
+	require.NotNil(t, modelCallbacks)
+	modelCallbacks.BeforeModel = nil
+	require.Len(t, contrib.ModelCallbacks().BeforeModel, 1,
+		"callback accessors must return clones so consumers cannot mutate stored contributions")
 }
 
 func TestRegistry_Tools_SilentlyDropsNil(t *testing.T) {
-	bundle, err := Collect([]Extension{
+	contrib, err := Collect([]Extension{
 		fakeExt{
 			name: "ext",
 			register: func(r *Registry) {
@@ -142,10 +170,10 @@ func TestRegistry_Tools_SilentlyDropsNil(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, bundle)
-	require.Len(t, bundle.Tools, 1,
+	require.NotNil(t, contrib)
+	require.Len(t, contrib.Tools(), 1,
 		"nil tool entries must be filtered so callers can build slices with conditional inclusion without per-entry guards")
-	assert.Equal(t, "real", bundle.Tools[0].Declaration().Name)
+	assert.Equal(t, "real", contrib.Tools()[0].Declaration().Name)
 }
 
 func TestRegistry_Tools_NoopOnNilRegistry(t *testing.T) {
@@ -164,7 +192,7 @@ func TestRegistry_Tools_NoopOnNilRegistry(t *testing.T) {
 func TestCollect_MergesCallbacksAcrossExtensions_InInstallOrder(t *testing.T) {
 	var order []string
 
-	bundle, err := Collect([]Extension{
+	contrib, err := Collect([]Extension{
 		fakeExt{
 			name: "ext-a",
 			register: func(r *Registry) {
@@ -205,12 +233,12 @@ func TestCollect_MergesCallbacksAcrossExtensions_InInstallOrder(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, bundle)
+	require.NotNil(t, contrib)
 
 	// Drive a real *agent.Callbacks chain to confirm order matches
 	// install order — this is the contract LLMAgent depends on
-	// when it folds the bundle into the agent's callback set.
-	_, _ = bundle.AgentCallbacks.RunBeforeAgent(context.Background(), nil)
+	// when it folds the contributions into the agent's callback set.
+	_, _ = contrib.AgentCallbacks().RunBeforeAgent(context.Background(), nil)
 	assert.Equal(t,
 		[]string{"before-agent:a", "before-agent:b"}, order,
 		"merged callbacks must fire in install order; the contract guarantees user-side ordering of extensions",
@@ -225,7 +253,7 @@ func TestRegistry_Callbacks_WrapErrorsWithExtensionName(t *testing.T) {
 	// table-style coverage handles cleanly.
 	sentinel := errors.New("boom")
 
-	bundle, err := Collect([]Extension{
+	contrib, err := Collect([]Extension{
 		fakeExt{
 			name: "ext",
 			register: func(r *Registry) {
@@ -251,7 +279,7 @@ func TestRegistry_Callbacks_WrapErrorsWithExtensionName(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, bundle)
+	require.NotNil(t, contrib)
 
 	ctx := context.Background()
 	type runResult struct {
@@ -260,17 +288,17 @@ func TestRegistry_Callbacks_WrapErrorsWithExtensionName(t *testing.T) {
 	}
 	results := []runResult{}
 
-	_, rErr := bundle.AgentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{})
+	_, rErr := contrib.AgentCallbacks().RunBeforeAgent(ctx, &agent.BeforeAgentArgs{})
 	results = append(results, runResult{"before-agent", rErr})
-	_, rErr = bundle.AgentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{})
+	_, rErr = contrib.AgentCallbacks().RunAfterAgent(ctx, &agent.AfterAgentArgs{})
 	results = append(results, runResult{"after-agent", rErr})
-	_, rErr = bundle.ModelCallbacks.RunBeforeModel(ctx, &model.BeforeModelArgs{})
+	_, rErr = contrib.ModelCallbacks().RunBeforeModel(ctx, &model.BeforeModelArgs{})
 	results = append(results, runResult{"before-model", rErr})
-	_, rErr = bundle.ModelCallbacks.RunAfterModel(ctx, &model.AfterModelArgs{})
+	_, rErr = contrib.ModelCallbacks().RunAfterModel(ctx, &model.AfterModelArgs{})
 	results = append(results, runResult{"after-model", rErr})
-	_, rErr = bundle.ToolCallbacks.RunBeforeTool(ctx, &tool.BeforeToolArgs{ToolName: "x"})
+	_, rErr = contrib.ToolCallbacks().RunBeforeTool(ctx, &tool.BeforeToolArgs{ToolName: "x"})
 	results = append(results, runResult{"before-tool", rErr})
-	_, rErr = bundle.ToolCallbacks.RunAfterTool(ctx, &tool.AfterToolArgs{ToolName: "x"})
+	_, rErr = contrib.ToolCallbacks().RunAfterTool(ctx, &tool.AfterToolArgs{ToolName: "x"})
 	results = append(results, runResult{"after-tool", rErr})
 
 	for _, r := range results {
@@ -289,7 +317,7 @@ func TestRegistry_Callbacks_WrapErrorsWithExtensionName(t *testing.T) {
 // stay at 50% coverage because Go reports the success-return as a
 // distinct statement from the error-return.
 func TestRegistry_Callbacks_PassThroughOnSuccess(t *testing.T) {
-	bundle, err := Collect([]Extension{
+	contrib, err := Collect([]Extension{
 		fakeExt{
 			name: "ext",
 			register: func(r *Registry) {
@@ -315,20 +343,20 @@ func TestRegistry_Callbacks_PassThroughOnSuccess(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, bundle)
+	require.NotNil(t, contrib)
 
 	ctx := context.Background()
-	_, rErr := bundle.AgentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{})
+	_, rErr := contrib.AgentCallbacks().RunBeforeAgent(ctx, &agent.BeforeAgentArgs{})
 	assert.NoError(t, rErr, "BeforeAgent success must surface as nil error through the wrapper")
-	_, rErr = bundle.AgentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{})
+	_, rErr = contrib.AgentCallbacks().RunAfterAgent(ctx, &agent.AfterAgentArgs{})
 	assert.NoError(t, rErr, "AfterAgent success must surface as nil error through the wrapper")
-	_, rErr = bundle.ModelCallbacks.RunBeforeModel(ctx, &model.BeforeModelArgs{})
+	_, rErr = contrib.ModelCallbacks().RunBeforeModel(ctx, &model.BeforeModelArgs{})
 	assert.NoError(t, rErr, "BeforeModel success must surface as nil error through the wrapper")
-	_, rErr = bundle.ModelCallbacks.RunAfterModel(ctx, &model.AfterModelArgs{})
+	_, rErr = contrib.ModelCallbacks().RunAfterModel(ctx, &model.AfterModelArgs{})
 	assert.NoError(t, rErr, "AfterModel success must surface as nil error through the wrapper")
-	_, rErr = bundle.ToolCallbacks.RunBeforeTool(ctx, &tool.BeforeToolArgs{ToolName: "x"})
+	_, rErr = contrib.ToolCallbacks().RunBeforeTool(ctx, &tool.BeforeToolArgs{ToolName: "x"})
 	assert.NoError(t, rErr, "BeforeTool success must surface as nil error through the wrapper")
-	_, rErr = bundle.ToolCallbacks.RunAfterTool(ctx, &tool.AfterToolArgs{ToolName: "x"})
+	_, rErr = contrib.ToolCallbacks().RunAfterTool(ctx, &tool.AfterToolArgs{ToolName: "x"})
 	assert.NoError(t, rErr, "AfterTool success must surface as nil error through the wrapper")
 }
 
@@ -336,7 +364,7 @@ func TestRegistry_Callbacks_IgnoreNilCallback(t *testing.T) {
 	// Skip-on-nil mirrors plugin.Registry: extensions can
 	// conditionally register hooks without guarding every call,
 	// which keeps option-driven extension constructors readable.
-	bundle, err := Collect([]Extension{
+	contrib, err := Collect([]Extension{
 		fakeExt{
 			name: "ext",
 			register: func(r *Registry) {
@@ -350,46 +378,46 @@ func TestRegistry_Callbacks_IgnoreNilCallback(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, bundle)
-	assert.True(t, bundle.IsEmpty(),
-		"a Registry that received only nil callbacks must produce an empty Bundle so the consumer can take the no-op fast path")
+	require.NotNil(t, contrib)
+	assert.True(t, contrib.IsEmpty(),
+		"a Registry that received only nil callbacks must produce an empty Contributions so the consumer can take the no-op fast path")
 }
 
-func TestBundle_IsEmpty(t *testing.T) {
-	assert.True(t, (*Bundle)(nil).IsEmpty(),
-		"a nil *Bundle is empty by convention (Collect returns nil on no input)")
-	assert.True(t, (&Bundle{}).IsEmpty(),
-		"zero-value Bundle with nil callback containers must be empty")
+func TestContributions_IsEmpty(t *testing.T) {
+	assert.True(t, (*Contributions)(nil).IsEmpty(),
+		"a nil *Contributions is empty by convention (Collect returns nil on no input)")
+	assert.True(t, (&Contributions{}).IsEmpty(),
+		"zero-value Contributions with nil callback containers must be empty")
 
-	withTool := &Bundle{Tools: []tool.Tool{fakeTool{name: "x"}}}
+	withTool := &Contributions{tools: []tool.Tool{fakeTool{name: "x"}}}
 	assert.False(t, withTool.IsEmpty(),
-		"a Bundle that carries any tool is non-empty even if no callbacks were registered")
+		"a Contributions that carries any tool is non-empty even if no callbacks were registered")
 
-	withModelCB := &Bundle{ModelCallbacks: model.NewCallbacks()}
-	withModelCB.ModelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+	withModelCB := &Contributions{modelCallbacks: model.NewCallbacks()}
+	withModelCB.modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
 		return nil, nil
 	})
 	assert.False(t, withModelCB.IsEmpty(),
-		"a Bundle that carries any model callback is non-empty")
+		"a Contributions that carries any model callback is non-empty")
 
 	// Cover the agent + tool callback branches separately so
 	// IsEmpty's per-surface short-circuits each receive at least
 	// one observation. A non-empty AgentCallbacks must keep the
-	// Bundle non-empty even when ModelCallbacks/ToolCallbacks/
+	// Contributions non-empty even when ModelCallbacks/ToolCallbacks/
 	// Tools are all empty, and vice versa for ToolCallbacks.
-	withAgentCB := &Bundle{AgentCallbacks: agent.NewCallbacks()}
-	withAgentCB.AgentCallbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+	withAgentCB := &Contributions{agentCallbacks: agent.NewCallbacks()}
+	withAgentCB.agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
 		return nil, nil
 	})
 	assert.False(t, withAgentCB.IsEmpty(),
-		"a Bundle that carries any agent callback is non-empty")
+		"a Contributions that carries any agent callback is non-empty")
 
-	withToolCB := &Bundle{ToolCallbacks: tool.NewCallbacks()}
-	withToolCB.ToolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+	withToolCB := &Contributions{toolCallbacks: tool.NewCallbacks()}
+	withToolCB.toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
 		return nil, nil
 	})
 	assert.False(t, withToolCB.IsEmpty(),
-		"a Bundle that carries any tool callback is non-empty")
+		"a Contributions that carries any tool callback is non-empty")
 }
 
 func TestRegistry_Name_RoundTrip(t *testing.T) {

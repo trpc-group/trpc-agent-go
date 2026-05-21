@@ -104,7 +104,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	// Wire agent-scoped extensions (WithExtensions) before any
 	// consumer of the callback fields runs. Order matters here:
 	//
-	//   - applyExtensionBundle must rewrite options.AgentCallbacks
+	//   - applyExtensionContributions must rewrite options.AgentCallbacks
 	//     / ModelCallbacks / ToolCallbacks BEFORE we copy them into
 	//     a.agentCallbacks, flowOpts.ModelCallbacks and the
 	//     FunctionCallResponseProcessor below — otherwise extension
@@ -115,11 +115,11 @@ func New(name string, opts ...Option) *LLMAgent {
 	//     tools such as transfer_to_agent). Extension callbacks are
 	//     static once merged; only tools need to flow through the
 	//     surface builders more than once.
-	extBundle, err := extension.Collect(options.extensions)
+	extContrib, err := extension.Collect(options.extensions)
 	if err != nil {
 		panic(err)
 	}
-	applyExtensionBundle(&options, extBundle)
+	applyExtensionContributions(&options, extContrib)
 
 	// Validate output_schema configuration before registering tools.
 	if options.OutputSchema != nil {
