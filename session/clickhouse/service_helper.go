@@ -112,6 +112,7 @@ func (s *Service) listSessions(
 	limit int,
 	afterTime time.Time,
 	listOnlyMeta bool,
+	page *session.ListSessionPage,
 ) ([]*session.Session, error) {
 	// Query app state
 	appState, err := s.ListAppStates(ctx, key.AppName)
@@ -127,13 +128,18 @@ func (s *Service) listSessions(
 
 	// Query all session states for this user using FINAL
 	var sessStates []*SessionState
-	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT session_id, state, created_at, updated_at FROM %s FINAL
+	listQuery := fmt.Sprintf(`SELECT session_id, state, created_at, updated_at FROM %s FINAL
 			WHERE app_name = ? AND user_id = ?
 			AND (expires_at IS NULL OR expires_at > ?)
 			AND deleted_at IS NULL
-			ORDER BY updated_at DESC`, s.tableSessionStates),
-		key.AppName, key.UserID, time.Now())
+			ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
+	listArgs := []any{key.AppName, key.UserID, time.Now()}
+	if page != nil && page.Limit > 0 {
+		listQuery += " LIMIT ? OFFSET ?"
+		listArgs = append(listArgs, page.Limit, page.Offset)
+	}
+
+	rows, err := s.chClient.Query(ctx, listQuery, listArgs...)
 
 	if err != nil {
 		return nil, fmt.Errorf("list session states failed: %w", err)

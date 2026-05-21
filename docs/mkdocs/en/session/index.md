@@ -432,10 +432,21 @@ sessions, err := sessionService.ListSessions(ctx, session.UserKey{
 }, session.WithListSessionOnlyMeta())
 ```
 
+```go
+// Fetch the second page of sessions, ordered by UpdatedAt descending
+sessions, err := sessionService.ListSessions(ctx, session.UserKey{
+    AppName: "my-agent",
+    UserID:  "user123",
+}, session.WithListSessionPage(20, 20))
+```
+
 Notes:
 
 - `session.WithListSessionOnlyMeta()` is only for `ListSessions`
 - This optimization is currently supported only by the `inmemory` and `redis` backends
+- `session.WithListSessionPage(offset, limit)` is only for `ListSessions`; `offset` must be `>= 0`, and `limit == 0` means no session-level pagination
+- Session list pagination is independent from `session.WithEventNum()` and `session.WithEventTime()`, which filter events inside each returned session
+- Results are ordered by `UpdatedAt` descending, with session ID used as a deterministic tie-breaker
 
 #### Delete Session
 
