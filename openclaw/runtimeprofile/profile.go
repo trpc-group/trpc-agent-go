@@ -1019,7 +1019,7 @@ func toolSetNamesFilter(names []string) tool.FilterFunc {
 	return func(_ context.Context, tl tool.Tool) bool {
 		name := sourceToolSetName(tl)
 		if name == "" {
-			return true
+			return false
 		}
 		_, ok := allowed[name]
 		return ok

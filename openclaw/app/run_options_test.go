@@ -10,6 +10,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -203,6 +204,39 @@ runtime_profiles:
 	resolver, err := runtimeprofile.NewResolver(*opts.RuntimeProfiles)
 	require.NoError(t, err)
 	require.NotNil(t, resolver)
+}
+
+func TestParseRunOptions_RuntimeProfilesSelectorsFailClosed(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+runtime_profiles:
+  required: false
+  profiles:
+    retail:
+      app_name: retail-app
+  selectors:
+    - profile_id: retail
+      users: ["user-a"]
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.RuntimeProfiles)
+	require.False(t, opts.RuntimeProfiles.Required)
+
+	resolver, _, required := runtimeProfileResolverFromOptions(
+		opts.RuntimeProfiles,
+		runtimeOptions{},
+	)
+	require.True(t, required)
+	_, err = resolver.Resolve(
+		context.Background(),
+		runtimeprofile.Request{UserID: "user-b"},
+	)
+	require.ErrorIs(t, err, runtimeprofile.ErrProfileSelectorDenied)
 }
 
 func TestParseRunOptions_RuntimeProfilesRejectUnsupportedAgent(

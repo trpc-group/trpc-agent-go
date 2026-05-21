@@ -1284,6 +1284,17 @@ func TestMain_HelpReturnsUsageCode(t *testing.T) {
 	require.Equal(t, 0, Main([]string{"-h"}))
 }
 
+func TestMainWithOptionsAppliesRuntimeOptions(t *testing.T) {
+	t.Parallel()
+
+	observed := false
+	code := MainWithOptions([]string{"-h"}, func(*runtimeOptions) {
+		observed = true
+	})
+	require.Equal(t, 0, code)
+	require.True(t, observed)
+}
+
 func TestMain_HelpSkipsErrorLog(t *testing.T) {
 	t.Parallel()
 

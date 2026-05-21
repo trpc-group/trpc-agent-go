@@ -598,6 +598,11 @@ OpenClaw hides search tools for other knowledge providers on that request;
 `Knowledge.Filter` remains the metadata filter sent to the selected knowledge
 provider.
 
+`Tools.ToolSets` uses the `name` values from the top-level `tools.toolsets`
+configuration. When it is non-empty, OpenClaw hides tools that do not come from
+one of the selected toolsets. `Tools.Include` and `Tools.Exclude` still apply
+to concrete tool names inside the selected toolsets.
+
 `Tools.CredentialRefs` maps a concrete tool name or toolset name to a
 credential reference. When `Credentials.AllowedRefs` is non-empty, OpenClaw
 hides tools mapped to references outside that allowlist. The selected

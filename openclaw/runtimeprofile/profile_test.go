@@ -466,7 +466,7 @@ func TestRunOptionsAppliesProfile(t *testing.T) {
 
 	require.True(t, runOpts.ToolFilter(
 		context.Background(),
-		testTool{name: testToolAllowed},
+		testTool{name: testToolAllowed, toolSetName: "mcp-retail"},
 	))
 	require.False(t, runOpts.ToolFilter(
 		context.Background(),
@@ -495,11 +495,11 @@ func TestRunOptionsFiltersProfileToolSets(t *testing.T) {
 		},
 	})...)
 
-	require.True(t, runOpts.ToolFilter(
+	require.False(t, runOpts.ToolFilter(
 		context.Background(),
 		testTool{name: "direct"},
 	))
-	require.True(t, runOpts.ToolFilter(
+	require.False(t, runOpts.ToolFilter(
 		context.Background(),
 		declarationOnlyTool{name: "direct"},
 	))

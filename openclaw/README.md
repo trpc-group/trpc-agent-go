@@ -459,9 +459,10 @@ like this:
 ```
 
 Profile `tools.toolsets` selects from the globally configured `tools.toolsets`
-entries by `name`. It does not create a toolset by itself; it hides tools from
-other named toolsets for that request. `tools.include` and `tools.exclude`
-still apply to concrete tool names.
+entries by `name`. It does not create a toolset by itself; it hides tools that
+do not come from the selected toolsets for that request. `tools.include` and
+`tools.exclude` still apply to concrete tool names inside the selected
+toolsets.
 
 Profile `knowledge.indexes` selects from `knowledges.providers` by `name`.
 Search tools for other knowledge providers are hidden for that request, and
