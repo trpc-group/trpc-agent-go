@@ -563,6 +563,8 @@ summarizer := summary.NewSummarizer(
 
 默认情况下，`CheckTokenThreshold` 使用内置的 `SimpleTokenCounter` 基于文本长度估算 token 数量。如果需要自定义 token 计数行为，可以使用 `summary.SetTokenCounter` 设置全局 token 计数器：
 
+`SimpleTokenCounter` 的 `WithApproxRunesPerToken(v)` 表示约 `v` 个 UTF-8 字符对应 1 个 token，估算公式是 `estimatedTokens = countedUTF8Runes / v`。例如 `v=1.5` 表示约 `1.5` 字符/token；不要把它当成 token 乘数。
+
 ```go
 import (
     "context"
@@ -608,6 +610,7 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 - **全局影响**：`SetTokenCounter` 会影响当前进程中所有的 `CheckTokenThreshold` 评估，建议在应用初始化时一次性设置
 - **默认计数器**：如果不设置，将使用默认的 `SimpleTokenCounter`（约每 token 对应 4 个字符）
+- **参数语义**：`WithApproxRunesPerToken(v)` 中的 `v` 是字符/token。传入 `2.0/3.0` 表示约 `0.67` 字符/token，等价于约 `1.5` token/字符
 
 ## 跳过最近事件
 
@@ -932,7 +935,7 @@ Pass 2 默认是关闭的（`0`），需要满足两个条件才会生效：(1) 
 
 ```go
 counter := model.NewSimpleTokenCounter(
-    model.WithApproxRunesPerToken(1.6), // 中文内容较多时的示例值
+    model.WithApproxRunesPerToken(1.6), // 约 1.6 字符/token；该值是除数，不是乘数
 )
 
 modelInstance := openai.New(

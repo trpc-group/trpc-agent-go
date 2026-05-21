@@ -26,6 +26,9 @@ type simpleTokenCounterOptions struct {
 type SimpleTokenCounterOption func(*simpleTokenCounterOptions)
 
 // WithApproxRunesPerToken sets the approximate runes per token heuristic.
+// The value is a divisor: estimated tokens = counted UTF-8 runes / v.
+// For example, v=1.5 means roughly 1.5 runes per token, while v=2.0/3.0
+// means roughly 0.67 runes per token, or about 1.5 tokens per rune.
 // This is a heuristic and may vary across languages and models.
 //
 // Note:
@@ -96,7 +99,7 @@ func (e *tokenTailoringOverflowError) Error() string {
 }
 
 // SimpleTokenCounter provides a very rough token estimation based on rune length.
-// Heuristic: approximately one token per several UTF-8 runes for text fields.
+// Heuristic: approximately one token per configured number of UTF-8 runes.
 type SimpleTokenCounter struct {
 	approxRunesPerToken float64
 }

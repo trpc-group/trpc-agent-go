@@ -1395,7 +1395,13 @@ The Token Counter is used to estimate the token count of text content. The frame
 
 **Estimation Principle:**
 
-Uses heuristic rules: approximately `N` UTF-8 characters per token, where `N` can be configured via `WithApproxRunesPerToken`.
+Uses heuristic rules: approximately `N` UTF-8 characters per token, where `N` can be configured via `WithApproxRunesPerToken`. `N` is a divisor, not a multiplier:
+
+```text
+estimatedTokens = countedUTF8Runes / N
+```
+
+Therefore, `WithApproxRunesPerToken(1.5)` means approximately `1.5` characters per token. Passing `2.0/3.0` means approximately `0.67` characters per token, which is about `1.5` tokens per character.
 
 **Usage:**
 
@@ -1424,6 +1430,7 @@ counter := model.NewSimpleTokenCounter(
 - **Type**: float64
 - **Default Value**: 4.0 (approx. 4 characters per token, suitable for English scenarios)
 - **Value Constraint**: Values <= 0 will be ignored, keeping the default value
+- **Formula**: estimated tokens = counted UTF-8 characters / `v`; for example, `v=1.5` means approximately `1.5` characters per token
 
 **Recommended Values for Common Languages:**
 
