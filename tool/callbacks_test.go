@@ -60,6 +60,70 @@ func TestNewToolCallbacks(t *testing.T) {
 	require.Empty(t, callbacks.AfterTool)
 }
 
+func TestToolCallbacks_Clone_PreservesOptionsAndDoesNotShareSlices(t *testing.T) {
+	callbacks := tool.NewCallbacks(
+		tool.WithContinueOnError(true),
+		tool.WithContinueOnResponse(true),
+	)
+	expectedErr := errors.New("first")
+	var trail []string
+	callbacks.RegisterBeforeTool(func(_ context.Context, _ *tool.BeforeToolArgs) (
+		*tool.BeforeToolResult, error,
+	) {
+		trail = append(trail, "orig-error")
+		return nil, expectedErr
+	})
+	callbacks.RegisterBeforeTool(func(_ context.Context, _ *tool.BeforeToolArgs) (
+		*tool.BeforeToolResult, error,
+	) {
+		trail = append(trail, "orig-response")
+		return &tool.BeforeToolResult{CustomResult: "orig"}, nil
+	})
+	callbacks.RegisterToolResultMessages(func(
+		_ context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		return "converter", nil
+	})
+
+	cloned := callbacks.Clone()
+	cloned.RegisterBeforeTool(func(_ context.Context, _ *tool.BeforeToolArgs) (
+		*tool.BeforeToolResult, error,
+	) {
+		trail = append(trail, "clone-response")
+		return &tool.BeforeToolResult{CustomResult: "clone"}, nil
+	})
+
+	result, err := cloned.RunBeforeTool(
+		context.Background(),
+		&tool.BeforeToolArgs{ToolName: "x"},
+	)
+	require.ErrorIs(t, err, expectedErr)
+	require.Equal(t, "clone", result.CustomResult)
+	require.Equal(t,
+		[]string{"orig-error", "orig-response", "clone-response"},
+		trail,
+		"clone must preserve ContinueOnError/ContinueOnResponse options",
+	)
+	got, err := cloned.RunToolResultMessages(
+		context.Background(),
+		&tool.ToolResultMessagesInput{ToolName: "x"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "converter", got,
+		"clone must preserve ToolResultMessages")
+
+	trail = nil
+	result, err = callbacks.RunBeforeTool(
+		context.Background(),
+		&tool.BeforeToolArgs{ToolName: "x"},
+	)
+	require.ErrorIs(t, err, expectedErr)
+	require.Equal(t, "orig", result.CustomResult)
+	require.Equal(t, []string{"orig-error", "orig-response"}, trail,
+		"adding callbacks to the clone must not mutate the original")
+}
+
 func TestRunToolResultMessages_PanicRecovery(t *testing.T) {
 	callbacks := tool.NewCallbacks()
 	callbacks.RegisterToolResultMessages(func(

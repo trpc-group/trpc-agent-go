@@ -220,6 +220,22 @@ func NewCallbacks(opts ...CallbacksOption) *Callbacks {
 	return c
 }
 
+// Clone returns an independent copy of c, including callback lists,
+// ToolResultMessages and execution options.
+func (c *Callbacks) Clone() *Callbacks {
+	if c == nil {
+		return nil
+	}
+	out := &Callbacks{
+		BeforeTool:         append([]BeforeToolCallbackStructured(nil), c.BeforeTool...),
+		AfterTool:          append([]AfterToolCallbackStructured(nil), c.AfterTool...),
+		ToolResultMessages: c.ToolResultMessages,
+		continueOnError:    c.continueOnError,
+		continueOnResponse: c.continueOnResponse,
+	}
+	return out
+}
+
 // RegisterToolResultMessages registers a ToolResultMessages callback.
 // The callback will be invoked once per tool execution, after the tool has
 // completed and after all AfterTool callbacks have run.
