@@ -2475,6 +2475,117 @@ func TestA2AAgentRunStreaming_SkipsSyntheticFinalOnTaskError(
 	require.True(t, events[0].Response.Done)
 }
 
+func TestA2AAgentRunStreaming_StreamingHandlerErrorStopsFinalSuccess(t *testing.T) {
+	sseBody := mustBuildSSEBody(t, []sseEvent{
+		{
+			eventType: protocol.EventMessage,
+			payload: protocol.Message{
+				Kind:      protocol.KindMessage,
+				Role:      protocol.MessageRoleAgent,
+				MessageID: "resp-1",
+				Parts: []protocol.Part{
+					&protocol.TextPart{Kind: protocol.KindText, Text: "partial response"},
+				},
+			},
+		},
+	})
+
+	testClient := newTestStreamClient(t, sseBody)
+	a := &A2AAgent{
+		name:                "test-agent",
+		agentCard:           &server.AgentCard{URL: "http://stream.test/"},
+		eventConverter:      &defaultA2AEventConverter{},
+		a2aMessageConverter: stubInvocationConverter{},
+		streamingRespHandler: func(resp *model.Response) (string, error) {
+			return "", fmt.Errorf("handler failed")
+		},
+		streamingBufSize: 4,
+		a2aClient:        testClient,
+	}
+	invocation := &agent.Invocation{
+		InvocationID: "inv-test",
+		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	eventCh, err := a.runStreaming(ctx, invocation)
+	require.NoError(t, err)
+
+	var sawHandlerError bool
+	for evt := range eventCh {
+		if evt.Response == nil {
+			continue
+		}
+		if evt.Response.Error != nil && strings.Contains(evt.Response.Error.Message, "handler failed") {
+			sawHandlerError = true
+			continue
+		}
+		require.False(
+			t,
+			sawHandlerError && evt.Response.Done && evt.Response.Error == nil,
+			"handler error was followed by a final success event",
+		)
+	}
+	require.True(t, sawHandlerError, "expected streaming handler error event")
+}
+
+func TestA2AAgentRunStreaming_StreamingHandlerErrorCancelsStream(t *testing.T) {
+	sseBody := mustBuildSSEBody(t, []sseEvent{
+		{
+			eventType: protocol.EventMessage,
+			payload: protocol.Message{
+				Kind:      protocol.KindMessage,
+				Role:      protocol.MessageRoleAgent,
+				MessageID: "resp-1",
+				Parts: []protocol.Part{
+					&protocol.TextPart{Kind: protocol.KindText, Text: "partial response"},
+				},
+			},
+		},
+	})
+
+	streamHandler := &cancelAwareStreamHandler{
+		body:     sseBody,
+		canceled: make(chan struct{}),
+	}
+	testClient, err := client.NewA2AClient(
+		"http://stream.test/",
+		client.WithHTTPReqHandler(streamHandler),
+	)
+	require.NoError(t, err)
+	a := &A2AAgent{
+		name:                "test-agent",
+		agentCard:           &server.AgentCard{URL: "http://stream.test/"},
+		eventConverter:      &defaultA2AEventConverter{},
+		a2aMessageConverter: stubInvocationConverter{},
+		streamingRespHandler: func(resp *model.Response) (string, error) {
+			return "", fmt.Errorf("handler failed")
+		},
+		streamingBufSize: 4,
+		a2aClient:        testClient,
+	}
+	invocation := &agent.Invocation{
+		InvocationID: "inv-test",
+		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	eventCh, err := a.runStreaming(ctx, invocation)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	select {
+	case <-streamHandler.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("expected streaming request context to be canceled")
+	}
+}
+
 func TestA2AAgentRunStreaming_ContinuesAfterRecoverableStructuredError(t *testing.T) {
 	code := "tool_not_found"
 	sseBody := mustBuildSSEBody(t, []sseEvent{
@@ -2784,27 +2895,30 @@ func TestA2AAgent_sendErrorEvent_UsesRunErrorType(t *testing.T) {
 	eventCh := make(chan *event.Event, 1)
 	invocation := &agent.Invocation{InvocationID: "inv-test"}
 
-	a.sendErrorEvent(
+	respErr := a.sendErrorEvent(
 		context.Background(),
 		eventCh,
 		invocation,
 		fmt.Errorf("boom"),
 	)
 
+	require.NotNil(t, respErr)
+	require.Equal(t, model.ErrorTypeRunError, respErr.Type)
+	require.Equal(t, "boom", respErr.Message)
+
 	evt := <-eventCh
 	require.NotNil(t, evt)
 	require.NotNil(t, evt.Response)
 	require.NotNil(t, evt.Response.Error)
 	require.Equal(t, model.ObjectTypeError, evt.Response.Object)
-	require.Equal(t, model.ErrorTypeRunError, evt.Response.Error.Type)
-	require.Equal(t, "boom", evt.Response.Error.Message)
+	require.Equal(t, evt.Response.Error, respErr)
 }
 
 func TestA2AAgent_aggregateEventContent_IgnoresErrorResponses(t *testing.T) {
 	a := &A2AAgent{name: "remote-agent"}
 	builder := &strings.Builder{}
 
-	responseID, hadErr := a.aggregateEventContent(
+	responseID, terminalError := a.aggregateEventContent(
 		context.Background(),
 		&agent.Invocation{InvocationID: "inv-test"},
 		make(chan *event.Event, 1),
@@ -2818,7 +2932,7 @@ func TestA2AAgent_aggregateEventContent_IgnoresErrorResponses(t *testing.T) {
 	)
 
 	require.Equal(t, "resp-1", responseID)
-	require.False(t, hadErr)
+	require.Nil(t, terminalError)
 	require.Equal(t, "", builder.String())
 }
 
@@ -2834,7 +2948,7 @@ func TestA2AAgent_aggregateEventContent_HandlerError(t *testing.T) {
 	eventCh := make(chan *event.Event, 1)
 	builder := &strings.Builder{}
 
-	responseID, hadErr := a.aggregateEventContent(
+	responseID, terminalError := a.aggregateEventContent(
 		context.Background(),
 		&agent.Invocation{InvocationID: "inv-test"},
 		eventCh,
@@ -2851,7 +2965,8 @@ func TestA2AAgent_aggregateEventContent_HandlerError(t *testing.T) {
 	)
 
 	require.Equal(t, "resp-2", responseID)
-	require.True(t, hadErr)
+	require.NotNil(t, terminalError)
+	require.Equal(t, model.ErrorTypeRunError, terminalError.Type)
 	require.Equal(t, "", builder.String())
 
 	evt := <-eventCh
@@ -2904,6 +3019,11 @@ type staticStreamHandler struct {
 	body string
 }
 
+type cancelAwareStreamHandler struct {
+	body     string
+	canceled chan struct{}
+}
+
 func (h *staticStreamHandler) Handle(
 	ctx context.Context,
 	_ *http.Client,
@@ -2913,6 +3033,30 @@ func (h *staticStreamHandler) Handle(
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(h.body)),
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+	}
+	resp.Header.Set("Content-Type", "text/event-stream")
+	return resp, nil
+}
+
+func (h *cancelAwareStreamHandler) Handle(
+	ctx context.Context,
+	_ *http.Client,
+	_ *http.Request,
+) (*http.Response, error) {
+	reader, writer := io.Pipe()
+	go func() {
+		_, _ = writer.Write([]byte(h.body))
+		<-ctx.Done()
+		close(h.canceled)
+		_ = writer.CloseWithError(ctx.Err())
+	}()
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       reader,
 		ProtoMajor: 1,
 		ProtoMinor: 1,
 	}
