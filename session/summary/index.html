@@ -4083,6 +4083,7 @@ conversation payload:</p>
 </ul>
 <h2 id="token-counter-configuration">Token Counter Configuration</h2>
 <p>By default, <code>CheckTokenThreshold</code> uses a built-in <code>SimpleTokenCounter</code> that estimates token count based on text length. To customize token counting behavior, use <code>summary.SetTokenCounter</code> to set a global token counter:</p>
+<p>For <code>SimpleTokenCounter</code>, <code>WithApproxRunesPerToken(v)</code> means roughly <code>v</code> UTF-8 characters per token. The formula is <code>estimatedTokens = countedUTF8Runes / v</code>. For example, <code>v=1.5</code> means about <code>1.5</code> characters per token; do not treat it as a token multiplier.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-16-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-16-3"> 3</a></span>
@@ -4163,6 +4164,7 @@ conversation payload:</p>
 <ul>
 <li><strong>Global effect</strong>: <code>SetTokenCounter</code> affects all <code>CheckTokenThreshold</code> evaluations in the current process; set it once during application initialization</li>
 <li><strong>Default counter</strong>: If not set, the default <code>SimpleTokenCounter</code> is used (approximately 4 characters per token)</li>
+<li><strong>Parameter meaning</strong>: <code>v</code> in <code>WithApproxRunesPerToken(v)</code> is characters per token. Passing <code>2.0/3.0</code> means about <code>0.67</code> characters per token, which is about <code>1.5</code> tokens per character</li>
 </ul>
 <h2 id="skip-recent-events">Skip Recent Events</h2>
 <p>Use <code>WithSkipRecent</code> to skip recent events during summarization:</p>
@@ -4663,7 +4665,7 @@ summarizer.</p>
 <span class="normal"><a href="#__codelineno-26-19">19</a></span>
 <span class="normal"><a href="#__codelineno-26-20">20</a></span>
 <span class="normal"><a href="#__codelineno-26-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1"></a><span class="nx">counter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewSimpleTokenCounter</span><span class="p">(</span>
-</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">WithApproxRunesPerToken</span><span class="p">(</span><span class="mf">1.6</span><span class="p">),</span><span class="w"> </span><span class="c1">// Example for Chinese-heavy content.</span>
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">WithApproxRunesPerToken</span><span class="p">(</span><span class="mf">1.6</span><span class="p">),</span><span class="w"> </span><span class="c1">// About 1.6 chars/token; this value is a divisor, not a multiplier.</span>
 </span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3"></a><span class="p">)</span>
 </span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4"></a>
 </span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5"></a><span class="nx">modelInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
@@ -5154,7 +5156,7 @@ cascade:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 18, 2026 12:21:55 UTC">2026-05-18 12:21:55</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 21, 2026 12:00:55 UTC">2026-05-21 12:00:55</span>
   </span>
 
     
