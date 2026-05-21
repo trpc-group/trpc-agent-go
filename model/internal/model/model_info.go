@@ -158,6 +158,7 @@ var ModelContextWindows = map[string]int{
 	// Gemini API model cards on ai.google.dev.
 
 	// Google Gemini 3.0
+	"gemini-3.1-pro-preview": 1048576, // https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview
 	"gemini-3-pro-preview":   1048576, // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro
 	"gemini-3-flash-preview": 1048576, // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash
 	"gemini-3.0-pro":         1048576, // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro
@@ -238,29 +239,36 @@ var ModelContextWindows = map[string]int{
 	// Provider page: https://openrouter.ai/mistralai
 	// Per-model pages: https://openrouter.ai/mistralai/<slug>
 	// Each row's window matches what OpenRouter's provider page lists.
+	// When first-party API IDs and OpenRouter slugs differ, both are listed.
 	// Open-weight checkpoints additionally have a Hugging Face model card; the
 	// HF link is inlined when it differs meaningfully from OpenRouter.
 
 	// Mistral Large
-	"mistral-large-3":      262144, // mistral-large-3-2512
-	"mistral-large-latest": 131072, // tracks the latest Large 2 family snapshot (mistral-large-2411)
-	"mistral-large":        131072, // mistral-large-2411
-	"mistral-large-2411":   131072,
-	"mistral-large-2407":   131072,
+	"mistral-large-3":              262144,
+	"mistral-large-2512":           262144, // https://docs.mistral.ai/models/model-cards/mistral-large-3-25-12
+	"mistral-large-latest":         131072, // tracks the latest Large 2 family snapshot (mistral-large-2411)
+	"mistral-large":                131072, // mistral-large-2411
+	"mistral-large-2411":           131072,
+	"mistral-large-2407":           131072,
+	"mistralai/mistral-large-2512": 262144, // https://openrouter.ai/mistralai/mistral-large-2512
 
 	// Mistral Medium
-	"mistral-medium-3.5":    262144,
-	"mistral-medium-latest": 131072, // tracks Medium 3.1
-	"mistral-medium-3.1":    131072,
-	"mistral-medium-3":      131072,
+	"mistral-medium-3.5":           262144,
+	"mistral-medium-3-5":           262144, // https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04
+	"mistral-medium-latest":        131072, // tracks Medium 3.1
+	"mistral-medium-3.1":           131072,
+	"mistral-medium-3":             131072,
+	"mistralai/mistral-medium-3-5": 262144, // https://openrouter.ai/mistralai/mistral-medium-3-5
 
 	// Mistral Small
-	"mistral-small-4":        262144,
-	"mistral-small-creative": 33000,
-	"mistral-small-3.2":      131072, // mistral-small-3.2-24b
-	"mistral-small-3.1":      128000, // mistral-small-3.1-24b
-	"mistral-small-latest":   128000, // tracks Mistral Small 3.1 24B
-	"mistral-small-3":        33000,
+	"mistral-small-4":              262144,
+	"mistral-small-2603":           262144, // https://docs.mistral.ai/models/model-cards/mistral-small-4-0-26-03
+	"mistral-small-creative":       33000,
+	"mistral-small-3.2":            131072, // mistral-small-3.2-24b
+	"mistral-small-3.1":            128000, // mistral-small-3.1-24b
+	"mistral-small-latest":         128000, // tracks Mistral Small 3.1 24B
+	"mistral-small-3":              33000,
+	"mistralai/mistral-small-2603": 262144, // https://openrouter.ai/mistralai/mistral-small-2603
 
 	// Mistral Nemo
 	"mistral-nemo": 131072,
@@ -280,8 +288,10 @@ var ModelContextWindows = map[string]int{
 	"codestral-mamba": 256000,
 
 	// Pixtral
-	"pixtral-large-2411": 131072,
-	"pixtral-12b":        4096,
+	"pixtral-large-2411":         131072,
+	"pixtral-12b":                4096,
+	"pixtral-12b-2409":           131072, // https://huggingface.co/mistralai/Pixtral-12B-2409
+	"mistralai/pixtral-12b-2409": 131072, // https://huggingface.co/mistralai/Pixtral-12B-2409
 
 	// Ministral
 	"ministral-3-14b": 262144, // ministral-3-14b-2512

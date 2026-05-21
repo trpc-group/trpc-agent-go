@@ -232,6 +232,31 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  1048576,
 		},
 		{
+			name:      "exact match - Gemini 3.1 Pro preview",
+			modelName: "gemini-3.1-pro-preview",
+			expected:  1048576,
+		},
+		{
+			name:      "exact match - Mistral Large 3 API ID",
+			modelName: "mistral-large-2512",
+			expected:  262144,
+		},
+		{
+			name:      "exact match - Mistral Medium 3.5 API ID",
+			modelName: "mistral-medium-3-5",
+			expected:  262144,
+		},
+		{
+			name:      "exact match - Mistral Small 4 API ID",
+			modelName: "mistral-small-2603",
+			expected:  262144,
+		},
+		{
+			name:      "exact match - Pixtral 12B first-party snapshot",
+			modelName: "pixtral-12b-2409",
+			expected:  131072,
+		},
+		{
 			name:      "longest prefix match - GPT-5.4 snapshot",
 			modelName: "gpt-5.4-2026-03-05",
 			expected:  1050000,
@@ -313,6 +338,42 @@ func TestLookupContextWindow(t *testing.T) {
 			name:      "OpenAI chat-latest exact match avoids broader prefix",
 			modelName: "gpt-5.2-chat-latest",
 			expected:  128000,
+			ok:        true,
+		},
+		{
+			name:      "Gemini replacement exact match",
+			modelName: "gemini-3.1-pro-preview",
+			expected:  1048576,
+			ok:        true,
+		},
+		{
+			name:      "Mistral Large 3 OpenRouter slug exact match",
+			modelName: "mistralai/mistral-large-2512",
+			expected:  262144,
+			ok:        true,
+		},
+		{
+			name:      "Mistral Medium 3.5 OpenRouter slug exact match",
+			modelName: "mistralai/mistral-medium-3-5",
+			expected:  262144,
+			ok:        true,
+		},
+		{
+			name:      "Mistral Small 4 OpenRouter slug exact match",
+			modelName: "mistralai/mistral-small-2603",
+			expected:  262144,
+			ok:        true,
+		},
+		{
+			name:      "Pixtral 12B exact match avoids OpenRouter cap prefix",
+			modelName: "pixtral-12b-2409",
+			expected:  131072,
+			ok:        true,
+		},
+		{
+			name:      "Pixtral 12B Hugging Face repo exact match",
+			modelName: "mistralai/pixtral-12b-2409",
+			expected:  131072,
 			ok:        true,
 		},
 		{
