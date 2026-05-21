@@ -29,10 +29,16 @@ const (
 	runningStatePersistAttempt = 2
 	testPersistBoom            = "persist boom"
 	shortRunTimeout            = 10 * time.Millisecond
+	testProfileInstruction     = "profile instruction"
+	testProfileRuntimeStateKey = "profile_id"
+	testRunContextValue        = "ctx-a"
 )
+
+type testRunContextKey struct{}
 
 type captureRunner struct {
 	mu        sync.Mutex
+	ctx       context.Context
 	userID    string
 	sessionID string
 	message   model.Message
@@ -49,6 +55,7 @@ func (r *captureRunner) Run(
 	opts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
 	r.mu.Lock()
+	r.ctx = ctx
 	r.userID = userID
 	r.sessionID = sessionID
 	r.message = message
@@ -281,6 +288,19 @@ func TestServiceSpawnCompletesRun(t *testing.T) {
 		RuntimeState: map[string]any{
 			"trace_id": "trace-1",
 		},
+		RunOptions: []agent.RunOption{
+			agent.WithInstruction(testProfileInstruction),
+			agent.MergeRuntimeState(map[string]any{
+				testProfileRuntimeStateKey: "profile-a",
+			}),
+		},
+		RunContext: func(ctx context.Context) context.Context {
+			return context.WithValue(
+				ctx,
+				testRunContextKey{},
+				testRunContextValue,
+			)
+		},
 		InjectedContextMessages: []model.Message{
 			model.NewSystemMessage("stay focused"),
 		},
@@ -318,6 +338,17 @@ func TestServiceSpawnCompletesRun(t *testing.T) {
 		t,
 		"parent-a",
 		runner.runOpts.RuntimeState[RuntimeStateKeyParentSessionID],
+	)
+	require.Equal(t, testProfileInstruction, runner.runOpts.Instruction)
+	require.Equal(
+		t,
+		"profile-a",
+		runner.runOpts.RuntimeState[testProfileRuntimeStateKey],
+	)
+	require.Equal(
+		t,
+		testRunContextValue,
+		runner.ctx.Value(testRunContextKey{}),
 	)
 	require.Equal(t, "trace-1", runner.runOpts.RuntimeState["trace_id"])
 	require.Len(t, runner.runOpts.InjectedContextMessages, 1)

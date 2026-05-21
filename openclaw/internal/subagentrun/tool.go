@@ -12,6 +12,7 @@ package subagentrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -36,8 +37,14 @@ const (
 	toolSessionsCancel = "sessions_cancel"
 
 	argID             = "id"
+	argMode           = "mode"
 	argTask           = "task"
 	argTimeoutSeconds = "timeout_seconds"
+	argWaitSeconds    = "wait_timeout_seconds"
+
+	spawnModeAsync  = "async"
+	spawnModeSync   = "sync"
+	spawnModeReview = "review"
 
 	schemaTypeInteger = "integer"
 	schemaTypeObject  = "object"
@@ -143,8 +150,10 @@ type waitTool struct {
 }
 
 type spawnInput struct {
-	Task           string `json:"task"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
+	Task               string `json:"task"`
+	Mode               string `json:"mode"`
+	TimeoutSeconds     int    `json:"timeout_seconds"`
+	WaitTimeoutSeconds int    `json:"wait_timeout_seconds"`
 }
 
 type runIDInput struct {
@@ -178,9 +187,12 @@ func (t *waitTool) setService(svc *Service) {
 
 func (t *spawnTool) Declaration() *tool.Declaration {
 	description := "Spawn one OpenClaw background subagent for " +
-		"the current session. Use this for long-running work, " +
-		"parallelizable work, or independent verification. It " +
-		"returns immediately with a run id."
+		"the current session. Use mode=async for long-running " +
+		"or parallel work that can continue after this turn, " +
+		"mode=sync when the parent must wait for the result, " +
+		"and mode=review when the parent must show the result " +
+		"to the user and wait for the next user reply before " +
+		"continuing."
 	if t.alias {
 		description = "Compatibility alias for " +
 			toolSubagentsSpawn + ". " + description
@@ -197,10 +209,25 @@ func (t *spawnTool) Declaration() *tool.Declaration {
 					Description: "Delegated task for the " +
 						"background subagent.",
 				},
+				argMode: {
+					Type: schemaTypeString,
+					Description: "Optional execution mode: " +
+						spawnModeAsync + ", " +
+						spawnModeSync + ", or " +
+						spawnModeReview + ". Default is " +
+						spawnModeAsync + ".",
+				},
 				argTimeoutSeconds: {
 					Type: schemaTypeInteger,
 					Description: "Optional timeout in " +
 						"seconds for the delegated run.",
+				},
+				argWaitSeconds: {
+					Type: schemaTypeInteger,
+					Description: "Optional wait timeout in " +
+						"seconds for " + spawnModeSync +
+						" or " + spawnModeReview +
+						" mode.",
 				},
 			},
 		},
@@ -224,6 +251,10 @@ func (t *spawnTool) Call(
 	if err := json.Unmarshal(args, &in); err != nil {
 		return nil, err
 	}
+	mode, err := normalizeSpawnMode(in.Mode)
+	if err != nil {
+		return nil, err
+	}
 	userID, sess, err := currentContext(ctx)
 	if err != nil {
 		return nil, err
@@ -239,16 +270,40 @@ func (t *spawnTool) Call(
 		)
 	}
 
-	return t.svc.Spawn(ctx, SpawnRequest{
-		OwnerUserID:     userID,
-		ParentSessionID: sess.ID,
-		Task:            in.Task,
-		TimeoutSeconds:  in.TimeoutSeconds,
+	run, err := t.svc.Spawn(ctx, SpawnRequest{
+		OwnerUserID:                    userID,
+		ParentSessionID:                sess.ID,
+		Task:                           in.Task,
+		TimeoutSeconds:                 in.TimeoutSeconds,
+		SuppressCompletionNotification: mode != spawnModeAsync,
 		Delivery: deliveryTarget{
 			Channel: delivery.Channel,
 			Target:  delivery.Target,
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	if mode == spawnModeAsync {
+		return run, nil
+	}
+	waitCtx, cancel := waitContext(ctx, in.WaitTimeoutSeconds)
+	if cancel != nil {
+		defer cancel()
+	}
+	final, err := t.svc.WaitForUser(waitCtx, userID, run.ID)
+	if waitTimedOut(ctx, waitCtx, err, in.WaitTimeoutSeconds) {
+		return t.svc.GetForUser(userID, run.ID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if mode == spawnModeReview {
+		if err := markAwaitingReview(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return final, nil
 }
 
 func (t *listTool) Declaration() *tool.Declaration {
@@ -374,13 +429,59 @@ func (t *waitTool) Call(
 	waitCtx := ctx
 	var cancel context.CancelFunc
 	if in.TimeoutSeconds > 0 {
-		waitCtx, cancel = context.WithTimeout(
-			ctx,
-			time.Duration(in.TimeoutSeconds)*time.Second,
-		)
+		waitCtx, cancel = waitContext(ctx, in.TimeoutSeconds)
 		defer cancel()
 	}
 	return t.svc.WaitForUser(waitCtx, userID, in.ID)
+}
+
+func normalizeSpawnMode(mode string) (string, error) {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return spawnModeAsync, nil
+	}
+	switch mode {
+	case spawnModeAsync, spawnModeSync, spawnModeReview:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("subagent: unsupported mode %q", mode)
+	}
+}
+
+func waitContext(
+	ctx context.Context,
+	timeoutSeconds int,
+) (context.Context, context.CancelFunc) {
+	if timeoutSeconds <= 0 {
+		return ctx, nil
+	}
+	return context.WithTimeout(
+		ctx,
+		time.Duration(timeoutSeconds)*time.Second,
+	)
+}
+
+func markAwaitingReview(ctx context.Context) error {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return fmt.Errorf("subagent: current invocation unavailable")
+	}
+	if err := agent.MarkAwaitingUserReply(inv); err != nil {
+		return fmt.Errorf("subagent: mark review continuation: %w", err)
+	}
+	return nil
+}
+
+func waitTimedOut(
+	ctx context.Context,
+	waitCtx context.Context,
+	err error,
+	timeoutSeconds int,
+) bool {
+	return timeoutSeconds > 0 &&
+		ctx.Err() == nil &&
+		errors.Is(waitCtx.Err(), context.DeadlineExceeded) &&
+		errors.Is(err, context.DeadlineExceeded)
 }
 
 func runIDSchema() *tool.Schema {

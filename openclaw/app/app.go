@@ -275,9 +275,13 @@ const (
 		"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing " +
 		"attachment paths. For long-running work, independent " +
 		"verification, or background work that can continue after " +
-		"this turn, use subagents_spawn. Do not use background " +
-		"subagents for small, tightly-coupled steps, and do not " +
-		"spawn nested subagents. " +
+		"this turn, use subagents_spawn with mode=async. When a " +
+		"subagent result is required before continuing, use " +
+		"mode=sync. When the user must review the subagent result " +
+		"before you continue, use mode=review, show the result, " +
+		"and wait for the next user reply. Do not use subagents " +
+		"for small, tightly-coupled steps, and do not spawn " +
+		"nested subagents. " +
 		"When a user follows up about a " +
 		"recent upload in the current chat, assume they mean " +
 		"that existing upload unless the reference is " +
@@ -1092,6 +1096,7 @@ func NewRuntimeWithOptions(
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(bridgedSessionSvc),
 		runner.WithPlugins(conversation.Plugin{}),
+		runner.WithAwaitUserReplyRouting(true),
 	}
 	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
@@ -1602,6 +1607,7 @@ func run(ctx context.Context, args []string) error {
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(bridgedSessionSvc),
 		runner.WithPlugins(conversation.Plugin{}),
+		runner.WithAwaitUserReplyRouting(true),
 	}
 	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)

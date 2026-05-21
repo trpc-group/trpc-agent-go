@@ -48,11 +48,12 @@ type deliveryTarget struct {
 }
 
 type SpawnRequest struct {
-	OwnerUserID     string
-	ParentSessionID string
-	Task            string
-	TimeoutSeconds  int
-	Delivery        deliveryTarget
+	OwnerUserID                    string
+	ParentSessionID                string
+	Task                           string
+	TimeoutSeconds                 int
+	Delivery                       deliveryTarget
+	SuppressCompletionNotification bool
 }
 
 func subagentStorePath(stateDir string) string {

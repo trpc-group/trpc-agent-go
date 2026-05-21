@@ -24,10 +24,13 @@ import (
 )
 
 type fakeController struct {
-	mu      sync.Mutex
-	nextID  int
-	spawned taskrunruntime.SpawnRequest
-	runs    map[string]taskrunruntime.Run
+	mu             sync.Mutex
+	nextID         int
+	spawned        taskrunruntime.SpawnRequest
+	waits          int
+	waitErr        error
+	waitForContext bool
+	runs           map[string]taskrunruntime.Run
 }
 
 func newFakeController() *fakeController {
@@ -114,15 +117,26 @@ func (c *fakeController) Wait(
 	runID string,
 ) (*taskrunruntime.Run, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.waits++
 	run, ok := c.runs[runID]
 	if !ok {
+		c.mu.Unlock()
 		return nil, taskrunruntime.ErrRunNotFound
+	}
+	if c.waitErr != nil {
+		err := c.waitErr
+		c.mu.Unlock()
+		return nil, err
+	}
+	if c.waitForContext {
+		c.mu.Unlock()
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
 	run.Status = taskrunruntime.StatusCompleted
 	run.Result = "done"
 	c.runs[runID] = run
+	c.mu.Unlock()
 	return &run, nil
 }
 
@@ -160,6 +174,7 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 		"extra context",
 		controller.spawned.InjectedContextMessages[0].Content,
 	)
+	require.Zero(t, controller.waits)
 	controller.mu.Unlock()
 
 	listedAny, err := tools.list.Call(ctx, []byte(`{"ignored":true}`))
@@ -189,6 +204,113 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	require.Equal(t, taskrunruntime.StatusCanceled, canceled.Status)
 }
 
+func TestSpawnToolSyncModeWaits(t *testing.T) {
+	t.Parallel()
+
+	controller := newFakeController()
+	tools := NewTools(controller)
+	ctx := newInvocationContext("user-a", "session-a", nil)
+
+	spawnedAny, err := tools.spawn.Call(
+		ctx,
+		[]byte(
+			`{"task":"review","mode":"sync","wait_timeout_seconds":1}`,
+		),
+	)
+	require.NoError(t, err)
+	spawned := spawnedAny.(*taskrunruntime.Run)
+	require.Equal(t, taskrunruntime.StatusCompleted, spawned.Status)
+	require.Equal(t, "done", spawned.Result)
+
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	require.Equal(t, 1, controller.waits)
+}
+
+func TestSpawnToolSyncWaitTimeoutReturnsLatestRun(t *testing.T) {
+	t.Parallel()
+
+	controller := newFakeController()
+	controller.waitForContext = true
+	tools := NewTools(controller)
+	ctx := newInvocationContext("user-a", "session-a", nil)
+
+	spawnedAny, err := tools.spawn.Call(
+		ctx,
+		[]byte(
+			`{"task":"review","mode":"sync","wait_timeout_seconds":1}`,
+		),
+	)
+	require.NoError(t, err)
+	spawned := spawnedAny.(*taskrunruntime.Run)
+	require.Equal(t, taskrunruntime.StatusQueued, spawned.Status)
+
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	require.Equal(t, 1, controller.waits)
+}
+
+func TestSpawnToolSyncWaitDeadlineErrors(t *testing.T) {
+	t.Parallel()
+
+	controller := newFakeController()
+	controller.waitErr = context.DeadlineExceeded
+	tools := NewTools(controller)
+	ctx := newInvocationContext("user-a", "session-a", nil)
+
+	_, err := tools.spawn.Call(
+		ctx,
+		[]byte(
+			`{"task":"review","mode":"sync","wait_timeout_seconds":1}`,
+		),
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	controller = newFakeController()
+	controller.waitForContext = true
+	tools = NewTools(controller)
+	ctx, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = tools.spawn.Call(
+		ctx,
+		[]byte(
+			`{"task":"review","mode":"sync","wait_timeout_seconds":1}`,
+		),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestWaitTimedOutRequiresWaitContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	parent := context.Background()
+	waitCtx, cancel := context.WithTimeout(parent, 0)
+	defer cancel()
+	<-waitCtx.Done()
+	require.True(t, waitTimedOut(
+		parent,
+		waitCtx,
+		context.DeadlineExceeded,
+		1,
+	))
+
+	require.False(t, waitTimedOut(
+		parent,
+		parent,
+		context.DeadlineExceeded,
+		1,
+	))
+
+	canceledParent, cancelParent := context.WithCancel(parent)
+	cancelParent()
+	require.False(t, waitTimedOut(
+		canceledParent,
+		canceledParent,
+		context.Canceled,
+		1,
+	))
+}
+
 func TestToolDeclarations(t *testing.T) {
 	t.Parallel()
 
@@ -199,6 +321,14 @@ func TestToolDeclarations(t *testing.T) {
 	require.Contains(t,
 		tools.spawn.Declaration().InputSchema.Properties,
 		argTimeoutSeconds,
+	)
+	require.Contains(t,
+		tools.spawn.Declaration().InputSchema.Properties,
+		argMode,
+	)
+	require.Contains(t,
+		tools.spawn.Declaration().InputSchema.Properties,
+		argWaitSeconds,
 	)
 	require.Equal(t, toolList, tools.list.Declaration().Name)
 	require.Equal(t, schemaTypeObject,
@@ -257,6 +387,9 @@ func TestToolsRequireContextAndController(t *testing.T) {
 
 	_, err = tools.spawn.Call(ctx, []byte(`{invalid`))
 	require.Error(t, err)
+
+	_, err = tools.spawn.Call(ctx, []byte(`{"task":"demo","mode":"bad"}`))
+	require.ErrorContains(t, err, "unsupported mode")
 
 	_, err = tools.list.Call(ctx, []byte(`{invalid`))
 	require.Error(t, err)

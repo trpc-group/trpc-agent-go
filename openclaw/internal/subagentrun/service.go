@@ -16,11 +16,13 @@ import (
 	"strings"
 	"sync"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	coretaskrun "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	taskruninprocess "trpc.group/trpc-go/trpc-agent-go/agent/taskrun/inprocess"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -109,6 +111,12 @@ func (s *Service) Spawn(
 			runtimeState[key] = value
 		}
 	}
+	runOptions := runOptionsFromContext(ctx)
+	runContext := runContextFromContext(ctx)
+	metadata := metadataForDelivery(req.Delivery)
+	if req.SuppressCompletionNotification {
+		metadata = nil
+	}
 	run, err := s.core.Spawn(ctx, coretaskrun.SpawnRequest{
 		ID:               runID,
 		OwnerUserID:      req.OwnerUserID,
@@ -118,16 +126,48 @@ func (s *Service) Spawn(
 		Task:             req.Task,
 		Timeout:          timeoutDuration(req.TimeoutSeconds),
 		RuntimeState:     runtimeState,
+		RunOptions:       runOptions,
+		RunContext:       runContext,
 		RuntimeStateKeys: subagentRuntimeStateKeys(),
 		InjectedContextMessages: []model.Message{
 			model.NewSystemMessage(subagentRunPrompt),
 		},
-		Metadata: metadataForDelivery(req.Delivery),
+		Metadata: metadata,
 	})
 	if err != nil {
 		return openclawsubagent.Run{}, translateCoreError(err)
 	}
 	return projectRun(run), nil
+}
+
+func runOptionsFromContext(ctx context.Context) []agent.RunOption {
+	profile, ok := runtimeprofile.ProfileFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	return runtimeprofile.RunOptions(profile)
+}
+
+func runContextFromContext(
+	ctx context.Context,
+) func(context.Context) context.Context {
+	profile, hasProfile := runtimeprofile.ProfileFromContext(ctx)
+	req, hasRequest := runtimeprofile.RequestFromContext(ctx)
+	if !hasProfile && !hasRequest {
+		return nil
+	}
+	return func(base context.Context) context.Context {
+		if base == nil {
+			base = context.Background()
+		}
+		if hasRequest {
+			base = runtimeprofile.WithRequest(base, req)
+		}
+		if hasProfile {
+			base = runtimeprofile.WithProfile(base, profile)
+		}
+		return base
+	}
 }
 
 func (s *Service) ListForUser(

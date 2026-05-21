@@ -388,6 +388,11 @@ func (s *Service) markRunning(
 	if runCtx == nil {
 		runCtx = context.Background()
 	}
+	if req.RunContext != nil {
+		if enriched := req.RunContext(runCtx); enriched != nil {
+			runCtx = enriched
+		}
+	}
 	var cancel context.CancelFunc
 	if req.Timeout > 0 {
 		runCtx, cancel = context.WithTimeout(runCtx, req.Timeout)
@@ -426,14 +431,15 @@ func (s *Service) runChild(
 	if run == nil {
 		return fmt.Errorf("taskrun: nil run")
 	}
-	runOpts := []agent.RunOption{
+	runOpts := append([]agent.RunOption(nil), req.RunOptions...)
+	runOpts = append(runOpts,
 		agent.WithRequestID(run.RequestID),
-		agent.WithRuntimeState(runtimeStateForRun(
+		agent.MergeRuntimeState(runtimeStateForRun(
 			run,
 			req.RuntimeState,
 			req.RuntimeStateKeys,
 		)),
-	}
+	)
 	if len(req.InjectedContextMessages) > 0 {
 		runOpts = append(
 			runOpts,
@@ -701,6 +707,9 @@ func cloneMetadata(metadata map[string]string) map[string]string {
 func cloneSpawnRequest(req SpawnRequest) SpawnRequest {
 	out := req
 	out.RuntimeState = cloneRuntimeState(req.RuntimeState)
+	if req.RunOptions != nil {
+		out.RunOptions = append([]agent.RunOption(nil), req.RunOptions...)
+	}
 	if req.InjectedContextMessages != nil {
 		out.InjectedContextMessages = append(
 			[]model.Message(nil),

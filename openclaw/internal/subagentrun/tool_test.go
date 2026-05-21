@@ -18,9 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+const testParentAgentName = "parent"
 
 func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	t.Parallel()
@@ -82,6 +85,134 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	require.Equal(t, openclawsubagent.StatusCanceled, waited.Status)
 }
 
+func TestSpawnToolSyncAndReviewModesWait(t *testing.T) {
+	t.Parallel()
+
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	runner := &captureRunner{reply: "review result"}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	tools := NewTools(svc)
+	ctx := newInvocationContext(
+		"telegram:user",
+		"telegram:dm:321",
+		map[string]any{
+			"openclaw.delivery.channel": "telegram",
+			"openclaw.delivery.target":  "321",
+		},
+	)
+
+	syncedAny, err := tools.spawn.Call(
+		ctx,
+		[]byte(`{"task":"review","mode":"sync"}`),
+	)
+	require.NoError(t, err)
+	synced := syncedAny.(*openclawsubagent.Run)
+	require.Equal(t, openclawsubagent.StatusCompleted, synced.Status)
+	require.Equal(t, "review result", synced.Result)
+
+	reviewInv := newInvocation(
+		"telegram:user",
+		"telegram:dm:654",
+		map[string]any{
+			"openclaw.delivery.channel": "telegram",
+			"openclaw.delivery.target":  "654",
+		},
+	)
+	reviewCtx := agent.NewInvocationContext(
+		context.Background(),
+		reviewInv,
+	)
+	reviewedAny, err := tools.spawn.Call(
+		reviewCtx,
+		[]byte(`{"task":"review","mode":"review"}`),
+	)
+	require.NoError(t, err)
+	reviewed := reviewedAny.(*openclawsubagent.Run)
+	require.Equal(t, openclawsubagent.StatusCompleted, reviewed.Status)
+
+	_, text := sender.snapshot()
+	require.Empty(t, text)
+
+	route, ok := agent.CurrentAwaitUserReplyRoute(reviewInv)
+	require.True(t, ok)
+	require.Equal(t, testParentAgentName, route.AgentName)
+}
+
+func TestSpawnToolSyncWaitTimeoutReturnsLatestRun(t *testing.T) {
+	t.Parallel()
+
+	runner := &blockingRunner{started: make(chan struct{})}
+	svc, err := NewService(t.TempDir(), runner, nil)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	tools := NewTools(svc)
+	ctx := newInvocationContext(
+		"telegram:user",
+		"telegram:dm:321",
+		map[string]any{
+			"openclaw.delivery.channel": "telegram",
+			"openclaw.delivery.target":  "321",
+		},
+	)
+
+	spawnedAny, err := tools.spawn.Call(
+		ctx,
+		[]byte(
+			`{"task":"review","mode":"sync","wait_timeout_seconds":1}`,
+		),
+	)
+	require.NoError(t, err)
+	spawned := spawnedAny.(*openclawsubagent.Run)
+	require.Contains(t, []openclawsubagent.Status{
+		openclawsubagent.StatusQueued,
+		openclawsubagent.StatusRunning,
+	}, spawned.Status)
+}
+
+func TestWaitTimedOutRequiresWaitContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	parent := context.Background()
+	waitCtx, cancel := context.WithTimeout(parent, 0)
+	defer cancel()
+	<-waitCtx.Done()
+	require.True(t, waitTimedOut(
+		parent,
+		waitCtx,
+		context.DeadlineExceeded,
+		1,
+	))
+
+	require.False(t, waitTimedOut(
+		parent,
+		parent,
+		context.DeadlineExceeded,
+		1,
+	))
+
+	canceledParent, cancelParent := context.WithCancel(parent)
+	cancelParent()
+	require.False(t, waitTimedOut(
+		canceledParent,
+		canceledParent,
+		context.Canceled,
+		1,
+	))
+}
+
 func TestSpawnToolRejectsNestedSubagent(t *testing.T) {
 	t.Parallel()
 
@@ -121,6 +252,16 @@ func TestToolsAllAndDeclarations(t *testing.T) {
 		require.NotNil(t, item.Declaration())
 	}
 	require.NotNil(t, tools.wait.Declaration())
+	require.Contains(
+		t,
+		tools.spawn.Declaration().InputSchema.Properties,
+		argMode,
+	)
+	require.Contains(
+		t,
+		tools.spawn.Declaration().InputSchema.Properties,
+		argWaitSeconds,
+	)
 	require.Contains(
 		t,
 		tools.spawnAlias.Declaration().Description,
@@ -163,6 +304,9 @@ func TestToolErrorPaths(t *testing.T) {
 
 	_, err = tools.spawn.Call(ctx, []byte(`{invalid`))
 	require.Error(t, err)
+
+	_, err = tools.spawn.Call(ctx, []byte(`{"task":"demo","mode":"bad"}`))
+	require.ErrorContains(t, err, "unsupported mode")
 
 	_, err = tools.spawn.Call(context.Background(), []byte(`{"task":"demo"}`))
 	require.ErrorContains(t, err, "current session context is unavailable")
@@ -215,6 +359,15 @@ func newInvocationContext(
 	sessionID string,
 	runtimeState map[string]any,
 ) context.Context {
+	inv := newInvocation(userID, sessionID, runtimeState)
+	return agent.NewInvocationContext(context.Background(), inv)
+}
+
+func newInvocation(
+	userID string,
+	sessionID string,
+	runtimeState map[string]any,
+) *agent.Invocation {
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(
 			session.NewSession("app", userID, sessionID),
@@ -223,8 +376,6 @@ func newInvocationContext(
 			RuntimeState: runtimeState,
 		}),
 	)
-	if runtimeState == nil {
-		return agent.NewInvocationContext(context.Background(), inv)
-	}
-	return agent.NewInvocationContext(context.Background(), inv)
+	inv.AgentName = testParentAgentName
+	return inv
 }

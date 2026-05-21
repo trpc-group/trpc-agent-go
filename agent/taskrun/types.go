@@ -19,6 +19,7 @@ import (
 	"errors"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -105,6 +106,12 @@ type SpawnRequest struct {
 	// RuntimeState is local runner state for implementations that call
 	// runner.Run directly. It is not a cross-node serialization contract.
 	RuntimeState map[string]any
+	// RunOptions are local runner options for implementations that call
+	// runner.Run directly. They are not a cross-node serialization contract.
+	RunOptions []agent.RunOption
+	// RunContext adds local context values for implementations that call
+	// runner.Run directly. It is not a cross-node serialization contract.
+	RunContext func(context.Context) context.Context
 	// RuntimeStateKeys overrides the keys injected by implementations that
 	// call runner.Run directly. Zero value uses the taskrun defaults.
 	RuntimeStateKeys RuntimeStateKeys

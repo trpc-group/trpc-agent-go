@@ -13,6 +13,7 @@ package taskrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -32,8 +33,13 @@ const (
 
 	argAgentName      = "agent_name"
 	argID             = "id"
+	argMode           = "mode"
 	argTask           = "task"
 	argTimeoutSeconds = "timeout_seconds"
+	argWaitSeconds    = "wait_timeout_seconds"
+
+	spawnModeAsync = "async"
+	spawnModeSync  = "sync"
 
 	schemaTypeInteger = "integer"
 	schemaTypeObject  = "object"
@@ -171,9 +177,11 @@ type waitTool struct {
 }
 
 type spawnInput struct {
-	Task           string `json:"task"`
-	AgentName      string `json:"agent_name"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
+	Task               string `json:"task"`
+	AgentName          string `json:"agent_name"`
+	Mode               string `json:"mode"`
+	TimeoutSeconds     int    `json:"timeout_seconds"`
+	WaitTimeoutSeconds int    `json:"wait_timeout_seconds"`
 }
 
 type runIDInput struct {
@@ -188,9 +196,11 @@ type listResult struct {
 func (t *spawnTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolSpawn,
-		Description: "Start one background task run for " +
-			"the current session. It returns immediately with " +
-			"a run id.",
+		Description: "Start one task run for the current session. " +
+			"By default mode is async and the tool returns " +
+			"immediately with a run id. Use mode=sync when the " +
+			"parent agent must wait for the delegated run to " +
+			"finish before continuing.",
 		InputSchema: &tool.Schema{
 			Type:     schemaTypeObject,
 			Required: []string{argTask},
@@ -205,10 +215,23 @@ func (t *spawnTool) Declaration() *tool.Declaration {
 					Description: "Optional registered agent " +
 						"name to run.",
 				},
+				argMode: {
+					Type: schemaTypeString,
+					Description: "Optional execution mode: " +
+						spawnModeAsync + " or " +
+						spawnModeSync + ". Default is " +
+						spawnModeAsync + ".",
+				},
 				argTimeoutSeconds: {
 					Type: schemaTypeInteger,
 					Description: "Optional timeout in seconds " +
 						"for the delegated run.",
+				},
+				argWaitSeconds: {
+					Type: schemaTypeInteger,
+					Description: "Optional wait timeout in " +
+						"seconds when mode is " +
+						spawnModeSync + ".",
 				},
 			},
 		},
@@ -233,6 +256,10 @@ func (t *spawnTool) Call(
 	if err := json.Unmarshal(args, &in); err != nil {
 		return nil, err
 	}
+	mode, err := normalizeSpawnMode(in.Mode)
+	if err != nil {
+		return nil, err
+	}
 	userID, sessionID, err := currentContext(ctx)
 	if err != nil {
 		return nil, err
@@ -252,6 +279,20 @@ func (t *spawnTool) Call(
 	})
 	if err != nil {
 		return nil, err
+	}
+	if mode == spawnModeSync {
+		waitCtx, cancel := waitContext(ctx, in.WaitTimeoutSeconds)
+		if cancel != nil {
+			defer cancel()
+		}
+		final, err := state.controller.Wait(waitCtx, run.ID)
+		if waitTimedOut(ctx, waitCtx, err, in.WaitTimeoutSeconds) {
+			return state.controller.Get(ctx, run.ID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return final, nil
 	}
 	return run, nil
 }
@@ -389,13 +430,45 @@ func (t *waitTool) Call(
 	waitCtx := ctx
 	var cancel context.CancelFunc
 	if in.TimeoutSeconds > 0 {
-		waitCtx, cancel = context.WithTimeout(
-			ctx,
-			secondsDuration(in.TimeoutSeconds),
-		)
+		waitCtx, cancel = waitContext(ctx, in.TimeoutSeconds)
 		defer cancel()
 	}
 	return state.controller.Wait(waitCtx, in.ID)
+}
+
+func normalizeSpawnMode(mode string) (string, error) {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return spawnModeAsync, nil
+	}
+	switch mode {
+	case spawnModeAsync, spawnModeSync:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("taskrun: unsupported mode %q", mode)
+	}
+}
+
+func waitContext(
+	ctx context.Context,
+	timeoutSeconds int,
+) (context.Context, context.CancelFunc) {
+	if timeoutSeconds <= 0 {
+		return ctx, nil
+	}
+	return context.WithTimeout(ctx, secondsDuration(timeoutSeconds))
+}
+
+func waitTimedOut(
+	ctx context.Context,
+	waitCtx context.Context,
+	err error,
+	timeoutSeconds int,
+) bool {
+	return timeoutSeconds > 0 &&
+		ctx.Err() == nil &&
+		errors.Is(waitCtx.Err(), context.DeadlineExceeded) &&
+		errors.Is(err, context.DeadlineExceeded)
 }
 
 func runIDSchema() *tool.Schema {

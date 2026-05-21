@@ -95,6 +95,17 @@ The tool names are:
 - `cancel_task_run`
 - `wait_task_run`
 
+`start_task_run` accepts a `mode` field:
+
+- `async` is the default. The tool starts the child run and returns the run
+  id immediately.
+- `sync` starts the child run and waits until it reaches a terminal status
+  before returning.
+
+`timeout_seconds` limits the child run itself. `wait_timeout_seconds` only
+limits how long the tool waits in `sync` mode; it does not cancel the child
+run when the wait times out.
+
 Nested task runs are rejected by default. Enable them explicitly with
 `taskruntool.WithNestedSpawns(true)` only when the application has its own
 fan-out limits.
@@ -110,4 +121,8 @@ Every child run receives these runtime-state keys:
 Application adapters can merge additional runtime state through
 `SpawnRequest.RuntimeState`, or override the injected key names through
 `SpawnRequest.RuntimeStateKeys` when they expose a product-specific runtime
-surface.
+surface. Local adapters that call `runner.Run` directly can also pass
+per-run `agent.RunOption` values through `SpawnRequest.RunOptions`; this is
+for in-process runner configuration and should not be serialized as a
+cross-node contract. `SpawnRequest.RunContext` can add local context values
+to the child runner context for the same in-process use case.

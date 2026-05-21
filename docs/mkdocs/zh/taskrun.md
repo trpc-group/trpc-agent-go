@@ -92,6 +92,14 @@ parent := llmagent.New(
 - `cancel_task_run`
 - `wait_task_run`
 
+`start_task_run` 支持 `mode` 字段：
+
+- `async` 是默认模式。工具会启动子 run，并立即返回 run id。
+- `sync` 会启动子 run，并等待它进入终态后再返回。
+
+`timeout_seconds` 限制的是子 run 本身的执行时间。`wait_timeout_seconds`
+只限制 `sync` 模式下工具等待的时间；等待超时不会取消子 run。
+
 默认禁止嵌套创建 task run。只有当应用自己有并发和扇出限制时，才应通过
 `taskruntool.WithNestedSpawns(true)` 显式开启。
 
@@ -105,4 +113,7 @@ parent := llmagent.New(
 
 业务适配层可以通过 `SpawnRequest.RuntimeState` 合并更多运行时状态；如果
 产品侧需要自己的运行时命名，也可以通过 `SpawnRequest.RuntimeStateKeys`
-覆盖注入的 key 名称。
+覆盖注入的 key 名称。直接调用 `runner.Run` 的本地适配层还可以通过
+`SpawnRequest.RunOptions` 传入每次运行的 `agent.RunOption`；这属于进程内
+runner 配置，不应作为跨节点序列化协议。`SpawnRequest.RunContext` 可用于
+把本地 context value 注入子 runner context，适用范围同样是进程内实现。

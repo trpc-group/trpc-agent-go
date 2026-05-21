@@ -27,16 +27,24 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 )
 
 const (
 	testStoreDirPerm  = 0o700
 	testStoreFilePerm = 0o600
+	testProfileID     = "reviewer"
+	testProfilePrompt = "profile instruction"
+	testProfileState  = "profile_state"
+	testProfileSystem = "profile system prompt"
+	testProfileRoot   = "/tmp/openclaw-profile-root"
+	testProfileUserID = "telegram:user"
 )
 
 type captureRunner struct {
 	mu        sync.Mutex
+	ctx       context.Context
 	userID    string
 	sessionID string
 	message   model.Message
@@ -53,6 +61,7 @@ func (r *captureRunner) Run(
 	opts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
 	r.mu.Lock()
+	r.ctx = ctx
 	r.userID = userID
 	r.sessionID = sessionID
 	r.message = message
@@ -162,7 +171,29 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 		require.NoError(t, svc.Close())
 	})
 
-	run, err := svc.Spawn(context.Background(), SpawnRequest{
+	spawnCtx := runtimeprofile.WithRequest(
+		runtimeprofile.WithProfile(
+			context.Background(),
+			runtimeprofile.Profile{
+				ID: testProfileID,
+				Prompt: runtimeprofile.Prompt{
+					Instruction:  testProfilePrompt,
+					SystemPrompt: testProfileSystem,
+				},
+				Workspace: runtimeprofile.WorkspacePolicy{
+					AllowedRoots: []string{testProfileRoot},
+				},
+				State: map[string]any{
+					testProfileState: "profile-a",
+				},
+			},
+		),
+		runtimeprofile.Request{
+			ProfileID: testProfileID,
+			UserID:    testProfileUserID,
+		},
+	)
+	run, err := svc.Spawn(spawnCtx, SpawnRequest{
 		OwnerUserID:     "telegram:user",
 		ParentSessionID: "telegram:dm:100",
 		Task:            "check the incident timeline",
@@ -232,6 +263,29 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 		"telegram",
 		runner.runOpts.RuntimeState["openclaw.delivery.channel"],
 	)
+	require.Equal(t, testProfilePrompt, runner.runOpts.Instruction)
+	require.Equal(
+		t,
+		testProfileSystem,
+		runner.runOpts.GlobalInstruction,
+	)
+	require.Equal(
+		t,
+		testProfileID,
+		runner.runOpts.RuntimeState[runtimeprofile.RuntimeStateProfileID],
+	)
+	require.Equal(
+		t,
+		"profile-a",
+		runner.runOpts.RuntimeState[testProfileState],
+	)
+	workspace, ok := runtimeprofile.WorkspaceFromContext(runner.ctx)
+	require.True(t, ok)
+	require.Equal(t, []string{testProfileRoot}, workspace.AllowedRoots)
+	req, ok := runtimeprofile.RequestFromContext(runner.ctx)
+	require.True(t, ok)
+	require.Equal(t, testProfileID, req.ProfileID)
+	require.Equal(t, testProfileUserID, req.UserID)
 	require.Len(t, runner.runOpts.InjectedContextMessages, 1)
 	require.Equal(
 		t,
