@@ -141,6 +141,24 @@ func TestValidateListSessionsOptions(t *testing.T) {
 		EventPage: &EventPage{Offset: 0, Limit: 10},
 	})
 	require.ErrorIs(t, err, ErrEventPageOnlyForGetSession)
+
+	err = ValidateListSessionsOptions(&Options{
+		ListSessionPage: &ListSessionPage{Offset: -1, Limit: 10},
+	})
+	require.ErrorIs(t, err, ErrInvalidListSessionPage)
+
+	err = ValidateListSessionsOptions(&Options{
+		ListSessionPage: &ListSessionPage{Offset: 0, Limit: 0},
+	})
+	require.ErrorIs(t, err, ErrInvalidListSessionPage)
+
+	err = ValidateListSessionsOptions(&Options{
+		ListSessionPage: &ListSessionPage{Offset: 0, Limit: 10},
+	})
+	require.NoError(t, err)
+
+	err = ValidateListSessionsOptions(&Options{})
+	require.NoError(t, err)
 }
 
 func TestWithSummaryFilterKey(t *testing.T) {
@@ -2367,6 +2385,14 @@ func TestWithListSessionOnlyMeta(t *testing.T) {
 	opt := &Options{}
 	WithListSessionOnlyMeta()(opt)
 	assert.True(t, opt.ListSessionOnlyMeta)
+}
+
+func TestWithListSessionPage(t *testing.T) {
+	opt := &Options{}
+	WithListSessionPage(20, 50)(opt)
+	require.NotNil(t, opt.ListSessionPage)
+	assert.Equal(t, 20, opt.ListSessionPage.Offset)
+	assert.Equal(t, 50, opt.ListSessionPage.Limit)
 }
 
 // TestSession_SnapshotTracksState tests the SnapshotTracksState method.
