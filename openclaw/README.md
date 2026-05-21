@@ -381,6 +381,110 @@ Notes:
     custom binary. See `openclaw/INTEGRATIONS.md` and
     `openclaw/EXTENDING.md`.
 
+## Runtime profiles
+
+Use `runtime_profiles` when one OpenClaw deployment serves multiple users,
+tenants, or product surfaces that need different runtime behavior. A profile
+can override prompt text, app name, model name, tool policy, knowledge policy,
+workspace roots, credentials, skill visibility, isolation mode, runtime state,
+and model request extras.
+
+Static profiles can be configured in YAML:
+
+```yaml
+tools:
+  toolsets:
+    - type: "mcp"
+      name: "tenant-alpha-tools"
+      config:
+        transport: "stdio"
+        command: "tenant-alpha-mcp"
+
+runtime_profiles:
+  default: default
+  profiles:
+    default:
+      app_name: "default"
+      prompt:
+        instruction: "You are a helpful assistant."
+    tenant_alpha:
+      app_name: "tenant-alpha"
+      prompt:
+        instruction: "You are the tenant Alpha assistant."
+      workspace:
+        workdir: "/srv/openclaw/workspaces/tenant-alpha"
+        allowed_roots:
+          - "/srv/openclaw/workspaces/tenant-alpha"
+      skills:
+        roots:
+          - "/srv/openclaw/skills/tenant-alpha"
+        include: ["tenant-alpha-guide"]
+      knowledge:
+        indexes: ["tenant-alpha-faq"]
+        filter:
+          tenant: "tenant-alpha"
+      tools:
+        toolsets: ["tenant-alpha-tools"]
+      isolation:
+        mode: "profile_cache"
+        agent_cache: true
+        toolset_cache: true
+  selectors:
+    - profile_id: "tenant_alpha"
+      channels: ["wecom"]
+      users: ["replace-with-user-id"]
+    - profile_id: "tenant_alpha"
+      tenants: ["tenant-alpha"]
+```
+
+Selectors are matched in order. All non-empty fields in a selector must match
+the request before its `profile_id` is selected. When selectors are configured,
+profile selection fails closed: a request with no matching selector, an
+explicit profile that conflicts with the selected profile, or a selector that
+points at a missing profile fails the run instead of silently falling back.
+
+`channels`, `users`, and `sessions` match gateway metadata. `tenants` matches
+the `tenant_id` field in the `openclaw.runtime_profile` request extension, so
+custom channels or callers that use tenant selectors must pass an extension
+like this:
+
+```json
+{
+  "extensions": {
+    "openclaw.runtime_profile": {
+      "tenant_id": "tenant-alpha"
+    }
+  }
+}
+```
+
+Profile `tools.toolsets` selects from the globally configured `tools.toolsets`
+entries by `name`. It does not create a toolset by itself; it hides tools from
+other named toolsets for that request. `tools.include` and `tools.exclude`
+still apply to concrete tool names.
+
+For custom OpenClaw binaries, load profiles from code by passing runtime
+options to `app.MainWithOptions`:
+
+```go
+func main() {
+	store := runtimeprofile.StoreFunc(func(ctx context.Context) (
+		runtimeprofile.Config,
+		error,
+	) {
+		return loadRuntimeProfilesFromDB(ctx)
+	})
+	os.Exit(app.MainWithOptions(
+		os.Args[1:],
+		app.WithRuntimeProfileStore(store, true),
+	))
+}
+```
+
+The store can read from a database, config center, or control plane. Returning
+`Selectors` in the loaded `runtimeprofile.Config` gives code-loaded profiles
+the same fail-closed selector semantics as YAML.
+
 ## Expose OpenClaw as an A2A sub-agent
 
 OpenClaw can publish a native A2A surface alongside the HTTP gateway.

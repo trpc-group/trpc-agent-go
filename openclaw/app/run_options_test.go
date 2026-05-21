@@ -132,6 +132,11 @@ runtime_profiles:
         plan: vip
       model_request_extra:
         reasoning_effort: medium
+  selectors:
+    - profile_id: retail
+      channels: ["wecom"]
+      tenants: ["tenant-a"]
+      users: ["user-a"]
 `)
 
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
@@ -186,8 +191,17 @@ runtime_profiles:
 	require.Equal(t, "sidecar", profile.Isolation.ServiceMode)
 	require.Equal(t, "vip", profile.State["plan"])
 	require.Equal(t, "medium", profile.ExtraModel["reasoning_effort"])
+	require.Equal(t, []runtimeprofile.Selector{
+		{
+			ProfileID: "retail",
+			Channels:  []string{"wecom"},
+			Tenants:   []string{"tenant-a"},
+			Users:     []string{"user-a"},
+		},
+	}, opts.RuntimeProfiles.Selectors)
 
-	resolver := runtimeprofile.NewMapResolver(*opts.RuntimeProfiles)
+	resolver, err := runtimeprofile.NewResolver(*opts.RuntimeProfiles)
+	require.NoError(t, err)
 	require.NotNil(t, resolver)
 }
 

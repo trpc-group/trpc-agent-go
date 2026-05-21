@@ -397,6 +397,14 @@ const (
 //
 // args should not include the program name.
 func Main(args []string) int {
+	return MainWithOptions(args)
+}
+
+// MainWithOptions runs the OpenClaw-like CLI with runtime options and returns
+// an exit code.
+//
+// args should not include the program name.
+func MainWithOptions(args []string, options ...RuntimeOption) int {
 	if len(args) > 0 {
 		switch args[0] {
 		case subcmdPairing:
@@ -417,7 +425,7 @@ func Main(args []string) int {
 	)
 	defer stop()
 
-	if err := run(ctx, args); err != nil {
+	if err := RunWithOptions(ctx, args, options...); err != nil {
 		var exitErr *exitError
 		if errors.As(err, &exitErr) {
 			if errors.Is(exitErr.Err, flag.ErrHelp) {
@@ -432,6 +440,15 @@ func Main(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// RunWithOptions runs OpenClaw until ctx is canceled or the runtime exits.
+func RunWithOptions(
+	ctx context.Context,
+	args []string,
+	options ...RuntimeOption,
+) error {
+	return run(ctx, args, options...)
 }
 
 type exitError struct {
@@ -1337,8 +1354,13 @@ func (r *Runtime) Close() error {
 	return errors.Join(errs...)
 }
 
-func run(ctx context.Context, args []string) error {
+func run(
+	ctx context.Context,
+	args []string,
+	options ...RuntimeOption,
+) error {
 	startedAt := time.Now()
+	runtimeOpts := buildRuntimeOptions(options)
 	opts, err := parseRunOptions(args)
 	if err != nil {
 		return err
@@ -1606,7 +1628,7 @@ func run(ctx context.Context, args []string) error {
 	runtimeProfileResolver, runtimeProfileCatalog, runtimeProfileRequired :=
 		runtimeProfileResolverFromOptions(
 			opts.RuntimeProfiles,
-			runtimeOptions{},
+			runtimeOpts,
 		)
 
 	gwOpts := makeGatewayOptions(

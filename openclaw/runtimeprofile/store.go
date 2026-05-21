@@ -67,7 +67,7 @@ func (s StaticStore) AppNames(context.Context) ([]string, error) {
 type CachedResolver struct {
 	mu       sync.RWMutex
 	store    Store
-	resolver *MapResolver
+	resolver Resolver
 	loaded   bool
 }
 
@@ -103,7 +103,10 @@ func (r *CachedResolver) Reload(ctx context.Context) error {
 	if err := ValidateConfig(cfg); err != nil {
 		return err
 	}
-	resolver := NewMapResolver(cfg)
+	resolver, err := NewResolver(cfg)
+	if err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.resolver = resolver
@@ -142,7 +145,7 @@ func (r *CachedResolver) AppNames(ctx context.Context) ([]string, error) {
 
 func (r *CachedResolver) resolverForRead(
 	ctx context.Context,
-) (*MapResolver, error) {
+) (Resolver, error) {
 	if r == nil {
 		return nil, nil
 	}
@@ -176,6 +179,7 @@ func (r *CachedResolver) configForCatalog(
 
 func cloneConfig(cfg Config) Config {
 	cfg.Default = strings.TrimSpace(cfg.Default)
+	cfg.Selectors = cloneSelectors(cfg.Selectors)
 	if len(cfg.Profiles) == 0 {
 		cfg.Profiles = nil
 		return cfg

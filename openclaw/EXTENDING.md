@@ -498,6 +498,80 @@ agent:
   add_session_summary: true
 ```
 
+## Runtime profile providers (code-driven multi-tenancy)
+
+Use `runtime_profiles` in YAML for small static deployments. For custom
+OpenClaw binaries that already import private model, tool, or channel plugins,
+prefer code-driven profiles when profile data lives in a database, config
+center, or control plane.
+
+`app.MainWithOptions` keeps the normal OpenClaw CLI behavior while allowing the
+custom binary to pass runtime options:
+
+```go
+package main
+
+import (
+	"context"
+	"os"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/app"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
+
+	_ "example.com/your/openclaw/plugins/channels/wecom"
+	_ "example.com/your/openclaw/plugins/model"
+	_ "example.com/your/openclaw/plugins/tools"
+)
+
+func main() {
+	store := runtimeprofile.StoreFunc(func(ctx context.Context) (
+		runtimeprofile.Config,
+		error,
+	) {
+		return runtimeprofile.Config{
+			Profiles: map[string]runtimeprofile.Profile{
+				"tenant_alpha": {
+					AppName: "tenant-alpha",
+					Prompt: runtimeprofile.Prompt{
+						Instruction: "You are the tenant Alpha assistant.",
+					},
+					Skills: runtimeprofile.SkillPolicy{
+						Include: []string{"tenant-alpha-guide"},
+					},
+				},
+			},
+			Selectors: []runtimeprofile.Selector{
+				{
+					ProfileID: "tenant_alpha",
+					Channels:  []string{"wecom"},
+					Users:     []string{"replace-with-user-id"},
+				},
+			},
+		}, nil
+	})
+
+	os.Exit(app.MainWithOptions(
+		os.Args[1:],
+		app.WithRuntimeProfileStore(store, true),
+	))
+}
+```
+
+When `Selectors` are present, selection fails closed. Requests that do not
+match a selector, explicitly request a different profile, or select a missing
+profile return an error instead of falling back to the default profile. This is
+important for multi-tenant prompts, tools, credentials, workspaces, and
+knowledge indexes.
+
+Use `Tenants` selectors when the caller or custom channel populates
+`tenant_id` in the `openclaw.runtime_profile` request extension. Use
+`Channels`, `Users`, or `Sessions` when selection should come only from normal
+gateway metadata.
+
+If the application already owns the HTTP server, use
+`app.NewRuntimeWithOptions` and mount `rt.Gateway.Handler` instead of
+`app.MainWithOptions`.
+
 ## Memory backend plugin (centralized user memory storage)
 
 Memory backends implement `memory.Service` (from `trpc-agent-go`).

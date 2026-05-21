@@ -37,11 +37,16 @@ func (nilDeclarationTool) Declaration() *tool.Declaration {
 }
 
 type testTool struct {
-	name string
+	name        string
+	toolSetName string
 }
 
 func (t testTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: t.name}
+}
+
+func (t testTool) ToolSetName() string {
+	return t.toolSetName
 }
 
 func TestMapResolver(t *testing.T) {
@@ -421,6 +426,44 @@ func TestRunOptionsAppliesProfile(t *testing.T) {
 	require.False(t, runOpts.ToolExecutionFilter(
 		context.Background(),
 		testTool{name: testToolOther},
+	))
+}
+
+func TestRunOptionsFiltersProfileToolSets(t *testing.T) {
+	t.Parallel()
+
+	runOpts := agent.NewRunOptions(RunOptions(Profile{
+		Tools: ToolPolicy{
+			ToolSets: []string{"crm"},
+		},
+	})...)
+
+	require.True(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "direct"},
+	))
+	require.True(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "crm_search", toolSetName: "crm"},
+	))
+	require.False(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "erp_search", toolSetName: "erp"},
+	))
+
+	concreteOpts := agent.NewRunOptions(RunOptions(Profile{
+		Tools: ToolPolicy{
+			Include:  []string{"crm_search"},
+			ToolSets: []string{"crm"},
+		},
+	})...)
+	require.True(t, concreteOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "crm_search", toolSetName: "crm"},
+	))
+	require.False(t, concreteOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "crm_update", toolSetName: "crm"},
 	))
 }
 

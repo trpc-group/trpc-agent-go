@@ -1296,6 +1296,7 @@ func TestMain_InspectDispatches(t *testing.T) {
 	t.Parallel()
 
 	require.Equal(t, 0, Main([]string{subcmdInspect}))
+	require.Equal(t, 0, MainWithOptions([]string{subcmdInspect}, nil))
 }
 
 func TestMain_BootstrapDispatches(t *testing.T) {

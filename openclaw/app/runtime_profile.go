@@ -245,7 +245,7 @@ func runtimeProfileRequired(cfg *runtimeprofile.Config) bool {
 	if cfg == nil {
 		return false
 	}
-	return cfg.Required
+	return cfg.Required || len(cfg.Selectors) > 0
 }
 
 func validateRuntimeProfiles(cfg *runtimeprofile.Config) error {

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -74,6 +75,9 @@ const (
 // ErrProfileNotFound means a resolver could not find the selected profile.
 var ErrProfileNotFound = errors.New("runtime profile not found")
 
+// ErrProfileSelectorDenied means selector policy rejected profile resolution.
+var ErrProfileSelectorDenied = errors.New("runtime profile selector denied")
+
 // ErrConfigInvalid means a runtime profile config is internally inconsistent.
 var ErrConfigInvalid = errors.New("runtime profile config invalid")
 
@@ -93,6 +97,7 @@ type Config struct {
 	Required          bool               `yaml:"required,omitempty"`
 	FallbackToDefault bool               `yaml:"fallback_to_default,omitempty"`
 	Profiles          map[string]Profile `yaml:"profiles,omitempty"`
+	Selectors         []Selector         `yaml:"selectors,omitempty"`
 }
 
 // Request describes one profile resolution request.
@@ -194,6 +199,12 @@ type Profile struct {
 // modes without assuming any OpenClaw application-specific agent names.
 func ValidateConfig(cfg Config) error {
 	if len(cfg.Profiles) == 0 {
+		if len(cfg.Selectors) > 0 {
+			return fmt.Errorf(
+				"%w: selectors need configured profiles",
+				ErrConfigInvalid,
+			)
+		}
 		if cfg.Required {
 			return fmt.Errorf("%w: required profiles are empty", ErrConfigInvalid)
 		}
@@ -241,13 +252,13 @@ func ValidateConfig(cfg Config) error {
 		if cfg.FallbackToDefault {
 			return fmt.Errorf("%w: fallback needs default", ErrConfigInvalid)
 		}
-		return nil
+		return validateSelectors(cfg.Selectors, effectiveIDs)
 	}
 	if _, ok := cfg.Profiles[defaultID]; ok {
-		return nil
+		return validateSelectors(cfg.Selectors, effectiveIDs)
 	}
 	if _, ok := effectiveIDs[defaultID]; ok {
-		return nil
+		return validateSelectors(cfg.Selectors, effectiveIDs)
 	}
 	return fmt.Errorf(
 		"%w: default profile %q is not configured",
@@ -511,6 +522,44 @@ func (r *MapResolver) Resolve(
 	return cloneProfile(profile), nil
 }
 
+// ProfileIDs implements Catalog.
+func (r *MapResolver) ProfileIDs(context.Context) ([]string, error) {
+	if r == nil || len(r.cache) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(r.cache))
+	for key := range r.cache {
+		if key.id == "" {
+			continue
+		}
+		out = append(out, key.id)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// AppNames implements Catalog.
+func (r *MapResolver) AppNames(context.Context) ([]string, error) {
+	if r == nil || len(r.cache) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(r.cache))
+	seen := make(map[string]struct{}, len(r.cache))
+	for _, profile := range r.cache {
+		appName := strings.TrimSpace(profile.AppName)
+		if appName == "" {
+			continue
+		}
+		if _, ok := seen[appName]; ok {
+			continue
+		}
+		seen[appName] = struct{}{}
+		out = append(out, appName)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // ExtensionFromRequestExtensions reads the runtime-profile request extension.
 func ExtensionFromRequestExtensions(
 	extensions map[string]json.RawMessage,
@@ -555,10 +604,7 @@ func RunOptions(profile Profile) []agent.RunOption {
 			agent.WithGlobalInstruction(profile.Prompt.SystemPrompt),
 		)
 	}
-	if filter := toolNamesFilter(
-		profile.Tools.Include,
-		profile.Tools.Exclude,
-	); filter != nil {
+	if filter := toolPolicyFilter(profile.Tools); filter != nil {
 		opts = append(opts, agent.WithToolFilter(filter))
 	}
 	if filter := toolNamesFilter(
@@ -763,6 +809,21 @@ func hasIsolationPolicy(policy IsolationPolicy) bool {
 		strings.TrimSpace(policy.ServiceMode) != ""
 }
 
+func toolPolicyFilter(policy ToolPolicy) tool.FilterFunc {
+	names := toolNamesFilter(policy.Include, policy.Exclude)
+	toolSets := toolSetNamesFilter(policy.ToolSets)
+	switch {
+	case names == nil:
+		return toolSets
+	case toolSets == nil:
+		return names
+	default:
+		return func(ctx context.Context, tl tool.Tool) bool {
+			return toolSets(ctx, tl) && names(ctx, tl)
+		}
+	}
+}
+
 func toolNamesFilter(include []string, exclude []string) tool.FilterFunc {
 	include = cleanStrings(include)
 	exclude = cleanStrings(exclude)
@@ -786,6 +847,34 @@ func toolNamesFilter(include []string, exclude []string) tool.FilterFunc {
 		_, allowed := included[name]
 		return allowed
 	}
+}
+
+func toolSetNamesFilter(names []string) tool.FilterFunc {
+	names = cleanStrings(names)
+	if len(names) == 0 {
+		return nil
+	}
+	allowed := nameSet(names)
+	return func(_ context.Context, tl tool.Tool) bool {
+		name := sourceToolSetName(tl)
+		if name == "" {
+			return true
+		}
+		_, ok := allowed[name]
+		return ok
+	}
+}
+
+type toolSetNamer interface {
+	ToolSetName() string
+}
+
+func sourceToolSetName(tl tool.Tool) string {
+	named, ok := tl.(toolSetNamer)
+	if !ok || named == nil {
+		return ""
+	}
+	return strings.TrimSpace(named.ToolSetName())
 }
 
 func nameSet(names []string) map[string]struct{} {
