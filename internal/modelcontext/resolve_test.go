@@ -34,7 +34,7 @@ func TestResolveContextWindowFallsBackToRegistry(t *testing.T) {
 		name: "gpt-4o-mini",
 	})
 	assert.True(t, ok)
-	assert.Equal(t, 200000, window)
+	assert.Equal(t, 128000, window)
 }
 
 type contextWindowTestModel struct {
