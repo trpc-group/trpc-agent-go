@@ -1294,6 +1294,7 @@ _, err = r.Run(
 - `SetFewShot([][]model.Message)`：覆盖该节点本次运行的 few-shot 示例。
 - `SetModel(model.Model)`：覆盖该节点本次运行使用的模型实例。
 - `SetTools([]tool.Tool)`：覆盖该节点本次运行的工具 surface。它表达的是“替换本次运行可见的工具集合”，不是只改工具描述文本。
+- `AppendTools([]tool.Tool)`：给该节点本次运行的工具 surface 增量追加工具。它会保留节点已有工具，并把传入的工具追加到后面。
 - `SetSkillRepository(skill.Repository)`：覆盖该节点本次运行的 skill repository；传 `nil` 可显式禁用该节点的 skill surface。
 
 不是每种节点都支持全部 surface，常见情况如下：
@@ -1326,7 +1327,7 @@ var reviewerPatch agent.SurfacePatch
 reviewerPatch.SetInstruction("Reject any plan that lacks cost analysis.")
 
 var toolsPatch agent.SurfacePatch
-toolsPatch.SetTools([]tool.Tool{searchTool, priceTool})
+toolsPatch.AppendTools([]tool.Tool{priceTool})
 
 _, err = r.Run(
     ctx,
@@ -1343,6 +1344,8 @@ _, err = r.Run(
 
 - 不同 surface 类型彼此合并。
 - 同一种 surface 类型后传入的值覆盖先传入的值。
+- 工具追加 patch 是增量语义。重复调用 `AppendTools(...)` 会继续追加到
+  有效工具集合；后续再调用 `SetTools(...)` 会替换该节点之前追加的工具。
 
 ### 组合结构与嵌套结构
 

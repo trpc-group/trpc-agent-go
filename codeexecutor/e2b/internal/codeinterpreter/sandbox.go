@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,10 @@ type SandboxOpts struct {
 	AccessToken string
 	// Domain to use (defaults to e2b.app).
 	Domain string
+	// APIURL is an optional full base URL for the E2B management API
+	// (e.g. "https://api.e2b.app" or "http://127.0.0.1:8080"). When set it
+	// overrides Domain/Debug based URL construction.
+	APIURL string
 	// Debug, if true, uses plain http:// against the sandbox.
 	Debug bool
 	// RequestTimeout default HTTP request timeout.
@@ -53,15 +58,22 @@ type SandboxInfo struct {
 	StartedAt  string            `json:"startedAt,omitempty"`
 	EndAt      string            `json:"endAt,omitempty"`
 	State      string            `json:"state,omitempty"`
+	// Domain is the actual domain on which this sandbox runs.
+	Domain string `json:"domain,omitempty"`
 }
 
 // Sandbox is a running E2B sandbox with code-interpreter capabilities.
 type Sandbox struct {
-	id         string
-	clientID   string
-	template   string
-	envdPort   int
-	connection *ConnectionConfig
+	sync.RWMutex
+	id       string
+	clientID string
+	template string
+	envdPort int
+	// sandboxDomain is the domain that the sandbox actually lives on, as
+	// returned by the E2B management API when creating or fetching the
+	// sandbox. When empty we fall back to connection.Domain.
+	sandboxDomain string
+	connection    *ConnectionConfig
 }
 
 // SandboxID returns the ID of this sandbox.
@@ -70,18 +82,44 @@ func (s *Sandbox) SandboxID() string { return s.id }
 // ClientID returns the client id (envd worker) running this sandbox.
 func (s *Sandbox) ClientID() string { return s.clientID }
 
-// fullID returns "<sandboxID>-<clientID>" which is the form used in the
-// sandbox hostnames.
-func (s *Sandbox) fullID() string {
-	if s.clientID == "" {
-		return s.id
+func (s *Sandbox) cachedSandboxDomain() string {
+	s.RLock()
+	defer s.RUnlock()
+	return s.sandboxDomain
+}
+
+func (s *Sandbox) setCachedSandboxDomain(d string) {
+	s.Lock()
+	s.sandboxDomain = d
+	s.Unlock()
+}
+
+// sandboxHostDomain returns the domain to use when constructing direct URLs
+// to this sandbox's exposed ports. It prefers the domain returned by the E2B
+// API (which is where the sandbox actually runs — important for self-hosted
+// deployments), falling back to the client-configured domain.
+func (s *Sandbox) sandboxHostDomain() string {
+	if d := s.cachedSandboxDomain(); d != "" {
+		return d
 	}
-	return fmt.Sprintf("%s-%s", s.id, s.clientID)
+	return s.connection.Domain
+}
+
+func (s *Sandbox) hostID(sandboxDomain string) string {
+	if sandboxDomain == "" && s.clientID != "" {
+		return s.id + "-" + s.clientID
+	}
+	return s.id
 }
 
 // getHost returns the public host for a port exposed by the sandbox.
 func (s *Sandbox) getHost(port int) string {
-	return fmt.Sprintf("%d-%s.%s", port, s.fullID(), s.connection.Domain)
+	sandboxDomain := s.cachedSandboxDomain()
+	domain := sandboxDomain
+	if domain == "" {
+		domain = s.connection.Domain
+	}
+	return fmt.Sprintf("%d-%s.%s", port, s.hostID(sandboxDomain), domain)
 }
 
 // jupyterURL returns the URL to the internal Jupyter/Code-Interpreter server.
@@ -104,6 +142,7 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 		APIKey:         opts.APIKey,
 		AccessToken:    opts.AccessToken,
 		Domain:         opts.Domain,
+		APIURL:         opts.APIURL,
 		Debug:          opts.Debug,
 		RequestTimeout: opts.RequestTimeout,
 		HTTPClient:     opts.HTTPClient,
@@ -141,17 +180,19 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 		ClientID   string `json:"clientID"`
 		TemplateID string `json:"templateID"`
 		EnvdPort   int    `json:"envdPort"`
+		Domain     string `json:"domain,omitempty"`
 	}
 	if err := cfg.do(ctx, "POST", "/sandboxes", body, &out); err != nil {
 		return nil, err
 	}
 
 	return &Sandbox{
-		id:         out.SandboxID,
-		clientID:   out.ClientID,
-		template:   out.TemplateID,
-		envdPort:   out.EnvdPort,
-		connection: cfg,
+		id:            out.SandboxID,
+		clientID:      out.ClientID,
+		template:      out.TemplateID,
+		envdPort:      out.EnvdPort,
+		sandboxDomain: out.Domain,
+		connection:    cfg,
 	}, nil
 }
 
@@ -165,6 +206,7 @@ func Connect(ctx context.Context, sandboxID string, opts *SandboxOpts) (*Sandbox
 		APIKey:         opts.APIKey,
 		AccessToken:    opts.AccessToken,
 		Domain:         opts.Domain,
+		APIURL:         opts.APIURL,
 		Debug:          opts.Debug,
 		RequestTimeout: opts.RequestTimeout,
 		HTTPClient:     opts.HTTPClient,
@@ -178,10 +220,11 @@ func Connect(ctx context.Context, sandboxID string, opts *SandboxOpts) (*Sandbox
 	}
 
 	return &Sandbox{
-		id:         info.SandboxID,
-		clientID:   info.ClientID,
-		template:   info.TemplateID,
-		connection: cfg,
+		id:            info.SandboxID,
+		clientID:      info.ClientID,
+		template:      info.TemplateID,
+		sandboxDomain: info.Domain,
+		connection:    cfg,
 	}, nil
 }
 
@@ -220,6 +263,7 @@ func List(ctx context.Context, opts *SandboxOpts) ([]SandboxInfo, error) {
 		APIKey:         opts.APIKey,
 		AccessToken:    opts.AccessToken,
 		Domain:         opts.Domain,
+		APIURL:         opts.APIURL,
 		Debug:          opts.Debug,
 		RequestTimeout: opts.RequestTimeout,
 		HTTPClient:     opts.HTTPClient,
@@ -240,6 +284,12 @@ func (s *Sandbox) GetInfo(ctx context.Context) (*SandboxInfo, error) {
 	var info SandboxInfo
 	if err := s.connection.do(ctx, "GET", "/sandboxes/"+s.id, nil, &info); err != nil {
 		return nil, err
+	}
+	// Refresh the cached sandbox domain with whatever the API reports —
+	// this keeps the jupyter/envd URLs correct even if the sandbox was
+	// relocated to a different host.
+	if info.Domain != "" {
+		s.setCachedSandboxDomain(info.Domain)
 	}
 	return &info, nil
 }

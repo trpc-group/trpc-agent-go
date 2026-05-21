@@ -18,6 +18,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func requireTokenTailoringOverflow(t *testing.T, err error) {
+	t.Helper()
+	var overflow *tokenTailoringOverflowError
+	require.ErrorAs(t, err, &overflow)
+	require.Contains(t, err.Error(), "token tailoring overflow")
+}
+
 func TestSimpleTokenCounter_CountTokens(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 	msg := NewSystemMessage("You are a helpful assistant.")
@@ -1101,6 +1108,40 @@ func (c *mockErrorTokenCounter) CountTokensRange(ctx context.Context, messages [
 	return 0, fmt.Errorf("mock error")
 }
 
+type rangeLenTokenCounter struct{}
+
+func (rangeLenTokenCounter) CountTokens(ctx context.Context, message Message) (int, error) {
+	return 1, nil
+}
+
+func (rangeLenTokenCounter) CountTokensRange(ctx context.Context, messages []Message, start, end int) (int, error) {
+	if start < 0 || end > len(messages) || start >= end {
+		return 0, fmt.Errorf("invalid range")
+	}
+	return end - start, nil
+}
+
+type scriptedRangeTokenCounter struct {
+	calls int
+	steps []struct {
+		tokens int
+		err    error
+	}
+}
+
+func (c *scriptedRangeTokenCounter) CountTokens(ctx context.Context, message Message) (int, error) {
+	return 1, nil
+}
+
+func (c *scriptedRangeTokenCounter) CountTokensRange(ctx context.Context, messages []Message, start, end int) (int, error) {
+	if c.calls >= len(c.steps) {
+		return 0, fmt.Errorf("unexpected CountTokensRange call: %d", c.calls+1)
+	}
+	step := c.steps[c.calls]
+	c.calls++
+	return step.tokens, step.err
+}
+
 // TestBuildPrefixSum_WithActualError tests the error handling path in buildPrefixSum
 func TestBuildPrefixSum_WithActualError(t *testing.T) {
 	counter := &mockErrorTokenCounter{}
@@ -1316,6 +1357,75 @@ func TestTailOutStrategy_VeryTightBudget(t *testing.T) {
 	assert.LessOrEqual(t, totalTokens, 20)
 }
 
+func TestMiddleOutStrategy_PreservesSystemWhenMinimalSuffixExceedsBudget(t *testing.T) {
+	msgs := []Message{
+		NewSystemMessage(repeat("system ", 100)),
+		NewUserMessage("Old 1 " + repeat("x", 200)),
+		NewUserMessage("Old 2 " + repeat("y", 200)),
+		NewUserMessage("Query"),
+		NewAssistantMessage(repeat("response ", 100)),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewMiddleOutStrategy(counter)
+
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
+	require.Error(t, err)
+	requireTokenTailoringOverflow(t, err)
+	require.GreaterOrEqual(t, len(tailored), 2)
+
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
+
+	totalTokens := 0
+	for _, msg := range tailored {
+		tokens, err := counter.CountTokens(context.Background(), msg)
+		require.NoError(t, err)
+		totalTokens += tokens
+	}
+	assert.Greater(t, totalTokens, 10)
+}
+
+func TestTokenTailor_DoesNotDropSystemForLargeToolResult(t *testing.T) {
+	toolCall := ToolCall{
+		Type: "function",
+		ID:   "call_1",
+		Function: FunctionDefinitionParam{
+			Name:      "search",
+			Arguments: []byte(`{"q":"latest"}`),
+		},
+	}
+	msgs := []Message{
+		NewSystemMessage(repeat("system ", 100)),
+		NewUserMessage("Old turn " + repeat("x", 200)),
+		NewUserMessage("Latest question"),
+		{
+			Role:      RoleAssistant,
+			Content:   "Calling search",
+			ToolCalls: []ToolCall{toolCall},
+		},
+		NewToolMessage("call_1", "search", repeat("large-result ", 200)),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewMiddleOutStrategy(counter)
+
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
+	require.Error(t, err)
+	requireTokenTailoringOverflow(t, err)
+	require.Len(t, tailored, 4)
+
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+	assert.Equal(t, RoleUser, tailored[1].Role)
+	assert.Equal(t, "Latest question", tailored[1].Content)
+	assert.Equal(t, RoleAssistant, tailored[2].Role)
+	require.Len(t, tailored[2].ToolCalls, 1)
+	assert.Equal(t, "call_1", tailored[2].ToolCalls[0].ID)
+	assert.Equal(t, RoleTool, tailored[3].Role)
+	assert.Equal(t, "call_1", tailored[3].ToolID)
+}
+
 // TestHeadOutStrategy_PreservedSegmentsExceedBudget tests when preserved segments exceed budget.
 func TestHeadOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 	msgs := []Message{
@@ -1331,10 +1441,12 @@ func TestHeadOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 
 	// Budget is less than preserved segments.
 	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
-	require.NoError(t, err)
+	require.Error(t, err)
+	requireTokenTailoringOverflow(t, err)
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
+	assert.Equal(t, RoleSystem, tailored[0].Role)
 	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
 	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 }
@@ -1354,10 +1466,12 @@ func TestTailOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 
 	// Budget is less than preserved segments.
 	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
-	require.NoError(t, err)
+	require.Error(t, err)
+	requireTokenTailoringOverflow(t, err)
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
+	assert.Equal(t, RoleSystem, tailored[0].Role)
 	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
 	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 }
@@ -1673,6 +1787,16 @@ func TestShouldReturnOriginal_CountTokensError(t *testing.T) {
 	require.Len(t, out, 1)
 }
 
+func TestShouldReturnOriginal_NilTokenCounter(t *testing.T) {
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	done, out := shouldReturnOriginal(context.Background(), nil, messages, 10)
+	require.True(t, done)
+	require.Equal(t, messages, out)
+}
+
 func TestFitsWithinBudget_Empty(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 
@@ -1685,9 +1809,8 @@ func TestBuildMinimalSuffixCandidates_NoNonSystem(t *testing.T) {
 		NewSystemMessage("sys"),
 	}
 
-	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 1)
+	withSystem := buildMinimalSuffixCandidate(messages, 1)
 	require.Nil(t, withSystem)
-	require.Nil(t, withoutSystem)
 }
 
 func TestBuildMinimalSuffixCandidates_ToolAtEnd(t *testing.T) {
@@ -1697,11 +1820,10 @@ func TestBuildMinimalSuffixCandidates_ToolAtEnd(t *testing.T) {
 		NewToolMessage("tool_1", "search", "result"),
 	}
 
-	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 1)
+	withSystem := buildMinimalSuffixCandidate(messages, 1)
 	require.Len(t, withSystem, 3)
+	require.Equal(t, RoleSystem, withSystem[0].Role)
 	require.Equal(t, RoleTool, withSystem[len(withSystem)-1].Role)
-	require.Len(t, withoutSystem, 2)
-	require.Equal(t, RoleTool, withoutSystem[len(withoutSystem)-1].Role)
 }
 
 func TestBuildMinimalSuffixCandidates_ToolOnly(t *testing.T) {
@@ -1709,9 +1831,8 @@ func TestBuildMinimalSuffixCandidates_ToolOnly(t *testing.T) {
 		NewToolMessage("tool_1", "search", "result"),
 	}
 
-	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 0)
+	withSystem := buildMinimalSuffixCandidate(messages, 0)
 	require.Nil(t, withSystem)
-	require.Nil(t, withoutSystem)
 }
 
 func TestLastNonSystemIndex_AllSystem(t *testing.T) {
@@ -1760,6 +1881,63 @@ func TestEnsureTailoredWithinBudget_CountTokensError(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	require.Equal(t, "q", out[0].Content)
+}
+
+func TestEnsureTailoredWithinBudget_MinimalCandidateFits(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("old"),
+		NewAssistantMessage("old answer"),
+		NewUserMessage("q"),
+	}
+
+	out, err := ensureTailoredWithinBudget(context.Background(),
+		rangeLenTokenCounter{}, messages, 2)
+	require.NoError(t, err)
+	require.Equal(t, []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("q"),
+	}, out)
+}
+
+func TestEnsureTailoredWithinBudget_NoMinimalCandidate(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewSystemMessage("sys2"),
+	}
+
+	out, err := ensureTailoredWithinBudget(context.Background(),
+		rangeLenTokenCounter{}, messages, 1)
+	require.NoError(t, err)
+	require.Nil(t, out)
+}
+
+func TestEnsureTailoredWithinBudget_CandidateTokenCountError(t *testing.T) {
+	counter := &scriptedRangeTokenCounter{
+		steps: []struct {
+			tokens int
+			err    error
+		}{
+			{tokens: 4},
+			{tokens: 4},
+			{err: fmt.Errorf("count candidate")},
+		},
+	}
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("old"),
+		NewAssistantMessage("old answer"),
+		NewUserMessage("q"),
+	}
+
+	out, err := ensureTailoredWithinBudget(context.Background(),
+		counter, messages, 2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "count candidate")
+	require.Equal(t, []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("q"),
+	}, out)
 }
 
 func TestFitsWithinBudget_CountTokensError(t *testing.T) {

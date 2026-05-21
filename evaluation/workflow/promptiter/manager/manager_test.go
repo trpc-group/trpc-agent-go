@@ -973,6 +973,100 @@ func TestValidateRunRequest(t *testing.T) {
 		},
 		MaxRounds: 1,
 	}), `validation eval case id for eval set "validation" is empty`)
+	assert.NoError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+			},
+			{
+				EvalSetID: "train",
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}))
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: " ",
+						MetricName: "quality",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss hint eval case id for eval set "train" is empty`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: " ",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss hint metric name for eval set "train" case "case_1" is empty`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: "quality",
+						Reason:     " ",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss hint reason for eval set "train" case "case_1" metric "quality" is empty`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID:   "train",
+				EvalCaseIDs: []string{"case_1"},
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: "case_2",
+						MetricName: "quality",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss hint eval case "case_2" is not selected for eval set "train"`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: "quality",
+						Severity:   promptiter.LossSeverity("P4"),
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss hint severity "P4" for eval set "train" case "case_1" metric "quality" is invalid`)
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),
@@ -983,11 +1077,47 @@ func TestValidateRunRequest(t *testing.T) {
 		MaxRounds:        1,
 		TargetSurfaceIDs: []string{},
 	}), "target surface ids must not be empty")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		BackwardOptions: promptiterengine.BackwardOptions{
+			CaseParallelism: -1,
+		},
+	}), "backward case parallelism must be non-negative")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		AggregationOptions: promptiterengine.AggregationOptions{
+			SurfaceParallelism: -1,
+		},
+	}), "aggregation surface parallelism must be non-negative")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		OptimizerOptions: promptiterengine.OptimizerOptions{
+			SurfaceParallelism: -1,
+		},
+	}), "optimizer surface parallelism must be non-negative")
 	assert.NoError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train:            testEvalSetInputs("train"),
 		Validation:       testEvalSetInputs("validation"),
 		MaxRounds:        1,
 		TargetSurfaceIDs: []string{"candidate#instruction"},
+		BackwardOptions: promptiterengine.BackwardOptions{
+			CaseParallelismEnabled: true,
+			CaseParallelism:        1,
+		},
+		AggregationOptions: promptiterengine.AggregationOptions{
+			SurfaceParallelismEnabled: true,
+			SurfaceParallelism:        1,
+		},
+		OptimizerOptions: promptiterengine.OptimizerOptions{
+			SurfaceParallelismEnabled: true,
+			SurfaceParallelism:        1,
+		},
 	}))
 }
 
@@ -999,6 +1129,14 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 			{
 				EvalSetID:   "validation",
 				EvalCaseIDs: []string{"case_1"},
+				LossHints: []promptiterengine.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: "quality",
+						Severity:   promptiter.LossSeverityP1,
+						Reason:     "business reason",
+					},
+				},
 			},
 		},
 		InitialProfile: &promptiter.Profile{
@@ -1013,6 +1151,18 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 			},
 		},
 		TargetSurfaceIDs: []string{"candidate#instruction"},
+		BackwardOptions: promptiterengine.BackwardOptions{
+			CaseParallelismEnabled: true,
+			CaseParallelism:        4,
+		},
+		AggregationOptions: promptiterengine.AggregationOptions{
+			SurfaceParallelismEnabled: true,
+			SurfaceParallelism:        3,
+		},
+		OptimizerOptions: promptiterengine.OptimizerOptions{
+			SurfaceParallelismEnabled: true,
+			SurfaceParallelism:        2,
+		},
 		StopPolicy: promptiterengine.StopPolicy{
 			TargetScore: &targetScore,
 		},
@@ -1021,14 +1171,19 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 	require.NotNil(t, cloned)
 	cloned.Train[0].EvalSetID = "mutated"
 	cloned.Validation[0].EvalCaseIDs[0] = "mutated"
+	cloned.Validation[0].LossHints[0].Reason = "mutated"
 	cloned.TargetSurfaceIDs[0] = "mutated"
 	*cloned.InitialProfile.Overrides[0].Value.Text = "mutated"
 	*cloned.StopPolicy.TargetScore = 1.0
 	assert.Equal(t, "train", request.Train[0].EvalSetID)
 	assert.Equal(t, []string{"case_1"}, request.Validation[0].EvalCaseIDs)
+	assert.Equal(t, "business reason", request.Validation[0].LossHints[0].Reason)
 	assert.Equal(t, "candidate#instruction", request.TargetSurfaceIDs[0])
 	assert.Equal(t, "prompt", *request.InitialProfile.Overrides[0].Value.Text)
 	assert.Equal(t, 0.9, *request.StopPolicy.TargetScore)
+	assert.Equal(t, promptiterengine.BackwardOptions{CaseParallelismEnabled: true, CaseParallelism: 4}, cloned.BackwardOptions)
+	assert.Equal(t, promptiterengine.AggregationOptions{SurfaceParallelismEnabled: true, SurfaceParallelism: 3}, cloned.AggregationOptions)
+	assert.Equal(t, promptiterengine.OptimizerOptions{SurfaceParallelismEnabled: true, SurfaceParallelism: 2}, cloned.OptimizerOptions)
 }
 
 func TestCloneRunRequestNil(t *testing.T) {

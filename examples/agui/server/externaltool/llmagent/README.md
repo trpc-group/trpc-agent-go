@@ -3,12 +3,15 @@
 This example exposes an AG-UI SSE endpoint backed by an `LLMAgent` that mixes:
 
 - internal tools (`calculator`, `internal_lookup`) executed automatically by the framework
-- external tools (`external_note`, `external_approval`) executed by the caller through `role=tool`
+- external tools (`external_note`, `external_approval`) declared by the AG-UI
+  request and executed by the caller through `role=tool`
 
-The goal is to verify that `agui + llmagent + agent.WithToolExecutionFilter(...)`
-can handle a mixed tool flow in one conversation:
+The goal is to verify that
+`agui + llmagent + agent.WithExternalTools(...)` can handle a mixed tool flow
+in one conversation:
 
-1. Call 1 (`role=user`) emits tool calls for all four tools.
+1. Call 1 (`role=user`) sends AG-UI `tools` for `external_note` and
+   `external_approval`, then emits tool calls for all four tools.
 2. The framework executes `calculator` and `internal_lookup` immediately and
    returns their `TOOL_CALL_RESULT` events.
 3. The framework defers `external_note` and `external_approval`, ends the run,
@@ -20,6 +23,10 @@ can handle a mixed tool flow in one conversation:
 
 Call 2 uses the same `threadId` and a new `runId` for the follow-up `role=tool`
 request.
+
+The default AG-UI runner converts `input.Tools` and passes them to
+`agent.WithExternalTools(...)`. These tools do not need a backend `Call`
+implementation.
 
 ## Run
 

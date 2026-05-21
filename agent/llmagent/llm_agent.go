@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -1264,6 +1265,29 @@ func codeExecutorSupportsWorkspaceExec(exec codeexecutor.CodeExecutor) bool {
 	return eng.Manager() != nil && eng.FS() != nil && eng.Runner() != nil
 }
 
+// codeExecutorHasLiveWorkspace reports whether exec exposes an Engine
+// with Manager + FS — enough to drive Workspace.Collect / PutFiles /
+// StageInputs / SaveArtifact. Looser than
+// codeExecutorSupportsWorkspaceExec, which additionally requires
+// Runner for the workspace_exec LLM tool. Workspace.RunProgram still
+// surfaces a targeted "no program runner" error when Runner is nil,
+// so executors that intentionally omit ProgramRunner can keep the
+// other facade methods usable from callbacks.
+func codeExecutorHasLiveWorkspace(exec codeexecutor.CodeExecutor) bool {
+	if exec == nil {
+		return false
+	}
+	ep, ok := exec.(codeexecutor.EngineProvider)
+	if !ok || ep == nil {
+		return false
+	}
+	eng := ep.Engine()
+	if eng == nil {
+		return false
+	}
+	return eng.Manager() != nil && eng.FS() != nil
+}
+
 // executorSupportsWorkspaceExecSessions reports whether workspace_exec can
 // expose interactive session helpers such as workspace_write_stdin.
 func executorSupportsWorkspaceExecSessions(options *Options) bool {
@@ -1302,6 +1326,7 @@ func codeExecutorSupportsWorkspaceExecSessions(
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
+	ctx = a.withWorkspace(ctx, invocation)
 	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
 		invocation,
@@ -1466,6 +1491,41 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// treat them as "no limit", preserving existing behavior.
 	invocation.MaxLLMCalls = a.option.MaxLLMCalls
 	invocation.MaxToolIterations = a.option.MaxToolIterations
+}
+
+// withWorkspace installs a workspaceio.Workspace into ctx so that
+// AgentCallbacks (BeforeAgent/AfterAgent/BeforeTool/AfterTool) observe
+// the same invocation workspace as workspace_exec.
+//
+// The helper resolves the effective executor and registry the same
+// way InvocationToolSurface does — honoring an invocation-scoped
+// RunOptions.CodeExecutor override and only installing a facade when
+// the executor actually supports workspace execution. This keeps the
+// callback view and the workspace_exec tool view in lockstep across
+// run-options overrides; otherwise callbacks could read or write a
+// stale executor while the LLM tool uses the override.
+func (a *LLMAgent) withWorkspace(
+	ctx context.Context,
+	inv *agent.Invocation,
+) context.Context {
+	if a == nil {
+		return ctx
+	}
+	if _, ok := workspaceio.WorkspaceFromContext(ctx); ok {
+		return ctx
+	}
+	exec := a.codeExecutorForInvocation(inv)
+	// Gate on "live workspace" (Manager + FS) rather than
+	// "workspace_exec" (Manager + FS + Runner). Executors that
+	// intentionally omit ProgramRunner can still serve Collect /
+	// PutFiles / StageInputs / SaveArtifact through the facade;
+	// RunProgram itself returns a targeted error when Runner is nil.
+	if !codeExecutorHasLiveWorkspace(exec) {
+		return ctx
+	}
+	reg := a.workspaceRegistryForInvocation(inv, exec)
+	ws := workspaceio.New(exec, reg)
+	return workspaceio.WithWorkspace(ctx, ws)
 }
 
 // wrapEventChannel wraps the event channel to apply after agent callbacks.

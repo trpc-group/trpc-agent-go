@@ -18,6 +18,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2258,6 +2259,146 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(
 	require.True(t, inv.EndInvocation)
 }
 
+func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
+	t *testing.T,
+) {
+	const (
+		toolName = "external_tool"
+		callID   = "call-1"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	var callCount atomic.Int32
+	externalTool := &mockTool{
+		name: toolName,
+		callHook: func() {
+			callCount.Add(1)
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-external-tool",
+		AgentName:    "test-agent",
+		RunOptions: agent.NewRunOptions(
+			agent.WithExternalTools([]tool.Tool{externalTool}),
+		),
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			toolName: externalTool,
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   callID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      toolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case <-ch:
+		t.Fatalf("unexpected tool response event")
+	default:
+	}
+	assert.Zero(t, callCount.Load())
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_WithExternalTools_UnknownStops(
+	t *testing.T,
+) {
+	const (
+		externalToolName = "external_tool"
+		unknownToolName  = "unknown_tool"
+		externalCallID   = "call-external"
+		unknownCallID    = "call-unknown"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	var callCount atomic.Int32
+	externalTool := &mockTool{
+		name: externalToolName,
+		callHook: func() {
+			callCount.Add(1)
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv-external-tool-unknown",
+		AgentName:    "test-agent",
+		Model:        &mockModel{},
+		RunOptions: agent.NewRunOptions(
+			agent.WithExternalTools([]tool.Tool{externalTool}),
+		),
+	}
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			externalToolName: externalTool,
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   externalCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      externalToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							ID:   unknownCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      unknownToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case ev := <-ch:
+		require.NotNil(t, ev.Response)
+		require.Len(t, ev.Response.Choices, 1)
+		msg := ev.Response.Choices[0].Message
+		require.Equal(t, model.RoleTool, msg.Role)
+		require.Equal(t, unknownCallID, msg.ToolID)
+	case <-time.After(time.Second):
+		t.Fatalf("expected a tool error response event")
+	}
+	assert.Zero(t, callCount.Load())
+	require.True(t, inv.EndInvocation)
+}
+
 func TestFunctionCallResponseProcessor_WaitsForToolResponseCompletion(
 	t *testing.T,
 ) {
@@ -3333,6 +3474,7 @@ type mockTool struct {
 	shouldPanic bool
 	delay       time.Duration
 	result      any
+	callHook    func()
 }
 
 func (m *mockTool) Declaration() *tool.Declaration {
@@ -3343,6 +3485,10 @@ func (m *mockTool) Declaration() *tool.Declaration {
 }
 
 func (m *mockTool) Call(ctx context.Context, args []byte) (any, error) {
+	if m.callHook != nil {
+		m.callHook()
+	}
+
 	// Add delay to simulate processing time
 	if m.delay > 0 {
 		select {

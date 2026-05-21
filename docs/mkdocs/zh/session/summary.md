@@ -247,6 +247,64 @@ summarizer := summary.NewSummarizer(
 摘要入口，可以在调用 session API 之前自行往 `ctx` 写入标记，并在
 `ContextChecker` 中读取。
 
+## 动态摘要器
+
+当会话服务需要复用，但摘要模型、提示词或检查条件需要按请求变化时，可以
+使用 `NewDynamicSummarizer`。这适合多租户系统、自定义模型路由等场景。
+对于 MySQL 等数据库会话服务，建议保持 session service 长生命周期复用，
+从而复用底层连接池，而不是为了更换摘要器按请求新建 service。
+
+```go
+type summaryCfgKey struct{}
+
+type SummaryCfg struct {
+    ModelName string
+    Prompt    string
+}
+
+func WithSummaryCfg(ctx context.Context, cfg SummaryCfg) context.Context {
+    return context.WithValue(ctx, summaryCfgKey{}, cfg)
+}
+
+func SummaryCfgFromContext(ctx context.Context) (SummaryCfg, bool) {
+    cfg, ok := ctx.Value(summaryCfgKey{}).(SummaryCfg)
+    return cfg, ok
+}
+
+summarizer := summary.NewDynamicSummarizer(func(
+    ctx context.Context,
+    sess *session.Session,
+) (summary.SessionSummarizer, error) {
+    cfg, ok := SummaryCfgFromContext(ctx)
+    if !ok {
+        return nil, nil // 本次调用跳过自动摘要。
+    }
+    return BuildSummarizer(cfg)
+})
+
+sessionService, err := mysql.NewService(
+    mysql.WithMySQLClientDSN(dsn),
+    mysql.WithSummarizer(summarizer),
+)
+```
+
+请求执行前，把本次摘要配置放到 `ctx`：
+
+```go
+ctx = WithSummaryCfg(ctx, SummaryCfg{
+    ModelName: req.SummaryModel,
+    Prompt:    req.SummaryPrompt,
+})
+```
+
+对于同一个 `ctx` 和 session，resolver 应尽量保持轻量且确定。非强制摘要
+场景下，它可能在摘要检查阶段调用一次，在实际生成摘要阶段再调用一次。如果
+构造摘要器成本较高，可以把已构造好的摘要器放到 `ctx`，resolver 只负责读取。
+resolver 返回 nil 会跳过自动摘要检查；如果直接调用 `Summarize`，或在没有
+解析到真实摘要器时强制摘要，会返回错误。如果 resolver 在
+`ShouldSummarizeWithContext` 执行自动、非强制摘要检查时返回错误，gate 会将其
+当作 `false` 并跳过摘要生成；直接调用 `Summarize` 时会把 resolver 错误返回给调用方。
+
 ## 摘要器选项
 
 ### 触发条件
