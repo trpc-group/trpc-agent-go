@@ -147,6 +147,61 @@ func TestAgentCallbacks_Before_Multi(t *testing.T) {
 	require.Equal(t, "second", result.CustomResponse.ID)
 }
 
+func TestAgentCallbacks_Clone_PreservesOptionsAndDoesNotShareSlices(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnError(true),
+		WithContinueOnResponse(true),
+	)
+	expectedErr := errors.New("first")
+	var trail []string
+	callbacks.RegisterBeforeAgent(func(_ context.Context, _ *BeforeAgentArgs) (
+		*BeforeAgentResult, error,
+	) {
+		trail = append(trail, "orig-error")
+		return nil, expectedErr
+	})
+	callbacks.RegisterBeforeAgent(func(_ context.Context, _ *BeforeAgentArgs) (
+		*BeforeAgentResult, error,
+	) {
+		trail = append(trail, "orig-response")
+		return &BeforeAgentResult{
+			CustomResponse: &model.Response{ID: "orig"},
+		}, nil
+	})
+
+	cloned := callbacks.Clone()
+	cloned.RegisterBeforeAgent(func(_ context.Context, _ *BeforeAgentArgs) (
+		*BeforeAgentResult, error,
+	) {
+		trail = append(trail, "clone-response")
+		return &BeforeAgentResult{
+			CustomResponse: &model.Response{ID: "clone"},
+		}, nil
+	})
+
+	result, err := cloned.RunBeforeAgent(
+		context.Background(),
+		&BeforeAgentArgs{},
+	)
+	require.ErrorIs(t, err, expectedErr)
+	require.Equal(t, "clone", result.CustomResponse.ID)
+	require.Equal(t,
+		[]string{"orig-error", "orig-response", "clone-response"},
+		trail,
+		"clone must preserve ContinueOnError/ContinueOnResponse options",
+	)
+
+	trail = nil
+	result, err = callbacks.RunBeforeAgent(
+		context.Background(),
+		&BeforeAgentArgs{},
+	)
+	require.ErrorIs(t, err, expectedErr)
+	require.Equal(t, "orig", result.CustomResponse.ID)
+	require.Equal(t, []string{"orig-error", "orig-response"}, trail,
+		"adding callbacks to the clone must not mutate the original")
+}
+
 // =========================
 // AfterAgent Callback Tests
 // =========================
