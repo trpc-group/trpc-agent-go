@@ -572,6 +572,8 @@ Notes:
 
 By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` that estimates token count based on text length. To customize token counting behavior, use `summary.SetTokenCounter` to set a global token counter:
 
+For `SimpleTokenCounter`, `WithApproxRunesPerToken(v)` means roughly `v` UTF-8 characters per token. The formula is `estimatedTokens = countedUTF8Runes / v`. For example, `v=1.5` means about `1.5` characters per token; do not treat it as a token multiplier.
+
 ```go
 import (
     "context"
@@ -617,6 +619,7 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 - **Global effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process; set it once during application initialization
 - **Default counter**: If not set, the default `SimpleTokenCounter` is used (approximately 4 characters per token)
+- **Parameter meaning**: `v` in `WithApproxRunesPerToken(v)` is characters per token. Passing `10.0/15` means about `0.67` characters per token, which is about `1.5` tokens per character
 
 ## Skip Recent Events
 
@@ -945,7 +948,7 @@ Additionally:
 
 ```go
 counter := model.NewSimpleTokenCounter(
-    model.WithApproxRunesPerToken(1.6), // Example for Chinese-heavy content.
+    model.WithApproxRunesPerToken(1.6), // About 1.6 chars/token; this value is a divisor, not a multiplier.
 )
 
 modelInstance := openai.New(

@@ -1383,7 +1383,13 @@ Token 计数器用于估算文本内容的 token 数量。框架提供了 `Simpl
 
 **估算原理：**
 
-使用启发式规则：每 token 大约对应 `N` 个 UTF-8 字符，其中 `N` 可通过 `WithApproxRunesPerToken` 配置。
+使用启发式规则：每 token 大约对应 `N` 个 UTF-8 字符，其中 `N` 可通过 `WithApproxRunesPerToken` 配置。这里的 `N` 是除数，不是乘数：
+
+```text
+estimatedTokens = countedUTF8Runes / N
+```
+
+因此 `WithApproxRunesPerToken(1.5)` 表示约 `1.5` 字符/token；如果传入 `10.0/15`，则表示约 `0.67` 字符/token，等价于约 `1.5` token/字符。
 
 **使用方式：**
 
@@ -1412,6 +1418,7 @@ counter := model.NewSimpleTokenCounter(
 - **类型**：float64
 - **默认值**：4.0（约每 4 个字符对应 1 个 token，适合英文场景）
 - **值限制**：<= 0 的值会被忽略，保持默认值
+- **计算方式**：估算 token 数 = 统计到的 UTF-8 字符数 / `v`；例如 `v=1.5` 才是约 `1.5` 字符/token
 
 **常见语言的推荐值：**
 
