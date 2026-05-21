@@ -645,12 +645,25 @@ func TestRuntimeProfileAppNames(t *testing.T) {
 			"support": {
 				AppName: "support-app",
 			},
+			"isolated": {
+				Isolation: runtimeprofile.IsolationPolicy{
+					Mode: runtimeprofile.IsolationModeProfileCache,
+				},
+			},
+			"service-key": {
+				ID: "service-profile",
+				Isolation: runtimeprofile.IsolationPolicy{
+					Mode: runtimeprofile.IsolationModeService,
+				},
+			},
 		},
 	}
 
 	got := runtimeProfileAppNames(&cfg)
 	require.ElementsMatch(t, []string{
+		"isolated",
 		"retail-app",
+		"service-profile",
 		"support-app",
 	}, got)
 }

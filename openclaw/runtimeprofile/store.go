@@ -100,9 +100,6 @@ func (r *CachedResolver) Reload(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := ValidateConfig(cfg); err != nil {
-		return err
-	}
 	resolver, err := NewResolver(cfg)
 	if err != nil {
 		return err
@@ -222,8 +219,12 @@ func appNames(cfg Config) []string {
 	}
 	out := make([]string, 0, len(cfg.Profiles))
 	seen := make(map[string]struct{}, len(cfg.Profiles))
-	for _, profile := range cfg.Profiles {
-		appName := strings.TrimSpace(profile.AppName)
+	for key, profile := range cfg.Profiles {
+		id := strings.TrimSpace(profile.ID)
+		if id == "" {
+			profile.ID = strings.TrimSpace(key)
+		}
+		appName := RuntimeAppName(profile)
 		if appName == "" {
 			continue
 		}

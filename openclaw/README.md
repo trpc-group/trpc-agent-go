@@ -463,6 +463,23 @@ entries by `name`. It does not create a toolset by itself; it hides tools from
 other named toolsets for that request. `tools.include` and `tools.exclude`
 still apply to concrete tool names.
 
+Profile `knowledge.indexes` selects from `knowledges.providers` by `name`.
+Search tools for other knowledge providers are hidden for that request, and
+`knowledge.filter` still applies as metadata filter criteria when querying the
+selected knowledge provider.
+
+Profile `tools.credential_refs` maps a concrete tool name or toolset `name` to
+a credential reference. When `credentials.allowed_refs` is set, tools mapped to
+other credential references are hidden for that request. Allowed credential
+references are also copied into runtime state so custom tools can resolve
+their own secrets through the deployment's credential provider.
+
+When `isolation.mode` is `profile_cache` or `service` and `app_name` is not
+set, OpenClaw uses the profile id as the run app name. That isolates session,
+memory, and event filter keys for the profile. Deployments that need a
+separate process or sandbox boundary can read the isolation fields from
+runtime state and enforce that boundary in their custom runtime.
+
 For custom OpenClaw binaries, load profiles from code by passing runtime
 options to `app.MainWithOptions`:
 

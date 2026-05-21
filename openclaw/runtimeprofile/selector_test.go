@@ -87,6 +87,51 @@ func TestSelectorResolverRejectsMissAndMismatch(t *testing.T) {
 	require.ErrorIs(t, err, ErrProfileSelectorDenied)
 }
 
+func TestSelectorResolverAllowsProfileKeyAlias(t *testing.T) {
+	t.Parallel()
+
+	const (
+		profileKey = "tenant_alpha"
+		profileID  = "tenant-alpha-v2"
+	)
+
+	resolver, err := NewResolver(Config{
+		Profiles: map[string]Profile{
+			profileKey: {
+				ID:      profileID,
+				AppName: "tenant-alpha-app",
+			},
+		},
+		Selectors: []Selector{
+			{
+				ProfileID: profileKey,
+				Tenants:   []string{"tenant-a"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	profile, err := resolver.Resolve(context.Background(), Request{
+		ProfileID: profileID,
+		TenantID:  "tenant-a",
+	})
+	require.NoError(t, err)
+	require.Equal(t, profileID, profile.ID)
+	require.Equal(t, "tenant-alpha-app", profile.AppName)
+}
+
+func TestSelectProfileIDUsesProfileAlias(t *testing.T) {
+	t.Parallel()
+
+	profileID := SelectProfileID([]Selector{
+		{
+			Profile: testProfileRetail,
+			Users:   []string{"user-a"},
+		},
+	}, Request{UserID: "user-a"})
+	require.Equal(t, testProfileRetail, profileID)
+}
+
 func TestSelectorResolverRejectsStaleSelectorProfile(t *testing.T) {
 	t.Parallel()
 
@@ -107,6 +152,80 @@ func TestSelectorResolverRejectsStaleSelectorProfile(t *testing.T) {
 	_, err = resolver.Resolve(context.Background(), Request{UserID: "user-a"})
 	require.ErrorIs(t, err, ErrProfileSelectorDenied)
 	require.False(t, errors.Is(err, ErrProfileNotFound))
+}
+
+func TestSelectorResolverPropagatesBaseError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("resolver down")
+	base := ResolverFunc(func(
+		context.Context,
+		Request,
+	) (Profile, error) {
+		return Profile{}, wantErr
+	})
+	resolver, err := NewSelectorResolver(base, []Selector{
+		{
+			ProfileID: testProfileRetail,
+			Users:     []string{"user-a"},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = resolver.Resolve(context.Background(), Request{UserID: "user-a"})
+	require.ErrorIs(t, err, wantErr)
+}
+
+func TestSelectorResolverRejectsEmptySelectedProfile(t *testing.T) {
+	t.Parallel()
+
+	base := ResolverFunc(func(
+		context.Context,
+		Request,
+	) (Profile, error) {
+		return Profile{}, nil
+	})
+	resolver, err := NewSelectorResolver(base, []Selector{
+		{
+			ProfileID: testProfileRetail,
+			Users:     []string{"user-a"},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = resolver.Resolve(context.Background(), Request{UserID: "user-a"})
+	require.ErrorIs(t, err, ErrProfileSelectorDenied)
+	require.Contains(t, err.Error(), "selected profile")
+}
+
+func TestSelectorResolverNilBranches(t *testing.T) {
+	t.Parallel()
+
+	var nilResolver *SelectorResolver
+	profile, err := nilResolver.Resolve(context.Background(), Request{})
+	require.NoError(t, err)
+	require.Empty(t, profile)
+
+	resolver := &SelectorResolver{
+		base: ResolverFunc(func(
+			context.Context,
+			Request,
+		) (Profile, error) {
+			return Profile{ID: testProfileRetail}, nil
+		}),
+		selectors: []Selector{
+			{
+				ProfileID: testProfileRetail,
+				Users:     []string{"user-a"},
+			},
+		},
+	}
+	ids, err := resolver.ProfileIDs(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, ids)
+	appNames, err := resolver.AppNames(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, appNames)
 }
 
 func TestSelectorResolverRejectsMissingBase(t *testing.T) {
@@ -144,6 +263,18 @@ func TestValidateConfigRejectsInvalidSelectors(t *testing.T) {
 				},
 			},
 			wantErr: `unknown profile_id "retail"`,
+		},
+		{
+			name: "missing profile id",
+			cfg: Config{
+				Profiles: map[string]Profile{
+					testProfileDefault: {},
+				},
+				Selectors: []Selector{
+					{Users: []string{"user-a"}},
+				},
+			},
+			wantErr: "profile_id is required",
 		},
 		{
 			name: "missing criteria",
@@ -199,6 +330,34 @@ func TestValidateConfigRejectsInvalidSelectors(t *testing.T) {
 			require.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
+}
+
+func TestNewResolverRejectsInvalidConfig(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewResolver(Config{
+		Default: "missing",
+		Profiles: map[string]Profile{
+			testProfileDefault: {},
+		},
+	})
+	require.ErrorIs(t, err, ErrConfigInvalid)
+}
+
+func TestNewSelectorResolverRejectsInvalidSelectors(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewSelectorResolver(
+		ResolverFunc(func(
+			context.Context,
+			Request,
+		) (Profile, error) {
+			return Profile{}, nil
+		}),
+		[]Selector{{Users: []string{"user-a"}}},
+	)
+	require.ErrorIs(t, err, ErrConfigInvalid)
+	require.Contains(t, err.Error(), "profile_id is required")
 }
 
 func TestSelectorResolverDelegatesCatalog(t *testing.T) {

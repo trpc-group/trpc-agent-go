@@ -32,6 +32,7 @@ type Selector struct {
 type SelectorResolver struct {
 	base      Resolver
 	selectors []Selector
+	aliases   map[string]string
 }
 
 // NewResolver creates a resolver from config, including selectors.
@@ -40,13 +41,25 @@ func NewResolver(cfg Config) (Resolver, error) {
 		return nil, err
 	}
 	base := NewMapResolver(cfg)
-	return NewSelectorResolver(base, cfg.Selectors)
+	aliases, err := profileIDAliases(cfg.Profiles)
+	if err != nil {
+		return nil, err
+	}
+	return newSelectorResolver(base, cfg.Selectors, aliases)
 }
 
 // NewSelectorResolver wraps base with selector-based profile selection.
 func NewSelectorResolver(
 	base Resolver,
 	selectors []Selector,
+) (Resolver, error) {
+	return newSelectorResolver(base, selectors, nil)
+}
+
+func newSelectorResolver(
+	base Resolver,
+	selectors []Selector,
+	aliases map[string]string,
 ) (Resolver, error) {
 	cleaned, err := cleanSelectors(selectors)
 	if err != nil {
@@ -64,6 +77,7 @@ func NewSelectorResolver(
 	return &SelectorResolver{
 		base:      base,
 		selectors: cleaned,
+		aliases:   copyStringMap(aliases),
 	}, nil
 }
 
@@ -82,8 +96,9 @@ func (r *SelectorResolver) Resolve(
 			ErrProfileSelectorDenied,
 		)
 	}
+	selected := r.canonicalProfileID(profileID)
 	if requested := strings.TrimSpace(req.ProfileID); requested != "" &&
-		requested != profileID {
+		r.canonicalProfileID(requested) != selected {
 		return Profile{}, fmt.Errorf(
 			"%w: requested profile %q does not match selector profile %q",
 			ErrProfileSelectorDenied,
@@ -91,7 +106,7 @@ func (r *SelectorResolver) Resolve(
 			profileID,
 		)
 	}
-	req.ProfileID = profileID
+	req.ProfileID = selected
 	profile, err := r.base.Resolve(ctx, req)
 	if errors.Is(err, ErrProfileNotFound) {
 		return Profile{}, fmt.Errorf(
@@ -111,6 +126,17 @@ func (r *SelectorResolver) Resolve(
 		)
 	}
 	return profile, nil
+}
+
+func (r *SelectorResolver) canonicalProfileID(profileID string) string {
+	profileID = strings.TrimSpace(profileID)
+	if r == nil || len(r.aliases) == 0 {
+		return profileID
+	}
+	if effectiveID, ok := r.aliases[profileID]; ok {
+		return effectiveID
+	}
+	return profileID
 }
 
 // ProfileIDs implements Catalog when the base resolver also implements it.
@@ -142,7 +168,11 @@ func SelectProfileID(
 ) string {
 	for _, selector := range selectors {
 		if selector.matches(req) {
-			return strings.TrimSpace(selector.ProfileID)
+			profileID, err := selector.runtimeProfileID()
+			if err != nil {
+				return ""
+			}
+			return profileID
 		}
 	}
 	return ""

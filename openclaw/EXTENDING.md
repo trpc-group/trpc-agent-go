@@ -531,12 +531,42 @@ func main() {
 		return runtimeprofile.Config{
 			Profiles: map[string]runtimeprofile.Profile{
 				"tenant_alpha": {
-					AppName: "tenant-alpha",
+					AppName:   "tenant-alpha",
+					ModelName: "gpt-5",
 					Prompt: runtimeprofile.Prompt{
 						Instruction: "You are the tenant Alpha assistant.",
 					},
+					Workspace: runtimeprofile.WorkspacePolicy{
+						Workdir: "/srv/openclaw/workspaces/tenant-alpha",
+						AllowedRoots: []string{
+							"/srv/openclaw/workspaces/tenant-alpha",
+						},
+					},
 					Skills: runtimeprofile.SkillPolicy{
+						Roots: []string{
+							"/srv/openclaw/skills/tenant-alpha",
+						},
 						Include: []string{"tenant-alpha-guide"},
+					},
+					Knowledge: runtimeprofile.KnowledgePolicy{
+						Indexes: []string{"tenant-alpha-faq"},
+						Filter: map[string]any{
+							"tenant": "tenant-alpha",
+						},
+					},
+					Tools: runtimeprofile.ToolPolicy{
+						ToolSets: []string{"tenant-alpha-tools"},
+						CredentialRefs: map[string]string{
+							"tenant-alpha-tools": "tenant-alpha-tools",
+						},
+					},
+					Credentials: runtimeprofile.CredentialPolicy{
+						AllowedRefs: []string{"tenant-alpha-tools"},
+					},
+					Isolation: runtimeprofile.IsolationPolicy{
+						Mode:         runtimeprofile.IsolationModeProfileCache,
+						AgentCache:   true,
+						ToolSetCache: true,
 					},
 				},
 			},
@@ -562,6 +592,23 @@ match a selector, explicitly request a different profile, or select a missing
 profile return an error instead of falling back to the default profile. This is
 important for multi-tenant prompts, tools, credentials, workspaces, and
 knowledge indexes.
+
+`Knowledge.Indexes` uses the `name` values from `knowledges.providers`.
+OpenClaw hides search tools for other knowledge providers on that request;
+`Knowledge.Filter` remains the metadata filter sent to the selected knowledge
+provider.
+
+`Tools.CredentialRefs` maps a concrete tool name or toolset name to a
+credential reference. When `Credentials.AllowedRefs` is non-empty, OpenClaw
+hides tools mapped to references outside that allowlist. The selected
+credential refs are also available in runtime state for custom tools that
+resolve secrets through a private credential provider.
+
+`Isolation.Mode` also has runtime behavior: `profile_cache` and `service`
+derive the run app name from the profile id when `AppName` is empty, isolating
+session, memory, and event filter keys. If your deployment needs a stronger
+process or sandbox boundary, read the isolation fields from runtime state in
+your custom runtime layer.
 
 Use `Tenants` selectors when the caller or custom channel populates
 `tenant_id` in the `openclaw.runtime_profile` request extension. Use
