@@ -131,6 +131,34 @@ func TestWithExtensions_Tools_NameCollisionDropsExtension(t *testing.T) {
 		"on collision the user-registered tool must win, extension copy is dropped")
 }
 
+func TestWithExtensions_Tools_DedupAgainstLaterFrameworkTools(t *testing.T) {
+	extAwait := echoTool("await_user_reply")
+	extTransfer := echoTool("transfer_to_agent")
+	e := &fakeExt{
+		name:  "e",
+		tools: []tool.Tool{extAwait, extTransfer},
+	}
+
+	a := New("a",
+		WithAwaitUserReplyTool(true),
+		WithSubAgents([]agent.Agent{&mockAgent{name: "sub"}}),
+		WithExtensions(e),
+	)
+
+	tools := a.Tools()
+	await := findTool(tools, "await_user_reply")
+	require.NotNil(t, await)
+	require.NotSame(t, extAwait, await,
+		"framework await_user_reply must win over an extension collision")
+	assert.Equal(t, 1, countToolName(tools, "await_user_reply"))
+
+	transfer := findTool(tools, "transfer_to_agent")
+	require.NotNil(t, transfer)
+	require.NotSame(t, extTransfer, transfer,
+		"framework transfer_to_agent must win over an extension collision")
+	assert.Equal(t, 1, countToolName(tools, "transfer_to_agent"))
+}
+
 // TestWithExtensions_ModelCallbacks_OrderIsUserThenExtension
 // asserts the documented merge order. The order matters: a user
 // callback that returns a CustomResponse stops the chain by
@@ -336,8 +364,8 @@ func TestWithExtensions_HookOnlyExtension_NoToolsContributed(t *testing.T) {
 
 // TestWithExtensions_Tools_AppearInInvocationToolSurface is the
 // regression guard for a dispatch-surface mismatch:
-// extension-contributed tools were being added to a.tools (so
-// LLMAgent.Tools() saw them) but the invocation-time path —
+// extension-contributed tools were being surfaced by LLMAgent.Tools()
+// but the invocation-time path —
 // getFilteredTools → InvocationToolSurface → userToolsForInvocation
 // — only walks a.userToolNames-gated entries. Extension tools are
 // deliberately NOT folded into userToolNames (they are framework-

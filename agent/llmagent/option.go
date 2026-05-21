@@ -547,12 +547,11 @@ type Options struct {
 	extensions []extension.Extension
 
 	// extensionContributedTools caches the tools harvested from
-	// the extensions' Register calls. The cache is consumed by
-	// registerTools so that hot-reload paths (AddToolSet →
-	// refreshToolsLocked) continue to surface extension tools
-	// too — callbacks are static once merged, but tool sets can
-	// be rebuilt at runtime, and we need both code paths to see
-	// the same set.
+	// the extensions' Register calls. Tool-surface builders append
+	// this cache after user/framework tools so hot-reload paths
+	// (AddToolSet → refreshToolsLocked) and per-invocation framework
+	// tools (transfer_to_agent, await_user_reply, ...) continue to
+	// share the same extension tool set.
 	extensionContributedTools []tool.Tool
 }
 

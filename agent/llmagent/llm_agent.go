@@ -109,11 +109,12 @@ func New(name string, opts ...Option) *LLMAgent {
 	//     a.agentCallbacks, flowOpts.ModelCallbacks and the
 	//     FunctionCallResponseProcessor below — otherwise extension
 	//     hooks would silently no-op for this agent.
-	//   - extensionContributedTools is cached on Options so that the
-	//     same set is re-applied by registerTools every time the
-	//     tool list is rebuilt (AddToolSet / refreshToolsLocked).
-	//     Extension callbacks are static once merged; only tools need
-	//     to flow through registerTools more than once.
+	//   - extensionContributedTools is cached on Options so the
+	//     tool-surface builders can re-apply the same set after user
+	//     and framework tools (including per-invocation framework
+	//     tools such as transfer_to_agent). Extension callbacks are
+	//     static once merged; only tools need to flow through the
+	//     surface builders more than once.
 	extBundle, err := extension.Collect(options.extensions)
 	if err != nil {
 		panic(err)
@@ -720,13 +721,6 @@ func registerTools(
 	// Step 4: wire skill tools (skill_load, skill_run, etc.) when a
 	// skill repository is configured.
 	allTools = appendSkillTools(allTools, options, runTool)
-	// Extension-contributed tools (WithExtensions →
-	// extension.Registry.Tools) are appended last so any name
-	// collision against user tools, knowledge tools, workspace_exec
-	// or skill tools resolves in favour of the earlier (framework-
-	// or user-registered) entry. See appendExtensionTools
-	// docstring in extension.go.
-	allTools = appendExtensionTools(allTools, options)
 	return allTools, userToolNames, workspaceRegistry
 }
 
@@ -1741,7 +1735,7 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 	}
 
 	if len(a.subAgents) == 0 {
-		return base
+		return appendExtensionTools(base, &a.option)
 	}
 
 	agentInfos := make([]agent.Info, len(a.subAgents))
@@ -1750,7 +1744,8 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 	}
 
 	transferTool := transfer.New(agentInfos)
-	return append(base, transferTool)
+	base = append(base, transferTool)
+	return appendExtensionTools(base, &a.option)
 }
 
 // Tools implements the agent.Agent interface.

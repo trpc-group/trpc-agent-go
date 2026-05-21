@@ -71,8 +71,9 @@ func applyExtensionBundle(options *Options, bundle *extension.Bundle) {
 // The cached slice on options.extensionContributedTools was
 // populated once during New() (or rather, during applyExtensionBundle
 // called from New). This function is cheap enough to call from every
-// registerTools invocation, which keeps tools in sync across
-// construction and the AddToolSet / refreshToolsLocked hot-reload
+// tool-surface builder (Tools, InvocationToolSurface, and friends),
+// which keeps tools in sync across construction, per-invocation
+// framework tools and the AddToolSet / refreshToolsLocked hot-reload
 // paths.
 //
 // Extension tools are intentionally NOT folded into userToolNames:
@@ -89,8 +90,8 @@ func applyExtensionBundle(options *Options, bundle *extension.Bundle) {
 // providers reject two declarations for the same name, and
 // silently overriding either side would be more surprising than
 // skipping. Earlier entries win, matching the order tools were
-// collected in registerTools (user tools first, then framework,
-// then extensions).
+// collected by each surface builder (user tools first, then
+// framework, then extensions).
 func appendExtensionTools(allTools []tool.Tool, options *Options) []tool.Tool {
 	if options == nil || len(options.extensionContributedTools) == 0 {
 		return allTools
