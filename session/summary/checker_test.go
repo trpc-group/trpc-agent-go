@@ -1142,8 +1142,8 @@ func TestResolveContextWindowFromCtx_KnownModel(t *testing.T) {
 		Model: &fakeModelWithName{name: "gpt-4o-mini"},
 	}
 	ctx := agent.NewInvocationContext(context.Background(), inv)
-	// gpt-4o-mini → 200000.
-	assert.Equal(t, 200000, resolveContextWindowFromCtx(ctx, 0))
+	// gpt-4o-mini → 128000.
+	assert.Equal(t, 128000, resolveContextWindowFromCtx(ctx, 0))
 }
 
 func TestResolveContextWindowFromCtx_ModelInstanceWindow(t *testing.T) {
