@@ -7,14 +7,25 @@ fails inside a default Docker or Kubernetes container because the outer
 container runtime filters namespace and mount operations through seccomp and
 capability restrictions.
 
-This document describes the permissions required by the outer container. The
-sandbox executor's profile still controls the child process file system,
-network, timeout, and environment policy inside that container.
+This document describes Docker launch options from lower to higher privilege.
+Use the smallest option that passes on your runtime. The sandbox executor's
+profile still controls the child process file system, network, timeout, and
+environment policy inside that container.
 
-## Why default Docker may fail
+## Summary
 
-The Linux backend probes `bwrap` before running a command with a minimal setup
-similar to:
+| Docker options | What to validate | Common result | What it means |
+| --- | --- | --- | --- |
+| Default Docker | `--unshare-user` probe | Often fails with `No permissions to create new namespace` | The container cannot create user namespaces. |
+| `--security-opt seccomp=unconfined` | `--unshare-user` probe | Usually passes | User namespaces are available, but this does not prove the full sandbox can mount `/dev` or `/proc`. |
+| `--security-opt seccomp=unconfined` | Full no-proc probe | Passes when only fresh `/proc` mounting is blocked | Managed sandbox can run with PID isolation and without `--proc /proc`; this is the lowest-permission working mode on many Docker hosts. |
+| `--security-opt seccomp=unconfined --security-opt systempaths=unconfined --cap-add SYS_ADMIN` | Full with-proc probe | Passes when fresh `/proc` mounting is required | The container can create the complete bwrap view including a fresh `/proc`. |
+| `--privileged` | Full with-proc probe | Usually passes | Broad fallback when the platform cannot express narrower permissions. |
+
+## Runtime Probe
+
+Before running a managed command, the Linux backend probes `bwrap` with the same
+core namespace and mount flags used by real sandbox runs:
 
 ```bash
 bwrap \
@@ -28,44 +39,109 @@ bwrap \
   -- /bin/true
 ```
 
-If that probe fails only because the container runtime rejects mounting a fresh
-`/proc` (for example `Can't mount proc on /newroot/proc: Operation not
-permitted`), the backend automatically retries the probe without
-`--proc /proc`. When the retry succeeds, managed sandbox runs keep PID isolation
-but skip the fresh `/proc` mount.
+If that fails with known proc mount errors such as
+`Can't mount proc on /newroot/proc: Operation not permitted`, the backend
+automatically retries without `--proc /proc`. If the retry succeeds, managed
+sandbox runs keep PID isolation but skip mounting a fresh `/proc`.
 
-If the probe fails with `Can't access /newroot/proc/sysrq-trigger: Read-only
-file system`, upgrade the image to `bubblewrap` 0.5.0 or newer. That message
-matches an older Docker `/proc` handling issue fixed by bubblewrap 0.5.0, so the
-backend reports it as a setup error instead of using the no-proc fallback.
+Managed sandbox runs then add bind mounts for the workspace and granted paths,
+masks for protected paths, and `--unshare-net` when networking is restricted.
+Other namespace, mount, executable lookup, or policy setup failures still make
+managed sandbox startup fail rather than falling back to unsandboxed execution.
 
-Managed sandbox runs then add PID isolation, optional `/proc` mounting, bind
-mounts for the workspace and granted paths, masks for protected paths, and
-`--unshare-net` when networking is restricted.
+## Default Docker
 
-Default Docker settings commonly block one of these operations. Typical failure
-messages are surfaced as setup/backend errors such as `bubblewrap preflight
-failed`, `Operation not permitted`, or a namespace/mount related error.
-
-## Recommended Docker permissions
-
-Prefer the smallest outer-container permission set that lets `bwrap` complete
-the preflight:
+Use default Docker only as a baseline. On many hosts it fails before the managed
+sandbox starts because `bwrap --unshare-user` cannot create a user namespace:
 
 ```bash
-docker run --rm -it \
+docker run --rm \
+  --entrypoint bwrap \
+  your-image \
+  --die-with-parent --unshare-user --ro-bind / / -- /bin/true
+```
+
+If this reports `No permissions to create new namespace`, allow user namespaces
+with unconfined seccomp.
+
+## User Namespace Only
+
+The lowest Docker setting that commonly allows `bwrap --unshare-user` is
+unconfined seccomp:
+
+```bash
+docker run --rm \
+  --security-opt seccomp=unconfined \
+  --entrypoint bwrap \
+  your-image \
+  --die-with-parent --unshare-user --ro-bind / / -- /bin/true
+```
+
+Passing this check means `--unshare-user` is available. It does not by itself
+prove that the full managed sandbox can mount `/dev`, create PID namespaces, or
+mount a fresh `/proc`.
+
+## No-Proc Fallback
+
+Some containers allow user and PID namespaces but reject mounting a fresh
+`/proc`. In that environment, the with-proc probe fails with text such as
+`Can't mount proc on /newroot/proc: Operation not permitted`, while the no-proc
+probe succeeds:
+
+```bash
+docker run --rm \
+  --security-opt seccomp=unconfined \
+  --entrypoint bwrap \
+  your-image \
+  --die-with-parent \
+  --unshare-user \
+  --unshare-pid \
+  --new-session \
+  --ro-bind / / \
+  --dev /dev \
+  -- /bin/true
+```
+
+This is the lowest-permission Docker mode that can run the managed sandbox on
+hosts where only fresh `/proc` mounting is blocked. In this mode the backend
+logs:
+
+```text
+managed sandbox notice: bwrap fresh /proc mount unavailable; using no-proc fallback
+```
+
+## Fresh Proc Mounting
+
+If your deployment requires a fresh `/proc` inside the sandbox, or if the
+no-proc fallback is not acceptable for your environment, grant the outer
+container enough permissions for the with-proc probe to pass:
+
+```bash
+docker run --rm \
   --security-opt seccomp=unconfined \
   --security-opt systempaths=unconfined \
   --cap-add SYS_ADMIN \
-  your-image
+  --entrypoint bwrap \
+  your-image \
+  --die-with-parent \
+  --unshare-user \
+  --unshare-pid \
+  --new-session \
+  --ro-bind / / \
+  --dev /dev \
+  --proc /proc \
+  -- /bin/true
 ```
 
-These flags do not disable the sandbox executor. They allow the OpenClaw or
-trpc-agent-go process inside the outer container to create the nested sandbox
-for executed code.
+These flags do not disable the sandbox executor. They allow the trpc-agent-go
+process inside the outer container to create the nested sandbox for executed
+code.
 
-If your platform cannot set seccomp and capability options separately, use a
-privileged container only as a deployment-platform fallback or debugging path:
+## Privileged Fallback
+
+If your platform cannot set seccomp, system path, and capability options
+separately, use a privileged container only as a deployment-platform fallback or
+debugging path:
 
 ```bash
 docker run --rm -it \
@@ -74,47 +150,26 @@ docker run --rm -it \
 ```
 
 `--privileged` grants much broader access to the outer container than the
-minimal option above. Treat it as a larger trust boundary: `bwrap` still isolates
-the code executed by the sandbox backend, but the service process that launches
+options above. Treat it as a larger trust boundary: `bwrap` still isolates the
+code executed by the sandbox backend, but the service process that launches
 `bwrap` is running with elevated container privileges.
 
-## Impact scope
+## Kubernetes and Managed Platforms
 
-The Docker or Kubernetes permissions in this document change the security
-boundary of the outer service container. They do not change the sandbox profile
-selected by `codeexecutor/sandbox`, and they do not grant model-generated code
-direct host access by themselves.
+For Kubernetes-style deployments, map the Docker options above to the pod or
+container security context.
 
-The main impact is that every process already running in the service container
-can use the added container privileges, not only `bwrap`. With the minimal
-permission set, the service container can perform mount and namespace operations
-needed to create nested sandboxes. With `--privileged`, the service container
-gets a much broader set of device, capability, and kernel-interface access.
+User namespace and no-proc fallback modes usually require at least unconfined
+seccomp:
 
-The `bwrap` child sandbox still applies the configured executor controls:
+```yaml
+securityContext:
+  seccompProfile:
+    type: Unconfined
+```
 
-- file system access is limited by the selected permission profile and explicit
-  path grants;
-- restricted networking still uses a network namespace for executed code;
-- shell environment filtering still controls which variables are visible to
-  sandboxed commands;
-- timeouts and output caps still apply to each sandboxed run.
-
-Therefore, enabling these outer-container permissions should be treated as
-expanding trust in the OpenClaw or trpc-agent-go service process and its
-dependencies. It is not equivalent to granting the same permissions to each
-model-generated command, but a compromise of the service process would have a
-larger container-level impact than it would under default Docker settings.
-
-Keep the permission grant scoped to the deployment that needs managed sandbox
-code execution. Avoid sharing the same elevated container with unrelated
-workloads, and prefer the minimal permission set over `--privileged` whenever
-the platform supports it.
-
-## Kubernetes and managed platforms
-
-For Kubernetes-style deployments, map the minimal Docker option to the pod or
-container security context:
+Fresh `/proc` mounting adds the capability and proc visibility needed for the
+with-proc path:
 
 ```yaml
 securityContext:
@@ -134,87 +189,42 @@ securityContext:
   privileged: true
 ```
 
-On managed platforms such as 123, prefer a whitelist that grants `SYS_ADMIN`
-and unconfined seccomp to the specific service that needs managed sandbox code
-execution. Use full privileged mode only when the platform cannot express the
-smaller permission set.
+On managed platforms such as 123, prefer a service-specific whitelist for the
+smallest required permissions. Use full privileged mode only when the platform
+cannot express the smaller permission set.
 
-## Validation commands
+## Failure Guide
 
-First verify that `bwrap` exists in the image:
+- `bubblewrap executable not found in PATH`: install `bubblewrap` in the image.
+- `No permissions to create new namespace`: use
+  `--security-opt seccomp=unconfined` and retry the user namespace probe.
+- `Can't mount proc on /newroot/proc: Operation not permitted`: the no-proc
+  fallback should apply, or use the fresh-proc permissions if your deployment
+  requires `/proc`.
+- `Can't access /newroot/proc/sysrq-trigger: Read-only file system`: upgrade
+  `bubblewrap` to 0.5.0 or newer. That message matches an older Docker `/proc`
+  handling issue fixed by bubblewrap 0.5.0.
+- Other namespace, mount, executable lookup, or policy setup failures still make
+  managed sandbox startup fail rather than falling back to unsandboxed
+  execution.
 
-```bash
-command -v bwrap
-```
+## Impact Scope
 
-Then run the preflight probe:
+The Docker or Kubernetes permissions in this document change the security
+boundary of the outer service container. They do not change the sandbox profile
+selected by `codeexecutor/sandbox`, and they do not grant model-generated code
+direct host access by themselves.
 
-```bash
-bwrap \
-  --die-with-parent \
-  --unshare-user \
-  --unshare-pid \
-  --new-session \
-  --ro-bind / / \
-  --dev /dev \
-  --proc /proc \
-  -- /bin/true
-```
+The `bwrap` child sandbox still applies the configured executor controls:
 
-If the only failure is `Can't mount proc on /newroot/proc` with
-`Operation not permitted`, `Permission denied`, or `Invalid argument`, validate
-the automatic fallback path:
+- file system access is limited by the selected permission profile and explicit
+  path grants;
+- restricted networking still uses a network namespace for executed code;
+- shell environment filtering still controls which variables are visible to
+  sandboxed commands;
+- timeouts and output caps still apply to each sandboxed run.
 
-```bash
-bwrap \
-  --die-with-parent \
-  --unshare-user \
-  --unshare-pid \
-  --new-session \
-  --ro-bind / / \
-  --dev /dev \
-  -- /bin/true
-```
-
-The fallback is intentionally narrow. Namespace, mount, executable lookup, or
-other setup failures still make managed sandbox startup fail rather than falling
-back to unsandboxed execution.
-
-If the failure is `Can't access /newroot/proc/sysrq-trigger: Read-only file
-system`, upgrade `bubblewrap` to 0.5.0 or newer before retrying the validation.
-
-For a full service-level check, run the OpenClaw sandbox service execution
-example from the repository root:
-
-```bash
-docker build \
-  -f openclaw/examples/sandbox_service_execution/Dockerfile \
-  -t openclaw-sandbox-service-execution .
-
-docker run --rm \
-  --security-opt seccomp=unconfined \
-  --security-opt systempaths=unconfined \
-  --cap-add SYS_ADMIN \
-  -e OPENAI_BASE_URL \
-  -e OPENAI_API_KEY \
-  -e MODEL_NAME \
-  openclaw-sandbox-service-execution
-```
-
-The example also documents a full test matrix for default Docker, minimal
-permissions, and privileged fallback.
-
-## Operational notes
-
-- Keep model and service credentials in environment variables or a secret
-  manager. Do not bake them into Dockerfiles, images, or example configs.
-- Use `shell_env.inherit: core` plus default secret-like excludes when sandboxed
-  child processes do not need model credentials.
-- The sandbox backend may skip mounting a fresh `/proc` for known
-  restricted-container proc mount failures, but it reports the older
-  `sysrq-trigger` read-only failure as an upgrade-required setup error and does
-  not silently fall back to local execution when a managed OS sandbox is
-  requested and `bwrap` setup fails.
-- Docker, containerd, and managed Kubernetes runtimes can differ in kernel,
-  seccomp, and namespace behavior. Validate on the same runtime class used in
-  production.
+Keep the permission grant scoped to the deployment that needs managed sandbox
+code execution. Avoid sharing the same elevated container with unrelated
+workloads, and prefer the lowest passing option over `--privileged` whenever the
+platform supports it.
