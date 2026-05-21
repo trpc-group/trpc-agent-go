@@ -32,6 +32,15 @@ func (m *mockTool) Call(context.Context, []byte) (any, error) {
 	return nil, nil
 }
 
+func hasToolName(tools []tool.Tool, name string) bool {
+	for _, tl := range tools {
+		if tl.Declaration().Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // mockAgentWithUserTools implements agent.Agent and UserToolsProvider.
 type mockAgentWithUserTools struct {
 	allTools       []tool.Tool
@@ -107,6 +116,15 @@ func (m *mockAgentWithFilterTools) SubAgents() []agent.Agent {
 
 func (m *mockAgentWithFilterTools) FindSubAgent(string) agent.Agent {
 	return nil
+}
+
+type mockAgentWithFilterAndUserTools struct {
+	*mockAgentWithFilterTools
+	userTools []tool.Tool
+}
+
+func (m *mockAgentWithFilterAndUserTools) UserTools() []tool.Tool {
+	return m.userTools
 }
 
 // mockAgentWithoutUserTools implements agent.Agent without UserToolsProvider.
@@ -441,6 +459,233 @@ func TestGetFilteredTools_WithToolFilter(t *testing.T) {
 	if foundUserTool2 {
 		t.Error("user_tool_2 should be filtered out")
 	}
+}
+
+func TestGetFilteredTools_AppendsRunOptionTools(t *testing.T) {
+	f := New(nil, nil, Options{})
+
+	frameworkTool := &mockTool{name: "framework_tool"}
+	runtimeAllowed := &mockTool{name: "runtime_allowed"}
+	runtimeDenied := &mockTool{name: "runtime_denied"}
+
+	mockAgent := &mockAgentWithInvocationToolSurface{
+		name:          "test-agent",
+		allTools:      []tool.Tool{frameworkTool},
+		userToolNames: map[string]bool{},
+	}
+
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+	inv.RunOptions = agent.NewRunOptions(
+		agent.WithAdditionalTools(
+			[]tool.Tool{runtimeAllowed, runtimeDenied},
+		),
+		agent.WithToolFilter(
+			tool.NewIncludeToolNamesFilter("runtime_allowed"),
+		),
+	)
+
+	filtered := f.getFilteredTools(context.Background(), inv)
+
+	require.Len(t, filtered, 2)
+	require.True(t, hasToolName(filtered, "framework_tool"))
+	require.True(t, hasToolName(filtered, "runtime_allowed"))
+	require.False(t, hasToolName(filtered, "runtime_denied"))
+}
+
+func TestGetFilteredTools_FiltersRunOptionToolsWithFilterProvider(
+	t *testing.T,
+) {
+	const (
+		frameworkToolName  = "framework_tool"
+		registeredToolName = "registered_user_tool"
+		runtimeAllowedName = "runtime_allowed"
+		runtimeDeniedName  = "runtime_denied"
+	)
+
+	f := New(nil, nil, Options{})
+
+	frameworkTool := &mockTool{name: frameworkToolName}
+	registeredTool := &mockTool{name: registeredToolName}
+	runtimeAllowed := &mockTool{name: runtimeAllowedName}
+	runtimeDenied := &mockTool{name: runtimeDeniedName}
+
+	mockAgent := &mockAgentWithFilterAndUserTools{
+		mockAgentWithFilterTools: &mockAgentWithFilterTools{
+			name:          "test-agent",
+			filteredTools: []tool.Tool{frameworkTool, registeredTool},
+		},
+		userTools: []tool.Tool{registeredTool},
+	}
+
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+	inv.RunOptions = agent.NewRunOptions(
+		agent.WithAdditionalTools(
+			[]tool.Tool{runtimeAllowed, runtimeDenied},
+		),
+		agent.WithToolFilter(
+			tool.NewIncludeToolNamesFilter(
+				registeredToolName,
+				runtimeAllowedName,
+			),
+		),
+	)
+
+	filtered := f.getFilteredTools(context.Background(), inv)
+
+	require.Len(t, filtered, 3)
+	require.True(t, hasToolName(filtered, frameworkToolName))
+	require.True(t, hasToolName(filtered, registeredToolName))
+	require.True(t, hasToolName(filtered, runtimeAllowedName))
+	require.False(t, hasToolName(filtered, runtimeDeniedName))
+}
+
+func TestGetFilteredTools_ExternalToolCannotShadowExistingTool(t *testing.T) {
+	f := New(nil, nil, Options{})
+
+	const toolName = "workspace_exec"
+
+	serverTool := &mockTool{name: toolName}
+	frontendTool := &mockTool{name: toolName}
+
+	mockAgent := &mockAgentWithInvocationToolSurface{
+		name:          "test-agent",
+		allTools:      []tool.Tool{serverTool},
+		userToolNames: map[string]bool{},
+	}
+
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+	inv.RunOptions = agent.NewRunOptions(
+		agent.WithExternalTools([]tool.Tool{frontendTool}),
+	)
+
+	filtered := f.getFilteredTools(context.Background(), inv)
+
+	require.Equal(t, []tool.Tool{serverTool}, filtered)
+	require.Empty(t, inv.RunOptions.ExternalToolNames)
+	require.True(t, inv.RunOptions.ShouldExecuteTool(
+		context.Background(),
+		serverTool,
+	))
+}
+
+func TestGetFilteredTools_ExternalToolCannotShadowAdditionalTool(
+	t *testing.T,
+) {
+	f := New(nil, nil, Options{})
+
+	const toolName = "client_tool"
+
+	runtimeTool := &mockTool{name: toolName}
+
+	mockAgent := &mockAgentWithInvocationToolSurface{
+		name:          "test-agent",
+		allTools:      nil,
+		userToolNames: map[string]bool{},
+	}
+
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+	inv.RunOptions = agent.NewRunOptions(
+		agent.WithAdditionalTools([]tool.Tool{runtimeTool}),
+		agent.WithExternalTools([]tool.Tool{runtimeTool}),
+	)
+
+	filtered := f.getFilteredTools(context.Background(), inv)
+
+	require.Equal(t, []tool.Tool{runtimeTool}, filtered)
+	require.Empty(t, inv.RunOptions.ExternalToolNames)
+	require.True(t, inv.RunOptions.ShouldExecuteTool(
+		context.Background(),
+		runtimeTool,
+	))
+}
+
+func TestGetFilteredTools_RunOptionToolsDoNotMutateUserToolNames(
+	t *testing.T,
+) {
+	f := New(nil, nil, Options{})
+
+	const (
+		registeredToolName = "registered_tool"
+		runtimeToolName    = "runtime_tool"
+		externalToolName   = "external_tool"
+	)
+
+	registeredTool := &mockTool{name: registeredToolName}
+	runtimeTool := &mockTool{name: runtimeToolName}
+	externalTool := &mockTool{name: externalToolName}
+	userToolNames := map[string]bool{
+		registeredToolName: true,
+	}
+
+	mockAgent := &mockAgentWithInvocationToolSurface{
+		name:          "test-agent",
+		allTools:      []tool.Tool{registeredTool},
+		userToolNames: userToolNames,
+	}
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+	inv.RunOptions = agent.NewRunOptions(
+		agent.WithAdditionalTools([]tool.Tool{runtimeTool}),
+		agent.WithExternalTools([]tool.Tool{externalTool}),
+	)
+
+	filtered := f.getFilteredTools(context.Background(), inv)
+
+	require.Len(t, filtered, 3)
+	require.True(t, hasToolName(filtered, registeredToolName))
+	require.True(t, hasToolName(filtered, runtimeToolName))
+	require.True(t, hasToolName(filtered, externalToolName))
+	require.Equal(t, map[string]bool{registeredToolName: true}, userToolNames)
+}
+
+func TestGetFilteredTools_RunOptionToolsDoNotMutateToolSlice(
+	t *testing.T,
+) {
+	f := New(nil, nil, Options{})
+
+	const (
+		registeredToolName = "registered_tool"
+		runtimeToolName    = "runtime_tool"
+		externalToolName   = "external_tool"
+	)
+
+	registeredTool := &mockTool{name: registeredToolName}
+	runtimeTool := &mockTool{name: runtimeToolName}
+	externalTool := &mockTool{name: externalToolName}
+	backing := make([]tool.Tool, 1, 3)
+	backing[0] = registeredTool
+
+	mockAgent := &mockAgentWithInvocationToolSurface{
+		name:          "test-agent",
+		allTools:      backing[:1],
+		userToolNames: map[string]bool{},
+	}
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+	inv.RunOptions = agent.NewRunOptions(
+		agent.WithAdditionalTools([]tool.Tool{runtimeTool}),
+		agent.WithExternalTools([]tool.Tool{externalTool}),
+	)
+
+	filtered := f.getFilteredTools(context.Background(), inv)
+
+	require.Len(t, filtered, 3)
+	require.True(t, hasToolName(filtered, registeredToolName))
+	require.True(t, hasToolName(filtered, runtimeToolName))
+	require.True(t, hasToolName(filtered, externalToolName))
+	expandedBacking := backing[:cap(backing)]
+	require.Nil(t, expandedBacking[1])
+	require.Nil(t, expandedBacking[2])
 }
 
 // TestGetFilteredTools_WithExcludeFilter tests tool filtering using exclude filter.

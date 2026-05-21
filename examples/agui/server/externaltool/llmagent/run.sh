@@ -18,6 +18,36 @@ first_response="$(curl --no-buffer --silent --show-error --fail --location \
   --data '{
     "threadId": "externaltool-llmagent-thread",
     "runId": "externaltool-llmagent-run-1",
+    "tools": [
+      {
+        "name": "external_note",
+        "description": "Ask the caller to provide a plain text note for the given topic.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string",
+              "description": "The topic that needs an external note."
+            }
+          },
+          "required": ["topic"]
+        }
+      },
+      {
+        "name": "external_approval",
+        "description": "Ask the caller to provide an approval decision for the given item.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "item": {
+              "type": "string",
+              "description": "The item that needs caller approval."
+            }
+          },
+          "required": ["item"]
+        }
+      }
+    ],
     "messages": [
       {
         "role": "user",

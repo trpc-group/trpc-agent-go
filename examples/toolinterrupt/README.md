@@ -24,10 +24,17 @@ This matches the common protocol order:
 
 ## Key API
 
-- `agent.WithToolExecutionFilter(...)`
-  - Controls **which tool calls are auto-executed** by the framework.
-  - Different from `agent.WithToolFilter(...)` which controls **which tools are
-    visible/callable** by the model.
+- `agent.WithExternalTools(...)`
+  - Adds caller-executed tools for one run.
+  - The model can call these tools, but the framework does not execute them.
+  - The tool only needs a declaration (`name`, `description`, `input_schema`)
+    when the caller will execute it outside the framework.
+- `model.NewToolMessage(...)`
+  - Sends the external tool result back with the original `tool_call_id`.
+  - The next `runner.Run` continues the same session from that result.
+
+Use `agent.WithToolExecutionFilter(...)` when the tool is already registered on
+the agent and only its execution policy should change for a run.
 
 ## Prerequisites
 
@@ -57,4 +64,3 @@ first, then answer based on the tool result.
 - `examples/humaninloop/` demonstrates a Human-in-the-Loop (HIL) pattern using a
   long-running tool.
 - This example focuses on **manual tool execution** (interrupt + resume).
-
