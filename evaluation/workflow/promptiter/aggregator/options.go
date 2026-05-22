@@ -34,7 +34,7 @@ func newOptions(opt ...Option) *options {
 			agent.WithStructuredOutputJSON(
 				new(aggregatedGradientProposal),
 				true,
-				"One aggregated PromptIter surface gradient.",
+				"One aggregated PromptIter gradient proposal.",
 			),
 		},
 		messageBuilder:    defaultMessageBuilder(),

@@ -220,7 +220,7 @@ func TestOptimizeUsesDefaultUUIDSessionID(t *testing.T) {
 				&model.Response{
 					Done: true,
 					Choices: []model.Choice{
-						{Message: model.NewAssistantMessage(`{"SurfaceID":"surf_1","Value":{"Text":"updated instruction"},"Reason":"tighten the system instruction"}`)},
+						{Message: model.NewAssistantMessage(`{"Value":{"Text":"updated instruction"},"Reason":"tighten the system instruction"}`)},
 					},
 				},
 			),
@@ -360,6 +360,30 @@ func TestOptimizeRejectsInvalidPatchOutput(t *testing.T) {
 						Value: astructure.SurfaceValue{
 							Text: textPtr("updated instruction"),
 						},
+					}),
+				),
+			},
+		})
+		assert.NoError(t, err)
+
+		rsp, err := oz.Optimize(context.Background(), newInstructionRequest("current instruction"))
+
+		assert.Error(t, err)
+		assert.Nil(t, rsp)
+	})
+
+	t.Run("patch reason is whitespace only", func(t *testing.T) {
+		oz, err := New(context.Background(), &fakeRunner{
+			events: []*event.Event{
+				event.NewResponseEvent(
+					"invocation-id",
+					"optimizer",
+					&model.Response{Done: true},
+					event.WithStructuredOutputPayload(&surfacePatchProposal{
+						Value: astructure.SurfaceValue{
+							Text: textPtr("updated instruction"),
+						},
+						Reason: "   ",
 					}),
 				),
 			},
@@ -724,6 +748,18 @@ func TestSanitizePatchProposalValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, patch)
 	assert.EqualError(t, err, "sanitize patch value: text is nil")
+}
+
+func TestSanitizePatchProposalTrimsReason(t *testing.T) {
+	patch, err := sanitizePatchProposal(newInstructionRequest("current instruction"), &surfacePatchProposal{
+		Reason: " tighten the system instruction ",
+		Value: astructure.SurfaceValue{
+			Text: textPtr("updated instruction"),
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "tighten the system instruction", patch.Reason)
 }
 
 func newInstructionRequest(currentText string) *Request {

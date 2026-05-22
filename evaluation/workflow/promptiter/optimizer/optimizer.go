@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -211,7 +212,8 @@ func sanitizePatchProposal(request *Request, proposal *surfacePatchProposal) (*p
 	if proposal == nil {
 		return nil, errors.New("surface patch proposal is nil")
 	}
-	if proposal.Reason == "" {
+	reason := strings.TrimSpace(proposal.Reason)
+	if reason == "" {
 		return nil, errors.New("patch reason is empty")
 	}
 	value, err := isurface.SanitizeValue(request.Surface.Type, proposal.Value)
@@ -221,6 +223,6 @@ func sanitizePatchProposal(request *Request, proposal *surfacePatchProposal) (*p
 	return &promptiter.SurfacePatch{
 		SurfaceID: request.Surface.SurfaceID,
 		Value:     value,
-		Reason:    proposal.Reason,
+		Reason:    reason,
 	}, nil
 }
