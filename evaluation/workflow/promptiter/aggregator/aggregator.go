@@ -50,6 +50,15 @@ type Result struct {
 	Gradient *promptiter.AggregatedSurfaceGradient
 }
 
+type aggregatedGradientProposal struct {
+	Gradients []gradientProposal
+}
+
+type gradientProposal struct {
+	Severity promptiter.LossSeverity
+	Gradient string
+}
+
 // aggregator is the default Aggregator implementation used by engine.
 type aggregator struct {
 	// runner executes model-assisted aggregation workflows when required.
@@ -135,16 +144,16 @@ func (a *aggregator) Aggregate(ctx context.Context, request *Request) (*Result, 
 	if err != nil {
 		return nil, fmt.Errorf("capture runner output: %w", err)
 	}
-	gradient, err := idecode.DecodeOutputJSON[promptiter.AggregatedSurfaceGradient](output)
+	proposal, err := idecode.DecodeOutputJSON[aggregatedGradientProposal](output)
 	if err != nil {
-		return nil, fmt.Errorf("decode aggregated gradient: %w", err)
+		return nil, fmt.Errorf("decode aggregated gradient proposal: %w", err)
 	}
-	if gradient == nil {
-		return nil, errors.New("aggregated gradient is empty")
+	if proposal == nil {
+		return nil, errors.New("aggregated gradient proposal is empty")
 	}
-	gradient, err = sanitizeAggregatedGradient(normalizedRequest, gradient)
+	gradient, err := sanitizeAggregatedGradientProposal(normalizedRequest, proposal)
 	if err != nil {
-		return nil, fmt.Errorf("sanitize aggregated gradient: %w", err)
+		return nil, fmt.Errorf("sanitize aggregated gradient proposal: %w", err)
 	}
 	return &Result{Gradient: gradient}, nil
 }
@@ -228,61 +237,31 @@ func compareGradients(left promptiter.SurfaceGradient, right promptiter.SurfaceG
 	return strings.Compare(left.Gradient, right.Gradient)
 }
 
-func sanitizeAggregatedGradient(
+func sanitizeAggregatedGradientProposal(
 	request *Request,
-	gradient *promptiter.AggregatedSurfaceGradient,
+	proposal *aggregatedGradientProposal,
 ) (*promptiter.AggregatedSurfaceGradient, error) {
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-	if gradient == nil {
-		return nil, errors.New("aggregated gradient is nil")
-	}
-	if surfaceID := gradient.SurfaceID; surfaceID != "" && surfaceID != request.SurfaceID {
-		return nil, fmt.Errorf(
-			"aggregated gradient surface id %q does not match request surface id %q",
-			gradient.SurfaceID,
-			request.SurfaceID,
-		)
-	}
-	if nodeID := gradient.NodeID; nodeID != "" && nodeID != request.NodeID {
-		return nil, fmt.Errorf(
-			"aggregated gradient node id %q does not match request node id %q",
-			gradient.NodeID,
-			request.NodeID,
-		)
-	}
-	if gradient.Type != "" && gradient.Type != request.Type {
-		return nil, fmt.Errorf(
-			"aggregated gradient surface type %q does not match request surface type %q",
-			gradient.Type,
-			request.Type,
-		)
+	if proposal == nil {
+		return nil, errors.New("aggregated gradient proposal is nil")
 	}
 	resolved := &promptiter.AggregatedSurfaceGradient{
 		SurfaceID: request.SurfaceID,
 		NodeID:    request.NodeID,
 		Type:      request.Type,
-		Gradients: make([]promptiter.SurfaceGradient, 0, len(gradient.Gradients)),
+		Gradients: make([]promptiter.SurfaceGradient, 0, len(proposal.Gradients)),
 	}
-	for _, item := range gradient.Gradients {
-		surfaceID := item.SurfaceID
-		switch {
-		case surfaceID == "":
-			item.SurfaceID = request.SurfaceID
-		case surfaceID != request.SurfaceID:
-			return nil, fmt.Errorf(
-				"aggregated gradient item surface id %q does not match request surface id %q",
-				item.SurfaceID,
-				request.SurfaceID,
-			)
-		default:
-			item.SurfaceID = request.SurfaceID
-		}
+	for _, item := range proposal.Gradients {
 		if item.Gradient == "" {
 			continue
 		}
-		resolved.Gradients = append(resolved.Gradients, item)
+		resolved.Gradients = append(resolved.Gradients, promptiter.SurfaceGradient{
+			SurfaceID: request.SurfaceID,
+			Severity:  item.Severity,
+			Gradient:  item.Gradient,
+		})
 	}
 	if len(resolved.Gradients) == 0 {
 		return nil, errors.New("aggregated gradient is empty")
