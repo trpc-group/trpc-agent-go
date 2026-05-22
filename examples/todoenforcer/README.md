@@ -14,8 +14,8 @@ the current invocation still has open todo items. It must either:
 ```bash
 cd examples/todoenforcer
 export OPENAI_API_KEY="your-key"
-# Optional for OpenAI-compatible gateways:
-# export OPENAI_BASE_URL="http://v2.open.venus.oa.com/llmproxy/"
+# Optional for an OpenAI-compatible endpoint:
+# export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
 ```
 
 Baseline, without enforcement:

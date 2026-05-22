@@ -55,7 +55,7 @@ import (
 )
 
 var (
-	modelName  = flag.String("model", "deepseek-chat", "Model identifier (any OpenAI-compatible name; for venus llmproxy try claude-4-5-sonnet-20250929 or gpt-5)")
+	modelName  = flag.String("model", "deepseek-chat", "Model identifier (any OpenAI-compatible name)")
 	streaming  = flag.Bool("streaming", true, "Stream the assistant response")
 	variant    = flag.String("variant", "openai", "Provider variant passed to the OpenAI client")
 	enforce    = flag.Bool("enforce", true, "Install the todoenforcer extension (set false to compare baseline behaviour)")
@@ -235,9 +235,9 @@ func (c *chat) prefillTodos(ctx context.Context) error {
 		// 3. The tool turn carrying todo_write's response.
 		// ToolName is set even though the spec doesn't strictly
 		// require it for assistant↔tool pairing — several
-		// OpenAI-compatible proxies (notably the adapters used by
-		// llmproxy gateways) reject tool messages whose name
-		// field is empty, even when the matching ID is present.
+		// Some OpenAI-compatible adapters reject tool messages
+		// whose name field is empty, even when the matching ID is
+		// present.
 		newPrefillEvent(priorInvocationID, agentName, model.Message{
 			Role:     model.RoleTool,
 			ToolID:   toolCallID,
