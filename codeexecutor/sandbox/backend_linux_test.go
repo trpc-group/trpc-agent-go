@@ -13,6 +13,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -173,6 +174,111 @@ func TestLinuxNoAccessMaskArgsCoverPathGlobAndSpecial(t *testing.T) {
 	}
 	if !hasArgPair(args, "--tmpfs", filepath.Join(ws.Path, codeexecutor.DirOut)) {
 		t.Fatalf("mask args = %#v, missing tmpfs for out special path", args)
+	}
+}
+
+func TestLinuxBackendCapabilitiesAndSandboxArgsBranches(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "linux-args-branches", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalRead := t.TempDir()
+	externalWrite := t.TempDir()
+	profile := WorkspaceWriteProfile().
+		WithReadPaths(externalRead).
+		WithWritePaths(externalWrite, filepath.Join(ws.Path, "work"))
+	profile.Network = NetworkPolicy{Mode: NetworkEnabled}
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		[]string{"GOOD=1", "MALFORMED", "=empty"},
+		codeexecutor.RunProgramSpec{Cmd: "/bin/echo", Args: []string{"ok"}},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasArg(args, "--unshare-net") {
+		t.Fatalf("args = %#v, unexpected network isolation for enabled network", args)
+	}
+	if !hasArgTriple(args, "--ro-bind", externalRead, externalRead) {
+		t.Fatalf("args = %#v, missing external read grant", args)
+	}
+	if !hasArgTriple(args, "--bind", externalWrite, externalWrite) {
+		t.Fatalf("args = %#v, missing external write grant", args)
+	}
+	if !hasArgPair(args, "--setenv", "GOOD") || !hasArg(args, "1") {
+		t.Fatalf("args = %#v, missing GOOD env", args)
+	}
+	if hasArg(args, "MALFORMED") || hasArg(args, "=empty") {
+		t.Fatalf("args = %#v, malformed env was not skipped", args)
+	}
+
+	caps := backendCapabilities(BackendLinuxBubblewrap, profile)
+	if !caps.OSSandbox || !caps.NetworkIsolation || !caps.ExternalPathGrants {
+		t.Fatalf("managed capabilities = %#v, want sandbox features", caps)
+	}
+	disabledCaps := backendCapabilities(BackendAuto, DangerFullAccessProfile())
+	if disabledCaps.OSSandbox || disabledCaps.NetworkIsolation || disabledCaps.ProtectedPathMasks {
+		t.Fatalf("disabled capabilities = %#v, want no managed sandbox features", disabledCaps)
+	}
+}
+
+func TestLinuxPreflightUnsupportedBackendAndProbeError(t *testing.T) {
+	rt := NewRuntime(WithBackend(BackendType("not-linux-bubblewrap")))
+	_, _, err := rt.linuxPreflight()
+	if !IsKind(err, ErrUnsupportedBackend) {
+		t.Fatalf("linuxPreflight error = %v, want ErrUnsupportedBackend", err)
+	}
+	ws := codeexecutor.Workspace{ID: "unsupported", Path: t.TempDir()}
+	_, backend, err := rt.osSandboxCommand(
+		context.Background(),
+		WorkspaceWriteProfile(),
+		ws,
+		ws.Path,
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "true"},
+	)
+	if backend != string(BackendLinuxBubblewrap) || !IsKind(err, ErrUnsupportedBackend) {
+		t.Fatalf("osSandboxCommand backend=%q err=%v, want bubblewrap unsupported", backend, err)
+	}
+
+	argRuntime := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	argWS, err := argRuntime.CreateWorkspace(context.Background(), "linux/error-args", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingGrant := WorkspaceWriteProfile().WithReadPaths(filepath.Join(t.TempDir(), "missing"))
+	_, err = argRuntime.linuxSandboxArgs(
+		missingGrant,
+		argWS,
+		filepath.Join(argWS.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "true"},
+		false,
+	)
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("missing external grant error = %v, want ErrPathDenied", err)
+	}
+
+	probeErr := bwrapProbeError{
+		err:    errors.New("probe failed"),
+		stderr: "stderr detail",
+		hint:   "try installing bubblewrap",
+	}
+	if got := probeErr.Error(); !strings.Contains(got, "probe failed: stderr detail; try installing bubblewrap") {
+		t.Fatalf("probe error string = %q", got)
+	}
+	if !errors.Is(probeErr, probeErr.err) {
+		t.Fatalf("probe error did not unwrap cause")
+	}
+	if !containsAny("permission denied", []string{"missing", "denied"}) {
+		t.Fatalf("containsAny did not match substring")
 	}
 }
 
