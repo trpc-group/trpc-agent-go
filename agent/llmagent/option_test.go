@@ -471,22 +471,6 @@ func TestWithToolCallRetryPolicy_OnOptions(t *testing.T) {
 	require.Same(t, policy, opts.ToolCallRetryPolicy)
 }
 
-func TestWithDefaultToolMessageMaxBytes_OnOptions(t *testing.T) {
-	opts := &Options{}
-	WithDefaultToolMessageMaxBytes(2048)(opts)
-	require.Equal(t, 2048, opts.DefaultToolMessageMaxBytes)
-}
-
-func TestNew_WithDefaultToolMessageMaxBytes(t *testing.T) {
-	agt := New(
-		"test-agent",
-		WithModel(newDummyModel()),
-		WithDefaultToolMessageMaxBytes(2048),
-	)
-	require.NotNil(t, agt)
-	require.Equal(t, 2048, agt.option.DefaultToolMessageMaxBytes)
-}
-
 func TestWithPreloadMemory(t *testing.T) {
 	tests := []struct {
 		name          string
