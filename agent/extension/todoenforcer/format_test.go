@@ -173,16 +173,18 @@ func TestDefaultNudgeFormatter_ListEntryFormatting(t *testing.T) {
 	assert.True(t, strings.Contains(out, "  - step three\n"))
 }
 
-// TestSplitByStatus_DropsCompleted documents the contract that
-// splitByStatus already happily satisfies (100% coverage), but
-// future helpers in this file may want to share a fixture; this
-// test doubles as inline documentation.
-func TestSplitByStatus_DropsCompleted(t *testing.T) {
+// TestSplitByStatus_DropsCompletedAndSurfacesUnknown documents the
+// visibility contract: completed items disappear from the nudge,
+// but an unexpected non-completed status is still shown as pending
+// so enforcement cannot block without giving the model an
+// actionable item.
+func TestSplitByStatus_DropsCompletedAndSurfacesUnknown(t *testing.T) {
 	in := []todo.Item{
 		{Content: "a", Status: todo.StatusInProgress},
 		{Content: "b", Status: todo.StatusCompleted},
 		{Content: "c", Status: todo.StatusPending},
 		{Content: "d", Status: todo.StatusInProgress},
+		{Content: "e", Status: todo.Status("blocked")},
 	}
 	inProg, pending := splitByStatus(in)
 	assert.Equal(t, []todo.Item{
@@ -191,6 +193,7 @@ func TestSplitByStatus_DropsCompleted(t *testing.T) {
 	}, inProg)
 	assert.Equal(t, []todo.Item{
 		{Content: "c", Status: todo.StatusPending},
+		{Content: "e", Status: todo.Status("blocked")},
 	}, pending)
 }
 
@@ -210,4 +213,7 @@ func TestHasOpenItems(t *testing.T) {
 	assert.True(t, hasOpenItems([]todo.Item{
 		{Content: "x", Status: todo.StatusInProgress},
 	}))
+	assert.True(t, hasOpenItems([]todo.Item{
+		{Content: "x", Status: todo.Status("blocked")},
+	}), "unknown non-completed status must be treated as open and surfaced by splitByStatus")
 }

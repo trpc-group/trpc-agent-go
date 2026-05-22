@@ -128,7 +128,10 @@ func DefaultNudgeFormatter(ctx NudgeContext) string {
 }
 
 // splitByStatus partitions items into in-progress and pending
-// buckets, dropping completed entries. Stable order is preserved
+// buckets, dropping completed entries. Unknown non-completed
+// statuses are treated as pending so a corrupted or externally
+// written state entry remains visible/actionable instead of
+// causing an invisible enforcement loop. Stable order is preserved
 // within each bucket — the model sees them in the order it wrote
 // them, which makes the nudge feel like a continuation rather
 // than a re-ordered scolding.
@@ -139,6 +142,10 @@ func splitByStatus(items []todo.Item) (inProgress, pending []todo.Item) {
 			inProgress = append(inProgress, it)
 		case todo.StatusPending:
 			pending = append(pending, it)
+		case todo.StatusCompleted:
+			// terminal: intentionally omitted
+		default:
+			pending = append(pending, it)
 		}
 	}
 	return
@@ -146,7 +153,8 @@ func splitByStatus(items []todo.Item) (inProgress, pending []todo.Item) {
 
 // hasOpenItems is the gate AfterModel uses to decide whether to
 // fire enforcement at all. Cheaper than splitByStatus when we only
-// need the boolean.
+// need the boolean. Unknown statuses are open for the same reason
+// splitByStatus keeps them visible as pending.
 func hasOpenItems(items []todo.Item) bool {
 	for _, it := range items {
 		if it.Status != todo.StatusCompleted {

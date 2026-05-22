@@ -308,6 +308,15 @@ func TestAfterModel_BlockerDeclared_RemainsLatchedForRestOfInvocation(t *testing
 	e := New()
 
 	for i := 0; i < 3; i++ {
+		if i == 1 {
+			writeTodos(t, sess, "", []todo.Item{
+				{
+					Content:    "new item",
+					ActiveForm: "processing new item",
+					Status:     todo.StatusInProgress,
+				},
+			})
+		}
 		rsp := finalRsp("waiting on user")
 		res, err := e.afterModel(ctx, &model.AfterModelArgs{Response: rsp})
 		require.NoError(t, err, "pass %d", i)
@@ -830,7 +839,10 @@ func TestEnforcer_NotifyBlockerDeclared_NilEnforcerIsNoOp(t *testing.T) {
 	// to call in pure unit tests that bypass enforcer construction
 	// (no observable behaviour change in normal operation).
 	var e *Enforcer
-	assert.NotPanics(t, func() { e.notifyBlockerDeclared(nil, "any") })
+	var inv *agent.Invocation
+	assert.NotPanics(t, func() {
+		e.notifyBlockerDeclared(inv, "any")
+	})
 }
 
 func TestEnforcer_Notify_NoOnEnforce_IsNoOp(t *testing.T) {
@@ -896,6 +908,7 @@ func TestShouldConsiderResponse_AllBranches(t *testing.T) {
 	// must therefore pass through (return false from
 	// shouldConsiderResponse — "no, do not consider").
 	toolCallRsp := &model.Response{
+		Done: true,
 		Choices: []model.Choice{{
 			Message: model.Message{
 				Role:      model.RoleAssistant,
