@@ -67,6 +67,10 @@ runner := runner.NewRunner(
     runner.WithSessionService(sessionService),
     runner.WithMemoryService(memoryService), // Step 2: Set memory service in runner
 )
+
+// Caller owns the memory service lifecycle — runner does not close it.
+defer memoryService.Close()
+defer runner.Close()
 ```
 
 ## Prerequisites
