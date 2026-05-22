@@ -769,13 +769,15 @@ So a deny on `curl` cannot be sidestepped via `$(c\url)`,
 `HOME=/tmp curl http://x`, etc.
 
 On top of the parser there is an **unconditional built-in deny set**
-of shell wrappers and re-executing builtins, blocked whenever any
-policy is active because they can launch arbitrary code with an
-innocent `argv[0]`: `sh`, `bash`, `zsh`, `ash`, `dash`, `ksh`, `mksh`,
-`fish`, `pwsh`, `powershell`, `cmd`, `busybox`, `toybox`, `eval`,
-`exec`, `command`, `source`, `.`, `builtin`, `xargs`, `env`, `nohup`,
-`timeout`, `sudo`, `su`, `doas`, `setsid`, `unshare`, `chroot`,
-`runuser`.
+of shell wrappers, re-executing builtins and process-launching
+wrappers, blocked whenever any policy is active because they can
+launch arbitrary code with an innocent `argv[0]` (e.g.
+`time curl http://x` would otherwise pass a deny on `curl`):
+`sh`, `bash`, `zsh`, `ash`, `dash`, `ksh`, `mksh`, `fish`, `pwsh`,
+`powershell`, `cmd`, `busybox`, `toybox`, `eval`, `exec`, `command`,
+`source`, `.`, `builtin`, `xargs`, `env`, `nohup`, `timeout`,
+`sudo`, `su`, `doas`, `setsid`, `unshare`, `chroot`, `runuser`,
+`time`, `nice`, `ionice`, `taskset`, `stdbuf`, `strace`, `ltrace`.
 
 This deny set is **not overridable** by `WithWorkspaceExecAllowedCommands`
 — allow-list entries for these names are ignored. If you legitimately
@@ -784,9 +786,23 @@ auditable script under the workspace and put the script in
 `allowed_commands` instead. The auditable wrapper is also better
 practice: reviewers can see exactly what is being exposed.
 
+### Matching
+
+Matching is intentionally **asymmetric** so workspace-controlled
+binaries cannot smuggle past the allowlist:
+
+- **Allow** matches strictly. An entry `echo` admits bare `echo`
+  but rejects `./echo`, `work/bin/echo` and `/usr/bin/echo`. If you
+  want to permit a specific absolute or relative path, list that
+  exact path (e.g. `WithWorkspaceExecAllowedCommands("/usr/bin/echo")`).
+- **Deny** matches permissively. An entry `curl` rejects `curl`,
+  `/usr/bin/curl` and `./curl` alike, so an attacker cannot slip a
+  full path past the denylist.
+
 On Windows the basename match strips common executable suffixes
-(`.exe`, `.cmd`, `.bat`, `.com`, `.ps1`) so `cmd` rejects `cmd.exe`
-and `curl` rejects `curl.exe`.
+(`.exe`, `.cmd`, `.bat`, `.com`, `.ps1`) and lower-cases the
+basename so `cmd` rejects `cmd.exe`, `curl` rejects `CURL.EXE`,
+and `echo` admits `ECHO.EXE`.
 
 ### Precedence
 
@@ -823,6 +839,16 @@ shell-startup tricks from re-arming a rejected command:
 
 Without a policy configured none of this kicks in: `sh -lc` and the
 caller-supplied env (including `PATH`) are preserved as before.
+
+!!! note "Spawn-hardening scope (v1)"
+    The `sh -c` switch and the per-call env scrubbing above are
+    fully implemented on the `codeexecutor/local` runtime. The
+    `container` and `e2b` runtimes honor the command-name policy
+    (so `curl` is still rejected before the spawn), but their own
+    env-isolation work to honor `RunProgramSpec.CleanEnv` is a
+    follow-up. Operators running policy mode on those backends
+    should still rely on the sandbox layer for `PATH` / `HOME` /
+    `LD_PRELOAD` isolation.
 
 ### Scope
 

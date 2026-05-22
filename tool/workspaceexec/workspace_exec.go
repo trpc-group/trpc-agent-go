@@ -197,20 +197,27 @@ func WithWorkspaceRegistry(
 	}
 }
 
-// WithAllowedCommands restricts workspace_exec to commands whose
-// executable name (or basename, for absolute paths) is in cmds.
+// WithAllowedCommands restricts workspace_exec to commands matching
+// cmds.
 //
 // When set the user's command is parsed by internal/shellsafe before
 // execution. Pipelines composed of allowed commands joined by safe
 // operators (|, &&, ||, ;) still work, but constructs that can
 // bypass the policy - $(...), backticks, ${VAR}, $VAR, redirections,
 // process/parameter substitution, subshells, brace expansion and
-// leading variable assignments - are rejected. Shell wrappers and
-// re-executing builtins (sh, bash, zsh, eval, exec, command, source,
-// xargs, env, sudo, ...) are subject to an unconditional built-in
-// deny set and cannot be re-enabled by listing them here; allow-list
-// entries for those names are ignored. Wrap the desired use in an
-// auditable workspace script and allow the script instead.
+// leading variable assignments - are rejected.
+//
+// Allow matching is strict: an entry "echo" admits bare "echo" but
+// not "./echo" or "/usr/bin/echo"; list an exact path if you want
+// to permit one. Deny matching is permissive: an entry "curl"
+// blocks "curl", "/usr/bin/curl" and "./curl" alike. Shell
+// wrappers and re-executing builtins (sh, bash, zsh, eval, exec,
+// command, source, xargs, env, nohup, timeout, sudo, time, nice,
+// ionice, taskset, stdbuf, strace, ltrace, ...) are subject to an
+// unconditional built-in deny set and cannot be re-enabled by
+// listing them here; allow-list entries for those names are
+// ignored. Wrap the desired use in an auditable workspace script
+// and allow the script instead.
 //
 // Calling this option with an empty list is a no-op so callers can
 // conditionally enable the policy.

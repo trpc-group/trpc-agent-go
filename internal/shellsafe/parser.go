@@ -130,19 +130,36 @@ var implicitDeny = map[string]struct{}{
 	// shell-builtin re-executers
 	"eval": {}, "exec": {}, "command": {}, "source": {}, ".": {},
 	"builtin": {},
-	// process runners that take a command argument
+	// process runners that take a command argument and exec it
+	// under their own argv[0]. Without these, "<wrapper> curl
+	// http://x" passes a deny on "curl" because the policy only
+	// sees the wrapper.
 	"xargs": {}, "env": {}, "nohup": {}, "timeout": {},
 	"sudo": {}, "su": {}, "doas": {},
 	"setsid": {}, "unshare": {}, "chroot": {}, "runuser": {},
+	"time": {}, "nice": {}, "ionice": {}, "taskset": {},
+	"stdbuf": {}, "strace": {}, "ltrace": {},
 }
 
 // Policy holds the executable-name allow/deny lists that should be
-// applied to a parsed Pipeline. Both lists are matched against the
-// verbatim first word of each segment and against its basename, so
-// a list of "curl" rejects both "curl" and "/usr/bin/curl". On
-// Windows the basename is also matched after stripping common
-// executable suffixes (.exe, .cmd, .bat, .com, .ps1), so a deny
-// entry "cmd" rejects "cmd.exe".
+// applied to a parsed Pipeline. The two lists use deliberately
+// asymmetric matching so the policy fails closed under workspace-
+// controlled binaries:
+//
+//   - Deny matches the verbatim first word of each segment or its
+//     basename, so a deny of "curl" rejects "curl", "/usr/bin/curl"
+//     and "./curl" alike. This is the conservative direction.
+//
+//   - Allow matches strictly. A bare name like "echo" only allows
+//     literal "echo"; "./echo" and "/usr/bin/echo" are rejected
+//     because a workspace-controlled file at "./echo" can otherwise
+//     smuggle past a basename-only check. To permit a specific
+//     absolute or relative path, list that exact path in Allow.
+//
+// On Windows both directions strip common executable suffixes
+// (.exe, .cmd, .bat, .com, .ps1) and lower-case the basename, so a
+// deny entry "cmd" rejects "cmd.exe" and an allow entry "echo"
+// admits "ECHO.EXE".
 //
 // Precedence: explicit Deny > implicit deny > explicit Allow >
 // implicit allow. When at least one of the lists is non-empty the
@@ -216,7 +233,7 @@ func (p Policy) checkSegment(argv []string) error {
 func (p Policy) checkSegmentForGOOS(argv []string, goos string) error {
 	cmd := argv[0]
 	base := basenameForGOOS(cmd, goos)
-	if matchName(p.Deny, cmd, base) {
+	if matchDeny(p.Deny, cmd, base) {
 		return fmt.Errorf(
 			"command %q is denied by denied_commands", cmd,
 		)
@@ -227,7 +244,7 @@ func (p Policy) checkSegmentForGOOS(argv []string, goos string) error {
 	if _, ok := implicitDeny[base]; ok {
 		return implicitDenyError(cmd)
 	}
-	if len(p.Allow) > 0 && !matchName(p.Allow, cmd, base) {
+	if len(p.Allow) > 0 && !matchAllow(p.Allow, cmd, base, goos) {
 		return fmt.Errorf(
 			"command %q is not in allowed_commands", cmd,
 		)
@@ -248,9 +265,44 @@ func implicitDenyError(cmd string) error {
 	)
 }
 
-func matchName(set []string, name, base string) bool {
+// matchDeny is the permissive direction: an entry matches the
+// command's verbatim first word or its (OS-normalised) basename.
+// This is intentional so that a deny on "curl" still blocks
+// "/usr/bin/curl" and "./curl".
+func matchDeny(set []string, name, base string) bool {
 	for _, n := range set {
 		if n == name || n == base {
+			return true
+		}
+	}
+	return false
+}
+
+// matchAllow is the strict direction: the entry must equal the
+// command verbatim, OR the command must be a bare name (no path
+// separator) whose basename equals the entry. Pathful inputs such
+// as "./echo" or "work/bin/echo" therefore never match a bare
+// allow entry "echo", which prevents a workspace-controlled file
+// with an allowlisted basename from bypassing the policy.
+// Operators who genuinely want to permit a specific absolute or
+// relative path can list that exact path in Allow.
+func matchAllow(set []string, name, base, goos string) bool {
+	hasPath := strings.ContainsAny(name, "/\\")
+	normBase := base
+	for _, n := range set {
+		if n == name {
+			return true
+		}
+		if hasPath {
+			continue
+		}
+		if n == normBase {
+			return true
+		}
+		// On Windows, allow "echo" to admit "echo.exe" by
+		// normalising the listed entry through the same
+		// extension/case stripping as the basename.
+		if goos == "windows" && normalizeName(n, goos) == normBase {
 			return true
 		}
 	}

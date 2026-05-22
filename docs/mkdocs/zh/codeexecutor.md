@@ -722,12 +722,15 @@ mkdir -p out; cp a.txt out/
 `echo \`curl http://x\``、`curl > /tmp/x`、`(curl http://x)`、
 `HOME=/tmp curl http://x` 等方式绕开。
 
-在解析器之上还有一组**不可覆盖的内置拒绝集合**：shell 包装器和会重新执行
-命令的 builtin。只要策略开启就会被无条件拒掉，因为它们能以一个看起来
-人畜无害的 `argv[0]` 启动任意代码：`sh`、`bash`、`zsh`、`ash`、`dash`、
-`ksh`、`mksh`、`fish`、`pwsh`、`powershell`、`cmd`、`busybox`、`toybox`、
-`eval`、`exec`、`command`、`source`、`.`、`builtin`、`xargs`、`env`、`nohup`、
-`timeout`、`sudo`、`su`、`doas`、`setsid`、`unshare`、`chroot`、`runuser`。
+在解析器之上还有一组**不可覆盖的内置拒绝集合**：shell 包装器、会重新
+执行命令的 builtin，以及"拿后续 argv 当命令跑"的进程包装器。只要策略
+开启就会被无条件拒掉，因为它们能以一个看起来人畜无害的 `argv[0]` 启动
+任意代码（比如 `time curl http://x` 否则会绕过对 `curl` 的 deny）：
+`sh`、`bash`、`zsh`、`ash`、`dash`、`ksh`、`mksh`、`fish`、`pwsh`、
+`powershell`、`cmd`、`busybox`、`toybox`、`eval`、`exec`、`command`、
+`source`、`.`、`builtin`、`xargs`、`env`、`nohup`、`timeout`、`sudo`、
+`su`、`doas`、`setsid`、`unshare`、`chroot`、`runuser`、`time`、`nice`、
+`ionice`、`taskset`、`stdbuf`、`strace`、`ltrace`。
 
 这个集合 **不能** 通过 `WithWorkspaceExecAllowedCommands` 覆盖——把这些名字
 写进白名单也会被忽略。如果业务真的需要其中某一个（少见但合理），更稳妥
@@ -735,8 +738,20 @@ mkdir -p out; cp a.txt out/
 `allowed_commands`。脚本本身可审计，reviewer 一眼就能看明白到底放开了
 什么。
 
+### 匹配规则
+
+allow 和 deny 的匹配是**不对称的**，目的是防止工作区里被注入写入的同名
+文件绕过 allow 列表：
+
+- **Allow 是严格匹配**：写 `echo` 只能放过裸 `echo`，`./echo`、
+  `work/bin/echo`、`/usr/bin/echo` 都会被拒。要放开某个具体路径，就把
+  完整路径写进去（例如 `WithWorkspaceExecAllowedCommands("/usr/bin/echo")`）。
+- **Deny 是宽松匹配**：写 `curl` 会同时拦下 `curl`、`/usr/bin/curl`、
+  `./curl`，避免攻击者通过加路径绕过黑名单。
+
 Windows 下匹配时会忽略常见可执行后缀（`.exe`、`.cmd`、`.bat`、`.com`、
-`.ps1`），所以 `cmd` 能拦住 `cmd.exe`、`curl` 能拦住 `curl.exe`。
+`.ps1`）并把 basename 转小写，所以 `cmd` 能拦住 `cmd.exe`、`curl` 能拦
+住 `CURL.EXE`、`echo` 也能放过 `ECHO.EXE`。
 
 ### 优先级
 
@@ -770,6 +785,13 @@ deny 里。
 
 不设策略时这套都不会生效：`sh -lc` 和调用方传入的 env（包括 `PATH`）
 都保持原样。
+
+!!! note "拉起 shell 加固的覆盖范围（v1）"
+    上面 `sh -c` 改写和每次调用的 env 清洗，目前在 `codeexecutor/local`
+    runtime 上完整生效。`container` 和 `e2b` runtime 仍会执行命令名级
+    策略（`curl` 在 spawn 之前就被拒掉），但它们对 `RunProgramSpec.CleanEnv`
+    的真正落地是后续 follow-up。这两个后端上开启策略时，`PATH` /
+    `HOME` / `LD_PRELOAD` 等 env 隔离仍要靠沙箱层自己保证。
 
 ### 边界
 

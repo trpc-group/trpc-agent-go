@@ -302,6 +302,8 @@ func TestPolicy_DenyMatchesBasename(t *testing.T) {
 // friends, otherwise the deny list is trivially side-stepped. The
 // busybox / toybox forms are included to cover the multi-call
 // binaries that re-export shell wrappers under their own name.
+// "time curl", "nice curl" and friends cover the process-wrapper
+// family that exec their argv tail under their own argv[0].
 func TestPolicy_BuiltinDenyBlocksEvalBypass(t *testing.T) {
 	p := PolicyFromLists(nil, []string{"curl"})
 	cases := []string{
@@ -315,6 +317,13 @@ func TestPolicy_BuiltinDenyBlocksEvalBypass(t *testing.T) {
 		"xargs -I{} curl http://x",
 		"env curl http://x",
 		"sudo curl http://x",
+		"time curl http://x",
+		"nice curl http://x",
+		"ionice curl http://x",
+		"taskset 1 curl http://x",
+		"stdbuf -o0 curl http://x",
+		"strace curl http://x",
+		"ltrace curl http://x",
 	}
 	for _, in := range cases {
 		t.Run(in, func(t *testing.T) {
@@ -349,6 +358,55 @@ func TestPolicy_BuiltinDenyUnconditional(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+// TestPolicy_AllowRejectsPathfulBasenameBypass guards the
+// asymmetric matching contract documented on Policy: an allow
+// entry "echo" must let through bare "echo" but reject "./echo",
+// "work/bin/echo" and "/usr/bin/echo", because a workspace-
+// controlled file at "./echo" can otherwise smuggle past a
+// basename-only allowlist check.
+func TestPolicy_AllowRejectsPathfulBasenameBypass(t *testing.T) {
+	p := PolicyFromLists([]string{"echo"}, nil)
+	if err := CheckCommand("echo hi", p); err != nil {
+		t.Fatalf("bare echo should be allowed, got: %v", err)
+	}
+	cases := []string{
+		"./echo hi",
+		"work/bin/echo hi",
+		"/usr/bin/echo hi",
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			err := CheckCommand(in, p)
+			if err == nil || !strings.Contains(
+				err.Error(), "not in allowed_commands",
+			) {
+				t.Fatalf(
+					"expected pathful basename bypass to be rejected, got: %v",
+					err,
+				)
+			}
+		})
+	}
+}
+
+// TestPolicy_AllowMatchesExplicitPath confirms that operators who
+// genuinely want to permit a specific path (e.g. a vetted binary
+// outside the workspace) can list that exact path and have it
+// match verbatim. The bare basename remains rejected because the
+// operator chose to be specific.
+func TestPolicy_AllowMatchesExplicitPath(t *testing.T) {
+	p := PolicyFromLists([]string{"/usr/bin/echo"}, nil)
+	if err := CheckCommand("/usr/bin/echo hi", p); err != nil {
+		t.Fatalf("explicit path should be allowed, got: %v", err)
+	}
+	err := CheckCommand("echo hi", p)
+	if err == nil || !strings.Contains(
+		err.Error(), "not in allowed_commands",
+	) {
+		t.Fatalf("bare basename should not match explicit path, got: %v", err)
 	}
 }
 

@@ -1070,8 +1070,7 @@ func WithSkillRunStager(stager toolskill.SkillStager) Option {
 }
 
 // WithWorkspaceExecAllowedCommands restricts workspace_exec to
-// commands whose executable name (or basename for absolute paths)
-// appears in cmds.
+// commands matching cmds.
 //
 // When non-empty the user's command is parsed by internal/shellsafe
 // (a conservative hand-rolled lexer) and only pipelines composed of
@@ -1080,21 +1079,37 @@ func WithSkillRunStager(stager toolskill.SkillStager) Option {
 // parameter substitution, redirections, subshells and friends - are
 // rejected.
 //
+// Matching is intentionally asymmetric: an allow entry "echo" lets
+// through bare "echo" but does NOT match "./echo", "work/bin/echo"
+// or "/usr/bin/echo", so a workspace-controlled file with an
+// allowlisted basename cannot smuggle past the policy. If you want
+// to permit a specific absolute or relative path, list that exact
+// path here. Deny entries, by contrast, match both the verbatim
+// first word and its basename, so a deny of "curl" blocks "curl",
+// "/usr/bin/curl" and "./curl" alike.
+//
 // Precedence is explicit Deny > implicit deny > explicit Allow >
 // implicit allow. Shell wrappers and re-executing builtins (sh,
 // bash, zsh, busybox, eval, exec, command, source, xargs, env,
-// sudo, ...) are blocked by an unconditional built-in deny set and
-// cannot be re-enabled by listing them here; allow-list entries
-// for them are ignored. If you legitimately need one of them, wrap
-// the desired use in an auditable workspace script and allow the
-// script instead.
+// nohup, timeout, sudo, time, nice, ionice, taskset, stdbuf,
+// strace, ltrace, ...) are blocked by an unconditional built-in
+// deny set and cannot be re-enabled by listing them here;
+// allow-list entries for them are ignored. If you legitimately
+// need one of them, wrap the desired use in an auditable workspace
+// script and allow the script instead.
 //
 // When a policy is active workspace_exec also switches the spawn
 // from "sh -lc" to "sh -c" and strips known shell-startup and
 // search-path environment variables (HOME, BASH_ENV, ENV, IFS,
 // PATH, LD_PRELOAD, ...) from the per-call env so a passing
 // command cannot be hijacked at shell start-up time or redirected
-// at a workspace-controlled binary via PATH.
+// at a workspace-controlled binary via PATH. Note that this spawn
+// hardening (CleanEnv + sh-c) is fully implemented on
+// codeexecutor/local; container / e2b backends honor the
+// command-name policy but their env-isolation work is tracked as a
+// follow-up. Operators running policy mode on those backends
+// should still rely on the sandbox layer for env / network
+// isolation.
 //
 // Scope: enforcement is at the executable-name level. If an allowed
 // command itself shells out based on its arguments (e.g.
