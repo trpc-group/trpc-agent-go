@@ -35,6 +35,23 @@ func (s *stubMessagesConstructor) ConstructMessages(ctx context.Context, actuals
 	return []model.Message{{Role: model.RoleUser, Content: actuals[0].InvocationID + expecteds[0].InvocationID}}, nil
 }
 
+type stubStructuredMessagesConstructor struct {
+	stubMessagesConstructor
+	structuredCalled bool
+	output           *model.StructuredOutput
+	err              error
+}
+
+func (s *stubStructuredMessagesConstructor) StructuredOutput(ctx context.Context, actuals,
+	expecteds []*evalset.Invocation, _ *metric.EvalMetric) (*model.StructuredOutput, error) {
+	s.structuredCalled = true
+	s.ctx = ctx
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.output, nil
+}
+
 type stubResponseScorer struct {
 	called bool
 	ctx    context.Context
@@ -152,4 +169,46 @@ func TestFinalResponseEvaluator_DelegatesToDependencies(t *testing.T) {
 	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
 	assert.Equal(t, "llm_final_response", impl.Name())
 	assert.Equal(t, "LLM judge for final responses", impl.Description())
+}
+
+func TestFinalResponseEvaluator_DelegatesStructuredOutput(t *testing.T) {
+	ctx := context.Background()
+	output := &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{
+			Name:   "custom_schema",
+			Schema: map[string]any{"type": "object"},
+		},
+	}
+	mc := &stubStructuredMessagesConstructor{output: output}
+	ev := New(WithMessagesConstructor(mc))
+	impl, ok := ev.(*finalResponseEvaluator)
+	require.True(t, ok)
+	actuals := []*evalset.Invocation{{InvocationID: "a"}}
+	expecteds := []*evalset.Invocation{{InvocationID: "b"}}
+	got, err := impl.StructuredOutput(ctx, actuals, expecteds, nil)
+	require.NoError(t, err)
+	assert.Same(t, output, got)
+	assert.True(t, mc.structuredCalled)
+	assert.Equal(t, ctx, mc.ctx)
+}
+
+func TestFinalResponseEvaluator_StructuredOutputReturnsNilForPlainConstructor(t *testing.T) {
+	ev := New(WithMessagesConstructor(&stubMessagesConstructor{}))
+	impl, ok := ev.(*finalResponseEvaluator)
+	require.True(t, ok)
+	got, err := impl.StructuredOutput(context.Background(), nil, nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestFinalResponseEvaluator_StructuredOutputPropagatesError(t *testing.T) {
+	mc := &stubStructuredMessagesConstructor{err: assert.AnError}
+	ev := New(WithMessagesConstructor(mc))
+	impl, ok := ev.(*finalResponseEvaluator)
+	require.True(t, ok)
+	got, err := impl.StructuredOutput(context.Background(), nil, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.ErrorIs(t, err, assert.AnError)
 }

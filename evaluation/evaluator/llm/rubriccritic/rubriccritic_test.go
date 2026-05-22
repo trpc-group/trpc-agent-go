@@ -18,6 +18,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -131,4 +133,44 @@ func TestRubricCriticEvaluatorDelegates(t *testing.T) {
 	assert.Equal(t, "llm_rubric_critic", impl.Name())
 	assert.Equal(t, "LLM rubric critic evaluator", impl.Description())
 	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
+}
+
+func TestRubricCriticEvaluatorDefaultsToStructuredOutput(t *testing.T) {
+	ev := New()
+	impl, ok := ev.(*rubricCriticEvaluator)
+	require.True(t, ok)
+	output, err := impl.StructuredOutput(context.Background(), nil, nil, &metric.EvalMetric{
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Rubrics: []*criterionllm.Rubric{
+					{
+						ID:      "1",
+						Content: &criterionllm.RubricContent{Text: "The answer is correct."},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "rubric_critic_scores", output.JSONSchema.Name)
+}
+
+func TestRubricCriticEvaluatorStructuredOutputUsesStrictJSONScorer(t *testing.T) {
+	response := &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Content: `{"debug": true}
+
+ID: 1
+Rubric: alpha
+Evidence: e1
+Reason: r1
+Verdict: yes
+`}}},
+	}
+	defaultImpl, ok := New().(*rubricCriticEvaluator)
+	require.True(t, ok)
+	_, err := defaultImpl.ScoreBasedOnResponse(context.Background(), response, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal response json")
 }

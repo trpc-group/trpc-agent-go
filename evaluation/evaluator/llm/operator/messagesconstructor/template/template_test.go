@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -119,6 +120,47 @@ func TestConstructMessagesRequiresExpectedFinalResponse(t *testing.T) {
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expected finalResponse is empty")
+}
+
+func TestStructuredOutputResolvesResponseScorerSchema(t *testing.T) {
+	constructor, ok := New().(messagesconstructor.StructuredOutputMessagesConstructor)
+	require.True(t, ok)
+	output, err := constructor.StructuredOutput(context.Background(), nil, nil,
+		buildTemplateEvalMetric("Answer: {{answer}}", nil))
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "single_score_result", output.JSONSchema.Name)
+	evalMetric := buildTemplateEvalMetric("Answer: {{answer}}", nil)
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = templateresolver.ResponseScorerRubricScoresName
+	output, err = constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "rubric_scores_result", output.JSONSchema.Name)
+}
+
+func TestStructuredOutputRejectsInvalidTemplateOptions(t *testing.T) {
+	constructor := New().(messagesconstructor.StructuredOutputMessagesConstructor)
+	_, err := constructor.StructuredOutput(context.Background(), nil, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing llm judge criterion")
+	_, err = constructor.StructuredOutput(context.Background(), nil, nil, &metric.EvalMetric{
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "template is nil")
+}
+
+func TestStructuredOutputRejectsUnsupportedScorer(t *testing.T) {
+	constructor := New().(messagesconstructor.StructuredOutputMessagesConstructor)
+	evalMetric := buildTemplateEvalMetric("Answer: {{answer}}", nil)
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = "missing"
+	_, err := constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unsupported response scorer "missing"`)
 }
 
 func TestConstructMessagesRejectsUnknownPlaceholder(t *testing.T) {
