@@ -52,7 +52,6 @@ func New(opts ...Option) *Enforcer {
 		MaxRetries:             DefaultMaxRetries,
 		DeclareBlockerToolName: DefaultDeclareBlockerToolName,
 		NudgeFormatter:         DefaultNudgeFormatter,
-		AllowToolCallFinal:     true,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -204,12 +203,11 @@ func (e *Enforcer) todoToolName() string {
 // Decision tree, ordered for fast no-op on the common path:
 //
 //  1. Missing invocation, no response, or out of scope → no-op.
-//  2. Response is not a candidate (still streaming, or carries
-//     tool calls and AllowToolCallFinal is true) → no-op.
-//     Tool-call responses are passed through because the natural
-//     completion pattern is `model -> todo_write(completed) ->
-//     model -> final`, and blocking the intermediate todo_write
-//     turn would break that.
+//  2. Response is an error, still streaming, or carries tool
+//     calls → no-op. Error responses must surface unchanged, and
+//     tool-call responses are passed through because tool calls
+//     are how the model continues doing the work (for example
+//     `model -> todo_write(completed) -> model -> final`).
 //  3. Blocker already declared on this invocation → pass through.
 //     Per the v2 contract, once the model has formally signalled
 //     "I cannot proceed without input you have to give me", we
@@ -239,6 +237,9 @@ func (e *Enforcer) afterModel(
 	}
 	inv, _ := agent.InvocationFromContext(ctx)
 	if !e.opts.inScope(inv) {
+		return nil, nil
+	}
+	if args.Error != nil || args.Response.Error != nil {
 		return nil, nil
 	}
 	if !e.shouldConsiderResponse(args.Response) {
@@ -303,21 +304,18 @@ func (e *Enforcer) afterModel(
 }
 
 // shouldConsiderResponse mirrors llmflow's loop-termination
-// predicate, with one knob: when AllowToolCallFinal is true (the
-// default), tool-call responses are treated as non-final from our
-// standpoint and pass through. The model.Response.IsFinalResponse
-// method already returns false for tool-call responses, but we
-// replicate the check here so the AllowToolCallFinal=false branch
-// can be future-extended without touching the model package.
+// predicate but narrows it to successful final text responses.
+// Tool-call responses are a continuation signal rather than an exit
+// signal, and error responses must surface without todo enforcement.
 func (e *Enforcer) shouldConsiderResponse(rsp *model.Response) bool {
 	if rsp == nil {
 		return false
 	}
-	if rsp.IsPartial {
+	if rsp.IsPartial || rsp.Error != nil {
 		return false
 	}
 	if rsp.IsToolCallResponse() {
-		return !e.opts.AllowToolCallFinal
+		return false
 	}
 	return rsp.IsFinalResponse()
 }

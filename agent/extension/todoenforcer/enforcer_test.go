@@ -12,6 +12,7 @@ package todoenforcer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -78,7 +79,6 @@ func TestNew_DefaultsApplied(t *testing.T) {
 	assert.Equal(t, DefaultExtensionName, e.Name())
 	assert.Equal(t, DefaultMaxRetries, e.opts.MaxRetries)
 	assert.Equal(t, DefaultDeclareBlockerToolName, e.declareBlockerTool.name)
-	assert.True(t, e.opts.AllowToolCallFinal)
 	assert.NotNil(t, e.opts.NudgeFormatter)
 
 	bundle, err := extension.Collect([]extension.Extension{e})
@@ -105,14 +105,12 @@ func TestNew_OptionsOverridden(t *testing.T) {
 		WithTodoTool(td),
 		WithDeclareBlockerToolName("need_human"),
 		WithDeclareBlockerToolDescription("custom desc"),
-		WithAllowToolCallFinal(false),
 	)
 	assert.Equal(t, "planner-enforcer", e.Name())
 	assert.Equal(t, 7, e.opts.MaxRetries)
 	assert.Same(t, td, e.todoTool)
 	assert.Equal(t, "need_human", e.declareBlockerTool.name)
 	assert.Equal(t, "custom desc", e.declareBlockerTool.description)
-	assert.False(t, e.opts.AllowToolCallFinal)
 }
 
 // TestRegister_WiresExpectedHooks installs the enforcer through
@@ -203,12 +201,44 @@ func TestAfterModel_OpenItems_BlocksAndQueuesReminder(t *testing.T) {
 	assert.Equal(t, 1, retryCount(inv))
 }
 
-// TestAfterModel_ToolCallResponse_DefaultPassesThrough confirms
-// the AllowToolCallFinal default: a response carrying tool calls
-// is treated as non-final and passes through, regardless of
-// pending todos. The natural completion pattern (model →
-// todo_write → model → final) relies on this.
-func TestAfterModel_ToolCallResponse_DefaultPassesThrough(t *testing.T) {
+func TestAfterModel_ErrorResponse_PassesThrough(t *testing.T) {
+	ctx, inv, sess := newTestInvocation(t, "a")
+	writeTodos(t, sess, "", []todo.Item{
+		{Content: "x", ActiveForm: "x", Status: todo.StatusInProgress},
+	})
+	e := New()
+
+	rsp := &model.Response{
+		Done: true,
+		Error: &model.ResponseError{
+			Type:    model.ErrorTypeAPIError,
+			Message: "provider failed",
+		},
+	}
+	res, err := e.afterModel(ctx, &model.AfterModelArgs{Response: rsp})
+	require.NoError(t, err)
+	assert.Nil(t, res)
+	assert.True(t, rsp.Done, "error response must surface unchanged")
+	assert.False(t, reminderPending(inv))
+	assert.Equal(t, 0, retryCount(inv))
+
+	rsp = finalRsp("done")
+	res, err = e.afterModel(ctx, &model.AfterModelArgs{
+		Response: rsp,
+		Error:    errors.New("stream failed"),
+	})
+	require.NoError(t, err)
+	assert.Nil(t, res)
+	assert.True(t, rsp.Done, "callback error must bypass enforcement")
+	assert.False(t, reminderPending(inv))
+	assert.Equal(t, 0, retryCount(inv))
+}
+
+// TestAfterModel_ToolCallResponse_PassesThrough confirms that a
+// response carrying tool calls is treated as non-final and passes
+// through, regardless of pending todos. The natural completion
+// pattern (model → todo_write → model → final) relies on this.
+func TestAfterModel_ToolCallResponse_PassesThrough(t *testing.T) {
 	ctx, inv, sess := newTestInvocation(t, "a")
 	writeTodos(t, sess, "", []todo.Item{
 		{Content: "x", ActiveForm: "x", Status: todo.StatusInProgress},
@@ -229,31 +259,6 @@ func TestAfterModel_ToolCallResponse_DefaultPassesThrough(t *testing.T) {
 	assert.Nil(t, res)
 	assert.False(t, reminderPending(inv))
 	assert.Equal(t, 0, retryCount(inv))
-}
-
-// TestAfterModel_ToolCallResponse_StrictMode confirms that
-// AllowToolCallFinal=false causes tool-call responses to be
-// blocked too. This is the strict-enforcement mode for stacks
-// that want to refuse any "wrap-up" turn while items remain.
-func TestAfterModel_ToolCallResponse_StrictMode(t *testing.T) {
-	ctx, _, sess := newTestInvocation(t, "a")
-	writeTodos(t, sess, "", []todo.Item{
-		{Content: "x", ActiveForm: "x", Status: todo.StatusInProgress},
-	})
-	e := New(WithAllowToolCallFinal(false))
-
-	rsp := &model.Response{
-		Done: true,
-		Choices: []model.Choice{{Message: model.Message{
-			Role: model.RoleAssistant,
-			ToolCalls: []model.ToolCall{
-				{ID: "1", Function: model.FunctionDefinitionParam{Name: "x"}},
-			},
-		}}},
-	}
-	res, err := e.afterModel(ctx, &model.AfterModelArgs{Response: rsp})
-	require.NoError(t, err)
-	require.NotNil(t, res, "strict mode must block tool-call responses too")
 }
 
 // TestAfterModel_PartialResponse_PassesThrough ensures we never
@@ -894,8 +899,8 @@ func TestInvocationHelpers_HappyPath(t *testing.T) {
 
 // TestShouldConsiderResponse_AllBranches covers the response
 // triage predicate in one shot. The hot path calls it on every
-// AfterModel invocation, so all four branches (nil, partial,
-// tool-call with AllowToolCallFinal, regular final) need pinning.
+// AfterModel invocation, so all branches (nil, partial, error,
+// tool-call, regular final) need pinning.
 func TestShouldConsiderResponse_AllBranches(t *testing.T) {
 	e := New()
 
@@ -903,10 +908,13 @@ func TestShouldConsiderResponse_AllBranches(t *testing.T) {
 		"nil response must short-circuit (defensive)")
 	assert.False(t, e.shouldConsiderResponse(&model.Response{IsPartial: true}),
 		"streaming partials must never trigger enforcement")
+	assert.False(t, e.shouldConsiderResponse(&model.Response{
+		Done:  true,
+		Error: &model.ResponseError{Type: "x", Message: "boom"},
+	}), "error responses must bypass enforcement")
 
-	// AllowToolCallFinal default is true; a tool-call response
-	// must therefore pass through (return false from
-	// shouldConsiderResponse — "no, do not consider").
+	// Tool-call responses are continuation signals. They must
+	// pass through so the model can complete open todos via tools.
 	toolCallRsp := &model.Response{
 		Done: true,
 		Choices: []model.Choice{{
@@ -917,7 +925,7 @@ func TestShouldConsiderResponse_AllBranches(t *testing.T) {
 		}},
 	}
 	assert.False(t, e.shouldConsiderResponse(toolCallRsp),
-		"AllowToolCallFinal=true must keep tool-call responses out of enforcement")
+		"tool-call responses must stay out of enforcement")
 
 	// A regular final response is exactly what enforcement
 	// targets.

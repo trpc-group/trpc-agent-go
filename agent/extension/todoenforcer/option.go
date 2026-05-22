@@ -130,14 +130,6 @@ type Options struct {
 	// bypassed).
 	ScopedAgents []string
 
-	// AllowToolCallFinal controls whether responses that include
-	// tool calls bypass enforcement. Default is true, matching
-	// the natural completion pattern (`model -> todo_write -> model`)
-	// where the wrap-up turn is itself a tool call. Setting this
-	// to false makes enforcement strict: any response with open
-	// items is blocked, even tool-call ones.
-	AllowToolCallFinal bool
-
 	// OnEnforce is an optional observer; see EnforceCallback for
 	// the contract.
 	OnEnforce EnforceCallback
@@ -222,14 +214,6 @@ func WithScopedAgents(names ...string) Option {
 func WithBypassAgents(names ...string) Option {
 	return func(o *Options) {
 		o.BypassAgents = append(o.BypassAgents, names...)
-	}
-}
-
-// WithAllowToolCallFinal toggles the "tool-call responses pass
-// through" shortcut.
-func WithAllowToolCallFinal(allow bool) Option {
-	return func(o *Options) {
-		o.AllowToolCallFinal = allow
 	}
 }
 
