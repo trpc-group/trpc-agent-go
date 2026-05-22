@@ -393,6 +393,54 @@ func main() {
 }
 ```
 
+### 结构化输出
+
+直接调用 `model.GenerateContent` 时，可以用 `model.NewRequest` 和
+`model.WithStructuredOutputJSON` 从 Go 结构体自动生成 JSON schema，并传给支持
+provider-native structured output 的模型适配器。
+
+```go
+type StageParseResult struct {
+    Stage  string `json:"stage"`
+    Reason string `json:"reason"`
+}
+
+request := model.NewRequest(
+    []model.Message{
+        model.NewUserMessage("分析当前用户意图属于哪个阶段。"),
+    },
+    model.WithStructuredOutputJSON(
+        new(StageParseResult),
+        true,
+        "Return stage parse result as JSON.",
+    ),
+)
+
+responseChan, err := llm.GenerateContent(ctx, request)
+if err != nil {
+    return err
+}
+
+var final string
+for response := range responseChan {
+    if response.Error != nil {
+        return fmt.Errorf("model error: %s", response.Error.Message)
+    }
+    if len(response.Choices) > 0 {
+        final = response.Choices[0].Message.Content
+    }
+}
+
+var result StageParseResult
+if err := json.Unmarshal([]byte(final), &result); err != nil {
+    return err
+}
+```
+
+`WithStructuredOutputJSON` 只负责配置模型请求；直接使用 `model` 包时，最终响应仍在
+`model.Response` 中，需要调用方自行解析 JSON。若已经有手写 schema，也可以直接设置
+`request.StructuredOutput`。
+
 ### 流式输出
 
 ```go

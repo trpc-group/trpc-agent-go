@@ -396,6 +396,55 @@ func main() {
 }
 ```
 
+### Structured Output
+
+When calling `model.GenerateContent` directly, use `model.NewRequest` and
+`model.WithStructuredOutputJSON` to generate a JSON schema from a Go struct and
+pass it to model adapters that support provider-native structured output.
+
+```go
+type StageParseResult struct {
+    Stage  string `json:"stage"`
+    Reason string `json:"reason"`
+}
+
+request := model.NewRequest(
+    []model.Message{
+        model.NewUserMessage("Classify the current user intent stage."),
+    },
+    model.WithStructuredOutputJSON(
+        new(StageParseResult),
+        true,
+        "Return stage parse result as JSON.",
+    ),
+)
+
+responseChan, err := llm.GenerateContent(ctx, request)
+if err != nil {
+    return err
+}
+
+var final string
+for response := range responseChan {
+    if response.Error != nil {
+        return fmt.Errorf("model error: %s", response.Error.Message)
+    }
+    if len(response.Choices) > 0 {
+        final = response.Choices[0].Message.Content
+    }
+}
+
+var result StageParseResult
+if err := json.Unmarshal([]byte(final), &result); err != nil {
+    return err
+}
+```
+
+`WithStructuredOutputJSON` only configures the model request. Direct `model`
+callers still receive normal `model.Response` values and should unmarshal the
+final JSON content themselves. If you already have a hand-written schema, set
+`request.StructuredOutput` directly.
+
 ### Streaming Output
 
 ```go
