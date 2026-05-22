@@ -81,7 +81,7 @@ func (r *Runtime) RunProgram(
 		TimedOut: timedOut,
 	}
 	if timedOut {
-		return result, &SandboxError{
+		return result, &sandboxError{
 			Kind:    ErrTimeout,
 			Op:      "run",
 			Backend: backendName,
@@ -179,15 +179,15 @@ func (r *Runtime) commandForProfile(
 	env []string,
 	spec codeexecutor.RunProgramSpec,
 ) (*exec.Cmd, string, error) {
-	switch profile.Enforcement() {
-	case EnforcementDisabled:
+	switch profile.enforcement() {
+	case enforcementDisabled:
 		// #nosec G204 -- RunProgram intentionally executes caller-provided
 		// commands when sandboxing is explicitly disabled.
 		cmd := exec.CommandContext(ctx, spec.Cmd, spec.Args...)
 		cmd.Dir = cwd
 		cmd.Env = env
 		return cmd, "disabled", nil
-	case EnforcementExternal:
+	case enforcementExternal:
 		return nil, "external", backendError(
 			ErrUnsupportedBackend,
 			"external",

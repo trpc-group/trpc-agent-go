@@ -22,16 +22,16 @@ import (
 )
 
 func TestPermissionProfileEnforcement(t *testing.T) {
-	if got := WorkspaceWriteProfile().Enforcement(); got != EnforcementManaged {
+	if got := WorkspaceWriteProfile().enforcement(); got != enforcementManaged {
 		t.Fatalf("workspace_write enforcement = %s", got)
 	}
-	if got := ReadOnlyProfile().Enforcement(); got != EnforcementManaged {
+	if got := ReadOnlyProfile().enforcement(); got != enforcementManaged {
 		t.Fatalf("read_only enforcement = %s", got)
 	}
-	if got := DangerFullAccessProfile().Enforcement(); got != EnforcementDisabled {
+	if got := DangerFullAccessProfile().enforcement(); got != enforcementDisabled {
 		t.Fatalf("danger_full_access enforcement = %s", got)
 	}
-	if got := ExternalSandboxProfile(NetworkPolicy{}).Enforcement(); got != EnforcementExternal {
+	if got := ExternalSandboxProfile(NetworkPolicy{}).enforcement(); got != enforcementExternal {
 		t.Fatalf("external_sandbox enforcement = %s", got)
 	}
 }

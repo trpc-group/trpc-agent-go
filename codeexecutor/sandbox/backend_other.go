@@ -20,10 +20,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-func backendCapabilities(backend BackendType, profile PermissionProfile) BackendCapabilities {
+func backendCapabilities(backend BackendType, profile PermissionProfile) backendCapabilitiesInfo {
 	_ = backend
 	_ = profile
-	return BackendCapabilities{
+	return backendCapabilitiesInfo{
 		OSSandbox:          false,
 		PTY:                false,
 		Stdin:              true,

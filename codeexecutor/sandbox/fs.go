@@ -82,7 +82,7 @@ func (r *Runtime) StageDirectory(
 		normalizeProfile(r.profile),
 		additionalPermissionsFromContext(ctx),
 	)
-	if profile.Enforcement() != EnforcementDisabled && !pathHasRule(profile, src, AccessRead) {
+	if profile.enforcement() != enforcementDisabled && !pathHasRule(profile, src, AccessRead) {
 		return deniedf(ErrPathDenied, "read", src, "host path requires explicit read grant")
 	}
 	if err := r.checkWrite(profile, ws, to); err != nil {

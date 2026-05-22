@@ -94,7 +94,7 @@ explicit `--setenv` entries.
 
 ## Diagnostics
 
-`RedactEnvironment` is a diagnostics helper, not an enforcement mechanism. It
-redacts names containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, or `CREDENTIAL`
-before logging. It should not be used as a substitute for inheritance and
-filtering policy.
+Environment redaction is a diagnostics concern, not an enforcement mechanism.
+Diagnostic logs should redact names containing `KEY`, `TOKEN`, `SECRET`,
+`PASSWORD`, or `CREDENTIAL` before logging. Redaction should not be used as a
+substitute for inheritance and filtering policy.

@@ -91,23 +91,18 @@ func (r *Runtime) Runner() codeexecutor.ProgramRunner { return r }
 func (r *Runtime) Describe() codeexecutor.Capabilities {
 	profile := normalizeProfile(r.profile)
 	isolation := "os-sandbox"
-	if profile.Enforcement() == EnforcementDisabled {
+	if profile.enforcement() == enforcementDisabled {
 		isolation = "none"
 	}
-	if profile.Enforcement() == EnforcementExternal {
+	if profile.enforcement() == enforcementExternal {
 		isolation = "external"
 	}
 	return codeexecutor.Capabilities{
 		Isolation:      isolation,
 		NetworkAllowed: profile.Network.Mode == NetworkEnabled,
-		ReadOnlyMount:  profile.Enforcement() == EnforcementManaged,
+		ReadOnlyMount:  profile.enforcement() == enforcementManaged,
 		Streaming:      false,
 	}
-}
-
-// Capabilities reports sandbox-specific capabilities.
-func (r *Runtime) Capabilities() BackendCapabilities {
-	return backendCapabilities(r.backend, r.profile)
 }
 
 // CreateWorkspace creates or opens the deterministic directory for an

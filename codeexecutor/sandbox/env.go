@@ -185,8 +185,8 @@ func envNameMatchesAny(patterns []string, name string) bool {
 	return false
 }
 
-// RedactEnvironment returns a copy safe for diagnostics.
-func RedactEnvironment(env []string) []string {
+// redactEnvironment returns a copy safe for diagnostics.
+func redactEnvironment(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		k, v, ok := strings.Cut(kv, "=")

@@ -387,7 +387,7 @@ func TestRuntimeDefaultsDescribeAndHelpers(t *testing.T) {
 	if got := external.Describe(); got.Isolation != "external" || !got.NetworkAllowed || got.ReadOnlyMount {
 		t.Fatalf("external capabilities = %#v", got)
 	}
-	if caps := rt.Capabilities(); !caps.Stdin || !caps.PerCommandGrants {
+	if caps := backendCapabilities(rt.backend, rt.profile); !caps.Stdin || !caps.PerCommandGrants {
 		t.Fatalf("backend capabilities = %#v", caps)
 	}
 	if got := sanitizeID("!!!"); len(got) != 16 {
@@ -686,11 +686,11 @@ func TestSandboxErrorsAndLimitedBuffer(t *testing.T) {
 		t.Fatalf("IsKind did not classify sandbox errors correctly")
 	}
 	if msg := err.Error(); !strings.Contains(msg, "PathDenied read work/secret") {
-		t.Fatalf("SandboxError message = %q", msg)
+		t.Fatalf("sandboxError message = %q", msg)
 	}
-	var nilErr *SandboxError
+	var nilErr *sandboxError
 	if nilErr.Error() != "" || nilErr.Unwrap() != nil {
-		t.Fatalf("nil SandboxError methods returned non-empty values")
+		t.Fatalf("nil sandboxError methods returned non-empty values")
 	}
 
 	buf := newLimitedBuffer(3)
@@ -754,7 +754,7 @@ func TestEnvironmentAndProfileBranches(t *testing.T) {
 	if !hasEnv(env, "SANDBOX_VISIBLE=yes") {
 		t.Fatalf("set env missing from %v", env)
 	}
-	redacted := RedactEnvironment([]string{"TOKEN=value", "PLAIN=value", "MALFORMED"})
+	redacted := redactEnvironment([]string{"TOKEN=value", "PLAIN=value", "MALFORMED"})
 	if !hasEnv(redacted, "TOKEN=<redacted>") ||
 		!hasEnv(redacted, "PLAIN=value") ||
 		!hasString(redacted, "MALFORMED") {

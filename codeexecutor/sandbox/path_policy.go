@@ -394,7 +394,7 @@ func isProtectedRel(rel string, protected []string) bool {
 }
 
 func (r *Runtime) checkRead(profile PermissionProfile, ws codeexecutor.Workspace, rel string) error {
-	if profile.Enforcement() == EnforcementDisabled {
+	if profile.enforcement() == enforcementDisabled {
 		return nil
 	}
 	d, err := r.decidePath(profile, ws, rel)
@@ -408,7 +408,7 @@ func (r *Runtime) checkRead(profile PermissionProfile, ws codeexecutor.Workspace
 }
 
 func (r *Runtime) checkWrite(profile PermissionProfile, ws codeexecutor.Workspace, rel string) error {
-	if profile.Enforcement() == EnforcementDisabled {
+	if profile.enforcement() == enforcementDisabled {
 		return nil
 	}
 	d, err := r.decidePath(profile, ws, rel)

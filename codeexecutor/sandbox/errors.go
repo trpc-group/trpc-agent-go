@@ -18,8 +18,6 @@ import (
 type ErrorKind string
 
 const (
-	// ErrDenied indicates a generic policy denial.
-	ErrDenied ErrorKind = "Denied"
 	// ErrTimeout indicates that execution exceeded its deadline.
 	ErrTimeout ErrorKind = "Timeout"
 	// ErrUnsupportedBackend indicates that the requested sandbox backend is
@@ -30,15 +28,13 @@ const (
 	// ErrPolicyViolation indicates that a request is internally inconsistent
 	// with the configured policy.
 	ErrPolicyViolation ErrorKind = "PolicyViolation"
-	// ErrNetworkDenied indicates that network access was denied by policy.
-	ErrNetworkDenied ErrorKind = "NetworkDenied"
 	// ErrPathDenied indicates that filesystem access was denied by policy.
 	ErrPathDenied ErrorKind = "PathDenied"
 )
 
-// SandboxError is returned when sandbox policy, setup, or execution control
+// sandboxError is returned when sandbox policy, setup, or execution control
 // rejects a request. It is intentionally small so callers can safely log it.
-type SandboxError struct {
+type sandboxError struct {
 	Kind    ErrorKind
 	Op      string
 	Path    string
@@ -46,7 +42,7 @@ type SandboxError struct {
 	Err     error
 }
 
-func (e *SandboxError) Error() string {
+func (e *sandboxError) Error() string {
 	if e == nil {
 		return ""
 	}
@@ -67,24 +63,24 @@ func (e *SandboxError) Error() string {
 }
 
 // Unwrap returns the underlying cause.
-func (e *SandboxError) Unwrap() error {
+func (e *sandboxError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
 	return e.Err
 }
 
-func sandboxError(kind ErrorKind, op string, path string, err error) error {
-	return &SandboxError{Kind: kind, Op: op, Path: path, Err: err}
+func newSandboxError(kind ErrorKind, op string, path string, err error) error {
+	return &sandboxError{Kind: kind, Op: op, Path: path, Err: err}
 }
 
 func backendError(kind ErrorKind, backend string, err error) error {
-	return &SandboxError{Kind: kind, Backend: backend, Err: err}
+	return &sandboxError{Kind: kind, Backend: backend, Err: err}
 }
 
-// IsKind reports whether err contains a SandboxError with the requested kind.
+// IsKind reports whether err contains a sandbox error with the requested kind.
 func IsKind(err error, kind ErrorKind) bool {
-	var se *SandboxError
+	var se *sandboxError
 	if !errors.As(err, &se) {
 		return false
 	}
@@ -92,5 +88,5 @@ func IsKind(err error, kind ErrorKind) bool {
 }
 
 func deniedf(kind ErrorKind, op string, path string, format string, args ...any) error {
-	return sandboxError(kind, op, path, fmt.Errorf(format, args...))
+	return newSandboxError(kind, op, path, fmt.Errorf(format, args...))
 }

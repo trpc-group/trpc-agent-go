@@ -25,11 +25,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-func backendCapabilities(backend BackendType, profile PermissionProfile) BackendCapabilities {
+func backendCapabilities(backend BackendType, profile PermissionProfile) backendCapabilitiesInfo {
 	_ = backend
-	enforcement := profile.Enforcement()
-	managed := enforcement == EnforcementManaged
-	return BackendCapabilities{
+	enforcement := profile.enforcement()
+	managed := enforcement == enforcementManaged
+	return backendCapabilitiesInfo{
 		OSSandbox:          managed && runtime.GOOS == "linux",
 		PTY:                false,
 		Stdin:              true,

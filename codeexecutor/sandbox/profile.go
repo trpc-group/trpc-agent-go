@@ -11,16 +11,16 @@ package sandbox
 
 import "context"
 
-// Enforcement is the internal execution mode derived from PermissionProfile.
-type Enforcement string
+// enforcement is the internal execution mode derived from PermissionProfile.
+type enforcement string
 
 const (
-	// EnforcementManaged means trpc-agent-go must enforce an OS sandbox.
-	EnforcementManaged Enforcement = "managed"
-	// EnforcementDisabled means no sandbox is requested.
-	EnforcementDisabled Enforcement = "disabled"
-	// EnforcementExternal means isolation is supplied by an external system.
-	EnforcementExternal Enforcement = "external"
+	// enforcementManaged means trpc-agent-go must enforce an OS sandbox.
+	enforcementManaged enforcement = "managed"
+	// enforcementDisabled means no sandbox is requested.
+	enforcementDisabled enforcement = "disabled"
+	// enforcementExternal means isolation is supplied by an external system.
+	enforcementExternal enforcement = "external"
 )
 
 // PermissionProfileType selects how sandbox permissions are enforced.
@@ -45,15 +45,15 @@ type PermissionProfile struct {
 	Network    NetworkPolicy
 }
 
-// Enforcement derives the execution mode from the profile.
-func (p PermissionProfile) Enforcement() Enforcement {
+// enforcement derives the execution mode from the profile.
+func (p PermissionProfile) enforcement() enforcement {
 	switch p.Type {
 	case ProfileDisabled:
-		return EnforcementDisabled
+		return enforcementDisabled
 	case ProfileExternal:
-		return EnforcementExternal
+		return enforcementExternal
 	default:
-		return EnforcementManaged
+		return enforcementManaged
 	}
 }
 

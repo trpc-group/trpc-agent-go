@@ -19,9 +19,9 @@ const (
 	BackendLinuxBubblewrap BackendType = "linux-bubblewrap"
 )
 
-// BackendCapabilities reports backend support above the generic engine
+// backendCapabilitiesInfo reports backend support above the generic engine
 // capabilities exposed by codeexecutor.Engine.
-type BackendCapabilities struct {
+type backendCapabilitiesInfo struct {
 	OSSandbox          bool
 	PTY                bool
 	Stdin              bool
