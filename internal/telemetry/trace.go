@@ -220,7 +220,7 @@ func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Dec
 	}
 
 	// args is json-encoded.
-	span.SetAttributes(attribute.String(semconvtrace.KeyGenAIToolCallArguments, string(args)))
+	span.SetAttributes(attribute.String(semconvtrace.KeyGenAIToolCallArguments, truncateTelemetryJSONBytes(args)))
 	if rspEvent != nil && rspEvent.Response != nil {
 		if e := rspEvent.Response.Error; e != nil {
 			span.SetStatus(codes.Error, e.Message)

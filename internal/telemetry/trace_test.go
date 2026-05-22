@@ -611,6 +611,20 @@ func TestTraceToolCall_NilPaths(t *testing.T) {
 	}
 }
 
+func TestTraceToolCall_TruncatesLargeArguments(t *testing.T) {
+	decl := &tool.Declaration{Name: "test_tool", Description: "test description"}
+	args := []byte(`{"payload":"` + strings.Repeat("x", maxTelemetryJSONBytes+1) + `"}`)
+
+	span := newRecordingSpan()
+	TraceToolCall(span, nil, decl, args, nil, nil)
+
+	got, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIToolCallArguments)
+	require.True(t, ok)
+	require.Less(t, len(got), len(args))
+	require.LessOrEqual(t, len(got), maxTelemetryJSONBytes)
+	require.Contains(t, got, "truncated")
+}
+
 func TestTraceMergedToolCalls_NilPaths(t *testing.T) {
 	tests := []struct {
 		name     string
