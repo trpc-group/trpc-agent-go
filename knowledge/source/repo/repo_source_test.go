@@ -2061,6 +2061,7 @@ func TestReadDocumentNodesInternal(t *testing.T) {
 			WithRepository(Repository{Dir: chunkDir}),
 			WithDocExtensions([]string{".md"}),
 		)
+		src.readers["markdown"] = &multiChunkMarkdownReader{}
 		nodes, err := src.readDocumentNodes(context.Background(), chunkDir, chunkDir, &repoInfo{name: "demo"})
 		if err != nil {
 			t.Fatalf("readDocumentNodes() error = %v", err)
@@ -2096,6 +2097,7 @@ func TestReadDocumentNodesReaderErrorContinues(t *testing.T) {
 		WithRepository(Repository{Dir: dir}),
 		WithDocExtensions([]string{".md"}),
 	)
+	src.readers["markdown"] = &errorOnBadMarkdownReader{}
 	nodes, err := src.readDocumentNodes(context.Background(), dir, dir, &repoInfo{name: "demo"})
 	if err == nil {
 		t.Fatal("readDocumentNodes() expected error for failed file read, got nil")

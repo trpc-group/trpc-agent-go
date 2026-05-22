@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
-	docreader "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -298,7 +297,8 @@ func (s *Source) readDocumentNodes(
 		if !slices.Contains(s.docExtensions, ext) {
 			continue
 		}
-		r, ok := docreader.GetReader(ext)
+		fileType := docExtensionType(ext)
+		r, ok := s.readers[fileType]
 		if !ok {
 			continue
 		}
@@ -335,6 +335,26 @@ func (s *Source) readDocumentNodes(
 		return nodes, fmt.Errorf("readDocumentNodes: %d file(s) failed, first: %w", len(readErrs), readErrs[0])
 	}
 	return nodes, nil
+}
+
+func docExtensionType(ext string) string {
+	ext = strings.TrimPrefix(strings.ToLower(ext), ".")
+	switch ext {
+	case "txt", "text":
+		return "text"
+	case "md", "markdown":
+		return "markdown"
+	case "json":
+		return "json"
+	case "csv":
+		return "csv"
+	case "pdf":
+		return "pdf"
+	case "docx", "doc":
+		return "docx"
+	default:
+		return ext
+	}
 }
 
 func graphNodeFromDocumentChunk(

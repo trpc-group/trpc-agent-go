@@ -343,6 +343,7 @@ func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.P
 	}
 
 	var paths []*graph.Path
+	truncated := false
 	if err := s.withAgeTx(ctx, func(tx *sql.Tx) error {
 		patterns, err := relationshipPatterns(query.Direction, query.EdgeTypes, depth)
 		if err != nil {
@@ -352,10 +353,15 @@ func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.P
 			if len(paths) >= maxPaths {
 				return nil
 			}
-			cypher := pathQueryCypher(query.FromID, query.ToID, pattern, maxPaths-len(paths))
+			remaining := maxPaths - len(paths)
+			cypher := pathQueryCypher(query.FromID, query.ToID, pattern, remaining+1)
 			rawPaths, err := s.queryAgPaths(ctx, tx, cypher)
 			if err != nil {
 				return err
+			}
+			if len(rawPaths) > remaining {
+				truncated = true
+				rawPaths = rawPaths[:remaining]
 			}
 			for _, path := range rawPaths {
 				nodes, err := s.queryNodesByIDs(ctx, tx, path.nodeIDs)
@@ -367,12 +373,15 @@ func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.P
 					Edges: pathEdges(path),
 				})
 			}
+			if len(paths) >= maxPaths && truncated {
+				return nil
+			}
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	return &graph.PathResult{Paths: paths}, nil
+	return &graph.PathResult{Paths: paths, Truncated: truncated}, nil
 }
 
 func pathQueryCypher(fromID, toID, pattern string, limit int) string {

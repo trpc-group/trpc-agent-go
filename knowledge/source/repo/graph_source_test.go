@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 func TestRepoGraphNamespace(t *testing.T) {
@@ -587,6 +588,30 @@ func TestReadGraphFromRemoteRepoWithDocExtensions(t *testing.T) {
 	require.Equal(t, 1, docCount)
 }
 
+func TestReadGraphDocumentNodesUseConfiguredReaders(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "notes.txt"), "DROPkeep")
+
+	src := New(
+		WithRepository(Repository{Dir: dir}),
+		WithDocExtensions([]string{".txt"}),
+		WithTransformers(transform.NewCharFilter("DROP")),
+	)
+	data, err := src.ReadGraph(context.Background())
+	require.NoError(t, err)
+
+	var docNode *graph.Node
+	for _, node := range data.Nodes {
+		if node.Metadata[source.MetaFilePath] == "notes.txt" {
+			docNode = node
+			break
+		}
+	}
+	require.NotNil(t, docNode)
+	require.Equal(t, "keep", docNode.Content)
+	require.Equal(t, len([]rune("keep")), docNode.Metadata[source.MetaContentLength])
+}
+
 func TestAllowedGoPathsFiltersTestFiles(t *testing.T) {
 	dir := t.TempDir()
 	writeRepoFile(t, filepath.Join(dir, "main.go"), "package main\n")
@@ -639,6 +664,7 @@ func TestReadDocumentNodesChunkIndexEdgeCases(t *testing.T) {
 			WithRepository(Repository{Dir: dir}),
 			WithDocExtensions([]string{".md"}),
 		)
+		src.readers["markdown"] = &stringChunkIndexReader{}
 		nodes, err := src.readDocumentNodes(context.Background(), dir, dir, &repoInfo{name: "demo"})
 		require.NoError(t, err)
 		require.Len(t, nodes, 1)
@@ -661,6 +687,7 @@ func TestReadDocumentNodesChunkIndexEdgeCases(t *testing.T) {
 			WithRepository(Repository{Dir: dir}),
 			WithDocExtensions([]string{".md"}),
 		)
+		src.readers["markdown"] = &noChunkIndexReader{}
 		nodes, err := src.readDocumentNodes(context.Background(), dir, dir, &repoInfo{name: "demo"})
 		require.NoError(t, err)
 		require.Len(t, nodes, 1)
