@@ -270,8 +270,8 @@ func TestService_ListSessions(t *testing.T) {
 		}
 		if callCount == 3 { // list session states
 			return newMockRows([][]any{
-				{sessState1.ID, string(stateBytes1), now, now},
 				{sessState2.ID, string(stateBytes2), now, now},
+				{sessState1.ID, string(stateBytes1), now, now},
 			}), nil
 		}
 		if callCount == 4 { // events
@@ -286,8 +286,115 @@ func TestService_ListSessions(t *testing.T) {
 	sessions, err := s.ListSessions(ctx, userKey)
 	assert.NoError(t, err)
 	assert.Len(t, sessions, 2)
+	assert.Equal(t, "sess2", sessions[0].ID)
+	assert.Equal(t, "sess1", sessions[1].ID)
+}
+
+func TestService_ListSessions_WithListSessionPage(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		opts:                  ServiceOpts{sessionTTL: time.Hour},
+		tableSessionStates:    "session_states",
+		tableSessionEvents:    "session_events",
+		tableSessionSummaries: "session_summaries",
+		tableAppStates:        "app_states",
+		tableUserStates:       "user_states",
+	}
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "test-app", UserID: "test-user"}
+	now := time.Now()
+
+	sessState2 := SessionState{
+		ID:        "sess2",
+		State:     session.StateMap{"k2": []byte("v2")},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	stateBytes2, _ := json.Marshal(sessState2)
+
+	callCount := 0
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		callCount++
+		if callCount == 1 { // app state
+			return newMockRows([][]any{}), nil
+		}
+		if callCount == 2 { // user state
+			return newMockRows([][]any{}), nil
+		}
+		if callCount == 3 { // list session states (DB applies LIMIT 1 OFFSET 1)
+			return newMockRows([][]any{
+				{sessState2.ID, string(stateBytes2), now, now},
+			}), nil
+		}
+		if callCount == 4 { // events
+			return newMockRows([][]any{}), nil
+		}
+		if callCount == 5 { // summaries
+			return newMockRows([][]any{}), nil
+		}
+		return newMockRows([][]any{}), nil
+	}
+
+	sessions, err := s.ListSessions(ctx, userKey, session.WithListSessionPage(1, 1))
+	assert.NoError(t, err)
+	assert.Len(t, sessions, 1)
+	assert.Equal(t, "sess2", sessions[0].ID)
+}
+
+func TestService_ListSessionsWithListSessionOnlyMeta(t *testing.T) {
+	mockCli := &mockClient{}
+	s := &Service{
+		chClient:              mockCli,
+		opts:                  ServiceOpts{sessionTTL: time.Hour},
+		tableSessionStates:    "session_states",
+		tableSessionEvents:    "session_events",
+		tableSessionSummaries: "session_summaries",
+		tableAppStates:        "app_states",
+		tableUserStates:       "user_states",
+	}
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "test-app", UserID: "test-user"}
+	now := time.Now()
+	tracks, err := json.Marshal([]session.Track{"alpha"})
+	assert.NoError(t, err)
+	sessState := SessionState{
+		ID: "sess1",
+		State: session.StateMap{
+			"k1":     []byte("v1"),
+			"tracks": tracks,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	stateBytes, err := json.Marshal(sessState)
+	assert.NoError(t, err)
+
+	callCount := 0
+	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		callCount++
+		switch callCount {
+		case 1, 2:
+			return newMockRows([][]any{}), nil
+		case 3:
+			return newMockRows([][]any{
+				{sessState.ID, string(stateBytes), now, now},
+			}), nil
+		default:
+			t.Fatalf("unexpected query after session states: %s", query)
+			return nil, nil
+		}
+	}
+
+	sessions, err := s.ListSessions(ctx, userKey, session.WithListSessionOnlyMeta())
+	assert.NoError(t, err)
+	assert.Len(t, sessions, 1)
 	assert.Equal(t, "sess1", sessions[0].ID)
-	assert.Equal(t, "sess2", sessions[1].ID)
+	assert.Empty(t, sessions[0].Events)
+	assert.Nil(t, sessions[0].Tracks)
+	assert.Equal(t, 3, callCount)
 }
 
 func TestService_ListSessions_Complex(t *testing.T) {

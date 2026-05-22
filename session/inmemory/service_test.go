@@ -538,6 +538,31 @@ func TestListSessions_WithListSessionOnlyMeta(t *testing.T) {
 	assert.False(t, got.UpdatedAt.IsZero())
 }
 
+func TestListSessions_WithListSessionPage(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app1", UserID: "user1"}
+	for _, id := range []string{"session1", "session2", "session3"} {
+		_, err := service.CreateSession(ctx, session.Key{
+			AppName:   userKey.AppName,
+			UserID:    userKey.UserID,
+			SessionID: id,
+		}, nil)
+		require.NoError(t, err)
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	sessions, err := service.ListSessions(
+		ctx, userKey, session.WithListSessionPage(1, 2),
+	)
+	require.NoError(t, err)
+	require.Len(t, sessions, 2)
+	assert.Equal(t, "session2", sessions[0].ID)
+	assert.Equal(t, "session1", sessions[1].ID)
+}
+
 func TestCloneSessionListMetadata(t *testing.T) {
 	t.Run("nil session", func(t *testing.T) {
 		assert.Nil(t, cloneSessionListMetadata(nil))

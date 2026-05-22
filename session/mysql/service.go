@@ -390,7 +390,14 @@ func (s *Service) ListSessions(
 	if err := session.ValidateListSessionsOptions(opt); err != nil {
 		return nil, err
 	}
-	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
+	sessList, err := s.listSessions(
+		ctx,
+		userKey,
+		opt.EventNum,
+		opt.EventTime,
+		opt.ListSessionOnlyMeta,
+		opt.ListSessionPage,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("mysql session service get session list failed: %w", err)
 	}

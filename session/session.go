@@ -45,6 +45,8 @@ var (
 	ErrInvalidEventPage = errors.New("event page requires offset >= 0 and limit > 0")
 	// ErrEventPageConflictsWithEventFilters indicates paging cannot be mixed with context filters.
 	ErrEventPageConflictsWithEventFilters = errors.New("event page cannot be combined with EventNum or EventTime")
+	// ErrInvalidListSessionPage indicates list-session paging arguments are invalid.
+	ErrInvalidListSessionPage = errors.New("list session page requires offset >= 0 and limit >= 0")
 )
 
 // SummaryFilterKeyAllContents is the filter key representing
@@ -589,10 +591,18 @@ type Summary struct {
 // Options contains shared session-service options.
 // Not every field applies to every service method.
 type Options struct {
-	EventNum            int        // EventNum is the number of recent events (context-window mode).
-	EventTime           time.Time  // EventTime is the after time.
-	EventPage           *EventPage // EventPage enables GetSession-only offset pagination when non-nil.
-	ListSessionOnlyMeta bool       // ListSessionOnlyMeta is only honored by ListSessions.
+	EventNum            int              // EventNum is the number of recent events (context-window mode).
+	EventTime           time.Time        // EventTime is the after time.
+	EventPage           *EventPage       // EventPage enables GetSession-only offset pagination when non-nil.
+	ListSessionOnlyMeta bool             // ListSessionOnlyMeta is only honored by ListSessions.
+	ListSessionPage     *ListSessionPage // ListSessionPage enables ListSessions offset pagination when non-nil.
+}
+
+// ListSessionPage specifies offset-based pagination for ListSessions.
+// When non-nil in Options, the backend applies LIMIT/OFFSET to the session list.
+type ListSessionPage struct {
+	Offset int // Offset is the number of sessions to skip.
+	Limit  int // Limit is the maximum number of sessions to return per page.
 }
 
 // EventPage specifies GetSession-only offset-based pagination for session events.
@@ -622,10 +632,18 @@ func WithEventTime(time time.Time) Option {
 
 // WithListSessionOnlyMeta requests ListSessions to return only session metadata
 // without events or tracks. Callers should only use this option with ListSessions.
-// The optimization is currently implemented by the in-memory and redis session services.
 func WithListSessionOnlyMeta() Option {
 	return func(o *Options) {
 		o.ListSessionOnlyMeta = true
+	}
+}
+
+// WithListSessionPage enables offset/limit pagination for ListSessions.
+// This option is orthogonal to WithEventNum/WithEventTime: those control event-level
+// filtering within each session, while this controls session-level pagination.
+func WithListSessionPage(offset, limit int) Option {
+	return func(o *Options) {
+		o.ListSessionPage = &ListSessionPage{Offset: offset, Limit: limit}
 	}
 }
 
@@ -660,10 +678,16 @@ func ValidateGetSessionOptions(opts *Options, supportsEventPage bool) error {
 
 // ValidateListSessionsOptions validates ListSessions-only option semantics.
 func ValidateListSessionsOptions(opts *Options) error {
-	if opts == nil || opts.EventPage == nil {
+	if opts == nil {
 		return nil
 	}
-	return ErrEventPageOnlyForGetSession
+	if opts.EventPage != nil {
+		return ErrEventPageOnlyForGetSession
+	}
+	if opts.ListSessionPage != nil && (opts.ListSessionPage.Offset < 0 || opts.ListSessionPage.Limit <= 0) {
+		return ErrInvalidListSessionPage
+	}
+	return nil
 }
 
 // SummaryOption is the option for getting session summary.
