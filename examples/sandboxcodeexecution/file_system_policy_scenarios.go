@@ -20,15 +20,50 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/sandbox"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 const (
-	fileSystemPolicyAccessModesMarker      = "FILE_SYSTEM_POLICY_ACCESS_MODES_OK"
-	fileSystemPolicySpecificityMarker      = "FILE_SYSTEM_POLICY_SPECIFICITY_OK"
-	fileSystemPolicyGlobNoAccessMarker     = "FILE_SYSTEM_POLICY_GLOB_NO_ACCESS_OK"
-	fileSystemPolicyAgentEnforcementMarker = "FILE_SYSTEM_POLICY_AGENT_ENFORCEMENT_OK"
-	fileSystemPolicySecretSentinel         = "FILE_SYSTEM_POLICY_SECRET_SHOULD_NOT_APPEAR"
+	fileSystemPolicyAccessModesMarker           = "FILE_SYSTEM_POLICY_ACCESS_MODES_OK"
+	fileSystemPolicySpecificityMarker           = "FILE_SYSTEM_POLICY_SPECIFICITY_OK"
+	fileSystemPolicyGlobNoAccessMarker          = "FILE_SYSTEM_POLICY_GLOB_NO_ACCESS_OK"
+	fileSystemPolicyAgentEnforcementMarker      = "FILE_SYSTEM_POLICY_AGENT_ENFORCEMENT_OK"
+	fileSystemPolicySymlinkNoAccessMarker       = "FILE_SYSTEM_POLICY_SYMLINK_NO_ACCESS_OK"
+	fileSystemPolicyStageTargetValidationMarker = "FILE_SYSTEM_POLICY_STAGE_TARGET_VALIDATION_OK"
+	sessionPolicyExplicitZeroMarker             = "SESSION_POLICY_EXPLICIT_ZERO_OK"
+	fileSystemPolicySecretSentinel              = "FILE_SYSTEM_POLICY_SECRET_SHOULD_NOT_APPEAR"
 )
+
+type collectPathInput struct {
+	Path string `json:"path" jsonschema:"description=Workspace-relative path to collect."`
+}
+
+type collectPathOutput struct {
+	Denied  bool   `json:"denied"`
+	Path    string `json:"path"`
+	Content string `json:"content,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+type stageHostValidationInput struct {
+	To string `json:"to" jsonschema:"description=Workspace-relative destination. Use work/staged for this scenario."`
+}
+
+type stageHostValidationOutput struct {
+	Denied bool   `json:"denied"`
+	To     string `json:"to"`
+	Error  string `json:"error,omitempty"`
+}
+
+type sessionPolicyProbeInput struct {
+	SessionID string `json:"session_id,omitempty" jsonschema:"description=Optional sandbox session id."`
+}
+
+type sessionPolicyProbeOutput struct {
+	Cleaned bool   `json:"cleaned"`
+	Error   string `json:"error,omitempty"`
+}
 
 func runFileSystemPolicyAccessModes(ctx context.Context, cfg config) error {
 	profile := sandbox.WorkspaceWriteProfile().WithNoAccessPaths("work/secret.txt")
@@ -177,6 +212,236 @@ After the tool result, answer concisely and include FILE_SYSTEM_POLICY_AGENT_ENF
 	}
 	fmt.Println(redact(final))
 	return nil
+}
+
+func runFileSystemPolicySymlinkNoAccess(ctx context.Context, cfg config) error {
+	profile := sandbox.WorkspaceWriteProfile().WithNoAccessPaths("work/secret.txt")
+	manifest := &sandbox.Manifest{
+		Files: []sandbox.ManifestFile{{
+			Path:    "work/secret.txt",
+			Content: []byte("TOKEN=" + fileSystemPolicySecretSentinel + "\n"),
+			Mode:    0o600,
+		}},
+	}
+	exec := sandbox.New(commonOptions(cfg, profile, 1<<20, 10*time.Second)...)
+	if err := requireManagedSandbox(ctx, exec.Runtime(), cfg); err != nil {
+		return err
+	}
+	h, err := newAgentToolHarness(
+		ctx,
+		cfg,
+		profile,
+		manifest,
+		withAgentToolExtraTools([]tool.Tool{newCollectPathTool(exec)}),
+		withAgentToolInstructionTail(
+			"Use sandbox_collect_path when the user asks whether a workspace path is collectable.",
+		),
+	)
+	if err != nil {
+		return err
+	}
+	defer h.runner.Close()
+	defer h.printToolTrace()
+	final, err := h.runTurn(ctx, "file-system-policy-symlink-no-access", `Use workspace_exec to run exactly:
+mkdir -p work && rm -f work/secret-link.txt && ln -s secret.txt work/secret-link.txt
+
+Then call sandbox_collect_path with path "work/secret-link.txt".
+Answer with FILE_SYSTEM_POLICY_SYMLINK_NO_ACCESS_OK only if sandbox_collect_path reports denied=true.
+Do not print file contents or environment variables.`)
+	if err != nil {
+		return err
+	}
+	if err := h.requireWorkspaceExecCalls(1); err != nil {
+		return err
+	}
+	if err := h.requireToolCalls("sandbox_collect_path", 1); err != nil {
+		return err
+	}
+	if err := expectContains(final, fileSystemPolicySymlinkNoAccessMarker); err != nil {
+		return err
+	}
+	if strings.Contains(final, fileSystemPolicySecretSentinel) {
+		return errors.New("agent final answer leaked denied secret content")
+	}
+	fmt.Println(redact(final))
+	return nil
+}
+
+func runFileSystemPolicyStageTargetValidation(ctx context.Context, cfg config) error {
+	hostDir := filepath.Join(cfg.workspaceRoot, "stage-target-validation-host")
+	if err := os.RemoveAll(hostDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(hostDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "secret.txt"), []byte("stage-denied"), 0o600); err != nil {
+		return err
+	}
+	profile := sandbox.WorkspaceWriteProfile().
+		WithReadPaths(hostDir).
+		WithNoAccessPaths("work/staged/secret.txt")
+	exec := sandbox.New(commonOptions(cfg, profile, 1<<20, 10*time.Second)...)
+	if err := requireManagedSandbox(ctx, exec.Runtime(), cfg); err != nil {
+		return err
+	}
+	h, err := newAgentToolHarness(
+		ctx,
+		cfg,
+		profile,
+		nil,
+		withAgentToolExtraTools([]tool.Tool{newStageHostValidationTool(exec, hostDir)}),
+		withAgentToolInstructionTail(
+			"Use sandbox_stage_host_validation when the user asks to verify staging target policy.",
+		),
+	)
+	if err != nil {
+		return err
+	}
+	defer h.runner.Close()
+	defer h.printToolTrace()
+	final, err := h.runTurn(ctx, "file-system-policy-stage-target-validation", `Call sandbox_stage_host_validation with to="work/staged".
+Answer with FILE_SYSTEM_POLICY_STAGE_TARGET_VALIDATION_OK only if the tool reports denied=true.
+Do not print file contents or environment variables.`)
+	if err != nil {
+		return err
+	}
+	if err := h.requireToolCalls("sandbox_stage_host_validation", 1); err != nil {
+		return err
+	}
+	if err := expectContains(final, fileSystemPolicyStageTargetValidationMarker); err != nil {
+		return err
+	}
+	fmt.Println(redact(final))
+	return nil
+}
+
+func runSessionPolicyExplicitZero(ctx context.Context, cfg config) error {
+	h, err := newAgentToolHarness(
+		ctx,
+		cfg,
+		sandbox.WorkspaceWriteProfile(),
+		nil,
+		withAgentToolExtraTools([]tool.Tool{newSessionPolicyProbeTool(cfg)}),
+		withAgentToolInstructionTail(
+			"Use sandbox_session_policy_probe when the user asks to verify explicit session policy.",
+		),
+	)
+	if err != nil {
+		return err
+	}
+	defer h.runner.Close()
+	defer h.printToolTrace()
+	final, err := h.runTurn(ctx, "session-policy-explicit-zero", `Call sandbox_session_policy_probe.
+Answer with SESSION_POLICY_EXPLICIT_ZERO_OK only if the tool reports cleaned=true.`)
+	if err != nil {
+		return err
+	}
+	if err := h.requireToolCalls("sandbox_session_policy_probe", 1); err != nil {
+		return err
+	}
+	if err := expectContains(final, sessionPolicyExplicitZeroMarker); err != nil {
+		return err
+	}
+	fmt.Println(redact(final))
+	return nil
+}
+
+func newCollectPathTool(exec *sandbox.CodeExecutor) tool.Tool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, in collectPathInput) (collectPathOutput, error) {
+			path := strings.TrimSpace(in.Path)
+			if path == "" {
+				return collectPathOutput{}, errors.New("path is required")
+			}
+			ctxIO, ws, err := artifactToolWorkspace(ctx, exec)
+			if err != nil {
+				return collectPathOutput{}, err
+			}
+			files, err := exec.Runtime().Collect(ctxIO, ws, []string{path})
+			out := collectPathOutput{Path: path}
+			if sandbox.IsKind(err, sandbox.ErrPathDenied) {
+				out.Denied = true
+				out.Error = err.Error()
+				return out, nil
+			}
+			if err != nil {
+				out.Error = err.Error()
+				return out, nil
+			}
+			if len(files) > 0 {
+				out.Content = files[0].Content
+			}
+			return out, nil
+		},
+		function.WithName("sandbox_collect_path"),
+		function.WithDescription("Collect a workspace path and report whether sandbox policy denied the read."),
+	)
+}
+
+func newStageHostValidationTool(exec *sandbox.CodeExecutor, hostDir string) tool.Tool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, in stageHostValidationInput) (stageHostValidationOutput, error) {
+			to := strings.TrimSpace(in.To)
+			if to == "" {
+				return stageHostValidationOutput{}, errors.New("to is required")
+			}
+			ctxIO, ws, err := artifactToolWorkspace(ctx, exec)
+			if err != nil {
+				return stageHostValidationOutput{}, err
+			}
+			err = exec.Runtime().StageDirectory(ctxIO, ws, hostDir, to, codeexecutor.StageOptions{})
+			out := stageHostValidationOutput{To: to}
+			if sandbox.IsKind(err, sandbox.ErrPathDenied) {
+				out.Denied = true
+				out.Error = err.Error()
+				return out, nil
+			}
+			if err != nil {
+				out.Error = err.Error()
+			}
+			return out, nil
+		},
+		function.WithName("sandbox_stage_host_validation"),
+		function.WithDescription("Try staging a prepared host directory and report whether target policy denied it."),
+	)
+}
+
+func newSessionPolicyProbeTool(cfg config) tool.Tool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, in sessionPolicyProbeInput) (sessionPolicyProbeOutput, error) {
+			sessionID := strings.TrimSpace(in.SessionID)
+			if sessionID == "" {
+				sessionID = "session-policy-explicit-zero-probe"
+			}
+			rt := sandbox.NewRuntime(
+				sandbox.WithWorkspaceRoot(cfg.workspaceRoot),
+				sandbox.WithPermissionProfile(sandbox.WorkspaceWriteProfile()),
+				sandbox.WithSessionPolicy(sandbox.SessionPolicy{}),
+			)
+			ws, err := rt.CreateWorkspace(ctx, sessionID, codeexecutor.WorkspacePolicy{})
+			if err != nil {
+				return sessionPolicyProbeOutput{Error: err.Error()}, nil
+			}
+			if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+				Path:    "work/marker.txt",
+				Content: []byte(sessionPolicyExplicitZeroMarker),
+			}}); err != nil {
+				return sessionPolicyProbeOutput{Error: err.Error()}, nil
+			}
+			if err := rt.Cleanup(ctx, ws); err != nil {
+				return sessionPolicyProbeOutput{Error: err.Error()}, nil
+			}
+			if _, err := os.Stat(ws.Path); os.IsNotExist(err) {
+				return sessionPolicyProbeOutput{Cleaned: true}, nil
+			} else if err != nil {
+				return sessionPolicyProbeOutput{Error: err.Error()}, nil
+			}
+			return sessionPolicyProbeOutput{Error: "workspace still exists after cleanup"}, nil
+		},
+		function.WithName("sandbox_session_policy_probe"),
+		function.WithDescription("Verify explicit SessionPolicy{} disables persistence by cleaning a probe workspace."),
+	)
 }
 
 func maybeVerifyFileSystemPolicyNetworkRestricted(

@@ -42,7 +42,8 @@ func WithPermissionProfile(profile PermissionProfile) Option {
 // WithSessionPolicy sets the session lifecycle policy.
 func WithSessionPolicy(policy SessionPolicy) Option {
 	return func(r *Runtime) {
-		r.sessionPolicy = normalizeSessionPolicy(policy)
+		r.sessionPolicy = policy
+		r.sessionPolicySet = true
 	}
 }
 
@@ -109,14 +110,11 @@ func normalizeProfile(profile PermissionProfile) PermissionProfile {
 	return profile
 }
 
-func normalizeSessionPolicy(policy SessionPolicy) SessionPolicy {
-	if !policy.PersistFilesAcrossTurns && !policy.MutatingCommandsSerial {
-		return SessionPolicy{
-			PersistFilesAcrossTurns: true,
-			MutatingCommandsSerial:  true,
-		}
+func defaultSessionPolicy() SessionPolicy {
+	return SessionPolicy{
+		PersistFilesAcrossTurns: true,
+		MutatingCommandsSerial:  true,
 	}
-	return policy
 }
 
 func normalizeShellEnvironmentPolicy(policy ShellEnvironmentPolicy) ShellEnvironmentPolicy {

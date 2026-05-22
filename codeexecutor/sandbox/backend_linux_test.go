@@ -141,6 +141,84 @@ func TestLinuxSandboxArgsToggleProcMount(t *testing.T) {
 	}
 }
 
+func TestLinuxSandboxArgsWorkspaceMountPolicy(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "workspace-mount-policy", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := codeexecutor.RunProgramSpec{Cmd: "/bin/true"}
+
+	readOnly := ReadOnlyProfile()
+	if err := rt.prepareProtectedMasks(readOnly, ws); err != nil {
+		t.Fatal(err)
+	}
+	readOnlyArgs, err := rt.linuxSandboxArgs(readOnly, ws, filepath.Join(ws.Path, "work"), nil, spec, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgTriple(readOnlyArgs, "--ro-bind", "/", "/") {
+		t.Fatalf("read-only args = %#v, missing read-only filesystem baseline", readOnlyArgs)
+	}
+	if hasArgTriple(readOnlyArgs, "--bind", ws.Path, ws.Path) {
+		t.Fatalf("read-only args = %#v, workspace was mounted writable", readOnlyArgs)
+	}
+
+	readonlyDir := filepath.Join(ws.Path, "work", "readonly")
+	if err := os.MkdirAll(readonlyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(ws.Path, "work", "secret.txt")
+	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().
+		WithReadPaths(readonlyDir).
+		WithNoAccessPaths("work/secret.txt")
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(profile, ws, filepath.Join(ws.Path, "work"), nil, spec, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgTriple(args, "--bind", ws.Path, ws.Path) {
+		t.Fatalf("workspace-write args = %#v, missing workspace write mount", args)
+	}
+	if !hasArgTriple(args, "--ro-bind", readonlyDir, readonlyDir) {
+		t.Fatalf("workspace-write args = %#v, missing read-only carveout", args)
+	}
+	if !hasArgTriple(args, "--ro-bind", filepath.Join(ws.Path, ".git"), filepath.Join(ws.Path, ".git")) {
+		t.Fatalf("workspace-write args = %#v, missing protected metadata mask", args)
+	}
+	if !hasArgTriple(args, "--ro-bind", denyReadMaskSource(ws), secret) {
+		t.Fatalf("workspace-write args = %#v, missing no-access file mask", args)
+	}
+}
+
+func TestLinuxSandboxArgsRejectRootWriteGrant(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "root-write-grant", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := ReadOnlyProfile()
+	profile.fileSystem.Rules = append(profile.fileSystem.Rules, fileSystemRule{
+		Kind: ruleSpecial, Access: accessWrite, Special: specialRoot,
+	})
+	_, err = rt.linuxSandboxArgs(
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	)
+	if !IsKind(err, ErrPolicyViolation) {
+		t.Fatalf("root write grant error = %v, want ErrPolicyViolation", err)
+	}
+}
+
 func TestLinuxNoAccessMaskArgsCoverPathGlobAndSpecial(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-args", codeexecutor.WorkspacePolicy{})

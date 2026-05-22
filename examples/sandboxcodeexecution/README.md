@@ -10,11 +10,14 @@ From the repository root, load model credentials without printing them:
 source ./glm.sh
 ```
 
+You can also export equivalent OpenAI-compatible variables yourself:
+`OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `MODEL_NAME`.
+
 Then run the example from the `examples` module:
 
 ```bash
 cd examples
-go run ./sandboxcodeexecution -scenario all -model glm-4.7-flash
+go run ./sandboxcodeexecution -scenario all -model "${MODEL_NAME:-glm-4.7-flash}"
 ```
 
 If `OPENAI_API_KEY` is not set, the LLM-backed scenarios are skipped with a
@@ -84,11 +87,20 @@ clear message. The example never reads or prints key contents.
   file API and shell reads.
 - `file-system-policy-agent-enforcement`: uses a real LLMAgent and
   `workspace_exec` to verify no-access enforcement.
+- `file-system-policy-symlink-no-access`: uses a real LLMAgent to create a
+  symlink to a denied path, then calls a collect helper tool to verify the
+  resolved target is still denied.
+- `file-system-policy-stage-target-validation`: uses a real LLMAgent to call a
+  staging helper tool and verify recursive target validation rejects a
+  no-access child.
+- `session-policy-explicit-zero`: uses a real LLMAgent to call a deterministic
+  probe that verifies `SessionPolicy{}` preserves explicit `false/false`
+  semantics and cleans up the workspace.
 
 ## Flags
 
 ```bash
--scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|network-policy-restricted|network-policy-enabled|network-policy-additional-permissions|network-policy-agent-enforcement|timeout|output-cap|additional-permissions|shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|all
+-scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|network-policy-restricted|network-policy-enabled|network-policy-additional-permissions|network-policy-agent-enforcement|timeout|output-cap|additional-permissions|shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|file-system-policy-symlink-no-access|file-system-policy-stage-target-validation|session-policy-explicit-zero|all
 -model glm-4.7-flash
 -workspace-root /tmp/my-sandbox-root
 -keep-workspace

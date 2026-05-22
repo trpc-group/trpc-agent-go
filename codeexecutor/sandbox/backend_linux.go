@@ -94,12 +94,21 @@ func (r *Runtime) linuxSandboxArgs(
 		return nil, err
 	}
 	args = append(args, grantArgs...)
-	args = append(args, "--bind", ws.Path, ws.Path)
+	writeArgs, err := r.workspaceWriteMountArgs(profile, ws)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, writeArgs...)
 	protectedArgs, err := r.protectedMaskArgs(profile, ws)
 	if err != nil {
 		return nil, err
 	}
 	args = append(args, protectedArgs...)
+	readOnlyArgs, err := r.workspaceReadOnlyMountArgs(profile, ws)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, readOnlyArgs...)
 	denyArgs, err := r.denyReadMaskArgs(profile, ws)
 	if err != nil {
 		return nil, err
@@ -380,4 +389,135 @@ func (r *Runtime) externalGrantArgs(
 		}
 	}
 	return args, nil
+}
+
+func (r *Runtime) workspaceWriteMountArgs(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+) ([]string, error) {
+	targets, err := r.workspaceMountTargets(profile, ws, accessWrite)
+	if err != nil {
+		return nil, err
+	}
+	var args []string
+	for _, target := range targets {
+		if _, err := os.Stat(target); err != nil {
+			return nil, deniedf(
+				ErrPathDenied,
+				"grant",
+				target,
+				"workspace write grant target unavailable",
+			)
+		}
+		args = append(args, "--bind", target, target)
+	}
+	return args, nil
+}
+
+func (r *Runtime) workspaceReadOnlyMountArgs(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+) ([]string, error) {
+	targets, err := r.workspaceMountTargets(profile, ws, accessRead)
+	if err != nil {
+		return nil, err
+	}
+	var args []string
+	for _, target := range targets {
+		if target == ws.Path {
+			continue
+		}
+		if _, err := os.Stat(target); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		args = append(args, "--ro-bind", target, target)
+	}
+	return args, nil
+}
+
+func (r *Runtime) workspaceMountTargets(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	access fileSystemAccess,
+) ([]string, error) {
+	if err := validateFileSystemRules(profile); err != nil {
+		return nil, err
+	}
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var targets []string
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Access != access {
+			continue
+		}
+		target, ok, err := r.workspaceMountTarget(ws, wsAbs, rule)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || seen[target] {
+			continue
+		}
+		seen[target] = true
+		targets = append(targets, target)
+	}
+	return targets, nil
+}
+
+func (r *Runtime) workspaceMountTarget(
+	ws codeexecutor.Workspace,
+	wsAbs string,
+	rule fileSystemRule,
+) (string, bool, error) {
+	switch rule.Kind {
+	case rulePath:
+		if rule.Path == "" {
+			return "", false, nil
+		}
+		if filepath.IsAbs(rule.Path) {
+			target, err := filepath.Abs(rule.Path)
+			if err != nil {
+				return "", false, err
+			}
+			if !sameOrChild(wsAbs, target) {
+				return "", false, nil
+			}
+			if err := ensureNoSymlinkEscape(wsAbs, target); err != nil {
+				return "", false, err
+			}
+			return target, true, nil
+		}
+		target, _, err := r.resolveWorkspacePath(ws, rule.Path)
+		if err != nil {
+			return "", false, err
+		}
+		return target, true, nil
+	case ruleSpecial:
+		if rule.Special == specialRoot {
+			if rule.Access == accessWrite {
+				return "", false, deniedf(
+					ErrPolicyViolation,
+					"grant",
+					string(rule.Special),
+					"linux backend cannot grant managed write access to filesystem root",
+				)
+			}
+			return "", false, nil
+		}
+		target, ok, err := specialPathAbs(ws, rule.Special)
+		if err != nil || !ok {
+			return "", false, err
+		}
+		if !sameOrChild(wsAbs, target) {
+			return "", false, nil
+		}
+		return target, true, nil
+	default:
+		return "", false, nil
+	}
 }

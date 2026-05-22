@@ -92,12 +92,15 @@ func (r *Runtime) StageDirectory(
 	if err != nil {
 		return err
 	}
-	if err := copyPath(src, dst); err != nil {
+	if err := r.copyPathIntoWorkspace(profile, ws, src, dst); err != nil {
 		return err
 	}
 	if opt.ReadOnly {
 		return filepath.WalkDir(dst, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
+				return err
+			}
+			if err := r.checkWorkspaceWriteTarget(profile, ws, path); err != nil {
 				return err
 			}
 			mode := os.FileMode(0o555)
@@ -138,28 +141,21 @@ func (r *Runtime) Collect(
 		}
 		for _, match := range matches {
 			abs := "/" + strings.TrimPrefix(match, "/")
-			info, err := os.Stat(abs)
+			rel, readAbs, info, skip, err := r.resolveCollectMatch(profile, ws, abs)
 			if err != nil {
 				return nil, err
 			}
-			if info.IsDir() {
+			if skip {
 				continue
 			}
-			rel, err := filepath.Rel(ws.Path, abs)
-			if err != nil {
-				return nil, err
-			}
-			if err := r.checkRead(profile, ws, rel); err != nil {
-				return nil, err
-			}
-			content, truncated, err := readFileLimited(abs, maxCollectFileBytes)
+			content, truncated, err := readFileLimited(readAbs, maxCollectFileBytes)
 			if err != nil {
 				return nil, err
 			}
 			files = append(files, codeexecutor.File{
 				Name:      filepath.ToSlash(rel),
 				Content:   string(content),
-				MIMEType:  mime.TypeByExtension(filepath.Ext(abs)),
+				MIMEType:  mime.TypeByExtension(filepath.Ext(readAbs)),
 				SizeBytes: info.Size(),
 				Truncated: truncated,
 			})
@@ -341,7 +337,7 @@ func (r *Runtime) stageWorkspaceRelativePath(
 	if err != nil {
 		return err
 	}
-	return copyPath(src, dst)
+	return r.copyPathIntoWorkspace(profile, ws, src, dst)
 }
 
 // CollectOutputs applies the declarative output spec under the same read
@@ -472,19 +468,11 @@ func (r *Runtime) collectOutputMatch(
 	if !sameOrChild(rootAbs, absPath) {
 		return codeexecutor.FileRef{}, 0, true, nil
 	}
-	rel, err := filepath.Rel(rootAbs, absPath)
+	rel, readAbs, info, skip, err := r.resolveCollectMatch(profile, ws, absPath)
 	if err != nil {
 		return codeexecutor.FileRef{}, 0, false, err
 	}
-	rel = filepath.ToSlash(rel)
-	if err := r.checkRead(profile, ws, rel); err != nil {
-		return codeexecutor.FileRef{}, 0, false, err
-	}
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return codeexecutor.FileRef{}, 0, false, err
-	}
-	if info.IsDir() {
+	if skip {
 		return codeexecutor.FileRef{}, 0, true, nil
 	}
 	limit := maxFileBytes
@@ -494,7 +482,7 @@ func (r *Runtime) collectOutputMatch(
 	if limit < 0 {
 		limit = 0
 	}
-	data, truncated, err := readFileLimited(absPath, int(limit))
+	data, truncated, err := readFileLimited(readAbs, int(limit))
 	if err != nil {
 		return codeexecutor.FileRef{}, 0, false, err
 	}
@@ -509,7 +497,7 @@ func (r *Runtime) collectOutputMatch(
 	}
 	ref := codeexecutor.FileRef{
 		Name:      rel,
-		MIMEType:  fileMIMEType(absPath),
+		MIMEType:  fileMIMEType(readAbs),
 		SizeBytes: info.Size(),
 		Truncated: truncated,
 	}
@@ -529,6 +517,70 @@ func (r *Runtime) collectOutputMatch(
 		ref.Version = ver
 	}
 	return ref, int64(len(data)), false, nil
+}
+
+func (r *Runtime) resolveCollectMatch(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	absPath string,
+) (string, string, os.FileInfo, bool, error) {
+	rootAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	absPath, err = filepath.Abs(absPath)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	if !sameOrChild(rootAbs, absPath) {
+		return "", "", nil, true, nil
+	}
+	rel, err := filepath.Rel(rootAbs, absPath)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	rel = filepath.ToSlash(rel)
+	if err := r.checkRead(profile, ws, rel); err != nil {
+		return "", "", nil, false, err
+	}
+	lstat, err := os.Lstat(absPath)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	readAbs := absPath
+	if lstat.Mode()&os.ModeSymlink != 0 {
+		readAbs, err = filepath.EvalSymlinks(absPath)
+		if err != nil {
+			return "", "", nil, false, err
+		}
+		readAbs, err = filepath.Abs(readAbs)
+		if err != nil {
+			return "", "", nil, false, err
+		}
+		if !sameOrChild(rootAbs, readAbs) {
+			return "", "", nil, false, deniedf(
+				ErrPathDenied,
+				"read",
+				rel,
+				"symlink target escapes workspace",
+			)
+		}
+		resolvedRel, err := filepath.Rel(rootAbs, readAbs)
+		if err != nil {
+			return "", "", nil, false, err
+		}
+		if err := r.checkRead(profile, ws, filepath.ToSlash(resolvedRel)); err != nil {
+			return "", "", nil, false, err
+		}
+	}
+	info, err := os.Stat(readAbs)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	if info.IsDir() {
+		return "", "", nil, true, nil
+	}
+	return rel, readAbs, info, false, nil
 }
 
 func pinnedArtifactVersion(
@@ -581,6 +633,106 @@ func pathHasRule(profile PermissionProfile, target string, access fileSystemAcce
 	return false
 }
 
+func (r *Runtime) copyPathIntoWorkspace(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	src string,
+	dst string,
+) error {
+	return copyPathWithValidator(src, dst, func(target string) error {
+		return r.checkWorkspaceWriteTarget(profile, ws, target)
+	})
+}
+
+func (r *Runtime) checkWorkspaceWriteTarget(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	target string,
+) error {
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return err
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	if !sameOrChild(wsAbs, targetAbs) {
+		return deniedf(ErrPathDenied, "write", target, "target escapes workspace")
+	}
+	if info, err := os.Lstat(targetAbs); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return deniedf(ErrPathDenied, "write", target, "destination symlink not writable")
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	rel, err := filepath.Rel(wsAbs, targetAbs)
+	if err != nil {
+		return err
+	}
+	if err := r.checkWrite(profile, ws, filepath.ToSlash(rel)); err != nil {
+		return err
+	}
+	resolved, changed, err := resolvePotentialSymlinkTarget(targetAbs)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	if !sameOrChild(wsAbs, resolved) {
+		return deniedf(ErrPathDenied, "write", target, "symlink target escapes workspace")
+	}
+	resolvedRel, err := filepath.Rel(wsAbs, resolved)
+	if err != nil {
+		return err
+	}
+	return r.checkWrite(profile, ws, filepath.ToSlash(resolvedRel))
+}
+
+func resolvePotentialSymlinkTarget(path string) (string, bool, error) {
+	path = filepath.Clean(path)
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(path)
+		if err != nil {
+			return "", false, err
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		target, err = filepath.Abs(target)
+		if err != nil {
+			return "", false, err
+		}
+		return target, target != path, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", false, err
+	}
+	var suffix []string
+	cur := path
+	for {
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			resolved, err = filepath.Abs(resolved)
+			if err != nil {
+				return "", false, err
+			}
+			return resolved, resolved != path, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", false, err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", false, nil
+		}
+		suffix = append(suffix, filepath.Base(cur))
+		cur = parent
+	}
+}
+
 func copyPath(src, dst string) error {
 	info, err := os.Stat(src)
 	if err != nil {
@@ -593,6 +745,23 @@ func copyPath(src, dst string) error {
 		return err
 	}
 	return copyFile(src, dst, info.Mode())
+}
+
+func copyPathWithValidator(src, dst string, validate func(string) error) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return copyDirWithValidator(src, dst, validate)
+	}
+	if err := validate(dst); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return copyFileWithValidator(src, dst, info.Mode(), validate)
 }
 
 func copyDir(src, dst string) error {
@@ -616,12 +785,59 @@ func copyDir(src, dst string) error {
 	})
 }
 
+func copyDirWithValidator(src, dst string, validate func(string) error) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if err := validate(target); err != nil {
+				return err
+			}
+			return os.MkdirAll(target, info.Mode())
+		}
+		return copyFileWithValidator(path, target, info.Mode(), validate)
+	})
+}
+
 func copyFile(src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
+}
+
+func copyFileWithValidator(src, dst string, mode os.FileMode, validate func(string) error) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := validate(dst); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}

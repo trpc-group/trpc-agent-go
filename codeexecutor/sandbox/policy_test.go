@@ -268,6 +268,73 @@ func TestNoAccessGlobCollectDenied(t *testing.T) {
 	}
 }
 
+func TestCollectRejectsSymlinkResolvedDeniedTarget(t *testing.T) {
+	profile := WorkspaceWriteProfile().
+		WithNoAccessPaths("work/secret.txt").
+		WithNoAccessGlobs("work/*.env")
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(profile),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "collect/symlink-denied", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "work", "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "work", "app.env"), []byte("TOKEN=secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("secret.txt", filepath.Join(ws.Path, "work", "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Collect(context.Background(), ws, []string{"work/link.txt"}); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("expected resolved no-access path to block Collect, got %v", err)
+	}
+	if err := os.Symlink("app.env", filepath.Join(ws.Path, "work", "env-link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Collect(context.Background(), ws, []string{"work/env-link.txt"}); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("expected resolved no-access glob to block Collect, got %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(ws.Path, "work", "outside-link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Collect(context.Background(), ws, []string{"work/outside-link.txt"}); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("expected outside symlink target to block Collect, got %v", err)
+	}
+}
+
+func TestCollectOutputsRejectsSymlinkResolvedDeniedTarget(t *testing.T) {
+	profile := WorkspaceWriteProfile().WithNoAccessPaths("work/secret.txt")
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(profile),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "collect/outputs-symlink-denied", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "work", "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../work/secret.txt", filepath.Join(ws.Path, "out", "leak.txt")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = rt.CollectOutputs(context.Background(), ws, codeexecutor.OutputSpec{
+		Globs:  []string{"out/leak.txt"},
+		Inline: true,
+	})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("expected resolved no-access path to block CollectOutputs, got %v", err)
+	}
+}
+
 func TestAccessNonePathDeniesReadAndWrite(t *testing.T) {
 	profile := WorkspaceWriteProfile().WithNoAccessPaths("work/secret.txt")
 	rt := NewRuntime(
@@ -467,6 +534,42 @@ func TestSessionPersistenceAndIsolation(t *testing.T) {
 	}
 }
 
+func TestSessionPolicyDefaultsAndExplicitZero(t *testing.T) {
+	defaultRuntime := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if !defaultRuntime.sessionPolicy.PersistFilesAcrossTurns ||
+		!defaultRuntime.sessionPolicy.MutatingCommandsSerial {
+		t.Fatalf("default session policy = %#v, want true/true", defaultRuntime.sessionPolicy)
+	}
+
+	explicitZero := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithSessionPolicy(SessionPolicy{}),
+	)
+	if explicitZero.sessionPolicy.PersistFilesAcrossTurns ||
+		explicitZero.sessionPolicy.MutatingCommandsSerial {
+		t.Fatalf("explicit zero session policy = %#v, want false/false", explicitZero.sessionPolicy)
+	}
+	ws, err := explicitZero.CreateWorkspace(context.Background(), "explicit-zero", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := explicitZero.Cleanup(context.Background(), ws); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ws.Path); !os.IsNotExist(err) {
+		t.Fatalf("explicit non-persistent cleanup kept workspace, stat err=%v", err)
+	}
+
+	serialOnly := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithSessionPolicy(SessionPolicy{MutatingCommandsSerial: true}),
+	)
+	if serialOnly.sessionPolicy.PersistFilesAcrossTurns ||
+		!serialOnly.sessionPolicy.MutatingCommandsSerial {
+		t.Fatalf("serial-only session policy = %#v, want false/true", serialOnly.sessionPolicy)
+	}
+}
+
 func TestWorkspacePathUsesAppUserSessionShape(t *testing.T) {
 	root := t.TempDir()
 	path, id := workspacePathForID(root, "app/user/session")
@@ -536,6 +639,122 @@ func TestAdditionalPermissionsAreScopedToContext(t *testing.T) {
 	err = rt.StageDirectory(ctx, ws, hostFile, "work/no-grant-again.txt", codeexecutor.StageOptions{})
 	if !IsKind(err, ErrPathDenied) {
 		t.Fatalf("expected grant to be scoped to one context, got %v", err)
+	}
+}
+
+func TestStageDirectoryValidatesCopiedTargets(t *testing.T) {
+	ctx := context.Background()
+	host := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(host, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(host, ".git", "config"), []byte("bad"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile().WithReadPaths(host)),
+	)
+	ws, err := rt.CreateWorkspace(ctx, "stage/protected-child", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.StageDirectory(ctx, ws, host, ".", codeexecutor.StageOptions{}); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("protected child stage error = %v, want ErrPathDenied", err)
+	}
+
+	secretHost := t.TempDir()
+	if err := os.WriteFile(filepath.Join(secretHost, "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noAccess := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(
+			WorkspaceWriteProfile().
+				WithReadPaths(secretHost).
+				WithNoAccessPaths("work/staged/secret.txt"),
+		),
+	)
+	noAccessWS, err := noAccess.CreateWorkspace(ctx, "stage/no-access-child", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = noAccess.StageDirectory(ctx, noAccessWS, secretHost, "work/staged", codeexecutor.StageOptions{})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("no-access child stage error = %v, want ErrPathDenied", err)
+	}
+
+	redirectHost := t.TempDir()
+	if err := os.WriteFile(filepath.Join(redirectHost, "redirect.txt"), []byte("redirect"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	redirect := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile().WithReadPaths(redirectHost)),
+	)
+	redirectWS, err := redirect.CreateWorkspace(ctx, "stage/symlink-redirect", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(redirectWS.Path, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(redirectWS.Path, "work", "staged"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(
+		filepath.Join(redirectWS.Path, ".git", "config"),
+		filepath.Join(redirectWS.Path, "work", "staged", "redirect.txt"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	err = redirect.StageDirectory(ctx, redirectWS, redirectHost, "work/staged", codeexecutor.StageOptions{})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("symlink redirect stage error = %v, want ErrPathDenied", err)
+	}
+}
+
+func TestStageInputsWorkspaceAndSkillValidateCopiedTargets(t *testing.T) {
+	ctx := context.Background()
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(ctx, "stage/input-target-policy", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws.Path, "work", "source", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(ws.Path, "work", "source", ".git", "config"),
+		[]byte("bad"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "workspace://work/source",
+		To:   ".",
+	}})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("workspace input stage error = %v, want ErrPathDenied", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(ws.Path, codeexecutor.DirSkills, "demo", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(ws.Path, codeexecutor.DirSkills, "demo", ".git", "config"),
+		[]byte("bad"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "skill://demo",
+		To:   ".",
+	}})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("skill input stage error = %v, want ErrPathDenied", err)
 	}
 }
 

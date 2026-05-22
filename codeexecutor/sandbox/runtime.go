@@ -30,14 +30,15 @@ var _ codeexecutor.Engine = (*Runtime)(nil)
 // Runtime implements workspace management, filesystem policy checks, and
 // program execution for the sandbox executor.
 type Runtime struct {
-	root           string
-	backend        BackendType
-	profile        PermissionProfile
-	sessionPolicy  SessionPolicy
-	envPolicy      ShellEnvironmentPolicy
-	manifest       Manifest
-	outputMaxBytes int
-	defaultTimeout time.Duration
+	root             string
+	backend          BackendType
+	profile          PermissionProfile
+	sessionPolicy    SessionPolicy
+	sessionPolicySet bool
+	envPolicy        ShellEnvironmentPolicy
+	manifest         Manifest
+	outputMaxBytes   int
+	defaultTimeout   time.Duration
 
 	mu       sync.Mutex
 	runLocks map[string]*sync.Mutex
@@ -54,7 +55,7 @@ func NewRuntime(opts ...Option) *Runtime {
 		root:           defaultWorkspaceRoot(),
 		backend:        BackendAuto,
 		profile:        WorkspaceWriteProfile(),
-		sessionPolicy:  normalizeSessionPolicy(SessionPolicy{}),
+		sessionPolicy:  defaultSessionPolicy(),
 		envPolicy:      normalizeShellEnvironmentPolicy(ShellEnvironmentPolicy{}),
 		outputMaxBytes: defaultOutputMaxBytes,
 		defaultTimeout: defaultRunTimeout,
@@ -66,7 +67,9 @@ func NewRuntime(opts ...Option) *Runtime {
 		}
 	}
 	r.profile = normalizeProfile(r.profile)
-	r.sessionPolicy = normalizeSessionPolicy(r.sessionPolicy)
+	if !r.sessionPolicySet {
+		r.sessionPolicy = defaultSessionPolicy()
+	}
 	r.envPolicy = normalizeShellEnvironmentPolicy(r.envPolicy)
 	if r.outputMaxBytes <= 0 {
 		r.outputMaxBytes = defaultOutputMaxBytes
