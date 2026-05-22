@@ -8494,4 +8494,3 @@ func TestMarshalChunkToText_StringPassthrough(t *testing.T) {
 	input := "<-done && x > 0"
 	assert.Equal(t, input, marshalChunkToText(input))
 }
-
