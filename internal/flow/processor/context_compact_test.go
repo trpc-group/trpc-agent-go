@@ -430,6 +430,13 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 	content := strings.Repeat("current-result ", 32)
 	msg := model.NewToolMessage("tool-call-current", "session_load", content)
 
+	baseline, baselineOK := compactedCurrentInvocationMessage(
+		msg,
+		ContextCompactionConfig{},
+	)
+	require.True(t, baselineOK)
+	require.Equal(t, compactedToolResultPlaceholder, baseline.Content)
+
 	compacted, ok := compactedCurrentInvocationMessage(
 		msg,
 		ContextCompactionConfig{
@@ -443,6 +450,50 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 	require.Equal(t, content, compacted.Content)
 	require.Equal(t, msg.ToolID, compacted.ToolID)
 	require.Equal(t, msg.ToolName, compacted.ToolName)
+}
+
+func TestContextCompactionToolResultOptions(t *testing.T) {
+	skipFunc := func([]event.Event) int { return 2 }
+	p := NewContentRequestProcessor(
+		WithEnableContextCompaction(true),
+		WithContextCompactionSkipRecentFunc(skipFunc),
+		WithContextCompactionForceCleanToolNames("", "shell", "shell"),
+		WithContextCompactionKeepToolNames("session_load", ""),
+	)
+
+	cfg := normalizeContextCompactionConfig(p.ContextCompactionConfig)
+	require.True(t, cfg.Enabled)
+	require.Equal(t, 2, cfg.SkipRecentFunc(nil))
+	require.Contains(t, cfg.toolResultCompactionRules.forceCleanToolNames, "shell")
+	require.NotContains(t, cfg.toolResultCompactionRules.forceCleanToolNames, "")
+	require.Contains(t, cfg.toolResultCompactionRules.keepToolNames, "session_load")
+	require.NotContains(t, cfg.toolResultCompactionRules.keepToolNames, "")
+}
+
+func TestTruncateOversizedToolResultMessages_ForceCleanAndKeepRules(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithEnableContextCompaction(true),
+		WithContextCompactionOversizedToolResultMaxTokens(16),
+		WithContextCompactionForceCleanToolNames("shell"),
+		WithContextCompactionKeepToolNames("session_load"),
+	)
+	shellContent := "short shell output"
+	keptContent := "HEAD-" + strings.Repeat("keep-", 200) + "-TAIL"
+	workerContent := "HEAD-" + strings.Repeat("worker-", 200) + "-TAIL"
+	messages := []model.Message{
+		model.NewToolMessage("tool-call-shell", "shell", shellContent),
+		model.NewToolMessage("tool-call-load", "session_load", keptContent),
+		model.NewToolMessage("tool-call-worker", "worker", workerContent),
+	}
+
+	got := p.truncateOversizedToolResultMessages(messages)
+
+	require.Equal(t, policyToolResultPlaceholder, got[0].Content)
+	require.Equal(t, keptContent, got[1].Content)
+	require.NotEqual(t, workerContent, got[2].Content)
+	require.Contains(t, got[2].Content, "[... ")
+	require.Equal(t, shellContent, messages[0].Content,
+		"original slice should be cloned before rewriting")
 }
 
 func TestNormalizeContextCompactionConfig(t *testing.T) {

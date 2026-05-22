@@ -125,12 +125,17 @@ type logResult struct {
 }
 
 func main() {
+	if err := run(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(ctx context.Context) error {
 	flag.Parse()
 	if strings.TrimSpace(*modelName) == "" {
-		log.Fatal("model is required; pass -model or set MODEL_NAME")
+		return fmt.Errorf("model is required; pass -model or set MODEL_NAME")
 	}
 
-	ctx := context.Background()
 	demo := newDemo()
 	defer demo.runner.Close()
 
@@ -148,13 +153,14 @@ func main() {
 		*logLines,
 	)
 	if err := demo.runTurn(ctx, firstPrompt); err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	secondPrompt := "What did the previous large_log tool return? Answer from the session history."
 	if err := demo.runTurn(ctx, secondPrompt); err != nil {
-		log.Fatal(err)
+		return err
 	}
+	return nil
 }
 
 type demoApp struct {
@@ -295,12 +301,25 @@ func (d *demoApp) runTurn(ctx context.Context, text string) error {
 	}
 	for evt := range events {
 		printEvent(evt)
+		if err := eventError(evt); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
+func eventError(evt *event.Event) error {
+	if evt == nil || evt.Response == nil || evt.Response.Error == nil {
+		return nil
+	}
+	return fmt.Errorf("response error: %w", evt.Response.Error)
+}
+
 func printEvent(evt *event.Event) {
 	if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+		if err := eventError(evt); err != nil {
+			fmt.Printf("Error: %v\n", err)
+		}
 		return
 	}
 	msg := evt.Response.Choices[0].Message

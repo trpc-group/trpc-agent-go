@@ -611,6 +611,9 @@ func cleanToolResultMessageWithCounter(
 		counter = model.NewSimpleTokenCounter()
 	}
 
+	// Force-clean is policy-driven, not threshold-driven. Even if token
+	// counting fails, still replace the payload with policyToolResultPlaceholder;
+	// savedTokens falls back to 0 because the exact savings are unknown.
 	originalTokens, err := counter.CountTokens(ctx, msg)
 	if err != nil {
 		originalTokens = 0
