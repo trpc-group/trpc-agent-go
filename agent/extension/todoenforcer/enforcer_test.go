@@ -376,6 +376,24 @@ func TestBeforeModel_InjectsNudge_WhenPending(t *testing.T) {
 		"BeforeModel must consume the pending flag")
 }
 
+func TestBeforeModel_InjectsConfiguredTodoToolName(t *testing.T) {
+	ctx, inv, sess := newTestInvocation(t, "a")
+	writeTodos(t, sess, "", []todo.Item{
+		{Content: "Run tests", ActiveForm: "Running tests", Status: todo.StatusInProgress},
+	})
+	setReminderPending(inv, true)
+	incRetryCount(inv)
+	e := New(WithTodoTool(todo.New(todo.WithToolName("plan_update"))))
+
+	req := &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}}
+	_, err := e.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	require.Len(t, req.Messages, 2)
+	assert.Contains(t, req.Messages[1].Content, "plan_update")
+	assert.NotContains(t, req.Messages[1].Content, "call "+todo.DefaultToolName,
+		"nudge must not tell the model to call a tool name that was overridden")
+}
+
 // TestBeforeModel_NoPending_NoOp confirms the BeforeModel branch
 // is a true no-op on the common path.
 func TestBeforeModel_NoPending_NoOp(t *testing.T) {

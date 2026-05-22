@@ -42,6 +42,12 @@ type NudgeContext struct {
 	// to embed in its message.
 	MaxRetries int
 
+	// TodoToolName is the registered name of the todo-write tool.
+	// The default formatter quotes this so the model sees the
+	// exact name even when the underlying todo.Tool was supplied
+	// via WithTodoTool(todo.New(todo.WithToolName(...))).
+	TodoToolName string
+
 	// DeclareBlockerToolName is the registered name of
 	// todo_declare_blocker. The default formatter quotes this so
 	// the model sees the exact name even when it is overridden
@@ -100,6 +106,10 @@ func DefaultNudgeFormatter(ctx NudgeContext) string {
 	if declareBlockerName == "" {
 		declareBlockerName = DefaultDeclareBlockerToolName
 	}
+	todoToolName := ctx.TodoToolName
+	if todoToolName == "" {
+		todoToolName = todo.DefaultToolName
+	}
 	fmt.Fprintf(&b,
 		"\nYou must either:\n"+
 			"  1) continue executing — pick the next item, do the work, then call "+
@@ -112,7 +122,7 @@ func DefaultNudgeFormatter(ctx NudgeContext) string {
 			"explaining what input is missing.\n"+
 			"Do NOT use option 2 to give up on hard but tractable work, and do "+
 			"NOT produce a final answer while items remain open.",
-		todo.DefaultToolName, declareBlockerName,
+		todoToolName, declareBlockerName,
 	)
 	return b.String()
 }

@@ -645,7 +645,7 @@ agent := llmagent.New("todo-assistant",
 )
 ```
 
-该 extension 会自动贡献 `todo_write` 和 `todo_declare_blocker`，不要再通过 `WithTools` 额外传入 `todo.New()`。`todo_declare_blocker` 用于声明客观阻塞，例如缺少权限、凭据、基础设施或必须由用户决策的信息。
+该 extension 会自动贡献 `todo_write` 和 `todo_declare_blocker`，不要再通过 `WithTools` 额外传入 `todo.New()`。如果需要复用 `tool/todo` 的选项（例如 `WithStateKeyPrefix`、`WithClearOnAllDone` 或 `WithNudgeHook`），先构造 `todo.New(...)`，再通过 `todoenforcer.WithTodoTool(...)` 传入。`todo_declare_blocker` 用于声明客观阻塞，例如缺少权限、凭据、基础设施或必须由用户决策的信息。
 
 #### 工具返回结构
 

@@ -178,6 +178,7 @@ func (e *Enforcer) beforeModel(
 		InProgress:             inProgress,
 		AttemptNumber:          retryCount(inv),
 		MaxRetries:             e.opts.MaxRetries,
+		TodoToolName:           e.todoToolName(),
 		DeclareBlockerToolName: e.declareBlockerTool.name,
 	})
 	if msg == "" {
@@ -185,6 +186,17 @@ func (e *Enforcer) beforeModel(
 	}
 	args.Request.Messages = append(args.Request.Messages, model.NewUserMessage(msg))
 	return nil, nil
+}
+
+func (e *Enforcer) todoToolName() string {
+	if e == nil || e.todoTool == nil {
+		return todo.DefaultToolName
+	}
+	decl := e.todoTool.Declaration()
+	if decl == nil || decl.Name == "" {
+		return todo.DefaultToolName
+	}
+	return decl.Name
 }
 
 // afterModel decides whether the response is allowed to be final.

@@ -28,14 +28,15 @@ import (
 //     their slices are non-empty (no awkward empty headers)
 //   - the escape-hatch name defaults correctly when the caller
 //     left DeclareBlockerToolName empty
-//   - both todo_write and the declare-blocker tool name appear in
-//     the trailing instruction (so the model knows the exact
-//     identifiers it should call)
+//   - both the todo-write tool and the declare-blocker tool name
+//     appear in the trailing instruction (so the model knows the
+//     exact identifiers it should call)
 
 func TestDefaultNudgeFormatter_BothBuckets(t *testing.T) {
 	out := DefaultNudgeFormatter(NudgeContext{
 		AttemptNumber:          2,
 		MaxRetries:             5,
+		TodoToolName:           todo.DefaultToolName,
 		DeclareBlockerToolName: "todo_declare_blocker",
 		InProgress: []todo.Item{
 			{Content: "Inspect pods", ActiveForm: "Inspecting pods"},
@@ -61,6 +62,7 @@ func TestDefaultNudgeFormatter_OnlyPending_OmitsInProgressHeader(t *testing.T) {
 	out := DefaultNudgeFormatter(NudgeContext{
 		AttemptNumber:          1,
 		MaxRetries:             3,
+		TodoToolName:           todo.DefaultToolName,
 		DeclareBlockerToolName: "todo_declare_blocker",
 		Pending: []todo.Item{
 			{Content: "Run tests"},
@@ -77,6 +79,7 @@ func TestDefaultNudgeFormatter_OnlyInProgress_OmitsPendingHeader(t *testing.T) {
 	out := DefaultNudgeFormatter(NudgeContext{
 		AttemptNumber:          3,
 		MaxRetries:             3,
+		TodoToolName:           todo.DefaultToolName,
 		DeclareBlockerToolName: "todo_declare_blocker",
 		InProgress: []todo.Item{
 			{Content: "Deploy staging", ActiveForm: "Deploying staging"},
@@ -97,6 +100,7 @@ func TestDefaultNudgeFormatter_BothEmpty_StillProducesValidNudge(t *testing.T) {
 	out := DefaultNudgeFormatter(NudgeContext{
 		AttemptNumber:          1,
 		MaxRetries:             1,
+		TodoToolName:           todo.DefaultToolName,
 		DeclareBlockerToolName: "todo_declare_blocker",
 	})
 
@@ -122,6 +126,23 @@ func TestDefaultNudgeFormatter_EmptyToolName_FallsBackToDefault(t *testing.T) {
 
 	assert.Contains(t, out, DefaultDeclareBlockerToolName,
 		"empty DeclareBlockerToolName must fall back to the package default")
+	assert.Contains(t, out, todo.DefaultToolName,
+		"empty TodoToolName must fall back to todo.DefaultToolName")
+}
+
+func TestDefaultNudgeFormatter_CustomTodoToolName(t *testing.T) {
+	out := DefaultNudgeFormatter(NudgeContext{
+		AttemptNumber:          1,
+		MaxRetries:             3,
+		TodoToolName:           "plan_update",
+		DeclareBlockerToolName: "todo_declare_blocker",
+		Pending:                []todo.Item{{Content: "Run tests"}},
+	})
+
+	assert.Contains(t, out, "plan_update",
+		"default nudge must quote the configured todo tool name")
+	assert.NotContains(t, out, "call "+todo.DefaultToolName,
+		"default nudge must not point the model at an unavailable default tool")
 }
 
 // TestDefaultNudgeFormatter_ListEntryFormatting nails down the
@@ -132,6 +153,7 @@ func TestDefaultNudgeFormatter_ListEntryFormatting(t *testing.T) {
 	out := DefaultNudgeFormatter(NudgeContext{
 		AttemptNumber:          1,
 		MaxRetries:             3,
+		TodoToolName:           todo.DefaultToolName,
 		DeclareBlockerToolName: "todo_declare_blocker",
 		InProgress: []todo.Item{
 			{Content: "step one", ActiveForm: "doing step one"},

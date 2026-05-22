@@ -67,3 +67,5 @@ Inside interactive mode:
 - `[enforce] BLOCKER_DECLARED ...` — final responses are allowed for the rest of this invocation.
 
 See also `examples/todo/` for the same checklist tool without enforcement.
+Use `todoenforcer.WithTodoTool(todo.New(...))` when you need the
+underlying `tool/todo` options.
