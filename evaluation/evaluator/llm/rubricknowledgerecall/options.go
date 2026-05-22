@@ -14,7 +14,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	rmessagesconstructor "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/rubricknowledgerecall"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
-	rresponsescorer "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer/rubricresponse"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer/rubricscores"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/samplesaggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/samplesaggregator/majorityvote"
 )
@@ -29,7 +29,7 @@ type options struct {
 func newOptions(opt ...Option) *options {
 	opts := &options{
 		messagesConstructor:   rmessagesconstructor.New(),
-		responsescorer:        rresponsescorer.New(),
+		responsescorer:        rubricscores.New(),
 		samplesAggregator:     majorityvote.New(),
 		invocationsAggregator: average.New(),
 	}

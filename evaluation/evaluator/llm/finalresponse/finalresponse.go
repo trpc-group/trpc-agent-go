@@ -68,6 +68,16 @@ func (e *finalResponseEvaluator) ConstructMessages(ctx context.Context, actuals,
 	return e.messagesConstructor.ConstructMessages(ctx, actuals, expecteds, evalMetric)
 }
 
+// StructuredOutput delegates structured output schema construction to the prompt builder.
+func (e *finalResponseEvaluator) StructuredOutput(ctx context.Context, actuals, expecteds []*evalset.Invocation,
+	evalMetric *metric.EvalMetric) (*model.StructuredOutput, error) {
+	constructor, ok := e.messagesConstructor.(messagesconstructor.StructuredOutputMessagesConstructor)
+	if !ok {
+		return nil, nil
+	}
+	return constructor.StructuredOutput(ctx, actuals, expecteds, evalMetric)
+}
+
 // ScoreBasedOnResponse converts judge feedback to a numeric score.
 func (e *finalResponseEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
 	evalMetric *metric.EvalMetric) (*evaluator.ScoreResult, error) {
