@@ -417,7 +417,7 @@ func newScenarioRuntime(
 		)
 	}
 	if os.Getenv("OPENAI_API_KEY") == "" {
-		fmt.Println("OPENAI_API_KEY is not set; source /data/home/amdahliu/sandbox/glm.sh to run real model scenarios.")
+		fmt.Println("OPENAI_API_KEY is not set; export OPENAI_API_KEY and optional OPENAI_BASE_URL/MODEL_NAME to run real model scenarios.")
 		return nil, errSkip
 	}
 	configPath, err := writeScenarioConfig(cfg)

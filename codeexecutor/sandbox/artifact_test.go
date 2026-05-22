@@ -11,6 +11,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,6 +122,24 @@ func TestStageInputsArtifactErrors(t *testing.T) {
 	}
 }
 
+func TestStageInputsUsesWorkspaceMetadataLock(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "artifact/stage-lock", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stageCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = rt.StageInputs(stageCtx, ws, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("StageInputs error = %v, want context canceled", err)
+	}
+}
+
 func TestCollectOutputsSaveInlineArtifact(t *testing.T) {
 	ctx := context.Background()
 	svc := inmemory.NewService()
@@ -183,6 +202,83 @@ func TestCollectOutputsSaveInlineArtifact(t *testing.T) {
 		md.Outputs[0].SavedAs[0] != "saved/out/report.txt" {
 		t.Fatalf("metadata outputs = %#v", md.Outputs)
 	}
+}
+
+func TestCollectOutputsMetadataLockFailureReturnsPartialManifest(t *testing.T) {
+	svc := inmemory.NewService()
+	info := artifact.SessionInfo{
+		AppName:   "sandbox-artifact-test",
+		UserID:    "user",
+		SessionID: "partial",
+	}
+	ctx := codeexecutor.WithArtifactService(context.Background(), svc)
+	ctx = codeexecutor.WithArtifactSession(ctx, info)
+	collectCtx, cancel := context.WithCancel(context.Background())
+	collectCtx = codeexecutor.WithArtifactService(
+		collectCtx,
+		&cancelAfterSaveService{Service: svc, cancel: cancel},
+	)
+	collectCtx = codeexecutor.WithArtifactSession(collectCtx, info)
+
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	ws, err := rt.CreateWorkspace(ctx, "artifact/partial", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    "out/report.txt",
+		Content: []byte("partial artifact"),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := rt.CollectOutputs(collectCtx, ws, codeexecutor.OutputSpec{
+		Globs:        []string{"out/report.txt"},
+		Save:         true,
+		Inline:       true,
+		NameTemplate: "saved/",
+	})
+
+	if !errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
+		t.Fatalf("error = %v, want ErrPartialOutputCommit", err)
+	}
+	if len(manifest.Files) != 1 {
+		t.Fatalf("manifest files = %#v, want 1", manifest.Files)
+	}
+	got := manifest.Files[0]
+	if got.Content != "partial artifact" || got.SavedAs != "saved/out/report.txt" {
+		t.Fatalf("manifest file = %#v", got)
+	}
+	data, _, actual, err := codeexecutor.LoadArtifactHelper(
+		ctx, got.SavedAs, &got.Version,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual != got.Version || string(data) != "partial artifact" {
+		t.Fatalf("loaded artifact actual=%d data=%q", actual, string(data))
+	}
+}
+
+type cancelAfterSaveService struct {
+	artifact.Service
+	cancel context.CancelFunc
+}
+
+func (s *cancelAfterSaveService) SaveArtifact(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	art *artifact.Artifact,
+) (int, error) {
+	version, err := s.Service.SaveArtifact(ctx, sessionInfo, filename, art)
+	if err == nil {
+		s.cancel()
+	}
+	return version, err
 }
 
 func TestCollectOutputsSaveTruncatedFileErrors(t *testing.T) {

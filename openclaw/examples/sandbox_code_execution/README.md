@@ -3,10 +3,12 @@
 This example validates OpenClaw-style `tools.code_executor.type: sandbox`
 configuration without enabling the generic `workspace_exec` tool surface.
 
-From the repository root, source model credentials without printing them:
+From the repository root, export OpenAI-compatible model credentials:
 
 ```bash
-source /data/home/amdahliu/sandbox/glm.sh
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="your-base-url"
+export MODEL_NAME="your-model-name"
 ```
 
 Then run the scenarios from the `openclaw` module:

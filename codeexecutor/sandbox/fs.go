@@ -174,6 +174,20 @@ func (r *Runtime) StageInputs(
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
 ) error {
+	return codeexecutor.WithWorkspaceMetadataLock(
+		ctx,
+		ws.Path,
+		func(ctx context.Context) error {
+			return r.stageInputsLocked(ctx, ws, specs)
+		},
+	)
+}
+
+func (r *Runtime) stageInputsLocked(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	specs []codeexecutor.InputSpec,
+) error {
 	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
 		return err
 	}
@@ -408,19 +422,32 @@ func (r *Runtime) CollectOutputs(
 			out.Files = append(out.Files, ref)
 		}
 	}
-	md, err := codeexecutor.LoadMetadata(ws.Path)
-	if err != nil {
-		return codeexecutor.OutputManifest{}, fmt.Errorf("load workspace metadata: %w", err)
-	}
-	md.Outputs = append(md.Outputs, codeexecutor.OutputRecord{
-		Globs:     spec.Globs,
-		SavedAs:   savedNames,
-		Versions:  savedVersions,
-		LimitsHit: out.LimitsHit,
-		Timestamp: time.Now(),
-	})
-	if err := codeexecutor.SaveMetadata(ws.Path, md); err != nil {
-		return codeexecutor.OutputManifest{}, fmt.Errorf("save workspace metadata: %w", err)
+	if err := codeexecutor.WithWorkspaceMetadataLock(
+		ctx,
+		ws.Path,
+		func(context.Context) error {
+			md, err := codeexecutor.LoadMetadata(ws.Path)
+			if err != nil {
+				return fmt.Errorf("load workspace metadata: %w", err)
+			}
+			md.Outputs = append(md.Outputs, codeexecutor.OutputRecord{
+				Globs:     spec.Globs,
+				SavedAs:   savedNames,
+				Versions:  savedVersions,
+				LimitsHit: out.LimitsHit,
+				Timestamp: time.Now(),
+			})
+			if err := codeexecutor.SaveMetadata(ws.Path, md); err != nil {
+				return fmt.Errorf("save workspace metadata: %w", err)
+			}
+			return nil
+		},
+	); err != nil {
+		return out, fmt.Errorf(
+			"%w: %w",
+			codeexecutor.ErrPartialOutputCommit,
+			err,
+		)
 	}
 	return out, nil
 }
