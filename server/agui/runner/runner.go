@@ -410,10 +410,12 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 }
 
 func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key session.Key, input *runInput, events chan<- aguievents.Event) {
-	defer r.unregister(key)
-	defer cancel(nil)
-	defer input.span.End()
-	defer close(events)
+	defer func() {
+		cancel(nil)
+		r.unregister(key)
+		input.span.End()
+		close(events)
+	}()
 	threadID := input.threadID
 	runID := input.runID
 	if input.enableTrack {
