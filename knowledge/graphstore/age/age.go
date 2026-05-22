@@ -856,6 +856,21 @@ func parseAgMetadata(raw string) map[string]any {
 
 func parseAgStringList(raw string) []string {
 	value := strings.TrimSpace(strings.TrimSuffix(raw, "::agtype"))
+	if value == "" {
+		return nil
+	}
+	var values []*string
+	if err := json.Unmarshal([]byte(value), &values); err == nil {
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if value == nil {
+				result = append(result, "")
+				continue
+			}
+			result = append(result, *value)
+		}
+		return result
+	}
 	value = strings.Trim(value, "[]")
 	if value == "" {
 		return nil

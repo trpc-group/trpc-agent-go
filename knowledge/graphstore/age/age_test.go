@@ -158,6 +158,14 @@ func TestParseAgStringListPreservesNullPositions(t *testing.T) {
 	}
 }
 
+func TestParseAgStringListPreservesQuotedCommas(t *testing.T) {
+	values := parseAgStringList(`["a,b", "c\\d"]::agtype`)
+	want := []string{"a,b", `c\d`}
+	if !reflect.DeepEqual(values, want) {
+		t.Fatalf("parseAgStringList() = %#v, want %#v", values, want)
+	}
+}
+
 func TestPathQueryCypherUsesPropertiesInListComprehension(t *testing.T) {
 	cypher := pathQueryCypher("from-node", "to-node", "-[:CALLS*1..3]->", 5)
 	for _, want := range []string{

@@ -43,6 +43,7 @@ type Parser struct {
 	concurrency    int
 	extractImports bool
 	extractEdges   bool
+	includeFiles   []string
 }
 
 type extractInput struct {
@@ -65,6 +66,7 @@ type parserConfig struct {
 	concurrency    int
 	extractImports bool
 	extractEdges   bool
+	includeFiles   []string
 }
 
 // Option is a functional option for configuring the parser.
@@ -96,6 +98,12 @@ func WithEdgeAnalysis(enabled bool) Option {
 	}
 }
 
+func withIncludeFiles(files []string) Option {
+	return func(c *parserConfig) {
+		c.includeFiles = append([]string(nil), files...)
+	}
+}
+
 // NewParser creates a new Go AST parser.
 func NewParser(opts ...Option) *Parser {
 	cfg := &parserConfig{
@@ -112,6 +120,7 @@ func NewParser(opts ...Option) *Parser {
 		concurrency:    cfg.concurrency,
 		extractImports: cfg.extractImports,
 		extractEdges:   cfg.extractEdges,
+		includeFiles:   cfg.includeFiles,
 	}
 }
 
@@ -123,6 +132,7 @@ func (p *Parser) withConcurrency(concurrency int) *Parser {
 		WithConcurrency(concurrency),
 		WithExtractImports(p.extractImports),
 		WithEdgeAnalysis(p.extractEdges),
+		withIncludeFiles(p.includeFiles),
 	)
 }
 
@@ -177,6 +187,11 @@ func (p *Parser) ParseContent(name, content string) (*codeast.Result, error) {
 
 // ParseDirectory parses a Go directory/module and returns semantic nodes across all files.
 func (p *Parser) ParseDirectory(dirPath string, opts ...codeast.ParseOption) (*codeast.Result, error) {
+	if includeFiles := codeast.ParseIncludeFiles(opts); len(includeFiles) > 0 {
+		next := *p
+		next.includeFiles = includeFiles
+		p = &next
+	}
 	if concurrency := codeast.ParseConcurrency(opts); concurrency > 0 && concurrency != p.concurrency {
 		return p.withConcurrency(concurrency).ParseDirectory(dirPath)
 	}
@@ -349,7 +364,17 @@ func (p *Parser) parseDirectoryFull(absDir string) (*codeast.Result, error) {
 		Dir:  absDir,
 		Fset: fset,
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	patterns := p.loadPatterns(absDir)
+	if len(patterns) == 0 {
+		return &codeast.Result{
+			File: &codeast.FileInfo{
+				Name:     absDir,
+				Language: codeast.LanguageGo,
+				Package:  modulePathForDir(absDir, absDir),
+			},
+		}, nil
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load packages: %w", err)
 	}
@@ -359,11 +384,15 @@ func (p *Parser) parseDirectoryFull(absDir string) (*codeast.Result, error) {
 
 	var allNodes []*codeast.Node
 	parsedPkgs := make([]*parsedPackage, 0, len(pkgs))
+	includeFiles := p.includeFileSet()
 	for _, pkg := range pkgs {
 		if pkg == nil || len(pkg.Syntax) == 0 {
 			continue
 		}
-		parsed := parsedPackageFromPackages(pkg)
+		parsed := parsedPackageFromPackages(pkg, includeFiles)
+		if len(parsed.Syntax) == 0 {
+			continue
+		}
 		nodes, err := p.extractor.Extract(&extractInput{pkg: parsed, fset: parsed.Fset})
 		if err != nil {
 			return nil, err
@@ -516,6 +545,7 @@ func packageInterfaces(pkgs []*parsedPackage, nodeSet map[string]bool) []*interf
 
 func (p *Parser) parseDirectoryDirectAST(absDir string) (*codeast.Result, error) {
 	fset := token.NewFileSet()
+	includeFiles := p.includeFileSet()
 	pkgFiles := make(map[string][]*ast.File)
 	pkgNames := make(map[string]string)
 	fileInfos := make(map[string]*codeast.FileInfo)
@@ -535,6 +565,15 @@ func (p *Parser) parseDirectoryDirectAST(absDir string) (*codeast.Result, error)
 		}
 		if !info.Mode().IsRegular() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
 			return nil
+		}
+		if len(includeFiles) > 0 {
+			absPath, err := filepath.Abs(path)
+			if err != nil {
+				return err
+			}
+			if _, ok := includeFiles[filepath.Clean(absPath)]; !ok {
+				return nil
+			}
 		}
 
 		fileNode, err := goparser.ParseFile(fset, path, nil, goparser.ParseComments)
@@ -620,6 +659,65 @@ func modulePathForDir(baseDir, dir string) string {
 	return modulePath + "/" + filepath.ToSlash(relPath)
 }
 
+func (p *Parser) loadPatterns(absDir string) []string {
+	if len(p.includeFiles) == 0 {
+		return []string{"./..."}
+	}
+	moduleRoot := parseGoModulePath(filepath.Join(absDir, "go.mod")) != ""
+	dirs := make(map[string]struct{})
+	for _, file := range p.includeFiles {
+		if file == "" {
+			continue
+		}
+		absFile, err := filepath.Abs(file)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(absDir, absFile)
+		if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+			continue
+		}
+		if moduleRoot {
+			nearest, _ := findNearestGoModule(filepath.Dir(absFile))
+			if filepath.Clean(nearest) != filepath.Clean(absDir) {
+				continue
+			}
+		}
+		dirs[filepath.Dir(rel)] = struct{}{}
+	}
+	if len(dirs) == 0 {
+		return nil
+	}
+	patterns := make([]string, 0, len(dirs))
+	for dir := range dirs {
+		if dir == "." {
+			patterns = append(patterns, ".")
+			continue
+		}
+		patterns = append(patterns, "./"+filepath.ToSlash(dir))
+	}
+	sort.Strings(patterns)
+	return patterns
+}
+
+func (p *Parser) includeFileSet() map[string]struct{} {
+	if len(p.includeFiles) == 0 {
+		return nil
+	}
+	files := make(map[string]struct{}, len(p.includeFiles))
+	for _, file := range p.includeFiles {
+		if file == "" {
+			continue
+		}
+		absFile, err := filepath.Abs(file)
+		if err != nil {
+			continue
+		}
+		files[filepath.Clean(absFile)] = struct{}{}
+	}
+	return files
+}
+
 // ParseFileInfo extracts file-level metadata without requiring a full semantic extraction result.
 func (p *Parser) ParseFileInfo(name, content string) (*codeast.FileInfo, error) {
 	fset := token.NewFileSet()
@@ -645,7 +743,7 @@ type parsedImport struct {
 	PkgPath string
 }
 
-func parsedPackageFromPackages(pkg *packages.Package) *parsedPackage {
+func parsedPackageFromPackages(pkg *packages.Package, includeFiles map[string]struct{}) *parsedPackage {
 	imports := make(map[string]*parsedImport, len(pkg.Imports))
 	for importPath, imported := range pkg.Imports {
 		if imported == nil {
@@ -659,12 +757,42 @@ func parsedPackageFromPackages(pkg *packages.Package) *parsedPackage {
 	return &parsedPackage{
 		ID:        pkg.ID,
 		Name:      pkg.Name,
-		Syntax:    pkg.Syntax,
+		Syntax:    filterPackageSyntax(pkg, includeFiles),
 		Fset:      pkg.Fset,
 		Types:     pkg.Types,
 		TypesInfo: pkg.TypesInfo,
 		Imports:   imports,
 	}
+}
+
+func filterPackageSyntax(pkg *packages.Package, includeFiles map[string]struct{}) []*ast.File {
+	if len(includeFiles) == 0 {
+		return pkg.Syntax
+	}
+	syntax := make([]*ast.File, 0, len(pkg.Syntax))
+	for i, file := range pkg.Syntax {
+		if file == nil {
+			continue
+		}
+		name := ""
+		if i < len(pkg.CompiledGoFiles) {
+			name = pkg.CompiledGoFiles[i]
+		}
+		if name == "" && pkg.Fset != nil {
+			name = pkg.Fset.Position(file.Package).Filename
+		}
+		if name == "" {
+			continue
+		}
+		absName, err := filepath.Abs(name)
+		if err != nil {
+			continue
+		}
+		if _, ok := includeFiles[filepath.Clean(absName)]; ok {
+			syntax = append(syntax, file)
+		}
+	}
+	return syntax
 }
 
 func packageImports(pkgs []*parsedPackage) []string {

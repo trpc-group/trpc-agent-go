@@ -495,7 +495,7 @@ func TestReadGraphZeroParseConcurrencySkipsOption(t *testing.T) {
 		src := New(WithRepository(Repository{Dir: dir}))
 		_, err := src.ReadGraph(context.Background())
 		require.NoError(t, err)
-		require.Empty(t, parser.opts)
+		require.Zero(t, codeast.ParseConcurrency(parser.opts))
 	})
 
 	t.Run("negative option with negative source skips option", func(t *testing.T) {
@@ -506,8 +506,31 @@ func TestReadGraphZeroParseConcurrencySkipsOption(t *testing.T) {
 		)
 		_, err := src.ReadGraph(context.Background(), source.WithReadGraphParseConcurrency(-5))
 		require.NoError(t, err)
-		require.Empty(t, parser.opts)
+		require.Zero(t, codeast.ParseConcurrency(parser.opts))
 	})
+}
+
+func TestReadGraphPassesAllowedGoFilesToParser(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "main.go")
+	skipPath := filepath.Join(dir, "skip.pb.go")
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, mainPath, "package demo\n\nfunc Main() {}\n")
+	writeRepoFile(t, skipPath, "package demo\n\nfunc Skip() {}\n")
+
+	parser := &configurableDirectoryParser{result: &codeast.Result{}}
+	codeast.RegisterDirectoryParser(codeast.FileTypeGo, parser)
+	defer codeast.RegisterDirectoryParser(codeast.FileTypeGo, stubDirectoryParser{})
+
+	src := New(
+		WithRepository(Repository{Dir: dir}),
+		WithSkipSuffixes([]string{".pb.go"}),
+	)
+	_, err := src.ReadGraph(context.Background())
+	require.NoError(t, err)
+
+	includeFiles := codeast.ParseIncludeFiles(parser.opts)
+	require.Equal(t, []string{mainPath}, includeFiles)
 }
 
 func TestReadGraphResolveRepositoryError(t *testing.T) {

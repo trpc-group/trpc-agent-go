@@ -102,6 +102,31 @@ func TestCodeDedupFilter_PartialDuplicatesKeepNewOnes(t *testing.T) {
 	require.Contains(t, out.Message, "duplicate")
 }
 
+func TestCodeDedupFilter_MetadataOnlyCanUpgradeToContent(t *testing.T) {
+	store := newCodeDedupStore()
+	ctx := newDedupTestCtx("inv-content-upgrade")
+
+	first := &KnowledgeSearchResponse{
+		Documents: []*DocumentResult{{ID: "node-1"}},
+	}
+	firstOut := store.filter(ctx, first)
+	require.Len(t, firstOut.Documents, 1)
+
+	second := &KnowledgeSearchResponse{
+		Documents: []*DocumentResult{{ID: "node-1", Text: "func Target() {}"}},
+	}
+	secondOut := store.filter(ctx, second)
+	require.Len(t, secondOut.Documents, 1)
+	require.Equal(t, "func Target() {}", secondOut.Documents[0].Text)
+
+	third := &KnowledgeSearchResponse{
+		Documents: []*DocumentResult{{ID: "node-1", Text: "func Target() {}"}},
+	}
+	thirdOut := store.filter(ctx, third)
+	require.Empty(t, thirdOut.Documents)
+	require.Contains(t, thirdOut.Message, "already returned")
+}
+
 // TestCodeDedupFilter_NoInvocationIsNoOp verifies that a context without an
 // invocation attached falls back to a pass-through rather than leaking state
 // across unrelated callers.

@@ -106,6 +106,66 @@ func (s *Service) Do() error {
 	}
 }
 
+func TestParseDirectoryIncludeFilesFiltersSamePackageFiles(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "main.go")
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeFile(t, mainPath, `package demo
+
+func Target() {}
+`)
+	writeFile(t, filepath.Join(dir, "skip.pb.go"), `package demo
+
+func Skipped() {}
+`)
+
+	parser := NewParser(WithEdgeAnalysis(true))
+	result, err := parser.ParseDirectory(dir, codeast.WithParseIncludeFiles([]string{mainPath}))
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v", err)
+	}
+	if !hasCodeNode(result.Nodes, "example.com/demo.Target") {
+		t.Fatalf("expected Target node, got %+v", result.Nodes)
+	}
+	if hasCodeNode(result.Nodes, "example.com/demo.Skipped") {
+		t.Fatalf("expected skipped file to be excluded, got %+v", result.Nodes)
+	}
+}
+
+func TestParseDirectoryIncludeFilesKeepsNestedModulesSeparate(t *testing.T) {
+	dir := t.TempDir()
+	rootPath := filepath.Join(dir, "root.go")
+	subPath := filepath.Join(dir, "sub", "sub.go")
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	writeFile(t, rootPath, `package root
+
+type Service struct{}
+
+func helper() {}
+
+func (s *Service) Do() {
+	helper()
+}
+`)
+	writeFile(t, filepath.Join(dir, "sub", "go.mod"), "module example.com/sub\n\ngo 1.21\n")
+	writeFile(t, subPath, `package sub
+
+func Sub() {}
+`)
+
+	parser := NewParser(WithEdgeAnalysis(true))
+	result, err := parser.ParseDirectory(dir, codeast.WithParseIncludeFiles([]string{rootPath, subPath}))
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v", err)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/root.Service", "example.com/root.Service.Do", codeast.RelationMethod) {
+		t.Fatalf("expected root module typed edge, got %+v", result.Edges)
+	}
+	if !hasCodeNode(result.Nodes, "example.com/sub.Sub") {
+		t.Fatalf("expected nested module node, got %+v", result.Nodes)
+	}
+}
+
 func TestParseDirectoryFullModeAnalyzesTypedEdges(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
@@ -515,6 +575,15 @@ func writeFile(t *testing.T, path, content string) {
 func hasCodeEdge(edges []*codeast.Edge, fromID, toID string, edgeType codeast.RelationType) bool {
 	for _, edge := range edges {
 		if edge.FromID == fromID && edge.ToID == toID && edge.Type == edgeType {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCodeNode(nodes []*codeast.Node, id string) bool {
+	for _, node := range nodes {
+		if node.ID == id {
 			return true
 		}
 	}

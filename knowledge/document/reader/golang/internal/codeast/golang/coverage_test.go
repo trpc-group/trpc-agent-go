@@ -2676,7 +2676,7 @@ func TestParsedPackageFromPackagesFiltersNilImports(t *testing.T) {
 			"nil": nil,
 		},
 	}
-	pp := parsedPackageFromPackages(pkg)
+	pp := parsedPackageFromPackages(pkg, nil)
 	if _, ok := pp.Imports["nil"]; ok {
 		t.Fatal("nil imports should be filtered out")
 	}

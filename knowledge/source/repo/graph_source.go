@@ -61,6 +61,7 @@ func (s *Source) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) 
 		if parseConcurrency > 0 {
 			parseOpts = append(parseOpts, codeast.WithParseConcurrency(parseConcurrency))
 		}
+		parseOpts = append(parseOpts, codeast.WithParseIncludeFiles(absoluteAllowedGoPaths(repoRoot, allowedGoPaths)))
 		result, err := parser.ParseDirectory(rootToScan, parseOpts...)
 		if err != nil {
 			return nil, err
@@ -98,6 +99,21 @@ func (s *Source) allowedGoPaths(repoRoot, rootToScan string) (map[string]struct{
 		allowed[filepath.ToSlash(relPath)] = struct{}{}
 	}
 	return allowed, nil
+}
+
+func absoluteAllowedGoPaths(repoRoot string, allowed map[string]struct{}) []string {
+	if len(allowed) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(allowed))
+	for relPath := range allowed {
+		if relPath == "" {
+			continue
+		}
+		paths = append(paths, filepath.Join(repoRoot, filepath.FromSlash(relPath)))
+	}
+	slices.Sort(paths)
+	return paths
 }
 
 func (s *Source) graphDataFromCodeAST(
