@@ -190,6 +190,30 @@ func TestPathQueryCypherUsesPropertiesInListComprehension(t *testing.T) {
 	}
 }
 
+func TestTraverseEdgeQueryCypherUsesProperties(t *testing.T) {
+	cypher := traverseEdgeQueryCypher("node-a", "-[:CALLS*1..2]->", 10)
+	for _, want := range []string{
+		"properties(edge).id",
+		"properties(startNode(edge)).id",
+		"properties(endNode(edge)).id",
+		"properties(edge).metadata",
+	} {
+		if !strings.Contains(cypher, want) {
+			t.Fatalf("traverseEdgeQueryCypher() missing %q in %s", want, cypher)
+		}
+	}
+	for _, bad := range []string{
+		" edge.id,",
+		"startNode(edge).id,",
+		"endNode(edge).id,",
+		" edge.metadata",
+	} {
+		if strings.Contains(cypher, bad) {
+			t.Fatalf("traverseEdgeQueryCypher() contains AGE-incompatible property access %q in %s", bad, cypher)
+		}
+	}
+}
+
 func TestDollarQuoteAvoidsExistingDelimiter(t *testing.T) {
 	quoted := dollarQuote("MATCH (n) RETURN '$age$' AS value")
 	if quoted[:6] != "$age1$" {

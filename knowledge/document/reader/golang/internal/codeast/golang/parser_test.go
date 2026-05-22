@@ -204,6 +204,31 @@ func Use(w lib.Worker) {
 	}
 }
 
+func TestParseDirectoryFullModeAnalyzesGenericReceiverCalls(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "container.go"), `package demo
+
+type Container[T any] struct{}
+
+func (c *Container[T]) Get() {}
+
+func Use() {
+	c := &Container[int]{}
+	c.Get()
+}
+`)
+
+	parser := NewParser(WithEdgeAnalysis(true))
+	result, err := parser.ParseDirectory(dir)
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v", err)
+	}
+	if !hasCodeEdge(result.Edges, "example.com/demo.Use", "example.com/demo.Container.Get", codeast.RelationCalls) {
+		t.Fatalf("expected generic receiver CALLS edge, got %+v", result.Edges)
+	}
+}
+
 func TestParseDirectoryFullModeAnalyzesCrossPackageImplements(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")

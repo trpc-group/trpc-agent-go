@@ -302,14 +302,7 @@ func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*grap
 				}
 				nodes = append(nodes, resultNodes...)
 
-				edgeCypher := fmt.Sprintf(
-					`MATCH p=(start:%s {id: %s})%s(n:%s) UNWIND relationships(p) AS edge RETURN DISTINCT edge.id, startNode(edge).id, endNode(edge).id, type(edge), edge.metadata LIMIT %d`,
-					nodeLabel,
-					cypherString(startID),
-					pattern,
-					nodeLabel,
-					maxNodes,
-				)
+				edgeCypher := traverseEdgeQueryCypher(startID, pattern, maxNodes)
 				resultEdges, err := s.queryEdges(ctx, tx, edgeCypher)
 				if err != nil {
 					return err
@@ -391,6 +384,17 @@ func pathQueryCypher(fromID, toID, pattern string, limit int) string {
 		nodeLabel,
 		cypherString(toID),
 		limit,
+	)
+}
+
+func traverseEdgeQueryCypher(startID, pattern string, maxNodes int) string {
+	return fmt.Sprintf(
+		`MATCH p=(start:%s {id: %s})%s(n:%s) UNWIND relationships(p) AS edge RETURN DISTINCT properties(edge).id, properties(startNode(edge)).id, properties(endNode(edge)).id, type(edge), properties(edge).metadata LIMIT %d`,
+		nodeLabel,
+		cypherString(startID),
+		pattern,
+		nodeLabel,
+		maxNodes,
 	)
 }
 

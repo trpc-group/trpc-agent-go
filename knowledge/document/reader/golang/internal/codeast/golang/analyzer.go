@@ -262,12 +262,16 @@ func (a *defaultAnalyzer) extractCall(
 			} else if pkgName, ok := pkg.TypesInfo.Uses[xIdent].(*types.PkgName); ok {
 				calleeID = fmt.Sprintf("%s.%s", pkgName.Imported().Path(), fun.Sel.Name)
 			} else if typeAndValue, ok := pkg.TypesInfo.Types[fun.X]; ok {
-				typeName := a.typeToStringFromType(typeAndValue.Type)
-				typeName = strings.TrimPrefix(typeName, "*")
-				if strings.Contains(typeName, ".") {
-					calleeID = fmt.Sprintf("%s.%s", typeName, fun.Sel.Name)
+				if typeID := receiverTypeID(pkg, typeAndValue.Type); typeID != "" {
+					calleeID = fmt.Sprintf("%s.%s", typeID, fun.Sel.Name)
 				} else {
-					calleeID = fmt.Sprintf("%s.%s.%s", pkg.ID, typeName, fun.Sel.Name)
+					typeName := a.typeToStringFromType(typeAndValue.Type)
+					typeName = strings.TrimPrefix(typeName, "*")
+					if strings.Contains(typeName, ".") {
+						calleeID = fmt.Sprintf("%s.%s", typeName, fun.Sel.Name)
+					} else {
+						calleeID = fmt.Sprintf("%s.%s.%s", pkg.ID, typeName, fun.Sel.Name)
+					}
 				}
 			}
 		}
@@ -322,6 +326,25 @@ func (a *defaultAnalyzer) analyzeImplements(
 		}
 	}
 	return edges
+}
+
+func receiverTypeID(pkg *parsedPackage, t types.Type) string {
+	switch typed := t.(type) {
+	case *types.Pointer:
+		return receiverTypeID(pkg, typed.Elem())
+	case *types.Named:
+		obj := typed.Obj()
+		if obj == nil {
+			return ""
+		}
+		if obj.Pkg() != nil {
+			return fmt.Sprintf("%s.%s", obj.Pkg().Path(), obj.Name())
+		}
+		if pkg != nil && pkg.ID != "" {
+			return fmt.Sprintf("%s.%s", pkg.ID, obj.Name())
+		}
+	}
+	return ""
 }
 
 func (a *defaultAnalyzer) typeToString(expr ast.Expr) string {
