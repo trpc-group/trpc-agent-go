@@ -2255,6 +2255,72 @@ func TestRunRejectsConcurrentSession(t *testing.T) {
 	collectEvents(t, events1)
 }
 
+func TestRunClosesEventsAfterCleanup(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	endStarted := make(chan struct{}, 2)
+	releaseEnd := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSpan := func() {
+		releaseOnce.Do(func() {
+			close(releaseEnd)
+		})
+	}
+	defer releaseSpan()
+	span := &blockingSpan{
+		Span:       trace.SpanFromContext(context.Background()),
+		endStarted: endStarted,
+		releaseEnd: releaseEnd,
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+			return ctx, span, nil
+		},
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	events1, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	waitForNextEvent(t, events1)
+	select {
+	case <-endStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for span end")
+	}
+	select {
+	case _, ok := <-events1:
+		require.True(t, ok, "events closed before cleanup completed")
+	default:
+	}
+	input2 := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run-2",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
+	}
+	events2, err := r.Run(context.Background(), input2)
+	require.NoError(t, err)
+	waitForNextEvent(t, events2)
+	releaseSpan()
+	waitForChannelClose(t, events1)
+	waitForChannelClose(t, events2)
+}
+
 func TestRunRunOptionResolverOptions(t *testing.T) {
 	fakeTrans := &fakeTranslator{}
 	resolverCalled := false
@@ -2994,6 +3060,21 @@ func (s *spySpan) End(options ...trace.SpanEndOption) {
 	s.Span.End(options...)
 }
 
+type blockingSpan struct {
+	trace.Span
+	endStarted chan struct{}
+	releaseEnd chan struct{}
+}
+
+func (s *blockingSpan) End(options ...trace.SpanEndOption) {
+	select {
+	case s.endStarted <- struct{}{}:
+	default:
+	}
+	<-s.releaseEnd
+	s.Span.End(options...)
+}
+
 type fakeRunner struct {
 	run func(ctx context.Context,
 		userID, sessionID string,
@@ -3655,6 +3736,32 @@ func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event 
 			assert.FailNow(t, "timeout collecting events")
 			return out
 		}
+	}
+}
+
+func waitForChannelClose(t *testing.T, ch <-chan aguievents.Event) {
+	t.Helper()
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		case <-time.After(time.Second):
+			require.FailNow(t, "timeout waiting for channel close")
+		}
+	}
+}
+
+func waitForNextEvent(t *testing.T, ch <-chan aguievents.Event) aguievents.Event {
+	t.Helper()
+	select {
+	case evt, ok := <-ch:
+		require.True(t, ok, "channel closed before next event")
+		return evt
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for next event")
+		return nil
 	}
 }
 
