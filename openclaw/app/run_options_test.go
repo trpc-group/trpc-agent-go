@@ -1087,6 +1087,141 @@ tools:
 	require.Contains(t, err.Error(), "sandbox.profile")
 }
 
+func TestConvertCodeExecutorConfigBranches(t *testing.T) {
+	t.Parallel()
+
+	empty, err := convertCodeExecutorConfig(nil)
+	require.NoError(t, err)
+	require.Equal(t, codeExecutorOptions{}, empty)
+
+	local, err := convertCodeExecutorConfig(&codeExecutorConfig{
+		Type: " LOCAL ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, codeExecutorTypeLocal, local.Type)
+
+	_, err = convertCodeExecutorConfig(&codeExecutorConfig{
+		Type:    "local",
+		Sandbox: &sandboxCodeExecutorConfig{},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sandbox config requires type")
+
+	_, err = convertCodeExecutorConfig(&codeExecutorConfig{Type: "remote"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid type")
+}
+
+func TestConvertSandboxCodeExecutorConfigValidationBranches(t *testing.T) {
+	t.Parallel()
+
+	maxBytes := 512
+	got, err := convertSandboxCodeExecutorConfig(&sandboxCodeExecutorConfig{
+		WorkspaceRoot:  " /tmp/sandbox ",
+		Backend:        " LINUX-BUBBLEWRAP ",
+		Profile:        " READ_ONLY ",
+		Network:        " ENABLED ",
+		DefaultTimeout: "2s",
+		OutputMaxBytes: &maxBytes,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/sandbox", got.WorkspaceRoot)
+	require.Equal(t, sandboxBackendLinuxBubblewrap, got.Backend)
+	require.Equal(t, sandboxProfileReadOnly, got.Profile)
+	require.Equal(t, sandboxNetworkEnabled, got.Network)
+	require.Equal(t, 2*time.Second, got.DefaultTimeout)
+	require.Equal(t, maxBytes, got.OutputMaxBytes)
+
+	cases := []struct {
+		name string
+		cfg  sandboxCodeExecutorConfig
+		want string
+	}{
+		{
+			name: "backend",
+			cfg:  sandboxCodeExecutorConfig{Backend: "firejail"},
+			want: "sandbox.backend",
+		},
+		{
+			name: "profile",
+			cfg:  sandboxCodeExecutorConfig{Profile: "everything"},
+			want: "sandbox.profile",
+		},
+		{
+			name: "network",
+			cfg:  sandboxCodeExecutorConfig{Network: "egress-only"},
+			want: "sandbox.network",
+		},
+		{
+			name: "timeout parse",
+			cfg:  sandboxCodeExecutorConfig{DefaultTimeout: "bad"},
+			want: "sandbox.default_timeout",
+		},
+		{
+			name: "timeout positive",
+			cfg:  sandboxCodeExecutorConfig{DefaultTimeout: "0s"},
+			want: "must be positive",
+		},
+		{
+			name: "output positive",
+			cfg:  sandboxCodeExecutorConfig{OutputMaxBytes: intPtrValue(0)},
+			want: "sandbox.output_max_bytes",
+		},
+		{
+			name: "shell env",
+			cfg: sandboxCodeExecutorConfig{
+				ShellEnv: &sandboxShellEnvConfig{Inherit: "bad"},
+			},
+			want: "sandbox.shell_env.inherit",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := convertSandboxCodeExecutorConfig(&tc.cfg)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestConvertSandboxShellEnvConfigBranches(t *testing.T) {
+	t.Parallel()
+
+	applyDefaultExcludes := false
+	got, err := convertSandboxShellEnvConfig(&sandboxShellEnvConfig{
+		Inherit:              " NONE ",
+		ApplyDefaultExcludes: &applyDefaultExcludes,
+		Exclude:              []string{" *_TOKEN ", ""},
+		IncludeOnly:          []string{" PATH ", " "},
+		Set: map[string]string{
+			" CUSTOM ": "ok",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, sandboxShellEnvInheritNone, got.Inherit)
+	require.False(t, got.ApplyDefaultExcludes)
+	require.Equal(t, []string{"*_TOKEN"}, got.Exclude)
+	require.Equal(t, []string{"PATH"}, got.IncludeOnly)
+	require.Equal(t, map[string]string{"CUSTOM": "ok"}, got.Set)
+
+	got, err = convertSandboxShellEnvConfig(nil)
+	require.NoError(t, err)
+	require.Equal(t, sandboxShellEnvInheritCore, got.Inherit)
+	require.True(t, got.ApplyDefaultExcludes)
+
+	_, err = convertSandboxShellEnvConfig(&sandboxShellEnvConfig{
+		Set: map[string]string{" ": "bad"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty key")
+
+	require.Nil(t, trimStringSlice(nil))
+	require.Nil(t, trimStringSlice([]string{" ", "\t"}))
+	require.Equal(t, []string{"a", "b"}, trimStringSlice([]string{" a ", "", "b"}))
+}
+
 func TestParseRunOptions_MultipleYAMLDocsFails(t *testing.T) {
 	t.Parallel()
 

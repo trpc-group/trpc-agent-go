@@ -177,6 +177,22 @@ func TestLinuxNoAccessMaskArgsCoverPathGlobAndSpecial(t *testing.T) {
 	}
 }
 
+func TestLinuxNoAccessMaskArgsSkipMissingPath(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-missing", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().WithNoAccessPaths("work/missing.txt")
+	args, err := rt.denyReadMaskArgs(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 0 {
+		t.Fatalf("missing no-access path args = %#v, want empty", args)
+	}
+}
+
 func TestLinuxBackendCapabilitiesAndSandboxArgsBranches(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "linux-args-branches", codeexecutor.WorkspacePolicy{})
@@ -226,6 +242,41 @@ func TestLinuxBackendCapabilitiesAndSandboxArgsBranches(t *testing.T) {
 	disabledCaps := backendCapabilities(BackendAuto, DangerFullAccessProfile())
 	if disabledCaps.OSSandbox || disabledCaps.NetworkIsolation || disabledCaps.ProtectedPathMasks {
 		t.Fatalf("disabled capabilities = %#v, want no managed sandbox features", disabledCaps)
+	}
+}
+
+func TestLinuxProtectedMaskArgsSkipBlankDotAndMissing(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "protected-mask-skip", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(ws.Path, "present"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile()
+	profile.fileSystem.ProtectedMetadata = []string{"", ".", "missing", "present"}
+	args, err := rt.protectedMaskArgs(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := filepath.Join(ws.Path, "present")
+	if !reflect.DeepEqual(args, []string{"--ro-bind", present, present}) {
+		t.Fatalf("protected args = %#v, want present ro-bind only", args)
+	}
+}
+
+func TestLinuxPrepareProtectedMasksRejectsEscapes(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "protected-mask-escape", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile()
+	profile.fileSystem.ProtectedMetadata = []string{"../escape"}
+	err = rt.prepareProtectedMasks(profile, ws)
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("prepareProtectedMasks error = %v, want ErrPathDenied", err)
 	}
 }
 

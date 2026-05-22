@@ -782,6 +782,60 @@ func TestEnvironmentAndProfileBranches(t *testing.T) {
 	}
 }
 
+func TestFilesystemHelperBranches(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "child", "input.txt")
+	if err := os.MkdirAll(filepath.Dir(child), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, []byte("0123456789"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().WithWritePaths(root)
+	if !pathHasRule(profile, child, accessRead) {
+		t.Fatalf("absolute child should inherit read-compatible grant from parent")
+	}
+	if !pathHasRule(profile, child, accessWrite) {
+		t.Fatalf("absolute child should inherit write grant from parent")
+	}
+	if pathHasRule(WorkspaceWriteProfile().WithNoAccessPaths(root), child, accessRead) {
+		t.Fatalf("no-access rule should not satisfy read grant")
+	}
+
+	copiedFile := filepath.Join(t.TempDir(), "nested", "copy.txt")
+	if err := copyPath(child, copiedFile); err != nil {
+		t.Fatal(err)
+	}
+	data, truncated, err := readFileLimited(copiedFile, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "0123" || !truncated {
+		t.Fatalf("readFileLimited = %q truncated=%v, want truncated 0123", data, truncated)
+	}
+
+	copiedDir := filepath.Join(t.TempDir(), "dir-copy")
+	if err := copyPath(root, copiedDir); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(copiedDir, "child", "input.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("copied file mode = %o, want 0640", info.Mode().Perm())
+	}
+
+	for _, ref := range []string{"", "   ", "/"} {
+		if got := inputName(ref); got != "input" {
+			t.Fatalf("inputName(%q) = %q, want input", ref, got)
+		}
+	}
+	if got := inputName("artifact://uploads/report.txt@7"); got != "report.txt" {
+		t.Fatalf("artifact input name = %q, want report.txt", got)
+	}
+}
+
 func hasString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

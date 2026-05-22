@@ -346,3 +346,82 @@ func TestCollectOutputsMetadataLoadError(t *testing.T) {
 		t.Fatalf("expected metadata load error")
 	}
 }
+
+func TestCollectOutputMatchSkipsOutsideAndDirectories(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "artifact/skip-output", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, consumed, skip, err := rt.collectOutputMatch(
+		context.Background(),
+		WorkspaceWriteProfile(),
+		ws,
+		t.TempDir(),
+		codeexecutor.OutputSpec{Inline: true},
+		1024,
+		1024,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !skip || consumed != 0 || ref.Name != "" {
+		t.Fatalf("outside output match = (%#v, %d, %v), want skipped", ref, consumed, skip)
+	}
+	ref, consumed, skip, err = rt.collectOutputMatch(
+		context.Background(),
+		WorkspaceWriteProfile(),
+		ws,
+		filepath.Join(ws.Path, codeexecutor.DirOut),
+		codeexecutor.OutputSpec{Inline: true},
+		1024,
+		1024,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !skip || consumed != 0 || ref.Name != "" {
+		t.Fatalf("directory output match = (%#v, %d, %v), want skipped", ref, consumed, skip)
+	}
+}
+
+func TestPinnedArtifactVersionBranches(t *testing.T) {
+	v1, v2 := 1, 2
+	md := codeexecutor.WorkspaceMetadata{
+		Inputs: []codeexecutor.InputRecord{
+			{
+				From:     "artifact://reports/raw.txt@1",
+				To:       "work/other.txt",
+				Resolved: "reports/raw.txt",
+				Version:  &v1,
+			},
+			{
+				From:     "host:///tmp/raw.txt",
+				To:       "work/raw.txt",
+				Resolved: "reports/raw.txt",
+			},
+			{
+				From:     "artifact://reports/raw.txt",
+				To:       "work/raw.txt",
+				Resolved: "reports/raw.txt",
+				Version:  &v2,
+			},
+		},
+	}
+	if got := pinnedArtifactVersion(md, "", "work/raw.txt"); got != nil {
+		t.Fatalf("blank artifact name returned version %v", *got)
+	}
+	if got := pinnedArtifactVersion(md, "reports/raw.txt", ""); got != nil {
+		t.Fatalf("blank target returned version %v", *got)
+	}
+	got := pinnedArtifactVersion(md, "reports/raw.txt", "work/raw.txt")
+	if got == nil || *got != v2 {
+		t.Fatalf("pinned version = %v, want %d", got, v2)
+	}
+	if got := pinnedArtifactVersion(md, "reports/raw.txt", "work/missing.txt"); got != nil {
+		t.Fatalf("missing target returned version %v", *got)
+	}
+}
