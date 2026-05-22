@@ -8311,3 +8311,187 @@ func TestExecuteCallableTool_DoesNotRetryStopError(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 1, toolCalls)
 }
+
+// =============================================================================
+// Regression tests for marshalJSONNoHTMLEscape and its callers.
+// These verify that <, >, & in tool results are NOT HTML-escaped,
+// which previously caused LLMs to see \u003c instead of < in code output.
+// =============================================================================
+
+func TestMarshalJSONNoHTMLEscape_PreservesSpecialChars(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  string // expected substring that must appear un-escaped
+	}{
+		{
+			name:  "less than in Go channel receive",
+			input: map[string]string{"output": "<-done"},
+			want:  `"output":"<-done"`,
+		},
+		{
+			name:  "angle brackets in generic type",
+			input: map[string]string{"type": "map[string]<Value>"},
+			want:  `"type":"map[string]<Value>"`,
+		},
+		{
+			name:  "ampersand in shell command",
+			input: map[string]string{"cmd": "a && b"},
+			want:  `"cmd":"a && b"`,
+		},
+		{
+			name:  "greater than comparison",
+			input: map[string]string{"expr": "if x > 0"},
+			want:  `"expr":"if x > 0"`,
+		},
+		{
+			name:  "all three special chars together",
+			input: map[string]string{"code": "for i := 0; i < len(s) && s[i] > 0; i++ { <-ch }"},
+			want:  `< len(s) && s[i] > 0`,
+		},
+		{
+			name:  "HTML-like content preserved as-is",
+			input: map[string]string{"html": "<script>alert('x')</script>"},
+			want:  `<script>alert('x')</script>`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := marshalJSONNoHTMLEscape(tt.input)
+			require.NoError(t, err)
+			assert.Contains(t, string(got), tt.want,
+				"expected un-escaped chars, got: %s", string(got))
+			// Also verify the old json.Marshal WOULD have escaped them.
+			stdBytes, _ := json.Marshal(tt.input)
+			assert.NotContains(t, string(stdBytes), tt.want,
+				"std json.Marshal should escape these chars (sanity check)")
+		})
+	}
+}
+
+func TestMarshalJSONNoHTMLEscape_ValidJSON(t *testing.T) {
+	inputs := []any{
+		map[string]string{"k": "<value>"},
+		map[string]any{"nested": map[string]int{"a": 1}},
+		[]string{"<a>", "&b", ">c"},
+		"hello <world>",
+		42,
+		true,
+		nil,
+	}
+	for _, input := range inputs {
+		got, err := marshalJSONNoHTMLEscape(input)
+		require.NoError(t, err)
+		// Must be valid JSON — round-trip through json.Unmarshal.
+		var decoded any
+		err = json.Unmarshal(got, &decoded)
+		assert.NoError(t, err, "output is not valid JSON: %s", string(got))
+	}
+}
+
+func TestMarshalJSONNoHTMLEscape_MatchesMarshalForSafeInputs(t *testing.T) {
+	// For inputs without <, >, & the output must be byte-identical to json.Marshal.
+	inputs := []any{
+		map[string]string{"name": "hello", "value": "world"},
+		map[string]int{"a": 1, "b": 2},
+		"plain string",
+		123,
+		true,
+		[]int{1, 2, 3},
+		nil,
+	}
+	for _, input := range inputs {
+		got, err := marshalJSONNoHTMLEscape(input)
+		require.NoError(t, err)
+		stdBytes, err := json.Marshal(input)
+		require.NoError(t, err)
+		assert.Equal(t, string(stdBytes), string(got),
+			"for safe input %v, output should match json.Marshal", input)
+	}
+}
+
+func TestMarshalJSONNoHTMLEscape_ErrorOnNonSerializable(t *testing.T) {
+	_, err := marshalJSONNoHTMLEscape(func() {})
+	assert.Error(t, err, "function values should not be serializable")
+}
+
+func TestMarshalJSONNoHTMLEscape_Unicode(t *testing.T) {
+	input := map[string]string{"msg": "你好世界 <-ch"}
+	got, err := marshalJSONNoHTMLEscape(input)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "<-ch", "angle bracket must not be escaped")
+	// Unicode CJK characters are preserved (not ASCII-escaped) by json.Encoder default.
+	assert.Contains(t, string(got), "你好世界")
+}
+
+func TestBuildDefaultToolMessage_NoHTMLEscape(t *testing.T) {
+	// End-to-end test: tool returning Go source code with channel ops.
+	result := map[string]any{
+		"exit_code": 0,
+		"output":    "    <-done\n    for i := 0; i < 10; i++ {\n        fmt.Println(i)\n    }",
+		"status":    "exited",
+	}
+	msg, err := buildDefaultToolMessage("call-123", result)
+	require.NoError(t, err)
+	assert.Equal(t, "call-123", msg.ToolID)
+	assert.Contains(t, msg.Content, "<-done",
+		"channel receive must not be escaped to \\u003c-done")
+	assert.Contains(t, msg.Content, "i < 10",
+		"less-than in loop must not be escaped")
+	assert.NotContains(t, msg.Content, `\u003c`,
+		"must not contain HTML-escaped less-than")
+	assert.NotContains(t, msg.Content, `\u003e`,
+		"must not contain HTML-escaped greater-than")
+	assert.NotContains(t, msg.Content, `\u0026`,
+		"must not contain HTML-escaped ampersand")
+}
+
+func TestBuildDefaultToolMessage_BackwardCompat(t *testing.T) {
+	// Verify that normal tool results (without special chars) produce the
+	// exact same output as the old json.Marshal path would have.
+	tests := []struct {
+		name   string
+		result any
+	}{
+		{"string result", "success"},
+		{"map result", map[string]any{"message": "done", "count": 42}},
+		{"nil result", nil},
+		{"bool result", true},
+		{"nested result", map[string]any{
+			"todos": []map[string]string{
+				{"content": "step 1", "status": "completed"},
+				{"content": "step 2", "status": "pending"},
+			},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := buildDefaultToolMessage("id-1", tt.result)
+			require.NoError(t, err)
+			// Compare with what json.Marshal would produce (they should
+			// be identical for inputs without < > &).
+			expected, err := json.Marshal(tt.result)
+			require.NoError(t, err)
+			assert.Equal(t, string(expected), msg.Content)
+		})
+	}
+}
+
+func TestMarshalChunkToText_NoHTMLEscape(t *testing.T) {
+	// marshalChunkToText with a non-string value containing special chars.
+	chunk := map[string]string{"output": "<-ch && x > 0"}
+	text := marshalChunkToText(chunk)
+	assert.Contains(t, text, "<-ch",
+		"less-than must be preserved in streaming chunk")
+	assert.Contains(t, text, "&& x > 0",
+		"ampersand and greater-than must be preserved")
+	assert.NotContains(t, text, `\u003c`)
+	assert.NotContains(t, text, `\u0026`)
+}
+
+func TestMarshalChunkToText_StringPassthrough(t *testing.T) {
+	// String values bypass JSON marshaling entirely.
+	input := "<-done && x > 0"
+	assert.Equal(t, input, marshalChunkToText(input))
+}
+
