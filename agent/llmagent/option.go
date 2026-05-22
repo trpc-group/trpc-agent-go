@@ -1247,7 +1247,7 @@ func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict b
 		if schema == nil {
 			return
 		}
-		opts.StructuredOutput = llmAgentStructuredOutput(
+		opts.StructuredOutput = newStructuredOutput(
 			structuredoutput.Name(name),
 			schema,
 			strict,
@@ -1265,12 +1265,12 @@ func WithStructuredOutputJSON(examplePtr any, strict bool, description string) O
 		if schema == nil {
 			return
 		}
-		opts.StructuredOutput = llmAgentStructuredOutput(name, schema, strict, description)
+		opts.StructuredOutput = newStructuredOutput(name, schema, strict, description)
 		opts.StructuredOutputType = t
 	}
 }
 
-func llmAgentStructuredOutput(name string, schema map[string]any, strict bool, description string) *model.StructuredOutput {
+func newStructuredOutput(name string, schema map[string]any, strict bool, description string) *model.StructuredOutput {
 	if schema == nil {
 		return nil
 	}
