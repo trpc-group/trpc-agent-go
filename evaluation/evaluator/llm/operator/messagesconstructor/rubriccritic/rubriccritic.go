@@ -16,6 +16,7 @@ import (
 	"text/template"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/internal/rubrics"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/internal/content"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -45,8 +46,8 @@ For each rubric item, first determine what the rubric item requires by reading:
 3. the relevant part of the GOLDEN ANSWER.
 
 Then compare the ACTUAL OUTPUT against that requirement.
-Return "yes" only if the ACTUAL OUTPUT materially satisfies the current rubric item.
-If a material defect remains, return "no".
+Use score 1 only if the ACTUAL OUTPUT materially satisfies the current rubric item.
+Use score 0 if a material defect remains.
 
 # Decision Rules
 
@@ -71,7 +72,7 @@ If a material defect remains, return "no".
    Literal wording does not need to match.
    Material meaning does need to match.
 
-5. **A "no" must be caused by a material defect**
+5. **A score of 0 must be caused by a material defect**
    A defect is material only if it would make a reasonable evaluator conclude that the current rubric item is not truly satisfied.
    Typical material defects include:
    * missing required information,
@@ -85,10 +86,10 @@ If a material defect remains, return "no".
    Do not invent hidden requirements.
    Do not fail an item because of style, tone, verbosity, brevity, formatting, or ordering alone.
    Do not fail an item for extra detail unless that detail contradicts, weakens, or obscures what the current rubric item requires.
-   If the ACTUAL OUTPUT is reasonably semantically equivalent to the GOLDEN ANSWER for the current rubric item, return "yes".
+   If the ACTUAL OUTPUT is reasonably semantically equivalent to the GOLDEN ANSWER for the current rubric item, use score 1.
 
 7. **Conditional rubric items**
-   If a rubric item is conditional, you may treat it as not applicable and return "yes" only when the condition is clearly not met based on <user_prompt> and <reference_answer>.
+   If a rubric item is conditional, you may treat it as not applicable and use score 1 only when the condition is clearly not met based on <user_prompt> and <reference_answer>.
    If applicability is unclear, do not guess. Treat the item as applicable.
 
 # Internal Evaluation Procedure
@@ -98,26 +99,32 @@ For each rubric item, do this internally:
 2. Extract the decisive evidence from the GOLDEN ANSWER and, if needed, the USER REQUEST.
 3. Extract the corresponding evidence from the ACTUAL OUTPUT.
 4. Decide whether there is a material mismatch, omission, contradiction, or unverifiable gap.
-5. If there is a material defect, return "no".
-6. Otherwise, return "yes".
+5. If there is a material defect, use score 0.
+6. Otherwise, use score 1.
 
 # Output Format
 
-Repeat the following block for every rubric item, starting on a new line.
+Return a single valid JSON object and nothing else:
 
-ID: [The ID of the rubric item, unique within the rubric. If the rubric itself is numbered 1..N, the ID must match that numbering.]
-Rubric: [Repeat the rubric item word-for-word without any changes. Keep punctuation and capitalization exactly as-is. Do not translate or paraphrase.]
-Evidence: [Quote only the decisive snippets from the GOLDEN ANSWER, the ACTUAL OUTPUT, and the USER REQUEST when needed. If something required is missing, explicitly state what is missing.]
-Reason: [State the key evaluation reason from the evaluator's perspective. Compare the ACTUAL OUTPUT against the GOLDEN ANSWER for this rubric item. Prefer one decisive material reason over a long list of minor complaints.]
-Verdict: [yes|no]
+{
+  "rubricScores": [
+    {
+      "id": "[The ID of the rubric item, unique within the rubric. If the rubric itself is numbered 1..N, the ID must match that numbering.]",
+      "score": 0,
+      "reason": "[Evidence: cite source-labeled decisive snippets, e.g. Golden: ..., Actual: ..., User: ... when needed. Judgment: explain whether the ACTUAL OUTPUT materially matches the GOLDEN ANSWER for this rubric item; if required content is missing, state exactly what is missing.]"
+    }
+  ]
+}
 
-# Output Constraints
+# Output Rules
 
-* Output only the rubric blocks in the exact format above.
-* Do not output JSON.
-* Do not add an overall summary.
-* Be decisive.
-* When the verdict is "no", the reason must point to a concrete mismatch, omission, contradiction, or unverifiable gap.
+Produce exactly one rubricScores item for each input rubric item, in the same order. Use the exact input rubric ID; do not add, omit, merge, split, translate, or rename IDs.
+
+Set score to 1 when the ACTUAL OUTPUT materially satisfies the rubric item under the GOLDEN ANSWER. Set score to 0 when a material mismatch, omission, contradiction, or unverifiable gap remains. The numeric score in the example is not a default.
+
+Write reason as one concise evaluator note containing both source-labeled evidence and judgment. Be decisive; when score is 0, name the concrete defect. Do not add separate Rubric, Evidence, Reason, or Verdict fields.
+
+Return JSON only: double-quote keys and strings, escape quotes/newlines inside strings, and do not include markdown, comments, trailing commas, summaries, or extra fields.
 
 # Your Turn
 
@@ -143,7 +150,9 @@ Verdict: [yes|no]
 
 ## Output
 `
-	rubricCriticPromptTemplate = template.Must(template.New("rubricCriticPrompt").Parse(rubricCriticPrompt))
+	rubricCriticPromptTemplate = template.Must(
+		template.New("rubricCriticPrompt").Parse(rubricCriticPrompt),
+	)
 )
 
 type rubricCriticMessagesConstructor struct {
@@ -154,7 +163,7 @@ func New() messagesconstructor.MessagesConstructor {
 	return &rubricCriticMessagesConstructor{}
 }
 
-// ConstructMessages builds critic-style judge prompts for rubric evaluation.
+// ConstructMessages builds structured-output critic prompts for rubric evaluation.
 func (e *rubricCriticMessagesConstructor) ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
 	if len(actuals) == 0 {
@@ -169,7 +178,7 @@ func (e *rubricCriticMessagesConstructor) ConstructMessages(ctx context.Context,
 	if evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
 		return nil, fmt.Errorf("llm judge criterion is required")
 	}
-	if effectiveRubricCount(evalMetric) == 0 {
+	if rubrics.Count(evalMetric) == 0 {
 		return nil, fmt.Errorf("llm judge rubrics are required")
 	}
 	actual := actuals[len(actuals)-1]
@@ -201,23 +210,23 @@ func (e *rubricCriticMessagesConstructor) ConstructMessages(ctx context.Context,
 	}, nil
 }
 
+// StructuredOutput returns the structured output schema for rubric critic evaluation.
+func (e *rubricCriticMessagesConstructor) StructuredOutput(ctx context.Context,
+	actuals, expecteds []*evalset.Invocation, evalMetric *metric.EvalMetric) (*model.StructuredOutput, error) {
+	visibleRubrics, err := rubrics.ValidateStructured(evalMetric)
+	if err != nil {
+		return nil, err
+	}
+	return rubrics.ScoresOutput(
+		"rubric_critic_scores",
+		"Per-rubric binary scores and reasons for rubric critic evaluation.",
+		visibleRubrics,
+	), nil
+}
+
 type rubricCriticPromptData struct {
 	UserInput        string
 	FinalResponse    string
 	ExpectedResponse string
 	Rubrics          string
-}
-
-func effectiveRubricCount(evalMetric *metric.EvalMetric) int {
-	if evalMetric == nil || evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
-		return 0
-	}
-	count := 0
-	for _, rubric := range evalMetric.Criterion.LLMJudge.Rubrics {
-		if rubric == nil || rubric.Content == nil {
-			continue
-		}
-		count++
-	}
-	return count
 }

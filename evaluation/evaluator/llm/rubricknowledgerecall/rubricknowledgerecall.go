@@ -66,6 +66,16 @@ func (e *rubricKnowledgeRecallEvaluator) ConstructMessages(ctx context.Context, 
 	return e.messagesConstructor.ConstructMessages(ctx, actuals, expecteds, evalMetric)
 }
 
+// StructuredOutput delegates structured output schema construction to the prompt builder.
+func (e *rubricKnowledgeRecallEvaluator) StructuredOutput(ctx context.Context, actuals,
+	expecteds []*evalset.Invocation, evalMetric *metric.EvalMetric) (*model.StructuredOutput, error) {
+	constructor, ok := e.messagesConstructor.(messagesconstructor.StructuredOutputMessagesConstructor)
+	if !ok {
+		return nil, nil
+	}
+	return constructor.StructuredOutput(ctx, actuals, expecteds, evalMetric)
+}
+
 // ScoreBasedOnResponse scores the response of the evaluator.
 func (e *rubricKnowledgeRecallEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
 	evalMetric *metric.EvalMetric) (*evaluator.ScoreResult, error) {

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/internal/content"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -61,6 +62,16 @@ func (c *templateMessagesConstructor) ConstructMessages(ctx context.Context, act
 		Role:    model.RoleUser,
 		Content: rendered,
 	}}, nil
+}
+
+// StructuredOutput returns the structured output schema for the configured response scorer.
+func (c *templateMessagesConstructor) StructuredOutput(ctx context.Context, actuals, expecteds []*evalset.Invocation,
+	evalMetric *metric.EvalMetric) (*model.StructuredOutput, error) {
+	templateOptions, err := judgeTemplateOptions(evalMetric)
+	if err != nil {
+		return nil, err
+	}
+	return templateresolver.StructuredOutput(templateOptions.ResponseScorerName)
 }
 
 func judgeTemplateOptions(evalMetric *metric.EvalMetric) (*metricllm.JudgeTemplateOptions, error) {
