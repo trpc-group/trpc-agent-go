@@ -7003,7 +7003,7 @@
 <p><code>providerName</code> 表示裁判模型的供应商，对应框架的 Model Provider。框架会按 <code>providerName</code> 与 <code>modelName</code> 创建裁判模型实例，常见取值有 <code>openai</code>、<code>anthropic</code> 和 <code>gemini</code>。Provider 的详细介绍可参考 <a href="../model/#provider">Provider</a>。</p>
 <p><code>rubrics</code> 用于把一个指标拆成多条粒度清晰的评估细则。每条细则尽量保持独立，并能从用户输入与最终回答中直接验证，使裁判判断更稳定，也便于定位问题。<code>id</code> 用作稳定标识，<code>content.text</code> 是裁判实际执行的细则文本。</p>
 <p><code>EvalCase.rubrics</code> 用于给单个用例补充额外评估细则。每条 rubric 通过 <code>metricName</code> 指向一个已配置的 metric；评估该 case 时，框架会在该 metric 的公共 rubrics 之后追加这些细则，只影响当前 case，不改变指标文件中的全局配置。合并后的 rubric <code>id</code> 需要保持唯一。</p>
-<p>目标 metric 使用 <code>criterion.llmJudge</code> 承载 rubric 列表。内置 rubric evaluator 会读取合并后的细则；自定义 rubric evaluator 按同一字段读取即可。</p>
+<p>目标 metric 使用 <code>criterion.llmJudge</code> 承载 rubric 列表。内置 rubric evaluator 会读取合并后的细则，并默认使用结构化输出让裁判按 <code>rubricScores</code> 返回逐条评分。每次 <code>Evaluate</code> 执行时，框架会先合并 metric 级 rubrics 与 <code>EvalCase.rubrics</code>，再在调用裁判模型前校验参与结构化输出的 merged rubric：每条 rubric 都必须具备非空且唯一的 <code>id</code>。如果校验失败，评估会返回类似 <code>llm judge rubric id is required for structured output</code> 或 <code>duplicate llm judge rubric id "accuracy"</code> 的错误。排查时请检查 metric 配置与 case 级 rubrics 合并后的 <code>criterion.llmJudge.rubrics</code> 及其 <code>id</code>。自定义 rubric evaluator 按同一字段读取即可。</p>
 <p><code>template</code> 仅用于 <code>llm_judge_template</code>。它将模板化评估限制在“prompt 不同，但评估编排逻辑相同”的场景，不要求框架把所有评估器都表达成模板。模板评估器不读取 <code>rubrics</code>，评估标准应直接写入 <code>template.prompt</code>。</p>
 <p><code>template.prompt</code> 使用双大括号模板语法，例如 <code>{{question}}</code>、<code>{{answer}}</code>。每个占位符都必须在 <code>variableBindings</code> 中显式绑定；未绑定变量、未知变量或绑定解析失败都会直接报错，不存在“可选变量”或空字符串兜底。</p>
 <p><code>template.variableBindings</code> 当前只支持从当前评分轮的 <code>actual</code> 与 <code>expected</code> 中取值：</p>
@@ -7692,7 +7692,17 @@
 <span class="normal"><a href="#__codelineno-58-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-58-10">10</a></span>
 <span class="normal"><a href="#__codelineno-58-11">11</a></span>
-<span class="normal"><a href="#__codelineno-58-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-58-12">12</a></span>
+<span class="normal"><a href="#__codelineno-58-13">13</a></span>
+<span class="normal"><a href="#__codelineno-58-14">14</a></span>
+<span class="normal"><a href="#__codelineno-58-15">15</a></span>
+<span class="normal"><a href="#__codelineno-58-16">16</a></span>
+<span class="normal"><a href="#__codelineno-58-17">17</a></span>
+<span class="normal"><a href="#__codelineno-58-18">18</a></span>
+<span class="normal"><a href="#__codelineno-58-19">19</a></span>
+<span class="normal"><a href="#__codelineno-58-20">20</a></span>
+<span class="normal"><a href="#__codelineno-58-21">21</a></span>
+<span class="normal"><a href="#__codelineno-58-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset&quot;</span>
 </span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
 </span><span id="__span-58-4"><a id="__codelineno-58-4" name="__codelineno-58-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
@@ -7701,10 +7711,21 @@
 </span><span id="__span-58-7"><a id="__codelineno-58-7" name="__codelineno-58-7"></a><span class="c1">// MessagesConstructor 负责构造裁判输入</span>
 </span><span id="__span-58-8"><a id="__codelineno-58-8" name="__codelineno-58-8"></a><span class="kd">type</span><span class="w"> </span><span class="nx">MessagesConstructor</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-58-9"><a id="__codelineno-58-9" name="__codelineno-58-9"></a><span class="w">    </span><span class="c1">// ConstructMessages 构造裁判输入消息</span>
-</span><span id="__span-58-10"><a id="__codelineno-58-10" name="__codelineno-58-10"></a><span class="w">    </span><span class="nx">ConstructMessages</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">actuals</span><span class="p">,</span><span class="w"> </span><span class="nx">expecteds</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
-</span><span id="__span-58-11"><a id="__codelineno-58-11" name="__codelineno-58-11"></a><span class="w">        </span><span class="nx">evalMetric</span><span class="w"> </span><span class="o">*</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</span><span id="__span-58-12"><a id="__codelineno-58-12" name="__codelineno-58-12"></a><span class="p">}</span>
+</span><span id="__span-58-10"><a id="__codelineno-58-10" name="__codelineno-58-10"></a><span class="w">    </span><span class="c1">// LLMBaseEvaluator 会传入按轮次截取的前缀切片：actuals[:i+1] 与 expecteds[:i+1]</span>
+</span><span id="__span-58-11"><a id="__codelineno-58-11" name="__codelineno-58-11"></a><span class="w">    </span><span class="nx">ConstructMessages</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">actuals</span><span class="p">,</span><span class="w"> </span><span class="nx">expecteds</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
+</span><span id="__span-58-12"><a id="__codelineno-58-12" name="__codelineno-58-12"></a><span class="w">        </span><span class="nx">evalMetric</span><span class="w"> </span><span class="o">*</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-58-13"><a id="__codelineno-58-13" name="__codelineno-58-13"></a><span class="p">}</span>
+</span><span id="__span-58-14"><a id="__codelineno-58-14" name="__codelineno-58-14"></a>
+</span><span id="__span-58-15"><a id="__codelineno-58-15" name="__codelineno-58-15"></a><span class="c1">// StructuredOutputMessagesConstructor 在构造裁判输入之外提供结构化输出约束</span>
+</span><span id="__span-58-16"><a id="__codelineno-58-16" name="__codelineno-58-16"></a><span class="kd">type</span><span class="w"> </span><span class="nx">StructuredOutputMessagesConstructor</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-58-17"><a id="__codelineno-58-17" name="__codelineno-58-17"></a><span class="w">    </span><span class="nx">MessagesConstructor</span>
+</span><span id="__span-58-18"><a id="__codelineno-58-18" name="__codelineno-58-18"></a><span class="w">    </span><span class="c1">// StructuredOutput 返回裁判模型的结构化输出 schema</span>
+</span><span id="__span-58-19"><a id="__codelineno-58-19" name="__codelineno-58-19"></a><span class="w">    </span><span class="c1">// LLMBaseEvaluator 会使用与 ConstructMessages 相同的前缀切片调用该方法</span>
+</span><span id="__span-58-20"><a id="__codelineno-58-20" name="__codelineno-58-20"></a><span class="w">    </span><span class="nx">StructuredOutput</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">actuals</span><span class="p">,</span><span class="w"> </span><span class="nx">expecteds</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
+</span><span id="__span-58-21"><a id="__codelineno-58-21" name="__codelineno-58-21"></a><span class="w">        </span><span class="nx">evalMetric</span><span class="w"> </span><span class="o">*</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">StructuredOutput</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-58-22"><a id="__codelineno-58-22" name="__codelineno-58-22"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<p><code>StructuredOutputMessagesConstructor</code> 是可选扩展接口。若具体 LLM 评估器实现了该接口，框架会在每一轮构造完裁判输入后调用 <code>StructuredOutput</code>，并把返回的 schema 传给裁判模型或裁判 Runner。默认的模板评估器以及内置 <code>llm_rubric_*</code> 评估器都使用该机制；未实现该接口时，框架不会附加结构化输出约束。<code>StructuredOutput</code> 返回 <code>(nil, nil)</code> 是合法的，表示当前轮不附加结构化输出约束；如果返回非空 error，评估会停止并把该错误返回给调用方。</p>
 <p>框架内置了多种 <code>MessagesConstructor</code> 实现，分别对应不同内置评估器的打分目标。默认选择关系如下。</p>
 <ul>
 <li><code>messagesconstructor/finalresponse</code> 用于 <code>llm_final_response</code>，将用户输入、实际最终回答与预期最终回答组织为裁判输入</li>
@@ -7747,8 +7768,7 @@
 <li><code>responsescorer/finalresponse</code> 用于 <code>llm_final_response</code>，解析裁判输出中的 valid 或 invalid 并映射为 1 或 0，同时保留 reasoning 作为 <code>reason</code></li>
 <li><code>responsescorer/hallucination</code> 用于 <code>llm_hallucinations</code>，逐句解析裁判结论；被证据支撑或无需事实支撑的句子记 1 分，其余句子记 0 分，再按句级平均值得到该轮分数</li>
 <li><code>responsescorer/singlescore</code> 用于 <code>llm_judge_template</code> 的 <code>single_score</code> 模式，解析 <code>score</code> 与 <code>reason</code></li>
-<li><code>responsescorer/rubricscores</code> 用于 <code>llm_judge_template</code> 的 <code>rubric_scores</code> 模式，解析 <code>rubricScores</code></li>
-<li><code>responsescorer/rubricresponse</code> 用于 <code>llm_rubric_critic</code>、<code>llm_rubric_reference_critic</code>、<code>llm_rubric_response</code> 与 <code>llm_rubric_knowledge_recall</code>，逐条解析评估细则的 verdict yes 或 no，将每条细则映射为 1 或 0 并取平均作为该轮分数，同时输出 <code>rubricScores</code></li>
+<li><code>responsescorer/rubricscores</code> 用于 <code>llm_judge_template</code> 的 <code>rubric_scores</code> 模式，以及 <code>llm_rubric_critic</code>、<code>llm_rubric_reference_critic</code>、<code>llm_rubric_response</code> 与 <code>llm_rubric_knowledge_recall</code>，解析 <code>rubricScores</code> 并按逐条 <code>score</code> 平均得到该轮分数</li>
 </ul>
 <h5 id="samplesaggregator">样本聚合算子 samplesaggregator</h5>
 <p><code>samplesaggregator</code> 用于聚合 <code>numSamples</code> 个裁判样本。默认实现使用多数票挑选代表样本，平票时会选择失败样本以保持保守。</p>
@@ -8108,8 +8128,8 @@
 <p>完整示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/template">examples/evaluation/llm/template</a>。该示例同时演示了 <code>single_score</code> 与 <code>rubric_scores</code> 两种模板评估指标。</p>
 <h5 id="llm_3">LLM 细则批判评估器</h5>
 <p>LLM 细则批判评估器对应的指标名称为 <code>llm_rubric_critic</code>，属于 LLM Judge 类评估器。它把“参考答案约束”与“细则拆解”结合起来：一方面使用 <a href="#llmcriterion">LLMCriterion</a> 配置裁判模型，并通过 <code>rubrics</code> 将一个指标拆成多条可独立验证的评估细则；另一方面要求 EvalSet 预期侧提供 <code>finalResponse</code> 作为 golden answer，再对实际最终回答逐条做批判式比较。</p>
-<p>该评估器适合这样的场景：<code>llm_final_response</code> 过于粗粒度，只能给出整体通过或失败；<code>llm_rubric_response</code> 又过于宽松，因为它只判断“是否满足细则”，不强制将参考答案作为对照目标。<code>llm_rubric_critic</code> 则要求裁判站在评估器本身的视角执行评分逻辑，以参考答案为权威目标，逐条判断实际输出是否在当前 rubric 上真正满足要求，并在存在实质缺陷、遗漏、矛盾或无法验证时返回 <code>no</code>。</p>
-<p>评估器会基于用户输入、实际最终回答、预期最终回答以及 <code>criterion.llmJudge.rubrics</code> 构造裁判输入。默认提示词会强调以下几点：参考答案是 golden answer；判断应聚焦当前 rubric；允许语义等价；只有存在 material defect 时才判 <code>no</code>；不能吹毛求疵，也不能脑补隐藏要求。裁判模型对每条 rubric 返回 <code>yes</code> 或 <code>no</code>，单次采样得分为所有 rubric 得分的平均值；当配置 <code>numSamples</code> 进行多次采样时，评估器会使用 <code>samplesaggregator/majorityvote</code> 选择代表结果，再与 <code>threshold</code> 对比得到通过或失败。</p>
+<p>该评估器适合这样的场景：<code>llm_final_response</code> 过于粗粒度，只能给出整体通过或失败；<code>llm_rubric_response</code> 又过于宽松，因为它只判断“是否满足细则”，不强制将参考答案作为对照目标。<code>llm_rubric_critic</code> 则要求裁判站在评估器本身的视角执行评分逻辑，以参考答案为权威目标，逐条判断实际输出是否在当前 rubric 上真正满足要求，并在存在实质缺陷、遗漏、矛盾或无法验证时给出 0 分。</p>
+<p>评估器会基于用户输入、实际最终回答、预期最终回答以及 <code>criterion.llmJudge.rubrics</code> 构造裁判输入。默认提示词会强调以下几点：参考答案是 golden answer；判断应聚焦当前 rubric；允许语义等价；只有存在 material defect 时才给出 0 分；不能吹毛求疵，也不能脑补隐藏要求。裁判模型通过结构化输出对每条 rubric 返回 <code>id</code>、<code>score</code> 与 <code>reason</code>，其中 <code>score</code> 只能为 0 或 1，单次采样得分为所有 rubric 得分的平均值；当配置 <code>numSamples</code> 进行多次采样时，评估器会使用 <code>samplesaggregator/majorityvote</code> 选择代表结果，再与 <code>threshold</code> 对比得到通过或失败。</p>
 <p>使用 <code>llm_rubric_critic</code> 时，建议将 rubric 写得足够原子化，并确保每条 rubric 都能从用户输入、参考答案和实际回答中直接验证。由于该评估器依赖 golden answer，通常要求 EvalSet 预期侧提供 <code>finalResponse</code>。出于安全考虑，建议不要在指标配置中明文写入 <code>judgeModel.apiKey</code> 和 <code>judgeModel.baseURL</code>，可使用环境变量引用以降低泄露风险。</p>
 <p>LLM 细则批判评估指标配置示例如下：</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-67-1"> 1</a></span>
@@ -8194,7 +8214,7 @@
 </span></code></pre></div></td></tr></table></div>
 <h5 id="llm_4">LLM 参考答案细则批判评估器</h5>
 <p>LLM 参考答案细则批判评估器对应的指标名称为 <code>llm_rubric_reference_critic</code>，属于 LLM Judge 类评估器。它同样会结合参考答案与细则做逐条打分，但没有 <code>llm_rubric_critic</code> 那么强的失败导向。这里的参考答案更像质量锚点，用来规定应该达到的 grounding、具体度与完整度，而不是要求实际回答逐字贴齐参考答案。</p>
-<p>评估器会基于用户输入、实际最终回答、预期最终回答以及 <code>criterion.llmJudge.rubrics</code> 构造裁判输入。默认提示词会要求裁判保留参考答案所体现的关键事实、决定性线索和有效细节，同时接受忠实的同义改写和不同句式，不因措辞不同就判失败。裁判模型对每条 rubric 返回 <code>yes</code> 或 <code>no</code>，单次采样得分为所有 rubric 得分的平均值；当配置 <code>numSamples</code> 进行多次采样时，评估器会使用 <code>samplesaggregator/majorityvote</code> 选择代表结果，再与 <code>threshold</code> 对比得到通过或失败。</p>
+<p>评估器会基于用户输入、实际最终回答、预期最终回答以及 <code>criterion.llmJudge.rubrics</code> 构造裁判输入。默认提示词会要求裁判保留参考答案所体现的关键事实、决定性线索和有效细节，同时接受忠实的同义改写和不同句式，不因措辞不同就判失败。裁判模型通过结构化输出对每条 rubric 返回 <code>id</code>、<code>score</code> 与 <code>reason</code>，其中 <code>score</code> 只能为 0 或 1，单次采样得分为所有 rubric 得分的平均值；当配置 <code>numSamples</code> 进行多次采样时，评估器会使用 <code>samplesaggregator/majorityvote</code> 选择代表结果，再与 <code>threshold</code> 对比得到通过或失败。</p>
 <p>当 <code>llm_final_response</code> 过于粗粒度，<code>llm_rubric_response</code> 又因为完全不看参考答案而偏宽松，而 <code>llm_rubric_critic</code> 又因为把参考答案当 golden answer 而过严时，可以使用 <code>llm_rubric_reference_critic</code>。rubric 仍然建议保持原子化，并确保每条都能从用户输入、参考答案和实际回答中直接验证。由于该评估器依赖参考答案，通常要求 EvalSet 预期侧提供 <code>finalResponse</code>。出于安全考虑，建议不要在指标配置中明文写入 <code>judgeModel.apiKey</code> 和 <code>judgeModel.baseURL</code>，可使用环境变量引用以降低泄露风险。</p>
 <p>LLM 参考答案细则批判评估指标配置示例如下：</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-68-1"> 1</a></span>
@@ -8279,7 +8299,7 @@
 </span></code></pre></div></td></tr></table></div>
 <h5 id="llm_5">LLM 细则响应评估器</h5>
 <p>LLM 细则响应评估器对应的指标名称为 <code>llm_rubric_response</code>，属于 LLM Judge 类评估器，使用 <a href="#llmcriterion">LLMCriterion</a> 配置裁判模型，并通过 <code>rubrics</code> 将一个指标拆成多条可独立验证的评估细则。该评估器侧重判定最终回答是否满足各项细则要求，适合对正确性、相关性与合规性等难以用确定性规则覆盖的目标进行自动化评估。</p>
-<p>评估器会基于 <code>criterion.llmJudge.rubrics</code> 构造裁判输入，裁判模型对每条 rubric 给出 <code>yes</code> 或 <code>no</code> 判定。单次采样得分为所有 rubric 得分的平均值，其中 <code>yes</code> 记 1 分，<code>no</code> 记 0 分。当配置 <code>numSamples</code> 进行多次采样时，评估器会使用 <code>samplesaggregator/majorityvote</code> 选择代表结果，再与 <code>threshold</code> 对比得到通过或失败。</p>
+<p>评估器会基于 <code>criterion.llmJudge.rubrics</code> 构造裁判输入，裁判模型通过结构化输出对每条 rubric 返回 <code>id</code>、<code>score</code> 与 <code>reason</code>。单次采样得分为所有 rubric 得分的平均值，其中 <code>score=1</code> 表示通过，<code>score=0</code> 表示失败。当配置 <code>numSamples</code> 进行多次采样时，评估器会使用 <code>samplesaggregator/majorityvote</code> 选择代表结果，再与 <code>threshold</code> 对比得到通过或失败。</p>
 <p>rubric 的表述尽量具体，并且能够直接从用户输入与最终回答中验证，避免把多条要求揉在同一条 rubric 里，以降低裁判波动并便于定位问题。出于安全考虑，建议不要在指标配置中明文写入 <code>judgeModel.apiKey</code> 和 <code>judgeModel.baseURL</code>，可使用环境变量引用以降低泄露风险。</p>
 <p>LLM 细则响应评估指标配置示例如下：</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-69-1"> 1</a></span>
@@ -8365,7 +8385,7 @@
 <p>完整示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/rubricresponse">examples/evaluation/llm/rubricresponse</a>。</p>
 <h5 id="llm_6">LLM 细则知识库召回评估器</h5>
 <p>LLM 细则知识库召回评估器对应的指标名称为 <code>llm_rubric_knowledge_recall</code>，属于 LLM Judge 类评估器，使用 <a href="#llmcriterion">LLMCriterion</a> 配置裁判模型，并通过 <code>rubrics</code> 描述检索证据需要支撑的关键信息。该评估器侧重评估检索到的知识是否足以支撑用户问题或细则中的关键事实，适用于 RAG 类场景对召回质量进行自动化评估。</p>
-<p>评估器会从工具调用中提取 <code>knowledge_search</code> 和 <code>knowledge_search_with_agentic_filter</code> 等知识检索工具的响应作为检索结果证据，并结合 <code>criterion.llmJudge.rubrics</code> 构造裁判输入。裁判模型对每条 rubric 返回 <code>yes</code> 或 <code>no</code> 判定，单次采样得分为平均值，多次采样时使用多数表决确定代表结果，再与 <code>threshold</code> 对比得到通过或失败。</p>
+<p>评估器会从工具调用中提取 <code>knowledge_search</code> 和 <code>knowledge_search_with_agentic_filter</code> 等知识检索工具的响应作为检索结果证据，并结合 <code>criterion.llmJudge.rubrics</code> 构造裁判输入。裁判模型通过结构化输出对每条 rubric 返回 <code>id</code>、<code>score</code> 与 <code>reason</code>，单次采样得分为平均值，多次采样时使用多数表决确定代表结果，再与 <code>threshold</code> 对比得到通过或失败。</p>
 <p>该评估器要求实际轨迹中包含知识检索类工具调用并返回可用的检索结果，否则无法形成稳定的裁判输入。rubric 应尽量围绕证据是否包含并支撑关键事实来写，避免将最终回答质量要求混入召回评估目标。出于安全考虑，建议不要在指标配置中明文写入 <code>judgeModel.apiKey</code> 和 <code>judgeModel.baseURL</code>，可使用环境变量引用以降低泄露风险。</p>
 <p>LLM 细则知识库召回评估指标配置示例如下：</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-70-1"> 1</a></span>
@@ -10811,7 +10831,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月15日 02:19:26 UTC">2026-05-15 02:19:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月22日 04:12:05 UTC">2026-05-22 04:12:05</span>
   </span>
 
     
