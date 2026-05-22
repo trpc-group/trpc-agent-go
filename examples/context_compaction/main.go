@@ -289,8 +289,11 @@ func makeLargeLog(_ context.Context, req logRequest) (logResult, error) {
 
 func (d *demoApp) runTurn(ctx context.Context, text string) error {
 	fmt.Printf("\nUser: %s\n", text)
+	turnCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	events, err := d.runner.Run(
-		ctx,
+		turnCtx,
 		userID,
 		d.sessionID,
 		model.NewUserMessage(text),
@@ -302,10 +305,17 @@ func (d *demoApp) runTurn(ctx context.Context, text string) error {
 	for evt := range events {
 		printEvent(evt)
 		if err := eventError(evt); err != nil {
+			cancel()
+			drainEvents(events)
 			return err
 		}
 	}
 	return nil
+}
+
+func drainEvents(events <-chan *event.Event) {
+	for range events {
+	}
 }
 
 func eventError(evt *event.Event) error {
