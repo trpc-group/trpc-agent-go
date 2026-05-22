@@ -113,7 +113,7 @@ func TestCodeExecutorExecuteCodeErrorBranches(t *testing.T) {
 	}
 
 	externalProfile := ExternalSandboxProfile(NetworkPolicy{})
-	externalProfile.FileSystem = WorkspaceWriteProfile().FileSystem
+	externalProfile.fileSystem = WorkspaceWriteProfile().fileSystem
 	external := New(
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(externalProfile),
@@ -192,7 +192,7 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 	}
 
 	externalProfile := ExternalSandboxProfile(NetworkPolicy{})
-	externalProfile.FileSystem = WorkspaceWriteProfile().FileSystem
+	externalProfile.fileSystem = WorkspaceWriteProfile().fileSystem
 	external := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(externalProfile),
@@ -208,7 +208,7 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 
 	strict := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
-		WithPermissionProfile(PermissionProfile{Type: ProfileManaged}),
+		WithPermissionProfile(PermissionProfile{typ: profileManaged}),
 	)
 	strictWS, err := strict.CreateWorkspace(context.Background(), "run/strict", codeexecutor.WorkspacePolicy{})
 	if err != nil {
@@ -375,7 +375,7 @@ func TestRuntimeDefaultsDescribeAndHelpers(t *testing.T) {
 		t.Fatalf("defaults output=%d timeout=%s", rt.outputMaxBytes, rt.defaultTimeout)
 	}
 	defaultProfile := NewRuntime(WithPermissionProfile(PermissionProfile{}))
-	if defaultProfile.profile.Type != ProfileManaged || defaultProfile.profile.Network.Mode != NetworkRestricted {
+	if defaultProfile.profile.typ != profileManaged || defaultProfile.profile.network.Mode != NetworkRestricted {
 		t.Fatalf("default normalized profile = %#v", defaultProfile.profile)
 	}
 	disabled := NewRuntime(WithPermissionProfile(DangerFullAccessProfile()))
@@ -629,50 +629,50 @@ func TestPathPolicyResolutionAndAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !decision.matched || decision.access != AccessNone {
+	if !decision.matched || decision.access != accessNone {
 		t.Fatalf("secret decision = %#v, want no access match", decision)
 	}
 	decision, err = rt.decidePath(profile, ws, "work/public/readme.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.access != AccessRead {
+	if decision.access != accessRead {
 		t.Fatalf("public decision = %#v, want read access", decision)
 	}
 
 	invalid := WorkspaceWriteProfile()
-	invalid.FileSystem.Rules = append(invalid.FileSystem.Rules, FileSystemRule{
-		Kind: RuleGlob, Access: AccessRead, Glob: "work/**",
+	invalid.fileSystem.Rules = append(invalid.fileSystem.Rules, fileSystemRule{
+		Kind: ruleGlob, Access: accessRead, Glob: "work/**",
 	})
 	if err := rt.checkRead(invalid, ws, "work/a.txt"); !IsKind(err, ErrPolicyViolation) {
 		t.Fatalf("invalid glob read rule error = %v, want ErrPolicyViolation", err)
 	}
 
-	if ok, err := rt.matchRule(ws, "work/a.txt", filepath.Join(ws.Path, "work", "a.txt"), FileSystemRule{}); err != nil || ok {
+	if ok, err := rt.matchRule(ws, "work/a.txt", filepath.Join(ws.Path, "work", "a.txt"), fileSystemRule{}); err != nil || ok {
 		t.Fatalf("empty path rule match = %v, %v; want false nil", ok, err)
 	}
-	if _, ok := specialRel(SpecialPath("missing")); ok {
+	if _, ok := specialRel(specialPath("missing")); ok {
 		t.Fatalf("unknown special path unexpectedly resolved")
 	}
 	if got := pathSpecificity("./work/a/b"); got != 3 {
 		t.Fatalf("path specificity = %d, want 3", got)
 	}
-	if got := accessPrecedence(FileSystemAccess("unknown")); got != 0 {
+	if got := accessPrecedence(fileSystemAccess("unknown")); got != 0 {
 		t.Fatalf("unknown access precedence = %d, want 0", got)
 	}
-	if accessCanRead(AccessNone) || accessCanWrite(AccessRead) {
+	if accessCanRead(accessNone) || accessCanWrite(accessRead) {
 		t.Fatalf("access helpers allowed insufficient permissions")
 	}
-	if target := ruleTarget(FileSystemRule{Kind: FileSystemRuleKind("mystery")}); !strings.Contains(target, "mystery") {
+	if target := ruleTarget(fileSystemRule{Kind: fileSystemRuleKind("mystery")}); !strings.Contains(target, "mystery") {
 		t.Fatalf("unexpected unknown rule target %q", target)
 	}
-	if spec, err := ruleSpecificity(ws, FileSystemRule{Kind: RuleSpecial, Special: SpecialPath("missing")}); err != nil || spec != 0 {
+	if spec, err := ruleSpecificity(ws, fileSystemRule{Kind: ruleSpecial, Special: specialPath("missing")}); err != nil || spec != 0 {
 		t.Fatalf("unknown special specificity = %d, %v", spec, err)
 	}
-	if spec, err := ruleSpecificity(ws, FileSystemRule{Kind: RulePath}); err != nil || spec != 0 {
+	if spec, err := ruleSpecificity(ws, fileSystemRule{Kind: rulePath}); err != nil || spec != 0 {
 		t.Fatalf("empty path specificity = %d, %v", spec, err)
 	}
-	if ok, err := matchSpecial(ws, filepath.Join(ws.Path, "work"), SpecialPath("missing")); err != nil || ok {
+	if ok, err := matchSpecial(ws, filepath.Join(ws.Path, "work"), specialPath("missing")); err != nil || ok {
 		t.Fatalf("unknown special match = %v, %v; want false nil", ok, err)
 	}
 	if matches, err := rt.deniedReadMatches(WorkspaceWriteProfile(), ws); err != nil || len(matches) != 0 {
@@ -737,7 +737,7 @@ func TestSandboxErrorsAndLimitedBuffer(t *testing.T) {
 func TestEnvironmentAndProfileBranches(t *testing.T) {
 	t.Setenv("SANDBOX_SECRET_TOKEN", "secret")
 	rt := NewRuntime(
-		WithPermissionProfile(PermissionProfile{Type: ProfileDisabled}),
+		WithPermissionProfile(PermissionProfile{typ: profileDisabled}),
 		WithShellEnvironmentPolicy(ShellEnvironmentPolicy{
 			Inherit:              ShellEnvironmentPolicyInheritNone,
 			ApplyDefaultExcludes: true,
@@ -774,11 +774,11 @@ func TestEnvironmentAndProfileBranches(t *testing.T) {
 		WithNoAccessGlobs("", "work/*.secret")
 	network := NetworkPolicy{Mode: NetworkEnabled}
 	p = applyAdditionalPermissions(p, AdditionalPermissions{Network: &network})
-	if p.Network.Mode != NetworkEnabled {
+	if p.network.Mode != NetworkEnabled {
 		t.Fatalf("additional network permission not applied")
 	}
-	if len(p.FileSystem.Rules) < len(WorkspaceWriteProfile().FileSystem.Rules)+4 {
-		t.Fatalf("empty profile rules were not skipped as expected: %#v", p.FileSystem.Rules)
+	if len(p.fileSystem.Rules) < len(WorkspaceWriteProfile().fileSystem.Rules)+4 {
+		t.Fatalf("empty profile rules were not skipped as expected: %#v", p.fileSystem.Rules)
 	}
 }
 

@@ -156,8 +156,8 @@ func TestLinuxNoAccessMaskArgsCoverPathGlobAndSpecial(t *testing.T) {
 	profile := WorkspaceWriteProfile().
 		WithNoAccessPaths("work/secret.txt").
 		WithNoAccessGlobs("work/*.env")
-	profile.FileSystem.Rules = append(profile.FileSystem.Rules, FileSystemRule{
-		Kind: RuleSpecial, Access: AccessNone, Special: SpecialOut,
+	profile.fileSystem.Rules = append(profile.fileSystem.Rules, fileSystemRule{
+		Kind: ruleSpecial, Access: accessNone, Special: specialOut,
 	})
 	args, err := rt.denyReadMaskArgs(profile, ws)
 	if err != nil {
@@ -187,8 +187,8 @@ func TestLinuxBackendCapabilitiesAndSandboxArgsBranches(t *testing.T) {
 	externalWrite := t.TempDir()
 	profile := WorkspaceWriteProfile().
 		WithReadPaths(externalRead).
-		WithWritePaths(externalWrite, filepath.Join(ws.Path, "work"))
-	profile.Network = NetworkPolicy{Mode: NetworkEnabled}
+		WithWritePaths(externalWrite, filepath.Join(ws.Path, "work")).
+		WithNetworkPolicy(NetworkPolicy{Mode: NetworkEnabled})
 	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
 		t.Fatal(err)
 	}

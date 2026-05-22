@@ -1,9 +1,10 @@
 # Sandbox Network Policy
 
-Sandbox profiles own network policy through `NetworkPolicy.Mode`. The policy is
-a binary switch: `NetworkRestricted` or `NetworkEnabled`. Managed profiles
-default to `NetworkRestricted`, so code runs without host network access unless
-the caller explicitly selects `NetworkEnabled`.
+Sandbox profiles own network policy through `NetworkPolicy.Mode`, configured on
+a profile with `WithNetworkPolicy`. The policy is a binary switch:
+`NetworkRestricted` or `NetworkEnabled`. Managed profiles default to
+`NetworkRestricted`, so code runs without host network access unless the caller
+explicitly selects `NetworkEnabled`.
 
 ## Policy Model
 
@@ -13,10 +14,10 @@ the caller explicitly selects `NetworkEnabled`.
 - `NetworkEnabled` allows the command to use the host network. On Linux this
   means the command is launched without network namespace isolation.
 
-`ProfileDisabled` and `ProfileExternal` are profile enforcement modes, not
-network policy modes. A disabled profile intentionally runs without local
-sandbox enforcement and is normalized to `NetworkEnabled`; an external profile
-declares that another system is responsible for enforcing the requested policy.
+Profile enforcement is separate from network policy. `DangerFullAccessProfile()`
+intentionally runs without local sandbox enforcement and is normalized to
+`NetworkEnabled`; `ExternalSandboxProfile` declares that another system is
+responsible for enforcing the requested policy.
 
 ## Linux Enforcement
 

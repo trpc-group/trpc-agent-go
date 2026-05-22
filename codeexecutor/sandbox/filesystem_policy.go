@@ -9,64 +9,64 @@
 
 package sandbox
 
-// FileSystemAccess describes a filesystem rule's access mode.
-type FileSystemAccess string
+// fileSystemAccess describes a filesystem rule's access mode.
+type fileSystemAccess string
 
 const (
-	// AccessRead grants read-only access.
-	AccessRead FileSystemAccess = "read"
-	// AccessWrite grants read and write access.
-	AccessWrite FileSystemAccess = "write"
-	// AccessNone denies both reads and writes.
-	AccessNone FileSystemAccess = "none"
+	// accessRead grants read-only access.
+	accessRead fileSystemAccess = "read"
+	// accessWrite grants read and write access.
+	accessWrite fileSystemAccess = "write"
+	// accessNone denies both reads and writes.
+	accessNone fileSystemAccess = "none"
 )
 
-// FileSystemRuleKind describes how a filesystem rule target is interpreted.
-type FileSystemRuleKind string
+// fileSystemRuleKind describes how a filesystem rule target is interpreted.
+type fileSystemRuleKind string
 
 const (
-	// RulePath targets a concrete path. Relative paths are workspace-relative;
+	// rulePath targets a concrete path. Relative paths are workspace-relative;
 	// absolute paths are host paths.
-	RulePath FileSystemRuleKind = "path"
-	// RuleSpecial targets a well-known sandbox path.
-	RuleSpecial FileSystemRuleKind = "special"
-	// RuleGlob targets a workspace-relative glob.
-	RuleGlob FileSystemRuleKind = "glob"
+	rulePath fileSystemRuleKind = "path"
+	// ruleSpecial targets a well-known sandbox path.
+	ruleSpecial fileSystemRuleKind = "special"
+	// ruleGlob targets a workspace-relative glob.
+	ruleGlob fileSystemRuleKind = "glob"
 )
 
-// SpecialPath identifies well-known session-scoped directories.
-type SpecialPath string
+// specialPath identifies well-known session-scoped directories.
+type specialPath string
 
 const (
-	// SpecialRoot matches the whole sandbox workspace.
-	SpecialRoot SpecialPath = "root"
-	// SpecialWorkspace matches the session workspace directory.
-	SpecialWorkspace SpecialPath = "workspace"
-	// SpecialWork matches the workspace work directory.
-	SpecialWork SpecialPath = "work"
-	// SpecialHome matches the workspace home directory.
-	SpecialHome SpecialPath = "home"
-	// SpecialTmp matches the workspace tmp directory.
-	SpecialTmp SpecialPath = "tmp"
-	// SpecialRuns matches the workspace runs directory.
-	SpecialRuns SpecialPath = "runs"
-	// SpecialOut matches the workspace output directory.
-	SpecialOut SpecialPath = "out"
-	// SpecialSkills matches the workspace skills directory.
-	SpecialSkills SpecialPath = "skills"
+	// specialRoot matches the whole sandbox workspace.
+	specialRoot specialPath = "root"
+	// specialWorkspace matches the session workspace directory.
+	specialWorkspace specialPath = "workspace"
+	// specialWork matches the workspace work directory.
+	specialWork specialPath = "work"
+	// specialHome matches the workspace home directory.
+	specialHome specialPath = "home"
+	// specialTmp matches the workspace tmp directory.
+	specialTmp specialPath = "tmp"
+	// specialRuns matches the workspace runs directory.
+	specialRuns specialPath = "runs"
+	// specialOut matches the workspace output directory.
+	specialOut specialPath = "out"
+	// specialSkills matches the workspace skills directory.
+	specialSkills specialPath = "skills"
 )
 
-// FileSystemRule declares one filesystem access rule.
-type FileSystemRule struct {
-	Kind    FileSystemRuleKind
-	Access  FileSystemAccess
+// fileSystemRule declares one filesystem access rule.
+type fileSystemRule struct {
+	Kind    fileSystemRuleKind
+	Access  fileSystemAccess
 	Path    string
-	Special SpecialPath
+	Special specialPath
 	Glob    string
 }
 
-// FileSystemPolicy is the filesystem portion of a PermissionProfile.
-type FileSystemPolicy struct {
-	Rules             []FileSystemRule
+// fileSystemPolicy is the filesystem portion of a PermissionProfile.
+type fileSystemPolicy struct {
+	Rules             []fileSystemRule
 	ProtectedMetadata []string
 }

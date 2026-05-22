@@ -58,14 +58,14 @@ func runFileSystemPolicyAccessModes(ctx context.Context, cfg config) error {
 		return fmt.Errorf("public file was not readable: %#v", files)
 	}
 	if _, err := rt.Collect(ctx, ws, []string{"work/secret.txt"}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
-		return fmt.Errorf("AccessNone read was not denied: %v", err)
+		return fmt.Errorf("no-access read was not denied: %v", err)
 	}
 	err = rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
 		Path:    "work/secret.txt",
 		Content: []byte("new"),
 	}})
 	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
-		return fmt.Errorf("AccessNone write was not denied: %v", err)
+		return fmt.Errorf("no-access write was not denied: %v", err)
 	}
 	if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
 		Path:    ".git/config",
@@ -124,14 +124,14 @@ func runFileSystemPolicyGlobNoAccess(ctx context.Context, cfg config) error {
 		return err
 	}
 	if _, err := rt.Collect(ctx, ws, []string{"work/*.env"}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
-		return fmt.Errorf("glob AccessNone read was not denied: %v", err)
+		return fmt.Errorf("glob no-access read was not denied: %v", err)
 	}
 	err = rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
 		Path:    "work/secret.env",
 		Content: []byte("TOKEN=new"),
 	}})
 	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
-		return fmt.Errorf("glob AccessNone write was not denied: %v", err)
+		return fmt.Errorf("glob no-access write was not denied: %v", err)
 	}
 	if err := maybeVerifyFileSystemPolicyShellMask(ctx, cfg, rt, ws); err != nil {
 		return err

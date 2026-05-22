@@ -23,34 +23,34 @@ const (
 	enforcementExternal enforcement = "external"
 )
 
-// PermissionProfileType selects how sandbox permissions are enforced.
-type PermissionProfileType string
+// permissionProfileType selects how sandbox permissions are enforced.
+type permissionProfileType string
 
 const (
-	// ProfileManaged uses the sandbox backend selected by this package.
-	ProfileManaged PermissionProfileType = "managed"
-	// ProfileDisabled intentionally disables sandboxing.
-	ProfileDisabled PermissionProfileType = "disabled"
-	// ProfileExternal declares that an outside system is already enforcing
+	// profileManaged uses the sandbox backend selected by this package.
+	profileManaged permissionProfileType = "managed"
+	// profileDisabled intentionally disables sandboxing.
+	profileDisabled permissionProfileType = "disabled"
+	// profileExternal declares that an outside system is already enforcing
 	// isolation. This executor does not claim OS enforcement in that mode.
-	ProfileExternal PermissionProfileType = "external"
+	profileExternal permissionProfileType = "external"
 )
 
 // PermissionProfile is the public sandbox permission model. It intentionally
 // owns both filesystem and network policy so callers cannot request contradictory
 // combinations such as read-only + disabled enforcement.
 type PermissionProfile struct {
-	Type       PermissionProfileType
-	FileSystem FileSystemPolicy
-	Network    NetworkPolicy
+	typ        permissionProfileType
+	fileSystem fileSystemPolicy
+	network    NetworkPolicy
 }
 
 // enforcement derives the execution mode from the profile.
 func (p PermissionProfile) enforcement() enforcement {
-	switch p.Type {
-	case ProfileDisabled:
+	switch p.typ {
+	case profileDisabled:
 		return enforcementDisabled
-	case ProfileExternal:
+	case profileExternal:
 		return enforcementExternal
 	default:
 		return enforcementManaged
@@ -61,16 +61,16 @@ func (p PermissionProfile) enforcement() enforcement {
 // restricted networking.
 func ReadOnlyProfile() PermissionProfile {
 	return PermissionProfile{
-		Type: ProfileManaged,
-		FileSystem: FileSystemPolicy{
-			Rules: []FileSystemRule{{
-				Kind:    RuleSpecial,
-				Access:  AccessRead,
-				Special: SpecialRoot,
+		typ: profileManaged,
+		fileSystem: fileSystemPolicy{
+			Rules: []fileSystemRule{{
+				Kind:    ruleSpecial,
+				Access:  accessRead,
+				Special: specialRoot,
 			}},
 			ProtectedMetadata: defaultProtectedMetadata(),
 		},
-		Network: NetworkPolicy{Mode: NetworkRestricted},
+		network: NetworkPolicy{Mode: NetworkRestricted},
 	}
 }
 
@@ -78,14 +78,14 @@ func ReadOnlyProfile() PermissionProfile {
 // root, writable session workspace, protected metadata, restricted networking.
 func WorkspaceWriteProfile() PermissionProfile {
 	p := ReadOnlyProfile()
-	p.FileSystem.Rules = append(p.FileSystem.Rules,
-		FileSystemRule{Kind: RuleSpecial, Access: AccessWrite, Special: SpecialWorkspace},
-		FileSystemRule{Kind: RuleSpecial, Access: AccessWrite, Special: SpecialWork},
-		FileSystemRule{Kind: RuleSpecial, Access: AccessWrite, Special: SpecialHome},
-		FileSystemRule{Kind: RuleSpecial, Access: AccessWrite, Special: SpecialTmp},
-		FileSystemRule{Kind: RuleSpecial, Access: AccessWrite, Special: SpecialRuns},
-		FileSystemRule{Kind: RuleSpecial, Access: AccessWrite, Special: SpecialOut},
-		FileSystemRule{Kind: RuleSpecial, Access: AccessWrite, Special: SpecialSkills},
+	p.fileSystem.Rules = append(p.fileSystem.Rules,
+		fileSystemRule{Kind: ruleSpecial, Access: accessWrite, Special: specialWorkspace},
+		fileSystemRule{Kind: ruleSpecial, Access: accessWrite, Special: specialWork},
+		fileSystemRule{Kind: ruleSpecial, Access: accessWrite, Special: specialHome},
+		fileSystemRule{Kind: ruleSpecial, Access: accessWrite, Special: specialTmp},
+		fileSystemRule{Kind: ruleSpecial, Access: accessWrite, Special: specialRuns},
+		fileSystemRule{Kind: ruleSpecial, Access: accessWrite, Special: specialOut},
+		fileSystemRule{Kind: ruleSpecial, Access: accessWrite, Special: specialSkills},
 	)
 	return p
 }
@@ -93,8 +93,8 @@ func WorkspaceWriteProfile() PermissionProfile {
 // DangerFullAccessProfile intentionally disables sandboxing.
 func DangerFullAccessProfile() PermissionProfile {
 	return PermissionProfile{
-		Type:    ProfileDisabled,
-		Network: NetworkPolicy{Mode: NetworkEnabled},
+		typ:     profileDisabled,
+		network: NetworkPolicy{Mode: NetworkEnabled},
 	}
 }
 
@@ -104,7 +104,16 @@ func ExternalSandboxProfile(network NetworkPolicy) PermissionProfile {
 	if network.Mode == "" {
 		network.Mode = NetworkRestricted
 	}
-	return PermissionProfile{Type: ProfileExternal, Network: network}
+	return PermissionProfile{typ: profileExternal, network: network}
+}
+
+// WithNetworkPolicy sets network access for the profile.
+func (p PermissionProfile) WithNetworkPolicy(policy NetworkPolicy) PermissionProfile {
+	if policy.Mode == "" {
+		policy.Mode = NetworkRestricted
+	}
+	p.network = policy
+	return p
 }
 
 // WithReadPaths adds read grants.
@@ -113,8 +122,8 @@ func (p PermissionProfile) WithReadPaths(paths ...string) PermissionProfile {
 		if path == "" {
 			continue
 		}
-		p = p.withFileSystemRule(FileSystemRule{
-			Kind: RulePath, Access: AccessRead, Path: path,
+		p = p.withFileSystemRule(fileSystemRule{
+			Kind: rulePath, Access: accessRead, Path: path,
 		})
 	}
 	return p
@@ -126,8 +135,8 @@ func (p PermissionProfile) WithWritePaths(paths ...string) PermissionProfile {
 		if path == "" {
 			continue
 		}
-		p = p.withFileSystemRule(FileSystemRule{
-			Kind: RulePath, Access: AccessWrite, Path: path,
+		p = p.withFileSystemRule(fileSystemRule{
+			Kind: rulePath, Access: accessWrite, Path: path,
 		})
 	}
 	return p
@@ -140,8 +149,8 @@ func (p PermissionProfile) WithNoAccessPaths(paths ...string) PermissionProfile 
 		if path == "" {
 			continue
 		}
-		p = p.withFileSystemRule(FileSystemRule{
-			Kind: RulePath, Access: AccessNone, Path: path,
+		p = p.withFileSystemRule(fileSystemRule{
+			Kind: rulePath, Access: accessNone, Path: path,
 		})
 	}
 	return p
@@ -154,18 +163,18 @@ func (p PermissionProfile) WithNoAccessGlobs(patterns ...string) PermissionProfi
 		if pattern == "" {
 			continue
 		}
-		p = p.withFileSystemRule(FileSystemRule{
-			Kind: RuleGlob, Access: AccessNone, Glob: pattern,
+		p = p.withFileSystemRule(fileSystemRule{
+			Kind: ruleGlob, Access: accessNone, Glob: pattern,
 		})
 	}
 	return p
 }
 
-func (p PermissionProfile) withFileSystemRule(rule FileSystemRule) PermissionProfile {
-	rules := make([]FileSystemRule, 0, len(p.FileSystem.Rules)+1)
-	rules = append(rules, p.FileSystem.Rules...)
+func (p PermissionProfile) withFileSystemRule(rule fileSystemRule) PermissionProfile {
+	rules := make([]fileSystemRule, 0, len(p.fileSystem.Rules)+1)
+	rules = append(rules, p.fileSystem.Rules...)
 	rules = append(rules, rule)
-	p.FileSystem.Rules = rules
+	p.fileSystem.Rules = rules
 	return p
 }
 
@@ -192,7 +201,7 @@ func applyAdditionalPermissions(p PermissionProfile, add AdditionalPermissions) 
 	p = p.WithReadPaths(add.ReadPaths...)
 	p = p.WithWritePaths(add.WritePaths...)
 	if add.Network != nil {
-		p.Network = *add.Network
+		p = p.WithNetworkPolicy(*add.Network)
 	}
 	return p
 }

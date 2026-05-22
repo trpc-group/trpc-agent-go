@@ -99,7 +99,7 @@ func (r *Runtime) Describe() codeexecutor.Capabilities {
 	}
 	return codeexecutor.Capabilities{
 		Isolation:      isolation,
-		NetworkAllowed: profile.Network.Mode == NetworkEnabled,
+		NetworkAllowed: profile.network.Mode == NetworkEnabled,
 		ReadOnlyMount:  profile.enforcement() == enforcementManaged,
 		Streaming:      false,
 	}
@@ -241,7 +241,7 @@ func (r *Runtime) materializeManifest(ctx context.Context, ws codeexecutor.Works
 		if err != nil {
 			return err
 		}
-		if isProtectedRel(rel, r.profile.FileSystem.ProtectedMetadata) {
+		if isProtectedRel(rel, r.profile.fileSystem.ProtectedMetadata) {
 			return deniedf(ErrPathDenied, "manifest", rel, "protected metadata path")
 		}
 		if err := os.RemoveAll(abs); err != nil {
@@ -253,7 +253,7 @@ func (r *Runtime) materializeManifest(ctx context.Context, ws codeexecutor.Works
 		if err != nil {
 			return err
 		}
-		if isProtectedRel(rel, r.profile.FileSystem.ProtectedMetadata) {
+		if isProtectedRel(rel, r.profile.fileSystem.ProtectedMetadata) {
 			return deniedf(ErrPathDenied, "manifest", rel, "protected metadata path")
 		}
 		if _, err := os.Stat(abs); err == nil {

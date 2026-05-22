@@ -82,7 +82,7 @@ func (r *Runtime) StageDirectory(
 		normalizeProfile(r.profile),
 		additionalPermissionsFromContext(ctx),
 	)
-	if profile.enforcement() != enforcementDisabled && !pathHasRule(profile, src, AccessRead) {
+	if profile.enforcement() != enforcementDisabled && !pathHasRule(profile, src, accessRead) {
 		return deniedf(ErrPathDenied, "read", src, "host path requires explicit read grant")
 	}
 	if err := r.checkWrite(profile, ws, to); err != nil {
@@ -559,12 +559,12 @@ func pinnedArtifactVersion(
 	return nil
 }
 
-func pathHasRule(profile PermissionProfile, target string, access FileSystemAccess) bool {
-	for _, rule := range profile.FileSystem.Rules {
-		if rule.Kind != RulePath {
+func pathHasRule(profile PermissionProfile, target string, access fileSystemAccess) bool {
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Kind != rulePath {
 			continue
 		}
-		if rule.Access != access && rule.Access != AccessWrite {
+		if rule.Access != access && rule.Access != accessWrite {
 			continue
 		}
 		if rule.Path == target {

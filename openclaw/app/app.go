@@ -2633,13 +2633,13 @@ func sandboxPermissionProfileFromConfig(
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Network)) {
 	case sandboxNetworkEnabled:
-		profile.Network = sandboxexec.NetworkPolicy{
+		profile = profile.WithNetworkPolicy(sandboxexec.NetworkPolicy{
 			Mode: sandboxexec.NetworkEnabled,
-		}
+		})
 	default:
-		profile.Network = sandboxexec.NetworkPolicy{
+		profile = profile.WithNetworkPolicy(sandboxexec.NetworkPolicy{
 			Mode: sandboxexec.NetworkRestricted,
-		}
+		})
 	}
 	return profile
 }

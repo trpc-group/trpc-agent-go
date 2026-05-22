@@ -62,8 +62,9 @@ func runNetworkPolicyRestricted(ctx context.Context, cfg config) error {
 }
 
 func runNetworkPolicyEnabled(ctx context.Context, cfg config) error {
-	profile := sandbox.WorkspaceWriteProfile()
-	profile.Network = sandbox.NetworkPolicy{Mode: sandbox.NetworkEnabled}
+	profile := sandbox.WorkspaceWriteProfile().WithNetworkPolicy(
+		sandbox.NetworkPolicy{Mode: sandbox.NetworkEnabled},
+	)
 	rt := newRuntime(cfg, profile, 1<<20, 3*time.Second)
 	if err := requireManagedSandbox(ctx, rt, cfg); err != nil {
 		return err

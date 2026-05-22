@@ -27,7 +27,7 @@ func defaultProtectedMetadata() []string {
 type pathDecision struct {
 	rel       string
 	abs       string
-	access    FileSystemAccess
+	access    fileSystemAccess
 	matched   bool
 	protected bool
 }
@@ -144,7 +144,7 @@ func (r *Runtime) decidePath(
 		return pathDecision{}, err
 	}
 	d := pathDecision{rel: rel, abs: abs}
-	d.protected = isProtectedRel(rel, profile.FileSystem.ProtectedMetadata)
+	d.protected = isProtectedRel(rel, profile.fileSystem.ProtectedMetadata)
 	access, matched, err := r.resolveAccess(profile, ws, rel, abs)
 	if err != nil {
 		return pathDecision{}, err
@@ -159,11 +159,11 @@ func (r *Runtime) resolveAccess(
 	ws codeexecutor.Workspace,
 	rel string,
 	abs string,
-) (FileSystemAccess, bool, error) {
-	var best FileSystemAccess
+) (fileSystemAccess, bool, error) {
+	var best fileSystemAccess
 	bestSpecificity := -1
 	bestRank := -1
-	for _, rule := range profile.FileSystem.Rules {
+	for _, rule := range profile.fileSystem.Rules {
 		matched, err := r.matchRule(ws, rel, abs, rule)
 		if err != nil {
 			return "", false, err
@@ -186,29 +186,29 @@ func (r *Runtime) resolveAccess(
 	return best, bestSpecificity >= 0, nil
 }
 
-func accessPrecedence(access FileSystemAccess) int {
+func accessPrecedence(access fileSystemAccess) int {
 	switch access {
-	case AccessNone:
+	case accessNone:
 		return 3
-	case AccessWrite:
+	case accessWrite:
 		return 2
-	case AccessRead:
+	case accessRead:
 		return 1
 	default:
 		return 0
 	}
 }
 
-func accessCanRead(access FileSystemAccess) bool {
-	return access == AccessRead || access == AccessWrite
+func accessCanRead(access fileSystemAccess) bool {
+	return access == accessRead || access == accessWrite
 }
 
-func accessCanWrite(access FileSystemAccess) bool {
-	return access == AccessWrite
+func accessCanWrite(access fileSystemAccess) bool {
+	return access == accessWrite
 }
 
 func validateFileSystemRules(profile PermissionProfile) error {
-	for _, rule := range profile.FileSystem.Rules {
+	for _, rule := range profile.fileSystem.Rules {
 		if !validFileSystemRuleShape(rule) {
 			return deniedf(
 				ErrPolicyViolation,
@@ -223,39 +223,39 @@ func validateFileSystemRules(profile PermissionProfile) error {
 	return nil
 }
 
-func validFileSystemRuleShape(rule FileSystemRule) bool {
+func validFileSystemRuleShape(rule fileSystemRule) bool {
 	switch rule.Access {
-	case AccessRead, AccessWrite:
-		return rule.Kind == RulePath || rule.Kind == RuleSpecial
-	case AccessNone:
-		return rule.Kind == RulePath || rule.Kind == RuleSpecial || rule.Kind == RuleGlob
+	case accessRead, accessWrite:
+		return rule.Kind == rulePath || rule.Kind == ruleSpecial
+	case accessNone:
+		return rule.Kind == rulePath || rule.Kind == ruleSpecial || rule.Kind == ruleGlob
 	default:
 		return false
 	}
 }
 
-func ruleTarget(rule FileSystemRule) string {
+func ruleTarget(rule fileSystemRule) string {
 	switch rule.Kind {
-	case RulePath:
+	case rulePath:
 		return rule.Path
-	case RuleGlob:
+	case ruleGlob:
 		return rule.Glob
-	case RuleSpecial:
+	case ruleSpecial:
 		return string(rule.Special)
 	default:
 		return fmt.Sprintf("kind=%s", rule.Kind)
 	}
 }
 
-func ruleSpecificity(ws codeexecutor.Workspace, rule FileSystemRule) (int, error) {
+func ruleSpecificity(ws codeexecutor.Workspace, rule fileSystemRule) (int, error) {
 	switch rule.Kind {
-	case RuleSpecial:
+	case ruleSpecial:
 		rel, ok := specialRel(rule.Special)
 		if !ok {
 			return 0, nil
 		}
 		return pathSpecificity(rel), nil
-	case RuleGlob:
+	case ruleGlob:
 		return pathSpecificity(rule.Glob), nil
 	default:
 		target := strings.TrimSpace(rule.Path)
@@ -293,12 +293,12 @@ func (r *Runtime) matchRule(
 	ws codeexecutor.Workspace,
 	rel string,
 	abs string,
-	rule FileSystemRule,
+	rule fileSystemRule,
 ) (bool, error) {
 	switch rule.Kind {
-	case RuleSpecial:
+	case ruleSpecial:
 		return matchSpecial(ws, abs, rule.Special)
-	case RuleGlob:
+	case ruleGlob:
 		ok, err := ds.Match(filepath.ToSlash(rule.Glob), filepath.ToSlash(rel))
 		return ok, err
 	default:
@@ -318,7 +318,7 @@ func (r *Runtime) matchRule(
 	}
 }
 
-func matchSpecial(ws codeexecutor.Workspace, abs string, special SpecialPath) (bool, error) {
+func matchSpecial(ws codeexecutor.Workspace, abs string, special specialPath) (bool, error) {
 	target, ok, err := specialPathAbs(ws, special)
 	if err != nil || !ok {
 		return false, err
@@ -326,24 +326,24 @@ func matchSpecial(ws codeexecutor.Workspace, abs string, special SpecialPath) (b
 	return sameOrChild(target, abs), nil
 }
 
-func specialPathAbs(ws codeexecutor.Workspace, special SpecialPath) (string, bool, error) {
+func specialPathAbs(ws codeexecutor.Workspace, special specialPath) (string, bool, error) {
 	var target string
 	switch special {
-	case SpecialRoot:
+	case specialRoot:
 		target = ws.Path
-	case SpecialWorkspace:
+	case specialWorkspace:
 		target = ws.Path
-	case SpecialWork:
+	case specialWork:
 		target = filepath.Join(ws.Path, codeexecutor.DirWork)
-	case SpecialHome:
+	case specialHome:
 		target = filepath.Join(ws.Path, "home")
-	case SpecialTmp:
+	case specialTmp:
 		target = filepath.Join(ws.Path, "tmp")
-	case SpecialRuns:
+	case specialRuns:
 		target = filepath.Join(ws.Path, codeexecutor.DirRuns)
-	case SpecialOut:
+	case specialOut:
 		target = filepath.Join(ws.Path, codeexecutor.DirOut)
-	case SpecialSkills:
+	case specialSkills:
 		target = filepath.Join(ws.Path, codeexecutor.DirSkills)
 	default:
 		return "", false, nil
@@ -355,21 +355,21 @@ func specialPathAbs(ws codeexecutor.Workspace, special SpecialPath) (string, boo
 	return targetAbs, true, nil
 }
 
-func specialRel(special SpecialPath) (string, bool) {
+func specialRel(special specialPath) (string, bool) {
 	switch special {
-	case SpecialRoot, SpecialWorkspace:
+	case specialRoot, specialWorkspace:
 		return ".", true
-	case SpecialWork:
+	case specialWork:
 		return codeexecutor.DirWork, true
-	case SpecialHome:
+	case specialHome:
 		return "home", true
-	case SpecialTmp:
+	case specialTmp:
 		return "tmp", true
-	case SpecialRuns:
+	case specialRuns:
 		return codeexecutor.DirRuns, true
-	case SpecialOut:
+	case specialOut:
 		return codeexecutor.DirOut, true
-	case SpecialSkills:
+	case specialSkills:
 		return codeexecutor.DirSkills, true
 	default:
 		return "", false
@@ -432,12 +432,12 @@ func (r *Runtime) deniedReadMatches(
 		return nil, err
 	}
 	var matches []string
-	for _, rule := range profile.FileSystem.Rules {
-		if rule.Access != AccessNone {
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Access != accessNone {
 			continue
 		}
 		switch rule.Kind {
-		case RulePath:
+		case rulePath:
 			if rule.Path == "" {
 				continue
 			}
@@ -452,7 +452,7 @@ func (r *Runtime) deniedReadMatches(
 			if _, err := os.Stat(abs); err == nil {
 				matches = append(matches, abs)
 			}
-		case RuleSpecial:
+		case ruleSpecial:
 			abs, ok, err := specialPathAbs(ws, rule.Special)
 			if err != nil {
 				return nil, err
@@ -463,7 +463,7 @@ func (r *Runtime) deniedReadMatches(
 			if _, err := os.Stat(abs); err == nil {
 				matches = append(matches, abs)
 			}
-		case RuleGlob:
+		case ruleGlob:
 			if rule.Glob == "" {
 				continue
 			}

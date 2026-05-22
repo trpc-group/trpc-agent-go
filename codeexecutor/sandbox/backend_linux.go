@@ -86,7 +86,7 @@ func (r *Runtime) linuxSandboxArgs(
 	if mountProc {
 		args = append(args, "--proc", "/proc")
 	}
-	if profile.Network.Mode == NetworkRestricted {
+	if profile.network.Mode == NetworkRestricted {
 		args = append(args, "--unshare-net")
 	}
 	grantArgs, err := r.externalGrantArgs(profile, ws)
@@ -279,7 +279,7 @@ func (r *Runtime) prepareProtectedMasks(profile PermissionProfile, ws codeexecut
 	if err := os.Chmod(mask, 0o000); err != nil {
 		return err
 	}
-	for _, rel := range profile.FileSystem.ProtectedMetadata {
+	for _, rel := range profile.fileSystem.ProtectedMetadata {
 		rel = strings.Trim(filepath.ToSlash(filepath.Clean(rel)), "/")
 		if rel == "" || rel == "." {
 			continue
@@ -302,7 +302,7 @@ func (r *Runtime) protectedMaskArgs(
 	ws codeexecutor.Workspace,
 ) ([]string, error) {
 	var args []string
-	for _, rel := range profile.FileSystem.ProtectedMetadata {
+	for _, rel := range profile.fileSystem.ProtectedMetadata {
 		rel = strings.Trim(filepath.ToSlash(filepath.Clean(rel)), "/")
 		if rel == "" || rel == "." {
 			continue
@@ -358,8 +358,8 @@ func (r *Runtime) externalGrantArgs(
 		return nil, err
 	}
 	var args []string
-	for _, rule := range profile.FileSystem.Rules {
-		if rule.Kind != RulePath || rule.Path == "" || !filepath.IsAbs(rule.Path) {
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Kind != rulePath || rule.Path == "" || !filepath.IsAbs(rule.Path) {
 			continue
 		}
 		target, err := filepath.Abs(rule.Path)
@@ -373,9 +373,9 @@ func (r *Runtime) externalGrantArgs(
 			return nil, deniedf(ErrPathDenied, "grant", target, "external grant target unavailable")
 		}
 		switch rule.Access {
-		case AccessRead:
+		case accessRead:
 			args = append(args, "--ro-bind", target, target)
-		case AccessWrite:
+		case accessWrite:
 			args = append(args, "--bind", target, target)
 		}
 	}

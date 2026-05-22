@@ -38,8 +38,8 @@ func TestPermissionProfileEnforcement(t *testing.T) {
 
 func TestRuntimeDefaultProfileIsWorkspaceWrite(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	if !containsSpecialRule(rt.profile, AccessWrite, SpecialWork) {
-		t.Fatalf("default runtime profile does not grant work writes: %#v", rt.profile.FileSystem.Rules)
+	if !containsSpecialRule(rt.profile, accessWrite, specialWork) {
+		t.Fatalf("default runtime profile does not grant work writes: %#v", rt.profile.fileSystem.Rules)
 	}
 	ws, err := rt.CreateWorkspace(context.Background(), "default-profile", codeexecutor.WorkspacePolicy{})
 	if err != nil {
@@ -57,17 +57,17 @@ func TestWithPermissionProfileKeepsCompleteManagedProfile(t *testing.T) {
 	rt := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(PermissionProfile{
-			Type:    ProfileManaged,
-			Network: NetworkPolicy{Mode: NetworkEnabled},
+			typ:     profileManaged,
+			network: NetworkPolicy{Mode: NetworkEnabled},
 		}),
 	)
-	if rt.profile.Network.Mode != NetworkEnabled {
-		t.Fatalf("network mode = %s, want %s", rt.profile.Network.Mode, NetworkEnabled)
+	if rt.profile.network.Mode != NetworkEnabled {
+		t.Fatalf("network mode = %s, want %s", rt.profile.network.Mode, NetworkEnabled)
 	}
-	if len(rt.profile.FileSystem.Rules) != 0 {
-		t.Fatalf("empty managed profile was expanded to rules: %#v", rt.profile.FileSystem.Rules)
+	if len(rt.profile.fileSystem.Rules) != 0 {
+		t.Fatalf("empty managed profile was expanded to rules: %#v", rt.profile.fileSystem.Rules)
 	}
-	if len(rt.profile.FileSystem.ProtectedMetadata) == 0 {
+	if len(rt.profile.fileSystem.ProtectedMetadata) == 0 {
 		t.Fatalf("protected metadata defaults were not populated")
 	}
 	if !rt.Describe().NetworkAllowed {
@@ -87,13 +87,12 @@ func TestWithPermissionProfileKeepsCompleteManagedProfile(t *testing.T) {
 }
 
 func TestWorkspaceWriteProfileCanSetNetwork(t *testing.T) {
-	profile := WorkspaceWriteProfile()
-	profile.Network = NetworkPolicy{Mode: NetworkEnabled}
-	if profile.Network.Mode != NetworkEnabled {
-		t.Fatalf("network mode = %s, want %s", profile.Network.Mode, NetworkEnabled)
+	profile := WorkspaceWriteProfile().WithNetworkPolicy(NetworkPolicy{Mode: NetworkEnabled})
+	if profile.network.Mode != NetworkEnabled {
+		t.Fatalf("network mode = %s, want %s", profile.network.Mode, NetworkEnabled)
 	}
-	if !containsSpecialRule(profile, AccessWrite, SpecialWork) {
-		t.Fatalf("workspace-write network profile missing work write grant: %#v", profile.FileSystem.Rules)
+	if !containsSpecialRule(profile, accessWrite, specialWork) {
+		t.Fatalf("workspace-write network profile missing work write grant: %#v", profile.fileSystem.Rules)
 	}
 }
 
@@ -333,10 +332,10 @@ func TestMoreSpecificReadRuleOverridesWorkspaceWrite(t *testing.T) {
 
 func TestEqualSpecificityAccessPrecedence(t *testing.T) {
 	profile := WorkspaceWriteProfile()
-	profile.FileSystem.Rules = append(profile.FileSystem.Rules,
-		FileSystemRule{Kind: RulePath, Access: AccessRead, Path: "work/tie.txt"},
-		FileSystemRule{Kind: RulePath, Access: AccessWrite, Path: "work/tie.txt"},
-		FileSystemRule{Kind: RulePath, Access: AccessNone, Path: "work/tie.txt"},
+	profile.fileSystem.Rules = append(profile.fileSystem.Rules,
+		fileSystemRule{Kind: rulePath, Access: accessRead, Path: "work/tie.txt"},
+		fileSystemRule{Kind: rulePath, Access: accessWrite, Path: "work/tie.txt"},
+		fileSystemRule{Kind: rulePath, Access: accessNone, Path: "work/tie.txt"},
 	)
 	rt := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
@@ -353,8 +352,8 @@ func TestEqualSpecificityAccessPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.access != AccessNone {
-		t.Fatalf("equal-specificity access = %s, want %s", d.access, AccessNone)
+	if d.access != accessNone {
+		t.Fatalf("equal-specificity access = %s, want %s", d.access, accessNone)
 	}
 	if _, err := rt.Collect(context.Background(), ws, []string{"work/tie.txt"}); !IsKind(err, ErrPathDenied) {
 		t.Fatalf("expected equal-specificity AccessNone to deny read, got %v", err)
@@ -367,10 +366,10 @@ func TestRuleGlobOnlySupportsAccessNone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, access := range []FileSystemAccess{AccessRead, AccessWrite} {
+	for _, access := range []fileSystemAccess{accessRead, accessWrite} {
 		profile := WorkspaceWriteProfile()
-		profile.FileSystem.Rules = append(profile.FileSystem.Rules, FileSystemRule{
-			Kind: RuleGlob, Access: access, Glob: "work/*.env",
+		profile.fileSystem.Rules = append(profile.fileSystem.Rules, fileSystemRule{
+			Kind: ruleGlob, Access: access, Glob: "work/*.env",
 		})
 		err := rt.checkRead(profile, ws, codeexecutor.DirWork)
 		if !IsKind(err, ErrPolicyViolation) {
@@ -393,8 +392,8 @@ func TestAccessNoneMaskCollectionAcceptsPathGlobAndSpecial(t *testing.T) {
 	}
 	profile := WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
 	profile = profile.WithNoAccessPaths("work/app.env")
-	profile.FileSystem.Rules = append(profile.FileSystem.Rules, FileSystemRule{
-		Kind: RuleSpecial, Access: AccessNone, Special: SpecialOut,
+	profile.fileSystem.Rules = append(profile.fileSystem.Rules, fileSystemRule{
+		Kind: ruleSpecial, Access: accessNone, Special: specialOut,
 	})
 	matches, err := rt.deniedReadMatches(profile, ws)
 	if err != nil {
@@ -414,14 +413,14 @@ func TestPermissionProfileBuildersDoNotAliasRules(t *testing.T) {
 	base := WorkspaceWriteProfile()
 	withRead := base.WithReadPaths("work/read")
 	withNone := base.WithNoAccessPaths("work/none")
-	if containsRule(withRead, AccessNone, "work/none") {
-		t.Fatalf("WithNoAccessPaths mutated sibling profile rules: %#v", withRead.FileSystem.Rules)
+	if containsRule(withRead, accessNone, "work/none") {
+		t.Fatalf("WithNoAccessPaths mutated sibling profile rules: %#v", withRead.fileSystem.Rules)
 	}
-	if containsRule(withNone, AccessRead, "work/read") {
-		t.Fatalf("WithReadPaths mutated sibling profile rules: %#v", withNone.FileSystem.Rules)
+	if containsRule(withNone, accessRead, "work/read") {
+		t.Fatalf("WithReadPaths mutated sibling profile rules: %#v", withNone.fileSystem.Rules)
 	}
-	if containsRule(base, AccessRead, "work/read") || containsRule(base, AccessNone, "work/none") {
-		t.Fatalf("builder mutated base profile rules: %#v", base.FileSystem.Rules)
+	if containsRule(base, accessRead, "work/read") || containsRule(base, accessNone, "work/none") {
+		t.Fatalf("builder mutated base profile rules: %#v", base.fileSystem.Rules)
 	}
 }
 
@@ -600,18 +599,18 @@ func containsPath(paths []string, want string) bool {
 	return false
 }
 
-func containsRule(profile PermissionProfile, access FileSystemAccess, path string) bool {
-	for _, rule := range profile.FileSystem.Rules {
-		if rule.Kind == RulePath && rule.Access == access && rule.Path == path {
+func containsRule(profile PermissionProfile, access fileSystemAccess, path string) bool {
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Kind == rulePath && rule.Access == access && rule.Path == path {
 			return true
 		}
 	}
 	return false
 }
 
-func containsSpecialRule(profile PermissionProfile, access FileSystemAccess, special SpecialPath) bool {
-	for _, rule := range profile.FileSystem.Rules {
-		if rule.Kind == RuleSpecial && rule.Access == access && rule.Special == special {
+func containsSpecialRule(profile PermissionProfile, access fileSystemAccess, special specialPath) bool {
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Kind == ruleSpecial && rule.Access == access && rule.Special == special {
 			return true
 		}
 	}

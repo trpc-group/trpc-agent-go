@@ -94,17 +94,17 @@ func defaultWorkspaceRoot() string {
 }
 
 func normalizeProfile(profile PermissionProfile) PermissionProfile {
-	if profile.Type == "" {
-		profile.Type = ProfileManaged
+	if profile.typ == "" {
+		profile.typ = profileManaged
 	}
-	if profile.Network.Mode == "" {
-		profile.Network.Mode = NetworkRestricted
+	if profile.network.Mode == "" {
+		profile.network.Mode = NetworkRestricted
 	}
-	if profile.Type == ProfileDisabled {
-		profile.Network.Mode = NetworkEnabled
+	if profile.typ == profileDisabled {
+		profile.network.Mode = NetworkEnabled
 	}
-	if profile.FileSystem.ProtectedMetadata == nil {
-		profile.FileSystem.ProtectedMetadata = defaultProtectedMetadata()
+	if profile.fileSystem.ProtectedMetadata == nil {
+		profile.fileSystem.ProtectedMetadata = defaultProtectedMetadata()
 	}
 	return profile
 }

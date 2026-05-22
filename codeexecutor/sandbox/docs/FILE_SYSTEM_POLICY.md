@@ -2,11 +2,11 @@
 
 This package uses a small file-system access lattice inspired by Codex:
 
-- `AccessRead` means paths are readable but not writable.
-- `AccessWrite` means paths are readable and writable.
-- `AccessNone` means paths are neither readable nor writable.
+- read means paths are readable but not writable.
+- write means paths are readable and writable.
+- no access means paths are neither readable nor writable.
 
-`AccessWrite` intentionally includes read access. The model does not support a
+Write access intentionally includes read access. The model does not support a
 "writable but unreadable" path because the Linux backend cannot enforce that
 shape consistently once the path is mounted into the process namespace.
 
@@ -26,22 +26,25 @@ The managed file-system boundary is designed around three rules:
 This boundary is not intended to hide the entire host file system by default.
 On Linux, managed execution starts with a read-only bind mount of `/`, then adds
 writable bind mounts for the workspace and any explicit external write grants.
-Sensitive files that must not be readable should be covered by `AccessNone`
-rules or kept outside the host paths visible to the sandbox.
+Sensitive files that must not be readable should be covered by no-access
+denials, for example through `WithNoAccessPaths` or `WithNoAccessGlobs`, or kept
+outside the host paths visible to the sandbox.
 
 ## Rule Targets
 
-File-system rules use one of three target kinds:
+Internally, file-system decisions use one of three target shapes:
 
-- `RulePath` targets a concrete path. Relative paths are workspace-relative;
-  absolute paths are host paths.
-- `RuleSpecial` targets one of the well-known sandbox directories such as
-  `SpecialRoot`, `SpecialWork`, `SpecialOut`, or `SpecialSkills`.
-- `RuleGlob` targets workspace-relative glob matches. Glob rules are only valid
-  with `AccessNone`.
+- Concrete paths. Relative paths are workspace-relative; absolute paths are host
+  paths. These are exposed through `WithReadPaths`, `WithWritePaths`, and
+  `WithNoAccessPaths`.
+- Well-known sandbox directories, such as the workspace root, `work`, `out`, and
+  `skills`. These are used by built-in profiles such as
+  `WorkspaceWriteProfile()`.
+- Workspace-relative glob matches. These are exposed through
+  `WithNoAccessGlobs` and are only valid for no-access denials.
 
-`AccessRead` and `AccessWrite` support `RulePath` and `RuleSpecial`. `AccessNone`
-supports `RulePath`, `RuleSpecial`, and `RuleGlob`.
+Read and write access can target concrete paths and built-in sandbox
+directories. No-access denials can additionally target workspace-relative globs.
 
 ## Resolution
 
@@ -69,16 +72,16 @@ The Linux backend uses `bubblewrap` mount namespaces to materialize the policy:
 - Explicit absolute read grants are added with `--ro-bind`.
 - Explicit absolute write grants are added with `--bind`.
 - Protected metadata paths are re-mounted read-only.
-- `AccessNone` path, special, and glob matches are covered by unreadable masks:
+- No-access path, built-in directory, and glob matches are covered by unreadable masks:
   files are replaced with a zero-permission mask file, and directories are
   covered by an empty `tmpfs`.
 
 The Go-level file APIs and Linux mount setup both derive from the same
-`AccessNone` rules so a path denied by `Collect`, `PutFiles`, or `StageInputs` is
+no-access denials so a path denied by `Collect`, `PutFiles`, or `StageInputs` is
 also denied to a process running inside the OS sandbox.
 
 The implementation is intentionally path-based. It supports concrete path grants,
-workspace-relative glob `AccessNone` rules, and protected metadata masks, but it
+workspace-relative glob no-access denials, and protected metadata masks, but it
 does not currently implement per-file capabilities beyond read, write, and none.
 
 ## Protected Metadata
@@ -97,21 +100,23 @@ For the default single-segment names above, protection applies to the top-level
 workspace path and its children, for example `.git` and `.git/config`. It does
 not match the same name at arbitrary depth, such as `vendor/.git/config`.
 
-Protected metadata is not a replacement for `AccessNone`. It only prevents
+Protected metadata is not a replacement for no-access denials. It only prevents
 writes to those paths, even when a broader rule grants workspace write access.
-Use `AccessNone` when a path must be neither readable nor writable, or when a
-nested metadata directory must be denied explicitly.
+Use `WithNoAccessPaths` or `WithNoAccessGlobs` when a path must be neither
+readable nor writable, or when a nested metadata directory must be denied
+explicitly.
 
 ## Default Profile
 
 The runtime defaults to `WorkspaceWriteProfile()`. When callers pass
 `WithPermissionProfile`, that explicit profile replaces the default.
 
-`WorkspaceWriteProfile()` uses these file-system rules:
+`WorkspaceWriteProfile()` starts from a read-only host view and grants writes to
+the session-owned workspace directories:
 
-- `SpecialRoot` is `AccessRead`, giving the sandbox a read-only host view.
-- `SpecialWorkspace`, `SpecialWork`, `SpecialHome`, `SpecialTmp`,
-  `SpecialRuns`, `SpecialOut`, and `SpecialSkills` are `AccessWrite`.
+- The host root is readable, giving the sandbox a read-only host view.
+- The workspace root, `work`, `home`, `tmp`, `runs`, `out`, and `skills`
+  directories are writable.
 - Default protected metadata still blocks writes to `.git`, `.agents`, and
   `.trpc-agent-sandbox` inside the workspace.
 
@@ -119,10 +124,11 @@ The runtime defaults to `WorkspaceWriteProfile()`. When callers pass
 
 The builder API mirrors the access model:
 
-- `WithReadPaths` adds concrete `AccessRead` path rules.
-- `WithWritePaths` adds concrete `AccessWrite` path rules.
-- `WithNoAccessPaths` adds concrete `AccessNone` path rules.
-- `WithNoAccessGlobs` adds workspace-relative `AccessNone` glob rules.
+- `WithReadPaths` grants read access to concrete paths.
+- `WithWritePaths` grants write access to concrete paths.
+- `WithNoAccessPaths` denies read and write access to concrete paths.
+- `WithNoAccessGlobs` denies read and write access to workspace-relative glob
+  matches.
 
 Path builders accept concrete paths. Glob no-access is intentionally separate so
 callers can distinguish exact path rules from workspace-relative pattern rules.
