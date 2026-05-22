@@ -410,8 +410,9 @@ func TestNormalizeName_Windows(t *testing.T) {
 		in, want string
 	}{
 		{"cmd.exe", "cmd"},
-		{"CMD.EXE", "CMD"},
+		{"CMD.EXE", "cmd"},
 		{"powershell.exe", "powershell"},
+		{"PowerShell.EXE", "powershell"},
 		{"script.bat", "script"},
 		{"helper.cmd", "helper"},
 		{"legacy.com", "legacy"},
@@ -430,6 +431,30 @@ func TestNormalizeName_Windows(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestPolicy_WindowsNamesAreCaseInsensitive(t *testing.T) {
+	p := PolicyFromLists([]string{"echo"}, []string{"curl"})
+
+	if err := p.checkSegmentForGOOS(
+		[]string{"ECHO.EXE", "ok"}, "windows",
+	); err != nil {
+		t.Fatalf("expected upper-case Windows echo to be allowed: %v", err)
+	}
+	err := p.checkSegmentForGOOS(
+		[]string{"CURL.EXE", "http://x"}, "windows",
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "denied by denied_commands") {
+		t.Fatalf("expected upper-case Windows curl to be denied, got: %v", err)
+	}
+	err = p.checkSegmentForGOOS(
+		[]string{"CMD.EXE", "/C", "echo", "hi"}, "windows",
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "built-in policy") {
+		t.Fatalf("expected upper-case Windows cmd to hit built-in deny, got: %v", err)
 	}
 }
 

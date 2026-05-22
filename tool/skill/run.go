@@ -1197,12 +1197,13 @@ func (t *RunTool) buildRunProgramSpec(
 			)
 		}
 		return codeexecutor.RunProgramSpec{
-			Cmd:     cmd,
-			Args:    argv[1:],
-			Env:     env,
-			Cwd:     cwd,
-			Stdin:   in.Stdin,
-			Timeout: timeout,
+			Cmd:      cmd,
+			Args:     argv[1:],
+			Env:      env,
+			CleanEnv: true,
+			Cwd:      cwd,
+			Stdin:    in.Stdin,
+			Timeout:  timeout,
 		}, nil
 	}
 

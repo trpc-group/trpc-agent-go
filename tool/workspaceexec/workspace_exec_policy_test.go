@@ -171,6 +171,8 @@ func TestExecTool_PolicyDescriptionMentionsRestrictions(t *testing.T) {
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "Restricted")
 	require.Contains(t, decl.Description, "Allowed commands")
+	require.Contains(t, decl.Description, "blocked unconditionally")
+	require.NotContains(t, decl.Description, "unless explicitly allow-listed")
 	require.Contains(t, decl.Description, "echo")
 }
 
@@ -275,6 +277,8 @@ func TestExecTool_PolicyActive_HardensSpawn(t *testing.T) {
 	require.Equal(t,
 		[]string{"-c", "echo hi"}, req.spec.Args,
 		"policy active should spawn with -c, not -lc")
+	require.True(t, req.spec.CleanEnv,
+		"policy active should not inherit host environment variables")
 	_, hasHome := req.spec.Env["HOME"]
 	require.False(t, hasHome,
 		"HOME must be stripped to defeat .profile injection")
@@ -311,6 +315,8 @@ func TestExecTool_NoPolicy_PreservesHistoricalSpawn(t *testing.T) {
 	require.Equal(t,
 		[]string{"-lc", "echo hi"}, req.spec.Args,
 		"no policy must keep historical -lc")
+	require.False(t, req.spec.CleanEnv,
+		"no policy must preserve historical host environment inheritance")
 	require.Equal(t, in.Env, req.spec.Env,
 		"no policy must keep env untouched")
 }

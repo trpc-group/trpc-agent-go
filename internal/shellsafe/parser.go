@@ -210,8 +210,12 @@ func (p Policy) Check(pipe *Pipeline) error {
 // The implicit deny set is unconditional and cannot be bypassed by
 // listing a shell wrapper in Allow.
 func (p Policy) checkSegment(argv []string) error {
+	return p.checkSegmentForGOOS(argv, runtime.GOOS)
+}
+
+func (p Policy) checkSegmentForGOOS(argv []string, goos string) error {
 	cmd := argv[0]
-	base := basename(cmd)
+	base := basenameForGOOS(cmd, goos)
 	if matchName(p.Deny, cmd, base) {
 		return fmt.Errorf(
 			"command %q is denied by denied_commands", cmd,
@@ -254,11 +258,15 @@ func matchName(set []string, name, base string) bool {
 }
 
 func basename(s string) string {
+	return basenameForGOOS(s, runtime.GOOS)
+}
+
+func basenameForGOOS(s, goos string) string {
 	if s == "" {
 		return s
 	}
 	clean := filepath.ToSlash(s)
-	return normalizeName(path.Base(clean), runtime.GOOS)
+	return normalizeName(path.Base(clean), goos)
 }
 
 // windowsExecExts is the set of Windows executable suffixes that
@@ -281,10 +289,10 @@ func normalizeName(base, goos string) string {
 	lower := strings.ToLower(base)
 	for _, ext := range windowsExecExts {
 		if strings.HasSuffix(lower, ext) {
-			return base[:len(base)-len(ext)]
+			return lower[:len(lower)-len(ext)]
 		}
 	}
-	return base
+	return lower
 }
 
 func cleanList(in []string) []string {

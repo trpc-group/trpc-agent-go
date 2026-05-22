@@ -207,8 +207,10 @@ func WithWorkspaceRegistry(
 // process/parameter substitution, subshells, brace expansion and
 // leading variable assignments - are rejected. Shell wrappers and
 // re-executing builtins (sh, bash, zsh, eval, exec, command, source,
-// xargs, env, sudo, ...) are subject to a built-in deny that can be
-// overridden by listing them explicitly here.
+// xargs, env, sudo, ...) are subject to an unconditional built-in
+// deny set and cannot be re-enabled by listing them here; allow-list
+// entries for those names are ignored. Wrap the desired use in an
+// auditable workspace script and allow the script instead.
 //
 // Calling this option with an empty list is a no-op so callers can
 // conditionally enable the policy.
@@ -404,7 +406,7 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 			"expansion and leading variable assignments are " +
 			"rejected, and shell wrappers / re-executing builtins " +
 			"(sh, bash, eval, exec, xargs, env, sudo, ...) are " +
-			"blocked unless explicitly allow-listed."
+			"blocked unconditionally under policy mode."
 		cmdDesc = "Shell command to execute. Restricted to a " +
 			"safe pipeline (no $(), no $VAR, no redirections, " +
 			"no subshells, no shell wrappers)."
@@ -606,12 +608,13 @@ func (t *ExecTool) prepareExec(
 		eng:        eng,
 		ws:         ws,
 		spec: codeexecutor.RunProgramSpec{
-			Cmd:     "sh",
-			Args:    shellArgsForPolicy(policyActive, in.Command),
-			Env:     envForPolicy(policyActive, in.Env),
-			Cwd:     cwd,
-			Stdin:   in.Stdin,
-			Timeout: execTimeout(timeout),
+			Cmd:      "sh",
+			Args:     shellArgsForPolicy(policyActive, in.Command),
+			Env:      envForPolicy(policyActive, in.Env),
+			CleanEnv: policyActive,
+			Cwd:      cwd,
+			Stdin:    in.Stdin,
+			Timeout:  execTimeout(timeout),
 		},
 	}, nil
 }

@@ -83,13 +83,17 @@ type ResourceLimits struct {
 
 // RunProgramSpec describes a program invocation in a workspace.
 type RunProgramSpec struct {
-	Cmd     string
-	Args    []string
-	Env     map[string]string
-	Cwd     string // relative to workspace root
-	Stdin   string
-	Timeout time.Duration
-	Limits  ResourceLimits
+	Cmd  string
+	Args []string
+	Env  map[string]string
+	// CleanEnv starts the program from an empty environment instead of
+	// inheriting os.Environ. Workspace base variables and Env are still
+	// added by runtimes that support workspace execution.
+	CleanEnv bool
+	Cwd      string // relative to workspace root
+	Stdin    string
+	Timeout  time.Duration
+	Limits   ResourceLimits
 }
 
 // RunResult captures a single program run result.
