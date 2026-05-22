@@ -404,6 +404,51 @@ func WithContextCompactionTokenCounter(counter model.TokenCounter) ContentOption
 	}
 }
 
+// WithContextCompactionSkipRecentFunc sets the function that determines how
+// many tail events are protected from historical tool-result compaction.
+func WithContextCompactionSkipRecentFunc(
+	skipFunc ContextCompactionSkipRecentFunc,
+) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ContextCompactionConfig.SkipRecentFunc = skipFunc
+	}
+}
+
+// WithContextCompactionForceCleanToolNames sets tool names whose results should
+// always be compacted to a placeholder while context compaction is enabled.
+func WithContextCompactionForceCleanToolNames(names ...string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ContextCompactionConfig.toolResultCompactionRules.forceCleanToolNames =
+			toolNameSet(names)
+	}
+}
+
+// WithContextCompactionKeepToolNames sets tool names whose results should be
+// left untouched by context compaction.
+func WithContextCompactionKeepToolNames(names ...string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ContextCompactionConfig.toolResultCompactionRules.keepToolNames =
+			toolNameSet(names)
+	}
+}
+
+func toolNameSet(names []string) map[string]struct{} {
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		set[name] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
 // WithFewShotResolver sets an invocation-aware few-shot resolver.
 func WithFewShotResolver(
 	resolver func(*agent.Invocation) [][]model.Message,
@@ -985,7 +1030,10 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 
 	var compactedChoices []model.Choice
 	for _, choice := range evt.Choices {
-		msg, ok := compactedCurrentInvocationMessage(choice.Message)
+		msg, ok := compactedCurrentInvocationMessage(
+			choice.Message,
+			p.ContextCompactionConfig,
+		)
 		if !ok {
 			continue
 		}
@@ -1009,6 +1057,7 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 
 func compactedCurrentInvocationMessage(
 	msg model.Message,
+	cfg ContextCompactionConfig,
 ) (model.Message, bool) {
 	switch {
 	case len(msg.ToolCalls) > 0:
@@ -1020,6 +1069,9 @@ func compactedCurrentInvocationMessage(
 			ToolCalls:        msg.ToolCalls,
 		}, true
 	case msg.Role == model.RoleTool && msg.ToolID != "":
+		if cfg.keepToolResult(msg) {
+			return msg, true
+		}
 		return model.Message{
 			Role:     msg.Role,
 			Content:  compactedToolResultPlaceholder,
@@ -1451,18 +1503,41 @@ func requestHasToolCalls(requestIDs map[string]struct{}, requestID string) bool 
 func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 	messages []model.Message,
 ) []model.Message {
-	if !p.ContextCompactionConfig.Enabled ||
-		p.ContextCompactionConfig.OversizedToolResultMaxTokens <= 0 {
+	cfg := normalizeContextCompactionConfig(p.ContextCompactionConfig)
+	forceCleanActive := cfg.hasForceCleanToolResults()
+	oversizedActive := cfg.OversizedToolResultMaxTokens > 0
+	if !cfg.Enabled || (!forceCleanActive && !oversizedActive) {
 		return messages
 	}
 
 	var cloned bool
 	for i := range messages {
+		if cfg.keepToolResult(messages[i]) {
+			continue
+		}
+		if cfg.forceCleanToolResult(messages[i]) {
+			msg, compacted, _ := cleanToolResultMessageWithCounter(
+				context.Background(),
+				messages[i],
+				cfg.TokenCounter,
+			)
+			if compacted {
+				if !cloned {
+					messages = append([]model.Message(nil), messages...)
+					cloned = true
+				}
+				messages[i] = msg
+			}
+			continue
+		}
+		if !oversizedActive {
+			continue
+		}
 		msg, truncated, _ := truncateOversizedToolResultMessageWithCounter(
 			context.Background(),
 			messages[i],
-			p.ContextCompactionConfig.OversizedToolResultMaxTokens,
-			p.ContextCompactionConfig.TokenCounter,
+			cfg.OversizedToolResultMaxTokens,
+			cfg.TokenCounter,
 		)
 		if !truncated {
 			continue

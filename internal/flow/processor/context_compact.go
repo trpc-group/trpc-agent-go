@@ -39,6 +39,7 @@ const (
 	DefaultContextCompactionOversizedToolResultMaxTokens = 8192
 
 	historicalToolResultPlaceholder = "Historical tool result omitted to save context."
+	policyToolResultPlaceholder     = "Tool result omitted by context compaction policy."
 )
 
 // ContextCompactionConfig controls request-side history compaction applied
@@ -56,13 +57,27 @@ type ContextCompactionConfig struct {
 	// TokenCounter estimates request and tool-result size for compaction decisions.
 	// When nil, SimpleTokenCounter is used.
 	TokenCounter model.TokenCounter
+	// SkipRecentFunc returns how many tail events should be treated as recent
+	// and protected from historical tool-result compaction.
+	SkipRecentFunc ContextCompactionSkipRecentFunc
+
+	toolResultCompactionRules toolResultCompactionRules
 }
+
+// ContextCompactionSkipRecentFunc determines how many recent events should be
+// protected from historical tool-result compaction.
+type ContextCompactionSkipRecentFunc func(events []event.Event) int
 
 // ContextCompactionStats reports how much prompt history was compacted during
 // request projection.
 type ContextCompactionStats struct {
 	ToolResultsCompacted int
 	EstimatedTokensSaved int
+}
+
+type toolResultCompactionRules struct {
+	forceCleanToolNames map[string]struct{}
+	keepToolNames       map[string]struct{}
 }
 
 func normalizeContextCompactionConfig(
@@ -80,7 +95,27 @@ func normalizeContextCompactionConfig(
 	if cfg.TokenCounter == nil {
 		cfg.TokenCounter = model.NewSimpleTokenCounter()
 	}
+	cfg.toolResultCompactionRules.forceCleanToolNames = normalizeToolNameSet(
+		cfg.toolResultCompactionRules.forceCleanToolNames,
+	)
+	cfg.toolResultCompactionRules.keepToolNames = normalizeToolNameSet(
+		cfg.toolResultCompactionRules.keepToolNames,
+	)
 	return cfg
+}
+
+func normalizeToolNameSet(in map[string]struct{}) map[string]struct{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(in))
+	for name := range in {
+		if name == "" {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	return out
 }
 
 func compactIncrementEvents(
@@ -95,9 +130,10 @@ func compactIncrementEvents(
 		return events, ContextCompactionStats{}
 	}
 
+	forceCleanActive := cfg.Enabled && cfg.hasForceCleanToolResults()
 	pass1Active := cfg.Enabled && cfg.ToolResultMaxTokens > 0
 	pass2Active := cfg.Enabled && cfg.OversizedToolResultMaxTokens > 0
-	if !pass1Active && !pass2Active {
+	if !forceCleanActive && !pass1Active && !pass2Active {
 		return events, ContextCompactionStats{}
 	}
 
@@ -105,6 +141,18 @@ func compactIncrementEvents(
 	copy(compacted, events)
 
 	var stats ContextCompactionStats
+
+	// Pass 0: named tool results → full placeholder replacement.
+	// This is explicit user policy and applies before recency protection.
+	if forceCleanActive {
+		passEvents, passStats := applyForceCleanToolResultPass(
+			ctx,
+			compacted,
+			cfg,
+		)
+		compacted = passEvents
+		stats = mergeContextCompactionStats(stats, passStats)
+	}
 
 	// Pass 1: historical tool results → full placeholder replacement.
 	// Gated on Enabled (requires context compaction to be on).
@@ -117,7 +165,7 @@ func compactIncrementEvents(
 				currentKey,
 				cfg.KeepRecentRequests,
 				cfg.ToolResultMaxTokens,
-				cfg.TokenCounter,
+				cfg,
 			)
 			compacted = passEvents
 			stats = mergeContextCompactionStats(stats, passStats)
@@ -133,7 +181,7 @@ func compactIncrementEvents(
 			ctx,
 			compacted,
 			cfg.OversizedToolResultMaxTokens,
-			cfg.TokenCounter,
+			cfg,
 		)
 		compacted = passEvents
 		stats = mergeContextCompactionStats(stats, passStats)
@@ -142,18 +190,67 @@ func compactIncrementEvents(
 	return compacted, stats
 }
 
+func (cfg ContextCompactionConfig) hasForceCleanToolResults() bool {
+	return len(cfg.toolResultCompactionRules.forceCleanToolNames) > 0
+}
+
+func (cfg ContextCompactionConfig) keepToolResult(msg model.Message) bool {
+	if msg.ToolName == "" {
+		return false
+	}
+	_, ok := cfg.toolResultCompactionRules.keepToolNames[msg.ToolName]
+	return ok
+}
+
+func (cfg ContextCompactionConfig) forceCleanToolResult(msg model.Message) bool {
+	if msg.ToolName == "" || cfg.keepToolResult(msg) {
+		return false
+	}
+	_, ok := cfg.toolResultCompactionRules.forceCleanToolNames[msg.ToolName]
+	return ok
+}
+
+func applyForceCleanToolResultPass(
+	ctx context.Context,
+	events []event.Event,
+	cfg ContextCompactionConfig,
+) ([]event.Event, ContextCompactionStats) {
+	var stats ContextCompactionStats
+	for i := range events {
+		evt, changed, compactedCount, savedTokens := rewriteToolResultEventMessages(
+			ctx,
+			events[i],
+			0,
+			func(ctx context.Context, msg model.Message, _ int) (model.Message, bool, int) {
+				if !cfg.forceCleanToolResult(msg) {
+					return msg, false, 0
+				}
+				return cleanToolResultMessageWithCounter(ctx, msg, cfg.TokenCounter)
+			},
+		)
+		if !changed {
+			continue
+		}
+		events[i] = evt
+		stats.ToolResultsCompacted += compactedCount
+		stats.EstimatedTokensSaved += savedTokens
+	}
+	return events, stats
+}
+
 func applyHistoricalToolResultPass(
 	ctx context.Context,
 	events []event.Event,
 	currentKey string,
 	keepRecentRequests int,
 	maxTokens int,
-	counter model.TokenCounter,
+	cfg ContextCompactionConfig,
 ) ([]event.Event, ContextCompactionStats) {
 	protectedRequestIDs := collectProtectedRequestIDs(
 		events,
 		currentKey,
 		keepRecentRequests,
+		cfg.SkipRecentFunc,
 	)
 
 	var stats ContextCompactionStats
@@ -163,7 +260,7 @@ func applyHistoricalToolResultPass(
 			events[i],
 			protectedRequestIDs,
 			maxTokens,
-			counter,
+			cfg,
 		)
 		if !changed {
 			continue
@@ -180,7 +277,7 @@ func compactHistoricalToolResultEvent(
 	evt event.Event,
 	protectedRequestIDs map[string]struct{},
 	maxTokens int,
-	counter model.TokenCounter,
+	cfg ContextCompactionConfig,
 ) (event.Event, bool, int, int) {
 	unitKey := compactionUnitKey(evt.RequestID, evt.InvocationID)
 	if unitKey == "" {
@@ -194,7 +291,12 @@ func compactHistoricalToolResultEvent(
 		evt,
 		maxTokens,
 		func(ctx context.Context, msg model.Message, maxTokens int) (model.Message, bool, int) {
-			return compactHistoricalToolResultMessageWithCounter(ctx, msg, maxTokens, counter)
+			if cfg.keepToolResult(msg) {
+				return msg, false, 0
+			}
+			return compactHistoricalToolResultMessageWithCounter(
+				ctx, msg, maxTokens, cfg.TokenCounter,
+			)
 		},
 	)
 }
@@ -203,7 +305,7 @@ func applyOversizedToolResultPass(
 	ctx context.Context,
 	events []event.Event,
 	maxTokens int,
-	counter model.TokenCounter,
+	cfg ContextCompactionConfig,
 ) ([]event.Event, ContextCompactionStats) {
 	var stats ContextCompactionStats
 	for i := range events {
@@ -212,7 +314,12 @@ func applyOversizedToolResultPass(
 			events[i],
 			maxTokens,
 			func(ctx context.Context, msg model.Message, maxTokens int) (model.Message, bool, int) {
-				return truncateOversizedToolResultMessageWithCounter(ctx, msg, maxTokens, counter)
+				if cfg.keepToolResult(msg) {
+					return msg, false, 0
+				}
+				return truncateOversizedToolResultMessageWithCounter(
+					ctx, msg, maxTokens, cfg.TokenCounter,
+				)
 			},
 		)
 		if !changed {
@@ -279,8 +386,10 @@ func collectProtectedRequestIDs(
 	events []event.Event,
 	currentKey string,
 	keepRecentRequests int,
+	skipRecentFunc ContextCompactionSkipRecentFunc,
 ) map[string]struct{} {
 	protected := map[string]struct{}{currentKey: {}}
+	protectRecentEvents(protected, events, skipRecentFunc)
 	if keepRecentRequests <= 0 {
 		return protected
 	}
@@ -301,6 +410,30 @@ func collectProtectedRequestIDs(
 		keepRecentRequests--
 	}
 	return protected
+}
+
+func protectRecentEvents(
+	protected map[string]struct{},
+	events []event.Event,
+	skipRecentFunc ContextCompactionSkipRecentFunc,
+) {
+	if skipRecentFunc == nil || len(events) == 0 {
+		return
+	}
+	skipCount := skipRecentFunc(events)
+	if skipCount <= 0 {
+		return
+	}
+	if skipCount > len(events) {
+		skipCount = len(events)
+	}
+	for i := len(events) - skipCount; i < len(events); i++ {
+		unitKey := compactionUnitKey(events[i].RequestID, events[i].InvocationID)
+		if unitKey == "" {
+			continue
+		}
+		protected[unitKey] = struct{}{}
+	}
 }
 
 func collectCompletedCompactionUnitKeys(events []event.Event) map[string]bool {
@@ -362,7 +495,8 @@ func truncateOversizedToolResultMessageWithCounter(
 	if msg.Content == "" && len(msg.ContentParts) == 0 {
 		return msg, false, 0
 	}
-	if msg.Content == historicalToolResultPlaceholder {
+	if msg.Content == historicalToolResultPlaceholder ||
+		msg.Content == policyToolResultPlaceholder {
 		return msg, false, 0
 	}
 	if counter == nil {
@@ -455,6 +589,47 @@ func truncateMiddle(s string, maxChars int) string {
 	head := string(runes[:halfBudget])
 	tail := string(runes[runeCount-halfBudget:])
 	return head + marker + tail
+}
+
+func cleanToolResultMessageWithCounter(
+	ctx context.Context,
+	msg model.Message,
+	counter model.TokenCounter,
+) (model.Message, bool, int) {
+	if msg.Role != model.RoleTool || msg.ToolID == "" {
+		return msg, false, 0
+	}
+	if msg.Content == "" && len(msg.ContentParts) == 0 {
+		return msg, false, 0
+	}
+	if (msg.Content == historicalToolResultPlaceholder ||
+		msg.Content == policyToolResultPlaceholder) &&
+		len(msg.ContentParts) == 0 {
+		return msg, false, 0
+	}
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
+
+	originalTokens, err := counter.CountTokens(ctx, msg)
+	if err != nil {
+		originalTokens = 0
+	}
+	compacted := model.Message{
+		Role:     msg.Role,
+		Content:  policyToolResultPlaceholder,
+		ToolID:   msg.ToolID,
+		ToolName: msg.ToolName,
+	}
+	compactedTokens, err := counter.CountTokens(ctx, compacted)
+	if err != nil {
+		compactedTokens = 0
+	}
+	savedTokens := originalTokens - compactedTokens
+	if savedTokens < 0 {
+		savedTokens = 0
+	}
+	return compacted, true, savedTokens
 }
 
 func compactHistoricalToolResultMessage(

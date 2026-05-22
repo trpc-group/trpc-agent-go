@@ -184,6 +184,104 @@ func TestCompactIncrementEvents_KeepRecentCompletedRequestsOnly(t *testing.T) {
 	require.Equal(t, 1, stats.ToolResultsCompacted)
 }
 
+func TestCompactIncrementEvents_SkipRecentFuncProtectsHistoricalPass(t *testing.T) {
+	makeToolEvent := func(requestID, content string) event.Event {
+		return event.Event{
+			RequestID:    requestID,
+			InvocationID: "inv-" + requestID,
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage("tool-call-"+requestID, "worker", content),
+				}},
+			},
+		}
+	}
+
+	oldContent := strings.Repeat("old-result ", 64)
+	recentContent := strings.Repeat("recent-result ", 64)
+	currentContent := strings.Repeat("current-result ", 64)
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{
+			makeToolEvent("req-old", oldContent),
+			makeToolEvent("req-recent", recentContent),
+			makeToolEvent("req-current", currentContent),
+		},
+		"req-current",
+		"inv-req-current",
+		ContextCompactionConfig{
+			Enabled:             true,
+			KeepRecentRequests:  0,
+			ToolResultMaxTokens: 10,
+			SkipRecentFunc: func([]event.Event) int {
+				return 2
+			},
+		},
+	)
+
+	require.Equal(t, historicalToolResultPlaceholder,
+		compacted[0].Response.Choices[0].Message.Content)
+	require.Equal(t, recentContent,
+		compacted[1].Response.Choices[0].Message.Content)
+	require.Equal(t, currentContent,
+		compacted[2].Response.Choices[0].Message.Content)
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+}
+
+func TestCompactIncrementEvents_SkipRecentFuncDoesNotDisableOversizedPass(t *testing.T) {
+	makeToolEvent := func(requestID, content string) event.Event {
+		return event.Event{
+			RequestID:    requestID,
+			InvocationID: "inv-" + requestID,
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage("tool-call-"+requestID, "worker", content),
+				}},
+			},
+		}
+	}
+
+	oldContent := strings.Repeat("old-result ", 64)
+	recentContent := "HEAD-" + strings.Repeat("recent-middle-", 400) + "-TAIL"
+	currentContent := "current"
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{
+			makeToolEvent("req-old", oldContent),
+			makeToolEvent("req-recent", recentContent),
+			makeToolEvent("req-current", currentContent),
+		},
+		"req-current",
+		"inv-req-current",
+		ContextCompactionConfig{
+			Enabled:                      true,
+			KeepRecentRequests:           0,
+			ToolResultMaxTokens:          10,
+			OversizedToolResultMaxTokens: 32,
+			SkipRecentFunc: func([]event.Event) int {
+				return 2
+			},
+		},
+	)
+
+	require.Equal(t, historicalToolResultPlaceholder,
+		compacted[0].Response.Choices[0].Message.Content)
+	gotRecent := compacted[1].Response.Choices[0].Message.Content
+	require.NotEqual(t, recentContent, gotRecent)
+	require.Contains(t, gotRecent, "[... ")
+	require.True(t, strings.HasPrefix(gotRecent, "HEAD-"))
+	require.True(t, strings.HasSuffix(gotRecent, "-TAIL"))
+	require.Equal(t, currentContent,
+		compacted[2].Response.Choices[0].Message.Content)
+	require.Equal(t, 2, stats.ToolResultsCompacted)
+}
+
 func TestCompactHistoricalToolResultMessage_SkipsWhenPlaceholderIsNotSmaller(t *testing.T) {
 	msg := model.NewToolMessage("tool-call-short", "worker", "shorter")
 
@@ -196,6 +294,155 @@ func TestCompactHistoricalToolResultMessage_SkipsWhenPlaceholderIsNotSmaller(t *
 	require.False(t, changed)
 	require.Zero(t, savedTokens)
 	require.Equal(t, msg, compacted)
+}
+
+func TestCompactIncrementEvents_ForceCleansToolName(t *testing.T) {
+	content := "short result"
+	evt := event.Event{
+		RequestID:    "req-current",
+		InvocationID: "inv-current",
+		FilterKey:    "test-agent",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage("tool-call-current", "shell", content),
+			}},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{evt},
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled: true,
+			toolResultCompactionRules: toolResultCompactionRules{
+				forceCleanToolNames: toolNameSet([]string{"shell"}),
+			},
+		},
+	)
+
+	require.Len(t, compacted, 1)
+	got := compacted[0].Response.Choices[0].Message
+	require.Equal(t, policyToolResultPlaceholder, got.Content)
+	require.Equal(t, "tool-call-current", got.ToolID)
+	require.Equal(t, "shell", got.ToolName)
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+}
+
+func TestCompactIncrementEvents_KeepToolNameSkipsCompaction(t *testing.T) {
+	keptContent := "HEAD-" + strings.Repeat("keep-", 400) + "-TAIL"
+	compactedContent := strings.Repeat("compact-", 400)
+	currentContent := "current"
+	events := []event.Event{
+		{
+			RequestID:    "req-keep",
+			InvocationID: "inv-keep",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage("tool-call-keep", "session_load", keptContent),
+				}},
+			},
+		},
+		{
+			RequestID:    "req-compact",
+			InvocationID: "inv-compact",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage("tool-call-compact", "shell", compactedContent),
+				}},
+			},
+		},
+		{
+			RequestID:    "req-current",
+			InvocationID: "inv-current",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage("tool-call-current", "worker", currentContent),
+				}},
+			},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		events,
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled:                      true,
+			KeepRecentRequests:           0,
+			ToolResultMaxTokens:          10,
+			OversizedToolResultMaxTokens: 32,
+			toolResultCompactionRules: toolResultCompactionRules{
+				keepToolNames: toolNameSet([]string{"session_load"}),
+			},
+		},
+	)
+
+	require.Equal(t, keptContent, compacted[0].Response.Choices[0].Message.Content)
+	require.Equal(t, historicalToolResultPlaceholder,
+		compacted[1].Response.Choices[0].Message.Content)
+	require.Equal(t, currentContent, compacted[2].Response.Choices[0].Message.Content)
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+}
+
+func TestCompactIncrementEvents_KeepToolNameWinsOverForceClean(t *testing.T) {
+	content := strings.Repeat("result-", 100)
+	evt := event.Event{
+		RequestID:    "req-current",
+		InvocationID: "inv-current",
+		FilterKey:    "test-agent",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage("tool-call-current", "session_load", content),
+			}},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{evt},
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled: true,
+			toolResultCompactionRules: toolResultCompactionRules{
+				forceCleanToolNames: toolNameSet([]string{"session_load"}),
+				keepToolNames:       toolNameSet([]string{"session_load"}),
+			},
+		},
+	)
+
+	require.Equal(t, content, compacted[0].Response.Choices[0].Message.Content)
+	require.Zero(t, stats.ToolResultsCompacted)
+}
+
+func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
+	content := strings.Repeat("current-result ", 32)
+	msg := model.NewToolMessage("tool-call-current", "session_load", content)
+
+	compacted, ok := compactedCurrentInvocationMessage(
+		msg,
+		ContextCompactionConfig{
+			toolResultCompactionRules: toolResultCompactionRules{
+				keepToolNames: toolNameSet([]string{"session_load"}),
+			},
+		},
+	)
+
+	require.True(t, ok)
+	require.Equal(t, content, compacted.Content)
+	require.Equal(t, msg.ToolID, compacted.ToolID)
+	require.Equal(t, msg.ToolName, compacted.ToolName)
 }
 
 func TestNormalizeContextCompactionConfig(t *testing.T) {
