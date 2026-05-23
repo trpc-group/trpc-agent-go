@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -145,14 +146,44 @@ func (o *openAPITool) prepareRequest(ctx context.Context, args map[string]any) (
 	return req, nil
 }
 
+// paramValueToString converts JSON scalar tool argument values to strings
+// for HTTP query, header, and cookie parameters. Non-scalar values are skipped.
 func paramValueToString(value any) (string, bool) {
 	if value == nil {
 		return "", false
 	}
-	if s, ok := value.(string); ok {
-		return s, true
+	switch v := value.(type) {
+	case string:
+		return v, true
+	case bool:
+		return strconv.FormatBool(v), true
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64), true
+	case float32:
+		return strconv.FormatFloat(float64(v), 'f', -1, 32), true
+	case int:
+		return strconv.Itoa(v), true
+	case int8:
+		return strconv.FormatInt(int64(v), 10), true
+	case int16:
+		return strconv.FormatInt(int64(v), 10), true
+	case int32:
+		return strconv.FormatInt(int64(v), 10), true
+	case int64:
+		return strconv.FormatInt(v, 10), true
+	case uint:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint8:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint16:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint32:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint64:
+		return strconv.FormatUint(v, 10), true
+	default:
+		return "", false
 	}
-	return fmt.Sprint(value), true
 }
 
 func makeRequestURL(endpoint *operationEndpoint, pathParams, queryParams map[string]any) (string, error) {

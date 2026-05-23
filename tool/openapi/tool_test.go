@@ -168,6 +168,24 @@ func Test_makeRequestURL(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "non-scalar query parameters should be skipped",
+			args: args{
+				endpoint: &operationEndpoint{
+					baseURL: "https://api.example.com",
+					path:    "/test",
+					method:  "GET",
+				},
+				pathParams: map[string]any{},
+				queryParams: map[string]any{
+					"stringParam": "value",
+					"mapParam":    map[string]any{"a": "b"},
+					"sliceParam":  []any{1, 2},
+				},
+			},
+			want:    "https://api.example.com/test?stringParam=value",
+			wantErr: false,
+		},
+		{
 			name: "path with special characters in parameters",
 			args: args{
 				endpoint: &operationEndpoint{
@@ -531,6 +549,17 @@ func Test_makeRequestCookies(t *testing.T) {
 			},
 		},
 		{
+			name: "non-scalar cookie parameters should be skipped",
+			cookieParams: map[string]any{
+				"session":    "abc123",
+				"mapParam":   map[string]any{"a": "b"},
+				"sliceParam": []any{1, 2},
+			},
+			want: []*http.Cookie{
+				{Name: "session", Value: "abc123"},
+			},
+		},
+		{
 			name: "special characters in cookie values",
 			cookieParams: map[string]any{
 				"token": "abc=123;def=456",
@@ -608,6 +637,17 @@ func Test_makeRequestHeaders(t *testing.T) {
 				"Content-Type":  "application/json",
 				"Retry-Count":   "3",
 				"Is-Valid":      "true",
+			},
+		},
+		{
+			name: "non-scalar header parameters should be skipped",
+			headerParams: map[string]any{
+				"Authorization": "Bearer token123",
+				"mapParam":      map[string]any{"a": "b"},
+				"sliceParam":    []any{1, 2},
+			},
+			want: map[string]string{
+				"Authorization": "Bearer token123",
 			},
 		},
 		{
