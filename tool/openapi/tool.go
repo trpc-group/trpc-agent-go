@@ -145,6 +145,16 @@ func (o *openAPITool) prepareRequest(ctx context.Context, args map[string]any) (
 	return req, nil
 }
 
+func paramValueToString(value any) (string, bool) {
+	if value == nil {
+		return "", false
+	}
+	if s, ok := value.(string); ok {
+		return s, true
+	}
+	return fmt.Sprint(value), true
+}
+
 func makeRequestURL(endpoint *operationEndpoint, pathParams, queryParams map[string]any) (string, error) {
 	path := endpoint.path
 	for arg, value := range pathParams {
@@ -157,7 +167,7 @@ func makeRequestURL(endpoint *operationEndpoint, pathParams, queryParams map[str
 
 	endpointQuery := url.Values{}
 	for arg, value := range queryParams {
-		if v, ok := value.(string); ok {
+		if v, ok := paramValueToString(value); ok {
 			endpointQuery.Set(arg, v)
 		}
 	}
@@ -238,7 +248,7 @@ var supportedMimeTypes = map[string]marshaler{
 func makeRequestCookies(cookieParams map[string]any) []*http.Cookie {
 	cookies := []*http.Cookie{}
 	for name, value := range cookieParams {
-		if v, ok := value.(string); ok {
+		if v, ok := paramValueToString(value); ok {
 			cookies = append(cookies, &http.Cookie{
 				Name:  name,
 				Value: v,
@@ -251,7 +261,7 @@ func makeRequestCookies(cookieParams map[string]any) []*http.Cookie {
 func makeRequestHeaders(headerParams map[string]any) map[string]string {
 	headers := make(map[string]string)
 	for name, value := range headerParams {
-		if v, ok := value.(string); ok {
+		if v, ok := paramValueToString(value); ok {
 			headers[name] = v
 		}
 	}

@@ -133,7 +133,7 @@ func Test_makeRequestURL(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "non-string query parameters should be ignored",
+			name: "non-string query parameters should be coerced",
 			args: args{
 				endpoint: &operationEndpoint{
 					baseURL: "https://api.example.com",
@@ -147,7 +147,24 @@ func Test_makeRequestURL(t *testing.T) {
 					"boolParam":   true,
 				},
 			},
-			want:    "https://api.example.com/test?stringParam=value",
+			want:    "https://api.example.com/test?boolParam=true&intParam=123&stringParam=value",
+			wantErr: false,
+		},
+		{
+			name: "json number query parameters (float64)",
+			args: args{
+				endpoint: &operationEndpoint{
+					baseURL: "https://api.example.com",
+					path:    "/search",
+					method:  "GET",
+				},
+				pathParams: map[string]any{},
+				queryParams: map[string]any{
+					"limit": float64(200),
+					"page":  float64(1),
+				},
+			},
+			want:    "https://api.example.com/search?limit=200&page=1",
 			wantErr: false,
 		},
 		{
@@ -499,7 +516,7 @@ func Test_makeRequestCookies(t *testing.T) {
 			},
 		},
 		{
-			name: "mixed types - only strings are included",
+			name: "mixed types - non-strings are coerced",
 			cookieParams: map[string]any{
 				"session": "abc123",
 				"user":    "john",
@@ -507,6 +524,8 @@ func Test_makeRequestCookies(t *testing.T) {
 				"active":  true,
 			},
 			want: []*http.Cookie{
+				{Name: "active", Value: "true"},
+				{Name: "count", Value: "123"},
 				{Name: "session", Value: "abc123"},
 				{Name: "user", Value: "john"},
 			},
@@ -577,7 +596,7 @@ func Test_makeRequestHeaders(t *testing.T) {
 			},
 		},
 		{
-			name: "mixed types - only strings are included",
+			name: "mixed types - non-strings are coerced",
 			headerParams: map[string]any{
 				"Authorization": "Bearer token123",
 				"Content-Type":  "application/json",
@@ -587,6 +606,8 @@ func Test_makeRequestHeaders(t *testing.T) {
 			want: map[string]string{
 				"Authorization": "Bearer token123",
 				"Content-Type":  "application/json",
+				"Retry-Count":   "3",
+				"Is-Valid":      "true",
 			},
 		},
 		{
