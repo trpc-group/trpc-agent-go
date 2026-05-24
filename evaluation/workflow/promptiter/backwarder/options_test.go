@@ -26,6 +26,7 @@ import (
 func TestDefaultMessageBuilder(t *testing.T) {
 	builder := defaultMessageBuilder()
 	currentText := "current instruction"
+	otherText := "non-target instruction"
 
 	msg, err := builder(context.Background(), &Request{
 		EvalSetID:  "set_a",
@@ -51,7 +52,16 @@ func TestDefaultMessageBuilder(t *testing.T) {
 					Text: &currentText,
 				},
 			},
+			{
+				SurfaceID: "surf_2",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value: astructure.SurfaceValue{
+					Text: &otherText,
+				},
+			},
 		},
+		AllowedGradientSurfaceIDs: []string{"surf_1"},
 		Predecessors: []Predecessor{
 			{
 				StepID: "pred_1",
@@ -77,6 +87,16 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	}
 	assert.Equal(t, model.RoleUser, msg.Role)
 	assert.Contains(t, msg.Content, "Compute PromptIter backward attribution for one step.")
+	assert.Contains(t, msg.Content, "Attribute gradients only to listed gradient surfaces.")
+	assert.NotContains(t, msg.Content, "EvalSetID")
+	assert.NotContains(t, msg.Content, "EvalCaseID")
+	assert.NotContains(t, msg.Content, "NodeID")
+	assert.NotContains(t, msg.Content, "AllowedGradientSurfaceIDs")
+	assert.NotContains(t, msg.Content, "FromStepID")
+	assert.NotContains(t, msg.Content, "set_a")
+	assert.NotContains(t, msg.Content, "case_1")
+	assert.NotContains(t, msg.Content, "node_pred")
+	assert.NotContains(t, msg.Content, "step_downstream")
 
 	payloadContent, ok := extractRequestJSON(msg.Content)
 	assert.True(t, ok)
@@ -84,48 +104,49 @@ func TestDefaultMessageBuilder(t *testing.T) {
 		return
 	}
 
-	var payload Request
+	var payload promptData
 	err = json.Unmarshal([]byte(payloadContent), &payload)
 	assert.NoError(t, err)
-	assert.Equal(t, &Request{
-		EvalSetID:  "set_a",
-		EvalCaseID: "case_1",
-		Node: &astructure.Node{
-			NodeID: "node_1",
-			Kind:   "llm",
-			Name:   "responder",
+	assert.Equal(t, &promptData{
+		Node: promptNode{
+			Kind: "llm",
+			Name: "responder",
 		},
-		StepID: "step_1",
 		Input: &atrace.Snapshot{
 			Text: "input text",
 		},
 		Output: &atrace.Snapshot{
 			Text: "output text",
 		},
-		Surfaces: []astructure.Surface{
+		GradientSurfaces: []promptSurface{
 			{
 				SurfaceID: "surf_1",
-				NodeID:    "node_1",
 				Type:      astructure.SurfaceTypeInstruction,
 				Value: astructure.SurfaceValue{
 					Text: &currentText,
 				},
 			},
 		},
-		Predecessors: []Predecessor{
+		OtherSurfaces: []promptContextSurface{
+			{
+				Type: astructure.SurfaceTypeGlobalInstruction,
+				Value: astructure.SurfaceValue{
+					Text: &otherText,
+				},
+			},
+		},
+		Predecessors: []promptPredecessor{
 			{
 				StepID: "pred_1",
-				NodeID: "node_pred",
 				Output: &atrace.Snapshot{
 					Text: "predecessor output",
 				},
 			},
 		},
-		Incoming: []GradientPacket{
+		Incoming: []promptIncomingGradient{
 			{
-				FromStepID: "step_downstream",
-				Severity:   promptiter.LossSeverityP1,
-				Gradient:   "need citations",
+				Severity: promptiter.LossSeverityP1,
+				Gradient: "need citations",
 			},
 		},
 	}, &payload)

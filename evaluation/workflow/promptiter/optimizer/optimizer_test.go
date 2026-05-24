@@ -109,7 +109,7 @@ func TestOptimizeUsesRunnerStructuredOutput(t *testing.T) {
 						{Message: model.NewAssistantMessage("ignored")},
 					},
 				},
-				event.WithStructuredOutputPayload(&promptiter.SurfacePatch{
+				event.WithStructuredOutputPayload(&surfacePatchProposal{
 					Value: astructure.SurfaceValue{
 						Text:    &updatedText,
 						FewShot: []astructure.FewShotExample{},
@@ -220,7 +220,7 @@ func TestOptimizeUsesDefaultUUIDSessionID(t *testing.T) {
 				&model.Response{
 					Done: true,
 					Choices: []model.Choice{
-						{Message: model.NewAssistantMessage(`{"SurfaceID":"surf_1","Value":{"Text":"updated instruction"},"Reason":"tighten the system instruction"}`)},
+						{Message: model.NewAssistantMessage(`{"Value":{"Text":"updated instruction"},"Reason":"tighten the system instruction"}`)},
 					},
 				},
 			),
@@ -242,7 +242,7 @@ func TestOptimizeUsesDefaultUUIDSessionID(t *testing.T) {
 	assert.Equal(t, model.StructuredOutputJSONSchema, r.lastRunOpts.StructuredOutput.Type)
 	assert.Equal(
 		t,
-		reflect.TypeOf((*promptiter.SurfacePatch)(nil)),
+		reflect.TypeOf((*surfacePatchProposal)(nil)),
 		r.lastRunOpts.StructuredOutputType,
 	)
 	assert.Equal(t, &updatedText, rsp.Patch.Value.Text)
@@ -323,7 +323,7 @@ func TestOptimizeRejectsInvalidPatchOutput(t *testing.T) {
 		assert.Nil(t, rsp)
 	})
 
-	t.Run("patch surface id mismatch", func(t *testing.T) {
+	t.Run("legacy patch surface id is ignored", func(t *testing.T) {
 		oz, err := New(context.Background(), &fakeRunner{
 			events: []*event.Event{
 				event.NewResponseEvent(
@@ -344,8 +344,9 @@ func TestOptimizeRejectsInvalidPatchOutput(t *testing.T) {
 
 		rsp, err := oz.Optimize(context.Background(), newInstructionRequest("current instruction"))
 
-		assert.Error(t, err)
-		assert.Nil(t, rsp)
+		assert.NoError(t, err)
+		assert.Equal(t, "surf_1", rsp.Patch.SurfaceID)
+		assert.Equal(t, "updated instruction", *rsp.Patch.Value.Text)
 	})
 
 	t.Run("patch reason is empty", func(t *testing.T) {
@@ -359,6 +360,30 @@ func TestOptimizeRejectsInvalidPatchOutput(t *testing.T) {
 						Value: astructure.SurfaceValue{
 							Text: textPtr("updated instruction"),
 						},
+					}),
+				),
+			},
+		})
+		assert.NoError(t, err)
+
+		rsp, err := oz.Optimize(context.Background(), newInstructionRequest("current instruction"))
+
+		assert.Error(t, err)
+		assert.Nil(t, rsp)
+	})
+
+	t.Run("patch reason is whitespace only", func(t *testing.T) {
+		oz, err := New(context.Background(), &fakeRunner{
+			events: []*event.Event{
+				event.NewResponseEvent(
+					"invocation-id",
+					"optimizer",
+					&model.Response{Done: true},
+					event.WithStructuredOutputPayload(&surfacePatchProposal{
+						Value: astructure.SurfaceValue{
+							Text: textPtr("updated instruction"),
+						},
+						Reason: "   ",
 					}),
 				),
 			},
@@ -504,7 +529,7 @@ func TestOptimizeRejectsMessageBuildAndEmptyDecodedPatch(t *testing.T) {
 		assert.NoError(t, err)
 		result, runErr := oz.Optimize(context.Background(), newInstructionRequest("current instruction"))
 		assert.Nil(t, result)
-		assert.EqualError(t, runErr, "sanitize surface patch: patch reason is empty")
+		assert.EqualError(t, runErr, "sanitize surface patch proposal: patch reason is empty")
 	})
 }
 
@@ -705,17 +730,17 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 	}
 }
 
-func TestSanitizeSurfacePatchValidationErrors(t *testing.T) {
-	patch, err := sanitizeSurfacePatch(nil, &promptiter.SurfacePatch{})
+func TestSanitizePatchProposalValidationErrors(t *testing.T) {
+	patch, err := sanitizePatchProposal(nil, &surfacePatchProposal{})
 	assert.Nil(t, patch)
 	assert.EqualError(t, err, "request is nil")
-	patch, err = sanitizeSurfacePatch(&Request{}, &promptiter.SurfacePatch{})
+	patch, err = sanitizePatchProposal(&Request{}, &surfacePatchProposal{})
 	assert.Nil(t, patch)
 	assert.EqualError(t, err, "surface is nil")
-	patch, err = sanitizeSurfacePatch(newInstructionRequest("current instruction"), nil)
+	patch, err = sanitizePatchProposal(newInstructionRequest("current instruction"), nil)
 	assert.Nil(t, patch)
-	assert.EqualError(t, err, "surface patch is nil")
-	patch, err = sanitizeSurfacePatch(newInstructionRequest("current instruction"), &promptiter.SurfacePatch{
+	assert.EqualError(t, err, "surface patch proposal is nil")
+	patch, err = sanitizePatchProposal(newInstructionRequest("current instruction"), &surfacePatchProposal{
 		Reason: "update",
 		Value: astructure.SurfaceValue{
 			Model: &astructure.ModelRef{Name: "gpt-test"},
@@ -723,6 +748,18 @@ func TestSanitizeSurfacePatchValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, patch)
 	assert.EqualError(t, err, "sanitize patch value: text is nil")
+}
+
+func TestSanitizePatchProposalTrimsReason(t *testing.T) {
+	patch, err := sanitizePatchProposal(newInstructionRequest("current instruction"), &surfacePatchProposal{
+		Reason: " tighten the system instruction ",
+		Value: astructure.SurfaceValue{
+			Text: textPtr("updated instruction"),
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "tighten the system instruction", patch.Reason)
 }
 
 func newInstructionRequest(currentText string) *Request {
