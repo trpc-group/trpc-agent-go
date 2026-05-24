@@ -1968,7 +1968,10 @@ func buildDefaultToolMessage(
 	result any,
 ) (model.Message, error) {
 	// Preserve legacy tool message serialization for default fallback content.
-	resultBytes, err := json.Marshal(result)
+	// Use marshalJSONNoHTMLEscape so that <, >, & in tool output (e.g. Go source
+	// code containing "<-done") are preserved verbatim instead of being escaped
+	// to \u003c, \u003e, \u0026 which confuses LLMs reading the content.
+	resultBytes, err := marshalJSONNoHTMLEscape(result)
 	if err != nil {
 		return model.Message{}, err
 	}
@@ -1977,6 +1980,25 @@ func buildDefaultToolMessage(
 		Content: string(resultBytes),
 		ToolID:  toolCallID,
 	}, nil
+}
+
+// marshalJSONNoHTMLEscape serializes v to JSON without escaping <, >, & characters.
+// Standard json.Marshal escapes these for HTML safety, but tool results are never
+// embedded in HTML and the escaped sequences (\u003c, \u003e, \u0026) confuse LLMs
+// that read the output as source code (e.g. Go channel operations "<-done").
+func marshalJSONNoHTMLEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	// json.Encoder.Encode appends a trailing newline; trim it for Marshal parity.
+	b := buf.Bytes()
+	if len(b) > 0 && b[len(b)-1] == '\n' {
+		b = b[:len(b)-1]
+	}
+	return b, nil
 }
 
 type structuredStreamErrorOptIn interface {
@@ -2276,7 +2298,7 @@ func marshalChunkToText(content any) string {
 	case string:
 		return v
 	default:
-		if bts, e := json.Marshal(v); e == nil {
+		if bts, e := marshalJSONNoHTMLEscape(v); e == nil {
 			return string(bts)
 		}
 		return fmt.Sprintf("%v", v)
