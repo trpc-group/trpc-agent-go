@@ -48,10 +48,16 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	}
 	assert.Equal(t, model.RoleUser, msg.Role)
 	assert.Contains(t, msg.Content, "Aggregate PromptIter gradients for a single surface.")
+	assert.Contains(t, msg.Content, "Return only merged gradient items.")
 	assert.NotContains(t, msg.Content, "Surface ID:")
 	assert.NotContains(t, msg.Content, "Node ID:")
 	assert.NotContains(t, msg.Content, "Surface Type:")
 	assert.NotContains(t, msg.Content, "Gradient Count:")
+	assert.NotContains(t, msg.Content, "SurfaceID")
+	assert.NotContains(t, msg.Content, "NodeID")
+	assert.NotContains(t, msg.Content, "EvalSetID")
+	assert.NotContains(t, msg.Content, "EvalCaseID")
+	assert.NotContains(t, msg.Content, "StepID")
 
 	payloadContent, ok := extractRequestJSON(msg.Content)
 	assert.True(t, ok)
@@ -59,21 +65,15 @@ func TestDefaultMessageBuilder(t *testing.T) {
 		return
 	}
 
-	var payload Request
+	var payload promptData
 	err = json.Unmarshal([]byte(payloadContent), &payload)
 	assert.NoError(t, err)
-	assert.Equal(t, &Request{
-		SurfaceID: "surf_1",
-		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeInstruction,
-		Gradients: []promptiter.SurfaceGradient{
+	assert.Equal(t, &promptData{
+		Surface: promptSurface{Type: astructure.SurfaceTypeInstruction},
+		Gradients: []promptGradient{
 			{
-				EvalSetID:  "set_a",
-				EvalCaseID: "case_1",
-				StepID:     "s1",
-				SurfaceID:  "surf_1",
-				Severity:   promptiter.LossSeverityP1,
-				Gradient:   "keep citation",
+				Severity: promptiter.LossSeverityP1,
+				Gradient: "keep citation",
 			},
 		},
 	}, &payload)

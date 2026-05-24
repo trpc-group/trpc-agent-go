@@ -63,6 +63,11 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	assert.Contains(t, msg.Content, "When the current value is mostly correct, prefer removing unsupported or speculative detail before adding new detail.")
 	assert.Contains(t, msg.Content, "Do not trade factual precision for stylistic vividness.")
 	assert.Contains(t, msg.Content, "Avoid broad rewrites unless the gradients indicate multiple independent failures.")
+	assert.Contains(t, msg.Content, "Return only Value and Reason fields.")
+	assert.NotContains(t, msg.Content, "SurfaceID")
+	assert.NotContains(t, msg.Content, "EvalSetID")
+	assert.NotContains(t, msg.Content, "EvalCaseID")
+	assert.NotContains(t, msg.Content, "StepID")
 
 	payloadContent, ok := extractRequestJSON(msg.Content)
 	assert.True(t, ok)
@@ -70,10 +75,28 @@ func TestDefaultMessageBuilder(t *testing.T) {
 		return
 	}
 
-	var payload Request
+	var payload promptData
 	err = json.Unmarshal([]byte(payloadContent), &payload)
 	assert.NoError(t, err)
-	assert.Equal(t, &Request{
+	assert.Equal(t, &promptData{
+		Surface: promptSurface{
+			Type: astructure.SurfaceTypeInstruction,
+			Value: astructure.SurfaceValue{
+				Text: &currentText,
+			},
+		},
+		Gradients: []promptGradient{
+			{
+				Severity: promptiter.LossSeverityP1,
+				Gradient: "keep citation",
+			},
+		},
+	}, &payload)
+}
+
+func TestNewPromptDataOmitsSurfaceIdentity(t *testing.T) {
+	currentText := "current instruction"
+	data := newPromptData(&Request{
 		Surface: &astructure.Surface{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
@@ -97,7 +120,16 @@ func TestDefaultMessageBuilder(t *testing.T) {
 				},
 			},
 		},
-	}, &payload)
+	})
+
+	payload, err := json.Marshal(data)
+
+	assert.NoError(t, err)
+	assert.NotContains(t, string(payload), "SurfaceID")
+	assert.NotContains(t, string(payload), "NodeID")
+	assert.NotContains(t, string(payload), "EvalSetID")
+	assert.NotContains(t, string(payload), "EvalCaseID")
+	assert.NotContains(t, string(payload), "StepID")
 }
 
 func extractRequestJSON(content string) (string, bool) {

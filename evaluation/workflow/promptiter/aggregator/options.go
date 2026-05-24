@@ -14,7 +14,6 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 )
 
 // options stores optional aggregation behavior.
@@ -33,9 +32,9 @@ func newOptions(opt ...Option) *options {
 	opts := &options{
 		runOptions: []agent.RunOption{
 			agent.WithStructuredOutputJSON(
-				new(promptiter.AggregatedSurfaceGradient),
+				new(aggregatedGradientProposal),
 				true,
-				"One aggregated PromptIter surface gradient.",
+				"One aggregated PromptIter gradient proposal.",
 			),
 		},
 		messageBuilder:    defaultMessageBuilder(),
