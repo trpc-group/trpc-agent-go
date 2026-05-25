@@ -139,6 +139,7 @@ func compactIncrementEvents(
 
 	compacted := make([]event.Event, len(events))
 	copy(compacted, events)
+	compacted = fillMissingToolResultNamesInEvents(compacted)
 
 	var stats ContextCompactionStats
 
@@ -208,6 +209,118 @@ func (cfg ContextCompactionConfig) forceCleanToolResult(msg model.Message) bool 
 	}
 	_, ok := cfg.toolResultCompactionRules.forceCleanToolNames[msg.ToolName]
 	return ok
+}
+
+func toolNamesByToolIDFromEvents(events []event.Event) map[string]string {
+	var names map[string]string
+	for _, evt := range events {
+		if evt.Response == nil {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			names = collectToolCallNames(names, choice.Message)
+			names = collectToolCallNames(names, choice.Delta)
+		}
+	}
+	return names
+}
+
+func toolNamesByToolIDFromMessages(messages []model.Message) map[string]string {
+	var names map[string]string
+	for _, msg := range messages {
+		names = collectToolCallNames(names, msg)
+	}
+	return names
+}
+
+func collectToolCallNames(
+	names map[string]string,
+	msg model.Message,
+) map[string]string {
+	for _, toolCall := range msg.ToolCalls {
+		if toolCall.ID == "" || toolCall.Function.Name == "" {
+			continue
+		}
+		if names == nil {
+			names = make(map[string]string)
+		}
+		if _, exists := names[toolCall.ID]; !exists {
+			names[toolCall.ID] = toolCall.Function.Name
+		}
+	}
+	return names
+}
+
+func resolveToolResultName(
+	msg model.Message,
+	toolNamesByID map[string]string,
+) model.Message {
+	if msg.Role != model.RoleTool ||
+		msg.ToolID == "" ||
+		msg.ToolName != "" ||
+		len(toolNamesByID) == 0 {
+		return msg
+	}
+	if name := toolNamesByID[msg.ToolID]; name != "" {
+		msg.ToolName = name
+	}
+	return msg
+}
+
+func fillMissingToolResultNamesInEvents(events []event.Event) []event.Event {
+	toolNamesByID := toolNamesByToolIDFromEvents(events)
+	if len(toolNamesByID) == 0 {
+		return events
+	}
+
+	var clonedEvents bool
+	for eventIndex := range events {
+		if events[eventIndex].Response == nil ||
+			len(events[eventIndex].Response.Choices) == 0 {
+			continue
+		}
+		var clonedResponse bool
+		for choiceIndex := range events[eventIndex].Response.Choices {
+			msg := events[eventIndex].Response.Choices[choiceIndex].Message
+			resolved := resolveToolResultName(msg, toolNamesByID)
+			if resolved.ToolName == msg.ToolName {
+				continue
+			}
+			if !clonedEvents {
+				events = append([]event.Event(nil), events...)
+				clonedEvents = true
+			}
+			if !clonedResponse {
+				events[eventIndex].Response = events[eventIndex].Response.Clone()
+				clonedResponse = true
+			}
+			events[eventIndex].Response.Choices[choiceIndex].Message = resolved
+		}
+	}
+	return events
+}
+
+func fillMissingToolResultNamesInMessages(
+	messages []model.Message,
+) []model.Message {
+	toolNamesByID := toolNamesByToolIDFromMessages(messages)
+	if len(toolNamesByID) == 0 {
+		return messages
+	}
+
+	var cloned bool
+	for i := range messages {
+		resolved := resolveToolResultName(messages[i], toolNamesByID)
+		if resolved.ToolName == messages[i].ToolName {
+			continue
+		}
+		if !cloned {
+			messages = append([]model.Message(nil), messages...)
+			cloned = true
+		}
+		messages[i] = resolved
+	}
+	return messages
 }
 
 func applyForceCleanToolResultPass(

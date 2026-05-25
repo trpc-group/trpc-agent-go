@@ -962,9 +962,28 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 						Version:      event.CurrentVersion,
 						Response: &model.Response{
 							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.Message{
+								Role: model.RoleAssistant,
+								ToolCalls: []model.ToolCall{{
+									ID: "call_1",
+									Function: model.FunctionDefinitionParam{
+										Name:      "session_load",
+										Arguments: []byte(`{}`),
+									},
+								}},
+							}}},
+						},
+					},
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    baseTime.Add(time.Second),
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
 							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
 								"call_1",
-								"session_load",
+								"",
 								"kept result",
 							)}},
 						},
@@ -973,6 +992,36 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 			}),
 		)
 		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+
+	t.Run("detects compacted tool result in later choice", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{
+								{Index: 0, Message: model.NewAssistantMessage("progress")},
+								{Index: 1, Message: model.NewToolMessage(
+									"call_1",
+									"worker",
+									"result",
+								)},
+							},
+						},
+					},
+				},
+			}),
+		)
+		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
 	})
 }
 

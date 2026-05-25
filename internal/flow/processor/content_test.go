@@ -2845,7 +2845,7 @@ func TestContentRequestProcessor_getIncrementMessages_ForceCleanWithScopedTimeli
 				Choices: []model.Choice{{
 					Message: model.NewToolMessage(
 						toolCallID(invocationID),
-						"shell",
+						"",
 						shellPayload,
 					),
 				}},

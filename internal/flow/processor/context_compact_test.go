@@ -331,6 +331,62 @@ func TestCompactIncrementEvents_ForceCleansToolName(t *testing.T) {
 	require.Equal(t, 1, stats.ToolResultsCompacted)
 }
 
+func TestCompactIncrementEvents_ForceCleansInferredToolName(t *testing.T) {
+	toolCall := event.Event{
+		RequestID:    "req-current",
+		InvocationID: "inv-current",
+		FilterKey:    "test-agent",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID: "tool-call-current",
+						Function: model.FunctionDefinitionParam{
+							Name:      "shell",
+							Arguments: []byte(`{}`),
+						},
+					}},
+				},
+			}},
+		},
+	}
+	toolResult := event.Event{
+		RequestID:    "req-current",
+		InvocationID: "inv-current",
+		FilterKey:    "test-agent",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage("tool-call-current", "", "short result"),
+			}},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{toolCall, toolResult},
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled: true,
+			toolResultCompactionRules: toolResultCompactionRules{
+				forceCleanToolNames: toolNameSet([]string{"shell"}),
+			},
+		},
+	)
+
+	require.Len(t, compacted, 2)
+	got := compacted[1].Response.Choices[0].Message
+	require.Equal(t, policyToolResultPlaceholder, got.Content)
+	require.Equal(t, "tool-call-current", got.ToolID)
+	require.Equal(t, "shell", got.ToolName)
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+	require.Empty(t, toolResult.Response.Choices[0].Message.ToolName,
+		"original event should not be mutated")
+}
+
 func TestCompactIncrementEvents_KeepToolNameSkipsCompaction(t *testing.T) {
 	keptContent := "HEAD-" + strings.Repeat("keep-", 400) + "-TAIL"
 	compactedContent := strings.Repeat("compact-", 400)
@@ -481,19 +537,50 @@ func TestTruncateOversizedToolResultMessages_ForceCleanAndKeepRules(t *testing.T
 	keptContent := "HEAD-" + strings.Repeat("keep-", 200) + "-TAIL"
 	workerContent := "HEAD-" + strings.Repeat("worker-", 200) + "-TAIL"
 	messages := []model.Message{
-		model.NewToolMessage("tool-call-shell", "shell", shellContent),
-		model.NewToolMessage("tool-call-load", "session_load", keptContent),
-		model.NewToolMessage("tool-call-worker", "worker", workerContent),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "tool-call-shell",
+					Function: model.FunctionDefinitionParam{
+						Name:      "shell",
+						Arguments: []byte(`{}`),
+					},
+				},
+				{
+					ID: "tool-call-load",
+					Function: model.FunctionDefinitionParam{
+						Name:      "session_load",
+						Arguments: []byte(`{}`),
+					},
+				},
+				{
+					ID: "tool-call-worker",
+					Function: model.FunctionDefinitionParam{
+						Name:      "worker",
+						Arguments: []byte(`{}`),
+					},
+				},
+			},
+		},
+		model.NewToolMessage("tool-call-shell", "", shellContent),
+		model.NewToolMessage("tool-call-load", "", keptContent),
+		model.NewToolMessage("tool-call-worker", "", workerContent),
 	}
 
 	got := p.truncateOversizedToolResultMessages(messages)
 
-	require.Equal(t, policyToolResultPlaceholder, got[0].Content)
-	require.Equal(t, keptContent, got[1].Content)
-	require.NotEqual(t, workerContent, got[2].Content)
-	require.Contains(t, got[2].Content, "[... ")
-	require.Equal(t, shellContent, messages[0].Content,
+	require.Equal(t, policyToolResultPlaceholder, got[1].Content)
+	require.Equal(t, "shell", got[1].ToolName)
+	require.Equal(t, keptContent, got[2].Content)
+	require.Equal(t, "session_load", got[2].ToolName)
+	require.NotEqual(t, workerContent, got[3].Content)
+	require.Contains(t, got[3].Content, "[... ")
+	require.Equal(t, "worker", got[3].ToolName)
+	require.Equal(t, shellContent, messages[1].Content,
 		"original slice should be cloned before rewriting")
+	require.Empty(t, messages[1].ToolName,
+		"original messages should not be mutated when resolving tool names")
 }
 
 func TestNormalizeContextCompactionConfig(t *testing.T) {

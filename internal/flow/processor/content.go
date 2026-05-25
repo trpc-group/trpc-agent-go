@@ -902,6 +902,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 
 	var events []event.Event
 	inv.Session.EventMu.RLock()
+	toolNamesByID := toolNamesByToolIDFromEvents(inv.Session.Events)
 	for _, evt := range inv.Session.Events {
 		if compactedEvt, ok := p.compactCurrentInvocationEvent(
 			evt,
@@ -909,6 +910,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 			filter,
 			isZeroTime,
 			since,
+			toolNamesByID,
 		); ok {
 			events = append(events, compactedEvt)
 			continue
@@ -1011,6 +1013,7 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 	filter string,
 	isZeroTime bool,
 	since time.Time,
+	toolNamesByID map[string]string,
 ) (event.Event, bool) {
 	if isZeroTime || inv == nil {
 		return event.Event{}, false
@@ -1031,8 +1034,9 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 
 	var compactedChoices []model.Choice
 	for _, choice := range evt.Choices {
+		msg := resolveToolResultName(choice.Message, toolNamesByID)
 		msg, ok := compactedCurrentInvocationMessage(
-			choice.Message,
+			msg,
 			p.ContextCompactionConfig,
 		)
 		if !ok {
@@ -1511,6 +1515,8 @@ func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 		return messages
 	}
 
+	messages = fillMissingToolResultNamesInMessages(messages)
+
 	var cloned bool
 	for i := range messages {
 		if cfg.keepToolResult(messages[i]) {
@@ -1723,6 +1729,7 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 	inv.Session.EventMu.RLock()
 	defer inv.Session.EventMu.RUnlock()
 
+	toolNamesByID := toolNamesByToolIDFromEvents(inv.Session.Events)
 	for _, evt := range inv.Session.Events {
 		if evt.RequestID != inv.RunOptions.RequestID ||
 			evt.InvocationID != inv.InvocationID {
@@ -1732,8 +1739,7 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 			continue
 		}
 		if !isEventEligibleForInclusion(evt) ||
-			len(evt.Choices) == 0 ||
-			evt.Choices[0].Message.Role != model.RoleTool {
+			len(evt.Choices) == 0 {
 			continue
 		}
 		if !p.passBranchFilter(evt, filter) {
@@ -1742,6 +1748,7 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 		if eventHasCompactedCurrentInvocationToolResult(
 			evt,
 			p.ContextCompactionConfig,
+			toolNamesByID,
 		) {
 			return true
 		}
@@ -1752,9 +1759,10 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 func eventHasCompactedCurrentInvocationToolResult(
 	evt event.Event,
 	cfg ContextCompactionConfig,
+	toolNamesByID map[string]string,
 ) bool {
 	for _, choice := range evt.Choices {
-		msg := choice.Message
+		msg := resolveToolResultName(choice.Message, toolNamesByID)
 		if msg.Role != model.RoleTool || msg.ToolID == "" {
 			continue
 		}
