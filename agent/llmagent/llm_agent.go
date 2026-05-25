@@ -1028,14 +1028,23 @@ func appendOnDemandSessionTools(
 		options.OutputSchema != nil {
 		return allTools
 	}
-	if inv != nil && !toolsessionrecall.SupportsOnDemandSession(inv) {
+	if inv == nil {
+		return append(
+			allTools,
+			toolsessionrecall.NewSearchTool(),
+			toolsessionrecall.NewLoadTool(),
+		)
+	}
+	if toolsessionrecall.SupportsSearch(inv) {
+		allTools = append(allTools, toolsessionrecall.NewSearchTool())
+	}
+	if toolsessionrecall.SupportsLoad(inv) {
+		allTools = append(allTools, toolsessionrecall.NewLoadTool())
+	}
+	if !toolsessionrecall.SupportsOnDemandSession(inv) {
 		return allTools
 	}
-	return append(
-		allTools,
-		toolsessionrecall.NewSearchTool(),
-		toolsessionrecall.NewLoadTool(),
-	)
+	return allTools
 }
 
 func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {

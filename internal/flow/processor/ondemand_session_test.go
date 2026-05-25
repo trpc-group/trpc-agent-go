@@ -70,13 +70,31 @@ func TestOnDemandSessionRequestProcessor_SkipsWithoutSupport(t *testing.T) {
 		},
 	}
 	inv := &agent.Invocation{
-		Session:        session.NewSession("app", "user", "sess"),
-		SessionService: sessioninmemory.NewSessionService(),
+		Session: session.NewSession("app", "user", "sess"),
 	}
 
 	p.ProcessRequest(context.Background(), inv, req, nil)
 	require.Len(t, req.Messages, 1)
 	assert.Equal(t, model.RoleUser, req.Messages[0].Role)
+}
+
+func TestOnDemandSessionRequestProcessor_LoadOnlyOverview(t *testing.T) {
+	p := NewOnDemandSessionRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+	}
+	inv := &agent.Invocation{
+		Session:        session.NewSession("app", "user", "sess"),
+		SessionService: sessioninmemory.NewSessionService(),
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Len(t, req.Messages, 2)
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Contains(t, req.Messages[0].Content, "Exact session history loading is available.")
+	assert.NotContains(t, req.Messages[0].Content, "Use session_search before session_load")
 }
 
 func TestOnDemandSessionRequestProcessor_InsertsSystemMessage(t *testing.T) {

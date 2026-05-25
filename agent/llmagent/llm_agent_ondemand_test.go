@@ -26,6 +26,10 @@ type onDemandSessionToolService struct {
 	session.Service
 }
 
+type onDemandSearchOnlyService struct {
+	session.Service
+}
+
 func (s *onDemandSessionToolService) SearchEvents(
 	context.Context,
 	session.EventSearchRequest,
@@ -38,6 +42,13 @@ func (s *onDemandSessionToolService) GetEventWindow(
 	session.EventWindowRequest,
 ) (*session.EventWindow, error) {
 	return &session.EventWindow{}, nil
+}
+
+func (s *onDemandSearchOnlyService) SearchEvents(
+	context.Context,
+	session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return nil, nil
 }
 
 func TestBuildRequestProcessors_OnDemandSessionWiring(t *testing.T) {
@@ -61,11 +72,30 @@ func TestLLMAgent_OnDemandSessionTools_StaticAndInvocationAware(t *testing.T) {
 	require.Nil(t, findTool(a.Tools(), "session_load"))
 
 	unsupportedInv := &agent.Invocation{
-		Session:        session.NewSession("app", "user", "sess"),
-		SessionService: sessioninmemory.NewSessionService(),
+		Session: session.NewSession("app", "user", "sess"),
 	}
 	tools, userToolNames := a.InvocationToolSurface(context.Background(), unsupportedInv)
 	require.Nil(t, findTool(tools, "session_search"))
+	require.Nil(t, findTool(tools, "session_load"))
+	require.NotNil(t, userToolNames)
+
+	loadOnlyInv := &agent.Invocation{
+		Session:        session.NewSession("app", "user", "sess"),
+		SessionService: sessioninmemory.NewSessionService(),
+	}
+	tools, userToolNames = a.InvocationToolSurface(context.Background(), loadOnlyInv)
+	require.Nil(t, findTool(tools, "session_search"))
+	require.NotNil(t, findTool(tools, "session_load"))
+	require.NotNil(t, userToolNames)
+
+	searchOnlyInv := &agent.Invocation{
+		Session: session.NewSession("app", "user", "sess"),
+		SessionService: &onDemandSearchOnlyService{
+			Service: sessioninmemory.NewSessionService(),
+		},
+	}
+	tools, userToolNames = a.InvocationToolSurface(context.Background(), searchOnlyInv)
+	require.NotNil(t, findTool(tools, "session_search"))
 	require.Nil(t, findTool(tools, "session_load"))
 	require.NotNil(t, userToolNames)
 
@@ -148,12 +178,29 @@ func TestAppendOnDemandSessionTools_Gating(t *testing.T) {
 	require.NotNil(t, findTool(staticTools, "session_load"))
 
 	unsupportedInv := &agent.Invocation{
-		Session:        session.NewSession("app", "user", "sess"),
-		SessionService: sessioninmemory.NewSessionService(),
+		Session: session.NewSession("app", "user", "sess"),
 	}
 	unsupportedTools := appendOnDemandSessionTools(baseTools, opts, unsupportedInv)
 	require.Nil(t, findTool(unsupportedTools, "session_search"))
 	require.Nil(t, findTool(unsupportedTools, "session_load"))
+
+	loadOnlyInv := &agent.Invocation{
+		Session:        session.NewSession("app", "user", "sess"),
+		SessionService: sessioninmemory.NewSessionService(),
+	}
+	loadOnlyTools := appendOnDemandSessionTools(baseTools, opts, loadOnlyInv)
+	require.Nil(t, findTool(loadOnlyTools, "session_search"))
+	require.NotNil(t, findTool(loadOnlyTools, "session_load"))
+
+	searchOnlyInv := &agent.Invocation{
+		Session: session.NewSession("app", "user", "sess"),
+		SessionService: &onDemandSearchOnlyService{
+			Service: sessioninmemory.NewSessionService(),
+		},
+	}
+	searchOnlyTools := appendOnDemandSessionTools(baseTools, opts, searchOnlyInv)
+	require.NotNil(t, findTool(searchOnlyTools, "session_search"))
+	require.Nil(t, findTool(searchOnlyTools, "session_load"))
 
 	supportedInv := &agent.Invocation{
 		Session: session.NewSession("app", "user", "sess"),

@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/internal/sessionopt"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
+	sessionwindow "trpc.group/trpc-go/trpc-agent-go/session/internal/window"
 )
 
 // stateWithTTL wraps state data with expiration time.
@@ -38,8 +39,9 @@ type sessionWithTTL struct {
 }
 
 var (
-	_ session.Service      = (*SessionService)(nil)
-	_ session.TrackService = (*SessionService)(nil)
+	_ session.Service       = (*SessionService)(nil)
+	_ session.TrackService  = (*SessionService)(nil)
+	_ session.WindowService = (*SessionService)(nil)
 )
 
 // isExpired checks if the given time has passed.
@@ -386,6 +388,21 @@ func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *s
 		userState = make(session.StateMap)
 	}
 	return mergeState(appState, userState, copiedSess), nil
+}
+
+// GetEventWindow loads a small ordered event window around one anchor event.
+func (s *SessionService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	sess, err := s.GetSession(ctx, req.Key)
+	if err != nil {
+		return nil, err
+	}
+	if sess == nil {
+		return sessionwindow.EventWindowFromOrderedEvents(req.Key, nil, req)
+	}
+	return sessionwindow.EventWindowFromOrderedEvents(req.Key, sess.Events, req)
 }
 
 // ListSessions returns all sessions for a given app and user.
