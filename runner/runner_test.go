@@ -6644,6 +6644,90 @@ func TestRunner_RoutedSessionPersistsInterruptedPartialAssistant(t *testing.T) {
 	require.Equal(t, "member text", svc.appendEventCalls[0].event.Choices[0].Message.Content)
 }
 
+func TestRunner_InterruptedAssistantPreservesSourceEventIdentity(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	rootInv := agent.NewInvocation(
+		agent.WithInvocationID("root-inv"),
+		agent.WithInvocationBranch("root/branch"),
+		agent.WithInvocationEventFilterKey("root/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "root-request"}),
+	)
+	loop := &eventLoopContext{
+		invocation:       rootInv,
+		streamFilter:     graph.NewStreamModeFilter(false, nil),
+		processedEventCh: make(chan *event.Event, 1),
+	}
+	partial := event.NewResponseEvent(
+		"child-inv",
+		"child-agent",
+		&model.Response{
+			ID:        "child-response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "partial",
+				},
+			}},
+		},
+	)
+	partial.ParentInvocationID = "parent-inv"
+	partial.Branch = "child/branch"
+	partial.FilterKey = "child/filter"
+	partial.RequestID = "child-request"
+
+	rr.recordInterruptedAssistantDelta(loop, partial, nil)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	evt := rr.interruptedAssistantEvent(cancelled, loop)
+	require.NotNil(t, evt)
+	require.Equal(t, "child-inv", evt.InvocationID)
+	require.Equal(t, "parent-inv", evt.ParentInvocationID)
+	require.Equal(t, "child/branch", evt.Branch)
+	require.Equal(t, "child/filter", evt.FilterKey)
+	require.Equal(t, "child-request", evt.RequestID)
+	require.NotEqual(t, rootInv.InvocationID, evt.InvocationID)
+	require.NotEqual(t, rootInv.Branch, evt.Branch)
+}
+
+func TestRunner_InterruptedAssistantFillsRequestIDFromRootInvocation(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	rootInv := agent.NewInvocation(
+		agent.WithInvocationID("root-inv"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "root-request"}),
+	)
+	loop := &eventLoopContext{
+		invocation:       rootInv,
+		streamFilter:     graph.NewStreamModeFilter(false, nil),
+		processedEventCh: make(chan *event.Event, 1),
+	}
+	partial := event.NewResponseEvent(
+		rootInv.InvocationID,
+		"agent",
+		&model.Response{
+			ID:        "response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "partial",
+				},
+			}},
+		},
+	)
+
+	rr.recordInterruptedAssistantDelta(loop, partial, nil)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	evt := rr.interruptedAssistantEvent(cancelled, loop)
+	require.NotNil(t, evt)
+	require.Equal(t, "root-request", evt.RequestID)
+}
+
 func TestRunner_CancelDoesNotPersistInterruptedPartialAssistantByDefault(t *testing.T) {
 	const (
 		requestID = "req-cancel-partial-default"

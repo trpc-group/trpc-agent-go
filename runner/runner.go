@@ -979,6 +979,10 @@ type interruptedAssistantAccumulator struct {
 	responseID                         string
 	author                             string
 	invocationID                       string
+	parentInvocationID                 string
+	branch                             string
+	filterKey                          string
+	requestID                          string
 	created                            int64
 	choiceContent                      map[int]*strings.Builder
 	persistedAssistantResponseIDs      map[string]struct{}
@@ -1472,7 +1476,7 @@ func (r *runner) recordInterruptedAssistantDelta(
 		responseID = "interrupted-assistant-" + uuid.NewString()
 	}
 	if acc.responseID != "" && responseID != acc.responseID {
-		acc.choiceContent = nil
+		resetInterruptedAssistantStreamState(acc)
 	}
 	recorded := false
 	for _, choice := range rsp.Choices {
@@ -1498,10 +1502,81 @@ func (r *runner) recordInterruptedAssistantDelta(
 	}
 	acc.responseID = responseID
 	acc.author = agentEvent.Author
-	acc.invocationID = agentEvent.InvocationID
+	captureInterruptedAssistantEventIdentity(acc, agentEvent)
 	if rsp.Created > 0 {
 		acc.created = rsp.Created
 	}
+}
+
+func resetInterruptedAssistantStreamState(acc *interruptedAssistantAccumulator) {
+	if acc == nil {
+		return
+	}
+	acc.choiceContent = nil
+	acc.author = ""
+	acc.invocationID = ""
+	acc.parentInvocationID = ""
+	acc.branch = ""
+	acc.filterKey = ""
+	acc.requestID = ""
+	acc.created = 0
+}
+
+func captureInterruptedAssistantEventIdentity(
+	acc *interruptedAssistantAccumulator,
+	agentEvent *event.Event,
+) {
+	if acc == nil || agentEvent == nil {
+		return
+	}
+	if agentEvent.InvocationID != "" {
+		acc.invocationID = agentEvent.InvocationID
+	}
+	if agentEvent.ParentInvocationID != "" {
+		acc.parentInvocationID = agentEvent.ParentInvocationID
+	}
+	if agentEvent.Branch != "" {
+		acc.branch = agentEvent.Branch
+	}
+	if agentEvent.FilterKey != "" {
+		acc.filterKey = agentEvent.FilterKey
+	}
+	if agentEvent.RequestID != "" {
+		acc.requestID = agentEvent.RequestID
+	}
+}
+
+func injectInterruptedAssistantEventIdentity(
+	inv *agent.Invocation,
+	acc *interruptedAssistantAccumulator,
+	evt *event.Event,
+) {
+	if evt == nil || acc == nil {
+		return
+	}
+	if acc.invocationID != "" {
+		evt.InvocationID = acc.invocationID
+	}
+	if acc.parentInvocationID != "" {
+		evt.ParentInvocationID = acc.parentInvocationID
+	}
+	if acc.branch != "" {
+		evt.Branch = acc.branch
+	}
+	if acc.filterKey != "" {
+		evt.FilterKey = acc.filterKey
+	}
+	if evt.RequestID != "" {
+		return
+	}
+	if acc.requestID != "" {
+		evt.RequestID = acc.requestID
+		return
+	}
+	if inv == nil {
+		return
+	}
+	evt.RequestID = inv.RunOptions.RequestID
 }
 
 // safePersistInterruptedAssistant guards cancellation-time partial persistence
@@ -1605,7 +1680,7 @@ func (r *runner) interruptedAssistantEventForAccumulator(
 			Choices:   choices,
 		},
 	)
-	agent.InjectIntoEvent(loop.invocation, evt)
+	injectInterruptedAssistantEventIdentity(loop.invocation, acc, evt)
 	if reason := contextDoneReason(ctx); reason != "" {
 		if payload, err := json.Marshal(
 			interruptedAssistantMetadata{Reason: reason},
