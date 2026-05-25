@@ -7098,10 +7098,22 @@ func TestInterruptedAssistantAlreadyPersisted(t *testing.T) {
 		loop := &eventLoopContext{}
 		acc := interruptedAssistantAccumulatorForSession(loop, nil)
 		acc.responseID = "different"
+		acc.requestID = "req"
 		acc.persistedAssistantChoiceSignatures = map[string]struct{}{
-			assistantChoiceSignature(choices): {},
+			interruptedAssistantSignatureKey("req", "", choices): {},
 		}
 		require.True(t, rr.interruptedAssistantAlreadyPersisted(loop, choices))
+	})
+
+	t.Run("same content different request", func(t *testing.T) {
+		loop := &eventLoopContext{}
+		acc := interruptedAssistantAccumulatorForSession(loop, nil)
+		acc.responseID = "different"
+		acc.requestID = "req-2"
+		acc.persistedAssistantChoiceSignatures = map[string]struct{}{
+			interruptedAssistantSignatureKey("req-1", "", choices): {},
+		}
+		require.False(t, rr.interruptedAssistantAlreadyPersisted(loop, choices))
 	})
 
 	t.Run("not persisted", func(t *testing.T) {
@@ -7121,6 +7133,73 @@ func TestInterruptedAssistantAlreadyPersisted(t *testing.T) {
 	})
 }
 
+func TestInterruptedAssistantSignatureDedupeScopedByRequest(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	prior := event.NewResponseEvent(
+		"inv-1",
+		"assistant",
+		&model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("same text"),
+			}},
+		},
+	)
+	prior.RequestID = "req-1"
+	sess := &session.Session{
+		Events: []event.Event{*prior},
+	}
+
+	sameRequestLoop := &eventLoopContext{
+		sess: sess,
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-1"}),
+		),
+	}
+	rr.recordInterruptedAssistantDelta(
+		sameRequestLoop,
+		interruptedAssistantPartialEvent("inv-2", "same text"),
+		nil,
+	)
+	require.Nil(t, rr.interruptedAssistantEvent(context.Background(), sameRequestLoop))
+
+	differentRequestLoop := &eventLoopContext{
+		sess: sess,
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-2"}),
+		),
+	}
+	rr.recordInterruptedAssistantDelta(
+		differentRequestLoop,
+		interruptedAssistantPartialEvent("inv-3", "same text"),
+		nil,
+	)
+	evt := rr.interruptedAssistantEvent(context.Background(), differentRequestLoop)
+	require.NotNil(t, evt)
+	require.Equal(t, "same text", evt.Choices[0].Message.Content)
+	require.Equal(t, "req-2", evt.RequestID)
+}
+
+func interruptedAssistantPartialEvent(invocationID string, content string) *event.Event {
+	return event.NewResponseEvent(
+		invocationID,
+		"assistant",
+		&model.Response{
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: content,
+				},
+			}},
+		},
+	)
+}
+
 func TestInterruptedAssistantEventSkipsEmptyAndPersistedContent(t *testing.T) {
 	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
 
@@ -7133,8 +7212,9 @@ func TestInterruptedAssistantEventSkipsEmptyAndPersistedContent(t *testing.T) {
 	loop := &eventLoopContext{}
 	acc := interruptedAssistantAccumulatorForSession(loop, nil)
 	acc.responseID = "resp"
+	acc.requestID = "req"
 	acc.persistedAssistantChoiceSignatures = map[string]struct{}{
-		assistantChoiceSignature(choices): {},
+		interruptedAssistantSignatureKey("req", "", choices): {},
 	}
 	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
 		"inv",

@@ -1237,7 +1237,11 @@ func recordPersistedAssistantOnAccumulator(
 			acc.persistedAssistantResponseIDs[responseID] = struct{}{}
 		}
 	}
-	signature := assistantChoiceSignature(agentEvent.Response.Choices)
+	signature := interruptedAssistantSignatureKey(
+		acc.requestID,
+		acc.invocationID,
+		agentEvent.Response.Choices,
+	)
 	if signature == "" {
 		return
 	}
@@ -1503,6 +1507,9 @@ func (r *runner) recordInterruptedAssistantDelta(
 	acc.responseID = responseID
 	acc.author = agentEvent.Author
 	captureInterruptedAssistantEventIdentity(acc, agentEvent)
+	if acc.requestID == "" && loop.invocation != nil {
+		acc.requestID = loop.invocation.RunOptions.RequestID
+	}
 	if rsp.Created > 0 {
 		acc.created = rsp.Created
 	}
@@ -1748,7 +1755,11 @@ func (r *runner) interruptedAssistantAlreadyPersistedForAccumulator(
 			return true
 		}
 	}
-	signature := assistantChoiceSignature(choices)
+	signature := interruptedAssistantSignatureKey(
+		acc.requestID,
+		acc.invocationID,
+		choices,
+	)
 	if signature == "" {
 		return false
 	}
@@ -2601,7 +2612,11 @@ func collectPriorAssistantChoiceSignatures(sess *session.Session) map[string]str
 		if isGraphCompletionEvent(evt) || !eventHasAssistantMessageContent(evt) {
 			continue
 		}
-		signature := assistantChoiceSignature(evt.Response.Choices)
+		signature := interruptedAssistantSignatureKey(
+			evt.RequestID,
+			evt.InvocationID,
+			evt.Response.Choices,
+		)
 		if signature == "" {
 			continue
 		}
@@ -2611,6 +2626,25 @@ func collectPriorAssistantChoiceSignatures(sess *session.Session) map[string]str
 		signatures[signature] = struct{}{}
 	}
 	return signatures
+}
+
+func interruptedAssistantSignatureKey(
+	requestID string,
+	invocationID string,
+	choices []model.Choice,
+) string {
+	signature := assistantChoiceSignature(choices)
+	if signature == "" {
+		return ""
+	}
+	lineage := requestID
+	if lineage == "" {
+		lineage = invocationID
+	}
+	if lineage == "" {
+		return signature
+	}
+	return lineage + "\x00" + signature
 }
 
 func baselineFinalResponseIDFromRuntimeState(runtimeState map[string]any) string {
