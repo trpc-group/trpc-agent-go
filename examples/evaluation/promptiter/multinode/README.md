@@ -40,7 +40,7 @@ sports-recap-validation.evalset.json
 sports-recap.metrics.json
 ```
 
-The train and validation evalsets each contain eight sports recap cases. The cases intentionally cover different scoring systems and recap pitfalls, including basketball, football, baseball, tennis, badminton, ice hockey, Formula 1, road cycling, and cricket. The shared metric file is strict about factual grounding, numeric precision, sport-specific terminology, decisive details, and polished Chinese copy.
+The train and validation evalsets each contain eight sports recap cases. Across both evalsets, the cases intentionally cover different scoring systems and recap pitfalls, including basketball, football, baseball, tennis, badminton, ice hockey, Formula 1, road cycling, and cricket. The shared metric file is strict about factual grounding, numeric precision, sport-specific terminology, decisive details, and polished Chinese copy.
 
 ## Run
 
