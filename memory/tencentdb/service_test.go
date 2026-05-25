@@ -99,6 +99,36 @@ func TestIngestSessionCapturesTimestampedMessagesAndCursor(t *testing.T) {
 	}
 }
 
+func TestIngestSessionAdvancesCursorBeforeAsyncCaptureCompletes(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		_ = json.NewEncoder(w).Encode(captureResponse{L0Recorded: 2})
+	}))
+	defer server.Close()
+
+	svc, err := NewService(
+		WithGatewayURL(server.URL),
+		WithIngestQueueSize(1),
+		WithIngestJobTimeout(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	sess := captureReadySession()
+	want := sess.Events[len(sess.Events)-1].Timestamp
+	if err := svc.IngestSession(context.Background(), sess); err != nil {
+		t.Fatalf("IngestSession: %v", err)
+	}
+	if got := readBestEffortLastCaptureAt(sess); !got.Equal(want) {
+		t.Fatalf("cursor = %v, want %v", got, want)
+	}
+	close(release)
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestInjectRecallContext(t *testing.T) {
 	req := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage("base"),

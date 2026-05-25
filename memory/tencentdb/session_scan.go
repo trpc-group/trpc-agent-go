@@ -128,7 +128,7 @@ func readBestEffortLastCaptureAt(sess *session.Session) time.Time {
 	if sess == nil {
 		return time.Time{}
 	}
-	raw, ok := sess.State[lastCaptureAtStateKey]
+	raw, ok := sess.GetState(lastCaptureAtStateKey)
 	if !ok || len(raw) == 0 {
 		return time.Time{}
 	}
@@ -143,8 +143,5 @@ func writeBestEffortLastCaptureAt(sess *session.Session, t time.Time) {
 	if sess == nil || t.IsZero() {
 		return
 	}
-	if sess.State == nil {
-		sess.State = map[string][]byte{}
-	}
-	sess.State[lastCaptureAtStateKey] = []byte(t.UTC().Format(time.RFC3339Nano))
+	sess.SetState(lastCaptureAtStateKey, []byte(t.UTC().Format(time.RFC3339Nano)))
 }

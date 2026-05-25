@@ -110,6 +110,7 @@ func (s *Service) IngestSession(
 	select {
 	case s.queue <- job:
 		s.mu.RUnlock()
+		writeBestEffortLastCaptureAt(sess, scan.Latest)
 		return nil
 	default:
 		s.mu.RUnlock()
