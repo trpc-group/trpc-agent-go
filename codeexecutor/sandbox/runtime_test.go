@@ -951,6 +951,18 @@ func TestFilesystemErrorBranches(t *testing.T) {
 		t.Fatalf("resolveCollectMatch unexpectedly succeeded for dangling symlink")
 	}
 
+	outsideFile := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outsideLink := filepath.Join(ws.Path, "work", "outside-link.txt")
+	if err := os.Symlink(outsideFile, outsideLink); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := rt.resolveCollectMatch(DangerFullAccessProfile(), ws, outsideLink); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("resolveCollectMatch symlink escape error = %v, want ErrPathDenied", err)
+	}
+
 	ref, consumed, skip, err := rt.collectOutputMatch(
 		ctx,
 		DangerFullAccessProfile(),

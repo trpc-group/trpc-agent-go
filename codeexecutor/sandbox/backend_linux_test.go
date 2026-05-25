@@ -202,6 +202,34 @@ func TestLinuxSandboxArgsWorkspaceMountPolicy(t *testing.T) {
 	}
 }
 
+func TestLinuxWorkspaceReadOnlyMountArgsSkipWorkspaceAndMissingTargets(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "workspace-ro-mount-skips", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readonlyDir := filepath.Join(ws.Path, "work", "readonly")
+	if err := os.MkdirAll(readonlyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	missingDir := filepath.Join(ws.Path, "work", "missing")
+	profile := WorkspaceWriteProfile().WithReadPaths(ws.Path, readonlyDir, missingDir)
+
+	args, err := rt.workspaceReadOnlyMountArgs(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasArgTriple(args, "--ro-bind", ws.Path, ws.Path) {
+		t.Fatalf("read-only args = %#v, workspace root should be skipped", args)
+	}
+	if !hasArgTriple(args, "--ro-bind", readonlyDir, readonlyDir) {
+		t.Fatalf("read-only args = %#v, missing existing read-only target", args)
+	}
+	if hasArgTriple(args, "--ro-bind", missingDir, missingDir) {
+		t.Fatalf("read-only args = %#v, missing target should be skipped", args)
+	}
+}
+
 func TestLinuxSandboxArgsRejectRootWriteGrant(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "root-write-grant", codeexecutor.WorkspacePolicy{})
