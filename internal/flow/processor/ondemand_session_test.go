@@ -25,6 +25,10 @@ type onDemandSessionService struct {
 	session.Service
 }
 
+type onDemandSearchOnlyService struct {
+	session.Service
+}
+
 func (s *onDemandSessionService) SearchEvents(
 	context.Context,
 	session.EventSearchRequest,
@@ -37,6 +41,13 @@ func (s *onDemandSessionService) GetEventWindow(
 	session.EventWindowRequest,
 ) (*session.EventWindow, error) {
 	return &session.EventWindow{}, nil
+}
+
+func (s *onDemandSearchOnlyService) SearchEvents(
+	context.Context,
+	session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return nil, nil
 }
 
 func TestOnDemandSessionRequestProcessor_ProcessRequest(t *testing.T) {
@@ -95,6 +106,27 @@ func TestOnDemandSessionRequestProcessor_LoadOnlyOverview(t *testing.T) {
 	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	assert.Contains(t, req.Messages[0].Content, "Exact session history loading is available.")
 	assert.NotContains(t, req.Messages[0].Content, "Use session_search before session_load")
+}
+
+func TestOnDemandSessionRequestProcessor_SearchOnlyOverview(t *testing.T) {
+	p := NewOnDemandSessionRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+	}
+	inv := &agent.Invocation{
+		Session: session.NewSession("app", "user", "sess"),
+		SessionService: &onDemandSearchOnlyService{
+			Service: sessioninmemory.NewSessionService(),
+		},
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Len(t, req.Messages, 2)
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Contains(t, req.Messages[0].Content, "Use session_search")
+	assert.NotContains(t, req.Messages[0].Content, "Exact session history loading is available.")
 }
 
 func TestOnDemandSessionRequestProcessor_InsertsSystemMessage(t *testing.T) {

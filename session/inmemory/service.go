@@ -395,7 +395,7 @@ func (s *SessionService) GetEventWindow(
 	ctx context.Context,
 	req session.EventWindowRequest,
 ) (*session.EventWindow, error) {
-	sess, err := s.GetSession(ctx, req.Key)
+	sess, err := s.getSession(ctx, req.Key, &session.Options{})
 	if err != nil {
 		return nil, err
 	}

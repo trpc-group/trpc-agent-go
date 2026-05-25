@@ -23,7 +23,20 @@ func (s *Service) GetEventWindow(
 	ctx context.Context,
 	req session.EventWindowRequest,
 ) (*session.EventWindow, error) {
-	sess, err := s.GetSession(ctx, req.Key)
+	if err := req.Key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, req.Key)
+	if err != nil {
+		return nil, err
+	}
+	sess, _, err := s.getSessionInternal(
+		ctx,
+		req.Key,
+		&session.Options{EventNum: int(^uint(0) >> 1)},
+		zsetExists,
+		hashidxExists,
+	)
 	if err != nil {
 		return nil, err
 	}

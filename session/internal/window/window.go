@@ -59,11 +59,11 @@ func EventWindowFromOrderedEntries(
 
 	roleFilter := MakeRoleFilter(req.Roles)
 	anchorIndex := -1
-	for idx, entry := range entries {
-		if entry.Event.ID != anchorEventID {
+	for idx := range entries {
+		if entries[idx].Event.ID != anchorEventID {
 			continue
 		}
-		if !EventAllowed(&entry.Event, roleFilter) {
+		if !EventAllowed(&entries[idx].Event, roleFilter) {
 			continue
 		}
 		anchorIndex = idx
@@ -186,11 +186,10 @@ func collectBefore(
 	}
 	out := make([]session.EventWindowEntry, 0, limit)
 	for idx := anchorIndex - 1; idx >= 0 && len(out) < limit; idx-- {
-		entry := entries[idx]
-		if !EventAllowed(&entry.Event, roleFilter) {
+		if !EventAllowed(&entries[idx].Event, roleFilter) {
 			continue
 		}
-		out = append(out, entry)
+		out = append(out, entries[idx])
 	}
 	reverse(out)
 	return out
@@ -207,11 +206,10 @@ func collectAfter(
 	}
 	out := make([]session.EventWindowEntry, 0, limit)
 	for idx := anchorIndex + 1; idx < len(entries) && len(out) < limit; idx++ {
-		entry := entries[idx]
-		if !EventAllowed(&entry.Event, roleFilter) {
+		if !EventAllowed(&entries[idx].Event, roleFilter) {
 			continue
 		}
-		out = append(out, entry)
+		out = append(out, entries[idx])
 	}
 	return out
 }

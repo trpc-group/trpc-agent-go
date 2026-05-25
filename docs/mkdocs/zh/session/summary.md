@@ -165,11 +165,13 @@ llmAgent := llmagent.New(
 
 启用条件与行为：
 
-- 只有在 Session 后端同时实现了 `session.SearchableService` 和
-  `session.WindowService` 时，`WithEnableOnDemandSession(true)` 才会启用
-  这条渐进式披露链路，并暴露
-  `session_search` 和 `session_load`。
-- 当前 `session/pgvector` 支持这条链路；纯内存摘要示例不会暴露这两个工具。
+- `WithEnableOnDemandSession(true)` 会按后端能力暴露按需 session 工具：
+  后端实现 `session.SearchableService` 时暴露 `session_search`，实现
+  `session.WindowService` 时暴露 `session_load`。后端可以只支持其中一个，
+  也可以同时支持两者。
+- `session/pgvector` 同时支持语义发现和精确加载。普通 session 后端只要实现了
+  `WindowService`，即使没有语义 `session_search`，也可以暴露精确的
+  `session_load` 恢复能力。
 - `current_hidden` 会严格搜索当前 session 中、位于 `summary:last_included_ts`
   之前的历史内容。`summary:last_included_ts` 是摘要中记录的
   `last_included_ts` 时间戳，表示该摘要覆盖到的最后一个事件时间。
@@ -192,9 +194,14 @@ llmAgent := llmagent.New(
 推荐使用方式：
 
 1. 先让模型基于当前可见 prompt、summary 和最近历史正常回答。
-2. 如果缺少旧细节，再先调用 `session_search`。
-3. 只有当 `session_search` 返回的小窗口仍然不够时，再调用 `session_load`。
+2. 如果 `session_search` 可用且缺少旧细节，再先调用 `session_search`。
+3. 当已经有 `event_id` 且需要周边原始历史或精确 tool result 时，调用
+   `session_load`；这同样适用于没有语义搜索能力的后端。
 4. 取回的内容应视为历史上下文，而不是当前轮的主动指令。
+
+迁移提示：早期版本只有在 `session_search` 和 `session_load` 同时存在时，
+才认为按需 session 能力可用。现在工具面按能力分别暴露，因此 search-only
+集成可以只暴露 `session_search`，load-only 集成可以只暴露 `session_load`。
 
 ## SessionSummarizer 接口
 
