@@ -836,6 +836,190 @@ func TestFilesystemHelperBranches(t *testing.T) {
 	}
 }
 
+func TestFilesystemErrorBranches(t *testing.T) {
+	ctx := context.Background()
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(DangerFullAccessProfile()),
+	)
+	ws, err := rt.CreateWorkspace(ctx, "fs/errors", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "work", "source.txt"), []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    "../escape.txt",
+		Content: []byte("escape"),
+	}})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("PutFiles escape error = %v, want ErrPathDenied", err)
+	}
+
+	host := t.TempDir()
+	if err := os.WriteFile(filepath.Join(host, "input.txt"), []byte("host"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = rt.StageDirectory(ctx, ws, host, "../escape", codeexecutor.StageOptions{})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("StageDirectory escape error = %v, want ErrPathDenied", err)
+	}
+
+	fileWorkspace := filepath.Join(t.TempDir(), "workspace-file")
+	if err := os.WriteFile(fileWorkspace, []byte("not a workspace"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	badWS := codeexecutor.Workspace{ID: "bad", Path: fileWorkspace}
+	if _, err := rt.Collect(ctx, badWS, []string{"."}); err == nil {
+		t.Fatalf("Collect unexpectedly succeeded for file workspace")
+	}
+	if _, err := rt.CollectOutputs(ctx, badWS, codeexecutor.OutputSpec{}); err == nil {
+		t.Fatalf("CollectOutputs unexpectedly succeeded for file workspace")
+	}
+
+	restrictive := PermissionProfile{typ: profileManaged}
+	err = rt.stageWorkspaceRelativePath(ws, restrictive, "work/source.txt", "work/copy.txt")
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("stageWorkspaceRelativePath read error = %v, want ErrPathDenied", err)
+	}
+	err = rt.stageWorkspaceRelativePath(ws, ReadOnlyProfile(), "work/source.txt", "work/copy.txt")
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("stageWorkspaceRelativePath write error = %v, want ErrPathDenied", err)
+	}
+	err = rt.stageWorkspaceRelativePath(ws, DangerFullAccessProfile(), "../escape.txt", "work/copy.txt")
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("stageWorkspaceRelativePath source escape = %v, want ErrPathDenied", err)
+	}
+	err = rt.stageWorkspaceRelativePath(ws, DangerFullAccessProfile(), "work/source.txt", "../escape.txt")
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("stageWorkspaceRelativePath destination escape = %v, want ErrPathDenied", err)
+	}
+
+	rel, _, _, skip, err := rt.resolveCollectMatch(
+		DangerFullAccessProfile(),
+		ws,
+		filepath.Join(filepath.Dir(ws.Path), "outside.txt"),
+	)
+	if err != nil || !skip || rel != "" {
+		t.Fatalf("outside collect match rel=%q skip=%v err=%v, want skip", rel, skip, err)
+	}
+
+	missingLink := filepath.Join(ws.Path, "work", "missing-link.txt")
+	if err := os.Symlink("missing-target.txt", missingLink); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := rt.resolveCollectMatch(DangerFullAccessProfile(), ws, missingLink); err == nil {
+		t.Fatalf("resolveCollectMatch unexpectedly succeeded for dangling symlink")
+	}
+
+	ref, consumed, skip, err := rt.collectOutputMatch(
+		ctx,
+		DangerFullAccessProfile(),
+		ws,
+		filepath.Join(ws.Path, "work", "source.txt"),
+		codeexecutor.OutputSpec{Inline: true},
+		10,
+		-1,
+	)
+	if err != nil || skip || consumed != 0 || !ref.Truncated {
+		t.Fatalf("negative budget output ref=%#v consumed=%d skip=%v err=%v", ref, consumed, skip, err)
+	}
+}
+
+func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
+	ctx := context.Background()
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(ctx, "fs/symlink-helpers", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outside := t.TempDir()
+	if err := rt.checkWorkspaceWriteTarget(WorkspaceWriteProfile(), ws, filepath.Join(outside, "x.txt")); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("outside write target error = %v, want ErrPathDenied", err)
+	}
+
+	directLink := filepath.Join(ws.Path, "work", "direct-link.txt")
+	if err := os.Symlink(filepath.Join(ws.Path, "work", "target.txt"), directLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.checkWorkspaceWriteTarget(WorkspaceWriteProfile(), ws, directLink); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("direct symlink write target error = %v, want ErrPathDenied", err)
+	}
+
+	parentLink := filepath.Join(ws.Path, "work", "parent-link")
+	if err := os.Symlink(outside, parentLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.checkWorkspaceWriteTarget(WorkspaceWriteProfile(), ws, filepath.Join(parentLink, "new.txt")); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("parent symlink escape error = %v, want ErrPathDenied", err)
+	}
+
+	insideTarget := filepath.Join(ws.Path, "work", "inside")
+	if err := os.MkdirAll(insideTarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	insideLink := filepath.Join(ws.Path, "work", "inside-link")
+	if err := os.Symlink(insideTarget, insideLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.checkWorkspaceWriteTarget(WorkspaceWriteProfile(), ws, filepath.Join(insideLink, "new.txt")); err != nil {
+		t.Fatalf("inside parent symlink write target error = %v", err)
+	}
+
+	resolved, changed, err := resolvePotentialSymlinkTarget(directLink)
+	if err != nil || !changed || resolved != filepath.Join(ws.Path, "work", "target.txt") {
+		t.Fatalf("direct symlink resolved=%q changed=%v err=%v", resolved, changed, err)
+	}
+	resolved, changed, err = resolvePotentialSymlinkTarget(filepath.Join(insideLink, "nested.txt"))
+	if err != nil || !changed || resolved != filepath.Join(insideTarget, "nested.txt") {
+		t.Fatalf("parent symlink resolved=%q changed=%v err=%v", resolved, changed, err)
+	}
+
+	if err := copyPath(filepath.Join(outside, "missing.txt"), filepath.Join(t.TempDir(), "copy.txt")); err == nil {
+		t.Fatalf("copyPath unexpectedly succeeded for missing source")
+	}
+	if err := copyPathWithValidator(filepath.Join(outside, "missing.txt"), filepath.Join(t.TempDir(), "copy.txt"), func(string) error {
+		return nil
+	}); err == nil {
+		t.Fatalf("copyPathWithValidator unexpectedly succeeded for missing source")
+	}
+	source := filepath.Join(outside, "source.txt")
+	if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyPathWithValidator(source, filepath.Join(t.TempDir(), "copy.txt"), func(string) error {
+		return deniedf(ErrPathDenied, "write", "copy.txt", "blocked")
+	}); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("copyPathWithValidator validation error = %v, want ErrPathDenied", err)
+	}
+}
+
+func TestPinnedArtifactVersionEdgeBranches(t *testing.T) {
+	version := 7
+	md := codeexecutor.WorkspaceMetadata{
+		Inputs: []codeexecutor.InputRecord{
+			{From: "artifact://old.txt@1", To: "work/other.txt", Resolved: "old.txt", Version: &version},
+			{From: "artifact://report.txt@3", To: "work/report.txt", Version: &version},
+		},
+	}
+	if got := pinnedArtifactVersion(md, "", "work/report.txt"); got != nil {
+		t.Fatalf("blank artifact name returned version %v", *got)
+	}
+	if got := pinnedArtifactVersion(md, "report.txt", ""); got != nil {
+		t.Fatalf("blank destination returned version %v", *got)
+	}
+	got := pinnedArtifactVersion(md, "report.txt", "work/report.txt")
+	if got == nil || *got != version {
+		t.Fatalf("pinned artifact version = %v, want %d", got, version)
+	}
+	if got := pinnedArtifactVersion(md, "missing.txt", "work/report.txt"); got != nil {
+		t.Fatalf("missing artifact returned version %v", *got)
+	}
+}
+
 func hasString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

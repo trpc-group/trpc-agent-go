@@ -411,6 +411,157 @@ func TestLinuxPreflightUnsupportedBackendAndProbeError(t *testing.T) {
 	}
 }
 
+func TestLinuxPreflightMissingBwrap(t *testing.T) {
+	t.Setenv("PATH", "")
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	_, _, err := rt.linuxPreflight()
+	if !IsKind(err, ErrSetupFailed) {
+		t.Fatalf("linuxPreflight error = %v, want ErrSetupFailed", err)
+	}
+}
+
+func TestLinuxPreflightFallsBackWhenProcMountFails(t *testing.T) {
+	binDir := t.TempDir()
+	bwrap := filepath.Join(binDir, "bwrap")
+	if err := os.WriteFile(bwrap, []byte(`#!/bin/sh
+for arg in "$@"; do
+	if [ "$arg" = "--proc" ]; then
+		echo "bwrap: Can't mount proc on /newroot/proc: Operation not permitted" >&2
+		exit 1
+	fi
+done
+exit 0
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	path, mountProc, err := rt.linuxPreflight()
+	if err != nil {
+		t.Fatalf("linuxPreflight error = %v, want fallback success", err)
+	}
+	if path != bwrap || mountProc {
+		t.Fatalf("linuxPreflight path=%q mountProc=%v, want %q false", path, mountProc, bwrap)
+	}
+}
+
+func TestLinuxSandboxCommandPrepareAndArgsErrors(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	rt.preflightOnce.Do(func() {
+		rt.bwrapPath = "/bin/true"
+	})
+
+	wsPath := filepath.Join(t.TempDir(), "workspace-file")
+	if err := os.WriteFile(wsPath, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws := codeexecutor.Workspace{ID: "bad", Path: wsPath}
+	_, backend, err := rt.osSandboxCommand(
+		context.Background(),
+		WorkspaceWriteProfile(),
+		ws,
+		ws.Path,
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "true"},
+	)
+	if backend != string(BackendLinuxBubblewrap) || err == nil {
+		t.Fatalf("osSandboxCommand backend=%q err=%v, want prepare error", backend, err)
+	}
+
+	argRuntime := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	argWS, err := argRuntime.CreateWorkspace(context.Background(), "linux/mount-errors", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile()
+	profile.fileSystem.ProtectedMetadata = []string{"work/\x00blocked"}
+	_, err = argRuntime.linuxSandboxArgs(
+		profile,
+		argWS,
+		filepath.Join(argWS.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "true"},
+		false,
+	)
+	if err == nil {
+		t.Fatalf("linuxSandboxArgs unexpectedly succeeded for unreadable protected path")
+	}
+}
+
+func TestLinuxWorkspaceMountTargetBranches(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "linux/mount-targets", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target, ok, err := rt.workspaceMountTarget(ws, wsAbs, fileSystemRule{
+		Kind: rulePath, Access: accessRead,
+	})
+	if err != nil || ok || target != "" {
+		t.Fatalf("empty path target=%q ok=%v err=%v, want empty false nil", target, ok, err)
+	}
+
+	inside := filepath.Join(ws.Path, "work")
+	target, ok, err = rt.workspaceMountTarget(ws, wsAbs, fileSystemRule{
+		Kind: rulePath, Access: accessRead, Path: inside,
+	})
+	if err != nil || !ok || target != inside {
+		t.Fatalf("absolute inside target=%q ok=%v err=%v", target, ok, err)
+	}
+
+	target, ok, err = rt.workspaceMountTarget(ws, wsAbs, fileSystemRule{
+		Kind: rulePath, Access: accessRead, Path: t.TempDir(),
+	})
+	if err != nil || ok || target != "" {
+		t.Fatalf("external absolute target=%q ok=%v err=%v, want skipped", target, ok, err)
+	}
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(ws.Path, "work", "escape")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = rt.workspaceMountTarget(ws, wsAbs, fileSystemRule{
+		Kind: rulePath, Access: accessRead, Path: filepath.Join(ws.Path, "work", "escape"),
+	})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("symlink escape target error = %v, want ErrPathDenied", err)
+	}
+
+	target, ok, err = rt.workspaceMountTarget(ws, wsAbs, fileSystemRule{
+		Kind: rulePath, Access: accessRead, Path: "work",
+	})
+	if err != nil || !ok || target != inside {
+		t.Fatalf("relative target=%q ok=%v err=%v", target, ok, err)
+	}
+
+	target, ok, err = rt.workspaceMountTarget(ws, wsAbs, fileSystemRule{
+		Kind: ruleSpecial, Access: accessRead, Special: specialRoot,
+	})
+	if err != nil || ok || target != "" {
+		t.Fatalf("read root target=%q ok=%v err=%v, want skipped", target, ok, err)
+	}
+
+	target, ok, err = rt.workspaceMountTarget(ws, wsAbs, fileSystemRule{
+		Kind: ruleSpecial, Access: accessRead, Special: specialWork,
+	})
+	if err != nil || !ok || target != filepath.Join(ws.Path, codeexecutor.DirWork) {
+		t.Fatalf("special work target=%q ok=%v err=%v", target, ok, err)
+	}
+
+	target, ok, err = rt.workspaceMountTarget(ws, wsAbs, fileSystemRule{
+		Kind: fileSystemRuleKind("unknown"), Access: accessRead,
+	})
+	if err != nil || ok || target != "" {
+		t.Fatalf("unknown target=%q ok=%v err=%v, want skipped", target, ok, err)
+	}
+}
+
 func hasArgPair(args []string, first, second string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == first && args[i+1] == second {
