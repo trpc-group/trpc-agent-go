@@ -102,6 +102,9 @@ func (s *Service) IngestSession(
 		sess:   sess,
 		cursor: scan.Latest,
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -112,12 +115,9 @@ func (s *Service) IngestSession(
 		s.mu.RUnlock()
 		writeBestEffortLastCaptureAt(sess, scan.Latest)
 		return nil
-	default:
+	case <-ctx.Done():
 		s.mu.RUnlock()
-		if err := s.capture(ctx, job); err != nil {
-			return err
-		}
-		return nil
+		return ctx.Err()
 	}
 }
 

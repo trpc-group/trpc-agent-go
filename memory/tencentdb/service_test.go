@@ -302,6 +302,12 @@ func TestGatewayClientEndpointsAndErrors(t *testing.T) {
 	if _, err := newGatewayClient(Options{GatewayURL: "://bad"}); err == nil {
 		t.Fatalf("expected invalid gateway url error")
 	}
+	if _, err := newGatewayClient(Options{GatewayURL: "/path-only"}); err == nil {
+		t.Fatalf("expected path-only gateway url error")
+	}
+	if _, err := newGatewayClient(Options{GatewayURL: "ftp://example.com"}); err == nil {
+		t.Fatalf("expected unsupported scheme gateway url error")
+	}
 }
 
 func TestRecallPluginInjectsContext(t *testing.T) {
@@ -409,6 +415,19 @@ func TestServiceOptionsAndLifecycleEdges(t *testing.T) {
 	}
 	if names["custom_conversation_search"] {
 		t.Fatalf("conversation search should be disabled")
+	}
+	deduped, err := NewService(
+		WithGatewayURL(server.URL),
+		WithStandardAliases(true),
+		WithConversationSearchTool(false),
+		func(o *Options) { o.ToolPrefix = "" },
+	)
+	if err != nil {
+		t.Fatalf("NewService deduped: %v", err)
+	}
+	defer deduped.Close()
+	if got := len(deduped.Tools()); got != 1 {
+		t.Fatalf("deduped tool count = %d, want 1", got)
 	}
 	if plugin, ok := svc.Plugin().(*recallPlugin); !ok || plugin.service != svc {
 		t.Fatalf("unexpected plugin = %#v", plugin)

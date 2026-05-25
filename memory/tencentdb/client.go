@@ -62,8 +62,12 @@ func newGatewayClient(opts Options) (*gatewayClient, error) {
 	if baseURL == "" {
 		return nil, errors.New("tencentdb memory: gateway url is required")
 	}
-	if _, err := url.ParseRequestURI(baseURL); err != nil {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
 		return nil, fmt.Errorf("tencentdb memory: invalid gateway url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" {
+		return nil, fmt.Errorf("tencentdb memory: gateway url must be an absolute http(s) URL with host: %q", baseURL)
 	}
 	hc := opts.HTTPClient
 	if hc == nil {

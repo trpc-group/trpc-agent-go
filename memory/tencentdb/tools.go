@@ -55,12 +55,26 @@ type searchConversationsToolResponse struct {
 }
 
 func (s *Service) buildTools() []tool.Tool {
-	out := []tool.Tool{s.newMemorySearchTool(s.nativeToolName("memory_search"))}
+	out := make([]tool.Tool, 0, 3)
+	seen := make(map[string]struct{}, 3)
+	add := func(t tool.Tool) {
+		if t == nil || t.Declaration() == nil {
+			return
+		}
+		name := t.Declaration().Name
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		out = append(out, t)
+	}
+
+	add(s.newMemorySearchTool(s.nativeToolName("memory_search")))
 	if s.opts.EnableConversationSearchTool {
-		out = append(out, s.newConversationSearchTool(s.nativeToolName("conversation_search")))
+		add(s.newConversationSearchTool(s.nativeToolName("conversation_search")))
 	}
 	if s.opts.EnableStandardAliases {
-		out = append(out, s.newMemorySearchTool(memorypkg.SearchToolName))
+		add(s.newMemorySearchTool(memorypkg.SearchToolName))
 	}
 	return out
 }
