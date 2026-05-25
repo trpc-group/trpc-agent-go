@@ -23,67 +23,77 @@ import (
 
 type inMemoryStore struct {
 	mu   sync.RWMutex
-	runs map[string]*engine.RunResult
+	runs map[string]map[string]*engine.RunResult
 }
 
 // New creates an in-memory PromptIter store.
 func New() store.Store {
 	return &inMemoryStore{
-		runs: make(map[string]*engine.RunResult),
+		runs: make(map[string]map[string]*engine.RunResult),
 	}
 }
 
-func (s *inMemoryStore) Create(_ context.Context, run *engine.RunResult) error {
-	if run == nil {
-		return errors.New("promptiter run is nil")
+func (s *inMemoryStore) Create(_ context.Context, appName string, run *engine.RunResult) error {
+	if err := validateRun(appName, run); err != nil {
+		return err
 	}
-	if run.ID == "" {
-		return errors.New("promptiter run id is empty")
-	}
-	cloned, err := cloneRun(run)
+	persisted := *run
+	persisted.AppName = appName
+	cloned, err := cloneRun(&persisted)
 	if err != nil {
 		return fmt.Errorf("clone promptiter run: %w", err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.runs[run.ID]; ok {
-		return fmt.Errorf("run %q already exists", run.ID)
+	appRuns := s.runs[appName]
+	if appRuns == nil {
+		appRuns = make(map[string]*engine.RunResult)
+		s.runs[appName] = appRuns
 	}
-	s.runs[run.ID] = cloned
+	if _, ok := appRuns[run.ID]; ok {
+		return fmt.Errorf("run %q for app %q already exists", run.ID, appName)
+	}
+	appRuns[run.ID] = cloned
 	return nil
 }
 
-func (s *inMemoryStore) Get(_ context.Context, runID string) (*engine.RunResult, error) {
+func (s *inMemoryStore) Get(_ context.Context, appName, runID string) (*engine.RunResult, error) {
+	if err := validateRunKey(appName, runID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
-	run, ok := s.runs[runID]
+	appRuns := s.runs[appName]
+	run, ok := appRuns[runID]
 	s.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("run %q not found: %w", runID, os.ErrNotExist)
+		return nil, fmt.Errorf("run %q for app %q not found: %w", runID, appName, os.ErrNotExist)
 	}
 	cloned, err := cloneRun(run)
 	if err != nil {
 		return nil, fmt.Errorf("clone promptiter run %q: %w", runID, err)
 	}
+	cloned.AppName = appName
+	cloned.ID = runID
 	return cloned, nil
 }
 
-func (s *inMemoryStore) Update(_ context.Context, run *engine.RunResult) error {
-	if run == nil {
-		return errors.New("promptiter run is nil")
+func (s *inMemoryStore) Update(_ context.Context, appName string, run *engine.RunResult) error {
+	if err := validateRun(appName, run); err != nil {
+		return err
 	}
-	if run.ID == "" {
-		return errors.New("promptiter run id is empty")
-	}
-	cloned, err := cloneRun(run)
+	persisted := *run
+	persisted.AppName = appName
+	cloned, err := cloneRun(&persisted)
 	if err != nil {
 		return fmt.Errorf("clone promptiter run: %w", err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.runs[run.ID]; !ok {
-		return fmt.Errorf("run %q not found: %w", run.ID, os.ErrNotExist)
+	appRuns := s.runs[appName]
+	if _, ok := appRuns[run.ID]; !ok {
+		return fmt.Errorf("run %q for app %q not found: %w", run.ID, appName, os.ErrNotExist)
 	}
-	s.runs[run.ID] = cloned
+	appRuns[run.ID] = cloned
 	return nil
 }
 
@@ -104,4 +114,27 @@ func cloneRun(run *engine.RunResult) (*engine.RunResult, error) {
 		return nil, err
 	}
 	return &cloned, nil
+}
+
+func validateRun(appName string, run *engine.RunResult) error {
+	if run == nil {
+		return errors.New("promptiter run is nil")
+	}
+	if err := validateRunKey(appName, run.ID); err != nil {
+		return err
+	}
+	if run.AppName != "" && run.AppName != appName {
+		return fmt.Errorf("promptiter run app name %q does not match %q", run.AppName, appName)
+	}
+	return nil
+}
+
+func validateRunKey(appName, runID string) error {
+	if appName == "" {
+		return errors.New("promptiter run app name is empty")
+	}
+	if runID == "" {
+		return errors.New("promptiter run id is empty")
+	}
+	return nil
 }

@@ -106,6 +106,8 @@ const (
 
 // RunResult stores the state and historical trace of one PromptIter execution.
 type RunResult struct {
+	// AppName identifies the PromptIter target app that owns this run.
+	AppName string
 	// ID uniquely identifies this run when the caller uses manager-backed execution.
 	ID string
 	// Status stores the lifecycle state of the run.
