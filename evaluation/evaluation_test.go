@@ -971,6 +971,55 @@ func TestAgentEvaluatorEvaluateAppliesPerCallJudgeRunnerNumSamples(t *testing.T)
 	assert.NotSame(t, &judgeRunnerNumSamples, gotMetric.Criterion.LLMJudge.JudgeRunnerOptions.NumSamples)
 }
 
+func TestAgentEvaluatorRunEvaluationDoesNotMutateMetricWhenInjectingJudgeRunner(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	modelNumSamples := 1
+	configuredMetric := &metric.EvalMetric{
+		MetricName: "metric",
+		Threshold:  0.5,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				JudgeModel: &criterionllm.JudgeModelOptions{
+					ProviderName: "provider",
+					ModelName:    "model",
+					NumSamples:   &modelNumSamples,
+					Generation:   &model.GenerationConfig{},
+				},
+			},
+		},
+	}
+	metricMgr := &fakeMetricManager{metrics: map[string]*metric.EvalMetric{
+		configuredMetric.MetricName: configuredMetric,
+	}}
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{}},
+	}
+	judgeRunner := &stubRunner{}
+	judgeRunnerNumSamples := 2
+	ae := &agentEvaluator{
+		appName:               appName,
+		evalService:           svc,
+		metricManager:         metricMgr,
+		evalResultManager:     evalresultinmemory.New(),
+		judgeRunner:           judgeRunner,
+		judgeRunnerNumSamples: &judgeRunnerNumSamples,
+		numRuns:               1,
+	}
+	_, err := ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
+	assert.NoError(t, err)
+	require.Len(t, svc.evaluateRequests, 1)
+	gotMetric := svc.evaluateRequests[0].EvaluateConfig.EvalMetrics[0]
+	require.NotNil(t, gotMetric.Criterion.LLMJudge.JudgeRunnerOptions)
+	assert.Nil(t, configuredMetric.Criterion.LLMJudge.JudgeRunnerOptions)
+	assert.NotSame(t, configuredMetric, gotMetric)
+	assert.NotSame(t, configuredMetric.Criterion, gotMetric.Criterion)
+	assert.NotSame(t, configuredMetric.Criterion.LLMJudge, gotMetric.Criterion.LLMJudge)
+	assert.Same(t, judgeRunner, gotMetric.Criterion.LLMJudge.JudgeRunnerOptions.Runner)
+	assert.Equal(t, &judgeRunnerNumSamples, gotMetric.Criterion.LLMJudge.JudgeRunnerOptions.NumSamples)
+}
+
 func TestAgentEvaluatorRunEvaluationExecutesRunsConcurrently(t *testing.T) {
 	ctx := context.Background()
 	svc := newBlockingRunService()

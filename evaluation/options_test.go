@@ -140,8 +140,8 @@ func TestWithJudgeRunner(t *testing.T) {
 
 func TestWithJudgeRunnerNumSamples(t *testing.T) {
 	opts := newOptions(WithJudgeRunnerNumSamples(3))
-	numSamples := 3
-	assert.Equal(t, &numSamples, opts.judgeRunnerNumSamples)
+	assert.NotNil(t, opts.judgeRunnerNumSamples)
+	assert.Equal(t, 3, *opts.judgeRunnerNumSamples)
 }
 
 func TestWithNumRuns(t *testing.T) {

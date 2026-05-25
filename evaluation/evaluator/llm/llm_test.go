@@ -419,12 +419,13 @@ func TestLLMBaseEvaluator_UsesJudgeRunnerNumSamples(t *testing.T) {
 func TestLLMBaseEvaluator_RejectsInvalidJudgeRunnerNumSamples(t *testing.T) {
 	base := &LLMBaseEvaluator{LLMEvaluator: &fakeLLMEvaluator{}}
 	numSamples := 0
+	r := &fakeJudgeRunner{}
 	evalMetric := &metric.EvalMetric{
 		Threshold: 0.5,
 		Criterion: &criterion.Criterion{
 			LLMJudge: &llm.LLMCriterion{
 				JudgeRunnerOptions: &llm.JudgeRunnerOptions{
-					Runner:     &fakeJudgeRunner{},
+					Runner:     r,
 					NumSamples: &numSamples,
 				},
 			},
@@ -439,6 +440,7 @@ func TestLLMBaseEvaluator_RejectsInvalidJudgeRunnerNumSamples(t *testing.T) {
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "num samples must be greater than 0")
+	assert.Equal(t, 0, r.runCalls)
 }
 
 func TestLLMBaseEvaluator_ResolveStructuredOutput(t *testing.T) {
