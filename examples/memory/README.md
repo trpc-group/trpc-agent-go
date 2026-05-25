@@ -97,6 +97,32 @@ go run .
 
 [Read full documentation →](./mem0/README.md)
 
+### 📁 tencentdb/
+
+**TencentDB Agent Memory Integration - Sidecar Memory Engine**
+
+Demonstrates integration with TencentDB Agent Memory through its local gateway
+sidecar. The runner sends session transcripts after each turn, a plugin injects
+automatic recall before model calls, and the agent can use TencentDB-native
+read-only search tools.
+
+**Key Features:**
+
+- Session ingestion via `runner.WithSessionIngestor(...)`
+- Automatic recall via `runner.WithPlugins(memSvc.Plugin())`
+- Native `tdai_memory_search` and `tdai_conversation_search` tools
+
+**Getting Started:**
+
+```bash
+cd examples/memory/tencentdb
+export OPENAI_API_KEY="your-api-key"
+export TENCENTDB_AGENT_MEMORY_GATEWAY="http://127.0.0.1:8420"
+go run .
+```
+
+[Read full documentation →](./tencentdb/README.md)
+
 ### 📁 compare/
 
 **Retrieval Comparison - SQLite vs SQLiteVec**
