@@ -1,0 +1,109 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package redis
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+func TestService_GetEventWindow(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	for _, evt := range []event.Event{
+		redisWindowEvent("u1", model.RoleUser, "one"),
+		redisWindowEvent("a1", model.RoleAssistant, "two"),
+		redisWindowEvent("u2", model.RoleUser, "three"),
+		redisWindowToolEvent("t1", "calc", "four"),
+		redisWindowEvent("u3", model.RoleUser, "five"),
+	} {
+		evt := evt
+		require.NoError(t, svc.AppendEvent(ctx, sess, &evt))
+	}
+
+	got, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "u2",
+		Before:        1,
+		After:         1,
+		Roles:         []model.Role{model.RoleUser},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"u1", "u2", "u3"}, redisWindowIDs(got))
+}
+
+func TestService_GetEventWindowAnchorNotFound(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	evt := redisWindowEvent("u1", model.RoleUser, "one")
+	require.NoError(t, svc.AppendEvent(ctx, sess, &evt))
+
+	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "missing",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event not found")
+}
+
+func redisWindowEvent(id string, role model.Role, content string) event.Event {
+	return event.Event{
+		ID:        id,
+		Timestamp: time.Now().UTC(),
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    role,
+					Content: content,
+				},
+			}},
+		},
+	}
+}
+
+func redisWindowToolEvent(id, toolName, content string) event.Event {
+	evt := redisWindowEvent(id, model.RoleTool, content)
+	evt.Response.Choices[0].Message.ToolID = "call-" + id
+	evt.Response.Choices[0].Message.ToolName = toolName
+	return evt
+}
+
+func redisWindowIDs(window *session.EventWindow) []string {
+	ids := make([]string, 0, len(window.Entries))
+	for _, entry := range window.Entries {
+		ids = append(ids, entry.Event.ID)
+	}
+	return ids
+}
