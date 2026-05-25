@@ -34,10 +34,12 @@ func (s *Service) GetEventWindow(
 	if anchorEventID == "" {
 		return nil, fmt.Errorf("anchor event id is required")
 	}
+	req.AnchorEventID = anchorEventID
 	if req.Before < 0 || req.After < 0 {
 		return nil, fmt.Errorf("event window requires before >= 0 and after >= 0")
 	}
-	if req.Before+req.After+1 > eventWindowScanCap {
+	windowSize := uint64(req.Before) + uint64(req.After) + 1
+	if windowSize > uint64(eventWindowScanCap) {
 		return nil, fmt.Errorf("redis event window exceeds scan cap: %d", eventWindowScanCap)
 	}
 
