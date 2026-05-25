@@ -41,7 +41,8 @@ type RubricContent struct {
 
 // JudgeRunnerOptions configures how judge responses are obtained via a runner at runtime.
 type JudgeRunnerOptions struct {
-	Runner runner.Runner // Runner is the runner to use for judge responses.
+	Runner     runner.Runner // Runner is the runner to use for judge responses.
+	NumSamples *int          // NumSamples sets how many judge runner samples to collect.
 }
 
 // JudgeModelOptions captures model and generation configuration for the judge.

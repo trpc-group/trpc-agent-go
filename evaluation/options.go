@@ -41,6 +41,7 @@ type options struct {
 	userSimulator                     usersimulation.Simulator
 	callbacks                         *service.Callbacks
 	judgeRunner                       runner.Runner
+	judgeRunnerNumSamples             *int
 	numRuns                           int
 	evalCaseIDs                       []string
 	numRunsParallelEnabled            *bool
@@ -136,6 +137,13 @@ func WithJudgeRunner(judge runner.Runner) Option {
 	}
 }
 
+// WithJudgeRunnerNumSamples sets how many samples to collect from the judge runner.
+func WithJudgeRunnerNumSamples(numSamples int) Option {
+	return func(o *options) {
+		o.judgeRunnerNumSamples = &numSamples
+	}
+}
+
 // WithExpectedRunner sets the runner used to generate dynamic expected outputs.
 func WithExpectedRunner(r runner.Runner) Option {
 	return func(o *options) {
@@ -205,6 +213,9 @@ func (o *options) validate(requireEvalService bool) error {
 	}
 	if o.numRuns <= 0 {
 		return errors.New("num runs must be greater than 0")
+	}
+	if o.judgeRunnerNumSamples != nil && *o.judgeRunnerNumSamples <= 0 {
+		return errors.New("judge runner num samples must be greater than 0")
 	}
 	parallelInferenceEnabled := o.evalCaseParallelInferenceEnabled != nil && *o.evalCaseParallelInferenceEnabled
 	parallelEvaluationEnabled := o.evalCaseParallelEvaluationEnabled != nil && *o.evalCaseParallelEvaluationEnabled
