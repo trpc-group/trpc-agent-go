@@ -5,11 +5,12 @@
 
 CREATE TABLE IF NOT EXISTS `{{PREFIX}}promptiter_runs` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
   `run_id` VARCHAR(255) NOT NULL,
   `status` VARCHAR(32) NOT NULL DEFAULT '',
   `run_result` JSON NOT NULL,
   `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_promptiter_runs_run_id` (`run_id`)
+  UNIQUE KEY `uniq_promptiter_runs_app_run` (`app_name`, `run_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
