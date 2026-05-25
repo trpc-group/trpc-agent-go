@@ -20,6 +20,7 @@ nav:
       - Code Executor: codeexecutor.md
       - Error Handling: error-handling.md
       - Model: model.md
+      - Prompt Template: prompt.md
       - Callbacks: callbacks.md
       - Plugins: plugin.md
       - Memory: memory.md
@@ -33,7 +34,6 @@ nav:
           - SQLite Session: session/sqlite.md
           - Redis Session: session/redis.md
           - MySQL Session: session/mysql.md
-          - TDSQL Session: session/tdsql.md
           - PostgreSQL Session: session/postgres.md
           - PGVector Session: session/pgvector.md
           - ClickHouse Session: session/clickhouse.md
@@ -102,6 +102,7 @@ plugins:
                 - Code Executor: codeexecutor.md
                 - 错误处理: error-handling.md
                 - Model: model.md
+                - Prompt Template: prompt.md
                 - Callbacks: callbacks.md
                 - Plugins: plugin.md
                 - Memory: memory.md
@@ -115,7 +116,6 @@ plugins:
                     - SQLite Session: session/sqlite.md
                     - Redis Session: session/redis.md
                     - MySQL Session: session/mysql.md
-                    - TDSQL Session: session/tdsql.md
                     - PostgreSQL Session: session/postgres.md
                     - PGVector Session: session/pgvector.md
                     - ClickHouse Session: session/clickhouse.md
