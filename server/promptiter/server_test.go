@@ -195,6 +195,12 @@ func TestDefaultAndCustomPaths(t *testing.T) {
 	assert.Equal(t, "/api/promptiter/demo-app/background-executions", customServer.AsyncRunsPath())
 }
 
+func TestNewTrimsAppName(t *testing.T) {
+	srv := newTestServer(t, WithAppName(" demo-app "))
+	assert.Equal(t, "demo-app", srv.appName)
+	assert.Equal(t, "/promptiter/v1/apps/demo-app", srv.BasePath())
+}
+
 func TestHandleStructure(t *testing.T) {
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, srv.StructurePath(), nil)
@@ -490,7 +496,6 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 				_ = ctx
 				captured = request
 				return &enginepkg.RunResult{
-					AppName:   "demo-app",
 					ID:        "run_1",
 					Status:    enginepkg.RunStatusQueued,
 					Structure: &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
@@ -571,7 +576,6 @@ func TestHandleGetRunReturnsRun(t *testing.T) {
 			get: func(ctx context.Context, runID string) (*enginepkg.RunResult, error) {
 				_ = ctx
 				return &enginepkg.RunResult{
-					AppName:      "demo-app",
 					ID:           runID,
 					Status:       enginepkg.RunStatusRunning,
 					CurrentRound: 2,

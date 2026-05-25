@@ -770,6 +770,16 @@ func TestManagerStartRejectsClosedManager(t *testing.T) {
 	assert.EqualError(t, err, "promptiter manager is closed")
 }
 
+func TestNewTrimsAppName(t *testing.T) {
+	managerInstance, err := New(" demo-app ", &fakePromptIterEngine{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, managerInstance.Close())
+	})
+	concreteManager := managerInstance.(*manager)
+	assert.Equal(t, "demo-app", concreteManager.appName)
+}
+
 func TestNewRejectsNilEngine(t *testing.T) {
 	managerInstance, err := New("demo-app", nil)
 	assert.Nil(t, managerInstance)

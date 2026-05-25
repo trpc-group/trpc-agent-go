@@ -50,7 +50,8 @@ type manager struct {
 // New creates a PromptIter run manager for one app.
 func New(appName string, engine engine.Engine, opts ...Option) (Manager, error) {
 	options := newOptions(opts...)
-	if strings.TrimSpace(appName) == "" {
+	appName = strings.TrimSpace(appName)
+	if appName == "" {
 		return nil, errors.New("promptiter manager: app name must not be empty")
 	}
 	if engine == nil {
