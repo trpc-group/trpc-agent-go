@@ -7846,7 +7846,7 @@
 <p>The framework includes <code>invocationsaggregator/average</code>, which is the default for built-in evaluators. It averages scores of evaluated turns and determines overall status based on <code>threshold</code>.</p>
 <h5 id="judge-runner">Judge Runner</h5>
 <p>By default, LLM Judge evaluators call the judge model directly via <code>criterion.llmJudge.judgeModel</code>. You can also inject a judge runner with <code>evaluation.WithJudgeRunner</code>, and use the runner's final <code>*model.Response</code> instead of a direct model call.</p>
-<p>When enabled, <code>judgeModel</code> is ignored. Each invocation calls the judge runner once.</p>
+<p>When enabled, <code>judgeModel</code> is ignored. Each invocation calls the judge runner once by default. You can explicitly increase runner sampling with <code>evaluation.WithJudgeRunnerNumSamples(n)</code>, where <code>n</code> must be greater than or equal to 1; non-positive values return an error from <code>evaluation.New(...)</code> or <code>Evaluate(...)</code> option merging. Multiple samples reuse the evaluator's current sample aggregator, which selects a representative sample by majority vote by default.</p>
 <p>Example snippet:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-62-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-62-2"> 2</a></span>
@@ -7860,7 +7860,8 @@
 <span class="normal"><a href="#__codelineno-62-10">10</a></span>
 <span class="normal"><a href="#__codelineno-62-11">11</a></span>
 <span class="normal"><a href="#__codelineno-62-12">12</a></span>
-<span class="normal"><a href="#__codelineno-62-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-62-13">13</a></span>
+<span class="normal"><a href="#__codelineno-62-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
 </span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
 </span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4"></a><span class="p">)</span>
@@ -7872,7 +7873,8 @@
 </span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10"></a><span class="w">    </span><span class="nx">appName</span><span class="p">,</span>
 </span><span id="__span-62-11"><a id="__codelineno-62-11" name="__codelineno-62-11"></a><span class="w">    </span><span class="nx">agentRunner</span><span class="p">,</span>
 </span><span id="__span-62-12"><a id="__codelineno-62-12" name="__codelineno-62-12"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
-</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a><span class="p">)</span>
+</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithJudgeRunnerNumSamples</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-62-14"><a id="__codelineno-62-14" name="__codelineno-62-14"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h5 id="custom-composition">Custom Composition</h5>
 <p>LLM Judge evaluators support injecting different operator implementations via <code>Option</code> to adjust evaluation logic without modifying the evaluator itself. The example below replaces the sample aggregation strategy with a minimum strategy, which fails if any sample fails.</p>
@@ -10853,7 +10855,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 22, 2026 04:12:05 UTC">2026-05-22 04:12:05</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 25, 2026 12:00:18 UTC">2026-05-25 12:00:18</span>
   </span>
 
     

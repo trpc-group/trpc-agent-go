@@ -7847,7 +7847,7 @@
 <p>框架内置 <code>invocationsaggregator/average</code> 实现，也是当前内置评估器的默认实现。它会对已评估轮次的分数做算术平均得到整体分数，并按 <code>threshold</code> 输出整体状态。</p>
 <h5 id="runner">裁判 Runner</h5>
 <p>LLM Judge 类评估器默认通过 <code>criterion.llmJudge.judgeModel</code> 直连裁判模型获取裁判输出。也可以通过 <code>evaluation.WithJudgeRunner</code> 注入一个裁判 Runner，用 runner 的最终 <code>*model.Response</code> 替代直连模型。</p>
-<p>启用后 <code>judgeModel</code> 被忽略，每个 invocation 默认调用 judge runner 1 次。</p>
+<p>启用后 <code>judgeModel</code> 被忽略，每个 invocation 默认调用 judge runner 1 次。可以通过 <code>evaluation.WithJudgeRunnerNumSamples(n)</code> 显式增加 runner 采样次数，<code>n</code> 必须大于等于 1，非正数会在 <code>evaluation.New(...)</code> 或 <code>Evaluate(...)</code> 合并选项时返回错误。多次采样会复用当前评估器的 sample aggregator，默认按多数票选出代表样本。</p>
 <p>示例片段如下：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-62-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-62-2"> 2</a></span>
@@ -7861,7 +7861,8 @@
 <span class="normal"><a href="#__codelineno-62-10">10</a></span>
 <span class="normal"><a href="#__codelineno-62-11">11</a></span>
 <span class="normal"><a href="#__codelineno-62-12">12</a></span>
-<span class="normal"><a href="#__codelineno-62-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-62-13">13</a></span>
+<span class="normal"><a href="#__codelineno-62-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
 </span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
 </span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4"></a><span class="p">)</span>
@@ -7873,7 +7874,8 @@
 </span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10"></a><span class="w">    </span><span class="nx">appName</span><span class="p">,</span>
 </span><span id="__span-62-11"><a id="__codelineno-62-11" name="__codelineno-62-11"></a><span class="w">    </span><span class="nx">agentRunner</span><span class="p">,</span>
 </span><span id="__span-62-12"><a id="__codelineno-62-12" name="__codelineno-62-12"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
-</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a><span class="p">)</span>
+</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithJudgeRunnerNumSamples</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-62-14"><a id="__codelineno-62-14" name="__codelineno-62-14"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h5 id="_31">自定义组合</h5>
 <p>LLM Judge 类评估器支持通过 <code>Option</code> 注入不同算子实现，用于在不改动评估器主体的前提下调整评估逻辑。下面示例片段将采样聚合策略替换为最小值策略，只要有一次采样失败就视为失败。</p>
@@ -10854,7 +10856,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月22日 04:12:05 UTC">2026-05-22 04:12:05</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月25日 12:00:18 UTC">2026-05-25 12:00:18</span>
   </span>
 
     
