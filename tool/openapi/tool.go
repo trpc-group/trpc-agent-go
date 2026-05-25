@@ -55,6 +55,10 @@ func (o *openAPITool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if err := dec.Decode(&args); err != nil {
 		return nil, err
 	}
+	// Reject trailing non-whitespace data to match json.Unmarshal strictness.
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("trailing data after JSON arguments")
+	}
 
 	for _, param := range o.operation.operationParams {
 		_, ok := args[param.OriginalName]

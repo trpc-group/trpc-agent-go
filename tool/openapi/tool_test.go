@@ -1477,6 +1477,46 @@ func (e *errorReader) Close() error {
 	return nil
 }
 
+func Test_openAPITool_Call_TrailingData(t *testing.T) {
+	o := &openAPITool{
+		operation: &Operation{
+			operationParams: []*APIParameter{},
+			endpoint: &operationEndpoint{
+				baseURL: "https://api.example.com",
+				path:    "/test",
+				method:  "GET",
+			},
+			originOperation: &openapi.Operation{
+				RequestBody: nil,
+			},
+		},
+		config: &config{
+			userAgent:  "TestAgent/1.0",
+			httpClient: http.DefaultClient,
+		},
+	}
+
+	tests := []struct {
+		name    string
+		rawJSON []byte
+	}{
+		{name: "trailing object", rawJSON: []byte(`{"a":1}{"b":2}`)},
+		{name: "trailing junk", rawJSON: []byte(`{"a":1}junk`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := o.Call(context.Background(), tt.rawJSON)
+			if err == nil {
+				t.Fatal("expected error for trailing data, got nil")
+			}
+			if !strings.Contains(err.Error(), "trailing") {
+				t.Errorf("expected trailing data error, got: %v", err)
+			}
+		})
+	}
+}
+
 func Test_paramValueToString(t *testing.T) {
 	tests := []struct {
 		name    string
