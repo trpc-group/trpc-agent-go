@@ -104,7 +104,7 @@ var (
 		"session",
 		"redis",
 		"Name of the session service to use, inmemory / noop / "+
-			"sqlite / redis / postgres / pgvector / mysql / clickhouse",
+			"sqlite / redis / postgres / pgvector / mysql / tdsql / clickhouse",
 	)
 	streaming = flag.Bool(
 		"streaming",
@@ -118,7 +118,7 @@ var (
 	)
 	sessionTTL = flag.Duration(
 		"session-ttl",
-		10*time.Second,
+		300*time.Second,
 		"Session time-to-live duration",
 	)
 	searchTopK = flag.Int(

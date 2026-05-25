@@ -554,10 +554,11 @@ func (s *Service) upsertUserState(ctx context.Context, appName, userID, key stri
 			fmt.Sprintf("INSERT INTO %s (app_name, user_id, `key`, value, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)", s.tableUserStates),
 			appName, userID, key, value, now, now, expiresAt)
 	} else {
-		// Update existing record
+		// Include user_id for shard routing (TDSQL PK is (id, user_id));
+		// also valid as an extra filter for standard MySQL.
 		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf("UPDATE %s SET value = ?, updated_at = ?, expires_at = ? WHERE id = ?", s.tableUserStates),
-			value, now, expiresAt, id)
+			fmt.Sprintf("UPDATE %s SET value = ?, updated_at = ?, expires_at = ? WHERE id = ? AND user_id = ?", s.tableUserStates),
+			value, now, expiresAt, id, userID)
 	}
 	return err
 }
@@ -929,17 +930,25 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 
 	// Clean up expired sessions
 	if s.opts.sessionTTL > 0 {
-		s.cleanupExpiredSessions(ctx, now)
+		if s.opts.tdsqlSharding {
+			s.tdsqlCleanupExpiredSessions(ctx, now)
+		} else {
+			s.cleanupExpiredSessions(ctx, now)
+		}
 	}
 
-	// Clean up expired app states
+	// Clean up expired app states (broadcast table, no routing needed)
 	if s.opts.appStateTTL > 0 {
 		s.cleanupExpiredAppStates(ctx, now)
 	}
 
 	// Clean up expired user states
 	if s.opts.userStateTTL > 0 {
-		s.cleanupExpiredUserStates(ctx, now)
+		if s.opts.tdsqlSharding {
+			s.tdsqlCleanupExpiredUserStates(ctx, now)
+		} else {
+			s.cleanupExpiredUserStates(ctx, now)
+		}
 	}
 }
 
@@ -981,12 +990,13 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 		}
 
 		// 2. Delete the locked sessions
-		if err := s.deleteSessions(ctx, tx, sessionKeys, now); err != nil {
+		n, err := s.deleteSessions(ctx, tx, sessionKeys, now)
+		if err != nil {
 			return err
 		}
 
 		// We count the number of sessions deleted, not the total rows affected across all tables
-		deletedCount = int64(len(sessionKeys))
+		deletedCount = int64(n)
 		return nil
 	})
 
@@ -1001,50 +1011,119 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 }
 
 // deleteSessions deletes session data for the given keys within a transaction.
-func (s *Service) deleteSessions(ctx context.Context, tx *sql.Tx, keys []session.Key, now time.Time) error {
-	// Prepare delete args for verified keys
+func (s *Service) deleteSessions(ctx context.Context, tx *sql.Tx, keys []session.Key, now time.Time) (int, error) {
+	whereClause, args := s.sessionKeysWhereClause(keys)
+	if whereClause == "" {
+		return 0, nil
+	}
+
+	stateWhereClause := whereClause + " AND expires_at IS NOT NULL AND expires_at <= ?"
+	stateArgs := append(append([]any(nil), args...), now)
+
+	verifiedKeys, err := s.lockExpiredSessionKeys(ctx, tx, stateWhereClause, stateArgs)
+	if err != nil {
+		return 0, err
+	}
+	if len(verifiedKeys) == 0 {
+		return 0, nil
+	}
+
+	childWhereClause, childArgs := s.sessionKeysWhereClause(verifiedKeys)
+	stateWhereClause = childWhereClause + " AND expires_at IS NOT NULL AND expires_at <= ?"
+	stateArgs = append(append([]any(nil), childArgs...), now)
+
+	if s.opts.softDelete {
+		return len(verifiedKeys), s.softDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs, now)
+	}
+	return len(verifiedKeys), s.hardDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs)
+}
+
+func (s *Service) sessionKeysWhereClause(keys []session.Key) (string, []any) {
+	if len(keys) == 0 {
+		return "", nil
+	}
 	placeholders := make([]string, len(keys))
-	args := make([]any, 0, len(keys)*3)
+	args := make([]any, 0, len(keys)*3+1)
 	for i, key := range keys {
 		placeholders[i] = "(?, ?, ?)"
 		args = append(args, key.AppName, key.UserID, key.SessionID)
 	}
 	whereClause := fmt.Sprintf(`(app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`, strings.Join(placeholders, ","))
 
-	if s.opts.softDelete {
-		return s.softDeleteSessions(ctx, tx, whereClause, args, now)
+	// TDSQL proxy cannot extract shardkey from tuple comparison. Add an
+	// explicit user_id filter for DML routing when keys share the same user_id.
+	if s.opts.tdsqlSharding {
+		whereClause += " AND user_id = ?"
+		args = append(args, keys[0].UserID)
 	}
-	return s.hardDeleteSessions(ctx, tx, whereClause, args)
+	return whereClause, args
+}
+
+func (s *Service) lockExpiredSessionKeys(
+	ctx context.Context,
+	tx *sql.Tx,
+	stateWhereClause string,
+	stateArgs []any,
+) ([]session.Key, error) {
+	rows, err := tx.QueryContext(ctx,
+		fmt.Sprintf(`SELECT app_name, user_id, session_id FROM %s WHERE %s FOR UPDATE`,
+			s.tableSessionStates, stateWhereClause),
+		stateArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("recheck expired sessions failed: %w", err)
+	}
+	defer rows.Close()
+
+	var keys []session.Key
+	for rows.Next() {
+		var key session.Key
+		if err := rows.Scan(&key.AppName, &key.UserID, &key.SessionID); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return keys, nil
 }
 
 // softDeleteSessions performs soft delete on session tables.
-func (s *Service) softDeleteSessions(ctx context.Context, tx *sql.Tx, whereClause string, args []any, now time.Time) error {
+func (s *Service) softDeleteSessions(
+	ctx context.Context,
+	tx *sql.Tx,
+	stateWhereClause string,
+	stateArgs []any,
+	childWhereClause string,
+	childArgs []any,
+	now time.Time,
+) error {
 	// Soft delete session states
 	_, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionStates, whereClause),
-		append([]any{now}, args...)...)
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionStates, stateWhereClause),
+		append([]any{now}, stateArgs...)...)
 	if err != nil {
 		return fmt.Errorf("soft delete sessions: %w", err)
 	}
 
 	// Soft delete summaries
 	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, whereClause),
-		append([]any{now}, args...)...); err != nil {
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, childWhereClause),
+		append([]any{now}, childArgs...)...); err != nil {
 		return fmt.Errorf("soft delete summaries: %w", err)
 	}
 
 	// Soft delete events
 	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionEvents, whereClause),
-		append([]any{now}, args...)...); err != nil {
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionEvents, childWhereClause),
+		append([]any{now}, childArgs...)...); err != nil {
 		return fmt.Errorf("soft delete events: %w", err)
 	}
 
 	// Soft delete track events
 	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionTracks, whereClause),
-		append([]any{now}, args...)...); err != nil {
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionTracks, childWhereClause),
+		append([]any{now}, childArgs...)...); err != nil {
 		return fmt.Errorf("soft delete track events: %w", err)
 	}
 
@@ -1052,33 +1131,40 @@ func (s *Service) softDeleteSessions(ctx context.Context, tx *sql.Tx, whereClaus
 }
 
 // hardDeleteSessions performs hard delete on session tables.
-func (s *Service) hardDeleteSessions(ctx context.Context, tx *sql.Tx, whereClause string, args []any) error {
+func (s *Service) hardDeleteSessions(
+	ctx context.Context,
+	tx *sql.Tx,
+	stateWhereClause string,
+	stateArgs []any,
+	childWhereClause string,
+	childArgs []any,
+) error {
 	// Hard delete session states
 	_, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionStates, whereClause),
-		args...)
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionStates, stateWhereClause),
+		stateArgs...)
 	if err != nil {
 		return fmt.Errorf("hard delete sessions: %w", err)
 	}
 
 	// Hard delete summaries
 	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionSummaries, whereClause),
-		args...); err != nil {
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionSummaries, childWhereClause),
+		childArgs...); err != nil {
 		return fmt.Errorf("hard delete summaries: %w", err)
 	}
 
 	// Hard delete events
 	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionEvents, whereClause),
-		args...); err != nil {
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionEvents, childWhereClause),
+		childArgs...); err != nil {
 		return fmt.Errorf("hard delete events: %w", err)
 	}
 
 	// Hard delete track events
 	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionTracks, whereClause),
-		args...); err != nil {
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionTracks, childWhereClause),
+		childArgs...); err != nil {
 		return fmt.Errorf("hard delete track events: %w", err)
 	}
 
@@ -1164,6 +1250,142 @@ func (s *Service) cleanupExpiredUserStates(ctx context.Context, now time.Time) {
 			"cleaned up %d expired user states",
 			deletedCount,
 		)
+	}
+}
+
+// tdsqlCleanupExpiredSessions uses two-phase cleanup for TDSQL distributed mode.
+// Phase 1: scan expired sessions without FOR UPDATE (cross-shard read is allowed).
+// Phase 2: delete per user_id so DML routes to the correct shard.
+func (s *Service) tdsqlCleanupExpiredSessions(ctx context.Context, now time.Time) {
+	query := fmt.Sprintf(`SELECT app_name, user_id, session_id FROM %s
+		WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL
+		LIMIT 1000`,
+		s.tableSessionStates)
+
+	var sessionKeys []session.Key
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var app, user, sess string
+		if err := rows.Scan(&app, &user, &sess); err != nil {
+			return err
+		}
+		sessionKeys = append(sessionKeys, session.Key{
+			AppName: app, UserID: user, SessionID: sess,
+		})
+		return nil
+	}, query, now)
+
+	if err != nil {
+		log.ErrorfContext(ctx, "tdsql cleanup: scan expired sessions failed: %v", err)
+		return
+	}
+	if len(sessionKeys) == 0 {
+		return
+	}
+
+	// Group by user_id for shard-local DML.
+	grouped := make(map[string][]session.Key)
+	for _, k := range sessionKeys {
+		grouped[k.UserID] = append(grouped[k.UserID], k)
+	}
+
+	var total int64
+	for _, keys := range grouped {
+		var n int
+		err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+			var err error
+			n, err = s.deleteSessions(ctx, tx, keys, now)
+			return err
+		})
+		if err != nil {
+			log.ErrorfContext(ctx, "tdsql cleanup: delete sessions failed: %v", err)
+			continue
+		}
+		total += int64(n)
+	}
+
+	if total > 0 {
+		log.InfofContext(ctx, "tdsql cleanup: cleaned up %d expired sessions", total)
+	}
+}
+
+// tdsqlCleanupExpiredUserStates uses two-phase cleanup for TDSQL distributed mode.
+// Phase 1: scan expired user_states to get (id, user_id) pairs.
+// Phase 2: delete per user_id for shard routing.
+func (s *Service) tdsqlCleanupExpiredUserStates(ctx context.Context, now time.Time) {
+	type idPair struct {
+		id     int64
+		userID string
+	}
+
+	query := fmt.Sprintf(`SELECT id, user_id FROM %s
+		WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL
+		LIMIT 1000`, s.tableUserStates)
+
+	var pairs []idPair
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var p idPair
+		if err := rows.Scan(&p.id, &p.userID); err != nil {
+			return err
+		}
+		pairs = append(pairs, p)
+		return nil
+	}, query, now)
+
+	if err != nil {
+		log.ErrorfContext(ctx, "tdsql cleanup: scan expired user states failed: %v", err)
+		return
+	}
+	if len(pairs) == 0 {
+		return
+	}
+
+	// Group by user_id for shard-local DML.
+	grouped := make(map[string][]int64)
+	for _, p := range pairs {
+		grouped[p.userID] = append(grouped[p.userID], p.id)
+	}
+
+	var total int64
+	for userID, ids := range grouped {
+		placeholders := make([]string, len(ids))
+		for i := range ids {
+			placeholders[i] = "?"
+		}
+		idClause := strings.Join(placeholders, ",")
+
+		// Recheck expiry to prevent deleting renewed user states between scan and delete.
+		var err error
+		if s.opts.softDelete {
+			args := make([]any, 0, len(ids)+3)
+			args = append(args, now)
+			for _, id := range ids {
+				args = append(args, id)
+			}
+			args = append(args, userID, now)
+			_, err = s.mysqlClient.Exec(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
+					s.tableUserStates, idClause),
+				args...)
+		} else {
+			args := make([]any, 0, len(ids)+2)
+			for _, id := range ids {
+				args = append(args, id)
+			}
+			args = append(args, userID, now)
+			_, err = s.mysqlClient.Exec(ctx,
+				fmt.Sprintf(`DELETE FROM %s WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
+					s.tableUserStates, idClause),
+				args...)
+		}
+		if err != nil {
+			log.ErrorfContext(ctx, "tdsql cleanup: delete user states failed: %v", err)
+			continue
+		}
+		total += int64(len(ids))
+	}
+
+	if total > 0 {
+		log.InfofContext(ctx, "tdsql cleanup: cleaned up %d expired user states", total)
 	}
 }
 
