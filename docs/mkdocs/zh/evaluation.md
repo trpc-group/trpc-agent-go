@@ -2192,7 +2192,7 @@ type InvocationsAggregator interface {
 
 LLM Judge 类评估器默认通过 `criterion.llmJudge.judgeModel` 直连裁判模型获取裁判输出。也可以通过 `evaluation.WithJudgeRunner` 注入一个裁判 Runner，用 runner 的最终 `*model.Response` 替代直连模型。
 
-启用后 `judgeModel` 被忽略，每个 invocation 默认调用 judge runner 1 次。
+启用后 `judgeModel` 被忽略，每个 invocation 默认调用 judge runner 1 次。可以通过 `evaluation.WithJudgeRunnerNumSamples(n)` 显式增加 runner 采样次数，`n` 必须大于等于 1，非正数会在 `evaluation.New(...)` 或 `Evaluate(...)` 合并选项时返回错误。多次采样会复用当前评估器的 sample aggregator，默认按多数票选出代表样本。
 
 示例片段如下：
 
@@ -2209,6 +2209,7 @@ agentEvaluator, err := evaluation.New(
 	appName,
 	agentRunner,
 	evaluation.WithJudgeRunner(judgeRunner),
+	evaluation.WithJudgeRunnerNumSamples(3),
 )
 ```
 
