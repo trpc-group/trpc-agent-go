@@ -203,6 +203,14 @@ func (p *Parser) ParseDirectory(dirPath string, opts ...codeast.ParseOption) (*c
 	if err != nil {
 		return nil, fmt.Errorf("failed to find go modules: %w", err)
 	}
+	// When absDir is not a module root but contains nested sub-modules, it still
+	// belongs to a parent module. Prepend absDir so its own packages are parsed
+	// under that parent module alongside the nested sub-modules.
+	if len(modules) > 0 && parseGoModulePath(filepath.Join(absDir, "go.mod")) == "" {
+		if parentModuleDir, _ := findNearestGoModule(absDir); parentModuleDir != "" {
+			modules = append([]string{absDir}, modules...)
+		}
+	}
 	if len(modules) == 0 {
 		modules = []string{absDir}
 	}
@@ -663,7 +671,9 @@ func (p *Parser) loadPatterns(absDir string) []string {
 	if len(p.includeFiles) == 0 {
 		return []string{"./..."}
 	}
-	moduleRoot := parseGoModulePath(filepath.Join(absDir, "go.mod")) != ""
+	// Resolve the module that owns absDir (which may be a non-root subdirectory)
+	// so we can exclude includeFiles that belong to a different module.
+	baseModuleDir, _ := findNearestGoModule(absDir)
 	dirs := make(map[string]struct{})
 	for _, file := range p.includeFiles {
 		if file == "" {
@@ -677,9 +687,9 @@ func (p *Parser) loadPatterns(absDir string) []string {
 		if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 			continue
 		}
-		if moduleRoot {
+		if baseModuleDir != "" {
 			nearest, _ := findNearestGoModule(filepath.Dir(absFile))
-			if filepath.Clean(nearest) != filepath.Clean(absDir) {
+			if filepath.Clean(nearest) != filepath.Clean(baseModuleDir) {
 				continue
 			}
 		}

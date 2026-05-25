@@ -275,6 +275,7 @@ func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*grap
 
 	nodes := make([]*graph.Node, 0)
 	edges := make([]*graph.Edge, 0)
+	queryTruncated := false
 	if err := s.withAgeTx(ctx, func(tx *sql.Tx) error {
 		startNodes, err := s.queryNodesByIDs(ctx, tx, query.StartIDs)
 		if err != nil {
@@ -288,24 +289,33 @@ func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*grap
 		}
 		for _, startID := range query.StartIDs {
 			for _, pattern := range patterns {
+				queryLimit := maxNodes + 1
 				cypher := fmt.Sprintf(
 					`MATCH p=(start:%s {id: %s})%s(n:%s) UNWIND nodes(p) AS node RETURN DISTINCT node.id, node.name, node.content, node.metadata LIMIT %d`,
 					nodeLabel,
 					cypherString(startID),
 					pattern,
 					nodeLabel,
-					maxNodes,
+					queryLimit,
 				)
 				resultNodes, err := s.queryNodes(ctx, tx, cypher)
 				if err != nil {
 					return err
 				}
+				if len(resultNodes) > maxNodes {
+					queryTruncated = true
+					resultNodes = resultNodes[:maxNodes]
+				}
 				nodes = append(nodes, resultNodes...)
 
-				edgeCypher := traverseEdgeQueryCypher(startID, pattern, maxNodes)
+				edgeCypher := traverseEdgeQueryCypher(startID, pattern, queryLimit)
 				resultEdges, err := s.queryEdges(ctx, tx, edgeCypher)
 				if err != nil {
 					return err
+				}
+				if len(resultEdges) > maxNodes {
+					queryTruncated = true
+					resultEdges = resultEdges[:maxNodes]
 				}
 				edges = append(edges, resultEdges...)
 			}
@@ -317,7 +327,7 @@ func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*grap
 
 	resultNodes := uniqueNodes(nodes)
 	limitedNodes := limitNodes(resultNodes, maxNodes)
-	truncated := len(resultNodes) > len(limitedNodes)
+	truncated := queryTruncated || len(resultNodes) > len(limitedNodes)
 	return &graph.TraverseResult{
 		Nodes:     limitedNodes,
 		Edges:     filterEdgesByNodes(uniqueEdges(edges), limitedNodes),
@@ -349,9 +359,11 @@ func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.P
 		if err != nil {
 			return err
 		}
-		for _, pattern := range patterns {
+		for i, pattern := range patterns {
+			// A previous pattern exactly filled the limit without overflow;
+			// probe remaining patterns (including current) to set truncated.
 			if len(paths) >= maxPaths {
-				return nil
+				return s.probeMorePaths(ctx, tx, query.FromID, query.ToID, patterns[i:], &truncated)
 			}
 			remaining := maxPaths - len(paths)
 			cypher := pathQueryCypher(query.FromID, query.ToID, pattern, remaining+1)
@@ -373,7 +385,12 @@ func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.P
 					Edges: pathEdges(path),
 				})
 			}
-			if len(paths) >= maxPaths && truncated {
+			// Current pattern filled the limit; probe later patterns if
+			// truncation was not already detected by overflow above.
+			if len(paths) >= maxPaths {
+				if !truncated && i+1 < len(patterns) {
+					return s.probeMorePaths(ctx, tx, query.FromID, query.ToID, patterns[i+1:], &truncated)
+				}
 				return nil
 			}
 		}
@@ -382,6 +399,30 @@ func (s *Store) FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.P
 		return nil, err
 	}
 	return &graph.PathResult{Paths: paths, Truncated: truncated}, nil
+}
+
+func (s *Store) hasAnyPath(ctx context.Context, tx *sql.Tx, fromID, toID string, patterns []string) (bool, error) {
+	for _, pattern := range patterns {
+		rawPaths, err := s.queryAgPaths(ctx, tx, pathQueryCypher(fromID, toID, pattern, 1))
+		if err != nil {
+			return false, err
+		}
+		if len(rawPaths) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) probeMorePaths(ctx context.Context, tx *sql.Tx, fromID, toID string, patterns []string, truncated *bool) error {
+	hasMore, err := s.hasAnyPath(ctx, tx, fromID, toID, patterns)
+	if err != nil {
+		return err
+	}
+	if hasMore {
+		*truncated = true
+	}
+	return nil
 }
 
 func pathQueryCypher(fromID, toID, pattern string, limit int) string {

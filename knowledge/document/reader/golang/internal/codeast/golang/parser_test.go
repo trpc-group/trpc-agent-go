@@ -166,6 +166,33 @@ func Sub() {}
 	}
 }
 
+func TestParseDirectorySubdirWithParentModuleAndNestedModule(t *testing.T) {
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "pkg")
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(pkgDir, "parent.go"), `package pkg
+
+func Parent() {}
+`)
+	writeFile(t, filepath.Join(pkgDir, "nested", "go.mod"), "module example.com/nested\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(pkgDir, "nested", "nested.go"), `package nested
+
+func Nested() {}
+`)
+
+	parser := NewParser()
+	result, err := parser.ParseDirectory(pkgDir)
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v", err)
+	}
+	if !hasCodeNode(result.Nodes, "example.com/root/pkg.Parent") {
+		t.Fatalf("expected parent module subdir node, got %+v", result.Nodes)
+	}
+	if !hasCodeNode(result.Nodes, "example.com/nested.Nested") {
+		t.Fatalf("expected nested module node, got %+v", result.Nodes)
+	}
+}
+
 func TestParseDirectoryFullModeAnalyzesTypedEdges(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")

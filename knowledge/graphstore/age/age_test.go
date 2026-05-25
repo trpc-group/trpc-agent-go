@@ -2132,6 +2132,45 @@ func TestTraverseWithSqlmock(t *testing.T) {
 	}
 }
 
+func TestTraverseSetsTruncatedOnQueryOverflow(t *testing.T) {
+	store, mock := newSqlmockStore(t)
+	defer store.client.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("LOAD 'age'").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SET search_path`).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	nodeRows := sqlmock.NewRows([]string{"id", "name", "content", "metadata"}).
+		AddRow(`"node_a"::agtype`, `"Node A"::agtype`, `""::agtype`, `null::agtype`)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(nodeRows)
+
+	traverseNodeRows := sqlmock.NewRows([]string{"id", "name", "content", "metadata"}).
+		AddRow(`"node_b"::agtype`, `"Node B"::agtype`, `""::agtype`, `null::agtype`).
+		AddRow(`"node_c"::agtype`, `"Node C"::agtype`, `""::agtype`, `null::agtype`)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(traverseNodeRows)
+
+	edgeRows := sqlmock.NewRows([]string{"id", "from_id", "to_id", "edge_type", "metadata"})
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(edgeRows)
+
+	mock.ExpectCommit()
+
+	result, err := store.Traverse(context.Background(), &graph.TraverseQuery{
+		StartIDs:  []string{"node_a"},
+		Direction: graph.DirectionOut,
+		MaxDepth:  1,
+		MaxNodes:  1,
+	})
+	if err != nil {
+		t.Fatalf("Traverse() error = %v", err)
+	}
+	if !result.Truncated {
+		t.Fatal("Traverse() truncated = false, want true")
+	}
+	if len(result.Nodes) != 1 {
+		t.Fatalf("Traverse() nodes = %d, want 1", len(result.Nodes))
+	}
+}
+
 func TestTraverseQueryNodesByIDsError(t *testing.T) {
 	store, mock := newSqlmockStore(t)
 	defer store.client.Close()
@@ -2284,6 +2323,113 @@ func TestFindPathsDoesNotSetTruncatedWhenLimitExactlyFilled(t *testing.T) {
 		ToID:     "b",
 		MaxDepth: 3,
 		MaxPaths: 1,
+	})
+	if err != nil {
+		t.Fatalf("FindPaths() error = %v", err)
+	}
+	if len(result.Paths) != 1 {
+		t.Fatalf("FindPaths() paths = %d, want 1", len(result.Paths))
+	}
+	if result.Truncated {
+		t.Fatal("FindPaths() truncated = true, want false")
+	}
+}
+
+func TestFindPathsSetsTruncatedWhenLaterPatternHasPaths(t *testing.T) {
+	store, mock := newSqlmockStore(t)
+	defer store.client.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("LOAD 'age'").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SET search_path`).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	pathRows := sqlmock.NewRows([]string{"node_ids", "edge_ids", "from_ids", "to_ids", "edge_types"}).
+		AddRow(
+			`["a", "b"]::agtype`,
+			`["e1"]::agtype`,
+			`["a"]::agtype`,
+			`["b"]::agtype`,
+			`["CALLS"]::agtype`,
+		)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(pathRows)
+
+	nodeARows := sqlmock.NewRows([]string{"id", "name", "content", "metadata"}).
+		AddRow(`"a"::agtype`, `"A"::agtype`, `""::agtype`, `null::agtype`)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(nodeARows)
+
+	nodeBRows := sqlmock.NewRows([]string{"id", "name", "content", "metadata"}).
+		AddRow(`"b"::agtype`, `"B"::agtype`, `""::agtype`, `null::agtype`)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(nodeBRows)
+
+	probeRows := sqlmock.NewRows([]string{"node_ids", "edge_ids", "from_ids", "to_ids", "edge_types"}).
+		AddRow(
+			`["a", "b"]::agtype`,
+			`["e2"]::agtype`,
+			`["a"]::agtype`,
+			`["b"]::agtype`,
+			`["METHOD"]::agtype`,
+		)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(probeRows)
+
+	mock.ExpectCommit()
+
+	result, err := store.FindPaths(context.Background(), &graph.PathQuery{
+		FromID:    "a",
+		ToID:      "b",
+		Direction: graph.DirectionOut,
+		EdgeTypes: []string{"CALLS", "METHOD"},
+		MaxDepth:  1,
+		MaxPaths:  1,
+	})
+	if err != nil {
+		t.Fatalf("FindPaths() error = %v", err)
+	}
+	if len(result.Paths) != 1 {
+		t.Fatalf("FindPaths() paths = %d, want 1", len(result.Paths))
+	}
+	if !result.Truncated {
+		t.Fatal("FindPaths() truncated = false, want true")
+	}
+}
+
+func TestFindPathsDoesNotSetTruncatedWhenLaterPatternsAreEmpty(t *testing.T) {
+	store, mock := newSqlmockStore(t)
+	defer store.client.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("LOAD 'age'").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SET search_path`).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	pathRows := sqlmock.NewRows([]string{"node_ids", "edge_ids", "from_ids", "to_ids", "edge_types"}).
+		AddRow(
+			`["a", "b"]::agtype`,
+			`["e1"]::agtype`,
+			`["a"]::agtype`,
+			`["b"]::agtype`,
+			`["CALLS"]::agtype`,
+		)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(pathRows)
+
+	nodeARows := sqlmock.NewRows([]string{"id", "name", "content", "metadata"}).
+		AddRow(`"a"::agtype`, `"A"::agtype`, `""::agtype`, `null::agtype`)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(nodeARows)
+
+	nodeBRows := sqlmock.NewRows([]string{"id", "name", "content", "metadata"}).
+		AddRow(`"b"::agtype`, `"B"::agtype`, `""::agtype`, `null::agtype`)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(nodeBRows)
+
+	probeRows := sqlmock.NewRows([]string{"node_ids", "edge_ids", "from_ids", "to_ids", "edge_types"})
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(probeRows)
+
+	mock.ExpectCommit()
+
+	result, err := store.FindPaths(context.Background(), &graph.PathQuery{
+		FromID:    "a",
+		ToID:      "b",
+		Direction: graph.DirectionOut,
+		EdgeTypes: []string{"CALLS", "METHOD"},
+		MaxDepth:  1,
+		MaxPaths:  1,
 	})
 	if err != nil {
 		t.Fatalf("FindPaths() error = %v", err)
