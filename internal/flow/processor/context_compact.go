@@ -211,68 +211,47 @@ func (cfg ContextCompactionConfig) forceCleanToolResult(msg model.Message) bool 
 	return ok
 }
 
-func toolNamesByToolIDFromEvents(events []event.Event) map[string]string {
-	var names map[string]string
-	for _, evt := range events {
-		if evt.Response == nil {
-			continue
-		}
-		for _, choice := range evt.Response.Choices {
-			names = collectToolCallNames(names, choice.Message)
-			names = collectToolCallNames(names, choice.Delta)
-		}
-	}
-	return names
-}
+type toolCallNameResolver map[string][]string
 
-func toolNamesByToolIDFromMessages(messages []model.Message) map[string]string {
-	var names map[string]string
-	for _, msg := range messages {
-		names = collectToolCallNames(names, msg)
-	}
-	return names
-}
-
-func collectToolCallNames(
-	names map[string]string,
-	msg model.Message,
-) map[string]string {
+func (r *toolCallNameResolver) addFromMessage(msg model.Message) {
 	for _, toolCall := range msg.ToolCalls {
 		if toolCall.ID == "" || toolCall.Function.Name == "" {
 			continue
 		}
-		if names == nil {
-			names = make(map[string]string)
+		if *r == nil {
+			*r = make(map[string][]string)
 		}
-		if _, exists := names[toolCall.ID]; !exists {
-			names[toolCall.ID] = toolCall.Function.Name
-		}
+		(*r)[toolCall.ID] = append((*r)[toolCall.ID], toolCall.Function.Name)
 	}
-	return names
 }
 
-func resolveToolResultName(
-	msg model.Message,
-	toolNamesByID map[string]string,
-) model.Message {
-	if msg.Role != model.RoleTool ||
-		msg.ToolID == "" ||
-		msg.ToolName != "" ||
-		len(toolNamesByID) == 0 {
+func (r toolCallNameResolver) resolveToolResultName(msg model.Message) model.Message {
+	if msg.Role != model.RoleTool || msg.ToolID == "" || len(r) == 0 {
 		return msg
 	}
-	if name := toolNamesByID[msg.ToolID]; name != "" {
+	name := r.consume(msg.ToolID)
+	if msg.ToolName == "" && name != "" {
 		msg.ToolName = name
 	}
 	return msg
 }
 
-func fillMissingToolResultNamesInEvents(events []event.Event) []event.Event {
-	toolNamesByID := toolNamesByToolIDFromEvents(events)
-	if len(toolNamesByID) == 0 {
-		return events
+func (r toolCallNameResolver) consume(toolID string) string {
+	names := r[toolID]
+	if len(names) == 0 {
+		return ""
 	}
+	name := names[0]
+	if len(names) == 1 {
+		delete(r, toolID)
+	} else {
+		r[toolID] = names[1:]
+	}
+	return name
+}
 
+func fillMissingToolResultNamesInEvents(events []event.Event) []event.Event {
+	var resolver toolCallNameResolver
 	var clonedEvents bool
 	for eventIndex := range events {
 		if events[eventIndex].Response == nil ||
@@ -281,8 +260,11 @@ func fillMissingToolResultNamesInEvents(events []event.Event) []event.Event {
 		}
 		var clonedResponse bool
 		for choiceIndex := range events[eventIndex].Response.Choices {
-			msg := events[eventIndex].Response.Choices[choiceIndex].Message
-			resolved := resolveToolResultName(msg, toolNamesByID)
+			choice := events[eventIndex].Response.Choices[choiceIndex]
+			resolver.addFromMessage(choice.Message)
+			resolver.addFromMessage(choice.Delta)
+			msg := choice.Message
+			resolved := resolver.resolveToolResultName(msg)
 			if resolved.ToolName == msg.ToolName {
 				continue
 			}
@@ -303,14 +285,11 @@ func fillMissingToolResultNamesInEvents(events []event.Event) []event.Event {
 func fillMissingToolResultNamesInMessages(
 	messages []model.Message,
 ) []model.Message {
-	toolNamesByID := toolNamesByToolIDFromMessages(messages)
-	if len(toolNamesByID) == 0 {
-		return messages
-	}
-
+	var resolver toolCallNameResolver
 	var cloned bool
 	for i := range messages {
-		resolved := resolveToolResultName(messages[i], toolNamesByID)
+		resolver.addFromMessage(messages[i])
+		resolved := resolver.resolveToolResultName(messages[i])
 		if resolved.ToolName == messages[i].ToolName {
 			continue
 		}

@@ -387,6 +387,105 @@ func TestCompactIncrementEvents_ForceCleansInferredToolName(t *testing.T) {
 		"original event should not be mutated")
 }
 
+func TestCompactIncrementEvents_ResolvesReusedToolIDByNearestCall(t *testing.T) {
+	reusedToolID := "tool-call-reused"
+	events := []event.Event{
+		{
+			RequestID:    "req-old",
+			InvocationID: "inv-old",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID: reusedToolID,
+							Function: model.FunctionDefinitionParam{
+								Name:      "session_load",
+								Arguments: []byte(`{}`),
+							},
+						}},
+					},
+				}},
+			},
+		},
+		{
+			RequestID:    "req-old",
+			InvocationID: "inv-old",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						reusedToolID,
+						"",
+						"loaded context",
+					),
+				}},
+			},
+		},
+		{
+			RequestID:    "req-current",
+			InvocationID: "inv-current",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID: reusedToolID,
+							Function: model.FunctionDefinitionParam{
+								Name:      "shell",
+								Arguments: []byte(`{}`),
+							},
+						}},
+					},
+				}},
+			},
+		},
+		{
+			RequestID:    "req-current",
+			InvocationID: "inv-current",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						reusedToolID,
+						"",
+						"sensitive shell output",
+					),
+				}},
+			},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		events,
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled: true,
+			toolResultCompactionRules: toolResultCompactionRules{
+				forceCleanToolNames: toolNameSet([]string{"shell"}),
+			},
+		},
+	)
+
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+	firstResult := compacted[1].Response.Choices[0].Message
+	require.Equal(t, "session_load", firstResult.ToolName)
+	require.Equal(t, "loaded context", firstResult.Content)
+	secondResult := compacted[3].Response.Choices[0].Message
+	require.Equal(t, "shell", secondResult.ToolName)
+	require.Equal(t, policyToolResultPlaceholder, secondResult.Content)
+	require.Empty(t, events[3].Response.Choices[0].Message.ToolName,
+		"original events should not be mutated")
+}
+
 func TestCompactIncrementEvents_KeepToolNameSkipsCompaction(t *testing.T) {
 	keptContent := "HEAD-" + strings.Repeat("keep-", 400) + "-TAIL"
 	compactedContent := strings.Repeat("compact-", 400)
@@ -580,6 +679,47 @@ func TestTruncateOversizedToolResultMessages_ForceCleanAndKeepRules(t *testing.T
 	require.Equal(t, shellContent, messages[1].Content,
 		"original slice should be cloned before rewriting")
 	require.Empty(t, messages[1].ToolName,
+		"original messages should not be mutated when resolving tool names")
+}
+
+func TestTruncateOversizedToolResultMessages_ResolvesReusedToolIDByNearestCall(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithEnableContextCompaction(true),
+		WithContextCompactionForceCleanToolNames("shell"),
+	)
+	reusedToolID := "tool-call-reused"
+	messages := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: reusedToolID,
+				Function: model.FunctionDefinitionParam{
+					Name:      "session_load",
+					Arguments: []byte(`{}`),
+				},
+			}},
+		},
+		model.NewToolMessage(reusedToolID, "", "loaded context"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: reusedToolID,
+				Function: model.FunctionDefinitionParam{
+					Name:      "shell",
+					Arguments: []byte(`{}`),
+				},
+			}},
+		},
+		model.NewToolMessage(reusedToolID, "", "sensitive shell output"),
+	}
+
+	got := p.truncateOversizedToolResultMessages(messages)
+
+	require.Equal(t, "session_load", got[1].ToolName)
+	require.Equal(t, "loaded context", got[1].Content)
+	require.Equal(t, "shell", got[3].ToolName)
+	require.Equal(t, policyToolResultPlaceholder, got[3].Content)
+	require.Empty(t, messages[3].ToolName,
 		"original messages should not be mutated when resolving tool names")
 }
 

@@ -902,15 +902,14 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 
 	var events []event.Event
 	inv.Session.EventMu.RLock()
-	toolNamesByID := toolNamesByToolIDFromEvents(inv.Session.Events)
-	for _, evt := range inv.Session.Events {
+	sessionEvents := fillMissingToolResultNamesInEvents(inv.Session.Events)
+	for _, evt := range sessionEvents {
 		if compactedEvt, ok := p.compactCurrentInvocationEvent(
 			evt,
 			inv,
 			filter,
 			isZeroTime,
 			since,
-			toolNamesByID,
 		); ok {
 			events = append(events, compactedEvt)
 			continue
@@ -1013,7 +1012,6 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 	filter string,
 	isZeroTime bool,
 	since time.Time,
-	toolNamesByID map[string]string,
 ) (event.Event, bool) {
 	if isZeroTime || inv == nil {
 		return event.Event{}, false
@@ -1034,9 +1032,8 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 
 	var compactedChoices []model.Choice
 	for _, choice := range evt.Choices {
-		msg := resolveToolResultName(choice.Message, toolNamesByID)
 		msg, ok := compactedCurrentInvocationMessage(
-			msg,
+			choice.Message,
 			p.ContextCompactionConfig,
 		)
 		if !ok {
@@ -1729,8 +1726,8 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 	inv.Session.EventMu.RLock()
 	defer inv.Session.EventMu.RUnlock()
 
-	toolNamesByID := toolNamesByToolIDFromEvents(inv.Session.Events)
-	for _, evt := range inv.Session.Events {
+	sessionEvents := fillMissingToolResultNamesInEvents(inv.Session.Events)
+	for _, evt := range sessionEvents {
 		if evt.RequestID != inv.RunOptions.RequestID ||
 			evt.InvocationID != inv.InvocationID {
 			continue
@@ -1748,7 +1745,6 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 		if eventHasCompactedCurrentInvocationToolResult(
 			evt,
 			p.ContextCompactionConfig,
-			toolNamesByID,
 		) {
 			return true
 		}
@@ -1759,10 +1755,9 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 func eventHasCompactedCurrentInvocationToolResult(
 	evt event.Event,
 	cfg ContextCompactionConfig,
-	toolNamesByID map[string]string,
 ) bool {
 	for _, choice := range evt.Choices {
-		msg := resolveToolResultName(choice.Message, toolNamesByID)
+		msg := choice.Message
 		if msg.Role != model.RoleTool || msg.ToolID == "" {
 			continue
 		}
