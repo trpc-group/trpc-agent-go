@@ -417,6 +417,10 @@ type GenerationConfig struct {
 	// ThinkingTokens controls the fixed thinking token budget for providers that support it.
 	// Anthropic adaptive-thinking models ignore this field and use ReasoningEffort instead.
 	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
+
+	// ThinkingLevel controls the qualitative thinking level for providers that support it.
+	// Gemini 3 uses this field for thinkingConfig.thinkingLevel.
+	ThinkingLevel *string `json:"thinking_level,omitempty"`
 }
 
 // GenerationConfigPatch selectively overrides fields in GenerationConfig.
@@ -440,6 +444,7 @@ type GenerationConfigPatch struct {
 	ReasoningEffort  *string  `json:"reasoning_effort,omitempty"`
 	ThinkingEnabled  *bool    `json:"thinking_enabled,omitempty"`
 	ThinkingTokens   *int     `json:"thinking_tokens,omitempty"`
+	ThinkingLevel    *string  `json:"thinking_level,omitempty"`
 }
 
 // ApplyGenerationConfigPatch applies patch to base and returns the merged
@@ -477,6 +482,9 @@ func ApplyGenerationConfigPatch(
 	}
 	if patch.ThinkingTokens != nil {
 		base.ThinkingTokens = patch.ThinkingTokens
+	}
+	if patch.ThinkingLevel != nil {
+		base.ThinkingLevel = patch.ThinkingLevel
 	}
 	return base
 }
