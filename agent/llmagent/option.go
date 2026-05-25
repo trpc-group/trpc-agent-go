@@ -1089,27 +1089,38 @@ func WithSkillRunStager(stager toolskill.SkillStager) Option {
 // "/usr/bin/curl" and "./curl" alike.
 //
 // Precedence is explicit Deny > implicit deny > explicit Allow >
-// implicit allow. Shell wrappers and re-executing builtins (sh,
-// bash, zsh, busybox, eval, exec, command, source, xargs, env,
-// nohup, timeout, sudo, time, nice, ionice, taskset, stdbuf,
-// strace, ltrace, ...) are blocked by an unconditional built-in
-// deny set and cannot be re-enabled by listing them here;
-// allow-list entries for them are ignored. If you legitimately
-// need one of them, wrap the desired use in an auditable workspace
-// script and allow the script instead.
+// implicit allow. The unconditional built-in deny set covers
+// shell wrappers and re-executing builtins (sh, bash, zsh,
+// busybox, eval, exec, command, source, xargs, env, nohup,
+// timeout, sudo, time, nice, ionice, taskset, stdbuf, strace,
+// ltrace, ...) together with the shell builtins that can register
+// code to run later or mutate later-segment resolution (trap,
+// alias, unalias, enable, export, unset, readonly, local, declare,
+// typeset, set, shopt, hash, cd, pushd, popd). They are blocked
+// whenever a policy is active and cannot be re-enabled by listing
+// them here; allow-list entries for them are ignored. If you
+// legitimately need one of them, wrap the desired use in an
+// auditable workspace script and allow the script instead.
+//
+// On Windows the configured deny entries are also passed through
+// the same suffix-stripping / lower-casing rules as the command
+// basename, so a deny of "CURL" or "curl.exe" rejects the bare
+// "curl" form (and vice versa).
 //
 // When a policy is active workspace_exec also switches the spawn
 // from "sh -lc" to "sh -c" and strips known shell-startup and
 // search-path environment variables (HOME, BASH_ENV, ENV, IFS,
 // PATH, LD_PRELOAD, ...) from the per-call env so a passing
 // command cannot be hijacked at shell start-up time or redirected
-// at a workspace-controlled binary via PATH. Note that this spawn
-// hardening (CleanEnv + sh-c) is fully implemented on
-// codeexecutor/local; container / e2b backends honor the
-// command-name policy but their env-isolation work is tracked as a
-// follow-up. Operators running policy mode on those backends
-// should still rely on the sandbox layer for env / network
-// isolation.
+// at a workspace-controlled binary via PATH. On Windows the env
+// scrub folds case before comparing, so caller-supplied "Path",
+// "Home" or "Bash_Env" cannot survive by varying capitalisation.
+// Note that this spawn hardening (CleanEnv + sh-c) is fully
+// implemented on codeexecutor/local; container / e2b backends
+// honor the command-name policy but their env-isolation work is
+// tracked as a follow-up. Operators running policy mode on those
+// backends should still rely on the sandbox layer for env /
+// network isolation.
 //
 // Scope: enforcement is at the executable-name level. If an allowed
 // command itself shells out based on its arguments (e.g.

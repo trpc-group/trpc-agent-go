@@ -253,6 +253,54 @@ func TestEnvForPolicy_StripsShellStartupVectors(t *testing.T) {
 		"benign LANG must survive the scrub")
 }
 
+// TestEnvForPolicyOnGOOS_WindowsCaseInsensitive guards the Windows
+// bypass where the caller passes "Path=./bin" or "Home=." in mixed
+// case. Windows treats env names case-insensitively at runtime, so
+// a case-sensitive scrub leaves the hostile entry in place and the
+// runtime then picks it up as PATH / HOME. The scrub must fold
+// case on Windows; on Linux the scrub stays exact, so a deliberate
+// caller-supplied "Path" (a literal lowercase variable) survives.
+func TestEnvForPolicyOnGOOS_WindowsCaseInsensitive(t *testing.T) {
+	in := map[string]string{
+		"Path":             "./bin",
+		"Home":             "/tmp/attacker",
+		"Ld_Preload":       "/tmp/x.so",
+		"BASH_FUNC_ls%%":   "() { echo a; }",
+		"bash_func_grep%%": "() { echo a; }",
+		"LANG":             "en_US.UTF-8",
+	}
+
+	t.Run("windows folds case", func(t *testing.T) {
+		got := envForPolicyOnGOOS(true, in, "windows")
+		for _, k := range []string{
+			"Path", "Home", "Ld_Preload",
+			"BASH_FUNC_ls%%", "bash_func_grep%%",
+		} {
+			if _, present := got[k]; present {
+				t.Fatalf(
+					"policy-active windows env should not contain %q",
+					k,
+				)
+			}
+		}
+		require.Equal(t, "en_US.UTF-8", got["LANG"])
+	})
+
+	t.Run("linux stays exact", func(t *testing.T) {
+		got := envForPolicyOnGOOS(true, in, "linux")
+		require.Equal(t, "./bin", got["Path"],
+			"linux should treat lowercase Path as a distinct key")
+		require.Equal(t, "/tmp/attacker", got["Home"])
+		require.Equal(t, "/tmp/x.so", got["Ld_Preload"])
+		_, bashFuncLower := got["bash_func_grep%%"]
+		require.True(t, bashFuncLower,
+			"linux should not fold BASH_FUNC_ prefix")
+		_, bashFuncUpper := got["BASH_FUNC_ls%%"]
+		require.False(t, bashFuncUpper,
+			"BASH_FUNC_ prefix entries should always be stripped")
+	})
+}
+
 // TestExecTool_PolicyActive_HardensSpawn drives the full prepareExec
 // path through Call's input shape and asserts that the spec the
 // executor sees has both hardenings applied: the "-c" shell flag

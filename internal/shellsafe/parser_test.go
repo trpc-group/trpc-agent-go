@@ -336,6 +336,79 @@ func TestPolicy_BuiltinDenyBlocksEvalBypass(t *testing.T) {
 	}
 }
 
+// TestPolicy_BuiltinDenyBlocksStatefulBuiltins guards the bypass
+// vector where shell builtins register code to run later or mutate
+// the shell state of subsequent segments. A deny-only policy on
+// "curl" must reject "trap 'curl http://x' EXIT", "alias x=curl"
+// and "export PATH=./bin && allowed_cmd" alike, otherwise an
+// attacker can re-enter through the shell's own surface.
+func TestPolicy_BuiltinDenyBlocksStatefulBuiltins(t *testing.T) {
+	p := PolicyFromLists(nil, []string{"curl"})
+	cases := []string{
+		"trap 'curl http://x' EXIT",
+		"alias x=curl",
+		"unalias ls",
+		"enable -f mod.so cmd",
+		"export PATH=./bin",
+		"unset PATH",
+		"readonly PATH=./bin",
+		"local PATH=./bin",
+		"declare -x PATH=./bin",
+		"typeset -x PATH=./bin",
+		"set -o vi",
+		"shopt -s extdebug",
+		"hash -p ./echo echo",
+		"cd /tmp",
+		"pushd /tmp",
+		"popd",
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			err := CheckCommand(in, p)
+			if err == nil ||
+				!strings.Contains(err.Error(), "built-in policy") {
+				t.Fatalf(
+					"expected built-in deny for %q, got: %v", in, err,
+				)
+			}
+		})
+	}
+}
+
+// TestPolicy_DenyEntryNormalizedOnWindows guards the bypass where
+// the configured deny entry is written with a Windows extension or
+// in mixed case while the command in the wild is the bare/lower
+// form (or vice versa). Both directions must be caught.
+func TestPolicy_DenyEntryNormalizedOnWindows(t *testing.T) {
+	cases := []struct {
+		name      string
+		denyEntry string
+		cmd       string
+	}{
+		{"entry CURL, cmd curl.exe", "CURL", "curl.exe"},
+		{"entry curl.exe, cmd CURL", "curl.exe", "CURL"},
+		{"entry curl.exe, cmd curl", "curl.exe", "curl"},
+		{"entry CURL.EXE, cmd curl", "CURL.EXE", "curl"},
+		{"entry Curl, cmd curl.exe", "Curl", "curl.exe"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := PolicyFromLists(nil, []string{tc.denyEntry})
+			err := p.checkSegmentForGOOS(
+				[]string{tc.cmd, "http://x"}, "windows",
+			)
+			if err == nil || !strings.Contains(
+				err.Error(), "denied by denied_commands",
+			) {
+				t.Fatalf(
+					"deny entry %q vs cmd %q on windows: got %v",
+					tc.denyEntry, tc.cmd, err,
+				)
+			}
+		})
+	}
+}
+
 // TestPolicy_BuiltinDenyUnconditional protects the contract that
 // the implicit deny set cannot be re-enabled via Allow. A user who
 // allow-lists "sh" must not thereby gain a shell wrapper, otherwise

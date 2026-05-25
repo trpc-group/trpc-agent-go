@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -210,14 +211,22 @@ func WithWorkspaceRegistry(
 // Allow matching is strict: an entry "echo" admits bare "echo" but
 // not "./echo" or "/usr/bin/echo"; list an exact path if you want
 // to permit one. Deny matching is permissive: an entry "curl"
-// blocks "curl", "/usr/bin/curl" and "./curl" alike. Shell
-// wrappers and re-executing builtins (sh, bash, zsh, eval, exec,
-// command, source, xargs, env, nohup, timeout, sudo, time, nice,
-// ionice, taskset, stdbuf, strace, ltrace, ...) are subject to an
-// unconditional built-in deny set and cannot be re-enabled by
-// listing them here; allow-list entries for those names are
-// ignored. Wrap the desired use in an auditable workspace script
-// and allow the script instead.
+// blocks "curl", "/usr/bin/curl" and "./curl" alike. On Windows
+// the configured deny entries are normalised (suffix stripped,
+// lower-cased) like the basename, so a deny of "CURL" or
+// "curl.exe" rejects the bare "curl" form too.
+//
+// The unconditional built-in deny set covers shell wrappers and
+// re-executing builtins (sh, bash, zsh, eval, exec, command,
+// source, xargs, env, nohup, timeout, sudo, time, nice, ionice,
+// taskset, stdbuf, strace, ltrace, ...) as well as the stateful
+// shell builtins that can register code to run later or mutate
+// later-segment resolution (trap, alias, unalias, enable, export,
+// unset, readonly, local, declare, typeset, set, shopt, hash, cd,
+// pushd, popd). These names cannot be re-enabled by listing them
+// here; allow-list entries for them are ignored. Wrap the desired
+// use in an auditable workspace script and allow the script
+// instead.
 //
 // Calling this option with an empty list is a no-op so callers can
 // conditionally enable the policy.
@@ -701,23 +710,58 @@ var shellStartupEnvBlocklist = map[string]struct{}{
 // (the Shellshock vector by which env entries are imported as
 // functions) - is dropped, so a command admitted by shellsafe
 // cannot be re-armed via the environment.
+//
+// On Windows the comparison is case-insensitive because Windows
+// treats env names case-insensitively at runtime: a caller-supplied
+// "Path=./bin" or "Home=." would otherwise survive a case-sensitive
+// scrub and then be picked up by the runtime as PATH / HOME.
 func envForPolicy(
 	policyActive bool, env map[string]string,
+) map[string]string {
+	return envForPolicyOnGOOS(policyActive, env, runtime.GOOS)
+}
+
+func envForPolicyOnGOOS(
+	policyActive bool, env map[string]string, goos string,
 ) map[string]string {
 	if !policyActive || len(env) == 0 {
 		return env
 	}
+	winCaseInsensitive := goos == "windows"
 	out := make(map[string]string, len(env))
 	for k, v := range env {
-		if _, blocked := shellStartupEnvBlocklist[k]; blocked {
+		if isShellStartupEnvKey(k, winCaseInsensitive) {
 			continue
 		}
-		if strings.HasPrefix(k, "BASH_FUNC_") {
+		if isBashFuncEnvKey(k, winCaseInsensitive) {
 			continue
 		}
 		out[k] = v
 	}
 	return out
+}
+
+func isShellStartupEnvKey(name string, caseInsensitive bool) bool {
+	if _, ok := shellStartupEnvBlocklist[name]; ok {
+		return true
+	}
+	if !caseInsensitive {
+		return false
+	}
+	upper := strings.ToUpper(name)
+	_, ok := shellStartupEnvBlocklist[upper]
+	return ok
+}
+
+func isBashFuncEnvKey(name string, caseInsensitive bool) bool {
+	if strings.HasPrefix(name, "BASH_FUNC_") {
+		return true
+	}
+	if caseInsensitive &&
+		strings.HasPrefix(strings.ToUpper(name), "BASH_FUNC_") {
+		return true
+	}
+	return false
 }
 
 func (t *ExecTool) callNonSessional(

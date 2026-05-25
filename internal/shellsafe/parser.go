@@ -139,6 +139,23 @@ var implicitDeny = map[string]struct{}{
 	"setsid": {}, "unshare": {}, "chroot": {}, "runuser": {},
 	"time": {}, "nice": {}, "ionice": {}, "taskset": {},
 	"stdbuf": {}, "strace": {}, "ltrace": {},
+	// shell builtins that register code to run later or mutate
+	// the parsing / resolution state of subsequent segments.
+	// Without these, "trap 'curl http://x' EXIT", "alias x=curl",
+	// "export PATH=./bin && allowed_cmd", or "shopt -s extdebug"
+	// would defeat a deny on "curl" or an allow on bare names.
+	"trap": {}, "alias": {}, "unalias": {},
+	"enable": {}, "hash": {},
+	"export": {}, "unset": {}, "readonly": {},
+	"local": {}, "declare": {}, "typeset": {},
+	"set": {}, "shopt": {},
+	// cwd-changing builtins. Strict allow already rejects "./x",
+	// but a cwd swap to an attacker-prepared directory plus a
+	// subsequent allowed bare name still resolves through the
+	// shell's CWD lookup on some PATH configurations, so block
+	// them defensively. workspace_exec exposes a working_directory
+	// parameter for the legitimate case.
+	"cd": {}, "pushd": {}, "popd": {},
 }
 
 // Policy holds the executable-name allow/deny lists that should be
@@ -233,7 +250,7 @@ func (p Policy) checkSegment(argv []string) error {
 func (p Policy) checkSegmentForGOOS(argv []string, goos string) error {
 	cmd := argv[0]
 	base := basenameForGOOS(cmd, goos)
-	if matchDeny(p.Deny, cmd, base) {
+	if matchDeny(p.Deny, cmd, base, goos) {
 		return fmt.Errorf(
 			"command %q is denied by denied_commands", cmd,
 		)
@@ -268,11 +285,20 @@ func implicitDenyError(cmd string) error {
 // matchDeny is the permissive direction: an entry matches the
 // command's verbatim first word or its (OS-normalised) basename.
 // This is intentional so that a deny on "curl" still blocks
-// "/usr/bin/curl" and "./curl".
-func matchDeny(set []string, name, base string) bool {
+// "/usr/bin/curl" and "./curl". On Windows the configured entries
+// are also passed through the same suffix-stripping / lower-casing
+// rules as the basename, so a deny of "CURL" or "curl.exe" blocks
+// the bare "curl" form and vice versa.
+func matchDeny(set []string, name, base, goos string) bool {
 	for _, n := range set {
 		if n == name || n == base {
 			return true
+		}
+		if goos == "windows" {
+			normEntry := normalizeName(n, goos)
+			if normEntry == base || normEntry == name {
+				return true
+			}
 		}
 	}
 	return false

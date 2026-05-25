@@ -769,15 +769,28 @@ So a deny on `curl` cannot be sidestepped via `$(c\url)`,
 `HOME=/tmp curl http://x`, etc.
 
 On top of the parser there is an **unconditional built-in deny set**
-of shell wrappers, re-executing builtins and process-launching
-wrappers, blocked whenever any policy is active because they can
-launch arbitrary code with an innocent `argv[0]` (e.g.
-`time curl http://x` would otherwise pass a deny on `curl`):
-`sh`, `bash`, `zsh`, `ash`, `dash`, `ksh`, `mksh`, `fish`, `pwsh`,
-`powershell`, `cmd`, `busybox`, `toybox`, `eval`, `exec`, `command`,
-`source`, `.`, `builtin`, `xargs`, `env`, `nohup`, `timeout`,
-`sudo`, `su`, `doas`, `setsid`, `unshare`, `chroot`, `runuser`,
-`time`, `nice`, `ionice`, `taskset`, `stdbuf`, `strace`, `ltrace`.
+of shell wrappers, re-executing builtins, process-launching
+wrappers, and stateful shell builtins. They are blocked whenever
+any policy is active because they can launch arbitrary code with
+an innocent `argv[0]` (e.g. `time curl http://x` would otherwise
+pass a deny on `curl`), register code to run later (e.g.
+`trap 'curl http://x' EXIT`) or mutate later-segment resolution
+(e.g. `export PATH=./bin && allowed_cmd`):
+
+- shell wrappers: `sh`, `bash`, `zsh`, `ash`, `dash`, `ksh`,
+  `mksh`, `fish`, `pwsh`, `powershell`, `cmd`, `busybox`, `toybox`
+- re-executing builtins: `eval`, `exec`, `command`, `source`, `.`,
+  `builtin`
+- process-launching wrappers: `xargs`, `env`, `nohup`, `timeout`,
+  `sudo`, `su`, `doas`, `setsid`, `unshare`, `chroot`, `runuser`,
+  `time`, `nice`, `ionice`, `taskset`, `stdbuf`, `strace`, `ltrace`
+- stateful shell builtins: `trap`, `alias`, `unalias`, `enable`,
+  `export`, `unset`, `readonly`, `local`, `declare`, `typeset`,
+  `set`, `shopt`, `hash`, `cd`, `pushd`, `popd`
+
+`workspace_exec` exposes a `working_directory` parameter for the
+legitimate `cd` use case, so the model never needs to call `cd`
+itself.
 
 This deny set is **not overridable** by `WithWorkspaceExecAllowedCommands`
 — allow-list entries for these names are ignored. If you legitimately
@@ -802,7 +815,9 @@ binaries cannot smuggle past the allowlist:
 On Windows the basename match strips common executable suffixes
 (`.exe`, `.cmd`, `.bat`, `.com`, `.ps1`) and lower-cases the
 basename so `cmd` rejects `cmd.exe`, `curl` rejects `CURL.EXE`,
-and `echo` admits `ECHO.EXE`.
+and `echo` admits `ECHO.EXE`. The configured deny entries are
+folded through the same rules, so `WithWorkspaceExecDeniedCommands("CURL")`
+also blocks bare `curl` and `curl.exe`.
 
 ### Precedence
 
@@ -836,6 +851,11 @@ shell-startup tricks from re-arming a rejected command:
   workspace-side `./bin/echo` would otherwise pass the policy and
   execute attacker code. Allowed commands resolve against the shell's
   default `PATH` instead.
+- on Windows the scrub folds env names to upper-case before
+  comparison, because Windows treats env keys case-insensitively at
+  runtime. A caller-supplied `Path=./bin`, `Home=.`, `Bash_Env=…` or
+  `bash_func_x%%=…` is therefore stripped just like its canonical
+  form would be.
 
 Without a policy configured none of this kicks in: `sh -lc` and the
 caller-supplied env (including `PATH`) are preserved as before.
