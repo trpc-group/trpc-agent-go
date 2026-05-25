@@ -6949,7 +6949,7 @@ func TestRunner_CancelDoesNotPersistNonTextPartialAssistant(t *testing.T) {
 	}
 }
 
-func TestInterruptedAssistantDeltaResetsOnNewResponse(t *testing.T) {
+func TestInterruptedAssistantDeltaBuffersInterleavedResponses(t *testing.T) {
 	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
 	loop := &eventLoopContext{}
 	rr.recordInterruptedAssistantDelta(nil, nil, nil)
@@ -6982,7 +6982,7 @@ func TestInterruptedAssistantDeltaResetsOnNewResponse(t *testing.T) {
 	), nil)
 	require.Empty(t, interruptedAssistantChoices(loop))
 
-	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
+	first := event.NewResponseEvent(
 		"inv",
 		"assistant",
 		&model.Response{
@@ -6997,8 +6997,8 @@ func TestInterruptedAssistantDeltaResetsOnNewResponse(t *testing.T) {
 				},
 			}},
 		},
-	), nil)
-	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
+	)
+	second := event.NewResponseEvent(
 		"inv",
 		"assistant",
 		&model.Response{
@@ -7013,10 +7013,148 @@ func TestInterruptedAssistantDeltaResetsOnNewResponse(t *testing.T) {
 				},
 			}},
 		},
-	), nil)
+	)
+	firstAgain := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "response-1",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: " again",
+				},
+			}},
+		},
+	)
+	rr.recordInterruptedAssistantDelta(loop, first, nil)
+	rr.recordInterruptedAssistantDelta(loop, second, nil)
+	rr.recordInterruptedAssistantDelta(loop, firstAgain, nil)
 
-	require.Equal(t, "response-2", defaultInterruptedAssistantAccumulator(loop).responseID)
-	require.Equal(t, "second", interruptedAssistantChoices(loop)[0].Message.Content)
+	require.Len(t, loop.interruptedAssistants, 2)
+	firstAcc := getInterruptedAssistantAccumulatorForEvent(loop, nil, first)
+	secondAcc := getInterruptedAssistantAccumulatorForEvent(loop, nil, second)
+	require.NotNil(t, firstAcc)
+	require.NotNil(t, secondAcc)
+	require.Equal(t, "response-1", firstAcc.responseID)
+	require.Equal(t, "response-2", secondAcc.responseID)
+	require.Equal(
+		t,
+		"first again",
+		interruptedAssistantChoicesFromAccumulator(firstAcc)[0].Message.Content,
+	)
+	require.Equal(
+		t,
+		"second",
+		interruptedAssistantChoicesFromAccumulator(secondAcc)[0].Message.Content,
+	)
+}
+
+func TestInterruptedAssistantDeltaBuffersEmptyResponseByInvocationLineage(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+		),
+	}
+	first := interruptedAssistantPartialEvent("child-a", "alpha ")
+	first.Branch = "parallel/a"
+	second := interruptedAssistantPartialEvent("child-b", "beta")
+	second.Branch = "parallel/b"
+	firstAgain := interruptedAssistantPartialEvent("child-a", "one")
+	firstAgain.Branch = "parallel/a"
+
+	rr.recordInterruptedAssistantDelta(loop, first, nil)
+	rr.recordInterruptedAssistantDelta(loop, second, nil)
+	rr.recordInterruptedAssistantDelta(loop, firstAgain, nil)
+
+	require.Len(t, loop.interruptedAssistants, 2)
+	firstAcc := getInterruptedAssistantAccumulatorForEvent(loop, nil, first)
+	secondAcc := getInterruptedAssistantAccumulatorForEvent(loop, nil, second)
+	require.NotNil(t, firstAcc)
+	require.NotNil(t, secondAcc)
+	require.NotEqual(t, firstAcc.responseID, secondAcc.responseID)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	firstEvent := rr.interruptedAssistantEventForAccumulator(cancelled, loop, firstAcc)
+	secondEvent := rr.interruptedAssistantEventForAccumulator(cancelled, loop, secondAcc)
+	require.NotNil(t, firstEvent)
+	require.NotNil(t, secondEvent)
+	require.Equal(t, "child-a", firstEvent.InvocationID)
+	require.Equal(t, "parallel/a", firstEvent.Branch)
+	require.Equal(t, "alpha one", firstEvent.Choices[0].Message.Content)
+	require.Equal(t, "child-b", secondEvent.InvocationID)
+	require.Equal(t, "parallel/b", secondEvent.Branch)
+	require.Equal(t, "beta", secondEvent.Choices[0].Message.Content)
+}
+
+func TestPersistInterruptedAssistantPersistsInterleavedBuffers(t *testing.T) {
+	svc := &mockSessionService{}
+	rr := &runner{sessionService: svc}
+	sess := session.NewSession("app", "u", "s")
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	loop := &eventLoopContext{
+		sess:       sess,
+		invocation: inv,
+	}
+	first := event.NewResponseEvent(
+		"child-a",
+		"assistant",
+		&model.Response{
+			ID:        "response-a",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "alpha",
+				},
+			}},
+		},
+	)
+	second := event.NewResponseEvent(
+		"child-b",
+		"assistant",
+		&model.Response{
+			ID:        "response-b",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "beta",
+				},
+			}},
+		},
+	)
+	rr.recordInterruptedAssistantDelta(loop, first, nil)
+	rr.recordInterruptedAssistantDelta(loop, second, nil)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr.persistInterruptedAssistant(cancelled, loop)
+
+	require.Len(t, svc.appendEventCalls, 2)
+	persisted := map[string]string{}
+	for _, call := range svc.appendEventCalls {
+		require.Same(t, sess, call.sess)
+		require.Len(t, call.event.Choices, 1)
+		persisted[call.event.Response.ID] = call.event.Choices[0].Message.Content
+	}
+	require.Equal(t, map[string]string{
+		"response-a": "alpha",
+		"response-b": "beta",
+	}, persisted)
 }
 
 func TestInterruptedAssistantDeltaGeneratesFallbackResponseID(t *testing.T) {
@@ -7241,12 +7379,24 @@ func TestInterruptedAssistantEventSkipsEmptyAndPersistedContent(t *testing.T) {
 		Index:   0,
 		Message: model.NewAssistantMessage("already there"),
 	}}
-	loop := &eventLoopContext{}
-	acc := interruptedAssistantAccumulatorForSession(loop, nil)
-	acc.responseID = "resp"
-	acc.requestID = "req"
-	acc.persistedAssistantChoiceSignatures = map[string]struct{}{
-		interruptedAssistantSignatureKey("req", "inv", choices): {},
+	prior := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:      "prior",
+			Object:  model.ObjectTypeChatCompletion,
+			Done:    true,
+			Choices: choices,
+		},
+	)
+	prior.RequestID = "req"
+	loop := &eventLoopContext{
+		sess: &session.Session{
+			Events: []event.Event{*prior},
+		},
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+		),
 	}
 	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
 		"inv",

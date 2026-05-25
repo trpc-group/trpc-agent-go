@@ -1205,7 +1205,7 @@ func (r *runner) recordPersistedInterruptedAssistantSessionEvent(
 	agentEvent *event.Event,
 	persisted bool,
 ) {
-	acc := getInterruptedAssistantAccumulator(loop, persistSession)
+	acc := getInterruptedAssistantAccumulatorForEvent(loop, persistSession, agentEvent)
 	if acc == nil {
 		return
 	}
@@ -1408,13 +1408,33 @@ func interruptedAssistantAccumulatorForSession(
 	loop *eventLoopContext,
 	persistSession *session.Session,
 ) *interruptedAssistantAccumulator {
+	return interruptedAssistantAccumulatorForLineage(loop, persistSession, "")
+}
+
+func interruptedAssistantAccumulatorForEvent(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+	agentEvent *event.Event,
+) *interruptedAssistantAccumulator {
+	return interruptedAssistantAccumulatorForLineage(
+		loop,
+		persistSession,
+		interruptedAssistantLineageKey(loop, agentEvent),
+	)
+}
+
+func interruptedAssistantAccumulatorForLineage(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+	lineageKey string,
+) *interruptedAssistantAccumulator {
 	if loop == nil {
 		return nil
 	}
 	if persistSession == nil {
 		persistSession = loop.sess
 	}
-	key := interruptedAssistantSessionKey(persistSession)
+	key := interruptedAssistantAccumulatorKey(persistSession, lineageKey)
 	if loop.interruptedAssistants == nil {
 		loop.interruptedAssistants = make(map[string]*interruptedAssistantAccumulator)
 	}
@@ -1430,6 +1450,24 @@ func interruptedAssistantAccumulatorForSession(
 	return acc
 }
 
+func getInterruptedAssistantAccumulatorForEvent(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+	agentEvent *event.Event,
+) *interruptedAssistantAccumulator {
+	if loop == nil || len(loop.interruptedAssistants) == 0 {
+		return nil
+	}
+	if persistSession == nil {
+		persistSession = loop.sess
+	}
+	key := interruptedAssistantAccumulatorKey(
+		persistSession,
+		interruptedAssistantLineageKey(loop, agentEvent),
+	)
+	return loop.interruptedAssistants[key]
+}
+
 func getInterruptedAssistantAccumulator(
 	loop *eventLoopContext,
 	persistSession *session.Session,
@@ -1440,7 +1478,18 @@ func getInterruptedAssistantAccumulator(
 	if persistSession == nil {
 		persistSession = loop.sess
 	}
-	return loop.interruptedAssistants[interruptedAssistantSessionKey(persistSession)]
+	prefix := interruptedAssistantAccumulatorKeyPrefix(persistSession)
+	var matched *interruptedAssistantAccumulator
+	for key, acc := range loop.interruptedAssistants {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if matched != nil {
+			return nil
+		}
+		matched = acc
+	}
+	return matched
 }
 
 func defaultInterruptedAssistantAccumulator(
@@ -1456,6 +1505,76 @@ func interruptedAssistantSessionKey(sess *session.Session) string {
 	return sess.AppName + "\x00" + sess.UserID + "\x00" + sess.ID
 }
 
+func interruptedAssistantAccumulatorKeyPrefix(sess *session.Session) string {
+	return interruptedAssistantSessionKey(sess) + "\x00"
+}
+
+func interruptedAssistantAccumulatorKey(sess *session.Session, lineageKey string) string {
+	return interruptedAssistantAccumulatorKeyPrefix(sess) + lineageKey
+}
+
+func interruptedAssistantLineageKey(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) string {
+	if agentEvent == nil {
+		return ""
+	}
+	responseID := ""
+	if agentEvent.Response != nil {
+		responseID = agentEvent.Response.ID
+	}
+	invocationID := agentEvent.InvocationID
+	parentInvocationID := agentEvent.ParentInvocationID
+	branch := agentEvent.Branch
+	filterKey := agentEvent.FilterKey
+	requestID := agentEvent.RequestID
+	author := agentEvent.Author
+	if loop != nil && loop.invocation != nil {
+		inv := loop.invocation
+		if invocationID == "" {
+			invocationID = inv.InvocationID
+		}
+		if parentInvocationID == "" {
+			if parent := inv.GetParentInvocation(); parent != nil {
+				parentInvocationID = parent.InvocationID
+			}
+		}
+		if branch == "" {
+			branch = inv.Branch
+		}
+		if filterKey == "" {
+			filterKey = inv.GetEventFilterKey()
+		}
+		if requestID == "" {
+			requestID = inv.RunOptions.RequestID
+		}
+		if author == "" {
+			author = inv.AgentName
+		}
+	}
+	if responseID != "" {
+		return strings.Join([]string{
+			"response",
+			responseID,
+			requestID,
+			invocationID,
+			parentInvocationID,
+			branch,
+			filterKey,
+		}, "\x00")
+	}
+	return strings.Join([]string{
+		"fallback",
+		requestID,
+		invocationID,
+		parentInvocationID,
+		branch,
+		filterKey,
+		author,
+	}, "\x00")
+}
+
 func (r *runner) recordInterruptedAssistantDelta(
 	loop *eventLoopContext,
 	agentEvent *event.Event,
@@ -1468,7 +1587,10 @@ func (r *runner) recordInterruptedAssistantDelta(
 	if !rsp.IsPartial || rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
 		return
 	}
-	acc := interruptedAssistantAccumulatorForSession(loop, persistSession)
+	if !interruptedAssistantHasTextDelta(rsp) {
+		return
+	}
+	acc := interruptedAssistantAccumulatorForEvent(loop, persistSession, agentEvent)
 	if acc == nil {
 		return
 	}
@@ -1478,9 +1600,6 @@ func (r *runner) recordInterruptedAssistantDelta(
 	}
 	if responseID == "" {
 		responseID = "interrupted-assistant-" + uuid.NewString()
-	}
-	if acc.responseID != "" && responseID != acc.responseID {
-		resetInterruptedAssistantStreamState(acc)
 	}
 	recorded := false
 	for _, choice := range rsp.Choices {
@@ -1513,18 +1632,19 @@ func (r *runner) recordInterruptedAssistantDelta(
 	}
 }
 
-func resetInterruptedAssistantStreamState(acc *interruptedAssistantAccumulator) {
-	if acc == nil {
-		return
+func interruptedAssistantHasTextDelta(rsp *model.Response) bool {
+	if rsp == nil {
+		return false
 	}
-	acc.choiceContent = nil
-	acc.author = ""
-	acc.invocationID = ""
-	acc.parentInvocationID = ""
-	acc.branch = ""
-	acc.filterKey = ""
-	acc.requestID = ""
-	acc.created = 0
+	for _, choice := range rsp.Choices {
+		if choice.Delta.Role != "" && choice.Delta.Role != model.RoleAssistant {
+			continue
+		}
+		if choice.Delta.Content != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func captureInterruptedAssistantEventIdentity(
@@ -1613,7 +1733,13 @@ func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoo
 	}
 	persistCtx, cancel := sessionPersistenceContext(ctx)
 	defer cancel()
-	for _, acc := range loop.interruptedAssistants {
+	keys := make([]string, 0, len(loop.interruptedAssistants))
+	for key := range loop.interruptedAssistants {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		acc := loop.interruptedAssistants[key]
 		persistSession := acc.sess
 		if persistSession == nil {
 			persistSession = loop.sess
