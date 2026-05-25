@@ -1318,33 +1318,6 @@ func (r *Runtime) Run(
 	return r.runner.Run(ctx, userID, sessionID, message, runOpts...)
 }
 
-// ToolNames returns the model-visible static tool names for this runtime.
-func (r *Runtime) ToolNames() []string {
-	if r == nil || r.prompts == nil || r.prompts.agent == nil {
-		return nil
-	}
-	type toolsAgent interface {
-		Tools() []tool.Tool
-	}
-	agt, ok := r.prompts.agent.(toolsAgent)
-	if !ok {
-		return nil
-	}
-	tools := agt.Tools()
-	names := make([]string, 0, len(tools))
-	for _, tl := range tools {
-		if tl == nil {
-			continue
-		}
-		decl := tl.Declaration()
-		if decl == nil || strings.TrimSpace(decl.Name) == "" {
-			continue
-		}
-		names = append(names, decl.Name)
-	}
-	return names
-}
-
 // Close releases owned resources (session/memory services, toolsets, runner).
 func (r *Runtime) Close() error {
 	if r == nil {

@@ -12,9 +12,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +53,7 @@ type exampleConfig struct {
 type modelConfig struct {
 	Mode          string `yaml:"mode,omitempty"`
 	Name          string `yaml:"name,omitempty"`
+	BaseURL       string `yaml:"base_url,omitempty"`
 	OpenAIVariant string `yaml:"openai_variant,omitempty"`
 }
 
@@ -369,13 +374,41 @@ func runWorkspaceExecHidden(
 	cfg exampleConfig,
 	requireOSSandbox bool,
 ) error {
+	captured := make(chan []string, 1)
+	srv := newToolCaptureServer(captured)
+	defer srv.Close()
+
+	cfg.Model.Mode = "openai"
+	cfg.Model.Name = "tool-capture"
+	cfg.Model.BaseURL = srv.URL
+	cfg.Model.OpenAIVariant = "openai"
+
+	restoreKey := ensureOpenAIAPIKey()
+	defer restoreKey()
+
 	rt, err := newScenarioRuntime(ctx, cfg, requireOSSandbox)
 	if err != nil {
 		return err
 	}
 	defer rt.close()
+
+	if _, err := rt.run(
+		ctx,
+		"workspace-exec-hidden",
+		"Reply with exactly ok.",
+	); err != nil {
+		return err
+	}
+
+	var toolNames []string
+	select {
+	case toolNames = <-captured:
+	default:
+		return errors.New("model request was not captured")
+	}
+
 	names := make(map[string]bool)
-	for _, name := range rt.runtime.ToolNames() {
+	for _, name := range toolNames {
 		names[name] = true
 	}
 	for _, name := range []string{
@@ -388,6 +421,101 @@ func runWorkspaceExecHidden(
 		}
 	}
 	return nil
+}
+
+type captureChatCompletionRequest struct {
+	Stream bool              `json:"stream"`
+	Tools  []captureChatTool `json:"tools"`
+}
+
+type captureChatTool struct {
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+}
+
+func newToolCaptureServer(captured chan<- []string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req captureChatCompletionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		names := make([]string, 0, len(req.Tools))
+		for _, tl := range req.Tools {
+			name := strings.TrimSpace(tl.Function.Name)
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		select {
+		case captured <- names:
+		default:
+		}
+		if req.Stream {
+			writeCaptureStreamingResponse(w)
+			return
+		}
+		writeCaptureResponse(w)
+	}))
+}
+
+func writeCaptureResponse(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{
+		"id": "tool-capture",
+		"object": "chat.completion",
+		"created": 1699200000,
+		"model": "tool-capture",
+		"choices": [{
+			"index": 0,
+			"message": {"role": "assistant", "content": "ok"},
+			"finish_reason": "stop"
+		}]
+	}`)
+}
+
+func writeCaptureStreamingResponse(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	chunks := []string{
+		`data: {"id":"tool-capture","object":"chat.completion.chunk","created":1699200000,"model":"tool-capture","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}`,
+		`data: {"id":"tool-capture","object":"chat.completion.chunk","created":1699200000,"model":"tool-capture","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	}
+	for _, chunk := range chunks {
+		_, _ = fmt.Fprintf(w, "%s\n\n", chunk)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}
+}
+
+func ensureOpenAIAPIKey() func() {
+	original, hadOriginal := os.LookupEnv("OPENAI_API_KEY")
+	if strings.TrimSpace(original) == "" {
+		_ = os.Setenv("OPENAI_API_KEY", "openclaw-sandbox-example-key")
+	}
+	return func() {
+		if hadOriginal {
+			_ = os.Setenv("OPENAI_API_KEY", original)
+			return
+		}
+		_ = os.Unsetenv("OPENAI_API_KEY")
+	}
 }
 
 func runDisabledProfileExplicit(
