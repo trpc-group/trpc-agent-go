@@ -33,6 +33,7 @@ nav:
           - SQLite Session: session/sqlite.md
           - Redis Session: session/redis.md
           - MySQL Session: session/mysql.md
+          - TDSQL Session: session/tdsql.md
           - PostgreSQL Session: session/postgres.md
           - PGVector Session: session/pgvector.md
           - ClickHouse Session: session/clickhouse.md
@@ -114,6 +115,7 @@ plugins:
                     - SQLite Session: session/sqlite.md
                     - Redis Session: session/redis.md
                     - MySQL Session: session/mysql.md
+                    - TDSQL Session: session/tdsql.md
                     - PostgreSQL Session: session/postgres.md
                     - PGVector Session: session/pgvector.md
                     - ClickHouse Session: session/clickhouse.md
