@@ -1,0 +1,166 @@
+{
+  "evalSetId": "sports-recap-validation",
+  "name": "sports-recap-validation",
+  "evalCases": [
+    {
+      "evalId": "validation_01_nba_empty_48",
+      "conversation": [
+        {
+          "invocationId": "validation_01_nba_empty_48-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"date\":\"2026-02-12\",\"venue\":\"Ball Arena\",\"teams\":{\"home\":{\"name\":\"丹佛掘金\",\"score\":118},\"away\":{\"name\":\"菲尼克斯太阳\",\"score\":111}},\"result\":{\"winner\":\"丹佛掘金\",\"margin\":7},\"teamStats\":{\"丹佛掘金\":{\"rebounds\":52,\"offensiveRebounds\":15,\"turnovers\":8,\"assists\":30,\"playersInDoubleFigures\":6},\"菲尼克斯太阳\":{\"rebounds\":39,\"offensiveRebounds\":7,\"turnovers\":16,\"assists\":18,\"playersInDoubleFigures\":3}},\"keyPlayers\":[{\"team\":\"菲尼克斯太阳\",\"name\":\"德文·布克\",\"points\":48,\"rebounds\":5,\"assists\":6,\"fieldGoals\":\"17-31\",\"threePointers\":\"6-12\"},{\"team\":\"丹佛掘金\",\"name\":\"尼古拉·约基奇\",\"points\":24,\"rebounds\":13,\"assists\":9},{\"team\":\"丹佛掘金\",\"name\":\"贾马尔·穆雷\",\"points\":22,\"assists\":7},{\"team\":\"丹佛掘金\",\"name\":\"阿龙·戈登\",\"points\":18,\"rebounds\":9}],\"decisiveStretch\":{\"quarter\":\"第四节\",\"timeRemaining\":\"5:42\",\"run\":\"丹佛掘金14-4菲尼克斯太阳\",\"sunTurnovers\":4,\"nuggetsOffensiveRebounds\":5},\"recapAngle\":\"输球方球星高分，赢球方靠篮板和失误控制取胜\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "掘金末节14比4定胜局，布克48分难阻太阳111比118落败\n\n2026年2月12日，NBA一场比赛在Ball Arena结束，丹佛掘金以118比111击败菲尼克斯太阳。德文·布克31投17中、三分12投6中轰下48分5篮板6助攻，但太阳没有把个人爆发转化为团队胜势；掘金凭借52比39的篮板优势、15比7的进攻篮板优势，以及8次失误对16次失误的回合控制，最终赢下7分。\n\n比赛转折集中在第四节还剩5分42秒后的关键阶段。掘金打出14比4攻势，太阳在这段时间出现4次失误，掘金则抢下5个进攻篮板。分差被拉开的核心不只是命中率，而是回合数和二次进攻：太阳的进攻被失误切断，掘金连续通过前场篮板延长进攻，比赛主动权随之转向主队。\n\n布克的48分撑起了太阳火力，但太阳全队只有18次助攻、3人得分上双，进攻更依赖单点输出。掘金则有6人得分上双、全队30次助攻，尼古拉·约基奇得到24分13篮板9助攻，贾马尔·穆雷贡献22分7助攻，阿龙·戈登拿到18分9篮板。约基奇的篮板和策应、穆雷的后场组织、戈登的锋线冲击，共同把掘金的进攻维持在更稳定的团队节奏里。\n\n这场球的胜负逻辑很清楚：太阳拥有全场最强的个人得分点，掘金则赢在更高质量的回合管理。13个篮板差、8个进攻篮板差、8次失误差，最终都在末节关键14比4里集中兑现。布克的高分让太阳始终有追赶资本，但掘金用篮板、少失误和多点分担完成了收比赛。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "validation_02_football_penalties",
+      "conversation": [
+        {
+          "invocationId": "validation_02_football_penalties-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"football\",\"competition\":\"洲际杯\",\"round\":\"1/4决赛\",\"game\":\"河城FC vs 海港联\",\"advancingTeam\":\"海港联\",\"regularTimeScore\":\"河城FC 1-1 海港联\",\"extraTimeScore\":\"河城FC 2-2 海港联\",\"goals\":[{\"minute\":27,\"team\":\"河城FC\",\"player\":\"卢卡·莫雷诺\",\"period\":\"regular_time\"},{\"minute\":71,\"team\":\"海港联\",\"player\":\"诺亚·里德\",\"period\":\"regular_time\"},{\"minute\":98,\"team\":\"河城FC\",\"player\":\"马特奥·席尔瓦\",\"period\":\"extra_time\"},{\"minute\":114,\"team\":\"海港联\",\"player\":\"埃文·布鲁克斯\",\"period\":\"extra_time\"}],\"penaltyShootout\":{\"score\":\"河城FC 3-4 海港联\",\"rounds\":[{\"round\":1,\"河城FC\":\"scored\",\"海港联\":\"scored\",\"runningScore\":\"1-1\"},{\"round\":2,\"河城FC\":\"scored\",\"海港联\":\"scored\",\"runningScore\":\"2-2\"},{\"round\":3,\"河城FC\":\"missed\",\"海港联\":\"scored\",\"runningScore\":\"2-3\"},{\"round\":4,\"河城FC\":\"scored\",\"海港联\":\"missed\",\"runningScore\":\"3-3\"},{\"round\":5,\"河城FC\":\"missed\",\"海港联\":\"scored\",\"runningScore\":\"3-4\"}]}}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "海港联两度追平后点球4比3晋级 河城FC第3、第5轮罚失出局\n\n洲际杯1/4决赛，海港联与河城FC常规时间1比1、加时赛2比2战平，最终海港联在点球大战中4比3胜出晋级。河城FC两次取得领先，但海港联分别在第71分钟和第114分钟追平；进入点球大战后，河城FC第3轮和第5轮两次罚失，海港联抓住最后一轮命中机会完成晋级。\n\n第27分钟，卢卡·莫雷诺为河城FC破门，河城FC在常规时间先取得1比0领先。第71分钟，诺亚·里德为海港联扳平，双方常规时间战成1比1。加时赛第98分钟，马特奥·席尔瓦帮助河城FC再次领先，比分变为2比1；第114分钟，埃文·布鲁克斯为海港联再度追平，比赛进入点球大战前定格为2比2。\n\n点球大战前两轮双方全部命中，比分来到2比2。第3轮，河城FC罚失，海港联命中，海港联以3比2取得主动。第4轮，河城FC命中，海港联罚失，点球比分回到3比3。第5轮成为胜负分界，河城FC再次罚失，海港联命中，将点球比分锁定为4比3。\n\n这场比赛的核心走势是河城FC两次领先，海港联两次追平。河城FC在常规时间和加时赛都先打破平衡，但都没有把领先带到阶段结束；海港联则在第71分钟和第114分钟两次把比赛拉回同一起点，尤其第114分钟的加时追平直接把胜负推向点球大战。点球环节的差距非常明确：海港联5轮4中，只在第4轮罚失；河城FC5轮3中，第3轮和第5轮两次罚失。最终，海港联不是依靠单一进球完成晋级，而是在两次落后后的追平能力和点球执行稳定性上占到优势。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "validation_03_f1_rain_safety_car",
+      "conversation": [
+        {
+          "invocationId": "validation_03_f1_rain_safety_car-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"Formula 1\",\"event\":\"Rain Grand Prix\",\"venue\":\"Harbor Street Circuit\",\"conditions\":\"Rain\",\"raceDistanceLaps\":58,\"safetyCar\":{\"deployedLap\":31,\"endedLap\":34,\"reason\":\"Car 22 stopped at Turn 7\"},\"postSafetyCarPitWindow\":{\"laps\":[34,35,36],\"tireChanges\":[{\"driver\":\"Marco Silva\",\"team\":\"Aurora Racing\",\"lap\":35,\"from\":\"Wet\",\"to\":\"Intermediate\"},{\"driver\":\"Evan Brooks\",\"team\":\"Northstar GP\",\"lap\":35,\"from\":\"Wet\",\"to\":\"Intermediate\"},{\"driver\":\"Luca Ren\",\"team\":\"Vector Motorsport\",\"lap\":36,\"from\":\"Wet\",\"to\":\"Intermediate\"}]},\"classification\":[{\"position\":1,\"driver\":\"Marco Silva\",\"team\":\"Aurora Racing\"},{\"position\":2,\"driver\":\"Evan Brooks\",\"team\":\"Northstar GP\",\"gap\":\"+4.812s\"},{\"position\":3,\"driver\":\"Luca Ren\",\"team\":\"Vector Motorsport\",\"gap\":\"+9.337s\"}],\"fastestLap\":{\"driver\":\"Evan Brooks\",\"team\":\"Northstar GP\",\"lap\":52,\"time\":\"1:42.318\"}}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Silva第35圈换胎后夺冠，Brooks最快圈未改第二\n\nRain Grand Prix在Harbor Street Circuit完成58圈雨战，胜负节点集中在第31圈后的安全车阶段。第31圈，22号赛车停在7号弯触发安全车；第34圈安全车结束后，第34至36圈成为关键进站窗口。Marco Silva与Evan Brooks同在第35圈从Wet换上Intermediate，Luca Ren第36圈完成同样调整。最终Silva代表Aurora Racing夺冠，Brooks为Northstar GP获得第二，落后4.812秒；Ren代表Vector Motorsport排名第三，落后9.337秒。\n\n第31圈的安全车把雨战节奏重新压缩。第34圈安全车结束，比赛立刻进入换胎窗口；第35圈，Silva和Brooks同步完成Wet到Intermediate的切换，并最终占据前两名。第36圈，Ren进站换上Intermediate，最终以第三名完赛。第52圈，Brooks跑出1:42.318的最快圈，但仍以4.812秒差距排在Silva之后。\n\n这场比赛不是由单圈速度单独决定。Brooks在第52圈做出全场最快圈，说明他后段仍有速度优势，但最快圈无法抹平安全车后换胎窗口形成的完赛差距。Silva的胜利核心在于第35圈完成Wet到Intermediate的关键切换，并在58圈结束时把优势转化为冠军；Ren晚一圈完成同类换胎，最终与冠军差距扩大到9.337秒。雨战、安全车、进站窗口和最快圈共同构成了前三名排序的解释链条。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "validation_04_badminton_match_point",
+      "conversation": [
+        {
+          "invocationId": "validation_04_badminton_match_point-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"badminton\",\"event\":\"国际羽毛球邀请赛\",\"discipline\":\"女单半决赛\",\"match\":\"林悦 vs 高桥美咲\",\"winner\":\"林悦\",\"finalScore\":\"17-21, 22-20, 21-16\",\"sets\":[{\"set\":1,\"score\":\"17-21\",\"winner\":\"高桥美咲\"},{\"set\":2,\"score\":\"22-20\",\"winner\":\"林悦\"},{\"set\":3,\"score\":\"21-16\",\"winner\":\"林悦\"}],\"competitors\":[{\"name\":\"林悦\",\"result\":\"win\",\"netFrontPoints\":18,\"netFrontErrors\":6,\"matchPointsSaved\":1},{\"name\":\"高桥美咲\",\"result\":\"loss\",\"netFrontPoints\":14,\"netFrontErrors\":11,\"matchPointsEarned\":1}],\"turningPoints\":[\"林悦首局17-21告负，随后以22-20和21-16连赢两局\",\"第二局林悦19-20落后时用一次网前扑球挽救赛点\",\"林悦第二局从19-20连得3分，以22-20拿下该局\"],\"netFrontMargin\":{\"winnerPointsAdvantage\":4,\"winnerFewerErrors\":5}}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "林悦19-20救赛点连下三分，2比1逆转高桥美咲\n\n国际羽毛球邀请赛女单半决赛，林悦在先丢一局、第二局又被逼到赛点的情况下，以17-21、22-20、21-16逆转高桥美咲。比赛的胜负拐点出现在第二局尾声：高桥美咲20-19握有局点兼赛点，林悦用一次网前扑球追成20平，随后再拿两分，以22-20把比赛带入决胜局。\n\n林悦首局17-21落后，总比分0比1进入第二局。第二局她一度19-20被动，但从这一分开始连得3分完成反扑，既化解高桥美咲的赛点，也拿下这一局。决胜局林悦延续反转后的主动，以21-16再胜一局，最终完成连扳两局的逆转。\n\n网前表现是林悦翻盘最明确的数据支撑。她全场网前得分18比14领先高桥美咲，多拿4分；网前失误6比11更少，少送5次失误。也就是说，林悦不只是靠第二局赛点上的单次扑球止住败势，而是在整场网前攻防里同时取得得分优势和稳定性优势。高桥美咲曾在第二局拿到终结比赛的机会，但没能兑现，最终被林悦从19-20的绝境中拉回并完成逆转。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "validation_05_ice_hockey_overtime",
+      "conversation": [
+        {
+          "invocationId": "validation_05_ice_hockey_overtime-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"ice_hockey\",\"gameType\":\"regular_season\",\"venue\":\"North Harbor Arena\",\"teams\":{\"home\":\"港城海鹰\",\"away\":\"北岸风暴\"},\"score\":{\"港城海鹰\":4,\"北岸风暴\":3,\"periods\":[{\"period\":1,\"港城海鹰\":1,\"北岸风暴\":1},{\"period\":2,\"港城海鹰\":1,\"北岸风暴\":2},{\"period\":3,\"港城海鹰\":1,\"北岸风暴\":0},{\"period\":\"OT\",\"港城海鹰\":1,\"北岸风暴\":0}]},\"keyPlays\":[{\"time\":\"第三节17:42\",\"team\":\"港城海鹰\",\"player\":\"林澈\",\"event\":\"扳平进球\",\"detail\":\"林澈在门前补射得手，将比分追成3比3\"},{\"time\":\"加时赛01:08\",\"team\":\"港城海鹰\",\"player\":\"周砚\",\"event\":\"犯规\",\"detail\":\"周砚因钩人被判2分钟小罚，港城海鹰进入少打一人防守\"},{\"time\":\"加时赛01:41\",\"team\":\"北岸风暴\",\"player\":\"韩维\",\"event\":\"强打射门\",\"detail\":\"韩维在右侧争球圈完成一次直接射门，被门将许知远用右腿挡出\"},{\"time\":\"加时赛02:16\",\"team\":\"北岸风暴\",\"player\":\"叶铭\",\"event\":\"强打补射\",\"detail\":\"叶铭在门前补射，被许知远用手套接住，比赛暂停\"},{\"time\":\"加时赛03:04\",\"team\":\"港城海鹰\",\"player\":\"周砚\",\"event\":\"回场\",\"detail\":\"周砚结束受罚回到冰面，港城海鹰完成少打一人防守\"},{\"time\":\"加时赛03:47\",\"team\":\"港城海鹰\",\"player\":\"陆行舟\",\"event\":\"绝杀进球\",\"detail\":\"陆行舟接林澈横传，在左侧低射破门，帮助港城海鹰4比3取胜\"}],\"goalieStats\":{\"港城海鹰\":{\"goalie\":\"许知远\",\"saves\":38,\"goalsAgainst\":3,\"overtimeSaves\":5},\"北岸风暴\":{\"goalie\":\"沈岳\",\"saves\":29,\"goalsAgainst\":4,\"overtimeSaves\":1}},\"specialTeams\":{\"港城海鹰\":{\"penaltyKill\":\"1/1\",\"overtimePenaltyKill\":\"1/1\"},\"北岸风暴\":{\"powerPlay\":\"0/1\",\"overtimePowerPlay\":\"0/1\"}}}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "守住少防多再绝杀，陆行舟加时03:47低射助港城海鹰4比3逆转北岸风暴\n\n港城海鹰在North Harbor Arena以4比3加时击败北岸风暴。比赛前三节从1比1、2比3走到3比3，第三节17:42，林澈在门前补射得手，为港城海鹰扳平比分。进入加时后，港城海鹰先因周砚钩人小罚陷入人数劣势，但许知远连续挡下北岸风暴强打攻势；等到周砚回场后，陆行舟接林澈横传完成低射绝杀。\n\n这场加时的胜负点先落在少打一人防守。加时01:08，周砚被判2分钟小罚，北岸风暴获得强打机会；01:41，韩维在右侧争球圈直接射门，被许知远用右腿挡出；02:16，叶铭门前补射，又被许知远用手套接住并造成比赛暂停。03:04，周砚结束受罚回到冰面，港城海鹰完成加时少打一人防守，也让北岸风暴全场唯一一次强打机会以0/1收场。\n\n防住强打后，港城海鹰把比赛带回自己的节奏。加时03:47，林澈送出横传，陆行舟在左侧低射破门，将比分定格为4比3。林澈先在第三节末段补射扳平，又在加时绝杀回合送出关键传球，是港城海鹰从落后到取胜的进攻连接点。\n\n门将数据也说明了比赛转折。许知远全场完成38次扑救、只丢3球，加时阶段有5次扑救，其中包括少防多期间对韩维直接射门和叶铭门前补射的连续化解；沈岳完成29次扑救、加时1次扑救，但最终未能挡住陆行舟的左侧低射。港城海鹰少打一人防守为1/1，加时同样1/1，这次防守成功直接为后续绝杀创造了前提。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "validation_06_tennis_tiebreak",
+      "conversation": [
+        {
+          "invocationId": "validation_06_tennis_tiebreak-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"tennis\",\"discipline\":\"女单\",\"winner\":\"林诗语\",\"loser\":\"赵清岚\",\"score\":{\"sets\":[\"7-6(10)\",\"6-3\"],\"straightSets\":true,\"setOneTiebreak\":\"12-10\"},\"keyFacts\":{\"setPointsSavedByWinner\":3,\"setPointDetails\":[\"首盘5-6发球局挽救2个盘点\",\"首盘抢七8-9再挽救1个盘点\"],\"aces\":{\"林诗语\":9,\"赵清岚\":4},\"firstServePointsWon\":{\"林诗语\":\"78%\",\"赵清岚\":\"66%\"},\"breakPoints\":{\"林诗语\":\"3/7\",\"赵清岚\":\"2/6\"},\"decisiveSecondSetFact\":\"第二盘林诗语两次破发，赵清岚一次回破\"},\"recapAngle\":\"直落两盘但首盘抢七极胶着，不能写成轻松横扫\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "林诗语三救盘点抢下首盘，7-6(10)、6-3直落两盘击败赵清岚\n\n林诗语以7-6(10)、6-3战胜赵清岚，比分是直落两盘，胜负手却集中在极其胶着的首盘。她先是在首盘5-6的发球局挽救2个盘点，把比赛拖入抢七；随后又在抢七8-9落后时化解第3个盘点，最终以12-10拿下抢七，也把比赛走势从被动边缘拉回自己手中。\n\n进入第二盘后，林诗语把首盘关键分带来的主动权转化到接发环节。她本盘两次破发，赵清岚虽完成一次回破，但未能持续抵消差距，林诗语最终以6-3收下第二盘，完成直落两盘取胜。\n\n数据层面，林诗语发出9记ace，高于赵清岚的4记；一发得分率也以78%对66%占优，这让她在关键发球局和抢七中拥有更稳定的保分基础。破发点上，林诗语7次机会兑现3次，赵清岚6次机会兑现2次，双方都有破发效率，但林诗语在首盘三次盘点压力下守住比分，并在第二盘多一次破发兑现，才是比赛被拉向她一边的决定性差别。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "validation_07_road_cycling_breakaway",
+      "conversation": [
+        {
+          "invocationId": "validation_07_road_cycling_breakaway-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"road_cycling\",\"raceType\":\"individual_road_race\",\"distanceRemainingKmAtKeyMove\":5,\"winner\":{\"name\":\"林澈\",\"team\":\"青岚车队\"},\"teammateLeadout\":{\"name\":\"赵屿\",\"team\":\"青岚车队\",\"role\":\"在最后5公里进入突围后持续领骑，帮助林澈维持优势，最后600米退出争夺\"},\"breakaway\":{\"riders\":[\"林澈\",\"赵屿\",\"周明远\",\"韩砚\"],\"gapToChasingGroup\":[{\"remainingKm\":5,\"gapSeconds\":9},{\"remainingKm\":3,\"gapSeconds\":6},{\"remainingKm\":1,\"gapSeconds\":4},{\"remainingKm\":0,\"gapSeconds\":7}]},\"finalSprint\":{\"launchDistanceMeters\":180,\"winnerAction\":\"林澈从周明远右侧启动冲刺并率先过线\",\"margin\":\"半个车身\"},\"result\":[{\"rank\":1,\"rider\":\"林澈\",\"team\":\"青岚车队\"},{\"rank\":2,\"rider\":\"周明远\",\"team\":\"北湾车队\",\"gap\":\"半个车身\"},{\"rank\":3,\"rider\":\"韩砚\",\"team\":\"岩川车队\",\"gap\":\"同秒\"},{\"rank\":4,\"rider\":\"赵屿\",\"team\":\"青岚车队\",\"gap\":\"同秒\"},{\"rank\":5,\"rider\":\"集团第一名\",\"gapSeconds\":7}],\"scoringNote\":\"这是个人公路赛，胜利归属车手林澈，不是青岚车队的团队胜利\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "林澈终点前180米右侧开冲 半个车身赢下四人突围\n\n个人公路赛最后5公里形成胜负分界：林澈、赵屿、周明远和韩砚组成四人突围，领先追击集团9秒。追击集团随后持续压缩差距，最后3公里追到6秒，最后1公里只剩4秒，但四人突围没有被追回，反而在终点时把优势扩大到7秒。\n\n青岚车队的赵屿是林澈夺冠前最关键的支点。他在最后5公里进入突围后持续领骑，把突围速度维持在追击集团难以彻底合拢的区间；到最后600米，赵屿退出争冠节奏，把冲刺空间留给林澈、周明远和韩砚。\n\n最终冲刺在终点前180米打开。林澈选择从周明远右侧启动，先手进入最高速度区间，并以半个车身优势率先过线。周明远第二，韩砚与赵屿同秒分列第三、第四，追击集团第一名落后7秒。\n\n这场胜利的核心不是大集团冲刺，而是小集团突围守住微弱时间差后的终点爆发。9秒到4秒的变化说明追击集团一度接近完成追回，但赵屿的领骑帮助突围维持到冲刺门槛；终点差距回到7秒，则说明四人突围在最后1公里没有被打散。由于这是个人公路赛，冠军归属林澈个人，青岚车队的作用体现在赵屿对队友的领骑和牵制，而不是团队成绩取胜。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "validation_08_cricket_t20_chase",
+      "conversation": [
+        {
+          "invocationId": "validation_08_cricket_t20_chase-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"cricket\",\"format\":\"T20\",\"teams\":{\"battingFirst\":\"海港国王\",\"chasing\":\"都会猎鹰\"},\"innings\":[{\"inningsNumber\":1,\"team\":\"海港国王\",\"score\":119,\"wickets\":8,\"overs\":\"20.0\"},{\"inningsNumber\":2,\"team\":\"都会猎鹰\",\"target\":120,\"score\":121,\"wickets\":7,\"overs\":\"19.5\",\"ballsRemaining\":1}],\"finalOver\":{\"startState\":{\"team\":\"都会猎鹰\",\"score\":109,\"wickets\":7,\"runsNeeded\":11,\"ballsRemaining\":6},\"battingTeamRunsInOver\":12,\"targetPassedOnBall\":\"19.5\"},\"keyBatsman\":{\"team\":\"都会猎鹰\",\"name\":\"阿拉夫·梅塔\",\"runs\":47,\"balls\":39,\"notOut\":true,\"fours\":3,\"sixes\":2},\"keyBowler\":{\"team\":\"海港国王\",\"name\":\"尼基尔·拉奥\",\"overs\":\"4.0\",\"maidens\":0,\"runsConceded\":18,\"wickets\":3,\"bowledFinalOver\":true,\"runsConcededInFinalOver\":12},\"result\":{\"winner\":\"都会猎鹰\",\"margin\":\"3 wickets\",\"winningScore\":\"121/7\",\"chaseCompletedInOvers\":\"19.5\"}}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "梅塔47*撑到19.5 overs 都会猎鹰3 wickets险胜海港国王\n\n海港国王先打出119/8，把都会猎鹰的追逐目标压在120分。都会猎鹰一路追到最后一个over仍未摆脱险境：109/7、6 balls需要11分，手里只剩3个wickets。最终他们在19.5 overs来到121/7，提前1 ball越过目标，以3 wickets完成追逐。\n\n胜负转折集中在最后一个over。尼基尔·拉奥此前全场数据仍然亮眼，4.0 overs失18分并取3 wickets，但他主投收官over时被都会猎鹰拿到12分。对海港国王来说，109/7的局面本应让防守方握有压力优势；对都会猎鹰来说，目标不是拖到最后一球，而是在剩余6 balls内完成11分追逐，他们最终在第5 ball就超过目标线。\n\n阿拉夫·梅塔是都会猎鹰这次追逐的核心。他39 balls拿到47分并保持not out，包含3个四分球和2个六分球，既提供边界球得分，也在7个wickets已失的情况下把追逐带到终点。121/7的比分意味着都会猎鹰没有崩盘到全队出局，3 wickets的胜差也说明比赛悬念一直压到最后一个over。\n\n这场球的关键不在总分多高，而在最后阶段的资源交换：海港国王20.0 overs只给出119/8的低目标，但靠拉奥的3 wickets把追逐方压到109/7；都会猎鹰则用梅塔的未出局和最后over的12分，把原本11 off 6的高压局面转化成19.5 overs完成的成功chase。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    }
+  ]
+}
