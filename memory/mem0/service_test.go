@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -100,12 +101,15 @@ func TestIngestSession_NilContext(t *testing.T) {
 }
 
 func TestIngestSession_ForwardsMessagesToBackend(t *testing.T) {
+	var gotBodyMu sync.Mutex
 	var gotBody []byte
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		buf := make([]byte, 4096)
 		n, _ := r.Body.Read(buf)
+		gotBodyMu.Lock()
 		gotBody = buf[:n]
+		gotBodyMu.Unlock()
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
 	})
@@ -137,15 +141,173 @@ func TestIngestSession_ForwardsMessagesToBackend(t *testing.T) {
 	))
 
 	// Wait for the async worker to hit the backend.
-	assert.Eventually(t, func() bool { return len(gotBody) > 0 },
+	assert.Eventually(t, func() bool {
+		gotBodyMu.Lock()
+		defer gotBodyMu.Unlock()
+		return len(gotBody) > 0
+	},
 		2*time.Second, 10*time.Millisecond, "backend was not hit")
 	assert.Eventually(t, func() bool { return readLastExtractAt(sess).Equal(eventTs) },
 		2*time.Second, 10*time.Millisecond, "checkpoint was not advanced after successful ingest")
 
+	gotBodyMu.Lock()
 	body := string(gotBody)
+	gotBodyMu.Unlock()
 	for _, want := range []string{"hello", "agent-1", "run-1", `"k":"v"`} {
 		assert.Contains(t, body, want)
 	}
+}
+
+func TestIngestSession_DedupesWhileAsyncInFlight(t *testing.T) {
+	var ingestCalls int32
+	var releaseClosed int32
+	firstStarted := make(chan struct{})
+	release := make(chan struct{})
+	releaseOnce := func() {
+		if atomic.CompareAndSwapInt32(&releaseClosed, 0, 1) {
+			close(release)
+		}
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/memories/" {
+			http.NotFound(w, r)
+			return
+		}
+		n := atomic.AddInt32(&ingestCalls, 1)
+		if n == 1 {
+			close(firstStarted)
+			<-release
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(
+		WithAPIKey("k"),
+		WithHost(srv.URL),
+		WithAsyncMode(false),
+		WithAsyncMemoryNum(1),
+		WithMemoryQueueSize(4),
+		WithMemoryJobTimeout(time.Second),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		releaseOnce()
+		_ = svc.Close()
+	})
+
+	eventTs := time.Date(2026, 5, 15, 11, 0, 0, 0, time.UTC)
+	sess := &session.Session{AppName: "app", UserID: "user", ID: "s"}
+	sess.Events = []event.Event{{
+		Timestamp: eventTs,
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: "hello"},
+		}}},
+	}}
+
+	require.NoError(t, svc.IngestSession(context.Background(), sess))
+	require.Eventually(t, func() bool {
+		select {
+		case <-firstStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond, "first ingest did not start")
+
+	require.NoError(t, svc.IngestSession(context.Background(), sess))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&ingestCalls))
+
+	releaseOnce()
+	assert.Eventually(t, func() bool { return readLastExtractAt(sess).Equal(eventTs) },
+		2*time.Second, 10*time.Millisecond, "checkpoint was not advanced after successful ingest")
+	require.NoError(t, svc.Close())
+	assert.Equal(t, int32(1), atomic.LoadInt32(&ingestCalls))
+}
+
+func TestIngestSession_DedupesConcurrentAsyncCalls(t *testing.T) {
+	var ingestCalls int32
+	var releaseClosed int32
+	firstStarted := make(chan struct{})
+	release := make(chan struct{})
+	releaseOnce := func() {
+		if atomic.CompareAndSwapInt32(&releaseClosed, 0, 1) {
+			close(release)
+		}
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/memories/" {
+			http.NotFound(w, r)
+			return
+		}
+		n := atomic.AddInt32(&ingestCalls, 1)
+		if n == 1 {
+			close(firstStarted)
+			<-release
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(
+		WithAPIKey("k"),
+		WithHost(srv.URL),
+		WithAsyncMode(false),
+		WithAsyncMemoryNum(1),
+		WithMemoryQueueSize(16),
+		WithMemoryJobTimeout(time.Second),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		releaseOnce()
+		_ = svc.Close()
+	})
+
+	eventTs := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	sess := &session.Session{AppName: "app", UserID: "user", ID: "s"}
+	sess.Events = []event.Event{{
+		Timestamp: eventTs,
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: "hello"},
+		}}},
+	}}
+
+	const callers = 8
+	start := make(chan struct{})
+	errCh := make(chan error, callers)
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			errCh <- svc.IngestSession(context.Background(), sess)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-firstStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond, "first ingest did not start")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&ingestCalls))
+
+	releaseOnce()
+	assert.Eventually(t, func() bool { return readLastExtractAt(sess).Equal(eventTs) },
+		2*time.Second, 10*time.Millisecond, "checkpoint was not advanced after successful ingest")
 }
 
 func TestIngestSession_SyncFallbackWhenQueueFull(t *testing.T) {

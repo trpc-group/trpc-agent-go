@@ -27,9 +27,16 @@ type ingestJob struct {
 	Ctx      context.Context
 	UserKey  memory.UserKey
 	Session  *session.Session
+	Since    time.Time
 	LatestTs time.Time
 	Messages []model.Message
 	Options  session.IngestOptions
+}
+
+type ingestSessionKey struct {
+	AppName   string
+	UserID    string
+	SessionID string
 }
 
 type ingestWorker struct {
@@ -47,6 +54,9 @@ type ingestWorker struct {
 	mu      sync.RWMutex
 	wg      sync.WaitGroup
 	started bool
+
+	progressMu sync.Mutex
+	inFlight   map[ingestSessionKey]time.Time
 }
 
 const (
@@ -74,6 +84,7 @@ func newIngestWorker(c *client, opts serviceOpts) *ingestWorker {
 		orgID:     opts.orgID,
 		projectID: opts.projectID,
 		jobChans:  make([]chan *ingestJob, num),
+		inFlight:  make(map[ingestSessionKey]time.Time),
 	}
 	for i := 0; i < num; i++ {
 		w.jobChans[i] = make(chan *ingestJob, queueSize)
@@ -147,10 +158,80 @@ func (w *ingestWorker) tryEnqueue(ctx context.Context, job *ingestJob) bool {
 	}
 }
 
+func (w *ingestWorker) scanSince(userKey memory.UserKey, sess *session.Session) time.Time {
+	w.progressMu.Lock()
+	defer w.progressMu.Unlock()
+	since := readLastExtractAt(sess)
+	key, ok := newIngestSessionKey(userKey, sess)
+	if !ok {
+		return since
+	}
+	latest, ok := w.inFlight[key]
+	if ok && latest.After(since) {
+		return latest
+	}
+	return since
+}
+
+func (w *ingestWorker) claimInFlight(
+	userKey memory.UserKey,
+	sess *session.Session,
+	since time.Time,
+	latest time.Time,
+) bool {
+	w.progressMu.Lock()
+	defer w.progressMu.Unlock()
+	if readLastExtractAt(sess).After(since) {
+		return false
+	}
+	key, ok := newIngestSessionKey(userKey, sess)
+	if !ok {
+		return true
+	}
+	if w.inFlight == nil {
+		w.inFlight = make(map[ingestSessionKey]time.Time)
+	}
+	current, ok := w.inFlight[key]
+	if ok && current.After(since) {
+		return false
+	}
+	if !ok || latest.After(current) {
+		w.inFlight[key] = latest
+	}
+	return true
+}
+
+func (w *ingestWorker) finishInFlight(userKey memory.UserKey, sess *session.Session, latest time.Time) {
+	key, ok := newIngestSessionKey(userKey, sess)
+	if !ok {
+		return
+	}
+	w.progressMu.Lock()
+	defer w.progressMu.Unlock()
+	current, ok := w.inFlight[key]
+	if ok && !current.After(latest) {
+		delete(w.inFlight, key)
+	}
+}
+
+func (w *ingestWorker) advanceCheckpoint(sess *session.Session, since time.Time, latest time.Time) bool {
+	w.progressMu.Lock()
+	defer w.progressMu.Unlock()
+	current := readLastExtractAt(sess)
+	if current.Before(since) {
+		return false
+	}
+	if latest.After(current) {
+		writeLastExtractAt(sess, latest)
+	}
+	return true
+}
+
 func (w *ingestWorker) process(job *ingestJob) {
 	if job == nil {
 		return
 	}
+	defer w.finishInFlight(job.UserKey, job.Session, job.LatestTs)
 	ctx := job.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -164,7 +245,7 @@ func (w *ingestWorker) process(job *ingestJob) {
 		log.WarnfContext(ctx, "mem0: ingest failed for user %s/%s: %v", job.UserKey.AppName, job.UserKey.UserID, err)
 		return
 	}
-	writeLastExtractAt(job.Session, job.LatestTs)
+	w.advanceCheckpoint(job.Session, job.Since, job.LatestTs)
 }
 
 func (w *ingestWorker) ingest(
@@ -253,4 +334,15 @@ func hashUserKey(userKey memory.UserKey) int {
 	_, _ = h.Write([]byte(userKey.AppName))
 	_, _ = h.Write([]byte(userKey.UserID))
 	return int(h.Sum32())
+}
+
+func newIngestSessionKey(userKey memory.UserKey, sess *session.Session) (ingestSessionKey, bool) {
+	if sess == nil || sess.ID == "" {
+		return ingestSessionKey{}, false
+	}
+	return ingestSessionKey{
+		AppName:   userKey.AppName,
+		UserID:    userKey.UserID,
+		SessionID: sess.ID,
+	}, true
 }

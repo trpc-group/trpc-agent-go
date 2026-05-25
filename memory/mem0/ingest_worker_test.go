@@ -63,6 +63,19 @@ func TestHashUserKey_Deterministic(t *testing.T) {
 	assert.NotEqual(t, hashUserKey(k), hashUserKey(other), "different keys should hash differently")
 }
 
+func TestNewIngestSessionKey_RequiresSessionID(t *testing.T) {
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	_, ok := newIngestSessionKey(userKey, nil)
+	assert.False(t, ok)
+
+	_, ok = newIngestSessionKey(userKey, &session.Session{AppName: "app", UserID: "user"})
+	assert.False(t, ok)
+
+	key, ok := newIngestSessionKey(userKey, &session.Session{AppName: "app", UserID: "user", ID: "s"})
+	require.True(t, ok)
+	assert.Equal(t, ingestSessionKey{AppName: "app", UserID: "user", SessionID: "s"}, key)
+}
+
 func TestNewIngestWorker_AppliesDefaults(t *testing.T) {
 	w, _ := newWorkerWithServer(t, http.NotFoundHandler(), serviceOpts{})
 	assert.Len(t, w.jobChans, defaultAsyncMemoryNum)
@@ -293,6 +306,23 @@ func TestProcess_LogsErrorButRecovers(t *testing.T) {
 			Messages: []model.Message{{Role: model.RoleUser, Content: "x"}},
 		})
 	})
+}
+
+func TestIngestWorker_AdvanceCheckpointDoesNotSkipGap(t *testing.T) {
+	w := &ingestWorker{}
+	t0 := time.Date(2026, 5, 15, 10, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	t2 := t1.Add(time.Minute)
+	sess := &session.Session{}
+	writeLastExtractAt(sess, t0)
+
+	assert.False(t, w.advanceCheckpoint(sess, t1, t2))
+	assert.True(t, readLastExtractAt(sess).Equal(t0))
+
+	assert.True(t, w.advanceCheckpoint(sess, t0, t1))
+	assert.True(t, readLastExtractAt(sess).Equal(t1))
+	assert.True(t, w.advanceCheckpoint(sess, t1, t2))
+	assert.True(t, readLastExtractAt(sess).Equal(t2))
 }
 
 func TestIngestWorker_TryEnqueue_HashesBySessionOrUserKey(t *testing.T) {
