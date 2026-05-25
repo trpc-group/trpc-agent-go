@@ -218,11 +218,14 @@ type tableIndex struct {
 	unique  bool     // Whether this is a unique index
 }
 
-// expectedSchema defines the expected schema for each table
-var expectedSchema = map[string]struct {
+// tableSchema defines the expected schema for a table.
+type tableSchema struct {
 	columns []tableColumn
 	indexes []tableIndex
-}{
+}
+
+// expectedSchema defines the expected schema for each table.
+var expectedSchema = map[string]tableSchema{
 	sqldb.TableNameSessionStates: {
 		columns: []tableColumn{
 			{"id", "bigint", false},
@@ -328,6 +331,25 @@ var expectedSchema = map[string]struct {
 	},
 }
 
+// tdsqlExpectedSchema extends expectedSchema with TDSQL-specific indexes.
+var tdsqlExpectedSchema = func() map[string]tableSchema {
+	s := make(map[string]tableSchema, len(expectedSchema))
+	for k, v := range expectedSchema {
+		s[k] = v
+	}
+	ss := s[sqldb.TableNameSessionStates]
+	newIndexes := make([]tableIndex, len(ss.indexes)+1)
+	copy(newIndexes, ss.indexes)
+	newIndexes[len(ss.indexes)] = tableIndex{
+		table:   sqldb.TableNameSessionStates,
+		suffix:  "list",
+		columns: []string{"app_name", "user_id", "updated_at"},
+	}
+	ss.indexes = newIndexes
+	s[sqldb.TableNameSessionStates] = ss
+	return s
+}()
+
 // Global table definitions
 var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionStates, sqlCreateSessionStatesTable},
@@ -359,12 +381,152 @@ var indexDefs = []indexDefinition{
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, sqlCreateUserStatesExpiresIndex},
 }
 
+// TDSQL table templates: PK includes shardkey (user_id for session tables, broadcast for app_states).
+const (
+	tdsqlCreateSessionStatesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(255) NOT NULL,
+			state JSON DEFAULT NULL,
+			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+			PRIMARY KEY (id, user_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
+
+	tdsqlCreateSessionEventsTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(255) NOT NULL,
+			event JSON NOT NULL,
+			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+			PRIMARY KEY (id, user_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
+
+	tdsqlCreateSessionTrackEventsTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(255) NOT NULL,
+			track VARCHAR(255) NOT NULL,
+			event JSON NOT NULL,
+			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+			PRIMARY KEY (id, user_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
+
+	// TDSQL session_summaries: app_name/session_id/filter_key use VARCHAR(128)
+	// so the UNIQUE KEY fits within InnoDB's 3072-byte limit at full length:
+	// 128*4*3 + 255*4 = 1536 + 1020 = 2556 < 3072. No prefix index needed.
+	tdsqlCreateSessionSummariesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			app_name VARCHAR(128) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(128) NOT NULL,
+			filter_key VARCHAR(128) NOT NULL DEFAULT '',
+			summary JSON DEFAULT NULL,
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+			PRIMARY KEY (id, user_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
+
+	tdsqlCreateAppStatesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			app_name VARCHAR(255) NOT NULL,
+			` + "`key`" + ` VARCHAR(255) NOT NULL,
+			value TEXT DEFAULT NULL,
+			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=noshardkey_allset`
+
+	tdsqlCreateUserStatesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			` + "`key`" + ` VARCHAR(255) NOT NULL,
+			value TEXT DEFAULT NULL,
+			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+			PRIMARY KEY (id, user_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
+
+	tdsqlCreateSessionStatesListIndex = `
+		CREATE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, updated_at)`
+
+	// TDSQL session_summaries uses VARCHAR(128) for app_name/session_id/filter_key,
+	// so UNIQUE KEY fits at full column length without prefix indexes.
+	tdsqlCreateSessionSummariesUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, filter_key)`
+)
+
+var tdsqlTableDefs = []tableDefinition{
+	{sqldb.TableNameSessionStates, tdsqlCreateSessionStatesTable},
+	{sqldb.TableNameSessionEvents, tdsqlCreateSessionEventsTable},
+	{sqldb.TableNameSessionTrackEvents, tdsqlCreateSessionTrackEventsTable},
+	{sqldb.TableNameSessionSummaries, tdsqlCreateSessionSummariesTable},
+	{sqldb.TableNameAppStates, tdsqlCreateAppStatesTable},
+	{sqldb.TableNameUserStates, tdsqlCreateUserStatesTable},
+}
+
+var tdsqlIndexDefs = []indexDefinition{
+	// Unique indexes (same as MySQL, shardkey already in UNIQUE KEYs)
+	{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
+	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, tdsqlCreateSessionSummariesUniqueIndex},
+	{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
+	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
+
+	// Lookup indexes (same as MySQL)
+	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, sqlCreateSessionEventsLookupIndex},
+	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, sqlCreateSessionTracksIndex},
+
+	// TDSQL-specific: ListSessions sort index
+	{sqldb.TableNameSessionStates, "list", tdsqlCreateSessionStatesListIndex},
+
+	// TTL indexes (same as MySQL)
+	{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
+	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
+	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, sqlCreateSessionTracksExpiresIndex},
+	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},
+	{sqldb.TableNameAppStates, sqldb.IndexSuffixExpires, sqlCreateAppStatesExpiresIndex},
+	{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, sqlCreateUserStatesExpiresIndex},
+}
+
 // initDB initializes the database schema.
 func (s *Service) initDB(ctx context.Context) error {
 	log.InfoContext(ctx, "initializing mysql session database schema...")
 
+	// Select table and index definitions based on TDSQL mode.
+	tables := tableDefs
+	indexes := indexDefs
+	if s.opts.tdsqlSharding {
+		tables = tdsqlTableDefs
+		indexes = tdsqlIndexDefs
+		log.InfoContext(ctx, "TDSQL sharding mode enabled, using TDSQL schema")
+	}
+
 	// Create tables
-	for _, tableDef := range tableDefs {
+	for _, tableDef := range tables {
 		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableDef.name)
 		sql := strings.ReplaceAll(tableDef.template, "{{TABLE_NAME}}", fullTableName)
 
@@ -375,7 +537,7 @@ func (s *Service) initDB(ctx context.Context) error {
 	}
 
 	// Create indexes
-	for _, indexDef := range indexDefs {
+	for _, indexDef := range indexes {
 		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, indexDef.table)
 		indexName := sqldb.BuildIndexName(s.opts.tablePrefix, indexDef.table, indexDef.suffix)
 		sql := indexDef.template
@@ -413,10 +575,15 @@ func (s *Service) initDB(ctx context.Context) error {
 
 // verifySchema verifies that the database schema matches expectations.
 func (s *Service) verifySchema(ctx context.Context) error {
-	// Use tableDefs order for deterministic verification
-	for _, tableDef := range tableDefs {
+	tables := tableDefs
+	schemas := expectedSchema
+	if s.opts.tdsqlSharding {
+		tables = tdsqlTableDefs
+		schemas = tdsqlExpectedSchema
+	}
+	for _, tableDef := range tables {
 		tableName := tableDef.name
-		schema, ok := expectedSchema[tableName]
+		schema, ok := schemas[tableName]
 		if !ok {
 			continue
 		}
@@ -540,7 +707,7 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		actualColumns, exists := actualIndexes[expectedIndexName]
 		if !exists {
 			// Build CREATE INDEX statement for user reference.
-			columnsStr := buildIndexColumnsStr(expected.table, expected.suffix, expected.columns)
+			columnsStr := buildIndexColumnsStr(expected.table, expected.suffix, expected.columns, s.opts.tdsqlSharding)
 			createSQL := buildCreateIndexSQL(expectedIndexName, fullTableName, columnsStr, expected.unique)
 			log.WarnfContext(ctx, "index %s on table %s is missing, please run: %s",
 				expectedIndexName, fullTableName, createSQL)
@@ -549,7 +716,7 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 
 		if !stringSlicesEqual(actualColumns, expected.columns) {
 			// Build DROP and CREATE INDEX statements for user reference.
-			columnsStr := buildIndexColumnsStr(expected.table, expected.suffix, expected.columns)
+			columnsStr := buildIndexColumnsStr(expected.table, expected.suffix, expected.columns, s.opts.tdsqlSharding)
 			dropSQL := fmt.Sprintf("DROP INDEX %s ON %s;", expectedIndexName, fullTableName)
 			createSQL := buildCreateIndexSQL(expectedIndexName, fullTableName, columnsStr, expected.unique)
 			log.WarnfContext(ctx, "index %s on table %s has wrong columns: got %v, want %v. "+
@@ -587,9 +754,10 @@ func stringSlicesEqual(a, b []string) bool {
 
 // buildIndexColumnsStr builds a comma-separated column list with appropriate
 // prefix lengths for indexes that require them.
-func buildIndexColumnsStr(table, suffix string, columns []string) string {
-	// session_summaries unique_active index requires prefix lengths to avoid Error 1071.
-	if table == sqldb.TableNameSessionSummaries && suffix == sqldb.IndexSuffixUniqueActive {
+func buildIndexColumnsStr(table, suffix string, columns []string, tdsqlSharding bool) string {
+	// MySQL mode: session_summaries unique_active index requires prefix lengths
+	// to avoid Error 1071. TDSQL mode uses VARCHAR(128) so no prefix needed.
+	if !tdsqlSharding && table == sqldb.TableNameSessionSummaries && suffix == sqldb.IndexSuffixUniqueActive {
 		var prefixed []string
 		for _, col := range columns {
 			prefixed = append(prefixed, fmt.Sprintf("%s(%d)", col, mysqlVarCharIndexPrefixLen))

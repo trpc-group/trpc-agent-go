@@ -69,7 +69,7 @@ func TestGetSession_Success(t *testing.T) {
 
 	// Mock: Query events (empty)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}))
 
 	sess, err := s.GetSession(ctx, key)
@@ -164,7 +164,7 @@ func TestGetSession_WithLimit(t *testing.T) {
 
 	// Mock: Query events with limit
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
 			AddRow(int64(1), key.AppName, key.UserID, key.SessionID, eventBytes, time.Now()))
 
@@ -221,7 +221,7 @@ func TestGetSession_WithTrackEvents(t *testing.T) {
 
 	// Mock: Query events (empty).
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}))
 
 	// Mock: Query track events.
@@ -290,7 +290,7 @@ func TestGetSession_WithTTL(t *testing.T) {
 
 	// Mock: Query events
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}))
 
 	sess, err := s.GetSession(ctx, key)

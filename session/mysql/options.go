@@ -74,6 +74,11 @@ type ServiceOpts struct {
 	// hooks for session operations.
 	appendEventHooks []session.AppendEventHook
 	getSessionHooks  []session.GetSessionHook
+
+	// tdsqlSharding enables TDSQL distributed instance mode.
+	// When true, uses user_id as shardkey for session/user tables,
+	// broadcast table for app_states, and two-phase TTL cleanup.
+	tdsqlSharding bool
 }
 
 // ServiceOpt is the option for the MySQL session service.
@@ -297,5 +302,20 @@ func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
 func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.getSessionHooks = append(opts.getSessionHooks, hooks...)
+	}
+}
+
+// WithTDSQLSharding enables TDSQL distributed instance mode.
+// In this mode:
+//   - session/user tables use user_id as shardkey (PK becomes (id, user_id))
+//   - app_states uses broadcast table (noshardkey_allset)
+//   - TTL cleanup uses two-phase approach (scan then targeted delete)
+//   - DML statements include shardkey in WHERE clause for routing
+//
+// Constraint: user_id must be ASCII-only. TDSQL proxy does not convert
+// character sets; non-ASCII shardkey values may cause routing instability.
+func WithTDSQLSharding(enable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.tdsqlSharding = enable
 	}
 }
