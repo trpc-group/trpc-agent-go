@@ -195,6 +195,12 @@ func TestDefaultAndCustomPaths(t *testing.T) {
 	assert.Equal(t, "/api/promptiter/demo-app/background-executions", customServer.AsyncRunsPath())
 }
 
+func TestNewTrimsAppName(t *testing.T) {
+	srv := newTestServer(t, WithAppName(" demo-app "))
+	assert.Equal(t, "demo-app", srv.appName)
+	assert.Equal(t, "/promptiter/v1/apps/demo-app", srv.BasePath())
+}
+
 func TestHandleStructure(t *testing.T) {
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, srv.StructurePath(), nil)
@@ -260,6 +266,7 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
+	assert.Equal(t, "demo-app", resp.Result.AppName)
 	assert.Equal(t, enginepkg.RunStatusSucceeded, resp.Result.Status)
 }
 
@@ -515,6 +522,7 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
+	assert.Equal(t, "demo-app", resp.Result.AppName)
 	assert.Equal(t, "run_1", resp.Result.ID)
 	assert.Equal(t, enginepkg.RunStatusQueued, resp.Result.Status)
 	assert.Nil(t, resp.Result.Structure)
@@ -583,6 +591,7 @@ func TestHandleGetRunReturnsRun(t *testing.T) {
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
+	assert.Equal(t, "demo-app", resp.Result.AppName)
 	assert.Equal(t, "run_1", resp.Result.ID)
 	assert.Equal(t, enginepkg.RunStatusRunning, resp.Result.Status)
 	assert.Equal(t, 2, resp.Result.CurrentRound)

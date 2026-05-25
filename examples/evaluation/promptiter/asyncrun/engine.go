@@ -197,7 +197,7 @@ func buildPromptIterRuntime(ctx context.Context, cfg asyncRunConfig) (*promptIte
 		closeAll()
 		return nil, fmt.Errorf("create promptiter engine: %w", err)
 	}
-	managerInstance, err := promptitermanager.New(engineInstance)
+	managerInstance, err := promptitermanager.New(appName, engineInstance)
 	if err != nil {
 		agentEvaluator.Close()
 		closeAll()

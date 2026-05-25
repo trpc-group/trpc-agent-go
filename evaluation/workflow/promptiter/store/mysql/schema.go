@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	tableNameRuns        = "promptiter_runs"
-	runIDUniqueIndexName = "uniq_promptiter_runs_run_id"
-	sqlCreateRunsTable   = `
+	tableNameRuns         = "promptiter_runs"
+	appRunUniqueIndexName = "uniq_promptiter_runs_app_run"
+	sqlCreateRunsTable    = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGINT NOT NULL AUTO_INCREMENT,
+			app_name VARCHAR(255) NOT NULL,
 			run_id VARCHAR(255) NOT NULL,
 			status VARCHAR(32) NOT NULL DEFAULT '',
 			run_result JSON NOT NULL,
@@ -30,8 +31,8 @@ const (
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 			PRIMARY KEY (id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
-	sqlCreateRunIDUniqueIndex = `
-		CREATE UNIQUE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(run_id)`
+	sqlCreateAppRunUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(app_name, run_id)`
 )
 
 func ensureSchema(ctx context.Context, db storage.Client, tableName string) error {
@@ -39,13 +40,13 @@ func ensureSchema(ctx context.Context, db storage.Client, tableName string) erro
 	if _, err := db.Exec(ctx, createTableQuery); err != nil {
 		return fmt.Errorf("create table %s failed: %w", tableName, err)
 	}
-	createIndexQuery := strings.ReplaceAll(sqlCreateRunIDUniqueIndex, "{{TABLE_NAME}}", tableName)
-	createIndexQuery = strings.ReplaceAll(createIndexQuery, "{{INDEX_NAME}}", runIDUniqueIndexName)
+	createIndexQuery := strings.ReplaceAll(sqlCreateAppRunUniqueIndex, "{{TABLE_NAME}}", tableName)
+	createIndexQuery = strings.ReplaceAll(createIndexQuery, "{{INDEX_NAME}}", appRunUniqueIndexName)
 	if _, err := db.Exec(ctx, createIndexQuery); err != nil {
 		if mysqldb.IsDuplicateKeyName(err) {
 			return nil
 		}
-		return fmt.Errorf("create index %s on table %s failed: %w", runIDUniqueIndexName, tableName, err)
+		return fmt.Errorf("create index %s on table %s failed: %w", appRunUniqueIndexName, tableName, err)
 	}
 	return nil
 }

@@ -659,6 +659,7 @@ import (
 )
 
 type RunResult struct {
+	AppName            string               // AppName 表示本次运行所属的应用名。
 	ID                 string               // ID 表示运行标识。
 	Status             RunStatus            // Status 表示当前运行状态。
 	CurrentRound       int                  // CurrentRound 表示当前执行到第几轮。
@@ -937,7 +938,7 @@ type Manager interface {
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/manager"
 
-managerInstance, err := manager.New(engineInstance)
+managerInstance, err := manager.New(appName, engineInstance)
 if err != nil {
 	return err
 }
@@ -974,9 +975,9 @@ import (
 )
 
 type Store interface {
-	Create(ctx context.Context, run *engine.RunResult) error
-	Get(ctx context.Context, runID string) (*engine.RunResult, error)
-	Update(ctx context.Context, run *engine.RunResult) error
+	Create(ctx context.Context, appName string, run *engine.RunResult) error
+	Get(ctx context.Context, appName, runID string) (*engine.RunResult, error)
+	Update(ctx context.Context, appName string, run *engine.RunResult) error
 	Close() error
 }
 ```
@@ -989,7 +990,7 @@ type Store interface {
 
 `store/mysql` 适合跨进程持久化与平台查询。该实现会将 `RunResult` 序列化后存入 MySQL，并支持手工初始化 schema 或自动建表。
 
-当前实现使用单表保存运行记录，核心字段包括 `run_id`、`status`、序列化后的 `run_result`，以及 `created_at`、`updated_at` 等时间字段。完整表结构可参考 [schema.sql](https://github.com/trpc-group/trpc-agent-go/tree/main/evaluation/workflow/promptiter/store/mysql/schema.sql)。
+当前实现使用单表保存运行记录，核心字段包括 `app_name`、`run_id`、`status`、序列化后的 `run_result`，以及 `created_at`、`updated_at` 等时间字段。`app_name` 和 `run_id` 组成唯一键，用于隔离不同应用下的运行记录。完整表结构可参考 [schema.sql](https://github.com/trpc-group/trpc-agent-go/tree/main/evaluation/workflow/promptiter/store/mysql/schema.sql)。
 
 ### HTTP 接口
 
