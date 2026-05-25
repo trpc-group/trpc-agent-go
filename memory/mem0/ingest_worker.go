@@ -162,7 +162,9 @@ func (w *ingestWorker) process(job *ingestJob) {
 	}
 	if err := w.ingest(ctx, job.UserKey, job.Session, job.Messages, job.Options); err != nil {
 		log.WarnfContext(ctx, "mem0: ingest failed for user %s/%s: %v", job.UserKey.AppName, job.UserKey.UserID, err)
+		return
 	}
+	writeLastExtractAt(job.Session, job.LatestTs)
 }
 
 func (w *ingestWorker) ingest(

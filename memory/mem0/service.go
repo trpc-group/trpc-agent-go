@@ -82,7 +82,6 @@ func (s *Service) IngestSession(
 	if len(messages) == 0 {
 		return nil
 	}
-	writeLastExtractAt(sess, latestTs)
 	var reqOpts session.IngestOptions
 	for _, opt := range opts {
 		if opt == nil {
@@ -111,7 +110,11 @@ func (s *Service) IngestSession(
 	}
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	return s.ingestWorker.ingest(syncCtx, userKey, sess, messages, reqOpts)
+	if err := s.ingestWorker.ingest(syncCtx, userKey, sess, messages, reqOpts); err != nil {
+		return err
+	}
+	writeLastExtractAt(sess, latestTs)
+	return nil
 }
 
 // ReadMemories reads memories for a user.

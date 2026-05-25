@@ -122,8 +122,9 @@ func TestIngestSession_ForwardsMessagesToBackend(t *testing.T) {
 	defer svc.Close()
 
 	sess := &session.Session{AppName: "app", UserID: "user", ID: "s"}
+	eventTs := time.Now()
 	sess.Events = []event.Event{{
-		Timestamp: time.Now(),
+		Timestamp: eventTs,
 		Response: &model.Response{Choices: []model.Choice{{
 			Message: model.Message{Role: model.RoleUser, Content: "hello"},
 		}}},
@@ -138,6 +139,8 @@ func TestIngestSession_ForwardsMessagesToBackend(t *testing.T) {
 	// Wait for the async worker to hit the backend.
 	assert.Eventually(t, func() bool { return len(gotBody) > 0 },
 		2*time.Second, 10*time.Millisecond, "backend was not hit")
+	assert.Eventually(t, func() bool { return readLastExtractAt(sess).Equal(eventTs) },
+		2*time.Second, 10*time.Millisecond, "checkpoint was not advanced after successful ingest")
 
 	body := string(gotBody)
 	for _, want := range []string{"hello", "agent-1", "run-1", `"k":"v"`} {
@@ -178,8 +181,9 @@ func TestIngestSession_SyncFallbackWhenQueueFull(t *testing.T) {
 	svc.ingestWorker.Stop()
 
 	sess := &session.Session{AppName: "app", UserID: "user", ID: "s1"}
+	eventTs := time.Now()
 	sess.Events = []event.Event{{
-		Timestamp: time.Now(),
+		Timestamp: eventTs,
 		Response: &model.Response{Choices: []model.Choice{{
 			Message: model.Message{Role: model.RoleUser, Content: "hello"},
 		}}},
@@ -188,6 +192,51 @@ func TestIngestSession_SyncFallbackWhenQueueFull(t *testing.T) {
 	require.NoError(t, svc.IngestSession(context.Background(), sess))
 	assert.Equal(t, int32(1), atomic.LoadInt32(&ingestCalls),
 		"sync fallback must hit the backend exactly once")
+	assert.True(t, readLastExtractAt(sess).Equal(eventTs))
+}
+
+func TestIngestSession_SyncFallbackFailureDoesNotAdvanceCheckpoint(t *testing.T) {
+	var ingestCalls int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/memories/" {
+			atomic.AddInt32(&ingestCalls, 1)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(
+		WithAPIKey("k"),
+		WithHost(srv.URL),
+		WithAsyncMode(false),
+		WithMemoryJobTimeout(100*time.Millisecond),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	svc.ingestWorker.Stop()
+
+	eventTs := time.Date(2026, 5, 15, 10, 0, 0, 0, time.UTC)
+	sess := &session.Session{AppName: "app", UserID: "user", ID: "s1"}
+	sess.Events = []event.Event{{
+		Timestamp: eventTs,
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: "hello"},
+		}}},
+	}}
+
+	require.Error(t, svc.IngestSession(context.Background(), sess))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&ingestCalls),
+		"sync fallback must hit the backend exactly once")
+	assert.True(t, readLastExtractAt(sess).IsZero())
+
+	latestTs, messages := scanDeltaSince(sess, readLastExtractAt(sess))
+	require.Len(t, messages, 1)
+	assert.Equal(t, "hello", messages[0].Content)
+	assert.True(t, latestTs.Equal(eventTs))
 }
 
 // --- ReadMemories ---
