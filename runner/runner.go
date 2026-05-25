@@ -2645,14 +2645,16 @@ func interruptedAssistantSignatureKey(
 	if signature == "" {
 		return ""
 	}
-	lineage := requestID
-	if lineage == "" {
-		lineage = invocationID
-	}
-	if lineage == "" {
+	switch {
+	case requestID != "" && invocationID != "":
+		return requestID + "\x00" + invocationID + "\x00" + signature
+	case requestID != "":
+		return requestID + "\x00" + signature
+	case invocationID != "":
+		return invocationID + "\x00" + signature
+	default:
 		return signature
 	}
-	return lineage + "\x00" + signature
 }
 
 func baselineFinalResponseIDFromRuntimeState(runtimeState map[string]any) string {

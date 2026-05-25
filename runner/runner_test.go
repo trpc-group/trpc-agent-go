@@ -7116,6 +7116,18 @@ func TestInterruptedAssistantAlreadyPersisted(t *testing.T) {
 		require.False(t, rr.interruptedAssistantAlreadyPersisted(loop, choices))
 	})
 
+	t.Run("same content same request different invocation", func(t *testing.T) {
+		loop := &eventLoopContext{}
+		acc := interruptedAssistantAccumulatorForSession(loop, nil)
+		acc.responseID = "different"
+		acc.requestID = "req"
+		acc.invocationID = "child-2"
+		acc.persistedAssistantChoiceSignatures = map[string]struct{}{
+			interruptedAssistantSignatureKey("req", "child-1", choices): {},
+		}
+		require.False(t, rr.interruptedAssistantAlreadyPersisted(loop, choices))
+	})
+
 	t.Run("not persisted", func(t *testing.T) {
 		loop := &eventLoopContext{}
 		interruptedAssistantAccumulatorForSession(loop, nil).responseID = "resp"
@@ -7160,10 +7172,30 @@ func TestInterruptedAssistantSignatureDedupeScopedByRequest(t *testing.T) {
 	}
 	rr.recordInterruptedAssistantDelta(
 		sameRequestLoop,
-		interruptedAssistantPartialEvent("inv-2", "same text"),
+		interruptedAssistantPartialEvent("inv-1", "same text"),
 		nil,
 	)
 	require.Nil(t, rr.interruptedAssistantEvent(context.Background(), sameRequestLoop))
+
+	sameRequestDifferentInvocationLoop := &eventLoopContext{
+		sess: sess,
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-1"}),
+		),
+	}
+	rr.recordInterruptedAssistantDelta(
+		sameRequestDifferentInvocationLoop,
+		interruptedAssistantPartialEvent("inv-2", "same text"),
+		nil,
+	)
+	evt := rr.interruptedAssistantEvent(
+		context.Background(),
+		sameRequestDifferentInvocationLoop,
+	)
+	require.NotNil(t, evt)
+	require.Equal(t, "same text", evt.Choices[0].Message.Content)
+	require.Equal(t, "req-1", evt.RequestID)
+	require.Equal(t, "inv-2", evt.InvocationID)
 
 	differentRequestLoop := &eventLoopContext{
 		sess: sess,
@@ -7176,7 +7208,7 @@ func TestInterruptedAssistantSignatureDedupeScopedByRequest(t *testing.T) {
 		interruptedAssistantPartialEvent("inv-3", "same text"),
 		nil,
 	)
-	evt := rr.interruptedAssistantEvent(context.Background(), differentRequestLoop)
+	evt = rr.interruptedAssistantEvent(context.Background(), differentRequestLoop)
 	require.NotNil(t, evt)
 	require.Equal(t, "same text", evt.Choices[0].Message.Content)
 	require.Equal(t, "req-2", evt.RequestID)
@@ -7214,7 +7246,7 @@ func TestInterruptedAssistantEventSkipsEmptyAndPersistedContent(t *testing.T) {
 	acc.responseID = "resp"
 	acc.requestID = "req"
 	acc.persistedAssistantChoiceSignatures = map[string]struct{}{
-		interruptedAssistantSignatureKey("req", "", choices): {},
+		interruptedAssistantSignatureKey("req", "inv", choices): {},
 	}
 	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
 		"inv",
