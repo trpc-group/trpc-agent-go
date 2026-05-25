@@ -116,7 +116,15 @@ func (e *Enforcer) Register(r *extension.Registry) {
 	r.AfterModel(e.afterModel)
 }
 
-// beforeModel injects a nudge user message when the previous
+// beforeModel prepares a model request while enforcement is active.
+//
+// It disables streaming whenever open todo items exist. The
+// enforcer can only make a hard allow/block decision after seeing
+// a complete model response; streaming deltas would otherwise
+// reach clients before AfterModel has a chance to reject the final
+// answer.
+//
+// It also injects a nudge user message when the previous
 // AfterModel turn flagged a pending reminder.
 //
 // Notes worth pinning down:
@@ -145,10 +153,10 @@ func (e *Enforcer) beforeModel(
 	if !e.opts.inScope(inv) {
 		return nil, nil
 	}
-	if !reminderPending(inv) {
-		return nil, nil
+	pendingReminder := reminderPending(inv)
+	if pendingReminder {
+		setReminderPending(inv, false)
 	}
-	setReminderPending(inv, false)
 
 	// Read through the prefix the configured todo tool actually
 	// writes with. todo.GetTodos hard-codes DefaultStateKeyPrefix,
@@ -159,7 +167,7 @@ func (e *Enforcer) beforeModel(
 	// "temp:todos:<branch>" and concluded the list was empty.
 	items, err := todo.GetTodosWithPrefix(
 		invocationSession(inv),
-		e.todoTool.StateKeyPrefix(),
+		e.todoStateKeyPrefix(),
 		invocationBranch(inv),
 	)
 	if err != nil {
@@ -170,6 +178,11 @@ func (e *Enforcer) beforeModel(
 	if len(inProgress) == 0 && len(pending) == 0 {
 		return nil, nil
 	}
+	args.Request.GenerationConfig.Stream = false
+
+	if !pendingReminder {
+		return nil, nil
+	}
 
 	msg := e.opts.NudgeFormatter(NudgeContext{
 		AgentName:              invocationAgentName(inv),
@@ -178,7 +191,7 @@ func (e *Enforcer) beforeModel(
 		AttemptNumber:          retryCount(inv),
 		MaxRetries:             e.opts.MaxRetries,
 		TodoToolName:           e.todoToolName(),
-		DeclareBlockerToolName: e.declareBlockerTool.name,
+		DeclareBlockerToolName: e.declareBlockerToolName(),
 	})
 	if msg == "" {
 		return nil, nil
@@ -196,6 +209,26 @@ func (e *Enforcer) todoToolName() string {
 		return todo.DefaultToolName
 	}
 	return decl.Name
+}
+
+func (e *Enforcer) todoStateKeyPrefix() string {
+	if e == nil || e.todoTool == nil {
+		return todo.DefaultStateKeyPrefix
+	}
+	return e.todoTool.StateKeyPrefix()
+}
+
+func (e *Enforcer) declareBlockerToolName() string {
+	if e == nil {
+		return DefaultDeclareBlockerToolName
+	}
+	if e.declareBlockerTool != nil && e.declareBlockerTool.name != "" {
+		return e.declareBlockerTool.name
+	}
+	if e.opts.DeclareBlockerToolName != "" {
+		return e.opts.DeclareBlockerToolName
+	}
+	return DefaultDeclareBlockerToolName
 }
 
 // afterModel decides whether the response is allowed to be final.
@@ -220,14 +253,14 @@ func (e *Enforcer) todoToolName() string {
 //     observability code that re-reads it sees a clean state;
 //     correctness does not depend on it because the Invocation
 //     is about to be discarded anyway.
-//  6. Otherwise: flip Done to false, set reminder pending, bump
-//     the retry counter, emit a blocked event, return the
-//     modified response as CustomResponse.
+//  6. Otherwise: return a non-content control response with
+//     Done=false, set reminder pending, bump the retry counter,
+//     and emit a blocked event.
 //
-// Returning CustomResponse rather than mutating args.Response in
-// place is intentional: the AfterModel chain treats CustomResponse
-// as the new authoritative response. The underlying pointer is the
-// same, so this is a "rebind" not a deep copy.
+// Returning a separate CustomResponse is intentional: the original
+// model text was a premature final answer. Letting it pass through
+// with Done=false would continue the loop, but still leak the false
+// answer to clients and session history.
 func (e *Enforcer) afterModel(
 	ctx context.Context,
 	args *model.AfterModelArgs,
@@ -259,7 +292,7 @@ func (e *Enforcer) afterModel(
 	// "temp:todos:<branch>" and concluded the list was empty.
 	items, err := todo.GetTodosWithPrefix(
 		invocationSession(inv),
-		e.todoTool.StateKeyPrefix(),
+		e.todoStateKeyPrefix(),
 		invocationBranch(inv),
 	)
 	if err != nil {
@@ -289,7 +322,6 @@ func (e *Enforcer) afterModel(
 		return nil, nil
 	}
 
-	args.Response.Done = false
 	setReminderPending(inv, true)
 	attempt := incRetryCount(inv)
 	e.notify(EnforceEvent{
@@ -300,7 +332,21 @@ func (e *Enforcer) afterModel(
 		PendingCount:    len(pending),
 		InProgressCount: len(inProgress),
 	})
-	return &model.AfterModelResult{CustomResponse: args.Response}, nil
+	return &model.AfterModelResult{
+		CustomResponse: blockedControlResponse(args.Response),
+	}, nil
+}
+
+func blockedControlResponse(src *model.Response) *model.Response {
+	if src == nil {
+		return &model.Response{Done: false}
+	}
+	rsp := src.Clone()
+	rsp.Done = false
+	rsp.IsPartial = false
+	rsp.Choices = nil
+	rsp.Error = nil
+	return rsp
 }
 
 // shouldConsiderResponse mirrors llmflow's loop-termination

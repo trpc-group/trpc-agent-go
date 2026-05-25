@@ -177,9 +177,8 @@ func TestAfterModel_AllCompleted_PassesThrough(t *testing.T) {
 
 // TestAfterModel_OpenItems_BlocksAndQueuesReminder is the core
 // enforcement assertion: open items present → AfterModel must
-//   - flip Done to false (so llmflow keeps looping),
-//   - return CustomResponse (so the AfterModel chain sees the
-//     rebind),
+//   - return a non-content CustomResponse with Done=false (so
+//     llmflow keeps looping without leaking the premature answer),
 //   - set reminder_pending so BeforeModel knows to inject,
 //   - bump the retry counter.
 func TestAfterModel_OpenItems_BlocksAndQueuesReminder(t *testing.T) {
@@ -194,9 +193,17 @@ func TestAfterModel_OpenItems_BlocksAndQueuesReminder(t *testing.T) {
 	res, err := e.afterModel(ctx, &model.AfterModelArgs{Response: rsp})
 	require.NoError(t, err)
 	require.NotNil(t, res, "blocked response must be returned via CustomResponse")
-	assert.Same(t, rsp, res.CustomResponse,
-		"enforcer must rebind the SAME response so other AfterModel hooks see the flip")
-	assert.False(t, rsp.Done, "Done must be flipped so the loop continues")
+	require.NotNil(t, res.CustomResponse)
+	assert.NotSame(t, rsp, res.CustomResponse,
+		"blocked responses must be scrubbed, not the original model text")
+	assert.True(t, rsp.Done, "original model response must not be mutated")
+	assert.Equal(t, "done", rsp.Choices[0].Message.Content)
+	assert.False(t, res.CustomResponse.Done,
+		"control response must keep the loop running")
+	assert.Empty(t, res.CustomResponse.Choices,
+		"premature assistant content must not leak to clients or session history")
+	assert.False(t, res.CustomResponse.IsValidContent(),
+		"control response must not be persisted as assistant content")
 	assert.True(t, reminderPending(inv))
 	assert.Equal(t, 1, retryCount(inv))
 }
@@ -348,9 +355,11 @@ func TestAfterModel_RetryBudgetExhausted_FailsOpen(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		rsp := finalRsp("done")
-		_, err := e.afterModel(ctx, &model.AfterModelArgs{Response: rsp})
+		res, err := e.afterModel(ctx, &model.AfterModelArgs{Response: rsp})
 		require.NoError(t, err)
-		assert.False(t, rsp.Done, "block %d", i)
+		require.NotNil(t, res, "block %d", i)
+		require.NotNil(t, res.CustomResponse, "block %d", i)
+		assert.False(t, res.CustomResponse.Done, "block %d", i)
 	}
 	rsp := finalRsp("done")
 	res, err := e.afterModel(ctx, &model.AfterModelArgs{Response: rsp})
@@ -417,6 +426,50 @@ func TestBeforeModel_NoPending_NoOp(t *testing.T) {
 	req := &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}}
 	_, err := e.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
 	require.NoError(t, err)
+	assert.Len(t, req.Messages, 1)
+}
+
+// TestBeforeModel_OpenItems_DisablesStreamingWithoutNudge covers
+// the streaming side of hard compliance. Even when no reminder is
+// pending yet, the enforcer must turn streaming off while open
+// todo items exist; otherwise partial deltas could reach clients
+// before AfterModel can reject the final answer.
+func TestBeforeModel_OpenItems_DisablesStreamingWithoutNudge(t *testing.T) {
+	ctx, inv, sess := newTestInvocation(t, "a")
+	writeTodos(t, sess, "", []todo.Item{
+		{Content: "Run tests", ActiveForm: "Running tests", Status: todo.StatusInProgress},
+	})
+	e := New()
+
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+	_, err := e.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	assert.False(t, req.GenerationConfig.Stream,
+		"hard enforcement must disable streaming while open todos exist")
+	assert.Len(t, req.Messages, 1,
+		"no pending reminder means no nudge message is injected yet")
+	assert.False(t, reminderPending(inv))
+}
+
+func TestBeforeModel_NoOpenItems_LeavesStreamingUntouched(t *testing.T) {
+	ctx, _, _ := newTestInvocation(t, "a")
+	e := New()
+
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+	_, err := e.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	assert.True(t, req.GenerationConfig.Stream,
+		"streaming remains available when there is nothing to enforce")
 	assert.Len(t, req.Messages, 1)
 }
 
@@ -524,7 +577,8 @@ func TestScopedAgents_OnlyTargetEnforced(t *testing.T) {
 	resPlan, err := e.afterModel(ctxPlan, &model.AfterModelArgs{Response: rspPlan})
 	require.NoError(t, err)
 	require.NotNil(t, resPlan)
-	assert.False(t, rspPlan.Done)
+	require.NotNil(t, resPlan.CustomResponse)
+	assert.False(t, resPlan.CustomResponse.Done)
 }
 
 // TestBypassAgents_SkipsEnforcement is the inverse of the scoped
@@ -663,7 +717,8 @@ func TestEndToEnd_DeclareBlockerThenFinalPasses(t *testing.T) {
 	res1, err := e.afterModel(ctx, &model.AfterModelArgs{Response: rsp1})
 	require.NoError(t, err)
 	require.NotNil(t, res1, "first final response must be blocked")
-	assert.False(t, rsp1.Done)
+	require.NotNil(t, res1.CustomResponse)
+	assert.False(t, res1.CustomResponse.Done)
 	assert.True(t, reminderPending(inv))
 
 	args, err := json.Marshal(declareBlockerInput{Reason: "prod-write not yet granted to this session"})
@@ -697,7 +752,9 @@ func TestEndToEnd_BlockThenContinueThenComplete(t *testing.T) {
 	res1, err := e.afterModel(ctx, &model.AfterModelArgs{Response: rsp1})
 	require.NoError(t, err)
 	require.NotNil(t, res1)
-	assert.False(t, rsp1.Done, "first final response must be blocked")
+	require.NotNil(t, res1.CustomResponse)
+	assert.False(t, res1.CustomResponse.Done,
+		"first final response must be blocked")
 	assert.True(t, reminderPending(inv))
 
 	req := &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}}
@@ -764,8 +821,9 @@ func TestAfterModel_HonoursCustomTodoToolPrefix(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res,
 		"enforcer must see the in_progress item written under the custom prefix and block")
-	assert.False(t, rsp.Done,
-		"enforcer must flip Done=false when open items remain at the custom prefix")
+	require.NotNil(t, res.CustomResponse)
+	assert.False(t, res.CustomResponse.Done,
+		"enforcer must return Done=false when open items remain at the custom prefix")
 }
 
 // The block below covers the small nil-safety / default-fallback
@@ -954,5 +1012,6 @@ func TestAfterModel_DefaultPrefixUnchangedWhenNoCustomTool(t *testing.T) {
 	res, err := e.afterModel(ctx, &model.AfterModelArgs{Response: rsp})
 	require.NoError(t, err)
 	require.NotNil(t, res, "default-prefix path must remain functional")
-	assert.False(t, rsp.Done)
+	require.NotNil(t, res.CustomResponse)
+	assert.False(t, res.CustomResponse.Done)
 }

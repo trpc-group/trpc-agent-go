@@ -643,6 +643,7 @@ agent := llmagent.New("todo-assistant",
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/extension/todoenforcer"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool/todo"
 )
 
 agent := llmagent.New("todo-assistant",
