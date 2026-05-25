@@ -307,10 +307,7 @@ func TestVerifySchema_Success(t *testing.T) {
 
 	// Override expectedSchema to test only one table for simplicity
 	testTable := sqldb.TableNameSessionStates
-	expectedSchema = map[string]struct {
-		columns []tableColumn
-		indexes []tableIndex
-	}{
+	expectedSchema = map[string]tableSchema{
 		testTable: originalExpectedSchema[testTable],
 	}
 
@@ -700,7 +697,7 @@ func TestBuildIndexColumnsStr(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildIndexColumnsStr(tt.table, tt.suffix, tt.columns)
+			got := buildIndexColumnsStr(tt.table, tt.suffix, tt.columns, false)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
