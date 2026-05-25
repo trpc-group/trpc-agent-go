@@ -2797,6 +2797,121 @@ func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
 	}
 }
 
+func TestContentRequestProcessor_getIncrementMessages_ForceCleanWithScopedTimeline(
+	t *testing.T,
+) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	shellPayload := strings.Repeat("shell-output-", 200)
+
+	toolCallID := func(invocationID string) string {
+		return "tool-call-" + invocationID
+	}
+	makeShellToolCallEvent := func(requestID, invocationID string) event.Event {
+		return event.Event{
+			Author:       "test-agent",
+			RequestID:    requestID,
+			InvocationID: invocationID,
+			FilterKey:    "test-filter",
+			Timestamp:    baseTime,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID: toolCallID(invocationID),
+							Function: model.FunctionDefinitionParam{
+								Name:      "shell",
+								Arguments: []byte(`{}`),
+							},
+						}},
+					},
+				}},
+			},
+		}
+	}
+	makeShellToolResultEvent := func(requestID, invocationID string) event.Event {
+		return event.Event{
+			Author:       "test-agent",
+			RequestID:    requestID,
+			InvocationID: invocationID,
+			FilterKey:    "test-filter",
+			Timestamp:    baseTime.Add(time.Second),
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:   true,
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						toolCallID(invocationID),
+						"shell",
+						shellPayload,
+					),
+				}},
+			},
+		}
+	}
+
+	tests := []struct {
+		name               string
+		timelineFilterMode string
+		requestID          string
+		invocationID       string
+	}{
+		{
+			name:               "TimelineFilterCurrentRequest",
+			timelineFilterMode: TimelineFilterCurrentRequest,
+			requestID:          "req-current",
+			invocationID:       "inv-current",
+		},
+		{
+			name:               "TimelineFilterCurrentInvocation",
+			timelineFilterMode: TimelineFilterCurrentInvocation,
+			requestID:          "req-shared",
+			invocationID:       "inv-current",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := getSession(
+				makeShellToolCallEvent(tt.requestID, tt.invocationID),
+				makeShellToolResultEvent(tt.requestID, tt.invocationID),
+				makeShellToolCallEvent("req-other", "inv-other"),
+				makeShellToolResultEvent("req-other", "inv-other"),
+				makeShellToolCallEvent("req-shared", "inv-other"),
+				makeShellToolResultEvent("req-shared", "inv-other"),
+			)
+
+			inv := agent.NewInvocation(
+				agent.WithInvocationEventFilterKey("test-filter"),
+				agent.WithInvocationSession(sess),
+				agent.WithInvocationID(tt.invocationID),
+				agent.WithInvocationRunOptions(agent.RunOptions{
+					RequestID: tt.requestID,
+				}),
+			)
+			inv.AgentName = "test-agent"
+
+			p := NewContentRequestProcessor(
+				WithBranchFilterMode(BranchFilterModeAll),
+				WithTimelineFilterMode(tt.timelineFilterMode),
+				WithEnableContextCompaction(true),
+				WithContextCompactionForceCleanToolNames("shell"),
+			)
+
+			messages := p.getIncrementMessages(inv, time.Time{})
+			require.Len(t, messages, 2)
+			require.Len(t, messages[0].ToolCalls, 1)
+			require.Equal(t, "shell", messages[0].ToolCalls[0].Function.Name)
+			require.Equal(t, model.RoleTool, messages[1].Role)
+			require.Equal(t, "shell", messages[1].ToolName)
+			require.Equal(t, policyToolResultPlaceholder, messages[1].Content)
+		})
+	}
+}
+
 func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	baseTime := time.Now()
 	sinceTime := baseTime.Add(-time.Hour)

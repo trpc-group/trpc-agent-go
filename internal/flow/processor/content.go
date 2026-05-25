@@ -937,24 +937,25 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
-	if p.TimelineFilterMode == TimelineFilterAll {
-		var stats ContextCompactionStats
-		resultEvents, stats = compactIncrementEvents(
+	// Apply compaction to the already timeline-filtered projection. Tool-result
+	// policy (force-clean/keep) and historical passes must run for scoped modes
+	// such as request/invocation, not only when TimelineFilterAll is selected.
+	var stats ContextCompactionStats
+	resultEvents, stats = compactIncrementEvents(
+		context.Background(),
+		resultEvents,
+		inv.RunOptions.RequestID,
+		inv.InvocationID,
+		p.ContextCompactionConfig,
+	)
+	if stats.ToolResultsCompacted > 0 {
+		log.DebugfContext(
 			context.Background(),
-			resultEvents,
-			inv.RunOptions.RequestID,
-			inv.InvocationID,
-			p.ContextCompactionConfig,
+			"Context compaction omitted %d historical tool results (~%d tokens) for agent %s",
+			stats.ToolResultsCompacted,
+			stats.EstimatedTokensSaved,
+			inv.AgentName,
 		)
-		if stats.ToolResultsCompacted > 0 {
-			log.DebugfContext(
-				context.Background(),
-				"Context compaction omitted %d historical tool results (~%d tokens) for agent %s",
-				stats.ToolResultsCompacted,
-				stats.EstimatedTokensSaved,
-				inv.AgentName,
-			)
-		}
 	}
 
 	// Get current request ID for reasoning content filtering.
