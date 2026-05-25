@@ -21,6 +21,13 @@ go run ./examples/sandbox_service_execution \
   -scenario all
 ```
 
+For shorter live smoke checks, run the security-focused scenarios directly:
+
+```bash
+go run ./examples/sandbox_service_execution -scenario metadata-protection
+go run ./examples/sandbox_service_execution -scenario session-id-sanitization
+```
+
 ## Docker validation
 
 Build the validation image from the repository root so the `openclaw` module can
@@ -89,8 +96,8 @@ events, not from the Gateway final reply. This keeps the example scoped to
 service-level validation without changing Gateway aggregation behavior.
 
 Scenarios include Python execution, session workspace persistence, secret
-environment redaction, restricted networking, timeout handling, and output
-truncation.
+environment redaction, restricted networking, timeout handling, output
+truncation, protected metadata enforcement, and sanitized session ID isolation.
 
 Linux managed sandbox execution requires `bwrap` and user namespace support.
 When a container denies fresh `/proc` mounting with errors such as

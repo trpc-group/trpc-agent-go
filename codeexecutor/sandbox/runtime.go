@@ -176,14 +176,22 @@ func sanitizeID(id string) string {
 	}
 	out := strings.Trim(b.String(), "._-")
 	if out == "" {
-		sum := sha256.Sum256([]byte(id))
-		return hex.EncodeToString(sum[:8])
+		return shortIDHash(id)
 	}
 	if len(out) > 128 {
-		sum := sha256.Sum256([]byte(out))
-		out = out[:96] + "-" + hex.EncodeToString(sum[:8])
+		out = out[:96] + "-" + shortIDHash(id)
+	} else if out != id {
+		if len(out) > 111 {
+			out = out[:111]
+		}
+		out = out + "-" + shortIDHash(id)
 	}
 	return out
+}
+
+func shortIDHash(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:8])
 }
 
 func workspacePathForID(root string, id string) (string, string) {

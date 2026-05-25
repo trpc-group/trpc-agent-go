@@ -22,4 +22,12 @@ go run ./examples/sandbox_code_execution \
 
 Scenarios include deterministic Python execution, session persistence, secret
 environment redaction, restricted networking, timeout handling, output
-truncation, and verifying that `workspace_exec` remains hidden.
+truncation, protected metadata enforcement, sanitized session ID isolation, and
+verifying that `workspace_exec` remains hidden.
+
+Useful smoke checks:
+
+```bash
+go run ./examples/sandbox_code_execution -scenario metadata-protection
+go run ./examples/sandbox_code_execution -scenario session-id-sanitization
+```

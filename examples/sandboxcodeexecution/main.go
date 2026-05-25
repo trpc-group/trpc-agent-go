@@ -59,7 +59,10 @@ func main() {
 			"shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|"+
 			"file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|"+
 			"file-system-policy-agent-enforcement|file-system-policy-symlink-no-access|"+
-			"file-system-policy-stage-target-validation|session-policy-explicit-zero|"+
+			"file-system-policy-stage-target-validation|file-system-policy-put-files-symlink-target|"+
+			"file-system-policy-host-stage-absolute-grant|file-system-policy-host-stage-source-symlink|"+
+			"file-system-policy-directory-no-access-mask|session-workspace-id-sanitization|"+
+			"session-policy-explicit-zero|"+
 			"all",
 	)
 	modelName := flag.String("model", "glm-4.7-flash", "model name")
@@ -128,6 +131,11 @@ func runScenarios(ctx context.Context, cfg config) error {
 		{"file-system-policy-agent-enforcement", runFileSystemPolicyAgentEnforcement},
 		{"file-system-policy-symlink-no-access", runFileSystemPolicySymlinkNoAccess},
 		{"file-system-policy-stage-target-validation", runFileSystemPolicyStageTargetValidation},
+		{"file-system-policy-put-files-symlink-target", runFileSystemPolicyPutFilesSymlinkTarget},
+		{"file-system-policy-host-stage-absolute-grant", runFileSystemPolicyHostStageAbsoluteGrant},
+		{"file-system-policy-host-stage-source-symlink", runFileSystemPolicyHostStageSourceSymlink},
+		{"file-system-policy-directory-no-access-mask", runFileSystemPolicyDirectoryNoAccessMask},
+		{"session-workspace-id-sanitization", runSessionWorkspaceIDSanitization},
 		{"session-policy-explicit-zero", runSessionPolicyExplicitZero},
 	}
 	selected := map[string]scenario{}

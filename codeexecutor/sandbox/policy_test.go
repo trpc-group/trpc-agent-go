@@ -220,6 +220,38 @@ func TestProtectedMetadataWriteDenied(t *testing.T) {
 	}
 }
 
+func TestPutFilesRejectsSymlinkRedirect(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "put/symlink-redirect", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws.Path, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, ".git", "config"), []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	redirect := filepath.Join(ws.Path, "work", "redirect.txt")
+	if err := os.Symlink(filepath.Join(ws.Path, ".git", "config"), redirect); err != nil {
+		t.Fatal(err)
+	}
+	err = rt.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
+		Path:    "work/redirect.txt",
+		Content: []byte("bad"),
+	}})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("PutFiles symlink redirect error = %v, want ErrPathDenied", err)
+	}
+	data, err := os.ReadFile(filepath.Join(ws.Path, ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "original" {
+		t.Fatalf("protected target was written through symlink: %q", data)
+	}
+}
+
 func TestProtectedMetadataOnlyCoversWorkspaceRoot(t *testing.T) {
 	protected := defaultProtectedMetadata()
 	for _, rel := range []string{".git", ".git/config", ".agents/skills/demo/SKILL.md"} {
@@ -580,6 +612,12 @@ func TestWorkspacePathUsesAppUserSessionShape(t *testing.T) {
 	if id != "app_user_session" {
 		t.Fatalf("workspace id = %s", id)
 	}
+
+	collidingPath, collidingID := workspacePathForID(root, "app/user:a/session")
+	plainPath, plainID := workspacePathForID(root, "app/user_a/session")
+	if collidingPath == plainPath || collidingID == plainID {
+		t.Fatalf("workspace IDs collided: %s/%s vs %s/%s", collidingPath, collidingID, plainPath, plainID)
+	}
 }
 
 func TestManifestMaterializesInitialFilesAndEnv(t *testing.T) {
@@ -711,6 +749,27 @@ func TestStageDirectoryValidatesCopiedTargets(t *testing.T) {
 	err = redirect.StageDirectory(ctx, redirectWS, redirectHost, "work/staged", codeexecutor.StageOptions{})
 	if !IsKind(err, ErrPathDenied) {
 		t.Fatalf("symlink redirect stage error = %v, want ErrPathDenied", err)
+	}
+
+	symlinkHost := t.TempDir()
+	symlinkTarget := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(symlinkTarget, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(symlinkTarget, filepath.Join(symlinkHost, "outside-link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	symlinkRuntime := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile().WithReadPaths(symlinkHost)),
+	)
+	symlinkWS, err := symlinkRuntime.CreateWorkspace(ctx, "stage/source-symlink", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = symlinkRuntime.StageDirectory(ctx, symlinkWS, symlinkHost, "work/staged", codeexecutor.StageOptions{})
+	if !IsKind(err, ErrPathDenied) {
+		t.Fatalf("source symlink stage error = %v, want ErrPathDenied", err)
 	}
 }
 

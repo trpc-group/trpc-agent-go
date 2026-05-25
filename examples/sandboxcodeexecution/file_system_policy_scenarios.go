@@ -31,6 +31,10 @@ const (
 	fileSystemPolicyAgentEnforcementMarker      = "FILE_SYSTEM_POLICY_AGENT_ENFORCEMENT_OK"
 	fileSystemPolicySymlinkNoAccessMarker       = "FILE_SYSTEM_POLICY_SYMLINK_NO_ACCESS_OK"
 	fileSystemPolicyStageTargetValidationMarker = "FILE_SYSTEM_POLICY_STAGE_TARGET_VALIDATION_OK"
+	fileSystemPolicyPutFilesSymlinkMarker       = "FILE_SYSTEM_POLICY_PUT_FILES_SYMLINK_TARGET_OK"
+	fileSystemPolicyHostStageAbsoluteMarker     = "FILE_SYSTEM_POLICY_HOST_STAGE_ABSOLUTE_GRANT_OK"
+	fileSystemPolicyHostStageSymlinkMarker      = "FILE_SYSTEM_POLICY_HOST_STAGE_SOURCE_SYMLINK_OK"
+	fileSystemPolicyDirectoryNoAccessMarker     = "FILE_SYSTEM_POLICY_DIRECTORY_NO_ACCESS_MASK_OK"
 	sessionPolicyExplicitZeroMarker             = "SESSION_POLICY_EXPLICIT_ZERO_OK"
 	fileSystemPolicySecretSentinel              = "FILE_SYSTEM_POLICY_SECRET_SHOULD_NOT_APPEAR"
 )
@@ -313,6 +317,232 @@ Do not print file contents or environment variables.`)
 		return err
 	}
 	fmt.Println(redact(final))
+	return nil
+}
+
+func runFileSystemPolicyPutFilesSymlinkTarget(ctx context.Context, cfg config) error {
+	profile := sandbox.WorkspaceWriteProfile().WithNoAccessPaths("work/denied.txt")
+	rt := newRuntime(cfg, profile, 1<<20, 3*time.Second)
+	ws, err := rt.CreateWorkspace(ctx, "file-system-policy-put-files-symlink-target", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		return err
+	}
+	outside := filepath.Join(cfg.workspaceRoot, "put-files-outside-target.txt")
+	if err := os.WriteFile(outside, []byte("outside-original"), 0o600); err != nil {
+		return err
+	}
+	targets := []struct {
+		name       string
+		linkPath   string
+		targetPath string
+		original   string
+	}{
+		{
+			name:       "git",
+			linkPath:   filepath.Join(ws.Path, "work", "git-link.txt"),
+			targetPath: filepath.Join(ws.Path, ".git", "config"),
+			original:   "git-original",
+		},
+		{
+			name:       "agents",
+			linkPath:   filepath.Join(ws.Path, "work", "agents-link.txt"),
+			targetPath: filepath.Join(ws.Path, ".agents", "state.json"),
+			original:   "agents-original",
+		},
+		{
+			name:       "no-access",
+			linkPath:   filepath.Join(ws.Path, "work", "denied-link.txt"),
+			targetPath: filepath.Join(ws.Path, "work", "denied.txt"),
+			original:   "denied-original",
+		},
+		{
+			name:       "outside",
+			linkPath:   filepath.Join(ws.Path, "work", "outside-link.txt"),
+			targetPath: outside,
+			original:   "outside-original",
+		},
+	}
+	for _, target := range targets {
+		if err := os.MkdirAll(filepath.Dir(target.targetPath), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(target.targetPath, []byte(target.original), 0o600); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target.linkPath), 0o755); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(target.linkPath); err != nil {
+			return err
+		}
+		if err := os.Symlink(target.targetPath, target.linkPath); err != nil {
+			return err
+		}
+		err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+			Path:    "work/" + filepath.Base(target.linkPath),
+			Content: []byte("unexpected-" + target.name),
+		}})
+		if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+			return fmt.Errorf("%s symlink write was not denied: %v", target.name, err)
+		}
+		data, err := os.ReadFile(target.targetPath)
+		if err != nil {
+			return err
+		}
+		if string(data) != target.original {
+			return fmt.Errorf("%s target changed through symlink: %q", target.name, data)
+		}
+	}
+	fmt.Println(fileSystemPolicyPutFilesSymlinkMarker)
+	return nil
+}
+
+func runFileSystemPolicyHostStageAbsoluteGrant(ctx context.Context, cfg config) error {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	relativeRoot := filepath.Join(cfg.workspaceRoot, "relative-stage-root")
+	hostDir := filepath.Join(relativeRoot, "host-input")
+	if err := os.MkdirAll(hostDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "input.txt"), []byte("absolute-grant"), 0o600); err != nil {
+		return err
+	}
+	if err := os.Chdir(relativeRoot); err != nil {
+		return err
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	relativeRuntime := newRuntime(
+		cfg,
+		sandbox.WorkspaceWriteProfile().WithReadPaths("host-input"),
+		1<<20,
+		3*time.Second,
+	)
+	relativeWS, err := relativeRuntime.CreateWorkspace(ctx, "file-system-policy-host-stage-relative", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		return err
+	}
+	err = relativeRuntime.StageDirectory(ctx, relativeWS, "host-input", "work/relative", codeexecutor.StageOptions{})
+	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+		return fmt.Errorf("relative host source was not denied: %v", err)
+	}
+
+	relativeGrantRuntime := newRuntime(
+		cfg,
+		sandbox.WorkspaceWriteProfile().WithReadPaths("host-input"),
+		1<<20,
+		3*time.Second,
+	)
+	relativeGrantWS, err := relativeGrantRuntime.CreateWorkspace(ctx, "file-system-policy-host-stage-relative-grant", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		return err
+	}
+	err = relativeGrantRuntime.StageDirectory(ctx, relativeGrantWS, hostDir, "work/relative-grant", codeexecutor.StageOptions{})
+	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+		return fmt.Errorf("absolute source with relative grant was not denied: %v", err)
+	}
+
+	absoluteRuntime := newRuntime(
+		cfg,
+		sandbox.WorkspaceWriteProfile().WithReadPaths(hostDir),
+		1<<20,
+		3*time.Second,
+	)
+	absoluteWS, err := absoluteRuntime.CreateWorkspace(ctx, "file-system-policy-host-stage-absolute", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		return err
+	}
+	if err := absoluteRuntime.StageDirectory(ctx, absoluteWS, hostDir, "work/absolute", codeexecutor.StageOptions{}); err != nil {
+		return err
+	}
+	files, err := absoluteRuntime.Collect(ctx, absoluteWS, []string{"work/absolute/input.txt"})
+	if err != nil {
+		return err
+	}
+	if len(files) != 1 || files[0].Content != "absolute-grant" {
+		return fmt.Errorf("absolute host stage did not copy input: %#v", files)
+	}
+	fmt.Println(fileSystemPolicyHostStageAbsoluteMarker)
+	return nil
+}
+
+func runFileSystemPolicyHostStageSourceSymlink(ctx context.Context, cfg config) error {
+	hostDir := filepath.Join(cfg.workspaceRoot, "host-stage-source-symlink")
+	outsideDir := filepath.Join(cfg.workspaceRoot, "host-stage-outside")
+	if err := os.RemoveAll(hostDir); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(outsideDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(hostDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		return err
+	}
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0o600); err != nil {
+		return err
+	}
+	if err := os.Symlink(outsideFile, filepath.Join(hostDir, "outside-link.txt")); err != nil {
+		return err
+	}
+	rt := newRuntime(
+		cfg,
+		sandbox.WorkspaceWriteProfile().WithReadPaths(hostDir),
+		1<<20,
+		3*time.Second,
+	)
+	ws, err := rt.CreateWorkspace(ctx, "file-system-policy-host-stage-source-symlink", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		return err
+	}
+	err = rt.StageDirectory(ctx, ws, hostDir, "work/staged", codeexecutor.StageOptions{})
+	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+		return fmt.Errorf("source symlink stage was not denied: %v", err)
+	}
+	fmt.Println(fileSystemPolicyHostStageSymlinkMarker)
+	return nil
+}
+
+func runFileSystemPolicyDirectoryNoAccessMask(ctx context.Context, cfg config) error {
+	profile := sandbox.WorkspaceWriteProfile().WithNoAccessPaths("work/denied-dir")
+	rt := newRuntime(cfg, profile, 1<<20, 3*time.Second)
+	if err := requireManagedSandbox(ctx, rt, cfg); err != nil {
+		return err
+	}
+	ws, err := rt.CreateWorkspace(ctx, "file-system-policy-directory-no-access-mask", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(ws.Path, "work", "denied-dir"), 0o755); err != nil {
+		return err
+	}
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash",
+		Args: []string{
+			"-c",
+			"echo unexpected > denied-dir/new.txt 2>/dev/null || echo " + fileSystemPolicyDirectoryNoAccessMarker,
+		},
+		Cwd: codeexecutor.DirWork,
+	})
+	if err != nil {
+		return err
+	}
+	if strings.Contains(res.Stdout, "unexpected") {
+		return fmt.Errorf("denied directory was writable: result=%#v", res)
+	}
+	if err := expectContains(res.Stdout, fileSystemPolicyDirectoryNoAccessMarker); err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(ws.Path, "work", "denied-dir", "new.txt")); !os.IsNotExist(err) {
+		return fmt.Errorf("denied directory write appeared on host, stat err=%v", err)
+	}
+	fmt.Println(fileSystemPolicyDirectoryNoAccessMarker)
 	return nil
 }
 

@@ -102,6 +102,9 @@ func TestLinuxBwrapPreflightArgsMatchRuntimeCore(t *testing.T) {
 		"--new-session",
 		"--ro-bind", "/", "/",
 		"--dev", "/dev",
+		"--perms", "000",
+		"--tmpfs", "/proc",
+		"--remount-ro", "/proc",
 		"--", "/bin/true",
 	}
 	if !reflect.DeepEqual(withoutProc, wantWithoutProc) {
@@ -135,6 +138,9 @@ func TestLinuxSandboxArgsToggleProcMount(t *testing.T) {
 	}
 	if hasArgPair(withoutProc, "--proc", "/proc") {
 		t.Fatalf("args = %#v, unexpected --proc /proc", withoutProc)
+	}
+	if !hasArgTriple(withoutProc, "--tmpfs", "/proc", "--remount-ro") {
+		t.Fatalf("args = %#v, missing inaccessible /proc mask", withoutProc)
 	}
 	if !hasArg(withoutProc, "--unshare-pid") {
 		t.Fatalf("args = %#v, missing pid isolation", withoutProc)
@@ -250,8 +256,8 @@ func TestLinuxNoAccessMaskArgsCoverPathGlobAndSpecial(t *testing.T) {
 			t.Fatalf("mask args = %#v, missing ro-bind mask for %s", args, want)
 		}
 	}
-	if !hasArgPair(args, "--tmpfs", filepath.Join(ws.Path, codeexecutor.DirOut)) {
-		t.Fatalf("mask args = %#v, missing tmpfs for out special path", args)
+	if !hasInaccessibleDirMask(args, filepath.Join(ws.Path, codeexecutor.DirOut)) {
+		t.Fatalf("mask args = %#v, missing inaccessible mask for out special path", args)
 	}
 }
 
@@ -583,6 +589,20 @@ func hasArg(args []string, want string) bool {
 func hasArgTriple(args []string, first, second, third string) bool {
 	for i := 0; i+2 < len(args); i++ {
 		if args[i] == first && args[i+1] == second && args[i+2] == third {
+			return true
+		}
+	}
+	return false
+}
+
+func hasInaccessibleDirMask(args []string, target string) bool {
+	for i := 0; i+5 < len(args); i++ {
+		if args[i] == "--perms" &&
+			args[i+1] == "000" &&
+			args[i+2] == "--tmpfs" &&
+			args[i+3] == target &&
+			args[i+4] == "--remount-ro" &&
+			args[i+5] == target {
 			return true
 		}
 	}

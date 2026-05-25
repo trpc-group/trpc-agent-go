@@ -52,17 +52,14 @@ func (r *Runtime) PutFiles(
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-			return err
-		}
 		mode := os.FileMode(f.Mode)
 		if mode == 0 {
 			mode = codeexecutor.DefaultScriptFileMode
 		}
-		if err := os.WriteFile(abs, f.Content, mode); err != nil {
+		if err := r.checkWorkspaceWriteTarget(profile, ws, abs); err != nil {
 			return err
 		}
-		if err := os.Chmod(abs, mode); err != nil {
+		if err := writeFileAtomically(abs, f.Content, mode); err != nil {
 			return err
 		}
 	}
@@ -82,7 +79,10 @@ func (r *Runtime) StageDirectory(
 		normalizeProfile(r.profile),
 		additionalPermissionsFromContext(ctx),
 	)
-	if profile.enforcement() != enforcementDisabled && !pathHasRule(profile, src, accessRead) {
+	if !filepath.IsAbs(src) {
+		return deniedf(ErrPathDenied, "read", src, "host path must be absolute")
+	}
+	if profile.enforcement() != enforcementDisabled && !hostPathHasRule(profile, src, accessRead) {
 		return deniedf(ErrPathDenied, "read", src, "host path requires explicit read grant")
 	}
 	if err := r.checkWrite(profile, ws, to); err != nil {
@@ -611,7 +611,14 @@ func pinnedArtifactVersion(
 	return nil
 }
 
-func pathHasRule(profile PermissionProfile, target string, access fileSystemAccess) bool {
+func hostPathHasRule(profile PermissionProfile, target string, access fileSystemAccess) bool {
+	if !filepath.IsAbs(target) {
+		return false
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return false
+	}
 	for _, rule := range profile.fileSystem.Rules {
 		if rule.Kind != rulePath {
 			continue
@@ -619,15 +626,15 @@ func pathHasRule(profile PermissionProfile, target string, access fileSystemAcce
 		if rule.Access != access && rule.Access != accessWrite {
 			continue
 		}
-		if rule.Path == target {
-			return true
+		if !filepath.IsAbs(rule.Path) {
+			continue
 		}
-		if filepath.IsAbs(rule.Path) && filepath.IsAbs(target) {
-			ruleAbs, _ := filepath.Abs(rule.Path)
-			targetAbs, _ := filepath.Abs(target)
-			if sameOrChild(ruleAbs, targetAbs) {
-				return true
-			}
+		ruleAbs, err := filepath.Abs(rule.Path)
+		if err != nil {
+			continue
+		}
+		if sameOrChild(ruleAbs, targetAbs) {
+			return true
 		}
 	}
 	return false
@@ -748,9 +755,12 @@ func copyPath(src, dst string) error {
 }
 
 func copyPathWithValidator(src, dst string, validate func(string) error) error {
-	info, err := os.Stat(src)
+	info, err := os.Lstat(src)
 	if err != nil {
 		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return deniedf(ErrPathDenied, "read", src, "source symlink not stageable")
 	}
 	if info.IsDir() {
 		return copyDirWithValidator(src, dst, validate)
@@ -774,7 +784,7 @@ func copyDir(src, dst string) error {
 			return err
 		}
 		target := filepath.Join(dst, rel)
-		info, err := d.Info()
+		info, err := os.Lstat(path)
 		if err != nil {
 			return err
 		}
@@ -790,15 +800,18 @@ func copyDirWithValidator(src, dst string, validate func(string) error) error {
 		if err != nil {
 			return err
 		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return deniedf(ErrPathDenied, "read", path, "source symlink not stageable")
+		}
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
 		}
 		target := filepath.Join(dst, rel)
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
 		if d.IsDir() {
 			if err := validate(target); err != nil {
 				return err
@@ -850,6 +863,37 @@ func copyFileWithValidator(src, dst string, mode os.FileMode, validate func(stri
 		return err
 	}
 	return out.Close()
+}
+
+func writeFileAtomically(path string, content []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = f.Close()
+		}
+		_ = os.Remove(tmp)
+	}()
+	if _, err := f.Write(content); err != nil {
+		return err
+	}
+	if err := f.Chmod(mode); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		closed = true
+		return err
+	}
+	closed = true
+	return os.Rename(tmp, path)
 }
 
 func readFileLimited(path string, max int) ([]byte, bool, error) {

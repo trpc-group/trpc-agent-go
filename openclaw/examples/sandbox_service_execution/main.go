@@ -312,6 +312,8 @@ func runScenarios(
 		{"network-restricted", runNetworkRestricted},
 		{"timeout", runTimeout},
 		{"output-cap", runOutputCap},
+		{"metadata-protection", runMetadataProtection},
+		{"session-id-sanitization", runSessionIDSanitization},
 	}
 	selected := make(map[string]scenario, len(scenarios))
 	for _, sc := range scenarios {

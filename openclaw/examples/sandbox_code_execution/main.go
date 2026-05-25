@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	defaultScenario = "basic-python"
-	appName         = "openclaw-sandbox-code-execution"
+	defaultScenario   = "basic-python"
+	defaultConfigPath = "examples/sandbox_code_execution/openclaw.yaml"
+	appName           = "openclaw-sandbox-code-execution"
 )
 
 var errSkip = errors.New("skip")
@@ -80,7 +81,7 @@ type sandboxShellEnvConfig struct {
 }
 
 func main() {
-	configPath := flag.String("config", "openclaw.yaml", "OpenClaw-style YAML config")
+	configPath := flag.String("config", defaultConfigPath, "OpenClaw-style YAML config")
 	scenarioName := flag.String("scenario", defaultScenario, "scenario name or all")
 	requireOSSandbox := flag.Bool("require-os-sandbox", true, "fail when managed OS sandbox setup is unavailable")
 	flag.Parse()
@@ -155,6 +156,8 @@ func runScenarios(
 		{"output-cap", runOutputCap},
 		{"workspace-exec-hidden", runWorkspaceExecHidden},
 		{"disabled-profile-explicit", runDisabledProfileExplicit},
+		{"metadata-protection", runMetadataProtection},
+		{"session-id-sanitization", runSessionIDSanitization},
 	}
 	selected := make(map[string]scenario, len(scenarios))
 	for _, sc := range scenarios {

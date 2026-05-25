@@ -393,6 +393,9 @@ func TestRuntimeDefaultsDescribeAndHelpers(t *testing.T) {
 	if got := sanitizeID("!!!"); len(got) != 16 {
 		t.Fatalf("hashed sanitizeID length = %d, want 16", len(got))
 	}
+	if sanitizeID("user:a") == sanitizeID("user_a") {
+		t.Fatalf("sanitized IDs collided for distinct raw IDs")
+	}
 	long := strings.Repeat("a", 160)
 	if got := sanitizeID(long); len(got) != 113 || !strings.Contains(got, "-") {
 		t.Fatalf("long sanitizeID = %q", got)
@@ -440,6 +443,40 @@ func TestRuntimeFilesystemOperations(t *testing.T) {
 	}
 	if err := rt.StageDirectory(context.Background(), ws, host, "work/host", codeexecutor.StageOptions{}); !IsKind(err, ErrPathDenied) {
 		t.Fatalf("ungranted host stage error = %v, want ErrPathDenied", err)
+	}
+	relativeRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(relativeRoot); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldWD)
+	})
+	if err := os.MkdirAll("relative-host", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("relative-host", "input.txt"), []byte("relative"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	relative := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile().WithReadPaths("relative-host")),
+	)
+	relativeWS, err := relative.CreateWorkspace(context.Background(), "fs/relative-stage", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relative.StageDirectory(
+		context.Background(),
+		relativeWS,
+		"relative-host",
+		"work/relative",
+		codeexecutor.StageOptions{},
+	); !IsKind(err, ErrPathDenied) {
+		t.Fatalf("relative host stage error = %v, want ErrPathDenied", err)
 	}
 
 	granted := NewRuntime(
@@ -792,13 +829,13 @@ func TestFilesystemHelperBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := WorkspaceWriteProfile().WithWritePaths(root)
-	if !pathHasRule(profile, child, accessRead) {
+	if !hostPathHasRule(profile, child, accessRead) {
 		t.Fatalf("absolute child should inherit read-compatible grant from parent")
 	}
-	if !pathHasRule(profile, child, accessWrite) {
+	if !hostPathHasRule(profile, child, accessWrite) {
 		t.Fatalf("absolute child should inherit write grant from parent")
 	}
-	if pathHasRule(WorkspaceWriteProfile().WithNoAccessPaths(root), child, accessRead) {
+	if hostPathHasRule(WorkspaceWriteProfile().WithNoAccessPaths(root), child, accessRead) {
 		t.Fatalf("no-access rule should not satisfy read grant")
 	}
 

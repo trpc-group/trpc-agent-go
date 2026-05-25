@@ -85,6 +85,8 @@ func (r *Runtime) linuxSandboxArgs(
 	}
 	if mountProc {
 		args = append(args, "--proc", "/proc")
+	} else {
+		args = appendInaccessibleDirMaskArgs(args, "/proc")
 	}
 	if profile.network.Mode == NetworkRestricted {
 		args = append(args, "--unshare-net")
@@ -215,6 +217,8 @@ func buildBwrapPreflightArgs(mountProc bool) []string {
 	}
 	if mountProc {
 		args = append(args, "--proc", "/proc")
+	} else {
+		args = appendInaccessibleDirMaskArgs(args, "/proc")
 	}
 	args = append(args, "--", "/bin/true")
 	return args
@@ -346,12 +350,20 @@ func (r *Runtime) denyReadMaskArgs(
 			return nil, err
 		}
 		if info.IsDir() {
-			args = append(args, "--tmpfs", match)
+			args = appendInaccessibleDirMaskArgs(args, match)
 			continue
 		}
 		args = append(args, "--ro-bind", denyReadMaskSource(ws), match)
 	}
 	return args, nil
+}
+
+func appendInaccessibleDirMaskArgs(args []string, target string) []string {
+	return append(args,
+		"--perms", "000",
+		"--tmpfs", target,
+		"--remount-ro", target,
+	)
 }
 
 func denyReadMaskSource(ws codeexecutor.Workspace) string {
