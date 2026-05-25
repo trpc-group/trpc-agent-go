@@ -1,0 +1,76 @@
+[
+  {
+    "metricName": "llm_rubric_critic",
+    "threshold": 0.98,
+    "criterion": {
+      "llmJudge": {
+        "rubrics": [
+          {
+            "id": "source_grounding",
+            "description": "The recap is fully grounded in the user JSON.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "The actual recap must only use facts supported by the user JSON and the golden recap. Fail if it invents a venue, ranking, streak, injury, future opponent, qualification consequence, tactical intent, emotion, unsupported cause, unsupported translation, renamed participant, or any other fact not supported by the allowed evidence."
+            }
+          },
+          {
+            "id": "lead_main_story",
+            "description": "The lead states the result and main story with the same editorial priority as the golden recap.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "The opening body paragraph must state the event context, final result, and winning storyline emphasized by the golden recap. Fail if the lead is only a generic result sentence, a raw fact list, or misses the main angle that the golden recap puts first."
+            }
+          },
+          {
+            "id": "decisive_sequence",
+            "description": "The decisive sequence is preserved in the correct order.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "The actual recap must preserve the decisive chain from the golden recap in the correct order, including late plays, penalty rounds, saved set or match points, safety-car pit windows, overtime penalty kill, final over, lead-out and sprint, or failed relief outing when present. Fail if a named decisive step is missing, reordered in a way that changes meaning, or replaced with a vague summary."
+            }
+          },
+          {
+            "id": "numbers_sport_logic",
+            "description": "Scores, numbers, and sport-specific notation are accurate.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "All scores, margins, timestamps, innings, overs, balls remaining, wickets, tiebreaks, periods, laps, gaps, shooting lines, and sport-specific notation in the actual recap must match the user JSON and preserve the sport semantics used by the golden recap. Fail for any wrong number, wrong score direction, malformed score that changes meaning, or mixed terminology such as treating cricket overs as a decimal ball count."
+            }
+          },
+          {
+            "id": "headline_angle",
+            "description": "The headline is publishable and carries the decisive angle.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "The first line must work as a sports-news headline that combines the result with a key number or decisive angle comparable to the golden recap. Fail if it is just a plain result sentence, misses the golden recap's headline angle, contains an unsupported stage/result claim, or uses a title-level number or timing error."
+            }
+          },
+          {
+            "id": "data_player_interpretation",
+            "description": "Data and player details explain why the result happened.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "Player and team data in the actual recap must be selected and interpreted to explain the result at a level comparable to the golden recap. Fail if the actual recap mostly dumps statistics, omits a key performer or decisive data contrast present in the golden recap, or does not connect the data to the winning storyline."
+            }
+          },
+          {
+            "id": "reference_depth_style",
+            "description": "The recap matches the golden recap's density, ordering, and sports-desk style.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "The actual recap should match the golden recap's content density, ordering, and professional Chinese sports-desk style. Fail if it replaces named sequences, time points, and score changes with vague summaries, becomes a thin field dump, or loses multiple details that define the golden recap's editorial substance."
+            }
+          },
+          {
+            "id": "production_copy",
+            "description": "The Chinese copy is polished and publishable.",
+            "type": "FORMAT_COMPLIANCE",
+            "content": {
+              "text": "The actual recap must be concise, fluent, professional Chinese sports copy without Markdown styling, meta commentary, multiple rewritten versions, slogan-like hype, translationese, malformed score spacing, awkward data dumping, or unnatural terms such as ACE球. Fail if it would require substantial editing before publication."
+            }
+          }
+        ]
+      }
+    }
+  }
+]

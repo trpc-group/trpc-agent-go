@@ -1,0 +1,166 @@
+{
+  "evalSetId": "sports-recap-train",
+  "name": "sports-recap-train",
+  "evalCases": [
+    {
+      "evalId": "train_01_nba_nuggets_blowout",
+      "conversation": [
+        {
+          "invocationId": "train_01_nba_nuggets_blowout-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"date\":\"2026-01-12\",\"venue\":\"Ball Arena\",\"teams\":{\"home\":{\"name\":\"丹佛掘金\",\"score\":128,\"recordAfter\":\"28-12\",\"scoreByQuarter\":[34,32,31,31]},\"away\":{\"name\":\"波特兰开拓者\",\"score\":104,\"recordAfter\":\"14-27\",\"scoreByQuarter\":[25,24,27,28]}},\"result\":{\"winner\":\"丹佛掘金\",\"margin\":24,\"largestLead\":29},\"garbageTime\":{\"start\":\"第四节8:42\",\"score\":\"丹佛掘金108-84波特兰开拓者\",\"benchPointsAfterStart\":{\"丹佛掘金\":17,\"波特兰开拓者\":14}},\"teamStats\":{\"丹佛掘金\":{\"fieldGoals\":\"48-91\",\"threePointers\":\"18-39\",\"threePointPct\":\"46.2%\",\"assists\":31,\"turnovers\":11,\"benchPoints\":52},\"波特兰开拓者\":{\"fieldGoals\":\"40-92\",\"threePointers\":\"10-34\",\"threePointPct\":\"29.4%\",\"assists\":23,\"turnovers\":14,\"benchPoints\":39}},\"keyPlayers\":[{\"team\":\"丹佛掘金\",\"name\":\"尼古拉·约基奇\",\"points\":22,\"rebounds\":10,\"assists\":8,\"minutes\":28},{\"team\":\"丹佛掘金\",\"name\":\"贾马尔·穆雷\",\"points\":20,\"assists\":6,\"threePointers\":\"4-7\"},{\"team\":\"丹佛掘金\",\"name\":\"朱利安·斯特劳瑟\",\"points\":12,\"fieldGoals\":\"4-6\",\"bench\":true},{\"team\":\"波特兰开拓者\",\"name\":\"安芬尼·西蒙斯\",\"points\":24,\"threePointers\":\"4-9\"}],\"recapAngle\":\"丹佛外线和替补深度早早拉开比赛，主力末节无需久留\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "掘金128比104大胜开拓者 18记三分+替补52分让主力末节早收\n\n2026年1月12日，丹佛掘金在Ball Arena以128比104击败波特兰开拓者，战绩来到28-12，开拓者赛后为14-27。掘金前三节分别拿到34分、32分和31分，三节结束已以97比76领先；第四节还剩8分42秒时比分来到108比84，比赛提前进入替补收尾节奏。外线效率和板凳深度，是丹佛把比赛打成大胜的两条主线。\n\n比赛从首节就向掘金倾斜。丹佛第一节34比25领先9分，第二节又以32比24继续扩大优势，半场已经66比49领先17分。第三节开拓者仍没能缩小差距，掘金再打出31比27，带着21分优势进入末节。第四节还剩8分42秒时，掘金领先达到24分，此后比赛悬念基本消失，最终最大领先来到29分。\n\n数据层面，掘金赢在进攻质量和阵容厚度。全队91投48中，三分39投18中，三分命中率达到46.2%；开拓者三分34投10中，命中率只有29.4%。丹佛还送出31次助攻且只有11次失误，开拓者为23次助攻、14次失误。更关键的是替补得分，掘金板凳席拿到52分，比开拓者替补多出13分；进入垃圾时间后，掘金替补仍以17比14压过对手，没有让比分走势出现反复。\n\n尼古拉·约基奇只打28分钟就交出22分10篮板8助攻，无需长时间留在场上。贾马尔·穆雷得到20分6助攻，三分7投4中，延续了掘金外线优势；替补席上朱利安·斯特劳瑟6投4中拿到12分，成为板凳火力的一部分。开拓者方面，安芬尼·西蒙斯得到24分并命中4记三分，但球队整体外线效率、传导质量和替补输出都落在下风，最终以24分差距告负。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "train_02_football_penalty_advancement",
+      "conversation": [
+        {
+          "invocationId": "train_02_football_penalty_advancement-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"football\",\"competition\":\"东岸杯\",\"round\":\"1/8决赛\",\"game\":\"北港竞技 vs 山城骑士\",\"advancingTeam\":\"北港竞技\",\"regularTimeScore\":\"北港竞技 0-0 山城骑士\",\"extraTimeScore\":\"北港竞技 1-1 山城骑士\",\"goals\":[{\"minute\":105,\"team\":\"北港竞技\",\"player\":\"韩序\",\"period\":\"extra_time\",\"method\":\"禁区内推射\"},{\"minute\":118,\"team\":\"山城骑士\",\"player\":\"周临\",\"period\":\"extra_time\",\"method\":\"后点头球\"}],\"penaltyShootout\":{\"score\":\"北港竞技 5-4 山城骑士\",\"rounds\":[{\"round\":1,\"北港竞技\":\"scored\",\"山城骑士\":\"scored\",\"runningScore\":\"1-1\"},{\"round\":2,\"北港竞技\":\"scored\",\"山城骑士\":\"scored\",\"runningScore\":\"2-2\"},{\"round\":3,\"北港竞技\":\"scored\",\"山城骑士\":\"missed\",\"runningScore\":\"3-2\"},{\"round\":4,\"北港竞技\":\"missed\",\"山城骑士\":\"scored\",\"runningScore\":\"3-3\"},{\"round\":5,\"北港竞技\":\"scored\",\"山城骑士\":\"scored\",\"runningScore\":\"4-4\"},{\"round\":6,\"北港竞技\":\"scored\",\"山城骑士\":\"missed\",\"runningScore\":\"5-4\"}]},\"recapAngle\":\"有明确advancingTeam时可以写晋级；点球轮次要交代第三、第四和第六轮变化\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "北港竞技点球5比4晋级，山城骑士118分钟追平仍倒在第六轮\n\n东岸杯1/8决赛，北港竞技与山城骑士常规时间0比0战平，加时赛各进一球，最终北港竞技在点球大战中5比4胜出并晋级。比赛主线从加时末段的破门与追平，转向点球大战第三轮、第四轮和第六轮的连续变化：北港竞技先获得主动，又被追平，最后在第六轮抓住机会完成晋级。\n\n常规时间双方都没有进球，僵局一直延续到加时赛。第105分钟，韩序在禁区内推射破门，北港竞技率先打破0比0；第118分钟，周临用后点头球为山城骑士追成1比1，把比赛拖入点球决胜。山城骑士的扳平让比赛重新回到同一起跑线，但也把胜负压缩到每一轮点球的执行质量上。\n\n点球大战前两轮双方全部命中，比分来到2比2。第三轮出现第一次转折，北港竞技罚进，山城骑士罚失，北港竞技以3比2取得领先。第四轮局势又被改写，北港竞技罚失，山城骑士命中，点球比分被追成3比3。第五轮双方再次命中后，悬念留到第六轮。\n\n第六轮成为决定晋级的一轮。北港竞技继续罚进，山城骑士第二次罚失，点球比分定格在5比4。北港竞技赢在关键轮次的兑现：第三轮先抢到优势，第六轮完成收口；山城骑士虽然靠第118分钟的头球延续希望，但第三轮和第六轮两次罚失，最终让他们止步东岸杯1/8决赛。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "train_03_football_late_header",
+      "conversation": [
+        {
+          "invocationId": "train_03_football_late_header-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"football\",\"competition\":\"城市杯\",\"round\":\"半决赛\",\"nextStageKnown\":false,\"game\":\"滨河FC vs 海港联\",\"teams\":{\"home\":\"滨河FC\",\"away\":\"海港联\"},\"result\":{\"winner\":\"滨河FC\",\"score\":\"2-1\"},\"goals\":[{\"minute\":23,\"team\":\"海港联\",\"player\":\"陈佑\",\"method\":\"禁区弧顶低射\"},{\"minute\":67,\"team\":\"滨河FC\",\"player\":\"林越\",\"method\":\"点球\"},{\"minute\":\"90+4\",\"team\":\"滨河FC\",\"player\":\"刘凯\",\"method\":\"角球头球\"}],\"teamStats\":{\"滨河FC\":{\"possession\":\"42%\",\"shots\":11,\"shotsOnTarget\":5,\"corners\":6,\"fouls\":13},\"海港联\":{\"possession\":\"58%\",\"shots\":14,\"shotsOnTarget\":4,\"corners\":5,\"fouls\":10}},\"keyMoments\":[\"海港联第23分钟先入一球\",\"滨河FC第67分钟利用点球扳平\",\"第90+4分钟滨河FC角球进攻中由刘凯头球破门\"],\"recapAngle\":\"控球少的一方通过定位球和补时头球完成逆转\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "滨河FC2比1逆转海港联 刘凯90+4角球头球制胜\n\n城市杯半决赛，滨河FC在先丢一球的情况下以2比1击败海港联。海港联第23分钟由陈佑禁区弧顶低射破门，并凭借58%的控球率长时间占据球权；但滨河FC用第67分钟林越的点球扳平比分，随后在第90+4分钟把角球机会转化为刘凯的制胜头球，完成一场控球少的一方的逆转。\n\n比赛走势先由海港联打开。第23分钟，陈佑在禁区弧顶低射得手，海港联取得1比0领先。此后滨河FC并没有在控球上占优，全场控球率只有42%，但他们逐渐把机会集中到更直接的进攻和定位球上。第67分钟，滨河FC获得点球，林越主罚命中，将比分追成1比1。\n\n真正改变胜负的是补时阶段的关键定位球。第90+4分钟，滨河FC角球进攻中由刘凯头球破门，把比分改写为2比1。这个进球不仅完成反超，也让海港联此前的控球和射门优势未能转化为胜势。\n\n数据上，海港联射门14比11领先，控球率也高出16个百分点，但射正只有4次，反而少于滨河FC的5次。滨河FC角球6比5略占上风，并把点球和补时角球两次关键机会都转化成进球。相比海港联更长时间控球，滨河FC赢在关键机会的效率和定位球终结。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "train_04_mlb_walkoff_single",
+      "conversation": [
+        {
+          "invocationId": "train_04_mlb_walkoff_single-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"baseball\",\"league\":\"MLB\",\"game\":\"辛辛那提红人 vs 芝加哥小熊\",\"venue\":\"Great American Ball Park\",\"result\":{\"winner\":\"辛辛那提红人\",\"score\":\"3-2\",\"walkOff\":true},\"linescore\":{\"辛辛那提红人\":{\"runs\":3,\"hits\":8,\"errors\":0},\"芝加哥小熊\":{\"runs\":2,\"hits\":6,\"errors\":1}},\"scoringSummary\":[{\"inning\":\"3上\",\"team\":\"芝加哥小熊\",\"detail\":\"Ian Happ二垒安打送回1分\"},{\"inning\":\"4下\",\"team\":\"辛辛那提红人\",\"detail\":\"Elly De La Cruz阳春本垒打追成1-1\"},{\"inning\":\"7上\",\"team\":\"芝加哥小熊\",\"detail\":\"Seiya Suzuki高飞牺牲打，芝加哥2-1领先\"},{\"inning\":\"9下\",\"team\":\"辛辛那提红人\",\"detail\":\"Tyler Stephenson一出局满垒再见安打，送回2分\"}],\"keyPlayers\":[{\"team\":\"辛辛那提红人\",\"name\":\"Tyler Stephenson\",\"batting\":\"2-for-4\",\"rbi\":2,\"notable\":\"九局下再见安打\"},{\"team\":\"辛辛那提红人\",\"name\":\"Hunter Greene\",\"inningsPitched\":6,\"runsAllowed\":1,\"strikeouts\":8},{\"team\":\"芝加哥小熊\",\"name\":\"Justin Steele\",\"inningsPitched\":7,\"runsAllowed\":1,\"strikeouts\":6},{\"team\":\"芝加哥小熊\",\"name\":\"Adbert Alzolay\",\"inningsPitched\":0.2,\"runsAllowed\":2,\"blownSave\":true}],\"recapAngle\":\"投手战直到九局下被Stephenson再见安打和Alzolay救援失败改写\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Stephenson九下满垒再见安打，红人3比2逆转小熊\n\nMLB比赛中，辛辛那提红人在Great American Ball Park以3比2再见击败芝加哥小熊。整场主线是投手战被九局下最后一击改写：小熊两度领先，红人靠Elly De La Cruz阳春本垒打追平，最终由Tyler Stephenson在一出局满垒时敲出送回2分的再见安打完成逆转。\n\n小熊第3局先打开局面，Ian Happ在3上击出二垒安打送回1分。红人第4局回应，Elly De La Cruz轰出阳春本垒打，把比分追成1比1。第7局，Seiya Suzuki高飞牺牲打帮助芝加哥再拿1分，小熊带着2比1领先进入最后阶段。\n\n两队先发把比赛压在低比分区间。红人先发Hunter Greene投6局只失1分并送出8次三振，小熊先发Justin Steele投7局仅失1分、三振6次。前八局的拉锯里，两边得分机会都有限，这也让九局下的每一次上垒都被放大。\n\n决定胜负的是小熊救援端没能守住2比1。Adbert Alzolay只投0.2局失2分并救援失败，Stephenson则在一出局满垒局面完成全场最关键打席。他此役4打数2安打、贡献2分打点，全部打点都来自这支再见安打。全场红人8支安打且没有失误，小熊6支安打并出现1次失误；在一场只有5分的比赛里，红人把最后一次进攻转化成了决定性的两分。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "train_05_tennis_five_set_comeback",
+      "conversation": [
+        {
+          "invocationId": "train_05_tennis_five_set_comeback-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"tennis\",\"event\":\"上海大师赛\",\"round\":\"男单第三轮\",\"match\":\"陈林 vs Diego Martinez\",\"winner\":\"陈林\",\"score\":{\"sets\":[\"3-6\",\"4-6\",\"6-4\",\"7-5\",\"7-6(6)\"],\"finalSetTiebreak\":\"8-6\",\"duration\":\"4小时18分钟\"},\"keyStats\":{\"陈林\":{\"aces\":18,\"doubleFaults\":5,\"breakPoints\":\"5/13\",\"winners\":54,\"unforcedErrors\":41},\"Diego Martinez\":{\"aces\":11,\"doubleFaults\":3,\"breakPoints\":\"5/11\",\"winners\":47,\"unforcedErrors\":38}},\"turningPoints\":[\"陈林先丢两盘后第三盘第10局完成关键破发\",\"第四盘5-5后陈林连赢两局将比赛拖入决胜盘\",\"决胜盘抢七陈林在5-6挽救赛点，随后连得3分以8-6取胜\"],\"recapAngle\":\"五盘逆转，关键是决胜盘抢七挽救赛点\",\"styleNote\":\"保留网球比分连字符和抢七括号，ace写作记ace，不写ACE球\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "陈林决胜盘5-6救赛点连得3分，五盘逆转Diego Martinez\n\n上海大师赛男单第三轮，陈林耗时4小时18分钟，以3-6、4-6、6-4、7-5、7-6(6)击败Diego Martinez。陈林前两盘连续失守，一度以0-2落后，但第三盘第10局完成关键破发后，比赛走势开始被重新拉回。\n\n第四盘的分水岭出现在5-5之后。陈林连赢两局，以7-5将比赛拖入决胜盘，也把前两盘被动局面改写成最后一盘决胜。决胜盘抢七中，陈林在5-6面对赛点时守住关键分，随后连得3分，以8-6拿下抢七，完成这场五盘逆转。\n\n数据上，陈林的主动进攻更有冲击力：他发出18记ace，高于Martinez的11记ace，制胜分也以54比47领先；代价是5次双误和41次非受迫性失误，均多于Martinez的3次双误和38次非受迫性失误。两人破发总数同为5次，陈林13个破发点兑现5个，Martinez11个破发点兑现5个，真正决定胜负的不是破发次数，而是陈林在第三盘第10局、第四盘5-5后以及决胜盘抢七赛点上的连续关键分处理。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "train_06_badminton_saved_match_point",
+      "conversation": [
+        {
+          "invocationId": "train_06_badminton_saved_match_point-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"badminton\",\"competition\":\"亚洲羽毛球挑战赛\",\"event\":\"女单1/4决赛\",\"players\":{\"winner\":\"王岚\",\"loser\":\"陈思思\"},\"score\":{\"winner\":\"王岚\",\"games\":\"2-1\",\"gameScores\":[\"18-21\",\"23-21\",\"21-15\"]},\"keyPoints\":[{\"game\":2,\"score\":\"20-21\",\"server\":\"陈思思\",\"event\":\"王岚网前封网挽救赛点\"},{\"game\":2,\"score\":\"21-21\",\"event\":\"王岚连续压后场造成陈思思回球出界\"},{\"game\":2,\"score\":\"22-21\",\"event\":\"王岚反手勾对角得分，以23-21扳回一局\"},{\"game\":3,\"score\":\"15-13\",\"event\":\"王岚连拿4分扩大到19-13\"}],\"stats\":{\"王岚\":{\"netPoints\":21,\"unforcedErrors\":13,\"smashWinners\":16},\"陈思思\":{\"netPoints\":16,\"unforcedErrors\":19,\"smashWinners\":18}},\"recapAngle\":\"比分必须保留连字符；重点是第二局20-21挽救赛点和决胜局15-13后的4分攻势\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "王岚20-21救赛点连扳两局，2-1逆转陈思思\n\n亚洲羽毛球挑战赛女单1/4决赛，王岚在先丢一局后以18-21、23-21、21-15击败陈思思。整场主线集中在第二局局末：王岚在20-21、陈思思发球的赛点压力下完成网前封网，把比分追成21-21，也把比赛从败局边缘重新拉回拉锯。\n\n随后王岚连续压后场造成陈思思回球出界，以22-21反拿局点；下一分又用反手勾对角得分，将第二局定格在23-21。这个三分段直接改写比赛走势，陈思思从握有赛点变成被拖入决胜局。\n\n决胜局双方打到15-13后，王岚再次在关键段提速，连拿4分把比分扩大到19-13。相比第二局末段的险中求生，这波攻势让王岚真正建立缓冲，并最终以21-15收下决胜局。\n\n数据也解释了逆转原因。王岚网前得分21比16领先，非受迫性失误只有13次，少于陈思思的19次；陈思思扣杀得分18比16略占优势，但在第二局20-21之后和决胜局15-13之后，王岚在网前处理、后场压迫和失误控制上连续赢下更关键的分段。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "train_07_ice_hockey_overtime",
+      "conversation": [
+        {
+          "invocationId": "train_07_ice_hockey_overtime-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"ice_hockey\",\"gameType\":\"regular_season\",\"venue\":\"East Ice Center\",\"teams\":{\"home\":\"雪原狼\",\"away\":\"湖湾骑士\"},\"score\":{\"雪原狼\":3,\"湖湾骑士\":2,\"periods\":[{\"period\":1,\"雪原狼\":0,\"湖湾骑士\":1},{\"period\":2,\"雪原狼\":1,\"湖湾骑士\":0},{\"period\":3,\"雪原狼\":1,\"湖湾骑士\":1},{\"period\":\"OT\",\"雪原狼\":1,\"湖湾骑士\":0}]},\"keyPlays\":[{\"time\":\"第三节18:26\",\"team\":\"雪原狼\",\"player\":\"顾南\",\"event\":\"扳平进球\",\"detail\":\"顾南在门前混战中补射得手，将比分追成2比2\"},{\"time\":\"加时赛00:54\",\"team\":\"雪原狼\",\"player\":\"林川\",\"event\":\"犯规\",\"detail\":\"林川因阻挡被判2分钟小罚，雪原狼进入少打一人防守\"},{\"time\":\"加时赛01:22\",\"team\":\"湖湾骑士\",\"player\":\"阿列克谢·诺瓦克\",\"event\":\"强打射门\",\"detail\":\"诺瓦克在左侧争球圈直接射门，被门将沈澈用肩部挡出\"},{\"time\":\"加时赛02:31\",\"team\":\"湖湾骑士\",\"player\":\"何屿\",\"event\":\"门前补射\",\"detail\":\"何屿在门前补射，被沈澈用护腿封出\"},{\"time\":\"加时赛02:54\",\"team\":\"雪原狼\",\"player\":\"林川\",\"event\":\"回场\",\"detail\":\"林川结束受罚回到冰面，雪原狼完成少打一人防守\"},{\"time\":\"加时赛04:12\",\"team\":\"雪原狼\",\"player\":\"唐越\",\"event\":\"绝杀进球\",\"detail\":\"唐越接顾南回传，在右侧低射破门，帮助雪原狼3比2取胜\"}],\"goalieStats\":{\"雪原狼\":{\"goalie\":\"沈澈\",\"saves\":41,\"goalsAgainst\":2,\"overtimeSaves\":6},\"湖湾骑士\":{\"goalie\":\"罗森\",\"saves\":33,\"goalsAgainst\":3,\"overtimeSaves\":2}},\"specialTeams\":{\"雪原狼\":{\"penaltyKill\":\"1/1\",\"overtimePenaltyKill\":\"1/1\"},\"湖湾骑士\":{\"powerPlay\":\"0/1\",\"overtimePowerPlay\":\"0/1\"}},\"recapAngle\":\"不要用未给出的特勤组评价；重点写少打一人防守的两次扑救和4:12绝杀\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "沈澈加时少防多两连扑，唐越4分12秒助雪原狼绝杀湖湾骑士\n\n雪原狼在East Ice Center以3比2加时击败湖湾骑士。比赛胜负的分水岭不只在最后一攻，而是加时初段的少打一人防守：林川受罚后，沈澈连续挡出阿列克谢·诺瓦克的左侧争球圈直接射门和何屿的门前补射，帮助雪原狼熬过湖湾骑士唯一一次强打机会。守住这两次攻门后，唐越在加时4分12秒接顾南回传右侧低射破门，完成终结。\n\n湖湾骑士首节1比0领先，雪原狼第二节扳成1比1。第三节双方各进一球，雪原狼直到18分26秒才追平：顾南在门前混战中补射得手，把比分改写为2比2，也把比赛带入加时。进入加时后，雪原狼很快陷入被动，00分54秒林川因阻挡被判2分钟小罚，球队进入少打一人防守。\n\n这次少防多决定了比赛走向。01分22秒，诺瓦克在左侧争球圈直接起杆，沈澈用肩部挡出；02分31秒，何屿在门前补射，沈澈又用护腿封住。02分54秒林川回到冰面，雪原狼完成加时少防多。不到1分半钟后，顾南从追平进球者变成进攻发起点，他的回传找到唐越，唐越右侧低射击穿罗森，将比分定格为3比2。\n\n数据上，沈澈全场41次扑救、只丢2球，加时赛完成6次扑救，是雪原狼能够从被强打压制中脱身的核心。罗森完成33次扑救、加时2次扑救，但湖湾骑士唯一一次强打未能兑现，直接错过结束比赛的窗口。雪原狼守住加时少防多后，才有唐越4分12秒绝杀的进攻空间。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    },
+    {
+      "evalId": "train_08_cricket_last_over_chase",
+      "conversation": [
+        {
+          "invocationId": "train_08_cricket_last_over_chase-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"cricket\",\"format\":\"T20\",\"match\":\"南岸海鸥 vs 首都流星\",\"innings\":[{\"team\":\"南岸海鸥\",\"runs\":142,\"wickets\":9,\"overs\":\"20.0\",\"topScorer\":{\"name\":\"伊桑·周\",\"runs\":38,\"balls\":31}},{\"team\":\"首都流星\",\"runs\":145,\"wickets\":6,\"overs\":\"19.4\",\"target\":143,\"topScorer\":{\"name\":\"卡里姆·汗\",\"runs\":52,\"balls\":44,\"notOut\":true}}],\"result\":{\"winner\":\"首都流星\",\"margin\":\"4 wickets\",\"ballsRemaining\":2},\"finalOver\":{\"bowler\":\"罗伊·陈\",\"runsNeeded\":9,\"battingTeamScoreBefore\":\"134/6\",\"balls\":[{\"ball\":\"19.1\",\"runs\":1,\"detail\":\"卡里姆·汗推向长边拿1分\"},{\"ball\":\"19.2\",\"runs\":2,\"detail\":\"萨米尔·帕特尔穿过midwicket拿2分\"},{\"ball\":\"19.3\",\"runs\":0,\"detail\":\"罗伊·陈投出慢球，帕特尔挥空\"},{\"ball\":\"19.4\",\"runs\":8,\"detail\":\"帕特尔先打出四分，随后因no-ball获得1分并在free hit再打出三分，首都流星达到145/6\"}]},\"bowlingFigure\":{\"team\":\"南岸海鸥\",\"bowler\":\"罗伊·陈\",\"overs\":\"4.0\",\"wickets\":2,\"runsConceded\":31},\"recapAngle\":\"板球用over、wickets和balls remaining表达；不要把19.4 overs写成第19.4个球\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "首都流星19.4 overs追到145/6，最后over拿11分以4 wickets险胜南岸海鸥\n\nT20追逐战中，南岸海鸥先打出142/9，首都流星追143分目标时在19.4 overs达到145/6，以4 wickets、剩2 balls取胜。卡里姆·汗44 balls拿到52分且未出局，稳住首都流星的追逐底盘；萨米尔·帕特尔则在最后一个over完成决定性打击，把134/6、需9分的局面直接改写为胜利。\n\n南岸海鸥一局中由伊桑·周31 balls得到38分，全队定格在142/9。首都流星追逐到最后一个over前为134/6，仍需9分，罗伊·陈承担守分任务。19.1，卡里姆·汗推向长边拿1分；19.2，帕特尔穿过midwicket跑2分；19.3，罗伊·陈用慢球让帕特尔挥空，首都流星前三球只拿3分，剩下3个合法球仍需6分。转折出现在19.4：帕特尔先打出四分，随后借no-ball再得1分，并在free hit跑出3分，这组进攻合计8分，首都流星直接越过目标到145/6。\n\n首都流星赢球时只丢6 wickets，最终胜差是4 wickets；19.4 overs意味着他们在19个完整over后的第4个合法球就完成追逐。罗伊·陈全场4.0 overs失31分、取2 wickets，但最后一个over丢掉11分，未能守住9分额度。卡里姆·汗52 not out是追逐成功的稳定轴，帕特尔在19.2和19.4合计制造10分，尤其no-ball与free hit连续把守方压力放大，决定了最后两球不用再打的结局。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-sports-recap-agent",
+        "userId": "promptiter-demo-user"
+      }
+    }
+  ]
+}
