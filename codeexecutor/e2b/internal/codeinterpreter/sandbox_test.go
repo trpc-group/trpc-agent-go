@@ -606,3 +606,134 @@ func TestSandbox_GetInfoConcurrentWithGetHost(t *testing.T) {
 	}
 	<-done
 }
+
+func TestCreate_BackfillsEnvdAccessToken(t *testing.T) {
+	t.Setenv("E2B_ACCESS_TOKEN", "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/sandboxes" || r.Method != "POST" {
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"sandboxID":"sbx-1",
+			"clientID":"c-1",
+			"templateID":"tpl",
+			"envdPort":49999,
+			"envdAccessToken":"envd-from-api"
+		}`))
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Transport: &rewriteToServerTransport{target: srv.URL}}
+	sbx, err := Create(context.Background(), &SandboxOpts{
+		APIKey:     "k",
+		Domain:     "e2b.test",
+		Debug:      true,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got := sbx.connection.AccessToken; got != "envd-from-api" {
+		t.Errorf("expected AccessToken to be back-filled from envdAccessToken; got %q", got)
+	}
+	h := http.Header{}
+	sbx.addAuthHeaders(h)
+	if got := h.Get("X-Access-Token"); got != "envd-from-api" {
+		t.Errorf("X-Access-Token header: %q", got)
+	}
+}
+
+func TestCreate_DoesNotOverrideExplicitAccessToken(t *testing.T) {
+	t.Setenv("E2B_ACCESS_TOKEN", "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"sandboxID":"sbx-1",
+			"clientID":"c-1",
+			"templateID":"tpl",
+			"envdPort":49999,
+			"envdAccessToken":"envd-from-api"
+		}`))
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Transport: &rewriteToServerTransport{target: srv.URL}}
+	sbx, err := Create(context.Background(), &SandboxOpts{
+		APIKey:      "k",
+		AccessToken: "explicit-token",
+		Domain:      "e2b.test",
+		Debug:       true,
+		HTTPClient:  client,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got := sbx.connection.AccessToken; got != "explicit-token" {
+		t.Errorf("explicit AccessToken should not be overridden; got %q", got)
+	}
+}
+
+func TestConnect_BackfillsEnvdAccessToken(t *testing.T) {
+	t.Setenv("E2B_ACCESS_TOKEN", "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/sandboxes/abc" {
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"sandboxID":"abc",
+			"clientID":"cid",
+			"templateID":"tpl",
+			"envdAccessToken":"envd-from-api"
+		}`))
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Transport: &rewriteToServerTransport{target: srv.URL}}
+	sbx, err := Connect(context.Background(), "abc", &SandboxOpts{
+		APIKey:     "k",
+		Domain:     "e2b.test",
+		Debug:      true,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if got := sbx.connection.AccessToken; got != "envd-from-api" {
+		t.Errorf("expected AccessToken to be back-filled; got %q", got)
+	}
+}
+
+func TestConnect_DoesNotOverrideExplicitAccessToken(t *testing.T) {
+	t.Setenv("E2B_ACCESS_TOKEN", "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"sandboxID":"abc",
+			"clientID":"cid",
+			"templateID":"tpl",
+			"envdAccessToken":"envd-from-api"
+		}`))
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Transport: &rewriteToServerTransport{target: srv.URL}}
+	sbx, err := Connect(context.Background(), "abc", &SandboxOpts{
+		APIKey:      "k",
+		AccessToken: "explicit-token",
+		Domain:      "e2b.test",
+		Debug:       true,
+		HTTPClient:  client,
+	})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if got := sbx.connection.AccessToken; got != "explicit-token" {
+		t.Errorf("explicit AccessToken should not be overridden; got %q", got)
+	}
+}
