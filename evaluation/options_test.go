@@ -138,6 +138,12 @@ func TestWithJudgeRunner(t *testing.T) {
 	assert.Equal(t, custom, opts.judgeRunner)
 }
 
+func TestWithJudgeRunnerNumSamples(t *testing.T) {
+	opts := newOptions(WithJudgeRunnerNumSamples(3))
+	assert.NotNil(t, opts.judgeRunnerNumSamples)
+	assert.Equal(t, 3, *opts.judgeRunnerNumSamples)
+}
+
 func TestWithNumRuns(t *testing.T) {
 	opts := newOptions(WithNumRuns(5))
 	assert.Equal(t, 5, opts.numRuns)
@@ -206,6 +212,15 @@ func TestOptionsValidateRejectsNilRegistry(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "registry is nil")
+}
+
+func TestOptionsValidateRejectsInvalidJudgeRunnerNumSamples(t *testing.T) {
+	opts := newOptions(WithJudgeRunnerNumSamples(0))
+
+	err := opts.validate(false)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "judge runner num samples must be greater than 0")
 }
 
 func TestOptionsValidateRejectsNilMetricRegistry(t *testing.T) {
