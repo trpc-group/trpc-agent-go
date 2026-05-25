@@ -659,6 +659,7 @@ import (
 )
 
 type RunResult struct {
+	AppName            string               // AppName is the app that owns this run.
 	ID                 string               // ID is the run identifier.
 	Status             RunStatus            // Status is the current run status.
 	CurrentRound       int                  // CurrentRound is the current round number.
@@ -941,7 +942,7 @@ The minimal usage is:
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/manager"
 
-managerInstance, err := manager.New(engineInstance)
+managerInstance, err := manager.New(appName, engineInstance)
 if err != nil {
 	return err
 }
@@ -978,9 +979,9 @@ import (
 )
 
 type Store interface {
-	Create(ctx context.Context, run *engine.RunResult) error
-	Get(ctx context.Context, runID string) (*engine.RunResult, error)
-	Update(ctx context.Context, run *engine.RunResult) error
+	Create(ctx context.Context, appName string, run *engine.RunResult) error
+	Get(ctx context.Context, appName, runID string) (*engine.RunResult, error)
+	Update(ctx context.Context, appName string, run *engine.RunResult) error
 	Close() error
 }
 ```
@@ -993,7 +994,7 @@ type Store interface {
 
 `store/mysql` fits cross-process persistence and platform queries. It serializes `RunResult` into MySQL and supports both manual schema initialization and automatic table creation.
 
-The current implementation uses a single table to store run records. Core fields include `run_id`, `status`, serialized `run_result`, and timestamps such as `created_at` and `updated_at`. The full schema is available in [schema.sql](https://github.com/trpc-group/trpc-agent-go/tree/main/evaluation/workflow/promptiter/store/mysql/schema.sql).
+The current implementation uses a single table to store run records. Core fields include `app_name`, `run_id`, `status`, serialized `run_result`, and timestamps such as `created_at` and `updated_at`. `app_name` and `run_id` form the unique key that isolates run records across apps. The full schema is available in [schema.sql](https://github.com/trpc-group/trpc-agent-go/tree/main/evaluation/workflow/promptiter/store/mysql/schema.sql).
 
 ### HTTP APIs
 

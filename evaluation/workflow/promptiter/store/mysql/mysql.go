@@ -51,44 +51,43 @@ func New(opts ...Option) (store.Store, error) {
 }
 
 // Create persists one new PromptIter run.
-func (s *mysqlStore) Create(ctx context.Context, run *engine.RunResult) error {
-	if run == nil {
-		return errors.New("promptiter run is nil")
+func (s *mysqlStore) Create(ctx context.Context, appName string, run *engine.RunResult) error {
+	if err := validateRun(appName, run); err != nil {
+		return err
 	}
-	if run.ID == "" {
-		return errors.New("promptiter run id is empty")
-	}
-	payload, err := json.Marshal(run)
+	persisted := *run
+	persisted.AppName = appName
+	payload, err := json.Marshal(&persisted)
 	if err != nil {
 		return fmt.Errorf("marshal promptiter run %q: %w", run.ID, err)
 	}
 	query := fmt.Sprintf(
-		"INSERT INTO %s (run_id, status, run_result) VALUES (?, ?, ?)",
+		"INSERT INTO %s (app_name, run_id, status, run_result) VALUES (?, ?, ?, ?)",
 		s.tableName,
 	)
 	// Pass JSON as a UTF-8 string so the driver does not bind []byte as BINARY (MySQL JSON rejects binary charset).
-	if _, err := s.db.Exec(ctx, query, run.ID, string(run.Status), string(payload)); err != nil {
+	if _, err := s.db.Exec(ctx, query, appName, run.ID, string(run.Status), string(payload)); err != nil {
 		if mysqldb.IsDuplicateEntry(err) {
-			return fmt.Errorf("run %q already exists", run.ID)
+			return fmt.Errorf("run %q for app %q already exists", run.ID, appName)
 		}
 		return fmt.Errorf("create run %q: %w", run.ID, err)
 	}
 	return nil
 }
 
-// Get loads one persisted PromptIter run by run ID.
-func (s *mysqlStore) Get(ctx context.Context, runID string) (*engine.RunResult, error) {
-	if runID == "" {
-		return nil, errors.New("run id is empty")
+// Get loads one persisted PromptIter run by app name and run ID.
+func (s *mysqlStore) Get(ctx context.Context, appName, runID string) (*engine.RunResult, error) {
+	if err := validateRunKey(appName, runID); err != nil {
+		return nil, err
 	}
 	var payload []byte
 	query := fmt.Sprintf(
-		"SELECT run_result FROM %s WHERE run_id = ?",
+		"SELECT run_result FROM %s WHERE app_name = ? AND run_id = ?",
 		s.tableName,
 	)
-	if err := s.db.QueryRow(ctx, []any{&payload}, query, runID); err != nil {
+	if err := s.db.QueryRow(ctx, []any{&payload}, query, appName, runID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("run %q not found: %w", runID, os.ErrNotExist)
+			return nil, fmt.Errorf("run %q for app %q not found: %w", runID, appName, os.ErrNotExist)
 		}
 		return nil, fmt.Errorf("load run %q: %w", runID, err)
 	}
@@ -96,29 +95,27 @@ func (s *mysqlStore) Get(ctx context.Context, runID string) (*engine.RunResult, 
 	if err := json.Unmarshal(payload, &run); err != nil {
 		return nil, fmt.Errorf("unmarshal run %q: %w", runID, err)
 	}
-	if run.ID == "" {
-		run.ID = runID
-	}
+	run.AppName = appName
+	run.ID = runID
 	return &run, nil
 }
 
 // Update persists changes to one existing PromptIter run.
-func (s *mysqlStore) Update(ctx context.Context, run *engine.RunResult) error {
-	if run == nil {
-		return errors.New("promptiter run is nil")
+func (s *mysqlStore) Update(ctx context.Context, appName string, run *engine.RunResult) error {
+	if err := validateRun(appName, run); err != nil {
+		return err
 	}
-	if run.ID == "" {
-		return errors.New("promptiter run id is empty")
-	}
-	payload, err := json.Marshal(run)
+	persisted := *run
+	persisted.AppName = appName
+	payload, err := json.Marshal(&persisted)
 	if err != nil {
 		return fmt.Errorf("marshal promptiter run %q: %w", run.ID, err)
 	}
 	query := fmt.Sprintf(
-		"UPDATE %s SET status = ?, run_result = ?, updated_at = CURRENT_TIMESTAMP(6) WHERE run_id = ?",
+		"UPDATE %s SET status = ?, run_result = ?, updated_at = CURRENT_TIMESTAMP(6) WHERE app_name = ? AND run_id = ?",
 		s.tableName,
 	)
-	result, err := s.db.Exec(ctx, query, string(run.Status), string(payload), run.ID)
+	result, err := s.db.Exec(ctx, query, string(run.Status), string(payload), appName, run.ID)
 	if err != nil {
 		return fmt.Errorf("update run %q: %w", run.ID, err)
 	}
@@ -127,7 +124,7 @@ func (s *mysqlStore) Update(ctx context.Context, run *engine.RunResult) error {
 		return fmt.Errorf("rows affected for run %q: %w", run.ID, err)
 	}
 	if affected == 0 {
-		return fmt.Errorf("run %q not found: %w", run.ID, os.ErrNotExist)
+		return fmt.Errorf("run %q for app %q not found: %w", run.ID, appName, os.ErrNotExist)
 	}
 	return nil
 }
@@ -138,4 +135,27 @@ func (s *mysqlStore) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func validateRun(appName string, run *engine.RunResult) error {
+	if run == nil {
+		return errors.New("promptiter run is nil")
+	}
+	if err := validateRunKey(appName, run.ID); err != nil {
+		return err
+	}
+	if run.AppName != "" && run.AppName != appName {
+		return fmt.Errorf("promptiter run app name %q does not match %q", run.AppName, appName)
+	}
+	return nil
+}
+
+func validateRunKey(appName, runID string) error {
+	if appName == "" {
+		return errors.New("promptiter run app name is empty")
+	}
+	if runID == "" {
+		return errors.New("promptiter run id is empty")
+	}
+	return nil
 }

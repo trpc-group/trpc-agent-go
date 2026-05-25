@@ -20,26 +20,31 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	promptiter "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
+	promptiterinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/store/inmemory"
 )
 
 type recordingStore struct {
-	updateCtx context.Context
-	updateRun *promptiterengine.RunResult
+	updateAppName string
+	updateCtx     context.Context
+	updateRun     *promptiterengine.RunResult
 }
 
-func (s *recordingStore) Create(ctx context.Context, run *promptiterengine.RunResult) error {
+func (s *recordingStore) Create(ctx context.Context, appName string, run *promptiterengine.RunResult) error {
 	_ = ctx
+	_ = appName
 	_ = run
 	return nil
 }
 
-func (s *recordingStore) Get(ctx context.Context, runID string) (*promptiterengine.RunResult, error) {
+func (s *recordingStore) Get(ctx context.Context, appName, runID string) (*promptiterengine.RunResult, error) {
 	_ = ctx
+	_ = appName
 	_ = runID
 	return nil, os.ErrNotExist
 }
 
-func (s *recordingStore) Update(ctx context.Context, run *promptiterengine.RunResult) error {
+func (s *recordingStore) Update(ctx context.Context, appName string, run *promptiterengine.RunResult) error {
+	s.updateAppName = appName
 	s.updateCtx = ctx
 	s.updateRun = run
 	return nil
@@ -60,7 +65,7 @@ type scriptedStore struct {
 	runs            map[string]*promptiterengine.RunResult
 }
 
-func (s *scriptedStore) Create(ctx context.Context, run *promptiterengine.RunResult) error {
+func (s *scriptedStore) Create(ctx context.Context, appName string, run *promptiterengine.RunResult) error {
 	_ = ctx
 	if s.createErr != nil {
 		return s.createErr
@@ -68,12 +73,14 @@ func (s *scriptedStore) Create(ctx context.Context, run *promptiterengine.RunRes
 	if s.runs == nil {
 		s.runs = make(map[string]*promptiterengine.RunResult)
 	}
+	run.AppName = appName
 	s.runs[run.ID] = run
 	return nil
 }
 
-func (s *scriptedStore) Get(ctx context.Context, runID string) (*promptiterengine.RunResult, error) {
+func (s *scriptedStore) Get(ctx context.Context, appName, runID string) (*promptiterengine.RunResult, error) {
 	_ = ctx
+	_ = appName
 	if s.getErr != nil {
 		return nil, s.getErr
 	}
@@ -87,7 +94,7 @@ func (s *scriptedStore) Get(ctx context.Context, runID string) (*promptiterengin
 	return run, nil
 }
 
-func (s *scriptedStore) Update(ctx context.Context, run *promptiterengine.RunResult) error {
+func (s *scriptedStore) Update(ctx context.Context, appName string, run *promptiterengine.RunResult) error {
 	_ = ctx
 	s.updateCalls++
 	if s.updateErr != nil {
@@ -98,6 +105,7 @@ func (s *scriptedStore) Update(ctx context.Context, run *promptiterengine.RunRes
 	if s.runs == nil {
 		s.runs = make(map[string]*promptiterengine.RunResult)
 	}
+	run.AppName = appName
 	s.runs[run.ID] = run
 	return nil
 }
@@ -163,7 +171,7 @@ func TestManagerStartAndGetReturnRun(t *testing.T) {
 			}, nil
 		},
 	}
-	managerInstance, err := New(engineInstance)
+	managerInstance, err := New("demo-app", engineInstance)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, managerInstance.Close())
@@ -176,6 +184,7 @@ func TestManagerStartAndGetReturnRun(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, run)
+	assert.Equal(t, "demo-app", run.AppName)
 	assert.Equal(t, promptiterengine.RunStatusQueued, run.Status)
 	assert.NotEmpty(t, run.ID)
 	require.Eventually(t, func() bool {
@@ -186,6 +195,7 @@ func TestManagerStartAndGetReturnRun(t *testing.T) {
 	current, err := managerInstance.Get(context.Background(), run.ID)
 	require.NoError(t, err)
 	require.NotNil(t, current)
+	assert.Equal(t, "demo-app", current.AppName)
 	assert.Equal(t, run.ID, current.ID)
 	assert.Equal(t, promptiterengine.RunStatusSucceeded, current.Status)
 	require.NotNil(t, current.Structure)
@@ -217,6 +227,7 @@ func TestManagerStartStoresFinalSlimmedRun(t *testing.T) {
 		},
 	}
 	managerInstance, err := New(
+		"demo-app",
 		engineInstance,
 		WithStoredResultSlimming(promptiterengine.RunResultSlimming{OmitStructure: true}),
 	)
@@ -340,7 +351,7 @@ func TestManagerCancelTransitionsRun(t *testing.T) {
 			return nil, ctx.Err()
 		},
 	}
-	managerInstance, err := New(engineInstance)
+	managerInstance, err := New("demo-app", engineInstance)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, managerInstance.Close())
@@ -364,7 +375,7 @@ func TestManagerCancelTransitionsRun(t *testing.T) {
 }
 
 func TestRunObserverBuildsIncrementalRun(t *testing.T) {
-	managerInstance, err := New(&fakePromptIterEngine{})
+	managerInstance, err := New("demo-app", &fakePromptIterEngine{})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, managerInstance.Close())
@@ -372,10 +383,11 @@ func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 	concreteManager, ok := managerInstance.(*manager)
 	require.True(t, ok)
 	run := &promptiterengine.RunResult{
-		ID:     "run-1",
-		Status: promptiterengine.RunStatusRunning,
+		AppName: "demo-app",
+		ID:      "run-1",
+		Status:  promptiterengine.RunStatusRunning,
 	}
-	require.NoError(t, concreteManager.store.Create(context.Background(), run))
+	require.NoError(t, concreteManager.store.Create(context.Background(), "demo-app", run))
 	observer := &observer{
 		manager: concreteManager,
 		run:     run,
@@ -474,7 +486,7 @@ func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 
 func TestRunObserverPassesContextToStoreUpdate(t *testing.T) {
 	store := &recordingStore{}
-	managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+	managerInstance, err := New("demo-app", &fakePromptIterEngine{}, WithStore(store))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, managerInstance.Close())
@@ -482,8 +494,9 @@ func TestRunObserverPassesContextToStoreUpdate(t *testing.T) {
 	concreteManager, ok := managerInstance.(*manager)
 	require.True(t, ok)
 	run := &promptiterengine.RunResult{
-		ID:     "run-ctx",
-		Status: promptiterengine.RunStatusRunning,
+		AppName: "demo-app",
+		ID:      "run-ctx",
+		Status:  promptiterengine.RunStatusRunning,
 	}
 	observer := &observer{
 		manager: concreteManager,
@@ -498,7 +511,9 @@ func TestRunObserverPassesContextToStoreUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, store.updateCtx)
 	assert.Equal(t, "store-update", store.updateCtx.Value(ctxKey{}))
+	assert.Equal(t, "demo-app", store.updateAppName)
 	require.NotNil(t, store.updateRun)
+	assert.Equal(t, "demo-app", store.updateRun.AppName)
 	assert.Equal(t, run.ID, store.updateRun.ID)
 	assert.Equal(t, run.Status, store.updateRun.Status)
 	require.NotNil(t, store.updateRun.BaselineValidation)
@@ -507,8 +522,7 @@ func TestRunObserverPassesContextToStoreUpdate(t *testing.T) {
 
 func TestRunObserverStoresSlimmedCopy(t *testing.T) {
 	store := &recordingStore{}
-	managerInstance, err := New(
-		&fakePromptIterEngine{},
+	managerInstance, err := New("demo-app", &fakePromptIterEngine{},
 		WithStore(store),
 		WithStoredResultSlimming(promptiterengine.RunResultSlimming{
 			OmitStructure:       true,
@@ -522,8 +536,9 @@ func TestRunObserverStoresSlimmedCopy(t *testing.T) {
 	concreteManager, ok := managerInstance.(*manager)
 	require.True(t, ok)
 	run := &promptiterengine.RunResult{
-		ID:     "run-slim",
-		Status: promptiterengine.RunStatusRunning,
+		AppName: "demo-app",
+		ID:      "run-slim",
+		Status:  promptiterengine.RunStatusRunning,
 	}
 	observer := &observer{
 		manager: concreteManager,
@@ -560,7 +575,7 @@ func TestRunObserverStoresSlimmedCopy(t *testing.T) {
 }
 
 func TestRunObserverRejectsInvalidEvents(t *testing.T) {
-	managerInstance, err := New(&fakePromptIterEngine{})
+	managerInstance, err := New("demo-app", &fakePromptIterEngine{})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, managerInstance.Close())
@@ -569,11 +584,12 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 	observer := &observer{
 		manager: concreteManager,
 		run: &promptiterengine.RunResult{
-			ID:     "run-1",
-			Status: promptiterengine.RunStatusRunning,
+			AppName: "demo-app",
+			ID:      "run-1",
+			Status:  promptiterengine.RunStatusRunning,
 		},
 	}
-	require.NoError(t, concreteManager.store.Create(context.Background(), observer.run))
+	require.NoError(t, concreteManager.store.Create(context.Background(), "demo-app", observer.run))
 	assert.EqualError(t, observer.append(context.Background(), nil), "promptiter event is nil")
 	testCases := []struct {
 		name       string
@@ -702,7 +718,7 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 }
 
 func TestManagerGetReturnsNotFoundForMissingRun(t *testing.T) {
-	managerInstance, err := New(&fakePromptIterEngine{})
+	managerInstance, err := New("demo-app", &fakePromptIterEngine{})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, managerInstance.Close())
@@ -712,8 +728,37 @@ func TestManagerGetReturnsNotFoundForMissingRun(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestManagerGetIsolatesSharedStoreByAppName(t *testing.T) {
+	ctx := context.Background()
+	sharedStore := promptiterinmemory.New()
+	managerA, err := New("app-a", &fakePromptIterEngine{}, WithStore(sharedStore))
+	require.NoError(t, err)
+	managerB, err := New("app-b", &fakePromptIterEngine{}, WithStore(sharedStore))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, managerA.Close())
+		require.NoError(t, managerB.Close())
+	})
+	require.NoError(t, sharedStore.Create(ctx, "app-a", &promptiterengine.RunResult{
+		ID:     "run-1",
+		Status: promptiterengine.RunStatusQueued,
+	}))
+	require.NoError(t, sharedStore.Create(ctx, "app-b", &promptiterengine.RunResult{
+		ID:     "run-1",
+		Status: promptiterengine.RunStatusSucceeded,
+	}))
+	runA, err := managerA.Get(ctx, "run-1")
+	require.NoError(t, err)
+	runB, err := managerB.Get(ctx, "run-1")
+	require.NoError(t, err)
+	assert.Equal(t, "app-a", runA.AppName)
+	assert.Equal(t, promptiterengine.RunStatusQueued, runA.Status)
+	assert.Equal(t, "app-b", runB.AppName)
+	assert.Equal(t, promptiterengine.RunStatusSucceeded, runB.Status)
+}
+
 func TestManagerStartRejectsClosedManager(t *testing.T) {
-	managerInstance, err := New(&fakePromptIterEngine{})
+	managerInstance, err := New("demo-app", &fakePromptIterEngine{})
 	require.NoError(t, err)
 	require.NoError(t, managerInstance.Close())
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
@@ -726,14 +771,17 @@ func TestManagerStartRejectsClosedManager(t *testing.T) {
 }
 
 func TestNewRejectsNilEngine(t *testing.T) {
-	managerInstance, err := New(nil)
+	managerInstance, err := New("demo-app", nil)
 	assert.Nil(t, managerInstance)
 	assert.EqualError(t, err, "promptiter manager: engine must not be nil")
+	managerInstance, err = New("", &fakePromptIterEngine{})
+	assert.Nil(t, managerInstance)
+	assert.EqualError(t, err, "promptiter manager: app name must not be empty")
 }
 
 func TestManagerStartReturnsCreateError(t *testing.T) {
 	store := &scriptedStore{createErr: errors.New("create failed")}
-	managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+	managerInstance, err := New("demo-app", &fakePromptIterEngine{}, WithStore(store))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, managerInstance.Close())
@@ -749,7 +797,7 @@ func TestManagerStartReturnsCreateError(t *testing.T) {
 }
 
 func TestManagerCancelRejectsMissingRun(t *testing.T) {
-	managerInstance, err := New(&fakePromptIterEngine{})
+	managerInstance, err := New("demo-app", &fakePromptIterEngine{})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, managerInstance.Close())
@@ -765,12 +813,13 @@ func TestManagerCancelReturnsStoreErrors(t *testing.T) {
 			getErr: errors.New("load failed"),
 			runs: map[string]*promptiterengine.RunResult{
 				"run-1": {
-					ID:     "run-1",
-					Status: promptiterengine.RunStatusRunning,
+					AppName: "demo-app",
+					ID:      "run-1",
+					Status:  promptiterengine.RunStatusRunning,
 				},
 			},
 		}
-		managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+		managerInstance, err := New("demo-app", &fakePromptIterEngine{}, WithStore(store))
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			require.NoError(t, managerInstance.Close())
@@ -785,12 +834,13 @@ func TestManagerCancelReturnsStoreErrors(t *testing.T) {
 			updateErr: errors.New("update failed"),
 			runs: map[string]*promptiterengine.RunResult{
 				"run-1": {
-					ID:     "run-1",
-					Status: promptiterengine.RunStatusRunning,
+					AppName: "demo-app",
+					ID:      "run-1",
+					Status:  promptiterengine.RunStatusRunning,
 				},
 			},
 		}
-		managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+		managerInstance, err := New("demo-app", &fakePromptIterEngine{}, WithStore(store))
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			require.NoError(t, managerInstance.Close())
@@ -804,7 +854,7 @@ func TestManagerCancelReturnsStoreErrors(t *testing.T) {
 
 func TestManagerCloseIsIdempotent(t *testing.T) {
 	store := &scriptedStore{}
-	managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+	managerInstance, err := New("demo-app", &fakePromptIterEngine{}, WithStore(store))
 	require.NoError(t, err)
 	require.NoError(t, managerInstance.Close())
 	require.NoError(t, managerInstance.Close())
@@ -814,7 +864,7 @@ func TestManagerCloseIsIdempotent(t *testing.T) {
 func TestManagerRunHandlesErrorBranches(t *testing.T) {
 	t.Run("get error clears cancel", func(t *testing.T) {
 		store := &scriptedStore{getErr: errors.New("load failed")}
-		managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+		managerInstance, err := New("demo-app", &fakePromptIterEngine{}, WithStore(store))
 		require.NoError(t, err)
 		concreteManager := managerInstance.(*manager)
 		concreteManager.cancelFuncs["run-1"] = func() {}
@@ -828,12 +878,13 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 			updateErrAtCall: 1,
 			runs: map[string]*promptiterengine.RunResult{
 				"run-1": {
-					ID:     "run-1",
-					Status: promptiterengine.RunStatusQueued,
+					AppName: "demo-app",
+					ID:      "run-1",
+					Status:  promptiterengine.RunStatusQueued,
 				},
 			},
 		}
-		managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+		managerInstance, err := New("demo-app", &fakePromptIterEngine{}, WithStore(store))
 		require.NoError(t, err)
 		concreteManager := managerInstance.(*manager)
 		concreteManager.cancelFuncs["run-1"] = func() {}
@@ -845,8 +896,9 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 		store := &scriptedStore{
 			runs: map[string]*promptiterengine.RunResult{
 				"run-1": {
-					ID:     "run-1",
-					Status: promptiterengine.RunStatusRunning,
+					AppName: "demo-app",
+					ID:      "run-1",
+					Status:  promptiterengine.RunStatusRunning,
 				},
 			},
 		}
@@ -857,7 +909,7 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 				return nil, context.Canceled
 			},
 		}
-		managerInstance, err := New(engineInstance, WithStore(store))
+		managerInstance, err := New("demo-app", engineInstance, WithStore(store))
 		require.NoError(t, err)
 		concreteManager := managerInstance.(*manager)
 		concreteManager.cancelFuncs["run-1"] = func() {}
@@ -870,8 +922,9 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 		store := &scriptedStore{
 			runs: map[string]*promptiterengine.RunResult{
 				"run-1": {
-					ID:     "run-1",
-					Status: promptiterengine.RunStatusRunning,
+					AppName: "demo-app",
+					ID:      "run-1",
+					Status:  promptiterengine.RunStatusRunning,
 				},
 			},
 		}
@@ -883,7 +936,7 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 				return nil, errors.New("engine failed")
 			},
 		}
-		managerInstance, err := New(engineInstance, WithStore(store))
+		managerInstance, err := New("demo-app", engineInstance, WithStore(store))
 		require.NoError(t, err)
 		concreteManager := managerInstance.(*manager)
 		concreteManager.cancelFuncs["run-1"] = func() {}
@@ -896,8 +949,9 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 		store := &scriptedStore{
 			runs: map[string]*promptiterengine.RunResult{
 				"run-1": {
-					ID:     "run-1",
-					Status: promptiterengine.RunStatusRunning,
+					AppName: "demo-app",
+					ID:      "run-1",
+					Status:  promptiterengine.RunStatusRunning,
 				},
 			},
 		}
@@ -909,7 +963,7 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 				return nil, nil
 			},
 		}
-		managerInstance, err := New(engineInstance, WithStore(store))
+		managerInstance, err := New("demo-app", engineInstance, WithStore(store))
 		require.NoError(t, err)
 		concreteManager := managerInstance.(*manager)
 		concreteManager.cancelFuncs["run-1"] = func() {}
@@ -924,8 +978,9 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 			updateErrAtCall: 2,
 			runs: map[string]*promptiterengine.RunResult{
 				"run-1": {
-					ID:     "run-1",
-					Status: promptiterengine.RunStatusRunning,
+					AppName: "demo-app",
+					ID:      "run-1",
+					Status:  promptiterengine.RunStatusRunning,
 				},
 			},
 		}
@@ -937,7 +992,7 @@ func TestManagerRunHandlesErrorBranches(t *testing.T) {
 				return &promptiterengine.RunResult{}, nil
 			},
 		}
-		managerInstance, err := New(engineInstance, WithStore(store))
+		managerInstance, err := New("demo-app", engineInstance, WithStore(store))
 		require.NoError(t, err)
 		concreteManager := managerInstance.(*manager)
 		concreteManager.cancelFuncs["run-1"] = func() {}

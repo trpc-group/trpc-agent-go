@@ -38,6 +38,7 @@ type Manager interface {
 }
 
 type manager struct {
+	appName              string
 	engine               engine.Engine
 	store                store.Store
 	storedResultSlimming engine.RunResultSlimming
@@ -46,13 +47,17 @@ type manager struct {
 	closed               bool
 }
 
-// New creates a PromptIter run manager.
-func New(engine engine.Engine, opts ...Option) (Manager, error) {
+// New creates a PromptIter run manager for one app.
+func New(appName string, engine engine.Engine, opts ...Option) (Manager, error) {
 	options := newOptions(opts...)
+	if strings.TrimSpace(appName) == "" {
+		return nil, errors.New("promptiter manager: app name must not be empty")
+	}
 	if engine == nil {
 		return nil, errors.New("promptiter manager: engine must not be nil")
 	}
 	return &manager{
+		appName:              appName,
 		engine:               engine,
 		store:                options.store,
 		storedResultSlimming: options.storedResultSlimming,
@@ -67,15 +72,16 @@ func (m *manager) Start(ctx context.Context, request *engine.RunRequest) (*engin
 	}
 	runID := uuid.NewString()
 	run := &engine.RunResult{
-		ID:     runID,
-		Status: engine.RunStatusQueued,
+		AppName: m.appName,
+		ID:      runID,
+		Status:  engine.RunStatusQueued,
 	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		return nil, errors.New("promptiter manager is closed")
 	}
-	if err := m.store.Create(ctx, m.slimStoredRun(run)); err != nil {
+	if err := m.store.Create(ctx, m.appName, m.slimStoredRun(run)); err != nil {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("create run %q: %w", runID, err)
 	}
@@ -88,7 +94,7 @@ func (m *manager) Start(ctx context.Context, request *engine.RunRequest) (*engin
 
 // Get loads one persisted PromptIter run.
 func (m *manager) Get(ctx context.Context, runID string) (*engine.RunResult, error) {
-	return m.store.Get(ctx, runID)
+	return m.store.Get(ctx, m.appName, runID)
 }
 
 // Cancel cancels one running PromptIter run.
@@ -100,14 +106,14 @@ func (m *manager) Cancel(ctx context.Context, runID string) error {
 		return fmt.Errorf("run %q is not running: %w", runID, os.ErrNotExist)
 	}
 	cancel()
-	run, err := m.store.Get(ctx, runID)
+	run, err := m.store.Get(ctx, m.appName, runID)
 	if err != nil {
 		return err
 	}
 	if run.Status == engine.RunStatusQueued || run.Status == engine.RunStatusRunning {
 		run.Status = engine.RunStatusCanceled
 		run.ErrorMessage = "run canceled"
-		if err := m.store.Update(ctx, m.slimStoredRun(run)); err != nil {
+		if err := m.store.Update(ctx, m.appName, m.slimStoredRun(run)); err != nil {
 			return err
 		}
 	}
@@ -135,13 +141,13 @@ func (m *manager) Close() error {
 }
 
 func (m *manager) run(ctx context.Context, runID string, request *engine.RunRequest) {
-	run, err := m.store.Get(context.Background(), runID)
+	run, err := m.store.Get(context.Background(), m.appName, runID)
 	if err != nil {
 		m.clearCancel(runID)
 		return
 	}
 	run.Status = engine.RunStatusRunning
-	if err := m.store.Update(context.Background(), m.slimStoredRun(run)); err != nil {
+	if err := m.store.Update(context.Background(), m.appName, m.slimStoredRun(run)); err != nil {
 		m.clearCancel(runID)
 		return
 	}
@@ -160,23 +166,24 @@ func (m *manager) run(ctx context.Context, runID string, request *engine.RunRequ
 			observer.run.Status = engine.RunStatusFailed
 			observer.run.ErrorMessage = err.Error()
 		}
-		_ = m.store.Update(context.Background(), m.slimStoredRun(observer.run))
+		_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(observer.run))
 		m.clearCancel(runID)
 		return
 	}
 	if result == nil {
 		observer.run.Status = engine.RunStatusFailed
 		observer.run.ErrorMessage = "engine returned nil run"
-		_ = m.store.Update(context.Background(), m.slimStoredRun(observer.run))
+		_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(observer.run))
 		m.clearCancel(runID)
 		return
 	}
 	result.ID = runID
+	result.AppName = m.appName
 	result.Status = engine.RunStatusSucceeded
-	if err := m.store.Update(context.Background(), m.slimStoredRun(result)); err != nil {
+	if err := m.store.Update(context.Background(), m.appName, m.slimStoredRun(result)); err != nil {
 		observer.run.Status = engine.RunStatusFailed
 		observer.run.ErrorMessage = err.Error()
-		_ = m.store.Update(context.Background(), m.slimStoredRun(observer.run))
+		_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(observer.run))
 	}
 	m.clearCancel(runID)
 }

@@ -260,6 +260,7 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
+	assert.Equal(t, "demo-app", resp.Result.AppName)
 	assert.Equal(t, enginepkg.RunStatusSucceeded, resp.Result.Status)
 }
 
@@ -489,6 +490,7 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 				_ = ctx
 				captured = request
 				return &enginepkg.RunResult{
+					AppName:   "demo-app",
 					ID:        "run_1",
 					Status:    enginepkg.RunStatusQueued,
 					Structure: &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
@@ -515,6 +517,7 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
+	assert.Equal(t, "demo-app", resp.Result.AppName)
 	assert.Equal(t, "run_1", resp.Result.ID)
 	assert.Equal(t, enginepkg.RunStatusQueued, resp.Result.Status)
 	assert.Nil(t, resp.Result.Structure)
@@ -568,6 +571,7 @@ func TestHandleGetRunReturnsRun(t *testing.T) {
 			get: func(ctx context.Context, runID string) (*enginepkg.RunResult, error) {
 				_ = ctx
 				return &enginepkg.RunResult{
+					AppName:      "demo-app",
 					ID:           runID,
 					Status:       enginepkg.RunStatusRunning,
 					CurrentRound: 2,
@@ -583,6 +587,7 @@ func TestHandleGetRunReturnsRun(t *testing.T) {
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
+	assert.Equal(t, "demo-app", resp.Result.AppName)
 	assert.Equal(t, "run_1", resp.Result.ID)
 	assert.Equal(t, enginepkg.RunStatusRunning, resp.Result.Status)
 	assert.Equal(t, 2, resp.Result.CurrentRound)

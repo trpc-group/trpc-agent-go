@@ -204,6 +204,11 @@ func (s *Server) runResponse(run *engine.RunResult) *RunResponse {
 	if s == nil {
 		return &RunResponse{Result: run}
 	}
+	if run != nil && run.AppName == "" {
+		cloned := *run
+		cloned.AppName = s.appName
+		run = &cloned
+	}
 	return &RunResponse{
 		Result: slimRunResult(run, s.responseResultSlimming),
 	}
