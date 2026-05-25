@@ -50,7 +50,9 @@ func newOpenAPITool(config *config, operation *Operation) tool.CallableTool {
 func (o *openAPITool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	log.Debug("Calling OpenAPI tool", "name", o.operation.name)
 	args := make(map[string]any)
-	if err := json.Unmarshal(jsonArgs, &args); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(jsonArgs))
+	dec.UseNumber()
+	if err := dec.Decode(&args); err != nil {
 		return nil, err
 	}
 
@@ -181,6 +183,8 @@ func paramValueToString(value any) (string, bool) {
 		return strconv.FormatUint(uint64(v), 10), true
 	case uint64:
 		return strconv.FormatUint(v, 10), true
+	case json.Number:
+		return v.String(), true
 	default:
 		return "", false
 	}
