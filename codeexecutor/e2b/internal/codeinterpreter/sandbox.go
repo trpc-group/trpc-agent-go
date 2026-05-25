@@ -60,6 +60,13 @@ type SandboxInfo struct {
 	State      string            `json:"state,omitempty"`
 	// Domain is the actual domain on which this sandbox runs.
 	Domain string `json:"domain,omitempty"`
+	// EnvdAccessToken is an optional access token issued by the management
+	// API for authenticating data-plane requests against the sandbox's
+	// envd/jupyter endpoints. Some E2B-compatible deployments return this
+	// token at sandbox creation time. The official Python SDK behaves the
+	// same way: when present and the caller did not provide an AccessToken,
+	// the SDK uses this value as the X-Access-Token header.
+	EnvdAccessToken string `json:"envdAccessToken,omitempty"`
 }
 
 // Sandbox is a running E2B sandbox with code-interpreter capabilities.
@@ -176,14 +183,19 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 	}
 
 	var out struct {
-		SandboxID  string `json:"sandboxID"`
-		ClientID   string `json:"clientID"`
-		TemplateID string `json:"templateID"`
-		EnvdPort   int    `json:"envdPort"`
-		Domain     string `json:"domain,omitempty"`
+		SandboxID       string `json:"sandboxID"`
+		ClientID        string `json:"clientID"`
+		TemplateID      string `json:"templateID"`
+		EnvdPort        int    `json:"envdPort"`
+		Domain          string `json:"domain,omitempty"`
+		EnvdAccessToken string `json:"envdAccessToken,omitempty"`
 	}
 	if err := cfg.do(ctx, "POST", "/sandboxes", body, &out); err != nil {
 		return nil, err
+	}
+
+	if out.EnvdAccessToken != "" && cfg.AccessToken == "" {
+		cfg.AccessToken = out.EnvdAccessToken
 	}
 
 	return &Sandbox{
@@ -217,6 +229,10 @@ func Connect(ctx context.Context, sandboxID string, opts *SandboxOpts) (*Sandbox
 	var info SandboxInfo
 	if err := cfg.do(ctx, "GET", "/sandboxes/"+sandboxID, nil, &info); err != nil {
 		return nil, err
+	}
+
+	if info.EnvdAccessToken != "" && cfg.AccessToken == "" {
+		cfg.AccessToken = info.EnvdAccessToken
 	}
 
 	return &Sandbox{
