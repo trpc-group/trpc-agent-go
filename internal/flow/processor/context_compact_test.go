@@ -10,6 +10,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -19,6 +20,39 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+type sequenceTokenCounter struct {
+	counts []int
+	errs   []error
+	calls  int
+}
+
+func (c *sequenceTokenCounter) CountTokens(
+	_ context.Context,
+	_ model.Message,
+) (int, error) {
+	idx := c.calls
+	c.calls++
+	if idx < len(c.errs) && c.errs[idx] != nil {
+		return 0, c.errs[idx]
+	}
+	if idx < len(c.counts) {
+		return c.counts[idx], nil
+	}
+	if len(c.counts) == 0 {
+		return 0, nil
+	}
+	return c.counts[len(c.counts)-1], nil
+}
+
+func (c *sequenceTokenCounter) CountTokensRange(
+	context.Context,
+	[]model.Message,
+	int,
+	int,
+) (int, error) {
+	return 0, nil
+}
 
 func TestCompactIncrementEvents_PreservesCurrentAndRecentRequests(t *testing.T) {
 	makeToolEvent := func(requestID, invocationID, content string, done bool) event.Event {
@@ -385,6 +419,61 @@ func TestCompactIncrementEvents_ForceCleansInferredToolName(t *testing.T) {
 	require.Equal(t, 1, stats.ToolResultsCompacted)
 	require.Empty(t, toolResult.Response.Choices[0].Message.ToolName,
 		"original event should not be mutated")
+}
+
+func TestToolCallNameResolverConsumesPendingCallsInOrder(t *testing.T) {
+	var resolver toolCallNameResolver
+	resolver.addFromMessage(model.Message{
+		ToolCalls: []model.ToolCall{
+			{
+				ID: "",
+				Function: model.FunctionDefinitionParam{
+					Name: "ignored_empty_id",
+				},
+			},
+			{
+				ID: "tool-call-reused",
+				Function: model.FunctionDefinitionParam{
+					Name: "",
+				},
+			},
+			{
+				ID: "tool-call-reused",
+				Function: model.FunctionDefinitionParam{
+					Name: "first_tool",
+				},
+			},
+			{
+				ID: "tool-call-reused",
+				Function: model.FunctionDefinitionParam{
+					Name: "second_tool",
+				},
+			},
+		},
+	})
+
+	assistant := resolver.resolveToolResultName(model.NewAssistantMessage("no tool"))
+	require.Empty(t, assistant.ToolName)
+
+	missing := resolver.resolveToolResultName(
+		model.NewToolMessage("missing-call", "", "missing"),
+	)
+	require.Empty(t, missing.ToolName)
+
+	first := resolver.resolveToolResultName(
+		model.NewToolMessage("tool-call-reused", "", "first"),
+	)
+	require.Equal(t, "first_tool", first.ToolName)
+
+	explicit := resolver.resolveToolResultName(
+		model.NewToolMessage("tool-call-reused", "explicit_tool", "second"),
+	)
+	require.Equal(t, "explicit_tool", explicit.ToolName)
+
+	exhausted := resolver.resolveToolResultName(
+		model.NewToolMessage("tool-call-reused", "", "third"),
+	)
+	require.Empty(t, exhausted.ToolName)
 }
 
 func TestCompactIncrementEvents_ResolvesReusedToolIDByNearestCall(t *testing.T) {
@@ -963,6 +1052,50 @@ func TestTruncateOversizedToolResultMessage_ContentPartsOnlyKeepsPayload(t *test
 	require.False(t, changed)
 	require.Zero(t, savedTokens)
 	require.Equal(t, msg, compacted)
+}
+
+func TestToolResultCompactionHelpers_HandleTokenCounterErrors(t *testing.T) {
+	errCountTokens := errors.New("count tokens")
+	msg := model.NewToolMessage(
+		"tool-call-current",
+		"worker",
+		"large result",
+	)
+
+	cleaned, changed, savedTokens := cleanToolResultMessageWithCounter(
+		context.Background(),
+		msg,
+		&sequenceTokenCounter{
+			errs: []error{errCountTokens, errCountTokens},
+		},
+	)
+	require.True(t, changed)
+	require.Equal(t, policyToolResultPlaceholder, cleaned.Content)
+	require.Zero(t, savedTokens)
+
+	compacted, changed, savedTokens := compactHistoricalToolResultMessageWithCounter(
+		context.Background(),
+		msg,
+		1,
+		&sequenceTokenCounter{
+			errs: []error{errCountTokens},
+		},
+	)
+	require.False(t, changed)
+	require.Equal(t, msg, compacted)
+	require.Zero(t, savedTokens)
+
+	truncated, changed, savedTokens := truncateOversizedToolResultMessageWithCounter(
+		context.Background(),
+		msg,
+		1,
+		&sequenceTokenCounter{
+			errs: []error{errCountTokens},
+		},
+	)
+	require.False(t, changed)
+	require.Equal(t, msg, truncated)
+	require.Zero(t, savedTokens)
 }
 
 func TestTruncateMiddle(t *testing.T) {
