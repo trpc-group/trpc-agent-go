@@ -7106,7 +7106,7 @@ func TestInterruptedAssistantDeltaSeparatesSameResponseIDByLineage(t *testing.T)
 		invocation: inv,
 	}
 	first := event.NewResponseEvent(
-		"child-a",
+		"shared-invocation",
 		"assistant",
 		&model.Response{
 			ID:        "shared-response",
@@ -7123,7 +7123,7 @@ func TestInterruptedAssistantDeltaSeparatesSameResponseIDByLineage(t *testing.T)
 	)
 	first.Branch = "parallel/a"
 	second := event.NewResponseEvent(
-		"child-b",
+		"shared-invocation",
 		"assistant",
 		&model.Response{
 			ID:        "shared-response",
@@ -7140,7 +7140,7 @@ func TestInterruptedAssistantDeltaSeparatesSameResponseIDByLineage(t *testing.T)
 	)
 	second.Branch = "parallel/b"
 	firstAgain := event.NewResponseEvent(
-		"child-a",
+		"shared-invocation",
 		"assistant",
 		&model.Response{
 			ID:        "shared-response",
@@ -7188,11 +7188,12 @@ func TestInterruptedAssistantDeltaSeparatesSameResponseIDByLineage(t *testing.T)
 	persisted := map[string]string{}
 	for _, call := range svc.appendEventCalls {
 		require.Equal(t, "shared-response", call.event.Response.ID)
-		persisted[call.event.InvocationID] = call.event.Choices[0].Message.Content
+		require.Equal(t, "shared-invocation", call.event.InvocationID)
+		persisted[call.event.Branch] = call.event.Choices[0].Message.Content
 	}
 	require.Equal(t, map[string]string{
-		"child-a": "alpha one",
-		"child-b": "beta",
+		"parallel/a": "alpha one",
+		"parallel/b": "beta",
 	}, persisted)
 }
 
