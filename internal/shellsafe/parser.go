@@ -118,6 +118,11 @@ func withParser(p commandParser) (restore func()) {
 // the very purpose of an allow/deny list. If you legitimately need
 // one, wrap the desired use in an auditable script under the
 // workspace and put that script in the Allow list instead.
+//
+// Keys are kept in lower case and compared after the segment
+// basename has been case-folded by normalizeName, so "SH -c …" on
+// macOS's default case-insensitive APFS and "Sh" / "SH.EXE" on
+// Windows are matched just like the bare "sh" form.
 var implicitDeny = map[string]struct{}{
 	// shell wrappers
 	"sh": {}, "bash": {}, "zsh": {}, "ash": {}, "dash": {},
@@ -173,10 +178,12 @@ var implicitDeny = map[string]struct{}{
 //     smuggle past a basename-only check. To permit a specific
 //     absolute or relative path, list that exact path in Allow.
 //
-// On Windows both directions strip common executable suffixes
-// (.exe, .cmd, .bat, .com, .ps1) and lower-case the basename, so a
-// deny entry "cmd" rejects "cmd.exe" and an allow entry "echo"
-// admits "ECHO.EXE".
+// All matching is case-folded on every OS (so a deny of "curl"
+// rejects "CURL" and "Curl" too, which matters on macOS's default
+// case-insensitive APFS and on Windows). On Windows both
+// directions additionally strip common executable suffixes
+// (.exe, .cmd, .bat, .com, .ps1), so a deny entry "cmd" rejects
+// "cmd.exe" and an allow entry "echo" admits "ECHO.EXE".
 //
 // Precedence: explicit Deny > implicit deny > explicit Allow >
 // implicit allow. When at least one of the lists is non-empty the
@@ -255,9 +262,9 @@ func (p Policy) checkSegmentForGOOS(argv []string, goos string) error {
 			"command %q is denied by denied_commands", cmd,
 		)
 	}
-	if _, ok := implicitDeny[cmd]; ok {
-		return implicitDenyError(cmd)
-	}
+	// implicitDeny keys are lower-case; base is already produced
+	// through normalizeName, so a single look-up covers "sh",
+	// "SH", "Sh", "/usr/bin/SH" and (on Windows) "sh.exe".
 	if _, ok := implicitDeny[base]; ok {
 		return implicitDenyError(cmd)
 	}
@@ -283,52 +290,45 @@ func implicitDenyError(cmd string) error {
 }
 
 // matchDeny is the permissive direction: an entry matches the
-// command's verbatim first word or its (OS-normalised) basename.
-// This is intentional so that a deny on "curl" still blocks
-// "/usr/bin/curl" and "./curl". On Windows the configured entries
-// are also passed through the same suffix-stripping / lower-casing
-// rules as the basename, so a deny of "CURL" or "curl.exe" blocks
-// the bare "curl" form and vice versa.
+// command's verbatim first word or its basename. All comparisons
+// happen in normalised form (case-folded everywhere, .exe / .cmd
+// / ... stripped on Windows), so a deny of "curl" rejects "curl",
+// "Curl", "CURL", "/usr/bin/curl", "./curl" and (on Windows)
+// "curl.exe" alike. This catches the case-insensitive resolvers
+// on Windows and on the default macOS APFS without losing the
+// hostname-style matching for arbitrary paths.
 func matchDeny(set []string, name, base, goos string) bool {
+	nName := normalizeName(name, goos)
 	for _, n := range set {
-		if n == name || n == base {
+		nEntry := normalizeName(n, goos)
+		if nEntry == nName || nEntry == base {
 			return true
-		}
-		if goos == "windows" {
-			normEntry := normalizeName(n, goos)
-			if normEntry == base || normEntry == name {
-				return true
-			}
 		}
 	}
 	return false
 }
 
 // matchAllow is the strict direction: the entry must equal the
-// command verbatim, OR the command must be a bare name (no path
-// separator) whose basename equals the entry. Pathful inputs such
-// as "./echo" or "work/bin/echo" therefore never match a bare
-// allow entry "echo", which prevents a workspace-controlled file
-// with an allowlisted basename from bypassing the policy.
-// Operators who genuinely want to permit a specific absolute or
-// relative path can list that exact path in Allow.
+// command verbatim (after the same case + extension normalisation
+// applied to deny), OR the command must be a bare name (no path
+// separator) whose normalised basename equals the entry. Pathful
+// inputs such as "./echo" or "work/bin/echo" therefore never
+// match a bare allow entry "echo", which prevents a workspace-
+// controlled file with an allowlisted basename from bypassing the
+// policy. Operators who genuinely want to permit a specific
+// absolute or relative path can list that exact path in Allow.
 func matchAllow(set []string, name, base, goos string) bool {
+	nName := normalizeName(name, goos)
 	hasPath := strings.ContainsAny(name, "/\\")
-	normBase := base
 	for _, n := range set {
-		if n == name {
+		nEntry := normalizeName(n, goos)
+		if nEntry == nName {
 			return true
 		}
 		if hasPath {
 			continue
 		}
-		if n == normBase {
-			return true
-		}
-		// On Windows, allow "echo" to admit "echo.exe" by
-		// normalising the listed entry through the same
-		// extension/case stripping as the basename.
-		if goos == "windows" && normalizeName(n, goos) == normBase {
+		if nEntry == base {
 			return true
 		}
 	}
@@ -354,17 +354,27 @@ var windowsExecExts = []string{
 	".exe", ".cmd", ".bat", ".com", ".ps1",
 }
 
-// normalizeName strips OS-specific executable suffixes that would
-// otherwise let a name like "cmd.exe" slip past an entry of "cmd".
-// On non-Windows OSes the input is returned unchanged so Linux
-// command resolution is unaffected. Lifted into its own helper
-// (parameterised by goos) so the Windows branch is testable on any
+// normalizeName lower-cases the input so the policy matches the
+// way mainstream OSes resolve command names: Windows and the
+// default macOS APFS both look up executables case-insensitively,
+// so without case-folding "CURL" or "SH -c" would slip past a
+// deny on "curl" / the implicit deny on "sh" on those platforms.
+// Linux file systems are case-sensitive, but the rare workspace
+// that ships a distinct upper-case "Curl" binary is not a use
+// case we want to silently allow past a deny, so the fold is
+// applied universally for safety. On Windows the function also
+// strips common executable suffixes (.exe, .cmd, .bat, .com,
+// .ps1) so "cmd" matches "cmd.exe" and vice versa. Parameterised
+// by goos so the Windows-only suffix branch is testable on any
 // host.
-func normalizeName(base, goos string) string {
-	if goos != "windows" || base == "" {
-		return base
+func normalizeName(s, goos string) string {
+	if s == "" {
+		return s
 	}
-	lower := strings.ToLower(base)
+	lower := strings.ToLower(s)
+	if goos != "windows" {
+		return lower
+	}
 	for _, ext := range windowsExecExts {
 		if strings.HasSuffix(lower, ext) {
 			return lower[:len(lower)-len(ext)]

@@ -788,9 +788,8 @@ pass a deny on `curl`), register code to run later (e.g.
   `export`, `unset`, `readonly`, `local`, `declare`, `typeset`,
   `set`, `shopt`, `hash`, `cd`, `pushd`, `popd`
 
-`workspace_exec` exposes a `working_directory` parameter for the
-legitimate `cd` use case, so the model never needs to call `cd`
-itself.
+`workspace_exec` exposes a `cwd` parameter for the legitimate cwd-
+switching use case, so the model never needs to call `cd` itself.
 
 This deny set is **not overridable** by `WithWorkspaceExecAllowedCommands`
 — allow-list entries for these names are ignored. If you legitimately
@@ -812,12 +811,20 @@ binaries cannot smuggle past the allowlist:
   `/usr/bin/curl` and `./curl` alike, so an attacker cannot slip a
   full path past the denylist.
 
-On Windows the basename match strips common executable suffixes
-(`.exe`, `.cmd`, `.bat`, `.com`, `.ps1`) and lower-cases the
-basename so `cmd` rejects `cmd.exe`, `curl` rejects `CURL.EXE`,
-and `echo` admits `ECHO.EXE`. The configured deny entries are
-folded through the same rules, so `WithWorkspaceExecDeniedCommands("CURL")`
-also blocks bare `curl` and `curl.exe`.
+All matching is **case-folded on every OS**. A deny of `curl`
+rejects `curl`, `Curl` and `CURL` alike, and the implicit deny
+on `sh` blocks `SH -c`, `Sh` and `Bash` too. This matters on
+macOS's default case-insensitive APFS (where `CURL` resolves to
+`/usr/bin/curl`) and on Windows's case-insensitive resolver; on
+Linux the fold is defence-in-depth against workspace-controlled
+upper-case binaries.
+
+On Windows the basename match additionally strips common
+executable suffixes (`.exe`, `.cmd`, `.bat`, `.com`, `.ps1`) so
+`cmd` rejects `cmd.exe`, `curl` rejects `CURL.EXE`, and `echo`
+admits `ECHO.EXE`. The configured deny entries are folded through
+the same rules, so `WithWorkspaceExecDeniedCommands("CURL")` also
+blocks bare `curl` and `curl.exe`.
 
 ### Precedence
 

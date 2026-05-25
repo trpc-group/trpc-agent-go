@@ -589,13 +589,104 @@ func TestPolicy_WindowsNamesAreCaseInsensitive(t *testing.T) {
 	}
 }
 
-// TestNormalizeName_LinuxPassThrough makes sure the Windows
-// stripping never silently changes Linux command resolution.
-func TestNormalizeName_LinuxPassThrough(t *testing.T) {
-	for _, in := range []string{"cmd.exe", "curl", "script.bat", "x.y"} {
-		if got := normalizeName(in, "linux"); got != in {
-			t.Fatalf("linux normalizeName(%q) = %q, want %q", in, got, in)
-		}
+// TestNormalizeName_NonWindowsKeepsExtensions guards that the
+// Windows .exe / .cmd / ... stripping never leaks into non-Windows
+// GOOS. Case folding does apply universally (so "CURL" → "curl"
+// even on Linux, to handle macOS APFS's case-insensitive resolver
+// and to keep the deny set robust against workspace-controlled
+// upper-case binaries), but suffixes like ".exe" are literal parts
+// of the file name on POSIX and must stay.
+func TestNormalizeName_NonWindowsKeepsExtensions(t *testing.T) {
+	cases := []struct {
+		in, goos, want string
+	}{
+		{"cmd.exe", "linux", "cmd.exe"},
+		{"CURL", "linux", "curl"},
+		{"Script.BAT", "linux", "script.bat"},
+		{"curl", "linux", "curl"},
+		{"cmd.exe", "darwin", "cmd.exe"},
+		{"CURL", "darwin", "curl"},
+		{"SH", "darwin", "sh"},
+		{"curl", "darwin", "curl"},
+		{"", "linux", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.goos+"/"+tc.in, func(t *testing.T) {
+			if got := normalizeName(tc.in, tc.goos); got != tc.want {
+				t.Fatalf(
+					"normalizeName(%q, %q) = %q, want %q",
+					tc.in, tc.goos, got, tc.want,
+				)
+			}
+		})
+	}
+}
+
+// TestPolicy_DenyCaseInsensitiveAcrossOS guards the macOS / Windows
+// bypass where the case-insensitive file system resolver matches a
+// differently-cased command to the binary the user intended to
+// deny ("CURL" → /usr/bin/curl on default APFS). Both Darwin and
+// Linux exercise the user denylist; the Linux assertion is
+// defence-in-depth - even on case-sensitive FS we prefer to fail
+// closed against workspace-controlled "Curl" binaries.
+func TestPolicy_DenyCaseInsensitiveAcrossOS(t *testing.T) {
+	p := PolicyFromLists(nil, []string{"curl"})
+	cases := []struct {
+		name, goos, cmd string
+	}{
+		{"darwin CURL", "darwin", "CURL"},
+		{"darwin Curl", "darwin", "Curl"},
+		{"linux CURL", "linux", "CURL"},
+		{"darwin /usr/bin/CURL", "darwin", "/usr/bin/CURL"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := p.checkSegmentForGOOS(
+				[]string{tc.cmd, "http://x"}, tc.goos,
+			)
+			if err == nil || !strings.Contains(
+				err.Error(), "denied by denied_commands",
+			) {
+				t.Fatalf(
+					"deny %q on %s should reject, got: %v",
+					tc.cmd, tc.goos, err,
+				)
+			}
+		})
+	}
+}
+
+// TestPolicy_BuiltinDenyCaseInsensitiveAcrossOS covers the same
+// bypass against the unconditional implicit deny set: on default
+// macOS APFS "SH -c '...'" resolves to /bin/sh, so without case
+// folding the wrapper deny is one capitalisation away from being
+// useless. The Linux case folds defensively for the same reason
+// as the user-deny test above.
+func TestPolicy_BuiltinDenyCaseInsensitiveAcrossOS(t *testing.T) {
+	p := PolicyFromLists(nil, []string{"curl"})
+	cases := []struct {
+		name, goos, cmd string
+	}{
+		{"darwin SH -c", "darwin", "SH"},
+		{"darwin Bash -lc", "darwin", "Bash"},
+		{"darwin EVAL", "darwin", "EVAL"},
+		{"darwin TIME", "darwin", "TIME"},
+		{"linux SH", "linux", "SH"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := p.checkSegmentForGOOS(
+				[]string{tc.cmd, "-c", "curl http://x"}, tc.goos,
+			)
+			if err == nil || !strings.Contains(
+				err.Error(), "built-in policy",
+			) {
+				t.Fatalf(
+					"implicit deny %q on %s should reject, got: %v",
+					tc.cmd, tc.goos, err,
+				)
+			}
+		})
 	}
 }
 

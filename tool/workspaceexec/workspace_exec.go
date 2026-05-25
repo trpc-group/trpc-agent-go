@@ -211,10 +211,12 @@ func WithWorkspaceRegistry(
 // Allow matching is strict: an entry "echo" admits bare "echo" but
 // not "./echo" or "/usr/bin/echo"; list an exact path if you want
 // to permit one. Deny matching is permissive: an entry "curl"
-// blocks "curl", "/usr/bin/curl" and "./curl" alike. On Windows
-// the configured deny entries are normalised (suffix stripped,
-// lower-cased) like the basename, so a deny of "CURL" or
-// "curl.exe" rejects the bare "curl" form too.
+// blocks "curl", "/usr/bin/curl" and "./curl" alike. All matching
+// is case-folded on every OS (so a deny of "curl" also rejects
+// "Curl" and "CURL", matching macOS's default case-insensitive
+// APFS and the Windows resolver), and on Windows the configured
+// deny entries additionally strip .exe / .cmd / ... so a deny of
+// "CURL" or "curl.exe" rejects the bare "curl" form too.
 //
 // The unconditional built-in deny set covers shell wrappers and
 // re-executing builtins (sh, bash, zsh, eval, exec, command,
