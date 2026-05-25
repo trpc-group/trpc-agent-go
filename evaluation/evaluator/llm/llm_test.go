@@ -386,6 +386,63 @@ func TestLLMBaseEvaluator_UsesJudgeRunnerAndIgnoresJudgeModelNumSamples(t *testi
 	assert.Equal(t, 1, r.runCalls)
 }
 
+func TestLLMBaseEvaluator_UsesJudgeRunnerNumSamples(t *testing.T) {
+	stub := &fakeLLMEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+
+	r := &fakeJudgeRunner{
+		events: []*event.Event{
+			event.NewResponseEvent("inv", "judge", &model.Response{
+				Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+				Done:    true,
+			}),
+		},
+	}
+	numSamples := 3
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{
+		Runner:     r,
+		NumSamples: &numSamples,
+	}
+
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{InvocationID: "a"}},
+		[]*evalset.Invocation{{InvocationID: "b"}},
+		evalMetric,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 3, r.runCalls)
+	require.Len(t, stub.receivedSamples, 3)
+}
+
+func TestLLMBaseEvaluator_RejectsInvalidJudgeRunnerNumSamples(t *testing.T) {
+	base := &LLMBaseEvaluator{LLMEvaluator: &fakeLLMEvaluator{}}
+	numSamples := 0
+	r := &fakeJudgeRunner{}
+	evalMetric := &metric.EvalMetric{
+		Threshold: 0.5,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{
+				JudgeRunnerOptions: &llm.JudgeRunnerOptions{
+					Runner:     r,
+					NumSamples: &numSamples,
+				},
+			},
+		},
+	}
+
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{InvocationID: "a"}},
+		[]*evalset.Invocation{{InvocationID: "b"}},
+		evalMetric,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "num samples must be greater than 0")
+	assert.Equal(t, 0, r.runCalls)
+}
+
 func TestLLMBaseEvaluator_ResolveStructuredOutput(t *testing.T) {
 	base := &LLMBaseEvaluator{}
 	output, err := base.resolveStructuredOutput(context.Background(), nil, nil, nil)
