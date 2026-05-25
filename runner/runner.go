@@ -1507,9 +1507,7 @@ func (r *runner) recordInterruptedAssistantDelta(
 	acc.responseID = responseID
 	acc.author = agentEvent.Author
 	captureInterruptedAssistantEventIdentity(acc, agentEvent)
-	if acc.requestID == "" && loop.invocation != nil {
-		acc.requestID = loop.invocation.RunOptions.RequestID
-	}
+	fillInterruptedAssistantRequestID(acc, loop)
 	if rsp.Created > 0 {
 		acc.created = rsp.Created
 	}
@@ -1551,6 +1549,16 @@ func captureInterruptedAssistantEventIdentity(
 	if agentEvent.RequestID != "" {
 		acc.requestID = agentEvent.RequestID
 	}
+}
+
+func fillInterruptedAssistantRequestID(
+	acc *interruptedAssistantAccumulator,
+	loop *eventLoopContext,
+) {
+	if acc == nil || acc.requestID != "" || loop == nil || loop.invocation == nil {
+		return
+	}
+	acc.requestID = loop.invocation.RunOptions.RequestID
 }
 
 func injectInterruptedAssistantEventIdentity(
