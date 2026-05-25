@@ -18,11 +18,11 @@ import (
 // Store stores persisted PromptIter runs.
 type Store interface {
 	// Create persists one new PromptIter run.
-	Create(ctx context.Context, run *engine.RunResult) error
-	// Get loads one persisted PromptIter run by run ID.
-	Get(ctx context.Context, runID string) (*engine.RunResult, error)
+	Create(ctx context.Context, appName string, run *engine.RunResult) error
+	// Get loads one persisted PromptIter run by app name and run ID.
+	Get(ctx context.Context, appName, runID string) (*engine.RunResult, error)
 	// Update persists changes to one existing PromptIter run.
-	Update(ctx context.Context, run *engine.RunResult) error
+	Update(ctx context.Context, appName string, run *engine.RunResult) error
 	// Close releases store resources.
 	Close() error
 }
