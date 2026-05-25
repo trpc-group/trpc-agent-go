@@ -38,6 +38,9 @@ type Service struct {
 	wg     sync.WaitGroup
 	once   sync.Once
 
+	cursorMu sync.Mutex
+	inFlight map[string]time.Time
+
 	tools []tool.Tool
 }
 
@@ -54,9 +57,10 @@ func NewService(opts ...Option) (*Service, error) {
 		return nil, err
 	}
 	s := &Service{
-		opts:   options,
-		client: client,
-		queue:  make(chan ingestJob, options.IngestQueueSize),
+		opts:     options,
+		client:   client,
+		queue:    make(chan ingestJob, options.IngestQueueSize),
+		inFlight: make(map[string]time.Time),
 	}
 	s.tools = s.buildTools()
 	s.startWorkers()
@@ -80,42 +84,26 @@ func (s *Service) IngestSession(
 		return err
 	}
 
-	scan := scanTranscript(sess, readBestEffortLastCaptureAt(sess))
-	if len(scan.Messages) == 0 {
-		return nil
-	}
-	userContent, assistantContent := lastUserAssistantPair(scan.Messages)
-	if strings.TrimSpace(userContent) == "" || strings.TrimSpace(assistantContent) == "" {
-		return nil
-	}
-
-	req := captureRequest{
-		UserContent:      userContent,
-		AssistantContent: assistantContent,
-		SessionKey:       s.sessionKey(sess),
-		SessionID:        sess.ID,
-		UserID:           sess.UserID,
-		Messages:         normalizeGatewayMessageTimestamps(scan.Messages, time.Now()),
-	}
-	job := ingestJob{
-		req:    req,
-		sess:   sess,
-		cursor: scan.Latest,
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	sessionKey := s.sessionKey(sess)
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
 		return errors.New("tencentdb memory: service is closed")
 	}
+	job, ok := s.reserveIngestJob(sess, sessionKey)
+	if !ok {
+		s.mu.RUnlock()
+		return nil
+	}
 	select {
 	case s.queue <- job:
 		s.mu.RUnlock()
-		writeBestEffortLastCaptureAt(sess, scan.Latest)
 		return nil
 	case <-ctx.Done():
+		s.clearInFlight(sessionKey, job.cursor)
 		s.mu.RUnlock()
 		return ctx.Err()
 	}
@@ -211,8 +199,51 @@ func (s *Service) capture(ctx context.Context, job ingestJob) error {
 	}
 	_, err := s.client.capture(ctx, job.req)
 	if err != nil {
+		s.clearInFlight(job.req.SessionKey, job.cursor)
 		return fmt.Errorf("tencentdb memory: capture failed: %w", err)
 	}
 	writeBestEffortLastCaptureAt(job.sess, job.cursor)
+	s.clearInFlight(job.req.SessionKey, job.cursor)
 	return nil
+}
+
+func (s *Service) reserveIngestJob(sess *session.Session, sessionKey string) (ingestJob, bool) {
+	s.cursorMu.Lock()
+	defer s.cursorMu.Unlock()
+
+	since := readBestEffortLastCaptureAt(sess)
+	if inFlight, ok := s.inFlight[sessionKey]; ok && inFlight.After(since) {
+		since = inFlight
+	}
+	scan := scanTranscript(sess, since)
+	if len(scan.Messages) == 0 {
+		return ingestJob{}, false
+	}
+	userContent, assistantContent := lastUserAssistantPair(scan.Messages)
+	if strings.TrimSpace(userContent) == "" || strings.TrimSpace(assistantContent) == "" {
+		return ingestJob{}, false
+	}
+	if current, ok := s.inFlight[sessionKey]; !ok || scan.Latest.After(current) {
+		s.inFlight[sessionKey] = scan.Latest
+	}
+	return ingestJob{
+		req: captureRequest{
+			UserContent:      userContent,
+			AssistantContent: assistantContent,
+			SessionKey:       sessionKey,
+			SessionID:        sess.ID,
+			UserID:           sess.UserID,
+			Messages:         normalizeGatewayMessageTimestamps(scan.Messages, time.Now()),
+		},
+		sess:   sess,
+		cursor: scan.Latest,
+	}, true
+}
+
+func (s *Service) clearInFlight(sessionKey string, cursor time.Time) {
+	s.cursorMu.Lock()
+	defer s.cursorMu.Unlock()
+	if current, ok := s.inFlight[sessionKey]; ok && !current.After(cursor) {
+		delete(s.inFlight, sessionKey)
+	}
 }

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,9 +100,19 @@ func TestIngestSessionCapturesTimestampedMessagesAndCursor(t *testing.T) {
 	}
 }
 
-func TestIngestSessionAdvancesCursorBeforeAsyncCaptureCompletes(t *testing.T) {
+func TestIngestSessionMarksInFlightBeforeAsyncCaptureCompletes(t *testing.T) {
 	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != pathCapture {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		requests.Add(1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
 		<-release
 		_ = json.NewEncoder(w).Encode(captureResponse{L0Recorded: 2})
 	}))
@@ -115,17 +126,98 @@ func TestIngestSessionAdvancesCursorBeforeAsyncCaptureCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
+	defer func() {
+		close(release)
+		if err := svc.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+	sess := captureReadySession()
+	if err := svc.IngestSession(context.Background(), sess); err != nil {
+		t.Fatalf("IngestSession: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatalf("capture request did not start")
+	}
+	if got := readBestEffortLastCaptureAt(sess); !got.IsZero() {
+		t.Fatalf("persistent cursor advanced before capture success: %v", got)
+	}
+	if err := svc.IngestSession(context.Background(), sess); err != nil {
+		t.Fatalf("second IngestSession: %v", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("capture requests = %d, want 1", got)
+	}
+}
+
+func TestIngestSessionRetriesAfterAsyncCaptureFailure(t *testing.T) {
+	firstDone := make(chan struct{})
+	secondDone := make(chan struct{})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != pathCapture {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		switch requests.Add(1) {
+		case 1:
+			http.Error(w, "gateway unavailable", http.StatusBadGateway)
+			close(firstDone)
+		case 2:
+			_ = json.NewEncoder(w).Encode(captureResponse{L0Recorded: 2})
+			close(secondDone)
+		default:
+			t.Fatalf("unexpected extra capture request")
+		}
+	}))
+	defer server.Close()
+
+	svc, err := NewService(
+		WithGatewayURL(server.URL),
+		WithIngestQueueSize(1),
+		WithIngestJobTimeout(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	defer func() {
+		if err := svc.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 	sess := captureReadySession()
 	want := sess.Events[len(sess.Events)-1].Timestamp
 	if err := svc.IngestSession(context.Background(), sess); err != nil {
 		t.Fatalf("IngestSession: %v", err)
 	}
-	if got := readBestEffortLastCaptureAt(sess); !got.Equal(want) {
-		t.Fatalf("cursor = %v, want %v", got, want)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatalf("first capture request did not complete")
 	}
-	close(release)
+	waitForCondition(t, time.Second, func() bool {
+		svc.cursorMu.Lock()
+		defer svc.cursorMu.Unlock()
+		_, ok := svc.inFlight[svc.sessionKey(sess)]
+		return !ok
+	})
+	if got := readBestEffortLastCaptureAt(sess); !got.IsZero() {
+		t.Fatalf("persistent cursor advanced after failed capture: %v", got)
+	}
+	if err := svc.IngestSession(context.Background(), sess); err != nil {
+		t.Fatalf("retry IngestSession: %v", err)
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatalf("retry capture request did not complete")
+	}
 	if err := svc.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+	if got := readBestEffortLastCaptureAt(sess); !got.Equal(want) {
+		t.Fatalf("cursor = %v, want %v", got, want)
 	}
 }
 
@@ -705,5 +797,19 @@ func captureReadySession() *session.Session {
 				}}},
 			},
 		},
+	}
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !condition() {
+		t.Fatalf("condition was not met within %s", timeout)
 	}
 }
