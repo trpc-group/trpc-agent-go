@@ -2189,7 +2189,7 @@ The framework includes `invocationsaggregator/average`, which is the default for
 
 By default, LLM Judge evaluators call the judge model directly via `criterion.llmJudge.judgeModel`. You can also inject a judge runner with `evaluation.WithJudgeRunner`, and use the runner's final `*model.Response` instead of a direct model call.
 
-When enabled, `judgeModel` is ignored. Each invocation calls the judge runner once.
+When enabled, `judgeModel` is ignored. Each invocation calls the judge runner once by default. You can explicitly increase runner sampling with `evaluation.WithJudgeRunnerNumSamples(...)`; multiple samples reuse the evaluator's current sample aggregator, which selects a representative sample by majority vote by default.
 
 Example snippet:
 
@@ -2206,6 +2206,7 @@ agentEvaluator, err := evaluation.New(
 	appName,
 	agentRunner,
 	evaluation.WithJudgeRunner(judgeRunner),
+	evaluation.WithJudgeRunnerNumSamples(3),
 )
 ```
 
