@@ -308,14 +308,12 @@ func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*grap
 				}
 				nodes = append(nodes, resultNodes...)
 
-				edgeCypher := traverseEdgeQueryCypher(startID, pattern, queryLimit)
+				// MaxNodes and Truncated describe node result completeness.
+				// Edges are bounded by the same value only to keep topology compact.
+				edgeCypher := traverseEdgeQueryCypher(startID, pattern, maxNodes)
 				resultEdges, err := s.queryEdges(ctx, tx, edgeCypher)
 				if err != nil {
 					return err
-				}
-				if len(resultEdges) > maxNodes {
-					queryTruncated = true
-					resultEdges = resultEdges[:maxNodes]
 				}
 				edges = append(edges, resultEdges...)
 			}

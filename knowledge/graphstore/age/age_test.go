@@ -2171,6 +2171,51 @@ func TestTraverseSetsTruncatedOnQueryOverflow(t *testing.T) {
 	}
 }
 
+func TestTraverseNotTruncatedWhenOnlyEdgesOverflow(t *testing.T) {
+	store, mock := newSqlmockStore(t)
+	defer store.client.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("LOAD 'age'").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SET search_path`).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	nodeRows := sqlmock.NewRows([]string{"id", "name", "content", "metadata"}).
+		AddRow(`"a"::agtype`, `"A"::agtype`, `""::agtype`, `null::agtype`)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(nodeRows)
+
+	traverseNodeRows := sqlmock.NewRows([]string{"id", "name", "content", "metadata"}).
+		AddRow(`"b"::agtype`, `"B"::agtype`, `""::agtype`, `null::agtype`).
+		AddRow(`"c"::agtype`, `"C"::agtype`, `""::agtype`, `null::agtype`)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(traverseNodeRows)
+
+	// sqlmock does not enforce the SQL LIMIT in traverseEdgeQueryCypher.
+	// These extra rows verify edge-only overflow does not set node truncation.
+	edgeRows := sqlmock.NewRows([]string{"id", "from_id", "to_id", "edge_type", "metadata"}).
+		AddRow(`"e1"::agtype`, `"a"::agtype`, `"b"::agtype`, `"CALLS"`, `null::agtype`).
+		AddRow(`"e2"::agtype`, `"a"::agtype`, `"b"::agtype`, `"IMPORTS"`, `null::agtype`).
+		AddRow(`"e3"::agtype`, `"a"::agtype`, `"c"::agtype`, `"CALLS"`, `null::agtype`).
+		AddRow(`"e4"::agtype`, `"a"::agtype`, `"c"::agtype`, `"IMPORTS"`, `null::agtype`)
+	mock.ExpectQuery("SELECT \\* FROM cypher").WillReturnRows(edgeRows)
+
+	mock.ExpectCommit()
+
+	result, err := store.Traverse(context.Background(), &graph.TraverseQuery{
+		StartIDs:  []string{"a"},
+		Direction: graph.DirectionOut,
+		MaxDepth:  1,
+		MaxNodes:  3,
+	})
+	if err != nil {
+		t.Fatalf("Traverse() error = %v", err)
+	}
+	if result.Truncated {
+		t.Fatal("Traverse() truncated = true, want false (only edges exceeded maxNodes)")
+	}
+	if len(result.Nodes) != 3 {
+		t.Fatalf("Traverse() nodes = %d, want 3", len(result.Nodes))
+	}
+}
+
 func TestTraverseQueryNodesByIDsError(t *testing.T) {
 	store, mock := newSqlmockStore(t)
 	defer store.client.Close()
