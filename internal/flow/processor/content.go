@@ -1705,8 +1705,8 @@ func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool
 }
 
 // hasCompactedCurrentInvocationToolResults reports whether same-invocation tool
-// result events exist before the active summary cutoff and were therefore
-// compacted out of the raw prompt history.
+// result events before the active summary cutoff are actually compacted out of
+// the raw prompt history.
 func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 	inv *agent.Invocation,
 	since time.Time,
@@ -1739,7 +1739,35 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 		if !p.passBranchFilter(evt, filter) {
 			continue
 		}
-		return true
+		if eventHasCompactedCurrentInvocationToolResult(
+			evt,
+			p.ContextCompactionConfig,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func eventHasCompactedCurrentInvocationToolResult(
+	evt event.Event,
+	cfg ContextCompactionConfig,
+) bool {
+	for _, choice := range evt.Choices {
+		msg := choice.Message
+		if msg.Role != model.RoleTool || msg.ToolID == "" {
+			continue
+		}
+		compacted, ok := compactedCurrentInvocationMessage(msg, cfg)
+		if !ok {
+			continue
+		}
+		if compacted.Content != compactedToolResultPlaceholder {
+			continue
+		}
+		if msg.Content != compacted.Content || len(msg.ContentParts) > 0 {
+			return true
+		}
 	}
 	return false
 }

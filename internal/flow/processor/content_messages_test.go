@@ -945,6 +945,35 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 		)
 		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
 	})
+
+	t.Run("ignores kept tool result", func(t *testing.T) {
+		p := NewContentRequestProcessor(
+			WithContextCompactionKeepToolNames("session_load"),
+		)
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								"call_1",
+								"session_load",
+								"kept result",
+							)}},
+						},
+					},
+				},
+			}),
+		)
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
 }
 
 // Test additional edge cases for session summary insertion.

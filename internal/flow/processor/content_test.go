@@ -2906,6 +2906,7 @@ func TestContentRequestProcessor_getIncrementMessages_ForceCleanWithScopedTimeli
 			require.Len(t, messages[0].ToolCalls, 1)
 			require.Equal(t, "shell", messages[0].ToolCalls[0].Function.Name)
 			require.Equal(t, model.RoleTool, messages[1].Role)
+			require.Equal(t, messages[0].ToolCalls[0].ID, messages[1].ToolID)
 			require.Equal(t, "shell", messages[1].ToolName)
 			require.Equal(t, policyToolResultPlaceholder, messages[1].Content)
 		})
