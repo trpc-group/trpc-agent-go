@@ -444,7 +444,7 @@ func (c *chat) processResponse(eventChan <-chan *event.Event) error {
 		}
 
 		text := ch.Delta.Content
-		if !c.streaming {
+		if text == "" {
 			text = ch.Message.Content
 		}
 		if text == "" {
