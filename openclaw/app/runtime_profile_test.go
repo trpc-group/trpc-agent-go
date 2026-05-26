@@ -363,6 +363,34 @@ func TestRuntimeProfileResolverFromInjectedResolver(t *testing.T) {
 	require.Equal(t, injectedProfileID, profile.ID)
 }
 
+func TestRuntimeProfileResolverFromConfigSelectorsRequired(t *testing.T) {
+	t.Parallel()
+
+	cfg := runtimeprofile.Config{
+		Profiles: map[string]runtimeprofile.Profile{
+			testRuntimeProfileID: {},
+		},
+		Selectors: []runtimeprofile.Selector{
+			{
+				ProfileID: testRuntimeProfileID,
+				Users:     []string{"user-a"},
+			},
+		},
+	}
+
+	resolver, _, required := runtimeProfileResolverFromOptions(
+		&cfg,
+		runtimeOptions{},
+	)
+
+	require.True(t, required)
+	_, err := resolver.Resolve(
+		context.Background(),
+		runtimeprofile.Request{UserID: "user-b"},
+	)
+	require.ErrorIs(t, err, runtimeprofile.ErrProfileSelectorDenied)
+}
+
 func TestBuildRuntimeOptionsIgnoresNilRuntimeProfileInputs(t *testing.T) {
 	t.Parallel()
 
@@ -617,12 +645,25 @@ func TestRuntimeProfileAppNames(t *testing.T) {
 			"support": {
 				AppName: "support-app",
 			},
+			"isolated": {
+				Isolation: runtimeprofile.IsolationPolicy{
+					Mode: runtimeprofile.IsolationModeProfileCache,
+				},
+			},
+			"service-key": {
+				ID: "service-profile",
+				Isolation: runtimeprofile.IsolationPolicy{
+					Mode: runtimeprofile.IsolationModeService,
+				},
+			},
 		},
 	}
 
 	got := runtimeProfileAppNames(&cfg)
 	require.ElementsMatch(t, []string{
+		"isolated",
 		"retail-app",
+		"service-profile",
 		"support-app",
 	}, got)
 }

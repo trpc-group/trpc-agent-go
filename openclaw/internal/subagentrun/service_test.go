@@ -11,6 +11,7 @@ package subagentrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -22,14 +23,28 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	coretaskrun "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
-	publicsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
+	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
+)
+
+const (
+	testStoreDirPerm  = 0o700
+	testStoreFilePerm = 0o600
+	testProfileID     = "reviewer"
+	testProfilePrompt = "profile instruction"
+	testProfileState  = "profile_state"
+	testProfileSystem = "profile system prompt"
+	testProfileRoot   = "/tmp/openclaw-profile-root"
+	testProfileUserID = "telegram:user"
 )
 
 type captureRunner struct {
 	mu        sync.Mutex
+	ctx       context.Context
 	userID    string
 	sessionID string
 	message   model.Message
@@ -46,6 +61,7 @@ func (r *captureRunner) Run(
 	opts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
 	r.mu.Lock()
+	r.ctx = ctx
 	r.userID = userID
 	r.sessionID = sessionID
 	r.message = message
@@ -94,7 +110,6 @@ func (r *blockingRunner) Run(
 	r.once.Do(func() {
 		close(r.started)
 	})
-
 	ch := make(chan *event.Event)
 	go func() {
 		defer close(ch)
@@ -156,7 +171,29 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 		require.NoError(t, svc.Close())
 	})
 
-	run, err := svc.Spawn(context.Background(), SpawnRequest{
+	spawnCtx := runtimeprofile.WithRequest(
+		runtimeprofile.WithProfile(
+			context.Background(),
+			runtimeprofile.Profile{
+				ID: testProfileID,
+				Prompt: runtimeprofile.Prompt{
+					Instruction:  testProfilePrompt,
+					SystemPrompt: testProfileSystem,
+				},
+				Workspace: runtimeprofile.WorkspacePolicy{
+					AllowedRoots: []string{testProfileRoot},
+				},
+				State: map[string]any{
+					testProfileState: "profile-a",
+				},
+			},
+		),
+		runtimeprofile.Request{
+			ProfileID: testProfileID,
+			UserID:    testProfileUserID,
+		},
+	)
+	run, err := svc.Spawn(spawnCtx, SpawnRequest{
 		OwnerUserID:     "telegram:user",
 		ParentSessionID: "telegram:dm:100",
 		Task:            "check the incident timeline",
@@ -167,24 +204,20 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, publicsubagent.StatusQueued, run.Status)
+	require.Equal(t, openclawsubagent.StatusQueued, run.Status)
+	require.True(t, strings.HasPrefix(run.ID, subagentIDPrefix))
 
-	require.Eventually(t, func() bool {
-		current, getErr := svc.GetForUser("telegram:user", run.ID)
-		if getErr != nil || current == nil {
-			return false
-		}
-		return current.Status == publicsubagent.StatusCompleted
-	}, time.Second, 10*time.Millisecond)
-
-	current, err := svc.GetForUser("telegram:user", run.ID)
+	final, err := svc.WaitForUser(
+		context.Background(),
+		"telegram:user",
+		run.ID,
+	)
 	require.NoError(t, err)
-	require.Equal(t, publicsubagent.StatusCompleted, current.Status)
-	require.Equal(t, "finished delegated work", current.Result)
-	require.Equal(t, "finished delegated work", current.Summary)
-	require.NotEmpty(t, current.ChildSessionID)
+	require.Equal(t, openclawsubagent.StatusCompleted, final.Status)
+	require.Equal(t, "finished delegated work", final.Result)
+	requireRunHidesInternalFields(t, *final)
 
-	runs := svc.ListForUser("telegram:user", publicsubagent.ListFilter{
+	runs := svc.ListForUser("telegram:user", openclawsubagent.ListFilter{
 		ParentSessionID: "telegram:dm:100",
 	})
 	require.Len(t, runs, 1)
@@ -193,35 +226,66 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 	runner.mu.Lock()
 	require.Equal(t, "telegram:user", runner.userID)
 	require.Equal(t, "check the incident timeline", runner.message.Content)
-	require.True(
-		t,
-		strings.HasPrefix(runner.sessionID, subagentSessionPrefix),
-	)
+	require.True(t, strings.HasPrefix(runner.sessionID, subagentIDPrefix))
+	parentSessionKey := openclawsubagent.RuntimeStateKeyParentSessionID
 	require.Equal(
 		t,
 		true,
-		runner.runOpts.RuntimeState[runtimeStateSubagentRun],
+		runner.runOpts.RuntimeState[openclawsubagent.RuntimeStateKeyRun],
 	)
 	require.Equal(
 		t,
 		run.ID,
-		runner.runOpts.RuntimeState[runtimeStateSubagentRunID],
+		runner.runOpts.RuntimeState[openclawsubagent.RuntimeStateKeyRunID],
 	)
 	require.Equal(
 		t,
 		"telegram:dm:100",
-		runner.runOpts.RuntimeState[runtimeStateSubagentParentID],
+		runner.runOpts.RuntimeState[parentSessionKey],
+	)
+	require.NotContains(
+		t,
+		runner.runOpts.RuntimeState,
+		coretaskrun.RuntimeStateKeyRun,
+	)
+	require.NotContains(
+		t,
+		runner.runOpts.RuntimeState,
+		coretaskrun.RuntimeStateKeyRunID,
+	)
+	require.NotContains(
+		t,
+		runner.runOpts.RuntimeState,
+		coretaskrun.RuntimeStateKeyParentSessionID,
 	)
 	require.Equal(
 		t,
 		"telegram",
 		runner.runOpts.RuntimeState["openclaw.delivery.channel"],
 	)
+	require.Equal(t, testProfilePrompt, runner.runOpts.Instruction)
 	require.Equal(
 		t,
-		"100",
-		runner.runOpts.RuntimeState["openclaw.delivery.target"],
+		testProfileSystem,
+		runner.runOpts.GlobalInstruction,
 	)
+	require.Equal(
+		t,
+		testProfileID,
+		runner.runOpts.RuntimeState[runtimeprofile.RuntimeStateProfileID],
+	)
+	require.Equal(
+		t,
+		"profile-a",
+		runner.runOpts.RuntimeState[testProfileState],
+	)
+	workspace, ok := runtimeprofile.WorkspaceFromContext(runner.ctx)
+	require.True(t, ok)
+	require.Equal(t, []string{testProfileRoot}, workspace.AllowedRoots)
+	req, ok := runtimeprofile.RequestFromContext(runner.ctx)
+	require.True(t, ok)
+	require.Equal(t, testProfileID, req.ProfileID)
+	require.Equal(t, testProfileUserID, req.UserID)
 	require.Len(t, runner.runOpts.InjectedContextMessages, 1)
 	require.Equal(
 		t,
@@ -241,6 +305,18 @@ func TestServiceSpawnCompletesRunAndNotifies(t *testing.T) {
 			strings.Contains(text, notificationPrefixCompleted) &&
 			strings.Contains(text, run.ID)
 	}, time.Second, 10*time.Millisecond)
+}
+
+func requireRunHidesInternalFields(t *testing.T, run openclawsubagent.Run) {
+	t.Helper()
+
+	data, err := json.Marshal(run)
+	require.NoError(t, err)
+	payload := string(data)
+	require.NotContains(t, payload, "owner_user_id")
+	require.NotContains(t, payload, "request_id")
+	require.NotContains(t, payload, "agent_name")
+	require.NotContains(t, payload, "metadata")
 }
 
 func TestServiceCancelForUser(t *testing.T) {
@@ -278,21 +354,17 @@ func TestServiceCancelForUser(t *testing.T) {
 	canceled, changed, err := svc.CancelForUser("user-a", run.ID)
 	require.NoError(t, err)
 	require.True(t, changed)
-	require.Equal(t, publicsubagent.StatusCanceled, canceled.Status)
+	require.Equal(t, openclawsubagent.StatusCanceled, canceled.Status)
 
-	require.Eventually(t, func() bool {
-		current, getErr := svc.GetForUser("user-a", run.ID)
-		if getErr != nil || current == nil {
-			return false
-		}
-		return current.Status == publicsubagent.StatusCanceled
-	}, time.Second, 10*time.Millisecond)
+	final, err := svc.WaitForUser(context.Background(), "user-a", run.ID)
+	require.NoError(t, err)
+	require.Equal(t, openclawsubagent.StatusCanceled, final.Status)
 
 	_, text := sender.snapshot()
 	require.Empty(t, text)
 }
 
-func TestServiceListForUserScopesByOwnerAndParent(t *testing.T) {
+func TestServiceListScopesByOwnerAndParent(t *testing.T) {
 	t.Parallel()
 
 	runner := &captureRunner{reply: "ok"}
@@ -323,55 +395,90 @@ func TestServiceListForUserScopesByOwnerAndParent(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		return len(svc.ListForUser("user-a", publicsubagent.ListFilter{})) == 2
+		return len(svc.ListForUser(
+			"user-a",
+			openclawsubagent.ListFilter{},
+		)) == 2
 	}, time.Second, 10*time.Millisecond)
 
-	filtered := svc.ListForUser("user-a", publicsubagent.ListFilter{
+	filtered := svc.ListForUser("user-a", openclawsubagent.ListFilter{
 		ParentSessionID: "parent-a",
 	})
 	require.Len(t, filtered, 1)
 	require.Equal(t, first.ID, filtered[0].ID)
 }
 
-func TestNewServiceMarksInterruptedRunsFailed(t *testing.T) {
+func TestServiceLoadsLegacySubagentRunsFile(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	startedAt := time.Now().Add(-time.Minute)
-	path := filepath.Join(
-		dir,
-		subagentDirName,
-		subagentRunsFileName,
+	const (
+		legacyRunID          = "subagent:legacy"
+		legacyOwnerUserID    = "user-a"
+		legacyParentSession  = "parent-a"
+		legacyTask           = "legacy task"
+		legacyDelivery       = "telegram"
+		legacyDeliveryTarget = "100"
 	)
-	runs := map[string]*runRecord{
-		"run-1": {
-			Run: publicsubagent.Run{
-				ID:              "run-1",
-				ParentSessionID: "parent",
-				Task:            "resume me",
-				Status:          publicsubagent.StatusRunning,
-				CreatedAt:       startedAt,
-				UpdatedAt:       startedAt,
-				StartedAt:       cloneTime(startedAt),
-			},
-			OwnerUserID: "user-a",
-		},
-	}
-	require.NoError(t, saveRuns(path, runs))
 
-	svc, err := NewService(dir, &captureRunner{reply: "ok"}, nil)
+	stateDir := t.TempDir()
+	storePath := subagentStorePath(stateDir)
+	require.NoError(t, os.MkdirAll(
+		filepath.Dir(storePath),
+		testStoreDirPerm,
+	))
+
+	createdAt := time.Now().Add(-time.Hour).UTC()
+	startedAt := createdAt.Add(time.Minute)
+	legacyFile := struct {
+		Version int               `json:"version"`
+		Runs    []coretaskrun.Run `json:"runs,omitempty"`
+	}{
+		Version: 1,
+		Runs: []coretaskrun.Run{{
+			ID:              legacyRunID,
+			OwnerUserID:     legacyOwnerUserID,
+			ParentSessionID: legacyParentSession,
+			ChildSessionID:  legacyRunID,
+			RequestID:       legacyRunID,
+			Task:            legacyTask,
+			Status:          coretaskrun.StatusRunning,
+			Metadata: map[string]string{
+				metadataDeliveryChannel: legacyDelivery,
+				metadataDeliveryTarget:  legacyDeliveryTarget,
+			},
+			CreatedAt: createdAt,
+			UpdatedAt: startedAt,
+			StartedAt: &startedAt,
+		}},
+	}
+	data, err := json.Marshal(legacyFile)
 	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		storePath,
+		data,
+		testStoreFilePerm,
+	))
+
+	svc, err := NewService(stateDir, &captureRunner{reply: "ok"}, nil)
+	require.NoError(t, err)
+	svc.Start(context.Background())
 	t.Cleanup(func() {
 		require.NoError(t, svc.Close())
 	})
 
-	run, err := svc.GetForUser("user-a", "run-1")
-	require.NoError(t, err)
-	require.Equal(t, publicsubagent.StatusFailed, run.Status)
-	require.Contains(t, run.Error, "previous runtime restart")
+	runs := svc.ListForUser(legacyOwnerUserID, openclawsubagent.ListFilter{
+		ParentSessionID: legacyParentSession,
+	})
+	require.Len(t, runs, 1)
+	require.Equal(t, legacyRunID, runs[0].ID)
+	require.Equal(t, legacyParentSession, runs[0].ParentSessionID)
+	require.Equal(t, legacyRunID, runs[0].ChildSessionID)
+	require.Equal(t, legacyTask, runs[0].Task)
+	require.Equal(t, openclawsubagent.StatusFailed, runs[0].Status)
+	requireRunHidesInternalFields(t, runs[0])
 }
 
-func TestNewServiceValidatesInput(t *testing.T) {
+func TestServiceValidatesInputAndPropagatesErrors(t *testing.T) {
 	t.Parallel()
 
 	_, err := NewService("", &captureRunner{reply: "ok"}, nil)
@@ -379,97 +486,48 @@ func TestNewServiceValidatesInput(t *testing.T) {
 
 	_, err = NewService(t.TempDir(), nil, nil)
 	require.ErrorContains(t, err, "nil runner")
-}
 
-func TestFormatNotification(t *testing.T) {
-	t.Parallel()
-
-	record := &runRecord{
-		Run: publicsubagent.Run{
-			ID:      "run-1",
-			Status:  publicsubagent.StatusCompleted,
-			Result:  "full result",
-			Summary: "summary only",
-		},
-	}
-	require.Contains(t, formatNotification(record), notificationPrefixCompleted)
-	require.Contains(t, formatNotification(record), "full result")
-	require.NotContains(t, formatNotification(record), "summary only")
-
-	record.Status = publicsubagent.StatusFailed
-	record.Summary = "boom"
-	require.Contains(t, formatNotification(record), notificationPrefixFailed)
-
-	record.Status = publicsubagent.StatusCanceled
-	require.Contains(t, formatNotification(record), notificationPrefixCanceled)
-
-	record.Status = publicsubagent.StatusQueued
-	require.Empty(t, formatNotification(record))
-}
-
-func TestReplyAccumulatorConsumeDeltaAndError(t *testing.T) {
-	t.Parallel()
-
-	var acc replyAccumulator
-	acc.consume(&event.Event{
-		Response: &model.Response{
-			Object: model.ObjectTypeChatCompletionChunk,
-			Choices: []model.Choice{{
-				Delta: model.Message{Content: "hello "},
-			}},
-		},
-	})
-	acc.consume(&event.Event{
-		Response: &model.Response{
-			Object: model.ObjectTypeChatCompletionChunk,
-			Choices: []model.Choice{{
-				Delta: model.Message{Content: "world"},
-			}},
-		},
-	})
-	require.Equal(t, "hello world", acc.text)
-
-	acc.consume(&event.Event{
-		Response: &model.Response{
-			Error: &model.ResponseError{
-				Message: "stream failed",
-			},
-		},
-	})
-	require.ErrorContains(t, acc.err, "stream failed")
-}
-
-func TestServiceSpawnValidation(t *testing.T) {
-	t.Parallel()
+	var nilSvc *Service
+	require.NoError(t, nilSvc.Close())
+	nilSvc.Start(context.Background())
+	_, err = nilSvc.Spawn(context.Background(), SpawnRequest{})
+	require.ErrorContains(t, err, "nil service")
+	require.Nil(
+		t,
+		nilSvc.ListForUser("user-a", openclawsubagent.ListFilter{}),
+	)
 
 	svc, err := NewService(t.TempDir(), &captureRunner{reply: "ok"}, nil)
 	require.NoError(t, err)
-
 	_, err = svc.Spawn(context.Background(), SpawnRequest{})
-	require.ErrorContains(t, err, "not started")
-
+	require.ErrorIs(t, err, openclawsubagent.ErrNotStarted)
 	svc.Start(context.Background())
 
 	_, err = svc.Spawn(context.Background(), SpawnRequest{
 		ParentSessionID: "session-a",
 		Task:            "task",
 	})
-	require.ErrorContains(t, err, "empty owner")
+	require.ErrorContains(t, err, "subagent: empty owner")
 
 	_, err = svc.Spawn(context.Background(), SpawnRequest{
 		OwnerUserID: "user-a",
 		Task:        "task",
 	})
-	require.ErrorContains(t, err, "empty parent session id")
+	require.ErrorContains(t, err, "subagent: empty parent session id")
 
 	_, err = svc.Spawn(context.Background(), SpawnRequest{
 		OwnerUserID:     "user-a",
 		ParentSessionID: "session-a",
 	})
-	require.ErrorContains(t, err, "empty task")
+	require.ErrorContains(t, err, "subagent: empty task")
+
+	_, err = svc.GetForUser("user-a", "missing")
+	require.ErrorIs(t, err, openclawsubagent.ErrRunNotFound)
+	_, _, err = svc.CancelForUser("user-a", "missing")
+	require.ErrorIs(t, err, openclawsubagent.ErrRunNotFound)
 }
 
-func TestServiceRunFailureMarksRunFailed(t *testing.T) {
+func TestServiceFailureNotification(t *testing.T) {
 	t.Parallel()
 
 	router := outbound.NewRouter()
@@ -495,18 +553,10 @@ func TestServiceRunFailureMarksRunFailed(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Eventually(t, func() bool {
-		current, getErr := svc.GetForUser("user-a", run.ID)
-		if getErr != nil || current == nil {
-			return false
-		}
-		return current.Status == publicsubagent.StatusFailed
-	}, time.Second, 10*time.Millisecond)
-
-	current, err := svc.GetForUser("user-a", run.ID)
+	final, err := svc.WaitForUser(context.Background(), "user-a", run.ID)
 	require.NoError(t, err)
-	require.Equal(t, publicsubagent.StatusFailed, current.Status)
-	require.Contains(t, current.Error, "runner boom")
+	require.Equal(t, openclawsubagent.StatusFailed, final.Status)
+	require.Contains(t, final.Error, "runner boom")
 
 	require.Eventually(t, func() bool {
 		_, text := sender.snapshot()
@@ -514,224 +564,23 @@ func TestServiceRunFailureMarksRunFailed(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestServiceHelperPaths(t *testing.T) {
+func TestFormatNotification(t *testing.T) {
 	t.Parallel()
 
-	var nilSvc *Service
-	nilSvc.Start(context.Background())
-	require.NoError(t, nilSvc.Close())
-	require.NoError(t, nilSvc.persist())
-
-	svc, err := NewService(t.TempDir(), &captureRunner{reply: "ok"}, nil)
-	require.NoError(t, err)
-	svc.Start(context.Background())
-	t.Cleanup(func() {
-		require.NoError(t, svc.Close())
-	})
-
-	_, err = svc.GetForUser("user-a", "missing")
-	require.ErrorIs(t, err, publicsubagent.ErrRunNotFound)
-
-	_, _, err = svc.CancelForUser("user-a", "missing")
-	require.ErrorIs(t, err, publicsubagent.ErrRunNotFound)
-
-	require.Empty(t, formatNotification(nil))
-}
-
-func TestServiceFinishRunCanceledPaths(t *testing.T) {
-	t.Parallel()
-
-	svc, err := NewService(t.TempDir(), &captureRunner{reply: "ok"}, nil)
-	require.NoError(t, err)
-
-	now := time.Now()
-	svc.clock = func() time.Time {
-		return now
+	run := coretaskrun.Run{
+		ID:      "run-1",
+		Status:  coretaskrun.StatusCompleted,
+		Result:  "full result",
+		Summary: "summary only",
 	}
+	require.Contains(t, formatNotification(run), notificationPrefixCompleted)
+	require.Contains(t, formatNotification(run), "full result")
+	require.NotContains(t, formatNotification(run), "summary only")
 
-	svc.runs["run-1"] = &runRecord{
-		Run: publicsubagent.Run{
-			ID:        "run-1",
-			Status:    publicsubagent.StatusRunning,
-			CreatedAt: now,
-			UpdatedAt: now,
-		},
-		OwnerUserID: "user-a",
-	}
-	svc.running["run-1"] = &runningRun{cancelRequested: true}
-	svc.finishRun("run-1", "ignored", nil)
+	run.Status = coretaskrun.StatusFailed
+	run.Summary = "boom"
+	require.Contains(t, formatNotification(run), notificationPrefixFailed)
 
-	run, err := svc.GetForUser("user-a", "run-1")
-	require.NoError(t, err)
-	require.Equal(t, publicsubagent.StatusCanceled, run.Status)
-	require.Equal(t, "canceled", run.Summary)
-
-	svc.runs["run-2"] = &runRecord{
-		Run: publicsubagent.Run{
-			ID:        "run-2",
-			Status:    publicsubagent.StatusRunning,
-			CreatedAt: now,
-			UpdatedAt: now,
-		},
-		OwnerUserID: "user-a",
-	}
-	svc.running["run-2"] = &runningRun{}
-	svc.finishRun("run-2", "", context.Canceled)
-
-	run, err = svc.GetForUser("user-a", "run-2")
-	require.NoError(t, err)
-	require.Equal(t, publicsubagent.StatusCanceled, run.Status)
-}
-
-func TestServiceNotifyCompletionToleratesSenderError(t *testing.T) {
-	t.Parallel()
-
-	router := outbound.NewRouter()
-	sender := &stubSender{sendErr: errors.New("send failed")}
-	router.RegisterSender(sender)
-
-	svc, err := NewService(t.TempDir(), &captureRunner{reply: "ok"}, router)
-	require.NoError(t, err)
-
-	svc.notifyCompletion(&runRecord{
-		Run: publicsubagent.Run{
-			ID:      "run-1",
-			Status:  publicsubagent.StatusCompleted,
-			Summary: "done",
-		},
-		Delivery: deliveryTarget{
-			Channel: "telegram",
-			Target:  "42",
-		},
-	})
-
-	target, text := sender.snapshot()
-	require.Equal(t, "42", target)
-	require.Contains(t, text, "run-1")
-
-	svc.notifyCompletion(&runRecord{
-		Run: publicsubagent.Run{
-			ID:     "run-2",
-			Status: publicsubagent.StatusCompleted,
-		},
-	})
-}
-
-func TestServiceErrorBranches(t *testing.T) {
-	t.Parallel()
-
-	var nilSvc *Service
-	_, err := nilSvc.Spawn(context.Background(), SpawnRequest{})
-	require.ErrorContains(t, err, "nil service")
-	require.Nil(t, nilSvc.ListForUser("user-a", publicsubagent.ListFilter{}))
-
-	svc := &Service{
-		path:    t.TempDir(),
-		clock:   time.Now,
-		runs:    make(map[string]*runRecord),
-		running: make(map[string]*runningRun),
-	}
-
-	_, _, _, err = svc.markRunning(
-		context.Background(),
-		"missing",
-		0,
-	)
-	require.ErrorIs(t, err, publicsubagent.ErrRunNotFound)
-
-	svc.runs["run-canceled"] = &runRecord{
-		Run: publicsubagent.Run{
-			ID:     "run-canceled",
-			Status: publicsubagent.StatusCanceled,
-		},
-	}
-	_, _, _, err = svc.markRunning(
-		context.Background(),
-		"run-canceled",
-		0,
-	)
-	require.ErrorContains(t, err, "run canceled before start")
-
-	badPath := filepath.Join(t.TempDir(), "runs-dir")
-	require.NoError(t, os.MkdirAll(badPath, 0o700))
-	svc.path = badPath
-	svc.runs["run-persist"] = &runRecord{
-		Run: publicsubagent.Run{
-			ID:        "run-persist",
-			Status:    publicsubagent.StatusQueued,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		},
-		OwnerUserID: "user-a",
-	}
-	_, _, _, err = svc.markRunning(
-		context.Background(),
-		"run-persist",
-		0,
-	)
-	require.Error(t, err)
-	run, getErr := svc.GetForUser("user-a", "run-persist")
-	require.NoError(t, getErr)
-	require.Equal(t, publicsubagent.StatusFailed, run.Status)
-
-	require.ErrorContains(
-		t,
-		svc.runChild(context.Background(), nil, runningRun{}, &replyAccumulator{}),
-		"nil run record",
-	)
-
-	svc.finishRun("missing", "", nil)
-
-	canceled := false
-	svc.running = map[string]*runningRun{
-		"nil-entry": nil,
-		"active": {
-			cancel: func() {
-				canceled = true
-			},
-		},
-	}
-	svc.stopAllRunning()
-	require.True(t, canceled)
-	require.NotNil(t, svc.running["active"])
-	require.True(t, svc.running["active"].cancelRequested)
-}
-
-func TestReplyAccumulatorNoOpBranches(t *testing.T) {
-	t.Parallel()
-
-	var acc replyAccumulator
-	acc.consume(nil)
-	acc.consume(&event.Event{
-		Response: &model.Response{},
-	})
-	acc.consume(&event.Event{
-		Response: &model.Response{
-			Error: &model.ResponseError{Message: "event failed"},
-		},
-	})
-	require.ErrorContains(t, acc.err, "event failed")
-
-	acc = replyAccumulator{}
-	acc.consumeFull(nil)
-	acc.consumeFull(&model.Response{})
-	acc.consumeFull(&model.Response{
-		Choices: []model.Choice{{}},
-	})
-	require.Empty(t, acc.text)
-
-	acc.consumeDelta(nil)
-	acc.seenFull = true
-	acc.consumeDelta(&model.Response{
-		Choices: []model.Choice{{
-			Delta: model.Message{Content: "ignored"},
-		}},
-	})
-	require.Empty(t, acc.text)
-
-	acc = replyAccumulator{}
-	acc.consumeDelta(&model.Response{
-		Choices: []model.Choice{{}},
-	})
-	require.Empty(t, acc.text)
+	run.Status = coretaskrun.StatusCanceled
+	require.Empty(t, formatNotification(run))
 }

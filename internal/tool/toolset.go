@@ -92,6 +92,11 @@ func (t *NamedTool) Original() tool.Tool {
 	return t.original
 }
 
+// ToolSetName returns the source ToolSet name for runtime policy checks.
+func (t *NamedTool) ToolSetName() string {
+	return t.name
+}
+
 // Call delegates to the original tool's Call method.
 func (t *NamedTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if callable, ok := t.original.(tool.CallableTool); ok {

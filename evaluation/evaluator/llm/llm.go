@@ -72,7 +72,11 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 		return nil, fmt.Errorf("missing required fields in eval metric")
 	}
 	numSamples := 1
-	if judgeRunner == nil {
+	if judgeRunner != nil {
+		if judgeCriterion.JudgeRunnerOptions.NumSamples != nil {
+			numSamples = *judgeCriterion.JudgeRunnerOptions.NumSamples
+		}
+	} else {
 		numSamplesPtr := judgeCriterion.JudgeModel.NumSamples
 		if numSamplesPtr == nil {
 			defaultNumSamples := llm.DefaultNumSamples

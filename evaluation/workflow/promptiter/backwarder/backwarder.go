@@ -443,7 +443,7 @@ func sanitizeBackwardResult(request *Request, result *Result) (*Result, error) {
 	if len(predecessorIndex) == 0 && len(result.Upstream) > 0 {
 		return nil, errors.New("upstream propagations are not allowed without predecessors")
 	}
-	seenPredecessors := make(map[string]struct{}, len(result.Upstream))
+	upstreamIndex := make(map[string]int, len(result.Upstream))
 	for _, propagation := range result.Upstream {
 		sanitizedPropagation, keep, err := sanitizePropagation(request, predecessorIndex, propagation)
 		if err != nil {
@@ -452,13 +452,14 @@ func sanitizeBackwardResult(request *Request, result *Result) (*Result, error) {
 		if !keep {
 			continue
 		}
-		if _, ok := seenPredecessors[sanitizedPropagation.PredecessorStepID]; ok {
-			return nil, fmt.Errorf(
-				"duplicate propagation for predecessor step id %q",
-				sanitizedPropagation.PredecessorStepID,
+		if existingIndex, ok := upstreamIndex[sanitizedPropagation.PredecessorStepID]; ok {
+			sanitized.Upstream[existingIndex].Gradients = append(
+				sanitized.Upstream[existingIndex].Gradients,
+				sanitizedPropagation.Gradients...,
 			)
+			continue
 		}
-		seenPredecessors[sanitizedPropagation.PredecessorStepID] = struct{}{}
+		upstreamIndex[sanitizedPropagation.PredecessorStepID] = len(sanitized.Upstream)
 		sanitized.Upstream = append(sanitized.Upstream, sanitizedPropagation)
 	}
 	if len(sanitized.Gradients) == 0 && len(sanitized.Upstream) == 0 {

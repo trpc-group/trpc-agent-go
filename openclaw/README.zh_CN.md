@@ -404,6 +404,19 @@ go run ./cmd/openclaw \
 - 可运行示例见
   [`./examples/a2a_subagent`](./examples/a2a_subagent/)。
 
+## Subagent 派生模式
+
+OpenClaw 提供 `subagents_spawn`，以及兼容别名 `sessions_spawn`，用于委托
+子任务。`mode` 参数决定主 agent 是立即继续，还是等待子 agent：
+
+- `async`：默认模式。启动子 agent 后立即返回 run id。
+- `sync`：等待子 agent 进入终态，再把结果返回给主 agent。
+- `review`：等待子 agent 结果，并把下一次用户回复路由回同一个主 agent
+  续点，让用户审核后主 agent 再继续。
+
+`timeout_seconds` 限制子 agent run 本身。`wait_timeout_seconds` 只限制
+`subagents_spawn` 在 `sync` 或 `review` 模式下等待的时间。
+
 ## 自定义 Prompt
 
 OpenClaw 支持通过以下方式自定义主 agent 的 prompt：
