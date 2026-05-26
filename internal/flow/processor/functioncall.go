@@ -1306,17 +1306,8 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 				fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 		}
 		defaultMsg.ToolName = toolCall.Function.Name
-		defaultChoices := []model.Choice{
-			{Index: index, Message: defaultMsg},
-		}
 		ctx = markSyntheticStateOnlyToolChoice(ctx)
-		if p.toolCallbacks == nil ||
-			p.toolCallbacks.ToolResultMessages == nil ||
-			isPermissionResult(result) {
-			return ctx, defaultChoices, modifiedArgs, true,
-				skipSummarization, nil
-		}
-		customChoices, overridden, cbErr := p.applyToolResultMessagesCallback(
+		choices, cbErr := p.buildToolResultChoices(
 			ctx,
 			toolCall,
 			tl,
@@ -1328,11 +1319,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		if cbErr != nil {
 			return ctx, nil, modifiedArgs, true, skipSummarization, cbErr
 		}
-		if overridden {
-			return ctx, customChoices, modifiedArgs, true,
-				skipSummarization, nil
-		}
-		return ctx, defaultChoices, modifiedArgs, true,
+		return ctx, choices, modifiedArgs, true,
 			skipSummarization, nil
 	}
 
@@ -1352,29 +1339,17 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	}
 	defaultMsg.ToolName = toolCall.Function.Name
 
-	choices := []model.Choice{
-		{Index: index, Message: defaultMsg},
-	}
-
-	if !isPermissionResult(result) &&
-		p.toolCallbacks != nil &&
-		p.toolCallbacks.ToolResultMessages != nil {
-		customChoices, overridden, cbErr :=
-			p.applyToolResultMessagesCallback(
-				ctx,
-				toolCall,
-				tl,
-				result,
-				modifiedArgs,
-				index,
-				defaultMsg,
-			)
-		if cbErr != nil {
-			return ctx, nil, modifiedArgs, true, skipSummarization, cbErr
-		}
-		if overridden {
-			choices = customChoices
-		}
+	choices, cbErr := p.buildToolResultChoices(
+		ctx,
+		toolCall,
+		tl,
+		result,
+		modifiedArgs,
+		index,
+		defaultMsg,
+	)
+	if cbErr != nil {
+		return ctx, nil, modifiedArgs, true, skipSummarization, cbErr
 	}
 
 	log.DebugfContext(
@@ -1385,6 +1360,41 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	)
 
 	return ctx, choices, modifiedArgs, true, skipSummarization, nil
+}
+
+func (p *FunctionCallResponseProcessor) buildToolResultChoices(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	tl tool.Tool,
+	result any,
+	modifiedArgs []byte,
+	index int,
+	defaultMsg model.Message,
+) ([]model.Choice, error) {
+	defaultChoices := []model.Choice{
+		{Index: index, Message: defaultMsg},
+	}
+	if isPermissionResult(result) ||
+		p.toolCallbacks == nil ||
+		p.toolCallbacks.ToolResultMessages == nil {
+		return defaultChoices, nil
+	}
+	customChoices, overridden, err := p.applyToolResultMessagesCallback(
+		ctx,
+		toolCall,
+		tl,
+		result,
+		modifiedArgs,
+		index,
+		defaultMsg,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if overridden {
+		return customChoices, nil
+	}
+	return defaultChoices, nil
 }
 
 func isPermissionResult(result any) bool {
