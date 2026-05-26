@@ -322,13 +322,13 @@ Run these checks sequentially via exec:
 - If no eligible issue is found (all issues either have PRs, have branches, or are in progress), report "No eligible issues to process — all issues have PRs/branches or are in progress" and exit.
 
 **Normal mode (`--cron` is NOT active):**
-For each confirmed issue, spawn a sub-agent using sessions_spawn. Launch up to 8 concurrently (matching `subagents.maxConcurrent: 8`). If more than 8 issues, batch them — launch the next agent as each completes.
+For each confirmed issue, spawn a sub-agent using subagents_spawn. Launch up to 8 concurrently (matching `subagents.maxConcurrent: 8`). If more than 8 issues, batch them — launch the next agent as each completes.
 
 **Write claims:** After spawning each sub-agent, read the claims file, add `{SOURCE_REPO}#{N}` with the current ISO timestamp, and write it back (same procedure as cron mode above). This covers interactive usage where watch mode might overlap with cron runs.
 
 ### Sub-agent Task Prompt
 
-For each issue, construct the following prompt and pass it to sessions_spawn. Variables to inject into the template:
+For each issue, construct the following prompt and pass it to subagents_spawn. Variables to inject into the template:
 
 - {SOURCE_REPO} — upstream repo where the issue lives
 - {PUSH_REPO} — repo to push branches to (same as SOURCE_REPO unless fork mode)

@@ -25,7 +25,14 @@ type resolvedAgentPrompts struct {
 }
 
 func resolveAgentPrompts(opts runOptions) (resolvedAgentPrompts, error) {
-	cwd, err := os.Getwd()
+	return resolveAgentPromptsWithGetwd(opts, os.Getwd)
+}
+
+func resolveAgentPromptsWithGetwd(
+	opts runOptions,
+	getwd func() (string, error),
+) (resolvedAgentPrompts, error) {
+	cwd, err := getwd()
 	if err != nil {
 		return resolvedAgentPrompts{}, err
 	}
@@ -82,7 +89,11 @@ func joinPromptParts(parts ...string) string {
 	return strings.Join(out, "\n\n")
 }
 
-func buildAgentPrompt(inline string, files []string, dir string) (string, error) {
+func buildAgentPrompt(
+	inline string,
+	files []string,
+	dir string,
+) (string, error) {
 	parts := make([]string, 0, 1+len(files))
 	if v := strings.TrimSpace(inline); v != "" {
 		parts = append(parts, v)
