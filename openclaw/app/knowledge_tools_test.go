@@ -22,10 +22,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -85,6 +88,7 @@ vector_store:
 	require.NotNil(t, bundle)
 	require.Len(t, bundle.tools, 1)
 	require.Equal(t, "knowledge_search", bundle.tools[0].Declaration().Name)
+	require.Equal(t, "docs", knowledgeIndexName(bundle.tools[0]))
 }
 
 func TestBuildKnowledgeTools_MultipleKnowledgesCreateNamedTools(t *testing.T) {
@@ -103,6 +107,34 @@ vector_store:
 	require.Len(t, bundle.tools, 2)
 	require.Equal(t, "docs_kb_knowledge_search", bundle.tools[0].Declaration().Name)
 	require.Equal(t, "faq_knowledge_search", bundle.tools[1].Declaration().Name)
+	require.Equal(t, "Docs KB", knowledgeIndexName(bundle.tools[0]))
+	require.Equal(t, "FAQ", knowledgeIndexName(bundle.tools[1]))
+}
+
+func TestKnowledgeIndexToolPreservesToolCapabilities(t *testing.T) {
+	t.Parallel()
+
+	callable := newKnowledgeIndexTool(
+		"docs",
+		knowledgeCallableTool{name: "knowledge_search"},
+	)
+	require.Implements(t, (*tool.CallableTool)(nil), callable)
+	require.NotImplements(t, (*tool.StreamableTool)(nil), callable)
+	require.Equal(t, "docs", knowledgeIndexName(callable))
+
+	streamable := newKnowledgeIndexTool(
+		"stream",
+		knowledgeStreamableTool{name: "stream_search"},
+	)
+	require.Implements(t, (*tool.StreamableTool)(nil), streamable)
+	require.NotImplements(t, (*tool.CallableTool)(nil), streamable)
+
+	both := newKnowledgeIndexTool(
+		"both",
+		knowledgeCallableStreamableTool{name: "both_search"},
+	)
+	require.Implements(t, (*tool.CallableTool)(nil), both)
+	require.Implements(t, (*tool.StreamableTool)(nil), both)
 }
 
 func TestBuildKnowledgeTools_RejectsCollidingToolNames(t *testing.T) {
@@ -739,6 +771,41 @@ vector_store:
 	require.Contains(t, req.Tools, "faq_knowledge_search")
 }
 
+func TestNewAgent_RuntimeProfileKnowledgeIndexesFilter(t *testing.T) {
+	t.Parallel()
+
+	inmemory := `
+vector_store:
+  type: inmemory
+`
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: t.TempDir(),
+		StateDir:   t.TempDir(),
+		KnowledgesConfig: []knowledgeEntry{
+			builtinKnowledgeEntry(t, "docs", inmemory),
+			builtinKnowledgeEntry(t, "faq", inmemory),
+		},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	runOpts := agent.NewRunOptions(runtimeprofile.RunOptions(
+		runtimeprofile.Profile{
+			Knowledge: runtimeprofile.KnowledgePolicy{
+				Indexes: []string{"docs"},
+			},
+		},
+	)...)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationRunOptions(runOpts),
+	)
+	req := runInvocationAndCapture(t, agt, mdl, inv)
+	require.Contains(t, req.Tools, "docs_knowledge_search")
+	require.NotContains(t, req.Tools, "faq_knowledge_search")
+}
+
 func TestNewAgent_InvalidKnowledgeConfigReturnsError(t *testing.T) {
 	t.Parallel()
 
@@ -756,4 +823,70 @@ vector_store:
 	}, nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `knowledge "docs" config invalid`)
+}
+
+func knowledgeIndexName(tl tool.Tool) string {
+	named, ok := tl.(interface {
+		KnowledgeIndexName() string
+	})
+	if !ok {
+		return ""
+	}
+	return named.KnowledgeIndexName()
+}
+
+type knowledgeCallableTool struct {
+	name string
+}
+
+func (t knowledgeCallableTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func (t knowledgeCallableTool) Call(
+	context.Context,
+	[]byte,
+) (any, error) {
+	return "ok", nil
+}
+
+type knowledgeStreamableTool struct {
+	name string
+}
+
+func (t knowledgeStreamableTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func (t knowledgeStreamableTool) StreamableCall(
+	context.Context,
+	[]byte,
+) (*tool.StreamReader, error) {
+	stream := tool.NewStream(1)
+	stream.Writer.Close()
+	return stream.Reader, nil
+}
+
+type knowledgeCallableStreamableTool struct {
+	name string
+}
+
+func (t knowledgeCallableStreamableTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func (t knowledgeCallableStreamableTool) Call(
+	context.Context,
+	[]byte,
+) (any, error) {
+	return "ok", nil
+}
+
+func (t knowledgeCallableStreamableTool) StreamableCall(
+	context.Context,
+	[]byte,
+) (*tool.StreamReader, error) {
+	stream := tool.NewStream(1)
+	stream.Writer.Close()
+	return stream.Reader, nil
 }

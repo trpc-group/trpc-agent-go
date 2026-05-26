@@ -245,7 +245,7 @@ func runtimeProfileRequired(cfg *runtimeprofile.Config) bool {
 	if cfg == nil {
 		return false
 	}
-	return cfg.Required
+	return cfg.Required || len(cfg.Selectors) > 0
 }
 
 func validateRuntimeProfiles(cfg *runtimeprofile.Config) error {
@@ -275,8 +275,15 @@ func runtimeProfileAppNames(cfg *runtimeprofile.Config) []string {
 		return nil
 	}
 	appNames := make([]string, 0, len(cfg.Profiles))
-	for _, profile := range cfg.Profiles {
-		appNames = appendUniqueAppNames(appNames, profile.AppName)
+	for key, profile := range cfg.Profiles {
+		id := strings.TrimSpace(profile.ID)
+		if id == "" {
+			profile.ID = strings.TrimSpace(key)
+		}
+		appNames = appendUniqueAppNames(
+			appNames,
+			runtimeprofile.RuntimeAppName(profile),
+		)
 	}
 	return appNames
 }

@@ -135,6 +135,11 @@ func TestProfileCatalog(t *testing.T) {
 			"support-alias": {
 				AppName: "support-app",
 			},
+			"isolated": {
+				Isolation: IsolationPolicy{
+					Mode: IsolationModeProfileCache,
+				},
+			},
 		},
 	}
 
@@ -142,6 +147,7 @@ func TestProfileCatalog(t *testing.T) {
 	ids, err := store.ProfileIDs(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, []string{
+		"isolated",
 		testProfileRetail,
 		"support",
 		"support-alias",
@@ -150,6 +156,7 @@ func TestProfileCatalog(t *testing.T) {
 	appNames, err := store.AppNames(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, []string{
+		"isolated",
 		"retail-app",
 		"support-app",
 	}, appNames)
@@ -158,6 +165,7 @@ func TestProfileCatalog(t *testing.T) {
 	appNames, err = resolver.AppNames(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, []string{
+		"isolated",
 		"retail-app",
 		"support-app",
 	}, appNames)
@@ -165,10 +173,49 @@ func TestProfileCatalog(t *testing.T) {
 	ids, err = resolver.ProfileIDs(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, []string{
+		"isolated",
 		testProfileRetail,
 		"support",
 		"support-alias",
 	}, ids)
+}
+
+func TestStaticStoreCopiesSelectors(t *testing.T) {
+	t.Parallel()
+
+	store := StaticStore{Config: Config{
+		Profiles: map[string]Profile{
+			testProfileRetail: {},
+		},
+		Selectors: []Selector{
+			{
+				ProfileID: testProfileRetail,
+				Channels:  []string{"wecom"},
+				Tenants:   []string{"tenant-a"},
+				Users:     []string{"user-a"},
+				Sessions:  []string{"session-a"},
+			},
+		},
+	}}
+
+	cfg, err := store.Load(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"wecom"}, cfg.Selectors[0].Channels)
+	require.Equal(t, []string{"tenant-a"}, cfg.Selectors[0].Tenants)
+	require.Equal(t, []string{"user-a"}, cfg.Selectors[0].Users)
+	require.Equal(t, []string{"session-a"}, cfg.Selectors[0].Sessions)
+
+	cfg.Selectors[0].Channels[0] = "changed"
+	cfg.Selectors[0].Tenants[0] = "changed"
+	cfg.Selectors[0].Users[0] = "changed"
+	cfg.Selectors[0].Sessions[0] = "changed"
+
+	cfg, err = store.Load(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"wecom"}, cfg.Selectors[0].Channels)
+	require.Equal(t, []string{"tenant-a"}, cfg.Selectors[0].Tenants)
+	require.Equal(t, []string{"user-a"}, cfg.Selectors[0].Users)
+	require.Equal(t, []string{"session-a"}, cfg.Selectors[0].Sessions)
 }
 
 func TestCachedResolverCatalogErrorsAndNilBranches(t *testing.T) {

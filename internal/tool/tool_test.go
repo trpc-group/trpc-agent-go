@@ -105,6 +105,7 @@ func TestNamedTool_OriginalAndCloseAndName(t *testing.T) {
 	nt, ok := got[0].(*NamedTool)
 	require.True(t, ok, "expected NamedTool, got %T", got[0])
 	require.Equal(t, t1, nt.Original())
+	require.Equal(t, "fs", nt.ToolSetName())
 	require.Equal(t, "fs", nts.Name())
 	require.NoError(t, nts.Close())
 	require.True(t, base.closed, "underlying Close() not called")
