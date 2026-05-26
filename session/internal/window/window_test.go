@@ -121,6 +121,65 @@ func TestEventWindowFromOrderedEventsValidation(t *testing.T) {
 	require.Contains(t, err.Error(), "before >= 0")
 }
 
+func TestEventWindowFromOrderedEntriesUsesRequestKeyAndTrimmedAnchor(t *testing.T) {
+	inputKey := session.Key{AppName: "ignored", UserID: "ignored", SessionID: "ignored"}
+	reqKey := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	entries := []session.EventWindowEntry{{
+		Event:     testEvent("anchor", model.RoleUser, "hello"),
+		CreatedAt: time.Unix(1, 0).UTC(),
+	}}
+
+	got, err := EventWindowFromOrderedEntries(inputKey, entries, session.EventWindowRequest{
+		Key:           reqKey,
+		AnchorEventID: " anchor ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, reqKey, got.SessionKey)
+	require.Equal(t, "anchor", got.AnchorEventID)
+}
+
+func TestMakeRoleFilterAndExtractEventText(t *testing.T) {
+	require.Nil(t, MakeRoleFilter(nil))
+	require.Nil(t, MakeRoleFilter([]model.Role{" ", ""}))
+	require.Equal(t, map[model.Role]struct{}{model.RoleUser: {}},
+		MakeRoleFilter([]model.Role{" user ", model.RoleUser}))
+
+	_, _, ok := ExtractEventText(nil)
+	require.False(t, ok)
+	_, _, ok = ExtractEventText(&event.Event{})
+	require.False(t, ok)
+
+	evt := testEvent("assistant-default", "", " hi ")
+	text, role, ok := ExtractEventText(&evt)
+	require.True(t, ok)
+	require.Equal(t, "hi", text)
+	require.Equal(t, model.RoleAssistant, role)
+
+	part1 := " first "
+	part2 := "second"
+	evt = testEvent("parts", model.RoleUser, " ")
+	evt.Response.Choices[0].Message.ContentParts = []model.ContentPart{
+		{Type: model.ContentTypeText},
+		{Type: model.ContentTypeText, Text: &part1},
+		{Type: model.ContentTypeText, Text: &part2},
+	}
+	text, role, ok = ExtractEventText(&evt)
+	require.True(t, ok)
+	require.Equal(t, "first\nsecond", text)
+	require.Equal(t, model.RoleUser, role)
+
+	evt = testEvent("tool", "", "result")
+	evt.Response.Choices[0].Message.ToolID = "call-tool"
+	text, role, ok = ExtractEventText(&evt)
+	require.True(t, ok)
+	require.Equal(t, "result", text)
+	require.Equal(t, model.RoleTool, role)
+
+	evt = testEvent("bad-role", model.Role("system"), "hidden")
+	_, _, ok = ExtractEventText(&evt)
+	require.False(t, ok)
+}
+
 func testEvent(id string, role model.Role, content string) event.Event {
 	return event.Event{
 		ID:        id,

@@ -87,6 +87,99 @@ func TestService_GetEventWindowAnchorNotFound(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestService_GetEventWindowValidation(t *testing.T) {
+	svc := createTestService(t, nil)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+	_, err := svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key: key,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event id is required")
+
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+		After:         -1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "before >= 0")
+}
+
+func TestService_GetEventWindowNoActiveSession(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	svc := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+	mock.ExpectQuery("SELECT created_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"created_at"}))
+
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "missing",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event not found")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_GetEventWindowAnchorFilteredByRole(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	svc := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	base := time.Date(2025, 4, 7, 9, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT created_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
+	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+		WithArgs(key.AppName, key.UserID, key.SessionID, base, "a1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
+			AddRow(int64(1), mysqlWindowEventBytes(t, "a1", model.RoleAssistant, "one"), base))
+
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "a1",
+		Roles:         []model.Role{model.RoleUser},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event not found")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_GetEventWindowUnmarshalError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	svc := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	base := time.Date(2025, 4, 7, 9, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT created_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
+	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+		WithArgs(key.AppName, key.UserID, key.SessionID, base, "bad").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
+			AddRow(int64(1), []byte("{bad-json"), base))
+
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "bad",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unmarshal event window entry")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func mysqlWindowEventBytes(
 	t *testing.T,
 	id string,

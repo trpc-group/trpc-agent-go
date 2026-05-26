@@ -58,6 +58,55 @@ func TestService_GetEventWindow(t *testing.T) {
 	require.False(t, got.Entries[0].CreatedAt.IsZero())
 }
 
+func TestService_GetEventWindowNoActiveSession(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key: session.Key{
+			AppName:   "app",
+			UserID:    "user",
+			SessionID: "missing",
+		},
+		AnchorEventID: "missing",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event not found")
+}
+
+func TestService_GetEventWindowUnmarshalError(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "bad-json"}
+	_, err = svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	now := time.Now().UTC().UnixNano()
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO session_events
+		(app_name, user_id, session_id, event, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		key.AppName, key.UserID, key.SessionID, []byte("{bad-json"), now, now)
+	require.NoError(t, err)
+
+	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "missing",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unmarshal event window entry")
+}
+
 func sqliteWindowEvent(id string, role model.Role, content string) event.Event {
 	return event.Event{
 		ID:        id,

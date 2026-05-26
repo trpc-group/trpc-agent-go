@@ -12,6 +12,7 @@ package clickhouse
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +105,84 @@ func TestService_GetEventWindowAnchorNotFound(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "anchor event not found")
+}
+
+func TestService_GetEventWindowNoActiveSession(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	mockCli := &mockClient{}
+	svc := &Service{
+		chClient:           mockCli,
+		tableSessionStates: "session_states",
+		tableSessionEvents: "session_events",
+	}
+	mockCli.queryFunc = func(
+		ctx context.Context,
+		query string,
+		args ...any,
+	) (driver.Rows, error) {
+		require.Contains(t, query, "SELECT created_at FROM")
+		return newMockRows(nil), nil
+	}
+
+	_, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "missing",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event not found")
+}
+
+func TestService_GetEventWindowQueryAndUnmarshalErrors(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	base := time.Date(2025, 4, 7, 9, 0, 0, 0, time.UTC)
+
+	t.Run("active session query error", func(t *testing.T) {
+		svc := &Service{
+			chClient: &mockClient{queryFunc: func(context.Context, string, ...any) (driver.Rows, error) {
+				return nil, errors.New("boom")
+			}},
+			tableSessionStates: "session_states",
+			tableSessionEvents: "session_events",
+		}
+		_, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
+			Key:           key,
+			AnchorEventID: "anchor",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "load active session")
+	})
+
+	t.Run("event unmarshal error", func(t *testing.T) {
+		mockCli := &mockClient{}
+		svc := &Service{
+			chClient:           mockCli,
+			tableSessionStates: "session_states",
+			tableSessionEvents: "session_events",
+		}
+		mockCli.queryFunc = func(
+			ctx context.Context,
+			query string,
+			args ...any,
+		) (driver.Rows, error) {
+			switch {
+			case strings.Contains(query, "SELECT created_at FROM"):
+				return newMockRows([][]any{{base}}), nil
+			case strings.Contains(query, "SELECT event, created_at FROM"):
+				return newMockRows([][]any{{"{bad-json", base}}), nil
+			default:
+				t.Fatalf("unexpected query: %s", query)
+				return nil, nil
+			}
+		}
+		_, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
+			Key:           key,
+			AnchorEventID: "anchor",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unmarshal event window entry")
+	})
 }
 
 func clickhouseWindowEventJSON(

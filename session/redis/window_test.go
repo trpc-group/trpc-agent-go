@@ -78,6 +78,74 @@ func TestService_GetEventWindowAnchorNotFound(t *testing.T) {
 	require.Contains(t, err.Error(), "anchor event not found")
 }
 
+func TestService_GetEventWindowValidation(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	svc := &Service{}
+
+	_, err := svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key: key,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event id is required")
+
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+		Before:        -1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "before >= 0")
+
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+		Before:        eventWindowScanCap,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "scan cap")
+}
+
+func TestService_GetEventWindowMissingSession(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "missing"}
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "missing",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event not found")
+}
+
+func TestService_GetEventWindowTrimsAnchorID(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess-trim"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	evt := redisWindowEvent("anchor", model.RoleUser, "one")
+	require.NoError(t, svc.AppendEvent(ctx, sess, &evt))
+
+	got, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: " anchor ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "anchor", got.AnchorEventID)
+	require.Equal(t, []string{"anchor"}, redisWindowIDs(got))
+}
+
 func redisWindowEvent(id string, role model.Role, content string) event.Event {
 	return event.Event{
 		ID:        id,
