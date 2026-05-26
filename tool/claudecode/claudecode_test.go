@@ -2241,19 +2241,37 @@ func TestPDFHelpersCoverRemainingBranches(t *testing.T) {
 	require.EqualError(t, err, `Page range "5-6" exceeds the PDF page count of 4.`)
 	scriptDir := t.TempDir()
 	successScript := filepath.Join(scriptDir, "pdftoppm-success")
-	require.NoError(t, os.WriteFile(successScript, []byte("#!/bin/bash\nprefix=\"${@: -1}\"\ntouch \"${prefix}-1.jpg\" \"${prefix}-2.jpg\"\n"), 0o755))
+	noImageScript := filepath.Join(scriptDir, "pdftoppm-empty")
+	failScript := filepath.Join(scriptDir, "pdftoppm-fail")
 	oldLookPath := pdftoppmLookPath
 	oldPath := pdftoppmPath
-	oldOnce := pdftoppmOnce
+	oldRun := pdftoppmRun
 	pdftoppmLookPath = func(string) (string, error) {
 		return successScript, nil
+	}
+	pdftoppmRun = func(path string, args ...string) ([]byte, error) {
+		require.NotEmpty(t, args)
+		outputPrefix := args[len(args)-1]
+		switch path {
+		case successScript:
+			require.NoError(t, os.WriteFile(outputPrefix+"-1.jpg", nil, 0o644))
+			require.NoError(t, os.WriteFile(outputPrefix+"-2.jpg", nil, 0o644))
+			return nil, nil
+		case noImageScript:
+			return nil, nil
+		case failScript:
+			return []byte("render failed\n"), errors.New("exit status 1")
+		default:
+			return nil, fmt.Errorf("unexpected pdftoppm path %q", path)
+		}
 	}
 	pdftoppmPath = ""
 	pdftoppmOnce = sync.Once{}
 	t.Cleanup(func() {
 		pdftoppmLookPath = oldLookPath
 		pdftoppmPath = oldPath
-		pdftoppmOnce = oldOnce
+		pdftoppmOnce = sync.Once{}
+		pdftoppmRun = oldRun
 	})
 	path, err := pdftoppmBinary()
 	require.NoError(t, err)
@@ -2268,8 +2286,6 @@ func TestPDFHelpersCoverRemainingBranches(t *testing.T) {
 	defer os.RemoveAll(outputDir)
 	_, statErr := os.Stat(filepath.Join(outputDir, "page-1.jpg"))
 	require.NoError(t, statErr)
-	noImageScript := filepath.Join(scriptDir, "pdftoppm-empty")
-	require.NoError(t, os.WriteFile(noImageScript, []byte("#!/bin/bash\nexit 0\n"), 0o755))
 	pdftoppmPath = noImageScript
 	_, _, err = extractPDFPages(filepath.Join(t.TempDir(), "fake.pdf"), pdfPageRange{
 		FirstPage: 1,
@@ -2277,8 +2293,6 @@ func TestPDFHelpersCoverRemainingBranches(t *testing.T) {
 		Count:     1,
 	})
 	require.EqualError(t, err, "failed to extract PDF pages: no rendered page images were produced")
-	failScript := filepath.Join(scriptDir, "pdftoppm-fail")
-	require.NoError(t, os.WriteFile(failScript, []byte("#!/bin/bash\necho render failed >&2\nexit 1\n"), 0o755))
 	pdftoppmPath = failScript
 	_, _, err = extractPDFPages(filepath.Join(t.TempDir(), "fake.pdf"), pdfPageRange{
 		FirstPage: 1,
@@ -2296,7 +2310,6 @@ func TestExtractPDFPagesFailsWhenPdftoppmIsUnavailable(t *testing.T) {
 	})
 	oldLookPath := pdftoppmLookPath
 	oldPath := pdftoppmPath
-	oldOnce := pdftoppmOnce
 	pdftoppmLookPath = func(string) (string, error) {
 		return "", errors.New("not found")
 	}
@@ -2305,7 +2318,7 @@ func TestExtractPDFPagesFailsWhenPdftoppmIsUnavailable(t *testing.T) {
 	t.Cleanup(func() {
 		pdftoppmLookPath = oldLookPath
 		pdftoppmPath = oldPath
-		pdftoppmOnce = oldOnce
+		pdftoppmOnce = sync.Once{}
 	})
 	_, _, err := extractPDFPages(filepath.Join(t.TempDir(), "missing.pdf"), pdfPageRange{
 		FirstPage: 1,
