@@ -1264,6 +1264,61 @@ func TestBuildBackwardRequestKeepsContextSurfacesButRestrictsAllowedGradientSurf
 	}
 }
 
+func TestBuildBackwardRequestPreservesEmptyAllowedGradientSurfaceIDs(t *testing.T) {
+	instructionText := "base prompt"
+	instructionSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeInstruction)
+	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "node_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM, Name: "writer"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: instructionSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
+					Text: &instructionText,
+				},
+			},
+			{
+				SurfaceID: modelSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeModel,
+				Value: astructure.SurfaceValue{
+					Model: &astructure.ModelRef{Name: "gpt-test"},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	request, err := buildBackwardRequest(
+		structure,
+		nil,
+		map[string]indexedTraceStep{},
+		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
+		atrace.Step{
+			StepID:            "step_1",
+			NodeID:            "node_1",
+			AppliedSurfaceIDs: []string{instructionSurfaceID},
+		},
+		[]backwarder.GradientPacket{
+			{
+				FromStepID: "step_2",
+				Severity:   promptiter.LossSeverityP1,
+				Gradient:   "focus on the live call",
+			},
+		},
+		targetSurfaceSet{modelSurfaceID: {}},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, request)
+	assert.NotNil(t, request.AllowedGradientSurfaceIDs)
+	assert.Empty(t, request.AllowedGradientSurfaceIDs)
+}
+
 func TestAggregateRejectsOutOfScopeGradient(t *testing.T) {
 	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
 	structure, err := newStructureState(&astructure.Snapshot{

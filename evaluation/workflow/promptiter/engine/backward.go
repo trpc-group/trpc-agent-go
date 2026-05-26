@@ -368,7 +368,9 @@ func allowedGradientSurfaceIDsOrNil(
 	if targetSurfaceSet == nil {
 		return nil
 	}
-	return append([]string(nil), allowedGradientSurfaceIDs...)
+	cloned := make([]string, len(allowedGradientSurfaceIDs))
+	copy(cloned, allowedGradientSurfaceIDs)
+	return cloned
 }
 
 func cloneTraceSnapshot(snapshot *atrace.Snapshot) *atrace.Snapshot {
