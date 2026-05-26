@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -503,6 +504,36 @@ type Request struct {
 	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
 }
 
+// RequestOption configures a Request.
+type RequestOption func(*Request)
+
+// NewRequest creates a model request from messages and applies options.
+func NewRequest(messages []Message, opts ...RequestOption) *Request {
+	req := &Request{
+		Messages: messages,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(req)
+		}
+	}
+	return req
+}
+
+// WithStructuredOutputJSON sets JSON schema structured output for a request.
+// The schema is constructed automatically from the provided example type.
+//
+// This configures provider-native structured output where supported. Direct
+// model callers still receive normal model.Response values and should unmarshal
+// the final JSON content themselves.
+func WithStructuredOutputJSON(examplePtr any, strict bool, description string) RequestOption {
+	return func(req *Request) {
+		if out := structuredOutputJSON(examplePtr, strict, description); out != nil {
+			req.StructuredOutput = out
+		}
+	}
+}
+
 // ToolCall represents a call to a tool (function) in the model response.
 type ToolCall struct {
 	// Type of the tool. Currently, only `function` is supported.
@@ -629,4 +660,20 @@ type StructuredOutput struct {
 	Type StructuredOutputType `json:"type"`
 	// JSONSchema is used when Type is StructuredOutputJSONSchema.
 	JSONSchema *JSONSchemaConfig `json:"json_schema,omitempty"`
+}
+
+func structuredOutputJSON(examplePtr any, strict bool, description string) *StructuredOutput {
+	name, schema, _ := structuredoutput.FromType(examplePtr, strict)
+	if schema == nil {
+		return nil
+	}
+	return &StructuredOutput{
+		Type: StructuredOutputJSONSchema,
+		JSONSchema: &JSONSchemaConfig{
+			Name:        name,
+			Schema:      schema,
+			Strict:      strict,
+			Description: description,
+		},
+	}
 }

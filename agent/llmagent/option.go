@@ -14,11 +14,12 @@ import (
 	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
-	"trpc.group/trpc-go/trpc-agent-go/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
+	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -335,7 +336,9 @@ type Options struct {
 	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
 	// ContextCompactionTokenCounter estimates request and tool-result size for
-	// context compaction. When nil, SimpleTokenCounter is used.
+	// context compaction. Compaction thresholds are compared against this
+	// estimate, not provider-reported usage tokens. When nil,
+	// SimpleTokenCounter is used.
 	ContextCompactionTokenCounter model.TokenCounter
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
@@ -532,6 +535,27 @@ type Options struct {
 	// Set to a non-empty string to customize the guidance given to the
 	// model after tool calls.
 	PostToolPrompt string
+
+	// extensions holds the agent-scoped extensions registered via
+	// WithExtensions. They are folded into a single
+	// extension.Contributions during New() and their callbacks are
+	// merged into AgentCallbacks / ModelCallbacks / ToolCallbacks
+	// (after any user-provided callbacks); the tools they
+	// contribute via extension.Registry.Tools land in
+	// extensionContributedTools.
+	//
+	// Kept private so callers go through WithExtensions and the
+	// invariants documented there (de-dup by name, agent-scope
+	// semantics, …).
+	extensions []extension.Extension
+
+	// extensionContributedTools caches the tools harvested from
+	// the extensions' Register calls. Tool-surface builders append
+	// this cache after user/framework tools so hot-reload paths
+	// (AddToolSet → refreshToolsLocked) and per-invocation framework
+	// tools (transfer_to_agent, await_user_reply, ...) continue to
+	// share the same extension tool set.
+	extensionContributedTools []tool.Tool
 }
 
 // SkillToolProfile controls which framework-provided skill tools are enabled.
@@ -1094,6 +1118,60 @@ func WithToolCallbacks(callbacks *tool.Callbacks) Option {
 	}
 }
 
+// WithExtensions installs agent-scoped extensions on this
+// LLMAgent.
+//
+// An extension.Extension is a composable capability bundle that
+// can contribute any combination of tools and lifecycle callbacks
+// (agent / model / tool) to a single LLMAgent. Compared with
+// plugin.Plugin — which is runner-scoped and limited to callback
+// registration — extensions:
+//
+//   - are scoped per-agent, so multi-agent setups can wire
+//     different capabilities onto different agents without
+//     cross-talk;
+//   - can contribute tools directly through extension.Registry.Tools,
+//     not only callbacks, so a single install handles the common
+//     "tool + matching callback" pattern.
+//
+// What LLMAgent consumes from each extension:
+//
+//   - BeforeAgent / AfterAgent callbacks are merged into the
+//     agent's AgentCallbacks chain after any user-supplied
+//     callbacks (user → extension order), so user code keeps the
+//     first chance to short-circuit.
+//   - BeforeModel / AfterModel callbacks are merged into the
+//     agent's ModelCallbacks chain with the same user → extension
+//     ordering.
+//   - BeforeTool / AfterTool callbacks are merged into the agent's
+//     ToolCallbacks chain with the same user → extension ordering.
+//   - Tools contributed via extension.Registry.Tools are appended
+//     to the agent's tool list on equal footing with WithKnowledge
+//     / WithSkills auto-injected tools — they are framework-managed
+//     and NOT counted as user-registered for UserTools / FilterTools
+//     purposes. Name collisions against user or other framework
+//     tools resolve earlier-wins (the extension's copy is dropped).
+//
+// Extensions installed here are scoped to this LLMAgent only. They
+// do NOT propagate to sub-agents (chain / parallel / cycle / graph);
+// install an extension on each agent that needs it, or use
+// plugin.Plugin via runner.WithPlugins for cross-cutting concerns
+// that must observe every agent on a runner.
+//
+// Calling WithExtensions multiple times appends; nil entries are
+// silently skipped; duplicates by Name are rejected at New() time
+// (panic), matching runner-level plugin semantics.
+func WithExtensions(extensions ...extension.Extension) Option {
+	return func(opts *Options) {
+		for _, e := range extensions {
+			if e == nil {
+				continue
+			}
+			opts.extensions = append(opts.extensions, e)
+		}
+	}
+}
+
 // WithToolCallRetryPolicy sets the retry policy for callable tool calls.
 func WithToolCallRetryPolicy(policy *tool.RetryPolicy) Option {
 	return func(opts *Options) {
@@ -1169,18 +1247,12 @@ func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict b
 		if schema == nil {
 			return
 		}
-		if name == "" {
-			name = "output"
-		}
-		opts.StructuredOutput = &model.StructuredOutput{
-			Type: model.StructuredOutputJSONSchema,
-			JSONSchema: &model.JSONSchemaConfig{
-				Name:        name,
-				Schema:      schema,
-				Strict:      strict,
-				Description: description,
-			},
-		}
+		opts.StructuredOutput = newStructuredOutput(
+			structuredoutput.Name(name),
+			schema,
+			strict,
+			description,
+		)
 	}
 }
 
@@ -1189,37 +1261,27 @@ func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict b
 // Provide a typed zero-value pointer like: new(MyStruct) or (*MyStruct)(nil) and we infer the type.
 func WithStructuredOutputJSON(examplePtr any, strict bool, description string) Option {
 	return func(opts *Options) {
-		// Infer reflect.Type from examplePtr.
-		var t reflect.Type
-		if examplePtr == nil {
+		name, schema, t := structuredoutput.FromType(examplePtr, strict)
+		if schema == nil {
 			return
 		}
-		if rt := reflect.TypeOf(examplePtr); rt.Kind() == reflect.Pointer {
-			t = rt
-		} else {
-			t = reflect.PointerTo(rt)
-		}
-		// Generate a robust JSON schema via the generator.
-		genOpts := make([]jsonschema.Option, 0, 1)
-		if strict {
-			genOpts = append(genOpts, jsonschema.WithStrict())
-		}
-		gen := jsonschema.New(genOpts...)
-		schema := gen.Generate(t.Elem())
-		name := t.Elem().Name()
-		if name == "" {
-			name = "output"
-		}
-		opts.StructuredOutput = &model.StructuredOutput{
-			Type: model.StructuredOutputJSONSchema,
-			JSONSchema: &model.JSONSchemaConfig{
-				Name:        name,
-				Schema:      schema,
-				Strict:      strict,
-				Description: description,
-			},
-		}
+		opts.StructuredOutput = newStructuredOutput(name, schema, strict, description)
 		opts.StructuredOutputType = t
+	}
+}
+
+func newStructuredOutput(name string, schema map[string]any, strict bool, description string) *model.StructuredOutput {
+	if schema == nil {
+		return nil
+	}
+	return &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{
+			Name:        name,
+			Schema:      schema,
+			Strict:      strict,
+			Description: description,
+		},
 	}
 }
 
@@ -1356,7 +1418,10 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 }
 
 // WithContextCompactionTokenCounter sets the token counter used by context
-// compaction to evaluate request thresholds and tool-result budgets.
+// compaction to evaluate request thresholds and tool-result budgets. These
+// budgets use the counter's estimated token count, not provider-reported usage
+// tokens. For SimpleTokenCounter, WithApproxRunesPerToken is runes per token
+// (estimated tokens = counted runes / value).
 func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *Options) {
 		if counter != nil {

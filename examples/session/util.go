@@ -53,6 +53,7 @@ const (
 	SessionPostgres   SessionType = "postgres"
 	SessionPGVector   SessionType = "pgvector"
 	SessionMySQL      SessionType = "mysql"
+	SessionTDSQL      SessionType = "tdsql"
 	SessionClickHouse SessionType = "clickhouse"
 )
 
@@ -83,6 +84,8 @@ type SessionServiceConfig struct {
 //	  PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_EMBEDDER_MODEL
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD,
 //	  MYSQL_DATABASE
+//	tdsql:      TDSQL_HOST, TDSQL_PORT, TDSQL_USER, TDSQL_PASSWORD,
+//	  TDSQL_DATABASE
 //	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
 //	  CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE
 func NewSessionServiceByType(
@@ -100,6 +103,8 @@ func NewSessionServiceByType(
 		return newPGVectorSessionService(cfg)
 	case SessionMySQL:
 		return newMySQLSessionService(cfg)
+	case SessionTDSQL:
+		return newTDSQLSessionService(cfg)
 	case SessionClickHouse:
 		return newClickHouseSessionService(cfg)
 	case SessionNoop:
@@ -305,6 +310,38 @@ func newMySQLSessionService(
 	return mysql.NewService(
 		mysql.WithMySQLClientDSN(dsn),
 		mysql.WithTablePrefix("trpc_"),
+		mysql.WithSessionEventLimit(cfg.EventLimit),
+		mysql.WithSessionTTL(cfg.TTL),
+		mysql.WithAppendEventHook(cfg.AppendEventHooks...),
+		mysql.WithGetSessionHook(cfg.GetSessionHooks...),
+	)
+}
+
+// newTDSQLSessionService creates a TDSQL (distributed MySQL) session service.
+// TDSQL requires shardkey-aware DDL/DML; WithTDSQLSharding enables the
+// necessary table definitions and query routing.
+// Environment variables:
+//   - TDSQL_HOST: TDSQL proxy host (default: localhost)
+//   - TDSQL_PORT: TDSQL proxy port (default: 3306)
+//   - TDSQL_USER: TDSQL user (default: root)
+//   - TDSQL_PASSWORD: TDSQL password (default: empty)
+//   - TDSQL_DATABASE: TDSQL database (default: trpc_agent_go)
+func newTDSQLSessionService(
+	cfg SessionServiceConfig,
+) (session.Service, error) {
+	host := GetEnvOrDefault("TDSQL_HOST", "localhost")
+	port := GetEnvOrDefault("TDSQL_PORT", "3306")
+	user := GetEnvOrDefault("TDSQL_USER", "root")
+	password := GetEnvOrDefault("TDSQL_PASSWORD", "")
+	database := GetEnvOrDefault("TDSQL_DATABASE", "trpc_agent_go")
+
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4",
+		user, password, host, port, database)
+
+	return mysql.NewService(
+		mysql.WithMySQLClientDSN(dsn),
+		mysql.WithTablePrefix("trpc_"),
+		mysql.WithTDSQLSharding(true),
 		mysql.WithSessionEventLimit(cfg.EventLimit),
 		mysql.WithSessionTTL(cfg.TTL),
 		mysql.WithAppendEventHook(cfg.AppendEventHooks...),

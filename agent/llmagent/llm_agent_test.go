@@ -994,6 +994,38 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 			},
 		)
 	})
+
+	// An extension that contributes tools through
+	// extension.Registry.Tools must be rejected too: those tools
+	// land on the same outbound surface as WithTools / WithToolSets
+	// and so violate the same "structured output ⇒ no callable
+	// tools" contract.
+	t.Run("with tool-contributing extension", func(t *testing.T) {
+		extTool := dummyTool{decl: &tool.Declaration{Name: "from_extension"}}
+		ext := &fakeExt{name: "ext", tools: []tool.Tool{extTool}}
+		require.PanicsWithValue(t,
+			"Invalid LLMAgent configuration: if output_schema is set, extension-contributed tools (WithExtensions → Registry.Tools) must be empty",
+			func() {
+				_ = New("test",
+					WithOutputSchema(schema),
+					WithExtensions(ext),
+				)
+			},
+		)
+	})
+
+	// A hook-only extension (Register that never calls r.Tools)
+	// leaves extensionContributedTools empty and must remain
+	// compatible with WithOutputSchema — the guard reaches the
+	// tools branch only via len(...) > 0.
+	t.Run("with hook-only extension is allowed", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			_ = New("test",
+				WithOutputSchema(schema),
+				WithExtensions(&hookOnlyExt{name: "h"}),
+			)
+		})
+	})
 }
 
 func TestLLMAgent_New_WithStructuredOutputJSONSchema_AllowsTools(t *testing.T) {

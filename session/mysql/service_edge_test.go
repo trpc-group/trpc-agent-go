@@ -88,7 +88,7 @@ func TestGetSession(t *testing.T) {
 
 		eventCreatedAt := time.Now()
 		expectLimitedEventRefs(mock, key, stateData.CreatedAt, defaultSessionEventLimit, eventRef{id: 1, createdAt: eventCreatedAt})
-		expectEventsByRefs(mock, limitedEventRow{id: 1, event: []byte("invalid-event-json"), createdAt: eventCreatedAt})
+		expectEventsByRefs(mock, key, limitedEventRow{id: 1, event: []byte("invalid-event-json"), createdAt: eventCreatedAt})
 
 		sess, err := s.getSession(context.Background(), key, 0, time.Time{}, nil)
 		assert.Error(t, err)
@@ -189,7 +189,7 @@ func TestListSessions(t *testing.T) {
 			WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		sessions, err := s.listSessions(context.Background(), userKey, 0, time.Time{})
+		sessions, err := s.listSessions(context.Background(), userKey, 0, time.Time{}, false, nil)
 		assert.Error(t, err)
 		assert.Nil(t, sessions)
 		assert.Contains(t, err.Error(), "unmarshal session state failed")
@@ -295,7 +295,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(int64(1), "app1", "user1", "sess1", []byte("invalid-json"), time.Now())
 
 		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
-			WithArgs("app1", "user1", "sess1").
+			WithArgs("app1", "user1", "sess1", "user1").
 			WillReturnRows(rows)
 
 		result, err := s.getEventsList(context.Background(), keys, createdAts, 0, time.Time{}, nil)
@@ -358,7 +358,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(int64(3), keys[0].AppName, keys[0].UserID, keys[0].SessionID, evt3Bytes, now)
 
 		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
-			WithArgs(keys[0].AppName, keys[0].UserID, keys[0].SessionID).
+			WithArgs(keys[0].AppName, keys[0].UserID, keys[0].SessionID, keys[0].UserID).
 			WillReturnRows(rows)
 
 		result, err := s.getEventsList(context.Background(), keys, createdAts, 2, time.Time{}, nil)
@@ -402,7 +402,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(int64(3), "app1", "user1", "sess1", evt3Bytes, now)
 
 		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
-			WithArgs("app1", "user1", "sess1").
+			WithArgs("app1", "user1", "sess1", "user1").
 			WillReturnRows(rows)
 
 		result, err := s.getEventsList(context.Background(), keys, createdAts, 2, time.Time{}, nil)
@@ -447,7 +447,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(int64(1), "app1", "user1", "sess1", evt1Bytes, now)
 
 		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
-			WithArgs("app1", "user1", "sess1").
+			WithArgs("app1", "user1", "sess1", "user1").
 			WillReturnRows(rows)
 
 		result, err := s.getEventsList(context.Background(), keys, createdAts, 0, time.Time{}, nil)
@@ -498,7 +498,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(int64(10), evt3Bytes).
 			AddRow(int64(11), evt2Bytes)
 		mock.ExpectQuery("SELECT id, event FROM").
-			WithArgs(int64(10), int64(11)).
+			WithArgs(int64(10), int64(11), "user1").
 			WillReturnRows(eventRows)
 
 		result, err := s.getEventsList(
@@ -551,7 +551,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(int64(2), evt2Bytes).
 			AddRow(int64(1), evt1Bytes)
 		mock.ExpectQuery("SELECT id, event FROM").
-			WithArgs(int64(3), int64(2), int64(1)).
+			WithArgs(int64(3), int64(2), int64(1), "user1").
 			WillReturnRows(eventRows)
 
 		result, err := s.getEventsList(
@@ -595,7 +595,7 @@ func TestGetEventsList(t *testing.T) {
 		eventRows := sqlmock.NewRows([]string{"id", "event"}).
 			AddRow(int64(10), evt3Bytes)
 		mock.ExpectQuery("SELECT id, event FROM").
-			WithArgs(int64(10), int64(11)).
+			WithArgs(int64(10), int64(11), "user1").
 			WillReturnRows(eventRows)
 
 		result, err := s.getEventsList(
@@ -706,7 +706,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(int64(3), "app1", "user1", "sess1", evt3Bytes, now)
 
 		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
-			WithArgs("app1", "user1", "sess1").
+			WithArgs("app1", "user1", "sess1", "user1").
 			WillReturnRows(rows)
 
 		result, err := s.getEventsList(context.Background(), keys, createdAts, 0, time.Time{}, nil)
@@ -734,7 +734,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow("app1", "user1")
 
 		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
-			WithArgs("app1", "user1", "sess1").
+			WithArgs("app1", "user1", "sess1", "user1").
 			WillReturnRows(rows)
 
 		result, err := s.getEventsList(context.Background(), keys, createdAts, 0, time.Time{}, nil)
@@ -772,6 +772,7 @@ func TestGetSessionEvents_DelegatesToPagedEvents(t *testing.T) {
 			AddRow(int64(1), older))
 	expectEventsByRefs(
 		mock,
+		key,
 		limitedEventRow{id: 2, event: evt2Bytes, createdAt: newer},
 		limitedEventRow{id: 1, event: evt1Bytes, createdAt: older},
 	)
@@ -807,7 +808,7 @@ func TestGetSessionEvents_DisabledLimitUsesLegacyList(t *testing.T) {
 	evtBytes, _ := json.Marshal(evt)
 
 	mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
-		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
 			AddRow(int64(1), key.AppName, key.UserID, key.SessionID, evtBytes, createdAt.Add(time.Minute)))
 
@@ -861,7 +862,7 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 		defer db.Close()
 
 		s := createTestService(t, db)
-		events, err := s.getEventsByRefs(context.Background(), nil)
+		events, err := s.getEventsByRefs(context.Background(), key, nil)
 		assert.NoError(t, err)
 		assert.Nil(t, events)
 	})
@@ -872,11 +873,11 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 		defer db.Close()
 
 		s := createTestService(t, db)
-		mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event FROM session_events WHERE id IN") + `.*` + regexp.QuoteMeta("AND deleted_at IS NULL")).
-			WithArgs(int64(1)).
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event FROM session_events WHERE id IN")+`.*`+regexp.QuoteMeta("AND user_id = ?")+`.*`+regexp.QuoteMeta("AND deleted_at IS NULL")).
+			WithArgs(int64(1), key.UserID).
 			WillReturnError(fmt.Errorf("database error"))
 
-		events, err := s.getEventsByRefs(context.Background(), []eventRef{{id: 1, createdAt: createdAt}})
+		events, err := s.getEventsByRefs(context.Background(), key, []eventRef{{id: 1, createdAt: createdAt}})
 		assert.Error(t, err)
 		assert.Nil(t, events)
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -931,6 +932,7 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 		)
 		expectEventsByRefs(
 			mock,
+			key,
 			limitedEventRow{id: 3, event: assistant2Bytes, createdAt: assistant2CreatedAt},
 			limitedEventRow{id: 2, event: assistant1Bytes, createdAt: assistant1CreatedAt},
 		)
@@ -943,6 +945,7 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 		)
 		expectEventsByRefs(
 			mock,
+			key,
 			limitedEventRow{id: 1, event: userBytes, createdAt: userCreatedAt},
 		)
 
@@ -1003,7 +1006,7 @@ func TestGetSummariesList(t *testing.T) {
 		AddRow("app1", "user1", "sess1", "filter1", []byte("invalid-json"), time.Now())
 
 	mock.ExpectQuery("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries").
-		WithArgs("app1", "user1", "sess1", sqlmock.AnyArg()).
+		WithArgs("app1", "user1", "sess1", "user1", sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
 	result, err := s.getSummariesList(context.Background(), keys, createdAts)
@@ -1166,6 +1169,9 @@ func TestCleanupExpired(t *testing.T) {
 
 		// Mock: Select expired sessions
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states")).
+			WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+				AddRow("app-1", "user-1", "session-1"))
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
 			WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 				AddRow("app-1", "user-1", "session-1"))
 
@@ -1679,6 +1685,9 @@ func TestCleanupExpiredSessions_DeleteError(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow("app", "user", "sess"))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 			AddRow("app", "user", "sess"))
 

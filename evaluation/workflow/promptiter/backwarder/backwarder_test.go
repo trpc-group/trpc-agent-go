@@ -1039,8 +1039,14 @@ func TestNormalizeRequestAndSanitizeBackwardResult(t *testing.T) {
 			},
 		},
 	})
-	assert.Nil(t, result)
-	assert.EqualError(t, err, `duplicate propagation for predecessor step id "pred_1"`)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.Upstream, 1)
+	assert.Equal(t, "pred_1", result.Upstream[0].PredecessorStepID)
+	assert.Equal(t, []GradientPacket{
+		{FromStepID: request.StepID, Gradient: "send upstream"},
+		{FromStepID: request.StepID, Gradient: "send upstream again"},
+	}, result.Upstream[0].Gradients)
 	result, err = sanitizeBackwardResult(request, &Result{
 		Gradients: []promptiter.SurfaceGradient{
 			{SurfaceID: "surf_1", Gradient: ""},

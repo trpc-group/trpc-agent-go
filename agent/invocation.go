@@ -26,7 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/jsonschema"
+	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -697,18 +697,12 @@ func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict b
 		if schema == nil {
 			return
 		}
-		if name == "" {
-			name = "output"
-		}
-		opts.StructuredOutput = &model.StructuredOutput{
-			Type: model.StructuredOutputJSONSchema,
-			JSONSchema: &model.JSONSchemaConfig{
-				Name:        name,
-				Schema:      schema,
-				Strict:      strict,
-				Description: description,
-			},
-		}
+		opts.StructuredOutput = newStructuredOutput(
+			structuredoutput.Name(name),
+			schema,
+			strict,
+			description,
+		)
 	}
 }
 
@@ -716,36 +710,27 @@ func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict b
 // The schema is constructed automatically from the provided example type.
 func WithStructuredOutputJSON(examplePtr any, strict bool, description string) RunOption {
 	return func(opts *RunOptions) {
-		// Infer reflect.Type from examplePtr.
-		var t reflect.Type
-		if examplePtr == nil {
+		name, schema, t := structuredoutput.FromType(examplePtr, strict)
+		if schema == nil {
 			return
 		}
-		if rt := reflect.TypeOf(examplePtr); rt.Kind() == reflect.Pointer {
-			t = rt
-		} else {
-			t = reflect.PointerTo(rt)
-		}
-		genOpts := make([]jsonschema.Option, 0, 1)
-		if strict {
-			genOpts = append(genOpts, jsonschema.WithStrict())
-		}
-		gen := jsonschema.New(genOpts...)
-		schema := gen.Generate(t.Elem())
-		name := t.Elem().Name()
-		if name == "" {
-			name = "output"
-		}
-		opts.StructuredOutput = &model.StructuredOutput{
-			Type: model.StructuredOutputJSONSchema,
-			JSONSchema: &model.JSONSchemaConfig{
-				Name:        name,
-				Schema:      schema,
-				Strict:      strict,
-				Description: description,
-			},
-		}
+		opts.StructuredOutput = newStructuredOutput(name, schema, strict, description)
 		opts.StructuredOutputType = t
+	}
+}
+
+func newStructuredOutput(name string, schema map[string]any, strict bool, description string) *model.StructuredOutput {
+	if schema == nil {
+		return nil
+	}
+	return &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{
+			Name:        name,
+			Schema:      schema,
+			Strict:      strict,
+			Description: description,
+		},
 	}
 }
 

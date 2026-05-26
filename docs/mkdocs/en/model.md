@@ -396,6 +396,55 @@ func main() {
 }
 ```
 
+### Structured Output
+
+When calling `model.GenerateContent` directly, use `model.NewRequest` and
+`model.WithStructuredOutputJSON` to generate a JSON schema from a Go struct and
+pass it to model adapters that support provider-native structured output.
+
+```go
+type StageParseResult struct {
+    Stage  string `json:"stage"`
+    Reason string `json:"reason"`
+}
+
+request := model.NewRequest(
+    []model.Message{
+        model.NewUserMessage("Classify the current user intent stage."),
+    },
+    model.WithStructuredOutputJSON(
+        new(StageParseResult),
+        true,
+        "Return stage parse result as JSON.",
+    ),
+)
+
+responseChan, err := llm.GenerateContent(ctx, request)
+if err != nil {
+    return err
+}
+
+var final string
+for response := range responseChan {
+    if response.Error != nil {
+        return fmt.Errorf("model error: %s", response.Error.Message)
+    }
+    if len(response.Choices) > 0 {
+        final = response.Choices[0].Message.Content
+    }
+}
+
+var result StageParseResult
+if err := json.Unmarshal([]byte(final), &result); err != nil {
+    return err
+}
+```
+
+`WithStructuredOutputJSON` only configures the model request. Direct `model`
+callers still receive normal `model.Response` values and should unmarshal the
+final JSON content themselves. If you already have a hand-written schema, set
+`request.StructuredOutput` directly.
+
 ### Streaming Output
 
 ```go
@@ -1395,7 +1444,13 @@ The Token Counter is used to estimate the token count of text content. The frame
 
 **Estimation Principle:**
 
-Uses heuristic rules: approximately `N` UTF-8 characters per token, where `N` can be configured via `WithApproxRunesPerToken`.
+Uses heuristic rules: approximately `N` UTF-8 characters per token, where `N` can be configured via `WithApproxRunesPerToken`. `N` is a divisor, not a multiplier:
+
+```text
+estimatedTokens = countedUTF8Runes / N
+```
+
+Therefore, `WithApproxRunesPerToken(1.5)` means approximately `1.5` characters per token. Passing `2.0/3.0` means approximately `0.67` characters per token, which is about `1.5` tokens per character.
 
 **Usage:**
 
@@ -1424,6 +1479,7 @@ counter := model.NewSimpleTokenCounter(
 - **Type**: float64
 - **Default Value**: 4.0 (approx. 4 characters per token, suitable for English scenarios)
 - **Value Constraint**: Values <= 0 will be ignored, keeping the default value
+- **Formula**: estimated tokens = counted UTF-8 characters / `v`; for example, `v=1.5` means approximately `1.5` characters per token
 
 **Recommended Values for Common Languages:**
 

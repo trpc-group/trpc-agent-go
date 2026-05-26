@@ -165,6 +165,8 @@ func (s *Service) listSessions(
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
+	page *session.ListSessionPage,
 ) ([]*session.Session, error) {
 	// Query app state
 	appState, err := s.ListAppStates(ctx, key.AppName)
@@ -184,8 +186,12 @@ func (s *Service) listSessions(
 		WHERE app_name = ? AND user_id = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL
-		ORDER BY updated_at DESC`, s.tableSessionStates)
+		ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 	listArgs := []any{key.AppName, key.UserID, time.Now()}
+	if page != nil && page.Limit > 0 {
+		listQuery += " LIMIT ? OFFSET ?"
+		listArgs = append(listArgs, page.Limit, page.Offset)
+	}
 
 	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		// rows.Next() is already called by the Query loop
@@ -208,6 +214,20 @@ func (s *Service) listSessions(
 
 	if err != nil {
 		return nil, fmt.Errorf("list session states failed: %w", err)
+	}
+
+	if listOnlyMeta {
+		sessions := make([]*session.Session, 0, len(sessStates))
+		for _, sessState := range sessStates {
+			sess := session.NewSession(
+				key.AppName, key.UserID, sessState.ID,
+				session.WithSessionState(sessState.State),
+				session.WithSessionCreatedAt(sessState.CreatedAt),
+				session.WithSessionUpdatedAt(sessState.UpdatedAt),
+			)
+			sessions = append(sessions, mergeState(appState, userState, sess))
+		}
+		return sessions, nil
 	}
 
 	// Build session keys and created_at times for batch loading
@@ -577,10 +597,14 @@ func (s *Service) getEventsList(
 		afterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
 
+	// TDSQL proxy cannot extract shardkey from tuple comparison;
+	// add explicit user_id for shard routing. Harmless on MySQL.
 	query := fmt.Sprintf(`SELECT id, app_name, user_id, session_id, event, created_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
+		AND user_id = ?
 		AND deleted_at IS NULL`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
+	args = append(args, sessionKeys[0].UserID)
 
 	sessionCreatedAtMap := make(map[string]time.Time, len(sessionKeys))
 	for i, key := range sessionKeys {
@@ -680,7 +704,7 @@ func (s *Service) getLimitedSessionEvents(
 	if err != nil {
 		return nil, err
 	}
-	events, err := s.getEventsByRefs(ctx, refs)
+	events, err := s.getEventsByRefs(ctx, key, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -740,6 +764,7 @@ func (s *Service) getRecentEventRefs(
 // ascending conversation order.
 func (s *Service) getEventsByRefs(
 	ctx context.Context,
+	key session.Key,
 	refs []eventRef,
 ) ([]event.Event, error) {
 	if len(refs) == 0 {
@@ -752,9 +777,12 @@ func (s *Service) getEventsByRefs(
 		args[i] = ref.id
 	}
 
+	// TDSQL PK is (id, user_id); include user_id for shard routing.
 	eventsQuery := fmt.Sprintf(`SELECT id, event FROM %s WHERE id IN (%s)
+		AND user_id = ?
 		AND deleted_at IS NULL`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
+	args = append(args, key.UserID)
 
 	eventsByID := make(map[int64]event.Event, len(refs))
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
@@ -824,7 +852,7 @@ func (s *Service) getLastUserEventBeforeRefs(
 		if len(batch) == 0 {
 			return event.Event{}, false, nil
 		}
-		events, err := s.getEventsByRefs(ctx, batch)
+		events, err := s.getEventsByRefs(ctx, key, batch)
 		if err != nil {
 			return event.Event{}, false, err
 		}
@@ -960,7 +988,7 @@ func (s *Service) getPagedEvents(
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
 
-	events, err := s.getEventsByRefs(ctx, refs)
+	events, err := s.getEventsByRefs(ctx, key, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -1081,10 +1109,13 @@ func (s *Service) getSummariesList(
 		args = append(args, key.AppName, key.UserID, key.SessionID)
 	}
 
-	args = append(args, time.Now())
+	// TDSQL proxy cannot extract shardkey from tuple comparison;
+	// add explicit user_id for shard routing. Harmless on MySQL.
+	args = append(args, sessionKeys[0].UserID, time.Now())
 
 	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
+		AND user_id = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL`,
 		s.tableSessionSummaries, strings.Join(placeholders, ","))

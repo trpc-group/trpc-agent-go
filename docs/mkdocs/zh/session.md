@@ -1470,6 +1470,30 @@ for _, sess := range sessions {
 }
 ```
 
+```go
+// 仅获取会话元数据，不返回 Events 和 Tracks
+sessions, err := sessionService.ListSessions(ctx, session.UserKey{
+    AppName: "my-agent",
+    UserID:  "user123",
+}, session.WithListSessionOnlyMeta())
+```
+
+```go
+// 获取第二页会话列表，按 UpdatedAt 倒序返回
+sessions, err := sessionService.ListSessions(ctx, session.UserKey{
+    AppName: "my-agent",
+    UserID:  "user123",
+}, session.WithListSessionPage(20, 20))
+```
+
+说明：
+
+- `session.WithListSessionOnlyMeta()` 只用于 `ListSessions`
+- 当前仅 `inmemory` 和 `redis` 后端支持该优化
+- `session.WithListSessionPage(offset, limit)` 只用于 `ListSessions`；`offset` 必须 `>= 0`，`limit == 0` 表示不做会话级分页
+- 会话列表分页与 `session.WithEventNum()`、`session.WithEventTime()` 相互独立，后两者用于过滤每个返回会话内部的事件
+- 结果按 `UpdatedAt` 倒序返回，`UpdatedAt` 相同时使用 session ID 做确定性排序
+
 #### 手动删除会话
 
 ```go
