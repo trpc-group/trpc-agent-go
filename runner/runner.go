@@ -668,10 +668,28 @@ func (r *runner) seedSessionHistory(
 	if len(ro.Messages) == 0 || sess.GetEventCount() != 0 {
 		return false, nil
 	}
+	infoLeadingNonUserSeedMessages(ctx, ro.Messages)
 	if err := r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, ro.Messages); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func infoLeadingNonUserSeedMessages(ctx context.Context, messages []model.Message) {
+	for i, msg := range messages {
+		if !model.HasPayload(msg) && len(msg.ToolCalls) == 0 {
+			continue
+		}
+		if msg.Role == model.RoleUser {
+			return
+		}
+		log.InfoContext(ctx, fmt.Sprintf(
+			"runner: WithMessages is used to seed session history; "+
+				"leading %s message at index %d may be filtered before the first user message. "+
+				"Use WithInjectedContextMessages for per-run context or agent instruction for system prompts.",
+			msg.Role, i))
+		return
+	}
 }
 
 // appendSessionMessages persists messages into the session transcript in the
@@ -3064,6 +3082,7 @@ func (r *runner) persistCurrentTurnMessages(
 		return r.appendIncomingMessage(ctx, sess, invocation, message, ro, historySeeded)
 	}
 	if sess.GetEventCount() == 0 {
+		infoLeadingNonUserSeedMessages(ctx, ro.Messages)
 		initialMessages := mergeCurrentTurnMessagesIntoSeed(
 			ro.Messages,
 			message,

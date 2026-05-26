@@ -1648,6 +1648,80 @@ func TestRunner_SkipAppendingSeedUserMessage(t *testing.T) {
 	require.Equal(t, 1, userCount)
 }
 
+func TestRunner_InfosOnLeadingNonUserSeedMessage(t *testing.T) {
+	original := runnerlog.InfoContext
+	var infos []string
+	runnerlog.InfoContext = func(ctx context.Context, args ...any) {
+		infos = append(infos, fmt.Sprint(args...))
+	}
+	defer func() {
+		runnerlog.InfoContext = original
+	}()
+
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	eventCh, err := runner.Run(
+		context.Background(),
+		"seed-user",
+		"seed-session",
+		model.NewUserMessage("hello"),
+		agent.WithMessages([]model.Message{
+			model.NewSystemMessage("system prompt"),
+			model.NewUserMessage("hello"),
+		}),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	require.Len(t, infos, 1)
+	require.Contains(t, infos[0], "WithMessages is used to seed session history")
+	require.Contains(t, infos[0], "leading system message")
+	require.Contains(t, infos[0], "WithInjectedContextMessages")
+}
+
+func TestRunner_InfosOnLeadingNonUserSeedMessageWithRewriter(t *testing.T) {
+	original := runnerlog.InfoContext
+	var infos []string
+	runnerlog.InfoContext = func(ctx context.Context, args ...any) {
+		infos = append(infos, fmt.Sprint(args...))
+	}
+	defer func() {
+		runnerlog.InfoContext = original
+	}()
+
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	eventCh, err := runner.Run(
+		context.Background(),
+		"seed-user",
+		"seed-session",
+		model.NewUserMessage("hello"),
+		agent.WithMessages([]model.Message{
+			model.NewAssistantMessage("assistant prefix"),
+			model.NewUserMessage("hello"),
+		}),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return []model.Message{model.NewUserMessage("hello")}, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	require.Len(t, infos, 1)
+	require.Contains(t, infos[0], "WithMessages is used to seed session history")
+	require.Contains(t, infos[0], "leading assistant message")
+	require.Contains(t, infos[0], "WithInjectedContextMessages")
+}
+
 func TestRunner_AppendsDifferentUserAfterSeed(t *testing.T) {
 	sessionService := sessioninmemory.NewSessionService()
 	mockAgent := &mockAgent{name: "test-agent"}
