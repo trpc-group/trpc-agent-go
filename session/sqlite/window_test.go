@@ -96,15 +96,46 @@ func TestService_GetEventWindowUnmarshalError(t *testing.T) {
 		`INSERT INTO session_events
 		(app_name, user_id, session_id, event, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		key.AppName, key.UserID, key.SessionID, []byte("{bad-json"), now, now)
+		key.AppName, key.UserID, key.SessionID, []byte(`{"id":"anchor"`), now, now)
 	require.NoError(t, err)
 
 	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
 		Key:           key,
-		AnchorEventID: "missing",
+		AnchorEventID: "anchor",
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unmarshal event window entry")
+}
+
+func TestService_GetEventWindowIgnoresMalformedRowOutsideWindow(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "bad-outside"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	evt := sqliteWindowEvent("anchor", model.RoleUser, "one")
+	require.NoError(t, svc.AppendEvent(ctx, sess, &evt))
+
+	now := time.Now().UTC().Add(time.Hour).UnixNano()
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO session_events
+		(app_name, user_id, session_id, event, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		key.AppName, key.UserID, key.SessionID, []byte("{bad-json"), now, now)
+	require.NoError(t, err)
+
+	got, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"anchor"}, sqliteWindowIDs(got))
 }
 
 func sqliteWindowEvent(id string, role model.Role, content string) event.Event {

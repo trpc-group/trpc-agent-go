@@ -44,14 +44,36 @@ func TestService_GetEventWindow(t *testing.T) {
 		case strings.Contains(query, "SELECT created_at FROM"):
 			require.Equal(t, []any{key.AppName, key.UserID, key.SessionID}, args[:3])
 			return newMockRows([][]any{{base}}), nil
-		case strings.Contains(query, "SELECT event, created_at FROM"):
-			require.Equal(t, []any{key.AppName, key.UserID, key.SessionID, base}, args)
+		case strings.Contains(query, "event_id = ?"):
+			require.Equal(t, []any{key.AppName, key.UserID, key.SessionID, base, "u2"}, args)
 			return newMockRows([][]any{
-				{clickhouseWindowEventJSON(t, "u1", model.RoleUser, "one"), base},
-				{clickhouseWindowEventJSON(t, "a1", model.RoleAssistant, "two"), base.Add(time.Minute)},
-				{clickhouseWindowEventJSON(t, "u2", model.RoleUser, "three"), base.Add(2 * time.Minute)},
-				{clickhouseWindowToolEventJSON(t, "t1", "calc", "four"), base.Add(3 * time.Minute)},
-				{clickhouseWindowEventJSON(t, "u3", model.RoleUser, "five"), base.Add(4 * time.Minute)},
+				{"u2", clickhouseWindowEventJSON(t, "u2", model.RoleUser, "three"), base.Add(2 * time.Minute)},
+			}), nil
+		case strings.Contains(query, "created_at < ?"):
+			require.Equal(
+				t,
+				[]any{
+					key.AppName, key.UserID, key.SessionID, base,
+					base.Add(2 * time.Minute), base.Add(2 * time.Minute), "u2", eventWindowBatchSize,
+				},
+				args,
+			)
+			return newMockRows([][]any{
+				{"a1", clickhouseWindowEventJSON(t, "a1", model.RoleAssistant, "two"), base.Add(time.Minute)},
+				{"u1", clickhouseWindowEventJSON(t, "u1", model.RoleUser, "one"), base},
+			}), nil
+		case strings.Contains(query, "created_at > ?"):
+			require.Equal(
+				t,
+				[]any{
+					key.AppName, key.UserID, key.SessionID, base,
+					base.Add(2 * time.Minute), base.Add(2 * time.Minute), "u2", eventWindowBatchSize,
+				},
+				args,
+			)
+			return newMockRows([][]any{
+				{"t1", clickhouseWindowToolEventJSON(t, "t1", "calc", "four"), base.Add(3 * time.Minute)},
+				{"u3", clickhouseWindowEventJSON(t, "u3", model.RoleUser, "five"), base.Add(4 * time.Minute)},
 			}), nil
 		default:
 			t.Fatalf("unexpected query: %s", query)
@@ -89,10 +111,8 @@ func TestService_GetEventWindowAnchorNotFound(t *testing.T) {
 		switch {
 		case strings.Contains(query, "SELECT created_at FROM"):
 			return newMockRows([][]any{{base}}), nil
-		case strings.Contains(query, "SELECT event, created_at FROM"):
-			return newMockRows([][]any{
-				{clickhouseWindowEventJSON(t, "u1", model.RoleUser, "one"), base},
-			}), nil
+		case strings.Contains(query, "event_id = ?"):
+			return newMockRows(nil), nil
 		default:
 			t.Fatalf("unexpected query: %s", query)
 			return nil, nil
@@ -169,8 +189,8 @@ func TestService_GetEventWindowQueryAndUnmarshalErrors(t *testing.T) {
 			switch {
 			case strings.Contains(query, "SELECT created_at FROM"):
 				return newMockRows([][]any{{base}}), nil
-			case strings.Contains(query, "SELECT event, created_at FROM"):
-				return newMockRows([][]any{{"{bad-json", base}}), nil
+			case strings.Contains(query, "event_id = ?"):
+				return newMockRows([][]any{{"anchor", "{bad-json", base}}), nil
 			default:
 				t.Fatalf("unexpected query: %s", query)
 				return nil, nil

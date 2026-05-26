@@ -35,14 +35,26 @@ func TestService_GetEventWindow(t *testing.T) {
 	mock.ExpectQuery("SELECT created_at FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
-	mock.ExpectQuery("SELECT event, created_at FROM session_events").
-		WithArgs(key.AppName, key.UserID, key.SessionID, base).
-		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}).
-			AddRow(postgresWindowEventBytes(t, "u1", model.RoleUser, "one"), base).
-			AddRow(postgresWindowEventBytes(t, "a1", model.RoleAssistant, "two"), base.Add(time.Minute)).
-			AddRow(postgresWindowEventBytes(t, "u2", model.RoleUser, "three"), base.Add(2*time.Minute)).
-			AddRow(postgresWindowToolEventBytes(t, "t1", "calc", "four"), base.Add(3*time.Minute)).
-			AddRow(postgresWindowEventBytes(t, "u3", model.RoleUser, "five"), base.Add(4*time.Minute)))
+	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+		WithArgs(key.AppName, key.UserID, key.SessionID, base, "u2").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
+			AddRow(3, postgresWindowEventBytes(t, "u2", model.RoleUser, "three"), base.Add(2*time.Minute)))
+	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+		WithArgs(
+			key.AppName, key.UserID, key.SessionID, base,
+			base.Add(2*time.Minute), base.Add(2*time.Minute), int64(3), eventWindowBatchSize,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
+			AddRow(2, postgresWindowEventBytes(t, "a1", model.RoleAssistant, "two"), base.Add(time.Minute)).
+			AddRow(1, postgresWindowEventBytes(t, "u1", model.RoleUser, "one"), base))
+	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+		WithArgs(
+			key.AppName, key.UserID, key.SessionID, base,
+			base.Add(2*time.Minute), base.Add(2*time.Minute), int64(3), eventWindowBatchSize,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
+			AddRow(4, postgresWindowToolEventBytes(t, "t1", "calc", "four"), base.Add(3*time.Minute)).
+			AddRow(5, postgresWindowEventBytes(t, "u3", model.RoleUser, "five"), base.Add(4*time.Minute)))
 
 	got, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
 		Key:           key,
@@ -68,10 +80,9 @@ func TestService_GetEventWindowAnchorNotFound(t *testing.T) {
 	mock.ExpectQuery("SELECT created_at FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
-	mock.ExpectQuery("SELECT event, created_at FROM session_events").
-		WithArgs(key.AppName, key.UserID, key.SessionID, base).
-		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}).
-			AddRow(postgresWindowEventBytes(t, "u1", model.RoleUser, "one"), base))
+	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+		WithArgs(key.AppName, key.UserID, key.SessionID, base, "missing").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}))
 
 	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
 		Key:           key,
@@ -115,14 +126,14 @@ func TestService_GetEventWindowUnmarshalError(t *testing.T) {
 	mock.ExpectQuery("SELECT created_at FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
-	mock.ExpectQuery("SELECT event, created_at FROM session_events").
-		WithArgs(key.AppName, key.UserID, key.SessionID, base).
-		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}).
-			AddRow([]byte("{bad-json"), base))
+	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+		WithArgs(key.AppName, key.UserID, key.SessionID, base, "anchor").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
+			AddRow(1, []byte("{bad-json"), base))
 
 	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
 		Key:           key,
-		AnchorEventID: "missing",
+		AnchorEventID: "anchor",
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unmarshal event window entry")

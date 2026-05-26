@@ -14,10 +14,12 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/hashidx"
 )
 
 func TestService_GetEventWindow(t *testing.T) {
@@ -39,6 +41,43 @@ func TestService_GetEventWindow(t *testing.T) {
 		redisWindowEvent("u2", model.RoleUser, "three"),
 		redisWindowToolEvent("t1", "calc", "four"),
 		redisWindowEvent("u3", model.RoleUser, "five"),
+	} {
+		evt := evt
+		require.NoError(t, svc.AppendEvent(ctx, sess, &evt))
+	}
+
+	got, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "u2",
+		Before:        1,
+		After:         1,
+		Roles:         []model.Role{model.RoleUser},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"u1", "u2", "u3"}, redisWindowIDs(got))
+}
+
+func TestService_GetEventWindowZSetStorage(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithCompatMode(CompatModeTransition),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess-zset"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	for _, evt := range []event.Event{
+		redisWindowEvent("u1", model.RoleUser, "one"),
+		redisWindowEvent("a1", model.RoleAssistant, "two"),
+		redisWindowEvent("u2", model.RoleUser, "three"),
+		redisWindowEvent("u3", model.RoleUser, "four"),
 	} {
 		evt := evt
 		require.NoError(t, svc.AppendEvent(ctx, sess, &evt))
@@ -143,6 +182,37 @@ func TestService_GetEventWindowTrimsAnchorID(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "anchor", got.AnchorEventID)
+	require.Equal(t, []string{"anchor"}, redisWindowIDs(got))
+}
+
+func TestService_GetEventWindowIgnoresMalformedHashIdxRowOutsideWindow(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess-bad-row"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	evt := redisWindowEvent("anchor", model.RoleUser, "one")
+	require.NoError(t, svc.AppendEvent(ctx, sess, &evt))
+
+	eventDataKey := hashidx.GetEventDataKey(svc.opts.keyPrefix, key)
+	eventTimeIndexKey := hashidx.GetEventTimeIndexKey(svc.opts.keyPrefix, key)
+	require.NoError(t, svc.redisClient.HSet(ctx, eventDataKey, "bad", "{bad-json").Err())
+	require.NoError(t, svc.redisClient.ZAdd(ctx, eventTimeIndexKey, goredis.Z{
+		Score:  float64(time.Now().UTC().Add(time.Hour).UnixNano()),
+		Member: "bad",
+	}).Err())
+
+	got, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+	})
+	require.NoError(t, err)
 	require.Equal(t, []string{"anchor"}, redisWindowIDs(got))
 }
 
