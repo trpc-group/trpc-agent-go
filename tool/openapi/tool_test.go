@@ -1457,6 +1457,77 @@ func Test_openAPITool_Call(t *testing.T) {
 	}
 }
 
+func Test_openAPITool_Call_PreservesLargeScalarParams(t *testing.T) {
+	operation := &Operation{
+		operationParams: []*APIParameter{
+			{
+				OriginalName: "id",
+				Location:     QueryParameter,
+			},
+			{
+				OriginalName: "X-Trace-ID",
+				Location:     HeaderParameter,
+			},
+			{
+				OriginalName: "session",
+				Location:     CookieParameter,
+			},
+		},
+		endpoint: &operationEndpoint{
+			baseURL: "https://api.example.com",
+			path:    "/items",
+			method:  "GET",
+		},
+		originOperation: &openapi.Operation{
+			RequestBody: nil,
+		},
+	}
+
+	originalTransport := http.DefaultTransport
+	defer func() {
+		http.DefaultTransport = originalTransport
+	}()
+	http.DefaultTransport = &mockTransport{
+		handler: func(req *http.Request) (*http.Response, error) {
+			if got := req.URL.Query().Get("id"); got != "9007199254740993" {
+				return nil, fmt.Errorf("query id = %q", got)
+			}
+			if got := req.Header.Get("X-Trace-ID"); got != "9007199254740995" {
+				return nil, fmt.Errorf("X-Trace-ID = %q", got)
+			}
+			cookie, err := req.Cookie("session")
+			if err != nil {
+				return nil, err
+			}
+			if cookie.Value != "9007199254740997" {
+				return nil, fmt.Errorf("session cookie = %q", cookie.Value)
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	o := &openAPITool{
+		operation: operation,
+		config: &config{
+			userAgent:  "TestAgent/1.0",
+			httpClient: http.DefaultClient,
+		},
+	}
+
+	got, err := o.Call(context.Background(), []byte(`{"id":9007199254740993,"X-Trace-ID":9007199254740995,"session":9007199254740997}`))
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	want := map[string]any{"ok": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Call() = %v, want %v", got, want)
+	}
+}
+
 // Mock transport for testing
 type mockTransport struct {
 	handler func(*http.Request) (*http.Response, error)
