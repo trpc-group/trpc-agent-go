@@ -645,7 +645,7 @@ func TestGatewayClientDecodeAndRequestEdges(t *testing.T) {
 		t.Fatalf("newGatewayClient: %v", err)
 	}
 	var out HealthResponse
-	if err := client.doJSON(nil, httpMethodGet, "/empty", nil, &out); err != nil {
+	if err := client.doJSON(context.Background(), httpMethodGet, "/empty", nil, &out); err != nil {
 		t.Fatalf("empty response should be accepted: %v", err)
 	}
 	if err := client.doJSON(context.Background(), httpMethodGet, "/bad-json", nil, &out); err == nil {
