@@ -1128,15 +1128,20 @@ func WithSkillRunStager(stager toolskill.SkillStager) Option {
 // at a workspace-controlled binary via PATH. On Windows the env
 // scrub folds case before comparing, so caller-supplied "Path",
 // "Home" or "Bash_Env" cannot survive by varying capitalisation.
-// Env entries whose key is empty or contains "=", "\n", "\r" or
-// "\0" are also dropped, so a malformed key like "PATH=." cannot
-// serialise as "PATH=.=<value>" and reintroduce PATH.
-// Note that this spawn hardening (CleanEnv + sh-c) is fully
-// implemented on codeexecutor/local; container / e2b backends
-// honor the command-name policy but their env-isolation work is
-// tracked as a follow-up. Operators running policy mode on those
-// backends should still rely on the sandbox layer for env /
-// network isolation.
+// Env entries whose key is not a POSIX name (/^[A-Za-z_][A-Za-z0-9_]*$/)
+// are also dropped, which catches "PATH=."-as-a-key,
+// "X; curl http://x #"-as-a-key (shell metacharacter injection on
+// runtimes that build "env KEY=value <cmd>" through a shell
+// string), and embedded "\n" / "\r" / "\0".
+//
+// Policy mode requires the underlying runtime to honor
+// RunProgramSpec.CleanEnv. workspace_exec fails closed when the
+// runtime's codeexecutor.Capabilities.SupportsCleanEnv is false:
+// the call is refused before spawn with an error pointing the
+// operator at a supported runtime. Today only codeexecutor/local
+// advertises the capability; container and e2b backends keep the
+// zero-valued capabilities until #1845 lands. Until then, run
+// policy mode on the local backend or drop the policy lists.
 //
 // Scope: enforcement is at the executable-name level. If an allowed
 // command itself shells out based on its arguments (e.g.

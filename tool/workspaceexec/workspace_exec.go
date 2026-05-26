@@ -612,6 +612,10 @@ func (t *ExecTool) prepareExec(
 	if err != nil {
 		return execRequest{}, err
 	}
+	policyActive := t.commandPolicy().Active()
+	if err := checkRunnerSupportsPolicy(eng, policyActive); err != nil {
+		return execRequest{}, err
+	}
 	ws, err := t.resolver.CreateWorkspace(ctx, eng, "workspace")
 	if err != nil {
 		return execRequest{}, err
@@ -623,7 +627,6 @@ func (t *ExecTool) prepareExec(
 	if timeout <= 0 {
 		timeout = in.Timeout
 	}
-	policyActive := t.commandPolicy().Active()
 	return execRequest{
 		background: in.Background,
 		tty:        firstBoolValue(in.TTY, in.PTY),
@@ -654,6 +657,51 @@ func (t *ExecTool) checkCommandPolicy(command string) error {
 		return fmt.Errorf("workspace_exec: %w", err)
 	}
 	return nil
+}
+
+// checkRunnerSupportsPolicy fails closed when the caller configured
+// a command allow/deny policy but the selected runtime cannot honor
+// the env-isolation half of policy mode (RunProgramSpec.CleanEnv).
+//
+// Policy mode's security contract has two halves:
+//
+//  1. Command-name allow/deny: enforced by internal/shellsafe before
+//     spawn; runtime-agnostic.
+//
+//  2. Spawn hardening: a scrubbed env (no caller-supplied PATH /
+//     LD_PRELOAD / BASH_ENV / ...) and CleanEnv = true so the child
+//     starts from the spec.Env only, not the inherited process
+//     environment.
+//
+// Half (2) only works when the underlying runtime actually
+// consumes spec.CleanEnv. Today only codeexecutor/local does
+// (#1845 tracks the container / e2b backends). On a backend that
+// silently ignores CleanEnv, the allow/deny list still applies but
+// the env layer reverts to the unhardened behaviour - which is
+// strictly weaker than the documented contract.
+//
+// Rather than letting that backend silently downgrade the
+// guarantee, refuse policy mode up front and tell the operator
+// either to switch to a runtime that supports CleanEnv (today:
+// local) or to wait for the linked follow-up.
+func checkRunnerSupportsPolicy(
+	eng codeexecutor.Engine, policyActive bool,
+) error {
+	if !policyActive || eng == nil {
+		return nil
+	}
+	if eng.Describe().SupportsCleanEnv {
+		return nil
+	}
+	return errors.New(
+		"workspace_exec: command allow/deny policy requires a runtime " +
+			"that supports RunProgramSpec.CleanEnv, but the configured " +
+			"runtime does not advertise it (see " +
+			"https://github.com/trpc-group/trpc-agent-go/issues/1845). " +
+			"Either run on codeexecutor/local or drop the policy lists " +
+			"(WithWorkspaceExecAllowedCommands / " +
+			"WithWorkspaceExecDeniedCommands).",
+	)
 }
 
 // shellArgsForPolicy returns the argv to pass to sh. When a command

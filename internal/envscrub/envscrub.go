@@ -81,18 +81,60 @@ func IsBlocked(name string, caseInsensitive bool) bool {
 	return isBashFuncKey(name, caseInsensitive)
 }
 
-// IsMalformedKey reports whether name is not usable as a POSIX
-// env name. An empty key, or one containing "=", "\0", "\n" or
-// "\r", would otherwise survive the blocklist and either confuse
-// the kernel's env serialisation (e.g. a key "PATH=." becomes the
-// env entry "PATH=.=<value>", which libc parses as PATH set to
-// ".=<value>") or split a single entry into two on libc
-// implementations that scan for newlines.
+// IsMalformedKey reports whether name does not conform to the POSIX
+// "name" production for environment variables -
+// /^[A-Za-z_][A-Za-z0-9_]*$/. Anything outside that grammar is
+// rejected outright by Scrub, because:
+//
+//   - Embedded "=" / "\0" / "\n" / "\r" can confuse env
+//     serialisation: a JSON key "PATH=." would become the env
+//     entry "PATH=.=<value>", which libc parses as PATH set to
+//     ".=<value>", silently reintroducing PATH after the scrub.
+//     Newlines split a single entry into two on libc
+//     implementations that scan for line boundaries.
+//
+//   - Shell metacharacters in a name are an injection vector on
+//     runners that build "env KEY=value <cmd>" through a shell
+//     string (today: codeexecutor/container and codeexecutor/e2b).
+//     A name like "X; curl http://x #" placed into that template
+//     becomes "env X; curl http://x #=value <cmd>", and the shell
+//     executes curl *before* the checked command. Restricting to
+//     POSIX names removes the entire class without requiring the
+//     scrub to enumerate every metacharacter (`;`, `&`, `|`, `(`,
+//     `)`, `<`, `>`, `$`, “ ` “, quotes, backslash, whitespace,
+//     glob, `#`, `~`, `!`, brace) for every runner.
+//
+// Names that legitimately need non-POSIX characters (Windows
+// "Program Files (x86)" style keys, application-specific keys
+// with `-` or `.`) survive the non-policy path because Scrub is
+// only invoked when the policy mode is active.
 func IsMalformedKey(name string) bool {
 	if name == "" {
 		return true
 	}
-	return strings.ContainsAny(name, "=\x00\n\r")
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if i == 0 {
+			if !isPosixNameStart(c) {
+				return true
+			}
+			continue
+		}
+		if !isPosixNameCont(c) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPosixNameStart(c byte) bool {
+	return (c >= 'A' && c <= 'Z') ||
+		(c >= 'a' && c <= 'z') ||
+		c == '_'
+}
+
+func isPosixNameCont(c byte) bool {
+	return isPosixNameStart(c) || (c >= '0' && c <= '9')
 }
 
 // Scrub returns a fresh map containing every entry from in whose

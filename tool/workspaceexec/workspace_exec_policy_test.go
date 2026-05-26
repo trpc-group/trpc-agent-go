@@ -325,12 +325,55 @@ func TestEnvForPolicyOnGOOS_WindowsCaseInsensitive(t *testing.T) {
 			"linux should treat lowercase Path as a distinct key")
 		require.Equal(t, "/tmp/attacker", got["Home"])
 		require.Equal(t, "/tmp/x.so", got["Ld_Preload"])
+		// Both BASH_FUNC_* shapes contain "%%", which is not a
+		// valid POSIX env name character, so the POSIX-only key
+		// grammar enforced by envscrub.IsMalformedKey drops both
+		// regardless of OS. This is stricter than the previous
+		// "rely on the case-sensitive BASH_FUNC_ blocklist" path
+		// and catches the lowercase-prefix variant on Linux too.
 		_, bashFuncLower := got["bash_func_grep%%"]
-		require.True(t, bashFuncLower,
-			"linux should not fold BASH_FUNC_ prefix")
+		require.False(t, bashFuncLower,
+			"non-POSIX env names must be dropped on every OS")
 		_, bashFuncUpper := got["BASH_FUNC_ls%%"]
 		require.False(t, bashFuncUpper,
 			"BASH_FUNC_ prefix entries should always be stripped")
+	})
+}
+
+// TestCheckRunnerSupportsPolicy guards the policy-mode contract
+// that env isolation (CleanEnv) is not optional: if the underlying
+// runtime does not advertise SupportsCleanEnv, refuse policy mode
+// up front instead of silently degrading to "command name check
+// only, host env inherited".
+//
+// A zero-capabilities engine here represents the shape returned by
+// codeexecutor.NewEngine (today: container, e2b). Local opts in
+// via NewEngineWithCapabilities(SupportsCleanEnv: true).
+func TestCheckRunnerSupportsPolicy(t *testing.T) {
+	zero := codeexecutor.NewEngine(nil, nil, nil)
+	clean := codeexecutor.NewEngineWithCapabilities(
+		nil, nil, nil,
+		codeexecutor.Capabilities{SupportsCleanEnv: true},
+	)
+
+	t.Run("no policy is a no-op on any runner", func(t *testing.T) {
+		require.NoError(t, checkRunnerSupportsPolicy(zero, false))
+		require.NoError(t, checkRunnerSupportsPolicy(clean, false))
+		require.NoError(t, checkRunnerSupportsPolicy(nil, false))
+	})
+
+	t.Run("policy requires SupportsCleanEnv", func(t *testing.T) {
+		err := checkRunnerSupportsPolicy(zero, true)
+		require.Error(t, err,
+			"policy mode must fail closed on a runner without SupportsCleanEnv")
+		require.True(t,
+			strings.Contains(err.Error(), "CleanEnv"),
+			"error should mention the missing CleanEnv capability, got: %v", err,
+		)
+	})
+
+	t.Run("policy passes when runner supports CleanEnv", func(t *testing.T) {
+		require.NoError(t, checkRunnerSupportsPolicy(clean, true))
 	})
 }
 

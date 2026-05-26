@@ -105,6 +105,52 @@ func TestScrub_DropsMalformedKeys(t *testing.T) {
 	}
 }
 
+// TestScrub_RejectsNonPosixNames pins the POSIX-only grammar for
+// env names enforced in policy mode. The motivating bypass is an
+// env key that smuggles shell metacharacters into runners that
+// concatenate "env KEY=value <cmd>" through a shell string
+// (container / e2b): "X; curl http://x #" placed into that
+// template makes the shell run curl before the checked command.
+// Restricting names to /^[A-Za-z_][A-Za-z0-9_]*$/ closes the whole
+// class without enumerating every shell metacharacter.
+func TestScrub_RejectsNonPosixNames(t *testing.T) {
+	in := map[string]string{
+		"X; curl http://x #": "v",
+		"BAD KEY":            "v",
+		"BAD\tKEY":           "v",
+		"PIPE|KEY":           "v",
+		"AND&KEY":            "v",
+		"OPEN(KEY":           "v",
+		"CLOSE)KEY":          "v",
+		"REDIR>KEY":          "v",
+		"DOLLAR$KEY":         "v",
+		"BACKTICK`KEY":       "v",
+		"QUOTE'KEY":          "v",
+		"DQUOTE\"KEY":        "v",
+		"BACKSLASH\\KEY":     "v",
+		"GLOB*KEY":           "v",
+		"BRACE{KEY":          "v",
+		"TILDE~KEY":          "v",
+		"BANG!KEY":           "v",
+		"DASH-KEY":           "v", // POSIX rejects dash too
+		"DOT.KEY":            "v",
+		"1LEADING_DIGIT":     "v", // POSIX names start with letter or _
+		"GOOD_KEY_42":        "kept",
+	}
+	out := Scrub(in, false)
+	for k := range in {
+		if k == "GOOD_KEY_42" {
+			continue
+		}
+		if _, ok := out[k]; ok {
+			t.Fatalf("non-POSIX key %q must be dropped", k)
+		}
+	}
+	if got := out["GOOD_KEY_42"]; got != "kept" {
+		t.Fatalf("GOOD_KEY_42 should survive, got %q", got)
+	}
+}
+
 func TestScrub_NilAndEmpty(t *testing.T) {
 	if got := Scrub(nil, false); got != nil {
 		t.Fatalf("nil input should return nil, got %v", got)

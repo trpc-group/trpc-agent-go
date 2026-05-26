@@ -819,9 +819,11 @@ deny 里。
 - Windows 下清洗时会先把 env key 折成大写再比对，因为 Windows 运行时本身
   就把 env key 当作大小写不敏感。所以调用方传 `Path=./bin`、`Home=.`、
   `Bash_Env=…` 或 `bash_func_x%%=…`，都会跟规范形式一样被清掉。
-- env 里 **key** 为空、或包含 `=` / `\n` / `\r` / `\0` 的条目会被直接丢
-  掉。否则一个 key 为 `"PATH=."` 的条目，序列化后会变成
-  `PATH=.=<value>`，绕过清洗把 `PATH` 重新塞回来。
+- env 里 **key** 不符合 POSIX 名（`/^[A-Za-z_][A-Za-z0-9_]*$/`）的条目
+  会被直接丢掉。这覆盖最直接的几种绕过（key 含 `=`、嵌入 `\n` / `\r` /
+  `\0`），同时也挡掉 runtime 用 shell 字符串拼 env 注入（`env KEY=value
+  <cmd>`）时的 shell 元字符绕过：一个 key 写成 `"X; curl http://x #"`
+  放进那个模板，shell 会先跑 `curl` 再跑被校验过的命令。
 - 策略开启时 `RunEnvProvider` 返回的条目也走同一套清洗。
   `codeexecutor.mergeProviderEnv` 会读 `spec.CleanEnv`，把 provider
   给出的 key 过一遍 `internal/envscrub` 的黑名单，所以
@@ -832,12 +834,22 @@ deny 里。
 不设策略时这套都不会生效：`sh -lc` 和调用方传入的 env（包括 `PATH`）
 都保持原样。
 
-!!! note "拉起 shell 加固的覆盖范围（v1）"
-    上面 `sh -c` 改写和每次调用的 env 清洗，目前在 `codeexecutor/local`
-    runtime 上完整生效。`container` 和 `e2b` runtime 仍会执行命令名级
-    策略（`curl` 在 spawn 之前就被拒掉），但它们对 `RunProgramSpec.CleanEnv`
-    的真正落地是后续 follow-up。这两个后端上开启策略时，`PATH` /
-    `HOME` / `LD_PRELOAD` 等 env 隔离仍要靠沙箱层自己保证。
+!!! warning "策略模式要求 runtime 支持 CleanEnv"
+    上面的 `sh -c` 改写和 env 清洗只有在底层 runtime 真正 honor
+    `RunProgramSpec.CleanEnv` 时才安全。为了避免在忽略 `CleanEnv` 的后端
+    上悄悄降级安全契约，`workspace_exec` **fail-closed**：配置了
+    `WithWorkspaceExecAllowedCommands` / `WithWorkspaceExecDeniedCommands`
+    后，如果 runtime 的 `codeexecutor.Capabilities.SupportsCleanEnv`
+    是 `false`，工具会在 spawn 之前直接拒掉这次调用，错误信息指引
+    operator 切到支持的 runtime。
+
+    目前只有 `codeexecutor/local` 声明了 `SupportsCleanEnv: true`。
+    `codeexecutor/container` 和 `codeexecutor/e2b` 保持 zero-valued
+    capabilities，所以这两个后端上的策略模式当前会在闸门处被拒掉。
+    给它们实现 `CleanEnv`（让它们声明 capability 后闸门自动放开）
+    跟在 [#1845](https://github.com/trpc-group/trpc-agent-go/issues/1845)
+    里。在那之前，请在 local 后端上开策略模式，或者去掉 allow/deny
+    列表，把 env / 网络隔离交给沙箱层。
 
 ### 边界
 

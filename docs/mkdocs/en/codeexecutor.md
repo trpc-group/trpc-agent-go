@@ -883,10 +883,13 @@ shell-startup tricks from re-arming a rejected command:
   runtime. A caller-supplied `Path=./bin`, `Home=.`, `Bash_Env=…` or
   `bash_func_x%%=…` is therefore stripped just like its canonical
   form would be.
-- env entries whose **key** is empty or contains `=`, `\n`, `\r`, or
-  `\0` are dropped outright. A key like `"PATH=."` would otherwise
-  serialise as `PATH=.=<value>` and reintroduce `PATH` after the
-  scrub.
+- env entries whose **key** is not a POSIX name
+  (`/^[A-Za-z_][A-Za-z0-9_]*$/`) are dropped outright. This catches
+  the obvious cases (`PATH=.` as a key, embedded `\n` / `\r` / `\0`)
+  and also closes the shell-metacharacter bypass on runtimes that
+  build env injection through a shell string (`env KEY=value <cmd>`):
+  a name like `"X; curl http://x #"` placed into that template
+  would otherwise execute `curl` before the checked command.
 - `RunEnvProvider` entries are subject to the same scrub when
   policy mode is active. `codeexecutor.mergeProviderEnv` honors
   `spec.CleanEnv` and runs provider-supplied keys through the same
@@ -897,15 +900,27 @@ shell-startup tricks from re-arming a rejected command:
 Without a policy configured none of this kicks in: `sh -lc` and the
 caller-supplied env (including `PATH`) are preserved as before.
 
-!!! note "Spawn-hardening scope (v1)"
+!!! warning "Policy mode requires a CleanEnv-capable runtime"
     The `sh -c` switch and the per-call env scrubbing above are
-    fully implemented on the `codeexecutor/local` runtime. The
-    `container` and `e2b` runtimes honor the command-name policy
-    (so `curl` is still rejected before the spawn), but their own
-    env-isolation work to honor `RunProgramSpec.CleanEnv` is a
-    follow-up. Operators running policy mode on those backends
-    should still rely on the sandbox layer for `PATH` / `HOME` /
-    `LD_PRELOAD` isolation.
+    only safe when the underlying runtime actually honors
+    `RunProgramSpec.CleanEnv`. To avoid silently degrading the
+    contract on a backend that ignores `CleanEnv`, `workspace_exec`
+    **fails closed**: with `WithWorkspaceExecAllowedCommands` /
+    `WithWorkspaceExecDeniedCommands` configured, the tool refuses
+    to start a call when the runtime's
+    `codeexecutor.Capabilities.SupportsCleanEnv` is `false`, and
+    returns an error pointing the operator at a supported runtime.
+
+    Today only `codeexecutor/local` advertises
+    `SupportsCleanEnv: true`. `codeexecutor/container` and
+    `codeexecutor/e2b` keep the zero-valued capabilities, so policy
+    mode on those backends is currently refused at the gate.
+    Implementing `CleanEnv` for them (so the policy gate opens
+    automatically once they declare the capability) is tracked in
+    [#1845](https://github.com/trpc-group/trpc-agent-go/issues/1845).
+    Until then, run policy mode on the local backend, or drop the
+    policy lists and rely on the sandbox layer for env / network
+    isolation.
 
 ### Scope
 
