@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -7706,6 +7707,370 @@ func TestInterruptedAssistantPriorDedupeScopedByLineage(t *testing.T) {
 	})
 }
 
+func TestInterruptedAssistantAccumulatorLineageEdgeCases(t *testing.T) {
+	require.Nil(t, interruptedAssistantAccumulatorForLineage(nil, nil, "lineage"))
+	require.Empty(t, interruptedAssistantLineageKey(nil, nil))
+
+	sess := session.NewSession("app", "u", "s")
+	otherSess := session.NewSession("app", "u", "other")
+	loop := &eventLoopContext{sess: sess}
+	require.Nil(t, getInterruptedAssistantAccumulator(loop, sess))
+
+	first := interruptedAssistantAccumulatorForLineage(loop, sess, "one")
+	require.NotNil(t, first)
+	require.Same(t, first, interruptedAssistantAccumulatorForLineage(loop, sess, "one"))
+	require.NotNil(t, interruptedAssistantAccumulatorForLineage(loop, otherSess, "other"))
+	require.Same(t, first, getInterruptedAssistantAccumulator(loop, sess))
+
+	require.NotNil(t, interruptedAssistantAccumulatorForLineage(loop, sess, "two"))
+	require.Nil(t, getInterruptedAssistantAccumulator(loop, sess))
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationID("parent-inv"),
+		agent.WithInvocationAgent(&noOpAgent{name: "parent"}),
+	)
+	child := parent.Clone(
+		agent.WithInvocationID("child-inv"),
+		agent.WithInvocationAgent(&noOpAgent{name: "child"}),
+		agent.WithInvocationBranch("child-branch"),
+		agent.WithInvocationEventFilterKey("child-filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+	)
+	key := interruptedAssistantLineageKey(&eventLoopContext{invocation: child}, &event.Event{
+		Response: &model.Response{ID: "resp"},
+	})
+	for _, part := range []string{
+		"resp",
+		"req",
+		"child-inv",
+		"parent-inv",
+		"child-branch",
+		"child-filter",
+		"child",
+	} {
+		require.Contains(t, key, part)
+	}
+}
+
+func TestRecordPersistedAssistantOnAccumulatorEdgeCases(t *testing.T) {
+	acc := &interruptedAssistantAccumulator{
+		requestID:    "req",
+		invocationID: "inv",
+	}
+
+	recordPersistedAssistantOnAccumulator(nil, nil, false)
+	recordPersistedAssistantOnAccumulator(acc, nil, true)
+	recordPersistedAssistantOnAccumulator(
+		acc,
+		interruptedAssistantFinalEvent("inv", "non-assistant-id", "user", model.RoleUser),
+		true,
+	)
+	require.Empty(t, acc.persistedAssistantResponseIDs)
+	require.Empty(t, acc.persistedAssistantChoiceSignatures)
+
+	rawGraph := graph.NewGraphCompletionEvent(
+		graph.WithCompletionEventInvocationID("inv"),
+		graph.WithCompletionEventFinalState(graph.State{
+			graph.StateKeyLastResponse:   "raw",
+			graph.StateKeyLastResponseID: "raw-final",
+		}),
+	)
+	recordPersistedAssistantOnAccumulator(acc, rawGraph, true)
+	require.Empty(t, acc.persistedAssistantResponseIDs)
+	require.Empty(t, acc.persistedAssistantChoiceSignatures)
+
+	visible, ok := graph.VisibleGraphCompletionEventForAuthor(
+		graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID("inv"),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse:   "visible",
+				graph.StateKeyLastResponseID: "visible-final",
+			}),
+		),
+		"assistant",
+	)
+	require.True(t, ok)
+	visible.Response.ID = "visible-wrapper"
+	visible.RequestID = "req"
+
+	recordPersistedAssistantOnAccumulator(acc, visible, true)
+	require.Contains(t, acc.persistedAssistantResponseIDs, "visible-wrapper")
+	require.Contains(t, acc.persistedAssistantResponseIDs, "visible-final")
+	require.Contains(
+		t,
+		acc.persistedAssistantChoiceSignatures,
+		interruptedAssistantSignatureKey("req", "inv", visible.Response.Choices),
+	)
+}
+
+func TestRecordInterruptedAssistantDeltaSkipsNonAssistantChoices(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	require.False(t, interruptedAssistantHasTextDelta(nil))
+
+	loop := &eventLoopContext{}
+	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "resp",
+			Created:   123,
+			IsPartial: true,
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Delta: model.Message{
+						Role:    model.RoleUser,
+						Content: "skip wrong role",
+					},
+				},
+				{
+					Index: 1,
+					Delta: model.Message{Role: model.RoleAssistant},
+				},
+				{
+					Index: 2,
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "keep",
+					},
+				},
+			},
+		},
+	), nil)
+
+	acc := defaultInterruptedAssistantAccumulator(loop)
+	require.NotNil(t, acc)
+	require.Equal(t, int64(123), acc.created)
+	choices := interruptedAssistantChoicesFromAccumulator(acc)
+	require.Len(t, choices, 1)
+	require.Equal(t, 2, choices[0].Index)
+	require.Equal(t, "keep", choices[0].Message.Content)
+}
+
+func TestInterruptedAssistantEventIdentityHelperEdgeCases(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	captureInterruptedAssistantEventIdentity(nil, nil)
+	injectInterruptedAssistantEventIdentity(nil, nil, nil)
+
+	acc := &interruptedAssistantAccumulator{requestID: "existing"}
+	fillInterruptedAssistantRequestID(acc, &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "root"}),
+		),
+	})
+	require.Equal(t, "existing", acc.requestID)
+
+	evt := &event.Event{RequestID: "keep"}
+	injectInterruptedAssistantEventIdentity(
+		agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "root"}),
+		),
+		&interruptedAssistantAccumulator{requestID: "acc"},
+		evt,
+	)
+	require.Equal(t, "keep", evt.RequestID)
+
+	empty := &strings.Builder{}
+	require.Empty(t, interruptedAssistantChoicesFromAccumulator(
+		&interruptedAssistantAccumulator{
+			choiceContent: map[int]*strings.Builder{
+				0: nil,
+				1: empty,
+			},
+		},
+	))
+
+	content := &strings.Builder{}
+	content.WriteString("fallback")
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("root-inv"),
+		agent.WithInvocationAgent(&noOpAgent{name: "root-agent"}),
+	)
+	out := rr.interruptedAssistantEventForAccumulator(
+		context.Background(),
+		&eventLoopContext{invocation: inv},
+		&interruptedAssistantAccumulator{
+			choiceContent: map[int]*strings.Builder{0: content},
+		},
+	)
+	require.NotNil(t, out)
+	require.Equal(t, "root-agent", out.Author)
+	require.Equal(t, "root-inv", out.InvocationID)
+}
+
+func TestPersistInterruptedAssistantSkipTargetsAndTieBreaker(t *testing.T) {
+	builderMap := func(text string) map[int]*strings.Builder {
+		b := &strings.Builder{}
+		b.WriteString(text)
+		return map[int]*strings.Builder{0: b}
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+
+	emptySvc := &mockSessionService{}
+	rr := &runner{sessionService: emptySvc}
+	rr.persistInterruptedAssistant(cancelled, &eventLoopContext{
+		invocation: inv,
+		interruptedAssistants: map[string]*interruptedAssistantAccumulator{
+			"empty": {
+				sequence:      2,
+				sess:          session.NewSession("app", "u", "empty"),
+				choiceContent: map[int]*strings.Builder{},
+			},
+			"nil":        nil,
+			"no-session": {sequence: 1, choiceContent: builderMap("no session")},
+		},
+	})
+	require.Empty(t, emptySvc.appendEventCalls)
+
+	svc := &mockSessionService{}
+	rr = &runner{sessionService: svc}
+	sess := session.NewSession("app", "u", "s")
+	rr.persistInterruptedAssistant(cancelled, &eventLoopContext{
+		sess:       sess,
+		invocation: inv,
+		interruptedAssistants: map[string]*interruptedAssistantAccumulator{
+			"b": {sequence: 1, choiceContent: builderMap("second")},
+			"a": {sequence: 1, choiceContent: builderMap("first")},
+		},
+	})
+	require.Len(t, svc.appendEventCalls, 2)
+	require.Same(t, sess, svc.appendEventCalls[0].sess)
+	require.Equal(t, "first", svc.appendEventCalls[0].event.Choices[0].Message.Content)
+	require.Equal(t, "second", svc.appendEventCalls[1].event.Choices[0].Message.Content)
+}
+
+func TestCollectPriorAssistantChoiceSignaturesSkipsAndCollects(t *testing.T) {
+	require.Nil(t, collectPriorAssistantChoiceSignatures(nil))
+	require.Nil(t, collectPriorAssistantChoiceSignatures(&session.Session{}))
+
+	partial := interruptedAssistantPartialEvent("inv", "partial")
+	rawGraph := graph.NewGraphCompletionEvent(
+		graph.WithCompletionEventInvocationID("inv"),
+		graph.WithCompletionEventFinalState(graph.State{
+			graph.StateKeyLastResponse: "graph",
+		}),
+	)
+	user := interruptedAssistantFinalEvent("inv", "user-id", "user", model.RoleUser)
+	assistant := interruptedAssistantFinalEvent(
+		"inv",
+		"assistant-id",
+		"assistant",
+		model.RoleAssistant,
+	)
+	assistant.RequestID = "req"
+
+	signatures := collectPriorAssistantChoiceSignatures(&session.Session{
+		Events: []event.Event{*partial, *rawGraph, *user, *assistant},
+	})
+	require.Equal(t, map[string]struct{}{
+		interruptedAssistantSignatureKey(
+			"req",
+			"inv",
+			assistant.Response.Choices,
+		): {},
+	}, signatures)
+}
+
+func TestCollectPriorAssistantLineageHelpersSkipAndCollect(t *testing.T) {
+	require.Nil(t, collectPriorAssistantResponseIDsForLineage(nil, nil, "lineage"))
+	require.Nil(t, collectPriorAssistantChoiceSignaturesForLineage(nil, nil, "lineage"))
+
+	loop := &eventLoopContext{}
+	regular := interruptedAssistantFinalEvent(
+		"inv",
+		"resp",
+		"assistant",
+		model.RoleAssistant,
+	)
+	regular.RequestID = "req"
+	regular.Branch = "branch/a"
+	regular.FilterKey = "filter/a"
+	lineage := interruptedAssistantLineageKey(loop, regular)
+
+	partial := interruptedAssistantPartialEvent("inv", "partial")
+	partial.Response.ID = "resp"
+	partial.RequestID = "req"
+	partial.Branch = "branch/a"
+	partial.FilterKey = "filter/a"
+
+	rawGraph := graph.NewGraphCompletionEvent(
+		graph.WithCompletionEventInvocationID("inv"),
+		graph.WithCompletionEventFinalState(graph.State{
+			graph.StateKeyLastResponse:   "graph",
+			graph.StateKeyLastResponseID: "graph-final",
+		}),
+	)
+	rawGraph.Response.ID = "resp"
+	rawGraph.RequestID = "req"
+	rawGraph.Branch = "branch/a"
+	rawGraph.FilterKey = "filter/a"
+	rawGraph.Author = "assistant"
+
+	user := interruptedAssistantFinalEvent("inv", "resp", "user", model.RoleUser)
+	user.RequestID = "req"
+	user.Branch = "branch/a"
+	user.FilterKey = "filter/a"
+
+	mismatch := interruptedAssistantFinalEvent(
+		"inv",
+		"other-resp",
+		"other",
+		model.RoleAssistant,
+	)
+	mismatch.RequestID = "req"
+	mismatch.Branch = "branch/b"
+
+	sess := &session.Session{
+		Events: []event.Event{*mismatch, *partial, *rawGraph, *user, *regular},
+	}
+	require.Equal(t, map[string]struct{}{"resp": {}},
+		collectPriorAssistantResponseIDsForLineage(loop, sess, lineage))
+	require.Equal(t, map[string]struct{}{
+		interruptedAssistantSignatureKey(
+			"req",
+			"inv",
+			regular.Response.Choices,
+		): {},
+	}, collectPriorAssistantChoiceSignaturesForLineage(loop, sess, lineage))
+
+	emptyID := interruptedAssistantFinalEvent(
+		"inv-empty",
+		"",
+		"empty id",
+		model.RoleAssistant,
+	)
+	require.Nil(t, collectPriorAssistantResponseIDsForLineage(
+		loop,
+		&session.Session{Events: []event.Event{*emptyID}},
+		interruptedAssistantLineageKey(loop, emptyID),
+	))
+
+	visible, ok := graph.VisibleGraphCompletionEventForAuthor(
+		graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID("inv-visible"),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse:   "visible",
+				graph.StateKeyLastResponseID: "visible-final",
+			}),
+		),
+		"assistant",
+	)
+	require.True(t, ok)
+	visible.Response.ID = "visible-wrapper"
+	ids := collectPriorAssistantResponseIDsForLineage(
+		loop,
+		&session.Session{Events: []event.Event{*visible}},
+		interruptedAssistantLineageKey(loop, visible),
+	)
+	require.Equal(t, map[string]struct{}{"visible-final": {}}, ids)
+}
+
 func interruptedAssistantPartialEvent(invocationID string, content string) *event.Event {
 	return event.NewResponseEvent(
 		invocationID,
@@ -7717,6 +8082,30 @@ func interruptedAssistantPartialEvent(invocationID string, content string) *even
 				Index: 0,
 				Delta: model.Message{
 					Role:    model.RoleAssistant,
+					Content: content,
+				},
+			}},
+		},
+	)
+}
+
+func interruptedAssistantFinalEvent(
+	invocationID string,
+	responseID string,
+	content string,
+	role model.Role,
+) *event.Event {
+	return event.NewResponseEvent(
+		invocationID,
+		"assistant",
+		&model.Response{
+			ID:     responseID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    role,
 					Content: content,
 				},
 			}},
