@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessionwindow "trpc.group/trpc-go/trpc-agent-go/session/internal/window"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/hashidx"
 )
 
@@ -224,6 +225,32 @@ func TestService_GetEventWindowHashIdxAnchorIndexMissing(t *testing.T) {
 	require.Contains(t, err.Error(), "anchor event not found")
 }
 
+func TestService_GetEventWindowMalformedHashIdxAnchor(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess-bad-anchor"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	evt := redisWindowEvent("anchor", model.RoleUser, "one")
+	require.NoError(t, svc.AppendEvent(ctx, sess, &evt))
+
+	eventDataKey := hashidx.GetEventDataKey(svc.opts.keyPrefix, key)
+	require.NoError(t, svc.redisClient.HSet(ctx, eventDataKey, "anchor", "{bad-json").Err())
+
+	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unmarshal redis event window entry")
+}
+
 func TestService_GetEventWindowValidation(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 	svc := &Service{}
@@ -258,6 +285,51 @@ func TestService_GetEventWindowValidation(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "scan cap")
+}
+
+func TestService_GetEventWindowRedisCommandErrors(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	require.NoError(t, svc.Close())
+
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           session.Key{AppName: "app", UserID: "user", SessionID: "sess"},
+		AnchorEventID: "anchor",
+	})
+	require.Error(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	roleFilter := sessionwindow.MakeRoleFilter(nil)
+	_, err = svc.loadHashIdxEventWindow(context.Background(), session.EventWindowRequest{
+		Key: key,
+	}, "anchor", roleFilter)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "load redis event window anchor")
+
+	_, err = svc.loadHashIdxWindowNeighbors(context.Background(), "events", "index", 1, 1, roleFilter, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "load redis event window neighbors")
+
+	_, err = svc.loadHashIdxWindowNeighbors(context.Background(), "events", "index", 0, 1, roleFilter, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "load redis event window neighbors")
+
+	_, err = svc.loadZSetEventWindow(context.Background(), session.EventWindowRequest{
+		Key: key,
+	}, "anchor", roleFilter)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "load redis event window anchor")
+
+	_, err = svc.loadZSetWindowNeighbors(context.Background(), "events", 1, 1, roleFilter, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "load redis event window neighbors")
+
+	_, err = svc.loadZSetWindowNeighbors(context.Background(), "events", 0, 1, roleFilter, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "load redis event window neighbors")
 }
 
 func TestService_GetEventWindowMissingSession(t *testing.T) {
@@ -364,6 +436,35 @@ func TestService_GetEventWindowMalformedHashIdxNeighbor(t *testing.T) {
 	require.Contains(t, err.Error(), "unmarshal redis event window entry")
 }
 
+func TestService_GetEventWindowMalformedHashIdxBeforeNeighbor(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess-bad-before"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	bad := redisWindowEvent("bad", model.RoleUser, "bad")
+	anchor := redisWindowEvent("anchor", model.RoleUser, "one")
+	require.NoError(t, svc.AppendEvent(ctx, sess, &bad))
+	require.NoError(t, svc.AppendEvent(ctx, sess, &anchor))
+
+	eventDataKey := hashidx.GetEventDataKey(svc.opts.keyPrefix, key)
+	require.NoError(t, svc.redisClient.HSet(ctx, eventDataKey, "bad", "{bad-json").Err())
+
+	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+		Before:        1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unmarshal redis event window entry")
+}
+
 func TestService_GetEventWindowMalformedZSetNeighbor(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
@@ -391,6 +492,38 @@ func TestService_GetEventWindowMalformedZSetNeighbor(t *testing.T) {
 		Key:           key,
 		AnchorEventID: "anchor",
 		After:         1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unmarshal redis event window entry")
+}
+
+func TestService_GetEventWindowMalformedZSetBeforeNeighbor(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithCompatMode(CompatModeTransition),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess-zset-bad-before"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	anchor := redisWindowEvent("anchor", model.RoleUser, "one")
+	require.NoError(t, svc.AppendEvent(ctx, sess, &anchor))
+
+	require.NoError(t, svc.redisClient.ZAdd(ctx, redisZSetEventKey(svc.opts.keyPrefix, key), goredis.Z{
+		Score:  float64(anchor.Timestamp.Add(-time.Hour).UnixNano()),
+		Member: "{bad-json",
+	}).Err())
+
+	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+		Before:        1,
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unmarshal redis event window entry")

@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -167,6 +168,27 @@ func TestOnDemandSessionRequestProcessor_InsertsSystemMessage(t *testing.T) {
 	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	assert.Contains(t, req.Messages[0].Content, "scope=current_session")
 	assert.Equal(t, model.RoleUser, req.Messages[1].Role)
+}
+
+func TestOnDemandSessionRequestProcessor_EmitsInstructionEvent(t *testing.T) {
+	p := NewOnDemandSessionRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID:   "invocation",
+		AgentName:      "agent",
+		Session:        session.NewSession("app", "user", "sess"),
+		SessionService: sessioninmemory.NewSessionService(),
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessRequest(context.Background(), inv, req, ch)
+	require.Len(t, req.Messages, 2)
+	got := <-ch
+	require.Equal(t, model.ObjectTypePreprocessingInstruction, got.Object)
 }
 
 func TestOnDemandSessionRequestProcessor_RebuildForContextCompaction(t *testing.T) {

@@ -103,6 +103,16 @@ func TestEventWindowFromOrderedEventsValidation(t *testing.T) {
 	_, err := EventWindowFromOrderedEvents(
 		key,
 		nil,
+		session.EventWindowRequest{
+			Key:           session.Key{UserID: "user", SessionID: "sess"},
+			AnchorEventID: "anchor",
+		},
+	)
+	require.Error(t, err)
+
+	_, err = EventWindowFromOrderedEvents(
+		key,
+		nil,
 		session.EventWindowRequest{Key: key},
 	)
 	require.Error(t, err)
@@ -176,6 +186,13 @@ func TestMakeRoleFilterAndExtractEventText(t *testing.T) {
 	require.Equal(t, model.RoleTool, role)
 
 	evt = testEvent("bad-role", model.Role("system"), "hidden")
+	_, _, ok = ExtractEventText(&evt)
+	require.False(t, ok)
+
+	evt = testEvent("empty-parts", model.RoleUser, " ")
+	evt.Response.Choices[0].Message.ContentParts = []model.ContentPart{
+		{Type: model.ContentTypeText},
+	}
 	_, _, ok = ExtractEventText(&evt)
 	require.False(t, ok)
 }

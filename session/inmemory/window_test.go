@@ -59,6 +59,12 @@ func TestSessionService_GetEventWindowValidation(t *testing.T) {
 	_, err := svc.GetEventWindow(ctx, session.EventWindowRequest{})
 	require.Error(t, err)
 
+	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           session.Key{UserID: "user", SessionID: "sess"},
+		AnchorEventID: "anchor",
+	})
+	require.Error(t, err)
+
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
 		Key:           key,
