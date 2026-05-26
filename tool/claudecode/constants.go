@@ -51,6 +51,9 @@ var (
 	pdftoppmLookPath  = func(file string) (string, error) {
 		return exec.LookPath(file)
 	}
+	pdftoppmRun = func(path string, args ...string) ([]byte, error) {
+		return exec.Command(path, args...).CombinedOutput()
+	}
 )
 
 var grepExcludedDirs = []string{
