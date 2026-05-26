@@ -7262,6 +7262,128 @@ func TestPersistInterruptedAssistantPersistsInterleavedBuffers(t *testing.T) {
 	}, persisted)
 }
 
+func TestPersistInterruptedAssistantPreservesFirstSeenOrder(t *testing.T) {
+	svc := &mockSessionService{}
+	rr := &runner{sessionService: svc}
+	sess := session.NewSession("app", "u", "s")
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	loop := &eventLoopContext{
+		sess:       sess,
+		invocation: inv,
+	}
+	first := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "z-response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "first",
+				},
+			}},
+		},
+	)
+	second := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "a-response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "second",
+				},
+			}},
+		},
+	)
+	rr.recordInterruptedAssistantDelta(loop, first, nil)
+	rr.recordInterruptedAssistantDelta(loop, second, nil)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr.persistInterruptedAssistant(cancelled, loop)
+
+	require.Len(t, svc.appendEventCalls, 2)
+	require.Equal(t, "z-response", svc.appendEventCalls[0].event.Response.ID)
+	require.Equal(t, "first", svc.appendEventCalls[0].event.Choices[0].Message.Content)
+	require.Equal(t, "a-response", svc.appendEventCalls[1].event.Response.ID)
+	require.Equal(t, "second", svc.appendEventCalls[1].event.Choices[0].Message.Content)
+}
+
+func TestPersistInterruptedAssistantDedupeAfterEventPlugin(t *testing.T) {
+	const requestID = "req-plugin-dedupe"
+	p := &testPlugin{
+		name: "final-content-plugin",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				if e == nil || e.Response == nil || e.IsPartial {
+					return e, nil
+				}
+				for i := range e.Response.Choices {
+					e.Response.Choices[i].Message.Content += "!"
+				}
+				return e, nil
+			})
+		},
+	}
+	svc := &mockSessionService{}
+	rr := &runner{sessionService: svc}
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRequestID(requestID),
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	inv.Plugins = plugin.MustNewManager(p)
+	loop := &eventLoopContext{
+		sess:             session.NewSession("app", "u", "s"),
+		invocation:       inv,
+		processedEventCh: make(chan *event.Event, 2),
+		streamFilter:     graph.NewStreamModeFilter(false, nil),
+	}
+
+	partial := interruptedAssistantPartialEvent(inv.InvocationID, "hello")
+	partial.RequestID = requestID
+	require.NoError(t, rr.processSingleAgentEvent(context.Background(), loop, partial))
+	final := event.NewResponseEvent(
+		inv.InvocationID,
+		"assistant",
+		&model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("hello"),
+			}},
+		},
+	)
+	final.RequestID = requestID
+	require.NoError(t, rr.processSingleAgentEvent(context.Background(), loop, final))
+	require.Len(t, svc.appendEventCalls, 1)
+	require.Equal(t, "hello!", svc.appendEventCalls[0].event.Choices[0].Message.Content)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr.persistInterruptedAssistant(cancelled, loop)
+
+	require.Len(t, svc.appendEventCalls, 1)
+}
+
 func TestInterruptedAssistantDeltaGeneratesFallbackResponseID(t *testing.T) {
 	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
 	loop := &eventLoopContext{}

@@ -966,6 +966,7 @@ type eventLoopContext struct {
 	sawTerminalError                   bool
 	streamFilter                       graph.StreamModeFilter
 	interruptedAssistants              map[string]*interruptedAssistantAccumulator
+	interruptedAssistantSequence       int64
 	// emittedAssistantResponseIDs tracks response IDs that already produced a
 	// non-partial assistant message event during this run.
 	//
@@ -976,6 +977,7 @@ type eventLoopContext struct {
 
 type interruptedAssistantAccumulator struct {
 	sess                               *session.Session
+	sequence                           int64
 	responseID                         string
 	author                             string
 	invocationID                       string
@@ -1441,7 +1443,9 @@ func interruptedAssistantAccumulatorForLineage(
 	if acc := loop.interruptedAssistants[key]; acc != nil {
 		return acc
 	}
+	loop.interruptedAssistantSequence++
 	acc := &interruptedAssistantAccumulator{
+		sequence:                           loop.interruptedAssistantSequence,
 		sess:                               persistSession,
 		persistedAssistantResponseIDs:      collectPriorAssistantResponseIDs(persistSession),
 		persistedAssistantChoiceSignatures: collectPriorAssistantChoiceSignatures(persistSession),
@@ -1733,13 +1737,25 @@ func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoo
 	}
 	persistCtx, cancel := sessionPersistenceContext(ctx)
 	defer cancel()
-	keys := make([]string, 0, len(loop.interruptedAssistants))
-	for key := range loop.interruptedAssistants {
-		keys = append(keys, key)
+	type persistTarget struct {
+		key string
+		acc *interruptedAssistantAccumulator
 	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		acc := loop.interruptedAssistants[key]
+	targets := make([]persistTarget, 0, len(loop.interruptedAssistants))
+	for key, acc := range loop.interruptedAssistants {
+		if acc == nil {
+			continue
+		}
+		targets = append(targets, persistTarget{key: key, acc: acc})
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].acc.sequence != targets[j].acc.sequence {
+			return targets[i].acc.sequence < targets[j].acc.sequence
+		}
+		return targets[i].key < targets[j].key
+	})
+	for _, target := range targets {
+		acc := target.acc
 		persistSession := acc.sess
 		if persistSession == nil {
 			persistSession = loop.sess
@@ -1757,6 +1773,13 @@ func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoo
 			interruptedEvent,
 		)
 		if interruptedEvent == nil {
+			continue
+		}
+		if interruptedEvent.Response != nil &&
+			r.interruptedAssistantAlreadyPersistedForAccumulator(
+				acc,
+				interruptedEvent.Response.Choices,
+			) {
 			continue
 		}
 		if err := r.sessionService.AppendEvent(
