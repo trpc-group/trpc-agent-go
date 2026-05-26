@@ -336,6 +336,9 @@ func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
 	WithContextCompactionToolResultMaxTokens(2048)(opts)
 	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
 	WithContextCompactionTokenCounter(counter)(opts)
+	WithToolResultCompactionConfig(&ToolResultCompactionConfig{
+		SkipRecentFunc: func([]event.Event) int { return 3 },
+	})(opts)
 
 	procs := buildRequestProcessors("test-agent", opts)
 	var crp *processor.ContentRequestProcessor
@@ -349,6 +352,8 @@ func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
 	require.Equal(t, 2, crp.ContextCompactionConfig.KeepRecentRequests)
 	require.Equal(t, 2048, crp.ContextCompactionConfig.ToolResultMaxTokens)
 	require.Same(t, counter, crp.ContextCompactionConfig.TokenCounter)
+	require.NotNil(t, crp.ContextCompactionConfig.SkipRecentFunc)
+	require.Equal(t, 3, crp.ContextCompactionConfig.SkipRecentFunc(nil))
 }
 
 // Test that buildRequestProcessors wires PreserveSameBranch into
