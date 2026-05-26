@@ -1445,10 +1445,18 @@ func interruptedAssistantAccumulatorForLineage(
 	}
 	loop.interruptedAssistantSequence++
 	acc := &interruptedAssistantAccumulator{
-		sequence:                           loop.interruptedAssistantSequence,
-		sess:                               persistSession,
-		persistedAssistantResponseIDs:      collectPriorAssistantResponseIDs(persistSession),
-		persistedAssistantChoiceSignatures: collectPriorAssistantChoiceSignatures(persistSession),
+		sequence: loop.interruptedAssistantSequence,
+		sess:     persistSession,
+		persistedAssistantResponseIDs: collectPriorAssistantResponseIDsForLineage(
+			loop,
+			persistSession,
+			lineageKey,
+		),
+		persistedAssistantChoiceSignatures: collectPriorAssistantChoiceSignaturesForLineage(
+			loop,
+			persistSession,
+			lineageKey,
+		),
 	}
 	loop.interruptedAssistants[key] = acc
 	return acc
@@ -1782,12 +1790,13 @@ func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoo
 			) {
 			continue
 		}
-		if err := r.sessionService.AppendEvent(
+		if !r.handleEventPersistence(
 			persistCtx,
+			loop.invocation,
+			loop.sess,
 			persistSession,
 			interruptedEvent,
-		); err != nil {
-			log.Errorf("Failed to append interrupted assistant event to session: %v", err)
+		) {
 			continue
 		}
 		recordPersistedAssistantOnAccumulator(acc, interruptedEvent, true)
@@ -2756,6 +2765,46 @@ func collectPriorAssistantResponseIDs(sess *session.Session) map[string]struct{}
 	return responseIDs
 }
 
+func collectPriorAssistantResponseIDsForLineage(
+	loop *eventLoopContext,
+	sess *session.Session,
+	lineageKey string,
+) map[string]struct{} {
+	if sess == nil || len(sess.Events) == 0 {
+		return nil
+	}
+	var responseIDs map[string]struct{}
+	for i := range sess.Events {
+		evt := &sess.Events[i]
+		if interruptedAssistantLineageKey(loop, evt) != lineageKey {
+			continue
+		}
+		if evt.Response == nil || evt.IsPartial {
+			continue
+		}
+		if isGraphCompletionEvent(evt) {
+			continue
+		}
+		if !eventHasAssistantMessageContent(evt) {
+			continue
+		}
+		responseID := evt.Response.ID
+		if graph.IsVisibleGraphCompletionEvent(evt) {
+			if visibleResponseID := finalResponseIDFromStateDelta(evt.StateDelta); visibleResponseID != "" {
+				responseID = visibleResponseID
+			}
+		}
+		if responseID == "" {
+			continue
+		}
+		if responseIDs == nil {
+			responseIDs = make(map[string]struct{})
+		}
+		responseIDs[responseID] = struct{}{}
+	}
+	return responseIDs
+}
+
 func collectPriorAssistantChoiceSignatures(sess *session.Session) map[string]struct{} {
 	if sess == nil || len(sess.Events) == 0 {
 		return nil
@@ -2763,6 +2812,42 @@ func collectPriorAssistantChoiceSignatures(sess *session.Session) map[string]str
 	var signatures map[string]struct{}
 	for i := range sess.Events {
 		evt := &sess.Events[i]
+		if evt.Response == nil || evt.IsPartial {
+			continue
+		}
+		if isGraphCompletionEvent(evt) || !eventHasAssistantMessageContent(evt) {
+			continue
+		}
+		signature := interruptedAssistantSignatureKey(
+			evt.RequestID,
+			evt.InvocationID,
+			evt.Response.Choices,
+		)
+		if signature == "" {
+			continue
+		}
+		if signatures == nil {
+			signatures = make(map[string]struct{})
+		}
+		signatures[signature] = struct{}{}
+	}
+	return signatures
+}
+
+func collectPriorAssistantChoiceSignaturesForLineage(
+	loop *eventLoopContext,
+	sess *session.Session,
+	lineageKey string,
+) map[string]struct{} {
+	if sess == nil || len(sess.Events) == 0 {
+		return nil
+	}
+	var signatures map[string]struct{}
+	for i := range sess.Events {
+		evt := &sess.Events[i]
+		if interruptedAssistantLineageKey(loop, evt) != lineageKey {
+			continue
+		}
 		if evt.Response == nil || evt.IsPartial {
 			continue
 		}

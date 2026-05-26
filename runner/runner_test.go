@@ -7384,6 +7384,49 @@ func TestPersistInterruptedAssistantDedupeAfterEventPlugin(t *testing.T) {
 	require.Len(t, svc.appendEventCalls, 1)
 }
 
+func TestPersistInterruptedAssistantEnqueuesSummary(t *testing.T) {
+	svc := &mockSessionService{}
+	rr := &runner{sessionService: svc}
+	sess := session.NewSession("app", "u", "s")
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	loop := &eventLoopContext{
+		sess:       sess,
+		invocation: inv,
+	}
+	partial := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "summarize me",
+				},
+			}},
+		},
+	)
+	partial.FilterKey = "summary/filter"
+	rr.recordInterruptedAssistantDelta(loop, partial, nil)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr.persistInterruptedAssistant(cancelled, loop)
+
+	require.Len(t, svc.appendEventCalls, 1)
+	require.Len(t, svc.enqueueSummaryJobCalls, 1)
+	require.Same(t, sess, svc.enqueueSummaryJobCalls[0].sess)
+	require.Equal(t, "summary/filter", svc.enqueueSummaryJobCalls[0].filterKey)
+	require.False(t, svc.enqueueSummaryJobCalls[0].force)
+}
+
 func TestInterruptedAssistantDeltaGeneratesFallbackResponseID(t *testing.T) {
 	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
 	loop := &eventLoopContext{}
@@ -7579,6 +7622,90 @@ func TestInterruptedAssistantSignatureDedupeScopedByRequest(t *testing.T) {
 	require.Equal(t, "req-2", evt.RequestID)
 }
 
+func TestInterruptedAssistantPriorDedupeScopedByLineage(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+
+	t.Run("same response id on sibling branch", func(t *testing.T) {
+		prior := event.NewResponseEvent(
+			"shared-invocation",
+			"assistant",
+			&model.Response{
+				ID:     "shared-response",
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("prior"),
+				}},
+			},
+		)
+		prior.RequestID = "req"
+		prior.Branch = "branch/b"
+		loop := &eventLoopContext{
+			sess: &session.Session{Events: []event.Event{*prior}},
+			invocation: agent.NewInvocation(
+				agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+			),
+		}
+		partial := event.NewResponseEvent(
+			"shared-invocation",
+			"assistant",
+			&model.Response{
+				ID:        "shared-response",
+				Object:    model.ObjectTypeChatCompletionChunk,
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Index: 0,
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "current",
+					},
+				}},
+			},
+		)
+		partial.RequestID = "req"
+		partial.Branch = "branch/a"
+
+		rr.recordInterruptedAssistantDelta(loop, partial, nil)
+		evt := rr.interruptedAssistantEvent(context.Background(), loop)
+		require.NotNil(t, evt)
+		require.Equal(t, "current", evt.Choices[0].Message.Content)
+		require.Equal(t, "branch/a", evt.Branch)
+	})
+
+	t.Run("same signature on sibling branch", func(t *testing.T) {
+		prior := event.NewResponseEvent(
+			"shared-invocation",
+			"assistant",
+			&model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("same text"),
+				}},
+			},
+		)
+		prior.RequestID = "req"
+		prior.Branch = "branch/b"
+		loop := &eventLoopContext{
+			sess: &session.Session{Events: []event.Event{*prior}},
+			invocation: agent.NewInvocation(
+				agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+			),
+		}
+		partial := interruptedAssistantPartialEvent("shared-invocation", "same text")
+		partial.RequestID = "req"
+		partial.Branch = "branch/a"
+
+		rr.recordInterruptedAssistantDelta(loop, partial, nil)
+		evt := rr.interruptedAssistantEvent(context.Background(), loop)
+		require.NotNil(t, evt)
+		require.Equal(t, "same text", evt.Choices[0].Message.Content)
+		require.Equal(t, "branch/a", evt.Branch)
+	})
+}
+
 func interruptedAssistantPartialEvent(invocationID string, content string) *event.Event {
 	return event.NewResponseEvent(
 		invocationID,
@@ -7610,7 +7737,6 @@ func TestInterruptedAssistantEventSkipsEmptyAndPersistedContent(t *testing.T) {
 		"inv",
 		"assistant",
 		&model.Response{
-			ID:      "prior",
 			Object:  model.ObjectTypeChatCompletion,
 			Done:    true,
 			Choices: choices,
@@ -7629,7 +7755,6 @@ func TestInterruptedAssistantEventSkipsEmptyAndPersistedContent(t *testing.T) {
 		"inv",
 		"assistant",
 		&model.Response{
-			ID:        "resp",
 			IsPartial: true,
 			Choices: []model.Choice{{
 				Index: 0,
