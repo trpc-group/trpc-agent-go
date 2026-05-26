@@ -1102,12 +1102,17 @@ func WithSkillRunStager(stager toolskill.SkillStager) Option {
 // legitimately need one of them, wrap the desired use in an
 // auditable workspace script and allow the script instead.
 //
-// All matching is case-folded on every OS, so a deny of "curl"
-// rejects "Curl" and "CURL" alike (matters on macOS's default
-// case-insensitive APFS and on Windows). On Windows the
-// configured deny entries are also passed through the same
-// suffix-stripping rules as the command basename, so a deny of
-// "CURL" or "curl.exe" rejects the bare "curl" form too.
+// Deny and the built-in deny set are case-folded on every OS
+// (matters on macOS's default case-insensitive APFS and on
+// Windows; on Linux the fold is defence-in-depth against a
+// workspace-controlled upper-case binary). Allow is case-folded
+// on Windows and macOS but stays exact-case on Linux, because
+// Linux file systems are case-sensitive and a fold would silently
+// widen "./safe" to admit the attacker-controlled "./SAFE". On
+// Windows the configured deny entries are additionally passed
+// through the same suffix-stripping rules as the command
+// basename, so a deny of "CURL" or "curl.exe" rejects the bare
+// "curl" form too.
 //
 // When a policy is active workspace_exec also switches the spawn
 // from "sh -lc" to "sh -c" and strips known shell-startup and

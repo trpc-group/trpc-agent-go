@@ -656,6 +656,80 @@ func TestPolicy_DenyCaseInsensitiveAcrossOS(t *testing.T) {
 	}
 }
 
+// TestPolicy_AllowCaseSensitiveOnLinux guards the bypass where a
+// universally case-folded allowlist would silently broaden to
+// admit a different workspace file on a case-sensitive FS:
+// `WithAllowedCommands("./safe")` on Linux must not let "./SAFE"
+// through, because Linux treats them as different paths and a
+// workspace-controlled "./SAFE" can otherwise smuggle past the
+// allowlist. Bare-name forms are also exact-case on Linux for
+// consistency.
+func TestPolicy_AllowCaseSensitiveOnLinux(t *testing.T) {
+	t.Run("pathful entry rejects upper-case path", func(t *testing.T) {
+		p := PolicyFromLists([]string{"./safe"}, nil)
+		if err := p.checkSegmentForGOOS(
+			[]string{"./safe", "arg"}, "linux",
+		); err != nil {
+			t.Fatalf("exact-case pathful allow should pass: %v", err)
+		}
+		err := p.checkSegmentForGOOS(
+			[]string{"./SAFE", "arg"}, "linux",
+		)
+		if err == nil || !strings.Contains(
+			err.Error(), "not in allowed_commands",
+		) {
+			t.Fatalf(
+				"./SAFE must not match allow ./safe on linux, got: %v",
+				err,
+			)
+		}
+	})
+	t.Run("bare entry rejects upper-case bare name", func(t *testing.T) {
+		p := PolicyFromLists([]string{"echo"}, nil)
+		if err := p.checkSegmentForGOOS(
+			[]string{"echo", "hi"}, "linux",
+		); err != nil {
+			t.Fatalf("exact-case bare allow should pass: %v", err)
+		}
+		err := p.checkSegmentForGOOS(
+			[]string{"ECHO", "hi"}, "linux",
+		)
+		if err == nil || !strings.Contains(
+			err.Error(), "not in allowed_commands",
+		) {
+			t.Fatalf(
+				"ECHO must not match allow echo on linux, got: %v",
+				err,
+			)
+		}
+	})
+}
+
+// TestPolicy_AllowCaseInsensitiveOnDarwin guards the
+// counterpart: on macOS's default case-insensitive APFS we
+// continue to fold so an allow of "echo" admits "ECHO" the same
+// way the file system would have resolved them to the same
+// /bin/echo binary anyway. Pathful entries fold for the same
+// reason.
+func TestPolicy_AllowCaseInsensitiveOnDarwin(t *testing.T) {
+	t.Run("bare entry admits upper-case bare name", func(t *testing.T) {
+		p := PolicyFromLists([]string{"echo"}, nil)
+		if err := p.checkSegmentForGOOS(
+			[]string{"ECHO", "hi"}, "darwin",
+		); err != nil {
+			t.Fatalf("darwin allow should fold case: %v", err)
+		}
+	})
+	t.Run("pathful entry admits upper-case path", func(t *testing.T) {
+		p := PolicyFromLists([]string{"./safe"}, nil)
+		if err := p.checkSegmentForGOOS(
+			[]string{"./SAFE", "arg"}, "darwin",
+		); err != nil {
+			t.Fatalf("darwin pathful allow should fold case: %v", err)
+		}
+	})
+}
+
 // TestPolicy_BuiltinDenyCaseInsensitiveAcrossOS covers the same
 // bypass against the unconditional implicit deny set: on default
 // macOS APFS "SH -c '...'" resolves to /bin/sh, so without case

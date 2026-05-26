@@ -178,12 +178,28 @@ var implicitDeny = map[string]struct{}{
 //     smuggle past a basename-only check. To permit a specific
 //     absolute or relative path, list that exact path in Allow.
 //
-// All matching is case-folded on every OS (so a deny of "curl"
-// rejects "CURL" and "Curl" too, which matters on macOS's default
-// case-insensitive APFS and on Windows). On Windows both
-// directions additionally strip common executable suffixes
-// (.exe, .cmd, .bat, .com, .ps1), so a deny entry "cmd" rejects
-// "cmd.exe" and an allow entry "echo" admits "ECHO.EXE".
+// Case handling tracks the underlying file system's resolution
+// rules so the allowlist cannot be silently widened on a
+// case-sensitive FS:
+//
+//   - Deny + implicit deny: case-folded on every OS (a deny of
+//     "curl" also rejects "Curl" and "CURL", which matters on
+//     macOS's default case-insensitive APFS and on Windows; on
+//     Linux the fold is defence-in-depth against workspace-
+//     controlled upper-case binaries).
+//
+//   - Allow: case-folded on Windows and macOS (their default
+//     file systems treat "./safe" and "./SAFE" as the same
+//     entry, so a fold would not actually widen access). On
+//     Linux, allow uses exact-case matching so an allow of
+//     "./safe" cannot be bypassed by a workspace-controlled
+//     "./SAFE". Operators who need both case variants on Linux
+//     can list both.
+//
+// On Windows both directions additionally strip common
+// executable suffixes (.exe, .cmd, .bat, .com, .ps1), so a deny
+// entry "cmd" rejects "cmd.exe" and an allow entry "echo"
+// admits "ECHO.EXE".
 //
 // Precedence: explicit Deny > implicit deny > explicit Allow >
 // implicit allow. When at least one of the lists is non-empty the
@@ -262,10 +278,10 @@ func (p Policy) checkSegmentForGOOS(argv []string, goos string) error {
 			"command %q is denied by denied_commands", cmd,
 		)
 	}
-	// implicitDeny keys are lower-case; base is already produced
-	// through normalizeName, so a single look-up covers "sh",
-	// "SH", "Sh", "/usr/bin/SH" and (on Windows) "sh.exe".
-	if _, ok := implicitDeny[base]; ok {
+	// implicitDeny keys are lower-case. Fold the basename through
+	// normalizeName so "SH", "Sh", "/usr/bin/SH" and (on Windows)
+	// "sh.exe" all hit the look-up via the bare "sh" key.
+	if _, ok := implicitDeny[normalizeName(base, goos)]; ok {
 		return implicitDenyError(cmd)
 	}
 	if len(p.Allow) > 0 && !matchAllow(p.Allow, cmd, base, goos) {
@@ -296,12 +312,13 @@ func implicitDenyError(cmd string) error {
 // "Curl", "CURL", "/usr/bin/curl", "./curl" and (on Windows)
 // "curl.exe" alike. This catches the case-insensitive resolvers
 // on Windows and on the default macOS APFS without losing the
-// hostname-style matching for arbitrary paths.
+// basename-style matching for arbitrary paths.
 func matchDeny(set []string, name, base, goos string) bool {
 	nName := normalizeName(name, goos)
+	nBase := normalizeName(base, goos)
 	for _, n := range set {
 		nEntry := normalizeName(n, goos)
-		if nEntry == nName || nEntry == base {
+		if nEntry == nName || nEntry == nBase {
 			return true
 		}
 	}
@@ -309,26 +326,41 @@ func matchDeny(set []string, name, base, goos string) bool {
 }
 
 // matchAllow is the strict direction: the entry must equal the
-// command verbatim (after the same case + extension normalisation
-// applied to deny), OR the command must be a bare name (no path
-// separator) whose normalised basename equals the entry. Pathful
-// inputs such as "./echo" or "work/bin/echo" therefore never
-// match a bare allow entry "echo", which prevents a workspace-
-// controlled file with an allowlisted basename from bypassing the
-// policy. Operators who genuinely want to permit a specific
-// absolute or relative path can list that exact path in Allow.
+// command verbatim, OR the command must be a bare name (no path
+// separator) whose basename equals the entry. Pathful inputs such
+// as "./echo" or "work/bin/echo" therefore never match a bare
+// allow entry "echo", which prevents a workspace-controlled file
+// with an allowlisted basename from bypassing the policy.
+//
+// Case handling tracks the underlying file system's resolution
+// rules so the allowlist cannot be silently widened: on Windows
+// and macOS (where the default file systems are case-insensitive
+// and a workspace-side "./SAFE" already resolves to the operator-
+// intended "./safe") matches are case-folded; on Linux (case-
+// sensitive ext4 / xfs / btrfs), matches are exact-case so an
+// allow of "./safe" never admits the attacker-controlled
+// "./SAFE". On Windows the configured entries are additionally
+// stripped of their executable suffix so "echo" admits "ECHO.EXE".
+// Operators who need both case variants on Linux can list both.
 func matchAllow(set []string, name, base, goos string) bool {
-	nName := normalizeName(name, goos)
 	hasPath := strings.ContainsAny(name, "/\\")
+	norm := func(s string) string {
+		if goos == "linux" {
+			return s
+		}
+		return normalizeName(s, goos)
+	}
+	nName := norm(name)
+	nBase := norm(base)
 	for _, n := range set {
-		nEntry := normalizeName(n, goos)
+		nEntry := norm(n)
 		if nEntry == nName {
 			return true
 		}
 		if hasPath {
 			continue
 		}
-		if nEntry == base {
+		if nEntry == nBase {
 			return true
 		}
 	}
@@ -339,12 +371,22 @@ func basename(s string) string {
 	return basenameForGOOS(s, runtime.GOOS)
 }
 
-func basenameForGOOS(s, goos string) string {
+// basenameForGOOS returns just the path basename of s without any
+// case-folding or extension stripping. Callers that need fold
+// semantics (matchDeny, matchAllow on Windows / Darwin, the
+// implicit-deny look-up) run normalizeName on the result
+// themselves so the policy can keep different semantics for
+// allow (case-sensitive on Linux) and deny (folded everywhere).
+// The goos parameter is currently only used to decide how to
+// route Windows-style "\" separators - it is still accepted so
+// the helper's surface mirrors normalizeName / matchDeny /
+// matchAllow and is easy to wire from a single call site.
+func basenameForGOOS(s, _ string) string {
 	if s == "" {
 		return s
 	}
 	clean := filepath.ToSlash(s)
-	return normalizeName(path.Base(clean), goos)
+	return path.Base(clean)
 }
 
 // windowsExecExts is the set of Windows executable suffixes that

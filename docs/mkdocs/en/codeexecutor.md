@@ -811,13 +811,23 @@ binaries cannot smuggle past the allowlist:
   `/usr/bin/curl` and `./curl` alike, so an attacker cannot slip a
   full path past the denylist.
 
-All matching is **case-folded on every OS**. A deny of `curl`
-rejects `curl`, `Curl` and `CURL` alike, and the implicit deny
-on `sh` blocks `SH -c`, `Sh` and `Bash` too. This matters on
-macOS's default case-insensitive APFS (where `CURL` resolves to
-`/usr/bin/curl`) and on Windows's case-insensitive resolver; on
-Linux the fold is defence-in-depth against workspace-controlled
-upper-case binaries.
+Case handling tracks the underlying file system's resolution
+rules so the allowlist cannot be silently widened on a case-
+sensitive FS:
+
+- **Deny and the built-in deny set** are case-folded on every OS.
+  A deny of `curl` rejects `curl`, `Curl` and `CURL` alike, and
+  the implicit deny on `sh` blocks `SH -c`, `Sh` and `Bash` too.
+  This matters on macOS's default case-insensitive APFS (where
+  `CURL` resolves to `/usr/bin/curl`) and on Windows's case-
+  insensitive resolver; on Linux the fold is defence-in-depth
+  against workspace-controlled upper-case binaries.
+- **Allow** is case-folded on Windows and macOS but stays
+  exact-case on Linux. Linux file systems are case-sensitive, so
+  `./safe` and `./SAFE` are different files; folding allow would
+  silently widen `WithWorkspaceExecAllowedCommands("./safe")` to
+  admit a workspace-controlled `./SAFE`. Operators who need both
+  case variants on Linux can list both.
 
 On Windows the basename match additionally strips common
 executable suffixes (`.exe`, `.cmd`, `.bat`, `.com`, `.ps1`) so
