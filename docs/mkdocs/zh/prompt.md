@@ -12,7 +12,7 @@ resolver 驱动的占位符，以及远端 Prompt 来源。当指令文本需要
 - 从 Langfuse 获取文本 Prompt，并在本地完成变量渲染
 
 如果你想了解 `LLMAgent` 指令中自动展开的会话状态占位符，请参考
-[Agent 占位符变量](./agent.md)。
+[Agent 占位符变量](./agent.md#placeholder-variables-session-state-injection)。
 
 ## 本地文本模板
 
@@ -164,6 +164,8 @@ eventCh, err := runner.Run(
 
 ```go
 import (
+    "time"
+
     "trpc.group/trpc-go/trpc-agent-go/prompt"
     promptlangfuse "trpc.group/trpc-go/trpc-agent-go/prompt/provider/langfuse"
     lfconfig "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse/config"
