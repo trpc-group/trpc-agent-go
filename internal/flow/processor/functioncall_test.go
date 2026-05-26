@@ -106,8 +106,10 @@ func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 
 type permissionMockTool struct {
 	*mockCallableTool
-	metadata tool.ToolMetadata
-	decision tool.PermissionDecision
+	metadata         tool.ToolMetadata
+	decision         tool.PermissionDecision
+	stateDelta       map[string][]byte
+	stateDeltaCalled bool
 }
 
 func (m *permissionMockTool) ToolMetadata() tool.ToolMetadata {
@@ -119,6 +121,16 @@ func (m *permissionMockTool) CheckPermission(
 	_ *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
 	return m.decision, nil
+}
+
+func (m *permissionMockTool) StateDeltaForInvocation(
+	_ *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	m.stateDeltaCalled = true
+	return m.stateDelta
 }
 
 type delayedLoadTool struct {
@@ -7868,6 +7880,56 @@ func TestExecuteToolCall_ToolPermissionResultSkipsToolResultMessagesCallback(
 	require.Equal(t, toolCallID, choices[0].Message.ToolID)
 	require.Equal(t, toolName, choices[0].Message.ToolName)
 	require.JSONEq(t, permissionJSON, choices[0].Message.Content)
+}
+
+func TestExecuteSingleToolCallSequential_ToolPermissionResultSkipsStateDelta(
+	t *testing.T,
+) {
+	const (
+		toolName       = "delete_file"
+		toolCallID     = "call-deny-delta"
+		denyReason     = "write access is disabled"
+		stateDeltaKey  = "denied_delta"
+		permissionJSON = `{"status":"denied","tool":"delete_file","reason":"write access is disabled"}`
+	)
+
+	var calledTool bool
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				calledTool = true
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		decision: tool.DenyPermission(denyReason),
+		stateDelta: map[string][]byte{
+			stateDeltaKey: []byte("should-not-persist"),
+		},
+	}
+	ev, err := NewFunctionCallResponseProcessor(false, nil).
+		executeSingleToolCallSequential(
+			context.Background(),
+			&agent.Invocation{AgentName: "a", Model: &mockModel{}},
+			&model.Response{Choices: []model.Choice{{}}},
+			map[string]tool.Tool{toolName: tl},
+			make(chan *event.Event, 1),
+			0,
+			model.ToolCall{
+				ID: toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			},
+		)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.False(t, calledTool)
+	require.False(t, tl.stateDeltaCalled)
+	require.NotContains(t, ev.StateDelta, stateDeltaKey)
+	require.Len(t, ev.Choices, 1)
+	require.JSONEq(t, permissionJSON, ev.Choices[0].Message.Content)
 }
 
 func TestExecuteToolWithCallbacks_ToolPermissionCheckerAskSkipsRunPolicy(

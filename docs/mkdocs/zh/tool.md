@@ -74,7 +74,7 @@ runner.Run(ctx, userID, sessionID, message,
 )
 ```
 
-工具也可以实现 `tool.PermissionChecker` 来声明自己的强约束。工具级检查先于本次运行的 policy 执行，遇到第一个非 allow 决策就停止。
+工具也可以实现 `tool.PermissionChecker` 来声明自己的强约束。工具级检查先于本次运行的 policy 执行，遇到第一个非 allow 决策就停止。没有实现 checker 的工具，在配置了本次运行 policy 时仍然会被 policy 检查；如果工具 checker 和本次运行 policy 都不存在，则保持旧行为，默认允许执行。
 
 决策语义：
 
@@ -88,7 +88,7 @@ runner.Run(ctx, userID, sessionID, message,
 
 - `agent.WithToolFilter(...)`：控制哪些工具对模型可见。
 - `agent.WithToolExecutionFilter(...)`：让部分已可见的 tool call 留给调用方外部执行。
-- `agent.WithToolPermissionPolicy(...)`：对框架即将执行的工具做权限判断。
+- `agent.WithToolPermissionPolicy(...)`：对框架即将执行的每个工具做权限判断。
 - Tool callbacks 与 guardrail plugins 仍然适合做鉴权、审计、自动审批评估等流程。简单确定性的 allow/deny/ask 判断，优先使用 permission policy。
 
 #### 📦 ToolSet（工具集）

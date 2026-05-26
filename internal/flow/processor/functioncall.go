@@ -82,6 +82,7 @@ type toolEventStateDelta struct {
 type resolvedToolContextKey struct{}
 type stateDeltaSessionBaselineContextKey struct{}
 type executingToolArgsContextKey struct{}
+type skipToolStateDeltaContextKey struct{}
 
 // toolResult holds the result of a single tool execution.
 type toolResult struct {
@@ -896,7 +897,9 @@ func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	args []byte,
 	choices []model.Choice,
 ) *toolEventStateDelta {
-	if len(choices) == 0 || hasSyntheticStateOnlyToolChoice(ctx) {
+	if len(choices) == 0 ||
+		hasSyntheticStateOnlyToolChoice(ctx) ||
+		shouldSkipToolStateDelta(ctx) {
 		return nil
 	}
 	tl, ok := resolvedToolFromContext(ctx)
@@ -1057,6 +1060,21 @@ func resolvedToolFromContext(ctx context.Context) (tool.Tool, bool) {
 	}
 	tl, ok := ctx.Value(resolvedToolContextKey{}).(tool.Tool)
 	return tl, ok
+}
+
+func withSkippedToolStateDelta(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, skipToolStateDeltaContextKey{}, true)
+}
+
+func shouldSkipToolStateDelta(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	skip, _ := ctx.Value(skipToolStateDeltaContextKey{}).(bool)
+	return skip
 }
 
 func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
@@ -1829,6 +1847,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		return ctx, nil, toolCall.Function.Arguments, false, false, err
 	}
 	if permissionResult != nil {
+		ctx = withSkippedToolStateDelta(ctx)
 		return ctx, *permissionResult, toolCall.Function.Arguments, false,
 			false, nil
 	}

@@ -34,8 +34,8 @@ type PermissionAction string
 
 // PermissionDecision is the result of a permission check.
 //
-// The zero value is allow. That keeps tools without permission checks fully
-// backward compatible.
+// The zero value is allow. That keeps calls without a tool checker or per-run
+// policy fully backward compatible.
 type PermissionDecision struct {
 	// Action decides whether the framework should execute the tool call.
 	Action PermissionAction

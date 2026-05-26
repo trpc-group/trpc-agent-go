@@ -81,7 +81,9 @@ runner.Run(ctx, userID, sessionID, message,
 
 Tools can also enforce their own rule by implementing `tool.PermissionChecker`.
 The tool-level checker runs before the per-run policy, and the first non-allow
-decision wins.
+decision wins. Tools without their own checker are still evaluated by the
+per-run policy when one is configured. If neither a tool checker nor a per-run
+policy exists, the legacy allow-by-default behavior is preserved.
 
 Decision behavior:
 
@@ -97,7 +99,7 @@ Keep the boundaries clear:
 
 - `agent.WithToolFilter(...)`: controls which tools are visible to the model.
 - `agent.WithToolExecutionFilter(...)`: leaves selected visible tool calls for the caller to execute externally.
-- `agent.WithToolPermissionPolicy(...)`: checks permission for tools the framework is about to execute.
+- `agent.WithToolPermissionPolicy(...)`: checks permission for every tool the framework is about to execute.
 - Tool callbacks and guardrail plugins still work for authorization, audit, and review workflows. Use the permission policy for simple deterministic allow/deny/ask checks.
 
 #### 📦 ToolSet

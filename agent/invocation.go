@@ -851,7 +851,10 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 //   - WithToolPermissionPolicy executes a permission check for tools the
 //     framework is about to run.
 //
-// Tools without permission checks keep the legacy allow behavior.
+// When no per-run policy is configured, tools without their own checker keep
+// the legacy allow behavior. When a per-run policy is configured, it is applied
+// to every tool the framework is about to execute, including tools that do not
+// implement tool.PermissionChecker.
 func WithToolPermissionPolicy(policy tool.PermissionPolicy) RunOption {
 	return func(opts *RunOptions) {
 		opts.ToolPermissionPolicy = policy
