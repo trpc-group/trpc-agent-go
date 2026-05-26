@@ -68,6 +68,10 @@ func (a *lazyAgent) Run(ctx context.Context, invocation *Invocation) (<-chan *ev
 	if created == nil {
 		return nil, errors.New(errLazyAgentFactoryNilAgent)
 	}
+	if invocation != nil {
+		invocation.Agent = created
+		invocation.AgentName = created.Info().Name
+	}
 	return created.Run(ctx, invocation)
 }
 

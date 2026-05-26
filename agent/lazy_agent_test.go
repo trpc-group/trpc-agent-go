@@ -22,18 +22,24 @@ import (
 
 const (
 	lazyAgentTestName        = "lazy-agent"
+	lazyAgentTestChildName   = "lazy-child"
 	lazyAgentTestDescription = "created only when invoked"
 	lazyAgentTestRequestID   = "lazy-request"
 	lazyAgentTestFactoryErr  = "factory failed"
 )
 
 type lazyAgentTestAgent struct {
-	name string
-	ran  bool
+	name      string
+	ran       bool
+	subAgents []Agent
+	onRun     func(*Invocation)
 }
 
-func (a *lazyAgentTestAgent) Run(context.Context, *Invocation) (<-chan *event.Event, error) {
+func (a *lazyAgentTestAgent) Run(_ context.Context, inv *Invocation) (<-chan *event.Event, error) {
 	a.ran = true
+	if a.onRun != nil {
+		a.onRun(inv)
+	}
 	ch := make(chan *event.Event)
 	close(ch)
 	return ch, nil
@@ -45,9 +51,18 @@ func (a *lazyAgentTestAgent) Info() Info {
 	return Info{Name: a.name}
 }
 
-func (a *lazyAgentTestAgent) SubAgents() []Agent { return nil }
+func (a *lazyAgentTestAgent) SubAgents() []Agent {
+	return append([]Agent(nil), a.subAgents...)
+}
 
-func (a *lazyAgentTestAgent) FindSubAgent(string) Agent { return nil }
+func (a *lazyAgentTestAgent) FindSubAgent(name string) Agent {
+	for _, subAgent := range a.subAgents {
+		if subAgent.Info().Name == name {
+			return subAgent
+		}
+	}
+	return nil
+}
 
 func TestNewLazyAgent_ExposesInfoWithoutCallingFactory(t *testing.T) {
 	called := false
@@ -91,6 +106,32 @@ func TestNewLazyAgent_RunBuildsAndDelegates(t *testing.T) {
 
 	assert.True(t, created.ran)
 	assert.Equal(t, lazyAgentTestRequestID, gotRunOptions.RequestID)
+}
+
+func TestNewLazyAgent_RunUpdatesInvocationAgentBeforeDelegating(t *testing.T) {
+	child := &lazyAgentTestAgent{name: lazyAgentTestChildName}
+	var created *lazyAgentTestAgent
+	created = &lazyAgentTestAgent{
+		name:      lazyAgentTestName,
+		subAgents: []Agent{child},
+		onRun: func(inv *Invocation) {
+			require.NotNil(t, inv)
+			assert.Same(t, created, inv.Agent)
+			assert.Equal(t, lazyAgentTestName, inv.AgentName)
+			assert.Same(t, child, inv.Agent.FindSubAgent(lazyAgentTestChildName))
+		},
+	}
+	lazy := NewLazyAgent(
+		Info{Name: lazyAgentTestName},
+		func(context.Context, RunOptions) (Agent, error) {
+			return created, nil
+		},
+	)
+
+	ch, err := lazy.Run(context.Background(), NewInvocation())
+	require.NoError(t, err)
+	for range ch {
+	}
 }
 
 func TestNewLazyAgent_RunReturnsFactoryErrors(t *testing.T) {
