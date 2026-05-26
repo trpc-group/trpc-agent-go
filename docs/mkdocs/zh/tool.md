@@ -1374,6 +1374,50 @@ childTool := agenttool.NewTool(
 )
 ```
 
+### 子 Agent 上下文可见性
+
+AgentTool 会复用当前 invocation 和 session 来运行子 Agent。为了避免把几个
+相近概念混在一起，可以先按下面的职责理解：
+
+| 概念 | 作用 | 不负责什么 |
+| --- | --- | --- |
+| `FilterKey` | 标记事件属于哪个会话视图；内容处理器用它决定哪些历史消息会进入模型请求 | 不是权限边界，也不是独立存储 |
+| `Branch` | 记录 Agent 执行链路，主要用于 trace、跨 Agent 消息投影等场景 | 一般不直接决定 AgentTool 能读哪些历史 |
+| `HistoryScope` | AgentTool 生成子 Agent `FilterKey` 的策略 | 不改变工具结果如何裁剪，也不改变子 Agent 可用工具 |
+| `MessageFilterMode` | LLMAgent/GraphAgent 的高层历史过滤预设，组合了时间维度和 `FilterKey` 维度 | 普通 AgentTool 使用者通常不需要直接配置 |
+
+由于历史命名原因，`BranchFilterMode` 这个名字里有 `Branch`，但对当前版本事件，
+它比较的是 `Event.FilterKey` 与当前 invocation 的 `FilterKey`。在 `FilterKey`
+出现前写入的旧版本事件，为了兼容仍可能回退使用 `Event.Branch`。
+
+AgentTool 目前有两个历史作用域：
+
+- `HistoryScopeIsolated`（默认）：子 Agent 使用独立的 `FilterKey`，例如
+  `math-specialist-<uuid>`。在正常 Runner 生成的事件下，子 Agent 只会看到本次
+  工具调用参数，不会继承父 Agent 的历史。子 Agent 的事件仍会写入同一个
+  session，但位于独立视图下。
+- `HistoryScopeParentBranch`：子 Agent 使用父 key 的子 key，例如
+  `assistant/math-specialist-<uuid>`。默认的 prefix 匹配会把祖先和子孙都视为同一
+  上下文链路，因此子 Agent 可以看到父 Agent 历史，父 Agent 后续也可能看到这个
+  子 Agent 的事件。这个模式适合共享上下文的协作链路，不是“只读取父历史但不污染
+  父历史”的快照隔离。
+
+换句话说：
+
+- 想让子 Agent 做独立工作，只把最终答案作为工具结果交回父 Agent：使用默认
+  `HistoryScopeIsolated`，必要时把上下文显式放进工具参数。
+- 想让子 Agent 基于父 Agent 的历史继续编辑、优化或续写，并接受父子事件处在同一
+  上下文链路中：使用 `HistoryScopeParentBranch`。
+
+`HistoryScope` 只控制历史可见性。下面这些行为不会因为切换 `HistoryScope` 而改变：
+
+- `WithResponseMode` 仍然只控制工具结果里返回哪些子 Agent assistant 内容。
+- `WithSkipSummarization` 仍然只控制父流程是否在工具结果后追加一次外层总结调用。
+- 子 Agent 仍通过 `Invocation.Clone(...)` 继承当前 invocation 的 session、plugins、
+  `RunOptions` 等运行上下文；如果需要真正后台隔离，请优先使用 `taskrun`。
+- 如果业务手动追加了空 `FilterKey` 事件，这类事件按兼容规则可能被多个视图看到；
+  自定义事件建议始终设置带 app 前缀的明确 `FilterKey`。
+
 ### 选项说明
 
 - WithSkipSummarization(bool)：
@@ -1397,8 +1441,8 @@ childTool := agenttool.NewTool(
   - `ResponseModeFinalOnly`：只把子 Agent 最后一条完整 assistant 消息作为工具结果返回
 
 - WithHistoryScope(HistoryScope)：
-  - `HistoryScopeIsolated`（默认）：保持子调用完全隔离，只读取本次工具参数（不继承父历史）。
-  - `HistoryScopeParentBranch`：通过分层过滤键 `父键/子名-UUID（Universally Unique Identifier，通用唯一识别码）` 继承父会话历史；内容处理器会基于前缀匹配纳入父事件，同时子事件仍写入独立子分支。典型场景：基于上一轮产出进行“编辑/优化/续写”。
+  - `HistoryScopeIsolated`（默认）：子调用使用独立 `FilterKey`，通常只读取本次工具参数，不继承父历史。
+  - `HistoryScopeParentBranch`：子调用使用 `父键/子名-UUID（Universally Unique Identifier，通用唯一识别码）` 形式的分层 `FilterKey`。父子事件处于同一上下文链路，prefix 匹配下可互相进入上下文。典型场景：基于上一轮产出进行“编辑/优化/续写”。
 
 示例：
 
@@ -1422,6 +1466,7 @@ child := agenttool.NewTool(
 - 子 Agent 上下文隔离和工具结果裁剪是两件事：
   `WithHistoryScope(agenttool.HistoryScopeIsolated)` 控制子 Agent 能读到什么；
   `WithResponseMode(agenttool.ResponseModeFinalOnly)` 控制父 Agent 作为工具结果收到什么。
+- `HistoryScopeParentBranch` 是共享上下文链路，不是快照隔离。如果不希望子 Agent 的详细事件在父 Agent 后续上下文中出现，保持默认 `HistoryScopeIsolated`，并把必要上下文放进工具参数。
 - `WithSkipSummarization(true)` 只会跳过额外的外层总结型 LLM 调用，不会把 `tool.response` 变成 assistant final response；如果你需要真正的终止信号，仍应持续消费到 `runner.completion`
 
 ## 工具集成与使用
