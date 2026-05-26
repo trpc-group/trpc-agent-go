@@ -129,6 +129,27 @@ func TestOnDemandSessionRequestProcessor_SearchOnlyOverview(t *testing.T) {
 	assert.NotContains(t, req.Messages[0].Content, "Exact session history loading is available.")
 }
 
+func TestOnDemandSessionRequestProcessor_EmptySystemMessage(t *testing.T) {
+	p := NewOnDemandSessionRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage(""),
+			model.NewUserMessage("hello"),
+		},
+	}
+	inv := &agent.Invocation{
+		Session:        session.NewSession("app", "user", "sess"),
+		SessionService: sessioninmemory.NewSessionService(),
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Len(t, req.Messages, 2)
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Equal(t, onDemandSessionLoadOverview, req.Messages[0].Content)
+
+	p.ProcessRequest(context.Background(), nil, nil, nil)
+}
+
 func TestOnDemandSessionRequestProcessor_InsertsSystemMessage(t *testing.T) {
 	p := NewOnDemandSessionRequestProcessor()
 	req := &model.Request{
