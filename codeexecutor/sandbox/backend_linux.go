@@ -139,14 +139,6 @@ func (r *Runtime) linuxPreflight() (string, bool, error) {
 			)
 			return
 		}
-		if isWSL1() {
-			r.preflightErr = backendError(
-				ErrUnsupportedBackend,
-				string(BackendLinuxBubblewrap),
-				errors.New("WSL1 does not provide the required namespace support"),
-			)
-			return
-		}
 		bwrap, err := exec.LookPath("bwrap")
 		if err != nil {
 			r.preflightErr = backendError(
@@ -263,17 +255,6 @@ func containsAny(s string, substrings []string) bool {
 		}
 	}
 	return false
-}
-
-func isWSL1() bool {
-	data, err := os.ReadFile("/proc/version")
-	if err != nil {
-		return false
-	}
-	version := strings.ToLower(string(data))
-	return strings.Contains(version, "microsoft") &&
-		!strings.Contains(version, "microsoft-standard") &&
-		!strings.Contains(version, "wsl2")
 }
 
 func (r *Runtime) prepareProtectedMasks(profile PermissionProfile, ws codeexecutor.Workspace) error {
