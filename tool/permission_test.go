@@ -63,6 +63,15 @@ func TestMetadataOf_DefaultsToZeroValue(t *testing.T) {
 	}
 }
 
+func TestMetadataHelpers_NilTool(t *testing.T) {
+	if got := MetadataOf(nil); got != (ToolMetadata{}) {
+		t.Fatalf("expected nil tool metadata to be zero, got %+v", got)
+	}
+	if ShouldDefer(context.Background(), nil) {
+		t.Fatalf("expected nil tool not to ask for deferral")
+	}
+}
+
 func TestMetadataOf_UsesProvider(t *testing.T) {
 	want := ToolMetadata{
 		ReadOnly:        true,
