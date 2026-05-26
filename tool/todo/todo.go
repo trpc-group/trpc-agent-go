@@ -166,6 +166,25 @@ func New(opts ...Option) *Tool {
 	return &Tool{opts: o}
 }
 
+// StateKeyPrefix returns the session.State key prefix this Tool
+// instance was configured with (see WithStateKeyPrefix). The
+// returned value is what callers should hand to
+// GetTodosWithPrefix to read back exactly what this Tool will
+// write — relying on DefaultStateKeyPrefix would miss writes from
+// a Tool constructed with a custom prefix.
+//
+// Why a getter rather than re-exposing the option: making
+// stateKeyPrefix public on the options struct would invite
+// callers to mutate it post-construction, which the
+// functional-options pattern explicitly tries to prevent. A
+// read-only accessor preserves the single point of truth
+// (defaultOptions + WithStateKeyPrefix) while still letting
+// callers (e.g. agent/extension/todoenforcer) honour the configured
+// layout.
+func (t *Tool) StateKeyPrefix() string {
+	return t.opts.stateKeyPrefix
+}
+
 // Declaration implements tool.Tool.
 func (t *Tool) Declaration() *tool.Declaration {
 	// Build an explicit schema so that the item sub-schema, enum and
