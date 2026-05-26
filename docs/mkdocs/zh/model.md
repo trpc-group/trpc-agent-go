@@ -393,6 +393,54 @@ func main() {
 }
 ```
 
+### 结构化输出
+
+直接调用 `model.GenerateContent` 时，可以用 `model.NewRequest` 和
+`model.WithStructuredOutputJSON` 从 Go 结构体自动生成 JSON schema，并传给支持
+provider-native structured output 的模型适配器。
+
+```go
+type StageParseResult struct {
+    Stage  string `json:"stage"`
+    Reason string `json:"reason"`
+}
+
+request := model.NewRequest(
+    []model.Message{
+        model.NewUserMessage("分析当前用户意图属于哪个阶段。"),
+    },
+    model.WithStructuredOutputJSON(
+        new(StageParseResult),
+        true,
+        "Return stage parse result as JSON.",
+    ),
+)
+
+responseChan, err := llm.GenerateContent(ctx, request)
+if err != nil {
+    return err
+}
+
+var final string
+for response := range responseChan {
+    if response.Error != nil {
+        return fmt.Errorf("model error: %s", response.Error.Message)
+    }
+    if len(response.Choices) > 0 {
+        final = response.Choices[0].Message.Content
+    }
+}
+
+var result StageParseResult
+if err := json.Unmarshal([]byte(final), &result); err != nil {
+    return err
+}
+```
+
+`WithStructuredOutputJSON` 只负责配置模型请求；直接使用 `model` 包时，最终响应仍在
+`model.Response` 中，需要调用方自行解析 JSON。若已经有手写 schema，也可以直接设置
+`request.StructuredOutput`。
+
 ### 流式输出
 
 ```go
@@ -1383,7 +1431,13 @@ Token 计数器用于估算文本内容的 token 数量。框架提供了 `Simpl
 
 **估算原理：**
 
-使用启发式规则：每 token 大约对应 `N` 个 UTF-8 字符，其中 `N` 可通过 `WithApproxRunesPerToken` 配置。
+使用启发式规则：每 token 大约对应 `N` 个 UTF-8 字符，其中 `N` 可通过 `WithApproxRunesPerToken` 配置。这里的 `N` 是除数，不是乘数：
+
+```text
+estimatedTokens = countedUTF8Runes / N
+```
+
+因此 `WithApproxRunesPerToken(1.5)` 表示约 `1.5` 字符/token；如果传入 `2.0/3.0`，则表示约 `0.67` 字符/token，等价于约 `1.5` token/字符。
 
 **使用方式：**
 
@@ -1412,6 +1466,7 @@ counter := model.NewSimpleTokenCounter(
 - **类型**：float64
 - **默认值**：4.0（约每 4 个字符对应 1 个 token，适合英文场景）
 - **值限制**：<= 0 的值会被忽略，保持默认值
+- **计算方式**：估算 token 数 = 统计到的 UTF-8 字符数 / `v`；例如 `v=1.5` 才是约 `1.5` 字符/token
 
 **常见语言的推荐值：**
 

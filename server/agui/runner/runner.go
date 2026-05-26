@@ -47,6 +47,7 @@ var (
 
 const (
 	toolResultInputEventAuthor = "agui.runner"
+	errResolveExternalTools    = "resolve external tools: %w"
 )
 
 // Runner executes AG-UI runs and emits AG-UI events.
@@ -344,6 +345,10 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if err != nil {
 		return nil, fmt.Errorf("resolve run option: %w", err)
 	}
+	runOption, err = appendExternalToolRunOption(runOption, runAgentInput)
+	if err != nil {
+		return nil, fmt.Errorf(errResolveExternalTools, err)
+	}
 	appName, err := r.resolveAppName(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("resolve app name: %w", err)
@@ -405,10 +410,12 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 }
 
 func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key session.Key, input *runInput, events chan<- aguievents.Event) {
-	defer r.unregister(key)
-	defer cancel(nil)
-	defer input.span.End()
-	defer close(events)
+	defer func() {
+		cancel(nil)
+		r.unregister(key)
+		input.span.End()
+		close(events)
+	}()
 	threadID := input.threadID
 	runID := input.runID
 	if input.enableTrack {

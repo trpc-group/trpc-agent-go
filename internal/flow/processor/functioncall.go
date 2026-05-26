@@ -210,7 +210,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
-	if deferred && !unknown {
+	if deferred {
 		invocation.EndInvocation = true
 	}
 
@@ -239,10 +239,6 @@ func (p *FunctionCallResponseProcessor) toolExecutionDecision(
 	if invocation == nil {
 		return false, true, false
 	}
-	filter := invocation.RunOptions.ToolExecutionFilter
-	if filter == nil {
-		return false, true, false
-	}
 	if req == nil || req.Tools == nil || rsp == nil {
 		return false, true, false
 	}
@@ -255,7 +251,7 @@ func (p *FunctionCallResponseProcessor) toolExecutionDecision(
 			unknown = true
 			continue
 		}
-		if filter(ctx, tl) {
+		if invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 			executable = true
 			continue
 		}
@@ -360,13 +356,10 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 		toolResults,
 	)
 
-	if len(toolCallResponsesEvents) == 0 &&
-		invocation != nil &&
-		invocation.RunOptions.ToolExecutionFilter != nil {
-		filter := invocation.RunOptions.ToolExecutionFilter
+	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
-			if ok && !filter(ctx, tl) {
+			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 				return nil, nil
 			}
 		}
@@ -548,13 +541,10 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		invocation,
 		toolResults,
 	)
-	if len(toolCallResponsesEvents) == 0 &&
-		invocation != nil &&
-		invocation.RunOptions.ToolExecutionFilter != nil {
-		filter := invocation.RunOptions.ToolExecutionFilter
+	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
-			if ok && !filter(ctx, tl) {
+			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 				return nil, nil
 			}
 		}
@@ -1315,6 +1305,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			return ctx, nil, modifiedArgs, true, skipSummarization,
 				fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 		}
+		defaultMsg.ToolName = toolCall.Function.Name
 		defaultChoices := []model.Choice{
 			{Index: index, Message: defaultMsg},
 		}
@@ -1357,6 +1348,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return ctx, nil, modifiedArgs, true, skipSummarization,
 			fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 	}
+	defaultMsg.ToolName = toolCall.Function.Name
 
 	choices := []model.Choice{
 		{Index: index, Message: defaultMsg},
@@ -1423,10 +1415,9 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 			return toolCall, nil, true, fmt.Errorf("executeToolCall: %s", ErrorToolNotFound)
 		}
 	}
-	if invocation != nil && invocation.RunOptions.ToolExecutionFilter != nil {
-		if !invocation.RunOptions.ToolExecutionFilter(ctx, tl) {
-			return toolCall, nil, true, nil
-		}
+	if invocation != nil &&
+		!invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
+		return toolCall, nil, true, nil
 	}
 	return toolCall, tl, false, nil
 }
@@ -1479,6 +1470,7 @@ func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
 
 	customChoices := make([]model.Choice, 0, len(msgs))
 	for _, msg := range msgs {
+		msg = ensureToolResultMessageName(msg, toolCall)
 		customChoices = append(customChoices, model.Choice{
 			Index:   index,
 			Message: msg,
@@ -1487,6 +1479,19 @@ func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
 	// When a callback is provided and returns non-empty messages,
 	// the framework defers entirely to the callback for correctness.
 	return customChoices, true, nil
+}
+
+func ensureToolResultMessageName(
+	msg model.Message,
+	toolCall model.ToolCall,
+) model.Message {
+	if msg.Role != model.RoleTool ||
+		msg.ToolID != toolCall.ID ||
+		msg.ToolName != "" {
+		return msg
+	}
+	msg.ToolName = toolCall.Function.Name
+	return msg
 }
 
 // createErrorChoice creates an error choice for tool execution failures.
@@ -1979,7 +1984,10 @@ func buildDefaultToolMessage(
 	result any,
 ) (model.Message, error) {
 	// Preserve legacy tool message serialization for default fallback content.
-	resultBytes, err := json.Marshal(result)
+	// Use marshalJSONNoHTMLEscape so that <, >, & in tool output (e.g. Go source
+	// code containing "<-done") are preserved verbatim instead of being escaped
+	// to \u003c, \u003e, \u0026 which confuses LLMs reading the content.
+	resultBytes, err := marshalJSONNoHTMLEscape(result)
 	if err != nil {
 		return model.Message{}, err
 	}
@@ -1988,6 +1996,25 @@ func buildDefaultToolMessage(
 		Content: string(resultBytes),
 		ToolID:  toolCallID,
 	}, nil
+}
+
+// marshalJSONNoHTMLEscape serializes v to JSON without escaping <, >, & characters.
+// Standard json.Marshal escapes these for HTML safety, but tool results are never
+// embedded in HTML and the escaped sequences (\u003c, \u003e, \u0026) confuse LLMs
+// that read the output as source code (e.g. Go channel operations "<-done").
+func marshalJSONNoHTMLEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	// json.Encoder.Encode appends a trailing newline; trim it for Marshal parity.
+	b := buf.Bytes()
+	if len(b) > 0 && b[len(b)-1] == '\n' {
+		b = b[:len(b)-1]
+	}
+	return b, nil
 }
 
 type structuredStreamErrorOptIn interface {
@@ -2287,7 +2314,7 @@ func marshalChunkToText(content any) string {
 	case string:
 		return v
 	default:
-		if bts, e := json.Marshal(v); e == nil {
+		if bts, e := marshalJSONNoHTMLEscape(v); e == nil {
 			return string(bts)
 		}
 		return fmt.Sprintf("%v", v)

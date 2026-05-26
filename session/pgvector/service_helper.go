@@ -154,6 +154,8 @@ func (s *Service) listSessions(
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
+	page *session.ListSessionPage,
 ) ([]*session.Session, error) {
 	appState, err := s.ListAppStates(ctx, key.AppName)
 	if err != nil {
@@ -172,11 +174,15 @@ func (s *Service) listSessions(
 		WHERE app_name = $1 AND user_id = $2
 		AND (expires_at IS NULL OR expires_at > NOW() AT TIME ZONE 'localtime')
 		AND deleted_at IS NULL
-		ORDER BY updated_at DESC`,
+		ORDER BY updated_at DESC, session_id DESC`,
 		s.tableSessionStates,
 	)
 	listArgs := []any{
 		key.AppName, key.UserID,
+	}
+	if page != nil && page.Limit > 0 {
+		listQuery += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(listArgs)+1, len(listArgs)+2)
+		listArgs = append(listArgs, page.Limit, page.Offset)
 	}
 
 	err = s.pgClient.Query(ctx,
@@ -211,6 +217,24 @@ func (s *Service) listSessions(
 		return nil, fmt.Errorf(
 			"list session states failed: %w", err,
 		)
+	}
+
+	if listOnlyMeta {
+		sessions := make(
+			[]*session.Session, 0, len(sessStates),
+		)
+		for _, st := range sessStates {
+			sess := session.NewSession(
+				key.AppName, key.UserID, st.ID,
+				session.WithSessionState(st.State),
+				session.WithSessionCreatedAt(st.CreatedAt),
+				session.WithSessionUpdatedAt(st.UpdatedAt),
+			)
+			sessions = append(sessions,
+				mergeState(appState, userState, sess),
+			)
+		}
+		return sessions, nil
 	}
 
 	sessionKeys := make(

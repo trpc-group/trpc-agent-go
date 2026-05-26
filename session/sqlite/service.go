@@ -456,7 +456,14 @@ func (s *Service) ListSessions(
 	if err := session.ValidateListSessionsOptions(opt); err != nil {
 		return nil, err
 	}
-	return s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
+	return s.listSessions(
+		ctx,
+		userKey,
+		opt.EventNum,
+		opt.EventTime,
+		opt.ListSessionOnlyMeta,
+		opt.ListSessionPage,
+	)
 }
 
 // DeleteSession deletes a session.

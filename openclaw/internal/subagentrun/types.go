@@ -10,30 +10,28 @@
 package subagentrun
 
 import (
-	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
-	publicsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
+	"github.com/google/uuid"
+
+	coretaskrun "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
+	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 )
 
 const (
-	subagentDirName       = "subagents"
-	subagentRunsFileName  = "runs.json"
-	subagentSessionPrefix = "subagent:"
-	subagentRequestPrefix = "subagent:"
+	subagentDirName      = "subagents"
+	subagentRunsFileName = "runs.json"
+	subagentIDPrefix     = "subagent:"
 
-	runtimeStateSubagentRun      = "openclaw.subagent.run"
-	runtimeStateSubagentRunID    = "openclaw.subagent.run_id"
-	runtimeStateSubagentParentID = "openclaw.subagent.parent_session_id"
+	metadataDeliveryChannel = "openclaw.delivery.channel"
+	metadataDeliveryTarget  = "openclaw.delivery.target"
 
-	defaultStoredResultRunes  = 4000
-	defaultStoredSummaryRunes = 240
-	defaultNotifyTimeout      = 15 * time.Second
+	defaultNotifyTimeout = 15 * time.Second
 
 	notificationPrefixCompleted = "✅ subagent 已完成"
 	notificationPrefixFailed    = "⚠️ subagent 失败"
-	notificationPrefixCanceled  = "🛑 subagent 已取消"
 
 	subagentRunPrompt = "You are running as an OpenClaw background " +
 		"subagent. Complete the delegated task once. The parent " +
@@ -49,83 +47,99 @@ type deliveryTarget struct {
 	Target  string `json:"target,omitempty"`
 }
 
-type runRecord struct {
-	publicsubagent.Run
-
-	OwnerUserID string         `json:"owner_user_id,omitempty"`
-	Delivery    deliveryTarget `json:"delivery,omitempty"`
-}
-
-type storeFile struct {
-	Version int         `json:"version"`
-	Runs    []runRecord `json:"runs,omitempty"`
-}
-
 type SpawnRequest struct {
-	OwnerUserID     string
-	ParentSessionID string
-	Task            string
-	TimeoutSeconds  int
-	Delivery        deliveryTarget
+	OwnerUserID                    string
+	ParentSessionID                string
+	Task                           string
+	TimeoutSeconds                 int
+	Delivery                       deliveryTarget
+	SuppressCompletionNotification bool
 }
 
-func (r *runRecord) clone() *runRecord {
-	if r == nil {
+func subagentStorePath(stateDir string) string {
+	return filepath.Join(
+		strings.TrimSpace(stateDir),
+		subagentDirName,
+		subagentRunsFileName,
+	)
+}
+
+func metadataForDelivery(target deliveryTarget) map[string]string {
+	if target.Channel == "" || target.Target == "" {
 		return nil
 	}
-	out := *r
-	if r.StartedAt != nil {
-		startedAt := *r.StartedAt
-		out.StartedAt = &startedAt
+	return map[string]string{
+		metadataDeliveryChannel: target.Channel,
+		metadataDeliveryTarget:  target.Target,
 	}
-	if r.FinishedAt != nil {
-		finishedAt := *r.FinishedAt
-		out.FinishedAt = &finishedAt
+}
+
+func deliveryFromRun(run coretaskrun.Run) deliveryTarget {
+	return deliveryTarget{
+		Channel: strings.TrimSpace(run.Metadata[metadataDeliveryChannel]),
+		Target:  strings.TrimSpace(run.Metadata[metadataDeliveryTarget]),
 	}
-	return &out
 }
 
-func (r *runRecord) publicView() publicsubagent.Run {
-	if r == nil {
-		return publicsubagent.Run{}
+func timeoutDuration(seconds int) time.Duration {
+	if seconds <= 0 {
+		return 0
 	}
-	return r.Run
+	return time.Duration(seconds) * time.Second
 }
 
-func newChildSessionID(runID string, now time.Time) string {
-	return fmt.Sprintf(
-		"%s%s:%d",
-		subagentSessionPrefix,
-		strings.TrimSpace(runID),
-		now.UnixNano(),
-	)
+func newSubagentID() string {
+	return subagentIDPrefix + uuid.NewString()
 }
 
-func newRequestID(runID string, now time.Time) string {
-	return fmt.Sprintf(
-		"%s%s:%d",
-		subagentRequestPrefix,
-		strings.TrimSpace(runID),
-		now.UnixNano(),
-	)
-}
-
-func sanitizeStoredResult(text string) string {
-	return truncateRunes(text, defaultStoredResultRunes)
-}
-
-func summarizeResult(text string) string {
-	return truncateRunes(text, defaultStoredSummaryRunes)
-}
-
-func truncateRunes(text string, limit int) string {
-	trimmed := strings.TrimSpace(text)
-	if limit <= 0 {
-		return trimmed
+func subagentRuntimeStateKeys() coretaskrun.RuntimeStateKeys {
+	return coretaskrun.RuntimeStateKeys{
+		Run:             openclawsubagent.RuntimeStateKeyRun,
+		RunID:           openclawsubagent.RuntimeStateKeyRunID,
+		ParentSessionID: openclawsubagent.RuntimeStateKeyParentSessionID,
 	}
-	runes := []rune(trimmed)
-	if len(runes) <= limit {
-		return trimmed
+}
+
+func projectRun(run coretaskrun.Run) openclawsubagent.Run {
+	return openclawsubagent.Run{
+		ID:              run.ID,
+		ParentSessionID: run.ParentSessionID,
+		ChildSessionID:  run.ChildSessionID,
+		Task:            run.Task,
+		Status:          openclawsubagent.Status(run.Status),
+		Summary:         run.Summary,
+		Result:          run.Result,
+		Error:           run.Error,
+		CreatedAt:       run.CreatedAt,
+		UpdatedAt:       run.UpdatedAt,
+		StartedAt:       cloneTimePtr(run.StartedAt),
+		FinishedAt:      cloneTimePtr(run.FinishedAt),
 	}
-	return string(runes[:limit])
+}
+
+func projectRunPtr(run *coretaskrun.Run) *openclawsubagent.Run {
+	if run == nil {
+		return nil
+	}
+	projected := projectRun(*run)
+	return &projected
+}
+
+func projectRuns(runs []coretaskrun.Run) []openclawsubagent.Run {
+	if len(runs) == 0 {
+		return nil
+	}
+	out := make([]openclawsubagent.Run, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, projectRun(run))
+	}
+	return out
+}
+
+func cloneTimePtr(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }

@@ -628,6 +628,26 @@ agent := llmagent.New("todo-assistant",
 
 `todo.DefaultToolPrompt` 是开箱即用的 system instruction 片段，告诉模型何时调用 `todo_write` 以及如何撰写条目；你也可以替换成自己的版本，下文的运行时校验规则不受影响。
 
+#### 强制完成
+
+默认情况下，`todo_write` 只是建议性工具：即使清单里还有未完成项，模型仍可能直接结束回复。若希望 Agent 必须完成清单后才能输出最终回复，可以安装 `todoenforcer` extension：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/extension/todoenforcer"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool/todo"
+)
+
+agent := llmagent.New("todo-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction(todo.DefaultToolPrompt),
+    llmagent.WithExtensions(todoenforcer.New()),
+)
+```
+
+该 extension 会自动贡献 `todo_write` 和 `todo_declare_blocker`，不要再通过 `WithTools` 额外传入 `todo.New()`。如果需要复用 `tool/todo` 的选项（例如 `WithStateKeyPrefix`、`WithClearOnAllDone` 或 `WithNudgeHook`），先构造 `todo.New(...)`，再通过 `todoenforcer.WithTodoTool(...)` 传入。`todo_declare_blocker` 用于声明客观阻塞，例如缺少权限、凭据、基础设施或必须由用户决策的信息。
+
 #### 工具返回结构
 
 `todo_write` 返回的是结构化结果而不是自由文本，因此终端、AG-UI、自研 HTTP 前端等任何调用方都可以直接消费：
@@ -687,7 +707,7 @@ todoTool := todo.New(
 )
 ```
 
-完整可运行示例（包含多轮暂停/续接场景与 ASCII 渲染器）见 [`examples/todo/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todo)。
+基础工具的完整可运行示例（包含多轮暂停/续接场景与 ASCII 渲染器）见 [`examples/todo/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todo)。带强制完成对照的示例见 [`examples/todoenforcer/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todoenforcer)。
 
 ## MCP Tools 协议工具
 
@@ -1822,26 +1842,49 @@ r := runner.NewRunner(
 
 在一些系统里，你可能希望由调用方（例如客户端、上游服务，或外部工具运行时，例如
 Model Context Protocol (MCP)）来执行工具。此时可以使用
-`agent.WithToolExecutionFilter(...)` 来中断工具的自动执行。
+`agent.WithExternalTools(...)` 或 `agent.WithToolExecutionFilter(...)`
+来中断工具的自动执行。
 
 **核心区别：**
 
 - `agent.WithToolFilter(...)` 控制**工具可见性**（模型能看到/能调用哪些工具）
 - `agent.WithToolExecutionFilter(...)` 控制**工具执行**（模型请求后，框架是否自动执行）
+- `agent.WithAdditionalTools(...)` 为本次运行追加临时可见工具
+- `agent.WithExternalTools(...)` 追加临时可见工具，并声明这些工具由调用方执行
 
 #### 基本流程
 
-1. 使用 `WithToolExecutionFilter` 发起一次 `runner.Run`，让框架**不执行**指定工具
+1. 使用 `WithExternalTools` 发起一次 `runner.Run`，让模型看到调用方工具
 2. 从事件里读取模型返回的 `tool_calls`
 3. 调用方在外部执行工具
 4. 通过 `role=tool` 的消息把结果回填，模型继续输出最终答案
 
 ```go
-execFilter := tool.NewExcludeToolNamesFilter("external_search")
+type declarationOnlyTool struct {
+    decl *tool.Declaration
+}
+
+func (t *declarationOnlyTool) Declaration() *tool.Declaration {
+    return t.decl
+}
+
+externalSearch := &declarationOnlyTool{
+    decl: &tool.Declaration{
+        Name:        "external_search",
+        Description: "Search a caller-owned system.",
+        InputSchema: &tool.Schema{
+            Type: "object",
+            Properties: map[string]*tool.Schema{
+                "query": {Type: "string"},
+            },
+            Required: []string{"query"},
+        },
+    },
+}
 
 // 第一步：模型会返回 tool_calls，但工具不会被框架执行。
 ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("search ..."),
-    agent.WithToolExecutionFilter(execFilter),
+    agent.WithExternalTools([]tool.Tool{externalSearch}),
 )
 
 // 第二步：从事件里提取 tool_call_id + arguments（此处省略）。
@@ -1851,9 +1894,15 @@ toolResultJSON := `{"status":"ok","data":"..."}`
 // 第三/四步：用 role=tool 回填工具结果，模型继续输出。
 toolMsg := model.NewToolMessage(toolCallID, "external_search", toolResultJSON)
 ch, err = r.Run(ctx, userID, sessionID, toolMsg,
-    agent.WithToolExecutionFilter(execFilter),
+    agent.WithExternalTools([]tool.Tool{externalSearch}),
 )
 ```
+
+如果工具已经通过 `llmagent.WithTools(...)` 注册在 Agent 上，只是想在某次
+运行中改成由调用方执行，可以继续使用 `agent.WithToolExecutionFilter(...)`。
+`WithExternalTools` 更适合 AG-UI、浏览器、移动端或上游服务在每次请求中动态声明
+工具的场景。AG-UI runner 默认会把请求里的 `input.Tools` 映射为
+`WithExternalTools`。外部工具与已有工具同名时，已有工具优先，外部声明不会覆盖或拦截它。这里的已有工具包括 Agent 上注册的工具，以及通过 `WithAdditionalTools` 追加的工具。
 
 **完整示例：** `examples/toolinterrupt/`
 

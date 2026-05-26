@@ -273,10 +273,13 @@ server, _ := agui.New(
 
 ## Custom `RunOptionResolver`
 
-`RunOptionResolver` adds [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go) for the current agent run. It runs for every request, and the returned options only affect that run.
+`RunOptionResolver` adds [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go) for the current agent run. It runs for every request, and the returned options only affect that run. The AG-UI runner still maps request `input.Tools` to caller-executed tools after the custom resolver returns.
 
 ```go
 import (
+	"context"
+	"errors"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
@@ -751,11 +754,11 @@ The general flow is:
 - The caller sends the tool result back with a subsequent request, represented as a `role=tool` message.
 - The AG-UI server sends `TOOL_CALL_RESULT`, writes it to session history, and passes the tool result to the agent to continue running.
 
-Two server-side forms are currently supported. When directly wrapping an `llmagent.Agent`, use LLMAgent Tool-Filter mode. When external execution belongs to a GraphAgent node and must resume from a checkpoint, use GraphAgent Interrupt mode.
+Two server-side forms are currently supported. When directly wrapping an `llmagent.Agent`, use LLMAgent External Tool mode. When external execution belongs to a GraphAgent node and must resume from a checkpoint, use GraphAgent Interrupt mode.
 
-### LLMAgent Tool-Filter Mode
+### LLMAgent External Tool Mode
 
-Use this mode when the AG-UI server directly wraps an `llmagent.Agent` and only some tools need to be executed by the caller. External tools are still registered with the Agent so the model can generate the corresponding tool calls. `RunOptionResolver` returns `agent.WithToolExecutionFilter(...)` to declare which tools are not executed on the server.
+Use this mode when the AG-UI server directly wraps an `llmagent.Agent` and only some tools need to be executed by the caller. If the external tools are already registered with the Agent, `RunOptionResolver` can return `agent.WithToolExecutionFilter(...)` to declare which tools are not executed on the server. If the frontend or upstream service declares tools in AG-UI `input.Tools`, the default AG-UI runner converts them to `agent.WithExternalTools(...)` and injects them into `runner.Run`.
 
 The first request uses `role=user`. When the model generates a tool call that must be executed by the caller, the event stream outputs `TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END`, then ends the current run after that assistant tool-call response. The caller reads `toolCallId` and tool arguments from the event stream, executes the tool, and starts a second request with a `role=tool` message.
 
@@ -765,31 +768,20 @@ Code snippet:
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
-    aguiadapter "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
-    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-    "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func resolveRunOptions(
-    context.Context,
-    *aguiadapter.RunAgentInput,
-) ([]agent.RunOption, error) {
-    return []agent.RunOption{
-        agent.WithToolExecutionFilter(
-            tool.NewExcludeToolNamesFilter("external_note"),
-        ),
-    }, nil
-}
-
-server, err := agui.New(
-    run,
-    agui.WithAGUIRunnerOptions(
-        aguirunner.WithRunOptionResolver(resolveRunOptions),
-    ),
-)
+server, err := agui.New(run)
 ```
+
+By default, the AG-UI runner converts AG-UI `input.Tools` to declaration-only
+trpc-agent-go tools, passes them with `WithExternalTools`, exposes them to the
+model, and defers execution to the caller. If a dynamic declaration has the same
+name as an existing server tool, the existing server tool wins and the dynamic
+declaration does not override or intercept it.
+
+This automatic mapping also applies when `WithRunOptionResolver` is used; the
+custom resolver only needs to return additional run options.
 
 For the complete LLMAgent example, see the server implementation in [examples/agui/server/externaltool/llmagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/llmagent), and the frontend client in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 

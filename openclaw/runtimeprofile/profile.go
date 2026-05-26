@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -22,6 +23,8 @@ import (
 )
 
 const (
+	runtimeStateKeyPrefix = "openclaw.profile."
+
 	// ExtensionKey is the request extension key used to select a profile.
 	ExtensionKey = "openclaw.runtime_profile"
 
@@ -74,6 +77,9 @@ const (
 // ErrProfileNotFound means a resolver could not find the selected profile.
 var ErrProfileNotFound = errors.New("runtime profile not found")
 
+// ErrProfileSelectorDenied means selector policy rejected profile resolution.
+var ErrProfileSelectorDenied = errors.New("runtime profile selector denied")
+
 // ErrConfigInvalid means a runtime profile config is internally inconsistent.
 var ErrConfigInvalid = errors.New("runtime profile config invalid")
 
@@ -93,6 +99,7 @@ type Config struct {
 	Required          bool               `yaml:"required,omitempty"`
 	FallbackToDefault bool               `yaml:"fallback_to_default,omitempty"`
 	Profiles          map[string]Profile `yaml:"profiles,omitempty"`
+	Selectors         []Selector         `yaml:"selectors,omitempty"`
 }
 
 // Request describes one profile resolution request.
@@ -194,6 +201,12 @@ type Profile struct {
 // modes without assuming any OpenClaw application-specific agent names.
 func ValidateConfig(cfg Config) error {
 	if len(cfg.Profiles) == 0 {
+		if len(cfg.Selectors) > 0 {
+			return fmt.Errorf(
+				"%w: selectors need configured profiles",
+				ErrConfigInvalid,
+			)
+		}
 		if cfg.Required {
 			return fmt.Errorf("%w: required profiles are empty", ErrConfigInvalid)
 		}
@@ -206,26 +219,12 @@ func ValidateConfig(cfg Config) error {
 		return nil
 	}
 
-	effectiveIDs := make(map[string]string, len(cfg.Profiles))
+	knownIDs, err := profileIDAliases(cfg.Profiles)
+	if err != nil {
+		return err
+	}
 	for key, profile := range cfg.Profiles {
 		lookupID := strings.TrimSpace(key)
-		if lookupID == "" {
-			return fmt.Errorf("%w: empty profile key", ErrConfigInvalid)
-		}
-		effectiveID := strings.TrimSpace(profile.ID)
-		if effectiveID == "" {
-			effectiveID = lookupID
-		}
-		if previous, ok := effectiveIDs[effectiveID]; ok {
-			return fmt.Errorf(
-				"%w: duplicate profile id %q for %q and %q",
-				ErrConfigInvalid,
-				effectiveID,
-				previous,
-				lookupID,
-			)
-		}
-		effectiveIDs[effectiveID] = lookupID
 		if err := validateIsolationPolicy(profile.Isolation); err != nil {
 			return fmt.Errorf(
 				"%w: profiles.%s.%w",
@@ -241,19 +240,76 @@ func ValidateConfig(cfg Config) error {
 		if cfg.FallbackToDefault {
 			return fmt.Errorf("%w: fallback needs default", ErrConfigInvalid)
 		}
-		return nil
+		return validateSelectors(cfg.Selectors, knownIDs)
 	}
-	if _, ok := cfg.Profiles[defaultID]; ok {
-		return nil
-	}
-	if _, ok := effectiveIDs[defaultID]; ok {
-		return nil
+	if _, ok := knownIDs[defaultID]; ok {
+		return validateSelectors(cfg.Selectors, knownIDs)
 	}
 	return fmt.Errorf(
 		"%w: default profile %q is not configured",
 		ErrConfigInvalid,
 		defaultID,
 	)
+}
+
+func profileIDAliases(
+	profiles map[string]Profile,
+) (map[string]string, error) {
+	aliases := make(map[string]string, len(profiles)*2)
+	effectiveIDs := make(map[string]string, len(profiles))
+	for key, profile := range profiles {
+		lookupID := strings.TrimSpace(key)
+		if lookupID == "" {
+			return nil, fmt.Errorf("%w: empty profile key", ErrConfigInvalid)
+		}
+		effectiveID := strings.TrimSpace(profile.ID)
+		if effectiveID == "" {
+			effectiveID = lookupID
+		}
+		if previous, ok := effectiveIDs[effectiveID]; ok {
+			return nil, fmt.Errorf(
+				"%w: duplicate profile id %q for %q and %q",
+				ErrConfigInvalid,
+				effectiveID,
+				previous,
+				lookupID,
+			)
+		}
+		effectiveIDs[effectiveID] = lookupID
+		if err := addProfileIDAlias(
+			aliases,
+			lookupID,
+			effectiveID,
+		); err != nil {
+			return nil, err
+		}
+		if err := addProfileIDAlias(
+			aliases,
+			effectiveID,
+			effectiveID,
+		); err != nil {
+			return nil, err
+		}
+	}
+	return aliases, nil
+}
+
+func addProfileIDAlias(
+	aliases map[string]string,
+	alias string,
+	effectiveID string,
+) error {
+	if previous, ok := aliases[alias]; ok && previous != effectiveID {
+		return fmt.Errorf(
+			"%w: profile alias %q points to both %q and %q",
+			ErrConfigInvalid,
+			alias,
+			previous,
+			effectiveID,
+		)
+	}
+	aliases[alias] = effectiveID
+	return nil
 }
 
 func validateIsolationPolicy(policy IsolationPolicy) error {
@@ -384,7 +440,7 @@ func cloneRequest(req Request) Request {
 // AppNameFromContext returns the profile app name or the provided fallback.
 func AppNameFromContext(ctx context.Context, fallback string) string {
 	if profile, ok := ProfileFromContext(ctx); ok {
-		if appName := strings.TrimSpace(profile.AppName); appName != "" {
+		if appName := RuntimeAppName(profile); appName != "" {
 			return appName
 		}
 	}
@@ -396,7 +452,7 @@ func TraceFields(profile Profile) map[string]any {
 	fields := make(map[string]any)
 	addTraceString(fields, "profile_id", profile.ID)
 	addTraceString(fields, "profile_version", profile.Version)
-	addTraceString(fields, "profile_app_name", profile.AppName)
+	addTraceString(fields, "profile_app_name", RuntimeAppName(profile))
 	addTraceStrings(fields, "skill_include", profile.Skills.Include)
 	addTraceStrings(fields, "skill_exclude", profile.Skills.Exclude)
 	addTraceStrings(fields, "knowledge_indexes", profile.Knowledge.Indexes)
@@ -511,6 +567,44 @@ func (r *MapResolver) Resolve(
 	return cloneProfile(profile), nil
 }
 
+// ProfileIDs implements Catalog.
+func (r *MapResolver) ProfileIDs(context.Context) ([]string, error) {
+	if r == nil || len(r.cache) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(r.cache))
+	for key := range r.cache {
+		if key.id == "" {
+			continue
+		}
+		out = append(out, key.id)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// AppNames implements Catalog.
+func (r *MapResolver) AppNames(context.Context) ([]string, error) {
+	if r == nil || len(r.cache) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(r.cache))
+	seen := make(map[string]struct{}, len(r.cache))
+	for _, profile := range r.cache {
+		appName := RuntimeAppName(profile)
+		if appName == "" {
+			continue
+		}
+		if _, ok := seen[appName]; ok {
+			continue
+		}
+		seen[appName] = struct{}{}
+		out = append(out, appName)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // ExtensionFromRequestExtensions reads the runtime-profile request extension.
 func ExtensionFromRequestExtensions(
 	extensions map[string]json.RawMessage,
@@ -534,7 +628,7 @@ func ExtensionFromRequestExtensions(
 // RunOptions converts a profile to agent run options.
 func RunOptions(profile Profile) []agent.RunOption {
 	var opts []agent.RunOption
-	if appName := strings.TrimSpace(profile.AppName); appName != "" {
+	if appName := RuntimeAppName(profile); appName != "" {
 		opts = append(opts, agent.WithAppName(appName))
 	}
 	if agentName := strings.TrimSpace(profile.AgentName); agentName != "" {
@@ -555,9 +649,10 @@ func RunOptions(profile Profile) []agent.RunOption {
 			agent.WithGlobalInstruction(profile.Prompt.SystemPrompt),
 		)
 	}
-	if filter := toolNamesFilter(
-		profile.Tools.Include,
-		profile.Tools.Exclude,
+	if filter := toolVisibilityFilter(
+		profile.Tools,
+		profile.Knowledge,
+		profile.Credentials,
 	); filter != nil {
 		opts = append(opts, agent.WithToolFilter(filter))
 	}
@@ -589,8 +684,25 @@ func RunOptions(profile Profile) []agent.RunOption {
 	return opts
 }
 
+// RuntimeAppName returns the app name OpenClaw should use for a profile run.
+func RuntimeAppName(profile Profile) string {
+	appName := strings.TrimSpace(profile.AppName)
+	if appName != "" {
+		return appName
+	}
+	if !requiresProfileRuntimeIsolation(profile.Isolation) {
+		return ""
+	}
+	return strings.TrimSpace(profile.ID)
+}
+
+func requiresProfileRuntimeIsolation(policy IsolationPolicy) bool {
+	mode := strings.TrimSpace(string(policy.Mode))
+	return mode != "" && mode != string(IsolationModeShared)
+}
+
 func runtimeState(profile Profile) map[string]any {
-	state := copyAnyMap(profile.State)
+	state := userRuntimeState(profile.State)
 	if id := strings.TrimSpace(profile.ID); id != "" {
 		if state == nil {
 			state = make(map[string]any)
@@ -643,7 +755,10 @@ func runtimeState(profile Profile) map[string]any {
 		RuntimeStateToolSets,
 		profile.Tools.ToolSets,
 	)
-	if refs := copyStringMap(profile.Tools.CredentialRefs); len(refs) > 0 {
+	if refs := allowedCredentialRefs(
+		profile.Tools.CredentialRefs,
+		profile.Credentials.AllowedRefs,
+	); len(refs) > 0 {
 		if state == nil {
 			state = make(map[string]any)
 		}
@@ -672,6 +787,19 @@ func runtimeState(profile Profile) map[string]any {
 		RuntimeStateIsolationServiceMode,
 		profile.Isolation.ServiceMode,
 	)
+	return state
+}
+
+func userRuntimeState(values map[string]any) map[string]any {
+	state := copyAnyMap(values)
+	for key := range state {
+		if strings.HasPrefix(key, runtimeStateKeyPrefix) {
+			delete(state, key)
+		}
+	}
+	if len(state) == 0 {
+		return nil
+	}
 	return state
 }
 
@@ -763,6 +891,100 @@ func hasIsolationPolicy(policy IsolationPolicy) bool {
 		strings.TrimSpace(policy.ServiceMode) != ""
 }
 
+func toolVisibilityFilter(
+	toolPolicy ToolPolicy,
+	knowledgePolicy KnowledgePolicy,
+	credentialPolicy CredentialPolicy,
+) tool.FilterFunc {
+	tools := toolPolicyFilter(toolPolicy)
+	knowledge := knowledgeIndexFilter(knowledgePolicy.Indexes)
+	credentials := toolCredentialFilter(
+		toolPolicy.CredentialRefs,
+		credentialPolicy.AllowedRefs,
+	)
+	return allToolFilters(tools, knowledge, credentials)
+}
+
+func toolPolicyFilter(policy ToolPolicy) tool.FilterFunc {
+	names := toolNamesFilter(policy.Include, policy.Exclude)
+	toolSets := toolSetNamesFilter(policy.ToolSets)
+	switch {
+	case names == nil:
+		return toolSets
+	case toolSets == nil:
+		return names
+	default:
+		return func(ctx context.Context, tl tool.Tool) bool {
+			return toolSets(ctx, tl) && names(ctx, tl)
+		}
+	}
+}
+
+func knowledgeIndexFilter(indexes []string) tool.FilterFunc {
+	indexes = cleanStrings(indexes)
+	if len(indexes) == 0 {
+		return nil
+	}
+	allowed := nameSet(indexes)
+	return func(_ context.Context, tl tool.Tool) bool {
+		index := sourceKnowledgeIndex(tl)
+		if index == "" {
+			return true
+		}
+		_, ok := allowed[index]
+		return ok
+	}
+}
+
+func toolCredentialFilter(
+	refs map[string]string,
+	allowedRefs []string,
+) tool.FilterFunc {
+	refs = cleanStringMap(refs)
+	if len(refs) == 0 {
+		return nil
+	}
+	allowed := nameSet(cleanStrings(allowedRefs))
+	return func(_ context.Context, tl tool.Tool) bool {
+		ref := credentialRefForTool(tl, refs)
+		if ref == "" || len(allowed) == 0 {
+			return true
+		}
+		_, ok := allowed[ref]
+		return ok
+	}
+}
+
+func credentialRefForTool(
+	tl tool.Tool,
+	refs map[string]string,
+) string {
+	if len(refs) == 0 || tl == nil || tl.Declaration() == nil {
+		return ""
+	}
+	if ref := strings.TrimSpace(refs[tl.Declaration().Name]); ref != "" {
+		return ref
+	}
+	if toolSetName := sourceToolSetName(tl); toolSetName != "" {
+		if ref := strings.TrimSpace(refs[toolSetName]); ref != "" {
+			return ref
+		}
+	}
+	return ""
+}
+
+type knowledgeIndexNamer interface {
+	KnowledgeIndexName() string
+}
+
+func sourceKnowledgeIndex(tl tool.Tool) string {
+	named, ok := tl.(knowledgeIndexNamer)
+	if !ok || named == nil {
+		return ""
+	}
+	return strings.TrimSpace(named.KnowledgeIndexName())
+}
+
 func toolNamesFilter(include []string, exclude []string) tool.FilterFunc {
 	include = cleanStrings(include)
 	exclude = cleanStrings(exclude)
@@ -788,6 +1010,54 @@ func toolNamesFilter(include []string, exclude []string) tool.FilterFunc {
 	}
 }
 
+func toolSetNamesFilter(names []string) tool.FilterFunc {
+	names = cleanStrings(names)
+	if len(names) == 0 {
+		return nil
+	}
+	allowed := nameSet(names)
+	return func(_ context.Context, tl tool.Tool) bool {
+		name := sourceToolSetName(tl)
+		if name == "" {
+			return false
+		}
+		_, ok := allowed[name]
+		return ok
+	}
+}
+
+type toolSetNamer interface {
+	ToolSetName() string
+}
+
+func sourceToolSetName(tl tool.Tool) string {
+	named, ok := tl.(toolSetNamer)
+	if !ok || named == nil {
+		return ""
+	}
+	return strings.TrimSpace(named.ToolSetName())
+}
+
+func allToolFilters(filters ...tool.FilterFunc) tool.FilterFunc {
+	out := make([]tool.FilterFunc, 0, len(filters))
+	for _, filter := range filters {
+		if filter != nil {
+			out = append(out, filter)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return func(ctx context.Context, tl tool.Tool) bool {
+		for _, filter := range out {
+			if !filter(ctx, tl) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
 func nameSet(names []string) map[string]struct{} {
 	if len(names) == 0 {
 		return nil
@@ -797,6 +1067,43 @@ func nameSet(names []string) map[string]struct{} {
 		set[name] = struct{}{}
 	}
 	return set
+}
+
+func cleanStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func allowedCredentialRefs(
+	refs map[string]string,
+	allowedRefs []string,
+) map[string]string {
+	refs = cleanStringMap(refs)
+	if len(refs) == 0 {
+		return nil
+	}
+	allowed := nameSet(cleanStrings(allowedRefs))
+	if len(allowed) == 0 {
+		return refs
+	}
+	out := make(map[string]string, len(refs))
+	for key, ref := range refs {
+		if _, ok := allowed[ref]; ok {
+			out[key] = ref
+		}
+	}
+	return out
 }
 
 func cleanStrings(values []string) []string {

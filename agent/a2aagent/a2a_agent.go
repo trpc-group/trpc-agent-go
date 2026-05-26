@@ -153,7 +153,7 @@ func (r *A2AAgent) sendErrorEvent(
 	eventChan chan<- *event.Event,
 	invocation *agent.Invocation,
 	err error,
-) {
+) *model.ResponseError {
 	respErr := model.ResponseErrorFromError(err, model.ErrorTypeRunError)
 	agent.EmitEvent(ctx, invocation, eventChan, event.New(
 		invocation.InvocationID,
@@ -163,6 +163,7 @@ func (r *A2AAgent) sendErrorEvent(
 			Error:  respErr,
 		}),
 	))
+	return respErr
 }
 
 // validateA2ARequestOptions validates that all A2A request options are of the correct type
@@ -391,7 +392,13 @@ func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invoc
 	}
 
 	requestOpts := r.buildRequestOptions(ctx, invocation)
-	streamChan, err := r.a2aClient.StreamMessage(ctx, protocol.SendMessageParams{Message: *a2aMessage}, requestOpts...)
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	streamChan, err := r.a2aClient.StreamMessage(
+		streamCtx,
+		protocol.SendMessageParams{Message: *a2aMessage},
+		requestOpts...,
+	)
 	if err != nil {
 		r.sendErrorEvent(
 			ctx,
@@ -407,7 +414,7 @@ func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invoc
 	}
 
 	streamResult := r.processStreamingEvents(
-		ctx,
+		streamCtx,
 		invocation,
 		eventChan,
 		streamChan,
@@ -501,7 +508,8 @@ func (r *A2AAgent) processStreamingEvents(
 					&contentBuilder,
 				)
 			}
-			result.responseID, _ = r.aggregateEventContent(
+			var terminalError *model.ResponseError
+			result.responseID, terminalError = r.aggregateEventContent(
 				ctx,
 				invocation,
 				eventChan,
@@ -509,6 +517,11 @@ func (r *A2AAgent) processStreamingEvents(
 				result.responseID,
 				&contentBuilder,
 			)
+			if terminalError != nil {
+				result.aggregatedContent = contentBuilder.String()
+				result.terminalError = terminalError
+				return result
+			}
 			agent.EmitEvent(ctx, invocation, eventChan, evt)
 			if evt.Response != nil &&
 				evt.Response.Error != nil &&
@@ -569,7 +582,7 @@ func (r *A2AAgent) flushBufferedContent(
 }
 
 // aggregateEventContent aggregates content from event delta.
-// Returns updated responseID and whether an error occurred.
+// Returns updated responseID and any terminal error that occurred.
 func (r *A2AAgent) aggregateEventContent(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -577,12 +590,12 @@ func (r *A2AAgent) aggregateEventContent(
 	evt *event.Event,
 	responseID string,
 	contentBuilder *strings.Builder,
-) (string, bool) {
+) (string, *model.ResponseError) {
 	if evt.Response == nil || evt.Response.Error != nil {
-		return responseID, false
+		return responseID, nil
 	}
 	if len(evt.Response.Choices) == 0 {
-		return responseID, false
+		return responseID, nil
 	}
 
 	if evt.Response.ID != "" {
@@ -592,13 +605,13 @@ func (r *A2AAgent) aggregateEventContent(
 	if r.streamingRespHandler != nil {
 		content, err := r.streamingRespHandler(evt.Response)
 		if err != nil {
-			r.sendErrorEvent(
+			respErr := r.sendErrorEvent(
 				ctx,
 				eventChan,
 				invocation,
 				fmt.Errorf("streaming resp handler failed: %w", err),
 			)
-			return responseID, true
+			return responseID, respErr
 		}
 		if content != "" {
 			contentBuilder.WriteString(content)
@@ -606,7 +619,7 @@ func (r *A2AAgent) aggregateEventContent(
 	} else if evt.Response.Choices[0].Delta.Content != "" {
 		contentBuilder.WriteString(evt.Response.Choices[0].Delta.Content)
 	}
-	return responseID, false
+	return responseID, nil
 }
 
 // emitFinalEvent emits the final completion event.

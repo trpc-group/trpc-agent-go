@@ -26,7 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/jsonschema"
+	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -402,6 +402,18 @@ func WithResume(enabled bool) RunOption {
 	}
 }
 
+// WithPersistInterruptedAssistant controls whether a cancelled streaming run
+// persists already-emitted assistant text as a final assistant message.
+//
+// By default this is not set, so the Runner uses its own default. The built-in
+// Runner default is false to preserve the "cancel discards partial text"
+// session semantics.
+func WithPersistInterruptedAssistant(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.PersistInterruptedAssistant = &enabled
+	}
+}
+
 // WithGraphEmitFinalModelResponses controls whether graph-based agents emit
 // final (Done=true) model responses as events.
 //
@@ -697,18 +709,12 @@ func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict b
 		if schema == nil {
 			return
 		}
-		if name == "" {
-			name = "output"
-		}
-		opts.StructuredOutput = &model.StructuredOutput{
-			Type: model.StructuredOutputJSONSchema,
-			JSONSchema: &model.JSONSchemaConfig{
-				Name:        name,
-				Schema:      schema,
-				Strict:      strict,
-				Description: description,
-			},
-		}
+		opts.StructuredOutput = newStructuredOutput(
+			structuredoutput.Name(name),
+			schema,
+			strict,
+			description,
+		)
 	}
 }
 
@@ -716,36 +722,27 @@ func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict b
 // The schema is constructed automatically from the provided example type.
 func WithStructuredOutputJSON(examplePtr any, strict bool, description string) RunOption {
 	return func(opts *RunOptions) {
-		// Infer reflect.Type from examplePtr.
-		var t reflect.Type
-		if examplePtr == nil {
+		name, schema, t := structuredoutput.FromType(examplePtr, strict)
+		if schema == nil {
 			return
 		}
-		if rt := reflect.TypeOf(examplePtr); rt.Kind() == reflect.Pointer {
-			t = rt
-		} else {
-			t = reflect.PointerTo(rt)
-		}
-		genOpts := make([]jsonschema.Option, 0, 1)
-		if strict {
-			genOpts = append(genOpts, jsonschema.WithStrict())
-		}
-		gen := jsonschema.New(genOpts...)
-		schema := gen.Generate(t.Elem())
-		name := t.Elem().Name()
-		if name == "" {
-			name = "output"
-		}
-		opts.StructuredOutput = &model.StructuredOutput{
-			Type: model.StructuredOutputJSONSchema,
-			JSONSchema: &model.JSONSchemaConfig{
-				Name:        name,
-				Schema:      schema,
-				Strict:      strict,
-				Description: description,
-			},
-		}
+		opts.StructuredOutput = newStructuredOutput(name, schema, strict, description)
 		opts.StructuredOutputType = t
+	}
+}
+
+func newStructuredOutput(name string, schema map[string]any, strict bool, description string) *model.StructuredOutput {
+	if schema == nil {
+		return nil
+	}
+	return &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{
+			Name:        name,
+			Schema:      schema,
+			Strict:      strict,
+			Description: description,
+		},
 	}
 }
 
@@ -794,6 +791,37 @@ func WithToolFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
+// WithAdditionalTools appends tools that are visible only for this run.
+//
+// Additional tools are treated as user tools, so WithToolFilter can still
+// hide them. If an additional tool has the same name as an already available
+// tool, the already available tool wins for that run.
+func WithAdditionalTools(tools []tool.Tool) RunOption {
+	return func(opts *RunOptions) {
+		appendRunTools(opts, tools)
+	}
+}
+
+// WithExternalTools appends caller-executed tools for this run.
+//
+// External tools are visible to the model like additional tools, but the
+// framework will not execute them. When the model calls one, the run stops
+// after the assistant tool_call response. The caller should execute the tool
+// externally and continue with model.NewToolMessage.
+func WithExternalTools(tools []tool.Tool) RunOption {
+	return func(opts *RunOptions) {
+		if opts == nil {
+			return
+		}
+		for _, tl := range tools {
+			if declarationName(tl) == "" {
+				continue
+			}
+			opts.ExternalTools = append(opts.ExternalTools, tl)
+		}
+	}
+}
+
 // WithToolExecutionFilter sets which tools the framework will execute.
 //
 // This is different from WithToolFilter:
@@ -809,6 +837,29 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	return func(opts *RunOptions) {
 		opts.ToolExecutionFilter = filter
 	}
+}
+
+func appendRunTools(opts *RunOptions, tools []tool.Tool) {
+	if opts == nil || len(tools) == 0 {
+		return
+	}
+	for _, tl := range tools {
+		if declarationName(tl) == "" {
+			continue
+		}
+		opts.AdditionalTools = append(opts.AdditionalTools, tl)
+	}
+}
+
+func declarationName(tl tool.Tool) string {
+	if tl == nil {
+		return ""
+	}
+	decl := tl.Declaration()
+	if decl == nil {
+		return ""
+	}
+	return decl.Name
 }
 
 // WithToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
@@ -945,6 +996,14 @@ type RunOptions struct {
 	// pending tool calls) and complete unfinished work prior to issuing a new
 	// LLM request.
 	Resume bool
+
+	// PersistInterruptedAssistant controls whether Runner persists already
+	// emitted assistant text as a final assistant message when a streaming run
+	// is cancelled before a normal final assistant response is produced.
+	//
+	// nil means the Runner default applies. The built-in Runner default is
+	// false to preserve the legacy cancellation semantics.
+	PersistInterruptedAssistant *bool
 
 	// GraphEmitFinalModelResponses controls event emission for graph-based
 	// Large Language Model (LLM) nodes.
@@ -1111,6 +1170,23 @@ type RunOptions struct {
 	//   })
 	ToolFilter tool.FilterFunc
 
+	// AdditionalTools contains tools that are visible only for this run.
+	//
+	// These tools are treated as user tools and are therefore affected by
+	// ToolFilter. They are appended to the effective tool surface without
+	// mutating the agent's registered tools.
+	AdditionalTools []tool.Tool
+
+	// ExternalTools contains caller-executed tools that are visible only for
+	// this run. The framework exposes them to the model, but does not execute
+	// them after the model returns a tool call.
+	ExternalTools []tool.Tool
+
+	// ExternalToolNames contains the accepted caller-executed tool names for
+	// this run. LLM flows set it after the invocation tool surface rejects
+	// collisions with existing tools.
+	ExternalToolNames map[string]bool
+
 	// ToolExecutionFilter controls which tools are executed by the
 	// framework when the model returns tool calls.
 	//
@@ -1131,6 +1207,48 @@ type RunOptions struct {
 
 	// runControlConfig stores internal event and buffering controls.
 	runControlConfig runControlConfig
+}
+
+// ShouldExecuteTool reports whether the framework should execute a tool call.
+//
+// External tools are always caller-executed and therefore return false. The
+// ToolExecutionFilter is evaluated only for non-external tools.
+func (opts RunOptions) ShouldExecuteTool(
+	ctx context.Context,
+	tl tool.Tool,
+) bool {
+	if opts.isExternalTool(tl) {
+		return false
+	}
+	if opts.ToolExecutionFilter == nil {
+		return true
+	}
+	return opts.ToolExecutionFilter(ctx, tl)
+}
+
+func (opts RunOptions) isExternalTool(tl tool.Tool) bool {
+	name := declarationName(tl)
+	if opts.ExternalToolNames != nil {
+		return name != "" && opts.ExternalToolNames[name]
+	}
+	for _, external := range opts.ExternalTools {
+		if sameRunTool(tl, external) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameRunTool(a tool.Tool, b tool.Tool) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if av.Type() == bv.Type() && av.Type().Comparable() {
+		return a == b
+	}
+	return false
 }
 
 // IsGraphCompletionEventDisabled reports whether this invocation hides terminal graph completion events.
