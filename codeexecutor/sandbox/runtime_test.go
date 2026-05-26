@@ -943,6 +943,21 @@ func TestFilesystemErrorBranches(t *testing.T) {
 		t.Fatalf("outside collect match rel=%q skip=%v err=%v, want skip", rel, skip, err)
 	}
 
+	if _, _, _, _, err := rt.resolveCollectMatch(
+		DangerFullAccessProfile(),
+		ws,
+		filepath.Join(ws.Path, "work", "missing.txt"),
+	); err == nil {
+		t.Fatalf("resolveCollectMatch unexpectedly succeeded for missing file")
+	}
+	if rel, _, _, skip, err := rt.resolveCollectMatch(
+		DangerFullAccessProfile(),
+		ws,
+		filepath.Join(ws.Path, "work"),
+	); err != nil || !skip || rel != "" {
+		t.Fatalf("directory collect match rel=%q skip=%v err=%v, want skip", rel, skip, err)
+	}
+
 	missingLink := filepath.Join(ws.Path, "work", "missing-link.txt")
 	if err := os.Symlink("missing-target.txt", missingLink); err != nil {
 		t.Fatal(err)
@@ -1039,10 +1054,48 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := resolvePotentialSymlinkTarget(filepath.Join(source, "child.txt")); err == nil {
+		t.Fatalf("resolvePotentialSymlinkTarget unexpectedly succeeded below file path")
+	}
+	fileParent := filepath.Join(t.TempDir(), "file-parent")
+	if err := os.WriteFile(fileParent, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyPath(source, filepath.Join(fileParent, "copy.txt")); err == nil {
+		t.Fatalf("copyPath unexpectedly succeeded with file as destination parent")
+	}
+	srcDir := filepath.Join(outside, "srcdir")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested.txt"), []byte("nested"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dstFile := filepath.Join(t.TempDir(), "dst-file")
+	if err := os.WriteFile(dstFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyPath(srcDir, dstFile); err == nil {
+		t.Fatalf("copyPath unexpectedly copied directory over file")
+	}
 	if err := copyPathWithValidator(source, filepath.Join(t.TempDir(), "copy.txt"), func(string) error {
 		return deniedf(ErrPathDenied, "write", "copy.txt", "blocked")
 	}); !isKind(err, ErrPathDenied) {
 		t.Fatalf("copyPathWithValidator validation error = %v, want ErrPathDenied", err)
+	}
+
+	if err := writeFileAtomically(filepath.Join(fileParent, "out.txt"), []byte("out"), 0o600); err == nil {
+		t.Fatalf("writeFileAtomically unexpectedly succeeded with file as parent")
+	}
+	if err := writeFileAtomically(filepath.Join(t.TempDir(), "bad\x00name"), []byte("out"), 0o600); err == nil {
+		t.Fatalf("writeFileAtomically unexpectedly succeeded with invalid temp pattern")
+	}
+	existingDir := filepath.Join(t.TempDir(), "existing-dir")
+	if err := os.MkdirAll(existingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomically(existingDir, []byte("out"), 0o600); err == nil {
+		t.Fatalf("writeFileAtomically unexpectedly renamed file over directory")
 	}
 }
 
