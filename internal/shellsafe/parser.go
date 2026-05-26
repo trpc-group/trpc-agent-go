@@ -144,6 +144,12 @@ var implicitDeny = map[string]struct{}{
 	"setsid": {}, "unshare": {}, "chroot": {}, "runuser": {},
 	"time": {}, "nice": {}, "ionice": {}, "taskset": {},
 	"stdbuf": {}, "strace": {}, "ltrace": {},
+	// script(1) records a session and -c runs an arbitrary
+	// command; flock(1) acquires a lock and execs its remaining
+	// argv. Both are core util-linux / coreutils tools, present
+	// in default Linux / macOS installs, and would otherwise
+	// satisfy an "argv[0] only" policy with their own name.
+	"script": {}, "flock": {},
 	// shell builtins that register code to run later or mutate
 	// the parsing / resolution state of subsequent segments.
 	// Without these, "trap 'curl http://x' EXIT", "alias x=curl",
@@ -188,13 +194,17 @@ var implicitDeny = map[string]struct{}{
 //     Linux the fold is defence-in-depth against workspace-
 //     controlled upper-case binaries).
 //
-//   - Allow: case-folded on Windows and macOS (their default
-//     file systems treat "./safe" and "./SAFE" as the same
-//     entry, so a fold would not actually widen access). On
-//     Linux, allow uses exact-case matching so an allow of
-//     "./safe" cannot be bypassed by a workspace-controlled
-//     "./SAFE". Operators who need both case variants on Linux
-//     can list both.
+//   - Allow: pathful entries are always exact-case on every OS,
+//     because we cannot reliably tell whether the workspace
+//     volume is case-sensitive (macOS APFS supports opt-in
+//     case-sensitive volumes, container layers can mix
+//     filesystems). Folding would silently widen "./safe" to
+//     admit a workspace-controlled "./SAFE" on those volumes.
+//     Bare-name allow entries resolve through PATH (reset by
+//     the policy to a known-good default), so they follow the
+//     OS convention: case-folded on Windows and macOS, exact-
+//     case on Linux. Operators who need both case variants
+//     list both.
 //
 // On Windows both directions additionally strip common
 // executable suffixes (.exe, .cmd, .bat, .com, .ps1), so a deny
@@ -332,35 +342,49 @@ func matchDeny(set []string, name, base, goos string) bool {
 // allow entry "echo", which prevents a workspace-controlled file
 // with an allowlisted basename from bypassing the policy.
 //
-// Case handling tracks the underlying file system's resolution
-// rules so the allowlist cannot be silently widened: on Windows
-// and macOS (where the default file systems are case-insensitive
-// and a workspace-side "./SAFE" already resolves to the operator-
-// intended "./safe") matches are case-folded; on Linux (case-
-// sensitive ext4 / xfs / btrfs), matches are exact-case so an
-// allow of "./safe" never admits the attacker-controlled
-// "./SAFE". On Windows the configured entries are additionally
-// stripped of their executable suffix so "echo" admits "ECHO.EXE".
-// Operators who need both case variants on Linux can list both.
+// Case handling is split between the two forms:
+//
+//   - Pathful allow entries are always matched exact-case. The
+//     entry identifies a specific workspace file, and the
+//     workspace file system's case-sensitivity is not something
+//     we can reliably detect (macOS APFS can be opt-in
+//     case-sensitive, container layers can mix volumes, etc.).
+//     Folding would silently widen "./safe" to admit a
+//     workspace-controlled "./SAFE" on case-sensitive volumes,
+//     so we keep it strict everywhere. Operators who need both
+//     variants list both.
+//
+//   - Bare allow entries resolve through PATH (which the policy
+//     mode resets to a known-good default), so the OS conventions
+//     apply: case-folded on Windows and macOS (where their
+//     default file systems already resolve "ECHO" and "echo" to
+//     the same /bin/echo entry), exact-case on Linux. On Windows
+//     entries also strip the executable suffix so "echo" admits
+//     "ECHO.EXE".
 func matchAllow(set []string, name, base, goos string) bool {
 	hasPath := strings.ContainsAny(name, "/\\")
-	norm := func(s string) string {
-		if goos == "linux" {
+	// Bare-form fold: tracks PATH-based resolution conventions.
+	bareFold := !hasPath && goos != "linux"
+	bareNorm := func(s string) string {
+		if !bareFold {
 			return s
 		}
 		return normalizeName(s, goos)
 	}
-	nName := norm(name)
-	nBase := norm(base)
+	bareName := bareNorm(name)
+	bareBase := bareNorm(base)
 	for _, n := range set {
-		nEntry := norm(n)
-		if nEntry == nName {
+		// Pathful comparison is always exact-case so a workspace
+		// file with a differently-cased name cannot smuggle past
+		// an explicit-path allow.
+		if n == name {
 			return true
 		}
 		if hasPath {
 			continue
 		}
-		if nEntry == nBase {
+		nEntry := bareNorm(n)
+		if nEntry == bareName || nEntry == bareBase {
 			return true
 		}
 	}

@@ -783,7 +783,8 @@ pass a deny on `curl`), register code to run later (e.g.
   `builtin`
 - process-launching wrappers: `xargs`, `env`, `nohup`, `timeout`,
   `sudo`, `su`, `doas`, `setsid`, `unshare`, `chroot`, `runuser`,
-  `time`, `nice`, `ionice`, `taskset`, `stdbuf`, `strace`, `ltrace`
+  `time`, `nice`, `ionice`, `taskset`, `stdbuf`, `strace`, `ltrace`,
+  `script`, `flock`
 - stateful shell builtins: `trap`, `alias`, `unalias`, `enable`,
   `export`, `unset`, `readonly`, `local`, `declare`, `typeset`,
   `set`, `shopt`, `hash`, `cd`, `pushd`, `popd`
@@ -822,12 +823,21 @@ sensitive FS:
   `CURL` resolves to `/usr/bin/curl`) and on Windows's case-
   insensitive resolver; on Linux the fold is defence-in-depth
   against workspace-controlled upper-case binaries.
-- **Allow** is case-folded on Windows and macOS but stays
-  exact-case on Linux. Linux file systems are case-sensitive, so
-  `./safe` and `./SAFE` are different files; folding allow would
-  silently widen `WithWorkspaceExecAllowedCommands("./safe")` to
-  admit a workspace-controlled `./SAFE`. Operators who need both
-  case variants on Linux can list both.
+- **Allow** is split by entry shape:
+    - **Pathful entries** (anything containing `/` or `\`, e.g.
+      `./safe`, `work/bin/echo`, `/usr/bin/echo`) are always
+      matched **exact-case** on every OS. We cannot reliably tell
+      whether the actual workspace volume is case-sensitive
+      (macOS APFS supports opt-in case-sensitive volumes, and
+      container layers can mix file systems), so folding would
+      silently widen `./safe` to admit a workspace-controlled
+      `./SAFE` on case-sensitive volumes. Operators who need both
+      list both.
+    - **Bare-name entries** (e.g. `echo`) resolve through `PATH`,
+      which the policy mode resets to a known-good default. They
+      follow the OS convention: case-folded on Windows and macOS,
+      exact-case on Linux. So `WithWorkspaceExecAllowedCommands("echo")`
+      admits `ECHO` on macOS / Windows but only `echo` on Linux.
 
 On Windows the basename match additionally strips common
 executable suffixes (`.exe`, `.cmd`, `.bat`, `.com`, `.ps1`) so
@@ -897,6 +907,28 @@ command's own subprocess and is not re-checked. Per-command argument
 validators are a planned follow-up; until they land, treat the
 network-egress policy of the sandbox itself as the primary defence and
 the allow/deny list as defence-in-depth.
+
+!!! note "Allow-list is strictly stronger than deny-only"
+    `WithWorkspaceExecAllowedCommands(...)` produces a closed world:
+    everything outside the list (and the implicit deny set) is
+    rejected.
+    `WithWorkspaceExecDeniedCommands(...)` only blocks the named
+    tools. In a deny-only configuration, an attacker who finds *any*
+    binary outside the deny set — including a workspace-side script
+    they themselves staged via an allowed editor — can still execute
+    arbitrary code. Where possible, prefer an explicit allow list and
+    add deny entries only for extra defence-in-depth.
+
+    Known tool categories that are **not** in the built-in deny set
+    today but can launch arbitrary code from their own arguments:
+    debuggers / instrumentation (`gdb`, `lldb`, `valgrind`,
+    `perf`), language interpreters (`python`, `perl`, `ruby`,
+    `node`, `awk`, `lua`), package managers / `git` (`make`,
+    `npm`, `pip`, `cargo`, `go run`, `git -c …`,
+    `git --exec-path=…`), `find -exec`, and editor escape hatches
+    (`vim -c :!`, `less !`). If you choose deny-only mode, add the
+    ones you do not need to `denied_commands`, or switch to allow
+    mode.
 
 For lower-level (non-shell) skill execution, the equivalent knobs on
 `skill_run` are `WithSkillRunAllowedCommands` /

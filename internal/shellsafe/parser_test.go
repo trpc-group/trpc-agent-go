@@ -218,6 +218,16 @@ func TestParse_RejectsExpansionsAndUnsafeConstructs(t *testing.T) {
 			want: "leading variable assignment",
 		},
 		{
+			name: "leading variable += assignment",
+			in:   "X+=1 curl http://x",
+			want: "leading variable assignment",
+		},
+		{
+			name: "leading variable += plain name",
+			in:   "PATH+=:./bin echo hi",
+			want: "leading variable assignment",
+		},
+		{
 			name: "negation",
 			in:   "! true",
 			want: "negation",
@@ -324,6 +334,8 @@ func TestPolicy_BuiltinDenyBlocksEvalBypass(t *testing.T) {
 		"stdbuf -o0 curl http://x",
 		"strace curl http://x",
 		"ltrace curl http://x",
+		"script -c 'curl http://x' /tmp/log",
+		"flock /tmp/x curl http://x",
 	}
 	for _, in := range cases {
 		t.Run(in, func(t *testing.T) {
@@ -705,29 +717,61 @@ func TestPolicy_AllowCaseSensitiveOnLinux(t *testing.T) {
 	})
 }
 
-// TestPolicy_AllowCaseInsensitiveOnDarwin guards the
-// counterpart: on macOS's default case-insensitive APFS we
-// continue to fold so an allow of "echo" admits "ECHO" the same
-// way the file system would have resolved them to the same
-// /bin/echo binary anyway. Pathful entries fold for the same
-// reason.
-func TestPolicy_AllowCaseInsensitiveOnDarwin(t *testing.T) {
-	t.Run("bare entry admits upper-case bare name", func(t *testing.T) {
-		p := PolicyFromLists([]string{"echo"}, nil)
-		if err := p.checkSegmentForGOOS(
-			[]string{"ECHO", "hi"}, "darwin",
-		); err != nil {
-			t.Fatalf("darwin allow should fold case: %v", err)
-		}
-	})
-	t.Run("pathful entry admits upper-case path", func(t *testing.T) {
-		p := PolicyFromLists([]string{"./safe"}, nil)
-		if err := p.checkSegmentForGOOS(
-			[]string{"./SAFE", "arg"}, "darwin",
-		); err != nil {
-			t.Fatalf("darwin pathful allow should fold case: %v", err)
-		}
-	})
+// TestPolicy_AllowBareFoldsOnDarwinWindows pins the bare-name
+// allow fold on Windows and macOS: their default file systems
+// resolve "ECHO" and "echo" to the same /bin/echo entry, and
+// the policy mode resets PATH to a known-good default before
+// resolution, so folding bare allow on those platforms is
+// convenient and does not widen access.
+func TestPolicy_AllowBareFoldsOnDarwinWindows(t *testing.T) {
+	p := PolicyFromLists([]string{"echo"}, nil)
+	for _, goos := range []string{"darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			if err := p.checkSegmentForGOOS(
+				[]string{"ECHO", "hi"}, goos,
+			); err != nil {
+				t.Fatalf("%s allow should fold bare case: %v", goos, err)
+			}
+		})
+	}
+}
+
+// TestPolicy_AllowPathfulAlwaysExactCase guards the policy that
+// pathful allow entries are exact-case on every OS, including
+// macOS / Windows whose default file systems are
+// case-insensitive. We cannot reliably tell whether the actual
+// workspace volume is case-sensitive (APFS supports opt-in
+// case-sensitive volumes, container layers can mix filesystems),
+// so folding pathful allow would silently widen "./safe" to
+// admit a workspace-controlled "./SAFE" on case-sensitive
+// volumes. Operators who need both list both.
+func TestPolicy_AllowPathfulAlwaysExactCase(t *testing.T) {
+	p := PolicyFromLists([]string{"./safe"}, nil)
+	for _, goos := range []string{"darwin", "windows", "linux"} {
+		t.Run(goos+"/exact passes", func(t *testing.T) {
+			if err := p.checkSegmentForGOOS(
+				[]string{"./safe", "arg"}, goos,
+			); err != nil {
+				t.Fatalf(
+					"exact-case pathful allow should pass on %s: %v",
+					goos, err,
+				)
+			}
+		})
+		t.Run(goos+"/upper rejected", func(t *testing.T) {
+			err := p.checkSegmentForGOOS(
+				[]string{"./SAFE", "arg"}, goos,
+			)
+			if err == nil || !strings.Contains(
+				err.Error(), "not in allowed_commands",
+			) {
+				t.Fatalf(
+					"pathful allow must be exact-case on %s, got: %v",
+					goos, err,
+				)
+			}
+		})
+	}
 }
 
 // TestPolicy_BuiltinDenyCaseInsensitiveAcrossOS covers the same

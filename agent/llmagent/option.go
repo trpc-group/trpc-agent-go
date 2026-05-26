@@ -1093,8 +1093,9 @@ func WithSkillRunStager(stager toolskill.SkillStager) Option {
 // shell wrappers and re-executing builtins (sh, bash, zsh,
 // busybox, eval, exec, command, source, xargs, env, nohup,
 // timeout, sudo, time, nice, ionice, taskset, stdbuf, strace,
-// ltrace, ...) together with the shell builtins that can register
-// code to run later or mutate later-segment resolution (trap,
+// ltrace, script, flock, ...) together with the shell builtins
+// that can register code to run later or mutate later-segment
+// resolution (trap,
 // alias, unalias, enable, export, unset, readonly, local, declare,
 // typeset, set, shopt, hash, cd, pushd, popd). They are blocked
 // whenever a policy is active and cannot be re-enabled by listing
@@ -1105,14 +1106,19 @@ func WithSkillRunStager(stager toolskill.SkillStager) Option {
 // Deny and the built-in deny set are case-folded on every OS
 // (matters on macOS's default case-insensitive APFS and on
 // Windows; on Linux the fold is defence-in-depth against a
-// workspace-controlled upper-case binary). Allow is case-folded
-// on Windows and macOS but stays exact-case on Linux, because
-// Linux file systems are case-sensitive and a fold would silently
-// widen "./safe" to admit the attacker-controlled "./SAFE". On
-// Windows the configured deny entries are additionally passed
-// through the same suffix-stripping rules as the command
-// basename, so a deny of "CURL" or "curl.exe" rejects the bare
-// "curl" form too.
+// workspace-controlled upper-case binary). Allow is split by
+// entry shape: pathful entries (containing "/" or "\") are
+// always matched exact-case on every OS, because we cannot
+// reliably tell whether the workspace volume is case-sensitive
+// (APFS supports opt-in case-sensitive volumes, containers can
+// mix file systems) — folding would silently widen "./safe" to
+// admit "./SAFE" on those volumes. Bare-name allow entries
+// resolve through PATH (reset by the policy to a known-good
+// default) and follow the OS convention: case-folded on Windows
+// and macOS, exact-case on Linux. On Windows the configured
+// deny entries are additionally passed through the same suffix-
+// stripping rules as the command basename, so a deny of "CURL"
+// or "curl.exe" rejects the bare "curl" form too.
 //
 // When a policy is active workspace_exec also switches the spawn
 // from "sh -lc" to "sh -c" and strips known shell-startup and

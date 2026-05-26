@@ -253,6 +253,39 @@ func TestEnvForPolicy_StripsShellStartupVectors(t *testing.T) {
 		"benign LANG must survive the scrub")
 }
 
+// TestEnvForPolicy_RejectsMalformedKeys guards the bypass where a
+// caller supplies an env key that already embeds "=" (or other
+// invalid bytes). The local runtime serialises entries as
+// "key=value", so a key like "PATH=." produces "PATH=.=<value>",
+// and libc parses that as PATH set to ".=<value>" — putting the
+// attacker back in control of the search path even though the
+// scrub never sees a plain "PATH". Reject the malformed key
+// outright so the policy mode contract holds regardless of how
+// the runtime serialises the map.
+func TestEnvForPolicy_RejectsMalformedKeys(t *testing.T) {
+	in := map[string]string{
+		"PATH=.":           ":/attacker/bin",
+		"":                 "anything",
+		"NEW\nLINE":        "x",
+		"NULL\x00":         "x",
+		"CARRIAGE\rRETURN": "x",
+		"GOOD":             "kept",
+	}
+	got := envForPolicy(true, in)
+	for _, k := range []string{
+		"PATH=.", "", "NEW\nLINE", "NULL\x00", "CARRIAGE\rRETURN",
+	} {
+		if _, present := got[k]; present {
+			t.Fatalf(
+				"malformed env key %q must be dropped, got value %q",
+				k, got[k],
+			)
+		}
+	}
+	require.Equal(t, "kept", got["GOOD"],
+		"benign key must survive the scrub")
+}
+
 // TestEnvForPolicyOnGOOS_WindowsCaseInsensitive guards the Windows
 // bypass where the caller passes "Path=./bin" or "Home=." in mixed
 // case. Windows treats env names case-insensitively at runtime, so

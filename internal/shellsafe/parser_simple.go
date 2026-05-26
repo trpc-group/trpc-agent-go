@@ -558,9 +558,13 @@ func opName(k tokKind) string {
 }
 
 // isLeadingAssignment reports whether word looks like the
-// "NAME=VALUE" prefix bash treats as a one-shot environment
-// assignment ahead of a command. NAME must start with a letter or
-// '_' and contain only [A-Za-z0-9_] before the '='.
+// "NAME=VALUE" or "NAME+=VALUE" prefix bash / zsh treat as a
+// one-shot environment assignment ahead of a command. NAME must
+// start with a letter or '_' and contain only [A-Za-z0-9_]
+// before the assignment operator. Both forms are rejected so
+// "X+=1 curl http://x" (which the shell still parses as a
+// leading assignment and runs curl) cannot smuggle "X+=1" past
+// the policy as a bareword.
 func isLeadingAssignment(word string) bool {
 	if word == "" {
 		return false
@@ -569,10 +573,14 @@ func isLeadingAssignment(word string) bool {
 		return false
 	}
 	for i := 1; i < len(word); i++ {
-		if word[i] == '=' {
+		c := word[i]
+		if c == '=' {
 			return true
 		}
-		if !isIdentCont(word[i]) {
+		if c == '+' && i+1 < len(word) && word[i+1] == '=' {
+			return true
+		}
+		if !isIdentCont(c) {
 			return false
 		}
 	}

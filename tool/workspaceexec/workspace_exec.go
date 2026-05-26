@@ -736,6 +736,16 @@ func envForPolicyOnGOOS(
 	winCaseInsensitive := goos == "windows"
 	out := make(map[string]string, len(env))
 	for k, v := range env {
+		// Drop malformed keys outright. POSIX env names cannot
+		// contain "=", "\0" or whitespace newlines, but a caller
+		// passing them as JSON map keys would otherwise survive
+		// the blocklist by carrying a literal "=" inside the key
+		// (e.g. "PATH=." → "PATH=.=<value>" on serialisation,
+		// which libc parses as PATH="...="). Defence in depth
+		// against the wider class of key-injection tricks.
+		if k == "" || strings.ContainsAny(k, "=\x00\n\r") {
+			continue
+		}
 		if isShellStartupEnvKey(k, winCaseInsensitive) {
 			continue
 		}
