@@ -498,6 +498,132 @@ agent:
   add_session_summary: true
 ```
 
+## Runtime profile providers (code-driven multi-tenancy)
+
+Use `runtime_profiles` in YAML for small static deployments. For custom
+OpenClaw binaries that already import private model, tool, or channel plugins,
+prefer code-driven profiles when profile data lives in a database, config
+center, or control plane.
+
+`app.MainWithOptions` keeps the normal OpenClaw CLI behavior while allowing the
+custom binary to pass runtime options:
+
+```go
+package main
+
+import (
+	"context"
+	"os"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/app"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
+
+	_ "example.com/your/openclaw/plugins/channels/wecom"
+	_ "example.com/your/openclaw/plugins/model"
+	_ "example.com/your/openclaw/plugins/tools"
+)
+
+func main() {
+	store := runtimeprofile.StoreFunc(func(ctx context.Context) (
+		runtimeprofile.Config,
+		error,
+	) {
+		return runtimeprofile.Config{
+			Profiles: map[string]runtimeprofile.Profile{
+				"tenant_alpha": {
+					AppName:   "tenant-alpha",
+					ModelName: "gpt-5",
+					Prompt: runtimeprofile.Prompt{
+						Instruction: "You are the tenant Alpha assistant.",
+					},
+					Workspace: runtimeprofile.WorkspacePolicy{
+						Workdir: "/srv/openclaw/workspaces/tenant-alpha",
+						AllowedRoots: []string{
+							"/srv/openclaw/workspaces/tenant-alpha",
+						},
+					},
+					Skills: runtimeprofile.SkillPolicy{
+						Roots: []string{
+							"/srv/openclaw/skills/tenant-alpha",
+						},
+						Include: []string{"tenant-alpha-guide"},
+					},
+					Knowledge: runtimeprofile.KnowledgePolicy{
+						Indexes: []string{"tenant-alpha-faq"},
+						Filter: map[string]any{
+							"tenant": "tenant-alpha",
+						},
+					},
+					Tools: runtimeprofile.ToolPolicy{
+						ToolSets: []string{"tenant-alpha-tools"},
+						CredentialRefs: map[string]string{
+							"tenant-alpha-tools": "tenant-alpha-tools",
+						},
+					},
+					Credentials: runtimeprofile.CredentialPolicy{
+						AllowedRefs: []string{"tenant-alpha-tools"},
+					},
+					Isolation: runtimeprofile.IsolationPolicy{
+						Mode:         runtimeprofile.IsolationModeProfileCache,
+						AgentCache:   true,
+						ToolSetCache: true,
+					},
+				},
+			},
+			Selectors: []runtimeprofile.Selector{
+				{
+					ProfileID: "tenant_alpha",
+					Channels:  []string{"wecom"},
+					Users:     []string{"replace-with-user-id"},
+				},
+			},
+		}, nil
+	})
+
+	os.Exit(app.MainWithOptions(
+		os.Args[1:],
+		app.WithRuntimeProfileStore(store, true),
+	))
+}
+```
+
+When `Selectors` are present, selection fails closed. Requests that do not
+match a selector, explicitly request a different profile, or select a missing
+profile return an error instead of falling back to the default profile. This is
+important for multi-tenant prompts, tools, credentials, workspaces, and
+knowledge indexes.
+
+`Knowledge.Indexes` uses the `name` values from `knowledges.providers`.
+OpenClaw hides search tools for other knowledge providers on that request;
+`Knowledge.Filter` remains the metadata filter sent to the selected knowledge
+provider.
+
+`Tools.ToolSets` uses the `name` values from the top-level `tools.toolsets`
+configuration. When it is non-empty, OpenClaw hides tools that do not come from
+one of the selected toolsets. `Tools.Include` and `Tools.Exclude` still apply
+to concrete tool names inside the selected toolsets.
+
+`Tools.CredentialRefs` maps a concrete tool name or toolset name to a
+credential reference. When `Credentials.AllowedRefs` is non-empty, OpenClaw
+hides tools mapped to references outside that allowlist. The selected
+credential refs are also available in runtime state for custom tools that
+resolve secrets through a private credential provider.
+
+`Isolation.Mode` also has runtime behavior: `profile_cache` and `service`
+derive the run app name from the profile id when `AppName` is empty, isolating
+session, memory, and event filter keys. If your deployment needs a stronger
+process or sandbox boundary, read the isolation fields from runtime state in
+your custom runtime layer.
+
+Use `Tenants` selectors when the caller or custom channel populates
+`tenant_id` in the `openclaw.runtime_profile` request extension. Use
+`Channels`, `Users`, or `Sessions` when selection should come only from normal
+gateway metadata.
+
+If the application already owns the HTTP server, use
+`app.NewRuntimeWithOptions` and mount `rt.Gateway.Handler` instead of
+`app.MainWithOptions`.
+
 ## Memory backend plugin (centralized user memory storage)
 
 Memory backends implement `memory.Service` (from `trpc-agent-go`).

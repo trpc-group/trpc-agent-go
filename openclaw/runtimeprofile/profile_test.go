@@ -36,12 +36,30 @@ func (nilDeclarationTool) Declaration() *tool.Declaration {
 	return nil
 }
 
-type testTool struct {
+type declarationOnlyTool struct {
 	name string
+}
+
+func (t declarationOnlyTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+type testTool struct {
+	name               string
+	toolSetName        string
+	knowledgeIndexName string
 }
 
 func (t testTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: t.name}
+}
+
+func (t testTool) ToolSetName() string {
+	return t.toolSetName
+}
+
+func (t testTool) KnowledgeIndexName() string {
+	return t.knowledgeIndexName
 }
 
 func TestMapResolver(t *testing.T) {
@@ -244,6 +262,50 @@ func TestMapResolverEdgeCases(t *testing.T) {
 	require.Empty(t, profile)
 }
 
+func TestMapResolverCatalogEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	var nilResolver *MapResolver
+	ids, err := nilResolver.ProfileIDs(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, ids)
+
+	appNames, err := nilResolver.AppNames(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, appNames)
+
+	resolver := NewMapResolver(Config{
+		Profiles: map[string]Profile{
+			"empty": {},
+			testProfileRetail: {
+				AppName: "retail-app",
+			},
+			"retail-alias": {
+				ID:      "retail-alias",
+				AppName: "retail-app",
+			},
+			"isolated": {
+				Isolation: IsolationPolicy{
+					Mode: IsolationModeProfileCache,
+				},
+			},
+		},
+	})
+
+	ids, err = resolver.ProfileIDs(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"empty",
+		"isolated",
+		testProfileRetail,
+		"retail-alias",
+	}, ids)
+
+	appNames, err = resolver.AppNames(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"isolated", "retail-app"}, appNames)
+}
+
 func TestRunOptionsAppliesProfile(t *testing.T) {
 	t.Parallel()
 
@@ -404,7 +466,7 @@ func TestRunOptionsAppliesProfile(t *testing.T) {
 
 	require.True(t, runOpts.ToolFilter(
 		context.Background(),
-		testTool{name: testToolAllowed},
+		testTool{name: testToolAllowed, toolSetName: "mcp-retail"},
 	))
 	require.False(t, runOpts.ToolFilter(
 		context.Background(),
@@ -422,6 +484,171 @@ func TestRunOptionsAppliesProfile(t *testing.T) {
 		context.Background(),
 		testTool{name: testToolOther},
 	))
+}
+
+func TestRunOptionsFiltersProfileToolSets(t *testing.T) {
+	t.Parallel()
+
+	runOpts := agent.NewRunOptions(RunOptions(Profile{
+		Tools: ToolPolicy{
+			ToolSets: []string{"crm"},
+		},
+	})...)
+
+	require.False(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "direct"},
+	))
+	require.False(t, runOpts.ToolFilter(
+		context.Background(),
+		declarationOnlyTool{name: "direct"},
+	))
+	require.True(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "crm_search", toolSetName: "crm"},
+	))
+	require.False(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "erp_search", toolSetName: "erp"},
+	))
+
+	concreteOpts := agent.NewRunOptions(RunOptions(Profile{
+		Tools: ToolPolicy{
+			Include:  []string{"crm_search"},
+			ToolSets: []string{"crm"},
+		},
+	})...)
+	require.True(t, concreteOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "crm_search", toolSetName: "crm"},
+	))
+	require.False(t, concreteOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "crm_update", toolSetName: "crm"},
+	))
+}
+
+func TestRunOptionsFiltersProfileKnowledgeIndexes(t *testing.T) {
+	t.Parallel()
+
+	runOpts := agent.NewRunOptions(RunOptions(Profile{
+		Knowledge: KnowledgePolicy{
+			Indexes: []string{"docs"},
+		},
+	})...)
+
+	require.True(t, runOpts.ToolFilter(
+		context.Background(),
+		declarationOnlyTool{name: "direct"},
+	))
+	require.True(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{
+			name:               "knowledge_search",
+			knowledgeIndexName: "docs",
+		},
+	))
+	require.False(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{
+			name:               "faq_knowledge_search",
+			knowledgeIndexName: "faq",
+		},
+	))
+}
+
+func TestRunOptionsFiltersProfileCredentialRefs(t *testing.T) {
+	t.Parallel()
+
+	runOpts := agent.NewRunOptions(RunOptions(Profile{
+		Tools: ToolPolicy{
+			CredentialRefs: map[string]string{
+				"crm":          "secret://tenant/crm",
+				"crm_delete":   "secret://tenant/admin",
+				"erp_search":   "secret://tenant/erp",
+				"empty_search": " ",
+			},
+		},
+		Credentials: CredentialPolicy{
+			AllowedRefs: []string{"secret://tenant/crm"},
+		},
+	})...)
+
+	require.True(t, runOpts.ToolFilter(
+		context.Background(),
+		declarationOnlyTool{name: "direct"},
+	))
+	require.True(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "crm_search", toolSetName: "crm"},
+	))
+	require.False(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "crm_delete", toolSetName: "crm"},
+	))
+	require.False(t, runOpts.ToolFilter(
+		context.Background(),
+		testTool{name: "erp_search"},
+	))
+	require.Equal(
+		t,
+		map[string]string{"crm": "secret://tenant/crm"},
+		runOpts.RuntimeState[RuntimeStateToolCredentialRefs],
+	)
+}
+
+func TestRunOptionsDropsReservedUserRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	runOpts := agent.NewRunOptions(RunOptions(Profile{
+		ID: testProfileRetail,
+		State: map[string]any{
+			"plan":                         "vip",
+			RuntimeStateProfileID:          "spoofed",
+			RuntimeStateToolCredentialRefs: "secret://tenant/admin",
+		},
+		Tools: ToolPolicy{
+			CredentialRefs: map[string]string{
+				"crm_delete": "secret://tenant/admin",
+			},
+		},
+		Credentials: CredentialPolicy{
+			AllowedRefs: []string{"secret://tenant/crm"},
+		},
+	})...)
+
+	require.Equal(t, "vip", runOpts.RuntimeState["plan"])
+	require.Equal(
+		t,
+		testProfileRetail,
+		runOpts.RuntimeState[RuntimeStateProfileID],
+	)
+	require.NotContains(
+		t,
+		runOpts.RuntimeState,
+		RuntimeStateToolCredentialRefs,
+	)
+}
+
+func TestRunOptionsUsesProfileIDForRuntimeIsolation(t *testing.T) {
+	t.Parallel()
+
+	runOpts := agent.NewRunOptions(RunOptions(Profile{
+		ID: testProfileRetail,
+		Isolation: IsolationPolicy{
+			Mode: IsolationModeProfileCache,
+		},
+	})...)
+	require.Equal(t, testProfileRetail, runOpts.AppName)
+
+	runOpts = agent.NewRunOptions(RunOptions(Profile{
+		ID:      testProfileRetail,
+		AppName: "retail-app",
+		Isolation: IsolationPolicy{
+			Mode: IsolationModeProfileCache,
+		},
+	})...)
+	require.Equal(t, "retail-app", runOpts.AppName)
 }
 
 func TestRunOptionsEdgeCases(t *testing.T) {
@@ -646,6 +873,15 @@ func TestContextProfile(t *testing.T) {
 	profile, ok = ProfileFromContext(ctx)
 	require.True(t, ok)
 	require.Equal(t, "vip", profile.State["plan"])
+
+	ctx = WithProfile(context.Background(), Profile{
+		ID: testProfileRetail,
+		Isolation: IsolationPolicy{
+			Mode: IsolationModeProfileCache,
+		},
+	})
+	require.Equal(t, testProfileRetail, AppNameFromContext(ctx, "fallback"))
+
 	require.Equal(t, "fallback", AppNameFromContext(
 		context.Background(),
 		" fallback ",
@@ -741,6 +977,14 @@ func TestTraceFields(t *testing.T) {
 	require.Equal(t, 1, fields["skill_root_count"])
 	require.NotContains(t, fields, "workspace_workdir")
 	require.NotContains(t, fields, "workspace_allowed_roots")
+
+	fields = TraceFields(Profile{
+		ID: testProfileRetail,
+		Isolation: IsolationPolicy{
+			Mode: IsolationModeProfileCache,
+		},
+	})
+	require.Equal(t, testProfileRetail, fields["profile_app_name"])
 }
 
 func TestResolverFuncNil(t *testing.T) {

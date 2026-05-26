@@ -10,6 +10,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,6 +28,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+)
+
+const (
+	genericKnowledgeToolName = "knowledge_search"
+	knowledgeToolNameSuffix  = "_knowledge_search"
 )
 
 // knowledgeEntry is the parsed intermediate representation of a knowledge
@@ -134,7 +140,7 @@ func buildKnowledgeTools(
 			desc = "Search for relevant information in the knowledge base."
 		}
 		toolOpts := []knowledgetool.Option{
-			knowledgetool.WithToolName("knowledge_search"),
+			knowledgetool.WithToolName(genericKnowledgeToolName),
 			knowledgetool.WithToolDescription(desc),
 		}
 		if entry.maxResults > 0 {
@@ -143,13 +149,14 @@ func buildKnowledgeTools(
 				knowledgetool.WithMaxResults(entry.maxResults),
 			)
 		}
+		searchTool := knowledgetool.NewAgenticFilterSearchTool(
+			entry.kb,
+			nil,
+			toolOpts...,
+		)
 		return &knowledgeToolsBundle{
 			tools: []tool.Tool{
-				knowledgetool.NewAgenticFilterSearchTool(
-					entry.kb,
-					nil,
-					toolOpts...,
-				),
+				newKnowledgeIndexTool(names[0], searchTool),
 			},
 		}, nil
 	}
@@ -185,11 +192,12 @@ func buildKnowledgeTools(
 				knowledgetool.WithMaxResults(entry.maxResults),
 			)
 		}
-		tools = append(tools, knowledgetool.NewAgenticFilterSearchTool(
+		searchTool := knowledgetool.NewAgenticFilterSearchTool(
 			entry.kb,
 			nil,
 			toolOpts...,
-		))
+		)
+		tools = append(tools, newKnowledgeIndexTool(name, searchTool))
 	}
 
 	return &knowledgeToolsBundle{tools: tools}, nil
@@ -438,7 +446,96 @@ func knowledgeToolName(name string) string {
 	if base == "" {
 		base = "knowledge"
 	}
-	return base + "_knowledge_search"
+	return base + knowledgeToolNameSuffix
+}
+
+type knowledgeIndexBaseTool struct {
+	original  tool.Tool
+	indexName string
+}
+
+func newKnowledgeIndexTool(indexName string, original tool.Tool) tool.Tool {
+	if original == nil {
+		return nil
+	}
+	base := &knowledgeIndexBaseTool{
+		original:  original,
+		indexName: strings.TrimSpace(indexName),
+	}
+	_, callable := original.(tool.CallableTool)
+	_, streamable := original.(tool.StreamableTool)
+	switch {
+	case callable && streamable:
+		return &knowledgeIndexCallableStreamableTool{
+			knowledgeIndexBaseTool: base,
+		}
+	case streamable:
+		return &knowledgeIndexStreamableTool{
+			knowledgeIndexBaseTool: base,
+		}
+	case callable:
+		return &knowledgeIndexCallableTool{
+			knowledgeIndexBaseTool: base,
+		}
+	default:
+		return base
+	}
+}
+
+func (t *knowledgeIndexBaseTool) Declaration() *tool.Declaration {
+	return t.original.Declaration()
+}
+
+func (t *knowledgeIndexBaseTool) KnowledgeIndexName() string {
+	return t.indexName
+}
+
+func (t *knowledgeIndexBaseTool) SkipSummarization() bool {
+	type skipper interface{ SkipSummarization() bool }
+	if s, ok := t.original.(skipper); ok {
+		return s.SkipSummarization()
+	}
+	return false
+}
+
+type knowledgeIndexCallableTool struct {
+	*knowledgeIndexBaseTool
+}
+
+func (t *knowledgeIndexCallableTool) Call(
+	ctx context.Context,
+	jsonArgs []byte,
+) (any, error) {
+	return t.original.(tool.CallableTool).Call(ctx, jsonArgs)
+}
+
+type knowledgeIndexStreamableTool struct {
+	*knowledgeIndexBaseTool
+}
+
+func (t *knowledgeIndexStreamableTool) StreamableCall(
+	ctx context.Context,
+	jsonArgs []byte,
+) (*tool.StreamReader, error) {
+	return t.original.(tool.StreamableTool).StreamableCall(ctx, jsonArgs)
+}
+
+type knowledgeIndexCallableStreamableTool struct {
+	*knowledgeIndexBaseTool
+}
+
+func (t *knowledgeIndexCallableStreamableTool) Call(
+	ctx context.Context,
+	jsonArgs []byte,
+) (any, error) {
+	return t.original.(tool.CallableTool).Call(ctx, jsonArgs)
+}
+
+func (t *knowledgeIndexCallableStreamableTool) StreamableCall(
+	ctx context.Context,
+	jsonArgs []byte,
+) (*tool.StreamReader, error) {
+	return t.original.(tool.StreamableTool).StreamableCall(ctx, jsonArgs)
 }
 
 func sanitizeKnowledgeToolSegment(name string) string {
