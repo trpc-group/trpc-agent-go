@@ -420,6 +420,22 @@ Notes:
 - A runnable example is available in
   [`./examples/a2a_subagent`](./examples/a2a_subagent/).
 
+## Subagent spawn modes
+
+OpenClaw exposes `subagents_spawn` and the compatibility alias
+`sessions_spawn` for delegated work. The `mode` argument controls whether the
+main agent continues immediately or waits:
+
+- `async`: default. Start the subagent and return a run id immediately.
+- `sync`: wait until the subagent reaches a terminal status, then return the
+  result to the main agent.
+- `review`: wait for the subagent result, then route the next user reply back
+  to the same main-agent continuation point so the user can review before the
+  main agent proceeds.
+
+`timeout_seconds` limits the subagent run. `wait_timeout_seconds` only limits
+how long `subagents_spawn` waits in `sync` or `review` mode.
+
 ## Customize prompts
 
 OpenClaw supports customizing the main agent's prompt with either:
