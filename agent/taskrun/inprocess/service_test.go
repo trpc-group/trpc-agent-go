@@ -29,9 +29,13 @@ const (
 	runningStatePersistAttempt = 2
 	testPersistBoom            = "persist boom"
 	shortRunTimeout            = 10 * time.Millisecond
+	noWaitResultDelay          = 20 * time.Millisecond
 	testProfileInstruction     = "profile instruction"
 	testProfileRuntimeStateKey = "profile_id"
 	testRunContextValue        = "ctx-a"
+	testFinalizedKey           = "finalized"
+	testFinalizedValue         = "yes"
+	testFinalizerPanic         = "finalizer panic"
 )
 
 type testRunContextKey struct{}
@@ -114,6 +118,80 @@ func (r *blockingRunner) Run(
 }
 
 func (r *blockingRunner) Close() error {
+	return nil
+}
+
+type controlledCancelRunner struct {
+	started     chan struct{}
+	canceling   chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+	once        sync.Once
+}
+
+func (r *controlledCancelRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	r.once.Do(func() {
+		close(r.started)
+	})
+
+	ch := make(chan *event.Event)
+	go func() {
+		defer close(ch)
+		<-ctx.Done()
+		close(r.canceling)
+		<-r.release
+	}()
+	return ch, nil
+}
+
+func (r *controlledCancelRunner) Close() error {
+	r.releaseOnce.Do(func() {
+		close(r.release)
+	})
+	return nil
+}
+
+type exitGateRunner struct {
+	started    chan struct{}
+	unblock    chan struct{}
+	afterReply chan struct{}
+	once       sync.Once
+}
+
+func (r *exitGateRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	r.once.Do(func() {
+		close(r.started)
+	})
+	ch := make(chan *event.Event)
+	go func() {
+		defer close(ch)
+		<-r.unblock
+		ch <- &event.Event{
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("done"),
+				}},
+			},
+		}
+		close(r.afterReply)
+	}()
+	return ch, nil
+}
+
+func (r *exitGateRunner) Close() error {
 	return nil
 }
 
@@ -265,6 +343,19 @@ func requireWaitResult(
 		t.Fatal("wait did not return after terminal transition")
 	}
 	return waitResult{}
+}
+
+func requireNoWaitResult(
+	t *testing.T,
+	ch <-chan waitResult,
+) {
+	t.Helper()
+
+	select {
+	case result := <-ch:
+		t.Fatalf("wait returned before terminal transition: %+v", result)
+	case <-time.After(noWaitResultDelay):
+	}
 }
 
 func TestServiceSpawnCompletesRun(t *testing.T) {
@@ -501,11 +592,68 @@ func TestServiceCancelAndWait(t *testing.T) {
 	canceled, changed, err := svc.Cancel(context.Background(), run.ID)
 	require.NoError(t, err)
 	require.True(t, changed)
-	require.Equal(t, StatusCanceled, canceled.Status)
+	require.Equal(t, StatusCanceling, canceled.Status)
 
 	final, err := svc.Wait(context.Background(), run.ID)
 	require.NoError(t, err)
 	require.Equal(t, StatusCanceled, final.Status)
+}
+
+func TestServiceCancelWaitsForRunningChildExit(t *testing.T) {
+	t.Parallel()
+
+	runner := &controlledCancelRunner{
+		started:   make(chan struct{}),
+		canceling: make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	svc, err := NewService(runner)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "wait for controlled cancel",
+	})
+	require.NoError(t, err)
+	requireRunnerStarted(t, runner.started)
+
+	canceled, changed, err := svc.Cancel(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, StatusCanceling, canceled.Status)
+	require.Nil(t, canceled.FinishedAt)
+
+	select {
+	case <-runner.canceling:
+	case <-time.After(time.Second):
+		t.Fatal("runner did not observe cancellation")
+	}
+
+	got, err := svc.Get(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Equal(t, StatusCanceling, got.Status)
+	require.Nil(t, got.FinishedAt)
+
+	waitCh := make(chan waitResult, 1)
+	go func() {
+		final, waitErr := svc.Wait(context.Background(), run.ID)
+		waitCh <- waitResult{run: final, err: waitErr}
+	}()
+	requireRegisteredWaiter(t, svc, run.ID)
+	requireNoWaitResult(t, waitCh)
+
+	runner.releaseOnce.Do(func() {
+		close(runner.release)
+	})
+	result := requireWaitResult(t, waitCh)
+	require.NoError(t, result.err)
+	require.Equal(t, StatusCanceled, result.run.Status)
+	require.NotNil(t, result.run.FinishedAt)
 }
 
 func TestServiceTimeoutWithoutEventErrorDoesNotComplete(t *testing.T) {
@@ -684,6 +832,522 @@ func TestServiceScopesAndErrors(t *testing.T) {
 	require.True(t, canceled.Status.IsTerminal())
 }
 
+func TestServiceFinalizerAttachesMetadataBeforeTerminalUpdate(t *testing.T) {
+	t.Parallel()
+
+	observer := &captureObserver{}
+	svc, err := NewService(
+		&captureRunner{reply: "ok"},
+		WithObserver(observer),
+		WithFinalizer(FinalizerFunc(
+			func(ctx context.Context, run Run) map[string]string {
+				require.Equal(t, StatusCompleted, run.Status)
+				return map[string]string{
+					"added": " value with spaces ",
+				}
+			},
+		)),
+	)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "attach metadata",
+		Metadata: map[string]string{
+			"initial": "value",
+		},
+	})
+	require.NoError(t, err)
+
+	final, err := svc.Wait(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Equal(t, "value", final.Metadata["initial"])
+	require.Equal(t, "value with spaces", final.Metadata["added"])
+
+	require.Eventually(t, func() bool {
+		seen := observer.statuses()
+		for _, status := range seen {
+			if status != StatusCompleted {
+				continue
+			}
+			observer.mu.Lock()
+			defer observer.mu.Unlock()
+			last := observer.runs[len(observer.runs)-1]
+			return last.Metadata["added"] == "value with spaces"
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestFinalizerHelpersHandleNilBranches(t *testing.T) {
+	t.Parallel()
+
+	const helperRunID = "finalizer-helper-run"
+
+	var fn FinalizerFunc
+	require.Nil(t, fn.FinalizeRun(context.Background(), Run{}))
+	require.Nil(t, runFinalizer(context.Background(), nil, Run{}))
+
+	metadata := runFinalizer(
+		nil,
+		FinalizerFunc(func(ctx context.Context, run Run) map[string]string {
+			require.NotNil(t, ctx)
+			require.Equal(t, helperRunID, run.ID)
+			return map[string]string{testFinalizedKey: testFinalizedValue}
+		}),
+		Run{ID: helperRunID},
+	)
+	require.Equal(t, testFinalizedValue, metadata[testFinalizedKey])
+
+	var nilService *Service
+	require.Nil(t, nilService.finalizeRun(context.Background(), Run{}))
+	require.NotNil(t, nilService.finalizerBaseContext())
+
+	svc := &Service{}
+	require.NotNil(t, svc.finalizerBaseContext())
+	require.NoError(t, nilService.persist(context.Background()))
+	require.NoError(t, svc.persist(context.Background()))
+}
+
+func TestRunFinalizerRecoversPanic(t *testing.T) {
+	t.Parallel()
+
+	panicFinalizer := FinalizerFunc(
+		func(ctx context.Context, run Run) map[string]string {
+			panic(testFinalizerPanic)
+		},
+	)
+	require.Nil(t, runFinalizer(context.Background(), panicFinalizer, Run{}))
+
+	store := NewMemoryStore()
+	now := time.Now()
+	require.NoError(t, store.Save(context.Background(), []Run{{
+		ID:              "panic-normalization-run",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "normalize with panic",
+		Status:          StatusRunning,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		StartedAt:       cloneTime(now),
+	}}))
+	normalized, err := NewService(
+		&captureRunner{reply: "ok"},
+		WithStore(store),
+		WithFinalizer(panicFinalizer),
+	)
+	require.NoError(t, err)
+	restarted, err := normalized.Get(
+		context.Background(),
+		"panic-normalization-run",
+	)
+	require.NoError(t, err)
+	require.Equal(t, StatusFailed, restarted.Status)
+
+	svc, err := NewService(
+		&captureRunner{reply: "ok"},
+		WithFinalizer(panicFinalizer),
+	)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "complete with panic",
+	})
+	require.NoError(t, err)
+	final, err := svc.Wait(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Equal(t, StatusCompleted, final.Status)
+	require.Empty(t, final.Metadata)
+}
+
+func TestServiceStopAllRunningHandlesNilAndExitingRuns(t *testing.T) {
+	t.Parallel()
+
+	activeCtx, activeCancel := context.WithCancel(context.Background())
+	defer activeCancel()
+
+	svc := &Service{
+		running: map[string]*runningRun{
+			"nil":     nil,
+			"exiting": {exiting: true},
+			"active":  {cancel: activeCancel},
+		},
+	}
+	svc.stopAllRunning()
+
+	svc.mu.Lock()
+	_, hasNil := svc.running["nil"]
+	exiting := svc.running["exiting"]
+	active := svc.running["active"]
+	svc.mu.Unlock()
+
+	require.False(t, hasNil)
+	require.False(t, exiting.cancelRequested)
+	require.True(t, active.cancelRequested)
+	require.ErrorIs(t, activeCtx.Err(), context.Canceled)
+}
+
+func TestServiceTerminalHelpersDropMissingRuns(t *testing.T) {
+	t.Parallel()
+
+	const terminalRunID = "terminal-helper-run"
+
+	errTerminal := errors.New("terminal helper failure")
+	newService := func() *Service {
+		return &Service{
+			store:   NewMemoryStore(),
+			clock:   time.Now,
+			runs:    map[string]*Run{},
+			running: map[string]*runningRun{terminalRunID: {}},
+		}
+	}
+
+	svc := newService()
+	svc.finishRun(terminalRunID, "terminal helper result", nil)
+	requireNoRunningRun(t, svc, terminalRunID)
+
+	svc = newService()
+	svc.failPersistedRun(terminalRunID, errTerminal, time.Now())
+	requireNoRunningRun(t, svc, terminalRunID)
+
+	svc = newService()
+	_, err := svc.finalizeCanceledRun(context.Background(), terminalRunID)
+	require.ErrorIs(t, err, ErrRunNotFound)
+}
+
+func TestServiceTerminalPersistFailureDoesNotNotifyObserver(t *testing.T) {
+	t.Parallel()
+
+	errTerminal := errors.New("terminal persist failure")
+	tests := []struct {
+		name   string
+		finish func(*Service, string)
+	}{
+		{
+			name: "finished run",
+			finish: func(svc *Service, runID string) {
+				svc.finishRun(runID, "terminal helper result", nil)
+			},
+		},
+		{
+			name: "failed persisted run",
+			finish: func(svc *Service, runID string) {
+				svc.failPersistedRun(runID, errTerminal, time.Now())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runID := "terminal-persist-failure"
+			observer := &captureObserver{}
+			svc := &Service{
+				store:    &failOnSaveStore{failAt: firstPersistAttempt},
+				observer: observer,
+				clock:    time.Now,
+				runs: map[string]*Run{
+					runID: runPtr(Run{
+						ID:              runID,
+						OwnerUserID:     "user-a",
+						ParentSessionID: "parent-a",
+						Task:            "finish with persist failure",
+						Status:          StatusRunning,
+						CreatedAt:       time.Now(),
+						UpdatedAt:       time.Now(),
+					}),
+				},
+				running: map[string]*runningRun{runID: {}},
+				waiters: map[string][]chan struct{}{},
+			}
+
+			tt.finish(svc, runID)
+
+			require.Empty(t, observer.statuses())
+			requireNoRunningRun(t, svc, runID)
+			got, err := svc.Get(context.Background(), runID)
+			require.NoError(t, err)
+			require.True(t, got.Status.IsTerminal())
+		})
+	}
+}
+
+func requireNoRunningRun(t *testing.T, svc *Service, runID string) {
+	t.Helper()
+	svc.mu.Lock()
+	_, running := svc.running[runID]
+	svc.mu.Unlock()
+	require.False(t, running)
+}
+
+func TestServiceFinalizerRunsForQueuedCancel(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		&captureRunner{reply: "ok"},
+		WithFinalizer(FinalizerFunc(
+			func(ctx context.Context, run Run) map[string]string {
+				require.Equal(t, StatusCanceled, run.Status)
+				return map[string]string{
+					testFinalizedKey: testFinalizedValue,
+				}
+			},
+		)),
+	)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+
+	now := time.Now()
+	run := Run{
+		ID:              "queued-cancel-finalizer",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "cancel queued work",
+		Status:          StatusQueued,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	svc.mu.Lock()
+	svc.runs[run.ID] = runPtr(run)
+	svc.mu.Unlock()
+
+	canceled, changed, err := svc.Cancel(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, StatusCanceled, canceled.Status)
+	require.Equal(
+		t,
+		testFinalizedValue,
+		canceled.Metadata[testFinalizedKey],
+	)
+}
+
+func TestServiceCancelDuringFinalizerDoesNotOverrideExitStatus(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	var releaseOnce sync.Once
+	svc, err := NewService(
+		&captureRunner{reply: "done"},
+		WithFinalizer(FinalizerFunc(
+			func(ctx context.Context, run Run) map[string]string {
+				enteredOnce.Do(func() {
+					close(entered)
+				})
+				<-release
+				return map[string]string{
+					testFinalizedKey: testFinalizedValue,
+				}
+			},
+		)),
+	)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+		require.NoError(t, svc.Close())
+	})
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "complete then finalize",
+	})
+	require.NoError(t, err)
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("finalizer did not run")
+	}
+
+	got, err := svc.Get(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Equal(t, StatusFinalizing, got.Status)
+
+	waitCh := make(chan waitResult, 1)
+	go func() {
+		final, waitErr := svc.Wait(context.Background(), run.ID)
+		waitCh <- waitResult{run: final, err: waitErr}
+	}()
+	select {
+	case <-waitCh:
+		t.Fatal("wait returned before finalizer completed")
+	case <-time.After(noWaitResultDelay):
+	}
+
+	canceled, changed, err := svc.Cancel(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, StatusFinalizing, canceled.Status)
+
+	releaseOnce.Do(func() {
+		close(release)
+	})
+	result := requireWaitResult(t, waitCh)
+	require.NoError(t, result.err)
+	final := result.run
+	require.Equal(t, StatusCompleted, final.Status)
+	require.Equal(t, testFinalizedValue, final.Metadata[testFinalizedKey])
+}
+
+func TestServiceCloseCancelsFinalizerContext(t *testing.T) {
+	entered := make(chan struct{})
+	finalized := make(chan struct{})
+	var enteredOnce sync.Once
+	var finalizedOnce sync.Once
+	svc, err := NewService(
+		&captureRunner{reply: "done"},
+		WithFinalizer(FinalizerFunc(
+			func(ctx context.Context, run Run) map[string]string {
+				enteredOnce.Do(func() {
+					close(entered)
+				})
+				<-ctx.Done()
+				finalizedOnce.Do(func() {
+					close(finalized)
+				})
+				return map[string]string{
+					testFinalizedKey: testFinalizedValue,
+				}
+			},
+		)),
+	)
+	require.NoError(t, err)
+	defer func() {
+		_ = svc.Close()
+	}()
+	svc.Start(context.Background())
+
+	_, err = svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "close during finalizer",
+	})
+	require.NoError(t, err)
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("finalizer did not run")
+	}
+
+	closed := make(chan error, 1)
+	go func() {
+		closed <- svc.Close()
+	}()
+
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("close did not cancel finalizer")
+	}
+	select {
+	case <-finalized:
+	default:
+		t.Fatal("finalizer did not observe context cancellation")
+	}
+}
+
+func TestServiceCancelAfterChildReplyDoesNotOverrideExitStatus(t *testing.T) {
+	t.Parallel()
+
+	runner := &exitGateRunner{
+		started:    make(chan struct{}),
+		unblock:    make(chan struct{}),
+		afterReply: make(chan struct{}),
+	}
+	svc, err := NewService(runner)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "complete then cancel race",
+	})
+	require.NoError(t, err)
+	requireRunnerStarted(t, runner.started)
+
+	close(runner.unblock)
+	select {
+	case <-runner.afterReply:
+	case <-time.After(time.Second):
+		t.Fatal("runner did not emit reply")
+	}
+
+	require.Eventually(t, func() bool {
+		got, getErr := svc.Get(context.Background(), run.ID)
+		return getErr == nil && got.Status == StatusCompleted
+	}, time.Second, time.Millisecond)
+
+	canceled, changed, err := svc.Cancel(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, StatusCompleted, canceled.Status)
+}
+
+func TestFinishedRunViewIgnoresLateCancelAfterSuccessfulExit(t *testing.T) {
+	t.Parallel()
+
+	run := Run{
+		ID:              "late-cancel",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "complete first",
+		Status:          StatusRunning,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	final := finishedRunView(
+		run,
+		"completed output",
+		nil,
+		time.Now(),
+	)
+
+	require.Equal(t, StatusCompleted, final.Status)
+	require.Equal(t, "completed output", final.Result)
+}
+
+func TestFinishedRunViewKeepsChildFailureAfterLateCancel(t *testing.T) {
+	t.Parallel()
+
+	runErr := errors.New("child failed")
+	final := finishedRunView(
+		Run{
+			ID:              "late-cancel-error",
+			OwnerUserID:     "user-a",
+			ParentSessionID: "parent-a",
+			Task:            "fail first",
+			Status:          StatusRunning,
+			CreatedAt:       time.Now(),
+			UpdatedAt:       time.Now(),
+		},
+		"",
+		runErr,
+		time.Now(),
+	)
+
+	require.Equal(t, StatusFailed, final.Status)
+	require.Equal(t, runErr.Error(), final.Error)
+}
+
 func TestServiceFailureAndRestartNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -700,12 +1364,26 @@ func TestServiceFailureAndRestartNormalization(t *testing.T) {
 		StartedAt:       cloneTime(now),
 	}}))
 
-	svc, err := NewService(&captureRunner{reply: "ok"}, WithStore(store))
+	svc, err := NewService(
+		&captureRunner{reply: "ok"},
+		WithStore(store),
+		WithFinalizer(FinalizerFunc(
+			func(ctx context.Context, run Run) map[string]string {
+				require.Equal(t, StatusFailed, run.Status)
+				_, ok := ctx.Deadline()
+				require.True(t, ok)
+				return map[string]string{
+					testFinalizedKey: testFinalizedValue,
+				}
+			},
+		)),
+	)
 	require.NoError(t, err)
 	run, err := svc.Get(context.Background(), "run-1")
 	require.NoError(t, err)
 	require.Equal(t, StatusFailed, run.Status)
 	require.Contains(t, run.Error, "previous runtime restart")
+	require.Equal(t, testFinalizedValue, run.Metadata[testFinalizedKey])
 
 	failing, err := NewService(&captureRunner{
 		runErr: errors.New("runner boom"),
@@ -750,6 +1428,14 @@ func TestServiceMarksRunFailedWhenPersistingRunningStateFails(
 	svc, err := NewService(
 		&captureRunner{reply: "ok"},
 		WithStore(store),
+		WithFinalizer(FinalizerFunc(
+			func(ctx context.Context, run Run) map[string]string {
+				require.Equal(t, StatusFailed, run.Status)
+				return map[string]string{
+					testFinalizedKey: testFinalizedValue,
+				}
+			},
+		)),
 	)
 	require.NoError(t, err)
 	svc.Start(context.Background())
@@ -765,7 +1451,16 @@ func TestServiceMarksRunFailedWhenPersistingRunningStateFails(
 		got, getErr := svc.Get(context.Background(), run.ID)
 		return getErr == nil &&
 			got.Status == StatusFailed &&
-			strings.Contains(got.Error, testPersistBoom)
+			strings.Contains(got.Error, testPersistBoom) &&
+			got.Metadata[testFinalizedKey] == testFinalizedValue
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		stored, loadErr := store.Load(context.Background())
+		if loadErr != nil || len(stored) != 1 {
+			return false
+		}
+		return stored[0].Status == StatusFailed &&
+			stored[0].Metadata[testFinalizedKey] == testFinalizedValue
 	}, time.Second, 10*time.Millisecond)
 }
 

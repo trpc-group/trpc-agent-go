@@ -30,6 +30,8 @@ import (
 const (
 	childSessionPrefix = "taskrun:"
 	requestIDPrefix    = "taskrun:"
+
+	defaultFinalizerTimeout = time.Minute
 )
 
 // Option configures a Service.
@@ -37,9 +39,10 @@ type Option func(*Options)
 
 // Options contains Service configuration.
 type Options struct {
-	Store    Store
-	Observer Observer
-	Clock    func() time.Time
+	Store     Store
+	Observer  Observer
+	Finalizer Finalizer
+	Clock     func() time.Time
 }
 
 // WithStore configures persistent storage for runs.
@@ -56,6 +59,13 @@ func WithObserver(observer Observer) Option {
 	}
 }
 
+// WithFinalizer configures terminal metadata attachment.
+func WithFinalizer(finalizer Finalizer) Option {
+	return func(opts *Options) {
+		opts.Finalizer = finalizer
+	}
+}
+
 // WithClock configures the clock used by the service.
 func WithClock(clock func() time.Time) Option {
 	return func(opts *Options) {
@@ -65,10 +75,11 @@ func WithClock(clock func() time.Time) Option {
 
 // Service manages persistent background task runs.
 type Service struct {
-	runner   runner.Runner
-	store    Store
-	observer Observer
-	clock    func() time.Time
+	runner    runner.Runner
+	store     Store
+	observer  Observer
+	finalizer Finalizer
+	clock     func() time.Time
 
 	mu      sync.Mutex
 	runs    map[string]*Run
@@ -86,6 +97,7 @@ type Service struct {
 type runningRun struct {
 	cancel          context.CancelFunc
 	cancelRequested bool
+	exiting         bool
 }
 
 var _ taskrun.Controller = (*Service)(nil)
@@ -116,13 +128,14 @@ func NewService(r runner.Runner, opts ...Option) (*Service, error) {
 		return nil, err
 	}
 	s := &Service{
-		runner:   r,
-		store:    options.Store,
-		observer: options.Observer,
-		clock:    options.Clock,
-		runs:     make(map[string]*Run, len(loaded)),
-		running:  make(map[string]*runningRun),
-		waiters:  make(map[string][]chan struct{}),
+		runner:    r,
+		store:     options.Store,
+		observer:  options.Observer,
+		finalizer: options.Finalizer,
+		clock:     options.Clock,
+		runs:      make(map[string]*Run, len(loaded)),
+		running:   make(map[string]*runningRun),
+		waiters:   make(map[string][]chan struct{}),
 	}
 	for _, run := range loaded {
 		copied := cloneRun(run)
@@ -131,7 +144,7 @@ func NewService(r runner.Runner, opts ...Option) (*Service, error) {
 		}
 		s.runs[copied.ID] = &copied
 	}
-	if normalizeLoadedRuns(s.runs, s.clock()) {
+	if normalizeLoadedRuns(s.runs, s.clock(), s.finalizer) {
 		if err := s.persist(context.Background()); err != nil {
 			return nil, err
 		}
@@ -279,9 +292,15 @@ func (s *Service) Cancel(
 		return nil, false, ErrRunNotFound
 	}
 
-	run, changed, err := s.markCanceled(strings.TrimSpace(runID))
+	run, changed, finalize, err := s.markCanceled(strings.TrimSpace(runID))
 	if err != nil || !changed {
 		return run, changed, err
+	}
+	if finalize {
+		run, err = s.finalizeCanceledRun(s.finalizerBaseContext(), run.ID)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	if err := s.persist(ctx); err != nil {
 		s.wake(run.ID)
@@ -353,6 +372,7 @@ func (s *Service) execute(
 	result := replyAccumulator{}
 	runErr := s.runChild(runCtx, run, req, &result)
 	output := trimResult(result.text)
+	s.markExiting(runID)
 	s.finishRun(runID, output, runErr)
 }
 
@@ -367,7 +387,7 @@ func (s *Service) markRunning(
 		s.mu.Unlock()
 		return nil, nil, nil, ErrRunNotFound
 	}
-	if run.Status == StatusCanceled {
+	if run.Status == StatusCanceled || run.Status == StatusCanceling {
 		s.mu.Unlock()
 		return nil, nil, nil, fmt.Errorf(
 			"taskrun: run canceled before start",
@@ -505,6 +525,17 @@ func normalizeRuntimeStateKeys(keys RuntimeStateKeys) RuntimeStateKeys {
 	}
 }
 
+func (s *Service) markExiting(runID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	running := s.running[runID]
+	if running == nil {
+		return
+	}
+	running.exiting = true
+}
+
 func (s *Service) finishRun(
 	runID string,
 	output string,
@@ -517,18 +548,51 @@ func (s *Service) finishRun(
 		s.mu.Unlock()
 		return
 	}
-	running := s.running[runID]
-	delete(s.running, runID)
-
 	now := s.clock()
+	view := finishedRunView(
+		*run,
+		output,
+		runErr,
+		now,
+	)
+	*run = finalizingRunView(view, now)
+	s.mu.Unlock()
+
+	finalMetadata := s.finalizeRun(s.finalizerBaseContext(), view)
+
+	s.mu.Lock()
+	run = s.runs[runID]
+	if run == nil {
+		delete(s.running, runID)
+		s.mu.Unlock()
+		return
+	}
+	delete(s.running, runID)
+	view.Metadata = mergeMetadata(view.Metadata, finalMetadata)
+	view.UpdatedAt = s.clock()
+	*run = cloneRun(view)
+	s.mu.Unlock()
+
+	if err := s.persist(context.Background()); err != nil {
+		log.Warnf("taskrun: persist run %s failed: %v", runID, err)
+		s.wake(runID)
+		return
+	}
+	s.notify(context.Background(), view)
+	s.wake(runID)
+}
+
+func finishedRunView(
+	run Run,
+	output string,
+	runErr error,
+	now time.Time,
+) Run {
+	run = cloneRun(run)
 	run.Result = output
 	run.UpdatedAt = now
 	run.FinishedAt = cloneTime(now)
 	switch {
-	case running != nil && running.cancelRequested:
-		run.Status = StatusCanceled
-		run.Error = ""
-		run.Summary = summarizeText(statusCanceledSummary, 0)
 	case errors.Is(runErr, context.Canceled):
 		run.Status = StatusCanceled
 		run.Error = ""
@@ -546,43 +610,147 @@ func (s *Service) finishRun(
 		run.Error = ""
 		run.Summary = summarizeText(output, defaultStoredSummaryRunes)
 	}
-	view := cloneRun(*run)
-	s.mu.Unlock()
-
-	if err := s.persist(context.Background()); err != nil {
-		log.Warnf("taskrun: persist run %s failed: %v", runID, err)
-	}
-	s.notify(context.Background(), view)
-	s.wake(runID)
+	return run
 }
 
-func (s *Service) markCanceled(runID string) (*Run, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func finalizingRunView(run Run, now time.Time) Run {
+	run = cloneRun(run)
+	run.Status = StatusFinalizing
+	run.UpdatedAt = now
+	return run
+}
 
-	run := s.runs[runID]
-	if run == nil {
-		return nil, false, ErrRunNotFound
-	}
-	if run.Status.IsTerminal() {
-		view := cloneRun(*run)
-		return &view, false, nil
-	}
-
-	now := s.clock()
+func canceledRunView(run Run, now time.Time) Run {
+	run = cloneRun(run)
 	run.Status = StatusCanceled
 	run.Error = ""
 	run.Summary = summarizeText(statusCanceledSummary, 0)
 	run.UpdatedAt = now
 	run.FinishedAt = cloneTime(now)
+	return run
+}
+
+func failedRunView(run Run, errText string, now time.Time) Run {
+	run = cloneRun(run)
+	run.Status = StatusFailed
+	run.Error = errText
+	run.Summary = summarizeText(run.Error, defaultStoredSummaryRunes)
+	run.UpdatedAt = now
+	run.FinishedAt = cloneTime(now)
+	return run
+}
+
+func (s *Service) finalizeRun(ctx context.Context, run Run) map[string]string {
+	if s == nil {
+		return nil
+	}
+	return runFinalizer(ctx, s.finalizer, run)
+}
+
+func (s *Service) finalizerBaseContext() context.Context {
+	if s == nil || s.baseCtx == nil {
+		return context.Background()
+	}
+	return s.baseCtx
+}
+
+func runFinalizer(
+	ctx context.Context,
+	finalizer Finalizer,
+	run Run,
+) (metadata map[string]string) {
+	if finalizer == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	finalCtx, cancel := context.WithTimeout(ctx, defaultFinalizerTimeout)
+	defer cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Warnf(
+				"taskrun: finalizer panic for run %s: %v",
+				run.ID,
+				recovered,
+			)
+			metadata = nil
+		}
+	}()
+	return finalizer.FinalizeRun(finalCtx, run)
+}
+
+func (s *Service) finalizeCanceledRun(
+	ctx context.Context,
+	runID string,
+) (*Run, error) {
+	s.mu.Lock()
+	run := s.runs[runID]
+	if run == nil {
+		s.mu.Unlock()
+		return nil, ErrRunNotFound
+	}
+	view := canceledRunView(*run, s.clock())
+	s.mu.Unlock()
+
+	finalMetadata := s.finalizeRun(ctx, view)
+
+	s.mu.Lock()
+	run = s.runs[runID]
+	if run == nil {
+		s.mu.Unlock()
+		return nil, ErrRunNotFound
+	}
+	view = canceledRunView(*run, s.clock())
+	view.Metadata = mergeMetadata(view.Metadata, finalMetadata)
+	*run = cloneRun(view)
+	s.mu.Unlock()
+	return &view, nil
+}
+
+func (s *Service) markCanceled(runID string) (*Run, bool, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	run := s.runs[runID]
+	if run == nil {
+		return nil, false, false, ErrRunNotFound
+	}
+	if run.Status.IsTerminal() {
+		view := cloneRun(*run)
+		return &view, false, false, nil
+	}
+	if run.Status == StatusCanceling {
+		view := cloneRun(*run)
+		return &view, false, false, nil
+	}
+
 	if running := s.running[run.ID]; running != nil {
+		if running.exiting {
+			view := cloneRun(*run)
+			return &view, false, false, nil
+		}
 		running.cancelRequested = true
 		if running.cancel != nil {
 			running.cancel()
 		}
+		now := s.clock()
+		run.Status = StatusCanceling
+		run.Error = ""
+		run.Summary = summarizeText(statusCancelingSummary, 0)
+		run.UpdatedAt = now
+		view := cloneRun(*run)
+		return &view, true, false, nil
 	}
+
+	now := s.clock()
+	run.Status = StatusCanceling
+	run.Error = ""
+	run.Summary = summarizeText(statusCancelingSummary, 0)
+	run.UpdatedAt = now
+	run.FinishedAt = nil
 	view := cloneRun(*run)
-	return &view, true, nil
+	return &view, true, true, nil
 }
 
 func (s *Service) failPersistedRun(
@@ -591,20 +759,41 @@ func (s *Service) failPersistedRun(
 	now time.Time,
 ) {
 	s.mu.Lock()
-	delete(s.running, runID)
-	changed := false
-	if run := s.runs[runID]; run != nil {
-		run.Status = StatusFailed
-		run.Error = err.Error()
-		run.Summary = summarizeText(run.Error, defaultStoredSummaryRunes)
-		run.UpdatedAt = now
-		run.FinishedAt = cloneTime(now)
-		changed = true
+	run := s.runs[runID]
+	if run == nil {
+		delete(s.running, runID)
+		s.mu.Unlock()
+		return
 	}
+	running := s.running[runID]
+	if running != nil {
+		running.exiting = true
+	}
+	view := failedRunView(*run, err.Error(), now)
+	*run = finalizingRunView(view, now)
 	s.mu.Unlock()
-	if changed {
-		s.wake(runID)
+
+	finalMetadata := s.finalizeRun(s.finalizerBaseContext(), view)
+
+	s.mu.Lock()
+	run = s.runs[runID]
+	if run == nil {
+		delete(s.running, runID)
+		s.mu.Unlock()
+		return
 	}
+	delete(s.running, runID)
+	view.Metadata = mergeMetadata(view.Metadata, finalMetadata)
+	view.UpdatedAt = s.clock()
+	*run = cloneRun(view)
+	s.mu.Unlock()
+	if err := s.persist(context.Background()); err != nil {
+		log.Warnf("taskrun: persist failed run %s failed: %v", runID, err)
+		s.wake(runID)
+		return
+	}
+	s.notify(context.Background(), view)
+	s.wake(runID)
 }
 
 func (s *Service) stopAllRunning() {
@@ -614,6 +803,9 @@ func (s *Service) stopAllRunning() {
 	for id, running := range s.running {
 		if running == nil {
 			delete(s.running, id)
+			continue
+		}
+		if running.exiting {
 			continue
 		}
 		running.cancelRequested = true
@@ -700,6 +892,21 @@ func cloneMetadata(metadata map[string]string) map[string]string {
 	out := make(map[string]string, len(metadata))
 	for key, value := range metadata {
 		out[key] = value
+	}
+	return out
+}
+
+func mergeMetadata(base map[string]string, extra map[string]string) map[string]string {
+	out := cloneMetadata(base)
+	for key, value := range extra {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string)
+		}
+		out[key] = strings.TrimSpace(value)
 	}
 	return out
 }
