@@ -14,13 +14,16 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 type fakeController struct {
@@ -52,6 +55,7 @@ func (c *fakeController) Spawn(
 		ID:              id,
 		OwnerUserID:     req.OwnerUserID,
 		ParentSessionID: req.ParentSessionID,
+		AppName:         req.AppName,
 		AgentName:       req.AgentName,
 		Task:            req.Task,
 		Status:          taskrunruntime.StatusQueued,
@@ -164,6 +168,7 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	require.Equal(t, taskrunruntime.StatusQueued, spawned.Status)
 
 	controller.mu.Lock()
+	require.Equal(t, "app", controller.spawned.AppName)
 	require.Equal(t, "worker", controller.spawned.AgentName)
 	require.Equal(t, "trace-1", controller.spawned.RuntimeState["trace_id"])
 	require.Equal(t, "review", controller.spawned.Task)
@@ -342,6 +347,15 @@ func TestToolDeclarations(t *testing.T) {
 		tools.wait.Declaration().InputSchema.Properties,
 		argTimeoutSeconds,
 	)
+	require.Len(t, tools.All(), 5)
+
+	sessionService := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, sessionService.Close())
+	})
+	tools = NewTools(newFakeController(), WithSessionService(sessionService))
+	require.Equal(t, toolTranscript, tools.read.Declaration().Name)
+	require.Len(t, tools.All(), 6)
 
 	var nilTools *Tools
 	require.Nil(t, nilTools.All())
@@ -350,6 +364,250 @@ func TestToolDeclarations(t *testing.T) {
 	empty.SetController(newFakeController())
 	require.NotNil(t, empty.state)
 	require.NotNil(t, empty.state.controller)
+}
+
+func TestTranscriptToolReadsChildSessionEvents(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	sessionService := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, sessionService.Close())
+	})
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user-a",
+		SessionID: "child-a",
+	}
+	child, err := sessionService.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, sessionService.AppendEvent(ctx, child, &event.Event{
+		ID:        "evt-0",
+		Author:    "user",
+		Timestamp: time.Now(),
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("start"),
+			}},
+		},
+	}))
+	require.NoError(t, sessionService.AppendEvent(ctx, child, &event.Event{
+		ID:        "evt-1",
+		Author:    "worker",
+		Timestamp: time.Now(),
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						Function: model.FunctionDefinitionParam{
+							Name: "lookup",
+						},
+					}},
+				},
+			}},
+		},
+	}))
+	require.NoError(t, sessionService.AppendEvent(ctx, child, &event.Event{
+		ID:        "evt-2",
+		Author:    "worker",
+		Timestamp: time.Now(),
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("final answer"),
+			}},
+		},
+	}))
+
+	controller := newFakeController()
+	controller.runs["run-1"] = taskrunruntime.Run{
+		ID:              "run-1",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "session-a",
+		AppName:         "app",
+		ChildSessionID:  "child-a",
+		Status:          taskrunruntime.StatusRunning,
+	}
+	tools := NewTools(controller, WithSessionService(sessionService))
+	invocationCtx := newInvocationContext("user-a", "session-a", nil)
+
+	gotAny, err := tools.read.Call(invocationCtx, []byte(`{"id":"run-1"}`))
+	require.NoError(t, err)
+	got := gotAny.(transcriptResult)
+	require.Equal(t, "run-1", got.ID)
+	require.Equal(t, "child-a", got.ChildSessionID)
+	require.Len(t, got.Events, 3)
+	require.Equal(t, "start", got.Events[0].Content)
+	require.Equal(t, "lookup", got.Events[1].ToolCalls[0])
+	require.Equal(t, "final answer", got.Events[2].Content)
+}
+
+func TestTranscriptToolUsesRunAppName(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	sessionService := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, sessionService.Close())
+	})
+	key := session.Key{
+		AppName:   "child-app",
+		UserID:    "user-a",
+		SessionID: "child-a",
+	}
+	child, err := sessionService.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, sessionService.AppendEvent(ctx, child, &event.Event{
+		ID:        "evt-user",
+		Author:    "user",
+		Timestamp: time.Now(),
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("start"),
+			}},
+		},
+	}))
+	require.NoError(t, sessionService.AppendEvent(ctx, child, &event.Event{
+		ID:        "evt-child",
+		Author:    "worker",
+		Timestamp: time.Now(),
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("child app event"),
+			}},
+		},
+	}))
+
+	controller := newFakeController()
+	controller.runs["run-1"] = taskrunruntime.Run{
+		ID:              "run-1",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "session-a",
+		AppName:         "child-app",
+		ChildSessionID:  "child-a",
+		Status:          taskrunruntime.StatusRunning,
+	}
+	tools := NewTools(controller, WithSessionService(sessionService))
+	invocationCtx := newInvocationContextWithApp(
+		"parent-app",
+		"user-a",
+		"session-a",
+		nil,
+	)
+
+	gotAny, err := tools.read.Call(invocationCtx, []byte(`{"id":"run-1"}`))
+	require.NoError(t, err)
+	got := gotAny.(transcriptResult)
+	require.Len(t, got.Events, 2)
+	require.Equal(t, "child app event", got.Events[1].Content)
+}
+
+func TestTranscriptToolRequiresSessionServiceAndParentSession(t *testing.T) {
+	t.Parallel()
+
+	controller := newFakeController()
+	controller.runs["run-1"] = taskrunruntime.Run{
+		ID:              "run-1",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "other-session",
+		ChildSessionID:  "child-a",
+	}
+	ctx := newInvocationContext("user-a", "session-a", nil)
+
+	withoutSessionService := transcriptTool{
+		state: &toolState{controller: controller},
+	}
+	_, err := withoutSessionService.Call(ctx, []byte(`{"id":"run-1"}`))
+	require.ErrorContains(t, err, "session service unavailable")
+
+	sessionService := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, sessionService.Close())
+	})
+	tools := NewTools(controller, WithSessionService(sessionService))
+	_, err = tools.read.Call(ctx, []byte(`{"id":"run-1"}`))
+	require.ErrorIs(t, err, taskrunruntime.ErrRunNotFound)
+}
+
+func TestTranscriptToolTrimsNormalizedEventLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	sessionService := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, sessionService.Close())
+	})
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user-a",
+		SessionID: "child-a",
+	}
+	child, err := sessionService.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, sessionService.AppendEvent(ctx, child, &event.Event{
+		ID:        "evt-user",
+		Author:    "user",
+		Timestamp: time.Now(),
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("start"),
+			}},
+		},
+	}))
+	for i := 0; i < maxTranscriptEventLimit+1; i++ {
+		require.NoError(t, sessionService.AppendEvent(ctx, child, &event.Event{
+			ID:        fmt.Sprintf("evt-%03d", i),
+			Author:    "worker",
+			Timestamp: time.Now(),
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(
+						fmt.Sprintf("answer-%03d", i),
+					),
+				}},
+			},
+		}))
+	}
+
+	controller := newFakeController()
+	controller.runs["run-1"] = taskrunruntime.Run{
+		ID:              "run-1",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "session-a",
+		AppName:         "app",
+		ChildSessionID:  "child-a",
+		Status:          taskrunruntime.StatusRunning,
+	}
+	tools := NewTools(controller, WithSessionService(sessionService))
+	invocationCtx := newInvocationContext("user-a", "session-a", nil)
+
+	gotAny, err := tools.read.Call(
+		invocationCtx,
+		[]byte(fmt.Sprintf(`{"id":"run-1","limit":%d}`, maxTranscriptEventLimit+1)),
+	)
+	require.NoError(t, err)
+	got := gotAny.(transcriptResult)
+	require.Len(t, got.Events, maxTranscriptEventLimit)
+	require.Equal(t, "answer-001", got.Events[0].Content)
+}
+
+func TestNormalizeTranscriptLimit(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, defaultTranscriptEventLimit, normalizeTranscriptLimit(0))
+	require.Equal(t, 3, normalizeTranscriptLimit(3))
+	require.Equal(
+		t,
+		maxTranscriptEventLimit,
+		normalizeTranscriptLimit(maxTranscriptEventLimit+1),
+	)
 }
 
 func TestToolsRejectNestedSpawnByDefault(t *testing.T) {
@@ -454,9 +712,18 @@ func newInvocationContext(
 	sessionID string,
 	runtimeState map[string]any,
 ) context.Context {
+	return newInvocationContextWithApp("app", userID, sessionID, runtimeState)
+}
+
+func newInvocationContextWithApp(
+	appName string,
+	userID string,
+	sessionID string,
+	runtimeState map[string]any,
+) context.Context {
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(
-			session.NewSession("app", userID, sessionID),
+			session.NewSession(appName, userID, sessionID),
 		),
 		agent.WithInvocationRunOptions(agent.RunOptions{
 			RuntimeState: runtimeState,
