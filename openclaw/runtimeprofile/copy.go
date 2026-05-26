@@ -38,6 +38,21 @@ func cloneProfile(profile Profile) Profile {
 	return profile
 }
 
+func cloneSelectors(selectors []Selector) []Selector {
+	if len(selectors) == 0 {
+		return nil
+	}
+	copied := make([]Selector, len(selectors))
+	for i, selector := range selectors {
+		copied[i] = selector
+		copied[i].Channels = copyStrings(selector.Channels)
+		copied[i].Tenants = copyStrings(selector.Tenants)
+		copied[i].Users = copyStrings(selector.Users)
+		copied[i].Sessions = copyStrings(selector.Sessions)
+	}
+	return copied
+}
+
 func copyStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil
