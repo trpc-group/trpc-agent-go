@@ -121,6 +121,26 @@ type EventMessageProjector func(
 	msg model.Message,
 ) model.Message
 
+// ToolResultCompactionSkipRecentFunc determines how many recent events should
+// be protected from historical tool-result compaction.
+type ToolResultCompactionSkipRecentFunc func(events []event.Event) int
+
+// ToolResultCompactionConfig declares tool-name based compaction rules.
+type ToolResultCompactionConfig struct {
+	// ForceCleanToolNames lists tool names whose results should always be
+	// compacted to a placeholder when context compaction is enabled.
+	ForceCleanToolNames []string
+	// KeepToolNames lists tool names whose results should be left untouched by
+	// context compaction. Model-level token tailoring may still remove older
+	// rounds if the final request is too large.
+	KeepToolNames []string
+	// SkipRecentFunc returns how many tail events should be treated as recent
+	// and protected from historical tool-result compaction. It only affects
+	// historical placeholder replacement; oversized tool-result truncation can
+	// still apply to recent events.
+	SkipRecentFunc ToolResultCompactionSkipRecentFunc
+}
+
 var (
 	defaultOptions = Options{
 		ChannelBufferSize:                    defaultChannelBufferSize,
@@ -340,6 +360,8 @@ type Options struct {
 	// estimate, not provider-reported usage tokens. When nil,
 	// SimpleTokenCounter is used.
 	ContextCompactionTokenCounter model.TokenCounter
+	// ToolResultCompactionConfig declares tool-name based compaction rules.
+	ToolResultCompactionConfig *ToolResultCompactionConfig
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	summaryFormatter func(summary string) string
@@ -1426,6 +1448,28 @@ func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *Options) {
 		if counter != nil {
 			opts.ContextCompactionTokenCounter = counter
+		}
+	}
+}
+
+// WithToolResultCompactionConfig sets tool-name based compaction rules.
+func WithToolResultCompactionConfig(
+	config *ToolResultCompactionConfig,
+) Option {
+	return func(opts *Options) {
+		if config == nil {
+			return
+		}
+		opts.ToolResultCompactionConfig = &ToolResultCompactionConfig{
+			ForceCleanToolNames: append(
+				[]string(nil),
+				config.ForceCleanToolNames...,
+			),
+			KeepToolNames: append(
+				[]string(nil),
+				config.KeepToolNames...,
+			),
+			SkipRecentFunc: config.SkipRecentFunc,
 		}
 	}
 }
