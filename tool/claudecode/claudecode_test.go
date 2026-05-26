@@ -2302,6 +2302,25 @@ func TestPDFHelpersCoverRemainingBranches(t *testing.T) {
 	require.EqualError(t, err, "failed to extract PDF pages: render failed")
 }
 
+func TestPdftoppmRunUsesDefaultCommandRunner(t *testing.T) {
+	t.Parallel()
+	pdftoppmTestMu.Lock()
+	t.Cleanup(func() {
+		pdftoppmTestMu.Unlock()
+	})
+	output, err := pdftoppmRun(os.Args[0], "-test.run=TestPdftoppmRunHelperProcess", "--", "pdftoppm-run-helper")
+	require.NoError(t, err)
+	require.Equal(t, "pdftoppm helper\n", string(output))
+}
+
+func TestPdftoppmRunHelperProcess(t *testing.T) {
+	if len(os.Args) == 0 || os.Args[len(os.Args)-1] != "pdftoppm-run-helper" {
+		return
+	}
+	_, _ = fmt.Fprintln(os.Stdout, "pdftoppm helper")
+	os.Exit(0)
+}
+
 func TestExtractPDFPagesFailsWhenPdftoppmIsUnavailable(t *testing.T) {
 	t.Parallel()
 	pdftoppmTestMu.Lock()
