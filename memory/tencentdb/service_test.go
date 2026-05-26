@@ -221,6 +221,85 @@ func TestIngestSessionRetriesAfterAsyncCaptureFailure(t *testing.T) {
 	}
 }
 
+func TestIngestSessionSerializesSameSessionCapturesAndTimestamps(t *testing.T) {
+	releaseFirst := make(chan struct{})
+	firstReqC := make(chan captureRequest, 1)
+	secondReqC := make(chan captureRequest, 1)
+	var released atomic.Bool
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != pathCapture {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		var req captureRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		switch requests.Add(1) {
+		case 1:
+			firstReqC <- req
+			<-releaseFirst
+		case 2:
+			secondReqC <- req
+		default:
+			t.Fatalf("unexpected extra capture request")
+		}
+		_ = json.NewEncoder(w).Encode(captureResponse{L0Recorded: len(req.Messages)})
+	}))
+	defer server.Close()
+	defer func() {
+		if released.CompareAndSwap(false, true) {
+			close(releaseFirst)
+		}
+	}()
+
+	svc, err := NewService(
+		WithGatewayURL(server.URL),
+		WithIngestWorkers(2),
+		WithIngestQueueSize(2),
+		WithIngestJobTimeout(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	defer func() {
+		if err := svc.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+	sess := captureReadySession()
+	if err := svc.IngestSession(context.Background(), sess); err != nil {
+		t.Fatalf("first IngestSession: %v", err)
+	}
+	firstReq := waitCaptureRequest(t, firstReqC, "first capture")
+
+	events := sess.GetEvents()
+	nextAt := events[len(events)-1].Timestamp.Add(time.Second)
+	appendSessionPair(sess, nextAt, "u2", "second fact", "a2", "stored second")
+	if err := svc.IngestSession(context.Background(), sess); err != nil {
+		t.Fatalf("second IngestSession: %v", err)
+	}
+	select {
+	case req := <-secondReqC:
+		t.Fatalf("second capture started before first completed: %#v", req)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if released.CompareAndSwap(false, true) {
+		close(releaseFirst)
+	}
+	secondReq := waitCaptureRequest(t, secondReqC, "second capture")
+	if len(firstReq.Messages) == 0 || len(secondReq.Messages) == 0 {
+		t.Fatalf("empty capture messages: first=%d second=%d", len(firstReq.Messages), len(secondReq.Messages))
+	}
+	firstLast := firstReq.Messages[len(firstReq.Messages)-1].Timestamp
+	if secondReq.Messages[0].Timestamp <= firstLast {
+		t.Fatalf("second timestamp = %d, want > %d", secondReq.Messages[0].Timestamp, firstLast)
+	}
+	if secondReq.UserContent != "second fact" || secondReq.AssistantContent != "stored second" {
+		t.Fatalf("second captured pair = %q / %q", secondReq.UserContent, secondReq.AssistantContent)
+	}
+}
+
 func TestInjectRecallContext(t *testing.T) {
 	req := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage("base"),
@@ -797,6 +876,45 @@ func captureReadySession() *session.Session {
 				}}},
 			},
 		},
+	}
+}
+
+func appendSessionPair(
+	sess *session.Session,
+	at time.Time,
+	userID string,
+	userContent string,
+	assistantID string,
+	assistantContent string,
+) {
+	sess.EventMu.Lock()
+	defer sess.EventMu.Unlock()
+	sess.Events = append(sess.Events,
+		event.Event{
+			ID:        userID,
+			Timestamp: at,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.NewUserMessage(userContent),
+			}}},
+		},
+		event.Event{
+			ID:        assistantID,
+			Timestamp: at.Add(time.Second),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.NewAssistantMessage(assistantContent),
+			}}},
+		},
+	)
+}
+
+func waitCaptureRequest(t *testing.T, ch <-chan captureRequest, name string) captureRequest {
+	t.Helper()
+	select {
+	case req := <-ch:
+		return req
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not start", name)
+		return captureRequest{}
 	}
 }
 

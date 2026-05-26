@@ -38,8 +38,10 @@ type Service struct {
 	wg     sync.WaitGroup
 	once   sync.Once
 
-	cursorMu sync.Mutex
-	inFlight map[string]time.Time
+	cursorMu           sync.Mutex
+	inFlight           map[string]time.Time
+	serialTail         map[string]*captureSerialState
+	syntheticTimestamp map[string]int64
 
 	tools []tool.Tool
 }
@@ -57,10 +59,12 @@ func NewService(opts ...Option) (*Service, error) {
 		return nil, err
 	}
 	s := &Service{
-		opts:     options,
-		client:   client,
-		queue:    make(chan ingestJob, options.IngestQueueSize),
-		inFlight: make(map[string]time.Time),
+		opts:               options,
+		client:             client,
+		queue:              make(chan ingestJob, options.IngestQueueSize),
+		inFlight:           make(map[string]time.Time),
+		serialTail:         make(map[string]*captureSerialState),
+		syntheticTimestamp: make(map[string]int64),
 	}
 	s.tools = s.buildTools()
 	s.startWorkers()
@@ -103,7 +107,7 @@ func (s *Service) IngestSession(
 		s.mu.RUnlock()
 		return nil
 	case <-ctx.Done():
-		s.clearInFlight(sessionKey, job.cursor)
+		s.finishCaptureJob(job, ctx.Err())
 		s.mu.RUnlock()
 		return ctx.Err()
 	}
@@ -197,13 +201,27 @@ func (s *Service) capture(ctx context.Context, job ingestJob) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if job.previous != nil {
+		select {
+		case <-job.previous.done:
+			if job.previous.err != nil {
+				err := fmt.Errorf("tencentdb memory: previous capture failed for session_key %q", job.req.SessionKey)
+				s.finishCaptureJob(job, err)
+				return err
+			}
+		case <-ctx.Done():
+			s.finishCaptureJob(job, ctx.Err())
+			return ctx.Err()
+		}
+	}
 	_, err := s.client.capture(ctx, job.req)
 	if err != nil {
-		s.clearInFlight(job.req.SessionKey, job.cursor)
-		return fmt.Errorf("tencentdb memory: capture failed: %w", err)
+		err = fmt.Errorf("tencentdb memory: capture failed: %w", err)
+		s.finishCaptureJob(job, err)
+		return err
 	}
 	writeBestEffortLastCaptureAt(job.sess, job.cursor)
-	s.clearInFlight(job.req.SessionKey, job.cursor)
+	s.finishCaptureJob(job, nil)
 	return nil
 }
 
@@ -226,6 +244,15 @@ func (s *Service) reserveIngestJob(sess *session.Session, sessionKey string) (in
 	if current, ok := s.inFlight[sessionKey]; !ok || scan.Latest.After(current) {
 		s.inFlight[sessionKey] = scan.Latest
 	}
+	messages, latestSynthetic := normalizeGatewayMessageTimestampsAfter(
+		scan.Messages,
+		time.Now(),
+		s.syntheticTimestamp[sessionKey],
+	)
+	s.syntheticTimestamp[sessionKey] = latestSynthetic
+	previous := s.serialTail[sessionKey]
+	serial := &captureSerialState{done: make(chan struct{})}
+	s.serialTail[sessionKey] = serial
 	return ingestJob{
 		req: captureRequest{
 			UserContent:      userContent,
@@ -233,17 +260,26 @@ func (s *Service) reserveIngestJob(sess *session.Session, sessionKey string) (in
 			SessionKey:       sessionKey,
 			SessionID:        sess.ID,
 			UserID:           sess.UserID,
-			Messages:         normalizeGatewayMessageTimestamps(scan.Messages, time.Now()),
+			Messages:         messages,
 		},
-		sess:   sess,
-		cursor: scan.Latest,
+		sess:     sess,
+		cursor:   scan.Latest,
+		previous: previous,
+		serial:   serial,
 	}, true
 }
 
-func (s *Service) clearInFlight(sessionKey string, cursor time.Time) {
+func (s *Service) finishCaptureJob(job ingestJob, err error) {
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
-	if current, ok := s.inFlight[sessionKey]; ok && !current.After(cursor) {
-		delete(s.inFlight, sessionKey)
+	if current, ok := s.inFlight[job.req.SessionKey]; ok && !current.After(job.cursor) {
+		delete(s.inFlight, job.req.SessionKey)
+	}
+	if job.serial != nil {
+		job.serial.err = err
+		if s.serialTail[job.req.SessionKey] == job.serial {
+			delete(s.serialTail, job.req.SessionKey)
+		}
+		close(job.serial.done)
 	}
 }

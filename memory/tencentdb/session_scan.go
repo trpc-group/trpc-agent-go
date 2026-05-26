@@ -26,11 +26,15 @@ type scanResult struct {
 }
 
 func scanTranscript(sess *session.Session, since time.Time) scanResult {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return scanResult{}
+	}
+	events := sess.GetEvents()
+	if len(events) == 0 {
 		return scanResult{}
 	}
 	var out scanResult
-	for _, e := range sess.Events {
+	for _, e := range events {
 		if e.Response == nil || !since.IsZero() && !e.Timestamp.After(since) {
 			continue
 		}
@@ -58,8 +62,17 @@ func scanTranscript(sess *session.Session, since time.Time) scanResult {
 }
 
 func normalizeGatewayMessageTimestamps(messages []tdaiMessage, captureAt time.Time) []tdaiMessage {
+	out, _ := normalizeGatewayMessageTimestampsAfter(messages, captureAt, 0)
+	return out
+}
+
+func normalizeGatewayMessageTimestampsAfter(
+	messages []tdaiMessage,
+	captureAt time.Time,
+	previousTimestamp int64,
+) ([]tdaiMessage, int64) {
 	if len(messages) == 0 {
-		return nil
+		return nil, previousTimestamp
 	}
 	if captureAt.IsZero() {
 		captureAt = time.Now()
@@ -67,15 +80,20 @@ func normalizeGatewayMessageTimestamps(messages []tdaiMessage, captureAt time.Ti
 	out := make([]tdaiMessage, len(messages))
 	copy(out, messages)
 	base := captureAt.Add(time.Second).UTC().UnixMilli()
+	if base <= previousTimestamp {
+		base = previousTimestamp + 1
+	}
 	for i := range out {
 		// The gateway's first per-session cursor is initialized when the capture
 		// request arrives. Use capture-time timestamps so the SDK's incremental
 		// filter treats this batch as new while preserving message order. A small
 		// forward offset avoids clock-order races between Go request construction
-		// and gateway request handling.
+		// and gateway request handling. Callers may also pass the last synthetic
+		// timestamp for the session so consecutive batches stay strictly
+		// increasing even if the wall clock does not move forward.
 		out[i].Timestamp = base + int64(i)
 	}
-	return out
+	return out, out[len(out)-1].Timestamp
 }
 
 func messageID(eventID string, choiceIndex int) string {

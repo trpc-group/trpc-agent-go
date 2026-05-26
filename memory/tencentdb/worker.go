@@ -18,9 +18,16 @@ import (
 )
 
 type ingestJob struct {
-	req    captureRequest
-	sess   *session.Session
-	cursor time.Time
+	req      captureRequest
+	sess     *session.Session
+	cursor   time.Time
+	previous *captureSerialState
+	serial   *captureSerialState
+}
+
+type captureSerialState struct {
+	done chan struct{}
+	err  error
 }
 
 func (s *Service) startWorkers() {
