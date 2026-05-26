@@ -171,12 +171,12 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{}); !IsKind(err, ErrPolicyViolation) {
+	if _, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{}); !isKind(err, ErrPolicyViolation) {
 		t.Fatalf("empty command error = %v, want ErrPolicyViolation", err)
 	}
 	if _, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
 		Cmd: "definitely-not-a-real-sandbox-test-command",
-	}); !IsKind(err, ErrSetupFailed) {
+	}); !isKind(err, ErrSetupFailed) {
 		t.Fatalf("start error = %v, want ErrSetupFailed", err)
 	}
 
@@ -184,7 +184,7 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 		Cmd:  "bash",
 		Args: []string{"-c", "sleep 1"},
 	})
-	if !IsKind(err, ErrTimeout) {
+	if !isKind(err, ErrTimeout) {
 		t.Fatalf("timeout error = %v, want ErrTimeout", err)
 	}
 	if !res.TimedOut || res.ExitCode != -1 {
@@ -202,7 +202,7 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = external.RunProgram(context.Background(), extWS, codeexecutor.RunProgramSpec{Cmd: "true"})
-	if !IsKind(err, ErrUnsupportedBackend) {
+	if !isKind(err, ErrUnsupportedBackend) {
 		t.Fatalf("external runtime error = %v, want ErrUnsupportedBackend", err)
 	}
 
@@ -215,7 +215,7 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = strict.RunProgram(context.Background(), strictWS, codeexecutor.RunProgramSpec{Cmd: "true"})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("strict runtime error = %v, want ErrPathDenied", err)
 	}
 
@@ -358,7 +358,7 @@ func TestRuntimeWorkspaceLifecycleAndManifest(t *testing.T) {
 		context.Background(),
 		"protected-manifest",
 		codeexecutor.WorkspacePolicy{},
-	); !IsKind(err, ErrPathDenied) {
+	); !isKind(err, ErrPathDenied) {
 		t.Fatalf("protected manifest error = %v, want ErrPathDenied", err)
 	}
 }
@@ -441,7 +441,7 @@ func TestRuntimeFilesystemOperations(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(host, "input.txt"), []byte("host"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.StageDirectory(context.Background(), ws, host, "work/host", codeexecutor.StageOptions{}); !IsKind(err, ErrPathDenied) {
+	if err := rt.StageDirectory(context.Background(), ws, host, "work/host", codeexecutor.StageOptions{}); !isKind(err, ErrPathDenied) {
 		t.Fatalf("ungranted host stage error = %v, want ErrPathDenied", err)
 	}
 	relativeRoot := t.TempDir()
@@ -475,7 +475,7 @@ func TestRuntimeFilesystemOperations(t *testing.T) {
 		"relative-host",
 		"work/relative",
 		codeexecutor.StageOptions{},
-	); !IsKind(err, ErrPathDenied) {
+	); !isKind(err, ErrPathDenied) {
 		t.Fatalf("relative host stage error = %v, want ErrPathDenied", err)
 	}
 
@@ -644,10 +644,10 @@ func TestPathPolicyResolutionAndAccess(t *testing.T) {
 	if abs != inside || rel != "work/inside.txt" {
 		t.Fatalf("absolute inside path resolved to (%q, %q)", abs, rel)
 	}
-	if _, _, err := rt.resolveWorkspacePath(ws, "../escape.txt"); !IsKind(err, ErrPathDenied) {
+	if _, _, err := rt.resolveWorkspacePath(ws, "../escape.txt"); !isKind(err, ErrPathDenied) {
 		t.Fatalf("relative escape error = %v, want ErrPathDenied", err)
 	}
-	if _, _, err := rt.resolveWorkspacePath(ws, filepath.Dir(ws.Path)); !IsKind(err, ErrPathDenied) {
+	if _, _, err := rt.resolveWorkspacePath(ws, filepath.Dir(ws.Path)); !isKind(err, ErrPathDenied) {
 		t.Fatalf("absolute escape error = %v, want ErrPathDenied", err)
 	}
 
@@ -655,7 +655,7 @@ func TestPathPolicyResolutionAndAccess(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(ws.Path, "work", "link")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := rt.resolveWorkspacePath(ws, "work/link/file.txt"); !IsKind(err, ErrPathDenied) {
+	if _, _, err := rt.resolveWorkspacePath(ws, "work/link/file.txt"); !isKind(err, ErrPathDenied) {
 		t.Fatalf("symlink escape error = %v, want ErrPathDenied", err)
 	}
 
@@ -681,7 +681,7 @@ func TestPathPolicyResolutionAndAccess(t *testing.T) {
 	invalid.fileSystem.Rules = append(invalid.fileSystem.Rules, fileSystemRule{
 		Kind: ruleGlob, Access: accessRead, Glob: "work/**",
 	})
-	if err := rt.checkRead(invalid, ws, "work/a.txt"); !IsKind(err, ErrPolicyViolation) {
+	if err := rt.checkRead(invalid, ws, "work/a.txt"); !isKind(err, ErrPolicyViolation) {
 		t.Fatalf("invalid glob read rule error = %v, want ErrPolicyViolation", err)
 	}
 
@@ -719,7 +719,7 @@ func TestPathPolicyResolutionAndAccess(t *testing.T) {
 
 func TestSandboxErrorsAndLimitedBuffer(t *testing.T) {
 	err := deniedf(ErrPathDenied, "read", "work/secret", "blocked")
-	if !IsKind(err, ErrPathDenied) || IsKind(errors.New("plain"), ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) || isKind(errors.New("plain"), ErrPathDenied) {
 		t.Fatalf("IsKind did not classify sandbox errors correctly")
 	}
 	if msg := err.Error(); !strings.Contains(msg, "PathDenied read work/secret") {
@@ -891,7 +891,7 @@ func TestFilesystemErrorBranches(t *testing.T) {
 		Path:    "../escape.txt",
 		Content: []byte("escape"),
 	}})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("PutFiles escape error = %v, want ErrPathDenied", err)
 	}
 
@@ -900,7 +900,7 @@ func TestFilesystemErrorBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = rt.StageDirectory(ctx, ws, host, "../escape", codeexecutor.StageOptions{})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("StageDirectory escape error = %v, want ErrPathDenied", err)
 	}
 
@@ -918,19 +918,19 @@ func TestFilesystemErrorBranches(t *testing.T) {
 
 	restrictive := PermissionProfile{typ: profileManaged}
 	err = rt.stageWorkspaceRelativePath(ws, restrictive, "work/source.txt", "work/copy.txt")
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("stageWorkspaceRelativePath read error = %v, want ErrPathDenied", err)
 	}
 	err = rt.stageWorkspaceRelativePath(ws, ReadOnlyProfile(), "work/source.txt", "work/copy.txt")
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("stageWorkspaceRelativePath write error = %v, want ErrPathDenied", err)
 	}
 	err = rt.stageWorkspaceRelativePath(ws, DangerFullAccessProfile(), "../escape.txt", "work/copy.txt")
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("stageWorkspaceRelativePath source escape = %v, want ErrPathDenied", err)
 	}
 	err = rt.stageWorkspaceRelativePath(ws, DangerFullAccessProfile(), "work/source.txt", "../escape.txt")
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("stageWorkspaceRelativePath destination escape = %v, want ErrPathDenied", err)
 	}
 
@@ -959,7 +959,7 @@ func TestFilesystemErrorBranches(t *testing.T) {
 	if err := os.Symlink(outsideFile, outsideLink); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, err := rt.resolveCollectMatch(DangerFullAccessProfile(), ws, outsideLink); !IsKind(err, ErrPathDenied) {
+	if _, _, _, _, err := rt.resolveCollectMatch(DangerFullAccessProfile(), ws, outsideLink); !isKind(err, ErrPathDenied) {
 		t.Fatalf("resolveCollectMatch symlink escape error = %v, want ErrPathDenied", err)
 	}
 
@@ -986,7 +986,7 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	}
 
 	outside := t.TempDir()
-	if err := rt.checkWorkspaceWriteTarget(WorkspaceWriteProfile(), ws, filepath.Join(outside, "x.txt")); !IsKind(err, ErrPathDenied) {
+	if err := rt.checkWorkspaceWriteTarget(WorkspaceWriteProfile(), ws, filepath.Join(outside, "x.txt")); !isKind(err, ErrPathDenied) {
 		t.Fatalf("outside write target error = %v, want ErrPathDenied", err)
 	}
 
@@ -994,7 +994,7 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	if err := os.Symlink(filepath.Join(ws.Path, "work", "target.txt"), directLink); err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.checkWorkspaceWriteTarget(WorkspaceWriteProfile(), ws, directLink); !IsKind(err, ErrPathDenied) {
+	if err := rt.checkWorkspaceWriteTarget(WorkspaceWriteProfile(), ws, directLink); !isKind(err, ErrPathDenied) {
 		t.Fatalf("direct symlink write target error = %v, want ErrPathDenied", err)
 	}
 
@@ -1002,7 +1002,7 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	if err := os.Symlink(outside, parentLink); err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.checkWorkspaceWriteTarget(WorkspaceWriteProfile(), ws, filepath.Join(parentLink, "new.txt")); !IsKind(err, ErrPathDenied) {
+	if err := rt.checkWorkspaceWriteTarget(WorkspaceWriteProfile(), ws, filepath.Join(parentLink, "new.txt")); !isKind(err, ErrPathDenied) {
 		t.Fatalf("parent symlink escape error = %v, want ErrPathDenied", err)
 	}
 
@@ -1041,7 +1041,7 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	}
 	if err := copyPathWithValidator(source, filepath.Join(t.TempDir(), "copy.txt"), func(string) error {
 		return deniedf(ErrPathDenied, "write", "copy.txt", "blocked")
-	}); !IsKind(err, ErrPathDenied) {
+	}); !isKind(err, ErrPathDenied) {
 		t.Fatalf("copyPathWithValidator validation error = %v, want ErrPathDenied", err)
 	}
 }

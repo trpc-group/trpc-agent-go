@@ -248,7 +248,7 @@ func TestLinuxSandboxArgsRejectRootWriteGrant(t *testing.T) {
 		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
 		false,
 	)
-	if !IsKind(err, ErrPolicyViolation) {
+	if !isKind(err, ErrPolicyViolation) {
 		t.Fatalf("root write grant error = %v, want ErrPolicyViolation", err)
 	}
 }
@@ -387,7 +387,7 @@ func TestLinuxPrepareProtectedMasksRejectsEscapes(t *testing.T) {
 	profile := WorkspaceWriteProfile()
 	profile.fileSystem.ProtectedMetadata = []string{"../escape"}
 	err = rt.prepareProtectedMasks(profile, ws)
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("prepareProtectedMasks error = %v, want ErrPathDenied", err)
 	}
 }
@@ -395,7 +395,7 @@ func TestLinuxPrepareProtectedMasksRejectsEscapes(t *testing.T) {
 func TestLinuxPreflightUnsupportedBackendAndProbeError(t *testing.T) {
 	rt := NewRuntime(WithBackend(BackendType("not-linux-bubblewrap")))
 	_, _, err := rt.linuxPreflight()
-	if !IsKind(err, ErrUnsupportedBackend) {
+	if !isKind(err, ErrUnsupportedBackend) {
 		t.Fatalf("linuxPreflight error = %v, want ErrUnsupportedBackend", err)
 	}
 	ws := codeexecutor.Workspace{ID: "unsupported", Path: t.TempDir()}
@@ -407,7 +407,7 @@ func TestLinuxPreflightUnsupportedBackendAndProbeError(t *testing.T) {
 		nil,
 		codeexecutor.RunProgramSpec{Cmd: "true"},
 	)
-	if backend != string(BackendLinuxBubblewrap) || !IsKind(err, ErrUnsupportedBackend) {
+	if backend != string(BackendLinuxBubblewrap) || !isKind(err, ErrUnsupportedBackend) {
 		t.Fatalf("osSandboxCommand backend=%q err=%v, want bubblewrap unsupported", backend, err)
 	}
 
@@ -425,7 +425,7 @@ func TestLinuxPreflightUnsupportedBackendAndProbeError(t *testing.T) {
 		codeexecutor.RunProgramSpec{Cmd: "true"},
 		false,
 	)
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("missing external grant error = %v, want ErrPathDenied", err)
 	}
 
@@ -449,7 +449,7 @@ func TestLinuxPreflightMissingBwrap(t *testing.T) {
 	t.Setenv("PATH", "")
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	_, _, err := rt.linuxPreflight()
-	if !IsKind(err, ErrSetupFailed) {
+	if !isKind(err, ErrSetupFailed) {
 		t.Fatalf("linuxPreflight error = %v, want ErrSetupFailed", err)
 	}
 }
@@ -563,7 +563,7 @@ func TestLinuxWorkspaceMountTargetBranches(t *testing.T) {
 	_, _, err = rt.workspaceMountTarget(ws, wsAbs, fileSystemRule{
 		Kind: rulePath, Access: accessRead, Path: filepath.Join(ws.Path, "work", "escape"),
 	})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("symlink escape target error = %v, want ErrPathDenied", err)
 	}
 

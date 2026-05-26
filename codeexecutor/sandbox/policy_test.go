@@ -81,7 +81,7 @@ func TestWithPermissionProfileKeepsCompleteManagedProfile(t *testing.T) {
 		Path:    "work/blocked.txt",
 		Content: []byte("blocked"),
 	}})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("empty managed filesystem rules should be restrictive, got %v", err)
 	}
 }
@@ -215,7 +215,7 @@ func TestProtectedMetadataWriteDenied(t *testing.T) {
 		Path:    ".git/config",
 		Content: []byte("bad"),
 	}})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected ErrPathDenied, got %v", err)
 	}
 }
@@ -240,7 +240,7 @@ func TestPutFilesRejectsSymlinkRedirect(t *testing.T) {
 		Path:    "work/redirect.txt",
 		Content: []byte("bad"),
 	}})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("PutFiles symlink redirect error = %v, want ErrPathDenied", err)
 	}
 	data, err := os.ReadFile(filepath.Join(ws.Path, ".git", "config"))
@@ -288,14 +288,14 @@ func TestNoAccessGlobCollectDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = rt.Collect(context.Background(), ws, []string{"work/*.env"})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected no-access glob to block Collect, got %v", err)
 	}
 	err = rt.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
 		Path:    "work/app.env",
 		Content: []byte("TOKEN=new"),
 	}})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected no-access glob to block PutFiles, got %v", err)
 	}
 }
@@ -321,13 +321,13 @@ func TestCollectRejectsSymlinkResolvedDeniedTarget(t *testing.T) {
 	if err := os.Symlink("secret.txt", filepath.Join(ws.Path, "work", "link.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.Collect(context.Background(), ws, []string{"work/link.txt"}); !IsKind(err, ErrPathDenied) {
+	if _, err := rt.Collect(context.Background(), ws, []string{"work/link.txt"}); !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected resolved no-access path to block Collect, got %v", err)
 	}
 	if err := os.Symlink("app.env", filepath.Join(ws.Path, "work", "env-link.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.Collect(context.Background(), ws, []string{"work/env-link.txt"}); !IsKind(err, ErrPathDenied) {
+	if _, err := rt.Collect(context.Background(), ws, []string{"work/env-link.txt"}); !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected resolved no-access glob to block Collect, got %v", err)
 	}
 	outside := filepath.Join(t.TempDir(), "outside.txt")
@@ -337,7 +337,7 @@ func TestCollectRejectsSymlinkResolvedDeniedTarget(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(ws.Path, "work", "outside-link.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.Collect(context.Background(), ws, []string{"work/outside-link.txt"}); !IsKind(err, ErrPathDenied) {
+	if _, err := rt.Collect(context.Background(), ws, []string{"work/outside-link.txt"}); !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected outside symlink target to block Collect, got %v", err)
 	}
 }
@@ -362,7 +362,7 @@ func TestCollectOutputsRejectsSymlinkResolvedDeniedTarget(t *testing.T) {
 		Globs:  []string{"out/leak.txt"},
 		Inline: true,
 	})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected resolved no-access path to block CollectOutputs, got %v", err)
 	}
 }
@@ -384,14 +384,14 @@ func TestAccessNonePathDeniesReadAndWrite(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.Collect(context.Background(), ws, []string{"work/secret.txt"}); !IsKind(err, ErrPathDenied) {
+	if _, err := rt.Collect(context.Background(), ws, []string{"work/secret.txt"}); !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected AccessNone to deny read, got %v", err)
 	}
 	err = rt.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
 		Path:    "work/secret.txt",
 		Content: []byte("new"),
 	}})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected AccessNone to deny write, got %v", err)
 	}
 }
@@ -424,7 +424,7 @@ func TestMoreSpecificReadRuleOverridesWorkspaceWrite(t *testing.T) {
 		Path:    "work/readonly/note.txt",
 		Content: []byte("new"),
 	}})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected more specific read rule to deny write, got %v", err)
 	}
 }
@@ -454,7 +454,7 @@ func TestEqualSpecificityAccessPrecedence(t *testing.T) {
 	if d.access != accessNone {
 		t.Fatalf("equal-specificity access = %s, want %s", d.access, accessNone)
 	}
-	if _, err := rt.Collect(context.Background(), ws, []string{"work/tie.txt"}); !IsKind(err, ErrPathDenied) {
+	if _, err := rt.Collect(context.Background(), ws, []string{"work/tie.txt"}); !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected equal-specificity AccessNone to deny read, got %v", err)
 	}
 }
@@ -471,7 +471,7 @@ func TestRuleGlobOnlySupportsAccessNone(t *testing.T) {
 			Kind: ruleGlob, Access: access, Glob: "work/*.env",
 		})
 		err := rt.checkRead(profile, ws, codeexecutor.DirWork)
-		if !IsKind(err, ErrPolicyViolation) {
+		if !isKind(err, ErrPolicyViolation) {
 			t.Fatalf("glob access %s: expected ErrPolicyViolation, got %v", access, err)
 		}
 	}
@@ -665,7 +665,7 @@ func TestAdditionalPermissionsAreScopedToContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = rt.StageDirectory(ctx, ws, hostFile, "work/no-grant.txt", codeexecutor.StageOptions{})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected read denial without grant, got %v", err)
 	}
 	grantCtx := WithAdditionalPermissions(ctx, AdditionalPermissions{
@@ -675,7 +675,7 @@ func TestAdditionalPermissionsAreScopedToContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = rt.StageDirectory(ctx, ws, hostFile, "work/no-grant-again.txt", codeexecutor.StageOptions{})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("expected grant to be scoped to one context, got %v", err)
 	}
 }
@@ -697,7 +697,7 @@ func TestStageDirectoryValidatesCopiedTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.StageDirectory(ctx, ws, host, ".", codeexecutor.StageOptions{}); !IsKind(err, ErrPathDenied) {
+	if err := rt.StageDirectory(ctx, ws, host, ".", codeexecutor.StageOptions{}); !isKind(err, ErrPathDenied) {
 		t.Fatalf("protected child stage error = %v, want ErrPathDenied", err)
 	}
 
@@ -718,7 +718,7 @@ func TestStageDirectoryValidatesCopiedTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = noAccess.StageDirectory(ctx, noAccessWS, secretHost, "work/staged", codeexecutor.StageOptions{})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("no-access child stage error = %v, want ErrPathDenied", err)
 	}
 
@@ -747,7 +747,7 @@ func TestStageDirectoryValidatesCopiedTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = redirect.StageDirectory(ctx, redirectWS, redirectHost, "work/staged", codeexecutor.StageOptions{})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("symlink redirect stage error = %v, want ErrPathDenied", err)
 	}
 
@@ -768,7 +768,7 @@ func TestStageDirectoryValidatesCopiedTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = symlinkRuntime.StageDirectory(ctx, symlinkWS, symlinkHost, "work/staged", codeexecutor.StageOptions{})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("source symlink stage error = %v, want ErrPathDenied", err)
 	}
 }
@@ -794,7 +794,7 @@ func TestStageInputsWorkspaceAndSkillValidateCopiedTargets(t *testing.T) {
 		From: "workspace://work/source",
 		To:   ".",
 	}})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("workspace input stage error = %v, want ErrPathDenied", err)
 	}
 
@@ -812,7 +812,7 @@ func TestStageInputsWorkspaceAndSkillValidateCopiedTargets(t *testing.T) {
 		From: "skill://demo",
 		To:   ".",
 	}})
-	if !IsKind(err, ErrPathDenied) {
+	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("skill input stage error = %v, want ErrPathDenied", err)
 	}
 }
@@ -845,7 +845,7 @@ func TestRunProgramOutputCapAndTimeout(t *testing.T) {
 		Args:    []string{"-c", "sleep 5"},
 		Timeout: 10 * time.Millisecond,
 	})
-	if !IsKind(err, ErrTimeout) {
+	if !isKind(err, ErrTimeout) {
 		t.Fatalf("expected timeout error, got %v", err)
 	}
 }

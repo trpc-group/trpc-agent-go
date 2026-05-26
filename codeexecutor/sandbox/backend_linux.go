@@ -132,20 +132,13 @@ func (r *Runtime) linuxSandboxArgs(
 func (r *Runtime) linuxPreflight() (string, bool, error) {
 	r.preflightOnce.Do(func() {
 		if r.backend != BackendAuto && r.backend != BackendLinuxBubblewrap {
-			r.preflightErr = backendError(
-				ErrUnsupportedBackend,
-				string(r.backend),
-				errors.New("unsupported backend on linux"),
-			)
+			r.preflightErr = backendError(ErrUnsupportedBackend, string(r.backend), errors.New("unsupported backend on linux"))
 			return
 		}
 		bwrap, err := exec.LookPath("bwrap")
 		if err != nil {
-			r.preflightErr = backendError(
-				ErrSetupFailed,
-				string(BackendLinuxBubblewrap),
-				errors.New("bubblewrap executable not found in PATH"),
-			)
+			r.preflightErr = backendError(ErrSetupFailed, string(BackendLinuxBubblewrap),
+				errors.New("bubblewrap executable not found in PATH"))
 			return
 		}
 		stderr, err := runBwrapPreflightProbe(bwrap, true)
@@ -163,11 +156,10 @@ func (r *Runtime) linuxPreflight() (string, bool, error) {
 			}
 		}
 		if err != nil {
-			r.preflightErr = backendError(
-				ErrSetupFailed,
-				string(BackendLinuxBubblewrap),
-				bwrapProbeError{err: err, stderr: stderr},
-			)
+			r.preflightErr = backendError(ErrSetupFailed, string(BackendLinuxBubblewrap), bwrapProbeError{
+				err:    err,
+				stderr: stderr,
+			})
 			return
 		}
 	})
@@ -395,12 +387,7 @@ func (r *Runtime) workspaceWriteMountArgs(
 	var args []string
 	for _, target := range targets {
 		if _, err := os.Stat(target); err != nil {
-			return nil, deniedf(
-				ErrPathDenied,
-				"grant",
-				target,
-				"workspace write grant target unavailable",
-			)
+			return nil, deniedf(ErrPathDenied, "grant", target, "workspace write grant target unavailable")
 		}
 		args = append(args, "--bind", target, target)
 	}

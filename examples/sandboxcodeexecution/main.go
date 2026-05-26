@@ -31,6 +31,10 @@ import (
 
 var errSkip = errors.New("skip")
 
+func isSandboxKind(err error, kind sandbox.ErrorKind) bool {
+	return err != nil && strings.HasPrefix(err.Error(), string(kind))
+}
+
 type config struct {
 	scenario         string
 	modelName        string
@@ -346,7 +350,7 @@ func runMetadataProtection(ctx context.Context, cfg config) error {
 	if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
 		Path:    ".agents/should-not-write",
 		Content: []byte("bad"),
-	}}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	}}); !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("file API protected metadata write was not denied: %v", err)
 	}
 	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
@@ -380,13 +384,13 @@ func runNoAccess(ctx context.Context, cfg config) error {
 	); err != nil {
 		return err
 	}
-	if _, err := rt.Collect(ctx, ws, []string{"work/*.env"}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if _, err := rt.Collect(ctx, ws, []string{"work/*.env"}); !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("file API no-access rule was not enforced: %v", err)
 	}
 	if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
 		Path:    "work/secret.env",
 		Content: []byte("OPENAI_API_KEY=new"),
-	}}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	}}); !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("file API no-access write was not enforced: %v", err)
 	}
 	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
@@ -418,7 +422,7 @@ func runTimeout(ctx context.Context, cfg config) error {
 		Cwd:     codeexecutor.DirWork,
 		Timeout: 100 * time.Millisecond,
 	})
-	if !sandbox.IsKind(err, sandbox.ErrTimeout) {
+	if !isSandboxKind(err, sandbox.ErrTimeout) {
 		return fmt.Errorf("expected timeout, got result=%#v err=%v", res, err)
 	}
 	return nil
@@ -462,7 +466,7 @@ func runAdditionalPermissions(ctx context.Context, cfg config) error {
 		return err
 	}
 	err = rt.StageDirectory(ctx, ws, externalFile, "work/no-grant.txt", codeexecutor.StageOptions{})
-	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("expected default external read denial, got %v", err)
 	}
 	grantCtx := sandbox.WithAdditionalPermissions(ctx, sandbox.AdditionalPermissions{
@@ -472,7 +476,7 @@ func runAdditionalPermissions(ctx context.Context, cfg config) error {
 		return err
 	}
 	err = rt.StageDirectory(ctx, ws, externalFile, "work/no-grant-again.txt", codeexecutor.StageOptions{})
-	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("expected per-command grant to expire, got %v", err)
 	}
 	files, err := rt.Collect(ctx, ws, []string{"work/granted.txt"})

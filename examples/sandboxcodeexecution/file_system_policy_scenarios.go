@@ -96,20 +96,20 @@ func runFileSystemPolicyAccessModes(ctx context.Context, cfg config) error {
 	if len(files) != 1 || files[0].Content != "public" {
 		return fmt.Errorf("public file was not readable: %#v", files)
 	}
-	if _, err := rt.Collect(ctx, ws, []string{"work/secret.txt"}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if _, err := rt.Collect(ctx, ws, []string{"work/secret.txt"}); !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("no-access read was not denied: %v", err)
 	}
 	err = rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
 		Path:    "work/secret.txt",
 		Content: []byte("new"),
 	}})
-	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("no-access write was not denied: %v", err)
 	}
 	if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
 		Path:    ".git/config",
 		Content: []byte("bad"),
-	}}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	}}); !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("protected metadata write was not denied: %v", err)
 	}
 	if err := maybeVerifyFileSystemPolicyNetworkRestricted(ctx, cfg, rt, ws); err != nil {
@@ -144,7 +144,7 @@ func runFileSystemPolicySpecificity(ctx context.Context, cfg config) error {
 		Path:    "work/readonly/note.txt",
 		Content: []byte("new"),
 	}})
-	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("more specific read rule did not block write: %v", err)
 	}
 	fmt.Println(fileSystemPolicySpecificityMarker)
@@ -162,14 +162,14 @@ func runFileSystemPolicyGlobNoAccess(ctx context.Context, cfg config) error {
 	if err := os.WriteFile(secretPath, []byte("TOKEN="+fileSystemPolicySecretSentinel), 0o600); err != nil {
 		return err
 	}
-	if _, err := rt.Collect(ctx, ws, []string{"work/*.env"}); !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if _, err := rt.Collect(ctx, ws, []string{"work/*.env"}); !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("glob no-access read was not denied: %v", err)
 	}
 	err = rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
 		Path:    "work/secret.env",
 		Content: []byte("TOKEN=new"),
 	}})
-	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("glob no-access write was not denied: %v", err)
 	}
 	if err := maybeVerifyFileSystemPolicyShellMask(ctx, cfg, rt, ws); err != nil {
@@ -382,7 +382,7 @@ func runFileSystemPolicyPutFilesSymlinkTarget(ctx context.Context, cfg config) e
 			Path:    "work/" + filepath.Base(target.linkPath),
 			Content: []byte("unexpected-" + target.name),
 		}})
-		if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+		if !isSandboxKind(err, sandbox.ErrPathDenied) {
 			return fmt.Errorf("%s symlink write was not denied: %v", target.name, err)
 		}
 		data, err := os.ReadFile(target.targetPath)
@@ -426,7 +426,7 @@ func runFileSystemPolicyHostStageAbsoluteGrant(ctx context.Context, cfg config) 
 		return err
 	}
 	err = relativeRuntime.StageDirectory(ctx, relativeWS, "host-input", "work/relative", codeexecutor.StageOptions{})
-	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("relative host source was not denied: %v", err)
 	}
 
@@ -441,7 +441,7 @@ func runFileSystemPolicyHostStageAbsoluteGrant(ctx context.Context, cfg config) 
 		return err
 	}
 	err = relativeGrantRuntime.StageDirectory(ctx, relativeGrantWS, hostDir, "work/relative-grant", codeexecutor.StageOptions{})
-	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("absolute source with relative grant was not denied: %v", err)
 	}
 
@@ -502,7 +502,7 @@ func runFileSystemPolicyHostStageSourceSymlink(ctx context.Context, cfg config) 
 		return err
 	}
 	err = rt.StageDirectory(ctx, ws, hostDir, "work/staged", codeexecutor.StageOptions{})
-	if !sandbox.IsKind(err, sandbox.ErrPathDenied) {
+	if !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("source symlink stage was not denied: %v", err)
 	}
 	fmt.Println(fileSystemPolicyHostStageSymlinkMarker)
@@ -590,7 +590,7 @@ func newCollectPathTool(exec *sandbox.CodeExecutor) tool.Tool {
 			}
 			files, err := exec.Runtime().Collect(ctxIO, ws, []string{path})
 			out := collectPathOutput{Path: path}
-			if sandbox.IsKind(err, sandbox.ErrPathDenied) {
+			if isSandboxKind(err, sandbox.ErrPathDenied) {
 				out.Denied = true
 				out.Error = err.Error()
 				return out, nil
@@ -622,7 +622,7 @@ func newStageHostValidationTool(exec *sandbox.CodeExecutor, hostDir string) tool
 			}
 			err = exec.Runtime().StageDirectory(ctxIO, ws, hostDir, to, codeexecutor.StageOptions{})
 			out := stageHostValidationOutput{To: to}
-			if sandbox.IsKind(err, sandbox.ErrPathDenied) {
+			if isSandboxKind(err, sandbox.ErrPathDenied) {
 				out.Denied = true
 				out.Error = err.Error()
 				return out, nil

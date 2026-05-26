@@ -78,8 +78,8 @@ func backendError(kind ErrorKind, backend string, err error) error {
 	return &sandboxError{Kind: kind, Backend: backend, Err: err}
 }
 
-// IsKind reports whether err contains a sandbox error with the requested kind.
-func IsKind(err error, kind ErrorKind) bool {
+// isKind reports whether err contains a sandbox error with the requested kind.
+func isKind(err error, kind ErrorKind) bool {
 	var se *sandboxError
 	if !errors.As(err, &se) {
 		return false
