@@ -44,7 +44,7 @@ Tool metadata is an optional description of execution behavior. It does not
 change the core `tool.Tool` interface.
 
 Use metadata when a host, policy, or UI needs to understand whether a tool is
-read-only, destructive, concurrency-safe, search/read oriented, open-world, or
+read-only, destructive, concurrency-safe, search/read-oriented, open-world, or
 has an advisory result size limit.
 
 ```go
@@ -62,7 +62,8 @@ type MetadataProvider interface {
 }
 ```
 
-Permission policy is checked after the model requests a tool and before the
+Permission policy is checked after the model requests a tool, after JSON repair
+and before-tool callbacks have finalized arguments, and immediately before the
 framework executes it:
 
 ```go

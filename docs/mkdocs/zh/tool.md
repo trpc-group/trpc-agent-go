@@ -59,7 +59,7 @@ type MetadataProvider interface {
 }
 ```
 
-权限策略发生在模型已经发起 tool call、框架即将真正执行工具之前：
+权限策略发生在模型已经发起 tool call、框架完成 JSON 修复和 before-tool callbacks 参数改写、并且即将真正执行工具之前：
 
 ```go
 runner.Run(ctx, userID, sessionID, message,

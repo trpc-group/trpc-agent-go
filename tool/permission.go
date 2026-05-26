@@ -88,7 +88,8 @@ type PermissionRequest struct {
 	ToolCallID string
 	// Declaration is the tool declaration.
 	Declaration *Declaration
-	// Arguments is the JSON-encoded argument payload after framework repairs.
+	// Arguments is the JSON-encoded argument payload after framework repairs and
+	// before-tool callbacks have finalized it.
 	Arguments []byte
 	// Metadata is the metadata published by the tool.
 	Metadata ToolMetadata

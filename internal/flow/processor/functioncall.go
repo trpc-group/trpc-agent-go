@@ -1310,7 +1310,9 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			{Index: index, Message: defaultMsg},
 		}
 		ctx = markSyntheticStateOnlyToolChoice(ctx)
-		if p.toolCallbacks == nil || p.toolCallbacks.ToolResultMessages == nil {
+		if p.toolCallbacks == nil ||
+			p.toolCallbacks.ToolResultMessages == nil ||
+			isPermissionResult(result) {
 			return ctx, defaultChoices, modifiedArgs, true,
 				skipSummarization, nil
 		}
@@ -1354,7 +1356,8 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		{Index: index, Message: defaultMsg},
 	}
 
-	if p.toolCallbacks != nil &&
+	if !isPermissionResult(result) &&
+		p.toolCallbacks != nil &&
 		p.toolCallbacks.ToolResultMessages != nil {
 		customChoices, overridden, cbErr :=
 			p.applyToolResultMessagesCallback(
@@ -1382,6 +1385,27 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	)
 
 	return ctx, choices, modifiedArgs, true, skipSummarization, nil
+}
+
+func isPermissionResult(result any) bool {
+	switch v := result.(type) {
+	case tool.PermissionResult:
+		return isPermissionResultStatus(v.Status)
+	case *tool.PermissionResult:
+		return v != nil && isPermissionResultStatus(v.Status)
+	default:
+		return false
+	}
+}
+
+func isPermissionResultStatus(status string) bool {
+	switch status {
+	case tool.PermissionResultStatusDenied,
+		tool.PermissionResultStatusApprovalRequired:
+		return true
+	default:
+		return false
+	}
 }
 
 // resolveToolCallTarget resolves the callable tool, applies compatibility remapping,
@@ -1755,20 +1779,6 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	toolDeclaration := tl.Declaration()
-	permissionResult, err := p.checkToolPermission(
-		ctx,
-		invocation,
-		toolCall,
-		tl,
-		toolDeclaration,
-	)
-	if err != nil {
-		return ctx, nil, toolCall.Function.Arguments, false, false, err
-	}
-	if permissionResult != nil {
-		return ctx, *permissionResult, toolCall.Function.Arguments, false,
-			false, nil
-	}
 	ctx, toolCall, customResult, err := p.runBeforeToolPluginCallbacks(
 		ctx,
 		invocation,
@@ -1796,6 +1806,20 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	if customResult != nil {
 		return ctx, customResult, toolCall.Function.Arguments, false,
+			false, nil
+	}
+	permissionResult, err := p.checkToolPermission(
+		ctx,
+		invocation,
+		toolCall,
+		tl,
+		toolDeclaration,
+	)
+	if err != nil {
+		return ctx, nil, toolCall.Function.Arguments, false, false, err
+	}
+	if permissionResult != nil {
+		return ctx, *permissionResult, toolCall.Function.Arguments, false,
 			false, nil
 	}
 	// Execute the actual tool.

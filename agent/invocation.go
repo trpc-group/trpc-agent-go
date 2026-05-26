@@ -839,8 +839,9 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
-// WithToolPermissionPolicy sets a per-run policy that is checked immediately
-// before the framework executes a tool call.
+// WithToolPermissionPolicy sets a per-run policy that is checked after
+// before-tool callbacks finalize arguments and immediately before the
+// framework executes a tool call.
 //
 // The policy is intentionally separate from WithToolFilter and
 // WithToolExecutionFilter:
@@ -1226,12 +1227,14 @@ type RunOptions struct {
 	ToolExecutionFilter tool.FilterFunc
 
 	// ToolPermissionPolicy checks whether a tool call may run after the model
-	// has requested it and after the framework has repaired its arguments.
+	// has requested it, after argument repair, and after before-tool callbacks
+	// have finalized arguments.
 	//
 	// This policy does not change the visible tool surface. Use ToolFilter for
-	// that. It also does not replace callbacks or guardrail plugins; those still
-	// run around actually executed tools. A deny or ask decision skips tool
-	// execution and returns a structured permission result to the model.
+	// that. It also does not replace callbacks or guardrail plugins; before-tool
+	// callbacks can still normalize arguments before the policy sees them. A deny
+	// or ask decision skips tool execution and returns a structured permission
+	// result to the model.
 	ToolPermissionPolicy tool.PermissionPolicy
 
 	// ToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
