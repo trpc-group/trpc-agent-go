@@ -10,26 +10,92 @@
 package toolpipe
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // declaredCallableTool is a request-local tool wrapper that returns
 // an augmented Declaration while delegating Call and optional interfaces
-// (StreamableTool, SkipSummarization) to the original.
+// (SkipSummarization) to the original.
 // It is NOT a persistent wrapper — it only lives within one
 // BeforeModel callback's Request.Tools replacement. The original
 // tool object is never mutated.
+//
+// IMPORTANT: This wrapper does NOT implement StreamableTool. If the
+// inner tool is streamable, use declaredStreamableCallableTool instead.
+// This prevents the framework from routing non-streaming tools through
+// the streaming execution path.
 type declaredCallableTool struct {
 	inner tool.CallableTool
 	decl  *tool.Declaration
 }
 
-func newDeclaredCallableTool(inner tool.CallableTool, decl *tool.Declaration) *declaredCallableTool {
-	return &declaredCallableTool{inner: inner, decl: decl}
+// declaredStreamableCallableTool extends declaredCallableTool for tools
+// that implement StreamableTool. Only this type satisfies the
+// tool.StreamableTool interface.
+type declaredStreamableCallableTool struct {
+	declaredCallableTool
+	streamable tool.StreamableTool
+}
+
+// newDeclaredCallableTool creates the appropriate wrapper based on whether
+// the REAL underlying tool implements StreamableTool.
+//
+// Critical: NamedTool (from ToolSet/MCP) always implements StreamableTool
+// on its wrapper regardless of the actual inner tool. We must unwrap through
+// Original() to check the true underlying tool's capabilities. Otherwise,
+// all MCP tools would be incorrectly routed through the streaming path.
+func newDeclaredCallableTool(inner tool.CallableTool, decl *tool.Declaration) tool.CallableTool {
+	base := declaredCallableTool{inner: inner, decl: decl}
+
+	// Determine the real tool for streamability check.
+	realTool := unwrapOriginal(inner)
+
+	if isReallyStreamable(realTool) {
+		// Find the StreamableTool interface on the immediate inner
+		// (it may be the NamedTool which forwards to the real streamable).
+		st, ok := inner.(tool.StreamableTool)
+		if !ok || st == nil {
+			// Safety: if immediate inner doesn't satisfy StreamableTool
+			// (shouldn't happen if realTool is streamable, but be defensive),
+			// fall back to non-streaming wrapper.
+			return &base
+		}
+		return &declaredStreamableCallableTool{
+			declaredCallableTool: base,
+			streamable:           st,
+		}
+	}
+	return &base
+}
+
+// unwrapOriginal recursively unwraps tool wrappers that implement
+// Original() tool.Tool (e.g. NamedTool) to find the true underlying tool.
+func unwrapOriginal(t tool.Tool) tool.Tool {
+	type originator interface{ Original() tool.Tool }
+	if o, ok := t.(originator); ok {
+		return unwrapOriginal(o.Original())
+	}
+	return t
+}
+
+// isReallyStreamable checks if a tool truly supports streaming,
+// respecting the StreamInner preference.
+func isReallyStreamable(t tool.Tool) bool {
+	// Check StreamInner preference — if tool opts out, don't treat as streamable.
+	type streamPref interface{ StreamInner() bool }
+	if pref, ok := t.(streamPref); ok && !pref.StreamInner() {
+		return false
+	}
+	_, ok := t.(tool.StreamableTool)
+	return ok
 }
 
 // Declaration implements tool.Tool — returns the augmented schema.
@@ -43,21 +109,83 @@ func (t *declaredCallableTool) Call(ctx context.Context, jsonArgs []byte) (any, 
 	return t.inner.Call(ctx, jsonArgs)
 }
 
-// StreamableCall delegates to the inner tool if it implements StreamableTool.
-func (t *declaredCallableTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
-	if st, ok := t.inner.(tool.StreamableTool); ok {
-		return st.StreamableCall(ctx, jsonArgs)
-	}
-	// Fallback: not streamable, call normally (caller should check interface first).
-	return nil, fmt.Errorf("tool %q does not support streaming", t.decl.Name)
-}
-
 // SkipSummarization delegates to the inner tool if it implements the interface.
 func (t *declaredCallableTool) SkipSummarization() bool {
 	type skipper interface{ SkipSummarization() bool }
 	if s, ok := t.inner.(skipper); ok {
 		return s.SkipSummarization()
 	}
+	return false
+}
+
+// StreamableCall implements tool.StreamableTool — only on the streamable wrapper.
+func (t *declaredStreamableCallableTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
+	return t.streamable.StreamableCall(ctx, jsonArgs)
+}
+
+// isFrameworkTool detects tools that implement framework control interfaces
+// or are known framework-internal tools by name. Detected categories:
+//   - Known names: transfer_to_agent, await_user_reply
+//   - StreamInner() — sub-agent streaming control (AgentTool)
+//   - InnerTextMode() — inner text forwarding (AgentTool)
+//   - LongRunning() returning true — long-running lifecycle tools
+//   - StateDelta / StateDeltaForInvocation — session state mutation tools
+//
+// These tools should NOT be augmented by toolpipe. Their output is either
+// framework-semantic or consumed by framework state machinery that expects
+// the raw tool result format.
+//
+// This is a CONSERVATIVE heuristic: matching tools are skipped even if
+// explicitly in the allowlist.
+//
+// This check uses the REAL underlying tool (unwrapped from NamedTool).
+func isFrameworkTool(t tool.Tool) bool {
+	real := unwrapOriginal(t)
+
+	// Known framework tool names.
+	if decl := real.Declaration(); decl != nil {
+		switch decl.Name {
+		case "transfer_to_agent", "await_user_reply":
+			return true
+		}
+	}
+
+	// StreamInner — AgentTool, any tool that controls sub-agent streaming.
+	type streamInner interface{ StreamInner() bool }
+	if _, ok := real.(streamInner); ok {
+		return true
+	}
+
+	// InnerTextMode — controls inner text forwarding behavior.
+	type innerTextMode interface{ InnerTextMode() tool.InnerTextMode }
+	if _, ok := real.(innerTextMode); ok {
+		return true
+	}
+
+	// LongRunning — tools with special execution lifecycle.
+	// Only skip if the tool is ACTUALLY long-running (returns true).
+	type longRunner interface{ LongRunning() bool }
+	if lr, ok := real.(longRunner); ok && lr.LongRunning() {
+		return true
+	}
+
+	// StateDelta / StateDeltaForInvocation — tools that produce session state
+	// mutations (todo lists, artifacts, skill selections, etc.). Wrapping these
+	// would hide the interface from the framework AND corrupt the state delta
+	// input (it would receive ToolResult envelope instead of original output).
+	type stateDeltaProvider interface {
+		StateDelta(string, []byte, []byte) map[string][]byte
+	}
+	if _, ok := real.(stateDeltaProvider); ok {
+		return true
+	}
+	type invocationStateDeltaProvider interface {
+		StateDeltaForInvocation(*agent.Invocation, string, []byte, []byte) map[string][]byte
+	}
+	if _, ok := real.(invocationStateDeltaProvider); ok {
+		return true
+	}
+
 	return false
 }
 
@@ -79,6 +207,11 @@ type ToolResult struct {
 	// TotalBytes is the original output size before truncation. Helps model
 	// understand how much data is available for filter-based extraction.
 	TotalBytes int `json:"total_bytes,omitempty"`
+	// InputTruncated is true when the tool output was truncated BEFORE filtering
+	// because it exceeded maxInput. The filter operated on partial data.
+	InputTruncated bool `json:"input_truncated,omitempty"`
+	// InputTotalBytes is the original tool output size before input truncation.
+	InputTotalBytes int `json:"input_total_bytes,omitempty"`
 	// Error describes a filter execution or parse error.
 	Error string `json:"error,omitempty"`
 	// EmptyReason explains why content is empty (filter matched nothing, etc).
@@ -114,23 +247,42 @@ func isRuneStart(b byte) bool {
 	return b&0xC0 != 0x80
 }
 
+// suffixUTF8 returns the last maxBytes bytes of s, adjusted forward to
+// start at a UTF-8 rune boundary. Preserves the END of the string (unlike
+// truncateUTF8 which preserves the start).
+func suffixUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	start := len(s) - maxBytes
+	// Advance past any continuation bytes to find a valid rune start.
+	for start < len(s) && !isRuneStart(s[start]) {
+		start++
+	}
+	return s[start:]
+}
+
 // augmentDeclaration creates a copy of the original declaration
 // with the filter field added to its input schema.
-func augmentDeclaration(orig *tool.Declaration, filterField string) *tool.Declaration {
+// It also clears OutputSchema since toolpipe may replace the output
+// with a ToolResult envelope.
+func augmentDeclaration(orig *tool.Declaration, filterField string, allowedOps map[OpType]bool) *tool.Declaration {
 	if orig == nil {
 		return nil
 	}
 	augmented := &tool.Declaration{
-		Name:         orig.Name,
-		Description:  orig.Description,
-		OutputSchema: orig.OutputSchema,
+		Name:        orig.Name,
+		Description: orig.Description,
+		// OutputSchema intentionally NOT copied: once toolpipe is active,
+		// the output may be the original result OR a ToolResult envelope.
+		// Keeping the original OutputSchema would mislead the model.
 	}
 
 	if orig.InputSchema == nil {
 		augmented.InputSchema = &tool.Schema{
 			Type: "object",
 			Properties: map[string]*tool.Schema{
-				filterField: filterFieldSchema(),
+				filterField: filterFieldSchema(allowedOps),
 			},
 		}
 	} else {
@@ -140,19 +292,60 @@ func augmentDeclaration(orig *tool.Declaration, filterField string) *tool.Declar
 		}
 		// Only add if not already present (avoid collision).
 		if _, exists := augmented.InputSchema.Properties[filterField]; !exists {
-			augmented.InputSchema.Properties[filterField] = filterFieldSchema()
+			augmented.InputSchema.Properties[filterField] = filterFieldSchema(allowedOps)
 		}
 	}
 	return augmented
 }
 
 // filterFieldSchema returns the schema for the filter field.
-// Kept concise — detailed usage guidance is in the system prompt.
-func filterFieldSchema() *tool.Schema {
-	return &tool.Schema{
-		Type:        "string",
-		Description: "Shell-like pipeline to filter this tool's output (e.g. \"jq -r '.field' | grep pattern | head 20\"). Applied before result enters context.",
+// The description is dynamically generated based on allowed ops.
+func filterFieldSchema(allowedOps map[OpType]bool) *tool.Schema {
+	ops := make([]string, 0, len(allowedOps))
+	for op := range allowedOps {
+		ops = append(ops, string(op))
 	}
+	sort.Strings(ops)
+
+	// Build example using only actually-enabled ops.
+	var exampleParts []string
+	if allowedOps[OpJQ] {
+		exampleParts = append(exampleParts, "jq -r '.field'")
+	}
+	if allowedOps[OpGrep] {
+		exampleParts = append(exampleParts, "grep pattern")
+	}
+	if allowedOps[OpHead] {
+		exampleParts = append(exampleParts, "head 20")
+	}
+	example := strings.Join(exampleParts, " | ")
+	if example == "" {
+		example = strings.Join(ops, " | ")
+	}
+
+	return &tool.Schema{
+		Type: "string",
+		Description: fmt.Sprintf(
+			`Shell-like pipeline to filter this tool's output (e.g. "%s"). Supported ops: %s. Applied before result enters context.`,
+			example,
+			strings.Join(ops, ", "),
+		),
+	}
+}
+
+// canAugmentSchema checks whether a tool's input schema can safely have
+// a property added. Only nil or object-type schemas are safe.
+func canAugmentSchema(t tool.Tool) bool {
+	decl := t.Declaration()
+	if decl == nil {
+		return false
+	}
+	schema := decl.InputSchema
+	if schema == nil {
+		return true // nil schema → we create an object schema
+	}
+	// Only "object" type (or unspecified type with properties) can have properties added.
+	return schema.Type == "object" || (schema.Type == "" && schema.Properties != nil)
 }
 
 // copySchema makes a shallow copy of a Schema (enough for our augmentation).
@@ -214,6 +407,7 @@ func extractFilter(jsonArgs []byte, filterField string) ([]byte, string, error) 
 // resultToString converts an arbitrary tool result to a string for filtering.
 // For structured results (JSON), it uses indented formatting so that grep
 // and other line-based ops can work naturally on the output.
+// HTML-special characters are NOT escaped (unlike json.Marshal default).
 func resultToString(result any) string {
 	if result == nil {
 		return ""
@@ -224,16 +418,27 @@ func resultToString(result any) string {
 	case []byte:
 		return string(v)
 	default:
-		b, err := json.MarshalIndent(v, "", "  ")
-		if err != nil {
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(v); err != nil {
 			return fmt.Sprintf("%v", v)
 		}
-		return string(b)
+		// Encoder.Encode appends a trailing newline; trim it.
+		out := buf.Bytes()
+		if len(out) > 0 && out[len(out)-1] == '\n' {
+			out = out[:len(out)-1]
+		}
+		return string(out)
 	}
 }
 
 // Compile-time interface checks.
 var (
-	_ tool.Tool         = (*declaredCallableTool)(nil)
-	_ tool.CallableTool = (*declaredCallableTool)(nil)
+	_ tool.Tool           = (*declaredCallableTool)(nil)
+	_ tool.CallableTool   = (*declaredCallableTool)(nil)
+	_ tool.Tool           = (*declaredStreamableCallableTool)(nil)
+	_ tool.CallableTool   = (*declaredStreamableCallableTool)(nil)
+	_ tool.StreamableTool = (*declaredStreamableCallableTool)(nil)
 )

@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,10 +51,13 @@ func (e *Engine) Apply(ctx context.Context, result any, filterExpr string) (*Too
 // applyPipeline executes a pre-parsed pipeline against a tool result.
 func (e *Engine) applyPipeline(ctx context.Context, result any, pipeline *Pipeline) (*ToolResult, error) {
 	input := resultToString(result)
+	inputTotalBytes := len(input)
 
 	// Enforce max input size (UTF-8 safe).
+	inputTruncated := false
 	if e.cfg.maxInput > 0 && int64(len(input)) > e.cfg.maxInput {
 		input = truncateUTF8(input, int(e.cfg.maxInput))
+		inputTruncated = true
 	}
 
 	// Apply pipeline with timeout.
@@ -66,16 +70,25 @@ func (e *Engine) applyPipeline(ctx context.Context, result any, pipeline *Pipeli
 	}
 
 	truncated := false
+	totalFilteredBytes := len(output)
 	if e.cfg.maxOutput > 0 && int64(len(output)) > e.cfg.maxOutput {
-		output = truncateUTF8(output, int(e.cfg.maxOutput))
+		output = windowOutput(output, int(e.cfg.maxOutput))
 		truncated = true
 	}
 
-	return &ToolResult{
+	tr := &ToolResult{
 		Filter:    pipeline.expr,
 		Truncated: truncated,
 		Content:   output,
-	}, nil
+	}
+	if truncated {
+		tr.TotalBytes = totalFilteredBytes
+	}
+	if inputTruncated {
+		tr.InputTruncated = true
+		tr.InputTotalBytes = inputTotalBytes
+	}
+	return tr, nil
 }
 
 // Pipeline is a sequence of operations parsed from a shell-like expression.
@@ -124,6 +137,18 @@ func (e *Engine) parse(expr string) (*Pipeline, error) {
 	// Reject redirections.
 	if len(stmt.Redirs) > 0 {
 		return nil, fmt.Errorf("redirections are not allowed in filter expressions")
+	}
+
+	// Reject background, negation, coprocess — these are shell execution
+	// modifiers that have no meaning in our filter DSL.
+	if stmt.Negated {
+		return nil, fmt.Errorf("negation (!) is not allowed in filter expressions")
+	}
+	if stmt.Background {
+		return nil, fmt.Errorf("background (&) is not allowed in filter expressions")
+	}
+	if stmt.Coprocess {
+		return nil, fmt.Errorf("coprocess is not allowed in filter expressions")
 	}
 
 	// The command must be a pipeline (or single call command).
@@ -276,5 +301,51 @@ func (e *Engine) allowedOpsString() string {
 	for op := range e.cfg.allowedOps {
 		ops = append(ops, string(op))
 	}
+	sort.Strings(ops)
 	return strings.Join(ops, ", ")
+}
+
+// windowOutput applies head+tail windowing to output that exceeds maxBytes.
+// The marker is included in the budget so the total content never exceeds maxBytes.
+func windowOutput(content string, maxBytes int) string {
+	// The marker format is "\n\n...(NNNNN bytes omitted)...\n\n".
+	// Max realistic omitted count is ~10 digits. Marker overhead ≈ 38 chars.
+	// Use a conservative estimate; post-verify and trim if needed.
+	markerOverhead := len("\n\n...(1234567890 bytes omitted)...\n\n") // 38
+	if maxBytes <= markerOverhead*2 {
+		// Extremely small budget — just prefix-truncate.
+		return truncateUTF8(content, maxBytes)
+	}
+
+	usable := maxBytes - markerOverhead
+	headBudget := usable / 2
+	tailBudget := usable - headBudget
+
+	head := truncateUTF8(content, headBudget)
+	tail := content[len(content)-tailBudget:]
+	// Ensure tail starts at a UTF-8 boundary.
+	for len(tail) > 0 && !isRuneStart(tail[0]) {
+		tail = tail[1:]
+	}
+
+	omitted := len(content) - len(head) - len(tail)
+	middle := fmt.Sprintf("\n\n...(%d bytes omitted)...\n\n", omitted)
+	result := head + middle + tail
+
+	// Post-verify: if actual marker was longer than estimate, trim tail from
+	// its FRONT (not back) to preserve the "end of output" semantics.
+	// Loop until within budget (marker digit count may shift on each iteration).
+	for len(result) > maxBytes {
+		excess := len(result) - maxBytes
+		newTailLen := len(tail) - excess
+		if newTailLen <= 0 {
+			tail = ""
+		} else {
+			tail = suffixUTF8(tail, newTailLen)
+		}
+		omitted = len(content) - len(head) - len(tail)
+		middle = fmt.Sprintf("\n\n...(%d bytes omitted)...\n\n", omitted)
+		result = head + middle + tail
+	}
+	return result
 }

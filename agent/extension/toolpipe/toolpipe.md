@@ -93,7 +93,7 @@ agent := llmagent.New("researcher",
 
 模型可以写 shell-like pipeline 语法：
 
-```
+```sh
 grep ERROR                     — 匹配行
 grep -i timeout                — 忽略大小写
 grep -v DEBUG                  — 排除行
@@ -115,6 +115,13 @@ jq -r '.items[].name' | grep Go | head 10
 2. **同名增强**：不改工具名，不新增工具，只追加一个 optional 字段。对 dispatch、tracing、tool filter 零影响。
 3. **Fail safe**：filter 解析失败仍剥离字段（防止泄漏到原工具）；工具执行失败直接透传错误不 filter。
 4. **框架不教策略**：prompt 只描述能力和格式，不教模型"怎么用"。策略留给用户在 Instruction 中定义。
+5. **框架工具自动跳过**：以下类型的工具会被自动排除，即使出现在 allowlist 中：
+   - 实现了 `StreamInner()` 或 `InnerTextMode()` 的工具（如 AgentTool）
+   - 已知框架内置工具（`transfer_to_agent`、`await_user_reply`）
+   - `LongRunning()` 返回 true 的长生命周期工具
+   - 实现了 `StateDelta` / `StateDeltaForInvocation` 的状态修改工具（如 todo、artifact、skill 类工具）
+   
+   这类工具的输出是框架编排语义或被框架状态机消费，不是可 grep/jq 投影的用户数据。
 
 ### 代价与权衡
 

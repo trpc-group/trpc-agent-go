@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -135,7 +136,35 @@ func TestEngine_MaxOutput(t *testing.T) {
 	result, err := engine.Apply(context.Background(), input, "head -1")
 	require.NoError(t, err)
 	assert.True(t, result.Truncated)
-	assert.Len(t, result.Content, 10)
+	assert.LessOrEqual(t, len(result.Content), 10)
+}
+
+func TestEngine_MaxOutput_HeadTailWindow(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.maxOutput = 200 // big enough to exercise head+tail
+	engine := NewEngine(cfg)
+
+	// 500 chars, exceeds 200 maxOutput.
+	input := strings.Repeat("x", 500)
+	result, err := engine.Apply(context.Background(), input, "head -1")
+	require.NoError(t, err)
+	assert.True(t, result.Truncated)
+	assert.Equal(t, 500, result.TotalBytes)
+	assert.Contains(t, result.Content, "bytes omitted")
+	assert.LessOrEqual(t, len(result.Content), 200)
+}
+
+func TestEngine_MaxInput_Signals(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.maxInput = 50
+	engine := NewEngine(cfg)
+
+	// 100 chars, exceeds maxInput=50.
+	input := strings.Repeat("a", 100)
+	result, err := engine.Apply(context.Background(), input, "head -5")
+	require.NoError(t, err)
+	assert.True(t, result.InputTruncated)
+	assert.Equal(t, 100, result.InputTotalBytes)
 }
 
 func TestEngine_EmptyFilter(t *testing.T) {
@@ -243,8 +272,8 @@ func TestToolPipe_BeforeModel_SkipsNotAllowed(t *testing.T) {
 	_, err := tp.beforeModel(context.Background(), args)
 	require.NoError(t, err)
 
-	// Should remain unchanged.
-	assert.Equal(t, other, req.Tools["other_tool"])
+	// Should remain unchanged — same pointer.
+	assert.Same(t, other, req.Tools["other_tool"])
 }
 
 // --- BeforeTool + AfterTool Integration ---
@@ -320,6 +349,46 @@ func TestToolPipe_AfterTool_NoFilterInContext(t *testing.T) {
 	assert.Nil(t, result) // No filtering applied.
 }
 
+func TestToolPipe_AfterTool_AugmentedNoFilter_SmallResult(t *testing.T) {
+	tp := New(WithToolNames("test_tool"), WithMaxOutputBytes(1024))
+
+	// Augmented tool (in context set), no filter, small result → no wrapping.
+	ctx := ctxWithAugmented("test_tool")
+	args := &tool.AfterToolArgs{
+		ToolName: "test_tool",
+		Result:   "small output",
+	}
+
+	result, err := tp.afterTool(ctx, args)
+	require.NoError(t, err)
+	assert.Nil(t, result) // Small enough, no truncation needed.
+}
+
+func TestToolPipe_AfterTool_AugmentedNoFilter_LargeResult(t *testing.T) {
+	tp := New(WithToolNames("test_tool"), WithMaxOutputBytes(100))
+
+	// Augmented tool (in context set), no filter, large result → head+tail windowed.
+	ctx := ctxWithAugmented("test_tool")
+	largeContent := strings.Repeat("line of text\n", 50) // ~650 bytes > 100
+	args := &tool.AfterToolArgs{
+		ToolName: "test_tool",
+		Result:   largeContent,
+	}
+
+	result, err := tp.afterTool(ctx, args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	fr, ok := result.CustomResult.(*ToolResult)
+	require.True(t, ok)
+	assert.True(t, fr.Truncated)
+	assert.Equal(t, len(largeContent), fr.TotalBytes)
+	assert.Contains(t, fr.Content, "bytes omitted")
+	// Verify head+tail: content should contain the beginning and end.
+	assert.True(t, strings.HasPrefix(fr.Content, "line of text"))
+	assert.True(t, strings.HasSuffix(fr.Content, "line of text\n"))
+}
+
 // --- ExtractFilter Tests ---
 
 func TestExtractFilter_Present(t *testing.T) {
@@ -388,6 +457,29 @@ func TestEngine_GrepUnsupportedFlag(t *testing.T) {
 	_, err := engine.Apply(context.Background(), "data", "grep -z pattern")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported flag")
+}
+
+func TestEngine_GrepRejectOutputModifiers(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	// Flags that change output semantics should be rejected (fail-closed).
+	for _, flag := range []string{"-n", "-c", "-l", "-o", "-P", "-F"} {
+		_, err := engine.Apply(context.Background(), "data", "grep "+flag+" pattern")
+		assert.Error(t, err, "flag %s should be rejected", flag)
+		assert.Contains(t, err.Error(), "unsupported flag", "flag %s", flag)
+	}
+}
+
+func TestEngine_GrepDoubleDash(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	// grep -- -pattern should search for literal "-pattern".
+	input := "-pattern matched\nother line\n-pattern again"
+	result, err := engine.Apply(context.Background(), input, "grep -- -pattern")
+	require.NoError(t, err)
+	assert.Equal(t, "-pattern matched\n-pattern again", result.Content)
 }
 
 func TestEngine_GrepNoMatch(t *testing.T) {
@@ -573,6 +665,19 @@ func TestEngine_JQNoExpression(t *testing.T) {
 	assert.Contains(t, err.Error(), "expression required")
 }
 
+func TestEngine_JQIterationTruncation(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.allowedOps[OpJQ] = true
+	engine := NewEngine(cfg)
+
+	// Generate a range expression that produces more than iterLimit results.
+	// [range(20000)] generates 20000 numbers.
+	input := `null`
+	result, err := engine.Apply(context.Background(), input, "jq '[range(20000)] | .[]'")
+	require.NoError(t, err)
+	assert.Contains(t, result.Content, "truncated: iteration limit 10000 reached")
+}
+
 // --- Security / Rejection Tests ---
 
 func TestEngine_RejectSemicolon(t *testing.T) {
@@ -637,6 +742,35 @@ func TestEngine_RejectPipelineTooLong(t *testing.T) {
 	_, err := engine.Apply(context.Background(), "data", expr)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "too long")
+}
+
+func TestEngine_RejectBackground(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	_, err := engine.Apply(context.Background(), "data", "grep foo &")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "background")
+}
+
+func TestEngine_RejectNegation(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	_, err := engine.Apply(context.Background(), "data", "! grep foo")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "negation")
+}
+
+func TestWithAllowedOps_IgnoresUnknown(t *testing.T) {
+	tp := New(
+		WithToolNames("test_tool"),
+		WithAllowedOps(OpGrep, OpType("sed"), OpType("awk")),
+	)
+	// Only OpGrep should be in allowedOps.
+	assert.True(t, tp.cfg.allowedOps[OpGrep])
+	assert.False(t, tp.cfg.allowedOps[OpType("sed")])
+	assert.False(t, tp.cfg.allowedOps[OpType("awk")])
 }
 
 // --- MaxInput Tests ---
@@ -723,6 +857,12 @@ func TestToolPipe_BeforeTool_InvalidFilterSkips(t *testing.T) {
 	require.NoError(t, json.Unmarshal(result.ModifiedArguments, &cleaned))
 	assert.NotContains(t, cleaned, "result_filter")
 	assert.Equal(t, "test", cleaned["query"])
+	// Context should carry parse error state.
+	require.NotNil(t, result.Context)
+	state, ok := result.Context.Value(filterContextKey{}).(*filterState)
+	require.True(t, ok)
+	assert.NotEmpty(t, state.parseError)
+	assert.Equal(t, "rm -rf /", state.filterExpr)
 }
 
 func TestToolPipe_BeforeTool_EmptyFilter(t *testing.T) {
@@ -866,6 +1006,402 @@ func makeLines(n int) []string {
 		lines[i] = fmt.Sprintf("line%d", i+1)
 	}
 	return lines
+}
+
+// --- Wrapper Type Tests ---
+
+// mockStreamableTool is a tool that implements StreamableTool.
+type mockStreamableTool struct {
+	mockTool
+}
+
+func (m *mockStreamableTool) StreamableCall(_ context.Context, _ []byte) (*tool.StreamReader, error) {
+	return nil, fmt.Errorf("not implemented in test")
+}
+
+func TestWrapper_NonStreamable_DoesNotSatisfyStreamableTool(t *testing.T) {
+	// A normal (non-streaming) tool, when wrapped, must NOT satisfy tool.StreamableTool.
+	inner := &mockTool{
+		decl: &tool.Declaration{
+			Name:        "normal_tool",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+
+	wrapped := newDeclaredCallableTool(inner, inner.decl)
+	_, isStreamable := wrapped.(tool.StreamableTool)
+	assert.False(t, isStreamable, "non-streaming tool wrapper must not satisfy StreamableTool")
+}
+
+func TestWrapper_Streamable_SatisfiesStreamableTool(t *testing.T) {
+	// A streaming tool, when wrapped, must satisfy tool.StreamableTool.
+	inner := &mockStreamableTool{
+		mockTool: mockTool{
+			decl: &tool.Declaration{
+				Name:        "stream_tool",
+				InputSchema: &tool.Schema{Type: "object"},
+			},
+		},
+	}
+
+	wrapped := newDeclaredCallableTool(inner, inner.decl)
+	st, isStreamable := wrapped.(tool.StreamableTool)
+	assert.True(t, isStreamable, "streaming tool wrapper must satisfy StreamableTool")
+	assert.NotNil(t, st)
+}
+
+// mockNamedToolLike simulates NamedTool behavior: implements StreamableTool
+// and Original() but wraps a non-streamable tool.
+type mockNamedToolLike struct {
+	original tool.Tool
+	decl     *tool.Declaration
+}
+
+func (m *mockNamedToolLike) Declaration() *tool.Declaration { return m.decl }
+func (m *mockNamedToolLike) Call(ctx context.Context, args []byte) (any, error) {
+	if callable, ok := m.original.(tool.CallableTool); ok {
+		return callable.Call(ctx, args)
+	}
+	return nil, fmt.Errorf("not callable")
+}
+func (m *mockNamedToolLike) StreamableCall(ctx context.Context, args []byte) (*tool.StreamReader, error) {
+	// NamedTool always implements this, delegating to original.
+	if st, ok := m.original.(tool.StreamableTool); ok {
+		return st.StreamableCall(ctx, args)
+	}
+	return nil, fmt.Errorf("tool is not streamable")
+}
+func (m *mockNamedToolLike) Original() tool.Tool { return m.original }
+
+func TestWrapper_NamedToolWrappingNonStreamable_DoesNotSatisfyStreamableTool(t *testing.T) {
+	// This is the critical NamedTool/MCP regression test.
+	// NamedTool always implements StreamableTool on its wrapper,
+	// but the Original() tool is NOT streamable. After toolpipe
+	// wrapping, the result must NOT satisfy tool.StreamableTool.
+	nonStreamableOriginal := &mockTool{
+		decl: &tool.Declaration{
+			Name:        "mcp_query",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+
+	namedTool := &mockNamedToolLike{
+		original: nonStreamableOriginal,
+		decl:     nonStreamableOriginal.decl,
+	}
+
+	// Verify precondition: namedTool itself satisfies StreamableTool.
+	_, namedIsStreamable := tool.Tool(namedTool).(tool.StreamableTool)
+	require.True(t, namedIsStreamable, "precondition: NamedTool-like wrapper satisfies StreamableTool")
+
+	// After toolpipe wrapping, it must NOT satisfy StreamableTool.
+	wrapped := newDeclaredCallableTool(namedTool, namedTool.decl)
+	_, wrappedIsStreamable := wrapped.(tool.StreamableTool)
+	assert.False(t, wrappedIsStreamable,
+		"NamedTool wrapping non-streamable tool must NOT satisfy StreamableTool after toolpipe wrap")
+}
+
+func TestWrapper_NamedToolWrappingStreamable_SatisfiesStreamableTool(t *testing.T) {
+	// When NamedTool wraps a truly streamable tool, toolpipe should preserve that.
+	streamableOriginal := &mockStreamableTool{
+		mockTool: mockTool{
+			decl: &tool.Declaration{
+				Name:        "mcp_stream_query",
+				InputSchema: &tool.Schema{Type: "object"},
+			},
+		},
+	}
+
+	namedTool := &mockNamedToolLike{
+		original: streamableOriginal,
+		decl:     streamableOriginal.decl,
+	}
+
+	wrapped := newDeclaredCallableTool(namedTool, namedTool.decl)
+	_, wrappedIsStreamable := wrapped.(tool.StreamableTool)
+	assert.True(t, wrappedIsStreamable,
+		"NamedTool wrapping streamable tool must satisfy StreamableTool after toolpipe wrap")
+}
+
+// --- Schema Augmentation Guard Tests ---
+
+func TestToolPipe_SkipsNonObjectSchema(t *testing.T) {
+	tp := New(WithToolNames("array_tool"))
+
+	arrayTool := &mockTool{
+		decl: &tool.Declaration{
+			Name: "array_tool",
+			InputSchema: &tool.Schema{
+				Type: "array",
+			},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"array_tool": arrayTool},
+	}
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// Tool with array schema should NOT be augmented.
+	assert.Same(t, arrayTool, req.Tools["array_tool"])
+}
+
+// mockFrameworkTool simulates an AgentTool-like framework tool
+// that implements StreamInner().
+type mockFrameworkTool struct {
+	mockTool
+}
+
+func (m *mockFrameworkTool) StreamInner() bool { return true }
+func (m *mockFrameworkTool) StreamableCall(_ context.Context, _ []byte) (*tool.StreamReader, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func TestToolPipe_SkipsFrameworkTool(t *testing.T) {
+	tp := New(WithToolNames("agent_tool"))
+
+	agentTool := &mockFrameworkTool{
+		mockTool: mockTool{
+			decl: &tool.Declaration{
+				Name:        "agent_tool",
+				InputSchema: &tool.Schema{Type: "object"},
+			},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"agent_tool": agentTool},
+	}
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// Framework tool should NOT be augmented even if in allowlist.
+	assert.Same(t, agentTool, req.Tools["agent_tool"])
+}
+
+// mockLongRunningTool simulates a tool that returns LongRunning() = true.
+type mockLongRunningTool struct {
+	mockTool
+}
+
+func (m *mockLongRunningTool) LongRunning() bool { return true }
+
+// mockNormalFunctionTool simulates a function tool that has LongRunning() = false (default).
+type mockNormalFunctionTool struct {
+	mockTool
+}
+
+func (m *mockNormalFunctionTool) LongRunning() bool { return false }
+
+func TestToolPipe_SkipsLongRunningTool(t *testing.T) {
+	tp := New(WithToolScope(func(_ tool.Tool) bool { return true }))
+
+	longTool := &mockLongRunningTool{
+		mockTool: mockTool{
+			decl: &tool.Declaration{
+				Name:        "long_tool",
+				InputSchema: &tool.Schema{Type: "object"},
+			},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"long_tool": longTool},
+	}
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// LongRunning=true tool should be skipped.
+	assert.Same(t, longTool, req.Tools["long_tool"])
+}
+
+func TestToolPipe_DoesNotSkipNormalFunctionTool(t *testing.T) {
+	tp := New(WithToolScope(func(_ tool.Tool) bool { return true }))
+
+	// LongRunning()=false should NOT cause skip.
+	normalTool := &mockNormalFunctionTool{
+		mockTool: mockTool{
+			decl: &tool.Declaration{
+				Name:        "my_function",
+				InputSchema: &tool.Schema{Type: "object"},
+			},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"my_function": normalTool},
+	}
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// Normal function tool (LongRunning=false) should be augmented.
+	assert.NotSame(t, normalTool, req.Tools["my_function"])
+	assert.NotNil(t, req.Tools["my_function"].Declaration().InputSchema.Properties["result_filter"])
+}
+
+// mockStateDeltaTool simulates a tool implementing StateDelta.
+type mockStateDeltaTool struct {
+	mockTool
+}
+
+func (m *mockStateDeltaTool) StateDelta(toolCallID string, args []byte, result []byte) map[string][]byte {
+	return nil
+}
+
+func TestToolPipe_SkipsStateDeltaTool(t *testing.T) {
+	tp := New(WithToolScope(func(_ tool.Tool) bool { return true }))
+
+	stateTool := &mockStateDeltaTool{
+		mockTool: mockTool{
+			decl: &tool.Declaration{
+				Name:        "todo_tool",
+				InputSchema: &tool.Schema{Type: "object"},
+			},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"todo_tool": stateTool},
+	}
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// StateDelta tool should be skipped.
+	assert.Same(t, stateTool, req.Tools["todo_tool"])
+}
+
+// mockStateDeltaForInvocationTool simulates a tool implementing only
+// StateDeltaForInvocation (like todo.go in the real codebase).
+type mockStateDeltaForInvocationTool struct {
+	mockTool
+}
+
+func (m *mockStateDeltaForInvocationTool) StateDeltaForInvocation(
+	_ *agent.Invocation, _ string, _ []byte, _ []byte,
+) map[string][]byte {
+	return nil
+}
+
+func TestToolPipe_SkipsStateDeltaForInvocationTool(t *testing.T) {
+	tp := New(WithToolScope(func(_ tool.Tool) bool { return true }))
+
+	stateTool := &mockStateDeltaForInvocationTool{
+		mockTool: mockTool{
+			decl: &tool.Declaration{
+				Name:        "todo_manage",
+				InputSchema: &tool.Schema{Type: "object"},
+			},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"todo_manage": stateTool},
+	}
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// StateDeltaForInvocation tool should be skipped.
+	assert.Same(t, stateTool, req.Tools["todo_manage"])
+}
+
+func TestToolPipe_SkipsFrameworkToolBehindNamedTool(t *testing.T) {
+	tp := New(WithToolNames("mcp_agent"))
+
+	// NamedTool wrapping a framework tool (has StreamInner on original).
+	frameworkOriginal := &mockFrameworkTool{
+		mockTool: mockTool{
+			decl: &tool.Declaration{
+				Name:        "agent",
+				InputSchema: &tool.Schema{Type: "object"},
+			},
+		},
+	}
+	namedTool := &mockNamedToolLike{
+		original: frameworkOriginal,
+		decl: &tool.Declaration{
+			Name:        "mcp_agent",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"mcp_agent": namedTool},
+	}
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// Should NOT be augmented — original behind NamedTool is a framework tool.
+	assert.Same(t, namedTool, req.Tools["mcp_agent"])
+}
+
+func TestToolPipe_SkipsTransferAndAwaitTools(t *testing.T) {
+	// Even with broad scope, transfer_to_agent and await_user_reply are skipped.
+	tp := New(WithToolScope(func(_ tool.Tool) bool { return true }))
+
+	transferTool := &mockTool{
+		decl: &tool.Declaration{
+			Name:        "transfer_to_agent",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+	awaitTool := &mockTool{
+		decl: &tool.Declaration{
+			Name:        "await_user_reply",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+	dataTool := &mockTool{
+		decl: &tool.Declaration{
+			Name:        "web_fetch",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"transfer_to_agent": transferTool,
+			"await_user_reply":  awaitTool,
+			"web_fetch":         dataTool,
+		},
+	}
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// Framework tools skipped.
+	assert.Same(t, transferTool, req.Tools["transfer_to_agent"])
+	assert.Same(t, awaitTool, req.Tools["await_user_reply"])
+	// Data tool augmented.
+	assert.NotSame(t, dataTool, req.Tools["web_fetch"])
+	assert.NotNil(t, req.Tools["web_fetch"].Declaration().InputSchema.Properties["result_filter"])
+}
+
+// --- suffixUTF8 / windowOutput Tests ---
+
+func TestSuffixUTF8_Basic(t *testing.T) {
+	assert.Equal(t, "world", suffixUTF8("hello world", 5))
+	assert.Equal(t, "hello world", suffixUTF8("hello world", 100))
+	assert.Equal(t, "d", suffixUTF8("hello world", 1))
+}
+
+func TestSuffixUTF8_MultiByte(t *testing.T) {
+	// "你好世界" = 12 bytes (3 per char). Request 7 bytes → can fit 2 chars (6 bytes).
+	s := "你好世界"
+	result := suffixUTF8(s, 7)
+	// Should skip partial rune, start at a valid boundary.
+	assert.True(t, len(result) <= 7)
+	// Must be valid UTF-8 and end with the original ending.
+	assert.True(t, strings.HasSuffix(s, result))
+}
+
+func TestWindowOutput_PreservesTail(t *testing.T) {
+	// Verify the windowed output ends with the actual end of the input.
+	input := strings.Repeat("A", 200) + "THE_END"
+	result := windowOutput(input, 120)
+	assert.True(t, strings.HasSuffix(result, "THE_END"),
+		"windowed output must preserve the end of original content")
+	assert.Contains(t, result, "bytes omitted")
+	assert.LessOrEqual(t, len(result), 120)
 }
 
 // --- Regression Tests ---

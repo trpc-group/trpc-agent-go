@@ -28,30 +28,34 @@ type Op interface {
 // --- Grep ---
 
 type grepOp struct {
-	pattern    *regexp.Regexp
-	ignoreCase bool
-	invert     bool
+	pattern *regexp.Regexp
+	invert  bool
 }
 
 func parseGrepOp(args []string) (Op, error) {
 	op := &grepOp{}
 	var patternStr string
+	ignoreCase := false
+	endOfFlags := false
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if strings.HasPrefix(arg, "-") && len(arg) > 1 && arg[1] != '-' {
+		if !endOfFlags && arg == "--" {
+			endOfFlags = true
+			continue
+		}
+		if !endOfFlags && strings.HasPrefix(arg, "-") && len(arg) > 1 && arg[1] != '-' {
 			// Parse combined short flags like -Ei, -iv, etc.
 			for _, ch := range arg[1:] {
 				switch ch {
 				case 'i':
-					op.ignoreCase = true
+					ignoreCase = true
 				case 'v':
 					op.invert = true
-				case 'E', 'P', 'F':
-					// -E (extended regex), -P (perl regex), -F (fixed string)
-					// Go's regexp is already extended, so these are no-ops.
-				case 'n', 'c', 'l', 'h', 'o':
-					// Common grep flags we can safely ignore.
+				case 'E':
+					// -E (extended regex) — Go's regexp is already extended, no-op.
+				case 'h':
+					// -h (suppress filename) — no-op in our context (no filenames).
 				default:
 					return nil, fmt.Errorf("grep: unsupported flag -%c", ch)
 				}
@@ -67,7 +71,7 @@ func parseGrepOp(args []string) (Op, error) {
 		return nil, fmt.Errorf("grep: pattern required")
 	}
 
-	if op.ignoreCase {
+	if ignoreCase {
 		patternStr = "(?i)" + patternStr
 	}
 
@@ -188,7 +192,6 @@ func (t *tailOp) Apply(_ context.Context, input string) (string, error) {
 
 type jqOp struct {
 	code      *gojq.Code
-	expr      string
 	rawOutput bool
 }
 
@@ -226,7 +229,7 @@ func parseJQOp(args []string) (Op, error) {
 	if err != nil {
 		return nil, fmt.Errorf("jq: compile error: %w", err)
 	}
-	return &jqOp{code: code, expr: expr, rawOutput: rawOutput}, nil
+	return &jqOp{code: code, rawOutput: rawOutput}, nil
 }
 
 func (j *jqOp) Apply(ctx context.Context, input string) (string, error) {
@@ -236,11 +239,17 @@ func (j *jqOp) Apply(ctx context.Context, input string) (string, error) {
 		return "", fmt.Errorf("jq: input is not valid JSON: %w", err)
 	}
 
+	const iterLimit = 10000
 	var results []string
 	iter := j.code.RunWithContext(ctx, data)
-	for i := 0; i < 10000; i++ { // safety limit
+	truncated := false
+	for i := 0; ; i++ {
 		v, ok := iter.Next()
 		if !ok {
+			break
+		}
+		if i >= iterLimit {
+			truncated = true
 			break
 		}
 		if err, isErr := v.(error); isErr {
@@ -272,5 +281,9 @@ func (j *jqOp) Apply(ctx context.Context, input string) (string, error) {
 			results = append(results, string(b))
 		}
 	}
-	return strings.Join(results, "\n"), nil
+	output := strings.Join(results, "\n")
+	if truncated {
+		output += fmt.Sprintf("\n...(truncated: iteration limit %d reached)", iterLimit)
+	}
+	return output, nil
 }

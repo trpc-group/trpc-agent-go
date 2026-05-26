@@ -151,14 +151,23 @@ func (p *ToolPipe) augmentToolSchemas(req *model.Request) map[string]bool {
 		if !ok {
 			continue
 		}
+		// Skip framework/orchestration tools (AgentTool, etc.) — their output
+		// is framework-semantic, not user-data suitable for grep/jq.
+		if isFrameworkTool(t) {
+			continue
+		}
 		// Skip if the tool already has a field with the same name as
 		// our filter field — we must not collide with existing schema.
 		if toolHasField(t, p.cfg.filterField) {
 			continue
 		}
+		// Skip if the tool's input schema is not object-compatible.
+		if !canAugmentSchema(t) {
+			continue
+		}
 		req.Tools[name] = newDeclaredCallableTool(
 			callable,
-			augmentDeclaration(t.Declaration(), p.cfg.filterField),
+			augmentDeclaration(t.Declaration(), p.cfg.filterField, p.cfg.allowedOps),
 		)
 		augmented[name] = true
 	}
@@ -215,6 +224,10 @@ func (p *ToolPipe) resolvePrompt(toolNames []string) string {
 // runtime may include additional tool names discovered dynamically.
 // This method only shows tools from WithToolNames.
 func (p *ToolPipe) Prompt() string {
+	// No ops = no augmentation at runtime, so no prompt either.
+	if len(p.cfg.allowedOps) == 0 {
+		return ""
+	}
 	names := make([]string, 0, len(p.cfg.allowedNames))
 	for n := range p.cfg.allowedNames {
 		names = append(names, n)
@@ -237,22 +250,40 @@ func (p *ToolPipe) defaultSystemPrompt(toolNames []string) string {
 	sort.Strings(ops)
 	sort.Strings(toolNames)
 
-	return fmt.Sprintf(`[toolpipe] Tools with %s: %s
-Accepts shell-like pipeline syntax. Ops: %s. Combine with pipes.
-Structured results are filtered as pretty JSON; use jq -r to extract fields before grep/head/tail. Text results can be filtered directly.
-Large output is automatically windowed (head+tail with middle omitted, total_bytes shown).
-With %s: {"filter":"<expr>", "content":"<filtered text>"}
-Without %s (large output): {"content":"<head>...omitted...<tail>", "truncated":true, "total_bytes":N}
-Without %s (small output): original tool response unchanged.
-Use %s when you need a specific slice from a large or structured result.`,
-		p.cfg.filterField,
-		strings.Join(toolNames, ", "),
-		strings.Join(ops, ", "),
-		p.cfg.filterField,
-		p.cfg.filterField,
-		p.cfg.filterField,
-		p.cfg.filterField,
+	field := p.cfg.filterField
+	r := strings.NewReplacer(
+		"{field}", field,
+		"{tools}", strings.Join(toolNames, ", "),
+		"{ops}", strings.Join(ops, ", "),
 	)
+
+	// Build the structured data hint only if jq is enabled.
+	structuredHint := "Structured results are serialized as pretty JSON for line-based filtering."
+	if p.cfg.allowedOps[OpJQ] {
+		// Only mention ops that are actually enabled alongside jq.
+		var companions []string
+		if p.cfg.allowedOps[OpGrep] {
+			companions = append(companions, "grep")
+		}
+		if p.cfg.allowedOps[OpHead] || p.cfg.allowedOps[OpTail] {
+			companions = append(companions, "head/tail")
+		}
+		if len(companions) > 0 {
+			structuredHint = fmt.Sprintf("Structured results are filtered as pretty JSON; use jq -r to extract fields before %s. Text results can be filtered directly.", strings.Join(companions, "/"))
+		} else {
+			structuredHint = "Structured results are filtered as pretty JSON; use jq -r to extract fields. Text results can be filtered directly."
+		}
+	}
+
+	return r.Replace(`[toolpipe] Tools with {field}: {tools}
+Accepts shell-like pipeline syntax. Ops: {ops}. Combine with pipes.
+` + structuredHint + `
+Large output is automatically windowed (head+tail with middle omitted, total_bytes shown).
+With {field}: {"filter":"<expr>", "content":"<filtered>", "truncated":bool, "total_bytes":N}
+Without {field} (large output): {"content":"<head>...omitted...<tail>", "truncated":true, "total_bytes":N}
+Without {field} (small output): original tool response unchanged.
+If input_truncated is true, the filter ran on partial data — refine the filter or use narrower tool parameters.
+{field} applies a targeted projection to large or structured results.`)
 }
 
 // beforeTool extracts the result_filter from arguments, parses it,
@@ -356,12 +387,13 @@ func (p *ToolPipe) afterTool(
 
 	// Case 2: Filter parse error — return error annotation with preview.
 	if state.parseError != "" {
+		raw := resultToString(args.Result)
 		return &tool.AfterToolResult{
 			CustomResult: &ToolResult{
 				Filter:          state.filterExpr,
 				Error:           "parse error: " + state.parseError,
-				Content:         truncateForPreview(resultToString(args.Result), 2048),
-				OriginalPreview: truncateForPreview(resultToString(args.Result), 1024),
+				Content:         truncateForPreview(raw, 2048),
+				OriginalPreview: truncateForPreview(raw, 1024),
 			},
 		}, nil
 	}
@@ -369,13 +401,21 @@ func (p *ToolPipe) afterTool(
 	// Case 3: Normal filter — apply pipeline.
 	filtered, err := p.engine.applyPipeline(ctx, args.Result, state.pipeline)
 	if err != nil {
+		raw := resultToString(args.Result)
+		errResult := &ToolResult{
+			Filter:          state.filterExpr,
+			Error:           err.Error(),
+			Content:         truncateForPreview(raw, 2048),
+			OriginalPreview: truncateForPreview(raw, 1024),
+		}
+		// If input would have been truncated, include that context —
+		// it may be the root cause of the error (e.g., jq invalid JSON).
+		if p.cfg.maxInput > 0 && int64(len(raw)) > p.cfg.maxInput {
+			errResult.InputTruncated = true
+			errResult.InputTotalBytes = len(raw)
+		}
 		return &tool.AfterToolResult{
-			CustomResult: &ToolResult{
-				Filter:          state.filterExpr,
-				Error:           err.Error(),
-				Content:         truncateForPreview(resultToString(args.Result), 2048),
-				OriginalPreview: truncateForPreview(resultToString(args.Result), 1024),
-			},
+			CustomResult: errResult,
 		}, nil
 	}
 
@@ -398,28 +438,29 @@ func (p *ToolPipe) afterTool(
 // with a middle-truncation marker, giving it structural overview without
 // flooding context. This discourages "multi-round reconstruction" behavior.
 func (p *ToolPipe) truncateUnfilteredResult(result any) (*tool.AfterToolResult, error) {
-	content := resultToString(result)
 	maxBytes := int(p.cfg.maxOutput)
+
+	// Fast path: for string/[]byte results, check length without extra allocation.
+	switch v := result.(type) {
+	case string:
+		if len(v) <= maxBytes {
+			return nil, nil
+		}
+	case []byte:
+		if len(v) <= maxBytes {
+			return nil, nil
+		}
+	}
+
+	content := resultToString(result)
 
 	// If output fits within limit, don't wrap — return unchanged.
 	if len(content) <= maxBytes {
 		return nil, nil
 	}
 
-	// Head+tail strategy: split budget 50/50, keep start and end.
-	headBudget := maxBytes / 2
-	tailBudget := maxBytes - headBudget
-
-	head := truncateUTF8(content, headBudget)
-	tail := content[len(content)-tailBudget:]
-	// Ensure tail starts at a UTF-8 boundary.
-	for len(tail) > 0 && !isRuneStart(tail[0]) {
-		tail = tail[1:]
-	}
-
-	omitted := len(content) - len(head) - len(tail)
-	middle := fmt.Sprintf("\n\n...(%d bytes omitted)...\n\n", omitted)
-	windowed := head + middle + tail
+	// Head+tail strategy using shared helper (marker budget accounted for).
+	windowed := windowOutput(content, maxBytes)
 
 	return &tool.AfterToolResult{
 		CustomResult: &ToolResult{
@@ -433,6 +474,10 @@ func (p *ToolPipe) truncateUnfilteredResult(result any) (*tool.AfterToolResult, 
 // shouldWrap checks whether a tool matches the configured allowlist or predicate.
 func (p *ToolPipe) shouldWrap(t tool.Tool) bool {
 	if t == nil || t.Declaration() == nil {
+		return false
+	}
+	// No ops configured — nothing useful can be filtered.
+	if len(p.cfg.allowedOps) == 0 {
 		return false
 	}
 	name := t.Declaration().Name

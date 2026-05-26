@@ -216,7 +216,7 @@ func runBenchmark(modelName string, withToolpipe bool, task string) *Stats {
 	r := runner.NewRunner("benchmark", agent)
 	defer r.Close()
 
-	sessionID := fmt.Sprintf("bench-%s-%d", stats.Mode, time.Now().Unix())
+	sessionID := fmt.Sprintf("bench-%s-%d", stats.Mode, time.Now().UnixNano())
 
 	// Run.
 	start := time.Now()
@@ -259,52 +259,13 @@ func runBenchmark(modelName string, withToolpipe bool, task string) *Stats {
 	return stats
 }
 
-func printSingle(label string, s *Stats) {
-	fmt.Printf("\n  [%s]\n", label)
-	fmt.Printf("  Duration:          %s\n", s.Duration.Round(time.Millisecond))
-	fmt.Printf("  Model rounds:      %d\n", s.Rounds)
-	fmt.Printf("  Tool calls:        %d\n", s.ToolCalls)
-	fmt.Printf("  Input tokens:      %d\n", s.InputTokens)
-	fmt.Printf("  Output tokens:     %d\n", s.OutputTokens)
-	fmt.Printf("  Total tokens:      %d\n", s.InputTokens+s.OutputTokens)
-	fmt.Printf("  Peak context:      %s\n", formatBytes(s.PeakContextBytes))
-	fmt.Printf("  Total context:     %s\n", formatBytes(s.TotalContextBytes))
-	fmt.Printf("  Answer length:     %d chars\n", len(s.FinalAnswer))
-	fmt.Println()
-	fmt.Println("  --- Answer Preview ---")
-	fmt.Printf("  %s\n", truncate(s.FinalAnswer, 500))
-}
-
-func printComparison(a, b *Stats) {
-	fmt.Println()
-	fmt.Printf("  %-22s %15s %15s %10s\n", "Metric", "BASELINE", "TOOLPIPE", "Δ")
-	fmt.Printf("  %-22s %15s %15s %10s\n", strings.Repeat("─", 22), strings.Repeat("─", 15), strings.Repeat("─", 15), strings.Repeat("─", 10))
-	printRow("Duration", a.Duration.String(), b.Duration.String(), "")
-	printRow("Model rounds", fmt.Sprint(a.Rounds), fmt.Sprint(b.Rounds), delta(int64(a.Rounds), int64(b.Rounds)))
-	printRow("Tool calls", fmt.Sprint(a.ToolCalls), fmt.Sprint(b.ToolCalls), delta(int64(a.ToolCalls), int64(b.ToolCalls)))
-	printRow("Input tokens", fmt.Sprint(a.InputTokens), fmt.Sprint(b.InputTokens), delta(a.InputTokens, b.InputTokens))
-	printRow("Output tokens", fmt.Sprint(a.OutputTokens), fmt.Sprint(b.OutputTokens), delta(a.OutputTokens, b.OutputTokens))
-	printRow("Total tokens", fmt.Sprint(a.InputTokens+a.OutputTokens), fmt.Sprint(b.InputTokens+b.OutputTokens), delta(a.InputTokens+a.OutputTokens, b.InputTokens+b.OutputTokens))
-	printRow("Peak context", formatBytes(a.PeakContextBytes), formatBytes(b.PeakContextBytes), delta(a.PeakContextBytes, b.PeakContextBytes))
-	printRow("Total context", formatBytes(a.TotalContextBytes), formatBytes(b.TotalContextBytes), delta(a.TotalContextBytes, b.TotalContextBytes))
-	printRow("Answer length", fmt.Sprintf("%d chars", len(a.FinalAnswer)), fmt.Sprintf("%d chars", len(b.FinalAnswer)), "")
-
-	fmt.Println()
-	fmt.Println("  --- BASELINE Answer Preview ---")
-	fmt.Printf("  %s\n", truncate(a.FinalAnswer, 300))
-	fmt.Println()
-	fmt.Println("  --- TOOLPIPE Answer Preview ---")
-	fmt.Printf("  %s\n", truncate(b.FinalAnswer, 300))
-}
-
-func printRow(label, a, b, d string) {
-	fmt.Printf("  %-22s %15s %15s %10s\n", label, a, b, d)
-}
-
 func delta(a, b int64) string {
 	diff := b - a
 	if diff == 0 {
 		return "="
+	}
+	if a == 0 {
+		return "N/A"
 	}
 	pct := float64(diff) / float64(a) * 100
 	if diff < 0 {
@@ -323,6 +284,10 @@ func formatBytes(b int64) string {
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	// Respect UTF-8 boundaries: walk backwards to find a valid rune start.
+	for n > 0 && n < len(s) && s[n]&0xC0 == 0x80 {
+		n--
 	}
 	return s[:n] + "..."
 }

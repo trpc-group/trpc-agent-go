@@ -48,7 +48,7 @@ import (
 )
 
 func main() {
-	modelName := flag.String("model", "deepseek-v4-flash", "Name of the model to use")
+	modelName := flag.String("model", "gpt-4o", "Name of the model to use")
 	flag.Parse()
 
 	fmt.Println("🚀 ToolPipe Demo — Shell-like Result Filtering")

@@ -53,10 +53,12 @@ func defaultConfig() *config {
 }
 
 // WithToolNames specifies which tools (by name) are eligible for
-// result filtering. Only tools whose Declaration().Name is in this
-// allowlist will have their schema augmented and results filtered.
-// This is the primary safety boundary: tools not listed here are
-// never wrapped.
+// result filtering. Tools matching this list may still be skipped if:
+//   - No allowed ops are configured
+//   - The tool implements framework control interfaces (StreamInner, InnerTextMode)
+//   - The tool's input schema is not object-compatible
+//   - The tool already has a field named result_filter (or the configured filter field)
+//   - The tool does not implement CallableTool
 func WithToolNames(names ...string) Option {
 	return func(c *config) {
 		for _, n := range names {
@@ -67,8 +69,10 @@ func WithToolNames(names ...string) Option {
 
 // WithToolScope adds a function-based tool selector that defines
 // the scope of tools eligible for result filtering. A tool is
-// wrapped if it matches either the name allowlist (WithToolNames)
-// OR the scope function returns true.
+// considered eligible if it matches either the name allowlist
+// (WithToolNames) OR the scope function returns true.
+// Same skip conditions as WithToolNames apply (framework tools,
+// non-object schema, etc.).
 //
 // This is useful for dynamic tool sources like MCP ToolSets where
 // tool names are not known at compile time:
@@ -92,13 +96,26 @@ func WithFilterField(field string) Option {
 	}
 }
 
+// knownOps is the set of all implemented operations.
+var knownOps = map[OpType]bool{
+	OpGrep: true,
+	OpHead: true,
+	OpTail: true,
+	OpJQ:   true,
+}
+
 // WithAllowedOps sets the operations the filter DSL supports.
 // Defaults to grep, head, tail. Pass OpJQ to enable jq support.
+// Passing no arguments effectively disables schema augmentation
+// (no tools will be wrapped since there are no usable ops).
+// Unknown op types are silently ignored.
 func WithAllowedOps(ops ...OpType) Option {
 	return func(c *config) {
 		c.allowedOps = make(map[OpType]bool, len(ops))
 		for _, op := range ops {
-			c.allowedOps[op] = true
+			if knownOps[op] {
+				c.allowedOps[op] = true
+			}
 		}
 	}
 }
