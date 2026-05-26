@@ -170,6 +170,8 @@ the template and call `SetInstruction` before invoking the runner.
 
 ```go
 import (
+    "time"
+
     "trpc.group/trpc-go/trpc-agent-go/prompt"
     promptlangfuse "trpc.group/trpc-go/trpc-agent-go/prompt/provider/langfuse"
     lfconfig "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse/config"
@@ -200,4 +202,3 @@ instruction, err := text.Render(prompt.RenderEnv{
 See `examples/prompt/langfuse` for a complete runnable example that fetches a
 prompt, renders variables, updates an `LLMAgent` instruction, and runs the
 agent.
-
