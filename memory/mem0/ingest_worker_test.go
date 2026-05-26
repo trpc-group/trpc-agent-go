@@ -325,6 +325,57 @@ func TestIngestWorker_AdvanceCheckpointDoesNotSkipGap(t *testing.T) {
 	assert.True(t, readLastExtractAt(sess).Equal(t2))
 }
 
+func TestIngestWorker_ProgressNoSessionID(t *testing.T) {
+	w := &ingestWorker{}
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	t0 := time.Date(2026, 5, 15, 13, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	sess := &session.Session{AppName: "app", UserID: "user"}
+	writeLastExtractAt(sess, t0)
+
+	assert.True(t, w.scanSince(userKey, sess).Equal(t0))
+	assert.True(t, w.claimInFlight(userKey, sess, t0, t1))
+	w.finishInFlight(userKey, sess, t1)
+	assert.True(t, w.scanSince(userKey, sess).Equal(t0))
+
+	assert.True(t, w.advanceCheckpoint(sess, t0, t0))
+	assert.True(t, readLastExtractAt(sess).Equal(t0))
+}
+
+func TestIngestWorker_InFlightProgressLifecycle(t *testing.T) {
+	w := &ingestWorker{}
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	t0 := time.Date(2026, 5, 15, 14, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	t2 := t1.Add(time.Minute)
+	sess := &session.Session{AppName: "app", UserID: "user", ID: "s"}
+	writeLastExtractAt(sess, t0)
+
+	assert.True(t, w.claimInFlight(userKey, sess, t0, t1))
+	assert.True(t, w.scanSince(userKey, sess).Equal(t1))
+	assert.False(t, w.claimInFlight(userKey, sess, t0, t2))
+
+	assert.True(t, w.claimInFlight(userKey, sess, t1, t2))
+	assert.True(t, w.scanSince(userKey, sess).Equal(t2))
+	w.finishInFlight(userKey, sess, t1)
+	assert.True(t, w.scanSince(userKey, sess).Equal(t2))
+
+	w.finishInFlight(userKey, sess, t2)
+	assert.True(t, w.scanSince(userKey, sess).Equal(t0))
+}
+
+func TestIngestWorker_ClaimInFlightRejectsAdvancedCheckpoint(t *testing.T) {
+	w := &ingestWorker{}
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	t0 := time.Date(2026, 5, 15, 15, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	t2 := t1.Add(time.Minute)
+	sess := &session.Session{AppName: "app", UserID: "user", ID: "s"}
+	writeLastExtractAt(sess, t2)
+
+	assert.False(t, w.claimInFlight(userKey, sess, t0, t1))
+}
+
 func TestIngestWorker_TryEnqueue_HashesBySessionOrUserKey(t *testing.T) {
 	w, _ := newWorkerWithServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
