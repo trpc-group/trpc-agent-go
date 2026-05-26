@@ -767,6 +767,7 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 				},
 			},
 			{
+				ID:           "evt-tool-result",
 				Author:       "test-agent",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -815,8 +816,10 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 	require.Equal(t, model.RoleTool, req.Messages[3].Role)
 	require.Equal(t, "call_1", req.Messages[3].ToolID)
 	require.Equal(t, "step_worker", req.Messages[3].ToolName)
-	require.Equal(t, compactedToolResultPlaceholder,
-		req.Messages[3].Content)
+	require.Contains(t, req.Messages[3].Content, compactedToolResultPlaceholder)
+	require.Contains(t, req.Messages[3].Content, "event_id: evt-tool-result")
+	require.Contains(t, req.Messages[3].Content, "tool_call_id: call_1")
+	require.Contains(t, req.Messages[3].Content, "tool_name: step_worker")
 	require.NotContains(t, req.Messages[3].Content, "large-result;")
 }
 

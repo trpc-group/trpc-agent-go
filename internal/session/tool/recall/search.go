@@ -105,15 +105,20 @@ func NewSearchTool() tool.CallableTool {
 				result,
 				idx,
 			)
+			toolCallID, toolName, contentBytes, isTool := toolResultMetadata(result.Event)
 			hits = append(hits, SearchSessionHit{
-				Scope:     resultScope(result, inv, scope),
-				SessionID: result.SessionKey.SessionID,
-				EventID:   eventID,
-				Created:   created,
-				Role:      role,
-				Score:     result.Score,
-				Snippet:   resultSnippet(result, window),
-				Context:   searchResultContext(window),
+				Scope:            resultScope(result, inv, scope),
+				SessionID:        result.SessionKey.SessionID,
+				EventID:          eventID,
+				Created:          created,
+				Role:             role,
+				Score:            result.Score,
+				Snippet:          resultSnippet(result, window),
+				Context:          searchResultContext(window),
+				ToolCallID:       toolCallID,
+				ToolName:         toolName,
+				ContentBytes:     contentBytes,
+				ContentTruncated: isTool && contentBytes > maxSnippetLength,
 			})
 		}
 
@@ -372,7 +377,7 @@ func resultSnippet(
 func searchResultContext(
 	window *session.EventWindow,
 ) []LoadedSessionMessage {
-	return loadedMessagesFromWindow(window)
+	return loadedMessagesFromWindow(window, loadContentWindow{})
 }
 
 func searchWithFallback(

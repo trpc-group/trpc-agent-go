@@ -187,7 +187,7 @@ func TestExtractSessionMessageText(t *testing.T) {
 }
 
 func TestLoadedMessagesFromWindow_SkipsUnusableEntries(t *testing.T) {
-	require.Nil(t, loadedMessagesFromWindow(nil))
+	require.Nil(t, loadedMessagesFromWindow(nil, loadContentWindow{}))
 
 	window := &session.EventWindow{
 		Entries: []session.EventWindowEntry{
@@ -223,7 +223,7 @@ func TestLoadedMessagesFromWindow_SkipsUnusableEntries(t *testing.T) {
 		},
 	}
 
-	messages := loadedMessagesFromWindow(window)
+	messages := loadedMessagesFromWindow(window, loadContentWindow{})
 	require.Len(t, messages, 1)
 	assert.Equal(t, "evt-user", messages[0].EventID)
 	assert.Equal(t, "hello", messages[0].Content)

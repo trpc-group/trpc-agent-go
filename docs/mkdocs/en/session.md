@@ -1846,8 +1846,10 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds prompt-s
 - **Pass 1** — Historical tool results from older requests that exceed `ContextCompactionToolResultMaxTokens` (default 1024 tokens) are replaced with a placeholder while keeping `ToolID` and `ToolName`.
 - **Pass 2** — Any single tool result (including the current request) exceeding `ContextCompactionOversizedToolResultMaxTokens` is truncated using head+tail preservation with a `[...N characters truncated...]` marker. **Disabled by default (value `0`)** — you must explicitly call `WithContextCompactionOversizedToolResultMaxTokens(...)` and keep `WithEnableContextCompaction(true)` for Pass 2 to fire (recommended opt-in value: 8192 tokens).
 - The latest `ContextCompactionKeepRecentRequests` completed requests are exempt from Pass 1 (but if Pass 2 is opted into, they remain subject to Pass 2 truncation).
+- When the compacted event has an `event_id`, placeholders and truncation markers include recovery hints such as `event_id`, `tool_call_id`, and `tool_name`. With `WithEnableOnDemandSession(true)` and a session backend that implements `session.WindowService`, the model can call `session_load` with `content_offset` / `content_limit` to reload a precise slice of the original tool result.
+- Pass 2 skips tool results returned by `session_load` itself. This prevents recovered slices from being silently compacted again; `session_load` output size is controlled by its own window parameters and `content_limit`, so very large results should be reloaded in slices instead of as one full payload.
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model.
-- Model-layer token tailoring remains the final fallback.
+- Model-layer token tailoring remains the final fallback. It trims whole message rounds, so keep recovered slices small enough that they still fit in the final provider request.
 - Context compaction uses `SimpleTokenCounter` by default. For CJK-heavy
   workloads or provider-specific tokenization, pass the same custom counter
   used by token tailoring via `WithContextCompactionTokenCounter(...)`.

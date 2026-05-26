@@ -985,7 +985,7 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 
 	var compactedChoices []model.Choice
 	for _, choice := range evt.Choices {
-		msg, ok := compactedCurrentInvocationMessage(choice.Message)
+		msg, ok := compactedCurrentInvocationMessage(choice.Message, evt)
 		if !ok {
 			continue
 		}
@@ -1009,6 +1009,7 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 
 func compactedCurrentInvocationMessage(
 	msg model.Message,
+	evt event.Event,
 ) (model.Message, bool) {
 	switch {
 	case len(msg.ToolCalls) > 0:
@@ -1021,8 +1022,14 @@ func compactedCurrentInvocationMessage(
 		}, true
 	case msg.Role == model.RoleTool && msg.ToolID != "":
 		return model.Message{
-			Role:     msg.Role,
-			Content:  compactedToolResultPlaceholder,
+			Role: msg.Role,
+			Content: recoverableToolResultPlaceholder(
+				toolResultRecoveryRefForMessage(
+					evt,
+					msg,
+					"current_invocation_summary",
+				),
+			),
 			ToolID:   msg.ToolID,
 			ToolName: msg.ToolName,
 		}, true

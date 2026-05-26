@@ -936,7 +936,7 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 
 **Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, **default 0 / disabled**):
 
-- Applies to **all** tool results including the current request
+- Applies to **nearly all** tool results including the current request. Tool results returned by `session_load` itself are skipped so recovered slices are not compacted again
 - Tool results exceeding this threshold are truncated using head+tail preservation: the beginning and end of the content are kept, with a `[...N characters truncated...]` marker in the middle
 - This is the safety net for single tool results large enough to overflow the context window on their own (e.g. `web_fetch` returning 800K+ chars of HTML)
 
@@ -944,10 +944,12 @@ The two passes have different roles: Pass 1 aggressively cleans old history (low
 
 Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableContextCompaction(true)` is set and (2) `ContextCompactionOversizedToolResultMaxTokens > 0` (recommended opt-in value: `8192`, exposed as the constant `processor.DefaultContextCompactionOversizedToolResultMaxTokens`). This guarantees that `EnableContextCompaction=false` always means "the framework will not modify any tool result".
 
+When the compacted event has an `event_id`, placeholders and truncation markers include recovery hints such as `event_id`, `tool_call_id`, and `tool_name`. With `WithEnableOnDemandSession(true)` and a session backend that implements `session.WindowService`, the model can call `session_load` with `content_offset` / `content_limit` to reload a precise slice of the original tool result. `session_load` output size is controlled by its own window parameters and `content_limit`; reload very large results in slices instead of requesting the full payload at once.
+
 Additionally:
 
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
-- Model-layer token tailoring remains the final fallback
+- Model-layer token tailoring remains the final fallback. It trims whole message rounds, so keep recovered slices small enough that they still fit in the final provider request
 - Context compaction uses `SimpleTokenCounter` by default. If your application
   uses a custom counter for CJK-heavy prompts or provider-specific tokenization,
   pass the same counter with `WithContextCompactionTokenCounter(...)` so Pass 1

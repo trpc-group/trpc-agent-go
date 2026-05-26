@@ -16,6 +16,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -46,6 +47,8 @@ const (
 	maxSearchTopK        = 10
 	defaultWindowBefore  = 1
 	defaultWindowAfter   = 1
+	defaultContentLimit  = 16 * 1024
+	maxContentLimit      = 64 * 1024
 	maxWindowSpan        = 4
 	maxSessionScanEvents = 10000
 	searchExpandedHits   = 2
@@ -81,6 +84,11 @@ type SearchSessionHit struct {
 	Score     float64                `json:"score"`
 	Snippet   string                 `json:"snippet"`
 	Context   []LoadedSessionMessage `json:"context,omitempty"`
+
+	ToolCallID       string `json:"tool_call_id,omitempty"`
+	ToolName         string `json:"tool_name,omitempty"`
+	ContentBytes     int    `json:"content_bytes,omitempty"`
+	ContentTruncated bool   `json:"content_truncated,omitempty"`
 }
 
 // SearchSessionResponse is the response from session_search.
@@ -94,9 +102,15 @@ type SearchSessionResponse struct {
 // LoadSessionRequest is the input for session_load.
 type LoadSessionRequest struct {
 	SessionID string `json:"session_id,omitempty" jsonschema:"description=Target session ID. Defaults to the current session when omitted."`
-	EventID   string `json:"event_id" jsonschema:"description=Anchor event ID to load around."`
-	Before    int    `json:"before,omitempty" jsonschema:"description=How many messages before the anchor to include. Defaults to 1."`
-	After     int    `json:"after,omitempty" jsonschema:"description=How many messages after the anchor to include. Defaults to 1."`
+	EventID   string `json:"event_id,omitempty" jsonschema:"description=Anchor event ID to load around. Prefer this when available."`
+	// ToolCallID is a current-session fallback when event_id is unavailable.
+	ToolCallID string `json:"tool_call_id,omitempty" jsonschema:"description=Optional fallback tool call ID when event_id is unavailable."`
+	Before     int    `json:"before,omitempty" jsonschema:"description=How many messages before the anchor to include. Defaults to 1."`
+	After      int    `json:"after,omitempty" jsonschema:"description=How many messages after the anchor to include. Defaults to 1."`
+	// ContentOffset and ContentLimit select a byte window for large tool
+	// results. UTF-8 boundaries are preserved in returned content.
+	ContentOffset int `json:"content_offset,omitempty" jsonschema:"description=Byte offset for loading a large tool result in slices."`
+	ContentLimit  int `json:"content_limit,omitempty" jsonschema:"description=Maximum bytes to return for the target tool result. Defaults to a conservative limit."`
 }
 
 // LoadedSessionMessage is one historical message returned by session_load.
@@ -105,6 +119,13 @@ type LoadedSessionMessage struct {
 	Role    model.Role `json:"role"`
 	Created time.Time  `json:"created"`
 	Content string     `json:"content"`
+
+	ToolCallID       string `json:"tool_call_id,omitempty"`
+	ToolName         string `json:"tool_name,omitempty"`
+	ContentOffset    int    `json:"content_offset,omitempty"`
+	ContentBytes     int    `json:"content_bytes,omitempty"`
+	ReturnedBytes    int    `json:"returned_bytes,omitempty"`
+	ContentTruncated bool   `json:"content_truncated,omitempty"`
 }
 
 // LoadSessionResponse is the response from session_load.
@@ -296,6 +317,21 @@ func normalizeWindowSize(
 	return before, after
 }
 
+func normalizeContentWindow(
+	offset, limit int,
+) (int, int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = defaultContentLimit
+	}
+	if limit > maxContentLimit {
+		limit = maxContentLimit
+	}
+	return offset, limit
+}
+
 func currentSummaryCutoff(
 	inv *agent.Invocation,
 ) time.Time {
@@ -394,8 +430,59 @@ func extractSessionMessageText(
 	return text, role, true
 }
 
+type loadContentWindow struct {
+	AnchorEventID string
+	ToolCallID    string
+	Offset        int
+	Limit         int
+}
+
+func toolResultMetadata(
+	evt event.Event,
+) (toolCallID, toolName string, contentBytes int, ok bool) {
+	if evt.Response == nil || evt.Response.IsPartial || len(evt.Choices) == 0 {
+		return "", "", 0, false
+	}
+	for _, choice := range evt.Choices {
+		msg := choice.Message
+		role := msg.Role
+		if msg.ToolID != "" || role == model.RoleTool {
+			return strings.TrimSpace(msg.ToolID),
+				strings.TrimSpace(msg.ToolName),
+				len(msg.Content),
+				true
+		}
+	}
+	return "", "", 0, false
+}
+
+func toolResultEventIDByToolCallID(
+	events []event.Event,
+	toolCallID string,
+) string {
+	toolCallID = strings.TrimSpace(toolCallID)
+	if toolCallID == "" {
+		return ""
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		evt := events[i]
+		if evt.ID == "" || evt.Response == nil || evt.Response.IsPartial {
+			continue
+		}
+		for _, choice := range evt.Choices {
+			msg := choice.Message
+			if msg.ToolID == toolCallID &&
+				(msg.Role == model.RoleTool || msg.ToolID != "") {
+				return evt.ID
+			}
+		}
+	}
+	return ""
+}
+
 func loadedMessagesFromWindow(
 	window *session.EventWindow,
+	contentWindow loadContentWindow,
 ) []LoadedSessionMessage {
 	if window == nil || len(window.Entries) == 0 {
 		return nil
@@ -403,19 +490,172 @@ func loadedMessagesFromWindow(
 
 	messages := make([]LoadedSessionMessage, 0, len(window.Entries))
 	for _, entry := range window.Entries {
-		text, role, ok := extractSessionMessageText(entry.Event)
+		msg, ok := loadedMessageFromEvent(entry.Event, entry.CreatedAt, contentWindow)
 		if !ok {
 			continue
 		}
-		messages = append(messages, LoadedSessionMessage{
-			EventID: entry.Event.ID,
-			Role:    role,
-			Created: entry.CreatedAt,
-			Content: text,
-		})
+		messages = append(messages, msg)
 	}
 	if len(messages) == 0 {
 		return nil
 	}
 	return messages
+}
+
+func loadedMessageFromEvent(
+	evt event.Event,
+	createdAt time.Time,
+	contentWindow loadContentWindow,
+) (LoadedSessionMessage, bool) {
+	if evt.Response == nil || evt.Response.IsPartial || len(evt.Choices) == 0 {
+		return LoadedSessionMessage{}, false
+	}
+	for _, choice := range evt.Choices {
+		msg := choice.Message
+		loaded, ok := loadedMessageFromModelMessage(
+			evt.ID,
+			createdAt,
+			msg,
+			contentWindow,
+		)
+		if ok {
+			return loaded, true
+		}
+	}
+	return LoadedSessionMessage{}, false
+}
+
+func loadedMessageFromModelMessage(
+	eventID string,
+	createdAt time.Time,
+	msg model.Message,
+	contentWindow loadContentWindow,
+) (LoadedSessionMessage, bool) {
+	if len(msg.ToolCalls) > 0 {
+		return LoadedSessionMessage{}, false
+	}
+
+	role := msg.Role
+	if role == "" {
+		role = model.RoleAssistant
+	}
+	if msg.ToolID != "" || role == model.RoleTool {
+		role = model.RoleTool
+	}
+	if role != model.RoleUser && role != model.RoleAssistant && role != model.RoleTool {
+		return LoadedSessionMessage{}, false
+	}
+
+	text := strings.TrimSpace(msg.Content)
+	if text == "" && len(msg.ContentParts) > 0 {
+		var parts []string
+		for _, part := range msg.ContentParts {
+			if part.Text == nil {
+				continue
+			}
+			partText := strings.TrimSpace(*part.Text)
+			if partText == "" {
+				continue
+			}
+			parts = append(parts, partText)
+		}
+		text = strings.TrimSpace(strings.Join(parts, "\n"))
+	}
+	if text == "" {
+		return LoadedSessionMessage{}, false
+	}
+
+	loaded := LoadedSessionMessage{
+		EventID: eventID,
+		Role:    role,
+		Created: createdAt,
+		Content: text,
+	}
+	if role != model.RoleTool {
+		return loaded, true
+	}
+
+	loaded.ToolCallID = strings.TrimSpace(msg.ToolID)
+	loaded.ToolName = strings.TrimSpace(msg.ToolName)
+	loaded.ContentBytes = len(msg.Content)
+	if shouldApplyContentWindow(eventID, loaded.ToolCallID, contentWindow) {
+		sliced, offset, returned, truncated := sliceContentByBytes(
+			msg.Content,
+			contentWindow.Offset,
+			contentWindow.Limit,
+		)
+		if truncated || offset > 0 {
+			loaded.Content = sliced
+		} else if loaded.ToolName != "" {
+			loaded.Content = loaded.ToolName + ": " + msg.Content
+		} else {
+			loaded.Content = sliced
+		}
+		loaded.ContentOffset = offset
+		loaded.ReturnedBytes = returned
+		loaded.ContentTruncated = truncated
+		return loaded, true
+	}
+	if loaded.ToolName != "" {
+		loaded.Content = loaded.ToolName + ": " + msg.Content
+	}
+	return loaded, true
+}
+
+func shouldApplyContentWindow(
+	eventID, toolCallID string,
+	window loadContentWindow,
+) bool {
+	if window.AnchorEventID == "" && window.ToolCallID == "" {
+		return false
+	}
+	if window.ToolCallID != "" && toolCallID != window.ToolCallID {
+		return false
+	}
+	if window.AnchorEventID != "" && eventID != window.AnchorEventID {
+		return false
+	}
+	return true
+}
+
+func sliceContentByBytes(
+	content string,
+	offset, limit int,
+) (string, int, int, bool) {
+	offset, limit = normalizeContentWindow(offset, limit)
+	total := len(content)
+	if offset > total {
+		offset = total
+	}
+	start := clampUTF8Boundary(content, offset)
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	end = clampUTF8Boundary(content, end)
+	if end < start {
+		end = start
+	}
+	sliced := content[start:end]
+	return sliced, start, len(sliced), start > 0 || end < total
+}
+
+func clampUTF8Boundary(s string, index int) int {
+	if index <= 0 {
+		return 0
+	}
+	if index >= len(s) {
+		return len(s)
+	}
+	for index > 0 && !isUTF8Boundary(s, index) {
+		index--
+	}
+	return index
+}
+
+func isUTF8Boundary(s string, index int) bool {
+	if index <= 0 || index >= len(s) {
+		return true
+	}
+	return utf8.RuneStart(s[index])
 }

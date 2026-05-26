@@ -604,6 +604,10 @@ func TestSearchTool_CurrentSessionIncludesToolResults(
 	assert.Equal(t, ScopeCurrentSession, resp.Results[0].Scope)
 	assert.Equal(t, model.RoleTool, resp.Results[0].Role)
 	assert.Contains(t, resp.Results[0].Snippet, "tool: web_fetch: HTTP 200 with product details")
+	assert.Equal(t, "call-1", resp.Results[0].ToolCallID)
+	assert.Equal(t, "web_fetch", resp.Results[0].ToolName)
+	assert.Equal(t, len("HTTP 200 with product details"), resp.Results[0].ContentBytes)
+	assert.False(t, resp.Results[0].ContentTruncated)
 	require.Len(t, resp.Results[0].Context, 2)
 	assert.Equal(t, model.RoleTool, resp.Results[0].Context[1].Role)
 	assert.Equal(t, "web_fetch: HTTP 200 with product details", resp.Results[0].Context[1].Content)
@@ -766,6 +770,73 @@ func TestLoadTool_IncludesToolResults(t *testing.T) {
 	require.Len(t, resp.Messages, 2)
 	assert.Equal(t, model.RoleTool, resp.Messages[1].Role)
 	assert.Equal(t, "db_query: row_count=42", resp.Messages[1].Content)
+	assert.Equal(t, "call-1", resp.Messages[1].ToolCallID)
+	assert.Equal(t, "db_query", resp.Messages[1].ToolName)
+	assert.Equal(t, len("row_count=42"), resp.Messages[1].ContentBytes)
+	assert.Equal(t, len("row_count=42"), resp.Messages[1].ReturnedBytes)
+	assert.False(t, resp.Messages[1].ContentTruncated)
+}
+
+func TestLoadTool_LoadsToolResultByToolCallIDWithContentWindow(t *testing.T) {
+	createdAt := time.Date(2025, 4, 7, 11, 0, 0, 0, time.UTC)
+	toolEvent := event.Event{
+		ID: "evt-tool",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolID:   "call-1",
+					ToolName: "db_query",
+					Content:  "0123456789abcdefghij",
+				},
+			}},
+		},
+	}
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{toolEvent}
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(req session.EventWindowRequest) (*session.EventWindow, error) {
+			require.Equal(t, "evt-tool", req.AnchorEventID)
+			return &session.EventWindow{
+				SessionKey:    req.Key,
+				AnchorEventID: req.AnchorEventID,
+				Entries: []session.EventWindowEntry{{
+					Event:     toolEvent,
+					CreatedAt: createdAt,
+				}},
+			}, nil
+		},
+	}
+	inv := &agent.Invocation{
+		Session:        sess,
+		SessionService: svc,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		ToolCallID:    "call-1",
+		ContentOffset: 10,
+		ContentLimit:  4,
+	})
+	require.NoError(t, err)
+
+	result, err := NewLoadTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*LoadSessionResponse)
+	require.True(t, ok)
+	assert.Equal(t, "evt-tool", resp.EventID)
+	require.Len(t, resp.Messages, 1)
+	got := resp.Messages[0]
+	assert.Equal(t, "evt-tool", got.EventID)
+	assert.Equal(t, "call-1", got.ToolCallID)
+	assert.Equal(t, "db_query", got.ToolName)
+	assert.Equal(t, "abcd", got.Content)
+	assert.Equal(t, 10, got.ContentOffset)
+	assert.Equal(t, 20, got.ContentBytes)
+	assert.Equal(t, 4, got.ReturnedBytes)
+	assert.True(t, got.ContentTruncated)
 }
 
 func TestLoadToolDescriptionIsSearchNeutral(t *testing.T) {
