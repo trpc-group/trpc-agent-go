@@ -43,7 +43,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
-	publicsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -67,6 +66,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
+	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 )
 
 const (
@@ -275,9 +275,13 @@ const (
 		"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing " +
 		"attachment paths. For long-running work, independent " +
 		"verification, or background work that can continue after " +
-		"this turn, use subagents_spawn. Do not use background " +
-		"subagents for small, tightly-coupled steps, and do not " +
-		"spawn nested subagents. " +
+		"this turn, use subagents_spawn with mode=async. When a " +
+		"subagent result is required before continuing, use " +
+		"mode=sync. When the user must review the subagent result " +
+		"before you continue, use mode=review, show the result, " +
+		"and wait for the next user reply. Do not use subagents " +
+		"for small, tightly-coupled steps, and do not spawn " +
+		"nested subagents. " +
 		"When a user follows up about a " +
 		"recent upload in the current chat, assume they mean " +
 		"that existing upload unless the reference is " +
@@ -397,6 +401,14 @@ const (
 //
 // args should not include the program name.
 func Main(args []string) int {
+	return MainWithOptions(args)
+}
+
+// MainWithOptions runs the OpenClaw-like CLI with runtime options and returns
+// an exit code.
+//
+// args should not include the program name.
+func MainWithOptions(args []string, options ...RuntimeOption) int {
 	if len(args) > 0 {
 		switch args[0] {
 		case subcmdPairing:
@@ -417,7 +429,7 @@ func Main(args []string) int {
 	)
 	defer stop()
 
-	if err := run(ctx, args); err != nil {
+	if err := RunWithOptions(ctx, args, options...); err != nil {
 		var exitErr *exitError
 		if errors.As(err, &exitErr) {
 			if errors.Is(exitErr.Err, flag.ErrHelp) {
@@ -432,6 +444,15 @@ func Main(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// RunWithOptions runs OpenClaw until ctx is canceled or the runtime exits.
+func RunWithOptions(
+	ctx context.Context,
+	args []string,
+	options ...RuntimeOption,
+) error {
+	return run(ctx, args, options...)
 }
 
 type exitError struct {
@@ -635,7 +656,7 @@ type Runtime struct {
 	adminCfg *admin.Config
 	appName  string
 	session  session.Service
-	subagent publicsubagent.Service
+	subagent SubagentService
 
 	runner            runner.Runner
 	cronRunner        closeFunc
@@ -718,7 +739,21 @@ func (r *Runtime) SessionService() session.Service {
 	return r.session
 }
 
-func (r *Runtime) SubagentService() publicsubagent.Service {
+// SubagentService is the OpenClaw subagent control-plane service exposed by
+// Runtime.
+type SubagentService interface {
+	ListForUser(
+		userID string,
+		filter openclawsubagent.ListFilter,
+	) []openclawsubagent.Run
+	GetForUser(userID string, runID string) (*openclawsubagent.Run, error)
+	CancelForUser(
+		userID string,
+		runID string,
+	) (*openclawsubagent.Run, bool, error)
+}
+
+func (r *Runtime) SubagentService() SubagentService {
 	if r == nil {
 		return nil
 	}
@@ -1004,7 +1039,8 @@ func NewRuntimeWithOptions(
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
-			ContextCompactionOversizedToolResultMaxTokens: opts.ContextCompactionOversizedToolResultMaxTokens,
+			ContextCompactionOversizedToolResultMaxTokens: opts.
+				ContextCompactionOversizedToolResultMaxTokens,
 			MaxHistoryRuns:   opts.MaxHistoryRuns,
 			PreloadMemory:    opts.PreloadMemory,
 			GenerationConfig: opts.GenerationConfig,
@@ -1077,6 +1113,7 @@ func NewRuntimeWithOptions(
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(bridgedSessionSvc),
 		runner.WithPlugins(conversation.Plugin{}),
+		runner.WithAwaitUserReplyRouting(true),
 	}
 	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
@@ -1337,8 +1374,13 @@ func (r *Runtime) Close() error {
 	return errors.Join(errs...)
 }
 
-func run(ctx context.Context, args []string) error {
+func run(
+	ctx context.Context,
+	args []string,
+	options ...RuntimeOption,
+) error {
 	startedAt := time.Now()
+	runtimeOpts := buildRuntimeOptions(options)
 	opts, err := parseRunOptions(args)
 	if err != nil {
 		return err
@@ -1518,7 +1560,8 @@ func run(ctx context.Context, args []string) error {
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
-			ContextCompactionOversizedToolResultMaxTokens: opts.ContextCompactionOversizedToolResultMaxTokens,
+			ContextCompactionOversizedToolResultMaxTokens: opts.
+				ContextCompactionOversizedToolResultMaxTokens,
 			MaxHistoryRuns:   opts.MaxHistoryRuns,
 			PreloadMemory:    opts.PreloadMemory,
 			GenerationConfig: opts.GenerationConfig,
@@ -1586,6 +1629,7 @@ func run(ctx context.Context, args []string) error {
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(bridgedSessionSvc),
 		runner.WithPlugins(conversation.Plugin{}),
+		runner.WithAwaitUserReplyRouting(true),
 	}
 	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
@@ -1606,7 +1650,7 @@ func run(ctx context.Context, args []string) error {
 	runtimeProfileResolver, runtimeProfileCatalog, runtimeProfileRequired :=
 		runtimeProfileResolverFromOptions(
 			opts.RuntimeProfiles,
-			runtimeOptions{},
+			runtimeOpts,
 		)
 
 	gwOpts := makeGatewayOptions(
@@ -2369,7 +2413,8 @@ func newAgent(
 		instruction = defaultAgentInstruction
 	}
 	if cfg.EnableOpenClawTools {
-		if guidance := buildOpenClawToolingGuidance(cfg); strings.TrimSpace(guidance) != "" {
+		guidance := buildOpenClawToolingGuidance(cfg)
+		if strings.TrimSpace(guidance) != "" {
 			instruction = strings.TrimSpace(
 				instruction + "\n\n" + guidance,
 			)
@@ -2431,7 +2476,9 @@ func newAgent(
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithEnableContextCompaction(cfg.EnableContextCompaction),
-		llmagent.WithContextCompactionOversizedToolResultMaxTokens(cfg.ContextCompactionOversizedToolResultMaxTokens),
+		llmagent.WithContextCompactionOversizedToolResultMaxTokens(
+			cfg.ContextCompactionOversizedToolResultMaxTokens,
+		),
 		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
 		llmagent.WithEventMessageProjector(

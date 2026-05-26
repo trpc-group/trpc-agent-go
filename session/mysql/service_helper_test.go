@@ -67,14 +67,14 @@ func TestGetSession_Success(t *testing.T) {
 		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
-	// Mock: Query events (empty)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}))
+	// Mock: Query event refs (empty)
+	expectLimitedEventRefs(mock, key, sessState.CreatedAt, defaultSessionEventLimit)
 
 	sess, err := s.GetSession(ctx, key)
 	require.NoError(t, err)
 	assert.NotNil(t, sess)
+	assert.NotNil(t, sess.Events)
+	assert.Empty(t, sess.Events)
 	assert.Equal(t, key.SessionID, sess.ID)
 	assert.Equal(t, sessState.State, sess.State)
 
@@ -163,10 +163,9 @@ func TestGetSession_WithLimit(t *testing.T) {
 	eventBytes, _ := json.Marshal(evt)
 
 	// Mock: Query events with limit
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(int64(1), key.AppName, key.UserID, key.SessionID, eventBytes, time.Now()))
+	eventCreatedAt := time.Now()
+	expectLimitedEventRefs(mock, key, sessState.CreatedAt, 10, eventRef{id: 1, createdAt: eventCreatedAt})
+	expectEventsByRefs(mock, key, limitedEventRow{id: 1, event: eventBytes, createdAt: eventCreatedAt})
 
 	// Mock: Batch load summaries with data
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries")).
@@ -176,6 +175,228 @@ func TestGetSession_WithLimit(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, sess)
 	assert.Len(t, sess.Events, 1)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSession_WithLimitFetchesUserAnchor(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	sessState := SessionState{
+		ID:        key.SessionID,
+		State:     session.StateMap{},
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now(),
+	}
+	stateBytes, _ := json.Marshal(sessState)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT state, created_at, updated_at FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "created_at", "updated_at"}).
+			AddRow(stateBytes, sessState.CreatedAt, sessState.UpdatedAt))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
+		WithArgs(key.AppName, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
+		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	anchor := event.NewResponseEvent("inv-1", "author1", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user"}}},
+	})
+	evt2 := event.NewResponseEvent("inv-2", "author1", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant-1"}}},
+	})
+	evt3 := event.NewResponseEvent("inv-3", "author1", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant-2"}}},
+	})
+	anchorBytes, _ := json.Marshal(anchor)
+	evt2Bytes, _ := json.Marshal(evt2)
+	evt3Bytes, _ := json.Marshal(evt3)
+	anchorCreatedAt := sessState.CreatedAt.Add(time.Minute)
+	evt2CreatedAt := sessState.CreatedAt.Add(2 * time.Minute)
+	evt3CreatedAt := sessState.CreatedAt.Add(3 * time.Minute)
+
+	expectLimitedEventRefs(
+		mock,
+		key,
+		sessState.CreatedAt,
+		2,
+		eventRef{id: 3, createdAt: evt3CreatedAt},
+		eventRef{id: 2, createdAt: evt2CreatedAt},
+	)
+	expectEventsByRefs(
+		mock,
+		key,
+		limitedEventRow{id: 3, event: evt3Bytes, createdAt: evt3CreatedAt},
+		limitedEventRow{id: 2, event: evt2Bytes, createdAt: evt2CreatedAt},
+	)
+	expectPreviousEventRefs(
+		mock,
+		key,
+		sessState.CreatedAt,
+		&eventRef{id: 2, createdAt: evt2CreatedAt},
+		eventRef{id: 1, createdAt: anchorCreatedAt},
+	)
+	expectEventsByRefs(
+		mock,
+		key,
+		limitedEventRow{id: 1, event: anchorBytes, createdAt: anchorCreatedAt},
+	)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "filter_key", "summary", "updated_at"}))
+
+	sess, err := s.GetSession(ctx, key, session.WithEventNum(2))
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 3)
+	assert.Equal(t, "inv-1", sess.Events[0].InvocationID)
+	assert.Equal(t, "inv-2", sess.Events[1].InvocationID)
+	assert.Equal(t, "inv-3", sess.Events[2].InvocationID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSession_WithEventTimeFiltersEventTimestamp(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	afterTime := time.Now().Add(-time.Hour)
+	sessState := SessionState{
+		ID:        key.SessionID,
+		State:     session.StateMap{},
+		CreatedAt: afterTime.Add(-time.Hour),
+		UpdatedAt: time.Now(),
+	}
+	stateBytes, _ := json.Marshal(sessState)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT state, created_at, updated_at FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "created_at", "updated_at"}).
+			AddRow(stateBytes, sessState.CreatedAt, sessState.UpdatedAt))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
+		WithArgs(key.AppName, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
+		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	anchor := event.NewResponseEvent("inv-anchor", "author", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "anchor"}}},
+	})
+	anchor.Timestamp = afterTime.Add(-30 * time.Minute)
+	oldByEventTime := event.NewResponseEvent("inv-old", "author", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "old"}}},
+	})
+	oldByEventTime.Timestamp = afterTime.Add(-time.Minute)
+	newByEventTime := event.NewResponseEvent("inv-new", "author", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "new"}}},
+	})
+	newByEventTime.Timestamp = afterTime.Add(time.Minute)
+	anchorBytes, _ := json.Marshal(anchor)
+	oldBytes, _ := json.Marshal(oldByEventTime)
+	newBytes, _ := json.Marshal(newByEventTime)
+	anchorCreatedAt := afterTime.Add(-30 * time.Minute)
+	oldCreatedAt := afterTime.Add(time.Minute)
+	newCreatedAt := afterTime.Add(2 * time.Minute)
+
+	expectFullSessionEventsList(
+		mock,
+		key,
+		limitedEventRow{id: 1, event: anchorBytes, createdAt: anchorCreatedAt},
+		limitedEventRow{id: 2, event: newBytes, createdAt: newCreatedAt},
+		limitedEventRow{id: 3, event: oldBytes, createdAt: oldCreatedAt},
+	)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "filter_key", "summary", "updated_at"}))
+
+	sess, err := s.GetSession(ctx, key, session.WithEventTime(afterTime))
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	assert.Equal(t, "inv-anchor", sess.Events[0].InvocationID)
+	assert.Equal(t, "inv-new", sess.Events[1].InvocationID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSession_WithEventTimeUsesLoadedUserAnchor(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	afterTime := time.Now().Add(-time.Hour)
+	sessState := SessionState{
+		ID:        key.SessionID,
+		State:     session.StateMap{},
+		CreatedAt: afterTime.Add(-time.Hour),
+		UpdatedAt: time.Now(),
+	}
+	stateBytes, _ := json.Marshal(sessState)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT state, created_at, updated_at FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "created_at", "updated_at"}).
+			AddRow(stateBytes, sessState.CreatedAt, sessState.UpdatedAt))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
+		WithArgs(key.AppName, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
+		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	userAnchor := event.NewResponseEvent("inv-user", "author", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user"}}},
+	})
+	userAnchor.Timestamp = afterTime.Add(-time.Minute)
+	assistant := event.NewResponseEvent("inv-assistant", "author", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant"}}},
+	})
+	assistant.Timestamp = afterTime.Add(time.Minute)
+	userBytes, _ := json.Marshal(userAnchor)
+	assistantBytes, _ := json.Marshal(assistant)
+	userCreatedAt := afterTime.Add(time.Minute)
+	assistantCreatedAt := afterTime.Add(2 * time.Minute)
+
+	expectFullSessionEventsList(
+		mock,
+		key,
+		limitedEventRow{id: 1, event: userBytes, createdAt: userCreatedAt},
+		limitedEventRow{id: 2, event: assistantBytes, createdAt: assistantCreatedAt},
+	)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "filter_key", "summary", "updated_at"}))
+
+	sess, err := s.GetSession(ctx, key, session.WithEventTime(afterTime))
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	assert.Equal(t, "inv-user", sess.Events[0].InvocationID)
+	assert.Equal(t, "inv-assistant", sess.Events[1].InvocationID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -219,10 +440,8 @@ func TestGetSession_WithTrackEvents(t *testing.T) {
 		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
-	// Mock: Query events (empty).
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}))
+	// Mock: Query event refs (empty).
+	expectLimitedEventRefs(mock, key, sessState.CreatedAt, defaultSessionEventLimit)
 
 	// Mock: Query track events.
 	trackEvent := &session.TrackEvent{
@@ -288,14 +507,15 @@ func TestGetSession_WithTTL(t *testing.T) {
 		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
-	// Mock: Query events
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}))
+	// Mock: Query event refs and user anchor with TTL lower bound.
+	expectLimitedEventRefs(mock, key, sessState.CreatedAt, defaultSessionEventLimit)
+	expectNoUserAnchor(mock, key, sessState.CreatedAt)
 
 	sess, err := s.GetSession(ctx, key)
 	require.NoError(t, err)
 	assert.NotNil(t, sess)
+	assert.NotNil(t, sess.Events)
+	assert.Empty(t, sess.Events)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -121,7 +120,7 @@ func extractPDFPages(
 		filePath,
 		outputPrefix,
 	}
-	output, err := exec.Command(pdftoppmPath, args...).CombinedOutput()
+	output, err := pdftoppmRun(pdftoppmPath, args...)
 	if err != nil {
 		_ = os.RemoveAll(outputDir)
 		message := strings.TrimSpace(string(output))
