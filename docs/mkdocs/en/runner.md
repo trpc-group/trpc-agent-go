@@ -590,6 +590,57 @@ Runner enforces the earlier of:
 - the parent context deadline (if any)
 - `MaxRunDuration` (if set)
 
+#### Persist Interrupted Assistant Text (opt-in)
+
+By default, cancelling a streaming run does not write partial assistant chunks
+to the Session. This preserves the common "cancel means discard the unfinished
+reply" behavior.
+
+If your product has a "continue from where it stopped" interaction, you can
+opt in to persisting already-emitted assistant text when cancellation happens
+before the model produces a normal final assistant message. Runner aggregates
+assistant text deltas, synthesizes one non-partial assistant event, runs it
+through event plugins, and appends it to the Session.
+
+Enable it as a Runner default:
+
+```go
+r := runner.NewRunner("my-app", myAgent,
+    runner.WithPersistInterruptedAssistant(true),
+)
+```
+
+Or override it for one run:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithPersistInterruptedAssistant(true),
+)
+```
+
+You can also disable it for a single run even when the Runner default is
+enabled:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithPersistInterruptedAssistant(false),
+)
+```
+
+This option only persists text assistant deltas. Tool-call deltas, tool
+responses, and already-completed assistant messages are not converted into an
+interrupted assistant event. GraphAgent workflows use the same Runner event
+pipeline, so this option also applies to graph LLM node text chunks; no
+graph-specific option is required.
+
 #### Resume Interrupted Runs (tools-first resume)
 
 In long-running conversations, users may interrupt the agent while it is still
