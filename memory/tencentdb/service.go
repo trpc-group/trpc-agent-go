@@ -38,10 +38,9 @@ type Service struct {
 	wg     sync.WaitGroup
 	once   sync.Once
 
-	cursorMu           sync.Mutex
-	inFlight           map[string]time.Time
-	serialTail         map[string]*captureSerialState
-	syntheticTimestamp map[string]int64
+	cursorMu   sync.Mutex
+	inFlight   map[string]time.Time
+	serialTail map[string]*captureSerialState
 
 	tools []tool.Tool
 }
@@ -59,12 +58,11 @@ func NewService(opts ...Option) (*Service, error) {
 		return nil, err
 	}
 	s := &Service{
-		opts:               options,
-		client:             client,
-		queue:              make(chan ingestJob, options.IngestQueueSize),
-		inFlight:           make(map[string]time.Time),
-		serialTail:         make(map[string]*captureSerialState),
-		syntheticTimestamp: make(map[string]int64),
+		opts:       options,
+		client:     client,
+		queue:      make(chan ingestJob, options.IngestQueueSize),
+		inFlight:   make(map[string]time.Time),
+		serialTail: make(map[string]*captureSerialState),
 	}
 	s.tools = s.buildTools()
 	s.startWorkers()
@@ -129,6 +127,9 @@ func (s *Service) EndSession(ctx context.Context, sess *session.Session) error {
 		SessionKey: s.sessionKey(sess),
 		UserID:     sess.UserID,
 	})
+	if err == nil {
+		clearBestEffortSyntheticTimestamp(sess)
+	}
 	return err
 }
 
@@ -247,9 +248,9 @@ func (s *Service) reserveIngestJob(sess *session.Session, sessionKey string) (in
 	messages, latestSynthetic := normalizeGatewayMessageTimestampsAfter(
 		scan.Messages,
 		time.Now(),
-		s.syntheticTimestamp[sessionKey],
+		readBestEffortSyntheticTimestamp(sess),
 	)
-	s.syntheticTimestamp[sessionKey] = latestSynthetic
+	writeBestEffortSyntheticTimestamp(sess, latestSynthetic)
 	previous := s.serialTail[sessionKey]
 	serial := &captureSerialState{done: make(chan struct{})}
 	s.serialTail[sessionKey] = serial

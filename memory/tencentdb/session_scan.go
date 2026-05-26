@@ -11,6 +11,7 @@ package tencentdb
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +19,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-const lastCaptureAtStateKey = "tencentdb_agent_memory.last_capture_at"
+const (
+	lastCaptureAtStateKey      = "tencentdb_agent_memory.last_capture_at"
+	syntheticTimestampStateKey = "tencentdb_agent_memory.synthetic_timestamp"
+)
 
 type scanResult struct {
 	Messages []tdaiMessage
@@ -162,4 +166,33 @@ func writeBestEffortLastCaptureAt(sess *session.Session, t time.Time) {
 		return
 	}
 	sess.SetState(lastCaptureAtStateKey, []byte(t.UTC().Format(time.RFC3339Nano)))
+}
+
+func readBestEffortSyntheticTimestamp(sess *session.Session) int64 {
+	if sess == nil {
+		return 0
+	}
+	raw, ok := sess.GetState(syntheticTimestampStateKey)
+	if !ok || len(raw) == 0 {
+		return 0
+	}
+	ts, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return ts
+}
+
+func writeBestEffortSyntheticTimestamp(sess *session.Session, timestamp int64) {
+	if sess == nil || timestamp <= 0 {
+		return
+	}
+	sess.SetState(syntheticTimestampStateKey, []byte(strconv.FormatInt(timestamp, 10)))
+}
+
+func clearBestEffortSyntheticTimestamp(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	sess.SetState(syntheticTimestampStateKey, nil)
 }

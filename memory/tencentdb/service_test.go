@@ -736,11 +736,15 @@ func TestEndSessionAndHealth(t *testing.T) {
 	defer svc.Close()
 
 	sess := &session.Session{ID: "s1", AppName: "app", UserID: "user"}
+	writeBestEffortSyntheticTimestamp(sess, 123)
 	if err := svc.EndSession(context.Background(), sess); err != nil {
 		t.Fatalf("EndSession: %v", err)
 	}
 	if ended.SessionKey != "app:user:s1" || ended.UserID != "user" {
 		t.Fatalf("end session request = %#v", ended)
+	}
+	if got := readBestEffortSyntheticTimestamp(sess); got != 0 {
+		t.Fatalf("synthetic timestamp was not cleared: %d", got)
 	}
 	health, err := svc.Health(context.Background())
 	if err != nil {
