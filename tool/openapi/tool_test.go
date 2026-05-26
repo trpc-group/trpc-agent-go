@@ -133,7 +133,7 @@ func Test_makeRequestURL(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "non-string query parameters should be ignored",
+			name: "non-string query parameters should be coerced",
 			args: args{
 				endpoint: &operationEndpoint{
 					baseURL: "https://api.example.com",
@@ -145,6 +145,58 @@ func Test_makeRequestURL(t *testing.T) {
 					"stringParam": "value",
 					"intParam":    123,
 					"boolParam":   true,
+				},
+			},
+			want:    "https://api.example.com/test?boolParam=true&intParam=123&stringParam=value",
+			wantErr: false,
+		},
+		{
+			name: "json number query parameters (float64)",
+			args: args{
+				endpoint: &operationEndpoint{
+					baseURL: "https://api.example.com",
+					path:    "/search",
+					method:  "GET",
+				},
+				pathParams: map[string]any{},
+				queryParams: map[string]any{
+					"limit": float64(200),
+					"page":  float64(1),
+				},
+			},
+			want:    "https://api.example.com/search?limit=200&page=1",
+			wantErr: false,
+		},
+		{
+			name: "json.Number query parameters",
+			args: args{
+				endpoint: &operationEndpoint{
+					baseURL: "https://api.example.com",
+					path:    "/search",
+					method:  "GET",
+				},
+				pathParams: map[string]any{},
+				queryParams: map[string]any{
+					"id":    json.Number("12345678901234567890"),
+					"limit": json.Number("200"),
+				},
+			},
+			want:    "https://api.example.com/search?id=12345678901234567890&limit=200",
+			wantErr: false,
+		},
+		{
+			name: "non-scalar query parameters should be skipped",
+			args: args{
+				endpoint: &operationEndpoint{
+					baseURL: "https://api.example.com",
+					path:    "/test",
+					method:  "GET",
+				},
+				pathParams: map[string]any{},
+				queryParams: map[string]any{
+					"stringParam": "value",
+					"mapParam":    map[string]any{"a": "b"},
+					"sliceParam":  []any{1, 2},
 				},
 			},
 			want:    "https://api.example.com/test?stringParam=value",
@@ -499,7 +551,7 @@ func Test_makeRequestCookies(t *testing.T) {
 			},
 		},
 		{
-			name: "mixed types - only strings are included",
+			name: "mixed types - non-strings are coerced",
 			cookieParams: map[string]any{
 				"session": "abc123",
 				"user":    "john",
@@ -507,8 +559,30 @@ func Test_makeRequestCookies(t *testing.T) {
 				"active":  true,
 			},
 			want: []*http.Cookie{
+				{Name: "active", Value: "true"},
+				{Name: "count", Value: "123"},
 				{Name: "session", Value: "abc123"},
 				{Name: "user", Value: "john"},
+			},
+		},
+		{
+			name: "json.Number cookie parameter",
+			cookieParams: map[string]any{
+				"session": json.Number("12345678901234567890"),
+			},
+			want: []*http.Cookie{
+				{Name: "session", Value: "12345678901234567890"},
+			},
+		},
+		{
+			name: "non-scalar cookie parameters should be skipped",
+			cookieParams: map[string]any{
+				"session":    "abc123",
+				"mapParam":   map[string]any{"a": "b"},
+				"sliceParam": []any{1, 2},
+			},
+			want: []*http.Cookie{
+				{Name: "session", Value: "abc123"},
 			},
 		},
 		{
@@ -577,7 +651,7 @@ func Test_makeRequestHeaders(t *testing.T) {
 			},
 		},
 		{
-			name: "mixed types - only strings are included",
+			name: "mixed types - non-strings are coerced",
 			headerParams: map[string]any{
 				"Authorization": "Bearer token123",
 				"Content-Type":  "application/json",
@@ -587,6 +661,28 @@ func Test_makeRequestHeaders(t *testing.T) {
 			want: map[string]string{
 				"Authorization": "Bearer token123",
 				"Content-Type":  "application/json",
+				"Retry-Count":   "3",
+				"Is-Valid":      "true",
+			},
+		},
+		{
+			name: "json.Number header parameter",
+			headerParams: map[string]any{
+				"X-Request-Id": json.Number("12345678901234567890"),
+			},
+			want: map[string]string{
+				"X-Request-Id": "12345678901234567890",
+			},
+		},
+		{
+			name: "non-scalar header parameters should be skipped",
+			headerParams: map[string]any{
+				"Authorization": "Bearer token123",
+				"mapParam":      map[string]any{"a": "b"},
+				"sliceParam":    []any{1, 2},
+			},
+			want: map[string]string{
+				"Authorization": "Bearer token123",
 			},
 		},
 		{
@@ -1267,13 +1363,13 @@ func Test_openAPITool_Call(t *testing.T) {
 						RequestBody: nil,
 					},
 				},
-				args: nil, // This will cause JSON unmarshal error
+				args: nil, // This will cause JSON decoder error
 			},
 			setupMock: func(client *http.Client) {
 				// No mock needed as error occurs before HTTP call
 			},
 			wantErr:     true,
-			errContains: "unexpected end of JSON input",
+			errContains: "EOF",
 		},
 		{
 			name: "response body read error",
@@ -1379,4 +1475,84 @@ func (e *errorReader) Read(p []byte) (n int, err error) {
 
 func (e *errorReader) Close() error {
 	return nil
+}
+
+func Test_openAPITool_Call_TrailingData(t *testing.T) {
+	o := &openAPITool{
+		operation: &Operation{
+			operationParams: []*APIParameter{},
+			endpoint: &operationEndpoint{
+				baseURL: "https://api.example.com",
+				path:    "/test",
+				method:  "GET",
+			},
+			originOperation: &openapi.Operation{
+				RequestBody: nil,
+			},
+		},
+		config: &config{
+			userAgent:  "TestAgent/1.0",
+			httpClient: http.DefaultClient,
+		},
+	}
+
+	tests := []struct {
+		name    string
+		rawJSON []byte
+	}{
+		{name: "trailing object", rawJSON: []byte(`{"a":1}{"b":2}`)},
+		{name: "trailing junk", rawJSON: []byte(`{"a":1}junk`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := o.Call(context.Background(), tt.rawJSON)
+			if err == nil {
+				t.Fatal("expected error for trailing data, got nil")
+			}
+			if !strings.Contains(err.Error(), "trailing") {
+				t.Errorf("expected trailing data error, got: %v", err)
+			}
+		})
+	}
+}
+
+func Test_paramValueToString(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   any
+		wantStr string
+		wantOk  bool
+	}{
+		{name: "nil", value: nil, wantStr: "", wantOk: false},
+		{name: "string", value: "hello", wantStr: "hello", wantOk: true},
+		{name: "bool true", value: true, wantStr: "true", wantOk: true},
+		{name: "bool false", value: false, wantStr: "false", wantOk: true},
+		{name: "float64", value: float64(3.14), wantStr: "3.14", wantOk: true},
+		{name: "float64 zero", value: float64(0), wantStr: "0", wantOk: true},
+		{name: "float32", value: float32(2.718), wantStr: "2.718", wantOk: true},
+		{name: "int", value: int(42), wantStr: "42", wantOk: true},
+		{name: "int8", value: int8(127), wantStr: "127", wantOk: true},
+		{name: "int16", value: int16(32767), wantStr: "32767", wantOk: true},
+		{name: "int32", value: int32(2147483647), wantStr: "2147483647", wantOk: true},
+		{name: "int64", value: int64(9223372036854775807), wantStr: "9223372036854775807", wantOk: true},
+		{name: "uint", value: uint(42), wantStr: "42", wantOk: true},
+		{name: "uint8", value: uint8(255), wantStr: "255", wantOk: true},
+		{name: "uint16", value: uint16(65535), wantStr: "65535", wantOk: true},
+		{name: "uint32", value: uint32(4294967295), wantStr: "4294967295", wantOk: true},
+		{name: "uint64", value: uint64(18446744073709551615), wantStr: "18446744073709551615", wantOk: true},
+		{name: "json.Number int", value: json.Number("12345678901234567890"), wantStr: "12345678901234567890", wantOk: true},
+		{name: "json.Number float", value: json.Number("3.141592653589793238"), wantStr: "3.141592653589793238", wantOk: true},
+		{name: "map skipped", value: map[string]any{"a": "b"}, wantStr: "", wantOk: false},
+		{name: "slice skipped", value: []any{1, 2}, wantStr: "", wantOk: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotStr, gotOk := paramValueToString(tt.value)
+			if gotStr != tt.wantStr || gotOk != tt.wantOk {
+				t.Errorf("paramValueToString(%v) = (%q, %v), want (%q, %v)",
+					tt.value, gotStr, gotOk, tt.wantStr, tt.wantOk)
+			}
+		})
+	}
 }

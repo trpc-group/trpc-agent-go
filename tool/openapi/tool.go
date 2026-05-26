@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -49,8 +50,14 @@ func newOpenAPITool(config *config, operation *Operation) tool.CallableTool {
 func (o *openAPITool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	log.Debug("Calling OpenAPI tool", "name", o.operation.name)
 	args := make(map[string]any)
-	if err := json.Unmarshal(jsonArgs, &args); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(jsonArgs))
+	dec.UseNumber()
+	if err := dec.Decode(&args); err != nil {
 		return nil, err
+	}
+	// Reject trailing non-whitespace data to match json.Unmarshal strictness.
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("trailing data after JSON arguments")
 	}
 
 	for _, param := range o.operation.operationParams {
@@ -145,6 +152,48 @@ func (o *openAPITool) prepareRequest(ctx context.Context, args map[string]any) (
 	return req, nil
 }
 
+// paramValueToString converts JSON scalar tool argument values to strings
+// for HTTP query, header, and cookie parameters. Non-scalar values are skipped.
+func paramValueToString(value any) (string, bool) {
+	if value == nil {
+		return "", false
+	}
+	switch v := value.(type) {
+	case string:
+		return v, true
+	case bool:
+		return strconv.FormatBool(v), true
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64), true
+	case float32:
+		return strconv.FormatFloat(float64(v), 'f', -1, 32), true
+	case int:
+		return strconv.Itoa(v), true
+	case int8:
+		return strconv.FormatInt(int64(v), 10), true
+	case int16:
+		return strconv.FormatInt(int64(v), 10), true
+	case int32:
+		return strconv.FormatInt(int64(v), 10), true
+	case int64:
+		return strconv.FormatInt(v, 10), true
+	case uint:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint8:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint16:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint32:
+		return strconv.FormatUint(uint64(v), 10), true
+	case uint64:
+		return strconv.FormatUint(v, 10), true
+	case json.Number:
+		return v.String(), true
+	default:
+		return "", false
+	}
+}
+
 func makeRequestURL(endpoint *operationEndpoint, pathParams, queryParams map[string]any) (string, error) {
 	path := endpoint.path
 	for arg, value := range pathParams {
@@ -157,7 +206,7 @@ func makeRequestURL(endpoint *operationEndpoint, pathParams, queryParams map[str
 
 	endpointQuery := url.Values{}
 	for arg, value := range queryParams {
-		if v, ok := value.(string); ok {
+		if v, ok := paramValueToString(value); ok {
 			endpointQuery.Set(arg, v)
 		}
 	}
@@ -238,7 +287,7 @@ var supportedMimeTypes = map[string]marshaler{
 func makeRequestCookies(cookieParams map[string]any) []*http.Cookie {
 	cookies := []*http.Cookie{}
 	for name, value := range cookieParams {
-		if v, ok := value.(string); ok {
+		if v, ok := paramValueToString(value); ok {
 			cookies = append(cookies, &http.Cookie{
 				Name:  name,
 				Value: v,
@@ -251,7 +300,7 @@ func makeRequestCookies(cookieParams map[string]any) []*http.Cookie {
 func makeRequestHeaders(headerParams map[string]any) map[string]string {
 	headers := make(map[string]string)
 	for name, value := range headerParams {
-		if v, ok := value.(string); ok {
+		if v, ok := paramValueToString(value); ok {
 			headers[name] = v
 		}
 	}
