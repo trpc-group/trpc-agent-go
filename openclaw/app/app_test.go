@@ -670,6 +670,10 @@ func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
 	)
 	require.NotNil(
 		t,
+		findToolDeclaration(bundle.tools, "subagents_wait"),
+	)
+	require.NotNil(
+		t,
 		findToolDeclaration(bundle.tools, "sessions_spawn"),
 	)
 	require.NotNil(
