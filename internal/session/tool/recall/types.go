@@ -60,7 +60,7 @@ var (
 	errWindowUnavailable         = errors.New("session window loading is not available for this session service")
 )
 
-const summaryLastIncludedTsKey = "summary:last_included_ts"
+const summaryLastIncludedTsKey = session.SummaryLastIncludedTimestampStateKey
 
 // SearchSessionRequest is the input for session_search.
 type SearchSessionRequest struct {
@@ -302,45 +302,54 @@ func currentSummaryCutoff(
 	if inv == nil || inv.Session == nil {
 		return time.Time{}
 	}
-	if raw, ok := inv.Session.GetState(summaryLastIncludedTsKey); ok && len(raw) > 0 {
-		if parsed, err := time.Parse(time.RFC3339Nano, string(raw)); err == nil {
-			return parsed
-		}
-	}
 
 	filterKey := strings.TrimSpace(inv.GetEventFilterKey())
-	inv.Session.SummariesMu.RLock()
-	defer inv.Session.SummariesMu.RUnlock()
+	if cutoff, ok := summaryCutoffForFilter(inv.Session, filterKey); ok {
+		return cutoff
+	}
+	return summaryCutoffFromState(inv.Session)
+}
 
-	if len(inv.Session.Summaries) == 0 {
+func summaryCutoffFromState(sess *session.Session) time.Time {
+	if sess == nil {
 		return time.Time{}
 	}
+	raw, ok := sess.GetState(summaryLastIncludedTsKey)
+	if !ok || len(raw) == 0 {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, string(raw))
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
 
-	if sum := inv.Session.Summaries[filterKey]; sum != nil && sum.Summary != "" {
-		return sum.UpdatedAt
+func summaryCutoffForFilter(
+	sess *session.Session,
+	filterKey string,
+) (time.Time, bool) {
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+
+	if len(sess.Summaries) == 0 {
+		return time.Time{}, false
+	}
+
+	if sum := sess.Summaries[filterKey]; sum != nil &&
+		strings.TrimSpace(sum.Summary) != "" {
+		return sum.CutoffTime(), true
 	}
 	if filterKey != "" {
-		var latest time.Time
-		prefix := filterKey + event.FilterKeyDelimiter
-		for key, sum := range inv.Session.Summaries {
-			if sum == nil || sum.Summary == "" {
-				continue
-			}
-			if key != filterKey && !strings.HasPrefix(key, prefix) {
-				continue
-			}
-			if sum.UpdatedAt.After(latest) {
-				latest = sum.UpdatedAt
-			}
-		}
-		if !latest.IsZero() {
-			return latest
+		if cutoff, ok := session.SummaryPrefixCutoff(sess.Summaries, filterKey); ok {
+			return cutoff, true
 		}
 	}
-	if sum := inv.Session.Summaries[session.SummaryFilterKeyAllContents]; sum != nil && sum.Summary != "" {
-		return sum.UpdatedAt
+	if sum := sess.Summaries[session.SummaryFilterKeyAllContents]; sum != nil &&
+		strings.TrimSpace(sum.Summary) != "" {
+		return sum.CutoffTime(), true
 	}
-	return time.Time{}
+	return time.Time{}, false
 }
 
 func extractSessionMessageText(

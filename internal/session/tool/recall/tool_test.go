@@ -216,10 +216,11 @@ func TestSearchTool_CurrentHidden(t *testing.T) {
 	)
 }
 
-func TestSearchTool_CurrentHiddenUsesLastIncludedTimestamp(
+func TestSearchTool_CurrentHiddenPrefersSummaryCutoff(
 	t *testing.T,
 ) {
 	summaryUpdatedAt := time.Date(2025, 4, 7, 10, 0, 0, 0, time.UTC)
+	summaryCutoff := summaryUpdatedAt.Add(-2 * time.Minute)
 	lastIncludedAt := summaryUpdatedAt.Add(-3 * time.Minute)
 	svc := &mockSessionService{
 		Service: sessioninmemory.NewSessionService(),
@@ -257,6 +258,7 @@ func TestSearchTool_CurrentHiddenUsesLastIncludedTimestamp(
 			"": {
 				Summary:   "summary",
 				UpdatedAt: summaryUpdatedAt,
+				Boundary:  session.NewSummaryBoundary("", summaryCutoff),
 			},
 		}),
 	)
@@ -281,7 +283,30 @@ func TestSearchTool_CurrentHiddenUsesLastIncludedTimestamp(
 	require.True(t, ok)
 	require.Len(t, resp.Results, 1)
 	require.NotNil(t, svc.lastSearchReq.CreatedBefore)
-	assert.Equal(t, lastIncludedAt, *svc.lastSearchReq.CreatedBefore)
+	assert.Equal(t, summaryCutoff, *svc.lastSearchReq.CreatedBefore)
+}
+
+func TestSummaryCutoffForFilterIgnoresWhitespaceSummaries(t *testing.T) {
+	updatedAt := time.Date(2025, 4, 7, 10, 0, 0, 0, time.UTC)
+	sess := session.NewSession(
+		"app",
+		"user",
+		"sess",
+		session.WithSessionSummaries(map[string]*session.Summary{
+			"branch": {
+				Summary:   " \t\n",
+				UpdatedAt: updatedAt,
+			},
+			session.SummaryFilterKeyAllContents: {
+				Summary:   "   ",
+				UpdatedAt: updatedAt,
+			},
+		}),
+	)
+
+	cutoff, ok := summaryCutoffForFilter(sess, "branch")
+	assert.False(t, ok)
+	assert.True(t, cutoff.IsZero())
 }
 
 func TestSearchTool_FallbackQuery(t *testing.T) {

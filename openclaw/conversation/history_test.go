@@ -133,7 +133,11 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 		Summaries: map[string]*session.Summary{
 			session.SummaryFilterKeyAllContents: {
 				Summary:   "older history",
-				UpdatedAt: base,
+				UpdatedAt: base.Add(3 * time.Minute),
+				Boundary: session.NewSummaryBoundary(
+					session.SummaryFilterKeyAllContents,
+					base,
+				),
 			},
 		},
 		Events: []event.Event{
@@ -559,7 +563,7 @@ func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 	text, updatedAt, ok := sessionSummary(sess)
 	require.True(t, ok)
 	require.Equal(t, "summary", text)
-	require.Equal(t, base, updatedAt)
+	require.True(t, updatedAt.Equal(base))
 }
 
 func TestBuildSummaryText(t *testing.T) {

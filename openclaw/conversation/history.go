@@ -614,7 +614,7 @@ func sessionSummary(
 	if text == "" {
 		return "", time.Time{}, false
 	}
-	return text, sum.UpdatedAt, true
+	return text, sum.CutoffTime(), true
 }
 
 func speakerLabel(
