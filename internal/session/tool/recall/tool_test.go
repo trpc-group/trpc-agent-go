@@ -768,6 +768,14 @@ func TestLoadTool_IncludesToolResults(t *testing.T) {
 	assert.Equal(t, "db_query: row_count=42", resp.Messages[1].Content)
 }
 
+func TestLoadToolDescriptionIsSearchNeutral(t *testing.T) {
+	desc := NewLoadTool().Declaration().Description
+	assert.Contains(t, desc, "anchor event_id")
+	assert.Contains(t, desc, "whether it came from session_search")
+	assert.NotContains(t, desc, "only after session_search")
+	assert.NotContains(t, desc, "session_search result")
+}
+
 func TestNormalizeWindowSize_PreservesExplicitZeroSide(t *testing.T) {
 	before, after := normalizeWindowSize(0, 3)
 	assert.Equal(t, 0, before)
