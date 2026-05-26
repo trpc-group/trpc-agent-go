@@ -79,6 +79,54 @@ func TestService_GetEventWindowNoActiveSession(t *testing.T) {
 	require.Contains(t, err.Error(), "anchor event not found")
 }
 
+func TestService_GetEventWindowValidation(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key: key,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event id is required")
+
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+		Before:        -1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "before >= 0")
+}
+
+func TestService_GetEventWindowAnchorFilteredByRole(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "filtered"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	evt := sqliteWindowEvent("anchor", model.RoleAssistant, "answer")
+	require.NoError(t, svc.AppendEvent(ctx, sess, &evt))
+
+	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+		Roles:         []model.Role{model.RoleUser},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event not found")
+}
+
 func TestService_GetEventWindowUnmarshalError(t *testing.T) {
 	db, _, cleanup := openTempSQLiteDB(t)
 	defer cleanup()

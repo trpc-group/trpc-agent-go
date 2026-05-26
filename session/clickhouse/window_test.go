@@ -42,6 +42,7 @@ func TestService_GetEventWindow(t *testing.T) {
 	) (driver.Rows, error) {
 		switch {
 		case strings.Contains(query, "SELECT created_at FROM"):
+			require.GreaterOrEqual(t, len(args), 3)
 			require.Equal(t, []any{key.AppName, key.UserID, key.SessionID}, args[:3])
 			return newMockRows([][]any{{base}}), nil
 		case strings.Contains(query, "event_id = ?"):
@@ -110,8 +111,11 @@ func TestService_GetEventWindowAnchorNotFound(t *testing.T) {
 	) (driver.Rows, error) {
 		switch {
 		case strings.Contains(query, "SELECT created_at FROM"):
+			require.GreaterOrEqual(t, len(args), 3)
+			require.Equal(t, []any{key.AppName, key.UserID, key.SessionID}, args[:3])
 			return newMockRows([][]any{{base}}), nil
 		case strings.Contains(query, "event_id = ?"):
+			require.Equal(t, []any{key.AppName, key.UserID, key.SessionID, base, "missing"}, args)
 			return newMockRows(nil), nil
 		default:
 			t.Fatalf("unexpected query: %s", query)
@@ -148,6 +152,65 @@ func TestService_GetEventWindowNoActiveSession(t *testing.T) {
 	_, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
 		Key:           key,
 		AnchorEventID: "missing",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event not found")
+}
+
+func TestService_GetEventWindowValidation(t *testing.T) {
+	svc := &Service{}
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+	_, err := svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key: key,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "anchor event id is required")
+
+	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+		Before:        -1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "before >= 0")
+}
+
+func TestService_GetEventWindowAnchorFilteredByRole(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	base := time.Date(2025, 4, 7, 9, 0, 0, 0, time.UTC)
+	mockCli := &mockClient{}
+	svc := &Service{
+		chClient:           mockCli,
+		tableSessionStates: "session_states",
+		tableSessionEvents: "session_events",
+	}
+	mockCli.queryFunc = func(
+		ctx context.Context,
+		query string,
+		args ...any,
+	) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "SELECT created_at FROM"):
+			require.GreaterOrEqual(t, len(args), 3)
+			require.Equal(t, []any{key.AppName, key.UserID, key.SessionID}, args[:3])
+			return newMockRows([][]any{{base}}), nil
+		case strings.Contains(query, "event_id = ?"):
+			require.Equal(t, []any{key.AppName, key.UserID, key.SessionID, base, "anchor"}, args)
+			return newMockRows([][]any{
+				{"anchor", clickhouseWindowEventJSON(t, "anchor", model.RoleAssistant, "answer"), base},
+			}), nil
+		default:
+			t.Fatalf("unexpected query: %s", query)
+			return nil, nil
+		}
+	}
+
+	_, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "anchor",
+		Roles:         []model.Role{model.RoleUser},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "anchor event not found")
