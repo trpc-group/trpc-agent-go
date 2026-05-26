@@ -479,6 +479,45 @@ func TestGatewayClientEndpointsAndErrors(t *testing.T) {
 	if _, err := newGatewayClient(Options{GatewayURL: "ftp://example.com"}); err == nil {
 		t.Fatalf("expected unsupported scheme gateway url error")
 	}
+	if _, err := newGatewayClient(Options{}); err == nil {
+		t.Fatalf("expected empty gateway url error")
+	}
+	nullable, err := newGatewayClient(Options{GatewayURL: server.URL})
+	if err != nil {
+		t.Fatalf("new nullable client: %v", err)
+	}
+	if err := nullable.doJSON(context.Background(), httpMethodGet, pathHealth, nil, nil); err != nil {
+		t.Fatalf("nil output should be accepted: %v", err)
+	}
+}
+
+func TestGatewayClientDecodeAndRequestEdges(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/empty":
+			w.WriteHeader(http.StatusNoContent)
+		case "/bad-json":
+			_, _ = w.Write([]byte("{"))
+		default:
+			_ = json.NewEncoder(w).Encode(HealthResponse{Status: "ok"})
+		}
+	}))
+	defer server.Close()
+
+	client, err := newGatewayClient(Options{GatewayURL: server.URL})
+	if err != nil {
+		t.Fatalf("newGatewayClient: %v", err)
+	}
+	var out HealthResponse
+	if err := client.doJSON(nil, httpMethodGet, "/empty", nil, &out); err != nil {
+		t.Fatalf("empty response should be accepted: %v", err)
+	}
+	if err := client.doJSON(context.Background(), httpMethodGet, "/bad-json", nil, &out); err == nil {
+		t.Fatalf("expected unmarshal error")
+	}
+	if err := client.doJSONOnce(context.Background(), httpMethodGet, "://bad", nil, nil); err == nil {
+		t.Fatalf("expected request build error")
+	}
 }
 
 func TestRecallPluginInjectsContext(t *testing.T) {
@@ -548,6 +587,7 @@ func TestServiceOptionsAndLifecycleEdges(t *testing.T) {
 
 	customClient := server.Client()
 	svc, err := NewService(
+		nil,
 		WithGatewayURL(server.URL),
 		WithTimeout(time.Second),
 		WithHTTPClient(customClient),
@@ -613,6 +653,15 @@ func TestServiceOptionsAndLifecycleEdges(t *testing.T) {
 	}
 
 	var nilSvc *Service
+	if nilSvc.Tools() != nil {
+		t.Fatalf("nil service should not expose tools")
+	}
+	if (&Service{}).Tools() != nil {
+		t.Fatalf("empty service should not expose tools")
+	}
+	if err := nilSvc.Close(); err != nil {
+		t.Fatalf("nil service close should be nil: %v", err)
+	}
 	if err := nilSvc.IngestSession(context.Background(), &session.Session{}); err == nil {
 		t.Fatalf("expected nil service error")
 	}
@@ -709,6 +758,98 @@ func TestMemorySearchToolAndHelpers(t *testing.T) {
 	writeBestEffortLastCaptureAt(nil, time.Now())
 	if !readBestEffortLastCaptureAt(&session.Session{}).IsZero() {
 		t.Fatalf("empty cursor should be zero")
+	}
+}
+
+func TestSessionScanTimestampAndStateEdges(t *testing.T) {
+	if got := scanTranscript(nil, time.Time{}); len(got.Messages) != 0 {
+		t.Fatalf("nil session scan = %#v", got)
+	}
+	if got := scanTranscript(&session.Session{}, time.Time{}); len(got.Messages) != 0 {
+		t.Fatalf("empty session scan = %#v", got)
+	}
+
+	base := time.Date(2026, 5, 22, 8, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		ID:      "s1",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			{ID: "old", Timestamp: base, Response: &model.Response{Choices: []model.Choice{{
+				Message: model.NewUserMessage("old"),
+			}}}},
+			{ID: "nil-response", Timestamp: base.Add(time.Second)},
+			{ID: "system", Timestamp: base.Add(2 * time.Second), Response: &model.Response{Choices: []model.Choice{{
+				Message: model.NewSystemMessage("system"),
+			}}}},
+			{ID: "empty", Timestamp: base.Add(3 * time.Second), Response: &model.Response{Choices: []model.Choice{{
+				Message: model.NewUserMessage("   "),
+			}}}},
+			{ID: "user", Timestamp: base.Add(4 * time.Second), Response: &model.Response{Choices: []model.Choice{{
+				Index:   2,
+				Message: model.NewUserMessage("new"),
+			}}}},
+		},
+	}
+	scan := scanTranscript(sess, base)
+	if len(scan.Messages) != 1 || scan.Messages[0].ID != "user:2" || scan.Latest != base.Add(4*time.Second) {
+		t.Fatalf("scan = %#v", scan)
+	}
+
+	if got := normalizeGatewayMessageTimestamps(nil, time.Now()); got != nil {
+		t.Fatalf("nil normalized messages = %#v", got)
+	}
+	normalized := normalizeGatewayMessageTimestamps([]tdaiMessage{{Content: "x"}}, time.Time{})
+	if len(normalized) != 1 || normalized[0].Timestamp == 0 {
+		t.Fatalf("normalized messages = %#v", normalized)
+	}
+	empty, latest := normalizeGatewayMessageTimestampsAfter(nil, time.Now(), 123)
+	if empty != nil || latest != 123 {
+		t.Fatalf("empty normalize result = %#v latest=%d", empty, latest)
+	}
+	bumped, latest := normalizeGatewayMessageTimestampsAfter(
+		[]tdaiMessage{{Content: "a"}, {Content: "b"}},
+		time.UnixMilli(1000),
+		5000,
+	)
+	if bumped[0].Timestamp != 5001 || bumped[1].Timestamp != 5002 || latest != 5002 {
+		t.Fatalf("bumped timestamps = %#v latest=%d", bumped, latest)
+	}
+
+	stateSess := &session.Session{}
+	stateSess.SetState(lastCaptureAtStateKey, []byte("not-a-time"))
+	if got := readBestEffortLastCaptureAt(stateSess); !got.IsZero() {
+		t.Fatalf("malformed last capture should be zero: %v", got)
+	}
+	writeBestEffortSyntheticTimestamp(nil, 10)
+	writeBestEffortSyntheticTimestamp(stateSess, 0)
+	if got := readBestEffortSyntheticTimestamp(stateSess); got != 0 {
+		t.Fatalf("non-positive synthetic timestamp should be ignored: %d", got)
+	}
+	stateSess.SetState(syntheticTimestampStateKey, []byte("bad"))
+	if got := readBestEffortSyntheticTimestamp(stateSess); got != 0 {
+		t.Fatalf("malformed synthetic timestamp should be zero: %d", got)
+	}
+	writeBestEffortSyntheticTimestamp(stateSess, 77)
+	if got := readBestEffortSyntheticTimestamp(stateSess); got != 77 {
+		t.Fatalf("synthetic timestamp = %d", got)
+	}
+	clearBestEffortSyntheticTimestamp(nil)
+	clearBestEffortSyntheticTimestamp(stateSess)
+	if got := readBestEffortSyntheticTimestamp(stateSess); got != 0 {
+		t.Fatalf("cleared synthetic timestamp = %d", got)
+	}
+
+	if messageText(model.Message{Role: model.RoleUser}) != "" {
+		t.Fatalf("empty message should have no text")
+	}
+	if messageText(model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			Type: model.ContentTypeText,
+		}},
+	}) != "" {
+		t.Fatalf("nil text part should have no text")
 	}
 }
 
@@ -855,6 +996,26 @@ func TestCaptureAndClientFailurePaths(t *testing.T) {
 	}
 	if _, err := svc.client.endSession(context.Background(), endSessionRequest{SessionKey: "s"}); err == nil {
 		t.Fatalf("expected client end session failure")
+	}
+
+	previousFailed := &captureSerialState{done: make(chan struct{}), err: errors.New("previous failed")}
+	close(previousFailed.done)
+	if err := svc.capture(context.Background(), ingestJob{
+		req:      captureRequest{SessionKey: "s"},
+		previous: previousFailed,
+		serial:   &captureSerialState{done: make(chan struct{})},
+	}); err == nil {
+		t.Fatalf("expected previous capture failure")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := svc.capture(ctx, ingestJob{
+		req:      captureRequest{SessionKey: "s"},
+		previous: &captureSerialState{done: make(chan struct{})},
+		serial:   &captureSerialState{done: make(chan struct{})},
+	}); err == nil {
+		t.Fatalf("expected context cancellation while waiting for previous capture")
 	}
 }
 
