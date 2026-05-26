@@ -431,6 +431,22 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		),
 		processor.WithFewShotResolver(a.fewShotForInvocation),
 	}
+	if options.ToolResultCompactionConfig != nil {
+		contentOpts = append(
+			contentOpts,
+			processor.WithContextCompactionForceCleanToolNames(
+				options.ToolResultCompactionConfig.ForceCleanToolNames...,
+			),
+			processor.WithContextCompactionKeepToolNames(
+				options.ToolResultCompactionConfig.KeepToolNames...,
+			),
+			processor.WithContextCompactionSkipRecentFunc(
+				processor.ContextCompactionSkipRecentFunc(
+					options.ToolResultCompactionConfig.SkipRecentFunc,
+				),
+			),
+		)
+	}
 	if options.ReasoningContentMode != "" {
 		contentOpts = append(contentOpts,
 			processor.WithReasoningContentMode(options.ReasoningContentMode))
