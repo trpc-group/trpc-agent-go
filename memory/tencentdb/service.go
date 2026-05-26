@@ -319,7 +319,11 @@ func (s *Service) waitForPreviousCapture(ctx context.Context, serial *captureSer
 	select {
 	case <-serial.previous.done:
 		if serial.previous.err != nil {
-			return fmt.Errorf("tencentdb memory: previous capture failed for session_key %q", serial.sessionKey)
+			return fmt.Errorf(
+				"tencentdb memory: previous capture failed for session_key %q: %w",
+				serial.sessionKey,
+				serial.previous.err,
+			)
 		}
 		return nil
 	case <-ctx.Done():

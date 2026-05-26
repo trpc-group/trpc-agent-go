@@ -1134,7 +1134,8 @@ func TestCaptureAndClientFailurePaths(t *testing.T) {
 		t.Fatalf("expected client end session failure")
 	}
 
-	previousFailed := &captureSerialState{done: make(chan struct{}), err: errors.New("previous failed")}
+	previousErr := errors.New("previous failed")
+	previousFailed := &captureSerialState{done: make(chan struct{}), err: previousErr}
 	close(previousFailed.done)
 	if err := svc.capture(context.Background(), ingestJob{
 		req: captureRequest{SessionKey: "s"},
@@ -1145,6 +1146,8 @@ func TestCaptureAndClientFailurePaths(t *testing.T) {
 		},
 	}); err == nil {
 		t.Fatalf("expected previous capture failure")
+	} else if !errors.Is(err, previousErr) {
+		t.Fatalf("expected wrapped previous error, got %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
