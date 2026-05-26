@@ -819,6 +819,15 @@ deny 里。
 - Windows 下清洗时会先把 env key 折成大写再比对，因为 Windows 运行时本身
   就把 env key 当作大小写不敏感。所以调用方传 `Path=./bin`、`Home=.`、
   `Bash_Env=…` 或 `bash_func_x%%=…`，都会跟规范形式一样被清掉。
+- env 里 **key** 为空、或包含 `=` / `\n` / `\r` / `\0` 的条目会被直接丢
+  掉。否则一个 key 为 `"PATH=."` 的条目，序列化后会变成
+  `PATH=.=<value>`，绕过清洗把 `PATH` 重新塞回来。
+- 策略开启时 `RunEnvProvider` 返回的条目也走同一套清洗。
+  `codeexecutor.mergeProviderEnv` 会读 `spec.CleanEnv`，把 provider
+  给出的 key 过一遍 `internal/envscrub` 的黑名单，所以
+  `NewEnvInjectingCodeExecutor` 的 provider 即便返回 `PATH` /
+  `BASH_ENV` / `LD_PRELOAD`，也不能在 `workspace_exec` 清洗完之后
+  再把它们塞回去。
 
 不设策略时这套都不会生效：`sh -lc` 和调用方传入的 env（包括 `PATH`）
 都保持原样。

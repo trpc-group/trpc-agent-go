@@ -164,8 +164,8 @@ var implicitDeny = map[string]struct{}{
 	// but a cwd swap to an attacker-prepared directory plus a
 	// subsequent allowed bare name still resolves through the
 	// shell's CWD lookup on some PATH configurations, so block
-	// them defensively. workspace_exec exposes a working_directory
-	// parameter for the legitimate case.
+	// them defensively. workspace_exec exposes a "cwd" parameter
+	// for the legitimate case.
 	"cd": {}, "pushd": {}, "popd": {},
 }
 

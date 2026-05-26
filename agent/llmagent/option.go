@@ -1128,6 +1128,9 @@ func WithSkillRunStager(stager toolskill.SkillStager) Option {
 // at a workspace-controlled binary via PATH. On Windows the env
 // scrub folds case before comparing, so caller-supplied "Path",
 // "Home" or "Bash_Env" cannot survive by varying capitalisation.
+// Env entries whose key is empty or contains "=", "\n", "\r" or
+// "\0" are also dropped, so a malformed key like "PATH=." cannot
+// serialise as "PATH=.=<value>" and reintroduce PATH.
 // Note that this spawn hardening (CleanEnv + sh-c) is fully
 // implemented on codeexecutor/local; container / e2b backends
 // honor the command-name policy but their env-isolation work is

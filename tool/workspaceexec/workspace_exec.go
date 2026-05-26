@@ -24,6 +24,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
 	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
@@ -670,57 +671,23 @@ func shellArgsForPolicy(policyActive bool, command string) []string {
 	return []string{"-lc", command}
 }
 
-// shellStartupEnvBlocklist is the set of environment variables that
-// can redirect the shell's start-up path, dynamic linker resolution
-// or word-splitting semantics. Each of them has been used as a
-// privilege-escalation / sandbox-escape vector and none of them is
-// needed for the workspace_exec use case once a command-name
-// policy is in place. They are removed from the per-call env when a
-// policy is active.
-var shellStartupEnvBlocklist = map[string]struct{}{
-	// Shell start-up file selection.
-	"HOME":           {}, // sh -l sources $HOME/.profile
-	"ENV":            {}, // sh sources $ENV on every invocation
-	"BASH_ENV":       {}, // bash sources $BASH_ENV on non-interactive starts
-	"PROMPT_COMMAND": {}, // bash hook executed before each prompt
-	"PS4":            {}, // bash debug prompt, can re-enter shell
-	"SHELL":          {}, // some tools spawn $SHELL
-	"SHELLOPTS":      {}, // bash options
-	"BASHOPTS":       {}, // bash options
-
-	// Executable / search-path control. The allow/deny policy only
-	// reasons about command names, so a caller-supplied PATH that
-	// points at workspace-controlled binaries would let a malicious
-	// "echo" / "python" / "git" pass the policy and execute
-	// arbitrary code. Drop PATH and rely on the shell's default.
-	"PATH": {},
-
-	// Word-splitting / glob-expansion semantics.
-	"IFS":        {}, // changes word-splitting semantics
-	"CDPATH":     {}, // affects how `cd` resolves arguments
-	"GLOBIGNORE": {},
-
-	// Dynamic linker hijacks.
-	"LD_PRELOAD":                {},
-	"LD_LIBRARY_PATH":           {},
-	"LD_AUDIT":                  {},
-	"DYLD_INSERT_LIBRARIES":     {}, // macOS
-	"DYLD_LIBRARY_PATH":         {}, // macOS
-	"DYLD_FORCE_FLAT_NAMESPACE": {},
-}
-
 // envForPolicy returns the per-call env map that should be passed to
 // the shell. When no policy is configured the input is returned
-// verbatim. When a policy is active any entry whose name is in the
-// shellStartupEnvBlocklist - or whose name begins with "BASH_FUNC_"
-// (the Shellshock vector by which env entries are imported as
-// functions) - is dropped, so a command admitted by shellsafe
+// verbatim. When a policy is active the map is filtered by
+// internal/envscrub: every shell start-up / search-path / dynamic-
+// linker variable, every BASH_FUNC_* Shellshock entry and every
+// malformed key is dropped, so a command admitted by shellsafe
 // cannot be re-armed via the environment.
 //
 // On Windows the comparison is case-insensitive because Windows
 // treats env names case-insensitively at runtime: a caller-supplied
 // "Path=./bin" or "Home=." would otherwise survive a case-sensitive
 // scrub and then be picked up by the runtime as PATH / HOME.
+//
+// The same envscrub package is invoked from
+// codeexecutor.mergeProviderEnv when spec.CleanEnv is true, so a
+// RunEnvProvider cannot reintroduce PATH / LD_PRELOAD / BASH_ENV
+// after this scrub runs.
 func envForPolicy(
 	policyActive bool, env map[string]string,
 ) map[string]string {
@@ -733,51 +700,7 @@ func envForPolicyOnGOOS(
 	if !policyActive || len(env) == 0 {
 		return env
 	}
-	winCaseInsensitive := goos == "windows"
-	out := make(map[string]string, len(env))
-	for k, v := range env {
-		// Drop malformed keys outright. POSIX env names cannot
-		// contain "=", "\0" or whitespace newlines, but a caller
-		// passing them as JSON map keys would otherwise survive
-		// the blocklist by carrying a literal "=" inside the key
-		// (e.g. "PATH=." → "PATH=.=<value>" on serialisation,
-		// which libc parses as PATH="...="). Defence in depth
-		// against the wider class of key-injection tricks.
-		if k == "" || strings.ContainsAny(k, "=\x00\n\r") {
-			continue
-		}
-		if isShellStartupEnvKey(k, winCaseInsensitive) {
-			continue
-		}
-		if isBashFuncEnvKey(k, winCaseInsensitive) {
-			continue
-		}
-		out[k] = v
-	}
-	return out
-}
-
-func isShellStartupEnvKey(name string, caseInsensitive bool) bool {
-	if _, ok := shellStartupEnvBlocklist[name]; ok {
-		return true
-	}
-	if !caseInsensitive {
-		return false
-	}
-	upper := strings.ToUpper(name)
-	_, ok := shellStartupEnvBlocklist[upper]
-	return ok
-}
-
-func isBashFuncEnvKey(name string, caseInsensitive bool) bool {
-	if strings.HasPrefix(name, "BASH_FUNC_") {
-		return true
-	}
-	if caseInsensitive &&
-		strings.HasPrefix(strings.ToUpper(name), "BASH_FUNC_") {
-		return true
-	}
-	return false
+	return envscrub.Scrub(env, goos == "windows")
 }
 
 func (t *ExecTool) callNonSessional(

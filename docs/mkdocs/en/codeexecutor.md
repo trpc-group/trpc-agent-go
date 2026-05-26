@@ -883,6 +883,16 @@ shell-startup tricks from re-arming a rejected command:
   runtime. A caller-supplied `Path=./bin`, `Home=.`, `Bash_Env=…` or
   `bash_func_x%%=…` is therefore stripped just like its canonical
   form would be.
+- env entries whose **key** is empty or contains `=`, `\n`, `\r`, or
+  `\0` are dropped outright. A key like `"PATH=."` would otherwise
+  serialise as `PATH=.=<value>` and reintroduce `PATH` after the
+  scrub.
+- `RunEnvProvider` entries are subject to the same scrub when
+  policy mode is active. `codeexecutor.mergeProviderEnv` honors
+  `spec.CleanEnv` and runs provider-supplied keys through the same
+  `internal/envscrub` blocklist, so a `NewEnvInjectingCodeExecutor`
+  provider returning `PATH` / `BASH_ENV` / `LD_PRELOAD` cannot
+  reintroduce them after `workspace_exec` has removed them.
 
 Without a policy configured none of this kicks in: `sh -lc` and the
 caller-supplied env (including `PATH`) are preserved as before.

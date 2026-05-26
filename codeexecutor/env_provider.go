@@ -9,7 +9,12 @@
 
 package codeexecutor
 
-import "context"
+import (
+	"context"
+	"runtime"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
+)
 
 // RunEnvProvider returns per-run environment variables derived from the
 // execution context. Implementations typically read caller-supplied
@@ -131,6 +136,15 @@ func (e *envCodeExecutor) Engine() Engine {
 // mergeProviderEnv builds a fresh Env map that contains all entries
 // from spec.Env plus any provider-supplied entries whose keys are not
 // already present. The original spec.Env map is never mutated.
+//
+// When spec.CleanEnv is true (set by workspace_exec policy mode) the
+// provider-supplied entries are first run through the same scrub the
+// tool already applied to the caller-supplied env, so a provider
+// returning PATH, BASH_ENV, LD_PRELOAD, BASH_FUNC_*, ... cannot
+// reintroduce a command-name-policy bypass after workspace_exec has
+// removed them. spec.Env is trusted: workspace_exec.envForPolicy
+// scrubbed it before reaching here, and other callers that do not
+// set CleanEnv preserve the historical "trust the spec" contract.
 func mergeProviderEnv(
 	ctx context.Context,
 	provider RunEnvProvider,
@@ -142,6 +156,12 @@ func mergeProviderEnv(
 	extra := provider(ctx)
 	if len(extra) == 0 {
 		return
+	}
+	if spec.CleanEnv {
+		extra = envscrub.Scrub(extra, runtime.GOOS == "windows")
+		if len(extra) == 0 {
+			return
+		}
 	}
 	merged := make(map[string]string, len(spec.Env)+len(extra))
 	for k, v := range spec.Env {
