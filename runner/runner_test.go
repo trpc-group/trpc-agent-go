@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	runnerlog "trpc.group/trpc-go/trpc-agent-go/log"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
@@ -53,6 +55,17 @@ import (
 // mockAgent implements the agent.Agent interface for testing.
 type mockAgent struct {
 	name string
+}
+
+type staticSessionRouter struct {
+	sess *session.Session
+}
+
+func (r staticSessionRouter) RouteEvent(
+	_ *agent.Invocation,
+	_ *event.Event,
+) (*session.Session, bool) {
+	return r.sess, r.sess != nil
 }
 
 func (m *mockAgent) Info() agent.Info {
@@ -6050,6 +6063,124 @@ func (m *tickCtxAgent) Run(
 	return ch, nil
 }
 
+type partialTextAgent struct {
+	name          string
+	chunks        []string
+	final         string
+	waitForCancel bool
+	reasoningOnly bool
+	toolCallDelta bool
+}
+
+func (m *partialTextAgent) Info() agent.Info { return agent.Info{Name: m.name} }
+
+func (m *partialTextAgent) SubAgents() []agent.Agent { return nil }
+
+func (m *partialTextAgent) FindSubAgent(name string) agent.Agent { return nil }
+
+func (m *partialTextAgent) Tools() []tool.Tool { return nil }
+
+func (m *partialTextAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, len(m.chunks)+1)
+	go func() {
+		defer close(ch)
+		responseID := "partial-response"
+		for i, chunk := range m.chunks {
+			choice := model.Choice{Index: 0}
+			switch {
+			case m.toolCallDelta:
+				idx := i
+				choice.Delta = model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:    "call-1",
+						Type:  "function",
+						Index: &idx,
+						Function: model.FunctionDefinitionParam{
+							Name:      "lookup",
+							Arguments: []byte(chunk),
+						},
+					}},
+				}
+			case m.reasoningOnly:
+				choice.Delta = model.Message{
+					Role:             model.RoleAssistant,
+					ReasoningContent: chunk,
+				}
+			default:
+				role := model.Role("")
+				if i == 0 {
+					role = model.RoleAssistant
+				}
+				choice.Delta = model.Message{
+					Role:    role,
+					Content: chunk,
+				}
+			}
+			evt := event.NewResponseEvent(
+				inv.InvocationID,
+				m.name,
+				&model.Response{
+					ID:        responseID,
+					Object:    model.ObjectTypeChatCompletionChunk,
+					Done:      false,
+					IsPartial: true,
+					Choices:   []model.Choice{choice},
+				},
+			)
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- evt:
+			}
+		}
+		if m.final != "" {
+			evt := event.NewResponseEvent(
+				inv.InvocationID,
+				m.name,
+				&model.Response{
+					ID:        responseID,
+					Object:    model.ObjectTypeChatCompletion,
+					Done:      true,
+					IsPartial: false,
+					Choices: []model.Choice{{
+						Index:   0,
+						Message: model.NewAssistantMessage(m.final),
+					}},
+				},
+			)
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- evt:
+			}
+		}
+		if m.waitForCancel {
+			<-ctx.Done()
+		}
+	}()
+	return ch, nil
+}
+
+type contextCheckingSessionService struct {
+	*sessioninmemory.SessionService
+}
+
+func (s *contextCheckingSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	opts ...session.Option,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.SessionService.AppendEvent(ctx, sess, evt, opts...)
+}
+
 func TestProcessAgentEvents_EmitEventContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before running
@@ -6251,6 +6382,1844 @@ func TestRunner_CancelEmitsRunnerCompletion(t *testing.T) {
 	require.Equal(t, 1, completionCount, "should receive exactly one runner-completion after cancel")
 	require.NotNil(t, completion.ExecutionTrace)
 	require.Equal(t, atrace.TraceStatusIncomplete, completion.ExecutionTrace.Status)
+}
+
+func TestRunner_CancelPersistsInterruptedPartialAssistant(t *testing.T) {
+	const (
+		requestID = "req-cancel-partial"
+		userID    = "u"
+		sessionID = "s"
+	)
+	const tagged = "interrupted-tagged"
+	p := &testPlugin{
+		name: "interrupted-event-plugin",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				e.Tag = tagged
+				return e, nil
+			})
+		},
+	}
+	svc := &contextCheckingSessionService{
+		SessionService: sessioninmemory.NewSessionService(),
+	}
+	r := NewRunner(
+		"app",
+		&partialTextAgent{
+			name:          "partial",
+			chunks:        []string{"hello ", "world"},
+			waitForCancel: true,
+		},
+		WithSessionService(svc),
+		WithPlugins(p),
+	)
+	mr, ok := r.(ManagedRunner)
+	require.True(t, ok)
+
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("start"),
+		agent.WithRequestID(requestID),
+		agent.WithDetachedCancel(true),
+		agent.WithPersistInterruptedAssistant(true),
+	)
+	require.NoError(t, err)
+
+	for i := 0; i < 2; i++ {
+		select {
+		case evt, ok := <-ch:
+			require.True(t, ok)
+			require.NotNil(t, evt)
+			require.True(t, evt.IsPartial)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for partial event")
+		}
+	}
+
+	require.True(t, mr.Cancel(requestID))
+	select {
+	case <-drainChannel(ch):
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cancelled run to finish")
+	}
+
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	require.False(t, sess.Events[1].IsPartial)
+	require.Equal(t, model.ObjectTypeChatCompletion, sess.Events[1].Object)
+	require.Equal(t, "hello world", sess.Events[1].Choices[0].Message.Content)
+	require.NotNil(t, sess.Events[1].Choices[0].FinishReason)
+	require.Equal(t, interruptedAssistantFinishReason, *sess.Events[1].Choices[0].FinishReason)
+	require.Contains(t, sess.Events[1].Extensions, interruptedAssistantExtensionKey)
+	require.Equal(t, tagged, sess.Events[1].Tag)
+}
+
+func TestRunner_StreamModeUpdatesStillPersistsInterruptedPartialAssistant(t *testing.T) {
+	rr := NewRunner(
+		"app",
+		&noOpAgent{name: "a"},
+		WithSessionService(sessioninmemory.NewSessionService()),
+	).(*runner)
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithStreamMode(agent.StreamModeUpdates),
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	loop := &eventLoopContext{
+		sess:             session.NewSession("app", "u", "s"),
+		invocation:       inv,
+		processedEventCh: make(chan *event.Event, 1),
+		streamFilter: graph.NewStreamModeFilter(
+			inv.RunOptions.StreamModeEnabled,
+			inv.RunOptions.StreamModes,
+		),
+	}
+
+	err := rr.processSingleAgentEvent(context.Background(), loop, event.NewResponseEvent(
+		inv.InvocationID,
+		"a",
+		&model.Response{
+			ID:        "filtered-partial",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "filtered text",
+				},
+			}},
+		},
+	))
+	require.NoError(t, err)
+	require.Empty(t, loop.processedEventCh)
+	choices := interruptedAssistantChoices(loop)
+	require.Len(t, choices, 1)
+	require.Equal(t, "filtered text", choices[0].Message.Content)
+}
+
+func TestRunner_InterruptedAssistantPluginRunsOnce(t *testing.T) {
+	const requestID = "req-cancel-plugin-once"
+	p := &testPlugin{
+		name: "append-once-plugin",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				if e == nil || e.Response == nil {
+					return e, nil
+				}
+				for i := range e.Response.Choices {
+					if e.IsPartial {
+						e.Response.Choices[i].Delta.Content += "!"
+						continue
+					}
+					e.Response.Choices[i].Message.Content += "!"
+				}
+				return e, nil
+			})
+		},
+	}
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		&partialTextAgent{
+			name:          "partial",
+			chunks:        []string{"hello"},
+			waitForCancel: true,
+		},
+		WithSessionService(svc),
+		WithPlugins(p),
+	)
+	mr, ok := r.(ManagedRunner)
+	require.True(t, ok)
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s-plugin-once",
+		model.NewUserMessage("start"),
+		agent.WithRequestID(requestID),
+		agent.WithDetachedCancel(true),
+		agent.WithPersistInterruptedAssistant(true),
+	)
+	require.NoError(t, err)
+	select {
+	case evt, ok := <-ch:
+		require.True(t, ok)
+		require.Equal(t, "hello!", evt.Choices[0].Delta.Content)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for partial event")
+	}
+	require.True(t, mr.Cancel(requestID))
+	select {
+	case <-drainChannel(ch):
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cancelled run to finish")
+	}
+
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s-plugin-once"},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	require.Equal(t, "hello!", sess.Events[1].Choices[0].Message.Content)
+}
+
+func TestRunner_RoutedSessionPersistsInterruptedPartialAssistant(t *testing.T) {
+	svc := &mockSessionService{}
+	rootSess := session.NewSession("app", "u", "root")
+	routedSess := session.NewSession("app", "u", "member")
+
+	rr := NewRunner(
+		"app",
+		&noOpAgent{name: "a"},
+		WithSessionService(svc),
+	).(*runner)
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	sessionroute.AttachEventRouter(inv, staticSessionRouter{sess: routedSess})
+	require.True(t, shouldPersistInterruptedAssistant(&eventLoopContext{invocation: inv}))
+	loop := &eventLoopContext{
+		sess:             rootSess,
+		invocation:       inv,
+		processedEventCh: make(chan *event.Event, 1),
+		streamFilter:     graph.NewStreamModeFilter(false, nil),
+	}
+
+	err := rr.processSingleAgentEvent(context.Background(), loop, event.NewResponseEvent(
+		inv.InvocationID,
+		"member",
+		&model.Response{
+			ID:        "routed-partial",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "member text",
+				},
+			}},
+		},
+	))
+	require.NoError(t, err)
+	require.Len(t, loop.interruptedAssistants, 1)
+	require.Equal(
+		t,
+		"member text",
+		interruptedAssistantChoicesFromAccumulator(
+			getInterruptedAssistantAccumulator(loop, routedSess),
+		)[0].Message.Content,
+	)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NotNil(t, rr.interruptedAssistantEventForAccumulator(
+		cancelled,
+		loop,
+		getInterruptedAssistantAccumulator(loop, routedSess),
+	))
+	rr.persistInterruptedAssistant(cancelled, loop)
+	require.Len(t, svc.appendEventCalls, 1)
+	require.Same(t, routedSess, svc.appendEventCalls[0].sess)
+	require.Equal(t, "member text", svc.appendEventCalls[0].event.Choices[0].Message.Content)
+}
+
+func TestRunner_InterruptedAssistantPreservesSourceEventIdentity(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	rootInv := agent.NewInvocation(
+		agent.WithInvocationID("root-inv"),
+		agent.WithInvocationBranch("root/branch"),
+		agent.WithInvocationEventFilterKey("root/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "root-request"}),
+	)
+	loop := &eventLoopContext{
+		invocation:       rootInv,
+		streamFilter:     graph.NewStreamModeFilter(false, nil),
+		processedEventCh: make(chan *event.Event, 1),
+	}
+	partial := event.NewResponseEvent(
+		"child-inv",
+		"child-agent",
+		&model.Response{
+			ID:        "child-response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "partial",
+				},
+			}},
+		},
+	)
+	partial.ParentInvocationID = "parent-inv"
+	partial.Branch = "child/branch"
+	partial.FilterKey = "child/filter"
+	partial.RequestID = "child-request"
+
+	rr.recordInterruptedAssistantDelta(loop, partial, nil)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	evt := rr.interruptedAssistantEvent(cancelled, loop)
+	require.NotNil(t, evt)
+	require.Equal(t, "child-inv", evt.InvocationID)
+	require.Equal(t, "parent-inv", evt.ParentInvocationID)
+	require.Equal(t, "child/branch", evt.Branch)
+	require.Equal(t, "child/filter", evt.FilterKey)
+	require.Equal(t, "child-request", evt.RequestID)
+	require.NotEqual(t, rootInv.InvocationID, evt.InvocationID)
+	require.NotEqual(t, rootInv.Branch, evt.Branch)
+}
+
+func TestRunner_InterruptedAssistantFillsRequestIDFromRootInvocation(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	rootInv := agent.NewInvocation(
+		agent.WithInvocationID("root-inv"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "root-request"}),
+	)
+	loop := &eventLoopContext{
+		invocation:       rootInv,
+		streamFilter:     graph.NewStreamModeFilter(false, nil),
+		processedEventCh: make(chan *event.Event, 1),
+	}
+	partial := event.NewResponseEvent(
+		rootInv.InvocationID,
+		"agent",
+		&model.Response{
+			ID:        "response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "partial",
+				},
+			}},
+		},
+	)
+
+	rr.recordInterruptedAssistantDelta(loop, partial, nil)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	evt := rr.interruptedAssistantEvent(cancelled, loop)
+	require.NotNil(t, evt)
+	require.Equal(t, "root-request", evt.RequestID)
+}
+
+func TestRunner_CancelDoesNotPersistInterruptedPartialAssistantByDefault(t *testing.T) {
+	const (
+		requestID = "req-cancel-partial-default"
+		userID    = "u"
+		sessionID = "s-default"
+	)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		&partialTextAgent{
+			name:          "partial",
+			chunks:        []string{"discard ", "me"},
+			waitForCancel: true,
+		},
+		WithSessionService(svc),
+	)
+	mr, ok := r.(ManagedRunner)
+	require.True(t, ok)
+
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("start"),
+		agent.WithRequestID(requestID),
+		agent.WithDetachedCancel(true),
+	)
+	require.NoError(t, err)
+	for i := 0; i < 2; i++ {
+		select {
+		case _, ok := <-ch:
+			require.True(t, ok)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for partial event")
+		}
+	}
+	require.True(t, mr.Cancel(requestID))
+	select {
+	case <-drainChannel(ch):
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cancelled run to finish")
+	}
+
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 1)
+	require.True(t, sess.Events[0].IsUserMessage())
+}
+
+func TestRunner_RunOptionOverridesInterruptedAssistantRunnerDefault(t *testing.T) {
+	const (
+		requestID = "req-cancel-partial-override"
+		userID    = "u"
+		sessionID = "s-override"
+	)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		&partialTextAgent{
+			name:          "partial",
+			chunks:        []string{"discard ", "override"},
+			waitForCancel: true,
+		},
+		WithSessionService(svc),
+		WithPersistInterruptedAssistant(true),
+	)
+	mr, ok := r.(ManagedRunner)
+	require.True(t, ok)
+
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("start"),
+		agent.WithRequestID(requestID),
+		agent.WithDetachedCancel(true),
+		agent.WithPersistInterruptedAssistant(false),
+	)
+	require.NoError(t, err)
+	for i := 0; i < 2; i++ {
+		select {
+		case _, ok := <-ch:
+			require.True(t, ok)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for partial event")
+		}
+	}
+	require.True(t, mr.Cancel(requestID))
+	select {
+	case <-drainChannel(ch):
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cancelled run to finish")
+	}
+
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 1)
+	require.True(t, sess.Events[0].IsUserMessage())
+}
+
+func TestRunner_ApplyRunnerRunDefaultsForPersistInterruptedAssistant(t *testing.T) {
+	rr := &runner{persistInterruptedAssistantDefault: true}
+	var ro agent.RunOptions
+	rr.applyRunnerRunDefaults(&ro)
+	require.NotNil(t, ro.PersistInterruptedAssistant)
+	require.True(t, *ro.PersistInterruptedAssistant)
+
+	ro = agent.NewRunOptions(agent.WithPersistInterruptedAssistant(false))
+	rr.applyRunnerRunDefaults(&ro)
+	require.NotNil(t, ro.PersistInterruptedAssistant)
+	require.False(t, *ro.PersistInterruptedAssistant)
+}
+
+func TestRunner_CompletedStreamDoesNotDuplicateInterruptedAssistant(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		&partialTextAgent{
+			name:   "partial",
+			chunks: []string{"hello ", "world"},
+			final:  "hello world",
+		},
+		WithSessionService(svc),
+	)
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("start"),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	require.Equal(t, "hello world", sess.Events[1].Choices[0].Message.Content)
+	require.Empty(t, sess.Events[1].Extensions)
+}
+
+func TestRunner_CancelDoesNotPersistNonTextPartialAssistant(t *testing.T) {
+	tests := []struct {
+		name  string
+		agent *partialTextAgent
+	}{
+		{
+			name: "reasoning only",
+			agent: &partialTextAgent{
+				name:          "reasoning",
+				chunks:        []string{"thinking"},
+				waitForCancel: true,
+				reasoningOnly: true,
+			},
+		},
+		{
+			name: "tool call delta",
+			agent: &partialTextAgent{
+				name:          "tool",
+				chunks:        []string{`{"q":"x"}`},
+				waitForCancel: true,
+				toolCallDelta: true,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const requestID = "req-cancel-non-text"
+			svc := sessioninmemory.NewSessionService()
+			r := NewRunner("app", tt.agent, WithSessionService(svc))
+			mr, ok := r.(ManagedRunner)
+			require.True(t, ok)
+
+			ch, err := r.Run(
+				context.Background(),
+				"u",
+				tt.name,
+				model.NewUserMessage("start"),
+				agent.WithRequestID(requestID),
+				agent.WithDetachedCancel(true),
+				agent.WithPersistInterruptedAssistant(true),
+			)
+			require.NoError(t, err)
+			select {
+			case _, ok := <-ch:
+				require.True(t, ok)
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for partial event")
+			}
+
+			require.True(t, mr.Cancel(requestID))
+			select {
+			case <-drainChannel(ch):
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for cancelled run to finish")
+			}
+
+			sess, err := svc.GetSession(
+				context.Background(),
+				session.Key{AppName: "app", UserID: "u", SessionID: tt.name},
+			)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			require.Len(t, sess.Events, 1)
+			require.True(t, sess.Events[0].IsUserMessage())
+		})
+	}
+}
+
+func TestInterruptedAssistantDeltaBuffersInterleavedResponses(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	loop := &eventLoopContext{}
+	rr.recordInterruptedAssistantDelta(nil, nil, nil)
+	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "skip-final",
+			IsPartial: false,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("final"),
+			}},
+		},
+	), nil)
+	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "skip-user",
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleUser,
+					Content: "not assistant",
+				},
+			}},
+		},
+	), nil)
+	require.Empty(t, interruptedAssistantChoices(loop))
+
+	first := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "response-1",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "first",
+				},
+			}},
+		},
+	)
+	second := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "response-2",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "second",
+				},
+			}},
+		},
+	)
+	firstAgain := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "response-1",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: " again",
+				},
+			}},
+		},
+	)
+	rr.recordInterruptedAssistantDelta(loop, first, nil)
+	rr.recordInterruptedAssistantDelta(loop, second, nil)
+	rr.recordInterruptedAssistantDelta(loop, firstAgain, nil)
+
+	require.Len(t, loop.interruptedAssistants, 2)
+	firstAcc := getInterruptedAssistantAccumulatorForEvent(loop, nil, first)
+	secondAcc := getInterruptedAssistantAccumulatorForEvent(loop, nil, second)
+	require.NotNil(t, firstAcc)
+	require.NotNil(t, secondAcc)
+	require.Equal(t, "response-1", firstAcc.responseID)
+	require.Equal(t, "response-2", secondAcc.responseID)
+	require.Equal(
+		t,
+		"first again",
+		interruptedAssistantChoicesFromAccumulator(firstAcc)[0].Message.Content,
+	)
+	require.Equal(
+		t,
+		"second",
+		interruptedAssistantChoicesFromAccumulator(secondAcc)[0].Message.Content,
+	)
+}
+
+func TestInterruptedAssistantDeltaBuffersEmptyResponseByInvocationLineage(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+		),
+	}
+	first := interruptedAssistantPartialEvent("child-a", "alpha ")
+	first.Branch = "parallel/a"
+	second := interruptedAssistantPartialEvent("child-b", "beta")
+	second.Branch = "parallel/b"
+	firstAgain := interruptedAssistantPartialEvent("child-a", "one")
+	firstAgain.Branch = "parallel/a"
+
+	rr.recordInterruptedAssistantDelta(loop, first, nil)
+	rr.recordInterruptedAssistantDelta(loop, second, nil)
+	rr.recordInterruptedAssistantDelta(loop, firstAgain, nil)
+
+	require.Len(t, loop.interruptedAssistants, 2)
+	firstAcc := getInterruptedAssistantAccumulatorForEvent(loop, nil, first)
+	secondAcc := getInterruptedAssistantAccumulatorForEvent(loop, nil, second)
+	require.NotNil(t, firstAcc)
+	require.NotNil(t, secondAcc)
+	require.NotEqual(t, firstAcc.responseID, secondAcc.responseID)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	firstEvent := rr.interruptedAssistantEventForAccumulator(cancelled, loop, firstAcc)
+	secondEvent := rr.interruptedAssistantEventForAccumulator(cancelled, loop, secondAcc)
+	require.NotNil(t, firstEvent)
+	require.NotNil(t, secondEvent)
+	require.Equal(t, "child-a", firstEvent.InvocationID)
+	require.Equal(t, "parallel/a", firstEvent.Branch)
+	require.Equal(t, "alpha one", firstEvent.Choices[0].Message.Content)
+	require.Equal(t, "child-b", secondEvent.InvocationID)
+	require.Equal(t, "parallel/b", secondEvent.Branch)
+	require.Equal(t, "beta", secondEvent.Choices[0].Message.Content)
+}
+
+func TestInterruptedAssistantDeltaSeparatesSameResponseIDByLineage(t *testing.T) {
+	svc := &mockSessionService{}
+	rr := &runner{sessionService: svc}
+	sess := session.NewSession("app", "u", "s")
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	loop := &eventLoopContext{
+		sess:       sess,
+		invocation: inv,
+	}
+	first := event.NewResponseEvent(
+		"shared-invocation",
+		"assistant",
+		&model.Response{
+			ID:        "shared-response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "alpha ",
+				},
+			}},
+		},
+	)
+	first.Branch = "parallel/a"
+	second := event.NewResponseEvent(
+		"shared-invocation",
+		"assistant",
+		&model.Response{
+			ID:        "shared-response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "beta",
+				},
+			}},
+		},
+	)
+	second.Branch = "parallel/b"
+	firstAgain := event.NewResponseEvent(
+		"shared-invocation",
+		"assistant",
+		&model.Response{
+			ID:        "shared-response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "one",
+				},
+			}},
+		},
+	)
+	firstAgain.Branch = "parallel/a"
+
+	rr.recordInterruptedAssistantDelta(loop, first, nil)
+	rr.recordInterruptedAssistantDelta(loop, second, nil)
+	rr.recordInterruptedAssistantDelta(loop, firstAgain, nil)
+
+	require.Len(t, loop.interruptedAssistants, 2)
+	firstAcc := getInterruptedAssistantAccumulatorForEvent(loop, nil, first)
+	secondAcc := getInterruptedAssistantAccumulatorForEvent(loop, nil, second)
+	require.NotNil(t, firstAcc)
+	require.NotNil(t, secondAcc)
+	require.NotSame(t, firstAcc, secondAcc)
+	require.Equal(t, "shared-response", firstAcc.responseID)
+	require.Equal(t, "shared-response", secondAcc.responseID)
+	require.Equal(
+		t,
+		"alpha one",
+		interruptedAssistantChoicesFromAccumulator(firstAcc)[0].Message.Content,
+	)
+	require.Equal(
+		t,
+		"beta",
+		interruptedAssistantChoicesFromAccumulator(secondAcc)[0].Message.Content,
+	)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr.persistInterruptedAssistant(cancelled, loop)
+
+	require.Len(t, svc.appendEventCalls, 2)
+	persisted := map[string]string{}
+	for _, call := range svc.appendEventCalls {
+		require.Equal(t, "shared-response", call.event.Response.ID)
+		require.Equal(t, "shared-invocation", call.event.InvocationID)
+		persisted[call.event.Branch] = call.event.Choices[0].Message.Content
+	}
+	require.Equal(t, map[string]string{
+		"parallel/a": "alpha one",
+		"parallel/b": "beta",
+	}, persisted)
+}
+
+func TestPersistInterruptedAssistantPersistsInterleavedBuffers(t *testing.T) {
+	svc := &mockSessionService{}
+	rr := &runner{sessionService: svc}
+	sess := session.NewSession("app", "u", "s")
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	loop := &eventLoopContext{
+		sess:       sess,
+		invocation: inv,
+	}
+	first := event.NewResponseEvent(
+		"child-a",
+		"assistant",
+		&model.Response{
+			ID:        "response-a",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "alpha",
+				},
+			}},
+		},
+	)
+	second := event.NewResponseEvent(
+		"child-b",
+		"assistant",
+		&model.Response{
+			ID:        "response-b",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "beta",
+				},
+			}},
+		},
+	)
+	rr.recordInterruptedAssistantDelta(loop, first, nil)
+	rr.recordInterruptedAssistantDelta(loop, second, nil)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr.persistInterruptedAssistant(cancelled, loop)
+
+	require.Len(t, svc.appendEventCalls, 2)
+	persisted := map[string]string{}
+	for _, call := range svc.appendEventCalls {
+		require.Same(t, sess, call.sess)
+		require.Len(t, call.event.Choices, 1)
+		persisted[call.event.Response.ID] = call.event.Choices[0].Message.Content
+	}
+	require.Equal(t, map[string]string{
+		"response-a": "alpha",
+		"response-b": "beta",
+	}, persisted)
+}
+
+func TestPersistInterruptedAssistantPreservesFirstSeenOrder(t *testing.T) {
+	svc := &mockSessionService{}
+	rr := &runner{sessionService: svc}
+	sess := session.NewSession("app", "u", "s")
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	loop := &eventLoopContext{
+		sess:       sess,
+		invocation: inv,
+	}
+	first := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "z-response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "first",
+				},
+			}},
+		},
+	)
+	second := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "a-response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "second",
+				},
+			}},
+		},
+	)
+	rr.recordInterruptedAssistantDelta(loop, first, nil)
+	rr.recordInterruptedAssistantDelta(loop, second, nil)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr.persistInterruptedAssistant(cancelled, loop)
+
+	require.Len(t, svc.appendEventCalls, 2)
+	require.Equal(t, "z-response", svc.appendEventCalls[0].event.Response.ID)
+	require.Equal(t, "first", svc.appendEventCalls[0].event.Choices[0].Message.Content)
+	require.Equal(t, "a-response", svc.appendEventCalls[1].event.Response.ID)
+	require.Equal(t, "second", svc.appendEventCalls[1].event.Choices[0].Message.Content)
+}
+
+func TestPersistInterruptedAssistantDedupeAfterEventPlugin(t *testing.T) {
+	const requestID = "req-plugin-dedupe"
+	p := &testPlugin{
+		name: "final-content-plugin",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				ctx context.Context,
+				inv *agent.Invocation,
+				e *event.Event,
+			) (*event.Event, error) {
+				if e == nil || e.Response == nil || e.IsPartial {
+					return e, nil
+				}
+				for i := range e.Response.Choices {
+					e.Response.Choices[i].Message.Content += "!"
+				}
+				return e, nil
+			})
+		},
+	}
+	svc := &mockSessionService{}
+	rr := &runner{sessionService: svc}
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRequestID(requestID),
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	inv.Plugins = plugin.MustNewManager(p)
+	loop := &eventLoopContext{
+		sess:             session.NewSession("app", "u", "s"),
+		invocation:       inv,
+		processedEventCh: make(chan *event.Event, 2),
+		streamFilter:     graph.NewStreamModeFilter(false, nil),
+	}
+
+	partial := interruptedAssistantPartialEvent(inv.InvocationID, "hello")
+	partial.RequestID = requestID
+	require.NoError(t, rr.processSingleAgentEvent(context.Background(), loop, partial))
+	final := event.NewResponseEvent(
+		inv.InvocationID,
+		"assistant",
+		&model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("hello"),
+			}},
+		},
+	)
+	final.RequestID = requestID
+	require.NoError(t, rr.processSingleAgentEvent(context.Background(), loop, final))
+	require.Len(t, svc.appendEventCalls, 1)
+	require.Equal(t, "hello!", svc.appendEventCalls[0].event.Choices[0].Message.Content)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr.persistInterruptedAssistant(cancelled, loop)
+
+	require.Len(t, svc.appendEventCalls, 1)
+}
+
+func TestPersistInterruptedAssistantEnqueuesSummary(t *testing.T) {
+	svc := &mockSessionService{}
+	rr := &runner{sessionService: svc}
+	sess := session.NewSession("app", "u", "s")
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+	loop := &eventLoopContext{
+		sess:       sess,
+		invocation: inv,
+	}
+	partial := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "response",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "summarize me",
+				},
+			}},
+		},
+	)
+	partial.FilterKey = "summary/filter"
+	rr.recordInterruptedAssistantDelta(loop, partial, nil)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr.persistInterruptedAssistant(cancelled, loop)
+
+	require.Len(t, svc.appendEventCalls, 1)
+	require.Len(t, svc.enqueueSummaryJobCalls, 1)
+	require.Same(t, sess, svc.enqueueSummaryJobCalls[0].sess)
+	require.Equal(t, "summary/filter", svc.enqueueSummaryJobCalls[0].filterKey)
+	require.False(t, svc.enqueueSummaryJobCalls[0].force)
+}
+
+func TestInterruptedAssistantDeltaGeneratesFallbackResponseID(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	loop := &eventLoopContext{}
+	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "chunk",
+				},
+			}},
+		},
+	), nil)
+	require.NotEmpty(t, defaultInterruptedAssistantAccumulator(loop).responseID)
+	require.Equal(t, "chunk", interruptedAssistantChoices(loop)[0].Message.Content)
+}
+
+func TestInterruptedAssistantDeltaPreservesChoiceIndexes(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	loop := &eventLoopContext{}
+
+	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "multi-choice",
+			IsPartial: true,
+			Choices: []model.Choice{
+				{
+					Index: 1,
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "choice one",
+					},
+				},
+				{
+					Index: 0,
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "choice zero",
+					},
+				},
+			},
+		},
+	), nil)
+	evt := rr.interruptedAssistantEvent(context.Background(), loop)
+	require.NotNil(t, evt)
+	require.Len(t, evt.Choices, 2)
+	require.Equal(t, 0, evt.Choices[0].Index)
+	require.Equal(t, "choice zero", evt.Choices[0].Message.Content)
+	require.Equal(t, 1, evt.Choices[1].Index)
+	require.Equal(t, "choice one", evt.Choices[1].Message.Content)
+}
+
+func TestInterruptedAssistantAlreadyPersisted(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	choices := []model.Choice{{
+		Index:   0,
+		Message: model.NewAssistantMessage("already there"),
+	}}
+
+	t.Run("by response id", func(t *testing.T) {
+		loop := &eventLoopContext{}
+		acc := interruptedAssistantAccumulatorForSession(loop, nil)
+		acc.responseID = "resp"
+		acc.persistedAssistantResponseIDs = map[string]struct{}{
+			"resp": {},
+		}
+		require.True(t, rr.interruptedAssistantAlreadyPersisted(loop, choices))
+	})
+
+	t.Run("by choice signature", func(t *testing.T) {
+		loop := &eventLoopContext{}
+		acc := interruptedAssistantAccumulatorForSession(loop, nil)
+		acc.responseID = "different"
+		acc.requestID = "req"
+		acc.persistedAssistantChoiceSignatures = map[string]struct{}{
+			interruptedAssistantSignatureKey("req", "", choices): {},
+		}
+		require.True(t, rr.interruptedAssistantAlreadyPersisted(loop, choices))
+	})
+
+	t.Run("same content different request", func(t *testing.T) {
+		loop := &eventLoopContext{}
+		acc := interruptedAssistantAccumulatorForSession(loop, nil)
+		acc.responseID = "different"
+		acc.requestID = "req-2"
+		acc.persistedAssistantChoiceSignatures = map[string]struct{}{
+			interruptedAssistantSignatureKey("req-1", "", choices): {},
+		}
+		require.False(t, rr.interruptedAssistantAlreadyPersisted(loop, choices))
+	})
+
+	t.Run("same content same request different invocation", func(t *testing.T) {
+		loop := &eventLoopContext{}
+		acc := interruptedAssistantAccumulatorForSession(loop, nil)
+		acc.responseID = "different"
+		acc.requestID = "req"
+		acc.invocationID = "child-2"
+		acc.persistedAssistantChoiceSignatures = map[string]struct{}{
+			interruptedAssistantSignatureKey("req", "child-1", choices): {},
+		}
+		require.False(t, rr.interruptedAssistantAlreadyPersisted(loop, choices))
+	})
+
+	t.Run("not persisted", func(t *testing.T) {
+		loop := &eventLoopContext{}
+		interruptedAssistantAccumulatorForSession(loop, nil).responseID = "resp"
+		require.False(t, rr.interruptedAssistantAlreadyPersisted(loop, choices))
+	})
+
+	t.Run("nil loop", func(t *testing.T) {
+		require.False(t, rr.interruptedAssistantAlreadyPersisted(nil, choices))
+	})
+
+	t.Run("empty signature", func(t *testing.T) {
+		loop := &eventLoopContext{}
+		interruptedAssistantAccumulatorForSession(loop, nil).responseID = "resp"
+		require.False(t, rr.interruptedAssistantAlreadyPersisted(loop, nil))
+	})
+}
+
+func TestInterruptedAssistantSignatureDedupeScopedByRequest(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	prior := event.NewResponseEvent(
+		"inv-1",
+		"assistant",
+		&model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("same text"),
+			}},
+		},
+	)
+	prior.RequestID = "req-1"
+	sess := &session.Session{
+		Events: []event.Event{*prior},
+	}
+
+	sameRequestLoop := &eventLoopContext{
+		sess: sess,
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-1"}),
+		),
+	}
+	rr.recordInterruptedAssistantDelta(
+		sameRequestLoop,
+		interruptedAssistantPartialEvent("inv-1", "same text"),
+		nil,
+	)
+	require.Nil(t, rr.interruptedAssistantEvent(context.Background(), sameRequestLoop))
+
+	sameRequestDifferentInvocationLoop := &eventLoopContext{
+		sess: sess,
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-1"}),
+		),
+	}
+	rr.recordInterruptedAssistantDelta(
+		sameRequestDifferentInvocationLoop,
+		interruptedAssistantPartialEvent("inv-2", "same text"),
+		nil,
+	)
+	evt := rr.interruptedAssistantEvent(
+		context.Background(),
+		sameRequestDifferentInvocationLoop,
+	)
+	require.NotNil(t, evt)
+	require.Equal(t, "same text", evt.Choices[0].Message.Content)
+	require.Equal(t, "req-1", evt.RequestID)
+	require.Equal(t, "inv-2", evt.InvocationID)
+
+	differentRequestLoop := &eventLoopContext{
+		sess: sess,
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-2"}),
+		),
+	}
+	rr.recordInterruptedAssistantDelta(
+		differentRequestLoop,
+		interruptedAssistantPartialEvent("inv-3", "same text"),
+		nil,
+	)
+	evt = rr.interruptedAssistantEvent(context.Background(), differentRequestLoop)
+	require.NotNil(t, evt)
+	require.Equal(t, "same text", evt.Choices[0].Message.Content)
+	require.Equal(t, "req-2", evt.RequestID)
+}
+
+func TestInterruptedAssistantPriorDedupeScopedByLineage(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+
+	t.Run("same response id on sibling branch", func(t *testing.T) {
+		prior := event.NewResponseEvent(
+			"shared-invocation",
+			"assistant",
+			&model.Response{
+				ID:     "shared-response",
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("prior"),
+				}},
+			},
+		)
+		prior.RequestID = "req"
+		prior.Branch = "branch/b"
+		loop := &eventLoopContext{
+			sess: &session.Session{Events: []event.Event{*prior}},
+			invocation: agent.NewInvocation(
+				agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+			),
+		}
+		partial := event.NewResponseEvent(
+			"shared-invocation",
+			"assistant",
+			&model.Response{
+				ID:        "shared-response",
+				Object:    model.ObjectTypeChatCompletionChunk,
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Index: 0,
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "current",
+					},
+				}},
+			},
+		)
+		partial.RequestID = "req"
+		partial.Branch = "branch/a"
+
+		rr.recordInterruptedAssistantDelta(loop, partial, nil)
+		evt := rr.interruptedAssistantEvent(context.Background(), loop)
+		require.NotNil(t, evt)
+		require.Equal(t, "current", evt.Choices[0].Message.Content)
+		require.Equal(t, "branch/a", evt.Branch)
+	})
+
+	t.Run("same signature on sibling branch", func(t *testing.T) {
+		prior := event.NewResponseEvent(
+			"shared-invocation",
+			"assistant",
+			&model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("same text"),
+				}},
+			},
+		)
+		prior.RequestID = "req"
+		prior.Branch = "branch/b"
+		loop := &eventLoopContext{
+			sess: &session.Session{Events: []event.Event{*prior}},
+			invocation: agent.NewInvocation(
+				agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+			),
+		}
+		partial := interruptedAssistantPartialEvent("shared-invocation", "same text")
+		partial.RequestID = "req"
+		partial.Branch = "branch/a"
+
+		rr.recordInterruptedAssistantDelta(loop, partial, nil)
+		evt := rr.interruptedAssistantEvent(context.Background(), loop)
+		require.NotNil(t, evt)
+		require.Equal(t, "same text", evt.Choices[0].Message.Content)
+		require.Equal(t, "branch/a", evt.Branch)
+	})
+}
+
+func TestInterruptedAssistantAccumulatorLineageEdgeCases(t *testing.T) {
+	require.Nil(t, interruptedAssistantAccumulatorForLineage(nil, nil, "lineage"))
+	require.Empty(t, interruptedAssistantLineageKey(nil, nil))
+
+	sess := session.NewSession("app", "u", "s")
+	otherSess := session.NewSession("app", "u", "other")
+	loop := &eventLoopContext{sess: sess}
+	require.Nil(t, getInterruptedAssistantAccumulator(loop, sess))
+
+	first := interruptedAssistantAccumulatorForLineage(loop, sess, "one")
+	require.NotNil(t, first)
+	require.Same(t, first, interruptedAssistantAccumulatorForLineage(loop, sess, "one"))
+	require.NotNil(t, interruptedAssistantAccumulatorForLineage(loop, otherSess, "other"))
+	require.Same(t, first, getInterruptedAssistantAccumulator(loop, sess))
+
+	require.NotNil(t, interruptedAssistantAccumulatorForLineage(loop, sess, "two"))
+	require.Nil(t, getInterruptedAssistantAccumulator(loop, sess))
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationID("parent-inv"),
+		agent.WithInvocationAgent(&noOpAgent{name: "parent"}),
+	)
+	child := parent.Clone(
+		agent.WithInvocationID("child-inv"),
+		agent.WithInvocationAgent(&noOpAgent{name: "child"}),
+		agent.WithInvocationBranch("child-branch"),
+		agent.WithInvocationEventFilterKey("child-filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+	)
+	key := interruptedAssistantLineageKey(&eventLoopContext{invocation: child}, &event.Event{
+		Response: &model.Response{ID: "resp"},
+	})
+	for _, part := range []string{
+		"resp",
+		"req",
+		"child-inv",
+		"parent-inv",
+		"child-branch",
+		"child-filter",
+		"child",
+	} {
+		require.Contains(t, key, part)
+	}
+}
+
+func TestRecordPersistedAssistantOnAccumulatorEdgeCases(t *testing.T) {
+	acc := &interruptedAssistantAccumulator{
+		requestID:    "req",
+		invocationID: "inv",
+	}
+
+	recordPersistedAssistantOnAccumulator(nil, nil, false)
+	recordPersistedAssistantOnAccumulator(acc, nil, true)
+	recordPersistedAssistantOnAccumulator(
+		acc,
+		interruptedAssistantFinalEvent("inv", "non-assistant-id", "user", model.RoleUser),
+		true,
+	)
+	require.Empty(t, acc.persistedAssistantResponseIDs)
+	require.Empty(t, acc.persistedAssistantChoiceSignatures)
+
+	rawGraph := graph.NewGraphCompletionEvent(
+		graph.WithCompletionEventInvocationID("inv"),
+		graph.WithCompletionEventFinalState(graph.State{
+			graph.StateKeyLastResponse:   "raw",
+			graph.StateKeyLastResponseID: "raw-final",
+		}),
+	)
+	recordPersistedAssistantOnAccumulator(acc, rawGraph, true)
+	require.Empty(t, acc.persistedAssistantResponseIDs)
+	require.Empty(t, acc.persistedAssistantChoiceSignatures)
+
+	visible, ok := graph.VisibleGraphCompletionEventForAuthor(
+		graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID("inv"),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse:   "visible",
+				graph.StateKeyLastResponseID: "visible-final",
+			}),
+		),
+		"assistant",
+	)
+	require.True(t, ok)
+	visible.Response.ID = "visible-wrapper"
+	visible.RequestID = "req"
+
+	recordPersistedAssistantOnAccumulator(acc, visible, true)
+	require.Contains(t, acc.persistedAssistantResponseIDs, "visible-wrapper")
+	require.Contains(t, acc.persistedAssistantResponseIDs, "visible-final")
+	require.Contains(
+		t,
+		acc.persistedAssistantChoiceSignatures,
+		interruptedAssistantSignatureKey("req", "inv", visible.Response.Choices),
+	)
+}
+
+func TestRecordInterruptedAssistantDeltaSkipsNonAssistantChoices(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	require.False(t, interruptedAssistantHasTextDelta(nil))
+
+	loop := &eventLoopContext{}
+	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "resp",
+			Created:   123,
+			IsPartial: true,
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Delta: model.Message{
+						Role:    model.RoleUser,
+						Content: "skip wrong role",
+					},
+				},
+				{
+					Index: 1,
+					Delta: model.Message{Role: model.RoleAssistant},
+				},
+				{
+					Index: 2,
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "keep",
+					},
+				},
+			},
+		},
+	), nil)
+
+	acc := defaultInterruptedAssistantAccumulator(loop)
+	require.NotNil(t, acc)
+	require.Equal(t, int64(123), acc.created)
+	choices := interruptedAssistantChoicesFromAccumulator(acc)
+	require.Len(t, choices, 1)
+	require.Equal(t, 2, choices[0].Index)
+	require.Equal(t, "keep", choices[0].Message.Content)
+}
+
+func TestInterruptedAssistantEventIdentityHelperEdgeCases(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	captureInterruptedAssistantEventIdentity(nil, nil)
+	injectInterruptedAssistantEventIdentity(nil, nil, nil)
+
+	acc := &interruptedAssistantAccumulator{requestID: "existing"}
+	fillInterruptedAssistantRequestID(acc, &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "root"}),
+		),
+	})
+	require.Equal(t, "existing", acc.requestID)
+
+	evt := &event.Event{RequestID: "keep"}
+	injectInterruptedAssistantEventIdentity(
+		agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "root"}),
+		),
+		&interruptedAssistantAccumulator{requestID: "acc"},
+		evt,
+	)
+	require.Equal(t, "keep", evt.RequestID)
+
+	empty := &strings.Builder{}
+	require.Empty(t, interruptedAssistantChoicesFromAccumulator(
+		&interruptedAssistantAccumulator{
+			choiceContent: map[int]*strings.Builder{
+				0: nil,
+				1: empty,
+			},
+		},
+	))
+
+	content := &strings.Builder{}
+	content.WriteString("fallback")
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("root-inv"),
+		agent.WithInvocationAgent(&noOpAgent{name: "root-agent"}),
+	)
+	out := rr.interruptedAssistantEventForAccumulator(
+		context.Background(),
+		&eventLoopContext{invocation: inv},
+		&interruptedAssistantAccumulator{
+			choiceContent: map[int]*strings.Builder{0: content},
+		},
+	)
+	require.NotNil(t, out)
+	require.Equal(t, "root-agent", out.Author)
+	require.Equal(t, "root-inv", out.InvocationID)
+}
+
+func TestPersistInterruptedAssistantSkipTargetsAndTieBreaker(t *testing.T) {
+	builderMap := func(text string) map[int]*strings.Builder {
+		b := &strings.Builder{}
+		b.WriteString(text)
+		return map[int]*strings.Builder{0: b}
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		)),
+	)
+
+	emptySvc := &mockSessionService{}
+	rr := &runner{sessionService: emptySvc}
+	rr.persistInterruptedAssistant(cancelled, &eventLoopContext{
+		invocation: inv,
+		interruptedAssistants: map[string]*interruptedAssistantAccumulator{
+			"empty": {
+				sequence:      2,
+				sess:          session.NewSession("app", "u", "empty"),
+				choiceContent: map[int]*strings.Builder{},
+			},
+			"nil":        nil,
+			"no-session": {sequence: 1, choiceContent: builderMap("no session")},
+		},
+	})
+	require.Empty(t, emptySvc.appendEventCalls)
+
+	svc := &mockSessionService{}
+	rr = &runner{sessionService: svc}
+	sess := session.NewSession("app", "u", "s")
+	rr.persistInterruptedAssistant(cancelled, &eventLoopContext{
+		sess:       sess,
+		invocation: inv,
+		interruptedAssistants: map[string]*interruptedAssistantAccumulator{
+			"b": {sequence: 1, choiceContent: builderMap("second")},
+			"a": {sequence: 1, choiceContent: builderMap("first")},
+		},
+	})
+	require.Len(t, svc.appendEventCalls, 2)
+	require.Same(t, sess, svc.appendEventCalls[0].sess)
+	require.Equal(t, "first", svc.appendEventCalls[0].event.Choices[0].Message.Content)
+	require.Equal(t, "second", svc.appendEventCalls[1].event.Choices[0].Message.Content)
+}
+
+func TestCollectPriorAssistantChoiceSignaturesSkipsAndCollects(t *testing.T) {
+	require.Nil(t, collectPriorAssistantChoiceSignatures(nil))
+	require.Nil(t, collectPriorAssistantChoiceSignatures(&session.Session{}))
+
+	partial := interruptedAssistantPartialEvent("inv", "partial")
+	rawGraph := graph.NewGraphCompletionEvent(
+		graph.WithCompletionEventInvocationID("inv"),
+		graph.WithCompletionEventFinalState(graph.State{
+			graph.StateKeyLastResponse: "graph",
+		}),
+	)
+	user := interruptedAssistantFinalEvent("inv", "user-id", "user", model.RoleUser)
+	assistant := interruptedAssistantFinalEvent(
+		"inv",
+		"assistant-id",
+		"assistant",
+		model.RoleAssistant,
+	)
+	assistant.RequestID = "req"
+
+	signatures := collectPriorAssistantChoiceSignatures(&session.Session{
+		Events: []event.Event{*partial, *rawGraph, *user, *assistant},
+	})
+	require.Equal(t, map[string]struct{}{
+		interruptedAssistantSignatureKey(
+			"req",
+			"inv",
+			assistant.Response.Choices,
+		): {},
+	}, signatures)
+}
+
+func TestCollectPriorAssistantLineageHelpersSkipAndCollect(t *testing.T) {
+	require.Nil(t, collectPriorAssistantResponseIDsForLineage(nil, nil, "lineage"))
+	require.Nil(t, collectPriorAssistantChoiceSignaturesForLineage(nil, nil, "lineage"))
+
+	loop := &eventLoopContext{}
+	regular := interruptedAssistantFinalEvent(
+		"inv",
+		"resp",
+		"assistant",
+		model.RoleAssistant,
+	)
+	regular.RequestID = "req"
+	regular.Branch = "branch/a"
+	regular.FilterKey = "filter/a"
+	lineage := interruptedAssistantLineageKey(loop, regular)
+
+	partial := interruptedAssistantPartialEvent("inv", "partial")
+	partial.Response.ID = "resp"
+	partial.RequestID = "req"
+	partial.Branch = "branch/a"
+	partial.FilterKey = "filter/a"
+
+	rawGraph := graph.NewGraphCompletionEvent(
+		graph.WithCompletionEventInvocationID("inv"),
+		graph.WithCompletionEventFinalState(graph.State{
+			graph.StateKeyLastResponse:   "graph",
+			graph.StateKeyLastResponseID: "graph-final",
+		}),
+	)
+	rawGraph.Response.ID = "resp"
+	rawGraph.RequestID = "req"
+	rawGraph.Branch = "branch/a"
+	rawGraph.FilterKey = "filter/a"
+	rawGraph.Author = "assistant"
+
+	user := interruptedAssistantFinalEvent("inv", "resp", "user", model.RoleUser)
+	user.RequestID = "req"
+	user.Branch = "branch/a"
+	user.FilterKey = "filter/a"
+
+	mismatch := interruptedAssistantFinalEvent(
+		"inv",
+		"other-resp",
+		"other",
+		model.RoleAssistant,
+	)
+	mismatch.RequestID = "req"
+	mismatch.Branch = "branch/b"
+
+	sess := &session.Session{
+		Events: []event.Event{*mismatch, *partial, *rawGraph, *user, *regular},
+	}
+	require.Equal(t, map[string]struct{}{"resp": {}},
+		collectPriorAssistantResponseIDsForLineage(loop, sess, lineage))
+	require.Equal(t, map[string]struct{}{
+		interruptedAssistantSignatureKey(
+			"req",
+			"inv",
+			regular.Response.Choices,
+		): {},
+	}, collectPriorAssistantChoiceSignaturesForLineage(loop, sess, lineage))
+
+	emptyID := interruptedAssistantFinalEvent(
+		"inv-empty",
+		"",
+		"empty id",
+		model.RoleAssistant,
+	)
+	require.Nil(t, collectPriorAssistantResponseIDsForLineage(
+		loop,
+		&session.Session{Events: []event.Event{*emptyID}},
+		interruptedAssistantLineageKey(loop, emptyID),
+	))
+
+	visible, ok := graph.VisibleGraphCompletionEventForAuthor(
+		graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID("inv-visible"),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse:   "visible",
+				graph.StateKeyLastResponseID: "visible-final",
+			}),
+		),
+		"assistant",
+	)
+	require.True(t, ok)
+	visible.Response.ID = "visible-wrapper"
+	ids := collectPriorAssistantResponseIDsForLineage(
+		loop,
+		&session.Session{Events: []event.Event{*visible}},
+		interruptedAssistantLineageKey(loop, visible),
+	)
+	require.Equal(t, map[string]struct{}{"visible-final": {}}, ids)
+}
+
+func interruptedAssistantPartialEvent(invocationID string, content string) *event.Event {
+	return event.NewResponseEvent(
+		invocationID,
+		"assistant",
+		&model.Response{
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: content,
+				},
+			}},
+		},
+	)
+}
+
+func interruptedAssistantFinalEvent(
+	invocationID string,
+	responseID string,
+	content string,
+	role model.Role,
+) *event.Event {
+	return event.NewResponseEvent(
+		invocationID,
+		"assistant",
+		&model.Response{
+			ID:     responseID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    role,
+					Content: content,
+				},
+			}},
+		},
+	)
+}
+
+func TestInterruptedAssistantEventSkipsEmptyAndPersistedContent(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+
+	require.Nil(t, rr.interruptedAssistantEvent(context.Background(), &eventLoopContext{}))
+
+	choices := []model.Choice{{
+		Index:   0,
+		Message: model.NewAssistantMessage("already there"),
+	}}
+	prior := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			Object:  model.ObjectTypeChatCompletion,
+			Done:    true,
+			Choices: choices,
+		},
+	)
+	prior.RequestID = "req"
+	loop := &eventLoopContext{
+		sess: &session.Session{
+			Events: []event.Event{*prior},
+		},
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req"}),
+		),
+	}
+	rr.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "already there",
+				},
+			}},
+		},
+	), nil)
+	require.Nil(t, rr.interruptedAssistantEvent(context.Background(), loop))
+}
+
+func TestPersistInterruptedAssistantGuardBranches(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr.persistInterruptedAssistant(context.Background(), &eventLoopContext{})
+	rr.persistInterruptedAssistant(cancelled, nil)
+	rr.persistInterruptedAssistant(cancelled, &eventLoopContext{sess: &session.Session{}})
+
+	base := &mockSessionService{}
+	appendErrRunner := &runner{
+		sessionService: &appendErrorSessionService{mockSessionService: base},
+	}
+	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPersistInterruptedAssistant(true),
+		))),
+		sess: &session.Session{},
+	}
+	appendErrRunner.recordInterruptedAssistantDelta(loop, event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			ID:        "resp",
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "partial",
+				},
+			}},
+		},
+	), nil)
+	appendErrRunner.persistInterruptedAssistant(cancelled, loop)
+	require.Len(t, base.appendEventCalls, 1)
+}
+
+func TestContextDoneReason(t *testing.T) {
+	require.Empty(t, contextDoneReason(context.Background()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Equal(t, context.Canceled.Error(), contextDoneReason(ctx))
+
+	causeCtx, cancelCause := context.WithCancelCause(context.Background())
+	cancelCause(errors.New("explicit"))
+	require.Equal(t, "explicit", contextDoneReason(causeCtx))
+}
+
+func TestSessionPersistenceContext(t *testing.T) {
+	ctx := context.Background()
+	got, cancel := sessionPersistenceContext(ctx)
+	defer cancel()
+	require.NotNil(t, got)
+	require.NoError(t, got.Err())
+
+	cancelled, cancelOriginal := context.WithCancel(context.Background())
+	cancelOriginal()
+	got, cancel = sessionPersistenceContext(cancelled)
+	defer cancel()
+	require.NoError(t, got.Err())
+	_, ok := got.Deadline()
+	require.True(t, ok)
 }
 
 func TestRunner_Close_CancelsRunningRuns(t *testing.T) {

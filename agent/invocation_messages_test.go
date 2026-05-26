@@ -218,6 +218,19 @@ func TestWithResume(t *testing.T) {
 	require.False(t, ro.Resume)
 }
 
+func TestWithPersistInterruptedAssistant(t *testing.T) {
+	var ro RunOptions
+	require.Nil(t, ro.PersistInterruptedAssistant)
+
+	WithPersistInterruptedAssistant(true)(&ro)
+	require.NotNil(t, ro.PersistInterruptedAssistant)
+	require.True(t, *ro.PersistInterruptedAssistant)
+
+	WithPersistInterruptedAssistant(false)(&ro)
+	require.NotNil(t, ro.PersistInterruptedAssistant)
+	require.False(t, *ro.PersistInterruptedAssistant)
+}
+
 func TestWithGraphEmitFinalModelResponses(t *testing.T) {
 	var ro RunOptions
 	WithGraphEmitFinalModelResponses(true)(&ro)
