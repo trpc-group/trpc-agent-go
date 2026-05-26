@@ -1305,6 +1305,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			return ctx, nil, modifiedArgs, true, skipSummarization,
 				fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 		}
+		defaultMsg.ToolName = toolCall.Function.Name
 		defaultChoices := []model.Choice{
 			{Index: index, Message: defaultMsg},
 		}
@@ -1347,6 +1348,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return ctx, nil, modifiedArgs, true, skipSummarization,
 			fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 	}
+	defaultMsg.ToolName = toolCall.Function.Name
 
 	choices := []model.Choice{
 		{Index: index, Message: defaultMsg},
@@ -1468,6 +1470,7 @@ func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
 
 	customChoices := make([]model.Choice, 0, len(msgs))
 	for _, msg := range msgs {
+		msg = ensureToolResultMessageName(msg, toolCall)
 		customChoices = append(customChoices, model.Choice{
 			Index:   index,
 			Message: msg,
@@ -1476,6 +1479,19 @@ func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
 	// When a callback is provided and returns non-empty messages,
 	// the framework defers entirely to the callback for correctness.
 	return customChoices, true, nil
+}
+
+func ensureToolResultMessageName(
+	msg model.Message,
+	toolCall model.ToolCall,
+) model.Message {
+	if msg.Role != model.RoleTool ||
+		msg.ToolID != toolCall.ID ||
+		msg.ToolName != "" {
+		return msg
+	}
+	msg.ToolName = toolCall.Function.Name
+	return msg
 }
 
 // createErrorChoice creates an error choice for tool execution failures.

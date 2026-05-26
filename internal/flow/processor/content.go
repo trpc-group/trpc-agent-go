@@ -902,8 +902,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 
 	var events []event.Event
 	inv.Session.EventMu.RLock()
-	sessionEvents := fillMissingToolResultNamesInEvents(inv.Session.Events)
-	for _, evt := range sessionEvents {
+	for _, evt := range inv.Session.Events {
 		if compactedEvt, ok := p.compactCurrentInvocationEvent(
 			evt,
 			inv,
@@ -1512,8 +1511,6 @@ func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 		return messages
 	}
 
-	messages = fillMissingToolResultNamesInMessages(messages)
-
 	var cloned bool
 	for i := range messages {
 		if cfg.keepToolResult(messages[i]) {
@@ -1726,8 +1723,7 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 	inv.Session.EventMu.RLock()
 	defer inv.Session.EventMu.RUnlock()
 
-	sessionEvents := fillMissingToolResultNamesInEvents(inv.Session.Events)
-	for _, evt := range sessionEvents {
+	for _, evt := range inv.Session.Events {
 		if evt.RequestID != inv.RunOptions.RequestID ||
 			evt.InvocationID != inv.InvocationID {
 			continue

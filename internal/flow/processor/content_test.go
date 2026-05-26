@@ -2845,7 +2845,7 @@ func TestContentRequestProcessor_getIncrementMessages_ForceCleanWithScopedTimeli
 				Choices: []model.Choice{{
 					Message: model.NewToolMessage(
 						toolCallID(invocationID),
-						"",
+						"shell",
 						shellPayload,
 					),
 				}},
@@ -2911,6 +2911,90 @@ func TestContentRequestProcessor_getIncrementMessages_ForceCleanWithScopedTimeli
 			require.Equal(t, policyToolResultPlaceholder, messages[1].Content)
 		})
 	}
+}
+
+func TestContentRequestProcessor_getIncrementMessages_DoesNotInferMissingToolName(
+	t *testing.T,
+) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	reusedToolID := "tool-call-reused"
+	toolCallEvent := func(filterKey, toolName string, ts time.Time) event.Event {
+		return event.Event{
+			Author:       "test-agent",
+			RequestID:    "req-current",
+			InvocationID: "inv-current",
+			FilterKey:    filterKey,
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID: reusedToolID,
+							Function: model.FunctionDefinitionParam{
+								Name:      toolName,
+								Arguments: []byte(`{}`),
+							},
+						}},
+					},
+				}},
+			},
+		}
+	}
+	toolResultEvent := event.Event{
+		Author:       "test-agent",
+		RequestID:    "req-current",
+		InvocationID: "inv-current",
+		FilterKey:    "wanted",
+		Timestamp:    baseTime.Add(2 * time.Second),
+		Version:      event.CurrentVersion,
+		Response: &model.Response{
+			Done:   true,
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage(
+					reusedToolID,
+					"",
+					strings.Repeat("shell-output-", 200),
+				),
+			}},
+		},
+	}
+	sess := getSession(
+		// This out-of-branch pending call reuses the same ToolID. The
+		// compaction layer should not infer either name for a nameless
+		// historical tool result.
+		toolCallEvent("other", "session_load", baseTime),
+		toolCallEvent("wanted", "shell", baseTime.Add(time.Second)),
+		toolResultEvent,
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationEventFilterKey("wanted"),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv-current"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-current",
+		}),
+	)
+	inv.AgentName = "test-agent"
+	p := NewContentRequestProcessor(
+		WithBranchFilterMode(BranchFilterModeExact),
+		WithTimelineFilterMode(TimelineFilterCurrentRequest),
+		WithEnableContextCompaction(true),
+		WithContextCompactionForceCleanToolNames("shell"),
+	)
+
+	messages := p.getIncrementMessages(inv, time.Time{})
+
+	require.Len(t, messages, 2)
+	require.Len(t, messages[0].ToolCalls, 1)
+	require.Equal(t, "shell", messages[0].ToolCalls[0].Function.Name)
+	require.Equal(t, model.RoleTool, messages[1].Role)
+	require.Equal(t, reusedToolID, messages[1].ToolID)
+	require.Empty(t, messages[1].ToolName)
+	require.NotEqual(t, policyToolResultPlaceholder, messages[1].Content)
 }
 
 func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {

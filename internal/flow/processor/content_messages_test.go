@@ -946,6 +946,64 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
 	})
 
+	t.Run("does not infer missing tool name from branch history", func(t *testing.T) {
+		reusedToolID := "call_reused"
+		toolCallEvent := func(filterKey, toolName string, ts time.Time) event.Event {
+			return event.Event{
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				FilterKey:    filterKey,
+				Timestamp:    ts,
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{Index: 0, Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID: reusedToolID,
+							Function: model.FunctionDefinitionParam{
+								Name:      toolName,
+								Arguments: []byte(`{}`),
+							},
+						}},
+					}}},
+				},
+			}
+		}
+		p := NewContentRequestProcessor(
+			WithBranchFilterMode(BranchFilterModeExact),
+			WithContextCompactionKeepToolNames("session_load"),
+		)
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationEventFilterKey("wanted"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					toolCallEvent("other", "session_load", baseTime),
+					toolCallEvent("wanted", "shell", baseTime.Add(time.Second)),
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						FilterKey:    "wanted",
+						Timestamp:    baseTime.Add(1500 * time.Millisecond),
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								reusedToolID,
+								"",
+								"result",
+							)}},
+						},
+					},
+				},
+			}),
+		)
+
+		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+
 	t.Run("ignores kept tool result", func(t *testing.T) {
 		p := NewContentRequestProcessor(
 			WithContextCompactionKeepToolNames("session_load"),
@@ -983,7 +1041,7 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 							Done: true,
 							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
 								"call_1",
-								"",
+								"session_load",
 								"kept result",
 							)}},
 						},
