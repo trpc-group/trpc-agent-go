@@ -628,6 +628,26 @@ agent := llmagent.New("todo-assistant",
 
 `todo.DefaultToolPrompt` 是开箱即用的 system instruction 片段，告诉模型何时调用 `todo_write` 以及如何撰写条目；你也可以替换成自己的版本，下文的运行时校验规则不受影响。
 
+#### 强制完成
+
+默认情况下，`todo_write` 只是建议性工具：即使清单里还有未完成项，模型仍可能直接结束回复。若希望 Agent 必须完成清单后才能输出最终回复，可以安装 `todoenforcer` extension：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/extension/todoenforcer"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool/todo"
+)
+
+agent := llmagent.New("todo-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction(todo.DefaultToolPrompt),
+    llmagent.WithExtensions(todoenforcer.New()),
+)
+```
+
+该 extension 会自动贡献 `todo_write` 和 `todo_declare_blocker`，不要再通过 `WithTools` 额外传入 `todo.New()`。如果需要复用 `tool/todo` 的选项（例如 `WithStateKeyPrefix`、`WithClearOnAllDone` 或 `WithNudgeHook`），先构造 `todo.New(...)`，再通过 `todoenforcer.WithTodoTool(...)` 传入。`todo_declare_blocker` 用于声明客观阻塞，例如缺少权限、凭据、基础设施或必须由用户决策的信息。
+
 #### 工具返回结构
 
 `todo_write` 返回的是结构化结果而不是自由文本，因此终端、AG-UI、自研 HTTP 前端等任何调用方都可以直接消费：
@@ -687,7 +707,7 @@ todoTool := todo.New(
 )
 ```
 
-完整可运行示例（包含多轮暂停/续接场景与 ASCII 渲染器）见 [`examples/todo/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todo)。
+基础工具的完整可运行示例（包含多轮暂停/续接场景与 ASCII 渲染器）见 [`examples/todo/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todo)。带强制完成对照的示例见 [`examples/todoenforcer/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todoenforcer)。
 
 ## MCP Tools 协议工具
 
