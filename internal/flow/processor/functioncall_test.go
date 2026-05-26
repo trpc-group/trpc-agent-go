@@ -1830,6 +1830,7 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
 	assert.Equal(t, pc.ID, choices[0].Message.ToolID)
+	assert.Equal(t, "echo", choices[0].Message.ToolName)
 	assert.Equal(t, string(wantBytes), choices[0].Message.Content)
 }
 
@@ -1923,6 +1924,7 @@ func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithMultipleMessages
 
 	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
 	assert.Equal(t, pc.ID, choices[0].Message.ToolID)
+	assert.Equal(t, "echo", choices[0].Message.ToolName)
 	assert.Equal(t, `{"ok":true}`, choices[0].Message.Content)
 
 	assert.Equal(t, model.RoleUser, choices[1].Message.Role)

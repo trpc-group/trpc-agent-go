@@ -925,6 +925,7 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 
 - Tool results from **older** requests that exceed the threshold are replaced entirely with a short placeholder while keeping `ToolID` and `ToolName`
 - The current request and the latest `ContextCompactionKeepRecentRequests` completed requests are never affected
+- If `ToolResultCompactionConfig.SkipRecentFunc` returns a positive number, the request/invocation units that own those tail events are also treated as recent and skipped by Pass 1
 - This cleans up accumulated long tool outputs from earlier conversation turns
 
 **Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, **default 0 / disabled**):
@@ -936,6 +937,14 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 The two passes have different roles: Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases but protects the current request too.
 
 Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableContextCompaction(true)` is set and (2) `ContextCompactionOversizedToolResultMaxTokens > 0` (recommended opt-in value: `8192`, exposed as the constant `processor.DefaultContextCompactionOversizedToolResultMaxTokens`). This guarantees that `EnableContextCompaction=false` always means "the framework will not modify any tool result".
+
+Use `WithToolResultCompactionConfig(...)` when you need tool-name or recency policy:
+
+- `ForceCleanToolNames`: results from these tools are replaced with a policy placeholder whenever context compaction is enabled. This is useful for noisy tools such as shell, grep, or log dump tools.
+- `KeepToolNames`: results from these tools are left untouched by context compaction. This is useful for recovery tools such as `session_load` and `session_search` when the model may need to read the exact payload.
+- `SkipRecentFunc`: customizes how many tail events are considered recent. It only affects Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.
+
+If the same tool name appears in both `ForceCleanToolNames` and `KeepToolNames`, `KeepToolNames` wins.
 
 Additionally:
 
@@ -967,8 +976,24 @@ agent := llmagent.New(
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
     llmagent.WithContextCompactionKeepRecentRequests(1),
     llmagent.WithContextCompactionTokenCounter(counter),
+    llmagent.WithToolResultCompactionConfig(&llmagent.ToolResultCompactionConfig{
+        ForceCleanToolNames: []string{"shell", "grep"},
+        KeepToolNames:       []string{"session_load", "session_search"},
+        SkipRecentFunc: func(events []event.Event) int {
+            // For example, protect the request/invocation units that own the
+            // last 3 events so an in-flight tool chain is not treated as old
+            // history by Pass 1.
+            return 3
+        },
+    }),
 )
 ```
+
+See
+[examples/context_compaction](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/context_compaction)
+for a full example. It calls a real model and prints the exact request sent to
+the model by default with `-debug=true`, which makes it easy to verify whether
+large historical `tool result` payloads were replaced with placeholders.
 
 **Context structure**:
 
