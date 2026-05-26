@@ -12,6 +12,7 @@ package processor
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -187,8 +188,13 @@ func TestOnDemandSessionRequestProcessor_EmitsInstructionEvent(t *testing.T) {
 
 	p.ProcessRequest(context.Background(), inv, req, ch)
 	require.Len(t, req.Messages, 2)
-	got := <-ch
-	require.Equal(t, model.ObjectTypePreprocessingInstruction, got.Object)
+	select {
+	case got := <-ch:
+		require.NotNil(t, got)
+		require.Equal(t, model.ObjectTypePreprocessingInstruction, got.Object)
+	case <-time.After(time.Second):
+		t.Fatal("expected preprocessing instruction event")
+	}
 }
 
 func TestOnDemandSessionRequestProcessor_RebuildForContextCompaction(t *testing.T) {
