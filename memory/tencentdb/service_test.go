@@ -300,6 +300,142 @@ func TestIngestSessionSerializesSameSessionCapturesAndTimestamps(t *testing.T) {
 	}
 }
 
+func TestEndSessionWaitsForPendingCapture(t *testing.T) {
+	releaseCapture := make(chan struct{})
+	captureStarted := make(chan struct{}, 1)
+	endCalled := make(chan struct{}, 1)
+	var released atomic.Bool
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case pathCapture:
+			requests.Add(1)
+			select {
+			case captureStarted <- struct{}{}:
+			default:
+			}
+			<-releaseCapture
+			_ = json.NewEncoder(w).Encode(captureResponse{L0Recorded: 2})
+		case pathEndSession:
+			if got := requests.Load(); got != 1 {
+				t.Fatalf("end called before capture request: captures=%d", got)
+			}
+			select {
+			case endCalled <- struct{}{}:
+			default:
+			}
+			_ = json.NewEncoder(w).Encode(endSessionResponse{Flushed: true})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	svc, err := NewService(
+		WithGatewayURL(server.URL),
+		WithIngestWorkers(2),
+		WithIngestQueueSize(2),
+		WithIngestJobTimeout(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	defer func() {
+		if released.CompareAndSwap(false, true) {
+			close(releaseCapture)
+		}
+		if err := svc.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+
+	sess := captureReadySession()
+	if err := svc.IngestSession(context.Background(), sess); err != nil {
+		t.Fatalf("IngestSession: %v", err)
+	}
+	select {
+	case <-captureStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("capture request did not start")
+	}
+	endDone := make(chan error, 1)
+	go func() {
+		endDone <- svc.EndSession(context.Background(), sess)
+	}()
+	select {
+	case <-endCalled:
+		t.Fatalf("end session reached gateway before capture completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if released.CompareAndSwap(false, true) {
+		close(releaseCapture)
+	}
+	select {
+	case err := <-endDone:
+		if err != nil {
+			t.Fatalf("EndSession: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("EndSession did not complete")
+	}
+	select {
+	case <-endCalled:
+	default:
+		t.Fatalf("end session gateway call was not observed")
+	}
+}
+
+func TestServiceCheckpointSkipsReloadedSessionEvents(t *testing.T) {
+	requests := make(chan captureRequest, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != pathCapture {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		var req captureRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		requests <- req
+		_ = json.NewEncoder(w).Encode(captureResponse{L0Recorded: len(req.Messages)})
+	}))
+	defer server.Close()
+
+	svc, err := NewService(
+		WithGatewayURL(server.URL),
+		WithIngestQueueSize(2),
+		WithIngestJobTimeout(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	defer func() {
+		if err := svc.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+
+	sess := captureReadySession()
+	if err := svc.IngestSession(context.Background(), sess); err != nil {
+		t.Fatalf("first IngestSession: %v", err)
+	}
+	_ = waitCaptureRequest(t, requests, "first capture")
+	reloaded := &session.Session{
+		ID:      sess.ID,
+		AppName: sess.AppName,
+		UserID:  sess.UserID,
+		Events:  sess.GetEvents(),
+		State:   session.StateMap{},
+	}
+	if err := svc.IngestSession(context.Background(), reloaded); err != nil {
+		t.Fatalf("reloaded IngestSession: %v", err)
+	}
+	select {
+	case req := <-requests:
+		t.Fatalf("reloaded session resent captured events: %#v", req)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestInjectRecallContext(t *testing.T) {
 	req := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage("base"),
@@ -1001,9 +1137,12 @@ func TestCaptureAndClientFailurePaths(t *testing.T) {
 	previousFailed := &captureSerialState{done: make(chan struct{}), err: errors.New("previous failed")}
 	close(previousFailed.done)
 	if err := svc.capture(context.Background(), ingestJob{
-		req:      captureRequest{SessionKey: "s"},
-		previous: previousFailed,
-		serial:   &captureSerialState{done: make(chan struct{})},
+		req: captureRequest{SessionKey: "s"},
+		serial: &captureSerialState{
+			sessionKey: "s",
+			previous:   previousFailed,
+			done:       make(chan struct{}),
+		},
 	}); err == nil {
 		t.Fatalf("expected previous capture failure")
 	}
@@ -1011,9 +1150,12 @@ func TestCaptureAndClientFailurePaths(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := svc.capture(ctx, ingestJob{
-		req:      captureRequest{SessionKey: "s"},
-		previous: &captureSerialState{done: make(chan struct{})},
-		serial:   &captureSerialState{done: make(chan struct{})},
+		req: captureRequest{SessionKey: "s"},
+		serial: &captureSerialState{
+			sessionKey: "s",
+			previous:   &captureSerialState{done: make(chan struct{})},
+			done:       make(chan struct{}),
+		},
 	}); err == nil {
 		t.Fatalf("expected context cancellation while waiting for previous capture")
 	}

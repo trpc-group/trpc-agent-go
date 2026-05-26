@@ -38,9 +38,10 @@ type Service struct {
 	wg     sync.WaitGroup
 	once   sync.Once
 
-	cursorMu   sync.Mutex
-	inFlight   map[string]time.Time
-	serialTail map[string]*captureSerialState
+	cursorMu    sync.Mutex
+	inFlight    map[string]time.Time
+	lastCapture map[string]time.Time
+	serialTail  map[string]*captureSerialState
 
 	tools []tool.Tool
 }
@@ -58,11 +59,12 @@ func NewService(opts ...Option) (*Service, error) {
 		return nil, err
 	}
 	s := &Service{
-		opts:       options,
-		client:     client,
-		queue:      make(chan ingestJob, options.IngestQueueSize),
-		inFlight:   make(map[string]time.Time),
-		serialTail: make(map[string]*captureSerialState),
+		opts:        options,
+		client:      client,
+		queue:       make(chan ingestJob, options.IngestQueueSize),
+		inFlight:    make(map[string]time.Time),
+		lastCapture: make(map[string]time.Time),
+		serialTail:  make(map[string]*captureSerialState),
 	}
 	s.tools = s.buildTools()
 	s.startWorkers()
@@ -123,13 +125,24 @@ func (s *Service) EndSession(ctx context.Context, sess *session.Session) error {
 	if err := validateSessionScope(sess); err != nil {
 		return err
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sessionKey := s.sessionKey(sess)
+	barrier := s.reserveSerialBarrier(sessionKey)
+	if err := s.waitForPreviousCapture(ctx, barrier); err != nil {
+		s.finishSerialBarrier(sessionKey, barrier, err)
+		return err
+	}
 	_, err := s.client.endSession(ctx, endSessionRequest{
-		SessionKey: s.sessionKey(sess),
+		SessionKey: sessionKey,
 		UserID:     sess.UserID,
 	})
 	if err == nil {
 		clearBestEffortSyntheticTimestamp(sess)
+		s.clearSessionCheckpoint(sessionKey)
 	}
+	s.finishSerialBarrier(sessionKey, barrier, nil)
 	return err
 }
 
@@ -202,18 +215,9 @@ func (s *Service) capture(ctx context.Context, job ingestJob) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if job.previous != nil {
-		select {
-		case <-job.previous.done:
-			if job.previous.err != nil {
-				err := fmt.Errorf("tencentdb memory: previous capture failed for session_key %q", job.req.SessionKey)
-				s.finishCaptureJob(job, err)
-				return err
-			}
-		case <-ctx.Done():
-			s.finishCaptureJob(job, ctx.Err())
-			return ctx.Err()
-		}
+	if err := s.waitForPreviousCapture(ctx, job.serial); err != nil {
+		s.finishCaptureJob(job, err)
+		return err
 	}
 	_, err := s.client.capture(ctx, job.req)
 	if err != nil {
@@ -231,6 +235,9 @@ func (s *Service) reserveIngestJob(sess *session.Session, sessionKey string) (in
 	defer s.cursorMu.Unlock()
 
 	since := readBestEffortLastCaptureAt(sess)
+	if last, ok := s.lastCapture[sessionKey]; ok && last.After(since) {
+		since = last
+	}
 	if inFlight, ok := s.inFlight[sessionKey]; ok && inFlight.After(since) {
 		since = inFlight
 	}
@@ -252,7 +259,11 @@ func (s *Service) reserveIngestJob(sess *session.Session, sessionKey string) (in
 	)
 	writeBestEffortSyntheticTimestamp(sess, latestSynthetic)
 	previous := s.serialTail[sessionKey]
-	serial := &captureSerialState{done: make(chan struct{})}
+	serial := &captureSerialState{
+		sessionKey: sessionKey,
+		previous:   previous,
+		done:       make(chan struct{}),
+	}
 	s.serialTail[sessionKey] = serial
 	return ingestJob{
 		req: captureRequest{
@@ -263,16 +274,20 @@ func (s *Service) reserveIngestJob(sess *session.Session, sessionKey string) (in
 			UserID:           sess.UserID,
 			Messages:         messages,
 		},
-		sess:     sess,
-		cursor:   scan.Latest,
-		previous: previous,
-		serial:   serial,
+		sess:   sess,
+		cursor: scan.Latest,
+		serial: serial,
 	}, true
 }
 
 func (s *Service) finishCaptureJob(job ingestJob, err error) {
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
+	if err == nil && !job.cursor.IsZero() {
+		if last, ok := s.lastCapture[job.req.SessionKey]; !ok || job.cursor.After(last) {
+			s.lastCapture[job.req.SessionKey] = job.cursor
+		}
+	}
 	if current, ok := s.inFlight[job.req.SessionKey]; ok && !current.After(job.cursor) {
 		delete(s.inFlight, job.req.SessionKey)
 	}
@@ -283,4 +298,47 @@ func (s *Service) finishCaptureJob(job ingestJob, err error) {
 		}
 		close(job.serial.done)
 	}
+}
+
+func (s *Service) reserveSerialBarrier(sessionKey string) *captureSerialState {
+	s.cursorMu.Lock()
+	defer s.cursorMu.Unlock()
+	barrier := &captureSerialState{
+		sessionKey: sessionKey,
+		previous:   s.serialTail[sessionKey],
+		done:       make(chan struct{}),
+	}
+	s.serialTail[sessionKey] = barrier
+	return barrier
+}
+
+func (s *Service) waitForPreviousCapture(ctx context.Context, serial *captureSerialState) error {
+	if serial == nil || serial.previous == nil {
+		return nil
+	}
+	select {
+	case <-serial.previous.done:
+		if serial.previous.err != nil {
+			return fmt.Errorf("tencentdb memory: previous capture failed for session_key %q", serial.sessionKey)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Service) finishSerialBarrier(sessionKey string, barrier *captureSerialState, err error) {
+	s.cursorMu.Lock()
+	defer s.cursorMu.Unlock()
+	barrier.err = err
+	if s.serialTail[sessionKey] == barrier {
+		delete(s.serialTail, sessionKey)
+	}
+	close(barrier.done)
+}
+
+func (s *Service) clearSessionCheckpoint(sessionKey string) {
+	s.cursorMu.Lock()
+	defer s.cursorMu.Unlock()
+	delete(s.lastCapture, sessionKey)
 }
