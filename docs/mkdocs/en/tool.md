@@ -38,6 +38,67 @@ type CallableTool interface {
 
 > For Function Tools, set these via `function.WithName(...)` / `function.WithDescription(...)`. For custom Tools, set `Name` / `Description` on the `tool.Declaration` returned by `Declaration()`.
 
+#### 🛡️ Tool Metadata and Permission Policy
+
+Tool metadata is an optional description of execution behavior. It does not
+change the core `tool.Tool` interface.
+
+Use metadata when a host, policy, or UI needs to understand whether a tool is
+read-only, destructive, concurrency-safe, search/read oriented, open-world, or
+has an advisory result size limit.
+
+```go
+type ToolMetadata struct {
+    ReadOnly        bool
+    Destructive     bool
+    ConcurrencySafe bool
+    SearchOrRead    bool
+    OpenWorld       bool
+    MaxResultSize   int
+}
+
+type MetadataProvider interface {
+    ToolMetadata() tool.ToolMetadata
+}
+```
+
+Permission policy is checked after the model requests a tool and before the
+framework executes it:
+
+```go
+runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolPermissionPolicyFunc(
+        func(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+            if req.Metadata.Destructive {
+                return tool.AskPermission("destructive tools require approval"), nil
+            }
+            return tool.AllowPermission(), nil
+        },
+    ),
+)
+```
+
+Tools can also enforce their own rule by implementing `tool.PermissionChecker`.
+The tool-level checker runs before the per-run policy, and the first non-allow
+decision wins.
+
+Decision behavior:
+
+- `tool.AllowPermission()`: execute the tool.
+- `tool.DenyPermission(reason)`: skip execution and return a structured `denied` tool result to the model.
+- `tool.AskPermission(reason)`: skip execution and return a structured `approval_required` tool result to the model.
+
+If your application has an approval UI, ask the user inside the policy and
+return `tool.AllowPermission()` only after approval. The framework does not
+invent a UI flow for `ask`.
+
+Keep the boundaries clear:
+
+- `agent.WithToolFilter(...)`: controls which tools are visible to the model.
+- `agent.WithToolExecutionFilter(...)`: leaves selected visible tool calls for the caller to execute externally.
+- `agent.WithToolPermissionPolicy(...)`: checks permission for tools the framework is about to execute.
+- Tool callbacks and guardrail plugins still work for authorization, audit, and review workflows. Use the permission policy for simple deterministic allow/deny/ask checks.
+
 #### 📦 ToolSet
 
 A ToolSet is a collection of related tools that implements the `tool.ToolSet` interface. A ToolSet manages the lifecycle of tools, connections, and resource cleanup.

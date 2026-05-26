@@ -1755,6 +1755,20 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	toolDeclaration := tl.Declaration()
+	permissionResult, err := p.checkToolPermission(
+		ctx,
+		invocation,
+		toolCall,
+		tl,
+		toolDeclaration,
+	)
+	if err != nil {
+		return ctx, nil, toolCall.Function.Arguments, false, false, err
+	}
+	if permissionResult != nil {
+		return ctx, *permissionResult, toolCall.Function.Arguments, false,
+			false, nil
+	}
 	ctx, toolCall, customResult, err := p.runBeforeToolPluginCallbacks(
 		ctx,
 		invocation,
@@ -1850,6 +1864,54 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 	return ctx, toolResult, toolCall.Function.Arguments,
 		suppressDefaultToolMessage, skipSummarization || localSkip, toolErr
+}
+
+func (p *FunctionCallResponseProcessor) checkToolPermission(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	tl tool.Tool,
+	decl *tool.Declaration,
+) (*tool.PermissionResult, error) {
+	req := &tool.PermissionRequest{
+		Tool:        tl,
+		ToolName:    toolCall.Function.Name,
+		ToolCallID:  toolCall.ID,
+		Declaration: decl,
+		Arguments:   toolCall.Function.Arguments,
+		Metadata:    tool.MetadataOf(tl),
+	}
+	if checker, ok := tl.(tool.PermissionChecker); ok {
+		decision, err := checker.CheckPermission(ctx, req)
+		result, err := normalizeToolPermissionResult(req, decision, err)
+		if result != nil || err != nil {
+			return result, err
+		}
+	}
+	if invocation == nil || invocation.RunOptions.ToolPermissionPolicy == nil {
+		return nil, nil
+	}
+	decision, err := invocation.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, req)
+	return normalizeToolPermissionResult(req, decision, err)
+}
+
+func normalizeToolPermissionResult(
+	req *tool.PermissionRequest,
+	decision tool.PermissionDecision,
+	checkErr error,
+) (*tool.PermissionResult, error) {
+	if checkErr != nil {
+		return nil, checkErr
+	}
+	decision, err := tool.NormalizePermissionDecision(decision)
+	if err != nil {
+		return nil, err
+	}
+	if decision.Action == tool.PermissionActionAllow {
+		return nil, nil
+	}
+	result := tool.PermissionResultFor(req.ToolName, decision)
+	return &result, nil
 }
 
 func rememberExecutingToolArgs(ctx context.Context, args []byte) {

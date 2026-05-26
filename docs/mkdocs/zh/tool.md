@@ -38,6 +38,59 @@ type CallableTool interface {
 
 > 对于 Function Tool：通过 `function.WithName(...)` / `function.WithDescription(...)` 配置；对于自定义 Tool：在 `Declaration()` 返回的 `tool.Declaration` 中设置 `Name` / `Description`。
 
+#### 🛡️ Tool Metadata 与权限策略
+
+Tool Metadata 是可选的执行行为描述，不改变核心 `tool.Tool` 接口。
+
+当宿主、策略或 UI 需要判断一个工具是否只读、是否具有破坏性、是否可并发、是否主要用于搜索/读取、是否会访问外部世界，或是否声明了建议的结果大小上限时，可以让工具实现 metadata。
+
+```go
+type ToolMetadata struct {
+    ReadOnly        bool
+    Destructive     bool
+    ConcurrencySafe bool
+    SearchOrRead    bool
+    OpenWorld       bool
+    MaxResultSize   int
+}
+
+type MetadataProvider interface {
+    ToolMetadata() tool.ToolMetadata
+}
+```
+
+权限策略发生在模型已经发起 tool call、框架即将真正执行工具之前：
+
+```go
+runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolPermissionPolicyFunc(
+        func(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+            if req.Metadata.Destructive {
+                return tool.AskPermission("destructive tools require approval"), nil
+            }
+            return tool.AllowPermission(), nil
+        },
+    ),
+)
+```
+
+工具也可以实现 `tool.PermissionChecker` 来声明自己的强约束。工具级检查先于本次运行的 policy 执行，遇到第一个非 allow 决策就停止。
+
+决策语义：
+
+- `tool.AllowPermission()`：执行工具。
+- `tool.DenyPermission(reason)`：不执行工具，并向模型返回结构化的 `denied` 工具结果。
+- `tool.AskPermission(reason)`：不执行工具，并向模型返回结构化的 `approval_required` 工具结果。
+
+如果你的应用有真正的审批 UI，请在 policy 内部完成询问，并在用户同意后返回 `tool.AllowPermission()`。框架不会为 `ask` 自行发明一套 UI 交互流程。
+
+几个机制的边界需要区分清楚：
+
+- `agent.WithToolFilter(...)`：控制哪些工具对模型可见。
+- `agent.WithToolExecutionFilter(...)`：让部分已可见的 tool call 留给调用方外部执行。
+- `agent.WithToolPermissionPolicy(...)`：对框架即将执行的工具做权限判断。
+- Tool callbacks 与 guardrail plugins 仍然适合做鉴权、审计、自动审批评估等流程。简单确定性的 allow/deny/ask 判断，优先使用 permission policy。
+
 #### 📦 ToolSet（工具集）
 
 ToolSet 是一组相关工具的集合，实现 `tool.ToolSet` 接口。ToolSet 负责管理工具的生命周期、连接和资源清理。

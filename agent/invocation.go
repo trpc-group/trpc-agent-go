@@ -839,6 +839,29 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
+// WithToolPermissionPolicy sets a per-run policy that is checked immediately
+// before the framework executes a tool call.
+//
+// The policy is intentionally separate from WithToolFilter and
+// WithToolExecutionFilter:
+//   - WithToolFilter controls which tools are visible to the model.
+//   - WithToolExecutionFilter controls whether the framework auto-executes
+//     a visible tool or leaves it to the caller.
+//   - WithToolPermissionPolicy executes a permission check for tools the
+//     framework is about to run.
+//
+// Tools without permission checks keep the legacy allow behavior.
+func WithToolPermissionPolicy(policy tool.PermissionPolicy) RunOption {
+	return func(opts *RunOptions) {
+		opts.ToolPermissionPolicy = policy
+	}
+}
+
+// WithToolPermissionPolicyFunc adapts fn into a per-run tool permission policy.
+func WithToolPermissionPolicyFunc(fn tool.PermissionPolicyFunc) RunOption {
+	return WithToolPermissionPolicy(fn)
+}
+
 func appendRunTools(opts *RunOptions, tools []tool.Tool) {
 	if opts == nil || len(tools) == 0 {
 		return
@@ -1201,6 +1224,16 @@ type RunOptions struct {
 	// assistant tool_call response so the caller can execute the tool
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
+
+	// ToolPermissionPolicy checks whether a tool call may run after the model
+	// has requested it and after the framework has repaired its arguments.
+	//
+	// This policy does not change the visible tool surface. Use ToolFilter for
+	// that. It also does not replace callbacks or guardrail plugins; those still
+	// run around actually executed tools. A deny or ask decision skips tool
+	// execution and returns a structured permission result to the model.
+	ToolPermissionPolicy tool.PermissionPolicy
+
 	// ToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
 	// When nil, JSON repair is disabled by default.
 	ToolCallArgumentsJSONRepairEnabled *bool
