@@ -291,7 +291,7 @@ func TestRuntimeWorkspaceLifecycleAndManifest(t *testing.T) {
 
 	cleaning := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
-		WithSessionPolicy(SessionPolicy{MutatingCommandsSerial: true}),
+		WithSessionPolicy(SessionPolicy{RunConcurrency: SessionRunConcurrencySerial}),
 	)
 	cleanWS, err := cleaning.CreateWorkspace(context.Background(), "cleanup", codeexecutor.WorkspacePolicy{})
 	if err != nil {

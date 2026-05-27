@@ -34,7 +34,7 @@ func (r *Runtime) RunProgram(
 	}
 	runCtx, cancel := context.WithTimeout(ctx, prep.timeout)
 	defer cancel()
-	if r.sessionPolicy.MutatingCommandsSerial {
+	if r.sessionPolicy.RunConcurrency == SessionRunConcurrencySerial {
 		lock := r.runLock(ws)
 		lock.Lock()
 		defer lock.Unlock()

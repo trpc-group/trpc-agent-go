@@ -112,8 +112,8 @@ func normalizeProfile(profile PermissionProfile) PermissionProfile {
 
 func defaultSessionPolicy() SessionPolicy {
 	return SessionPolicy{
-		PersistFilesAcrossTurns: true,
-		MutatingCommandsSerial:  true,
+		Persistence:    SessionPersistencePerSession,
+		RunConcurrency: SessionRunConcurrencySerial,
 	}
 }
 

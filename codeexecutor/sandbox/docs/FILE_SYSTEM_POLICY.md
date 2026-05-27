@@ -161,16 +161,17 @@ host path.
 ### Turn Visibility
 
 Turns in the same session reuse the same workspace path. By default,
-`SessionPolicy.PersistFilesAcrossTurns` is enabled, so files created or modified
-by one turn remain visible to later turns in the same session.
+`SessionPolicy.Persistence` is `SessionPersistencePerSession`, so workspace
+state created or modified by one turn remains visible to later turns in the same
+session.
 
-`SessionPolicy.MutatingCommandsSerial` is also enabled by default. Program runs
-for the same workspace are serialized so concurrent mutating commands do not
+`SessionPolicy.RunConcurrency` is also `SessionRunConcurrencySerial` by default.
+Program runs for the same workspace are serialized so concurrent commands do not
 race against the same session file tree.
 
 Callers can disable persistence with `WithSessionPolicy`. When
-`PersistFilesAcrossTurns` is false, `Cleanup` removes the workspace directory
-instead of keeping it for the next turn.
+`Persistence` is `SessionPersistencePerTurn`, `Cleanup` removes the workspace
+directory instead of keeping it for the next turn.
 
 ### Lifecycle
 

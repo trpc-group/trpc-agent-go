@@ -568,18 +568,18 @@ func TestSessionPersistenceAndIsolation(t *testing.T) {
 
 func TestSessionPolicyDefaultsAndExplicitZero(t *testing.T) {
 	defaultRuntime := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	if !defaultRuntime.sessionPolicy.PersistFilesAcrossTurns ||
-		!defaultRuntime.sessionPolicy.MutatingCommandsSerial {
-		t.Fatalf("default session policy = %#v, want true/true", defaultRuntime.sessionPolicy)
+	if defaultRuntime.sessionPolicy.Persistence != SessionPersistencePerSession ||
+		defaultRuntime.sessionPolicy.RunConcurrency != SessionRunConcurrencySerial {
+		t.Fatalf("default session policy = %#v, want per-session/serial", defaultRuntime.sessionPolicy)
 	}
 
 	explicitZero := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
 		WithSessionPolicy(SessionPolicy{}),
 	)
-	if explicitZero.sessionPolicy.PersistFilesAcrossTurns ||
-		explicitZero.sessionPolicy.MutatingCommandsSerial {
-		t.Fatalf("explicit zero session policy = %#v, want false/false", explicitZero.sessionPolicy)
+	if explicitZero.sessionPolicy.Persistence != SessionPersistencePerTurn ||
+		explicitZero.sessionPolicy.RunConcurrency != SessionRunConcurrencyParallel {
+		t.Fatalf("explicit zero session policy = %#v, want per-turn/parallel", explicitZero.sessionPolicy)
 	}
 	ws, err := explicitZero.CreateWorkspace(context.Background(), "explicit-zero", codeexecutor.WorkspacePolicy{})
 	if err != nil {
@@ -594,11 +594,11 @@ func TestSessionPolicyDefaultsAndExplicitZero(t *testing.T) {
 
 	serialOnly := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
-		WithSessionPolicy(SessionPolicy{MutatingCommandsSerial: true}),
+		WithSessionPolicy(SessionPolicy{RunConcurrency: SessionRunConcurrencySerial}),
 	)
-	if serialOnly.sessionPolicy.PersistFilesAcrossTurns ||
-		!serialOnly.sessionPolicy.MutatingCommandsSerial {
-		t.Fatalf("serial-only session policy = %#v, want false/true", serialOnly.sessionPolicy)
+	if serialOnly.sessionPolicy.Persistence != SessionPersistencePerTurn ||
+		serialOnly.sessionPolicy.RunConcurrency != SessionRunConcurrencySerial {
+		t.Fatalf("serial-only session policy = %#v, want per-turn/serial", serialOnly.sessionPolicy)
 	}
 }
 

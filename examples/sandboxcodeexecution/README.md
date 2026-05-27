@@ -105,7 +105,7 @@ clear message. The example never reads or prints key contents.
 - `session-workspace-id-sanitization`: verifies distinct session IDs that
   sanitize similarly, such as `user:a` and `user_a`, remain isolated.
 - `session-policy-explicit-zero`: uses a real LLMAgent to call a deterministic
-  probe that verifies `SessionPolicy{}` preserves explicit `false/false`
+  probe that verifies `SessionPolicy{}` preserves explicit per-turn/parallel
   semantics and cleans up the workspace.
 
 ## Flags

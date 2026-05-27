@@ -141,11 +141,11 @@ func (r *Runtime) CreateWorkspace(
 	return ws, nil
 }
 
-// Cleanup releases workspace resources. Persistent sandbox sessions keep files
+// Cleanup releases workspace resources. Session-persistent workspaces keep files
 // by default so later turns in the same session can observe prior file changes.
 func (r *Runtime) Cleanup(ctx context.Context, ws codeexecutor.Workspace) error {
 	_ = ctx
-	if r.sessionPolicy.PersistFilesAcrossTurns {
+	if r.sessionPolicy.Persistence == SessionPersistencePerSession {
 		return nil
 	}
 	if ws.Path == "" {

@@ -9,8 +9,32 @@
 
 package sandbox
 
+// SessionPersistenceMode controls how long sandbox workspace state is reused.
+type SessionPersistenceMode int
+
+const (
+	// SessionPersistencePerTurn removes the workspace during cleanup so later
+	// turns do not observe files written through the session workspace.
+	SessionPersistencePerTurn SessionPersistenceMode = iota
+	// SessionPersistencePerSession reuses one deterministic workspace for all
+	// turns in the same session.
+	SessionPersistencePerSession
+)
+
+// SessionRunConcurrencyMode controls how program runs sharing one session
+// workspace are scheduled.
+type SessionRunConcurrencyMode int
+
+const (
+	// SessionRunConcurrencyParallel allows runs sharing a workspace to execute
+	// concurrently. Callers are responsible for avoiding file races.
+	SessionRunConcurrencyParallel SessionRunConcurrencyMode = iota
+	// SessionRunConcurrencySerial runs one program at a time per workspace.
+	SessionRunConcurrencySerial
+)
+
 // SessionPolicy controls sandbox session lifecycle.
 type SessionPolicy struct {
-	PersistFilesAcrossTurns bool
-	MutatingCommandsSerial  bool
+	Persistence    SessionPersistenceMode
+	RunConcurrency SessionRunConcurrencyMode
 }
