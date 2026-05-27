@@ -82,6 +82,8 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.False(t, opts.ToolCallDeltaStreamingEnabled)
 	assert.False(t, opts.StreamingToolResultActivityEnabled)
 	assert.False(t, opts.MessagesSnapshotRunLifecycleEventsEnabled)
+	assert.False(t, opts.DistributedCancelEnabled)
+	assert.Equal(t, time.Second, opts.DistributedCancelPollInterval)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -285,6 +287,16 @@ func TestWithTimeout(t *testing.T) {
 func TestWithCancelOnContextDoneEnabled(t *testing.T) {
 	opts := NewOptions(WithCancelOnContextDoneEnabled(true))
 	assert.True(t, opts.CancelOnContextDoneEnabled)
+}
+
+func TestWithDistributedCancelEnabled(t *testing.T) {
+	opts := NewOptions(WithDistributedCancelEnabled(true))
+	assert.True(t, opts.DistributedCancelEnabled)
+}
+
+func TestWithDistributedCancelPollInterval(t *testing.T) {
+	opts := NewOptions(WithDistributedCancelPollInterval(2 * time.Second))
+	assert.Equal(t, 2*time.Second, opts.DistributedCancelPollInterval)
 }
 
 func TestWithMessagesSnapshotFollowEnabled(t *testing.T) {
