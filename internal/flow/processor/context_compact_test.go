@@ -535,7 +535,9 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 
 	baseline, baselineOK := compactedCurrentInvocationMessage(
 		msg,
-		ContextCompactionConfig{},
+		ContextCompactionConfig{
+			ToolResultMaxTokens: 10,
+		},
 	)
 	require.True(t, baselineOK)
 	require.Equal(t, compactedToolResultPlaceholder, baseline.Content)
@@ -543,6 +545,7 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 	compacted, ok := compactedCurrentInvocationMessage(
 		msg,
 		ContextCompactionConfig{
+			ToolResultMaxTokens: 10,
 			toolResultCompactionRules: toolResultCompactionRules{
 				keepToolNames: toolNameSet([]string{"session_load"}),
 			},
