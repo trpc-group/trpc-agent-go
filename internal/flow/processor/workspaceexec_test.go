@@ -168,6 +168,23 @@ func TestWorkspaceExecRequestProcessor_NoDuplicateLegacyGuidance(t *testing.T) {
 	require.NotContains(t, req.Messages[0].Content, workspaceExecGuidanceHeader)
 }
 
+func TestWorkspaceExecRequestProcessor_NoDuplicateGuidanceWhenHeaderMentionedInline(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor()
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("Existing " + workspaceExecGuidanceHeader + " text."),
+	}}
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{AgentName: "tester"},
+		req,
+		nil,
+	)
+	require.Len(t, req.Messages, 1)
+	require.NotContains(t, req.Messages[0].Content, "shell command tool")
+}
+
 func TestWorkspaceExecRequestProcessor_ProcessRequest_UsesSkillsRepoResolver(
 	t *testing.T,
 ) {
@@ -179,14 +196,12 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_UsesSkillsRepoResolver(
 		),
 	)
 	req := &model.Request{}
-
 	p.ProcessRequest(
 		context.Background(),
 		&agent.Invocation{AgentName: "tester"},
 		req,
 		nil,
 	)
-
 	require.NotEmpty(t, req.Messages)
 	require.Contains(
 		t,
@@ -207,14 +222,12 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_ResolverCanDisableSkillsGu
 		),
 	)
 	req := &model.Request{}
-
 	p.ProcessRequest(
 		context.Background(),
 		&agent.Invocation{AgentName: "tester"},
 		req,
 		nil,
 	)
-
 	require.NotEmpty(t, req.Messages)
 	require.NotContains(
 		t,
@@ -242,6 +255,118 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_DisabledByResolver(
 		nil,
 	)
 
+	require.Empty(t, req.Messages)
+}
+
+func TestWorkspaceExecRequestProcessor_ProcessRequest_GuidanceOverride(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor()
+	req := &model.Request{}
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{
+			AgentName: "tester",
+			RunOptions: agent.RunOptions{
+				WorkspaceExecGuidance: "Use workspace_exec sparingly.",
+			},
+		},
+		req,
+		nil,
+	)
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, workspaceExecGuidanceHeader)
+	require.Contains(t, sys, "Use workspace_exec sparingly.")
+	require.NotContains(t, sys, "shell command tool for the current workspace")
+}
+
+func TestWorkspaceExecRequestProcessor_ProcessRequest_GuidanceOverrideWithHeader(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor()
+	req := &model.Request{}
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{
+			AgentName: "tester",
+			RunOptions: agent.RunOptions{
+				WorkspaceExecGuidance: workspaceExecGuidanceHeader + "\ncustom",
+			},
+		},
+		req,
+		nil,
+	)
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Equal(t, 1, strings.Count(sys, workspaceExecGuidanceHeader))
+	require.Contains(t, sys, "custom")
+}
+
+func TestWorkspaceExecRequestProcessor_ProcessRequest_GuidanceOverrideAddsHeaderWhenMentionedInBody(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor()
+	req := &model.Request{}
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{
+			AgentName: "tester",
+			RunOptions: agent.RunOptions{
+				WorkspaceExecGuidance: "- mention Workspace shell guidance: in prose",
+			},
+		},
+		req,
+		nil,
+	)
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.True(t, strings.HasPrefix(sys, workspaceExecGuidanceHeader+"\n"))
+	require.Contains(t, sys, "mention Workspace shell guidance: in prose")
+}
+
+func TestWorkspaceExecRequestProcessor_ProcessRequest_GuidanceOverrideEmptyUsesDefault(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor()
+	req := &model.Request{}
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{
+			AgentName: "tester",
+			RunOptions: agent.RunOptions{
+				WorkspaceExecGuidance: "  \n",
+			},
+		},
+		req,
+		nil,
+	)
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, workspaceExecGuidanceHeader)
+	require.Contains(t, sys, "shell command tool for the current workspace")
+}
+
+func TestWorkspaceExecRequestProcessor_ProcessRequest_GuidanceOverrideDisabled(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor(
+		WithWorkspaceExecEnabledResolver(func(*agent.Invocation) bool {
+			return false
+		}),
+	)
+	req := &model.Request{}
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{
+			AgentName: "tester",
+			RunOptions: agent.RunOptions{
+				WorkspaceExecGuidance: "Use workspace_exec.",
+			},
+		},
+		req,
+		nil,
+	)
 	require.Empty(t, req.Messages)
 }
 
