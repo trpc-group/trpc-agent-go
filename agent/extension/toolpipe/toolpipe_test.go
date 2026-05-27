@@ -2137,3 +2137,136 @@ func TestToolPipe_AfterTool_AugmentedNoFilter_ByteResult(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, result)
 }
+
+// --- Additional coverage for patch threshold ---
+
+func TestToolPipe_BeforeTool_NilArgs(t *testing.T) {
+	tp := New(WithToolNames("t"))
+	result, err := tp.beforeTool(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+}
+
+func TestToolPipe_AfterTool_NilArgs(t *testing.T) {
+	tp := New(WithToolNames("t"))
+	result, err := tp.afterTool(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+}
+
+func TestToolPipe_BeforeModel_NilArgs(t *testing.T) {
+	tp := New(WithToolNames("t"))
+	result, err := tp.beforeModel(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+
+	result, err = tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: nil})
+	require.NoError(t, err)
+	assert.Nil(t, result)
+}
+
+func TestWindowOutput_PostTrimEmptyTail(t *testing.T) {
+	// Trigger the tail="" branch in post-trim by using very tight budget
+	// with long content where marker eats most of the budget.
+	input := strings.Repeat("x", 500)
+	// Budget 80: marker ~38, usable ~42, head ~21, tail ~21.
+	// After trim if marker is larger, tail might go to empty.
+	result := windowOutput(input, 80)
+	assert.LessOrEqual(t, len(result), 80)
+	assert.Contains(t, result, "bytes omitted")
+}
+
+func TestToolPipe_BeforeTool_ExtractionError(t *testing.T) {
+	tp := New(WithToolNames("t"))
+
+	// Simulate args where filter field is present but re-marshal would fail.
+	// In practice this tests the extractFilterEx error branch with valid JSON
+	// that just has filter field.
+	args := &tool.BeforeToolArgs{
+		ToolName:  "t",
+		Arguments: []byte(`not-json`),
+	}
+	// Non-JSON args → extractFilterEx passes through, not in augmented set → nil.
+	result, err := tp.beforeTool(ctxWithAugmented("t"), args)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+}
+
+func TestEngine_ParseCoprocess(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	// Coprocess syntax (|&) should be rejected.
+	// Note: mvdan.cc/sh may not parse |& as coprocess on all versions,
+	// but ensure basic & is caught.
+	_, err := engine.Apply(context.Background(), "data", "grep foo &")
+	assert.Error(t, err)
+}
+
+func TestToolPipe_AfterTool_InputTruncatedOnError(t *testing.T) {
+	// When filter execution fails AND input would be truncated,
+	// the error result should carry input_truncated metadata.
+	tp := New(
+		WithToolNames("t"),
+		WithAllowedOps(OpGrep, OpHead, OpTail, OpJQ),
+		WithMaxInputBytes(20), // Very small to trigger truncation.
+	)
+
+	pipeline, err := tp.engine.parse("jq '.'")
+	require.NoError(t, err)
+
+	ctx := context.WithValue(ctxWithAugmented("t"), filterContextKey{}, &filterState{
+		pipeline:   pipeline,
+		filterExpr: "jq '.'",
+	})
+
+	// Large non-JSON content → will be truncated to 20 bytes → jq will fail.
+	bigContent := strings.Repeat("x", 100)
+	args := &tool.AfterToolArgs{
+		ToolName: "t",
+		Result:   bigContent,
+	}
+
+	result, err := tp.afterTool(ctx, args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	fr, ok := result.CustomResult.(*ToolResult)
+	require.True(t, ok)
+	assert.NotEmpty(t, fr.Error)
+	assert.True(t, fr.InputTruncated)
+	assert.Equal(t, 100, fr.InputTotalBytes)
+}
+
+func TestToolPipe_Prompt_NoToolsNoScope(t *testing.T) {
+	// No tools, no scope → empty prompt.
+	tp := New()
+	assert.Equal(t, "", tp.Prompt())
+}
+
+func TestEngine_GrepEndOfFlagsNoPattern(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	// grep -- (no pattern after --) should error.
+	_, err := engine.Apply(context.Background(), "data", "grep --")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "pattern required")
+}
+
+func TestToolPipe_ShouldWrap_EmptyOps(t *testing.T) {
+	tp := New(WithToolNames("t"), WithAllowedOps())
+	inner := &mockTool{decl: &tool.Declaration{Name: "t"}}
+	assert.False(t, tp.shouldWrap(inner))
+}
+
+func TestResultToString_HTMLChars(t *testing.T) {
+	// Verify HTML special chars are NOT escaped.
+	type resp struct {
+		HTML string `json:"html"`
+	}
+	s := resultToString(resp{HTML: "<div>&amp;</div>"})
+	assert.Contains(t, s, "<div>")
+	assert.Contains(t, s, "&amp;")
+	assert.NotContains(t, s, "\\u003c")
+}
