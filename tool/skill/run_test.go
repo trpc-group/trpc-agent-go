@@ -5059,6 +5059,21 @@ func TestRunTool_runProgram_DefaultTimeout(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1*time.Second, rr.last.Timeout)
+
+	rr.last = codeexecutor.RunProgramSpec{}
+	rt = &RunTool{}
+	rt.setAllowedCommands([]string{"echo"})
+	_, err = rt.runProgram(
+		context.Background(),
+		eng,
+		ws,
+		defaultWorkspaceSkillDir(testSkillName),
+		".",
+		runInput{Skill: testSkillName, Command: echoOK},
+	)
+	require.NoError(t, err)
+	require.True(t, rr.last.CleanEnv,
+		"skill_run policy mode should not inherit host env")
 }
 
 // dummyExec implements CodeExecutor but not EngineProvider to cover
