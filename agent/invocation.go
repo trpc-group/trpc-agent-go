@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -213,6 +214,19 @@ type RunOption func(*RunOptions)
 // called concurrently by different runs and must protect any shared state it
 // owns.
 type ModelSelector func(ctx context.Context, inv *Invocation) (model.Model, error)
+
+// AvailableSkillsRenderRequest contains inputs for rendering the request-scoped
+// Available skills section.
+type AvailableSkillsRenderRequest struct {
+	// Summaries are the skills visible to the current request.
+	Summaries []skill.Summary
+}
+
+// AvailableSkillsRenderer renders the request-scoped Available skills section.
+type AvailableSkillsRenderer func(
+	ctx context.Context,
+	req AvailableSkillsRenderRequest,
+) string
 
 type runControlConfig struct {
 	DisableGraphCompletionEvent bool
@@ -703,6 +717,24 @@ func WithGlobalInstruction(instruction string) RunOption {
 	}
 }
 
+// WithWorkspaceExecGuidance sets request-scoped workspace_exec guidance.
+// Empty guidance leaves the built-in default guidance in use.
+func WithWorkspaceExecGuidance(guidance string) RunOption {
+	return func(opts *RunOptions) {
+		opts.WorkspaceExecGuidance = guidance
+	}
+}
+
+// WithAvailableSkillsRenderer sets a request-scoped renderer for the
+// Available skills section.
+//
+// Returning a blank string omits the Available skills section.
+func WithAvailableSkillsRenderer(renderer AvailableSkillsRenderer) RunOption {
+	return func(opts *RunOptions) {
+		opts.AvailableSkillsRenderer = renderer
+	}
+}
+
 // WithStructuredOutputJSONSchema sets a JSON schema structured output for this run.
 func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict bool, description string) RunOption {
 	return func(opts *RunOptions) {
@@ -1142,6 +1174,14 @@ type RunOptions struct {
 	// If set, it temporarily overrides the agent's global instruction for
 	// this request only.
 	GlobalInstruction string
+
+	// WorkspaceExecGuidance overrides workspace_exec guidance for this run.
+	// If empty, the built-in guidance is used.
+	WorkspaceExecGuidance string
+	// AvailableSkillsRenderer renders the Available skills section for this run.
+	// If nil, the built-in renderer is used. If it returns blank text, the section
+	// is omitted.
+	AvailableSkillsRenderer AvailableSkillsRenderer
 
 	// StructuredOutput defines how the model should produce structured output for this run.
 	StructuredOutput *model.StructuredOutput

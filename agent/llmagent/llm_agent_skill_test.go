@@ -1546,6 +1546,79 @@ func TestLLMAgent_WithSkills_InsertsOverview(t *testing.T) {
 	require.Contains(t, sys, "echoer")
 }
 
+func TestLLMAgent_RunAvailableSkillsRenderer_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	m := &captureModel{}
+	agt := New("tester", WithModel(m), WithSkills(repo))
+	gotSummaries := make(chan []skill.Summary, 1)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithAvailableSkillsRenderer(
+				func(
+					_ context.Context,
+					req agent.AvailableSkillsRenderRequest,
+				) string {
+					gotSummaries <- append([]skill.Summary(nil), req.Summaries...)
+					return "- echoer: compact"
+				},
+			),
+		)),
+	)
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	ctx := context.Background()
+	for evt := range ch {
+		if evt != nil && evt.RequiresCompletion {
+			key := agent.GetAppendEventNoticeKey(evt.ID)
+			_ = inv.AddNoticeChannel(ctx, key)
+			_ = inv.NotifyCompletion(ctx, key)
+		}
+	}
+	require.NotNil(t, m.got)
+	sys := findSystemMessageContaining(m.got, skillsOverviewHeader)
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "- echoer: compact")
+	require.NotContains(t, sys, "simple echo skill")
+	require.Len(t, gotSummaries, 1)
+	require.Equal(t, "echoer", (<-gotSummaries)[0].Name)
+}
+
+func TestLLMAgent_RunWorkspaceExecGuidance_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	m := &captureModel{}
+	agt := New("tester", WithModel(m), WithSkills(repo))
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithWorkspaceExecGuidance(
+				"Workspace shell guidance:\n- Compact workspace guidance.",
+			),
+		)),
+	)
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	ctx := context.Background()
+	for evt := range ch {
+		if evt != nil && evt.RequiresCompletion {
+			key := agent.GetAppendEventNoticeKey(evt.ID)
+			_ = inv.AddNoticeChannel(ctx, key)
+			_ = inv.NotifyCompletion(ctx, key)
+		}
+	}
+	require.NotNil(t, m.got)
+	sys := findSystemMessageContaining(m.got, workspaceExecGuidanceHeader)
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "Compact workspace guidance.")
+	require.NotContains(t, sys, "shell command tool for the current workspace")
+}
+
 func TestLLMAgent_WithSkillFilter_FiltersPromptAndDeclaration(t *testing.T) {
 	root1 := createNamedTestSkill(t, "alpha", "alpha skill")
 	root2 := createNamedTestSkill(t, "beta", "beta skill")

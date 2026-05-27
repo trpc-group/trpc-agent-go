@@ -1069,6 +1069,65 @@ their tokens via AG-UI `state` or HTTP headers; the provider reads
 them from the request context and injects them into the executor
 transparently — the LLM never sees the credentials.
 
+## Request-scoped Prompt Section Overrides
+
+For the small number of requests that need a shorter or custom system
+message, pass run options to `runner.Run(...)` to override the skill
+overview or `workspace_exec` guidance for that request:
+
+- `agent.WithAvailableSkillsRenderer(...)` customizes the
+  `Available skills:` overview. The renderer receives the
+  `skill.Summary` list visible to the current request; skill filters,
+  context-aware repositories, and other visibility rules have already
+  been applied. Use it to compact descriptions, change formatting, or
+  add request-specific selection constraints. If the returned text does
+  not start with `Available skills:`, the framework adds the header
+  automatically. Returning a blank string omits the `Available skills:`
+  section for that request.
+- `agent.WithWorkspaceExecGuidance(...)` customizes the `workspace_exec`
+  guidance. Passing an empty string means no override; the built-in
+  default guidance remains in use.
+
+```go
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Run the release checklist skill."),
+    agent.WithAvailableSkillsRenderer(func(
+        ctx context.Context,
+        req agent.AvailableSkillsRenderRequest,
+    ) string {
+        if len(req.Summaries) == 0 {
+            return ""
+        }
+        var b strings.Builder
+        b.WriteString("Only call skill_load when a listed skill is directly relevant.\n")
+        for _, s := range req.Summaries {
+            b.WriteString("- ")
+            b.WriteString(s.Name)
+            if desc := strings.TrimSpace(s.Description); desc != "" {
+                b.WriteString(": ")
+                b.WriteString(desc)
+            }
+            b.WriteString("\n")
+        }
+        return b.String()
+    }),
+    agent.WithWorkspaceExecGuidance(
+        "Use workspace_exec only when shell execution is required.",
+    ),
+)
+```
+
+`WithAvailableSkillsRenderer` only changes the overview text. It does
+not change which skill tools are available, and it does not replace
+`skill_load` for loading skill bodies and docs on demand.
+`WithWorkspaceExecGuidance` only changes prompt text; it does not
+disable `workspace_exec`. To hide execution capability from the model,
+disable the workspace execution surface when creating the Agent, for
+example with `llmagent.WithWorkspaceExecSurfaceEnabled(false)`.
+
 ## Troubleshooting
 
 - Unknown skill: verify name and repository path; ensure the overview
