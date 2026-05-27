@@ -21,6 +21,7 @@ nav:
       - Code Executor: codeexecutor.md
       - Error Handling: error-handling.md
       - Model: model.md
+      - Prompt Template: prompt.md
       - Callbacks: callbacks.md
       - Plugins: plugin.md
       - Memory: memory.md
@@ -104,6 +105,7 @@ plugins:
                 - Code Executor: codeexecutor.md
                 - 错误处理: error-handling.md
                 - Model: model.md
+                - Prompt Template: prompt.md
                 - Callbacks: callbacks.md
                 - Plugins: plugin.md
                 - Memory: memory.md
