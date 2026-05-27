@@ -380,6 +380,62 @@ func TestBackwardStructuredOutputSchema_EmptyCollectionsStillDeclareItems(t *tes
 	assert.Contains(t, upstreamSchema, "items")
 }
 
+func TestBackwardStructuredOutputSchema_EmptyAllowedGradientSurfaceIDsStayEmpty(t *testing.T) {
+	request := newInstructionRequest()
+	request.AllowedGradientSurfaceIDs = []string{}
+
+	schema := backwardResultSchema(request)
+	schemaProps, ok := schema["properties"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	gradientsSchema, ok := schemaProps["Gradients"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.Equal(t, 0, gradientsSchema["maxItems"])
+	gradientItem, ok := gradientsSchema["items"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	gradientProps, ok := gradientItem["properties"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	gradientSurfaceIDSchema, ok := gradientProps["SurfaceID"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.Equal(t, []string{}, gradientSurfaceIDSchema["enum"])
+	upstreamSchema, ok := schemaProps["Upstream"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.Equal(t, 1, upstreamSchema["minItems"])
+	upstreamItem, ok := upstreamSchema["items"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	upstreamProps, ok := upstreamItem["properties"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	upstreamGradientsSchema, ok := upstreamProps["Gradients"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.Equal(t, 1, upstreamGradientsSchema["minItems"])
+}
+
 func TestBackwardAllowsEmptyResultForRootControlStep(t *testing.T) {
 	r := &fakeRunner{
 		events: []*event.Event{
@@ -1167,6 +1223,10 @@ func TestRequestHelpersHandleNilAndDeduplicate(t *testing.T) {
 	assert.Equal(t, []string{"surf_1", "surf_2"}, requestSurfaceIDs(request))
 	assert.Equal(t, []string{"surf_1", "surf_2"}, requestAllowedGradientSurfaceIDs(request))
 	assert.Equal(t, []string{"pred_1", "pred_2"}, requestPredecessorStepIDs(request))
+	request.AllowedGradientSurfaceIDs = []string{}
+	restrictedSurfaceIDs := requestAllowedGradientSurfaceIDs(request)
+	assert.NotNil(t, restrictedSurfaceIDs)
+	assert.Empty(t, restrictedSurfaceIDs)
 }
 
 func newInstructionRequest() *Request {
