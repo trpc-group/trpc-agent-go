@@ -19,7 +19,9 @@ import (
 )
 
 // SQL templates for table creation (ClickHouse syntax)
-// Using ReplacingMergeTree with updated_at as version column for deduplication.
+// Most tables use updated_at as the ReplacingMergeTree version column. Session
+// summaries keep updated_at as the semantic summary cutoff and use version_at
+// only for replacement ordering.
 // Partition by (app_name, cityHash64(user_id) % 64) for user-centric query optimization.
 // CRITICAL: deleted_at is NOT included in ORDER BY to allow ReplacingMergeTree to collapse deleted records.
 const (
@@ -65,9 +67,10 @@ const (
 			summary     JSON,
 			created_at  DateTime64(6),
 			updated_at  DateTime64(6),
+			version_at  DateTime64(9),
 			expires_at  Nullable(DateTime64(6)),
 			deleted_at  Nullable(DateTime64(6))
-		) ENGINE = ReplacingMergeTree(updated_at)
+		) ENGINE = ReplacingMergeTree(version_at)
 		PARTITION BY (app_name, cityHash64(user_id) % 64)
 		ORDER BY (app_name, user_id, session_id, filter_key)
 		SETTINGS allow_nullable_key = 1`

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -60,27 +61,136 @@ func (s *Service) CreateSessionSummary(
 	if err != nil {
 		return fmt.Errorf("marshal summary failed: %w", err)
 	}
+	stale, err := s.summaryWriteIsStale(
+		ctx,
+		key,
+		filterKey,
+		sess.CreatedAt,
+		summary,
+		sess.Events,
+	)
+	if err != nil {
+		return fmt.Errorf("check existing summary failed: %w", err)
+	}
+	if stale {
+		return nil
+	}
 
 	// Note: expires_at is set to NULL - summaries are bound to session
 	// lifecycle and will be deleted when session is deleted or expires.
-	now := time.Now()
-	// Summary.UpdatedAt stores the event cutoff. Use a separate write timestamp
-	// for ReplacingMergeTree's version column so same-timestamp event cutoffs
-	// that only advance by Boundary.LastEventID still replace deterministically.
-	writeVersion := now
-	if !summary.UpdatedAt.IsZero() && !writeVersion.After(summary.UpdatedAt) {
-		writeVersion = summary.UpdatedAt.Add(time.Nanosecond)
-	}
+	now := time.Now().UTC()
+	updatedAt := summaryUpdatedAt(summary, now)
 	err = s.chClient.Exec(ctx,
-		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, expires_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), now, writeVersion, nil)
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, version_at, expires_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionSummaries),
+		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), now, updatedAt, now, nil)
 
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)
 	}
 
 	return nil
+}
+
+func summaryUpdatedAt(summary *session.Summary, fallback time.Time) time.Time {
+	if summary == nil {
+		return fallback.UTC()
+	}
+	if cutoff := summary.CutoffTime(); !cutoff.IsZero() {
+		return cutoff.UTC()
+	}
+	return fallback.UTC()
+}
+
+func (s *Service) summaryWriteIsStale(
+	ctx context.Context,
+	key session.Key,
+	filterKey string,
+	sessionCreatedAt time.Time,
+	next *session.Summary,
+	events []event.Event,
+) (bool, error) {
+	current, err := s.getPersistedSummary(ctx, key, filterKey, sessionCreatedAt)
+	if err != nil || current == nil {
+		return false, err
+	}
+	return summaryBoundaryBefore(next, current, events), nil
+}
+
+func (s *Service) getPersistedSummary(
+	ctx context.Context,
+	key session.Key,
+	filterKey string,
+	sessionCreatedAt time.Time,
+) (*session.Summary, error) {
+	rows, err := s.chClient.Query(ctx,
+		fmt.Sprintf(`SELECT summary FROM %s FINAL
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
+			AND updated_at >= ?
+			AND (expires_at IS NULL OR expires_at > ?)
+			AND deleted_at IS NULL`, s.tableSessionSummaries),
+		key.AppName, key.UserID, key.SessionID, filterKey, sessionCreatedAt, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return nil, nil
+	}
+	var summaryBytes []byte
+	if err := rows.Scan(&summaryBytes); err != nil {
+		return nil, err
+	}
+	var sum session.Summary
+	if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+		return nil, err
+	}
+	return &sum, nil
+}
+
+func summaryBoundaryBefore(
+	next *session.Summary,
+	current *session.Summary,
+	events []event.Event,
+) bool {
+	if next == nil || current == nil {
+		return false
+	}
+	nextBoundary := next.CutoffBoundary()
+	currentBoundary := current.CutoffBoundary()
+	if nextBoundary == nil || currentBoundary == nil {
+		return false
+	}
+	nextCutoff := nextBoundary.CutoffTime()
+	currentCutoff := currentBoundary.CutoffTime()
+	if nextCutoff.IsZero() || currentCutoff.IsZero() {
+		return false
+	}
+	if nextCutoff.Before(currentCutoff) {
+		return true
+	}
+	if nextCutoff.After(currentCutoff) {
+		return false
+	}
+	nextIndex, nextOK := summaryBoundaryEventIndex(events, nextBoundary)
+	currentIndex, currentOK := summaryBoundaryEventIndex(events, currentBoundary)
+	return nextOK && currentOK && nextIndex < currentIndex
+}
+
+func summaryBoundaryEventIndex(
+	events []event.Event,
+	boundary *session.SummaryBoundary,
+) (int, bool) {
+	if boundary == nil || boundary.LastEventID == "" {
+		return 0, false
+	}
+	for i := range events {
+		if events[i].ID == boundary.LastEventID {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
