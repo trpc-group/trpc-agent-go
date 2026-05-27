@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -1564,13 +1565,14 @@ func TestToolPipe_Name(t *testing.T) {
 }
 
 func TestToolPipe_Register(t *testing.T) {
-	// Just verify it doesn't panic. Full callback testing is in other tests.
 	tp := New(WithToolNames("t"))
-	assert.NotPanics(t, func() {
-		// We can't easily call Register without a real Registry,
-		// but we can verify the method exists.
-		_ = tp.Name()
-	})
+
+	// Use extension.Collect which calls Register internally.
+	contrib, err := extension.Collect([]extension.Extension{tp})
+	require.NoError(t, err)
+	require.NotNil(t, contrib)
+	// Verify callbacks were registered (non-empty contributions).
+	assert.False(t, contrib.IsEmpty())
 }
 
 func TestToolPipe_Prompt_WithNames(t *testing.T) {
@@ -1711,7 +1713,8 @@ func TestToolPipe_AfterTool_ToolError(t *testing.T) {
 func TestToolPipe_AfterTool_FilterEmpty(t *testing.T) {
 	tp := New(WithToolNames("test_tool"))
 
-	pipeline, _ := tp.engine.parse("grep NOTFOUND")
+	pipeline, err := tp.engine.parse("grep NOTFOUND")
+	require.NoError(t, err)
 	ctx := context.WithValue(ctxWithAugmented("test_tool"), filterContextKey{}, &filterState{
 		pipeline:   pipeline,
 		filterExpr: "grep NOTFOUND",
