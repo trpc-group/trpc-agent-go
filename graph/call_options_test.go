@@ -38,6 +38,7 @@ const (
 	callOptsTestStopA      = "A"
 	callOptsTestStopB      = "B"
 	callOptsTestEffort     = "high"
+	callOptsTestThinkLevel = "low"
 )
 
 func TestWithCallOptions_MergesCustomAgentConfigs(t *testing.T) {
@@ -81,6 +82,21 @@ func TestWithCallOptions_MergesCustomAgentConfigs(t *testing.T) {
 	require.Equal(t, callOptsTestMaxTokens, *patch.MaxTokens)
 }
 
+func TestWithCallOptions_ThinkingLevelOnlyPatchIsPreserved(t *testing.T) {
+	runOpts := agent.RunOptions{}
+	WithCallOptions(
+		WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+			ThinkingLevel: model.StringPtr(callOptsTestThinkLevel),
+		}),
+	)(&runOpts)
+
+	opts := graphCallOptionsFromConfigs(runOpts.CustomAgentConfigs)
+	require.NotNil(t, opts)
+	patch := generationPatchForNode(opts, "")
+	require.NotNil(t, patch.ThinkingLevel)
+	require.Equal(t, callOptsTestThinkLevel, *patch.ThinkingLevel)
+}
+
 func TestMergeGenPatch_AllFields(t *testing.T) {
 	base := model.GenerationConfigPatch{
 		Stop: []string{callOptsTestStopA},
@@ -96,6 +112,7 @@ func TestMergeGenPatch_AllFields(t *testing.T) {
 		ReasoningEffort:  model.StringPtr(callOptsTestEffort),
 		ThinkingEnabled:  model.BoolPtr(true),
 		ThinkingTokens:   model.IntPtr(callOptsTestThinkTok),
+		ThinkingLevel:    model.StringPtr(callOptsTestThinkLevel),
 	}
 	got := mergeGenPatch(base, override)
 	require.NotNil(t, got.MaxTokens)
@@ -117,9 +134,23 @@ func TestMergeGenPatch_AllFields(t *testing.T) {
 	require.True(t, *got.ThinkingEnabled)
 	require.NotNil(t, got.ThinkingTokens)
 	require.Equal(t, callOptsTestThinkTok, *got.ThinkingTokens)
+	require.NotNil(t, got.ThinkingLevel)
+	require.Equal(t, callOptsTestThinkLevel, *got.ThinkingLevel)
 
 	override.Stop[0] = callOptsTestStopA
 	require.Equal(t, []string{callOptsTestStopB}, got.Stop)
+}
+
+func TestMergeGenPatch_ThinkingLevelOnlyIsNotEmpty(t *testing.T) {
+	patch := model.GenerationConfigPatch{
+		ThinkingLevel: model.StringPtr(callOptsTestThinkLevel),
+	}
+
+	require.False(t, isEmptyGenPatch(patch))
+
+	got := mergeGenPatch(model.GenerationConfigPatch{}, patch)
+	require.NotNil(t, got.ThinkingLevel)
+	require.Equal(t, callOptsTestThinkLevel, *got.ThinkingLevel)
 }
 
 func TestGraphCallOptionsFromConfigs_ClonesValueType(t *testing.T) {
