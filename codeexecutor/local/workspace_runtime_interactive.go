@@ -474,7 +474,12 @@ func (r *Runtime) buildProgramEnv(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) ([]string, error) {
-	env := os.Environ()
+	var env []string
+	if !spec.CleanEnv {
+		env = os.Environ()
+	} else if !envMapHasKey(spec.Env, envPathKey) {
+		env = append(env, envPathKey+"="+cleanEnvPath())
+	}
 	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
 		return nil, err
 	}
@@ -513,6 +518,32 @@ func (r *Runtime) buildProgramEnv(
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 	return env, nil
+}
+
+func envMapHasKey(env map[string]string, key string) bool {
+	for k := range env {
+		if envKeyEqual(k, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanEnvPath() string {
+	if runtime.GOOS == "windows" {
+		return strings.Join([]string{
+			`C:\Windows\System32`,
+			`C:\Windows`,
+			`C:\Windows\System32\WindowsPowerShell\v1.0`,
+		}, string(os.PathListSeparator))
+	}
+	return strings.Join([]string{
+		"/usr/local/bin",
+		"/usr/bin",
+		"/bin",
+		"/usr/sbin",
+		"/sbin",
+	}, string(os.PathListSeparator))
 }
 
 func newLocalProgramCommand(

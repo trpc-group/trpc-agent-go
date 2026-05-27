@@ -591,6 +591,30 @@ func TestWithSkillRunDeniedCommands_CopiesSlice(t *testing.T) {
 	require.Equal(t, []string{"echo", "ls"}, opts.skillRunDeniedCommands)
 }
 
+func TestWithWorkspaceExecAllowedCommands_CopiesSlice(t *testing.T) {
+	in := []string{"echo", "ls"}
+	opts := &Options{}
+	WithWorkspaceExecAllowedCommands(in...)(opts)
+
+	in[0] = "rm"
+	require.Equal(t,
+		[]string{"echo", "ls"},
+		opts.workspaceExecAllowedCommands,
+	)
+}
+
+func TestWithWorkspaceExecDeniedCommands_CopiesSlice(t *testing.T) {
+	in := []string{"curl", "wget"}
+	opts := &Options{}
+	WithWorkspaceExecDeniedCommands(in...)(opts)
+
+	in[0] = "ssh"
+	require.Equal(t,
+		[]string{"curl", "wget"},
+		opts.workspaceExecDeniedCommands,
+	)
+}
+
 func TestWithSkillRunForceSaveArtifacts(t *testing.T) {
 	opts := &Options{}
 	WithSkillRunForceSaveArtifacts(true)(opts)
