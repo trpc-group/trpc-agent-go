@@ -300,6 +300,62 @@ func TestCreateAndCleanupWorkspace(t *testing.T) {
 	require.NoError(t, c.Cleanup(ctx, ws))
 }
 
+func TestCreateWorkspace_PerSessionPersistence(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string { return "" })
+	defer srv.close()
+	c := newMockedExecutor(t, srv, WithWorkspacePersistence(WorkspacePersistencePerSession))
+	ctx := context.Background()
+
+	// First call creates the workspace with a deterministic hash-based path.
+	ws1, err := c.CreateWorkspace(ctx, "session-xyz", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	assert.Equal(t, "session-xyz", ws1.ID)
+	// SHA-256("session-xyz")[:16 hex] = "090d29dd6bd25e05"
+	assert.Equal(t, defaultSandboxRunBase+"/ws_090d29dd6bd25e05", ws1.Path)
+
+	// Second call with the same exec ID returns the exact same path.
+	ws2, err := c.CreateWorkspace(ctx, "session-xyz", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	assert.Equal(t, ws1.Path, ws2.Path)
+
+	// Different exec ID gets a different stable path.
+	ws3, err := c.CreateWorkspace(ctx, "other-session", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	// SHA-256("other-session")[:16 hex] = "5f711b23ee4fecbb"
+	assert.Equal(t, defaultSandboxRunBase+"/ws_5f711b23ee4fecbb", ws3.Path)
+	assert.NotEqual(t, ws1.Path, ws3.Path)
+
+	// Collision-prone inputs that sanitize() would merge are now distinct.
+	wsA, _ := c.CreateWorkspace(ctx, "a/b", codeexecutor.WorkspacePolicy{})
+	wsB, _ := c.CreateWorkspace(ctx, "a_b", codeexecutor.WorkspacePolicy{})
+	assert.NotEqual(t, wsA.Path, wsB.Path)
+}
+
+func TestCreateWorkspace_DefaultIsPerTurn(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string { return "" })
+	defer srv.close()
+	c := newMockedExecutor(t, srv) // default: WorkspacePersistencePerTurn
+	ctx := context.Background()
+
+	ws1, err := c.CreateWorkspace(ctx, "same-id", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	ws2, err := c.CreateWorkspace(ctx, "same-id", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Default behavior: each call creates a unique path (timestamp suffix).
+	assert.NotEqual(t, ws1.Path, ws2.Path)
+}
+
+func TestCreateWorkspace_PerSessionRejectsEmptyID(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string { return "" })
+	defer srv.close()
+	c := newMockedExecutor(t, srv, WithWorkspacePersistence(WorkspacePersistencePerSession))
+
+	_, err := c.CreateWorkspace(context.Background(), "", codeexecutor.WorkspacePolicy{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "execID must not be empty")
+}
+
 func TestPutFilesAndPutDirectory(t *testing.T) {
 	srv := newMockE2BServer(t, func(code string) string { return "" })
 	defer srv.close()
