@@ -279,8 +279,8 @@ func (p *ToolPipe) defaultSystemPrompt(toolNames []string) string {
 Accepts shell-like pipeline syntax. Ops: {ops}. Combine with pipes.
 ` + structuredHint + `
 Large output is automatically windowed (head+tail with middle omitted, total_bytes shown).
-With {field}: {"filter":"<expr>", "content":"<filtered>", "truncated":bool, "total_bytes":N}
-Without {field} (large output): {"content":"<head>...omitted...<tail>", "truncated":true, "total_bytes":N}
+Response format when {field} is used: {"filter":"<the expr you wrote>", "content":"<filtered output>", "truncated":bool, "total_bytes":N}
+Response format without {field} (large output): {"content":"<head>...omitted...<tail>", "truncated":true, "total_bytes":N}
 Without {field} (small output): original tool response unchanged.
 If input_truncated is true, the filter ran on partial data — refine the filter or use narrower tool parameters.
 {field} applies a targeted projection to large or structured results.`)
