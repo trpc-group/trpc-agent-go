@@ -42,9 +42,8 @@ type searchMemoriesToolResponse struct {
 }
 
 type searchConversationsToolRequest struct {
-	Query      string `json:"query" description:"Search query for raw or summarized conversation history."`
-	Limit      int    `json:"limit,omitempty" description:"Maximum number of results to return. Defaults to 5, maximum 20."`
-	SessionKey string `json:"session_key,omitempty" description:"Optional TencentDB Agent Memory session_key. Defaults to the current session."`
+	Query string `json:"query" description:"Search query for raw or summarized conversation history."`
+	Limit int    `json:"limit,omitempty" description:"Maximum number of results to return. Defaults to 5, maximum 20."`
 }
 
 type searchConversationsToolResponse struct {
@@ -130,10 +129,7 @@ func (s *Service) newConversationSearchTool(name string) tool.CallableTool {
 		if err != nil {
 			return nil, err
 		}
-		sessionKey := strings.TrimSpace(req.SessionKey)
-		if sessionKey == "" {
-			sessionKey = s.sessionKey(sess)
-		}
+		sessionKey := s.sessionKey(sess)
 		limit := normalizeLimit(req.Limit)
 		rsp, err := s.client.searchConversations(ctx, searchConversationsRequest{
 			Query:      strings.TrimSpace(req.Query),

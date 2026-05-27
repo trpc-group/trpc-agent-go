@@ -499,7 +499,7 @@ func TestConversationSearchToolUsesCurrentSessionKey(t *testing.T) {
 
 	sess := &session.Session{ID: "s1", AppName: "app", UserID: "u1"}
 	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{Session: sess}).Context
-	raw, err := convTool.Call(ctx, []byte(`{"query":"previous topic"}`))
+	raw, err := convTool.Call(ctx, []byte(`{"query":"previous topic","session_key":"app:other:secret"}`))
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
