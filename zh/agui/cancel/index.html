@@ -2059,6 +2059,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      多实例分布式取消
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2312,6 +2321,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      多实例分布式取消
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2348,7 +2366,7 @@
 <h2 id="_2">核心概念</h2>
 <p>取消路由用于主动停止实时对话路由中正在运行的后端任务。该路由默认关闭，可通过 <code>agui.WithCancelEnabled(true)</code> 开启；默认路径为 <code>/cancel</code>，可通过 <code>agui.WithCancelPath(path)</code> 修改。如果需要统一路由前缀，可参考 <a href="../#路由前缀">路由前缀</a>。</p>
 <p>取消时，框架会使用 <code>AppName</code>、<code>UserID</code> 和 <code>threadId</code> 组成同一个 <code>SessionKey</code>，并取消该会话下正在运行的后端任务。因此，取消请求需要与实时对话请求解析出一致的 <code>AppName</code>、<code>UserID</code> 和 <code>threadId</code>。</p>
-<p>多实例部署时，取消请求需要打到启动该实时对话请求的同一个实例。正在运行的任务只保存在实例本地，单独共享 <code>SessionService</code> 不能让其他实例取消该任务；如果请求打到其他实例，通常会返回 <code>404 Not Found</code>。</p>
+<p>默认情况下，多实例部署时，取消请求需要打到启动该实时对话请求的同一个实例。正在运行的任务只保存在实例本地；如果请求打到其他实例，通常会返回 <code>404 Not Found</code>。</p>
 <p>取消路由通常用于：</p>
 <ul>
 <li>前端有“停止生成”按钮，需要中断后端执行。</li>
@@ -2407,10 +2425,34 @@
 </span></code></pre></div></td></tr></table></div>
 <p>典型返回：</p>
 <ul>
-<li><code>200 OK</code>：取消成功</li>
+<li><code>200 OK</code>：已触发本机取消，或在开启分布式取消时已投递远程取消信号</li>
 <li><code>404 Not Found</code>：没有找到对应 <code>SessionKey</code> 的运行中任务（可能已结束，或标识不匹配）</li>
 </ul>
-<p>取消成功后，框架仍会执行必要的运行结束收尾，补齐协议结束事件，并将聚合缓存尽量写入 <code>SessionService</code>。因此，后续通过 <code>/history</code> 读取历史时，拿到的是取消后的合法一致状态，而不是一段未收尾的中间状态。收尾流程和超时配置可参考 <a href="../history/#session-存储与事件聚合">Session 存储与事件聚合</a>。</p>
+<p>取消成功后，框架仍会执行必要的运行结束收尾，补齐协议结束事件，并将聚合缓存尽量写入 <code>SessionService</code>。取消请求返回成功不表示同一个 <code>SessionKey</code> 已经可以立即发起新的实时对话请求；如果需要继续发起下一次运行，应等待原实时对话流返回终态事件。因此，后续通过 <code>/history</code> 读取历史时，拿到的是取消后的合法一致状态，而不是一段未收尾的中间状态。收尾流程和超时配置可参考 <a href="../history/#session-存储与事件聚合">Session 存储与事件聚合</a>。</p>
+<h2 id="_4">多实例分布式取消</h2>
+<p>如果多实例部署中无法保证同一个 <code>SessionKey</code> 的实时对话请求和取消请求落到同一个实例，可以开启分布式取消：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span>
+<span class="normal"><a href="#__codelineno-3-5">5</a></span>
+<span class="normal"><a href="#__codelineno-3-6">6</a></span>
+<span class="normal"><a href="#__codelineno-3-7">7</a></span>
+<span class="normal"><a href="#__codelineno-3-8">8</a></span>
+<span class="normal"><a href="#__codelineno-3-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithCancelEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithDistributedCancelEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithDistributedCancelPollInterval</span><span class="p">(</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>开启后，参与同一组请求的 AG-UI 实例需要配置同一个共享 <code>SessionService</code>。取消请求命中未持有该本地运行的实例时，框架会通过共享 <code>SessionService</code> 投递取消信号，由持有该运行的实例触发本机取消。</p>
+<p>分布式取消仍按 <code>AppName</code>、<code>UserID</code> 和 <code>threadId</code> 组成的 <code>SessionKey</code> 定位运行任务。远程取消返回成功只表示取消信号已投递，不表示持有该运行的实例已经完成取消；如果需要继续发起下一次运行，应等待原实时对话流返回终态事件。</p>
+<p>分布式取消依赖共享 <code>SessionService</code> 传递取消信号；如果共享 <code>SessionService</code> 读写失败，跨实例取消可能无法生效或返回错误。</p>
+<p>持有运行的实例会按轮询间隔检查取消信号，默认间隔为 <code>1s</code>，可通过 <code>agui.WithDistributedCancelPollInterval(d)</code> 调整。较短的间隔通常能降低远程取消延迟，但会增加对 <code>SessionService</code> 的读取次数。</p>
 
 
 
@@ -2433,7 +2475,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月7日 09:51:41 UTC">2026-05-07 09:51:41</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月27日 10:15:16 UTC">2026-05-27 10:15:16</span>
   </span>
 
     
