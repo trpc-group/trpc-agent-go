@@ -59,6 +59,9 @@ func newService(runner runner.Runner, opts *options) (service.Service, error) {
 	if opts.serviceFactory == nil {
 		return nil, errors.New("agui: serviceFactory must not be nil")
 	}
+	if opts.distributedCancelEnabled && opts.sessionService == nil {
+		return nil, errors.New("agui: session service is required when distributed cancel is enabled")
+	}
 	aguiRunner := aguirunner.New(runner, opts.aguiRunnerOptions...)
 	chatPath, err := joinURLPath(opts.basePath, opts.path)
 	if err != nil {
