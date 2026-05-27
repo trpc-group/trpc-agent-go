@@ -1,66 +1,66 @@
 # ToolPipe Extension
 
-ToolPipe 是一个 agent-scoped extension，为选定的工具注入 shell-like 结果过滤能力。
+ToolPipe is an agent-scoped extension that injects shell-like result filtering capabilities into selected tools.
 
-## 核心理念
+## Core Philosophy
 
-**精确投喂，提升模型注意力质量。**
+**Precision feeding to improve model attention quality.**
 
-当工具返回大量数据时，全部塞进 context 不仅浪费 token，更关键的是会**分散模型注意力**。ToolPipe 的价值不在于"省 token"本身，而在于让模型在有限的注意力窗口里看到的**全是有用信息**。
+When tools return large amounts of data, dumping everything into context not only wastes tokens — more critically, it **dilutes model attention**. ToolPipe's value is not about "saving tokens" per se, but ensuring the model sees **only useful information** within its limited attention window.
 
-大输出处理的哲学：模型永远不应该被大输出直接淹没。ToolPipe 的做法是自动窗口化（保留头尾轮廓）+ 按需精确过滤（shell-like pipe），让模型始终工作在精简、聚焦的上下文中。
+Large output philosophy: models should never be overwhelmed by raw large output. ToolPipe automatically windows output (preserving head+tail outline) and enables on-demand precise filtering (shell-like pipes), keeping the model working in a focused, streamlined context.
 
-ToolPipe 的独特定位：**给没有本地 shell 环境的 Agent 一个受控的"结果投影"层**。特别适合第三方 MCP 工具、网络搜索、API 返回等接入方无法修改工具定义、也无法预知返回大小的场景。
+ToolPipe's unique positioning: **a controlled "result projection" layer for Agents without a local shell environment**. Especially suited for third-party MCP tools, web searches, API responses, and other scenarios where the tool definition cannot be modified and output size is unpredictable.
 
-## 甜蜜点与反面场景
+## Sweet Spot vs Anti-Patterns
 
-### ✅ 适合的场景（大数据 + 小目标 + 可结构化过滤）
+### ✅ Ideal Scenarios (Large Data + Small Target + Structurally Filterable)
 
-- **日志查错**：10000 行日志中 grep 5 行 ERROR
-- **API/MCP 返回提取字段**：从搜索结果 JSON 中只取 title + url
-- **网页定位特定段落**：80KB 页面中 grep 关于 authentication 的 2KB 内容
-- **配置/Schema 提取**：大 OpenAPI spec 中只看路由列表
-- **结构提取**：大文档中只取标题列表
+- **Log debugging**: grep 5 ERROR lines from 10,000 lines of logs
+- **API/MCP field extraction**: extract only title + url from search result JSON
+- **Web page section lookup**: grep 2KB about authentication from an 80KB page
+- **Config/Schema extraction**: view only route list from a large OpenAPI spec
+- **Structure extraction**: extract only headings from a large document
 
-共同特征：数据大、目标小、目标可用 grep/jq 描述、不需要全文理解。
+Common traits: large data, small target, target describable via grep/jq, no full-text understanding needed.
 
-### ❌ 不适合的场景
+### ❌ Anti-Patterns
 
-- **总结整篇文章**：需要全文理解
-- **对比两个文档差异**：需要全量
-- **小数据源**：结果本来就不大（< maxOutput），filter 反而增加无谓轮次
-- **目标模糊/需要全文扫描**：模型不确定要 grep 什么，会反复探测
+- **Summarize an entire article**: requires full-text understanding
+- **Compare two documents**: requires full content
+- **Small data sources**: results are already small (< maxOutput), filter adds unnecessary round trips
+- **Vague targets / full-text scan needed**: model doesn't know what to grep, will probe repeatedly
 
-### Benchmark 实测数据
+### Benchmark Results
 
-Token 消耗可能减少也可能增加，取决于场景和模型策略。**Token 不是核心指标**——核心指标是单轮上下文的信噪比和模型回答的精准度。
+Token consumption may increase or decrease depending on scenario and model strategy. **Tokens are not the core metric** — the core metric is signal-to-noise ratio per turn and answer precision.
 
-| 场景 | Token 变化 | Peak Context 变化 | 说明 |
-|------|-----------|-----------------|------|
-| JSON 字段提取（Algolia API） | -88% | -96% | 最佳场景 |
-| 结构提取（文档标题列表） | -99% | -99% | 最佳场景 |
-| 大页面定位段落（defer 章节） | -65% | -93% | 良好 |
-| 大海捞针（2 个事实问答） | -34% | -86% | 良好 |
-| 小数据模糊搜索 ❌ | +235% | +86% | 不适合此场景 |
+| Scenario | Token Change | Peak Context Change | Notes |
+|----------|-------------|-------------------|-------|
+| JSON field extraction (Algolia API) | -88% | -96% | Best case |
+| Structure extraction (doc headings) | -99% | -99% | Best case |
+| Large page section lookup (defer) | -65% | -93% | Good |
+| Needle in haystack (2 fact Q&A) | -34% | -86% | Good |
+| Small data vague search | +235% | +86% | Not suitable |
 
-关键观察：即使在"大海捞针"场景中 toolpipe 模式的答案**更完整更准确**——因为 context 精简后模型注意力更集中。这比 token 数字更有意义。
+Key observation: even in the "needle in haystack" scenario, toolpipe mode produced **more complete and accurate answers** — because focused context improves model attention. This matters more than token counts.
 
-## 工作原理
+## How It Works
 
-ToolPipe 使用三个 callback（BeforeModel + BeforeTool + AfterTool）实现，不修改框架主链路：
+ToolPipe uses three callbacks (BeforeModel + BeforeTool + AfterTool) with no core framework modifications:
 
-1. **BeforeModel**：给选定工具的 InputSchema 追加一个 `result_filter` 字段（optional string）；注入 system prompt 引导模型使用。
-2. **BeforeTool**：从工具参数中剥离 `result_filter`，解析为 pipeline AST，存入 context。
-3. **AfterTool**：
-   - 有 filter → 对结果执行 pipeline，返回过滤后内容
-   - 无 filter 但结果超过 maxOutput → 自动 head+tail 窗口化，标记 `truncated: true` + `total_bytes`
-   - 无 filter 且结果不大 → 原样返回
+1. **BeforeModel**: appends an optional `result_filter` field to selected tools' InputSchema; injects a system prompt guiding model usage.
+2. **BeforeTool**: strips `result_filter` from tool arguments, parses it into a pipeline AST, stores in context.
+3. **AfterTool**:
+   - Filter present → execute pipeline on result, return filtered content
+   - No filter but result exceeds maxOutput → automatic head+tail windowing with `truncated: true` + `total_bytes`
+   - No filter and result is small → pass through unchanged
 
-### 窗口化策略（无 filter 时）
+### Windowing Strategy (No Filter)
 
-采用 head+tail 截断策略：保留输出的开头和结尾，中间标记省略字节数。这让模型获得整体轮廓，能直接工作或写出精准的 filter，**不会诱导多轮探测拼全文**。
+Uses head+tail truncation: preserves the beginning and end of output, marks omitted bytes in the middle. This gives the model structural overview so it can either work directly or write a precise filter — **without encouraging multi-round full-text reconstruction**.
 
-## 使用方式
+## Usage
 
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/agent/extension/toolpipe"
@@ -71,72 +71,72 @@ agent := llmagent.New("researcher",
         toolpipe.New(
             toolpipe.WithToolNames("web_fetch", "mcp_search"),
             toolpipe.WithAllowedOps(toolpipe.OpGrep, toolpipe.OpHead, toolpipe.OpTail, toolpipe.OpJQ),
-            toolpipe.WithMaxOutputBytes(32<<10), // 32KB 窗口
+            toolpipe.WithMaxOutputBytes(32<<10), // 32KB window
         ),
     ),
 )
 ```
 
-### 配置选项
+### Configuration Options
 
-| Option | 说明 | 默认值 |
-|--------|------|--------|
-| `WithToolNames(names...)` | 白名单：哪些工具启用 filter | 空（必须显式指定） |
-| `WithToolScope(fn)` | 动态选择器（如按前缀匹配 MCP 工具） | nil |
-| `WithAllowedOps(ops...)` | 允许的 filter 操作 | grep, head, tail |
-| `WithMaxOutputBytes(n)` | 窗口大小（无 filter 时截断阈值） | 64KB |
-| `WithMaxInputBytes(n)` | filter 前最大输入 | 2MB |
-| `WithFilterField(name)` | 注入的参数字段名 | `"result_filter"` |
-| `WithPrompt(text)` | 自定义引导 prompt（空字符串=关闭） | 内置默认 |
+| Option | Description | Default |
+|--------|-------------|---------|
+| `WithToolNames(names...)` | Allowlist: which tools get filter capability | empty (must specify) |
+| `WithToolScope(fn)` | Dynamic selector (e.g., prefix-match MCP tools) | nil |
+| `WithAllowedOps(ops...)` | Allowed filter operations | grep, head, tail |
+| `WithMaxOutputBytes(n)` | Window size (truncation threshold when no filter) | 64KB |
+| `WithMaxInputBytes(n)` | Max input before filtering | 2MB |
+| `WithFilterField(name)` | Injected parameter field name | `"result_filter"` |
+| `WithPrompt(text)` | Custom guidance prompt (empty string = disable) | built-in default |
 
-### 支持的 Filter 操作
+### Supported Filter Operations
 
-模型可以写 shell-like pipeline 语法：
+Models can write shell-like pipeline syntax:
 
 ```sh
-grep ERROR                     — 匹配行
-grep -i timeout                — 忽略大小写
-grep -v DEBUG                  — 排除行
-head -20                       — 前 N 行
-tail -10                       — 后 N 行
-jq '.results[] | .title'       — JSON 查询
-jq -r '.content'               — JSON 提取为纯文本
-grep ERROR | head 5            — 组合管道
+grep ERROR                     — match lines
+grep -i timeout                — case insensitive
+grep -v DEBUG                  — exclude lines
+head -20                       — first N lines
+tail -10                       — last N lines
+jq '.results[] | .title'       — JSON query
+jq -r '.content'               — JSON extract as raw text
+grep ERROR | head 5            — combined pipeline
 jq -r '.items[].name' | grep Go | head 10
 ```
 
-使用 `mvdan.cc/sh/v3` 做 shell 语法解析（只解析不执行），白名单验证命令，拒绝重定向、变量赋值、命令替换等不安全构造。
+Uses `mvdan.cc/sh/v3` for shell syntax parsing (parse only, never execute), validates commands against allowlist, rejects redirections, variable assignments, command substitution, and other unsafe constructs.
 
-## 设计原则与代价
+## Design Principles and Trade-offs
 
-### 设计原则
+### Design Principles
 
-1. **Allowlist only**：只有显式选定的工具才会被增强。不该对写操作、审批、状态修改类工具启用。
-2. **同名增强**：不改工具名，不新增工具，只追加一个 optional 字段。对 dispatch、tracing、tool filter 零影响。
-3. **Fail safe**：filter 解析失败仍剥离字段（防止泄漏到原工具）；工具执行失败直接透传错误不 filter。
-4. **框架不教策略**：prompt 只描述能力和格式，不教模型"怎么用"。策略留给用户在 Instruction 中定义。
-5. **框架工具自动跳过**：以下类型的工具会被自动排除，即使出现在 allowlist 中：
-   - 实现了 `StreamInner()` 或 `InnerTextMode()` 的工具（如 AgentTool）
-   - 已知框架内置工具（`transfer_to_agent`、`await_user_reply`）
-   - `LongRunning()` 返回 true 的长生命周期工具
-   - 实现了 `StateDelta` / `StateDeltaForInvocation` 的状态修改工具（如 todo、artifact、skill 类工具）
+1. **Allowlist only**: only explicitly selected tools are augmented. Never enable for write operations, approvals, or state-modifying tools.
+2. **Same-name augmentation**: does not rename tools or add new tools, only appends an optional field. Zero impact on dispatch, tracing, tool filtering.
+3. **Fail safe**: filter parse failure still strips the field (prevents leaking to original tool); tool execution failure passes through error without filtering.
+4. **Framework doesn't teach strategy**: prompt only describes capability and format, never prescribes usage. Strategy belongs in user's Instruction.
+5. **Framework tools auto-skipped**: the following tool types are automatically excluded, even if in the allowlist:
+   - Tools implementing `StreamInner()` or `InnerTextMode()` (e.g., AgentTool)
+   - Known framework built-in tools (`transfer_to_agent`, `await_user_reply`)
+   - Tools with `LongRunning()` returning true
+   - Tools implementing `StateDelta` / `StateDeltaForInvocation` (e.g., todo, artifact, skill tools)
    
-   这类工具的输出是框架编排语义或被框架状态机消费，不是可 grep/jq 投影的用户数据。
+   These tools' output is framework-semantic or consumed by framework state machinery, not user-data suitable for grep/jq projection.
 
-### 代价与权衡
+### Trade-offs
 
-- **多轮次**：模型可能为了精确提取信息做多次 filter 调用，增加总 token 和延迟。
-- **不适合全文理解任务**：如果任务需要通读全文，toolpipe 的窗口化反而会迫使模型多轮拼凑。
-- **模型行为不可控**：模型看到 `result_filter` 参数可能过度使用它，即使数据不大。
-- **非幂等工具风险**：result_filter 的"重新调用回查"模式假设工具是幂等的。对有副作用或结果不稳定的工具，多次调用可能有问题。
+- **Multi-round**: model may make multiple filter calls for precise extraction, increasing total tokens and latency.
+- **Not for full-text tasks**: if the task requires reading the entire text, windowing forces multi-round reconstruction.
+- **Unpredictable model behavior**: model may overuse `result_filter` even when data is small.
+- **Non-idempotent tool risk**: the "re-call for lookup" pattern assumes tools are idempotent. Tools with side effects or unstable results may have issues.
 
-### 什么时候不该用
+### When NOT to Use
 
-- 工具返回结果通常很小（< maxOutput）
-- 任务是"总结/翻译/对比"整份内容
-- 工具有副作用或非幂等
-- 目标不明确，需要全文扫描才能确定要什么
+- Tool results are typically small (< maxOutput)
+- Task is "summarize/translate/compare" entire content
+- Tool has side effects or is non-idempotent
+- Target is vague, requires full-text scan to determine what to extract
 
-## 独立模块
+## Independent Module
 
-ToolPipe 是独立 Go module（`agent/extension/toolpipe/go.mod`），依赖 `mvdan.cc/sh/v3` 和 `github.com/itchyny/gojq`。不使用 toolpipe 的用户不会被拉入这些依赖。
+ToolPipe is an independent Go module (`agent/extension/toolpipe/go.mod`), depending on `mvdan.cc/sh/v3` and `github.com/itchyny/gojq`. Users not using toolpipe will not pull in these dependencies.
