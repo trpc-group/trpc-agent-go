@@ -169,6 +169,7 @@ func TestParseAgStringListPreservesQuotedCommas(t *testing.T) {
 func TestPathQueryCypherUsesPropertiesInListComprehension(t *testing.T) {
 	cypher := pathQueryCypher("from-node", "to-node", "-[:CALLS*1..3]->", 5)
 	for _, want := range []string{
+		"WITH p ORDER BY length(p) ASC LIMIT 5 RETURN",
 		"[node IN nodes(p) | properties(node).id]",
 		"[edge IN relationships(p) | properties(edge).id]",
 		"[edge IN relationships(p) | properties(startNode(edge)).id]",
@@ -186,6 +187,21 @@ func TestPathQueryCypherUsesPropertiesInListComprehension(t *testing.T) {
 	} {
 		if strings.Contains(cypher, bad) {
 			t.Fatalf("pathQueryCypher() contains AGE-incompatible property access %q in %s", bad, cypher)
+		}
+	}
+}
+
+func TestTraverseNodeQueryCypherOrdersByNearestDistance(t *testing.T) {
+	cypher := traverseNodeQueryCypher("node-a", "-[:CALLS*1..2]->", 10)
+	for _, want := range []string{
+		`MATCH p=(start:Node {id: "node-a"})-[:CALLS*1..2]->(n:Node)`,
+		"UNWIND nodes(p) AS node",
+		"WITH node, min(length(p)) AS distance",
+		"ORDER BY distance ASC, node.id ASC LIMIT 10 RETURN",
+		"node.id, node.name, node.content, node.metadata",
+	} {
+		if !strings.Contains(cypher, want) {
+			t.Fatalf("traverseNodeQueryCypher() missing %q in %s", want, cypher)
 		}
 	}
 }
@@ -939,6 +955,9 @@ func TestPathQueryCypherFormat(t *testing.T) {
 	}
 	if !strings.Contains(cypher, "LIMIT 10") {
 		t.Errorf("pathQueryCypher() missing LIMIT clause")
+	}
+	if !strings.Contains(cypher, "WITH p ORDER BY length(p) ASC LIMIT 10 RETURN") {
+		t.Errorf("pathQueryCypher() missing shortest-path ordering")
 	}
 	if !strings.Contains(cypher, "-[:CALLS*1..2]->") {
 		t.Errorf("pathQueryCypher() missing pattern")

@@ -290,14 +290,7 @@ func (s *Store) Traverse(ctx context.Context, query *graph.TraverseQuery) (*grap
 		for _, startID := range query.StartIDs {
 			for _, pattern := range patterns {
 				queryLimit := maxNodes + 1
-				cypher := fmt.Sprintf(
-					`MATCH p=(start:%s {id: %s})%s(n:%s) UNWIND nodes(p) AS node RETURN DISTINCT node.id, node.name, node.content, node.metadata LIMIT %d`,
-					nodeLabel,
-					cypherString(startID),
-					pattern,
-					nodeLabel,
-					queryLimit,
-				)
+				cypher := traverseNodeQueryCypher(startID, pattern, queryLimit)
 				resultNodes, err := s.queryNodes(ctx, tx, cypher)
 				if err != nil {
 					return err
@@ -425,12 +418,23 @@ func (s *Store) probeMorePaths(ctx context.Context, tx *sql.Tx, fromID, toID str
 
 func pathQueryCypher(fromID, toID, pattern string, limit int) string {
 	return fmt.Sprintf(
-		`MATCH p=(from:%s {id: %s})%s(to:%s {id: %s}) RETURN [node IN nodes(p) | properties(node).id], [edge IN relationships(p) | properties(edge).id], [edge IN relationships(p) | properties(startNode(edge)).id], [edge IN relationships(p) | properties(endNode(edge)).id], [edge IN relationships(p) | type(edge)] LIMIT %d`,
+		`MATCH p=(from:%s {id: %s})%s(to:%s {id: %s}) WITH p ORDER BY length(p) ASC LIMIT %d RETURN [node IN nodes(p) | properties(node).id], [edge IN relationships(p) | properties(edge).id], [edge IN relationships(p) | properties(startNode(edge)).id], [edge IN relationships(p) | properties(endNode(edge)).id], [edge IN relationships(p) | type(edge)]`,
 		nodeLabel,
 		cypherString(fromID),
 		pattern,
 		nodeLabel,
 		cypherString(toID),
+		limit,
+	)
+}
+
+func traverseNodeQueryCypher(startID, pattern string, limit int) string {
+	return fmt.Sprintf(
+		`MATCH p=(start:%s {id: %s})%s(n:%s) UNWIND nodes(p) AS node WITH node, min(length(p)) AS distance ORDER BY distance ASC, node.id ASC LIMIT %d RETURN node.id, node.name, node.content, node.metadata`,
+		nodeLabel,
+		cypherString(startID),
+		pattern,
+		nodeLabel,
 		limit,
 	)
 }
