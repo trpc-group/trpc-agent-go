@@ -33,15 +33,17 @@ import (
 )
 
 const (
-	testStoreDirPerm  = 0o700
-	testStoreFilePerm = 0o600
-	testProfileID     = "reviewer"
-	testProfilePrompt = "profile instruction"
-	testProfileState  = "profile_state"
-	testProfileSystem = "profile system prompt"
-	testProfileRoot   = "/tmp/openclaw-profile-root"
-	testProfileUserID = "telegram:user"
-	testSubagentRunID = "subagent:test-run"
+	testStoreDirPerm   = 0o700
+	testStoreFilePerm  = 0o600
+	testProfileID      = "reviewer"
+	testProfilePrompt  = "profile instruction"
+	testProfileState   = "profile_state"
+	testProfileSystem  = "profile system prompt"
+	testProfileRoot    = "/tmp/openclaw-profile-root"
+	testProfileUserID  = "telegram:user"
+	testFinalizePath   = "/tmp/subagent-worktree"
+	testFinalizeBranch = "feature/kept-branch"
+	testSubagentRunID  = "subagent:test-run"
 )
 
 type captureRunner struct {
@@ -697,6 +699,23 @@ func TestMetadataForFinalizeResultMarksErrors(t *testing.T) {
 		"finalize failed",
 		metadata[metadataWorktreeCleanupNote],
 	)
+}
+
+func TestMetadataForFinalizeResultRecordsCurrentWorktree(t *testing.T) {
+	t.Parallel()
+
+	metadata := metadataForFinalizeResult(
+		gitworktree.FinalizeResult{
+			Path:      testFinalizePath,
+			Branch:    testFinalizeBranch,
+			Preserved: true,
+		},
+		nil,
+	)
+
+	require.Equal(t, worktreeCleanupPreserved, metadata[metadataWorktreeCleanup])
+	require.Equal(t, testFinalizePath, metadata[metadataWorktreePath])
+	require.Equal(t, testFinalizeBranch, metadata[metadataWorktreeBranch])
 }
 
 func TestServiceCreateWorktreeUnavailable(t *testing.T) {

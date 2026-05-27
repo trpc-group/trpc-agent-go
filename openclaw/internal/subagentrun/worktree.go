@@ -188,10 +188,17 @@ func metadataForFinalizeResult(
 			note = note + ": " + errText
 		}
 	}
-	return mergeMetadata(map[string]string{
+	metadata := map[string]string{
 		metadataWorktreeCleanup:     cleanup,
 		metadataWorktreeCleanupNote: note,
-	})
+	}
+	if path := strings.TrimSpace(result.Path); path != "" {
+		metadata[metadataWorktreePath] = path
+	}
+	if branch := strings.TrimSpace(result.Branch); branch != "" {
+		metadata[metadataWorktreeBranch] = branch
+	}
+	return mergeMetadata(metadata)
 }
 
 func worktreeNotificationDetail(run coretaskrun.Run) string {
