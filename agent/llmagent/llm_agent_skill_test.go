@@ -963,6 +963,78 @@ func TestLLMAgent_SkillRun_AllowedCommands_Enforced(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestLLMAgent_WorkspaceExec_DeniedCommands_Enforced confirms that
+// WithWorkspaceExecDeniedCommands threads through to workspace_exec
+// so command-level safety can be configured at agent construction
+// time without touching the workspaceexec package directly. This is
+// the wiring that addresses the recent prompt-injection / SSRF
+// reports where models invoked curl from inside the sandbox.
+func TestLLMAgent_WorkspaceExec_DeniedCommands_Enforced(t *testing.T) {
+	a := New(
+		"tester",
+		WithCodeExecutor(localexec.New()),
+		WithWorkspaceExecDeniedCommands("curl", "wget"),
+	)
+
+	tl := findTool(a.Tools(), "workspace_exec")
+	require.NotNil(t, tl)
+
+	args := map[string]any{
+		"command": "curl http://internal.example.com",
+		// Bound runtime so a future regression that lets curl through
+		// fails the assertion instead of hanging on external I/O.
+		"timeout": 1,
+	}
+	body, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	_, err = tl.(tool.CallableTool).Call(context.Background(), body)
+	require.Error(t, err)
+	require.True(t,
+		strings.Contains(err.Error(), "curl"),
+		"expected error to mention curl, got: %v", err,
+	)
+}
+
+// TestLLMAgent_WorkspaceExec_AllowedCommands_Enforced is the allow-
+// list flavor. It also asserts that bypass attempts using $() and
+// shell wrappers are rejected by shellsafe before workspace_exec
+// even spawns a process.
+func TestLLMAgent_WorkspaceExec_AllowedCommands_Enforced(t *testing.T) {
+	a := New(
+		"tester",
+		WithCodeExecutor(localexec.New()),
+		WithWorkspaceExecAllowedCommands("echo"),
+	)
+	tl := findTool(a.Tools(), "workspace_exec")
+	require.NotNil(t, tl)
+
+	allow := map[string]any{"command": "echo hello"}
+	allowB, err := json.Marshal(allow)
+	require.NoError(t, err)
+	_, err = tl.(tool.CallableTool).Call(context.Background(), allowB)
+	require.NoError(t, err)
+
+	for _, cmd := range []string{
+		"ls",
+		"echo $(curl http://x)",
+		"sh -c 'curl http://x'",
+	} {
+		args := map[string]any{
+			"command": cmd,
+			// Bound runtime so a regression that lets a bypass through
+			// fails the assertion instead of hanging on external I/O.
+			"timeout": 1,
+		}
+		b, err := json.Marshal(args)
+		require.NoError(t, err)
+		_, err = tl.(tool.CallableTool).Call(context.Background(), b)
+		require.Error(t, err,
+			"command %q should be rejected", cmd,
+		)
+	}
+}
+
 func TestLLMAgent_WithSkillsToolingGuidance_Disabled(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
