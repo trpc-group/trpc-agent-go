@@ -110,6 +110,7 @@ type permissionMockTool struct {
 	decision         tool.PermissionDecision
 	stateDelta       map[string][]byte
 	stateDeltaCalled bool
+	skipSummarize    bool
 }
 
 func (m *permissionMockTool) ToolMetadata() tool.ToolMetadata {
@@ -131,6 +132,10 @@ func (m *permissionMockTool) StateDeltaForInvocation(
 ) map[string][]byte {
 	m.stateDeltaCalled = true
 	return m.stateDelta
+}
+
+func (m *permissionMockTool) SkipSummarization() bool {
+	return m.skipSummarize
 }
 
 type delayedLoadTool struct {
@@ -7928,6 +7933,49 @@ func TestExecuteSingleToolCallSequential_ToolPermissionResultSkipsStateDelta(
 	require.False(t, calledTool)
 	require.False(t, tl.stateDeltaCalled)
 	require.NotContains(t, ev.StateDelta, stateDeltaKey)
+	require.Len(t, ev.Choices, 1)
+	require.JSONEq(t, permissionJSON, ev.Choices[0].Message.Content)
+}
+
+func TestExecuteSingleToolCallSequential_ToolPermissionResultIgnoresToolSkipSummarization(
+	t *testing.T,
+) {
+	const (
+		toolName       = "delete_file"
+		toolCallID     = "call-deny-skip"
+		denyReason     = "write access is disabled"
+		permissionJSON = `{"status":"denied","tool":"delete_file","reason":"write access is disabled"}`
+	)
+
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		decision:      tool.DenyPermission(denyReason),
+		skipSummarize: true,
+	}
+	ev, err := NewFunctionCallResponseProcessor(false, nil).
+		executeSingleToolCallSequential(
+			context.Background(),
+			&agent.Invocation{AgentName: "a", Model: &mockModel{}},
+			&model.Response{Choices: []model.Choice{{}}},
+			map[string]tool.Tool{toolName: tl},
+			make(chan *event.Event, 1),
+			0,
+			model.ToolCall{
+				ID: toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			},
+		)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.False(t, ev.Actions != nil && ev.Actions.SkipSummarization)
 	require.Len(t, ev.Choices, 1)
 	require.JSONEq(t, permissionJSON, ev.Choices[0].Message.Content)
 }

@@ -83,6 +83,7 @@ type resolvedToolContextKey struct{}
 type stateDeltaSessionBaselineContextKey struct{}
 type executingToolArgsContextKey struct{}
 type skipToolStateDeltaContextKey struct{}
+type skipToolSkipSummarizationContextKey struct{}
 
 // toolResult holds the result of a single tool execution.
 type toolResult struct {
@@ -439,6 +440,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		}
 	}
 	toolEvent := p.buildToolCallResponseEvent(
+		ctx,
 		invocation,
 		llmResponse,
 		choices,
@@ -646,6 +648,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			tools,
 			tc,
 			skipSummarization,
+			!shouldSkipToolSkipSummarization(ctx),
 		)
 		// Only propagate the error if it's not ignorable (e.g., stop errors)
 		var returnErr error
@@ -663,6 +666,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 
 	// No error and at least one choice means we have tool result messages.
 	toolCallResponseEvent := p.buildToolCallResponseEvent(
+		ctx,
 		invocation,
 		llmResponse,
 		choices,
@@ -728,6 +732,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 }
 
 func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
+	ctx context.Context,
 	invocation *agent.Invocation,
 	llmResponse *model.Response,
 	choices []model.Choice,
@@ -752,6 +757,7 @@ func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
 			tools,
 			toolCall,
 			skipSummarization,
+			!shouldSkipToolSkipSummarization(ctx),
 		)
 	}
 	annotateToolChoicesWithName(choices, toolCall.Function.Name)
@@ -762,6 +768,7 @@ func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
 		tools,
 		toolCall,
 		skipSummarization,
+		!shouldSkipToolSkipSummarization(ctx),
 	)
 }
 
@@ -818,6 +825,7 @@ func (p *FunctionCallResponseProcessor) decorateToolCallResponseEvent(
 	tools map[string]tool.Tool,
 	toolCall model.ToolCall,
 	skipSummarization bool,
+	allowToolSkipSummarization bool,
 ) *event.Event {
 	if ev == nil {
 		return nil
@@ -826,7 +834,12 @@ func (p *FunctionCallResponseProcessor) decorateToolCallResponseEvent(
 		ev.Tag = event.TransferTag
 	}
 	if tl, ok := tools[toolCall.Function.Name]; ok {
-		p.annotateSkipSummarization(ev, tl, skipSummarization)
+		p.annotateSkipSummarization(
+			ev,
+			tl,
+			skipSummarization,
+			allowToolSkipSummarization,
+		)
 	} else if skipSummarization {
 		markSkipSummarization(ev)
 	}
@@ -885,8 +898,9 @@ func (p *FunctionCallResponseProcessor) annotateSkipSummarization(
 	ev *event.Event,
 	tl tool.Tool,
 	dynamic bool,
+	allowToolPreference bool,
 ) {
-	if dynamic || toolPrefersSkipSummarization(tl) {
+	if dynamic || (allowToolPreference && toolPrefersSkipSummarization(tl)) {
 		markSkipSummarization(ev)
 	}
 }
@@ -1074,6 +1088,21 @@ func shouldSkipToolStateDelta(ctx context.Context) bool {
 		return false
 	}
 	skip, _ := ctx.Value(skipToolStateDeltaContextKey{}).(bool)
+	return skip
+}
+
+func withSkippedToolSkipSummarization(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, skipToolSkipSummarizationContextKey{}, true)
+}
+
+func shouldSkipToolSkipSummarization(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	skip, _ := ctx.Value(skipToolSkipSummarizationContextKey{}).(bool)
 	return skip
 }
 
@@ -1848,6 +1877,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 	if permissionResult != nil {
 		ctx = withSkippedToolStateDelta(ctx)
+		ctx = withSkippedToolSkipSummarization(ctx)
 		return ctx, *permissionResult, toolCall.Function.Arguments, false,
 			false, nil
 	}
