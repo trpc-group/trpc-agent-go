@@ -96,26 +96,50 @@ func newWorkspaceRuntime(c *CodeExecutor) (*workspaceRuntime, error) {
 }
 
 // findBindSource returns the host path whose bind dest equals dest.
-// Bind spec is source:dest[:mode]. We parse from right to handle ':'
-// that may appear in the source path (Windows not considered here).
+// Bind spec is source:dest[:mode]. We parse from the right so ':'
+// may appear in the source path (Windows not considered here).
 func findBindSource(binds []string, dest string) string {
 	for _, b := range binds {
 		parts := strings.Split(b, ":")
 		if len(parts) < 2 {
 			continue
 		}
-		// Last part may be mode; second last is dest.
-		d := parts[len(parts)-2]
-		if d != dest {
-			continue
-		}
-		// Join all but the last two parts as source.
-		src := strings.Join(parts[:len(parts)-2], ":")
-		if st, err := os.Stat(src); err == nil && st.IsDir() {
-			return src
+		for _, i := range bindDestCandidateIndexes(parts) {
+			if parts[i] == dest {
+				src := strings.Join(parts[:i], ":")
+				if st, err := os.Stat(src); err == nil && st.IsDir() {
+					return src
+				}
+			}
 		}
 	}
 	return ""
+}
+
+func bindDestCandidateIndexes(parts []string) []int {
+	if len(parts) == 2 {
+		return []int{1}
+	}
+	if isBindMode(parts[len(parts)-1]) {
+		return []int{len(parts) - 2}
+	}
+	return []int{len(parts) - 1}
+}
+
+func isBindMode(s string) bool {
+	if s == "" {
+		return true
+	}
+	for _, opt := range strings.Split(s, ",") {
+		switch opt {
+		case "ro", "rw", "z", "Z", "cached", "delegated", "consistent",
+			"private", "rprivate", "shared", "rshared", "slave", "rslave",
+			"nocopy":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // CreateWorkspace ensures a per‑execution directory inside container.
