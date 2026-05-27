@@ -14,7 +14,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,7 +77,8 @@ type workspaceRuntime struct {
 }
 
 type runtimeConfig struct {
-	runBase string
+	runBase              string
+	workspacePersistence WorkspacePersistenceMode
 }
 
 func newWorkspaceRuntime(c *CodeExecutor) *workspaceRuntime {
@@ -83,7 +86,10 @@ func newWorkspaceRuntime(c *CodeExecutor) *workspaceRuntime {
 	if base == "" {
 		base = defaultSandboxRunBase
 	}
-	return &workspaceRuntime{ce: c, cfg: runtimeConfig{runBase: base}}
+	return &workspaceRuntime{ce: c, cfg: runtimeConfig{
+		runBase:              base,
+		workspacePersistence: c.workspacePersistence,
+	}}
 }
 
 // CreateWorkspace creates a per-execution directory inside the sandbox.
@@ -103,11 +109,23 @@ func (r *workspaceRuntime) CreateWorkspace(
 		)
 	}
 
+	if r.cfg.workspacePersistence == WorkspacePersistencePerSession && execID == "" {
+		return codeexecutor.Workspace{}, errors.New(
+			"e2b: execID must not be empty when using WorkspacePersistencePerSession",
+		)
+	}
+
 	safe := sanitize(execID)
-	suf := time.Now().UnixNano()
-	wsPath := path.Join(
-		r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf),
-	)
+	var wsPath string
+	if r.cfg.workspacePersistence == WorkspacePersistencePerSession {
+		// Use a stable hash of the raw exec ID to avoid collisions from
+		// sanitize() (e.g. "a/b" and "a_b" both sanitize to "a_b").
+		h := stableWorkspaceHash(execID)
+		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s", h))
+	} else {
+		suf := time.Now().UnixNano()
+		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf))
+	}
 
 	var sb strings.Builder
 	sb.WriteString("set -e; mkdir -p ")
@@ -1317,6 +1335,15 @@ func sanitize(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// stableWorkspaceHash returns a collision-free, filesystem-safe identifier
+// derived from the raw exec/session ID. It uses the first 16 hex characters of
+// a SHA-256 hash (64 bits), which is sufficient for workspace deduplication
+// within a single sandbox while keeping directory names short.
+func stableWorkspaceHash(id string) string {
+	h := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(h[:8])
 }
 
 func shellQuote(s string) string {

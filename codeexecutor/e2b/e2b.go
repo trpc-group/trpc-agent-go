@@ -113,6 +113,29 @@ func WithSandboxRunBase(dir string) Option {
 	return func(c *CodeExecutor) { c.sandboxRunBase = dir }
 }
 
+// WorkspacePersistenceMode controls how long a sandbox workspace is reused.
+type WorkspacePersistenceMode int
+
+const (
+	// WorkspacePersistencePerTurn creates a fresh workspace for each turn.
+	// Files written during one turn are not visible to later turns through the
+	// session workspace.
+	WorkspacePersistencePerTurn WorkspacePersistenceMode = iota
+
+	// WorkspacePersistencePerSession reuses one deterministic workspace for all
+	// turns in the same session. Files written during one turn remain visible to
+	// later turns in that session.
+	WorkspacePersistencePerSession
+)
+
+// WithWorkspacePersistence sets the workspace persistence mode. The default is
+// WorkspacePersistencePerTurn (a fresh workspace per CreateWorkspace call). Use
+// WorkspacePersistencePerSession when multi-turn agents should keep files and
+// intermediate state across turns.
+func WithWorkspacePersistence(mode WorkspacePersistenceMode) Option {
+	return func(c *CodeExecutor) { c.workspacePersistence = mode }
+}
+
 // CodeExecutor executes code inside an E2B code-interpreter sandbox.
 type CodeExecutor struct {
 	mu sync.Mutex
@@ -137,8 +160,9 @@ type CodeExecutor struct {
 	defaultLanguage  ci.RunCodeLanguage
 
 	// Workspace integration (runs entirely inside the sandbox).
-	sandboxRunBase string
-	rt             *workspaceRuntime
+	sandboxRunBase       string
+	workspacePersistence WorkspacePersistenceMode
+	rt                   *workspaceRuntime
 
 	// Sandbox instance.
 	sbx *ci.Sandbox
