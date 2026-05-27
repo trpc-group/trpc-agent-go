@@ -1632,6 +1632,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#child-agent-context-visibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      Child Agent Context Visibility
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#options" class="md-nav__link">
     <span class="md-ellipsis">
       Options
@@ -3796,6 +3805,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#child-agent-context-visibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      Child Agent Context Visibility
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#options" class="md-nav__link">
     <span class="md-ellipsis">
       Options
@@ -5935,6 +5953,81 @@ contains in the first place.</p>
 </span><span id="__span-35-7"><a id="__codelineno-35-7" name="__codelineno-35-7"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithSkipSummarization</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
 </span><span id="__span-35-8"><a id="__codelineno-35-8" name="__codelineno-35-8"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="child-agent-context-visibility">Child Agent Context Visibility</h3>
+<p>AgentTool runs the child Agent by reusing the current invocation and session.
+It helps to separate the nearby concepts first:</p>
+<table>
+<thead>
+<tr>
+<th>Concept</th>
+<th>What it does</th>
+<th>What it does not do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FilterKey</code></td>
+<td>Labels which conversation view an event belongs to; the content processor uses it to decide which historical messages enter a model request</td>
+<td>It is not a permission boundary or a separate storage unit</td>
+</tr>
+<tr>
+<td><code>Branch</code></td>
+<td>Records the Agent execution lineage, mainly for traces and cross-Agent message projection</td>
+<td>It usually does not directly decide what history AgentTool can read</td>
+</tr>
+<tr>
+<td><code>HistoryScope</code></td>
+<td>Controls how AgentTool builds the child Agent <code>FilterKey</code></td>
+<td>It does not shape the tool result and does not change the child Agent tool surface</td>
+</tr>
+<tr>
+<td><code>MessageFilterMode</code></td>
+<td>A higher-level LLMAgent/GraphAgent preset that combines time filtering and <code>FilterKey</code> filtering</td>
+<td>Most AgentTool users do not need to configure it directly</td>
+</tr>
+</tbody>
+</table>
+<p>For historical reasons, <code>BranchFilterMode</code> contains the word <code>Branch</code>, but for
+current-version events it compares <code>Event.FilterKey</code> with the current
+invocation <code>FilterKey</code>. Legacy events written before <code>FilterKey</code> existed may
+still fall back to <code>Event.Branch</code> for compatibility.</p>
+<p>AgentTool currently has two history scopes:</p>
+<ul>
+<li><code>HistoryScopeIsolated</code> (default): the child Agent uses an independent
+  <code>FilterKey</code>, such as <code>math-specialist-&lt;uuid&gt;</code>. With normal Runner-generated
+  events, the child sees only the current tool arguments and does not inherit
+  parent Agent history. Child events are still stored in the same session, but
+  under a separate view.</li>
+<li><code>HistoryScopeParentBranch</code>: the child Agent uses a sub-key under the parent
+  key, such as <code>assistant/math-specialist-&lt;uuid&gt;</code>. The default prefix matching
+  treats ancestors and descendants as the same lineage. This means the child
+  can see parent history, and the parent may also see child events in later
+  context. This mode is for shared-lineage collaboration; it is not a snapshot
+  mode that reads parent history while hiding child details from the parent.</li>
+</ul>
+<p>In practice:</p>
+<ul>
+<li>Use the default <code>HistoryScopeIsolated</code> when the child Agent should do
+  independent work and return only its tool result to the parent. Pass any
+  required context explicitly in the tool arguments.</li>
+<li>Use <code>HistoryScopeParentBranch</code> when the child Agent should continue, edit, or
+  refine prior parent output, and it is acceptable for parent and child events
+  to share one lineage.</li>
+</ul>
+<p><code>HistoryScope</code> only controls historical visibility. These behaviors do not
+change when you switch history scope:</p>
+<ul>
+<li><code>WithResponseMode</code> still controls which child assistant content becomes the
+  tool result.</li>
+<li><code>WithSkipSummarization</code> still controls whether the parent flow performs an
+  extra outer summarization call after the tool result.</li>
+<li>The child Agent still inherits the current invocation's session, plugins, and
+  <code>RunOptions</code> through <code>Invocation.Clone(...)</code>; start a separate application
+  run when you need true background isolation.</li>
+<li>If business code manually appends events with an empty <code>FilterKey</code>, those
+  events may be visible from multiple views for compatibility. Prefer setting
+  explicit app-prefixed <code>FilterKey</code> values for custom events.</li>
+</ul>
 <h3 id="options">Options</h3>
 <ul>
 <li>
@@ -5979,8 +6072,8 @@ contains in the first place.</p>
 </ul>
 <ul>
 <li>WithHistoryScope(HistoryScope):<ul>
-<li><code>HistoryScopeIsolated</code> (default): Keep the child Agent fully isolated; it only sees the current tool arguments (no inherited history).</li>
-<li><code>HistoryScopeParentBranch</code>: Inherit parent conversation history by using a hierarchical filter key <code>parent/child-uuid</code>. This allows the content processor to include parent events via prefix matching while keeping child events isolated under a sub-branch. Typical use cases: “edit/optimize/continue previous output”.</li>
+<li><code>HistoryScopeIsolated</code> (default): Use an independent child <code>FilterKey</code>; the child usually sees only the current tool arguments and does not inherit parent history.</li>
+<li><code>HistoryScopeParentBranch</code>: Use a hierarchical <code>FilterKey</code> in the form <code>parent/child-uuid</code>. Parent and child events share one lineage, and prefix matching can include either side in the other's context. Typical use cases: edit, optimize, or continue previous output.</li>
 </ul>
 </li>
 </ul>
@@ -6013,6 +6106,9 @@ contains in the first place.</p>
   <code>WithHistoryScope(agenttool.HistoryScopeIsolated)</code> controls what the child
   can read. <code>WithResponseMode(agenttool.ResponseModeFinalOnly)</code> controls what
   the parent receives as the tool result.</li>
+<li><code>HistoryScopeParentBranch</code> is shared lineage, not snapshot isolation. If child
+  details should not appear in later parent context, keep the default
+  <code>HistoryScopeIsolated</code> and pass the needed context through tool arguments.</li>
 <li><code>WithSkipSummarization(true)</code> only skips the extra outer summarization LLM call. It does not make <code>tool.response</code> a final assistant response; keep consuming until <code>runner.completion</code> if you need the real terminal signal</li>
 </ul>
 <h2 id="tool-integration-and-usage">Tool Integration and Usage</h2>
@@ -7131,7 +7227,7 @@ explicitly at the right time.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 26, 2026 03:00:40 UTC">2026-05-26 03:00:40</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 27, 2026 10:58:23 UTC">2026-05-27 10:58:23</span>
   </span>
 
     
