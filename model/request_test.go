@@ -289,6 +289,7 @@ func TestApplyGenerationConfigPatch(t *testing.T) {
 		ReasoningEffort:  StringPtr("low"),
 		ThinkingEnabled:  BoolPtr(true),
 		ThinkingTokens:   IntPtr(100),
+		ThinkingLevel:    StringPtr("medium"),
 	}
 	patch := GenerationConfigPatch{
 		MaxTokens:        IntPtr(20),
@@ -301,6 +302,7 @@ func TestApplyGenerationConfigPatch(t *testing.T) {
 		ReasoningEffort:  StringPtr("high"),
 		ThinkingEnabled:  BoolPtr(false),
 		ThinkingTokens:   IntPtr(200),
+		ThinkingLevel:    StringPtr("low"),
 	}
 	got := ApplyGenerationConfigPatch(base, patch)
 	require.NotNil(t, got.MaxTokens)
@@ -321,6 +323,8 @@ func TestApplyGenerationConfigPatch(t *testing.T) {
 	require.False(t, *got.ThinkingEnabled)
 	require.NotNil(t, got.ThinkingTokens)
 	require.Equal(t, 200, *got.ThinkingTokens)
+	require.NotNil(t, got.ThinkingLevel)
+	require.Equal(t, "low", *got.ThinkingLevel)
 
 	patch.Stop[0] = "Y"
 	require.Equal(t, []string{"X"}, got.Stop)
