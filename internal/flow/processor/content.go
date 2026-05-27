@@ -1505,33 +1505,14 @@ func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 	messages []model.Message,
 ) []model.Message {
 	cfg := normalizeContextCompactionConfig(p.ContextCompactionConfig)
-	forceCleanActive := cfg.hasForceCleanToolResults()
 	oversizedActive := cfg.OversizedToolResultMaxTokens > 0
-	if !cfg.Enabled || (!forceCleanActive && !oversizedActive) {
+	if !cfg.Enabled || !oversizedActive {
 		return messages
 	}
 
 	var cloned bool
 	for i := range messages {
 		if cfg.keepToolResult(messages[i]) {
-			continue
-		}
-		if cfg.forceCleanToolResult(messages[i]) {
-			msg, compacted, _ := cleanToolResultMessageWithCounter(
-				context.Background(),
-				messages[i],
-				cfg.TokenCounter,
-			)
-			if compacted {
-				if !cloned {
-					messages = append([]model.Message(nil), messages...)
-					cloned = true
-				}
-				messages[i] = msg
-			}
-			continue
-		}
-		if !oversizedActive {
 			continue
 		}
 		msg, truncated, _ := truncateOversizedToolResultMessageWithCounter(
