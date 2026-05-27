@@ -901,8 +901,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	var includedInvocationMessage bool
 
 	var events []event.Event
-	inv.Session.EventMu.RLock()
-	for _, evt := range inv.Session.Events {
+	for _, evt := range snapshotSessionEvents(inv.Session) {
 		if compactedEvt, ok := p.compactCurrentInvocationEvent(
 			evt,
 			inv,
@@ -928,7 +927,6 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		}
 		events = append(events, evt)
 	}
-	inv.Session.EventMu.RUnlock()
 
 	// insert invocation message
 	if !includedInvocationMessage && model.HasPayload(inv.Message) {
@@ -1394,15 +1392,22 @@ func (p *ContentRequestProcessor) collectCurrentInvocationEvents(
 	inv *agent.Invocation,
 ) []event.Event {
 	var events []event.Event
-	inv.Session.EventMu.RLock()
-	for _, evt := range inv.Session.Events {
+	for _, evt := range snapshotSessionEvents(inv.Session) {
 		if !isCurrentInvocationEligibleEvent(evt, inv.InvocationID) {
 			continue
 		}
 		events = append(events, normalizeCurrentInvocationEvent(evt))
 	}
-	inv.Session.EventMu.RUnlock()
 	return events
+}
+
+func snapshotSessionEvents(sess *session.Session) []event.Event {
+	if sess == nil {
+		return nil
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	return append([]event.Event(nil), sess.Events...)
 }
 
 func isCurrentInvocationEligibleEvent(
@@ -1723,10 +1728,7 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 
 	filter := inv.GetEventFilterKey()
 
-	inv.Session.EventMu.RLock()
-	defer inv.Session.EventMu.RUnlock()
-
-	for _, evt := range inv.Session.Events {
+	for _, evt := range snapshotSessionEvents(inv.Session) {
 		if evt.RequestID != inv.RunOptions.RequestID ||
 			evt.InvocationID != inv.InvocationID {
 			continue
