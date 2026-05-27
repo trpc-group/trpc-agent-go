@@ -940,9 +940,9 @@ Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableCont
 
 Use `WithToolResultCompactionConfig(...)` when you need tool-name or recency policy:
 
-- `ForceCleanToolNames`: results from these tools are replaced with a policy placeholder whenever context compaction is enabled. This is useful for noisy tools such as shell, grep, or log dump tools.
+- `ForceCleanToolNames`: historical results from these tools are replaced with a policy placeholder whenever context compaction is enabled, after current/recent protection is applied. This is useful for noisy tools such as shell, grep, or log dump tools.
 - `KeepToolNames`: results from these tools are left untouched by context compaction. This is useful for recovery tools such as `session_load` and `session_search` when the model may need to read the exact payload.
-- `SkipRecentFunc`: customizes how many tail events are considered recent. It only affects Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.
+- `SkipRecentFunc`: customizes how many tail events are considered recent. It affects Pass 0 force-clean and Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.
 
 If the same tool name appears in both `ForceCleanToolNames` and `KeepToolNames`, `KeepToolNames` wins.
 

@@ -166,6 +166,9 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 	if !p.enabledForInvocation(inv) {
 		return ""
 	}
+	if guidance := workspaceExecGuidanceFromInvocation(inv); guidance != "" {
+		return guidance
+	}
 	var b strings.Builder
 	b.WriteString(workspaceExecGuidanceHeader)
 	b.WriteString("\n")
@@ -237,6 +240,25 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 		b.WriteString("session.\n")
 	}
 	return b.String()
+}
+
+func workspaceExecGuidanceFromInvocation(inv *agent.Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	return normalizeWorkspaceExecGuidance(inv.RunOptions.WorkspaceExecGuidance)
+}
+
+func normalizeWorkspaceExecGuidance(guidance string) string {
+	guidance = strings.TrimSpace(guidance)
+	if guidance == "" {
+		return ""
+	}
+	if startsWithSectionHeader(guidance, workspaceExecGuidanceHeader) ||
+		startsWithSectionHeader(guidance, legacyWorkspaceExecGuidanceHeader) {
+		return guidance
+	}
+	return workspaceExecGuidanceHeader + "\n" + guidance
 }
 
 func (p *WorkspaceExecRequestProcessor) enabledForInvocation(

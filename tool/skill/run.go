@@ -20,6 +20,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillstage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
@@ -1151,6 +1153,20 @@ func (t *RunTool) buildRunProgramSpec(
 	)
 
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		// Policy mode: scrub the merged env before building PATH
+		// so a caller-supplied PATH / BASH_ENV / LD_PRELOAD /
+		// BASH_FUNC_* cannot survive into the spawn. Without
+		// this, a model-supplied `env: {"PATH": "./bin"}` is
+		// prepended to PATH ahead of skillBin by
+		// injectSkillLocalEnvWithSep, so an allowed bare command
+		// (`curl`, `python`, `git`, …) resolves at the attacker
+		// controlled directory rather than the vetted binary -
+		// the same vulnerability class that PR #1800 closed for
+		// `workspace_exec`. The scrub mirrors what
+		// tool/workspaceexec already does for its own policy
+		// mode; on Windows the comparison is case-insensitive so
+		// "Path" / "Home" cannot survive by varying case.
+		env = scrubPolicyEnv(env)
 		injectSkillLocalEnvWithSep(
 			env,
 			venvRel,
@@ -1197,12 +1213,13 @@ func (t *RunTool) buildRunProgramSpec(
 			)
 		}
 		return codeexecutor.RunProgramSpec{
-			Cmd:     cmd,
-			Args:    argv[1:],
-			Env:     env,
-			Cwd:     cwd,
-			Stdin:   in.Stdin,
-			Timeout: timeout,
+			Cmd:      cmd,
+			Args:     argv[1:],
+			Env:      env,
+			CleanEnv: true,
+			Cwd:      cwd,
+			Stdin:    in.Stdin,
+			Timeout:  timeout,
 		}, nil
 	}
 
@@ -1380,6 +1397,26 @@ func injectSkillLocalEnv(
 		skillBin,
 		posixPathListSep,
 	)
+}
+
+// scrubPolicyEnv returns the env that should be passed to the
+// runtime when a skill_run command policy is active. It filters the
+// input through internal/envscrub so shell start-up vars (HOME,
+// BASH_ENV, ENV, SHELL, …), executable resolution vars (PATH,
+// LD_PRELOAD, DYLD_*, IFS, CDPATH, …), BASH_FUNC_* Shellshock
+// entries and non-POSIX keys are dropped before the per-call PATH
+// is rebuilt by injectSkillLocalEnvWithSep. A nil / empty result
+// is normalised to an empty non-nil map so the subsequent assign
+// of env[PATH] / env[VIRTUAL_ENV] does not panic.
+//
+// The same envscrub package backs the equivalent scrub in
+// tool/workspaceexec so the two policy modes stay in sync.
+func scrubPolicyEnv(env map[string]string) map[string]string {
+	out := envscrub.Scrub(env, runtime.GOOS == "windows")
+	if out == nil {
+		out = map[string]string{}
+	}
+	return out
 }
 
 func injectSkillLocalEnvWithSep(

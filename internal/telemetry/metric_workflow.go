@@ -26,6 +26,9 @@ var (
 
 	// WorkflowMetricGenAIClientOperationDuration records graph workflow/node execution durations in seconds.
 	WorkflowMetricGenAIClientOperationDuration *histogram.DynamicFloat64Histogram
+
+	// WorkflowMetricGenAIWorkflowElapsedTime records relative workflow elapsed time in seconds.
+	WorkflowMetricGenAIWorkflowElapsedTime *histogram.DynamicFloat64Histogram
 )
 
 // WorkflowAttributes is the attributes for workflow execution metrics.
@@ -38,6 +41,8 @@ type WorkflowAttributes struct {
 	WorkflowID   string
 	WorkflowName string
 	WorkflowType string
+	ElapsedFrom  string
+	ElapsedTo    string
 	Error        error
 	ErrorType    string
 }
@@ -64,6 +69,24 @@ func (a WorkflowAttributes) toAttributes() []attribute.KeyValue {
 	return attrs
 }
 
+func (a WorkflowAttributes) toElapsedAttributes() []attribute.KeyValue {
+	attrs := a.toAttributes()
+	elapsedFrom := a.ElapsedFrom
+	if elapsedFrom == "" {
+		elapsedFrom = metrics.ValueGenAIWorkflowElapsedFromRootWorkflowStart
+	}
+	elapsedTo := a.ElapsedTo
+	if elapsedTo == "" {
+		elapsedTo = metrics.ValueGenAIWorkflowElapsedToCurrentWorkflowEnd
+	}
+	attrs = append(
+		attrs,
+		attribute.String(metrics.KeyGenAIWorkflowElapsedFrom, elapsedFrom),
+		attribute.String(metrics.KeyGenAIWorkflowElapsedTo, elapsedTo),
+	)
+	return attrs
+}
+
 // ReportWorkflowMetrics reports the workflow execution metrics.
 func ReportWorkflowMetrics(ctx context.Context, attrs WorkflowAttributes, duration time.Duration) {
 	if WorkflowMetricGenAIClientOperationDuration == nil {
@@ -73,5 +96,17 @@ func ReportWorkflowMetrics(ctx context.Context, attrs WorkflowAttributes, durati
 		ctx,
 		duration.Seconds(),
 		metric.WithAttributes(attrs.toAttributes()...),
+	)
+}
+
+// ReportWorkflowElapsedMetrics reports relative workflow elapsed-time metrics.
+func ReportWorkflowElapsedMetrics(ctx context.Context, attrs WorkflowAttributes, duration time.Duration) {
+	if WorkflowMetricGenAIWorkflowElapsedTime == nil {
+		return
+	}
+	WorkflowMetricGenAIWorkflowElapsedTime.Record(
+		ctx,
+		duration.Seconds(),
+		metric.WithAttributes(attrs.toElapsedAttributes()...),
 	)
 }

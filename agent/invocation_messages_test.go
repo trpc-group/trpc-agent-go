@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -409,4 +410,30 @@ func TestWithToolCallArgumentsJSONRepairEnabled_SetsRunOptions(t *testing.T) {
 	WithToolCallArgumentsJSONRepairEnabled(false)(&ro)
 	require.NotNil(t, ro.ToolCallArgumentsJSONRepairEnabled)
 	require.False(t, *ro.ToolCallArgumentsJSONRepairEnabled)
+}
+
+func TestWithPromptSectionOptions_SetsRunOptions(t *testing.T) {
+	renderer := func(
+		_ context.Context,
+		req AvailableSkillsRenderRequest,
+	) string {
+		require.Len(t, req.Summaries, 1)
+		return "- " + req.Summaries[0].Name + ": compact"
+	}
+	var ro RunOptions
+	WithWorkspaceExecGuidance("compact workspace guidance")(&ro)
+	WithAvailableSkillsRenderer(renderer)(&ro)
+	require.Equal(t, "compact workspace guidance", ro.WorkspaceExecGuidance)
+	require.NotNil(t, ro.AvailableSkillsRenderer)
+	got := ro.AvailableSkillsRenderer(
+		context.Background(),
+		AvailableSkillsRenderRequest{
+			Summaries: []skill.Summary{
+				{Name: "alpha", Description: "alpha skill"},
+			},
+		},
+	)
+	require.Equal(t, "- alpha: compact", got)
+	WithAvailableSkillsRenderer(nil)(&ro)
+	require.Nil(t, ro.AvailableSkillsRenderer)
 }
