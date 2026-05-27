@@ -1007,6 +1007,84 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#restricting-workspace_exec-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Restricting workspace_exec commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Restricting workspace_exec commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-still-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      What still works
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-rejected" class="md-nav__link">
+    <span class="md-ellipsis">
+      What is rejected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#matching" class="md-nav__link">
+    <span class="md-ellipsis">
+      Matching
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#precedence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Precedence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spawn-hardening" class="md-nav__link">
+    <span class="md-ellipsis">
+      Spawn hardening
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scope
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       Environment Variables
@@ -2749,6 +2827,84 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#restricting-workspace_exec-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Restricting workspace_exec commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Restricting workspace_exec commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-still-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      What still works
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-rejected" class="md-nav__link">
+    <span class="md-ellipsis">
+      What is rejected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#matching" class="md-nav__link">
+    <span class="md-ellipsis">
+      Matching
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#precedence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Precedence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spawn-hardening" class="md-nav__link">
+    <span class="md-ellipsis">
+      Spawn hardening
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scope
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       Environment Variables
@@ -3709,6 +3865,263 @@ your callback as needed.</p>
   best-effort.</li>
 </ul>
 <p>End-to-end example: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/workspace_io">examples/workspace_io</a>.</p>
+<h2 id="restricting-workspace_exec-commands">Restricting <code>workspace_exec</code> commands</h2>
+<p><code>workspace_exec</code> runs whatever shell command the model sends. In sandboxes
+with network egress this becomes a prompt-injection / SSRF surface: a
+user prompt can trick the model into running <code>curl &lt;internal-url&gt;</code> and
+the sandbox dutifully obliges.</p>
+<p>To shrink that surface you can attach an allow- and/or deny-list of
+executable names. When at least one list is non-empty, the command is
+parsed before execution and rejected if it does not pass.</p>
+<h3 id="configure">Configure</h3>
+<p>At the agent level:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span>
+<span class="normal"><a href="#__codelineno-13-2">2</a></span>
+<span class="normal"><a href="#__codelineno-13-3">3</a></span>
+<span class="normal"><a href="#__codelineno-13-4">4</a></span>
+<span class="normal"><a href="#__codelineno-13-5">5</a></span>
+<span class="normal"><a href="#__codelineno-13-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="w">    </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">executor</span><span class="p">),</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithWorkspaceExecAllowedCommands</span><span class="p">(</span><span class="s">&quot;ls&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;rg&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;git&quot;</span><span class="p">),</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithWorkspaceExecDeniedCommands</span><span class="p">(</span><span class="s">&quot;curl&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;wget&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;nc&quot;</span><span class="p">),</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Or directly on <code>ExecTool</code> if you build it yourself (the first argument
+is a <code>codeexecutor.CodeExecutor</code> such as <code>localexec.New()</code>):</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
+<span class="normal"><a href="#__codelineno-14-2">2</a></span>
+<span class="normal"><a href="#__codelineno-14-3">3</a></span>
+<span class="normal"><a href="#__codelineno-14-4">4</a></span>
+<span class="normal"><a href="#__codelineno-14-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="nx">tool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">NewExecTool</span><span class="p">(</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a><span class="w">    </span><span class="nx">executor</span><span class="p">,</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="w">    </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">WithAllowedCommands</span><span class="p">(</span><span class="s">&quot;ls&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;rg&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;git&quot;</span><span class="p">),</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="w">    </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">WithDeniedCommands</span><span class="p">(</span><span class="s">&quot;curl&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;wget&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;nc&quot;</span><span class="p">),</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Or via environment, for deployment-time configuration (comma- or
+whitespace-separated):</p>
+<ul>
+<li><code>TRPC_AGENT_WORKSPACE_EXEC_ALLOWED_COMMANDS</code></li>
+<li><code>TRPC_AGENT_WORKSPACE_EXEC_DENIED_COMMANDS</code></li>
+</ul>
+<p>Explicit options take precedence over the environment. Leaving both
+unset disables the policy and preserves the historical behaviour.</p>
+<h3 id="what-still-works">What still works</h3>
+<p>Pipelines made of allowed commands joined by the safe sequencing
+operators are accepted:</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1">1</a></span>
+<span class="normal"><a href="#__codelineno-15-2">2</a></span>
+<span class="normal"><a href="#__codelineno-15-3">3</a></span>
+<span class="normal"><a href="#__codelineno-15-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a>ls | rg foo
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a>git status &amp;&amp; git diff
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a>test -f x.txt || echo missing
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a>mkdir -p out; cp a.txt out/
+</span></code></pre></div></td></tr></table></div>
+<p>Single-quoted, double-quoted and <code>\X</code>-escaped literals are accepted as
+arguments. <code>{}</code> is allowed as a literal so patterns like
+<code>find -exec {} \;</code> parse fine. Note that <code>xargs</code> itself is in the
+unconditional built-in deny set below — <code>xargs -I{}</code> will be rejected
+regardless of what is in the allow list.</p>
+<h3 id="what-is-rejected">What is rejected</h3>
+<p>Whenever a policy is active the command is <strong>structurally rejected</strong>
+before any name lookup if it contains any of:</p>
+<ul>
+<li>command, parameter, arithmetic or process substitution
+  (<code>$(…)</code>, <code>`…`</code>, <code>$VAR</code>, <code>${X}</code>, <code>$((…))</code>, <code>&lt;(…)</code>, <code>&gt;(…)</code>)</li>
+<li>redirections of any kind (<code>&gt;</code>, <code>&gt;&gt;</code>, <code>&lt;</code>, <code>2&gt;&amp;1</code>, here-docs)</li>
+<li>subshells, blocks, control flow, function definitions
+  (<code>(…)</code>, <code>{…}</code>, <code>if/for/while/case</code>, <code>f() { … }</code>)</li>
+<li>backgrounding, <code>|&amp;</code>, leading <code>VAR=… cmd</code>, glob characters, <code>!</code>, <code>#</code>,
+  bare or escaped newlines</li>
+</ul>
+<p>So a deny on <code>curl</code> cannot be sidestepped via <code>$(c\url)</code>,
+<code>echo \</code>curl http://x`<code>,</code>curl &gt; /tmp/x<code>,</code>(curl http://x)<code>,</code>HOME=/tmp curl http://x`, etc.</p>
+<p>On top of the parser there is an <strong>unconditional built-in deny set</strong>
+of shell wrappers, re-executing builtins, process-launching
+wrappers, and stateful shell builtins. They are blocked whenever
+any policy is active because they can launch arbitrary code with
+an innocent <code>argv[0]</code> (e.g. <code>time curl http://x</code> would otherwise
+pass a deny on <code>curl</code>), register code to run later (e.g.
+<code>trap 'curl http://x' EXIT</code>) or mutate later-segment resolution
+(e.g. <code>export PATH=./bin &amp;&amp; allowed_cmd</code>):</p>
+<ul>
+<li>shell wrappers: <code>sh</code>, <code>bash</code>, <code>zsh</code>, <code>ash</code>, <code>dash</code>, <code>ksh</code>,
+  <code>mksh</code>, <code>fish</code>, <code>pwsh</code>, <code>powershell</code>, <code>cmd</code>, <code>busybox</code>, <code>toybox</code></li>
+<li>re-executing builtins: <code>eval</code>, <code>exec</code>, <code>command</code>, <code>source</code>, <code>.</code>,
+  <code>builtin</code></li>
+<li>process-launching wrappers: <code>xargs</code>, <code>env</code>, <code>nohup</code>, <code>timeout</code>,
+  <code>sudo</code>, <code>su</code>, <code>doas</code>, <code>setsid</code>, <code>unshare</code>, <code>chroot</code>, <code>runuser</code>,
+  <code>time</code>, <code>nice</code>, <code>ionice</code>, <code>taskset</code>, <code>stdbuf</code>, <code>strace</code>, <code>ltrace</code>,
+  <code>script</code>, <code>flock</code></li>
+<li>stateful shell builtins: <code>trap</code>, <code>alias</code>, <code>unalias</code>, <code>enable</code>,
+  <code>export</code>, <code>unset</code>, <code>readonly</code>, <code>local</code>, <code>declare</code>, <code>typeset</code>,
+  <code>set</code>, <code>shopt</code>, <code>hash</code>, <code>cd</code>, <code>pushd</code>, <code>popd</code></li>
+<li>variable-assigning builtins: <code>printf</code>, <code>read</code>, <code>getopts</code>, <code>let</code>,
+  <code>mapfile</code>, <code>readarray</code> — on a single-process shell these can
+  rewrite <code>PATH</code> or other resolution state before a later allowed
+  segment runs (e.g. <code>printf -v PATH ./work/bin; git</code> would
+  otherwise resolve <code>git</code> to <code>./work/bin/git</code> even when both
+  <code>printf</code> and <code>git</code> pass an <code>argv[0]</code>-only check). The bash
+  extensions matter because <code>/bin/sh</code> is bash on macOS and on
+  many container images.</li>
+</ul>
+<p><code>workspace_exec</code> exposes a <code>cwd</code> parameter for the legitimate cwd-
+switching use case, so the model never needs to call <code>cd</code> itself.</p>
+<p>This deny set is <strong>not overridable</strong> by <code>WithWorkspaceExecAllowedCommands</code>
+— allow-list entries for these names are ignored. If you legitimately
+need one of them (rare, but possible), wrap the desired use in an
+auditable script under the workspace and put the script in
+<code>allowed_commands</code> instead. The auditable wrapper is also better
+practice: reviewers can see exactly what is being exposed.</p>
+<h3 id="matching">Matching</h3>
+<p>Matching is intentionally <strong>asymmetric</strong> so workspace-controlled
+binaries cannot smuggle past the allowlist:</p>
+<ul>
+<li><strong>Allow</strong> matches strictly. An entry <code>echo</code> admits bare <code>echo</code>
+  but rejects <code>./echo</code>, <code>work/bin/echo</code> and <code>/usr/bin/echo</code>. If you
+  want to permit a specific absolute or relative path, list that
+  exact path (e.g. <code>WithWorkspaceExecAllowedCommands("/usr/bin/echo")</code>).</li>
+<li><strong>Deny</strong> matches permissively. An entry <code>curl</code> rejects <code>curl</code>,
+  <code>/usr/bin/curl</code> and <code>./curl</code> alike, so an attacker cannot slip a
+  full path past the denylist.</li>
+</ul>
+<p>Case handling tracks the underlying file system's resolution
+rules so the allowlist cannot be silently widened on a case-
+sensitive FS:</p>
+<ul>
+<li><strong>Deny and the built-in deny set</strong> are case-folded on every OS.
+  A deny of <code>curl</code> rejects <code>curl</code>, <code>Curl</code> and <code>CURL</code> alike, and
+  the implicit deny on <code>sh</code> blocks <code>SH -c</code>, <code>Sh</code> and <code>Bash</code> too.
+  This matters on macOS's default case-insensitive APFS (where
+  <code>CURL</code> resolves to <code>/usr/bin/curl</code>) and on Windows's case-
+  insensitive resolver; on Linux the fold is defence-in-depth
+  against workspace-controlled upper-case binaries.</li>
+<li><strong>Allow</strong> is split by entry shape:
+    - <strong>Pathful entries</strong> (anything containing <code>/</code> or <code>\</code>, e.g.
+      <code>./safe</code>, <code>work/bin/echo</code>, <code>/usr/bin/echo</code>) are always
+      matched <strong>exact-case</strong> on every OS. We cannot reliably tell
+      whether the actual workspace volume is case-sensitive
+      (macOS APFS supports opt-in case-sensitive volumes, and
+      container layers can mix file systems), so folding would
+      silently widen <code>./safe</code> to admit a workspace-controlled
+      <code>./SAFE</code> on case-sensitive volumes. Operators who need both
+      list both.
+    - <strong>Bare-name entries</strong> (e.g. <code>echo</code>) resolve through <code>PATH</code>,
+      which the policy mode resets to a known-good default. They
+      follow the OS convention: case-folded on Windows and macOS,
+      exact-case on Linux. So <code>WithWorkspaceExecAllowedCommands("echo")</code>
+      admits <code>ECHO</code> on macOS / Windows but only <code>echo</code> on Linux.</li>
+</ul>
+<p>On Windows the basename match additionally strips common
+executable suffixes (<code>.exe</code>, <code>.cmd</code>, <code>.bat</code>, <code>.com</code>, <code>.ps1</code>) so
+<code>cmd</code> rejects <code>cmd.exe</code>, <code>curl</code> rejects <code>CURL.EXE</code>, and <code>echo</code>
+admits <code>ECHO.EXE</code>. The configured deny entries are folded through
+the same rules, so <code>WithWorkspaceExecDeniedCommands("CURL")</code> also
+blocks bare <code>curl</code> and <code>curl.exe</code>.</p>
+<h3 id="precedence">Precedence</h3>
+<p>When the same name appears in both lists, <strong>deny wins</strong>:</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a>explicit Deny  &gt;  implicit deny  &gt;  explicit Allow  &gt;  implicit allow
+</span></code></pre></div></td></tr></table></div>
+<p>So <code>WithWorkspaceExecAllowedCommands("git") + WithWorkspaceExecDeniedCommands("git")</code>
+rejects <code>git</code>. If you also list <code>sh</code> in the allow list, it stays
+denied by the implicit-deny set; you cannot weaken the implicit
+deny by re-listing its members in <code>Allow</code>.</p>
+<h3 id="spawn-hardening">Spawn hardening</h3>
+<p>When a policy is active, the spawn itself is also hardened to stop
+shell-startup tricks from re-arming a rejected command:</p>
+<ul>
+<li>the shell invocation is <code>sh -c</code> instead of <code>sh -lc</code>, so
+  <code>/etc/profile</code> and <code>$HOME/.profile</code> are not sourced first;</li>
+<li>per-call env is scrubbed: <code>HOME</code>, <code>ENV</code>, <code>BASH_ENV</code>,
+  <code>PROMPT_COMMAND</code>, <code>PS4</code>, <code>SHELL</code>, <code>SHELLOPTS</code>, <code>BASHOPTS</code>, <code>PATH</code>,
+  <code>IFS</code>, <code>CDPATH</code>, <code>GLOBIGNORE</code>, <code>LD_PRELOAD</code>, <code>LD_LIBRARY_PATH</code>,
+  <code>LD_AUDIT</code>, <code>DYLD_INSERT_LIBRARIES</code>, <code>DYLD_LIBRARY_PATH</code>,
+  <code>DYLD_FORCE_FLAT_NAMESPACE</code>, and any <code>BASH_FUNC_*</code> entry (Shellshock)
+  are dropped. <code>LANG</code> and similar benign variables pass through
+  untouched.</li>
+<li><code>PATH</code> in particular is dropped because the policy only matches by
+  command name; a caller-controlled <code>PATH=./bin:$PATH</code> plus a
+  workspace-side <code>./bin/echo</code> would otherwise pass the policy and
+  execute attacker code. Allowed commands resolve against the shell's
+  default <code>PATH</code> instead.</li>
+<li>on Windows the scrub folds env names to upper-case before
+  comparison, because Windows treats env keys case-insensitively at
+  runtime. A caller-supplied <code>Path=./bin</code>, <code>Home=.</code>, <code>Bash_Env=…</code> or
+  <code>bash_func_x%%=…</code> is therefore stripped just like its canonical
+  form would be.</li>
+<li>env entries whose <strong>key</strong> is not a POSIX name
+  (<code>/^[A-Za-z_][A-Za-z0-9_]*$/</code>) are dropped outright. This catches
+  the obvious cases (<code>PATH=.</code> as a key, embedded <code>\n</code> / <code>\r</code> / <code>\0</code>)
+  and also closes the shell-metacharacter bypass on runtimes that
+  build env injection through a shell string (<code>env KEY=value &lt;cmd&gt;</code>):
+  a name like <code>"X; curl http://x #"</code> placed into that template
+  would otherwise execute <code>curl</code> before the checked command.</li>
+<li><code>RunEnvProvider</code> entries are subject to the same scrub when
+  policy mode is active. <code>codeexecutor.mergeProviderEnv</code> honors
+  <code>spec.CleanEnv</code> and runs provider-supplied keys through the same
+  <code>internal/envscrub</code> blocklist, so a <code>NewEnvInjectingCodeExecutor</code>
+  provider returning <code>PATH</code> / <code>BASH_ENV</code> / <code>LD_PRELOAD</code> cannot
+  reintroduce them after <code>workspace_exec</code> has removed them.</li>
+</ul>
+<p>Without a policy configured none of this kicks in: <code>sh -lc</code> and the
+caller-supplied env (including <code>PATH</code>) are preserved as before.</p>
+<div class="admonition warning">
+<p class="admonition-title">Policy mode requires a CleanEnv-capable runtime</p>
+<p>The <code>sh -c</code> switch and the per-call env scrubbing above are
+only safe when the underlying runtime actually honors
+<code>RunProgramSpec.CleanEnv</code>. To avoid silently degrading the
+contract on a backend that ignores <code>CleanEnv</code>, <code>workspace_exec</code>
+<strong>fails closed</strong>: with <code>WithWorkspaceExecAllowedCommands</code> /
+<code>WithWorkspaceExecDeniedCommands</code> configured, the tool refuses
+to start a call when the runtime's
+<code>codeexecutor.Capabilities.SupportsCleanEnv</code> is <code>false</code>, and
+returns an error pointing the operator at a supported runtime.</p>
+<p>Today only <code>codeexecutor/local</code> advertises
+<code>SupportsCleanEnv: true</code>. <code>codeexecutor/container</code> and
+<code>codeexecutor/e2b</code> keep the zero-valued capabilities, so policy
+mode on those backends is currently refused at the gate.
+Implementing <code>CleanEnv</code> for them (so the policy gate opens
+automatically once they declare the capability) is tracked in
+<a href="https://github.com/trpc-group/trpc-agent-go/issues/1845">#1845</a>.
+Until then, run policy mode on the local backend, or drop the
+policy lists and rely on the sandbox layer for env / network
+isolation.</p>
+</div>
+<h3 id="scope">Scope</h3>
+<p>Enforcement is at the <strong>executable-name</strong> level. If an allowed command
+itself shells out based on its arguments — for example
+<code>find . -exec curl …</code>, <code>awk 'BEGIN{system("curl …")}'</code>,
+<code>git -c protocol.ext.allow=…</code> — the inner command is the allowed
+command's own subprocess and is not re-checked. Per-command argument
+validators are a planned follow-up; until they land, treat the
+network-egress policy of the sandbox itself as the primary defence and
+the allow/deny list as defence-in-depth.</p>
+<div class="admonition note">
+<p class="admonition-title">Allow-list is strictly stronger than deny-only</p>
+<p><code>WithWorkspaceExecAllowedCommands(...)</code> produces a closed world:
+everything outside the list (and the implicit deny set) is
+rejected.
+<code>WithWorkspaceExecDeniedCommands(...)</code> only blocks the named
+tools. In a deny-only configuration, an attacker who finds <em>any</em>
+binary outside the deny set — including a workspace-side script
+they themselves staged via an allowed editor — can still execute
+arbitrary code. Where possible, prefer an explicit allow list and
+add deny entries only for extra defence-in-depth.</p>
+<p>Known tool categories that are <strong>not</strong> in the built-in deny set
+today but can launch arbitrary code from their own arguments:
+debuggers / instrumentation (<code>gdb</code>, <code>lldb</code>, <code>valgrind</code>,
+<code>perf</code>), language interpreters (<code>python</code>, <code>perl</code>, <code>ruby</code>,
+<code>node</code>, <code>awk</code>, <code>lua</code>), package managers / <code>git</code> (<code>make</code>,
+<code>npm</code>, <code>pip</code>, <code>cargo</code>, <code>go run</code>, <code>git -c …</code>,
+<code>git --exec-path=…</code>), <code>find -exec</code>, and editor escape hatches
+(<code>vim -c :!</code>, <code>less !</code>). If you choose deny-only mode, add the
+ones you do not need to <code>denied_commands</code>, or switch to allow
+mode.</p>
+</div>
+<p>For lower-level (non-shell) skill execution, the equivalent knobs on
+<code>skill_run</code> are <code>WithSkillRunAllowedCommands</code> /
+<code>WithSkillRunDeniedCommands</code>; see <a href="../skill/">skill</a>.</p>
 <h2 id="environment-variables">Environment Variables</h2>
 <p>When the executor runs in a container, on a remote worker, or in another
 isolated environment, environment variables usually need to be injected
@@ -3780,7 +4193,7 @@ exposes it depends on the higher-level Agent and tool wiring.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 20, 2026 10:20:32 UTC">2026-05-20 10:20:32</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 27, 2026 04:33:11 UTC">2026-05-27 04:33:11</span>
   </span>
 
     
