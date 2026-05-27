@@ -1027,6 +1027,58 @@ agent := llmagent.New(
 HTTP header 传入自己的 token，provider 从请求上下文中读取后注入
 执行器，LLM 无需感知。
 
+## 请求级提示词片段覆盖
+
+如果少数请求需要压缩或改写系统消息，可以在 `runner.Run(...)` 里
+覆盖本次请求的 skill 概览或 `workspace_exec` 指引：
+
+- `agent.WithAvailableSkillsRenderer(...)` 自定义 `Available skills:`
+  概览。renderer 会收到当前请求可见的 `skill.Summary` 列表
+  （已应用 skill filter、上下文仓库等可见性规则），可以按业务需要
+  压缩描述、调整格式或补充本次请求的选择约束。返回内容没有以
+  `Available skills:` 开头时，框架会自动补上标题；返回空白字符串
+  表示本次请求不输出 `Available skills:` 段。
+- `agent.WithWorkspaceExecGuidance(...)` 自定义 `workspace_exec` 使用
+  指引。传入空字符串表示不覆盖，继续使用框架默认指引。
+
+```go
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Run the release checklist skill."),
+    agent.WithAvailableSkillsRenderer(func(
+        ctx context.Context,
+        req agent.AvailableSkillsRenderRequest,
+    ) string {
+        if len(req.Summaries) == 0 {
+            return ""
+        }
+        var b strings.Builder
+        b.WriteString("Only call skill_load when a listed skill is directly relevant.\n")
+        for _, s := range req.Summaries {
+            b.WriteString("- ")
+            b.WriteString(s.Name)
+            if desc := strings.TrimSpace(s.Description); desc != "" {
+                b.WriteString(": ")
+                b.WriteString(desc)
+            }
+            b.WriteString("\n")
+        }
+        return b.String()
+    }),
+    agent.WithWorkspaceExecGuidance(
+        "Use workspace_exec only when shell execution is required.",
+    ),
+)
+```
+
+`WithAvailableSkillsRenderer` 只改变概览文本，不改变实际可用的 skill
+工具，也不会替代 `skill_load` 对正文和文档的按需注入。
+`WithWorkspaceExecGuidance` 只改写提示词，不会禁用 `workspace_exec`。
+如果不希望暴露执行能力，请在创建 Agent 时关闭 workspace 执行
+surface，例如使用 `llmagent.WithWorkspaceExecSurfaceEnabled(false)`。
+
 ## 故障排查
 
 - “unknown skill”：确认技能名与仓库路径；调用 `skill_load` 前
