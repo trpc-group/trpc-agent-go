@@ -228,6 +228,10 @@ func (p *ToolPipe) Prompt() string {
 	if len(p.cfg.allowedOps) == 0 {
 		return ""
 	}
+	// No tools configured = nothing will be wrapped at runtime.
+	if len(p.cfg.allowedNames) == 0 && p.cfg.predicate == nil {
+		return ""
+	}
 	names := make([]string, 0, len(p.cfg.allowedNames))
 	for n := range p.cfg.allowedNames {
 		names = append(names, n)
