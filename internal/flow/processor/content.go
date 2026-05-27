@@ -414,12 +414,22 @@ func WithContextCompactionSkipRecentFunc(
 	}
 }
 
-// WithContextCompactionForceCleanToolNames sets tool names whose results should
-// always be compacted to a placeholder while context compaction is enabled.
+// WithContextCompactionForceCleanToolNames sets tool names whose historical
+// results should be compacted to a placeholder while context compaction is
+// enabled.
 func WithContextCompactionForceCleanToolNames(names ...string) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ContextCompactionConfig.toolResultCompactionRules.forceCleanToolNames =
 			toolNameSet(names)
+	}
+}
+
+// WithContextCompactionForceCleanRecentToolResults also applies force-clean
+// tool-name policy to current/recent events that are otherwise protected.
+func WithContextCompactionForceCleanRecentToolResults(enable bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ContextCompactionConfig.toolResultCompactionRules.forceCleanRecentToolResults =
+			enable
 	}
 }
 
@@ -1505,14 +1515,34 @@ func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
 	messages []model.Message,
 ) []model.Message {
 	cfg := normalizeContextCompactionConfig(p.ContextCompactionConfig)
+	forceCleanActive := cfg.hasForceCleanToolResults() &&
+		cfg.toolResultCompactionRules.forceCleanRecentToolResults
 	oversizedActive := cfg.OversizedToolResultMaxTokens > 0
-	if !cfg.Enabled || !oversizedActive {
+	if !cfg.Enabled || (!forceCleanActive && !oversizedActive) {
 		return messages
 	}
 
 	var cloned bool
 	for i := range messages {
 		if cfg.keepToolResult(messages[i]) {
+			continue
+		}
+		if forceCleanActive && cfg.forceCleanToolResult(messages[i]) {
+			msg, compacted, _ := cleanToolResultMessageWithCounter(
+				context.Background(),
+				messages[i],
+				cfg.TokenCounter,
+			)
+			if compacted {
+				if !cloned {
+					messages = append([]model.Message(nil), messages...)
+					cloned = true
+				}
+				messages[i] = msg
+			}
+			continue
+		}
+		if !oversizedActive {
 			continue
 		}
 		msg, truncated, _ := truncateOversizedToolResultMessageWithCounter(

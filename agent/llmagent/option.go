@@ -127,9 +127,13 @@ type ToolResultCompactionSkipRecentFunc func(events []event.Event) int
 
 // ToolResultCompactionConfig declares tool-name based compaction rules.
 type ToolResultCompactionConfig struct {
-	// ForceCleanToolNames lists tool names whose results should always be
+	// ForceCleanToolNames lists tool names whose historical results should be
 	// compacted to a placeholder when context compaction is enabled.
 	ForceCleanToolNames []string
+	// ForceCleanRecentToolResults also applies ForceCleanToolNames to
+	// current/recent protected results. The default is false so the active tool
+	// chain remains visible unless explicitly requested.
+	ForceCleanRecentToolResults bool
 	// KeepToolNames lists tool names whose results should be left untouched by
 	// context compaction. Model-level token tailoring may still remove older
 	// rounds if the final request is too large.
@@ -1592,6 +1596,7 @@ func WithToolResultCompactionConfig(
 				[]string(nil),
 				config.ForceCleanToolNames...,
 			),
+			ForceCleanRecentToolResults: config.ForceCleanRecentToolResults,
 			KeepToolNames: append(
 				[]string(nil),
 				config.KeepToolNames...,

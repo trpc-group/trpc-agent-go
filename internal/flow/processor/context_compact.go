@@ -76,8 +76,9 @@ type ContextCompactionStats struct {
 }
 
 type toolResultCompactionRules struct {
-	forceCleanToolNames map[string]struct{}
-	keepToolNames       map[string]struct{}
+	forceCleanToolNames         map[string]struct{}
+	keepToolNames               map[string]struct{}
+	forceCleanRecentToolResults bool
 }
 
 func normalizeContextCompactionConfig(
@@ -224,7 +225,8 @@ func applyForceCleanToolResultPass(
 ) ([]event.Event, ContextCompactionStats) {
 	var stats ContextCompactionStats
 	for i := range events {
-		if isProtectedCompactionEvent(events[i], protectedRequestIDs) {
+		if !cfg.toolResultCompactionRules.forceCleanRecentToolResults &&
+			isProtectedCompactionEvent(events[i], protectedRequestIDs) {
 			continue
 		}
 		evt, changed, compactedCount, savedTokens := rewriteToolResultEventMessages(

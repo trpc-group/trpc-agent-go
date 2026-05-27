@@ -130,15 +130,17 @@ func TestWithContextCompactionOptions(t *testing.T) {
 func TestWithToolResultCompactionConfig(t *testing.T) {
 	opts := &Options{}
 	cfg := &ToolResultCompactionConfig{
-		ForceCleanToolNames: []string{"shell", "grep"},
-		KeepToolNames:       []string{"session_load"},
-		SkipRecentFunc:      func([]event.Event) int { return 2 },
+		ForceCleanToolNames:         []string{"shell", "grep"},
+		ForceCleanRecentToolResults: true,
+		KeepToolNames:               []string{"session_load"},
+		SkipRecentFunc:              func([]event.Event) int { return 2 },
 	}
 
 	WithToolResultCompactionConfig(cfg)(opts)
 	require.NotNil(t, opts.ToolResultCompactionConfig)
 	require.Equal(t, []string{"shell", "grep"},
 		opts.ToolResultCompactionConfig.ForceCleanToolNames)
+	require.True(t, opts.ToolResultCompactionConfig.ForceCleanRecentToolResults)
 	require.Equal(t, []string{"session_load"},
 		opts.ToolResultCompactionConfig.KeepToolNames)
 	require.Equal(t, 2,
