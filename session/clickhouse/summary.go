@@ -64,11 +64,17 @@ func (s *Service) CreateSessionSummary(
 	// Note: expires_at is set to NULL - summaries are bound to session
 	// lifecycle and will be deleted when session is deleted or expires.
 	now := time.Now()
-	// INSERT new version (ReplacingMergeTree will deduplicate based on updated_at).
+	// Summary.UpdatedAt stores the event cutoff. Use a separate write timestamp
+	// for ReplacingMergeTree's version column so same-timestamp event cutoffs
+	// that only advance by Boundary.LastEventID still replace deterministically.
+	writeVersion := now
+	if !summary.UpdatedAt.IsZero() && !writeVersion.After(summary.UpdatedAt) {
+		writeVersion = summary.UpdatedAt.Add(time.Nanosecond)
+	}
 	err = s.chClient.Exec(ctx,
 		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, expires_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), now, summary.UpdatedAt, nil)
+		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), now, writeVersion, nil)
 
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)

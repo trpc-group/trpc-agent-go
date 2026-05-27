@@ -128,7 +128,10 @@ func TestService_CreateSessionSummary_Error(t *testing.T) {
 		AppName:   "app1",
 		UserID:    "user1",
 		Summaries: make(map[string]*session.Summary),
-		Events:    []event.Event{{ID: "1"}},
+		Events: []event.Event{{
+			ID:        "1",
+			Timestamp: time.Now().Add(time.Hour),
+		}},
 	}
 
 	// Case 1: Summarize failed
@@ -190,6 +193,13 @@ func TestService_CreateSessionSummary_NoTTL(t *testing.T) {
 		assert.Contains(t, query, "INSERT INTO session_summaries")
 		// expires_at should be nil (last argument)
 		assert.Len(t, args, 8)
+		summary := sess.Summaries["key"]
+		if assert.NotNil(t, summary) {
+			writeVersion, ok := args[6].(time.Time)
+			if assert.True(t, ok) {
+				assert.True(t, writeVersion.After(summary.UpdatedAt))
+			}
+		}
 		assert.Nil(t, args[7]) // expires_at should be nil
 		return nil
 	}
