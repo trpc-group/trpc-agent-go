@@ -86,6 +86,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		runAgentInputHook:                      opts.RunAgentInputHook,
 		stateResolver:                          opts.StateResolver,
 		runOptionResolver:                      opts.RunOptionResolver,
+		sessionService:                         opts.SessionService,
 		tracker:                                tracker,
 		running:                                make(map[session.Key]*sessionContext),
 		startSpan:                              opts.StartSpan,
@@ -99,6 +100,8 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		toolResultInputTranslationEnabled:         opts.ToolResultInputTranslationEnabled,
 		toolCallDeltaStreamingEnabled:             opts.ToolCallDeltaStreamingEnabled,
 		streamingToolResultActivityEnabled:        opts.StreamingToolResultActivityEnabled,
+		distributedCancelEnabled:                  opts.DistributedCancelEnabled,
+		distributedCancelPollInterval:             opts.DistributedCancelPollInterval,
 	}
 	return run
 }
@@ -119,6 +122,7 @@ type runner struct {
 	runAgentInputHook                         RunAgentInputHook
 	stateResolver                             StateResolver
 	runOptionResolver                         RunOptionResolver
+	sessionService                            session.Service
 	tracker                                   track.Tracker
 	runningMu                                 sync.Mutex
 	running                                   map[session.Key]*sessionContext
@@ -133,11 +137,15 @@ type runner struct {
 	toolResultInputTranslationEnabled         bool
 	toolCallDeltaStreamingEnabled             bool
 	streamingToolResultActivityEnabled        bool
+	distributedCancelEnabled                  bool
+	distributedCancelPollInterval             time.Duration
 }
 
 type sessionContext struct {
-	ctx    context.Context
-	cancel context.CancelCauseFunc
+	ctx                      context.Context
+	cancel                   context.CancelCauseFunc
+	distributedCancelStarted bool
+	stopDistributedCancel    context.CancelFunc
 }
 
 type runInput struct {
@@ -405,6 +413,14 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		span.End()
 		return nil, fmt.Errorf("register running context: %w", err)
 	}
+	if r.distributedCancelEnabled {
+		stopDistributedCancel, err := r.startDistributedCancel(ctx, input.key, cancel)
+		if err != nil {
+			log.WarnfContext(ctx, "agui distributed cancel disabled for run: threadID: %s, runID: %s, err: %v", input.threadID, input.runID, err)
+		} else {
+			r.setDistributedCancel(input.key, stopDistributedCancel)
+		}
+	}
 	go r.run(ctx, cancel, input.key, input, events)
 	return events, nil
 }
@@ -412,6 +428,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key session.Key, input *runInput, events chan<- aguievents.Event) {
 	defer func() {
 		cancel(nil)
+		r.finishDistributedCancel(ctx, key)
 		r.unregister(key)
 		input.span.End()
 		close(events)
@@ -951,6 +968,24 @@ func (r *runner) register(key session.Key, ctx context.Context, cancel context.C
 	}
 	r.running[key] = &sessionContext{ctx: ctx, cancel: cancel}
 	return nil
+}
+
+func (r *runner) setDistributedCancel(key session.Key, stop context.CancelFunc) {
+	r.runningMu.Lock()
+	defer r.runningMu.Unlock()
+	if entry, ok := r.running[key]; ok {
+		entry.distributedCancelStarted = true
+		entry.stopDistributedCancel = stop
+	}
+}
+
+func (r *runner) distributedCancelSnapshot(key session.Key) (bool, context.CancelFunc) {
+	r.runningMu.Lock()
+	defer r.runningMu.Unlock()
+	if entry, ok := r.running[key]; ok {
+		return entry.distributedCancelStarted, entry.stopDistributedCancel
+	}
+	return false, nil
 }
 
 func (r *runner) unregister(key session.Key) {
