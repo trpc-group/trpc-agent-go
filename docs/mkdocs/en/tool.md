@@ -1409,6 +1409,60 @@ childTool := agenttool.NewTool(
 )
 ```
 
+### Child Agent Context Visibility
+
+AgentTool runs the child Agent by reusing the current invocation and session.
+It helps to separate the nearby concepts first:
+
+| Concept | What it does | What it does not do |
+| --- | --- | --- |
+| `FilterKey` | Labels which conversation view an event belongs to; the content processor uses it to decide which historical messages enter a model request | It is not a permission boundary or a separate storage unit |
+| `Branch` | Records the Agent execution lineage, mainly for traces and cross-Agent message projection | It usually does not directly decide what history AgentTool can read |
+| `HistoryScope` | Controls how AgentTool builds the child Agent `FilterKey` | It does not shape the tool result and does not change the child Agent tool surface |
+| `MessageFilterMode` | A higher-level LLMAgent/GraphAgent preset that combines time filtering and `FilterKey` filtering | Most AgentTool users do not need to configure it directly |
+
+For historical reasons, `BranchFilterMode` contains the word `Branch`, but for
+current-version events it compares `Event.FilterKey` with the current
+invocation `FilterKey`. Legacy events written before `FilterKey` existed may
+still fall back to `Event.Branch` for compatibility.
+
+AgentTool currently has two history scopes:
+
+- `HistoryScopeIsolated` (default): the child Agent uses an independent
+  `FilterKey`, such as `math-specialist-<uuid>`. With normal Runner-generated
+  events, the child sees only the current tool arguments and does not inherit
+  parent Agent history. Child events are still stored in the same session, but
+  under a separate view.
+- `HistoryScopeParentBranch`: the child Agent uses a sub-key under the parent
+  key, such as `assistant/math-specialist-<uuid>`. The default prefix matching
+  treats ancestors and descendants as the same lineage. This means the child
+  can see parent history, and the parent may also see child events in later
+  context. This mode is for shared-lineage collaboration; it is not a snapshot
+  mode that reads parent history while hiding child details from the parent.
+
+In practice:
+
+- Use the default `HistoryScopeIsolated` when the child Agent should do
+  independent work and return only its tool result to the parent. Pass any
+  required context explicitly in the tool arguments.
+- Use `HistoryScopeParentBranch` when the child Agent should continue, edit, or
+  refine prior parent output, and it is acceptable for parent and child events
+  to share one lineage.
+
+`HistoryScope` only controls historical visibility. These behaviors do not
+change when you switch history scope:
+
+- `WithResponseMode` still controls which child assistant content becomes the
+  tool result.
+- `WithSkipSummarization` still controls whether the parent flow performs an
+  extra outer summarization call after the tool result.
+- The child Agent still inherits the current invocation's session, plugins, and
+  `RunOptions` through `Invocation.Clone(...)`; start a separate application
+  run when you need true background isolation.
+- If business code manually appends events with an empty `FilterKey`, those
+  events may be visible from multiple views for compatibility. Prefer setting
+  explicit app-prefixed `FilterKey` values for custom events.
+
 ### Options
 
 - WithSkipSummarization(bool):
@@ -1437,8 +1491,8 @@ childTool := agenttool.NewTool(
     message as the tool result
 
 - WithHistoryScope(HistoryScope):
-  - `HistoryScopeIsolated` (default): Keep the child Agent fully isolated; it only sees the current tool arguments (no inherited history).
-  - `HistoryScopeParentBranch`: Inherit parent conversation history by using a hierarchical filter key `parent/child-uuid`. This allows the content processor to include parent events via prefix matching while keeping child events isolated under a sub-branch. Typical use cases: “edit/optimize/continue previous output”.
+  - `HistoryScopeIsolated` (default): Use an independent child `FilterKey`; the child usually sees only the current tool arguments and does not inherit parent history.
+  - `HistoryScopeParentBranch`: Use a hierarchical `FilterKey` in the form `parent/child-uuid`. Parent and child events share one lineage, and prefix matching can include either side in the other's context. Typical use cases: edit, optimize, or continue previous output.
 
 Example:
 
@@ -1465,6 +1519,9 @@ child := agenttool.NewTool(
   `WithHistoryScope(agenttool.HistoryScopeIsolated)` controls what the child
   can read. `WithResponseMode(agenttool.ResponseModeFinalOnly)` controls what
   the parent receives as the tool result.
+- `HistoryScopeParentBranch` is shared lineage, not snapshot isolation. If child
+  details should not appear in later parent context, keep the default
+  `HistoryScopeIsolated` and pass the needed context through tool arguments.
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
 ## Tool Integration and Usage
