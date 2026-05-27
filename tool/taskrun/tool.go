@@ -62,6 +62,7 @@ type options struct {
 	injectedContextMessages []model.Message
 	sessionService          session.Service
 	allowNested             bool
+	propagateParentAppName  bool
 }
 
 // WithDefaultAgentName configures the agent selected by spawn when the caller
@@ -94,6 +95,15 @@ func WithInjectedContextMessages(messages []model.Message) Option {
 func WithSessionService(service session.Service) Option {
 	return func(opts *options) {
 		opts.sessionService = service
+	}
+}
+
+// WithParentAppNamePropagation copies the current invocation app name into
+// spawned runs. It is disabled by default so workers keep their runner-level
+// default app namespace unless callers explicitly opt in.
+func WithParentAppNamePropagation(enabled bool) Option {
+	return func(opts *options) {
+		opts.propagateParentAppName = enabled
 	}
 }
 
@@ -323,7 +333,7 @@ func (t *spawnTool) Call(
 	run, err := state.controller.Spawn(ctx, taskrunruntime.SpawnRequest{
 		OwnerUserID:             userID,
 		ParentSessionID:         sessionID,
-		AppName:                 currentAppName(ctx),
+		AppName:                 appNameForSpawnTool(ctx, state.options),
 		AgentName:               agentName,
 		Task:                    in.Task,
 		Timeout:                 secondsDuration(in.TimeoutSeconds),
@@ -741,6 +751,13 @@ func currentAppName(ctx context.Context) string {
 		return ""
 	}
 	return strings.TrimSpace(inv.Session.AppName)
+}
+
+func appNameForSpawnTool(ctx context.Context, opts options) string {
+	if !opts.propagateParentAppName {
+		return ""
+	}
+	return currentAppName(ctx)
 }
 
 func isNestedTaskRun(ctx context.Context) bool {

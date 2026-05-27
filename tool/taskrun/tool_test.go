@@ -168,7 +168,7 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	require.Equal(t, taskrunruntime.StatusQueued, spawned.Status)
 
 	controller.mu.Lock()
-	require.Equal(t, "app", controller.spawned.AppName)
+	require.Empty(t, controller.spawned.AppName)
 	require.Equal(t, "worker", controller.spawned.AgentName)
 	require.Equal(t, "trace-1", controller.spawned.RuntimeState["trace_id"])
 	require.Equal(t, "review", controller.spawned.Task)
@@ -283,6 +283,29 @@ func TestSpawnToolSyncWaitDeadlineErrors(t *testing.T) {
 		),
 	)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestSpawnToolPropagatesParentAppNameWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	controller := newFakeController()
+	tools := NewTools(
+		controller,
+		WithParentAppNamePropagation(true),
+	)
+	ctx := newInvocationContextWithApp(
+		"parent-app",
+		"user-a",
+		"session-a",
+		nil,
+	)
+
+	_, err := tools.spawn.Call(ctx, []byte(`{"task":"review"}`))
+	require.NoError(t, err)
+
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	require.Equal(t, "parent-app", controller.spawned.AppName)
 }
 
 func TestWaitTimedOutRequiresWaitContextDeadline(t *testing.T) {
