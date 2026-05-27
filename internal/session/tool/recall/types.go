@@ -299,15 +299,29 @@ func normalizeWindowSize(
 func currentSummaryCutoff(
 	inv *agent.Invocation,
 ) time.Time {
+	boundary := currentSummaryBoundary(inv)
+	if boundary != nil {
+		return boundary.CutoffTime()
+	}
+	return time.Time{}
+}
+
+func currentSummaryBoundary(
+	inv *agent.Invocation,
+) *session.SummaryBoundary {
 	if inv == nil || inv.Session == nil {
-		return time.Time{}
+		return nil
 	}
 
 	filterKey := strings.TrimSpace(inv.GetEventFilterKey())
-	if cutoff, ok := summaryCutoffForFilter(inv.Session, filterKey); ok {
-		return cutoff
+	if boundary, ok := summaryBoundaryForFilter(inv.Session, filterKey); ok {
+		return boundary
 	}
-	return summaryCutoffFromState(inv.Session)
+	cutoff := summaryCutoffFromState(inv.Session)
+	if cutoff.IsZero() {
+		return nil
+	}
+	return session.NewSummaryBoundary("", cutoff)
 }
 
 func summaryCutoffFromState(sess *session.Session) time.Time {
@@ -329,27 +343,44 @@ func summaryCutoffForFilter(
 	sess *session.Session,
 	filterKey string,
 ) (time.Time, bool) {
+	boundary, ok := summaryBoundaryForFilter(sess, filterKey)
+	if !ok {
+		return time.Time{}, false
+	}
+	return boundary.CutoffTime(), true
+}
+
+func summaryBoundaryForFilter(
+	sess *session.Session,
+	filterKey string,
+) (*session.SummaryBoundary, bool) {
+	if sess == nil {
+		return nil, false
+	}
 	sess.SummariesMu.RLock()
 	defer sess.SummariesMu.RUnlock()
 
 	if len(sess.Summaries) == 0 {
-		return time.Time{}, false
+		return nil, false
 	}
 
 	if sum := sess.Summaries[filterKey]; sum != nil &&
 		strings.TrimSpace(sum.Summary) != "" {
-		return sum.CutoffTime(), true
+		return sum.CutoffBoundary(), true
 	}
 	if filterKey != "" {
-		if cutoff, ok := session.SummaryPrefixCutoff(sess.Summaries, filterKey); ok {
-			return cutoff, true
+		if boundary, ok := session.SummaryPrefixBoundary(
+			sess.Summaries,
+			filterKey,
+		); ok {
+			return boundary, true
 		}
 	}
 	if sum := sess.Summaries[session.SummaryFilterKeyAllContents]; sum != nil &&
 		strings.TrimSpace(sum.Summary) != "" {
-		return sum.CutoffTime(), true
+		return sum.CutoffBoundary(), true
 	}
-	return time.Time{}, false
+	return nil, false
 }
 
 func extractSessionMessageText(

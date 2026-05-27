@@ -574,7 +574,7 @@ func TestLexicalScanSessionEvents_HonorsCutoffAndTopK(t *testing.T) {
 		},
 		"budget planning friday",
 		"",
-		base.Add(90*time.Second),
+		session.NewSummaryBoundary("", base.Add(90*time.Second)),
 		1,
 	)
 	require.Len(t, results, 1)
@@ -620,7 +620,7 @@ func TestLexicalScanSessionEvents_HonorsFilterKey(t *testing.T) {
 		session.Key{AppName: "app", UserID: "user", SessionID: "sess"},
 		"budget planning",
 		"branch/a",
-		time.Time{},
+		nil,
 		5,
 	)
 	require.Len(t, results, 1)
@@ -907,8 +907,8 @@ func TestSearchHelpers_EdgeBranches(t *testing.T) {
 	assert.Empty(t, keywordSearchQuery("the and or"))
 	assert.Nil(t, keywordTokens("the and or"))
 
-	assert.Nil(t, lexicalScanSessionEvents(nil, session.Key{}, "alpha", "", time.Time{}, 1))
-	assert.Nil(t, lexicalScanSessionEvents(session.NewSession("app", "user", "sess"), session.Key{}, "", "", time.Time{}, 1))
+	assert.Nil(t, lexicalScanSessionEvents(nil, session.Key{}, "alpha", "", nil, 1))
+	assert.Nil(t, lexicalScanSessionEvents(session.NewSession("app", "user", "sess"), session.Key{}, "", "", nil, 1))
 
 	assert.Zero(
 		t,
@@ -1027,7 +1027,7 @@ func TestSearchSessionHistory_AndScanErrorBranches(t *testing.T) {
 			},
 		},
 		&SearchSessionRequest{Query: "alpha"},
-		time.Time{},
+		nil,
 	)
 	require.Error(t, err)
 
@@ -1046,7 +1046,7 @@ func TestSearchSessionHistory_AndScanErrorBranches(t *testing.T) {
 			},
 		},
 		&SearchSessionRequest{Query: "alpha"},
-		time.Time{},
+		nil,
 	)
 	require.Error(t, err)
 
@@ -1065,7 +1065,7 @@ func TestSearchSessionHistory_AndScanErrorBranches(t *testing.T) {
 			},
 		},
 		&SearchSessionRequest{Query: "alpha"},
-		time.Time{},
+		nil,
 	)
 	require.NoError(t, err)
 	assert.Nil(t, results)
