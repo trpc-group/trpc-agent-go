@@ -39,6 +39,16 @@ const (
 
 	// MetricGenAIClientOperationDuration represents the duration of client operation.
 	MetricGenAIClientOperationDuration = "gen_ai.client.operation.duration"
+	// MetricGenAIWorkflowElapsedTime represents workflow elapsed time between two lifecycle points.
+	MetricGenAIWorkflowElapsedTime = "gen_ai.workflow.elapsed_time"
+	// KeyGenAIWorkflowElapsedFrom represents the lifecycle point elapsed time is measured from.
+	KeyGenAIWorkflowElapsedFrom = "gen_ai.workflow.elapsed.from"
+	// KeyGenAIWorkflowElapsedTo represents the lifecycle point elapsed time is measured to.
+	KeyGenAIWorkflowElapsedTo = "gen_ai.workflow.elapsed.to"
+	// ValueGenAIWorkflowElapsedFromRootWorkflowStart represents the root workflow start point.
+	ValueGenAIWorkflowElapsedFromRootWorkflowStart = "root_workflow.start"
+	// ValueGenAIWorkflowElapsedToCurrentWorkflowEnd represents the current workflow end point.
+	ValueGenAIWorkflowElapsedToCurrentWorkflowEnd = "current_workflow.end"
 	// MetricTRPCAgentGoClientTimeToFirstToken represents the time to first token for client.
 	// Note: This metric will be reported alongside MetricGenAIServerTimeToFirstToken with the same value.
 	MetricTRPCAgentGoClientTimeToFirstToken = "trpc_agent_go.client.time_to_first_token" // #nosec G101 - this is a metric key name, not a credential.

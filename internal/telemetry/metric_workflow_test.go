@@ -78,10 +78,12 @@ func TestReportWorkflowMetrics(t *testing.T) {
 	originalProvider := MeterProvider
 	originalMeter := WorkflowMeter
 	originalDuration := WorkflowMetricGenAIClientOperationDuration
+	originalElapsed := WorkflowMetricGenAIWorkflowElapsedTime
 	defer func() {
 		MeterProvider = originalProvider
 		WorkflowMeter = originalMeter
 		WorkflowMetricGenAIClientOperationDuration = originalDuration
+		WorkflowMetricGenAIWorkflowElapsedTime = originalElapsed
 	}()
 
 	MeterProvider = provider
@@ -112,6 +114,52 @@ func TestReportWorkflowMetrics(t *testing.T) {
 	require.Len(t, points, 1)
 	require.Equal(t, uint64(1), points[0].Count)
 	require.True(t, workflowAttrSetContains(points[0].Attributes, semconvtrace.KeyGenAIWorkflowID, "retrieve"))
+	require.False(t, workflowAttrSetContainsKey(points[0].Attributes, metrics.KeyGenAIWorkflowElapsedFrom))
+	require.False(t, workflowAttrSetContainsKey(points[0].Attributes, metrics.KeyGenAIWorkflowElapsedTo))
+}
+
+func TestReportWorkflowElapsedMetrics(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+
+	originalProvider := MeterProvider
+	originalMeter := WorkflowMeter
+	originalElapsed := WorkflowMetricGenAIWorkflowElapsedTime
+	defer func() {
+		MeterProvider = originalProvider
+		WorkflowMeter = originalMeter
+		WorkflowMetricGenAIWorkflowElapsedTime = originalElapsed
+	}()
+
+	MeterProvider = provider
+	WorkflowMeter = provider.Meter(metrics.MeterNameWorkflow)
+	var err error
+	WorkflowMetricGenAIWorkflowElapsedTime, err = histogram.NewDynamicFloat64Histogram(
+		provider,
+		metrics.MeterNameWorkflow,
+		metrics.MetricGenAIWorkflowElapsedTime,
+		metric.WithUnit("s"),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	ReportWorkflowElapsedMetrics(ctx, WorkflowAttributes{
+		AppName:      "test-app",
+		UserID:       "user-123",
+		AgentID:      "agent-1",
+		WorkflowID:   "retrieve",
+		WorkflowName: "retrieve",
+		WorkflowType: WorkflowTypeFunction.String(),
+	}, 250*time.Millisecond)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(ctx, &rm))
+	points := workflowHistogramPointsByName(t, rm, metrics.MetricGenAIWorkflowElapsedTime)
+	require.Len(t, points, 1)
+	require.Equal(t, uint64(1), points[0].Count)
+	require.True(t, workflowAttrSetContains(points[0].Attributes, semconvtrace.KeyGenAIWorkflowID, "retrieve"))
+	require.True(t, workflowAttrSetContains(points[0].Attributes, metrics.KeyGenAIWorkflowElapsedFrom, metrics.ValueGenAIWorkflowElapsedFromRootWorkflowStart))
+	require.True(t, workflowAttrSetContains(points[0].Attributes, metrics.KeyGenAIWorkflowElapsedTo, metrics.ValueGenAIWorkflowElapsedToCurrentWorkflowEnd))
 }
 
 func TestReportWorkflowMetricsNoopWhenHistogramNil(t *testing.T) {
@@ -123,6 +171,18 @@ func TestReportWorkflowMetricsNoopWhenHistogramNil(t *testing.T) {
 
 	require.NotPanics(t, func() {
 		ReportWorkflowMetrics(context.Background(), WorkflowAttributes{}, time.Millisecond)
+	})
+}
+
+func TestReportWorkflowElapsedMetricsNoopWhenHistogramNil(t *testing.T) {
+	originalElapsed := WorkflowMetricGenAIWorkflowElapsedTime
+	defer func() {
+		WorkflowMetricGenAIWorkflowElapsedTime = originalElapsed
+	}()
+	WorkflowMetricGenAIWorkflowElapsedTime = nil
+
+	require.NotPanics(t, func() {
+		ReportWorkflowElapsedMetrics(context.Background(), WorkflowAttributes{}, time.Millisecond)
 	})
 }
 
@@ -148,10 +208,18 @@ func workflowHistogramPoints(
 	t *testing.T,
 	rm metricdata.ResourceMetrics,
 ) []metricdata.HistogramDataPoint[float64] {
+	return workflowHistogramPointsByName(t, rm, metrics.MetricGenAIClientOperationDuration)
+}
+
+func workflowHistogramPointsByName(
+	t *testing.T,
+	rm metricdata.ResourceMetrics,
+	metricName string,
+) []metricdata.HistogramDataPoint[float64] {
 	t.Helper()
 	for _, scopeMetric := range rm.ScopeMetrics {
 		for _, metric := range scopeMetric.Metrics {
-			if metric.Name != metrics.MetricGenAIClientOperationDuration {
+			if metric.Name != metricName {
 				continue
 			}
 			require.Equal(t, "s", metric.Unit)
@@ -160,13 +228,22 @@ func workflowHistogramPoints(
 			return hist.DataPoints
 		}
 	}
-	t.Fatalf("metric %s not found", metrics.MetricGenAIClientOperationDuration)
+	t.Fatalf("metric %s not found", metricName)
 	return nil
 }
 
 func workflowAttrSetContains(set attribute.Set, key string, value string) bool {
 	for _, kv := range set.ToSlice() {
 		if string(kv.Key) == key && kv.Value.AsString() == value {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowAttrSetContainsKey(set attribute.Set, key string) bool {
+	for _, kv := range set.ToSlice() {
+		if string(kv.Key) == key {
 			return true
 		}
 	}
