@@ -82,7 +82,10 @@ func WithSessionService(service session.Service) Option {
 //
 // This enables request-scoped agent construction (for example, building the
 // agent with a prompt/model/sandbox that depends on the current request).
-type AgentFactory = agent.AgentFactory
+type AgentFactory func(
+	ctx context.Context,
+	ro agent.RunOptions,
+) (agent.Agent, error)
 
 // WithMemoryService sets the memory service to use.
 func WithMemoryService(service memory.Service) Option {
