@@ -12,6 +12,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,8 @@ import (
 // treats the corresponding tool result as orphaned and downgrades it to a user
 // message, injecting "[orphan_tool_result]" noise into the conversation history.
 var geminiCallSeq uint64
+
+const geminiThoughtSignatureKey = "thought_signature"
 
 // Model implements the model.Model interface for Gemini API.
 type Model struct {
@@ -431,6 +434,7 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 		reasoningBuilder strings.Builder
 		toolCalls        []model.ToolCall
 		finishReason     string
+		reasoningSig     string
 	)
 	for _, candidate := range candidates {
 		if candidate.FinishReason != "" {
@@ -459,22 +463,31 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 					if id == "" {
 						id = fmt.Sprintf("gemini_call_%d", atomic.AddUint64(&geminiCallSeq, 1))
 					}
-					toolCalls = append(toolCalls, model.ToolCall{
+					toolCall := model.ToolCall{
 						ID: id,
 						Function: model.FunctionDefinitionParam{
 							Name:      part.FunctionCall.Name,
 							Arguments: args,
 						},
-					})
+					}
+					if len(part.ThoughtSignature) > 0 {
+						toolCall.ExtraFields = map[string]any{
+							geminiThoughtSignatureKey: append([]byte(nil), part.ThoughtSignature...),
+						}
+					}
+					toolCalls = append(toolCalls, toolCall)
+				} else if len(part.ThoughtSignature) > 0 {
+					reasoningSig = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
 				}
 			}
 		}
 	}
 	return model.Message{
-		Role:             model.RoleAssistant,
-		Content:          textBuilder.String(),
-		ReasoningContent: reasoningBuilder.String(),
-		ToolCalls:        toolCalls,
+		Role:               model.RoleAssistant,
+		Content:            textBuilder.String(),
+		ReasoningContent:   reasoningBuilder.String(),
+		ReasoningSignature: reasoningSig,
+		ToolCalls:          toolCalls,
 	}, finishReason
 }
 
@@ -676,13 +689,19 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 // buildThinkingConfig converts our Request to Gemini request ThinkingConfig
 func (m *Model) buildThinkingConfig(request *model.Request) *genai.ThinkingConfig {
 	res := &genai.ThinkingConfig{}
-	if request.ThinkingTokens != nil {
+	if request.ThinkingLevel != nil {
+		res.ThinkingLevel = normalizeThinkingLevel(*request.ThinkingLevel)
+	} else if request.ThinkingTokens != nil {
 		res.ThinkingBudget = genai.Ptr(int32(*request.ThinkingTokens))
 	}
 	if request.ThinkingEnabled != nil {
 		res.IncludeThoughts = *request.ThinkingEnabled
 	}
 	return res
+}
+
+func normalizeThinkingLevel(level string) genai.ThinkingLevel {
+	return genai.ThinkingLevel(strings.TrimSpace(level))
 }
 
 // convertMessages converts our Message format to OpenAI's format.
@@ -727,10 +746,20 @@ func (m *Model) convertMessageContent(
 	}
 	// Add Content as a text part if present.
 	if msg.Content != "" {
-		contentParts = append(
-			contentParts,
-			genai.NewContentFromText(msg.Content, genai.Role(role)),
-		)
+		if signature := thoughtSignatureFromString(msg.ReasoningSignature); len(signature) > 0 {
+			contentParts = append(
+				contentParts,
+				genai.NewContentFromParts([]*genai.Part{{
+					Text:             msg.Content,
+					ThoughtSignature: signature,
+				}}, genai.Role(role)),
+			)
+		} else {
+			contentParts = append(
+				contentParts,
+				genai.NewContentFromText(msg.Content, genai.Role(role)),
+			)
+		}
 	}
 	for _, part := range msg.ContentParts {
 		contentPart := m.convertContentPart(part)
@@ -740,7 +769,69 @@ func (m *Model) convertMessageContent(
 		// For non-file or non-skipped file types, add to contentParts.
 		contentParts = append(contentParts, genai.NewContentFromParts([]*genai.Part{contentPart}, genai.Role(role)))
 	}
+	for _, toolCall := range msg.ToolCalls {
+		contentPart := m.convertToolCallPart(toolCall)
+		if contentPart == nil {
+			continue
+		}
+		contentParts = append(contentParts, genai.NewContentFromParts([]*genai.Part{contentPart}, genai.Role(role)))
+	}
 	return contentParts
+}
+
+func (m *Model) convertToolCallPart(toolCall model.ToolCall) *genai.Part {
+	if toolCall.Function.Name == "" {
+		return nil
+	}
+	args := map[string]any{}
+	if len(toolCall.Function.Arguments) > 0 {
+		if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+			args = map[string]any{}
+		}
+	}
+	part := &genai.Part{
+		FunctionCall: &genai.FunctionCall{
+			ID:   toolCall.ID,
+			Name: toolCall.Function.Name,
+			Args: args,
+		},
+	}
+	if signature := thoughtSignatureFromExtraFields(toolCall.ExtraFields); len(signature) > 0 {
+		part.ThoughtSignature = signature
+	}
+	return part
+}
+
+func thoughtSignatureFromExtraFields(extraFields map[string]any) []byte {
+	if len(extraFields) == 0 {
+		return nil
+	}
+	raw, ok := extraFields[geminiThoughtSignatureKey]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []byte:
+		return append([]byte(nil), v...)
+	case string:
+		if decoded, err := base64.StdEncoding.DecodeString(v); err == nil {
+			return decoded
+		}
+		return []byte(v)
+	default:
+		return nil
+	}
+}
+
+func thoughtSignatureFromString(signature string) []byte {
+	signature = strings.TrimSpace(signature)
+	if signature == "" {
+		return nil
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(signature); err == nil {
+		return decoded
+	}
+	return []byte(signature)
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
