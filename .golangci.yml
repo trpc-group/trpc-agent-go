@@ -1,36 +1,48 @@
-linters-settings:
-  gocyclo:
-    min-complexity: 20
-  goliddjoijnt:
-    min-confidence: 0
-  revive:
-    rules:
-      - name: package-comments
-      - name: exported
-        arguments:
-          - disableStutteringCheck
-
-issues:
-  include:
-    - EXC0012 # exported should have comment
-    - EXC0013 # package comment should be of the form
-    - EXC0014 # comment on exported should be of the form
-    - EXC0015 # should have a package comment
-  exclude-files:
-    - ".*.pb.go"
-    - ".*_mock.go"
-    - ".*_test.go"
-
+version: "2"
+output:
+  formats:
+    text:
+      path: stdout
 linters:
-  disable-all: true
+  default: none
   enable:
-    - govet 
-    - goimports
-    - gofmt
-    - revive
     - gocyclo
     - gosec
+    - govet
     - ineffassign
-
-output:
-  formats: colored-line-number 
+    - revive
+  settings:
+    gocyclo:
+      min-complexity: 20
+    revive:
+      rules:
+        - name: package-comments
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - .*.pb.go
+      - .*_mock.go
+      - .*_test.go
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - .*.pb.go
+      - .*_mock.go
+      - .*_test.go
+      - third_party$
+      - builtin$
+      - examples$
