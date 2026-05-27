@@ -31,7 +31,7 @@
 //	go run ./context_compaction -model=gpt-5.2
 //
 //	# Try -skip-recent-events=3 to protect the previous tool chain from Pass 1,
-//	# or -force-clean-large-log to always clean the demo tool by name.
+//	# or -force-clean-large-log to clean historical demo tool results by name.
 package main
 
 import (
@@ -111,7 +111,7 @@ var (
 	forceCleanLargeLog = flag.Bool(
 		"force-clean-large-log",
 		false,
-		"Force the large_log tool result to be cleaned whenever context compaction is enabled",
+		"Force historical large_log tool results to be cleaned when context compaction is enabled",
 	)
 )
 

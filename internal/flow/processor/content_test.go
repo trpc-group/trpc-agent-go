@@ -2797,7 +2797,7 @@ func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
 	}
 }
 
-func TestContentRequestProcessor_getIncrementMessages_ForceCleanWithScopedTimeline(
+func TestContentRequestProcessor_getIncrementMessages_ForceCleanPreservesScopedCurrentTimeline(
 	t *testing.T,
 ) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -2908,7 +2908,7 @@ func TestContentRequestProcessor_getIncrementMessages_ForceCleanWithScopedTimeli
 			require.Equal(t, model.RoleTool, messages[1].Role)
 			require.Equal(t, messages[0].ToolCalls[0].ID, messages[1].ToolID)
 			require.Equal(t, "shell", messages[1].ToolName)
-			require.Equal(t, policyToolResultPlaceholder, messages[1].Content)
+			require.Equal(t, shellPayload, messages[1].Content)
 		})
 	}
 }
