@@ -387,6 +387,129 @@ func TestPolicy_BuiltinDenyBlocksStatefulBuiltins(t *testing.T) {
 	}
 }
 
+// TestPolicy_BuiltinDenyBlocksVarMutatingBuiltins guards a
+// state-mutation bypass vector: shell builtins that assign to a
+// shell variable can rewrite PATH (or any other resolution state)
+// before a subsequent allowed segment runs, even though argv[0]
+// of the mutator segment is itself harmless. The classic PoC is
+// `printf -v PATH ./work/bin; git`, which under bash sets PATH
+// from inside the shell and then resolves `git` to
+// `./work/bin/git` - a workspace-controlled binary - despite
+// `printf` and `git` both passing an argv[0]-only check.
+func TestPolicy_BuiltinDenyBlocksVarMutatingBuiltins(t *testing.T) {
+	// Allow `git` so we exercise the "harmless argv[0] segment +
+	// mutator that rewrites PATH first" shape, not just a default
+	// deny on the mutator itself.
+	p := PolicyFromLists([]string{"git", "echo"}, nil)
+	cases := []string{
+		// bash extension: `printf -v VAR FORMAT [ARGS]` writes
+		// the formatted output to VAR instead of stdout.
+		"printf -v PATH ./work/bin",
+		"printf -v PATH ./work/bin ; git",
+		// POSIX: read assigns to a named variable from stdin.
+		"read PATH",
+		// POSIX: getopts writes OPTARG / the named variable.
+		"getopts a x",
+		// bash arithmetic assignment.
+		"let X=1",
+		// bash array fillers.
+		"mapfile X",
+		"readarray X",
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			err := CheckCommand(in, p)
+			if err == nil ||
+				!strings.Contains(err.Error(), "built-in policy") {
+				t.Fatalf(
+					"expected built-in deny for %q, got: %v", in, err,
+				)
+			}
+		})
+	}
+}
+
+// TestParse_DoubleQuotedBackslashPosix pins the POSIX rule that
+// inside a double-quoted string the backslash is only special
+// before $, `, ", \\ (and newline, which we reject outright).
+// Folding `\X` to `X` unconditionally would let `"./s\afe"` parse
+// as `./safe` while the shell still execs `./s\afe`, allowing a
+// workspace-controlled file with a backslash-bearing name to
+// bypass an allowlist entry for the folded form.
+func TestParse_DoubleQuotedBackslashPosix(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{
+			name: "backslash before non-special char preserved",
+			in:   `echo "./s\afe"`,
+			want: []string{"echo", `./s\afe`},
+		},
+		{
+			name: "backslash before letter preserved",
+			in:   `echo "a\bc"`,
+			want: []string{"echo", `a\bc`},
+		},
+		{
+			name: "backslash before dollar escapes",
+			in:   `echo "a\$b"`,
+			want: []string{"echo", "a$b"},
+		},
+		{
+			name: "backslash before backtick escapes",
+			in:   "echo \"a\\`b\"",
+			want: []string{"echo", "a`b"},
+		},
+		{
+			name: "backslash before double quote escapes",
+			in:   `echo "a\"b"`,
+			want: []string{"echo", `a"b`},
+		},
+		{
+			name: "backslash before backslash escapes",
+			in:   `echo "a\\b"`,
+			want: []string{"echo", `a\b`},
+		},
+		{
+			name: "multiple non-special escapes preserved",
+			in:   `echo "\a\b\c"`,
+			want: []string{"echo", `\a\b\c`},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pipe, err := Parse(tc.in)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !equal(pipe.Commands[0], tc.want) {
+				t.Fatalf("argv: got %q want %q",
+					pipe.Commands[0], tc.want)
+			}
+		})
+	}
+}
+
+// TestPolicy_AllowExactPathAvoidsBackslashBypass demonstrates the
+// concrete bypass that the POSIX backslash rule closes: an allow
+// entry "./safe" must not admit a `"./s\afe"` invocation whose
+// shell-executed argv[0] differs from the allowlisted form.
+func TestPolicy_AllowExactPathAvoidsBackslashBypass(t *testing.T) {
+	p := PolicyFromLists([]string{"./safe"}, nil)
+	err := CheckCommand(`"./s\afe"`, p)
+	if err == nil {
+		t.Fatalf(
+			"expected deny: parser must not fold \"./s\\afe\" to " +
+				"./safe (shell would still exec ./s\\afe)",
+		)
+	}
+	if !strings.Contains(err.Error(), "not in allowed_commands") {
+		t.Fatalf("expected allowlist miss, got: %v", err)
+	}
+}
+
 // TestPolicy_DenyEntryNormalizedOnWindows guards the bypass where
 // the configured deny entry is written with a Windows extension or
 // in mixed case while the command in the wild is the bare/lower

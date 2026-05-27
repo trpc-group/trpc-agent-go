@@ -788,6 +788,14 @@ pass a deny on `curl`), register code to run later (e.g.
 - stateful shell builtins: `trap`, `alias`, `unalias`, `enable`,
   `export`, `unset`, `readonly`, `local`, `declare`, `typeset`,
   `set`, `shopt`, `hash`, `cd`, `pushd`, `popd`
+- variable-assigning builtins: `printf`, `read`, `getopts`, `let`,
+  `mapfile`, `readarray` — on a single-process shell these can
+  rewrite `PATH` or other resolution state before a later allowed
+  segment runs (e.g. `printf -v PATH ./work/bin; git` would
+  otherwise resolve `git` to `./work/bin/git` even when both
+  `printf` and `git` pass an `argv[0]`-only check). The bash
+  extensions matter because `/bin/sh` is bash on macOS and on
+  many container images.
 
 `workspace_exec` exposes a `cwd` parameter for the legitimate cwd-
 switching use case, so the model never needs to call `cd` itself.

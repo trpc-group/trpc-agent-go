@@ -56,9 +56,15 @@ func TestSimple_AcceptsCommonShapes(t *testing.T) {
 			want: []string{"echo", "hi"},
 		},
 		{
-			name: "double-quoted with non-letter escape",
+			// POSIX double-quote rule: backslash is only special
+			// before $, `, ", \, and newline. Before any other
+			// byte the backslash is preserved literally, so
+			// "a\nb" is the three-byte sequence a-\-n-b. The
+			// stricter, POSIX-accurate behaviour is covered by
+			// TestParse_DoubleQuotedBackslashPosix in parser_test.go.
+			name: "double-quoted backslash before non-special preserved",
 			in:   `echo "a\nb"`,
-			want: []string{"echo", "anb"},
+			want: []string{"echo", `a\nb`},
 		},
 		{
 			name: "xargs literal brace placeholder",

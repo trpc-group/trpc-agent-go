@@ -167,6 +167,18 @@ var implicitDeny = map[string]struct{}{
 	// them defensively. workspace_exec exposes a "cwd" parameter
 	// for the legitimate case.
 	"cd": {}, "pushd": {}, "popd": {},
+	// shell builtins that assign to a shell variable. On a shell
+	// that runs the full pipeline in a single process (e.g.
+	// `sh -c "printf -v PATH ./work/bin; git"` under bash), they
+	// can rewrite PATH or other resolution state before a later
+	// allowed segment runs, so a deny on "curl" + allow on "git"
+	// still ends up resolving git to "./work/bin/git". `printf`,
+	// `let`, `mapfile` and `readarray` are bash extensions but
+	// `/bin/sh` is bash on macOS and on many container images,
+	// so the deny needs to be unconditional. `read` and
+	// `getopts` are POSIX and assign to a named variable.
+	"printf": {}, "read": {}, "getopts": {},
+	"let": {}, "mapfile": {}, "readarray": {},
 }
 
 // Policy holds the executable-name allow/deny lists that should be

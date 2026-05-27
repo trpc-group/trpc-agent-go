@@ -740,6 +740,12 @@ mkdir -p out; cp a.txt out/
 - 有状态 shell builtin：`trap`、`alias`、`unalias`、`enable`、`export`、
   `unset`、`readonly`、`local`、`declare`、`typeset`、`set`、`shopt`、
   `hash`、`cd`、`pushd`、`popd`
+- 会给 shell 变量赋值的 builtin：`printf`、`read`、`getopts`、`let`、
+  `mapfile`、`readarray`。在同一进程里跑整条管道的 shell（macOS 以及
+  很多容器镜像里 `/bin/sh` 就是 bash）上，这些 builtin 可以在后续允许
+  的命令之前改写 `PATH` 等解析状态。例如 `printf -v PATH ./work/bin; git`
+  在不拦 `printf` 的策略下，`git` 会被解析成 `./work/bin/git`，即便
+  `printf` 与 `git` 的 `argv[0]` 都通过了 allow/deny 检查。
 
 `workspace_exec` 自带 `cwd` 参数来覆盖正常的 cwd 切换场景，所以模型
 不需要也不应该自己调 `cd`。

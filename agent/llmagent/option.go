@@ -1095,9 +1095,14 @@ func WithSkillRunStager(stager toolskill.SkillStager) Option {
 // timeout, sudo, time, nice, ionice, taskset, stdbuf, strace,
 // ltrace, script, flock, ...) together with the shell builtins
 // that can register code to run later or mutate later-segment
-// resolution (trap,
-// alias, unalias, enable, export, unset, readonly, local, declare,
-// typeset, set, shopt, hash, cd, pushd, popd). They are blocked
+// resolution (trap, alias, unalias, enable, export, unset,
+// readonly, local, declare, typeset, set, shopt, hash, cd,
+// pushd, popd) and the shell builtins that assign to a shell
+// variable, which on a single-process shell can rewrite PATH or
+// other resolution state before a later allowed segment runs
+// (printf, read, getopts, let, mapfile, readarray; the bash
+// extensions of this set matter because /bin/sh is bash on
+// macOS and on many container images). They are blocked
 // whenever a policy is active and cannot be re-enabled by listing
 // them here; allow-list entries for them are ignored. If you
 // legitimately need one of them, wrap the desired use in an

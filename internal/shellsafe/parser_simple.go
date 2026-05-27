@@ -426,9 +426,17 @@ func lexSingleQuoted(src string, i int, sb *strings.Builder) (int, error) {
 
 // lexDoubleQuoted copies the literal bytes between matched double
 // quotes into sb. '$' and '`' inside double quotes are rejected
-// because they would re-introduce expansion; '\' escapes the next
-// byte; bare newlines are rejected so a multi-line command cannot
-// hide intent.
+// because they would re-introduce expansion; bare newlines are
+// rejected so a multi-line command cannot hide intent.
+//
+// Backslash handling follows POSIX: inside a double-quoted string
+// the backslash is only special before one of `$`, '`', `"`, `\`
+// (and newline, which we reject outright). Before any other byte
+// the backslash is preserved literally. Folding `\X` to `X`
+// unconditionally would let `"./s\afe"` parse as `./safe` while
+// the shell still execs `./s\afe`, letting a workspace-controlled
+// file with a backslash-bearing name bypass an allowlist entry
+// for the folded form.
 func lexDoubleQuoted(src string, i int, sb *strings.Builder) (int, error) {
 	j := i + 1
 	for j < len(src) {
@@ -452,8 +460,13 @@ func lexDoubleQuoted(src string, i int, sb *strings.Builder) (int, error) {
 				return 0, errors.New(
 					"escaped newline is not allowed")
 			}
-			sb.WriteByte(n)
-			j += 2
+			if isDQEscapable(n) {
+				sb.WriteByte(n)
+				j += 2
+			} else {
+				sb.WriteByte('\\')
+				j++
+			}
 		case c == '\n' || c == '\r':
 			return 0, errors.New(
 				"newline inside double-quoted string is not allowed")
@@ -463,6 +476,13 @@ func lexDoubleQuoted(src string, i int, sb *strings.Builder) (int, error) {
 		}
 	}
 	return 0, errors.New("unterminated double-quoted string")
+}
+
+// isDQEscapable reports whether c is a byte that, when preceded by
+// '\\' inside a double-quoted string, is folded into a literal c
+// per POSIX. Any byte not in this set keeps the leading backslash.
+func isDQEscapable(c byte) bool {
+	return c == '$' || c == '`' || c == '"' || c == '\\'
 }
 
 // lexBackslash consumes a '\X' escape outside any quotes and writes
