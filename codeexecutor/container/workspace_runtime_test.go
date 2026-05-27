@@ -188,7 +188,7 @@ func TestWorkspaceRuntime_CreateWorkspace_AutoMapsInputs(t *testing.T) {
 		container: &tcontainer.Summary{ID: testCID},
 		hostConfig: tcontainer.HostConfig{
 			Binds: []string{
-				host + ":" + defaultInputsContainer + ":ro",
+				host + ":" + defaultInputsContainer,
 			},
 		},
 		autoInputs: true,
@@ -1303,10 +1303,29 @@ func TestWorkspaceRuntime_RunProgram_NoDupWorkspaceEnv(t *testing.T) {
 
 func TestHelpers_Simple(t *testing.T) {
 	tmp := t.TempDir()
-	b := []string{tmp + ":/opt/trpc-agent/skills:ro"}
+	tmpWithColon := filepath.Join(tmp, "host:with-colon")
+	require.NoError(t, os.Mkdir(tmpWithColon, 0o755))
+	b := []string{
+		tmp + ":/opt/trpc-agent/skills:ro",
+		tmp + ":/opt/trpc-agent/inputs",
+		tmp + ":/opt/trpc-agent/empty-mode:",
+		tmpWithColon + ":/opt/trpc-agent/colon:ro",
+	}
 	got := findBindSource(b, "/opt/trpc-agent/skills")
 	require.Equal(t, tmp, got)
 
+	require.Equal(t, tmp, findBindSource(
+		b, "/opt/trpc-agent/inputs",
+	))
+	require.Equal(t, tmp, findBindSource(
+		b, "/opt/trpc-agent/empty-mode",
+	))
+	require.Equal(t, tmpWithColon, findBindSource(
+		b, "/opt/trpc-agent/colon",
+	))
+	require.Equal(t, "", findBindSource([]string{
+		tmp + ":/opt/trpc-agent/inputs:/other:ro",
+	}, "/opt/trpc-agent/inputs"))
 	require.Equal(t, "", findBindSource(b, "/none"))
 	require.Equal(t, "ab_12__X", sanitize("ab 12!@X"))
 
