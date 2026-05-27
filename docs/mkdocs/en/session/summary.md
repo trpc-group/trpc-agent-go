@@ -941,7 +941,6 @@ Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableCont
 Use `WithToolResultCompactionConfig(...)` when you need tool-name or recency policy:
 
 - `ForceCleanToolNames`: historical results from these tools are replaced with a policy placeholder whenever context compaction is enabled, after current/recent protection is applied. This is useful for noisy tools such as shell, grep, or log dump tools.
-- `ForceCleanRecentToolResults`: when true, `ForceCleanToolNames` also applies to protected current/recent requests. Leave it false unless the raw output should be hidden even in the active tool loop.
 - `KeepToolNames`: results from these tools are left untouched by context compaction. This is useful for recovery tools such as `session_load` and `session_search` when the model may need to read the exact payload.
 - `SkipRecentFunc`: customizes how many tail events are considered recent. It affects Pass 0 force-clean and Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.
 
@@ -979,7 +978,6 @@ agent := llmagent.New(
     llmagent.WithContextCompactionTokenCounter(counter),
     llmagent.WithToolResultCompactionConfig(&llmagent.ToolResultCompactionConfig{
         ForceCleanToolNames: []string{"shell", "grep"},
-        ForceCleanRecentToolResults: false,
         KeepToolNames:       []string{"session_load", "session_search"},
         SkipRecentFunc: func(events []event.Event) int {
             // For example, protect the request/invocation units that own the

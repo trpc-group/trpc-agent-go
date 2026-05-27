@@ -380,40 +380,6 @@ func TestCompactIncrementEvents_ForceCleansOnlyUnprotectedToolNames(t *testing.T
 	require.Equal(t, 1, stats.ToolResultsCompacted)
 }
 
-func TestCompactIncrementEvents_ForceCleanRecentOptInCleansProtectedToolNames(t *testing.T) {
-	content := "current result"
-	evt := event.Event{
-		RequestID:    "req-current",
-		InvocationID: "inv-current",
-		FilterKey:    "test-agent",
-		Response: &model.Response{
-			Done: true,
-			Choices: []model.Choice{{
-				Message: model.NewToolMessage("tool-call-current", "shell", content),
-			}},
-		},
-	}
-
-	compacted, stats := compactIncrementEvents(
-		context.Background(),
-		[]event.Event{evt},
-		"req-current",
-		"inv-current",
-		ContextCompactionConfig{
-			Enabled: true,
-			toolResultCompactionRules: toolResultCompactionRules{
-				forceCleanToolNames:         toolNameSet([]string{"shell"}),
-				forceCleanRecentToolResults: true,
-			},
-		},
-	)
-
-	require.Len(t, compacted, 1)
-	require.Equal(t, policyToolResultPlaceholder,
-		compacted[0].Response.Choices[0].Message.Content)
-	require.Equal(t, 1, stats.ToolResultsCompacted)
-}
-
 func TestCompactIncrementEvents_MissingToolNameDoesNotForceClean(t *testing.T) {
 	toolCall := event.Event{
 		RequestID:    "req-current",
@@ -595,7 +561,6 @@ func TestContextCompactionToolResultOptions(t *testing.T) {
 		WithEnableContextCompaction(true),
 		WithContextCompactionSkipRecentFunc(skipFunc),
 		WithContextCompactionForceCleanToolNames("", "shell", "shell"),
-		WithContextCompactionForceCleanRecentToolResults(true),
 		WithContextCompactionKeepToolNames("session_load", ""),
 	)
 
@@ -604,7 +569,6 @@ func TestContextCompactionToolResultOptions(t *testing.T) {
 	require.Equal(t, 2, cfg.SkipRecentFunc(nil))
 	require.Contains(t, cfg.toolResultCompactionRules.forceCleanToolNames, "shell")
 	require.NotContains(t, cfg.toolResultCompactionRules.forceCleanToolNames, "")
-	require.True(t, cfg.toolResultCompactionRules.forceCleanRecentToolResults)
 	require.Contains(t, cfg.toolResultCompactionRules.keepToolNames, "session_load")
 	require.NotContains(t, cfg.toolResultCompactionRules.keepToolNames, "")
 }
@@ -636,22 +600,6 @@ func TestTruncateOversizedToolResultMessages_SkipsForceCleanForCurrentMessages(t
 	require.Equal(t, "worker", got[2].ToolName)
 	require.Equal(t, shellContent, messages[0].Content,
 		"original slice should be cloned before rewriting")
-}
-
-func TestTruncateOversizedToolResultMessages_ForceCleanRecentOptIn(t *testing.T) {
-	p := NewContentRequestProcessor(
-		WithEnableContextCompaction(true),
-		WithContextCompactionForceCleanToolNames("shell"),
-		WithContextCompactionForceCleanRecentToolResults(true),
-	)
-	messages := []model.Message{
-		model.NewToolMessage("tool-call-shell", "shell", "short shell output"),
-	}
-
-	got := p.truncateOversizedToolResultMessages(messages)
-
-	require.Equal(t, policyToolResultPlaceholder, got[0].Content)
-	require.Equal(t, "shell", got[0].ToolName)
 }
 
 func TestTruncateOversizedToolResultMessages_MissingToolNameSkipsNamedRules(t *testing.T) {

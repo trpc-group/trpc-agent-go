@@ -440,9 +440,6 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			processor.WithContextCompactionKeepToolNames(
 				options.ToolResultCompactionConfig.KeepToolNames...,
 			),
-			processor.WithContextCompactionForceCleanRecentToolResults(
-				options.ToolResultCompactionConfig.ForceCleanRecentToolResults,
-			),
 			processor.WithContextCompactionSkipRecentFunc(
 				processor.ContextCompactionSkipRecentFunc(
 					options.ToolResultCompactionConfig.SkipRecentFunc,
