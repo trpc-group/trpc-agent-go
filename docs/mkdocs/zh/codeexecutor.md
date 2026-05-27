@@ -187,6 +187,13 @@ msg := model.NewUserMessage("请处理这个文件")
 _ = msg.AddFileData("report.pdf", pdfBytes, "application/pdf")
 ```
 
+如果文件内容只给工具或代码执行器使用，可以为 OpenAI 模型配置
+`openai.WithOmitFileContentParts(true)`，让 provider 请求省略 file content
+parts。这个选项不会隐藏你放在 prompt 里的普通消息文本或文件名提示。当前
+OpenAI adapter 使用 Chat Completions API，它只支持该接口接受的文件内容请求
+形式。PDF 文件数据可以作为 file content 发送；Markdown 或纯文本内容应作为
+普通消息文本传入，或只 stage 给工具使用，而不是作为 file content part 发送。
+
 ### 方式 2：先上传到 artifact，再在消息里只放引用
 
 如果文件已经提前上传到 artifact，可以把 `artifact://...` 作为 `file_id`
