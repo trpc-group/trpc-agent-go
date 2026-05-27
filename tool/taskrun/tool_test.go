@@ -541,6 +541,14 @@ func TestTranscriptToolRequiresSessionServiceAndParentSession(t *testing.T) {
 	}
 	_, err = tools.read.Call(ctx, []byte(`{"id":"run-2"}`))
 	require.ErrorIs(t, err, taskrunruntime.ErrRunNotFound)
+
+	controller.runs["run-3"] = taskrunruntime.Run{
+		ID:              "run-3",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "session-a",
+	}
+	_, err = tools.read.Call(ctx, []byte(`{"id":"run-3"}`))
+	require.ErrorContains(t, err, "child session id unavailable")
 }
 
 func TestTranscriptToolTrimsNormalizedEventLimit(t *testing.T) {
@@ -605,6 +613,82 @@ func TestTranscriptToolTrimsNormalizedEventLimit(t *testing.T) {
 	got := gotAny.(transcriptResult)
 	require.Len(t, got.Events, maxTranscriptEventLimit)
 	require.Equal(t, "answer-001", got.Events[0].Content)
+}
+
+func TestTranscriptToolRejectsInvalidArgsAndAppContext(t *testing.T) {
+	t.Parallel()
+
+	sessionService := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, sessionService.Close())
+	})
+	tools := NewTools(newFakeController(), WithSessionService(sessionService))
+	ctx := newInvocationContext("user-a", "session-a", nil)
+
+	_, err := tools.read.Call(ctx, []byte(`{invalid`))
+	require.Error(t, err)
+
+	_, err = tools.read.Call(ctx, []byte(`{"id":" "}`))
+	require.ErrorContains(t, err, "empty run id")
+
+	ctx = newInvocationContextWithApp("", "user-a", "session-a", nil)
+	_, err = tools.read.Call(ctx, []byte(`{"id":"run-1"}`))
+	require.ErrorContains(t, err, "current app name is unavailable")
+}
+
+func TestTranscriptEventHelpersHandleSparseAndDeltaEvents(t *testing.T) {
+	t.Parallel()
+
+	eventTime := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	require.Nil(t, transcriptEvents(nil))
+	require.Empty(t, transcriptEventFromEvent(nil))
+
+	sparse := transcriptEventFromEvent(&event.Event{
+		ID:        "evt-empty",
+		Author:    "worker",
+		Timestamp: eventTime,
+	})
+	require.Equal(t, "evt-empty", sparse.ID)
+	require.Equal(t, "worker", sparse.Author)
+	require.Equal(t, eventTime, sparse.Timestamp)
+	require.Empty(t, sparse.Object)
+
+	got := transcriptEventFromEvent(&event.Event{
+		ID:        "evt-delta",
+		Author:    "worker",
+		Timestamp: eventTime,
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Error:  &model.ResponseError{Message: "model failed"},
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					Role:     model.RoleAssistant,
+					Content:  "partial answer",
+					ToolID:   "tool-call-1",
+					ToolName: "lookup",
+					ToolCalls: []model.ToolCall{
+						{
+							Function: model.FunctionDefinitionParam{
+								Name: " ",
+							},
+						},
+						{
+							Function: model.FunctionDefinitionParam{
+								Name: "search",
+							},
+						},
+					},
+				},
+			}},
+		},
+	})
+	require.Equal(t, model.ObjectTypeChatCompletion, got.Object)
+	require.Equal(t, "model failed", got.Error)
+	require.Equal(t, model.RoleAssistant, got.Role)
+	require.Equal(t, "partial answer", got.Content)
+	require.Equal(t, "tool-call-1", got.ToolID)
+	require.Equal(t, "lookup", got.ToolName)
+	require.Equal(t, []string{"search"}, got.ToolCalls)
 }
 
 func TestNormalizeTranscriptLimit(t *testing.T) {

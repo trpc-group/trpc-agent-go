@@ -460,6 +460,80 @@ func TestServiceRecordsRunProgress(t *testing.T) {
 	require.Equal(t, startedAt.Add(3*time.Second), *final.Progress.LastEventAt)
 }
 
+func TestProgressAccumulatorHandlesSparseEvents(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
+	acc := progressAccumulator{}
+
+	require.False(t, acc.consume(nil, now))
+	require.Nil(t, acc.snapshot())
+
+	require.True(t, acc.consume(&event.Event{}, now))
+	require.True(t, acc.consume(&event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Usage: &model.Usage{
+				PromptTokens:     100,
+				CompletionTokens: 100,
+				TotalTokens:      200,
+			},
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					ToolCalls: []model.ToolCall{{
+						ID: "partial-call",
+						Function: model.FunctionDefinitionParam{
+							Name: "lookup",
+						},
+					}},
+				},
+			}},
+		},
+	}, now.Add(time.Second)))
+
+	got := acc.snapshot()
+	require.NotNil(t, got)
+	require.Equal(t, 2, got.EventCount)
+	require.Zero(t, got.ToolCallCount)
+	require.Zero(t, got.ToolResultCount)
+	require.Zero(t, got.PromptTokens)
+	require.Zero(t, got.CompletionTokens)
+	require.Zero(t, got.TotalTokens)
+	require.NotNil(t, got.LastEventAt)
+	require.Equal(t, now.Add(time.Second), *got.LastEventAt)
+}
+
+func TestServiceUpdateProgressIgnoresNilMissingAndTerminalRuns(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(&captureRunner{})
+	require.NoError(t, err)
+
+	runningRunID := "running-run"
+	terminalRunID := "terminal-run"
+	svc.runs[runningRunID] = &Run{ID: runningRunID, Status: StatusRunning}
+	svc.runs[terminalRunID] = &Run{ID: terminalRunID, Status: StatusCompleted}
+
+	svc.updateProgress(runningRunID, nil)
+	require.Nil(t, svc.runs[runningRunID].Progress)
+
+	lastEventAt := time.Date(2026, 5, 26, 11, 0, 0, 0, time.UTC)
+	progress := &Progress{
+		EventCount:  1,
+		LastEventAt: &lastEventAt,
+	}
+	svc.updateProgress("missing-run", progress)
+	svc.updateProgress(terminalRunID, progress)
+	require.Nil(t, svc.runs[terminalRunID].Progress)
+
+	svc.updateProgress(runningRunID, progress)
+	progress.EventCount = 2
+	require.NotNil(t, svc.runs[runningRunID].Progress)
+	require.Equal(t, 1, svc.runs[runningRunID].Progress.EventCount)
+	require.NotSame(t, progress, svc.runs[runningRunID].Progress)
+	require.NotSame(t, progress.LastEventAt, svc.runs[runningRunID].Progress.LastEventAt)
+}
+
 func TestServicePropagatesSpawnAppName(t *testing.T) {
 	t.Parallel()
 
