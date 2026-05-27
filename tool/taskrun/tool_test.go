@@ -532,6 +532,15 @@ func TestTranscriptToolRequiresSessionServiceAndParentSession(t *testing.T) {
 	tools := NewTools(controller, WithSessionService(sessionService))
 	_, err = tools.read.Call(ctx, []byte(`{"id":"run-1"}`))
 	require.ErrorIs(t, err, taskrunruntime.ErrRunNotFound)
+
+	controller.runs["run-2"] = taskrunruntime.Run{
+		ID:              "run-2",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "session-a",
+		ChildSessionID:  "missing-child",
+	}
+	_, err = tools.read.Call(ctx, []byte(`{"id":"run-2"}`))
+	require.ErrorIs(t, err, taskrunruntime.ErrRunNotFound)
 }
 
 func TestTranscriptToolTrimsNormalizedEventLimit(t *testing.T) {

@@ -552,6 +552,9 @@ func (t *transcriptTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	if child == nil {
+		return nil, taskrunruntime.ErrRunNotFound
+	}
 	return transcriptResult{
 		ID:             run.ID,
 		Status:         run.Status,
