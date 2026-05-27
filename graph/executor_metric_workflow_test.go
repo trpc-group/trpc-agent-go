@@ -110,6 +110,10 @@ func TestWorkflowMetricRetryRecordsOnce(t *testing.T) {
 	require.Len(t, points, 1)
 	require.Equal(t, uint64(1), points[0].Count)
 	require.False(t, workflowPointHasAttrKey(points[0], semconvtrace.KeyErrorType))
+	elapsedPts := collectWorkflowElapsedMetricPoints(t, reader)
+	require.Len(t, elapsedPts, 1)
+	require.Equal(t, uint64(1), elapsedPts[0].Count)
+	require.False(t, workflowPointHasAttrKey(elapsedPts[0], semconvtrace.KeyErrorType))
 }
 
 func TestWorkflowMetricCacheHitRecordsWithoutCacheDimension(t *testing.T) {
@@ -140,6 +144,10 @@ func TestWorkflowMetricCacheHitRecordsWithoutCacheDimension(t *testing.T) {
 	require.Len(t, points, 1)
 	require.Equal(t, uint64(2), points[0].Count)
 	require.False(t, workflowPointHasAttrKey(points[0], MetadataKeyCacheHit))
+	elapsedPts := collectWorkflowElapsedMetricPoints(t, reader)
+	require.Len(t, elapsedPts, 1)
+	require.Equal(t, uint64(2), elapsedPts[0].Count)
+	require.False(t, workflowPointHasAttrKey(elapsedPts[0], MetadataKeyCacheHit))
 }
 
 func TestWorkflowMetricBeforeCallbackCustomResultRecordsSuccess(t *testing.T) {
@@ -166,6 +174,109 @@ func TestWorkflowMetricBeforeCallbackCustomResultRecordsSuccess(t *testing.T) {
 	require.Len(t, points, 1)
 	require.Equal(t, uint64(1), points[0].Count)
 	require.False(t, workflowPointHasAttrKey(points[0], semconvtrace.KeyErrorType))
+	elapsedPts := collectWorkflowElapsedMetricPoints(t, reader)
+	require.Len(t, elapsedPts, 1)
+	require.Equal(t, uint64(1), elapsedPts[0].Count)
+	require.False(t, workflowPointHasAttrKey(elapsedPts[0], semconvtrace.KeyErrorType))
+}
+
+func TestWorkflowElapsedMetricRecordsOnSuccess(t *testing.T) {
+	reader, cleanup := setupWorkflowMetricReader(t)
+	defer cleanup()
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("work", func(ctx context.Context, state State) (any, error) {
+		time.Sleep(10 * time.Millisecond)
+		return State{"ok": true}, nil
+	}).SetEntryPoint("work").SetFinishPoint("work")
+	exec := compileExecutorForWorkflowMetric(t, sg)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-workflow-elapsed-success"),
+		agent.WithInvocationSession(&session.Session{AppName: "test-app", UserID: "user-1"}),
+	)
+	ch, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+	drainWorkflowEvents(ch)
+
+	nodePts := collectWorkflowMetricPoints(t, reader)
+	require.Len(t, nodePts, 1)
+	require.False(t, workflowPointHasAttrKey(nodePts[0], semconvmetrics.KeyGenAIWorkflowElapsedFrom))
+	require.False(t, workflowPointHasAttrKey(nodePts[0], semconvmetrics.KeyGenAIWorkflowElapsedTo))
+
+	elapsedPts := collectWorkflowElapsedMetricPoints(t, reader)
+	require.Len(t, elapsedPts, 1)
+	require.Equal(t, uint64(1), elapsedPts[0].Count)
+	require.GreaterOrEqual(t, elapsedPts[0].Sum, nodePts[0].Sum)
+	require.True(t, workflowPointHasAttr(elapsedPts[0], semconvtrace.KeyGenAIWorkflowID, "work"))
+	require.True(t, workflowPointHasAttr(elapsedPts[0], semconvtrace.KeyGenAIAppName, "test-app"))
+	require.True(t, workflowPointHasAttr(elapsedPts[0], semconvmetrics.KeyGenAIWorkflowElapsedFrom, semconvmetrics.ValueGenAIWorkflowElapsedFromRootWorkflowStart))
+	require.True(t, workflowPointHasAttr(elapsedPts[0], semconvmetrics.KeyGenAIWorkflowElapsedTo, semconvmetrics.ValueGenAIWorkflowElapsedToCurrentWorkflowEnd))
+	require.False(t, workflowPointHasAttrKey(elapsedPts[0], semconvtrace.KeyErrorType))
+}
+
+func TestWorkflowElapsedMetricRecordsOnFailure(t *testing.T) {
+	reader, cleanup := setupWorkflowMetricReader(t)
+	defer cleanup()
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("fail", func(ctx context.Context, state State) (any, error) {
+		return nil, fmt.Errorf("boom")
+	}).SetEntryPoint("fail").SetFinishPoint("fail")
+	exec := compileExecutorForWorkflowMetric(t, sg)
+
+	ch, err := exec.Execute(context.Background(), State{}, agent.NewInvocation(
+		agent.WithInvocationID("inv-workflow-elapsed-failure"),
+	))
+	require.NoError(t, err)
+	drainWorkflowEvents(ch)
+
+	elapsedPts := collectWorkflowElapsedMetricPoints(t, reader)
+	require.Len(t, elapsedPts, 1)
+	require.Equal(t, uint64(1), elapsedPts[0].Count)
+	require.True(t, workflowPointHasAttr(elapsedPts[0], semconvtrace.KeyGenAIWorkflowID, "fail"))
+	require.True(t, workflowPointHasAttr(elapsedPts[0], semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType))
+}
+
+func TestWorkflowElapsedMetricMultipleNodes(t *testing.T) {
+	reader, cleanup := setupWorkflowMetricReader(t)
+	defer cleanup()
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("step1", func(ctx context.Context, state State) (any, error) {
+		time.Sleep(20 * time.Millisecond)
+		return State{"step1": true}, nil
+	})
+	sg.AddNode("step2", func(ctx context.Context, state State) (any, error) {
+		time.Sleep(20 * time.Millisecond)
+		return State{"step2": true}, nil
+	})
+	sg.SetEntryPoint("step1")
+	sg.AddEdge("step1", "step2")
+	sg.SetFinishPoint("step2")
+	exec := compileExecutorForWorkflowMetric(t, sg)
+
+	ch, err := exec.Execute(context.Background(), State{}, agent.NewInvocation(
+		agent.WithInvocationID("inv-workflow-elapsed-multi"),
+	))
+	require.NoError(t, err)
+	drainWorkflowEvents(ch)
+
+	elapsedPts := collectWorkflowElapsedMetricPoints(t, reader)
+	require.Len(t, elapsedPts, 2)
+
+	var step1Elapsed, step2Elapsed float64
+	for _, pt := range elapsedPts {
+		if workflowPointHasAttr(pt, semconvtrace.KeyGenAIWorkflowID, "step1") {
+			step1Elapsed = pt.Sum
+		}
+		if workflowPointHasAttr(pt, semconvtrace.KeyGenAIWorkflowID, "step2") {
+			step2Elapsed = pt.Sum
+		}
+	}
+	require.Positive(t, step1Elapsed)
+	require.Positive(t, step2Elapsed)
+	require.Greater(t, step2Elapsed, step1Elapsed)
 }
 
 func TestWorkflowMetricRecorderBuildsFallbackAttributes(t *testing.T) {
@@ -387,6 +498,7 @@ func setupWorkflowMetricReader(t *testing.T) (*sdkmetric.ManualReader, func()) {
 	originalProvider := itelemetry.MeterProvider
 	originalMeter := itelemetry.WorkflowMeter
 	originalDuration := itelemetry.WorkflowMetricGenAIClientOperationDuration
+	originalElapsed := itelemetry.WorkflowMetricGenAIWorkflowElapsedTime
 
 	itelemetry.MeterProvider = provider
 	itelemetry.WorkflowMeter = provider.Meter(semconvmetrics.MeterNameWorkflow)
@@ -397,11 +509,18 @@ func setupWorkflowMetricReader(t *testing.T) (*sdkmetric.ManualReader, func()) {
 		semconvmetrics.MetricGenAIClientOperationDuration,
 	)
 	require.NoError(t, err)
+	itelemetry.WorkflowMetricGenAIWorkflowElapsedTime, err = histogram.NewDynamicFloat64Histogram(
+		provider,
+		semconvmetrics.MeterNameWorkflow,
+		semconvmetrics.MetricGenAIWorkflowElapsedTime,
+	)
+	require.NoError(t, err)
 
 	return reader, func() {
 		itelemetry.MeterProvider = originalProvider
 		itelemetry.WorkflowMeter = originalMeter
 		itelemetry.WorkflowMetricGenAIClientOperationDuration = originalDuration
+		itelemetry.WorkflowMetricGenAIWorkflowElapsedTime = originalElapsed
 	}
 }
 
@@ -423,12 +542,27 @@ func collectWorkflowMetricPoints(
 	t *testing.T,
 	reader *sdkmetric.ManualReader,
 ) []metricdata.HistogramDataPoint[float64] {
+	return collectWorkflowMetricPointsByName(t, reader, semconvmetrics.MetricGenAIClientOperationDuration)
+}
+
+func collectWorkflowElapsedMetricPoints(
+	t *testing.T,
+	reader *sdkmetric.ManualReader,
+) []metricdata.HistogramDataPoint[float64] {
+	return collectWorkflowMetricPointsByName(t, reader, semconvmetrics.MetricGenAIWorkflowElapsedTime)
+}
+
+func collectWorkflowMetricPointsByName(
+	t *testing.T,
+	reader *sdkmetric.ManualReader,
+	metricName string,
+) []metricdata.HistogramDataPoint[float64] {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &rm))
 	for _, scopeMetric := range rm.ScopeMetrics {
 		for _, metric := range scopeMetric.Metrics {
-			if metric.Name != semconvmetrics.MetricGenAIClientOperationDuration {
+			if metric.Name != metricName {
 				continue
 			}
 			hist, ok := metric.Data.(metricdata.Histogram[float64])
@@ -436,7 +570,7 @@ func collectWorkflowMetricPoints(
 			return hist.DataPoints
 		}
 	}
-	t.Fatalf("metric %s not found", semconvmetrics.MetricGenAIClientOperationDuration)
+	t.Fatalf("metric %s not found", metricName)
 	return nil
 }
 
