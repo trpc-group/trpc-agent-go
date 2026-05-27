@@ -193,6 +193,15 @@ msg := model.NewUserMessage("Please process this file.")
 _ = msg.AddFileData("report.pdf", pdfBytes, "application/pdf")
 ```
 
+If the file content is meant only for tools or the code executor, configure the
+OpenAI model with `openai.WithOmitFileContentParts(true)` to omit file content
+parts from provider requests. This does not hide normal message text or
+file-name hints that you include in the prompt. The current OpenAI adapter uses
+the Chat Completions API, whose file content support is limited to the request
+shapes accepted by that endpoint. PDF file data can be sent as file content,
+but Markdown or plain-text content should be passed as normal message text, or
+staged only for tools, instead of being sent as file content parts.
+
 ### Option 2: Upload to Artifact First, Then Attach a Reference
 
 If the file is already stored in the artifact service, attach an
