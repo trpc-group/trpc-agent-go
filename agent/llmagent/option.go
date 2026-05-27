@@ -1034,8 +1034,24 @@ func WithSkillLoadToolDescription(
 	}
 }
 
-// WithSkillRunAllowedCommands restricts skill_run to a single,
-// allowlisted command (no shell syntax) when non-empty.
+// WithSkillRunAllowedCommands restricts skill_run to an
+// allowlisted set of commands (no shell syntax) when non-empty.
+//
+// When either an allow or deny list is configured the per-call env
+// is also scrubbed: every shell-startup variable (HOME, BASH_ENV,
+// ENV, SHELL, PROMPT_COMMAND, …), the executable search path
+// (PATH), the dynamic-linker hijack vars (LD_PRELOAD,
+// LD_LIBRARY_PATH, DYLD_*), the word-splitting vars (IFS, CDPATH,
+// GLOBIGNORE), every BASH_FUNC_* Shellshock entry and every key
+// that does not match the POSIX env-name grammar
+// (/^[A-Za-z_][A-Za-z0-9_]*$/) is dropped before the per-call
+// PATH is rebuilt. Without this scrub a model-supplied
+// `env: {"PATH": "./bin"}` would survive into the spawned skill
+// and cause an allowed bare command (curl, python, git, …) to
+// resolve at an attacker-controlled directory ahead of the
+// skill's vetted bin (issue #1862). The scrub uses
+// internal/envscrub - the same package tool/workspaceexec uses for
+// its own policy mode - so the two policies stay in sync.
 func WithSkillRunAllowedCommands(cmds ...string) Option {
 	return func(opts *Options) {
 		opts.skillRunAllowedCommands = append(
@@ -1044,8 +1060,10 @@ func WithSkillRunAllowedCommands(cmds ...string) Option {
 	}
 }
 
-// WithSkillRunDeniedCommands rejects a single, denylisted command (no shell
-// syntax) when non-empty.
+// WithSkillRunDeniedCommands rejects a denylisted set of commands
+// (no shell syntax) when non-empty. See WithSkillRunAllowedCommands
+// for the env scrubbing that is enabled whenever either list is
+// configured.
 func WithSkillRunDeniedCommands(cmds ...string) Option {
 	return func(opts *Options) {
 		opts.skillRunDeniedCommands = append(
