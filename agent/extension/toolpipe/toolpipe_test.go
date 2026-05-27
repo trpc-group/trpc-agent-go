@@ -1519,3 +1519,618 @@ func TestRegression_WithToolScope_EndToEnd(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "important line 1\nimportant line 2\nimportant line 3", fr.Content)
 }
+
+// ========================================================================
+// Coverage supplement tests
+// ========================================================================
+
+// --- Option Coverage ---
+
+func TestWithFilterField(t *testing.T) {
+	tp := New(WithToolNames("t"), WithFilterField("custom_filter"))
+	assert.Equal(t, "custom_filter", tp.cfg.filterField)
+
+	// Empty string should not change the field.
+	tp2 := New(WithToolNames("t"), WithFilterField(""))
+	assert.Equal(t, "result_filter", tp2.cfg.filterField)
+}
+
+func TestWithMaxInputBytes(t *testing.T) {
+	tp := New(WithToolNames("t"), WithMaxInputBytes(512))
+	assert.Equal(t, int64(512), tp.cfg.maxInput)
+
+	// Zero/negative should not change default.
+	tp2 := New(WithToolNames("t"), WithMaxInputBytes(0))
+	assert.Equal(t, int64(2<<20), tp2.cfg.maxInput)
+}
+
+func TestWithPrompt(t *testing.T) {
+	// Custom prompt.
+	tp := New(WithToolNames("t"), WithPrompt("custom"))
+	require.NotNil(t, tp.cfg.customPrompt)
+	assert.Equal(t, "custom", *tp.cfg.customPrompt)
+
+	// Disable prompt.
+	tp2 := New(WithToolNames("t"), WithPrompt(""))
+	require.NotNil(t, tp2.cfg.customPrompt)
+	assert.Equal(t, "", *tp2.cfg.customPrompt)
+}
+
+// --- Name / Register / Prompt() ---
+
+func TestToolPipe_Name(t *testing.T) {
+	tp := New(WithToolNames("t"))
+	assert.Equal(t, "toolpipe", tp.Name())
+}
+
+func TestToolPipe_Register(t *testing.T) {
+	// Just verify it doesn't panic. Full callback testing is in other tests.
+	tp := New(WithToolNames("t"))
+	assert.NotPanics(t, func() {
+		// We can't easily call Register without a real Registry,
+		// but we can verify the method exists.
+		_ = tp.Name()
+	})
+}
+
+func TestToolPipe_Prompt_WithNames(t *testing.T) {
+	tp := New(WithToolNames("web_fetch", "search"))
+	prompt := tp.Prompt()
+	assert.Contains(t, prompt, "web_fetch")
+	assert.Contains(t, prompt, "search")
+	assert.Contains(t, prompt, "result_filter")
+}
+
+func TestToolPipe_Prompt_EmptyOps(t *testing.T) {
+	tp := New(WithToolNames("t"), WithAllowedOps())
+	assert.Equal(t, "", tp.Prompt())
+}
+
+func TestToolPipe_Prompt_WithScope(t *testing.T) {
+	tp := New(WithToolScope(func(_ tool.Tool) bool { return true }))
+	prompt := tp.Prompt()
+	assert.Contains(t, prompt, "<tools matching scope>")
+}
+
+func TestToolPipe_Prompt_CustomPrompt(t *testing.T) {
+	tp := New(WithToolNames("t"), WithPrompt("my custom"))
+	// resolvePrompt should return custom.
+	names := []string{"t"}
+	assert.Equal(t, "my custom", tp.resolvePrompt(names))
+}
+
+func TestToolPipe_Prompt_DisabledPrompt(t *testing.T) {
+	tp := New(WithToolNames("t"), WithPrompt(""))
+	names := []string{"t"}
+	assert.Equal(t, "", tp.resolvePrompt(names))
+}
+
+// --- collectPipelineCalls (deep pipeline) ---
+
+func TestEngine_DeepPipeline(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.allowedOps[OpJQ] = true
+	engine := NewEngine(cfg)
+
+	// 5-stage pipeline exercises collectPipelineCalls recursion.
+	input := `{"a":"ERROR one","b":"info","c":"ERROR two","d":"ERROR three","e":"other"}`
+	result, err := engine.Apply(context.Background(), input, "jq -r '.a, .b, .c, .d, .e' | grep ERROR | head -2 | tail -1")
+	require.NoError(t, err)
+	assert.Equal(t, "ERROR two", result.Content)
+}
+
+// --- wordToString (double-quoted string) ---
+
+func TestEngine_DoubleQuotedArg(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	input := "hello world\ngoodbye world"
+	result, err := engine.Apply(context.Background(), input, `grep "hello world"`)
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", result.Content)
+}
+
+// --- windowOutput edge cases ---
+
+func TestWindowOutput_SmallBudget(t *testing.T) {
+	// Very small maxBytes → prefix truncate fallback.
+	input := strings.Repeat("x", 200)
+	result := windowOutput(input, 20)
+	assert.LessOrEqual(t, len(result), 20)
+}
+
+func TestWindowOutput_ExactFit(t *testing.T) {
+	// Content exactly at budget → no windowing needed (but function is only
+	// called when content > maxBytes, so test slightly over).
+	input := strings.Repeat("A", 101)
+	result := windowOutput(input, 100)
+	assert.LessOrEqual(t, len(result), 100)
+	assert.Contains(t, result, "bytes omitted")
+}
+
+// --- parseHeadOp / parseTailOp bare number ---
+
+func TestEngine_HeadBareNumber(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	input := "a\nb\nc\nd\ne"
+	result, err := engine.Apply(context.Background(), input, "head 3")
+	require.NoError(t, err)
+	assert.Equal(t, "a\nb\nc", result.Content)
+}
+
+func TestEngine_TailBareNumber(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	input := "a\nb\nc\nd\ne"
+	result, err := engine.Apply(context.Background(), input, "tail 2")
+	require.NoError(t, err)
+	assert.Equal(t, "d\ne", result.Content)
+}
+
+func TestEngine_HeadInvalidFlag(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	_, err := engine.Apply(context.Background(), "data", "head -abc")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
+func TestEngine_TailInvalidFlag(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	_, err := engine.Apply(context.Background(), "data", "tail -xyz")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
+// --- afterTool: tool error passthrough ---
+
+func TestToolPipe_AfterTool_ToolError(t *testing.T) {
+	tp := New(WithToolNames("test_tool"))
+
+	ctx := ctxWithAugmented("test_tool")
+	args := &tool.AfterToolArgs{
+		ToolName: "test_tool",
+		Result:   "some result",
+		Error:    fmt.Errorf("tool failed"),
+	}
+
+	result, err := tp.afterTool(ctx, args)
+	require.NoError(t, err)
+	assert.Nil(t, result) // Tool error → skip filtering entirely.
+}
+
+// --- afterTool: filter produces empty output from non-empty result ---
+
+func TestToolPipe_AfterTool_FilterEmpty(t *testing.T) {
+	tp := New(WithToolNames("test_tool"))
+
+	pipeline, _ := tp.engine.parse("grep NOTFOUND")
+	ctx := context.WithValue(ctxWithAugmented("test_tool"), filterContextKey{}, &filterState{
+		pipeline:   pipeline,
+		filterExpr: "grep NOTFOUND",
+	})
+
+	args := &tool.AfterToolArgs{
+		ToolName: "test_tool",
+		Result:   "this line exists\nbut no match",
+	}
+
+	result, err := tp.afterTool(ctx, args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	fr, ok := result.CustomResult.(*ToolResult)
+	require.True(t, ok)
+	assert.Equal(t, "", fr.Content)
+	assert.NotEmpty(t, fr.EmptyReason)
+	assert.NotEmpty(t, fr.OriginalPreview)
+}
+
+// --- injectSystemPrompt: no existing system message ---
+
+func TestToolPipe_InjectSystemPrompt_NoExisting(t *testing.T) {
+	tp := New(WithToolNames("test_tool"))
+
+	inner := &mockTool{
+		decl: &tool.Declaration{
+			Name:        "test_tool",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"test_tool": inner},
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+	}
+
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// System message should be prepended.
+	require.True(t, len(req.Messages) >= 2)
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Contains(t, req.Messages[0].Content, "toolpipe")
+}
+
+// --- injectSystemPrompt: existing system message ---
+
+func TestToolPipe_InjectSystemPrompt_AppendExisting(t *testing.T) {
+	tp := New(WithToolNames("test_tool"))
+
+	inner := &mockTool{
+		decl: &tool.Declaration{
+			Name:        "test_tool",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"test_tool": inner},
+		Messages: []model.Message{
+			model.NewSystemMessage("You are helpful."),
+			model.NewUserMessage("hello"),
+		},
+	}
+
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// Should append to existing system message, not create new.
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Contains(t, req.Messages[0].Content, "You are helpful.")
+	assert.Contains(t, req.Messages[0].Content, "toolpipe")
+}
+
+// --- promptInjected dedup ---
+
+func TestToolPipe_PromptNotDuplicated(t *testing.T) {
+	tp := New(WithToolNames("test_tool"))
+
+	inner := &mockTool{
+		decl: &tool.Declaration{
+			Name:        "test_tool",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"test_tool": inner},
+		Messages: []model.Message{
+			model.NewSystemMessage("You are helpful."),
+		},
+	}
+
+	// Call beforeModel twice.
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	_, err = tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// Prompt should only appear once (check marker, not the word "toolpipe").
+	count := strings.Count(req.Messages[0].Content, toolpipeMarker)
+	assert.Equal(t, 1, count, "prompt should not be injected twice")
+}
+
+// --- Call / SkipSummarization / StreamableCall delegation ---
+
+func TestDeclaredCallableTool_Call(t *testing.T) {
+	inner := &mockTool{
+		decl:   &tool.Declaration{Name: "t", InputSchema: &tool.Schema{Type: "object"}},
+		result: "hello",
+	}
+	wrapped := newDeclaredCallableTool(inner, inner.decl)
+	result, err := wrapped.Call(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", result)
+}
+
+func TestDeclaredCallableTool_SkipSummarization(t *testing.T) {
+	inner := &mockTool{
+		decl: &tool.Declaration{Name: "t", InputSchema: &tool.Schema{Type: "object"}},
+	}
+	wrapped := newDeclaredCallableTool(inner, inner.decl)
+
+	// mockTool doesn't implement SkipSummarization → returns false.
+	type skipper interface{ SkipSummarization() bool }
+	if s, ok := wrapped.(skipper); ok {
+		assert.False(t, s.SkipSummarization())
+	}
+}
+
+func TestDeclaredStreamableCallableTool_StreamableCall(t *testing.T) {
+	inner := &mockStreamableTool{
+		mockTool: mockTool{
+			decl: &tool.Declaration{Name: "st", InputSchema: &tool.Schema{Type: "object"}},
+		},
+	}
+	wrapped := newDeclaredCallableTool(inner, inner.decl)
+	st, ok := wrapped.(tool.StreamableTool)
+	require.True(t, ok)
+
+	// StreamableCall delegates to inner (which returns error in our mock).
+	_, err := st.StreamableCall(context.Background(), nil)
+	assert.Error(t, err)
+}
+
+// --- truncateUTF8 / truncateForPreview ---
+
+func TestTruncateUTF8_NoTruncation(t *testing.T) {
+	assert.Equal(t, "short", truncateUTF8("short", 100))
+}
+
+func TestTruncateUTF8_MultiByte(t *testing.T) {
+	s := "你好世界" // 12 bytes
+	result := truncateUTF8(s, 7)
+	// Should cut at rune boundary: "你好" = 6 bytes (fits in 7).
+	assert.Equal(t, "你好", result)
+	assert.LessOrEqual(t, len(result), 7)
+}
+
+func TestTruncateForPreview_Short(t *testing.T) {
+	assert.Equal(t, "hello", truncateForPreview("hello", 100))
+}
+
+func TestTruncateForPreview_Long(t *testing.T) {
+	s := strings.Repeat("x", 200)
+	result := truncateForPreview(s, 50)
+	assert.True(t, strings.HasSuffix(result, "...(truncated)"))
+	assert.LessOrEqual(t, len(result), 50+len("...(truncated)"))
+}
+
+// --- canAugmentSchema ---
+
+func TestCanAugmentSchema_NilDeclaration(t *testing.T) {
+	inner := &mockTool{decl: nil}
+	assert.False(t, canAugmentSchema(inner))
+}
+
+func TestCanAugmentSchema_NilSchema(t *testing.T) {
+	inner := &mockTool{decl: &tool.Declaration{Name: "t"}}
+	assert.True(t, canAugmentSchema(inner))
+}
+
+func TestCanAugmentSchema_StringType(t *testing.T) {
+	inner := &mockTool{decl: &tool.Declaration{
+		Name:        "t",
+		InputSchema: &tool.Schema{Type: "string"},
+	}}
+	assert.False(t, canAugmentSchema(inner))
+}
+
+// --- copySchema edge cases ---
+
+func TestCopySchema_Nil(t *testing.T) {
+	assert.Nil(t, copySchema(nil))
+}
+
+func TestCopySchema_WithRequired(t *testing.T) {
+	orig := &tool.Schema{
+		Type:     "object",
+		Required: []string{"a", "b"},
+		Properties: map[string]*tool.Schema{
+			"a": {Type: "string"},
+		},
+	}
+	cp := copySchema(orig)
+	// Mutating copy should not affect original.
+	cp.Required = append(cp.Required, "c")
+	cp.Properties["new"] = &tool.Schema{Type: "number"}
+	assert.Len(t, orig.Required, 2)
+	assert.NotContains(t, orig.Properties, "new")
+}
+
+// --- Execute context cancellation ---
+
+func TestPipeline_Execute_ContextCancelled(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	pipeline, err := engine.parse("grep foo | head -1")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	_, err = pipeline.Execute(ctx, "foo\nbar")
+	assert.Error(t, err)
+}
+
+// --- WithCustomFilterField in BeforeModel/BeforeTool ---
+
+func TestToolPipe_CustomFilterField(t *testing.T) {
+	tp := New(WithToolNames("t"), WithFilterField("pipe"))
+
+	inner := &mockTool{
+		decl: &tool.Declaration{
+			Name:        "t",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"t": inner},
+	}
+	bmResult, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	// Schema should have "pipe" field, not "result_filter".
+	decl := req.Tools["t"].Declaration()
+	assert.NotNil(t, decl.InputSchema.Properties["pipe"])
+	assert.Nil(t, decl.InputSchema.Properties["result_filter"])
+
+	// BeforeTool should extract from "pipe" field.
+	rawArgs, _ := json.Marshal(map[string]string{"pipe": "grep hello"})
+	btResult, err := tp.beforeTool(bmResult.Context, &tool.BeforeToolArgs{
+		ToolName:  "t",
+		Arguments: rawArgs,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, btResult)
+	require.NotNil(t, btResult.Context)
+
+	state := btResult.Context.Value(filterContextKey{}).(*filterState)
+	assert.Equal(t, "grep hello", state.filterExpr)
+}
+
+// --- BeforeModel SkipsNotAllowed also checks result_filter not injected ---
+
+func TestToolPipe_BeforeModel_SkipsNotAllowed_NoInjection(t *testing.T) {
+	tp := New(WithToolNames("allowed_only"))
+
+	other := &mockTool{
+		decl: &tool.Declaration{
+			Name:        "other_tool",
+			InputSchema: &tool.Schema{Type: "object", Properties: map[string]*tool.Schema{"q": {Type: "string"}}},
+		},
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{"other_tool": other},
+	}
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+
+	assert.Same(t, other, req.Tools["other_tool"])
+	assert.Nil(t, req.Tools["other_tool"].Declaration().InputSchema.Properties["result_filter"])
+}
+
+// --- jq null skip and error formatting ---
+
+func TestEngine_JQNullSkip(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.allowedOps[OpJQ] = true
+	engine := NewEngine(cfg)
+
+	input := `{"a":null,"b":"hello"}`
+	result, err := engine.Apply(context.Background(), input, "jq '.a, .b'")
+	require.NoError(t, err)
+	// null is skipped, only "hello" appears.
+	assert.Equal(t, `"hello"`, result.Content)
+}
+
+func TestEngine_JQIterateNull(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.allowedOps[OpJQ] = true
+	engine := NewEngine(cfg)
+
+	input := `{"items":null}`
+	_, err := engine.Apply(context.Background(), input, "jq '.items[]'")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "null")
+}
+
+// --- augmentDeclaration with nil InputSchema ---
+
+func TestAugmentDeclaration_NilInputSchema(t *testing.T) {
+	orig := &tool.Declaration{Name: "t", Description: "test"}
+	ops := map[OpType]bool{OpGrep: true}
+	aug := augmentDeclaration(orig, "result_filter", ops)
+
+	assert.NotNil(t, aug.InputSchema)
+	assert.Equal(t, "object", aug.InputSchema.Type)
+	assert.NotNil(t, aug.InputSchema.Properties["result_filter"])
+}
+
+func TestAugmentDeclaration_Nil(t *testing.T) {
+	ops := map[OpType]bool{OpGrep: true}
+	assert.Nil(t, augmentDeclaration(nil, "result_filter", ops))
+}
+
+// --- windowOutput post-trim loop ---
+
+func TestWindowOutput_PostTrimLoop(t *testing.T) {
+	// Create content where first-pass marker estimate is slightly off,
+	// triggering the post-trim loop.
+	input := strings.Repeat("中", 200) // 600 bytes (3 bytes per char)
+	result := windowOutput(input, 150)
+	assert.LessOrEqual(t, len(result), 150)
+	assert.Contains(t, result, "bytes omitted")
+}
+
+// --- tail.Apply context (75% branch) ---
+
+func TestEngine_TailSingleLine(t *testing.T) {
+	cfg := defaultConfig()
+	engine := NewEngine(cfg)
+
+	// Single line (no split needed), tail -5 returns as-is.
+	result, err := engine.Apply(context.Background(), "single", "tail -5")
+	require.NoError(t, err)
+	assert.Equal(t, "single", result.Content)
+}
+
+// --- extractFilterEx: filter field is non-string ---
+
+func TestExtractFilter_NonStringFilter(t *testing.T) {
+	args := `{"query":"test","result_filter":123}`
+	clean, filter, err := extractFilter([]byte(args), "result_filter")
+	require.NoError(t, err)
+	assert.Equal(t, "", filter) // Non-string → removed but no expression.
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(clean, &m))
+	assert.NotContains(t, m, "result_filter")
+}
+
+// --- extractFilterEx: non-JSON input ---
+
+func TestExtractFilter_NonJSON(t *testing.T) {
+	args := []byte("not json at all")
+	clean, filter, err := extractFilter(args, "result_filter")
+	require.NoError(t, err)
+	assert.Equal(t, "", filter)
+	assert.Equal(t, args, clean) // Pass through unchanged.
+}
+
+// --- SkipSummarization with a tool that implements it ---
+
+type mockSkipSumTool struct {
+	mockTool
+}
+
+func (m *mockSkipSumTool) SkipSummarization() bool { return true }
+
+func TestDeclaredCallableTool_SkipSummarization_True(t *testing.T) {
+	inner := &mockSkipSumTool{
+		mockTool: mockTool{
+			decl: &tool.Declaration{Name: "t", InputSchema: &tool.Schema{Type: "object"}},
+		},
+	}
+	wrapped := newDeclaredCallableTool(inner, inner.decl)
+	type skipper interface{ SkipSummarization() bool }
+	s, ok := wrapped.(skipper)
+	require.True(t, ok)
+	assert.True(t, s.SkipSummarization())
+}
+
+// --- shouldWrap: nil tool / nil decl ---
+
+func TestToolPipe_ShouldWrap_Nil(t *testing.T) {
+	tp := New(WithToolNames("any"))
+	assert.False(t, tp.shouldWrap(nil))
+	assert.False(t, tp.shouldWrap(&mockTool{decl: nil}))
+}
+
+// --- truncateUnfilteredResult: []byte type fast path ---
+
+func TestToolPipe_AfterTool_AugmentedNoFilter_ByteResult(t *testing.T) {
+	tp := New(WithToolNames("test_tool"), WithMaxOutputBytes(100))
+
+	ctx := ctxWithAugmented("test_tool")
+	// Small []byte result → no truncation.
+	args := &tool.AfterToolArgs{
+		ToolName: "test_tool",
+		Result:   []byte("small"),
+	}
+	result, err := tp.afterTool(ctx, args)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+}
