@@ -189,6 +189,7 @@ func (s *Service) Spawn(
 		ID:              runID,
 		OwnerUserID:     strings.TrimSpace(req.OwnerUserID),
 		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
+		ParentAppName:   strings.TrimSpace(req.ParentAppName),
 		AppName:         appNameForSpawn(req),
 		AgentName:       strings.TrimSpace(req.AgentName),
 		Task:            strings.TrimSpace(req.Task),
@@ -720,6 +721,10 @@ func matchesFilter(run Run, filter ListFilter) bool {
 	}
 	if filter.ParentSessionID != "" &&
 		run.ParentSessionID != strings.TrimSpace(filter.ParentSessionID) {
+		return false
+	}
+	if filter.ParentAppName != "" &&
+		run.ParentAppName != strings.TrimSpace(filter.ParentAppName) {
 		return false
 	}
 	if filter.Status != "" && run.Status != filter.Status {

@@ -62,6 +62,7 @@ type Run struct {
 	ID              string            `json:"id,omitempty"`
 	OwnerUserID     string            `json:"owner_user_id,omitempty"`
 	ParentSessionID string            `json:"parent_session_id,omitempty"`
+	ParentAppName   string            `json:"parent_app_name,omitempty"`
 	AppName         string            `json:"app_name,omitempty"`
 	ChildSessionID  string            `json:"child_session_id,omitempty"`
 	RequestID       string            `json:"request_id,omitempty"`
@@ -98,6 +99,7 @@ type Progress struct {
 type ListFilter struct {
 	OwnerUserID     string
 	ParentSessionID string
+	ParentAppName   string
 	Status          Status
 }
 
@@ -115,6 +117,7 @@ type SpawnRequest struct {
 	ID              string
 	OwnerUserID     string
 	ParentSessionID string
+	ParentAppName   string
 	AppName         string
 	ChildSessionID  string
 	RequestID       string

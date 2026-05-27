@@ -333,6 +333,7 @@ func (t *spawnTool) Call(
 	run, err := state.controller.Spawn(ctx, taskrunruntime.SpawnRequest{
 		OwnerUserID:             userID,
 		ParentSessionID:         sessionID,
+		ParentAppName:           currentAppName(ctx),
 		AppName:                 appNameForSpawnTool(ctx, state.options),
 		AgentName:               agentName,
 		Task:                    in.Task,
@@ -382,13 +383,14 @@ func (t *listTool) Call(
 	if err := validateEmptyArgs(args); err != nil {
 		return nil, err
 	}
-	userID, sessionID, err := currentContext(ctx)
+	key, err := currentSessionKey(ctx)
 	if err != nil {
 		return nil, err
 	}
 	runs, err := state.controller.List(ctx, taskrunruntime.ListFilter{
-		OwnerUserID:     userID,
-		ParentSessionID: sessionID,
+		OwnerUserID:     key.UserID,
+		ParentSessionID: key.SessionID,
+		ParentAppName:   key.AppName,
 	})
 	if err != nil {
 		return nil, err
@@ -542,7 +544,7 @@ func (t *transcriptTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	if !sameOwnerAndParent(run, key.UserID, key.SessionID) {
+	if !sameOwnerAndParent(run, key.UserID, key.AppName, key.SessionID) {
 		return nil, taskrunruntime.ErrRunNotFound
 	}
 	if strings.TrimSpace(run.ChildSessionID) == "" {
@@ -776,11 +778,24 @@ func sameOwner(run *taskrunruntime.Run, userID string) bool {
 func sameOwnerAndParent(
 	run *taskrunruntime.Run,
 	userID string,
+	appName string,
 	sessionID string,
 ) bool {
 	return sameOwner(run, userID) &&
+		sameParentApp(run, appName) &&
 		strings.TrimSpace(run.ParentSessionID) ==
 			strings.TrimSpace(sessionID)
+}
+
+func sameParentApp(run *taskrunruntime.Run, appName string) bool {
+	if run == nil {
+		return false
+	}
+	runAppName := strings.TrimSpace(run.ParentAppName)
+	if runAppName == "" {
+		runAppName = strings.TrimSpace(run.AppName)
+	}
+	return runAppName == strings.TrimSpace(appName)
 }
 
 func secondsDuration(seconds int) time.Duration {

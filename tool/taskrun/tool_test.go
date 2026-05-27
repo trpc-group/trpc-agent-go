@@ -55,6 +55,7 @@ func (c *fakeController) Spawn(
 		ID:              id,
 		OwnerUserID:     req.OwnerUserID,
 		ParentSessionID: req.ParentSessionID,
+		ParentAppName:   req.ParentAppName,
 		AppName:         req.AppName,
 		AgentName:       req.AgentName,
 		Task:            req.Task,
@@ -79,6 +80,10 @@ func (c *fakeController) List(
 		}
 		if filter.ParentSessionID != "" &&
 			run.ParentSessionID != filter.ParentSessionID {
+			continue
+		}
+		if filter.ParentAppName != "" &&
+			run.ParentAppName != filter.ParentAppName {
 			continue
 		}
 		runs = append(runs, run)
@@ -165,9 +170,11 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	require.NoError(t, err)
 	spawned := spawnedAny.(taskrunruntime.Run)
 	require.Equal(t, "session-a", spawned.ParentSessionID)
+	require.Equal(t, "app", spawned.ParentAppName)
 	require.Equal(t, taskrunruntime.StatusQueued, spawned.Status)
 
 	controller.mu.Lock()
+	require.Equal(t, "app", controller.spawned.ParentAppName)
 	require.Empty(t, controller.spawned.AppName)
 	require.Equal(t, "worker", controller.spawned.AgentName)
 	require.Equal(t, "trace-1", controller.spawned.RuntimeState["trace_id"])
@@ -305,6 +312,7 @@ func TestSpawnToolPropagatesParentAppNameWhenConfigured(t *testing.T) {
 
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
+	require.Equal(t, "parent-app", controller.spawned.ParentAppName)
 	require.Equal(t, "parent-app", controller.spawned.AppName)
 }
 
@@ -450,6 +458,7 @@ func TestTranscriptToolReadsChildSessionEvents(t *testing.T) {
 		ID:              "run-1",
 		OwnerUserID:     "user-a",
 		ParentSessionID: "session-a",
+		ParentAppName:   "app",
 		AppName:         "app",
 		ChildSessionID:  "child-a",
 		Status:          taskrunruntime.StatusRunning,
@@ -511,6 +520,7 @@ func TestTranscriptToolUsesRunAppName(t *testing.T) {
 		ID:              "run-1",
 		OwnerUserID:     "user-a",
 		ParentSessionID: "session-a",
+		ParentAppName:   "parent-app",
 		AppName:         "child-app",
 		ChildSessionID:  "child-a",
 		Status:          taskrunruntime.StatusRunning,
@@ -538,6 +548,7 @@ func TestTranscriptToolRequiresSessionServiceAndParentSession(t *testing.T) {
 		ID:              "run-1",
 		OwnerUserID:     "user-a",
 		ParentSessionID: "other-session",
+		ParentAppName:   "app",
 		ChildSessionID:  "child-a",
 	}
 	ctx := newInvocationContext("user-a", "session-a", nil)
@@ -560,6 +571,7 @@ func TestTranscriptToolRequiresSessionServiceAndParentSession(t *testing.T) {
 		ID:              "run-2",
 		OwnerUserID:     "user-a",
 		ParentSessionID: "session-a",
+		ParentAppName:   "app",
 		ChildSessionID:  "missing-child",
 	}
 	_, err = tools.read.Call(ctx, []byte(`{"id":"run-2"}`))
@@ -569,9 +581,59 @@ func TestTranscriptToolRequiresSessionServiceAndParentSession(t *testing.T) {
 		ID:              "run-3",
 		OwnerUserID:     "user-a",
 		ParentSessionID: "session-a",
+		ParentAppName:   "app",
 	}
 	_, err = tools.read.Call(ctx, []byte(`{"id":"run-3"}`))
 	require.ErrorContains(t, err, "child session id unavailable")
+}
+
+func TestTranscriptToolRequiresParentAppName(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	sessionService := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, sessionService.Close())
+	})
+	key := session.Key{
+		AppName:   "child-app",
+		UserID:    "user-a",
+		SessionID: "child-a",
+	}
+	child, err := sessionService.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, sessionService.AppendEvent(ctx, child, &event.Event{
+		ID:        "evt-child",
+		Author:    "worker",
+		Timestamp: time.Now(),
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("secret"),
+			}},
+		},
+	}))
+
+	controller := newFakeController()
+	controller.runs["run-1"] = taskrunruntime.Run{
+		ID:              "run-1",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "session-a",
+		ParentAppName:   "parent-app",
+		AppName:         "child-app",
+		ChildSessionID:  "child-a",
+		Status:          taskrunruntime.StatusRunning,
+	}
+	tools := NewTools(controller, WithSessionService(sessionService))
+	otherAppCtx := newInvocationContextWithApp(
+		"other-app",
+		"user-a",
+		"session-a",
+		nil,
+	)
+
+	_, err = tools.read.Call(otherAppCtx, []byte(`{"id":"run-1"}`))
+	require.ErrorIs(t, err, taskrunruntime.ErrRunNotFound)
 }
 
 func TestTranscriptToolTrimsNormalizedEventLimit(t *testing.T) {
@@ -621,6 +683,7 @@ func TestTranscriptToolTrimsNormalizedEventLimit(t *testing.T) {
 		ID:              "run-1",
 		OwnerUserID:     "user-a",
 		ParentSessionID: "session-a",
+		ParentAppName:   "app",
 		AppName:         "app",
 		ChildSessionID:  "child-a",
 		Status:          taskrunruntime.StatusRunning,
