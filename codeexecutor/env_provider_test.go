@@ -309,3 +309,64 @@ func TestNewEnvInjectingCodeExecutor_NoEngineProvider(t *testing.T) {
 	})
 	assert.Same(t, inner, wrapped)
 }
+
+// TestMergeProviderEnv_CleanEnvScrubsDangerousProviderKeys guards
+// the cross-layer bypass where workspace_exec correctly scrubs the
+// caller-supplied env and sets spec.CleanEnv = true, but a
+// RunEnvProvider returning PATH / BASH_ENV / LD_PRELOAD /
+// BASH_FUNC_* would otherwise reintroduce them via this merge.
+// When CleanEnv is set the provider entries must also pass through
+// the shared envscrub blocklist before being merged.
+func TestMergeProviderEnv_CleanEnvScrubsDangerousProviderKeys(t *testing.T) {
+	spec := RunProgramSpec{
+		Cmd:      "echo",
+		Env:      map[string]string{"APP": "ok"},
+		CleanEnv: true,
+	}
+	provider := RunEnvProvider(func(_ context.Context) map[string]string {
+		return map[string]string{
+			"PATH":          ":/attacker/bin",
+			"BASH_ENV":      "/tmp/x",
+			"LD_PRELOAD":    "./evil.so",
+			"BASH_FUNC_x%%": "() { :; }",
+			"PATH=.":        "/attacker",
+			"SAFE":          "kept",
+		}
+	})
+	mergeProviderEnv(context.Background(), provider, &spec)
+
+	for _, k := range []string{
+		"PATH", "BASH_ENV", "LD_PRELOAD", "BASH_FUNC_x%%", "PATH=.",
+	} {
+		_, ok := spec.Env[k]
+		assert.Falsef(t, ok,
+			"provider-supplied %q must be scrubbed when CleanEnv is set", k)
+	}
+	assert.Equal(t, "kept", spec.Env["SAFE"],
+		"benign provider entry must still be merged when CleanEnv is set")
+	assert.Equal(t, "ok", spec.Env["APP"],
+		"caller-supplied entry must be preserved")
+}
+
+// TestMergeProviderEnv_NoCleanEnvKeepsLegacyBehaviour pins the
+// historical contract for non-policy callers: when spec.CleanEnv is
+// false the provider env passes through unchanged so existing tests
+// and integrations that depend on full env propagation continue to
+// work.
+func TestMergeProviderEnv_NoCleanEnvKeepsLegacyBehaviour(t *testing.T) {
+	spec := RunProgramSpec{
+		Cmd: "echo",
+		Env: map[string]string{"APP": "ok"},
+		// CleanEnv left false (default).
+	}
+	provider := RunEnvProvider(func(_ context.Context) map[string]string {
+		return map[string]string{
+			"PATH":     ":/safe",
+			"BASH_ENV": "/tmp/x",
+		}
+	})
+	mergeProviderEnv(context.Background(), provider, &spec)
+	assert.Equal(t, ":/safe", spec.Env["PATH"])
+	assert.Equal(t, "/tmp/x", spec.Env["BASH_ENV"])
+	assert.Equal(t, "ok", spec.Env["APP"])
+}
