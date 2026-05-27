@@ -176,6 +176,18 @@ func TestWithCancelOnContextDoneEnabled(t *testing.T) {
 	assert.True(t, ro.CancelOnContextDoneEnabled)
 }
 
+func TestWithDistributedCancelEnabled(t *testing.T) {
+	opts := newOptions(WithDistributedCancelEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.DistributedCancelEnabled)
+}
+
+func TestWithDistributedCancelPollInterval(t *testing.T) {
+	opts := newOptions(WithDistributedCancelPollInterval(2 * time.Second))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.Equal(t, 2*time.Second, ro.DistributedCancelPollInterval)
+}
+
 func TestWithAppNameResolver(t *testing.T) {
 	called := false
 	resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
