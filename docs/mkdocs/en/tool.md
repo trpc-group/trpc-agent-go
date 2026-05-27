@@ -1457,8 +1457,8 @@ change when you switch history scope:
 - `WithSkipSummarization` still controls whether the parent flow performs an
   extra outer summarization call after the tool result.
 - The child Agent still inherits the current invocation's session, plugins, and
-  `RunOptions` through `Invocation.Clone(...)`; use `taskrun` when you need a
-  truly background-isolated run.
+  `RunOptions` through `Invocation.Clone(...)`; start a separate application
+  run when you need true background isolation.
 - If business code manually appends events with an empty `FilterKey`, those
   events may be visible from multiple views for compatibility. Prefer setting
   explicit app-prefixed `FilterKey` values for custom events.

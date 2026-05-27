@@ -1414,7 +1414,7 @@ AgentTool 目前有两个历史作用域：
 - `WithResponseMode` 仍然只控制工具结果里返回哪些子 Agent assistant 内容。
 - `WithSkipSummarization` 仍然只控制父流程是否在工具结果后追加一次外层总结调用。
 - 子 Agent 仍通过 `Invocation.Clone(...)` 继承当前 invocation 的 session、plugins、
-  `RunOptions` 等运行上下文；如果需要真正后台隔离，请优先使用 `taskrun`。
+  `RunOptions` 等运行上下文；如果需要真正后台隔离，请启动独立的应用运行流程。
 - 如果业务手动追加了空 `FilterKey` 事件，这类事件按兼容规则可能被多个视图看到；
   自定义事件建议始终设置带 app 前缀的明确 `FilterKey`。
 
