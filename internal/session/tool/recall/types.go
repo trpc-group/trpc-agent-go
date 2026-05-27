@@ -60,7 +60,10 @@ var (
 	errWindowUnavailable         = errors.New("session window loading is not available for this session service")
 )
 
-const summaryLastIncludedTsKey = session.SummaryLastIncludedTimestampStateKey
+const (
+	summaryLastIncludedTsKey      = session.SummaryLastIncludedTimestampStateKey
+	summaryLastIncludedEventIDKey = session.SummaryLastIncludedEventIDStateKey
+)
 
 // SearchSessionRequest is the input for session_search.
 type SearchSessionRequest struct {
@@ -317,11 +320,23 @@ func currentSummaryBoundary(
 	if boundary, ok := summaryBoundaryForFilter(inv.Session, filterKey); ok {
 		return boundary
 	}
-	cutoff := summaryCutoffFromState(inv.Session)
+	boundary := summaryBoundaryFromState(inv.Session)
+	if boundary == nil {
+		return nil
+	}
+	return boundary
+}
+
+func summaryBoundaryFromState(sess *session.Session) *session.SummaryBoundary {
+	cutoff := summaryCutoffFromState(sess)
 	if cutoff.IsZero() {
 		return nil
 	}
-	return session.NewSummaryBoundary("", cutoff)
+	return session.NewSummaryBoundaryWithEventID(
+		"",
+		cutoff,
+		summaryLastIncludedEventIDFromState(sess),
+	)
 }
 
 func summaryCutoffFromState(sess *session.Session) time.Time {
@@ -337,6 +352,17 @@ func summaryCutoffFromState(sess *session.Session) time.Time {
 		return time.Time{}
 	}
 	return parsed
+}
+
+func summaryLastIncludedEventIDFromState(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	raw, ok := sess.GetState(summaryLastIncludedEventIDKey)
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func summaryCutoffForFilter(

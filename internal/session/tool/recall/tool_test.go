@@ -382,6 +382,83 @@ func TestSearchTool_CurrentHiddenFiltersSameTimestampAfterBoundary(
 	assert.Equal(t, "covered", resp.Results[0].EventID)
 }
 
+func TestSearchTool_CurrentHiddenStateFallbackKeepsEventBoundary(
+	t *testing.T,
+) {
+	cutoff := time.Date(2025, 4, 7, 10, 0, 0, 0, time.UTC)
+	hiddenEvent := event.Event{
+		ID:        "covered",
+		Timestamp: cutoff,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "hidden state detail",
+				},
+			}},
+		},
+	}
+	visibleEvent := event.Event{
+		ID:        "visible",
+		Timestamp: cutoff,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "visible state detail",
+				},
+			}},
+		},
+	}
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	current := session.NewSession("app", "user", "sess")
+	current.Events = []event.Event{hiddenEvent, visibleEvent}
+	current.SetState(
+		summaryLastIncludedTsKey,
+		[]byte(cutoff.Format(time.RFC3339Nano)),
+	)
+	current.SetState(summaryLastIncludedEventIDKey, []byte("covered"))
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		searchResults: []session.EventSearchResult{
+			{
+				SessionKey:       key,
+				EventCreatedAt:   cutoff,
+				Event:            visibleEvent,
+				Role:             model.RoleUser,
+				Text:             "visible state detail",
+				Score:            0.9,
+				SessionCreatedAt: current.CreatedAt,
+			},
+			{
+				SessionKey:       key,
+				EventCreatedAt:   cutoff,
+				Event:            hiddenEvent,
+				Role:             model.RoleUser,
+				Text:             "hidden state detail",
+				Score:            0.8,
+				SessionCreatedAt: current.CreatedAt,
+			},
+		},
+	}
+	inv := &agent.Invocation{Session: current, SessionService: svc}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&SearchSessionRequest{
+		Query: "state detail",
+		Scope: ScopeCurrentHidden,
+	})
+	require.NoError(t, err)
+
+	result, err := NewSearchTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*SearchSessionResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, "covered", resp.Results[0].EventID)
+}
+
 func TestSummaryCutoffForFilterIgnoresWhitespaceSummaries(t *testing.T) {
 	updatedAt := time.Date(2025, 4, 7, 10, 0, 0, 0, time.UTC)
 	sess := session.NewSession(
