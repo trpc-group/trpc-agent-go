@@ -218,11 +218,16 @@ func backwardStructuredOutput(request *Request) agent.RunOption {
 func backwardResultSchema(request *Request) map[string]any {
 	surfaceIDs := requestAllowedGradientSurfaceIDs(request)
 	predecessorStepIDs := requestPredecessorStepIDs(request)
+	gradientsSchema := backwardGradientArraySchema(surfaceIDs)
+	upstreamSchema := backwardPropagationArraySchema(predecessorStepIDs)
+	if len(surfaceIDs) == 0 && len(predecessorStepIDs) > 0 {
+		upstreamSchema["minItems"] = 1
+	}
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"Gradients": backwardGradientArraySchema(surfaceIDs),
-			"Upstream":  backwardPropagationArraySchema(predecessorStepIDs),
+			"Gradients": gradientsSchema,
+			"Upstream":  upstreamSchema,
 		},
 		"required":             []string{"Gradients", "Upstream"},
 		"additionalProperties": false,
@@ -255,7 +260,9 @@ func requestAllowedGradientSurfaceIDs(request *Request) []string {
 	if request.AllowedGradientSurfaceIDs == nil {
 		return requestSurfaceIDs(request)
 	}
-	return append([]string(nil), request.AllowedGradientSurfaceIDs...)
+	cloned := make([]string, len(request.AllowedGradientSurfaceIDs))
+	copy(cloned, request.AllowedGradientSurfaceIDs)
+	return cloned
 }
 
 func requestPredecessorStepIDs(request *Request) []string {
@@ -323,7 +330,8 @@ func backwardPropagationArraySchema(predecessorStepIDs []string) map[string]any 
 				"enum": predecessorStepIDs,
 			},
 			"Gradients": map[string]any{
-				"type": "array",
+				"type":     "array",
+				"minItems": 1,
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
