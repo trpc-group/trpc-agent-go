@@ -24,9 +24,9 @@ const (
 
 // AgentFactory creates an Agent for one run.
 //
-// Runner uses the same shape for request-scoped root agents. NewLazyAgent uses
-// it for sub-agents that should be described up front but constructed only
-// when they are actually invoked.
+// Runner uses the same shape for request-scoped root agents. NewLazyAgent
+// accepts this shape for sub-agents that should be described up front but
+// constructed only when they are actually invoked.
 type AgentFactory func(ctx context.Context, ro RunOptions) (Agent, error)
 
 type lazyAgent struct {
@@ -43,7 +43,10 @@ type lazyAgent struct {
 //
 // The factory should return an Agent with the same Info().Name as info.Name so
 // traces, transfer targets, and session branches remain easy to follow.
-func NewLazyAgent(info Info, factory AgentFactory) Agent {
+func NewLazyAgent(
+	info Info,
+	factory func(context.Context, RunOptions) (Agent, error),
+) Agent {
 	return &lazyAgent{
 		info:    info,
 		factory: factory,
