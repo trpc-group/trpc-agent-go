@@ -1348,6 +1348,35 @@ func TestFinishedRunViewKeepsChildFailureAfterLateCancel(t *testing.T) {
 	require.Equal(t, runErr.Error(), final.Error)
 }
 
+func TestFinishedRunViewPreservesCancelingTerminalState(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	base := Run{
+		ID:              "canceling-terminal",
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "cancel first",
+		Status:          StatusCanceling,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+
+	noErr := finishedRunView(base, "", nil, now)
+	require.Equal(t, StatusCanceled, noErr.Status)
+	require.Empty(t, noErr.Error)
+
+	customCancelErr := errors.New("worker canceled request")
+	customErr := finishedRunView(base, "", customCancelErr, now)
+	require.Equal(t, StatusCanceled, customErr.Status)
+	require.Empty(t, customErr.Error)
+
+	childErr := errors.New("child failed")
+	failed := finishedRunView(base, "", childErr, now)
+	require.Equal(t, StatusFailed, failed.Status)
+	require.Equal(t, childErr.Error(), failed.Error)
+}
+
 func TestServiceFailureAndRestartNormalization(t *testing.T) {
 	t.Parallel()
 

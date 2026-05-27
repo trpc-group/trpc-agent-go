@@ -32,6 +32,8 @@ const (
 	requestIDPrefix    = "taskrun:"
 
 	defaultFinalizerTimeout = time.Minute
+
+	cancellationErrorSubstring = "cancel"
 )
 
 // Option configures a Service.
@@ -593,7 +595,7 @@ func finishedRunView(
 	run.UpdatedAt = now
 	run.FinishedAt = cloneTime(now)
 	switch {
-	case errors.Is(runErr, context.Canceled):
+	case isCanceledRunResult(run, runErr):
 		run.Status = StatusCanceled
 		run.Error = ""
 		run.Summary = summarizeText(statusCanceledSummary, 0)
@@ -611,6 +613,20 @@ func finishedRunView(
 		run.Summary = summarizeText(output, defaultStoredSummaryRunes)
 	}
 	return run
+}
+
+func isCanceledRunResult(run Run, runErr error) bool {
+	if errors.Is(runErr, context.Canceled) {
+		return true
+	}
+	if run.Status != StatusCanceling {
+		return false
+	}
+	if runErr == nil {
+		return true
+	}
+	errText := strings.ToLower(runErr.Error())
+	return strings.Contains(errText, cancellationErrorSubstring)
 }
 
 func finalizingRunView(run Run, now time.Time) Run {
