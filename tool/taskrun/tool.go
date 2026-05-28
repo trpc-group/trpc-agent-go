@@ -20,19 +20,23 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	toolSpawn  = "start_task_run"
-	toolList   = "list_task_runs"
-	toolGet    = "get_task_run"
-	toolCancel = "cancel_task_run"
-	toolWait   = "wait_task_run"
+	toolSpawn      = "start_task_run"
+	toolList       = "list_task_runs"
+	toolGet        = "get_task_run"
+	toolCancel     = "cancel_task_run"
+	toolWait       = "wait_task_run"
+	toolTranscript = "read_task_run_transcript"
 
 	argAgentName      = "agent_name"
 	argID             = "id"
+	argLimit          = "limit"
 	argMode           = "mode"
 	argTask           = "task"
 	argTimeoutSeconds = "timeout_seconds"
@@ -40,6 +44,9 @@ const (
 
 	spawnModeAsync = "async"
 	spawnModeSync  = "sync"
+
+	defaultTranscriptEventLimit = 40
+	maxTranscriptEventLimit     = 200
 
 	schemaTypeInteger = "integer"
 	schemaTypeObject  = "object"
@@ -53,7 +60,9 @@ type options struct {
 	defaultAgentName        string
 	runtimeState            map[string]any
 	injectedContextMessages []model.Message
+	sessionService          session.Service
 	allowNested             bool
+	propagateParentAppName  bool
 }
 
 // WithDefaultAgentName configures the agent selected by spawn when the caller
@@ -82,6 +91,22 @@ func WithInjectedContextMessages(messages []model.Message) Option {
 	}
 }
 
+// WithSessionService enables transcript reads for child task sessions.
+func WithSessionService(service session.Service) Option {
+	return func(opts *options) {
+		opts.sessionService = service
+	}
+}
+
+// WithParentAppNamePropagation copies the current invocation app name into
+// spawned runs. It is disabled by default so workers keep their runner-level
+// default app namespace unless callers explicitly opt in.
+func WithParentAppNamePropagation(enabled bool) Option {
+	return func(opts *options) {
+		opts.propagateParentAppName = enabled
+	}
+}
+
 // WithNestedSpawns allows a task run to spawn additional task runs.
 func WithNestedSpawns(enabled bool) Option {
 	return func(opts *options) {
@@ -98,6 +123,7 @@ type Tools struct {
 	get    *getTool
 	cancel *cancelTool
 	wait   *waitTool
+	read   *transcriptTool
 }
 
 type toolState struct {
@@ -128,6 +154,9 @@ func NewTools(
 	t.get = &getTool{state: state}
 	t.cancel = &cancelTool{state: state}
 	t.wait = &waitTool{state: state}
+	if options.sessionService != nil {
+		t.read = &transcriptTool{state: state}
+	}
 	return t
 }
 
@@ -147,13 +176,17 @@ func (t *Tools) All() []tool.Tool {
 	if t == nil {
 		return nil
 	}
-	return []tool.Tool{
+	tools := []tool.Tool{
 		t.spawn,
 		t.list,
 		t.get,
 		t.cancel,
 		t.wait,
 	}
+	if t.read != nil {
+		tools = append(tools, t.read)
+	}
+	return tools
 }
 
 type spawnTool struct {
@@ -176,6 +209,10 @@ type waitTool struct {
 	state *toolState
 }
 
+type transcriptTool struct {
+	state *toolState
+}
+
 type spawnInput struct {
 	Task               string `json:"task"`
 	AgentName          string `json:"agent_name"`
@@ -189,8 +226,33 @@ type runIDInput struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
+type transcriptInput struct {
+	ID    string `json:"id"`
+	Limit int    `json:"limit"`
+}
+
 type listResult struct {
 	Runs []taskrunruntime.Run `json:"runs,omitempty"`
+}
+
+type transcriptResult struct {
+	ID             string                `json:"id,omitempty"`
+	Status         taskrunruntime.Status `json:"status,omitempty"`
+	ChildSessionID string                `json:"child_session_id,omitempty"`
+	Events         []transcriptEvent     `json:"events,omitempty"`
+}
+
+type transcriptEvent struct {
+	ID        string     `json:"id,omitempty"`
+	Author    string     `json:"author,omitempty"`
+	Object    string     `json:"object,omitempty"`
+	Role      model.Role `json:"role,omitempty"`
+	Content   string     `json:"content,omitempty"`
+	ToolID    string     `json:"tool_id,omitempty"`
+	ToolName  string     `json:"tool_name,omitempty"`
+	ToolCalls []string   `json:"tool_calls,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	Timestamp time.Time  `json:"timestamp,omitempty"`
 }
 
 func (t *spawnTool) Declaration() *tool.Declaration {
@@ -271,6 +333,8 @@ func (t *spawnTool) Call(
 	run, err := state.controller.Spawn(ctx, taskrunruntime.SpawnRequest{
 		OwnerUserID:             userID,
 		ParentSessionID:         sessionID,
+		ParentAppName:           currentAppName(ctx),
+		AppName:                 appNameForSpawnTool(ctx, state.options),
 		AgentName:               agentName,
 		Task:                    in.Task,
 		Timeout:                 secondsDuration(in.TimeoutSeconds),
@@ -319,13 +383,14 @@ func (t *listTool) Call(
 	if err := validateEmptyArgs(args); err != nil {
 		return nil, err
 	}
-	userID, sessionID, err := currentContext(ctx)
+	key, err := currentSessionKey(ctx)
 	if err != nil {
 		return nil, err
 	}
 	runs, err := state.controller.List(ctx, taskrunruntime.ListFilter{
-		OwnerUserID:     userID,
-		ParentSessionID: sessionID,
+		OwnerUserID:     key.UserID,
+		ParentSessionID: key.SessionID,
+		ParentAppName:   key.AppName,
 	})
 	if err != nil {
 		return nil, err
@@ -434,6 +499,80 @@ func (t *waitTool) Call(
 		defer cancel()
 	}
 	return state.controller.Wait(waitCtx, in.ID)
+}
+
+func (t *transcriptTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name: toolTranscript,
+		Description: "Read recent transcript events from one child " +
+			"task run session.",
+		InputSchema: &tool.Schema{
+			Type:     schemaTypeObject,
+			Required: []string{argID},
+			Properties: map[string]*tool.Schema{
+				argID: {
+					Type:        schemaTypeString,
+					Description: "Task run id returned by start.",
+				},
+				argLimit: {
+					Type: schemaTypeInteger,
+					Description: "Optional number of recent " +
+						"events to read. Defaults to 40 and " +
+						"is capped at 200.",
+				},
+			},
+		},
+	}
+}
+
+func (t *transcriptTool) Call(
+	ctx context.Context,
+	args []byte,
+) (any, error) {
+	state, err := requireTools(t.state)
+	if err != nil {
+		return nil, err
+	}
+	if state.options.sessionService == nil {
+		return nil, fmt.Errorf("taskrun: session service unavailable")
+	}
+	in, key, err := decodeTranscriptArgs(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	run, err := state.controller.Get(ctx, in.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !sameOwnerAndParent(run, key.UserID, key.AppName, key.SessionID) {
+		return nil, taskrunruntime.ErrRunNotFound
+	}
+	if strings.TrimSpace(run.ChildSessionID) == "" {
+		return nil, fmt.Errorf("taskrun: child session id unavailable")
+	}
+	appName := appNameForTranscript(run, key.AppName)
+	limit := normalizeTranscriptLimit(in.Limit)
+	child, err := state.options.sessionService.GetSession(
+		ctx,
+		session.Key{
+			AppName:   appName,
+			UserID:    run.OwnerUserID,
+			SessionID: run.ChildSessionID,
+		},
+		session.WithEventNum(limit),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if child == nil {
+		return nil, taskrunruntime.ErrRunNotFound
+	}
+	return transcriptResult{
+		ID:             run.ID,
+		Status:         run.Status,
+		ChildSessionID: run.ChildSessionID,
+		Events:         transcriptEvents(trimTranscriptEvents(child.GetEvents(), limit)),
+	}, nil
 }
 
 func normalizeSpawnMode(mode string) (string, error) {
@@ -547,6 +686,27 @@ func decodeWaitArgs(
 	return in, userID, nil
 }
 
+func decodeTranscriptArgs(
+	ctx context.Context,
+	args []byte,
+) (transcriptInput, session.Key, error) {
+	var in transcriptInput
+	if err := json.Unmarshal(args, &in); err != nil {
+		return transcriptInput{}, session.Key{}, err
+	}
+	key, err := currentSessionKey(ctx)
+	if err != nil {
+		return transcriptInput{}, session.Key{}, err
+	}
+	in.ID = strings.TrimSpace(in.ID)
+	if in.ID == "" {
+		return transcriptInput{}, session.Key{}, fmt.Errorf(
+			"taskrun: empty run id",
+		)
+	}
+	return in, key, nil
+}
+
 func currentContext(ctx context.Context) (string, string, error) {
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil {
@@ -569,6 +729,39 @@ func currentContext(ctx context.Context) (string, string, error) {
 	return userID, sessionID, nil
 }
 
+func currentSessionKey(ctx context.Context) (session.Key, error) {
+	userID, sessionID, err := currentContext(ctx)
+	if err != nil {
+		return session.Key{}, err
+	}
+	appName := currentAppName(ctx)
+	if appName == "" {
+		return session.Key{}, fmt.Errorf(
+			"taskrun: current app name is unavailable",
+		)
+	}
+	return session.Key{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	}, nil
+}
+
+func currentAppName(ctx context.Context) string {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil {
+		return ""
+	}
+	return strings.TrimSpace(inv.Session.AppName)
+}
+
+func appNameForSpawnTool(ctx context.Context, opts options) string {
+	if !opts.propagateParentAppName {
+		return ""
+	}
+	return currentAppName(ctx)
+}
+
 func isNestedTaskRun(ctx context.Context) bool {
 	nested, ok := agent.GetRuntimeStateValueFromContext[bool](
 		ctx,
@@ -580,6 +773,29 @@ func isNestedTaskRun(ctx context.Context) bool {
 func sameOwner(run *taskrunruntime.Run, userID string) bool {
 	return run != nil &&
 		strings.TrimSpace(run.OwnerUserID) == strings.TrimSpace(userID)
+}
+
+func sameOwnerAndParent(
+	run *taskrunruntime.Run,
+	userID string,
+	appName string,
+	sessionID string,
+) bool {
+	return sameOwner(run, userID) &&
+		sameParentApp(run, appName) &&
+		strings.TrimSpace(run.ParentSessionID) ==
+			strings.TrimSpace(sessionID)
+}
+
+func sameParentApp(run *taskrunruntime.Run, appName string) bool {
+	if run == nil {
+		return false
+	}
+	runAppName := strings.TrimSpace(run.ParentAppName)
+	if runAppName == "" {
+		runAppName = strings.TrimSpace(run.AppName)
+	}
+	return runAppName == strings.TrimSpace(appName)
 }
 
 func secondsDuration(seconds int) time.Duration {
@@ -598,4 +814,89 @@ func cloneRuntimeState(state map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func normalizeTranscriptLimit(limit int) int {
+	if limit <= 0 {
+		return defaultTranscriptEventLimit
+	}
+	if limit > maxTranscriptEventLimit {
+		return maxTranscriptEventLimit
+	}
+	return limit
+}
+
+func appNameForTranscript(run *taskrunruntime.Run, fallback string) string {
+	if run != nil {
+		if appName := strings.TrimSpace(run.AppName); appName != "" {
+			return appName
+		}
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func trimTranscriptEvents(events []event.Event, limit int) []event.Event {
+	if limit <= 0 || len(events) <= limit {
+		return events
+	}
+	return events[len(events)-limit:]
+}
+
+func transcriptEvents(events []event.Event) []transcriptEvent {
+	if len(events) == 0 {
+		return nil
+	}
+	out := make([]transcriptEvent, 0, len(events))
+	for i := range events {
+		out = append(out, transcriptEventFromEvent(&events[i]))
+	}
+	return out
+}
+
+func transcriptEventFromEvent(evt *event.Event) transcriptEvent {
+	if evt == nil {
+		return transcriptEvent{}
+	}
+	out := transcriptEvent{
+		ID:        evt.ID,
+		Author:    evt.Author,
+		Timestamp: evt.Timestamp,
+	}
+	if evt.Response == nil {
+		return out
+	}
+	out.Object = evt.Response.Object
+	if evt.Response.Error != nil {
+		out.Error = evt.Response.Error.Message
+	}
+	for _, choice := range evt.Response.Choices {
+		mergeTranscriptMessage(&out, choice.Message)
+		mergeTranscriptMessage(&out, choice.Delta)
+	}
+	return out
+}
+
+func mergeTranscriptMessage(out *transcriptEvent, msg model.Message) {
+	if out == nil {
+		return
+	}
+	if out.Role == "" && msg.Role != "" {
+		out.Role = msg.Role
+	}
+	if out.Content == "" && msg.Content != "" {
+		out.Content = msg.Content
+	}
+	if out.ToolID == "" && msg.ToolID != "" {
+		out.ToolID = msg.ToolID
+	}
+	if out.ToolName == "" && msg.ToolName != "" {
+		out.ToolName = msg.ToolName
+	}
+	for _, toolCall := range msg.ToolCalls {
+		name := strings.TrimSpace(toolCall.Function.Name)
+		if name == "" {
+			continue
+		}
+		out.ToolCalls = append(out.ToolCalls, name)
+	}
 }
