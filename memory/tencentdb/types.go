@@ -45,10 +45,11 @@ type recallResponse struct {
 }
 
 type searchMemoriesRequest struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit,omitempty"`
-	Type  string `json:"type,omitempty"`
-	Scene string `json:"scene,omitempty"`
+	Query  string `json:"query"`
+	Limit  int    `json:"limit,omitempty"`
+	Type   string `json:"type,omitempty"`
+	Scene  string `json:"scene,omitempty"`
+	UserID string `json:"user_id,omitempty"`
 }
 
 type searchMemoriesResponse struct {
@@ -61,6 +62,7 @@ type searchConversationsRequest struct {
 	Query      string `json:"query"`
 	Limit      int    `json:"limit,omitempty"`
 	SessionKey string `json:"session_key,omitempty"`
+	UserID     string `json:"user_id,omitempty"`
 }
 
 type searchConversationsResponse struct {

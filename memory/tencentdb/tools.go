@@ -91,16 +91,17 @@ func (s *Service) newMemorySearchTool(name string) tool.CallableTool {
 		if req == nil || strings.TrimSpace(req.Query) == "" {
 			return nil, fmt.Errorf("%s: query is required", name)
 		}
-		_, err := currentSession(ctx)
+		sess, err := currentSession(ctx)
 		if err != nil {
 			return nil, err
 		}
 		limit := normalizeLimit(req.Limit)
 		rsp, err := s.client.searchMemories(ctx, searchMemoriesRequest{
-			Query: strings.TrimSpace(req.Query),
-			Limit: limit,
-			Type:  strings.TrimSpace(req.Type),
-			Scene: strings.TrimSpace(req.Scene),
+			Query:  strings.TrimSpace(req.Query),
+			Limit:  limit,
+			Type:   strings.TrimSpace(req.Type),
+			Scene:  strings.TrimSpace(req.Scene),
+			UserID: sess.UserID,
 		})
 		if err != nil {
 			return nil, err
@@ -135,6 +136,7 @@ func (s *Service) newConversationSearchTool(name string) tool.CallableTool {
 			Query:      strings.TrimSpace(req.Query),
 			Limit:      limit,
 			SessionKey: sessionKey,
+			UserID:     sess.UserID,
 		})
 		if err != nil {
 			return nil, err

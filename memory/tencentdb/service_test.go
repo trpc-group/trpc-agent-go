@@ -507,8 +507,8 @@ func TestConversationSearchToolUsesCurrentSessionKey(t *testing.T) {
 	if rsp.Results != "hit" || rsp.Total != 1 {
 		t.Fatalf("response = %#v", rsp)
 	}
-	if got.SessionKey != "app:u1:s1" {
-		t.Fatalf("session_key = %q", got.SessionKey)
+	if got.SessionKey != "app:u1:s1" || got.UserID != "u1" {
+		t.Fatalf("conversation search scope = %#v", got)
 	}
 	if got.Limit != defaultSearchLimit {
 		t.Fatalf("limit = %d", got.Limit)
@@ -849,9 +849,19 @@ func TestMemorySearchToolAndHelpers(t *testing.T) {
 	}
 	defer svc.Close()
 
-	memTool, ok := svc.Tools()[0].(tool.CallableTool)
-	if !ok {
-		t.Fatalf("memory tool is not callable")
+	var memTool tool.CallableTool
+	for _, tl := range svc.Tools() {
+		if tl.Declaration().Name == "tdai_memory_search" {
+			var ok bool
+			memTool, ok = tl.(tool.CallableTool)
+			if !ok {
+				t.Fatalf("memory tool is not callable")
+			}
+			break
+		}
+	}
+	if memTool == nil {
+		t.Fatalf("memory tool not found")
 	}
 	if _, err := memTool.Call(context.Background(), []byte(`{"query":"hello"}`)); err == nil {
 		t.Fatalf("expected missing invocation error")
@@ -870,7 +880,8 @@ func TestMemorySearchToolAndHelpers(t *testing.T) {
 	if rsp.Results != "memory result" || rsp.Total != 3 || rsp.Strategy != "hybrid" {
 		t.Fatalf("response = %#v", rsp)
 	}
-	if got.Query != "profile" || got.Limit != maxSearchLimit || got.Type != "L1" || got.Scene != "work" {
+	if got.Query != "profile" || got.Limit != maxSearchLimit || got.Type != "L1" ||
+		got.Scene != "work" || got.UserID != "u1" {
 		t.Fatalf("search request = %#v", got)
 	}
 	if normalizeLimit(-1) != defaultSearchLimit || normalizeLimit(7) != 7 || normalizeLimit(99) != maxSearchLimit {
