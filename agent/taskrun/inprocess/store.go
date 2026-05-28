@@ -160,17 +160,24 @@ type storeFile struct {
 	Runs    []Run `json:"runs,omitempty"`
 }
 
-func normalizeLoadedRuns(runs map[string]*Run, now time.Time) bool {
+func normalizeLoadedRuns(
+	runs map[string]*Run,
+	now time.Time,
+	finalizer Finalizer,
+) bool {
 	changed := false
 	for _, run := range runs {
 		if run == nil || run.Status.IsTerminal() {
 			continue
 		}
-		run.Status = StatusFailed
-		run.Error = errInterruptedByRestart
-		run.UpdatedAt = now
-		run.FinishedAt = cloneTime(now)
-		run.Summary = summarizeText(run.Error, defaultStoredSummaryRunes)
+		view := failedRunView(*run, errInterruptedByRestart, now)
+		if finalizer != nil {
+			view.Metadata = mergeMetadata(
+				view.Metadata,
+				runFinalizer(context.Background(), finalizer, view),
+			)
+		}
+		*run = cloneRun(view)
 		changed = true
 	}
 	return changed

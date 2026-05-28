@@ -38,6 +38,7 @@ const (
 
 	argID             = "id"
 	argMode           = "mode"
+	argIsolation      = "isolation"
 	argTask           = "task"
 	argTimeoutSeconds = "timeout_seconds"
 	argWaitSeconds    = "wait_timeout_seconds"
@@ -152,6 +153,7 @@ type waitTool struct {
 type spawnInput struct {
 	Task               string `json:"task"`
 	Mode               string `json:"mode"`
+	Isolation          string `json:"isolation"`
 	TimeoutSeconds     int    `json:"timeout_seconds"`
 	WaitTimeoutSeconds int    `json:"wait_timeout_seconds"`
 }
@@ -217,6 +219,13 @@ func (t *spawnTool) Declaration() *tool.Declaration {
 						spawnModeReview + ". Default is " +
 						spawnModeAsync + ".",
 				},
+				argIsolation: {
+					Type: schemaTypeString,
+					Description: "Optional isolation mode. " +
+						"Use " + isolationWorktree +
+						" to run the subagent in a " +
+						"managed Git worktree.",
+				},
 				argTimeoutSeconds: {
 					Type: schemaTypeInteger,
 					Description: "Optional timeout in " +
@@ -275,6 +284,7 @@ func (t *spawnTool) Call(
 		ParentSessionID:                sess.ID,
 		Task:                           in.Task,
 		TimeoutSeconds:                 in.TimeoutSeconds,
+		Isolation:                      in.Isolation,
 		SuppressCompletionNotification: mode != spawnModeAsync,
 		Delivery: deliveryTarget{
 			Channel: delivery.Channel,

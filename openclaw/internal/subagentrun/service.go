@@ -16,20 +16,36 @@ import (
 	"strings"
 	"sync"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	coretaskrun "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	taskruninprocess "trpc.group/trpc-go/trpc-agent-go/agent/taskrun/inprocess"
+	"trpc.group/trpc-go/trpc-agent-go/internal/gitworktree"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
+type serviceOptions struct {
+	worktrees worktreeManager
+}
+
+// Option customizes the OpenClaw subagent service.
+type Option func(*serviceOptions)
+
+// WithWorktreeManager injects the manager used for worktree isolation.
+func WithWorktreeManager(manager worktreeManager) Option {
+	return func(opts *serviceOptions) {
+		if manager != nil {
+			opts.worktrees = manager
+		}
+	}
+}
+
 type Service struct {
-	core   *taskruninprocess.Service
-	router *outbound.Router
+	core      *taskruninprocess.Service
+	router    *outbound.Router
+	worktrees worktreeManager
 
 	mu      sync.RWMutex
 	baseCtx context.Context
@@ -39,6 +55,7 @@ func NewService(
 	stateDir string,
 	r runner.Runner,
 	router *outbound.Router,
+	opts ...Option,
 ) (*Service, error) {
 	if strings.TrimSpace(stateDir) == "" {
 		return nil, fmt.Errorf("subagent: empty state dir")
@@ -51,11 +68,26 @@ func NewService(
 	if err != nil {
 		return nil, err
 	}
-	svc := &Service{router: router}
+	options := serviceOptions{
+		worktrees: gitworktree.NewManager(
+			subagentWorktreeRoot(stateDir),
+			gitworktree.WithBranchPrefix(worktreeBranchPrefix),
+		),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	svc := &Service{
+		router:    router,
+		worktrees: options.worktrees,
+	}
 	core, err := taskruninprocess.NewService(
 		r,
 		taskruninprocess.WithStore(store),
 		taskruninprocess.WithObserver(svc),
+		taskruninprocess.WithFinalizer(svc),
 	)
 	if err != nil {
 		return nil, err
@@ -97,6 +129,10 @@ func (s *Service) Spawn(
 	if err := validateSpawnRequest(req); err != nil {
 		return openclawsubagent.Run{}, err
 	}
+	isolation, err := normalizeIsolation(req.Isolation)
+	if err != nil {
+		return openclawsubagent.Run{}, err
+	}
 
 	runID := newSubagentID()
 	runtimeState := map[string]any{}
@@ -111,63 +147,53 @@ func (s *Service) Spawn(
 			runtimeState[key] = value
 		}
 	}
-	runOptions := runOptionsFromContext(ctx)
-	runContext := runContextFromContext(ctx)
-	metadata := metadataForDelivery(req.Delivery)
-	if req.SuppressCompletionNotification {
-		metadata = nil
+
+	var lease *gitworktree.Lease
+	var worktreeMetadata map[string]string
+	if isolation == isolationWorktree {
+		created, err := s.createWorktree(ctx, runID)
+		if err != nil {
+			return openclawsubagent.Run{}, err
+		}
+		lease = &created
+		worktreeMetadata = metadataForWorktreeLease(created)
+		for key, value := range worktreeMetadata {
+			runtimeState[key] = value
+		}
 	}
+
+	runOptions := runOptionsFromContext(ctx, lease)
+	runContext := runContextFromContext(ctx, lease)
+	messages := []model.Message{model.NewSystemMessage(subagentRunPrompt)}
+	if lease != nil {
+		messages = append(messages, model.NewSystemMessage(worktreeRunPrompt(*lease)))
+	}
+
+	var deliveryMetadata map[string]string
+	if !req.SuppressCompletionNotification {
+		deliveryMetadata = metadataForDelivery(req.Delivery)
+	}
+	metadata := mergeMetadata(deliveryMetadata, worktreeMetadata)
 	run, err := s.core.Spawn(ctx, coretaskrun.SpawnRequest{
-		ID:               runID,
-		OwnerUserID:      req.OwnerUserID,
-		ParentSessionID:  req.ParentSessionID,
-		ChildSessionID:   runID,
-		RequestID:        runID,
-		Task:             req.Task,
-		Timeout:          timeoutDuration(req.TimeoutSeconds),
-		RuntimeState:     runtimeState,
-		RunOptions:       runOptions,
-		RunContext:       runContext,
-		RuntimeStateKeys: subagentRuntimeStateKeys(),
-		InjectedContextMessages: []model.Message{
-			model.NewSystemMessage(subagentRunPrompt),
-		},
-		Metadata: metadata,
+		ID:                      runID,
+		OwnerUserID:             req.OwnerUserID,
+		ParentSessionID:         req.ParentSessionID,
+		ChildSessionID:          runID,
+		RequestID:               runID,
+		Task:                    req.Task,
+		Timeout:                 timeoutDuration(req.TimeoutSeconds),
+		RuntimeState:            runtimeState,
+		RunOptions:              runOptions,
+		RunContext:              runContext,
+		RuntimeStateKeys:        subagentRuntimeStateKeys(),
+		InjectedContextMessages: messages,
+		Metadata:                metadata,
 	})
 	if err != nil {
+		s.cleanupUnspawnedWorktree(ctx, lease)
 		return openclawsubagent.Run{}, translateCoreError(err)
 	}
 	return projectRun(run), nil
-}
-
-func runOptionsFromContext(ctx context.Context) []agent.RunOption {
-	profile, ok := runtimeprofile.ProfileFromContext(ctx)
-	if !ok {
-		return nil
-	}
-	return runtimeprofile.RunOptions(profile)
-}
-
-func runContextFromContext(
-	ctx context.Context,
-) func(context.Context) context.Context {
-	profile, hasProfile := runtimeprofile.ProfileFromContext(ctx)
-	req, hasRequest := runtimeprofile.RequestFromContext(ctx)
-	if !hasProfile && !hasRequest {
-		return nil
-	}
-	return func(base context.Context) context.Context {
-		if base == nil {
-			base = context.Background()
-		}
-		if hasRequest {
-			base = runtimeprofile.WithRequest(base, req)
-		}
-		if hasProfile {
-			base = runtimeprofile.WithProfile(base, profile)
-		}
-		return base
-	}
 }
 
 func (s *Service) ListForUser(
@@ -231,11 +257,23 @@ func (s *Service) WaitForUser(
 }
 
 func (s *Service) OnRunUpdate(ctx context.Context, run coretaskrun.Run) {
-	if s == nil || !run.Status.IsTerminal() ||
-		run.Status == coretaskrun.StatusCanceled {
+	if s == nil || !run.Status.IsTerminal() {
+		return
+	}
+	if run.Status == coretaskrun.StatusCanceled {
 		return
 	}
 	s.notifyCompletion(run)
+}
+
+func (s *Service) FinalizeRun(
+	ctx context.Context,
+	run coretaskrun.Run,
+) map[string]string {
+	if s == nil || !run.Status.IsTerminal() {
+		return nil
+	}
+	return s.finalizeWorktree(ctx, run)
 }
 
 func (s *Service) notifyCompletion(run coretaskrun.Run) {
@@ -307,16 +345,27 @@ func formatNotification(run coretaskrun.Run) string {
 }
 
 func notificationDetail(run coretaskrun.Run) string {
+	var details []string
 	if run.Status == coretaskrun.StatusCompleted {
 		result := strings.TrimSpace(run.Result)
 		if result != "" {
-			return result
+			details = append(details, result)
 		}
 	}
-	if summary := strings.TrimSpace(run.Summary); summary != "" {
-		return summary
+	if len(details) == 0 {
+		if summary := strings.TrimSpace(run.Summary); summary != "" {
+			details = append(details, summary)
+		}
 	}
-	return strings.TrimSpace(run.Error)
+	if len(details) == 0 {
+		if errText := strings.TrimSpace(run.Error); errText != "" {
+			details = append(details, errText)
+		}
+	}
+	if detail := worktreeNotificationDetail(run); detail != "" {
+		details = append(details, detail)
+	}
+	return strings.Join(details, "\n")
 }
 
 func (s *Service) runForUser(
@@ -351,6 +400,17 @@ func validateSpawnRequest(req SpawnRequest) error {
 		return fmt.Errorf("subagent: empty task")
 	}
 	return nil
+}
+
+func normalizeIsolation(raw string) (string, error) {
+	isolation := strings.TrimSpace(raw)
+	if isolation == "" {
+		return "", nil
+	}
+	if isolation == isolationWorktree {
+		return isolation, nil
+	}
+	return "", fmt.Errorf("subagent: unsupported isolation %q", isolation)
 }
 
 func translateCoreError(err error) error {
