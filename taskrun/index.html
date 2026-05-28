@@ -705,6 +705,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#progress-and-transcript" class="md-nav__link">
+    <span class="md-ellipsis">
+      Progress and Transcript
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#runtime-state" class="md-nav__link">
     <span class="md-ellipsis">
       Runtime State
@@ -2444,6 +2453,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#progress-and-transcript" class="md-nav__link">
+    <span class="md-ellipsis">
+      Progress and Transcript
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#runtime-state" class="md-nav__link">
     <span class="md-ellipsis">
       Runtime State
@@ -2864,6 +2882,11 @@ the runner needs the parent.</p>
 <li><code>cancel_task_run</code></li>
 <li><code>wait_task_run</code></li>
 </ul>
+<p>When <code>taskruntool.WithSessionService</code> is configured, <code>tool/taskrun</code> also
+adds:</p>
+<ul>
+<li><code>read_task_run_transcript</code></li>
+</ul>
 <p><code>start_task_run</code> accepts a <code>mode</code> field:</p>
 <ul>
 <li><code>async</code> is the default. The tool starts the child run and returns the run
@@ -2980,6 +3003,41 @@ child run starts.</p>
 <code>readonly_researcher</code> to represent execution policies. The model chooses a
 business role, while the application owns the actual model, tools, and
 permission boundary.</p>
+<h2 id="progress-and-transcript">Progress and Transcript</h2>
+<p><code>Run.Progress</code> is a small status snapshot collected from the child run event
+stream. It records event count, tool call count, tool result count, token
+counts, and the latest observed event time. The full task transcript is not
+copied into <code>Run</code>; it remains in the child session identified by
+<code>Run.ChildSessionID</code>.</p>
+<p>The in-process controller keeps active progress available through polling
+APIs. Observers still receive persisted lifecycle updates; the final progress
+snapshot is persisted with the terminal run state.</p>
+<p>This keeps the task control plane small:</p>
+<ul>
+<li><code>list_task_runs</code>, <code>get_task_run</code>, and <code>wait_task_run</code> return lightweight
+  status and progress.</li>
+<li>The child session stores the detailed transcript.</li>
+<li>Applications remain free to build their own UI, notifications, logs, or
+  artifact storage on top of task run observers and session events.</li>
+</ul>
+<p>To let an agent inspect the child transcript, pass the same session service
+used by the runner:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1">1</a></span>
+<span class="normal"><a href="#__codelineno-11-2">2</a></span>
+<span class="normal"><a href="#__codelineno-11-3">3</a></span>
+<span class="normal"><a href="#__codelineno-11-4">4</a></span>
+<span class="normal"><a href="#__codelineno-11-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="nx">taskRunTools</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">taskruntool</span><span class="p">.</span><span class="nx">NewTools</span><span class="p">(</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="nx">svc</span><span class="p">,</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="nx">taskruntool</span><span class="p">.</span><span class="nx">WithDefaultAgentName</span><span class="p">(</span><span class="s">&quot;worker&quot;</span><span class="p">),</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="nx">taskruntool</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The <code>read_task_run_transcript</code> tool reads recent events from the child
+session. Its <code>limit</code> field is optional, defaults to 40 recent events, and is
+capped at 200 events. Access is limited to runs owned by the current user and
+created from the current parent session. When the run records an app name, for
+example from <code>agent.WithAppName</code>, transcript reads use that app name to locate
+the child session.</p>
 <h2 id="runtime-state">Runtime State</h2>
 <p>Every child run receives these runtime-state keys:</p>
 <ul>
@@ -2990,11 +3048,12 @@ permission boundary.</p>
 <p>Application adapters can merge additional runtime state through
 <code>SpawnRequest.RuntimeState</code>, or override the injected key names through
 <code>SpawnRequest.RuntimeStateKeys</code> when they expose a product-specific runtime
-surface. Local adapters that call <code>runner.Run</code> directly can also pass
-per-run <code>agent.RunOption</code> values through <code>SpawnRequest.RunOptions</code>; this is
-for in-process runner configuration and should not be serialized as a
-cross-node contract. <code>SpawnRequest.RunContext</code> can add local context values
-to the child runner context for the same in-process use case.</p>
+surface. Set <code>SpawnRequest.AppName</code> when the child run should use a specific
+session app namespace. Local adapters that call <code>runner.Run</code> directly can
+also pass per-run <code>agent.RunOption</code> values through <code>SpawnRequest.RunOptions</code>;
+this is for in-process runner configuration and should not be serialized as a
+cross-node contract. <code>SpawnRequest.RunContext</code> can add local context values to
+the child runner context for the same in-process use case.</p>
 
 
 
@@ -3017,7 +3076,7 @@ to the child runner context for the same in-process use case.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 27, 2026 10:58:33 UTC">2026-05-27 10:58:33</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 28, 2026 01:51:10 UTC">2026-05-28 01:51:10</span>
   </span>
 
     
