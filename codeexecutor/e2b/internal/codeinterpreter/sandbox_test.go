@@ -435,7 +435,7 @@ func (r *rewriteToServerTransport) RoundTrip(req *http.Request) (*http.Response,
 
 func TestConnect_ThroughMockAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" || r.URL.Path != "/sandboxes/abc" {
+		if r.Method != "POST" || r.URL.Path != "/sandboxes/abc/connect" {
 			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -517,7 +517,10 @@ func TestConnect_MissingAPIKey(t *testing.T) {
 	t.Setenv("E2B_API_KEY", "")
 	_, err := Connect(context.Background(), "abc", nil)
 	if err == nil {
-		t.Fatal("expected error (no API key, no server)")
+		t.Fatal("expected error when API key missing")
+	}
+	if _, ok := err.(*AuthenticationError); !ok {
+		t.Errorf("expected AuthenticationError, got %T: %v", err, err)
 	}
 }
 
@@ -680,7 +683,7 @@ func TestConnect_BackfillsEnvdAccessToken(t *testing.T) {
 	t.Setenv("E2B_ACCESS_TOKEN", "")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" || r.URL.Path != "/sandboxes/abc" {
+		if r.Method != "POST" || r.URL.Path != "/sandboxes/abc/connect" {
 			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -735,5 +738,71 @@ func TestConnect_DoesNotOverrideExplicitAccessToken(t *testing.T) {
 	}
 	if got := sbx.connection.AccessToken; got != "explicit-token" {
 		t.Errorf("explicit AccessToken should not be overridden; got %q", got)
+	}
+}
+
+func TestPause_ThroughMockAPI(t *testing.T) {
+	var paused bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/sandboxes/abc/pause" {
+			paused = true
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	sbx := &Sandbox{
+		id: "abc",
+		connection: &ConnectionConfig{
+			APIKey:     "k",
+			Domain:     "e2b.test",
+			Debug:      true,
+			HTTPClient: &http.Client{Transport: &rewriteToServerTransport{target: srv.URL}},
+		},
+	}
+	if err := sbx.Pause(context.Background()); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	if !paused {
+		t.Error("expected pause handler to have been called")
+	}
+}
+
+func TestConnect_BackfillsTrafficAccessToken(t *testing.T) {
+	t.Setenv("E2B_ACCESS_TOKEN", "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/sandboxes/abc/connect" {
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"sandboxID":"abc",
+			"clientID":"cid",
+			"templateID":"tpl",
+			"trafficAccessToken":"traffic-tok"
+		}`))
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Transport: &rewriteToServerTransport{target: srv.URL}}
+	sbx, err := Connect(context.Background(), "abc", &SandboxOpts{
+		APIKey:     "k",
+		Domain:     "e2b.test",
+		Debug:      true,
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if got := sbx.connection.TrafficAccessToken; got != "traffic-tok" {
+		t.Errorf("expected TrafficAccessToken to be back-filled; got %q", got)
+	}
+	h := http.Header{}
+	sbx.addAuthHeaders(h)
+	if got := h.Get("E2B-Traffic-Access-Token"); got != "traffic-tok" {
+		t.Errorf("E2B-Traffic-Access-Token header: %q", got)
 	}
 }

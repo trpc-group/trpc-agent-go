@@ -79,6 +79,10 @@ func (m *mockE2BServer) handle(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 		return
+	case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/connect"):
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","state":"running"}`))
+		return
 	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/sandboxes/"):
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","state":"running"}`))
