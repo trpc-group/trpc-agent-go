@@ -25,6 +25,8 @@ func TestStatusIsTerminal(t *testing.T) {
 	}{
 		{name: "queued", status: StatusQueued},
 		{name: "running", status: StatusRunning},
+		{name: "finalizing", status: StatusFinalizing},
+		{name: "canceling", status: StatusCanceling},
 		{name: "completed", status: StatusCompleted, terminal: true},
 		{name: "failed", status: StatusFailed, terminal: true},
 		{name: "canceled", status: StatusCanceled, terminal: true},

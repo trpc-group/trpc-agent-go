@@ -77,7 +77,7 @@ func TestToolsSpawnListGetCancelWait(t *testing.T) {
 	canceledAny, err := tools.cancel.Call(ctx, getArgs)
 	require.NoError(t, err)
 	canceled := canceledAny.(*openclawsubagent.Run)
-	require.Equal(t, openclawsubagent.StatusCanceled, canceled.Status)
+	require.Equal(t, openclawsubagent.StatusCanceling, canceled.Status)
 
 	waitedAny, err := tools.wait.Call(ctx, getArgs)
 	require.NoError(t, err)
@@ -260,6 +260,11 @@ func TestToolsAllAndDeclarations(t *testing.T) {
 	require.Contains(
 		t,
 		tools.spawn.Declaration().InputSchema.Properties,
+		argIsolation,
+	)
+	require.Contains(
+		t,
+		tools.spawn.Declaration().InputSchema.Properties,
 		argWaitSeconds,
 	)
 	require.Contains(
@@ -307,6 +312,20 @@ func TestToolErrorPaths(t *testing.T) {
 
 	_, err = tools.spawn.Call(ctx, []byte(`{"task":"demo","mode":"bad"}`))
 	require.ErrorContains(t, err, "unsupported mode")
+
+	deliveryCtx := newInvocationContext(
+		"user-a",
+		"session-a",
+		map[string]any{
+			"openclaw.delivery.channel": "telegram",
+			"openclaw.delivery.target":  "100",
+		},
+	)
+	_, err = tools.spawn.Call(
+		deliveryCtx,
+		[]byte(`{"task":"demo","isolation":"bad"}`),
+	)
+	require.ErrorContains(t, err, "unsupported isolation")
 
 	_, err = tools.spawn.Call(context.Background(), []byte(`{"task":"demo"}`))
 	require.ErrorContains(t, err, "current session context is unavailable")
