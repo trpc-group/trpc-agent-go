@@ -428,6 +428,66 @@ func TestGetSummariesList_Success(t *testing.T) {
 	)
 }
 
+func TestGetSummariesList_FiltersStaleAndPreservesBoundary(t *testing.T) {
+	s, mock, db := newTestServiceWithSliceSupport(
+		t, nil,
+	)
+	defer db.Close()
+
+	key := session.Key{
+		AppName: "app", UserID: "user",
+		SessionID: "sess",
+	}
+	createdAt := time.Date(2026, 5, 27, 10, 0, 0, 0, time.UTC)
+	cutoffAt := createdAt.Add(time.Minute)
+	fresh := session.Summary{
+		Summary:   "fresh",
+		UpdatedAt: cutoffAt,
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			"all",
+			cutoffAt,
+			"event-fresh",
+		),
+	}
+	stale := session.Summary{
+		Summary:   "stale",
+		UpdatedAt: createdAt.Add(-time.Hour),
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			"old",
+			createdAt.Add(-time.Hour),
+			"event-stale",
+		),
+	}
+	freshBytes, err := json.Marshal(fresh)
+	require.NoError(t, err)
+	staleBytes, err := json.Marshal(stale)
+	require.NoError(t, err)
+
+	mock.ExpectQuery("SELECT session_id, filter_key").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{
+				"session_id",
+				"filter_key",
+				"summary",
+				"updated_at",
+			},
+		).
+			AddRow("sess", "all", freshBytes, cutoffAt).
+			AddRow("sess", "old", staleBytes, createdAt.Add(-time.Minute)))
+
+	result, err := s.getSummariesList(
+		context.Background(),
+		[]session.Key{key},
+		[]time.Time{createdAt},
+	)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0]["all"])
+	assert.Equal(t, "fresh", result[0]["all"].Summary)
+	assert.Equal(t, "event-fresh", result[0]["all"].Boundary.LastEventID)
+	assert.Nil(t, result[0]["old"])
+}
+
 func TestGetSummariesList_NoSummaries(t *testing.T) {
 	s, mock, db := newTestServiceWithSliceSupport(
 		t, nil,

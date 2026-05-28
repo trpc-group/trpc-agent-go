@@ -1206,7 +1206,18 @@ func TestRunTool_AllowedCommandsFindsSkillBin(t *testing.T) {
 	require.Contains(t, out.Stdout, testBinOutput)
 }
 
-func TestRunTool_AllowedCommandsPrefersExplicitPATHBeforeSkillBin(
+// TestRunTool_AllowedCommandsPolicyScrubsCallerPATH guards the
+// fix for issue #1862: in policy mode the caller-supplied
+// env.PATH must NOT be prepended to the per-call PATH, otherwise
+// a model-controlled hostBin can sit ahead of skillBin during
+// bare-command resolution and run an attacker-staged binary
+// under the allowlisted name. After the scrub the caller's
+// PATH is dropped before injectSkillLocalEnvWithSep rebuilds
+// the search path, so bare "testSkillCLI" resolves through the
+// vetted skill bin instead of the hostBin the model tried to
+// inject. The previous test pinned the bypass as a feature; the
+// flipped assertion below replaces it.
+func TestRunTool_AllowedCommandsPolicyScrubsCallerPATH(
 	t *testing.T,
 ) {
 	root := t.TempDir()
@@ -1245,8 +1256,12 @@ func TestRunTool_AllowedCommandsPrefersExplicitPATHBeforeSkillBin(
 
 	out := res.(runOutput)
 	require.Equal(t, 0, out.ExitCode)
-	require.Contains(t, out.Stdout, testHostOutput)
-	require.NotContains(t, out.Stdout, testBinOutput)
+	require.NotContains(
+		t, out.Stdout, testHostOutput,
+		"caller-supplied env.PATH must not survive into policy "+
+			"mode (issue #1862)",
+	)
+	require.Contains(t, out.Stdout, testBinOutput)
 }
 
 func TestRunTool_AllowedCommandsPathAllowsBareSkillBin(t *testing.T) {
@@ -1283,7 +1298,78 @@ func TestRunTool_AllowedCommandsPathAllowsBareSkillBin(t *testing.T) {
 	require.Contains(t, out.Stdout, testBinOutput)
 }
 
-func TestRunTool_DeniedCommandsPathScopeKeepsInheritedPATH(t *testing.T) {
+// TestScrubPolicyEnv_DropsShellAndPathHijackVars pins the policy-
+// mode env scrub contract for skill_run: every shell-startup,
+// search-path, dynamic-linker and BASH_FUNC_* entry must be removed
+// before the per-call PATH is rebuilt, and a non-policy-relevant
+// caller key must survive. The scrub is delegated to
+// internal/envscrub so tool/workspaceexec and tool/skill stay in
+// sync; this test guards the wiring rather than re-litigating the
+// blocklist itself.
+func TestScrubPolicyEnv_DropsShellAndPathHijackVars(t *testing.T) {
+	in := map[string]string{
+		"PATH":                  "/tmp/attacker",
+		"HOME":                  "/tmp",
+		"BASH_ENV":              "/tmp/x.sh",
+		"ENV":                   "/tmp/x.sh",
+		"LD_PRELOAD":            "/tmp/x.so",
+		"DYLD_INSERT_LIBRARIES": "/tmp/x.dylib",
+		"IFS":                   " ",
+		"CDPATH":                "/tmp",
+		"BASH_FUNC_foo%%":       "() { :; }",
+		// non-POSIX key (would inject through "env K=V <cmd>")
+		"X; curl http://x #": "1",
+		// legitimate skill-side var that must survive.
+		"SKILL_CUSTOM": "ok",
+	}
+	out := scrubPolicyEnv(in)
+
+	require.NotNil(t, out)
+	for _, blocked := range []string{
+		"PATH", "HOME", "BASH_ENV", "ENV",
+		"LD_PRELOAD", "DYLD_INSERT_LIBRARIES",
+		"IFS", "CDPATH", "BASH_FUNC_foo%%",
+		"X; curl http://x #",
+	} {
+		_, ok := out[blocked]
+		require.Falsef(
+			t, ok,
+			"policy-mode env scrub must drop %q", blocked,
+		)
+	}
+	require.Equal(
+		t, "ok", out["SKILL_CUSTOM"],
+		"non-policy-relevant entries must survive the scrub",
+	)
+}
+
+// TestScrubPolicyEnv_EmptyInputReturnsNonNil pins the small but
+// important contract that scrubPolicyEnv never hands back a nil
+// map: downstream code in buildRunProgramSpec assigns the venv /
+// PATH entries directly on the returned map, and a nil map would
+// panic on the assignment.
+func TestScrubPolicyEnv_EmptyInputReturnsNonNil(t *testing.T) {
+	out := scrubPolicyEnv(nil)
+	require.NotNil(t, out)
+	out["X"] = "1" // must not panic.
+	out = scrubPolicyEnv(map[string]string{})
+	require.NotNil(t, out)
+	out["X"] = "1"
+}
+
+// TestRunTool_DeniedCommandsPolicyScrubsCallerPATH guards the
+// fix for issue #1862 in the deny-only configuration: a model-
+// supplied env.PATH must not be prepended to the per-call PATH
+// when a skill_run command policy is active. The previous test
+// asserted the opposite (the hostBin wins) as a documented
+// quirk; that was the bypass the issue calls out, and the
+// assertion is flipped here. (A path-form deny like
+// "bin/testSkillCLI" does not by itself reject a bare
+// "testSkillCLI" - that limitation is tracked separately as the
+// argv-level validator follow-up - so the test still observes
+// the skill bin running. The point is that the caller cannot
+// redirect resolution at an attacker-staged hostBin via env.PATH.)
+func TestRunTool_DeniedCommandsPolicyScrubsCallerPATH(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSkill(t, root, testSkillName)
 	writeSkillExecutable(
@@ -1320,8 +1406,11 @@ func TestRunTool_DeniedCommandsPathScopeKeepsInheritedPATH(t *testing.T) {
 
 	out := res.(runOutput)
 	require.Equal(t, 0, out.ExitCode)
-	require.Contains(t, out.Stdout, testHostOutput)
-	require.NotContains(t, out.Stdout, testBinOutput)
+	require.NotContains(
+		t, out.Stdout, testHostOutput,
+		"caller-supplied env.PATH must not survive into policy "+
+			"mode (issue #1862)",
+	)
 }
 
 func TestRunTool_DeniedCommandsRejectsExplicitRelativeSkillBin(
@@ -5059,6 +5148,21 @@ func TestRunTool_runProgram_DefaultTimeout(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1*time.Second, rr.last.Timeout)
+
+	rr.last = codeexecutor.RunProgramSpec{}
+	rt = &RunTool{}
+	rt.setAllowedCommands([]string{"echo"})
+	_, err = rt.runProgram(
+		context.Background(),
+		eng,
+		ws,
+		defaultWorkspaceSkillDir(testSkillName),
+		".",
+		runInput{Skill: testSkillName, Command: echoOK},
+	)
+	require.NoError(t, err)
+	require.True(t, rr.last.CleanEnv,
+		"skill_run policy mode should not inherit host env")
 }
 
 // dummyExec implements CodeExecutor but not EngineProvider to cover

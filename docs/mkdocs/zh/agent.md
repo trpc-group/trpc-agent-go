@@ -78,6 +78,8 @@ llmAgent := llmagent.New(
 )
 ```
 
+<a id="placeholder-variables-session-state-injection"></a>
+
 ### 占位符变量（会话状态注入）
 
 LLMAgent 会自动在 `Instruction` 和可选的 `SystemPrompt` 中注入会话状态。支持的占位符语法：

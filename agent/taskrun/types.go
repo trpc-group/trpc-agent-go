@@ -68,6 +68,8 @@ type Run struct {
 	ID              string            `json:"id,omitempty"`
 	OwnerUserID     string            `json:"owner_user_id,omitempty"`
 	ParentSessionID string            `json:"parent_session_id,omitempty"`
+	ParentAppName   string            `json:"parent_app_name,omitempty"`
+	AppName         string            `json:"app_name,omitempty"`
 	ChildSessionID  string            `json:"child_session_id,omitempty"`
 	RequestID       string            `json:"request_id,omitempty"`
 	AgentName       string            `json:"agent_name,omitempty"`
@@ -76,6 +78,7 @@ type Run struct {
 	Summary         string            `json:"summary,omitempty"`
 	Result          string            `json:"result,omitempty"`
 	Error           string            `json:"error,omitempty"`
+	Progress        *Progress         `json:"progress,omitempty"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
 	CreatedAt       time.Time         `json:"created_at"`
 	UpdatedAt       time.Time         `json:"updated_at"`
@@ -83,10 +86,26 @@ type Run struct {
 	FinishedAt      *time.Time        `json:"finished_at,omitempty"`
 }
 
+// Progress is a lightweight, best-effort view of events observed for a run.
+//
+// Full task transcripts remain in the child session identified by
+// Run.ChildSessionID. Progress intentionally stores only small counters that
+// are useful for polling and status displays.
+type Progress struct {
+	EventCount       int        `json:"event_count,omitempty"`
+	ToolCallCount    int        `json:"tool_call_count,omitempty"`
+	ToolResultCount  int        `json:"tool_result_count,omitempty"`
+	PromptTokens     int        `json:"prompt_tokens,omitempty"`
+	CompletionTokens int        `json:"completion_tokens,omitempty"`
+	TotalTokens      int        `json:"total_tokens,omitempty"`
+	LastEventAt      *time.Time `json:"last_event_at,omitempty"`
+}
+
 // ListFilter limits the runs returned by List.
 type ListFilter struct {
 	OwnerUserID     string
 	ParentSessionID string
+	ParentAppName   string
 	Status          Status
 }
 
@@ -104,6 +123,8 @@ type SpawnRequest struct {
 	ID              string
 	OwnerUserID     string
 	ParentSessionID string
+	ParentAppName   string
+	AppName         string
 	ChildSessionID  string
 	RequestID       string
 	AgentName       string

@@ -459,6 +459,7 @@ func (e *Executor) executeGraph(
 		eventChan, invocation.InvocationID, execState, resumed, lastCkpt,
 	)
 	execCtx.Invocation = invocation
+	execCtx.startTime = startTime
 	// Initialize per-execution input channels from the prepared state.
 	e.initializeChannels(execCtx, execState, true)
 	if len(restoredPending) > 0 {
@@ -3144,8 +3145,10 @@ type nodeExecutionContext struct {
 }
 
 type workflowMetricRecorder struct {
-	once       sync.Once
-	start      time.Time
+	once      sync.Once
+	start     time.Time
+	rootStart time.Time
+
 	attributes itelemetry.WorkflowAttributes
 }
 
@@ -3165,6 +3168,9 @@ func (r *workflowMetricRecorder) record(ctx context.Context, err error) {
 		attrs := r.attributes
 		attrs.Error = err
 		itelemetry.ReportWorkflowMetrics(ctx, attrs, time.Since(r.start))
+		if !r.rootStart.IsZero() {
+			itelemetry.ReportWorkflowElapsedMetrics(ctx, attrs, time.Since(r.rootStart))
+		}
 	})
 }
 
@@ -3669,8 +3675,14 @@ func (e *Executor) newWorkflowMetricRecorder(
 		}
 	}
 
+	var rootStart time.Time
+	if execCtx != nil {
+		rootStart = execCtx.startTime
+	}
 	return &workflowMetricRecorder{
-		start:      start,
+		start:     start,
+		rootStart: rootStart,
+
 		attributes: attrs,
 	}
 }

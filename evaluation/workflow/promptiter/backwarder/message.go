@@ -35,6 +35,7 @@ Requirements:
 - Do not wrap the response in markdown code fences.
 - Attribute gradients only to listed gradient surfaces.
 - Route upstream gradients only to listed predecessor steps.
+- If no gradient surfaces are listed and predecessor steps are listed, route non-empty upstream gradients to the relevant predecessor steps.
 - Do not broadcast the same gradient packet to every predecessor.
 
 Request JSON:

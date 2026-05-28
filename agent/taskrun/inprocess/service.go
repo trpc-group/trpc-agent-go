@@ -32,8 +32,6 @@ const (
 	requestIDPrefix    = "taskrun:"
 
 	defaultFinalizerTimeout = time.Minute
-
-	cancellationErrorSubstring = "cancel"
 )
 
 // Option configures a Service.
@@ -204,6 +202,8 @@ func (s *Service) Spawn(
 		ID:              runID,
 		OwnerUserID:     strings.TrimSpace(req.OwnerUserID),
 		ParentSessionID: strings.TrimSpace(req.ParentSessionID),
+		ParentAppName:   strings.TrimSpace(req.ParentAppName),
+		AppName:         appNameForSpawn(req),
 		AgentName:       strings.TrimSpace(req.AgentName),
 		Task:            strings.TrimSpace(req.Task),
 		Status:          StatusQueued,
@@ -360,6 +360,14 @@ func validateSpawnRequest(req SpawnRequest) error {
 	return nil
 }
 
+func appNameForSpawn(req SpawnRequest) string {
+	runOpts := agent.NewRunOptions(req.RunOptions...)
+	if appName := strings.TrimSpace(runOpts.AppName); appName != "" {
+		return appName
+	}
+	return strings.TrimSpace(req.AppName)
+}
+
 func (s *Service) execute(
 	parent context.Context,
 	runID string,
@@ -372,10 +380,11 @@ func (s *Service) execute(
 	defer cancel()
 
 	result := replyAccumulator{}
-	runErr := s.runChild(runCtx, run, req, &result)
+	progress := progressAccumulator{}
+	runErr := s.runChild(runCtx, run, req, &result, &progress)
 	output := trimResult(result.text)
 	s.markExiting(runID)
-	s.finishRun(runID, output, runErr)
+	s.finishRun(runID, output, runErr, progress.snapshot())
 }
 
 func (s *Service) markRunning(
@@ -449,11 +458,15 @@ func (s *Service) runChild(
 	run *Run,
 	req SpawnRequest,
 	result *replyAccumulator,
+	progress *progressAccumulator,
 ) error {
 	if run == nil {
 		return fmt.Errorf("taskrun: nil run")
 	}
 	runOpts := append([]agent.RunOption(nil), req.RunOptions...)
+	if run.AppName != "" {
+		runOpts = append(runOpts, agent.WithAppName(run.AppName))
+	}
 	runOpts = append(runOpts,
 		agent.WithRequestID(run.RequestID),
 		agent.MergeRuntimeState(runtimeStateForRun(
@@ -484,6 +497,9 @@ func (s *Service) runChild(
 	}
 	for evt := range events {
 		result.consume(evt)
+		if progress != nil && progress.consume(evt, s.clock()) {
+			s.updateProgress(run.ID, progress.snapshot())
+		}
 	}
 	if result.err != nil {
 		return result.err
@@ -542,6 +558,7 @@ func (s *Service) finishRun(
 	runID string,
 	output string,
 	runErr error,
+	progress *Progress,
 ) {
 	s.mu.Lock()
 	run := s.runs[runID]
@@ -555,6 +572,7 @@ func (s *Service) finishRun(
 		*run,
 		output,
 		runErr,
+		progress,
 		now,
 	)
 	*run = finalizingRunView(view, now)
@@ -588,10 +606,12 @@ func finishedRunView(
 	run Run,
 	output string,
 	runErr error,
+	progress *Progress,
 	now time.Time,
 ) Run {
 	run = cloneRun(run)
 	run.Result = output
+	run.Progress = cloneProgress(progress)
 	run.UpdatedAt = now
 	run.FinishedAt = cloneTime(now)
 	switch {
@@ -619,14 +639,23 @@ func isCanceledRunResult(run Run, runErr error) bool {
 	if errors.Is(runErr, context.Canceled) {
 		return true
 	}
-	if run.Status != StatusCanceling {
-		return false
+	return run.Status == StatusCanceling && runErr == nil
+}
+
+func (s *Service) updateProgress(runID string, progress *Progress) {
+	if progress == nil {
+		return
 	}
-	if runErr == nil {
-		return true
+	// Progress is an in-memory polling hint while the run is active.
+	// Terminal updates persist the final snapshot and notify observers.
+	s.mu.Lock()
+	run := s.runs[runID]
+	if run == nil || run.Status.IsTerminal() {
+		s.mu.Unlock()
+		return
 	}
-	errText := strings.ToLower(runErr.Error())
-	return strings.Contains(errText, cancellationErrorSubstring)
+	run.Progress = cloneProgress(progress)
+	s.mu.Unlock()
 }
 
 func finalizingRunView(run Run, now time.Time) Run {
@@ -893,6 +922,10 @@ func matchesFilter(run Run, filter ListFilter) bool {
 	}
 	if filter.ParentSessionID != "" &&
 		run.ParentSessionID != strings.TrimSpace(filter.ParentSessionID) {
+		return false
+	}
+	if filter.ParentAppName != "" &&
+		run.ParentAppName != strings.TrimSpace(filter.ParentAppName) {
 		return false
 	}
 	if filter.Status != "" && run.Status != filter.Status {
