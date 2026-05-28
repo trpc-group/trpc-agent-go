@@ -558,6 +558,13 @@ main agent continues immediately or waits:
 `timeout_seconds` limits the subagent run. `wait_timeout_seconds` only limits
 how long `subagents_spawn` waits in `sync` or `review` mode.
 
+`isolation: "worktree"` is opt-in for coding tasks that should not edit the
+parent checkout directly. OpenClaw creates a managed Git worktree from the
+current runtime profile workspace, runs the subagent with that worktree as its
+default workspace, removes it when it stays clean, and preserves it when the
+subagent leaves file or commit changes. The source workspace must be a clean
+Git checkout so the isolated run starts from an explicit commit.
+
 ## Customize prompts
 
 OpenClaw supports customizing the main agent's prompt with either:

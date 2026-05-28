@@ -49,11 +49,17 @@ const (
 	StatusQueued Status = "queued"
 	// StatusRunning means the child agent is executing.
 	StatusRunning Status = "running"
+	// StatusFinalizing means the child agent exited and final metadata is
+	// being attached.
+	StatusFinalizing Status = "finalizing"
+	// StatusCanceling means cancellation was requested and the child agent
+	// has not exited yet.
+	StatusCanceling Status = "canceling"
 	// StatusCompleted means the child agent completed successfully.
 	StatusCompleted Status = "completed"
 	// StatusFailed means the child agent failed.
 	StatusFailed Status = "failed"
-	// StatusCanceled means cancellation was requested or observed.
+	// StatusCanceled means the child agent exited after cancellation.
 	StatusCanceled Status = "canceled"
 )
 
