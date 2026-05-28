@@ -734,15 +734,23 @@ func (r *runner) persistAgentRunError(
 	ag agent.Agent,
 	runErr error,
 ) {
+	persistCtx, cancel := sessionPersistenceContext(ctx)
+	defer cancel()
+
 	errorEvent := event.NewErrorEvent(
 		invocation.InvocationID,
 		ag.Info().Name,
 		model.ErrorTypeRunError,
 		runErr.Error(),
 	)
+	agent.InjectIntoEvent(invocation, errorEvent)
 	ensureErrorEventContent(errorEvent)
-	errorEvent = r.applyEventPlugins(ctx, invocation, errorEvent)
-	appendErr := r.sessionService.AppendEvent(ctx, currentTurnSession, errorEvent)
+	errorEvent = r.applyEventPlugins(persistCtx, invocation, errorEvent)
+	appendErr := r.sessionService.AppendEvent(
+		persistCtx,
+		currentTurnSession,
+		errorEvent,
+	)
 	if appendErr != nil {
 		log.Errorf("failed to append agent run error event: %v", appendErr)
 	}

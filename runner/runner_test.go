@@ -4015,10 +4015,39 @@ func TestNewRunner_DefaultSessionService(t *testing.T) {
 }
 
 func TestRunner_Run_AgentRunError(t *testing.T) {
-	r := NewRunner("app", &failingAgent{name: "f"})
-	ch, err := r.Run(context.Background(), "u", "s", model.NewUserMessage("m"))
+	const (
+		requestID = "req-run-error"
+		filterKey = "filter/run-error"
+	)
+	ctx := context.Background()
+	sessionService := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		&failingAgent{name: "f"},
+		WithSessionService(sessionService),
+	)
+	ch, err := r.Run(
+		ctx,
+		"u",
+		"s",
+		model.NewUserMessage("m"),
+		agent.WithRequestID(requestID),
+		agent.WithEventFilterKey(filterKey),
+	)
 	require.Error(t, err)
 	require.Nil(t, ch)
+
+	sess, err := sessionService.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+	})
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 2)
+	errorEvent := sess.Events[1]
+	require.Equal(t, model.ErrorTypeRunError, errorEvent.Error.Type)
+	require.Equal(t, requestID, errorEvent.RequestID)
+	require.Equal(t, filterKey, errorEvent.FilterKey)
 }
 
 func TestGetOrCreateSession_Existing(t *testing.T) {
