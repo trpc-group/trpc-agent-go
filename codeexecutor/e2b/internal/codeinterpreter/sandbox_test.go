@@ -806,3 +806,20 @@ func TestConnect_BackfillsTrafficAccessToken(t *testing.T) {
 		t.Errorf("E2B-Traffic-Access-Token header: %q", got)
 	}
 }
+
+func TestConnect_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	client := &http.Client{Transport: &rewriteToServerTransport{target: srv.URL}}
+	_, err := Connect(context.Background(), "abc", &SandboxOpts{
+		APIKey:     "k",
+		Domain:     "e2b.test",
+		Debug:      true,
+		HTTPClient: client,
+	})
+	if err == nil {
+		t.Fatal("expected error on server error, got nil")
+	}
+}

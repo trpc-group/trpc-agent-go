@@ -83,6 +83,9 @@ func (m *mockE2BServer) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","state":"running"}`))
 		return
+	case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pause"):
+		w.WriteHeader(http.StatusNoContent)
+		return
 	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/sandboxes/"):
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","state":"running"}`))
@@ -1123,6 +1126,22 @@ func TestExecuteCode_SandboxExecutionError(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "execute block 0")
+}
+
+func TestPauseExecutor_Success(t *testing.T) {
+	srv := newMockE2BServer(t, nil)
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	err := c.Pause(context.Background())
+	require.NoError(t, err)
+}
+
+func TestPauseExecutor_NilSandbox(t *testing.T) {
+	c := &CodeExecutor{}
+	err := c.Pause(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sandbox not initialized")
 }
 
 func writeTempFile(path, content string) error {
