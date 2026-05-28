@@ -871,6 +871,33 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
+// WithToolPermissionPolicy sets a per-run policy that is checked after
+// before-tool callbacks finalize arguments and immediately before the
+// framework executes a tool call.
+//
+// The policy is intentionally separate from WithToolFilter and
+// WithToolExecutionFilter:
+//   - WithToolFilter controls which tools are visible to the model.
+//   - WithToolExecutionFilter controls whether the framework auto-executes
+//     a visible tool or leaves it to the caller.
+//   - WithToolPermissionPolicy executes a permission check for tools the
+//     framework is about to run.
+//
+// When no per-run policy is configured, tools without their own checker keep
+// the legacy allow behavior. When a per-run policy is configured, it is applied
+// to every tool the framework is about to execute, including tools that do not
+// implement tool.PermissionChecker.
+func WithToolPermissionPolicy(policy tool.PermissionPolicy) RunOption {
+	return func(opts *RunOptions) {
+		opts.ToolPermissionPolicy = policy
+	}
+}
+
+// WithToolPermissionPolicyFunc adapts fn into a per-run tool permission policy.
+func WithToolPermissionPolicyFunc(fn tool.PermissionPolicyFunc) RunOption {
+	return WithToolPermissionPolicy(fn)
+}
+
 func appendRunTools(opts *RunOptions, tools []tool.Tool) {
 	if opts == nil || len(tools) == 0 {
 		return
@@ -1241,6 +1268,18 @@ type RunOptions struct {
 	// assistant tool_call response so the caller can execute the tool
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
+
+	// ToolPermissionPolicy checks whether a tool call may run after the model
+	// has requested it, after argument repair, and after before-tool callbacks
+	// have finalized arguments.
+	//
+	// This policy does not change the visible tool surface. Use ToolFilter for
+	// that. It also does not replace callbacks or guardrail plugins; before-tool
+	// callbacks can still normalize arguments before the policy sees them. A deny
+	// or ask decision skips tool execution and returns a structured permission
+	// result to the model.
+	ToolPermissionPolicy tool.PermissionPolicy
+
 	// ToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
 	// When nil, JSON repair is disabled by default.
 	ToolCallArgumentsJSONRepairEnabled *bool

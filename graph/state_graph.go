@@ -4144,33 +4144,26 @@ func runToolWithEventContexts(
 	if customResult != nil {
 		return ctx, startInvocation, ctx, startInvocation, customResult, toolCall.Function.Arguments, nil
 	}
+	permissionResult, err := checkToolPermission(
+		ctx,
+		startInvocation,
+		toolCall,
+		t,
+		decl,
+	)
+	if err != nil {
+		return ctx, startInvocation, ctx, startInvocation, nil, toolCall.Function.Arguments, err
+	}
+	if permissionResult != nil {
+		return ctx, startInvocation, ctx, startInvocation, permissionResult, toolCall.Function.Arguments, nil
+	}
 	startCtx := ctx
 
 	callableTool, err := ensureCallableTool(t, toolCall.Function.Name)
 	if err != nil {
 		return startCtx, startInvocation, ctx, startInvocation, nil, toolCall.Function.Arguments, err
 	}
-	var result any
-	var toolErr error
-	if retryPolicy == nil {
-		result, toolErr = callableTool.Call(ctx, toolCall.Function.Arguments)
-	} else {
-		runResult := toolretry.Execute(ctx, toolretry.ExecuteInput{
-			ToolName:   toolCall.Function.Name,
-			ToolCallID: toolCall.ID,
-			Arguments:  toolCall.Function.Arguments,
-			Policy:     retryPolicy,
-			Call:       callableTool.Call,
-			ResultError: func(result any) bool {
-				return extractResultError(result)
-			},
-			IsTerminalError: func(err error) bool {
-				return IsInterruptError(err)
-			},
-		})
-		result = runResult.Result
-		toolErr = runResult.Error
-	}
+	result, toolErr := callToolWithRetry(ctx, toolCall, callableTool, retryPolicy)
 	completeInvocation := startInvocation
 
 	ctx, customResult, err = runAfterToolPluginCallbacks(
@@ -4227,6 +4220,79 @@ func runToolWithEventContexts(
 			fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, toolErr)
 	}
 	return startCtx, startInvocation, ctx, completeInvocation, result, toolCall.Function.Arguments, nil
+}
+
+func callToolWithRetry(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	callableTool tool.CallableTool,
+	retryPolicy *tool.RetryPolicy,
+) (any, error) {
+	if retryPolicy == nil {
+		return callableTool.Call(ctx, toolCall.Function.Arguments)
+	}
+	runResult := toolretry.Execute(ctx, toolretry.ExecuteInput{
+		ToolName:   toolCall.Function.Name,
+		ToolCallID: toolCall.ID,
+		Arguments:  toolCall.Function.Arguments,
+		Policy:     retryPolicy,
+		Call:       callableTool.Call,
+		ResultError: func(result any) bool {
+			return extractResultError(result)
+		},
+		IsTerminalError: func(err error) bool {
+			return IsInterruptError(err)
+		},
+	})
+	return runResult.Result, runResult.Error
+}
+
+func checkToolPermission(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	t tool.Tool,
+	decl *tool.Declaration,
+) (*tool.PermissionResult, error) {
+	req := &tool.PermissionRequest{
+		Tool:        t,
+		ToolName:    toolCall.Function.Name,
+		ToolCallID:  toolCall.ID,
+		Declaration: decl,
+		Arguments:   toolCall.Function.Arguments,
+		Metadata:    tool.MetadataOf(t),
+	}
+	if checker, ok := t.(tool.PermissionChecker); ok {
+		decision, err := checker.CheckPermission(ctx, req)
+		result, err := normalizeToolPermissionResult(req, decision, err)
+		if result != nil || err != nil {
+			return result, err
+		}
+	}
+	if invocation == nil || invocation.RunOptions.ToolPermissionPolicy == nil {
+		return nil, nil
+	}
+	decision, err := invocation.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, req)
+	return normalizeToolPermissionResult(req, decision, err)
+}
+
+func normalizeToolPermissionResult(
+	req *tool.PermissionRequest,
+	decision tool.PermissionDecision,
+	checkErr error,
+) (*tool.PermissionResult, error) {
+	if checkErr != nil {
+		return nil, checkErr
+	}
+	decision, err := tool.NormalizePermissionDecision(decision)
+	if err != nil {
+		return nil, err
+	}
+	if decision.Action == tool.PermissionActionAllow {
+		return nil, nil
+	}
+	result := tool.PermissionResultFor(req.ToolName, decision)
+	return &result, nil
 }
 
 func extractResultError(result any) bool {
