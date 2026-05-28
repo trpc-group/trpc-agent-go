@@ -54,22 +54,22 @@ func BuildInjectedContextMessages(
 		return nil
 	}
 	out := make([]model.Message, 0, opts.MaxHistoryRuns+1)
-	var since time.Time
+	var boundary *session.SummaryBoundary
 	if opts.AddSessionSummary {
-		if text, updatedAt, ok := sessionSummary(sess); ok {
+		if text, sumBoundary, ok := sessionSummary(sess); ok {
 			out = append(
 				out,
 				model.NewSystemMessage(
 					formatSummary(text),
 				),
 			)
-			since = updatedAt
+			boundary = sumBoundary
 		}
 	}
 
 	history := buildVisibleHistory(
 		sess.Events,
-		since,
+		boundary,
 		normalizeActorLabels(opts.LabelOverrides),
 	)
 	if opts.MaxHistoryRuns > 0 && len(history) > opts.MaxHistoryRuns {
@@ -131,10 +131,24 @@ func BuildSummaryText(events []event.Event) string {
 
 func buildVisibleHistory(
 	events []event.Event,
-	since time.Time,
+	boundary *session.SummaryBoundary,
 	labelOverrides map[string]string,
 ) []model.Message {
+	if boundary != nil && strings.TrimSpace(boundary.LastEventID) != "" {
+		if history, ok := buildVisibleHistoryAfterEvent(
+			events,
+			boundary.LastEventID,
+			labelOverrides,
+		); ok {
+			return history
+		}
+	}
+
 	out := make([]model.Message, 0, len(events))
+	since := time.Time{}
+	if boundary != nil {
+		since = boundary.CutoffTime()
+	}
 	for i := range events {
 		evt := events[i]
 		if !includeEvent(evt, since) {
@@ -147,6 +161,33 @@ func buildVisibleHistory(
 		out = append(out, msgs...)
 	}
 	return out
+}
+
+func buildVisibleHistoryAfterEvent(
+	events []event.Event,
+	lastEventID string,
+	labelOverrides map[string]string,
+) ([]model.Message, bool) {
+	out := make([]model.Message, 0, len(events))
+	var foundBoundary bool
+	for i := range events {
+		evt := events[i]
+		if !foundBoundary {
+			if evt.ID == lastEventID {
+				foundBoundary = true
+			}
+			continue
+		}
+		if !includeEvent(evt, time.Time{}) {
+			continue
+		}
+		msgs := visibleMessagesFromEvent(
+			evt,
+			labelOverrides,
+		)
+		out = append(out, msgs...)
+	}
+	return out, foundBoundary
 }
 
 func buildTurns(
@@ -600,21 +641,21 @@ func messageText(msg model.Message) string {
 
 func sessionSummary(
 	sess *session.Session,
-) (string, time.Time, bool) {
+) (string, *session.SummaryBoundary, bool) {
 	sess.SummariesMu.RLock()
 	defer sess.SummariesMu.RUnlock()
 	if sess.Summaries == nil {
-		return "", time.Time{}, false
+		return "", nil, false
 	}
 	sum := sess.Summaries[session.SummaryFilterKeyAllContents]
 	if sum == nil {
-		return "", time.Time{}, false
+		return "", nil, false
 	}
 	text := strings.TrimSpace(sum.Summary)
 	if text == "" {
-		return "", time.Time{}, false
+		return "", nil, false
 	}
-	return text, sum.UpdatedAt, true
+	return text, sum.CutoffBoundary(), true
 }
 
 func speakerLabel(

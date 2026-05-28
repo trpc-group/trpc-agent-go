@@ -12,6 +12,7 @@ package hashidx
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -28,6 +29,8 @@ import (
 //   Type:  String
 //   Value: JSON(map[filterKey]*session.Summary)
 
+const summaryNilError = "summary is nil"
+
 // CreateSummary creates or updates a summary for the session.
 // Uses Lua script to atomically merge filterKey summary only if newer.
 // TTL is set atomically inside the Lua script to avoid orphan keys without expiry.
@@ -40,11 +43,14 @@ func (c *Client) CreateSummary(
 	sum *session.Summary,
 	ttl time.Duration,
 ) error {
+	if sum == nil {
+		return errors.New(summaryNilError)
+	}
 	// Normalize to UTC so Lua string comparison of "updated_at" is correct.
-	normalized := *sum
+	normalized := sum.Clone()
 	normalized.UpdatedAt = sum.UpdatedAt.UTC()
 
-	payload, err := json.Marshal(&normalized)
+	payload, err := json.Marshal(normalized)
 	if err != nil {
 		return fmt.Errorf("marshal summary failed: %w", err)
 	}

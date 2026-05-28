@@ -88,7 +88,11 @@ func (s *Service) getSession(
 	summaries := make(map[string]*session.Summary)
 	if len(events) > 0 {
 		// Batch load summaries for all sessions
-		summariesList, err := s.getSummariesList(ctx, []session.Key{key})
+		summariesList, err := s.getSummariesList(
+			ctx,
+			[]session.Key{key},
+			[]time.Time{sessState.CreatedAt},
+		)
 		if err != nil {
 			return nil, fmt.Errorf("get summaries failed: %w", err)
 		}
@@ -194,12 +198,14 @@ func (s *Service) listSessions(
 
 	// Build session keys for batch loading events and summaries
 	sessionKeys := make([]session.Key, 0, len(sessStates))
+	sessionCreatedAts := make([]time.Time, 0, len(sessStates))
 	for _, sessState := range sessStates {
 		sessionKeys = append(sessionKeys, session.Key{
 			AppName:   key.AppName,
 			UserID:    key.UserID,
 			SessionID: sessState.ID,
 		})
+		sessionCreatedAts = append(sessionCreatedAts, sessState.CreatedAt)
 	}
 
 	// Batch load events for all sessions
@@ -210,7 +216,11 @@ func (s *Service) listSessions(
 	}
 
 	// Batch load summaries for all sessions
-	summariesList, err := s.getSummariesList(ctx, sessionKeys)
+	summariesList, err := s.getSummariesList(
+		ctx,
+		sessionKeys,
+		sessionCreatedAts,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("get summaries list failed: %w", err)
 	}
@@ -863,6 +873,7 @@ func (s *Service) getTrackEvents(
 func (s *Service) getSummariesList(
 	ctx context.Context,
 	sessionKeys []session.Key,
+	sessionCreatedAts ...[]time.Time,
 ) ([]map[string]*session.Summary, error) {
 	if len(sessionKeys) == 0 {
 		return []map[string]*session.Summary{}, nil
@@ -874,11 +885,26 @@ func (s *Service) getSummariesList(
 		sessionIDs[i] = key.SessionID
 	}
 
+	sessionCreatedAtMap := map[string]time.Time(nil)
+	if len(sessionCreatedAts) > 0 {
+		if len(sessionKeys) != len(sessionCreatedAts[0]) {
+			return nil, fmt.Errorf("session keys and createdAts length mismatch")
+		}
+		sessionCreatedAtMap = make(map[string]time.Time, len(sessionKeys))
+		for i, key := range sessionKeys {
+			sessionCreatedAtMap[key.SessionID] = sessionCreatedAts[0][i]
+		}
+	}
+
 	// Query all summaries for all sessions (always filter deleted records)
-	summaryQuery := fmt.Sprintf(`SELECT session_id, filter_key, summary FROM %s
+	summaryColumns := "session_id, filter_key, summary"
+	if sessionCreatedAtMap != nil {
+		summaryColumns += ", updated_at"
+	}
+	summaryQuery := fmt.Sprintf(`SELECT %s FROM %s
 		WHERE app_name = $1 AND user_id = $2 AND session_id = ANY($3::varchar[])
 		AND (expires_at IS NULL OR expires_at > $4)
-		AND deleted_at IS NULL`, s.tableSessionSummaries)
+		AND deleted_at IS NULL`, summaryColumns, s.tableSessionSummaries)
 
 	// Query all summaries for all sessions
 	summariesMap := make(map[string]map[string]*session.Summary)
@@ -886,8 +912,24 @@ func (s *Service) getSummariesList(
 		for rows.Next() {
 			var sessionID, filterKey string
 			var summaryBytes []byte
-			if err := rows.Scan(&sessionID, &filterKey, &summaryBytes); err != nil {
-				return err
+			if sessionCreatedAtMap == nil {
+				if err := rows.Scan(&sessionID, &filterKey, &summaryBytes); err != nil {
+					return err
+				}
+			} else {
+				var updatedAt time.Time
+				if err := rows.Scan(
+					&sessionID,
+					&filterKey,
+					&summaryBytes,
+					&updatedAt,
+				); err != nil {
+					return err
+				}
+				createdAt, exists := sessionCreatedAtMap[sessionID]
+				if !exists || updatedAt.Before(createdAt) {
+					continue
+				}
 			}
 
 			var sum session.Summary
