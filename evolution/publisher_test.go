@@ -21,7 +21,7 @@ import (
 
 func TestFilePublisher_UpsertSkill(t *testing.T) {
 	dir := t.TempDir()
-	pub := NewFilePublisher(dir)
+	pub := newFilePublisher(dir)
 	spec := &SkillSpec{
 		Name:        "Deploy Service",
 		Description: "Steps to deploy a microservice",
@@ -47,7 +47,7 @@ func TestFilePublisher_UpsertSkill(t *testing.T) {
 
 func TestFilePublisher_UpsertSkill_Overwrite(t *testing.T) {
 	dir := t.TempDir()
-	pub := NewFilePublisher(dir)
+	pub := newFilePublisher(dir)
 	spec := &SkillSpec{
 		Name:  "My Skill",
 		Steps: []string{"step1"},
@@ -116,7 +116,7 @@ func TestYamlScalar(t *testing.T) {
 
 func TestFilePublisher_DeleteSkill(t *testing.T) {
 	dir := t.TempDir()
-	pub := NewFilePublisher(dir)
+	pub := newFilePublisher(dir)
 	require.NoError(t, pub.UpsertSkill(context.Background(), &SkillSpec{
 		Name:  "Doomed",
 		Steps: []string{"do"},
@@ -132,20 +132,20 @@ func TestFilePublisher_DeleteSkill(t *testing.T) {
 
 func TestFilePublisher_DeleteSkill_Missing_NoError(t *testing.T) {
 	dir := t.TempDir()
-	pub := NewFilePublisher(dir)
+	pub := newFilePublisher(dir)
 	assert.NoError(t, pub.DeleteSkill(context.Background(), "Nonexistent"),
 		"deleting a missing skill must be idempotent")
 }
 
 func TestFilePublisher_DeleteSkill_EmptyName(t *testing.T) {
 	dir := t.TempDir()
-	pub := NewFilePublisher(dir)
+	pub := newFilePublisher(dir)
 	assert.Error(t, pub.DeleteSkill(context.Background(), ""))
 }
 
 func TestFilePublisher_DeleteSkill_WhitespaceOnlyName(t *testing.T) {
 	dir := t.TempDir()
-	pub := NewFilePublisher(dir)
+	pub := newFilePublisher(dir)
 	err := pub.DeleteSkill(context.Background(), "   ")
 	assert.Error(t, err, "whitespace-only name should error")
 	assert.Contains(t, err.Error(), "empty name")
@@ -157,7 +157,7 @@ func TestFilePublisher_UpsertSkill_MkdirFailure(t *testing.T) {
 	blocker := filepath.Join(dir, "skill-dir")
 	require.NoError(t, os.WriteFile(blocker, []byte("not-a-dir"), 0o644))
 
-	pub := NewFilePublisher(blocker) // root is a file, MkdirAll will fail
+	pub := newFilePublisher(blocker) // root is a file, MkdirAll will fail
 	err := pub.UpsertSkill(context.Background(), &SkillSpec{
 		Name:  "Test",
 		Steps: []string{"s"},
@@ -167,7 +167,7 @@ func TestFilePublisher_UpsertSkill_MkdirFailure(t *testing.T) {
 
 func TestFilePublisher_DeleteSkill_RefusesRoot(t *testing.T) {
 	dir := t.TempDir()
-	pub := NewFilePublisher(dir)
+	pub := newFilePublisher(dir)
 	// Inputs that sanitize to a non-root name but still exist beneath root
 	// must succeed (idempotent), but a name that would target root itself
 	// must be refused. We simulate by passing a name equal to filepath.Base
@@ -181,7 +181,7 @@ func TestFilePublisher_DeleteSkill_RefusesRoot(t *testing.T) {
 
 func TestFilePublisher_UpsertSkill_NilSpec(t *testing.T) {
 	dir := t.TempDir()
-	pub := NewFilePublisher(dir)
+	pub := newFilePublisher(dir)
 	err := pub.UpsertSkill(context.Background(), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil spec")
@@ -189,7 +189,7 @@ func TestFilePublisher_UpsertSkill_NilSpec(t *testing.T) {
 
 func TestFilePublisher_UpsertSkill_EmptyName(t *testing.T) {
 	dir := t.TempDir()
-	pub := NewFilePublisher(dir)
+	pub := newFilePublisher(dir)
 	// Empty name sanitizes to "unnamed-skill"
 	spec := &SkillSpec{
 		Name:  "",
@@ -205,6 +205,6 @@ func TestFilePublisher_UpsertSkill_EmptyName(t *testing.T) {
 }
 
 func TestNewFilePublisher(t *testing.T) {
-	pub := NewFilePublisher("/some/path")
+	pub := newFilePublisher("/some/path")
 	assert.Equal(t, "/some/path", pub.root)
 }

@@ -33,7 +33,11 @@ import (
 //
 // Returns nil when evolution cannot be enabled (no repo, no state dir,
 // or no model).
-func maybeCreateEvolutionService(opts runOptions, repo skill.Repository) evolution.Service {
+func maybeCreateEvolutionService(
+	opts runOptions,
+	repo skill.Repository,
+	providers ...skill.RepositoryProvider,
+) evolution.Service {
 	if repo == nil {
 		return nil
 	}
@@ -63,16 +67,24 @@ func maybeCreateEvolutionService(opts runOptions, repo skill.Repository) evoluti
 		log.Errorf("evolution: create revisions dir: %v", err)
 		return nil
 	}
+	var repoProvider skill.RepositoryProvider
+	if len(providers) > 0 && providers[0] != nil {
+		repoProvider = providers[0]
+	}
 
 	// Build evolution options.
 	evoOpts := []evolution.Option{
 		evolution.WithManagedSkillsDir(managedDir),
 		evolution.WithSkillRepository(repo),
+		evolution.WithSkillScopeMode(opts.EvolutionSkillScopeMode),
 		evolution.WithCandidateStore(evolution.NewFileCandidateStore(revisionsDir)),
 		evolution.WithActivePointer(evolution.NewFileActivePointer(revisionsDir)),
 		evolution.WithSpecGate(evolution.NewDefaultSpecGate()),
 		evolution.WithSafetyGate(evolution.NewDefaultSafetyGate()),
 		evolution.WithEffectivenessGate(evolution.NewOutcomeBasedEffectivenessGate()),
+	}
+	if repoProvider != nil {
+		evoOpts = append(evoOpts, evolution.WithSkillRepositoryProvider(repoProvider))
 	}
 
 	// Optional human approval gate, configured via yaml or env var:

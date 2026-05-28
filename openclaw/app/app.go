@@ -47,6 +47,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
@@ -1022,6 +1023,7 @@ func NewRuntimeWithOptions(
 		toolSets    []tool.ToolSet
 		ag          agent.Agent
 		skillsRepo  *ocskills.Repository
+		skillsProv  skill.RepositoryProvider
 		skillsWatch *ocskills.WatchService
 	)
 	if agentType == agentTypeClaudeCode {
@@ -1057,20 +1059,21 @@ func NewRuntimeWithOptions(
 			SkillsAllowBundled: splitCSV(
 				opts.SkillsAllowBundled,
 			),
-			SkillConfigs:        opts.SkillConfigs,
-			SkillConfigKeys:     resolveSkillConfigKeys(opts),
-			SkillsWatch:         opts.SkillsWatch,
-			SkillsWatchBundled:  opts.SkillsWatchBundled,
-			SkillsWatchDebounce: opts.SkillsWatchDebounce,
-			SkillsToolProfile:   opts.SkillsToolProfile,
-			SkillsLoadMode:      opts.SkillsLoadMode,
-			SkillsMaxLoaded:     opts.SkillsMaxLoaded,
-			SkillsToolResults:   opts.SkillsToolResults,
-			SkillsSkipFallback:  opts.SkillsSkipFallback,
-			SkillsToolingGuide:  opts.SkillsToolingGuide,
-			KnowledgesConfig:    opts.KnowledgesConfig,
-			StateDir:            resolvedStateDir,
-			MemoryFileStore:     fileMemoryStore,
+			SkillConfigs:            opts.SkillConfigs,
+			SkillConfigKeys:         resolveSkillConfigKeys(opts),
+			SkillsWatch:             opts.SkillsWatch,
+			SkillsWatchBundled:      opts.SkillsWatchBundled,
+			SkillsWatchDebounce:     opts.SkillsWatchDebounce,
+			SkillsToolProfile:       opts.SkillsToolProfile,
+			SkillsLoadMode:          opts.SkillsLoadMode,
+			SkillsMaxLoaded:         opts.SkillsMaxLoaded,
+			SkillsToolResults:       opts.SkillsToolResults,
+			SkillsSkipFallback:      opts.SkillsSkipFallback,
+			SkillsToolingGuide:      opts.SkillsToolingGuide,
+			KnowledgesConfig:        opts.KnowledgesConfig,
+			EvolutionSkillScopeMode: opts.EvolutionSkillScopeMode,
+			StateDir:                resolvedStateDir,
+			MemoryFileStore:         fileMemoryStore,
 
 			EnableLocalExec:      opts.EnableLocalExec,
 			EnableOpenClawTools:  opts.EnableOpenClawTools,
@@ -1090,6 +1093,7 @@ func NewRuntimeWithOptions(
 		)
 		if err == nil {
 			cwd, _ := os.Getwd()
+			skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
 			skillsWatch = newSkillsWatchService(
 				cwd,
 				agentCfg,
@@ -1135,7 +1139,11 @@ func NewRuntimeWithOptions(
 	}
 
 	// Evolution: if skills repo exists, wire up the async learning loop.
-	evoSvc := maybeCreateEvolutionService(opts, skillsRepo)
+	evoSvc := maybeCreateEvolutionService(
+		opts,
+		skillsRepo,
+		skillsProv,
+	)
 	if evoSvc != nil {
 		runnerOpts = append(runnerOpts, runner.WithEvolutionService(evoSvc))
 		rt.evolutionService = evoSvc
@@ -1539,6 +1547,7 @@ func run(
 		toolSets    []tool.ToolSet
 		ag          agent.Agent
 		skillsRepo  *ocskills.Repository
+		skillsProv  skill.RepositoryProvider
 		skillsWatch *ocskills.WatchService
 	)
 	defer func() {
@@ -1585,20 +1594,21 @@ func run(
 			SkillsAllowBundled: splitCSV(
 				opts.SkillsAllowBundled,
 			),
-			SkillConfigs:        opts.SkillConfigs,
-			SkillConfigKeys:     resolveSkillConfigKeys(opts),
-			SkillsWatch:         opts.SkillsWatch,
-			SkillsWatchBundled:  opts.SkillsWatchBundled,
-			SkillsWatchDebounce: opts.SkillsWatchDebounce,
-			SkillsToolProfile:   opts.SkillsToolProfile,
-			SkillsLoadMode:      opts.SkillsLoadMode,
-			SkillsMaxLoaded:     opts.SkillsMaxLoaded,
-			SkillsToolResults:   opts.SkillsToolResults,
-			SkillsSkipFallback:  opts.SkillsSkipFallback,
-			SkillsToolingGuide:  opts.SkillsToolingGuide,
-			KnowledgesConfig:    opts.KnowledgesConfig,
-			StateDir:            resolvedStateDir,
-			MemoryFileStore:     fileMemoryStore,
+			SkillConfigs:            opts.SkillConfigs,
+			SkillConfigKeys:         resolveSkillConfigKeys(opts),
+			SkillsWatch:             opts.SkillsWatch,
+			SkillsWatchBundled:      opts.SkillsWatchBundled,
+			SkillsWatchDebounce:     opts.SkillsWatchDebounce,
+			SkillsToolProfile:       opts.SkillsToolProfile,
+			SkillsLoadMode:          opts.SkillsLoadMode,
+			SkillsMaxLoaded:         opts.SkillsMaxLoaded,
+			SkillsToolResults:       opts.SkillsToolResults,
+			SkillsSkipFallback:      opts.SkillsSkipFallback,
+			SkillsToolingGuide:      opts.SkillsToolingGuide,
+			KnowledgesConfig:        opts.KnowledgesConfig,
+			EvolutionSkillScopeMode: opts.EvolutionSkillScopeMode,
+			StateDir:                resolvedStateDir,
+			MemoryFileStore:         fileMemoryStore,
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
@@ -1617,6 +1627,7 @@ func run(
 		)
 		if err == nil {
 			cwd, _ := os.Getwd()
+			skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
 			skillsWatch = newSkillsWatchService(
 				cwd,
 				agentCfg,
@@ -1656,7 +1667,11 @@ func run(
 			runner.WithRalphLoop(*rlCfg),
 		)
 	}
-	evoSvc := maybeCreateEvolutionService(opts, skillsRepo)
+	evoSvc := maybeCreateEvolutionService(
+		opts,
+		skillsRepo,
+		skillsProv,
+	)
 	if evoSvc != nil {
 		runnerOpts = append(runnerOpts, runner.WithEvolutionService(evoSvc))
 	}
@@ -2508,6 +2523,13 @@ func newAgent(
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
 		opts,
+		llmagent.WithSkillRepositoryProvider(
+			newScopedSkillRepositoryProvider(cwd, cfg),
+		),
+		llmagent.WithSkillScopeMode(cfg.EvolutionSkillScopeMode),
+	)
+	opts = append(
+		opts,
 		llmagent.WithSkillToolProfile(
 			llmagent.SkillToolProfile(cfg.SkillsToolProfile),
 		),
@@ -2751,22 +2773,23 @@ type agentConfig struct {
 	Instruction                                   string
 	SystemPrompt                                  string
 
-	SkillsRoot          string
-	SkillsExtraDirs     []string
-	SkillsDebug         bool
-	SkillsAllowBundled  []string
-	SkillConfigs        map[string]ocskills.SkillConfig
-	SkillConfigKeys     []string
-	SkillsWatch         bool
-	SkillsWatchBundled  bool
-	SkillsWatchDebounce time.Duration
-	SkillsToolProfile   string
-	SkillsLoadMode      string
-	SkillsMaxLoaded     int
-	SkillsToolResults   bool
-	SkillsSkipFallback  bool
-	SkillsToolingGuide  *string
-	KnowledgesConfig    []knowledgeEntry
+	SkillsRoot              string
+	SkillsExtraDirs         []string
+	SkillsDebug             bool
+	SkillsAllowBundled      []string
+	SkillConfigs            map[string]ocskills.SkillConfig
+	SkillConfigKeys         []string
+	SkillsWatch             bool
+	SkillsWatchBundled      bool
+	SkillsWatchDebounce     time.Duration
+	SkillsToolProfile       string
+	SkillsLoadMode          string
+	SkillsMaxLoaded         int
+	SkillsToolResults       bool
+	SkillsSkipFallback      bool
+	SkillsToolingGuide      *string
+	KnowledgesConfig        []knowledgeEntry
+	EvolutionSkillScopeMode skill.SkillScopeMode
 
 	StateDir string
 

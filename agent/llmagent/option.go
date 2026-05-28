@@ -466,6 +466,10 @@ type Options struct {
 
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
+	// skillsRepositoryProvider resolves a scoped skills repository per run.
+	skillsRepositoryProvider skill.RepositoryProvider
+	// skillScopeMode controls app-level sharing vs app+user isolation.
+	skillScopeMode skill.SkillScopeMode
 	// skillFilter narrows the visible skill set per run context.
 	skillFilter skill.VisibilityFilter
 	// skillToolProfile controls which built-in skill tools are registered.
@@ -853,6 +857,22 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.skillsRepository = repo
+	}
+}
+
+// WithSkillRepositoryProvider enables model-agnostic Agent Skills support
+// using a repository selected from the current app/user scope.
+func WithSkillRepositoryProvider(provider skill.RepositoryProvider) Option {
+	return func(opts *Options) {
+		opts.skillsRepositoryProvider = provider
+	}
+}
+
+// WithSkillScopeMode configures whether scoped skills are shared per app or
+// isolated per app+user.
+func WithSkillScopeMode(mode skill.SkillScopeMode) Option {
+	return func(opts *Options) {
+		opts.skillScopeMode = mode
 	}
 }
 

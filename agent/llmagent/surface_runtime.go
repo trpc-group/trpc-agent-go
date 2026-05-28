@@ -57,6 +57,7 @@ func (a *LLMAgent) fewShotForInvocation(
 }
 
 func (a *LLMAgent) skillRepositoryForInvocation(
+	ctx context.Context,
 	inv *agent.Invocation,
 ) skill.Repository {
 	if patch, ok := a.rootSurfacePatch(inv); ok {
@@ -65,8 +66,45 @@ func (a *LLMAgent) skillRepositoryForInvocation(
 		}
 	}
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.option.skillsRepository
+	provider := a.option.skillsRepositoryProvider
+	mode := a.option.skillScopeMode
+	staticRepo := a.option.skillsRepository
+	a.mu.RUnlock()
+	if provider == nil {
+		return staticRepo
+	}
+	scope, err := skillScopeForInvocation(mode, inv)
+	if err != nil {
+		if skill.NormalizeSkillScopeMode(mode) == skill.SkillScopeUser {
+			return nil
+		}
+		return staticRepo
+	}
+	if scope.IsZero() {
+		return staticRepo
+	}
+	repo, err := provider.Repository(ctx, scope)
+	if err != nil {
+		if skill.NormalizeSkillScopeMode(mode) == skill.SkillScopeUser {
+			return nil
+		}
+		return staticRepo
+	}
+	return repo
+}
+
+func skillScopeForInvocation(
+	mode skill.SkillScopeMode,
+	inv *agent.Invocation,
+) (skill.SkillScope, error) {
+	if inv == nil || inv.Session == nil {
+		return skill.SkillScope{}, nil
+	}
+	return skill.NewSkillScope(
+		skill.NormalizeSkillScopeMode(mode),
+		inv.Session.AppName,
+		inv.Session.UserID,
+	)
 }
 
 func (a *LLMAgent) modelSurfaceForInvocation(
@@ -165,7 +203,7 @@ func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []stri
 	if hasUserTools, ok := llmflow.InvocationHasFilteredUserTools(inv); ok && hasUserTools {
 		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeTool))
 	}
-	if a.skillRepositoryForInvocation(inv) != nil {
+	if a.skillRepositoryForInvocation(context.Background(), inv) != nil {
 		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeSkill))
 	}
 	return appliedSurfaceIDs
@@ -194,7 +232,7 @@ func (a *LLMAgent) InvocationToolSurface(
 
 	allTools := append([]tool.Tool(nil), userTools...)
 	allTools = appendKnowledgeTools(allTools, &options)
-	effectiveSkills := a.skillRepositoryForInvocation(inv)
+	effectiveSkills := a.skillRepositoryForInvocation(ctx, inv)
 	effectiveExec := a.codeExecutorForInvocation(inv)
 	workspaceExecEnabled := workspaceExecSurfaceEnabled(&options) &&
 		codeExecutorSupportsWorkspaceExec(effectiveExec)

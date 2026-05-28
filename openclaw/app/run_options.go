@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 const (
@@ -196,7 +197,8 @@ type runOptions struct {
 	SkillsToolingGuide  *string
 	StateDir            string
 
-	EvolutionHumanGate string
+	EvolutionHumanGate      string
+	EvolutionSkillScopeMode skill.SkillScopeMode
 
 	DebugRecorderEnabled bool
 	DebugRecorderDir     string
@@ -273,6 +275,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 		SkillsLoadMode:      defaultSkillsLoadMode,
 		SkillsToolResults:   true,
 		SkillsSkipFallback:  true,
+
+		EvolutionSkillScopeMode: skill.SkillScopeApp,
 
 		SessionBackend: sessionBackendInMemory,
 		MemoryBackend:  memoryBackendInMemory,
@@ -1120,7 +1124,12 @@ type memoryConfig struct {
 type evolutionConfig struct {
 	// HumanGate controls the human approval gate for skill revisions.
 	// Values: "always" (hold all), "create" (hold new skills only), "" (disabled).
-	HumanGate *string `yaml:"human_gate,omitempty"`
+	HumanGate  *string                    `yaml:"human_gate,omitempty"`
+	SkillScope *evolutionSkillScopeConfig `yaml:"skill_scope,omitempty"`
+}
+
+type evolutionSkillScopeConfig struct {
+	Mode *string `yaml:"mode,omitempty"`
 }
 
 type knowledgesConfig struct {
@@ -1753,6 +1762,12 @@ func (cfg *fileConfig) apply(
 		if cfg.Evolution.HumanGate != nil {
 			opts.EvolutionHumanGate = strings.TrimSpace(*cfg.Evolution.HumanGate)
 		}
+		if cfg.Evolution.SkillScope != nil &&
+			cfg.Evolution.SkillScope.Mode != nil {
+			opts.EvolutionSkillScopeMode = skill.SkillScopeMode(
+				strings.TrimSpace(*cfg.Evolution.SkillScope.Mode),
+			)
+		}
 	}
 
 	return nil
@@ -2075,6 +2090,9 @@ func finalizeRunOptions(opts *runOptions) error {
 			opts.SkillsWatchDebounce,
 		)
 	}
+	opts.EvolutionSkillScopeMode = skill.NormalizeSkillScopeMode(
+		opts.EvolutionSkillScopeMode,
+	)
 	opts.MemoryBackend = resolveMemoryBackendType(opts.MemoryBackend)
 	opts.AdminAddr = strings.TrimSpace(opts.AdminAddr)
 	if opts.AdminEnabled && opts.AdminAddr == "" {

@@ -423,14 +423,14 @@ func TestSkillsRequestProcessor_RepositoryResolverAndHints(t *testing.T) {
 	p := NewSkillsRequestProcessor(
 		nil,
 		WithSkillsRepositoryResolver(
-			func(*agent.Invocation) skill.Repository { return resolvedRepo },
+			func(context.Context, *agent.Invocation) skill.Repository { return resolvedRepo },
 		),
 		WithSkillsDirectoryHints(true),
 		WithSkillsFilePathHints(true),
 		WithSkillsCapabilityGuidance(""),
 		WithSkillsToolingGuidance(""),
 	)
-	require.Same(t, resolvedRepo, p.repositoryForInvocation(inv))
+	require.Same(t, resolvedRepo, p.repositoryForInvocation(context.Background(), inv))
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
 	sys := req.Messages[0].Content
@@ -3113,7 +3113,7 @@ func TestSkillsToolResultRequestProcessor_RepositoryResolver_MaterializesToolRes
 	p := NewSkillsToolResultRequestProcessor(
 		nil,
 		WithSkillsToolResultRepositoryResolver(
-			func(*agent.Invocation) skill.Repository {
+			func(context.Context, *agent.Invocation) skill.Repository {
 				return dynamicRepo
 			},
 		),
@@ -3167,7 +3167,7 @@ func TestSkillsToolResultRequestProcessor_RepositoryResolver_CanDisableStaticRep
 	p := NewSkillsToolResultRequestProcessor(
 		staticRepo,
 		WithSkillsToolResultRepositoryResolver(
-			func(*agent.Invocation) skill.Repository {
+			func(context.Context, *agent.Invocation) skill.Repository {
 				return nil
 			},
 		),
@@ -3183,7 +3183,7 @@ func TestSkillsToolResultRequestProcessor_RepositoryResolver_DoesNotPanicOnNilIn
 	p := NewSkillsToolResultRequestProcessor(
 		nil,
 		WithSkillsToolResultRepositoryResolver(
-			func(inv *agent.Invocation) skill.Repository {
+			func(_ context.Context, inv *agent.Invocation) skill.Repository {
 				require.Nil(t, inv)
 				return nil
 			},

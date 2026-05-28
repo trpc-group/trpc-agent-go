@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 const subcmdEvolution = "evolution"
@@ -88,6 +89,8 @@ Commands:
 
 Global options:
   --dir <path>         Path to evolution revisions directory
+  --app <app-name>    Select app-scoped revisions under --dir
+  --user <user-id>    Select user-scoped revisions under --dir
                        (or set EVOLUTION_REVISIONS_DIR env var)`
 
 // ---------------------------------------------------------------------------
@@ -97,15 +100,19 @@ Global options:
 // evoFlags wraps a FlagSet with a mandatory --dir flag. Call parse()
 // to get the resolved directory and positional args.
 type evoFlags struct {
-	fs  *flag.FlagSet
-	dir *string
+	fs   *flag.FlagSet
+	dir  *string
+	app  *string
+	user *string
 }
 
 func newEvoFlags(name string) *evoFlags {
 	fs := flag.NewFlagSet("evolution "+name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dir := fs.String("dir", "", "path to evolution revisions directory")
-	return &evoFlags{fs: fs, dir: dir}
+	app := fs.String("app", "", "app name for scoped revision directory")
+	user := fs.String("user", "", "user id for user-scoped revision directory")
+	return &evoFlags{fs: fs, dir: dir, app: app, user: user}
 }
 
 func (f *evoFlags) parse(args []string) (dir string, positional []string, err error) {
@@ -118,7 +125,30 @@ func (f *evoFlags) parse(args []string) (dir string, positional []string, err er
 	if *f.dir == "" {
 		return "", nil, fmt.Errorf("--dir is required (or set EVOLUTION_REVISIONS_DIR)")
 	}
-	return *f.dir, f.fs.Args(), nil
+	dir, err = scopedEvolutionCLIPath(*f.dir, *f.app, *f.user)
+	if err != nil {
+		return "", nil, err
+	}
+	return dir, f.fs.Args(), nil
+}
+
+func scopedEvolutionCLIPath(root, appName, userID string) (string, error) {
+	if strings.TrimSpace(appName) == "" && strings.TrimSpace(userID) == "" {
+		return root, nil
+	}
+	mode := skill.SkillScopeApp
+	if strings.TrimSpace(userID) != "" {
+		mode = skill.SkillScopeUser
+	}
+	scope, err := skill.NewSkillScope(mode, appName, userID)
+	if err != nil {
+		return "", err
+	}
+	parts, err := skill.ScopePathParts(mode, scope)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(append([]string{root}, parts...)...), nil
 }
 
 // ---------------------------------------------------------------------------

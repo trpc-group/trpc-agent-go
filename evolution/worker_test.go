@@ -12,6 +12,8 @@ package evolution
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -122,7 +124,7 @@ func addEvents(sess *session.Session, msgs ...model.Message) {
 
 func TestWorker_ProcessJob_NoMessages(t *testing.T) {
 	rev := &mockReviewer{decision: &ReviewDecision{}}
-	w := NewWorker(WorkerConfig{Reviewer: rev})
+	w := newWorker(workerConfig{Reviewer: rev})
 
 	sess := newTestSession()
 	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
@@ -134,7 +136,7 @@ func TestWorker_ProcessJob_NoMessages(t *testing.T) {
 
 func TestWorker_ProcessJob_PolicyRejects(t *testing.T) {
 	rev := &mockReviewer{decision: &ReviewDecision{}}
-	w := NewWorker(WorkerConfig{Reviewer: rev})
+	w := newWorker(workerConfig{Reviewer: rev})
 
 	sess := newTestSession()
 	addEvents(sess,
@@ -164,7 +166,7 @@ func TestWorker_ProcessJob_SkillWrittenAndRefreshed(t *testing.T) {
 	}
 
 	// Use an AlwaysPolicy to bypass the threshold.
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -189,12 +191,62 @@ func TestWorker_ProcessJob_SkillWrittenAndRefreshed(t *testing.T) {
 	repo.mu.Unlock()
 }
 
+func TestWorker_ProcessJob_AppScopedFileBackends(t *testing.T) {
+	root := t.TempDir()
+	managedDir := filepath.Join(root, "managed")
+	revisionsDir := filepath.Join(root, "revisions")
+	provider := skill.RepositoryProviderFunc(func(_ context.Context, scope skill.SkillScope) (skill.Repository, error) {
+		scopedDir, err := scopedTestDir(managedDir, skill.SkillScopeApp, scope)
+		require.NoError(t, err)
+		return skill.NewFSRepository(scopedDir)
+	})
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Skills: []*SkillSpec{{
+			Name:        "Weather Snapshot",
+			Description: "Collects weather data.",
+			WhenToUse:   "When weather data is needed.",
+			Steps:       []string{"Fetch data.", "Summarize the result."},
+		}},
+	}}
+	w := newWorker(workerConfig{
+		Reviewer:          rev,
+		Publisher:         newFilePublisher(managedDir),
+		PublisherBaseDir:  managedDir,
+		Policy:            alwaysPolicy{},
+		SkillScopeMode:    skill.SkillScopeApp,
+		SkillRepoProvider: provider,
+		CandidateStore:    NewFileCandidateStore(revisionsDir),
+		ActivePointer:     NewFileActivePointer(revisionsDir),
+		SpecGate:          NewDefaultSpecGate(),
+		SafetyGate:        NewDefaultSafetyGate(),
+	})
+	sess := newTestSession()
+	addEvents(sess, model.NewUserMessage("learn this workflow"), model.NewAssistantMessage("done"))
+
+	require.NoError(t, w.Enqueue(context.Background(), LearningJob{Session: sess}))
+
+	scopedManaged := filepath.Join(managedDir, "apps", sess.AppName)
+	assert.FileExists(t, filepath.Join(scopedManaged, "weather-snapshot", "SKILL.md"))
+	scopedRevisions := filepath.Join(revisionsDir, "apps", sess.AppName)
+	entries, err := os.ReadDir(filepath.Join(scopedRevisions, "weather-snapshot", "revisions"))
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+}
+
+func scopedTestDir(root string, mode skill.SkillScopeMode, scope skill.SkillScope) (string, error) {
+	parts, err := skill.ScopePathParts(mode, scope)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(append([]string{root}, parts...)...), nil
+}
+
 func TestWorker_ProcessJob_SkipReason(t *testing.T) {
 	pub := &mockPublisher{}
 	rev := &mockReviewer{
 		decision: &ReviewDecision{SkipReason: "nothing useful"},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -214,7 +266,7 @@ func TestWorker_ProcessJob_SkipReason(t *testing.T) {
 
 func TestWorker_ProcessJob_SkipsWhenSkillWritesDetected(t *testing.T) {
 	rev := &mockReviewer{decision: &ReviewDecision{}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer: rev,
 		Policy:   alwaysPolicy{},
 	})
@@ -233,7 +285,7 @@ func TestWorker_ProcessJob_SkipsWhenSkillWritesDetected(t *testing.T) {
 
 func TestWorker_ProcessJob_SkipsWhenStructuredSkillWriteDetected(t *testing.T) {
 	rev := &mockReviewer{decision: &ReviewDecision{}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer: rev,
 		Policy:   alwaysPolicy{},
 	})
@@ -266,7 +318,7 @@ func TestWorker_AsyncEnqueue(t *testing.T) {
 			Skills: []*SkillSpec{{Name: "Async Skill", Steps: []string{"go"}}},
 		},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -298,7 +350,7 @@ func TestWorker_DeltaScan_Incremental(t *testing.T) {
 	rev := &mockReviewer{
 		decision: &ReviewDecision{},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer: rev,
 		Policy:   alwaysPolicy{},
 	})
@@ -462,7 +514,7 @@ func TestWorker_ApplyDecision_UpdateExistingSkill(t *testing.T) {
 			}},
 		},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -503,7 +555,7 @@ func TestWorker_ApplyDecision_UpdateUnknownSkillIsDropped(t *testing.T) {
 			}},
 		},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -534,7 +586,7 @@ func TestWorker_ApplyDecision_DeleteExistingSkill(t *testing.T) {
 	rev := &mockReviewer{
 		decision: &ReviewDecision{Deletions: []string{"Stale"}},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -562,7 +614,7 @@ func TestWorker_ApplyDecision_DeleteUnknownIsIdempotent(t *testing.T) {
 	rev := &mockReviewer{
 		decision: &ReviewDecision{Deletions: []string{"Phantom"}},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -586,7 +638,7 @@ func TestWorker_ApplyDecision_DeleteUnknownIsIdempotent(t *testing.T) {
 
 func TestWorker_ProcessJob_ForwardsOutcomeToReviewer(t *testing.T) {
 	rev := &capturingReviewer{}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer: rev,
 		Policy:   alwaysPolicy{},
 	})
@@ -617,7 +669,7 @@ func TestWorker_ProcessJob_ForwardsOutcomeToReviewer(t *testing.T) {
 
 func TestWorker_Enqueue_ForwardsOutcomeViaAsyncQueue(t *testing.T) {
 	rev := &capturingReviewer{}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer: rev,
 		Policy:   alwaysPolicy{},
 	})
@@ -648,7 +700,7 @@ func TestWorker_Enqueue_ForwardsOutcomeViaAsyncQueue(t *testing.T) {
 
 func TestWorker_ProcessJob_RedactsSecretsBeforeReviewer(t *testing.T) {
 	rev := &capturingReviewer{}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer: rev,
 		Policy:   alwaysPolicy{},
 	})
@@ -702,7 +754,7 @@ func TestWorker_ProcessJob_ForwardsExistingSkillsWithBodyExcerpt(t *testing.T) {
 		bodies:    map[string]string{"Known": "full body content"},
 	}
 	rev := &capturingReviewer{}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Policy:    alwaysPolicy{},
 		SkillRepo: repo,
@@ -732,7 +784,7 @@ func TestWorker_ProcessJob_TruncatesBodyExcerptToConfiguredBudget(t *testing.T) 
 		bodies:    map[string]string{"Known": longBody},
 	}
 	rev := &capturingReviewer{}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:                  rev,
 		Policy:                    alwaysPolicy{},
 		SkillRepo:                 repo,
@@ -764,7 +816,7 @@ func TestWorker_ProcessJob_OmitsBodyWhenBudgetIsNegative(t *testing.T) {
 		bodies:    map[string]string{"Known": "full body content"},
 	}
 	rev := &capturingReviewer{}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:                  rev,
 		Policy:                    alwaysPolicy{},
 		SkillRepo:                 repo,
@@ -805,7 +857,7 @@ func TestWorker_ProcessJob_ReconcilerRewritesSupersetCandidate(t *testing.T) {
 		}},
 	}}
 	pub := &mockPublisher{}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Policy:    alwaysPolicy{},
 		SkillRepo: repo,
@@ -873,7 +925,7 @@ func TestWorker_ApprovalGate_PromotesCleanCandidate(t *testing.T) {
 			Steps:       []string{"a", "b"},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -895,7 +947,7 @@ func TestWorker_ApprovalGate_PromotesCleanCandidate(t *testing.T) {
 	require.Len(t, pub.skills, 1, "publisher should receive the skill")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.CandidatesSeen)
 	assert.Equal(t, 1, metrics.RevisionsWritten)
 	assert.Equal(t, 1, metrics.RevisionsPromoted)
@@ -903,7 +955,7 @@ func TestWorker_ApprovalGate_PromotesCleanCandidate(t *testing.T) {
 	assert.Equal(t, 0, metrics.SpecGateRejected)
 	assert.Equal(t, 0, metrics.SafetyGateRejected)
 
-	got, err := ptr.Get(context.Background(), SkillIDFromName("Clean Skill"))
+	got, err := ptr.Get(context.Background(), skillIDFromName("Clean Skill"))
 	require.NoError(t, err)
 	assert.NotEmpty(t, got, "active pointer should be set")
 }
@@ -922,7 +974,7 @@ func TestWorker_ApprovalGate_SpecGateRejects(t *testing.T) {
 			Steps:       []string{},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -944,7 +996,7 @@ func TestWorker_ApprovalGate_SpecGateRejects(t *testing.T) {
 	assert.Empty(t, pub.skills, "publisher should NOT receive a gate-rejected skill")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.CandidatesSeen)
 	assert.Equal(t, 1, metrics.RevisionsWritten)
 	assert.Equal(t, 0, metrics.RevisionsPromoted)
@@ -969,7 +1021,7 @@ func TestWorker_ApprovalGate_ShadowModePublishesAnyway(t *testing.T) {
 			Steps:       []string{},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:           rev,
 		Publisher:          pub,
 		Policy:             alwaysPolicy{},
@@ -992,7 +1044,7 @@ func TestWorker_ApprovalGate_ShadowModePublishesAnyway(t *testing.T) {
 	assert.Len(t, pub.skills, 1, "shadow mode should still publish")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.SpecGateRejected)
 	assert.Equal(t, 1, metrics.ShadowModeBypassed)
 }
@@ -1010,10 +1062,10 @@ func TestWorker_ApplyDeletionsWithGate_DeletesExistingSkill(t *testing.T) {
 	ptr := NewFileActivePointer(dir)
 
 	// Pre-set the active pointer so we can verify Clear is called.
-	require.NoError(t, ptr.Set(context.Background(), SkillIDFromName("Stale"), "fake-rev"))
+	require.NoError(t, ptr.Set(context.Background(), skillIDFromName("Stale"), "fake-rev"))
 
 	rev := &mockReviewer{decision: &ReviewDecision{Deletions: []string{"Stale"}}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -1036,11 +1088,11 @@ func TestWorker_ApplyDeletionsWithGate_DeletesExistingSkill(t *testing.T) {
 	pub.mu.Unlock()
 
 	// Active pointer should be cleared.
-	got, err := ptr.Get(context.Background(), SkillIDFromName("Stale"))
+	got, err := ptr.Get(context.Background(), skillIDFromName("Stale"))
 	require.NoError(t, err)
 	assert.Empty(t, got, "active pointer should be cleared after deletion")
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.DeletionsApplied)
 }
 
@@ -1053,7 +1105,7 @@ func TestWorker_ApplyDeletionsWithGate_NilPublisherSkips(t *testing.T) {
 	store := NewFileCandidateStore(dir)
 
 	rev := &mockReviewer{decision: &ReviewDecision{Deletions: []string{"Existing"}}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      nil, // no publisher
 		Policy:         alwaysPolicy{},
@@ -1082,7 +1134,7 @@ func TestWorker_ApplyDeletionsWithGate_NonexistentSkillSkipped(t *testing.T) {
 	ptr := NewFileActivePointer(dir)
 
 	rev := &mockReviewer{decision: &ReviewDecision{Deletions: []string{"Ghost"}}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -1104,7 +1156,7 @@ func TestWorker_ApplyDeletionsWithGate_NonexistentSkillSkipped(t *testing.T) {
 	assert.Empty(t, pub.deletions, "publisher should NOT receive deletion for nonexistent skill")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 0, metrics.DeletionsApplied)
 }
 
@@ -1131,7 +1183,7 @@ func TestWorker_ApplyUpdatesWithGate_PassesGates(t *testing.T) {
 			},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -1155,7 +1207,7 @@ func TestWorker_ApplyUpdatesWithGate_PassesGates(t *testing.T) {
 	assert.Equal(t, "updated desc", pub.skills[0].Description)
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.UpdatesApplied)
 }
 
@@ -1181,7 +1233,7 @@ func TestWorker_ApplyUpdatesWithGate_SpecGateRejects(t *testing.T) {
 			},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -1203,7 +1255,7 @@ func TestWorker_ApplyUpdatesWithGate_SpecGateRejects(t *testing.T) {
 	assert.Empty(t, pub.skills, "publisher should NOT receive spec-gate-rejected update")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.SpecGateRejected)
 	assert.Equal(t, 0, metrics.UpdatesApplied)
 }
@@ -1211,14 +1263,14 @@ func TestWorker_ApplyUpdatesWithGate_SpecGateRejects(t *testing.T) {
 // --- Tests for Enqueue ---
 
 func TestWorker_Enqueue_NilReviewer(t *testing.T) {
-	w := NewWorker(WorkerConfig{Reviewer: nil})
+	w := newWorker(workerConfig{Reviewer: nil})
 	err := w.Enqueue(context.Background(), LearningJob{Session: newTestSession()})
 	assert.NoError(t, err, "enqueue with nil reviewer should silently return nil")
 }
 
 func TestWorker_Enqueue_NilSession(t *testing.T) {
 	rev := &mockReviewer{decision: &ReviewDecision{}}
-	w := NewWorker(WorkerConfig{Reviewer: rev})
+	w := newWorker(workerConfig{Reviewer: rev})
 	err := w.Enqueue(context.Background(), LearningJob{Session: nil})
 	assert.NoError(t, err, "enqueue with nil session should silently return nil")
 }
@@ -1235,7 +1287,7 @@ func TestWorker_Enqueue_SynchronousFallbackWhenNotStarted(t *testing.T) {
 			}},
 		},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -1259,7 +1311,7 @@ func TestWorker_Enqueue_SynchronousFallbackWhenNotStarted(t *testing.T) {
 
 func TestWorker_Enqueue_CancelledContextReturnsNil(t *testing.T) {
 	rev := &mockReviewer{decision: &ReviewDecision{}}
-	w := NewWorker(WorkerConfig{Reviewer: rev})
+	w := newWorker(workerConfig{Reviewer: rev})
 	w.Start()
 	defer w.Stop()
 
@@ -1287,7 +1339,7 @@ func TestWorker_SafetyGate_PassesCleanRevision(t *testing.T) {
 			Steps:       []string{"step 1", "step 2"},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -1309,7 +1361,7 @@ func TestWorker_SafetyGate_PassesCleanRevision(t *testing.T) {
 	require.Len(t, pub.skills, 1, "clean revision should pass safety gate")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 0, metrics.SafetyGateRejected)
 }
 
@@ -1328,7 +1380,7 @@ func TestWorker_SafetyGate_RejectsDangerousContent(t *testing.T) {
 			Steps:       []string{"rm -rf /home", "done"},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -1350,7 +1402,7 @@ func TestWorker_SafetyGate_RejectsDangerousContent(t *testing.T) {
 	assert.Empty(t, pub.skills, "dangerous revision should be rejected by safety gate")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.SafetyGateRejected)
 }
 
@@ -1367,7 +1419,7 @@ func TestWorker_ApplySkills_WithPublisher(t *testing.T) {
 			},
 		},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -1399,7 +1451,7 @@ func TestWorker_ApplySkills_NilPublisher(t *testing.T) {
 			},
 		},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: nil, // no publisher
 		Policy:    alwaysPolicy{},
@@ -1426,7 +1478,7 @@ func TestWorker_ApplySkills_NilSpecInSlice(t *testing.T) {
 			Skills: []*SkillSpec{nil, {Name: "Valid", Steps: []string{"go"}}},
 		},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -1456,7 +1508,7 @@ func TestWorker_ApplySkills_PublisherError(t *testing.T) {
 			},
 		},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},
@@ -1491,7 +1543,7 @@ func TestWorker_ApprovalGate_EffectivenessGateHoldsOnFail(t *testing.T) {
 			Steps:       []string{"a", "b"},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:          rev,
 		Publisher:         pub,
 		Policy:            alwaysPolicy{},
@@ -1521,7 +1573,7 @@ func TestWorker_ApprovalGate_EffectivenessGateHoldsOnFail(t *testing.T) {
 	assert.Empty(t, pub.skills, "publisher should NOT receive a revision held by effectiveness gate")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.CandidatesSeen)
 	assert.Equal(t, 1, metrics.RevisionsWritten)
 	assert.Equal(t, 0, metrics.RevisionsPromoted)
@@ -1530,9 +1582,9 @@ func TestWorker_ApprovalGate_EffectivenessGateHoldsOnFail(t *testing.T) {
 	assert.Equal(t, 1, metrics.EffectivenessGateRejected)
 
 	// Revision should be in PendingEval status on disk
-	list, _ := store.ListRevisions(context.Background(), SkillIDFromName("Learn From Disaster"))
+	list, _ := store.ListRevisions(context.Background(), skillIDFromName("Learn From Disaster"))
 	require.Len(t, list, 1)
-	stored, _ := store.ReadRevision(context.Background(), SkillIDFromName("Learn From Disaster"), list[0])
+	stored, _ := store.ReadRevision(context.Background(), skillIDFromName("Learn From Disaster"), list[0])
 	assert.Equal(t, RevisionPendingEval, stored.Status)
 }
 
@@ -1555,7 +1607,7 @@ func TestWorker_HumanGate_HoldsRevision(t *testing.T) {
 			Steps:       []string{"step1", "step2"},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -1582,16 +1634,16 @@ func TestWorker_HumanGate_HoldsRevision(t *testing.T) {
 	assert.Empty(t, pub.skills, "publisher should NOT receive a revision held by human gate")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.CandidatesSeen)
 	assert.Equal(t, 1, metrics.RevisionsWritten)
 	assert.Equal(t, 0, metrics.RevisionsPromoted)
 	assert.Equal(t, 1, metrics.HumanGateHeld)
 
 	// Revision should be in pending_approval status on disk
-	list, _ := store.ListRevisions(context.Background(), SkillIDFromName("New Skill"))
+	list, _ := store.ListRevisions(context.Background(), skillIDFromName("New Skill"))
 	require.Len(t, list, 1)
-	stored, _ := store.ReadRevision(context.Background(), SkillIDFromName("New Skill"), list[0])
+	stored, _ := store.ReadRevision(context.Background(), skillIDFromName("New Skill"), list[0])
 	assert.Equal(t, RevisionPendingApproval, stored.Status)
 	assert.NotNil(t, stored.HumanReport)
 	assert.True(t, stored.HumanReport.Held)
@@ -1618,7 +1670,7 @@ func TestWorker_HumanGate_PassesUpdate(t *testing.T) {
 			},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -1645,7 +1697,7 @@ func TestWorker_HumanGate_PassesUpdate(t *testing.T) {
 	assert.Len(t, pub.skills, 1, "update should pass through CreateOnlyHoldGate")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.RevisionsPromoted)
 	assert.Equal(t, 0, metrics.HumanGateHeld)
 }
@@ -1671,7 +1723,7 @@ func TestWorker_HumanGate_ErrorFailsClosed(t *testing.T) {
 			Steps:       []string{"a", "b"},
 		}},
 	}}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
 		Policy:         alwaysPolicy{},
@@ -1698,7 +1750,7 @@ func TestWorker_HumanGate_ErrorFailsClosed(t *testing.T) {
 	assert.Empty(t, pub.skills, "human gate error should fail closed (hold)")
 	pub.mu.Unlock()
 
-	metrics := w.ApprovalGateMetricsJSON()
+	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.HumanGateHeld)
 	assert.Equal(t, 0, metrics.RevisionsPromoted)
 }
@@ -1732,7 +1784,7 @@ func TestWorker_ApplyUpdates_SkipsNonEvolutionSkill(t *testing.T) {
 			}},
 		},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:         rev,
 		Publisher:        pub,
 		Policy:           alwaysPolicy{},
@@ -1777,7 +1829,7 @@ func TestWorker_ApplyUpdates_AllowsEvolutionSkill(t *testing.T) {
 			}},
 		},
 	}
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:         rev,
 		Publisher:        pub,
 		Policy:           alwaysPolicy{},
@@ -1823,7 +1875,7 @@ func TestWorker_ApplyUpdates_NoIsolationWhenManagedDirEmpty(t *testing.T) {
 		},
 	}
 	// ManagedSkillsDir not set → no isolation.
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:  rev,
 		Publisher: pub,
 		Policy:    alwaysPolicy{},

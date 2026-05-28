@@ -27,20 +27,20 @@ type Publisher interface {
 	DeleteSkill(ctx context.Context, name string) error
 }
 
-// FilePublisher writes each skill to a SKILL.md file under a managed
+// filePublisher writes each skill to a SKILL.md file under a managed
 // directory on the local filesystem.
-type FilePublisher struct {
+type filePublisher struct {
 	root string
 }
 
-// NewFilePublisher creates a FilePublisher rooted at root.
-func NewFilePublisher(root string) *FilePublisher {
-	return &FilePublisher{root: root}
+// newFilePublisher creates a filePublisher rooted at root.
+func newFilePublisher(root string) *filePublisher {
+	return &filePublisher{root: root}
 }
 
 // UpsertSkill implements Publisher. It creates (or overwrites) a SKILL.md file
 // under root/<sanitized-name>/SKILL.md.
-func (p *FilePublisher) UpsertSkill(_ context.Context, spec *SkillSpec) error {
+func (p *filePublisher) UpsertSkill(_ context.Context, spec *SkillSpec) error {
 	if spec == nil {
 		return errors.New("evolution: upsert skill: nil spec")
 	}
@@ -56,7 +56,7 @@ func (p *FilePublisher) UpsertSkill(_ context.Context, spec *SkillSpec) error {
 // DeleteSkill implements Publisher. It removes root/<sanitized-name>/.
 // Refuses to remove the root directory itself. Returns nil when the target
 // does not exist so it is safe to call idempotently.
-func (p *FilePublisher) DeleteSkill(_ context.Context, name string) error {
+func (p *filePublisher) DeleteSkill(_ context.Context, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("evolution: delete skill: empty name")
 	}

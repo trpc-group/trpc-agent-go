@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 // SessionStateKeyLastReviewAt stores the last reviewed timestamp in session
@@ -56,6 +57,11 @@ type LearningJob struct {
 	// not actually execute). When nil, the reviewer prompt is identical
 	// to the transcript-only baseline.
 	Outcome *Outcome
+
+	// Scope optionally pins the skill sharing boundary for this job. When
+	// empty, the service derives it from Session.AppName/UserID according to
+	// the service's skill scope mode.
+	Scope skill.SkillScope
 }
 
 // OutcomeStatus is a typed enum that classifies the evaluator verdict.
@@ -84,8 +90,7 @@ type Outcome struct {
 	// Status is the evaluator verdict; "" means "no signal".
 	Status OutcomeStatus `json:"status,omitempty"`
 
-	// Score is an optional numeric metric. Callers using a 0..1 scale
-	// pass it directly; callers using 0..100 should normalize first.
+	// Score is an optional normalized numeric metric on a 0..1 scale.
 	Score *float64 `json:"score,omitempty"`
 
 	// Notes is a short evaluator one-liner (e.g.
@@ -112,8 +117,8 @@ type ReviewInput struct {
 	// library. Each entry includes the skill name, description, and a
 	// truncated body excerpt so the reviewer can detect substantive
 	// duplicates instead of relying on name/description matching alone.
-	// The Worker controls the per-skill body budget via
-	// WorkerConfig.ExistingSkillBodyMaxChars (set 0 to omit bodies).
+	// The service controls the per-skill body budget via
+	// WithExistingSkillBodyMaxChars (set negative to omit bodies).
 	ExistingSkills []ExistingSkill `json:"existing_skills,omitempty"`
 	// Outcome is the caller-observed evaluator verdict for the session
 	// being reviewed (nil when no evaluator was attached). The reviewer
@@ -129,7 +134,7 @@ type ReviewInput struct {
 // construct it directly without depending on the skill package.
 //
 // BodyExcerpt is the head of the SKILL.md body truncated to the
-// WorkerConfig.ExistingSkillBodyMaxChars budget. It is meant for
+// WithExistingSkillBodyMaxChars budget. It is meant for
 // substantive duplicate detection (does the proposed workflow already
 // exist with different parameters?) and is intentionally not the full
 // body — that would explode the reviewer prompt as the library grows.

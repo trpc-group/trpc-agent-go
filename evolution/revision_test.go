@@ -32,8 +32,8 @@ func TestFileCandidateStoreRoundTrip(t *testing.T) {
 		Steps:       []string{"listen", "echo"},
 	}
 	rev := &Revision{
-		SkillID:    SkillIDFromName(spec.Name),
-		RevisionID: NewRevisionID(),
+		SkillID:    skillIDFromName(spec.Name),
+		RevisionID: newRevisionID(),
 		Source:     "reviewer",
 		Action:     "create",
 		Spec:       spec,
@@ -235,7 +235,7 @@ func TestDefaultSafetyGateCatchesPathTraversal(t *testing.T) {
 func TestNewRevisionIDUniqueness(t *testing.T) {
 	seen := make(map[string]struct{})
 	for i := 0; i < 128; i++ {
-		id := NewRevisionID()
+		id := newRevisionID()
 		if _, dup := seen[id]; dup {
 			t.Fatalf("duplicate id %q at iter %d", id, i)
 		}
@@ -274,13 +274,13 @@ func TestOutcomeBasedEffectivenessGateHoldsOnFail(t *testing.T) {
 
 func TestOutcomeBasedEffectivenessGateHoldsOnLowScore(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
-	score := 50.0
+	score := 0.5
 	report, _ := g.Evaluate(context.Background(),
 		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomePartial, Score: &score},
 	)
 	if report.Passed {
-		t.Fatalf("expected held for score=50")
+		t.Fatalf("expected held for score=0.5")
 	}
 }
 
@@ -494,8 +494,8 @@ func TestFileActivePointer_ClearNonexistent(t *testing.T) {
 }
 
 func TestSkillIDFromName(t *testing.T) {
-	assert.Equal(t, "deploy-service", SkillIDFromName("Deploy Service"))
-	assert.Equal(t, "unnamed-skill", SkillIDFromName(""))
+	assert.Equal(t, "deploy-service", skillIDFromName("Deploy Service"))
+	assert.Equal(t, "unnamed-skill", skillIDFromName(""))
 }
 
 func TestOutcomeBasedEffectivenessGate_NilRevision(t *testing.T) {

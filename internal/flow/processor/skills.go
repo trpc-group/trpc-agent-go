@@ -75,7 +75,7 @@ type skillsRequestProcessorOptions struct {
 	toolFlagsResolver  func(*agent.Invocation) skillprofile.Flags
 	hasToolFlags       bool
 	execToolsDisabled  bool
-	repoResolver       func(*agent.Invocation) skill.Repository
+	repoResolver       func(context.Context, *agent.Invocation) skill.Repository
 	directoryHints     bool
 	filePathHints      bool
 }
@@ -201,7 +201,7 @@ func WithSkillExecToolsDisabled() SkillsRequestProcessorOption {
 
 // WithSkillsRepositoryResolver sets an invocation-aware repository resolver.
 func WithSkillsRepositoryResolver(
-	resolver func(*agent.Invocation) skill.Repository,
+	resolver func(context.Context, *agent.Invocation) skill.Repository,
 ) SkillsRequestProcessorOption {
 	return func(o *skillsRequestProcessorOptions) {
 		o.repoResolver = resolver
@@ -276,7 +276,7 @@ func WithSkillsFilePathHints(
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
 	repo               skill.Repository
-	repoResolver       func(*agent.Invocation) skill.Repository
+	repoResolver       func(context.Context, *agent.Invocation) skill.Repository
 	capabilityGuidance *string
 	protocolGuidance   *string
 	toolingGuidance    *string
@@ -354,7 +354,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	ctx context.Context, inv *agent.Invocation, req *model.Request,
 	ch chan<- *event.Event,
 ) {
-	repo := p.repositoryForInvocation(inv)
+	repo := p.repositoryForInvocation(ctx, inv)
 	if req == nil || inv == nil || inv.Session == nil || repo == nil {
 		return
 	}
@@ -435,10 +435,11 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 }
 
 func (p *SkillsRequestProcessor) repositoryForInvocation(
+	ctx context.Context,
 	inv *agent.Invocation,
 ) skill.Repository {
 	if p.repoResolver != nil {
-		return p.repoResolver(inv)
+		return p.repoResolver(ctx, inv)
 	}
 	return p.repo
 }
@@ -1648,7 +1649,7 @@ func (p *SkillsRequestProcessor) getDocsSelection(
 	inv *agent.Invocation,
 	name string,
 ) []string {
-	repo := p.repositoryForInvocation(inv)
+	repo := p.repositoryForInvocation(ctx, inv)
 	if repo == nil {
 		return nil
 	}

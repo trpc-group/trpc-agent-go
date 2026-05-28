@@ -449,12 +449,12 @@ func validateRevisionID(id string) error {
 // Helpers used by the worker when building revisions.
 // -----------------------------------------------------------------------------
 
-// NewRevisionID returns a time-ordered id that is unique with very
+// newRevisionID returns a time-ordered id that is unique with very
 // high probability. The leading timestamp keeps lexicographic sort
 // roughly aligned with creation order, which makes listing and
 // rollback intuitive. The random suffix prevents collisions when two
 // workers extract the same skill at the same time.
-func NewRevisionID() string {
+func newRevisionID() string {
 	var buf [6]byte
 	_, _ = rand.Read(buf[:])
 	return fmt.Sprintf("%s-%s",
@@ -462,11 +462,11 @@ func NewRevisionID() string {
 		hex.EncodeToString(buf[:]))
 }
 
-// SkillIDFromName returns the canonical SkillID for a reviewer-given
+// skillIDFromName returns the canonical SkillID for a reviewer-given
 // skill name. We reuse the on-disk sanitizer so the SkillID matches
-// the directory name that FilePublisher already writes to — the
+// the directory name that filePublisher already writes to — the
 // revision store and the publisher therefore stay consistent when
 // both are enabled.
-func SkillIDFromName(name string) string {
+func skillIDFromName(name string) string {
 	return sanitizeSkillName(name)
 }

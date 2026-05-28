@@ -116,10 +116,10 @@ type HumanGate interface {
 // A more sophisticated gate (mini-benchmark, shadow traffic) can
 // replace it by implementing the same interface.
 type OutcomeBasedEffectivenessGate struct {
-	// MinScore is the minimum Outcome.Score (0..100 scale) required
-	// for auto-promotion. Revisions from sessions below this score
-	// are held in PendingEval. Zero means "no score threshold"
-	// (effectively disabled). A good default for SkillCraft is 80.
+	// MinScore is the minimum normalized Outcome.Score (0..1 scale)
+	// required for auto-promotion. Revisions from sessions below this
+	// score are held in PendingEval. Zero means "no score threshold"
+	// (effectively disabled).
 	MinScore float64
 
 	// RejectOnFail, when true, rejects revisions from sessions where
@@ -130,10 +130,10 @@ type OutcomeBasedEffectivenessGate struct {
 }
 
 // NewOutcomeBasedEffectivenessGate returns a gate with sensible
-// defaults for SkillCraft: MinScore=80, RejectOnFail=true.
+// defaults: MinScore=0.8, RejectOnFail=true.
 func NewOutcomeBasedEffectivenessGate() *OutcomeBasedEffectivenessGate {
 	return &OutcomeBasedEffectivenessGate{
-		MinScore:     80,
+		MinScore:     0.8,
 		RejectOnFail: true,
 	}
 }

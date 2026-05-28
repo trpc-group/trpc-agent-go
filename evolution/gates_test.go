@@ -176,8 +176,8 @@ func TestOutcomeBasedEffectivenessGate_ScoreNil(t *testing.T) {
 }
 
 func TestOutcomeBasedEffectivenessGate_ExactMinScore(t *testing.T) {
-	g := NewOutcomeBasedEffectivenessGate() // MinScore = 80
-	score := 80.0
+	g := NewOutcomeBasedEffectivenessGate() // MinScore = 0.8
+	score := 0.8
 	report, _ := g.Evaluate(context.Background(),
 		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeSuccess, Score: &score},
@@ -186,8 +186,8 @@ func TestOutcomeBasedEffectivenessGate_ExactMinScore(t *testing.T) {
 }
 
 func TestOutcomeBasedEffectivenessGate_BothReasons(t *testing.T) {
-	g := NewOutcomeBasedEffectivenessGate() // MinScore=80, RejectOnFail=true
-	score := 50.0
+	g := NewOutcomeBasedEffectivenessGate() // MinScore=0.8, RejectOnFail=true
+	score := 0.5
 	report, _ := g.Evaluate(context.Background(),
 		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeFail, Score: &score},
@@ -277,7 +277,7 @@ func TestNewDefaultSafetyGate_NotNil(t *testing.T) {
 
 func TestNewOutcomeBasedEffectivenessGate_Defaults(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
-	assert.Equal(t, 80.0, g.MinScore)
+	assert.Equal(t, 0.8, g.MinScore)
 	assert.True(t, g.RejectOnFail)
 }
 

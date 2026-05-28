@@ -19,6 +19,8 @@ type Option func(*serviceOpts)
 type serviceOpts struct {
 	managedSkillsDir          string
 	skillRepo                 skill.Repository
+	skillRepoProvider         skill.RepositoryProvider
+	skillScopeMode            skill.SkillScopeMode
 	policy                    Policy
 	publisher                 Publisher
 	workerNum                 int
@@ -43,7 +45,7 @@ type serviceOpts struct {
 }
 
 // WithManagedSkillsDir sets the root directory where managed skill files are
-// written. If a Publisher is not explicitly provided, a FilePublisher targeting
+// written. If a Publisher is not explicitly provided, a filePublisher targeting
 // this directory is created automatically.
 func WithManagedSkillsDir(dir string) Option {
 	return func(o *serviceOpts) { o.managedSkillsDir = dir }
@@ -53,6 +55,18 @@ func WithManagedSkillsDir(dir string) Option {
 // summaries into the reviewer and to call Refresh after new skills are written.
 func WithSkillRepository(repo skill.Repository) Option {
 	return func(o *serviceOpts) { o.skillRepo = repo }
+}
+
+// WithSkillRepositoryProvider sets the provider used to resolve the skill
+// repository for each SkillScope.
+func WithSkillRepositoryProvider(provider skill.RepositoryProvider) Option {
+	return func(o *serviceOpts) { o.skillRepoProvider = provider }
+}
+
+// WithSkillScopeMode configures whether evolution shares skills per app or
+// isolates them per app+user.
+func WithSkillScopeMode(mode skill.SkillScopeMode) Option {
+	return func(o *serviceOpts) { o.skillScopeMode = mode }
 }
 
 // WithPolicy overrides the default trigger policy.
@@ -78,7 +92,7 @@ func WithQueueSize(n int) Option {
 // WithExistingSkillBodyMaxChars sets the per-skill body excerpt budget the
 // worker uses when snapshotting the skill library for the reviewer. A
 // positive value caps each excerpt at that many characters; 0 falls back
-// to DefaultExistingSkillBodyMaxChars; a negative value disables bodies
+// to the package default; a negative value disables bodies
 // entirely so the reviewer only sees `name: description` (cheap mode).
 //
 // Increase this when SKILL.md bodies are long enough that the head

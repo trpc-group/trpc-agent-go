@@ -15,9 +15,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// service is the default Service implementation backed by an async Worker.
+// service is the default Service implementation backed by an async worker.
 type service struct {
-	worker *Worker
+	worker *worker
 }
 
 // NewService creates an evolution Service that uses reviewModel to evaluate
@@ -29,11 +29,13 @@ func NewService(reviewModel model.Model, opts ...Option) Service {
 	}
 
 	var publisher Publisher
+	publisherBaseDir := ""
 	switch {
 	case o.publisher != nil:
 		publisher = o.publisher
 	case o.managedSkillsDir != "":
-		publisher = NewFilePublisher(o.managedSkillsDir)
+		publisher = newFilePublisher(o.managedSkillsDir)
+		publisherBaseDir = o.managedSkillsDir
 	}
 
 	var reviewer Reviewer
@@ -43,11 +45,14 @@ func NewService(reviewModel model.Model, opts ...Option) Service {
 		reviewer = NewLLMReviewer(reviewModel, o.reviewerOptions...)
 	}
 
-	w := NewWorker(WorkerConfig{
+	w := newWorker(workerConfig{
 		Reviewer:                  reviewer,
 		Publisher:                 publisher,
+		PublisherBaseDir:          publisherBaseDir,
 		Policy:                    o.policy,
 		SkillRepo:                 o.skillRepo,
+		SkillRepoProvider:         o.skillRepoProvider,
+		SkillScopeMode:            o.skillScopeMode,
 		WorkerNum:                 o.workerNum,
 		QueueSize:                 o.queueSize,
 		ExistingSkillBodyMaxChars: o.existingSkillBodyMaxChars,
@@ -77,18 +82,16 @@ func (s *service) Close() error {
 	return nil
 }
 
-// Worker returns the underlying async worker. Exported so adopters
-// can read approval-gate metrics (and nothing else) after Close
-// without racing the worker goroutine. Callers MUST NOT mutate the
-// returned worker's config; treat it as read-only.
-func (s *service) Worker() *Worker { return s.worker }
+// ApprovalGateMetrics returns a JSON-friendly snapshot of quality-gate
+// activity. It is safe to call after Close.
+func (s *service) ApprovalGateMetrics() ApprovalGateMetrics {
+	return s.worker.approvalGateMetrics()
+}
 
-// ServiceWithWorker is an optional extension interface that exposes
-// the underlying Worker for read-only introspection. The default
-// service implementation satisfies it; alternative Service
-// implementations MAY satisfy it if they want to expose gate metrics
-// too.
-type ServiceWithWorker interface {
+// ApprovalGateMetricsProvider is an optional extension interface for
+// services that expose quality-gate counters without exposing their
+// worker implementation.
+type ApprovalGateMetricsProvider interface {
 	Service
-	Worker() *Worker
+	ApprovalGateMetrics() ApprovalGateMetrics
 }

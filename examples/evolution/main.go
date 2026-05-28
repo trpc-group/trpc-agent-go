@@ -246,8 +246,8 @@ func (d *evolutionDemo) printFinalState() {
 		}
 	}
 
-	if svcW, ok := d.evoSvc.(evolution.ServiceWithWorker); ok {
-		m := svcW.Worker().ApprovalGateMetricsJSON()
+	if metrics, ok := d.evoSvc.(evolution.ApprovalGateMetricsProvider); ok {
+		m := metrics.ApprovalGateMetrics()
 		fmt.Printf("\nQuality gate metrics:\n")
 		fmt.Printf("  Candidates seen:       %d\n", m.CandidatesSeen)
 		fmt.Printf("  Revisions promoted:    %d\n", m.RevisionsPromoted)

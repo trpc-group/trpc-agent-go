@@ -577,7 +577,7 @@ func normalizeStringSlice(values []string) []string {
 // duplicates ("the proposed workflow already exists, only the dish count
 // differs") instead of relying on name/description string matches alone.
 // bodyMaxChars caps the per-skill excerpt: a positive value is the
-// character budget; zero falls back to DefaultExistingSkillBodyMaxChars;
+// character budget; zero falls back to the package default;
 // a negative value disables bodies entirely (description-only mode).
 //
 // Errors loading a single skill body are non-fatal — that skill is still
@@ -592,7 +592,7 @@ func loadExistingSkills(repo skill.Repository, bodyMaxChars int) []ExistingSkill
 		return nil
 	}
 	if bodyMaxChars == 0 {
-		bodyMaxChars = DefaultExistingSkillBodyMaxChars
+		bodyMaxChars = defaultExistingSkillBodyMaxChars
 	}
 	out := make([]ExistingSkill, 0, len(summaries))
 	for _, s := range summaries {

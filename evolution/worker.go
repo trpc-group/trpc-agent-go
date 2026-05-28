@@ -25,36 +25,39 @@ import (
 
 // Default values for worker configuration.
 const (
-	DefaultWorkerNum  = 1
-	DefaultQueueSize  = 10
-	DefaultJobTimeout = 60 * time.Second
+	defaultWorkerNum  = 1
+	defaultQueueSize  = 10
+	defaultJobTimeout = 60 * time.Second
 
-	// DefaultExistingSkillBodyMaxChars caps the body excerpt the worker
+	// defaultExistingSkillBodyMaxChars caps the body excerpt the worker
 	// loads per existing skill before handing the list to the reviewer.
 	// Picked so a library of ~50 skills still fits comfortably in a
 	// 32K-token reviewer prompt; bump it for libraries with longer
 	// SKILL.md files or shrink it (or set 0) to disable bodies.
-	DefaultExistingSkillBodyMaxChars = 600
+	defaultExistingSkillBodyMaxChars = 600
 )
 
-// Worker manages async evolution workers.
+// worker manages async evolution workers.
 //
-// Worker only manages reusable skills (create/update/delete via
+// worker only manages reusable skills (create/update/delete via
 // Publisher and skill.Repository). Durable fact memory is intentionally
 // out of scope: it is owned by `memory.Service` + the auto-memory
 // extractor (memory/<backend>.WithExtractor), so users get a single,
 // dedup-aware fact pipeline instead of two competing writers against
 // the same backend.
-type Worker struct {
+type worker struct {
 	reviewer  Reviewer
 	publisher Publisher
 	policy    Policy
 	skillRepo skill.Repository
+	repoProv  skill.RepositoryProvider
 
 	workerNum                 int
 	queueSize                 int
 	jobTimeout                time.Duration
 	existingSkillBodyMaxChars int
+	skillScopeMode            skill.SkillScopeMode
+	publisherBaseDir          string
 
 	// Quality-gate plumbing. All nil-able; when any is set,
 	// applyDecision routes writes through the revision pipeline
@@ -67,12 +70,19 @@ type Worker struct {
 	humanGate          HumanGate
 	managedSkillsDir   string
 	approvalGateShadow bool
+	candidateStoreRoot string
+	activePointerRoot  string
 
-	// approvalGateMetrics records the last observed gate activity so
+	scopedMu       sync.Mutex
+	scopedPubs     map[string]Publisher
+	scopedStores   map[string]CandidateStore
+	scopedPointers map[string]ActivePointer
+
+	// approvalGateCounters records the last observed gate activity so
 	// callers (benchmark, adopter metrics) can read counters after a
 	// Close without racing against the worker goroutine.
-	approvalGateMetrics approvalGateMetrics
-	approvalGateMu      sync.Mutex
+	approvalGateCounters approvalGateCounters
+	approvalGateMu       sync.Mutex
 
 	jobChans []chan *pendingJob
 	wg       sync.WaitGroup
@@ -80,9 +90,9 @@ type Worker struct {
 	started  bool
 }
 
-// approvalGateMetrics counts what the gates have seen and done.
+// approvalGateCounters counts what the gates have seen and done.
 // Counters are cumulative across all jobs the worker has processed.
-type approvalGateMetrics struct {
+type approvalGateCounters struct {
 	CandidatesSeen            int
 	RevisionsWritten          int
 	SpecGateRejected          int
@@ -107,19 +117,25 @@ type pendingJob struct {
 	job LearningJob
 }
 
-// WorkerConfig holds configuration for the Worker.
-type WorkerConfig struct {
-	Reviewer   Reviewer
-	Publisher  Publisher
-	Policy     Policy
-	SkillRepo  skill.Repository
-	WorkerNum  int
-	QueueSize  int
-	JobTimeout time.Duration
+// workerConfig holds configuration for the worker.
+type workerConfig struct {
+	Reviewer  Reviewer
+	Publisher Publisher
+	// PublisherBaseDir enables file-backed scope routing for Publisher.
+	PublisherBaseDir string
+	Policy           Policy
+	SkillRepo        skill.Repository
+	// SkillRepoProvider resolves the repository visible for each skill scope.
+	SkillRepoProvider skill.RepositoryProvider
+	// SkillScopeMode controls app-level sharing vs app+user isolation.
+	SkillScopeMode skill.SkillScopeMode
+	WorkerNum      int
+	QueueSize      int
+	JobTimeout     time.Duration
 
 	// ExistingSkillBodyMaxChars caps the body excerpt the worker loads
 	// per existing skill before sending the library snapshot to the
-	// reviewer. Zero means "use DefaultExistingSkillBodyMaxChars"; a
+	// reviewer. Zero means "use the package default"; a
 	// negative value means "do not include bodies at all" (description
 	// only — the pre-P1 behavior).
 	ExistingSkillBodyMaxChars int
@@ -142,33 +158,36 @@ type WorkerConfig struct {
 	ManagedSkillsDir string
 }
 
-// NewWorker creates a new Worker.
-func NewWorker(cfg WorkerConfig) *Worker {
+// newWorker creates a new worker.
+func newWorker(cfg workerConfig) *worker {
 	if cfg.WorkerNum <= 0 {
-		cfg.WorkerNum = DefaultWorkerNum
+		cfg.WorkerNum = defaultWorkerNum
 	}
 	if cfg.QueueSize <= 0 {
-		cfg.QueueSize = DefaultQueueSize
+		cfg.QueueSize = defaultQueueSize
 	}
 	if cfg.JobTimeout <= 0 {
-		cfg.JobTimeout = DefaultJobTimeout
+		cfg.JobTimeout = defaultJobTimeout
 	}
 	if cfg.Policy == nil {
 		cfg.Policy = DefaultPolicy{}
 	}
 	bodyMax := cfg.ExistingSkillBodyMaxChars
 	if bodyMax == 0 {
-		bodyMax = DefaultExistingSkillBodyMaxChars
+		bodyMax = defaultExistingSkillBodyMaxChars
 	}
-	return &Worker{
+	w := &worker{
 		reviewer:                  cfg.Reviewer,
 		publisher:                 cfg.Publisher,
 		policy:                    cfg.Policy,
 		skillRepo:                 cfg.SkillRepo,
+		repoProv:                  cfg.SkillRepoProvider,
 		workerNum:                 cfg.WorkerNum,
 		queueSize:                 cfg.QueueSize,
 		jobTimeout:                cfg.JobTimeout,
 		existingSkillBodyMaxChars: bodyMax,
+		skillScopeMode:            cfg.SkillScopeMode,
+		publisherBaseDir:          cfg.PublisherBaseDir,
 		candidateStore:            cfg.CandidateStore,
 		activePointer:             cfg.ActivePointer,
 		specGate:                  cfg.SpecGate,
@@ -178,10 +197,17 @@ func NewWorker(cfg WorkerConfig) *Worker {
 		approvalGateShadow:        cfg.ApprovalGateShadow,
 		managedSkillsDir:          cfg.ManagedSkillsDir,
 	}
+	if store, ok := cfg.CandidateStore.(*FileCandidateStore); ok && store != nil {
+		w.candidateStoreRoot = store.root
+	}
+	if ptr, ok := cfg.ActivePointer.(*FileActivePointer); ok && ptr != nil {
+		w.activePointerRoot = ptr.root
+	}
+	return w
 }
 
 // Start launches the background processing goroutines.
-func (w *Worker) Start() {
+func (w *worker) Start() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.started || w.reviewer == nil {
@@ -204,7 +230,7 @@ func (w *Worker) Start() {
 }
 
 // Stop shuts down all workers and waits for them to finish.
-func (w *Worker) Stop() {
+func (w *worker) Stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if !w.started || len(w.jobChans) == 0 {
@@ -225,7 +251,7 @@ func (w *Worker) Stop() {
 // queued so the reviewer continues to run even after the originating
 // request context is torn down. Outcome (when set) is forwarded verbatim
 // to the reviewer prompt.
-func (w *Worker) Enqueue(ctx context.Context, job LearningJob) error {
+func (w *worker) Enqueue(ctx context.Context, job LearningJob) error {
 	if w.reviewer == nil || job.Session == nil {
 		return nil
 	}
@@ -250,7 +276,7 @@ func (w *Worker) Enqueue(ctx context.Context, job LearningJob) error {
 	return nil
 }
 
-func (w *Worker) tryEnqueue(ctx context.Context, sess *session.Session, item *pendingJob) bool {
+func (w *worker) tryEnqueue(ctx context.Context, sess *session.Session, item *pendingJob) bool {
 	if ctx.Err() != nil {
 		return false
 	}
@@ -268,7 +294,7 @@ func (w *Worker) tryEnqueue(ctx context.Context, sess *session.Session, item *pe
 	}
 }
 
-func (w *Worker) processJob(item *pendingJob) {
+func (w *worker) processJob(item *pendingJob) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.ErrorfContext(context.Background(), "evolution: panic in worker: %v", r)
@@ -284,6 +310,16 @@ func (w *Worker) processJob(item *pendingJob) {
 	defer cancel()
 
 	sess := item.job.Session
+	scope, scoped, err := w.resolveJobScope(item.job)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve skill scope for session %s failed: %v", sess.ID, err)
+		return
+	}
+	repo, err := w.repositoryForScope(ctx, scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve skill repo for session %s failed: %v", sess.ID, err)
+		return
+	}
 
 	since := readLastReviewAt(sess)
 	latestTs, reviewCtx := scanDelta(sess, since)
@@ -307,7 +343,7 @@ func (w *Worker) processJob(item *pendingJob) {
 		return
 	}
 
-	existing := loadExistingSkills(w.skillRepo, w.existingSkillBodyMaxChars)
+	existing := loadExistingSkills(repo, w.existingSkillBodyMaxChars)
 	decision, err := w.reviewer.Review(ctx, sanitizeReviewInput(&ReviewInput{
 		AppName:        sess.AppName,
 		UserID:         sess.UserID,
@@ -337,31 +373,31 @@ func (w *Worker) processJob(item *pendingJob) {
 			e.Kind, e.Original, e.Target, e.Reason)
 	}
 
-	w.applyDecision(ctx, decision, item.job.Outcome)
+	w.applyDecision(ctx, decision, item.job.Outcome, scope, scoped, repo)
 	writeLastReviewAt(sess, latestTs)
 }
 
-func (w *Worker) applyDecision(ctx context.Context, decision *ReviewDecision, outcome *Outcome) {
+func (w *worker) applyDecision(ctx context.Context, decision *ReviewDecision, outcome *Outcome, scope skill.SkillScope, scoped bool, repo skill.Repository) {
 	mutated := false
 	if w.approvalGateEnabled() {
-		existing := loadExistingSkills(w.skillRepo, w.existingSkillBodyMaxChars)
-		if w.applySkillsWithGate(ctx, decision.Skills, existing, outcome) {
+		existing := loadExistingSkills(repo, w.existingSkillBodyMaxChars)
+		if w.applySkillsWithGate(ctx, decision.Skills, existing, outcome, scope, scoped) {
 			mutated = true
 		}
-		if w.applyUpdatesWithGate(ctx, decision.Updates, existing, outcome) {
+		if w.applyUpdatesWithGate(ctx, decision.Updates, existing, outcome, scope, scoped, repo) {
 			mutated = true
 		}
-		if w.applyDeletionsWithGate(ctx, decision.Deletions) {
+		if w.applyDeletionsWithGate(ctx, decision.Deletions, scope, scoped, repo) {
 			mutated = true
 		}
 	} else {
-		if w.applySkills(ctx, decision.Skills) {
+		if w.applySkills(ctx, decision.Skills, scope, scoped) {
 			mutated = true
 		}
-		if w.applyUpdates(ctx, decision.Updates) {
+		if w.applyUpdates(ctx, decision.Updates, scope, scoped, repo) {
 			mutated = true
 		}
-		if w.applyDeletions(ctx, decision.Deletions) {
+		if w.applyDeletions(ctx, decision.Deletions, scope, scoped, repo) {
 			mutated = true
 		}
 	}
@@ -369,7 +405,7 @@ func (w *Worker) applyDecision(ctx context.Context, decision *ReviewDecision, ou
 	if !mutated {
 		return
 	}
-	refreshable, ok := w.skillRepo.(skill.RefreshableRepository)
+	refreshable, ok := repo.(skill.RefreshableRepository)
 	if !ok {
 		return
 	}
@@ -381,25 +417,136 @@ func (w *Worker) applyDecision(ctx context.Context, decision *ReviewDecision, ou
 // approvalGateEnabled reports whether any quality-gate component is
 // configured. When true, applyDecision routes through the revision
 // pipeline; when false, the original direct-publish path is used.
-func (w *Worker) approvalGateEnabled() bool {
+func (w *worker) approvalGateEnabled() bool {
 	return w.candidateStore != nil || w.activePointer != nil ||
 		w.specGate != nil || w.safetyGate != nil || w.effectivenessGate != nil ||
 		w.humanGate != nil
 }
 
-// ApprovalGateMetrics returns a copy of the worker's current
-// gate-activity counters. Safe to call at any time; updates to the
-// underlying counters are serialized by a mutex.
-func (w *Worker) ApprovalGateMetrics() approvalGateMetrics {
-	w.approvalGateMu.Lock()
-	defer w.approvalGateMu.Unlock()
-	return w.approvalGateMetrics
+func (w *worker) resolveJobScope(job LearningJob) (skill.SkillScope, bool, error) {
+	if w.skillScopeMode == skill.SkillScopeNone && job.Scope.IsZero() {
+		return skill.SkillScope{}, false, nil
+	}
+	mode := skill.NormalizeSkillScopeMode(w.skillScopeMode)
+	if w.skillScopeMode == skill.SkillScopeNone && !job.Scope.IsZero() && strings.TrimSpace(job.Scope.UserID) != "" {
+		// An explicit job scope should remain usable even when the service is
+		// otherwise unscoped; a non-empty UserID means the caller intended
+		// app+user isolation for this single job.
+		mode = skill.SkillScopeUser
+	}
+	if job.Scope.IsZero() {
+		if job.Session == nil {
+			return skill.SkillScope{}, false, nil
+		}
+		scope, err := skill.NewSkillScope(mode, job.Session.AppName, job.Session.UserID)
+		return scope, true, err
+	}
+	scope, err := skill.NewSkillScope(mode, job.Scope.AppName, job.Scope.UserID)
+	return scope, true, err
 }
 
-// ApprovalGateMetricsSnapshot is a public, exported view of the
-// internal approvalGateMetrics. Kept separate from the internal type
+func (w *worker) repositoryForScope(ctx context.Context, scope skill.SkillScope, scoped bool) (skill.Repository, error) {
+	if !scoped || w.repoProv == nil {
+		return w.skillRepo, nil
+	}
+	return w.repoProv.Repository(ctx, scope)
+}
+
+func (w *worker) scopedRoot(root string, scope skill.SkillScope, scoped bool) (string, error) {
+	if !scoped || root == "" {
+		return root, nil
+	}
+	mode := w.skillScopeMode
+	if mode == skill.SkillScopeNone && strings.TrimSpace(scope.UserID) != "" {
+		mode = skill.SkillScopeUser
+	}
+	parts, err := skill.ScopePathParts(mode, scope)
+	if err != nil {
+		return "", err
+	}
+	all := append([]string{root}, parts...)
+	return filepath.Join(all...), nil
+}
+
+func (w *worker) publisherForScope(scope skill.SkillScope, scoped bool) (Publisher, error) {
+	root, err := w.scopedRoot(w.publisherBaseDir, scope, scoped)
+	if err != nil {
+		return nil, err
+	}
+	if root == "" {
+		return w.publisher, nil
+	}
+	key := "publisher:" + root
+	w.scopedMu.Lock()
+	defer w.scopedMu.Unlock()
+	if w.scopedPubs == nil {
+		w.scopedPubs = make(map[string]Publisher)
+	}
+	if p := w.scopedPubs[key]; p != nil {
+		return p, nil
+	}
+	p := newFilePublisher(root)
+	w.scopedPubs[key] = p
+	return p, nil
+}
+
+func (w *worker) candidateStoreForScope(scope skill.SkillScope, scoped bool) (CandidateStore, error) {
+	root, err := w.scopedRoot(w.candidateStoreRoot, scope, scoped)
+	if err != nil {
+		return nil, err
+	}
+	if root == "" {
+		return w.candidateStore, nil
+	}
+	key := "store:" + root
+	w.scopedMu.Lock()
+	defer w.scopedMu.Unlock()
+	if w.scopedStores == nil {
+		w.scopedStores = make(map[string]CandidateStore)
+	}
+	if s := w.scopedStores[key]; s != nil {
+		return s, nil
+	}
+	s := NewFileCandidateStore(root)
+	w.scopedStores[key] = s
+	return s, nil
+}
+
+func (w *worker) activePointerForScope(scope skill.SkillScope, scoped bool) (ActivePointer, error) {
+	root, err := w.scopedRoot(w.activePointerRoot, scope, scoped)
+	if err != nil {
+		return nil, err
+	}
+	if root == "" {
+		return w.activePointer, nil
+	}
+	key := "pointer:" + root
+	w.scopedMu.Lock()
+	defer w.scopedMu.Unlock()
+	if w.scopedPointers == nil {
+		w.scopedPointers = make(map[string]ActivePointer)
+	}
+	if p := w.scopedPointers[key]; p != nil {
+		return p, nil
+	}
+	p := NewFileActivePointer(root)
+	w.scopedPointers[key] = p
+	return p, nil
+}
+
+// approvalGateCountersCopy returns a copy of the worker's current
+// gate-activity counters. Safe to call at any time; updates to the
+// underlying counters are serialized by a mutex.
+func (w *worker) approvalGateCountersCopy() approvalGateCounters {
+	w.approvalGateMu.Lock()
+	defer w.approvalGateMu.Unlock()
+	return w.approvalGateCounters
+}
+
+// ApprovalGateMetrics is a public, exported view of the
+// internal approvalGateCounters. Kept separate from the internal type
 // so the internal one stays free to evolve.
-type ApprovalGateMetricsSnapshot struct {
+type ApprovalGateMetrics struct {
 	CandidatesSeen            int `json:"candidates_seen"`
 	RevisionsWritten          int `json:"revisions_written"`
 	SpecGateRejected          int `json:"spec_gate_rejected"`
@@ -414,13 +561,11 @@ type ApprovalGateMetricsSnapshot struct {
 	ShadowModeBypassed        int `json:"shadow_mode_bypassed"`
 }
 
-// ApprovalGateMetricsJSON returns an externally-visible snapshot of the
-// approval-gate counters. Callers that want JSON-friendly output use
-// this; callers that already work with the internal type use
-// ApprovalGateMetrics. Both return the same numbers.
-func (w *Worker) ApprovalGateMetricsJSON() ApprovalGateMetricsSnapshot {
-	m := w.ApprovalGateMetrics()
-	return ApprovalGateMetricsSnapshot{
+// approvalGateMetrics returns an externally-visible snapshot of the
+// approval-gate counters.
+func (w *worker) approvalGateMetrics() ApprovalGateMetrics {
+	m := w.approvalGateCountersCopy()
+	return ApprovalGateMetrics{
 		CandidatesSeen:            m.CandidatesSeen,
 		RevisionsWritten:          m.RevisionsWritten,
 		SpecGateRejected:          m.SpecGateRejected,
@@ -439,10 +584,10 @@ func (w *Worker) ApprovalGateMetricsJSON() ApprovalGateMetricsSnapshot {
 // bumpGateMetric applies a callback to the locked metrics struct.
 // Keeps all metric bumps in one place so the mutex boundary is easy
 // to audit.
-func (w *Worker) bumpGateMetric(fn func(*approvalGateMetrics)) {
+func (w *worker) bumpGateMetric(fn func(*approvalGateCounters)) {
 	w.approvalGateMu.Lock()
 	defer w.approvalGateMu.Unlock()
-	fn(&w.approvalGateMetrics)
+	fn(&w.approvalGateCounters)
 }
 
 // -----------------------------------------------------------------------------
@@ -451,66 +596,81 @@ func (w *Worker) bumpGateMetric(fn func(*approvalGateMetrics)) {
 // update ActivePointer -> audit" shape.
 // -----------------------------------------------------------------------------
 
-func (w *Worker) applySkillsWithGate(ctx context.Context, skills []*SkillSpec, existing []ExistingSkill, outcome *Outcome) bool {
+func (w *worker) applySkillsWithGate(ctx context.Context, skills []*SkillSpec, existing []ExistingSkill, outcome *Outcome, scope skill.SkillScope, scoped bool) bool {
 	mutated := false
 	for _, spec := range skills {
 		if spec == nil {
 			continue
 		}
 		rev := w.buildRevision(spec, "create", "")
-		if w.processRevision(ctx, rev, existing, "create", outcome) {
+		if w.processRevision(ctx, rev, existing, "create", outcome, scope, scoped) {
 			mutated = true
 		}
 	}
 	return mutated
 }
 
-func (w *Worker) applyUpdatesWithGate(ctx context.Context, updates []*SkillUpdate, existing []ExistingSkill, outcome *Outcome) bool {
+func (w *worker) applyUpdatesWithGate(ctx context.Context, updates []*SkillUpdate, existing []ExistingSkill, outcome *Outcome, scope skill.SkillScope, scoped bool, repo skill.Repository) bool {
 	mutated := false
 	for _, upd := range updates {
 		if upd == nil || upd.NewSpec == nil {
 			continue
 		}
-		if !skillExists(w.skillRepo, upd.Name) {
+		if !skillExists(repo, upd.Name) {
 			log.WarnfContext(ctx, "evolution: update skill %q skipped: not found in repo", upd.Name)
 			continue
 		}
 		spec := *upd.NewSpec
 		spec.Name = upd.Name // force stable on-disk name
 		rev := w.buildRevision(&spec, "update", upd.Name)
-		if w.processRevision(ctx, rev, existing, "update", outcome) {
+		if w.processRevision(ctx, rev, existing, "update", outcome, scope, scoped) {
 			mutated = true
 		}
 	}
 	return mutated
 }
 
-func (w *Worker) applyDeletionsWithGate(ctx context.Context, names []string) bool {
+func (w *worker) applyDeletionsWithGate(ctx context.Context, names []string, scope skill.SkillScope, scoped bool, repo skill.Repository) bool {
 	mutated := false
+	publisher, err := w.publisherForScope(scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve publisher failed: %v", err)
+		return false
+	}
+	store, err := w.candidateStoreForScope(scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve candidate store failed: %v", err)
+		return false
+	}
+	pointer, err := w.activePointerForScope(scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve active pointer failed: %v", err)
+		return false
+	}
 	for _, name := range names {
-		if name == "" || !skillExists(w.skillRepo, name) {
+		if name == "" || !skillExists(repo, name) {
 			continue
 		}
 		rev := &Revision{
-			SkillID:    SkillIDFromName(name),
-			RevisionID: NewRevisionID(),
+			SkillID:    skillIDFromName(name),
+			RevisionID: newRevisionID(),
 			Source:     "reviewer",
 			Action:     "delete",
 			Status:     RevisionPending,
 			CreatedAt:  time.Now().UTC(),
 		}
-		w.bumpGateMetric(func(m *approvalGateMetrics) { m.CandidatesSeen++ })
+		w.bumpGateMetric(func(m *approvalGateCounters) { m.CandidatesSeen++ })
 		// No spec gate / safety gate for deletes — the Spec is nil by
 		// design. We still log the revision for audit and rollback.
-		if w.candidateStore != nil {
-			if err := w.candidateStore.WriteRevision(ctx, rev); err != nil {
+		if store != nil {
+			if err := store.WriteRevision(ctx, rev); err != nil {
 				log.WarnfContext(ctx, "evolution: write delete revision failed: %v", err)
 			} else {
-				w.bumpGateMetric(func(m *approvalGateMetrics) { m.RevisionsWritten++ })
+				w.bumpGateMetric(func(m *approvalGateCounters) { m.RevisionsWritten++ })
 			}
 		}
-		if w.publisher != nil {
-			if err := w.publisher.DeleteSkill(ctx, name); err != nil {
+		if publisher != nil {
+			if err := publisher.DeleteSkill(ctx, name); err != nil {
 				log.WarnfContext(ctx, "evolution: delete skill %q failed: %v", name, err)
 				continue
 			}
@@ -523,13 +683,13 @@ func (w *Worker) applyDeletionsWithGate(ctx context.Context, names []string) boo
 			// avoid diverging state.
 			continue
 		}
-		if w.activePointer != nil {
-			if err := w.activePointer.Clear(ctx, rev.SkillID); err != nil {
+		if pointer != nil {
+			if err := pointer.Clear(ctx, rev.SkillID); err != nil {
 				log.WarnfContext(ctx, "evolution: clear active pointer %q failed: %v", rev.SkillID, err)
 			}
 		}
-		if w.candidateStore != nil {
-			_ = w.candidateStore.AppendAudit(ctx, AuditEvent{
+		if store != nil {
+			_ = store.AppendAudit(ctx, AuditEvent{
 				Action:     "delete",
 				SkillID:    rev.SkillID,
 				RevisionID: rev.RevisionID,
@@ -537,17 +697,17 @@ func (w *Worker) applyDeletionsWithGate(ctx context.Context, names []string) boo
 				Reason:     "reviewer-driven deletion",
 			})
 		}
-		w.bumpGateMetric(func(m *approvalGateMetrics) { m.DeletionsApplied++ })
+		w.bumpGateMetric(func(m *approvalGateCounters) { m.DeletionsApplied++ })
 		mutated = true
 	}
 	return mutated
 }
 
 // buildRevision constructs a fresh Revision for a create or update.
-func (w *Worker) buildRevision(spec *SkillSpec, action, parentName string) *Revision {
+func (w *worker) buildRevision(spec *SkillSpec, action, parentName string) *Revision {
 	rev := &Revision{
-		SkillID:    SkillIDFromName(spec.Name),
-		RevisionID: NewRevisionID(),
+		SkillID:    skillIDFromName(spec.Name),
+		RevisionID: newRevisionID(),
 		Source:     "reviewer",
 		Action:     action,
 		Spec:       spec,
@@ -555,7 +715,7 @@ func (w *Worker) buildRevision(spec *SkillSpec, action, parentName string) *Revi
 		CreatedAt:  time.Now().UTC(),
 	}
 	if parentName != "" {
-		rev.ParentID = SkillIDFromName(parentName)
+		rev.ParentID = skillIDFromName(parentName)
 	}
 	return rev
 }
@@ -563,8 +723,13 @@ func (w *Worker) buildRevision(spec *SkillSpec, action, parentName string) *Revi
 // processRevision runs the full gate + publish + audit pipeline for
 // one revision. Returns true when the live publisher was actually
 // updated (so the worker knows to refresh the repository).
-func (w *Worker) processRevision(ctx context.Context, rev *Revision, existing []ExistingSkill, actionLabel string, outcome *Outcome) bool {
-	w.bumpGateMetric(func(m *approvalGateMetrics) { m.CandidatesSeen++ })
+func (w *worker) processRevision(ctx context.Context, rev *Revision, existing []ExistingSkill, actionLabel string, outcome *Outcome, scope skill.SkillScope, scoped bool) bool {
+	w.bumpGateMetric(func(m *approvalGateCounters) { m.CandidatesSeen++ })
+	store, err := w.candidateStoreForScope(scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve candidate store failed: %v", err)
+		return false
+	}
 
 	gatePassed := w.runGates(ctx, rev, existing, outcome)
 	if !gatePassed && rev.Status == RevisionPending {
@@ -573,33 +738,33 @@ func (w *Worker) processRevision(ctx context.Context, rev *Revision, existing []
 
 	// Always write the revision so the audit trail stays complete,
 	// even for rejected revisions.
-	if w.candidateStore != nil {
-		if err := w.candidateStore.WriteRevision(ctx, rev); err != nil {
+	if store != nil {
+		if err := store.WriteRevision(ctx, rev); err != nil {
 			log.WarnfContext(ctx, "evolution: write revision %s failed: %v", rev.RevisionID, err)
 		} else {
-			w.bumpGateMetric(func(m *approvalGateMetrics) { m.RevisionsWritten++ })
+			w.bumpGateMetric(func(m *approvalGateCounters) { m.RevisionsWritten++ })
 		}
 	}
 
 	// Decide whether to publish.
 	shouldPublish := gatePassed || w.approvalGateShadow
 	if !shouldPublish {
-		w.auditReject(ctx, rev)
+		w.auditReject(ctx, rev, store)
 		return false
 	}
 	if !gatePassed && w.approvalGateShadow {
-		w.bumpGateMetric(func(m *approvalGateMetrics) { m.ShadowModeBypassed++ })
+		w.bumpGateMetric(func(m *approvalGateCounters) { m.ShadowModeBypassed++ })
 		log.InfofContext(ctx,
 			"evolution: shadow mode publishing failed revision %s (reasons=%v)",
 			rev.RevisionID, gateRejectReason(rev))
 	}
 
-	return w.publishRevision(ctx, rev, actionLabel, gatePassed)
+	return w.publishRevision(ctx, rev, actionLabel, gatePassed, scope, scoped, store)
 }
 
 // runGates evaluates spec, safety, and effectiveness gates in order.
 // Returns true if all gates pass (or if no gates are configured).
-func (w *Worker) runGates(ctx context.Context, rev *Revision, existing []ExistingSkill, outcome *Outcome) bool {
+func (w *worker) runGates(ctx context.Context, rev *Revision, existing []ExistingSkill, outcome *Outcome) bool {
 	passed := true
 	if w.specGate != nil {
 		if !w.runSpecGate(ctx, rev, existing) {
@@ -626,7 +791,7 @@ func (w *Worker) runGates(ctx context.Context, rev *Revision, existing []Existin
 	return passed
 }
 
-func (w *Worker) runSpecGate(ctx context.Context, rev *Revision, existing []ExistingSkill) bool {
+func (w *worker) runSpecGate(ctx context.Context, rev *Revision, existing []ExistingSkill) bool {
 	report, err := w.specGate.Validate(ctx, rev, existing)
 	if err != nil {
 		log.WarnfContext(ctx, "evolution: spec gate error on %q: %v", rev.Spec.Name, err)
@@ -634,7 +799,7 @@ func (w *Worker) runSpecGate(ctx context.Context, rev *Revision, existing []Exis
 	}
 	rev.SpecReport = report
 	if report != nil && !report.Passed {
-		w.bumpGateMetric(func(m *approvalGateMetrics) { m.SpecGateRejected++ })
+		w.bumpGateMetric(func(m *approvalGateCounters) { m.SpecGateRejected++ })
 		log.InfofContext(ctx,
 			"evolution: spec gate rejected %q revision=%s reasons=%v",
 			rev.Spec.Name, rev.RevisionID, report.Reasons)
@@ -643,7 +808,7 @@ func (w *Worker) runSpecGate(ctx context.Context, rev *Revision, existing []Exis
 	return true
 }
 
-func (w *Worker) runSafetyGate(ctx context.Context, rev *Revision) bool {
+func (w *worker) runSafetyGate(ctx context.Context, rev *Revision) bool {
 	report, err := w.safetyGate.Scan(ctx, rev)
 	if err != nil {
 		log.WarnfContext(ctx, "evolution: safety gate error on %q: %v", rev.Spec.Name, err)
@@ -651,7 +816,7 @@ func (w *Worker) runSafetyGate(ctx context.Context, rev *Revision) bool {
 	}
 	rev.SafetyReport = report
 	if report != nil && !report.Passed {
-		w.bumpGateMetric(func(m *approvalGateMetrics) { m.SafetyGateRejected++ })
+		w.bumpGateMetric(func(m *approvalGateCounters) { m.SafetyGateRejected++ })
 		log.InfofContext(ctx,
 			"evolution: safety gate rejected %q revision=%s reasons=%v",
 			rev.Spec.Name, rev.RevisionID, report.Reasons)
@@ -660,7 +825,7 @@ func (w *Worker) runSafetyGate(ctx context.Context, rev *Revision) bool {
 	return true
 }
 
-func (w *Worker) runEffectivenessGate(ctx context.Context, rev *Revision, outcome *Outcome) bool {
+func (w *worker) runEffectivenessGate(ctx context.Context, rev *Revision, outcome *Outcome) bool {
 	report, err := w.effectivenessGate.Evaluate(ctx, rev, outcome)
 	if err != nil {
 		log.WarnfContext(ctx, "evolution: effectiveness gate error on %q: %v", rev.Spec.Name, err)
@@ -669,7 +834,7 @@ func (w *Worker) runEffectivenessGate(ctx context.Context, rev *Revision, outcom
 	rev.EffectivenessReport = report
 	if report != nil && !report.Passed {
 		rev.Status = RevisionPendingEval
-		w.bumpGateMetric(func(m *approvalGateMetrics) { m.EffectivenessGateRejected++ })
+		w.bumpGateMetric(func(m *approvalGateCounters) { m.EffectivenessGateRejected++ })
 		log.InfofContext(ctx,
 			"evolution: effectiveness gate held %q revision=%s reasons=%v",
 			rev.Spec.Name, rev.RevisionID, report.Reasons)
@@ -678,7 +843,7 @@ func (w *Worker) runEffectivenessGate(ctx context.Context, rev *Revision, outcom
 	return true
 }
 
-func (w *Worker) runHumanGate(ctx context.Context, rev *Revision, outcome *Outcome) bool {
+func (w *worker) runHumanGate(ctx context.Context, rev *Revision, outcome *Outcome) bool {
 	hold, err := w.humanGate.ShouldHold(ctx, rev, outcome)
 	if err != nil {
 		log.WarnfContext(ctx, "evolution: human gate error on %q: %v", rev.Spec.Name, err)
@@ -687,7 +852,7 @@ func (w *Worker) runHumanGate(ctx context.Context, rev *Revision, outcome *Outco
 	rev.HumanReport = &HumanReport{Held: hold}
 	if hold {
 		rev.Status = RevisionPendingApproval
-		w.bumpGateMetric(func(m *approvalGateMetrics) { m.HumanGateHeld++ })
+		w.bumpGateMetric(func(m *approvalGateCounters) { m.HumanGateHeld++ })
 		log.InfofContext(ctx, "evolution: human gate held %q revision=%s for approval",
 			rev.Spec.Name, rev.RevisionID)
 		return false
@@ -696,9 +861,9 @@ func (w *Worker) runHumanGate(ctx context.Context, rev *Revision, outcome *Outco
 }
 
 // auditReject appends a rejection audit event.
-func (w *Worker) auditReject(ctx context.Context, rev *Revision) {
-	if w.candidateStore != nil {
-		_ = w.candidateStore.AppendAudit(ctx, AuditEvent{
+func (w *worker) auditReject(ctx context.Context, rev *Revision, store CandidateStore) {
+	if store != nil {
+		_ = store.AppendAudit(ctx, AuditEvent{
 			Action:     "reject",
 			SkillID:    rev.SkillID,
 			RevisionID: rev.RevisionID,
@@ -710,11 +875,21 @@ func (w *Worker) auditReject(ctx context.Context, rev *Revision) {
 
 // publishRevision writes the skill, updates the active pointer,
 // and appends a promotion audit event.
-func (w *Worker) publishRevision(ctx context.Context, rev *Revision, actionLabel string, gatePassed bool) bool {
-	if w.publisher == nil {
+func (w *worker) publishRevision(ctx context.Context, rev *Revision, actionLabel string, gatePassed bool, scope skill.SkillScope, scoped bool, store CandidateStore) bool {
+	publisher, err := w.publisherForScope(scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve publisher failed: %v", err)
 		return false
 	}
-	if err := w.publisher.UpsertSkill(ctx, rev.Spec); err != nil {
+	pointer, err := w.activePointerForScope(scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve active pointer failed: %v", err)
+		return false
+	}
+	if publisher == nil {
+		return false
+	}
+	if err := publisher.UpsertSkill(ctx, rev.Spec); err != nil {
 		log.WarnfContext(ctx, "evolution: publish revision %s failed: %v", rev.RevisionID, err)
 		return false
 	}
@@ -724,16 +899,16 @@ func (w *Worker) publishRevision(ctx context.Context, rev *Revision, actionLabel
 	now := time.Now().UTC()
 	rev.PromotedAt = &now
 	// Rewrite meta.json to reflect the new status/promoted_at.
-	if w.candidateStore != nil {
-		_ = w.candidateStore.WriteRevision(ctx, rev)
+	if store != nil {
+		_ = store.WriteRevision(ctx, rev)
 	}
-	if w.activePointer != nil {
-		if err := w.activePointer.Set(ctx, rev.SkillID, rev.RevisionID); err != nil {
+	if pointer != nil {
+		if err := pointer.Set(ctx, rev.SkillID, rev.RevisionID); err != nil {
 			log.WarnfContext(ctx, "evolution: active pointer set %s failed: %v", rev.SkillID, err)
 		}
 	}
-	if w.candidateStore != nil {
-		_ = w.candidateStore.AppendAudit(ctx, AuditEvent{
+	if store != nil {
+		_ = store.AppendAudit(ctx, AuditEvent{
 			Action:     "promote",
 			SkillID:    rev.SkillID,
 			RevisionID: rev.RevisionID,
@@ -741,7 +916,7 @@ func (w *Worker) publishRevision(ctx context.Context, rev *Revision, actionLabel
 			Reason:     actionLabel,
 		})
 	}
-	w.bumpGateMetric(func(m *approvalGateMetrics) {
+	w.bumpGateMetric(func(m *approvalGateCounters) {
 		m.RevisionsPromoted++
 		switch actionLabel {
 		case "create":
@@ -776,8 +951,13 @@ func gateRejectReason(rev *Revision) string {
 	return strings.Join(parts, " | ")
 }
 
-func (w *Worker) applySkills(ctx context.Context, skills []*SkillSpec) bool {
-	if w.publisher == nil {
+func (w *worker) applySkills(ctx context.Context, skills []*SkillSpec, scope skill.SkillScope, scoped bool) bool {
+	publisher, err := w.publisherForScope(scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve publisher failed: %v", err)
+		return false
+	}
+	if publisher == nil {
 		return false
 	}
 	mutated := false
@@ -785,7 +965,7 @@ func (w *Worker) applySkills(ctx context.Context, skills []*SkillSpec) bool {
 		if spec == nil {
 			continue
 		}
-		if err := w.publisher.UpsertSkill(ctx, spec); err != nil {
+		if err := publisher.UpsertSkill(ctx, spec); err != nil {
 			log.WarnfContext(ctx, "evolution: upsert skill %q failed: %v", spec.Name, err)
 			continue
 		}
@@ -799,23 +979,32 @@ func (w *Worker) applySkills(ctx context.Context, skills []*SkillSpec) bool {
 //   - managedSkillsDir is not configured (no isolation enforced)
 //   - skill does not exist yet in the repo (create is always safe)
 //   - skill's on-disk path is under managedSkillsDir
-func (w *Worker) isEvolutionManagedSkill(name string) bool {
-	if w.managedSkillsDir == "" || w.skillRepo == nil {
+func (w *worker) isEvolutionManagedSkill(name string, repo skill.Repository, scope skill.SkillScope, scoped bool) bool {
+	managedDir, err := w.scopedRoot(w.managedSkillsDir, scope, scoped)
+	if err != nil {
+		return false
+	}
+	if managedDir == "" || repo == nil {
 		return true
 	}
-	p, err := w.skillRepo.Path(name)
+	p, err := repo.Path(name)
 	if err != nil {
 		return true // doesn't exist yet → safe to create
 	}
-	rel, err := filepath.Rel(w.managedSkillsDir, p)
+	rel, err := filepath.Rel(managedDir, p)
 	if err != nil {
 		return false
 	}
 	return !strings.HasPrefix(rel, "..")
 }
 
-func (w *Worker) applyUpdates(ctx context.Context, updates []*SkillUpdate) bool {
-	if w.publisher == nil {
+func (w *worker) applyUpdates(ctx context.Context, updates []*SkillUpdate, scope skill.SkillScope, scoped bool, repo skill.Repository) bool {
+	publisher, err := w.publisherForScope(scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve publisher failed: %v", err)
+		return false
+	}
+	if publisher == nil {
 		return false
 	}
 	mutated := false
@@ -823,20 +1012,20 @@ func (w *Worker) applyUpdates(ctx context.Context, updates []*SkillUpdate) bool 
 		if upd == nil || upd.NewSpec == nil {
 			continue
 		}
-		if !skillExists(w.skillRepo, upd.Name) {
+		if !skillExists(repo, upd.Name) {
 			log.WarnfContext(ctx, "evolution: update skill %q skipped: not found in repo", upd.Name)
 			continue
 		}
 		// Write isolation: only update skills that live within the
 		// evolution-managed directory. Bundled and user-authored skills
 		// are protected from accidental overwrites.
-		if !w.isEvolutionManagedSkill(upd.Name) {
+		if !w.isEvolutionManagedSkill(upd.Name, repo, scope, scoped) {
 			log.WarnfContext(ctx, "evolution: update skill %q skipped: not evolution-managed (protected)", upd.Name)
 			continue
 		}
 		// Force the on-disk directory name to remain stable.
 		upd.NewSpec.Name = upd.Name
-		if err := w.publisher.UpsertSkill(ctx, upd.NewSpec); err != nil {
+		if err := publisher.UpsertSkill(ctx, upd.NewSpec); err != nil {
 			log.WarnfContext(ctx, "evolution: update skill %q failed: %v", upd.Name, err)
 			continue
 		}
@@ -845,17 +1034,22 @@ func (w *Worker) applyUpdates(ctx context.Context, updates []*SkillUpdate) bool 
 	return mutated
 }
 
-func (w *Worker) applyDeletions(ctx context.Context, names []string) bool {
-	if w.publisher == nil {
+func (w *worker) applyDeletions(ctx context.Context, names []string, scope skill.SkillScope, scoped bool, repo skill.Repository) bool {
+	publisher, err := w.publisherForScope(scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve publisher failed: %v", err)
+		return false
+	}
+	if publisher == nil {
 		return false
 	}
 	mutated := false
 	for _, name := range names {
-		if name == "" || !skillExists(w.skillRepo, name) {
+		if name == "" || !skillExists(repo, name) {
 			// Idempotent: nothing to delete (or never existed).
 			continue
 		}
-		if err := w.publisher.DeleteSkill(ctx, name); err != nil {
+		if err := publisher.DeleteSkill(ctx, name); err != nil {
 			log.WarnfContext(ctx, "evolution: delete skill %q failed: %v", name, err)
 			continue
 		}
