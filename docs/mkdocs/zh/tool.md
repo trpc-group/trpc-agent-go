@@ -59,6 +59,26 @@ type MetadataProvider interface {
 }
 ```
 
+直接使用 MCP ToolSet 暴露出来的工具，也会从显式 MCP annotations 生成
+metadata：
+
+| MCP annotation | ToolMetadata 字段 |
+| -------------- | ----------------- |
+| `readOnlyHint` | `ReadOnly`        |
+| `destructiveHint` | `Destructive` |
+| `openWorldHint` | `OpenWorld`     |
+
+框架只映射 MCP server 显式返回的 hint。如果 MCP server 没有返回
+`destructiveHint` 或 `openWorldHint`，`ToolMetadata` 会保持 Go 零值
+（`false`）。这与 MCP 规范的默认 hint 语义不同：MCP 中非只读工具的
+`destructiveHint` 默认是 `true`，`openWorldHint` 默认也是 `true`。
+由于 `ToolMetadata` 使用普通 `bool` 字段，无法区分“未设置”和“显式
+false”。如果你的 permission policy 需要遵循 MCP 默认语义，请对非只读
+MCP 工具采用更保守的策略，除非业务侧还有额外的可信信号。
+
+MCP annotations 没有与 `SearchOrRead` 或 `ConcurrencySafe` 对应的字段。
+框架也不会把 `readOnlyHint` 或 `idempotentHint` 推断为并发安全信号。
+
 权限策略发生在模型已经发起 tool call、框架完成 JSON 修复和 before-tool callbacks 参数改写、并且即将真正执行工具之前：
 
 ```go
@@ -800,6 +820,18 @@ agent := llmagent.New("mcp-assistant",
     llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}))
 ```
 
+### MCP Annotations 与权限 Metadata
+
+当远端 MCP server 在 `tools/list` 中返回 tool annotations 时，直接通过
+MCP ToolSet 暴露的工具会实现 `tool.MetadataProvider`。Permission policy
+可以直接读取 `req.Metadata.ReadOnly`、`req.Metadata.Destructive` 和
+`req.Metadata.OpenWorld`，无需再解析 MCP 专属结构。
+
+这个映射基于 `tools/list` 返回的工具快照。ToolSet 刷新工具列表时，会
+重新构造框架内的工具列表，而不是原地修改已有 `mcpTool` 实例。如果未来
+支持基于 MCP `ToolListChangedNotification` 的原地热更新，需要重新评估
+metadata 读取的线程安全性。
+
 ### ToolSet 生命周期与所有权
 
 `ToolSet` 接口里显式提供了 `Close()`，这意味着它持有的连接、会话和缓存
@@ -1042,9 +1074,11 @@ agent := llmagent.New(
 - `MCP ToolSet`
   - 在初始化或运行时先 `initialize + tools/list`
   - 把远端每个 MCP tool 直接变成 Agent 可见 Tool
+  - 把远端 MCP 工具显式声明的安全 annotations 映射到 `PermissionRequest.Metadata`
 - `mcpbroker`
   - 初始只暴露 4 个 broker 工具
   - 模型先发现 server，再发现 tool，再检查指定 tool 的 schema，最后再调用
+  - 暴露的是 `mcp_call` 等 broker 工具，远端 tool annotations 不会自动进入 `PermissionRequest.Metadata`
 
 可以把它理解为：
 
