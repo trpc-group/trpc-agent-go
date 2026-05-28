@@ -534,6 +534,9 @@ func (c *CodeExecutor) Pause(ctx context.Context) error {
 	if c.sbx == nil {
 		return fmt.Errorf("e2b: sandbox not initialized")
 	}
+	if !c.owned {
+		return fmt.Errorf("e2b: only owner may pause sandbox")
+	}
 	return c.sbx.Pause(ctx)
 }
 

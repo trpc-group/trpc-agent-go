@@ -1144,6 +1144,27 @@ func TestPauseExecutor_NilSandbox(t *testing.T) {
 	assert.Contains(t, err.Error(), "sandbox not initialized")
 }
 
+func TestPauseExecutor_NotOwner(t *testing.T) {
+	srv := newMockE2BServer(t, nil)
+	defer srv.close()
+
+	t.Setenv("E2B_API_KEY", "test-key")
+	c, err := NewWithContext(context.Background(),
+		WithAPIKey("test-key"),
+		WithDomain("e2b.test"),
+		WithDebug(true),
+		WithHTTPClient(srv.client()),
+		WithSandboxID("existing-id"),
+	)
+	require.NoError(t, err)
+	defer c.Close()
+
+	require.False(t, c.owned, "pre-condition: connected executor must not own the sandbox")
+	err = c.Pause(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only owner may pause sandbox")
+}
+
 func writeTempFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
