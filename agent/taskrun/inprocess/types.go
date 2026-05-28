@@ -61,6 +61,9 @@ var ErrNotStarted = taskrun.ErrNotStarted
 // Run is the persisted control-plane view of one delegated task run.
 type Run = taskrun.Run
 
+// Progress is the lightweight event progress for one delegated task run.
+type Progress = taskrun.Progress
+
 // Status describes the lifecycle state of a task run.
 type Status = taskrun.Status
 
@@ -89,6 +92,9 @@ func cloneRun(r Run) Run {
 		finishedAt := *r.FinishedAt
 		out.FinishedAt = &finishedAt
 	}
+	if r.Progress != nil {
+		out.Progress = cloneProgress(r.Progress)
+	}
 	if r.Metadata != nil {
 		out.Metadata = make(map[string]string, len(r.Metadata))
 		for key, value := range r.Metadata {
@@ -96,6 +102,18 @@ func cloneRun(r Run) Run {
 		}
 	}
 	return out
+}
+
+func cloneProgress(progress *Progress) *Progress {
+	if progress == nil {
+		return nil
+	}
+	out := *progress
+	if progress.LastEventAt != nil {
+		lastEventAt := *progress.LastEventAt
+		out.LastEventAt = &lastEventAt
+	}
+	return &out
 }
 
 func cloneRuns(runs []Run) []Run {

@@ -266,6 +266,11 @@ The tool names are:
 - `cancel_task_run`
 - `wait_task_run`
 
+When `taskruntool.WithSessionService` is configured, `tool/taskrun` also
+adds:
+
+- `read_task_run_transcript`
+
 `start_task_run` accepts a `mode` field:
 
 - `async` is the default. The tool starts the child run and returns the run
@@ -358,6 +363,44 @@ Prefer named agents such as `fast_worker`, `deep_reviewer`, or
 business role, while the application owns the actual model, tools, and
 permission boundary.
 
+## Progress and Transcript
+
+`Run.Progress` is a small status snapshot collected from the child run event
+stream. It records event count, tool call count, tool result count, token
+counts, and the latest observed event time. The full task transcript is not
+copied into `Run`; it remains in the child session identified by
+`Run.ChildSessionID`.
+
+The in-process controller keeps active progress available through polling
+APIs. Observers still receive persisted lifecycle updates; the final progress
+snapshot is persisted with the terminal run state.
+
+This keeps the task control plane small:
+
+- `list_task_runs`, `get_task_run`, and `wait_task_run` return lightweight
+  status and progress.
+- The child session stores the detailed transcript.
+- Applications remain free to build their own UI, notifications, logs, or
+  artifact storage on top of task run observers and session events.
+
+To let an agent inspect the child transcript, pass the same session service
+used by the runner:
+
+```go
+taskRunTools := taskruntool.NewTools(
+	svc,
+	taskruntool.WithDefaultAgentName("worker"),
+	taskruntool.WithSessionService(sessionService),
+)
+```
+
+The `read_task_run_transcript` tool reads recent events from the child
+session. Its `limit` field is optional, defaults to 40 recent events, and is
+capped at 200 events. Access is limited to runs owned by the current user and
+created from the current parent session. When the run records an app name, for
+example from `agent.WithAppName`, transcript reads use that app name to locate
+the child session.
+
 ## Runtime State
 
 Every child run receives these runtime-state keys:
@@ -369,8 +412,9 @@ Every child run receives these runtime-state keys:
 Application adapters can merge additional runtime state through
 `SpawnRequest.RuntimeState`, or override the injected key names through
 `SpawnRequest.RuntimeStateKeys` when they expose a product-specific runtime
-surface. Local adapters that call `runner.Run` directly can also pass
-per-run `agent.RunOption` values through `SpawnRequest.RunOptions`; this is
-for in-process runner configuration and should not be serialized as a
-cross-node contract. `SpawnRequest.RunContext` can add local context values
-to the child runner context for the same in-process use case.
+surface. Set `SpawnRequest.AppName` when the child run should use a specific
+session app namespace. Local adapters that call `runner.Run` directly can
+also pass per-run `agent.RunOption` values through `SpawnRequest.RunOptions`;
+this is for in-process runner configuration and should not be serialized as a
+cross-node contract. `SpawnRequest.RunContext` can add local context values to
+the child runner context for the same in-process use case.
