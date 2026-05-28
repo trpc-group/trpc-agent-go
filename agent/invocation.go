@@ -58,6 +58,12 @@ const (
 	// appenderStateKey is the invocation state key used by internal appender
 	// attachment (see internal/state/appender).
 	appenderStateKey = "__append_event__"
+	// liveSessionStateKey is the invocation state key used by internal
+	// livesession attachment (see internal/state/livesession). Sub-agents
+	// (e.g., AgentTool) read this pointer to restore the runner's live
+	// session after the function-call processor clones the invocation
+	// session for state-delta isolation.
+	liveSessionStateKey = "__live_session__"
 
 	// streamHubStateKey is the invocation state key used by the graph to
 	// share ephemeral streams across node invocations within the same run.
@@ -1584,6 +1590,7 @@ func isCloneStateKey(key string) bool {
 	case flusherStateKey,
 		barrierStateKey,
 		appenderStateKey,
+		liveSessionStateKey,
 		streamHubStateKey,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:
