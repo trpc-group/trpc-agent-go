@@ -92,6 +92,35 @@ func (t *NamedTool) Original() tool.Tool {
 	return t.original
 }
 
+// ToolMetadata delegates to the original tool.
+func (t *NamedTool) ToolMetadata() tool.ToolMetadata {
+	return tool.MetadataOf(t.original)
+}
+
+// IsConcurrencySafe delegates to the original tool.
+func (t *NamedTool) IsConcurrencySafe() bool {
+	return tool.MetadataOf(t.original).ConcurrencySafe
+}
+
+// ShouldDefer delegates to the original tool.
+func (t *NamedTool) ShouldDefer(ctx context.Context) bool {
+	return tool.ShouldDefer(ctx, t.original)
+}
+
+// CheckPermission delegates to the original tool when it implements
+// tool.PermissionChecker. Wrappers keep the model-visible declaration and name
+// in the request.
+func (t *NamedTool) CheckPermission(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	checker, ok := t.original.(tool.PermissionChecker)
+	if !ok {
+		return tool.AllowPermission(), nil
+	}
+	return checker.CheckPermission(ctx, req)
+}
+
 // ToolSetName returns the source ToolSet name for runtime policy checks.
 func (t *NamedTool) ToolSetName() string {
 	return t.name

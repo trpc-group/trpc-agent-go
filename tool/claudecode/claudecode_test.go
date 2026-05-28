@@ -2423,7 +2423,12 @@ func newTestPDF(t *testing.T, pages []string) []byte {
 func writeExecutableFile(t *testing.T, dir string, name string, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
+	file, err := os.Create(path)
+	require.NoError(t, err)
+	_, err = file.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.NoError(t, os.Chmod(path, 0o555))
 	return path
 }
 
