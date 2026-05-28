@@ -141,8 +141,9 @@ func cloneSessionListMetadata(sess *session.Session) *session.Session {
 			if sum == nil {
 				continue
 			}
-			copied := *sum
-			copiedSess.Summaries[key] = &copied
+			if copied := sum.Clone(); copied != nil {
+				copiedSess.Summaries[key] = copied
+			}
 		}
 	}
 	sess.SummariesMu.RUnlock()

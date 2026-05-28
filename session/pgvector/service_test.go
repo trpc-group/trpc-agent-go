@@ -2600,9 +2600,9 @@ func TestGetSession_SuccessPath(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"session_id", "event"},
 		))
-	mock.ExpectQuery("SELECT session_id, filter_key, summary").
+	mock.ExpectQuery("SELECT session_id, filter_key").
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"session_id", "filter_key", "summary"},
+			[]string{"session_id", "filter_key", "summary", "updated_at"},
 		))
 
 	// refreshSessionTTL.
@@ -2659,9 +2659,9 @@ func TestGetSession_SuccessNoTTL(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"session_id", "event"},
 		))
-	mock.ExpectQuery("SELECT session_id, filter_key, summary").
+	mock.ExpectQuery("SELECT session_id, filter_key").
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"session_id", "filter_key", "summary"},
+			[]string{"session_id", "filter_key", "summary", "updated_at"},
 		))
 
 	sess, err := s.GetSession(
@@ -2738,8 +2738,9 @@ func TestGetSession_WithEventsAndSummaries(
 		WillReturnRows(sqlmock.NewRows(
 			[]string{
 				"session_id", "filter_key", "summary",
+				"updated_at",
 			},
-		).AddRow("sess", "all", sumBytes))
+		).AddRow("sess", "all", sumBytes, time.Now()))
 
 	// getTrackEvents - no tracks.
 
@@ -2821,8 +2822,9 @@ func TestGetSession_WithEventsAndTracks(
 		WillReturnRows(sqlmock.NewRows(
 			[]string{
 				"session_id", "filter_key", "summary",
+				"updated_at",
 			},
-		).AddRow("sess", "all", sumBytes))
+		).AddRow("sess", "all", sumBytes, time.Now()))
 
 	// Track events for "alpha".
 	te := session.TrackEvent{
@@ -3232,7 +3234,7 @@ func TestListSessions_WithListSessionPage(t *testing.T) {
 	mock.ExpectQuery("SELECT session_id, event").
 		WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}))
 	mock.ExpectQuery("SELECT session_id, filter_key").
-		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary"}))
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"}))
 
 	sessions, err := s.ListSessions(
 		context.Background(), userKey, session.WithListSessionPage(1, 1),
@@ -4668,9 +4670,9 @@ func TestGetSession_WithRefreshTTLError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"session_id", "event"},
 		))
-	mock.ExpectQuery("SELECT session_id, filter_key, summary").
+	mock.ExpectQuery("SELECT session_id, filter_key").
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"session_id", "filter_key", "summary"},
+			[]string{"session_id", "filter_key", "summary", "updated_at"},
 		))
 
 	// refreshSessionTTL fails but should not cause
