@@ -202,6 +202,9 @@ _ = err
 
 - 每次调用 `Runner.Run(...)`，Factory 会被调用一次。
 - `agent.WithAgent(...)` 依然优先生效（测试时很方便）。
+- Runner factory 用来选择本次 run 的 root Agent。如果你要配置父 Agent
+  可以委托的专家 Agent，请使用 `WithSubAgents`。请求级或懒加载 SubAgent
+  的写法见 [动态 SubAgent 与 Agent Factory](./multiagent.md#动态-subagent-与-agent-factory)。
 
 #### Agent Factory 中的资源边界
 

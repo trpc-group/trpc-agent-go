@@ -1994,6 +1994,19 @@ func TestRunner_Run_WithDefaultAgentFactory(t *testing.T) {
 	assert.Equal(t, defaultNameBase+"1", events[0].Author)
 }
 
+func TestRunnerAgentFactoryCanBuildLazyAgent(t *testing.T) {
+	const agentName = "lazy-runner-agent"
+	var factory AgentFactory = func(
+		_ context.Context,
+		_ agent.RunOptions,
+	) (agent.Agent, error) {
+		return &mockAgent{name: agentName}, nil
+	}
+
+	lazy := agent.NewLazyAgent(agent.Info{Name: agentName}, factory)
+	require.Equal(t, agentName, lazy.Info().Name)
+}
+
 func TestRunner_NewRunnerWithAgentFactory_CoverageBranches(t *testing.T) {
 	const (
 		appName       = "test-app"
