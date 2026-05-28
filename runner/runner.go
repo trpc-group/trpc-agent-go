@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
@@ -438,7 +439,7 @@ func (r *runner) Run(
 	sessionID string,
 	message model.Message,
 	runOpts ...agent.RunOption,
-) (<-chan *event.Event, error) {
+) (out <-chan *event.Event, err error) {
 	if message.Role == "" && model.HasPayload(message) {
 		log.WarnfContext(
 			ctx,
@@ -463,6 +464,15 @@ func (r *runner) Run(
 	if ro.AppName != "" {
 		effectiveAppName = ro.AppName
 	}
+	ctx, runSpan, runStarted := startRunnerRunOptionsLatencySpan(
+		ctx,
+		ro,
+		runnerLatencySpanRun,
+		runnerRunAttrs(effectiveAppName, userID, sessionID, message, ro)...,
+	)
+	defer func() {
+		finishRunnerLatencySpan(runSpan, runStarted, err)
+	}()
 
 	execCtx, execCancel := r.newExecutionContext(ctx, ro)
 
@@ -473,37 +483,76 @@ func (r *runner) Run(
 		SessionID: sessionID,
 	}
 
-	sess, err := r.getOrCreateSession(execCtx, sessionKey)
+	sessionCtx, sessionSpan, sessionStarted := startRunnerRunOptionsLatencySpan(
+		execCtx,
+		ro,
+		runnerLatencySpanGetSession,
+		runnerSessionAttrs(sessionKey, nil)...,
+	)
+	sess, err := r.getOrCreateSession(sessionCtx, sessionKey)
+	if sessionStarted && sess != nil {
+		sessionSpan.SetAttributes(runnerSessionAttrs(sessionKey, sess)...)
+	}
+	finishRunnerLatencySpan(sessionSpan, sessionStarted, err)
 	if err != nil {
 		execCancel()
 		return nil, err
 	}
 
-	ro, awaitUserReplyRootName, err := r.applyAwaitUserReplyRoute(
+	awaitCtx, awaitSpan, awaitStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
+		ro,
+		runnerLatencySpanAwaitRoute,
+	)
+	ro, awaitUserReplyRootName, err := r.applyAwaitUserReplyRoute(
+		awaitCtx,
 		sessionKey,
 		sess,
 		message,
 		ro,
 	)
+	finishRunnerLatencySpan(awaitSpan, awaitStarted, err)
 	if err != nil {
 		execCancel()
 		return nil, err
 	}
 
-	ag, err := r.selectAgent(execCtx, ro)
+	selectCtx, selectSpan, selectStarted := startRunnerRunOptionsLatencySpan(
+		execCtx,
+		ro,
+		runnerLatencySpanSelectAgent,
+	)
+	ag, err := r.selectAgent(selectCtx, ro)
+	if selectStarted && ag != nil {
+		selectSpan.SetAttributes(attribute.String("runner.agent", ag.Info().Name))
+	}
+	finishRunnerLatencySpan(selectSpan, selectStarted, err)
 	if err != nil {
 		execCancel()
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
-	invocationMessage, persistedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
+	resolveCtx, resolveSpan, resolveStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
+		ro,
+		runnerLatencySpanResolveMessages,
+	)
+	invocationMessage, persistedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
+		resolveCtx,
 		effectiveAppName,
 		userID,
 		sessionID,
 		message,
 		ro,
 	)
+	if resolveStarted {
+		resolveSpan.SetAttributes(
+			attribute.Int(
+				"runner.messages.persisted_current_turn",
+				len(persistedCurrentTurnMessages),
+			),
+		)
+	}
+	finishRunnerLatencySpan(resolveSpan, resolveStarted, err)
 	if err != nil {
 		execCancel()
 		return nil, err
@@ -550,6 +599,12 @@ func (r *runner) Run(
 	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
 
+	registerCtx, registerSpan, registerStarted := startRunnerLatencySpan(
+		execCtx,
+		invocation,
+		runnerLatencySpanRegisterRun,
+		runnerInvocationAttrs(invocation)...,
+	)
 	handle, err := r.registerRun(
 		ro.RequestID,
 		RunStatus{
@@ -562,13 +617,21 @@ func (r *runner) Run(
 		execCancel,
 		queuedUserMessages,
 	)
+	finishRunnerLatencySpan(registerSpan, registerStarted, err)
+	_ = registerCtx
 	if err != nil {
 		execCancel()
 		return nil, err
 	}
 
-	if err := r.persistCurrentTurnMessages(
+	persistCtx, persistSpan, persistStarted := startRunnerLatencySpan(
 		execCtx,
+		invocation,
+		runnerLatencySpanPersistTurn,
+		runnerSessionAttrs(sessionKey, currentTurnSession)...,
+	)
+	if err := r.persistCurrentTurnMessages(
+		persistCtx,
 		currentTurnSession,
 		invocation,
 		ag,
@@ -576,11 +639,13 @@ func (r *runner) Run(
 		persistedCurrentTurnMessages,
 		ro,
 	); err != nil {
+		finishRunnerLatencySpan(persistSpan, persistStarted, err)
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
 		execCancel()
 		return nil, err
 	}
+	finishRunnerLatencySpan(persistSpan, persistStarted, nil)
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like
@@ -602,12 +667,27 @@ func (r *runner) Run(
 		if !ok || persistSession == nil {
 			persistSession = sess
 		}
-		return r.sessionService.AppendEvent(ctx, persistSession, e)
+		appendCtx, appendSpan, appendStarted := startRunnerLatencySpan(
+			ctx,
+			invocation,
+			runnerLatencySpanPersistEvent,
+			runnerEventAttrs(e)...,
+		)
+		err := r.sessionService.AppendEvent(appendCtx, persistSession, e)
+		finishRunnerLatencySpan(appendSpan, appendStarted, err)
+		return err
 	})
 	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
-	agentEventCh, err := agent.RunWithPlugins(execCtx, invocation, ag)
+	startCtx, startSpan, startStarted := startRunnerLatencySpan(
+		execCtx,
+		invocation,
+		runnerLatencySpanStartAgent,
+		runnerInvocationAttrs(invocation)...,
+	)
+	agentEventCh, err := agent.RunWithPlugins(startCtx, invocation, ag)
+	finishRunnerLatencySpan(startSpan, startStarted, err)
 	if err != nil {
 		// Attempt to persist the error event so the session reflects the failure.
 		errorEvent := event.NewErrorEvent(
@@ -1019,7 +1099,14 @@ func (r *runner) processAgentEvents(
 
 // runEventLoop drives the main event processing loop for a single invocation.
 func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		loop.invocation,
+		runnerLatencySpanEventLoop,
+		runnerInvocationAttrs(loop.invocation)...,
+	)
 	defer func() {
+		finishRunnerLatencySpan(span, started, nil)
 		if rr := recover(); rr != nil {
 			log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
 		}
@@ -1069,7 +1156,20 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 }
 
 // processSingleAgentEvent handles a single agent event.
-func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopContext, agentEvent *event.Event) error {
+func (r *runner) processSingleAgentEvent(
+	ctx context.Context,
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) (err error) {
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		loop.invocation,
+		runnerLatencySpanProcessEvent,
+		runnerEventAttrs(agentEvent)...,
+	)
+	defer func() {
+		finishRunnerLatencySpan(span, started, err)
+	}()
 	if agentEvent == nil {
 		// Preserve existing behavior: skip nil events without failing the loop.
 		log.Errorf("agentEvent is nil")
@@ -1150,9 +1250,17 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	}
 
 	// Emit event to output channel.
-	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
+	emitCtx, emitSpan, emitStarted := startRunnerLatencySpan(
+		ctx,
+		loop.invocation,
+		runnerLatencySpanEmitEvent,
+		runnerEventAttrs(agentEvent)...,
+	)
+	if err := event.EmitEvent(emitCtx, loop.processedEventCh, agentEvent); err != nil {
+		finishRunnerLatencySpan(emitSpan, emitStarted, err)
 		return fmt.Errorf("emit event to output channel: %w", err)
 	}
+	finishRunnerLatencySpan(emitSpan, emitStarted, nil)
 
 	return nil
 }
@@ -1292,6 +1400,16 @@ func (r *runner) applyEventPlugins(
 	invocation *agent.Invocation,
 	e *event.Event,
 ) *event.Event {
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		invocation,
+		runnerLatencySpanEventPlugins,
+		runnerEventAttrs(e)...,
+	)
+	var err error
+	defer func() {
+		finishRunnerLatencySpan(span, started, err)
+	}()
 	if e == nil {
 		return nil
 	}
@@ -1726,7 +1844,13 @@ func injectInterruptedAssistantEventIdentity(
 // safePersistInterruptedAssistant guards cancellation-time partial persistence
 // against panics from session services.
 func (r *runner) safePersistInterruptedAssistant(ctx context.Context, loop *eventLoopContext) {
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		loop.invocation,
+		runnerLatencySpanInterrupted,
+	)
 	defer func() {
+		finishRunnerLatencySpan(span, started, nil)
 		if rr := recover(); rr != nil {
 			log.Errorf("panic persisting interrupted assistant: %v\n%s", rr, string(debug.Stack()))
 		}
@@ -1957,7 +2081,13 @@ func sessionPersistenceContext(ctx context.Context) (context.Context, context.Ca
 
 // safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
 func (r *runner) safeEmitRunnerCompletion(ctx context.Context, loop *eventLoopContext) {
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		loop.invocation,
+		runnerLatencySpanCompletion,
+	)
 	defer func() {
+		finishRunnerLatencySpan(span, started, nil)
 		if rr := recover(); rr != nil {
 			log.Errorf("panic emitting runner completion: %v\n%s", rr, string(debug.Stack()))
 		}
@@ -1967,7 +2097,19 @@ func (r *runner) safeEmitRunnerCompletion(ctx context.Context, loop *eventLoopCo
 
 // handleFlushRequest drains buffered agent events when a flush request arrives and closes the request's ACK channel
 // once all events currently buffered in the agent event channel have been processed.
-func (r *runner) handleFlushRequest(ctx context.Context, loop *eventLoopContext, req *flush.FlushRequest) error {
+func (r *runner) handleFlushRequest(
+	ctx context.Context,
+	loop *eventLoopContext,
+	req *flush.FlushRequest,
+) (err error) {
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		loop.invocation,
+		runnerLatencySpanFlush,
+	)
+	defer func() {
+		finishRunnerLatencySpan(span, started, err)
+	}()
 	defer close(req.ACK)
 	for {
 		select {
@@ -2017,14 +2159,22 @@ func (r *runner) handleEventPersistence(
 		persistEvent = &eventCopy
 	}
 
-	if err := r.sessionService.AppendEvent(
+	appendCtx, appendSpan, appendStarted := startRunnerLatencySpan(
 		ctx,
+		invocation,
+		runnerLatencySpanPersistEvent,
+		runnerEventAttrs(persistEvent)...,
+	)
+	if err := r.sessionService.AppendEvent(
+		appendCtx,
 		persistSession,
 		persistEvent,
 	); err != nil {
+		finishRunnerLatencySpan(appendSpan, appendStarted, err)
 		log.Errorf("Failed to append event to session: %v", err)
 		return false
 	}
+	finishRunnerLatencySpan(appendSpan, appendStarted, nil)
 
 	// Skip user messages, tool call events, and invalid content.
 	// These should not trigger summarization.
@@ -2058,10 +2208,19 @@ func (r *runner) handleEventPersistence(
 
 	// Use EnqueueSummaryJob for true asynchronous processing.
 	// Prefer filter-specific summarization to avoid scanning all filters.
+	summaryCtx, summarySpan, summaryStarted := startRunnerLatencySpan(
+		ctx,
+		invocation,
+		runnerLatencySpanEnqueueSummary,
+		runnerEventAttrs(agentEvent)...,
+	)
 	if err := r.sessionService.EnqueueSummaryJob(
-		ctx, persistSession, agentEvent.FilterKey, false,
+		summaryCtx, persistSession, agentEvent.FilterKey, false,
 	); err != nil {
+		finishRunnerLatencySpan(summarySpan, summaryStarted, err)
 		log.DebugfContext(ctx, "Auto summarize after append skipped or failed: %v.", err)
+	} else {
+		finishRunnerLatencySpan(summarySpan, summaryStarted, nil)
 	}
 	// Do not enqueue full-session summary here. The worker will cascade
 	// a full-session summarization after a branch update when appropriate.

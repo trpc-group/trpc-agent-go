@@ -166,6 +166,16 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
+		ctx, runSpan, runStarted := startLatencySpan(
+			ctx,
+			invocation,
+			latencySpanFlowRun,
+			latencyInvocationAttrs(invocation)...,
+		)
+		var runErr error
+		defer func() {
+			finishLatencySpan(runSpan, runStarted, runErr)
+		}()
 		defer close(eventChan)
 		defer steer.Close(invocation)
 		defer recoverFlowRunPanic(ctx, invocation, eventChan)
@@ -187,6 +197,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		for {
 			// emit start event and wait for completion notice.
 			if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
+				runErr = err
 				return
 			}
 
@@ -201,12 +212,14 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 				invocation,
 				eventChan,
 			); err != nil {
+				runErr = err
 				return
 			}
 
 			// Run one step (one LLM call cycle).
 			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
 			if err != nil {
+				runErr = err
 				steer.Close(invocation)
 				// Treat context cancellation as graceful termination (common in streaming
 				// pipelines where the client closes the stream after final event).
@@ -335,12 +348,25 @@ func (f *Flow) maybeConsumeQueuedUserMessages(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) error {
+) (err error) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanQueuedMessages,
+	)
+	var drained int
+	defer func() {
+		if started {
+			span.SetAttributes(attribute.Int("llmflow.queued_messages", drained))
+		}
+		finishLatencySpan(span, started, err)
+	}()
 	if !steer.IsAttached(invocation) {
 		return nil
 	}
 
 	messages := steer.Drain(invocation)
+	drained = len(messages)
 	if len(messages) == 0 {
 		return nil
 	}
@@ -409,6 +435,18 @@ func (f *Flow) maybeResumePendingToolCalls(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanResumeTools,
+	)
+	var resumed bool
+	defer func() {
+		if started {
+			span.SetAttributes(attribute.Bool("llmflow.resume_tools.resumed", resumed))
+		}
+		finishLatencySpan(span, started, nil)
+	}()
 	if invocation == nil || !invocation.RunOptions.Resume {
 		return
 	}
@@ -431,6 +469,7 @@ func (f *Flow) maybeResumePendingToolCalls(
 	if lastResp == nil {
 		return
 	}
+	resumed = true
 
 	req := &model.Request{
 		Tools: make(map[string]tool.Tool),
@@ -451,17 +490,27 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanSyncSummary,
+	)
+	var err error
+	defer func() {
+		finishLatencySpan(span, started, err)
+	}()
 	if !f.syncSummaryIntraRun || invocation == nil || invocation.Session == nil ||
 		invocation.SessionService == nil {
 		return
 	}
 
-	if err := invocation.SessionService.CreateSessionSummary(
+	err = invocation.SessionService.CreateSessionSummary(
 		ctx,
 		invocation.Session,
 		invocation.GetEventFilterKey(),
 		false,
-	); err != nil {
+	)
+	if err != nil {
 		log.DebugfContext(
 			ctx,
 			"Intra-run summary skipped or failed for agent %s: %v",
@@ -574,8 +623,22 @@ func (f *Flow) runOneStep(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) (*event.Event, error) {
-	var lastEvent *event.Event
+) (lastEvent *event.Event, err error) {
+	ctx, stepSpan, stepStarted := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanRunOneStep,
+		latencyInvocationAttrs(invocation)...,
+	)
+	defer func() {
+		if stepStarted && lastEvent != nil {
+			stepSpan.SetAttributes(
+				attribute.String("llmflow.last_event.object", lastEvent.Object),
+				attribute.Bool("llmflow.last_event.final", lastEvent.IsFinalResponse()),
+			)
+		}
+		finishLatencySpan(stepSpan, stepStarted, err)
+	}()
 	// Initialize empty LLM request.
 	llmRequest := &model.Request{
 		Tools: make(map[string]tool.Tool), // Initialize tools map
@@ -655,6 +718,21 @@ func (f *Flow) processStreamingResponses(
 	span oteltrace.Span,
 	startedSpan bool,
 ) (lastEvent *event.Event, err error) {
+	ctx, streamSpan, streamStarted := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanStreamResponses,
+		latencyRequestAttrs(llmRequest)...,
+	)
+	var responseCount int
+	defer func() {
+		if streamStarted {
+			streamSpan.SetAttributes(
+				attribute.Int("llmflow.response.count", responseCount),
+			)
+		}
+		finishLatencySpan(streamSpan, streamStarted, err)
+	}()
 	currentInvocation := invocationFromContextOrDefault(ctx, invocation)
 	metricsInvocation := observabilityInvocation
 	if metricsInvocation == nil {
@@ -680,6 +758,18 @@ func (f *Flow) processStreamingResponses(
 	}
 
 	responseSeq(func(response *model.Response) bool {
+		responseCount++
+		responseCtx, responseSpan, responseStarted := startLatencySpan(
+			ctx,
+			invocation,
+			latencySpanProcessResponse,
+			latencyResponseAttrs(response)...,
+		)
+		responseErr := error(nil)
+		finishResponseSpan := func() {
+			finishLatencySpan(responseSpan, responseStarted, responseErr)
+		}
+		ctx = responseCtx
 		currentInvocation = invocationFromContextOrDefault(
 			ctx,
 			currentInvocation,
@@ -718,6 +808,8 @@ func (f *Flow) processStreamingResponses(
 		)
 		if cbErr != nil {
 			err = cbErr
+			responseErr = cbErr
+			finishResponseSpan()
 			return false
 		}
 		ctx = updatedCtx
@@ -756,13 +848,22 @@ func (f *Flow) processStreamingResponses(
 			response,
 			llmRequest,
 		)
-		agent.EmitEvent(ctx, eventInvocation, eventChan, llmResponseEvent)
+		emitCtx, emitSpan, emitStarted := startLatencySpan(
+			ctx,
+			eventInvocation,
+			latencySpanEmitResponse,
+			latencyResponseAttrs(response)...,
+		)
+		agent.EmitEvent(emitCtx, eventInvocation, eventChan, llmResponseEvent)
+		finishLatencySpan(emitSpan, emitStarted, nil)
 		lastEvent = llmResponseEvent
 		if tracker != nil {
 			tracker.SetLastEvent(lastEvent)
 		}
 		// 5. Check context cancellation.
 		if err = agent.CheckContextCancelled(ctx); err != nil {
+			responseErr = err
+			finishResponseSpan()
 			return false
 		}
 		// 6. Postprocess response.
@@ -775,6 +876,8 @@ func (f *Flow) processStreamingResponses(
 		)
 		if ctxErr := agent.CheckContextCancelled(ctx); ctxErr != nil {
 			err = ctxErr
+			responseErr = ctxErr
+			finishResponseSpan()
 			return false
 		}
 		var ttfb time.Duration
@@ -790,6 +893,10 @@ func (f *Flow) processStreamingResponses(
 				TimeToFirstToken: ttfb,
 			})
 		}
+		if responseStarted && response != nil {
+			responseSpan.SetAttributes(latencyResponseAttrs(response)...)
+		}
+		finishResponseSpan()
 		return true
 	})
 	if err != nil {
@@ -807,7 +914,23 @@ func (f *Flow) handleAfterModelCallbacks(
 	response *model.Response,
 	eventChan chan<- *event.Event,
 ) (context.Context, *model.Response, error) {
-	ctx, customResp, err := f.runAfterModelCallbacks(
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanAfterModel,
+		latencyResponseAttrs(response)...,
+	)
+	var err error
+	var customResp *model.Response
+	defer func() {
+		if started {
+			span.SetAttributes(
+				attribute.Bool("llmflow.callback.custom_response", customResp != nil),
+			)
+		}
+		finishLatencySpan(span, started, err)
+	}()
+	ctx, customResp, err = f.runAfterModelCallbacks(
 		ctx,
 		invocation,
 		llmRequest,
@@ -1889,8 +2012,24 @@ func (f *Flow) callLLM(
 	llmRequest *model.Request,
 	callModel model.Model,
 ) (context.Context, model.Seq[*model.Response], error) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanCallLLM,
+		latencyRequestAttrs(llmRequest)...,
+	)
+	var err error
+	defer func() {
+		if started && callModel != nil {
+			span.SetAttributes(
+				attribute.String("llmflow.model", callModel.Info().Name),
+			)
+		}
+		finishLatencySpan(span, started, err)
+	}()
 	if callModel == nil {
-		return ctx, nil, errors.New("no model available for LLM call")
+		err = errors.New("no model available for LLM call")
+		return ctx, nil, err
 	}
 	log.DebugfContext(
 		ctx,
@@ -1899,7 +2038,7 @@ func (f *Flow) callLLM(
 	)
 	// Enforce optional per-invocation LLM call limit. When the limit is not
 	// configured (<= 0), this is a no-op and preserves existing behavior.
-	if err := invocation.IncLLMCallCount(); err != nil {
+	if err = invocation.IncLLMCallCount(); err != nil {
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
 		return ctx, nil, err
 	}
@@ -1925,6 +2064,22 @@ func (f *Flow) runBeforeModelCallbacks(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 ) (context.Context, *model.Response, error) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanBeforeModel,
+		latencyRequestAttrs(llmRequest)...,
+	)
+	var err error
+	var resp *model.Response
+	defer func() {
+		if started {
+			span.SetAttributes(
+				attribute.Bool("llmflow.callback.custom_response", resp != nil),
+			)
+		}
+		finishLatencySpan(span, started, err)
+	}()
 	var pluginCallbacks *model.Callbacks
 	if invocation != nil && invocation.Plugins != nil {
 		pluginCallbacks = invocation.Plugins.ModelCallbacks()
@@ -1934,7 +2089,7 @@ func (f *Flow) runBeforeModelCallbacks(
 		return ctx, nil, nil
 	}
 	callbackCtx := withInvocationContextIfMissing(ctx, invocation)
-	ctx, resp, err := runBeforeModelCallbacksWith(callbackCtx, invocation, llmRequest, pluginCallbacks)
+	ctx, resp, err = runBeforeModelCallbacksWith(callbackCtx, invocation, llmRequest, pluginCallbacks)
 	if err != nil {
 		log.ErrorfContext(ctx, "Before model plugin failed for agent %s: %v", invocation.AgentName, err)
 		return ctx, nil, err
@@ -2029,8 +2184,24 @@ func (f *Flow) generateContentSeq(
 	llmRequest *model.Request,
 	callModel model.Model,
 ) (model.Seq[*model.Response], error) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanGenerateContent,
+		latencyRequestAttrs(llmRequest)...,
+	)
+	var err error
+	defer func() {
+		if started && callModel != nil {
+			span.SetAttributes(
+				attribute.String("llmflow.model", callModel.Info().Name),
+			)
+		}
+		finishLatencySpan(span, started, err)
+	}()
 	if iterModel, ok := callModel.(model.IterModel); ok {
-		seq, err := iterModel.GenerateContentIter(ctx, llmRequest)
+		seq, genErr := iterModel.GenerateContentIter(ctx, llmRequest)
+		err = genErr
 		if err != nil {
 			log.ErrorfContext(
 				ctx,
@@ -2046,7 +2217,8 @@ func (f *Flow) generateContentSeq(
 		return normalizeResponseIDs(seq), nil
 	}
 
-	responseChan, err := callModel.GenerateContent(ctx, llmRequest)
+	responseChan, genErr := callModel.GenerateContent(ctx, llmRequest)
+	err = genErr
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -2114,13 +2286,46 @@ func (f *Flow) postprocess(
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
 ) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanPostprocess,
+		latencyResponseAttrs(llmResponse)...,
+	)
+	defer func() {
+		if started {
+			span.SetAttributes(
+				attribute.Int(
+					"llmflow.postprocess.stages",
+					len(f.responseProcessors),
+				),
+			)
+		}
+		finishLatencySpan(span, started, nil)
+	}()
 	if llmResponse == nil {
 		return
 	}
 
 	// Run response processors - they send events directly to the channel.
 	for _, processor := range f.responseProcessors {
-		processor.ProcessResponse(ctx, invocation, llmRequest, llmResponse, eventChan)
+		stageCtx, stageSpan, stageStarted := startLatencySpan(
+			ctx,
+			invocation,
+			latencySpanPostprocessStage,
+			attribute.String(
+				"llmflow.postprocess.stage",
+				latencyProcessorName(processor),
+			),
+		)
+		processor.ProcessResponse(
+			stageCtx,
+			invocation,
+			llmRequest,
+			llmResponse,
+			eventChan,
+		)
+		finishLatencySpan(stageSpan, stageStarted, nil)
 	}
 }
 

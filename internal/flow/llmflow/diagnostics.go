@@ -16,6 +16,11 @@ import (
 )
 
 const (
+	latencySpanFlowRun            = "llmflow.run"
+	latencySpanRunOneStep         = "llmflow.run_one_step"
+	latencySpanResumeTools        = "llmflow.resume_pending_tools"
+	latencySpanQueuedMessages     = "llmflow.queued_messages"
+	latencySpanSyncSummary        = "llmflow.sync_summary_intra_run"
 	latencySpanEmitStartWait      = "llmflow.emit_start_event_wait"
 	latencySpanSelectModel        = "llmflow.select_model"
 	latencySpanPreprocess         = "llmflow.preprocess"
@@ -24,6 +29,15 @@ const (
 	latencySpanContextSummary     = "llmflow.context_compaction.create_summary"
 	latencySpanContextRebuild     = "llmflow.context_compaction.rebuild"
 	latencySpanResolveTools       = "llmflow.tools.resolve"
+	latencySpanCallLLM            = "llmflow.call_llm"
+	latencySpanBeforeModel        = "llmflow.callbacks.before_model"
+	latencySpanGenerateContent    = "llmflow.model.generate_content"
+	latencySpanStreamResponses    = "llmflow.model.stream_responses"
+	latencySpanProcessResponse    = "llmflow.response.process"
+	latencySpanAfterModel         = "llmflow.callbacks.after_model"
+	latencySpanEmitResponse       = "llmflow.response.emit"
+	latencySpanPostprocess        = "llmflow.postprocess"
+	latencySpanPostprocessStage   = "llmflow.postprocess.stage"
 	latencyDiagnosticStageCompact = "context_compaction"
 	latencyDiagnosticStatusStart  = "started"
 	latencyDiagnosticStatusDone   = "completed"
@@ -71,6 +85,45 @@ func latencyRequestAttrs(req *model.Request) []attribute.KeyValue {
 		attribute.Int("llmflow.request.tools", len(req.Tools)),
 		attribute.Bool("llmflow.request.stream", req.GenerationConfig.Stream),
 	}
+}
+
+func latencyResponseAttrs(resp *model.Response) []attribute.KeyValue {
+	if resp == nil {
+		return nil
+	}
+	attrs := []attribute.KeyValue{
+		attribute.Bool("llmflow.response.done", resp.Done),
+		attribute.Bool("llmflow.response.partial", resp.IsPartial),
+		attribute.Int("llmflow.response.choices", len(resp.Choices)),
+	}
+	if resp.Object != "" {
+		attrs = append(attrs, attribute.String("llmflow.response.object", resp.Object))
+	}
+	if resp.Error != nil {
+		attrs = append(
+			attrs,
+			attribute.String("llmflow.response.error_type", string(resp.Error.Type)),
+		)
+	}
+	return attrs
+}
+
+func latencyInvocationAttrs(inv *agent.Invocation) []attribute.KeyValue {
+	if inv == nil {
+		return nil
+	}
+	attrs := []attribute.KeyValue{
+		attribute.String("llmflow.invocation_id", inv.InvocationID),
+		attribute.String("llmflow.agent", inv.AgentName),
+		attribute.String("llmflow.request_id", inv.RunOptions.RequestID),
+	}
+	if inv.Session != nil {
+		attrs = append(
+			attrs,
+			attribute.Int("llmflow.session.events", inv.Session.GetEventCount()),
+		)
+	}
+	return attrs
 }
 
 func latencyProcessorName(processor any) string {
