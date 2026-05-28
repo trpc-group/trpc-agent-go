@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
@@ -471,6 +473,16 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 
 func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invocation,
 	eventChan chan<- *event.Event) error {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanEmitStartWait,
+	)
+	var err error
+	defer func() {
+		finishLatencySpan(span, started, err)
+	}()
+
 	invocationID, agentName := "", ""
 	if invocation != nil {
 		invocationID = invocation.InvocationID
@@ -483,7 +495,7 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	// Wait for completion notice.
 	// Ensure that the events of the previous agent or the previous step have been synchronized to the session.
 	completionID := agent.GetAppendEventNoticeKey(startEvent.ID)
-	err := invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
+	err = invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -493,7 +505,24 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 func (f *Flow) selectModelForStep(
 	ctx context.Context,
 	invocation *agent.Invocation,
-) (model.Model, error) {
+) (selectedModel model.Model, err error) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanSelectModel,
+	)
+	defer func() {
+		if selectedModel != nil && started {
+			span.SetAttributes(
+				attribute.String(
+					"llmflow.model",
+					selectedModel.Info().Name,
+				),
+			)
+		}
+		finishLatencySpan(span, started, err)
+	}()
+
 	if invocation == nil {
 		return nil, nil
 	}
@@ -570,6 +599,7 @@ func (f *Flow) runOneStep(
 	llmRequest = f.maybeCompactContextBeforeLLM(
 		ctx,
 		invocation,
+		eventChan,
 		llmRequest,
 		rebuildPlan,
 	)
@@ -1009,6 +1039,18 @@ func (f *Flow) preprocess(
 	eventChan chan<- *event.Event,
 ) *contextCompactionRebuildPlan {
 	var rebuildPlan *contextCompactionRebuildPlan
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanPreprocess,
+		latencyRequestAttrs(llmRequest)...,
+	)
+	defer func() {
+		if started {
+			span.SetAttributes(latencyRequestAttrs(llmRequest)...)
+		}
+		finishLatencySpan(span, started, nil)
+	}()
 
 	// Run request processors - they send events directly to the channel.
 	for _, requestProcessor := range f.requestProcessors {
@@ -1031,7 +1073,25 @@ func (f *Flow) preprocess(
 				rebuildPlan.tailProcessors = append(rebuildPlan.tailProcessors, tailProcessor)
 			}
 		}
-		requestProcessor.ProcessRequest(ctx, invocation, llmRequest, eventChan)
+		stageCtx, stageSpan, stageStarted := startLatencySpan(
+			ctx,
+			invocation,
+			latencySpanPreprocessStage,
+			attribute.String(
+				"llmflow.preprocess.stage",
+				latencyProcessorName(requestProcessor),
+			),
+		)
+		requestProcessor.ProcessRequest(
+			stageCtx,
+			invocation,
+			llmRequest,
+			eventChan,
+		)
+		if stageStarted {
+			stageSpan.SetAttributes(latencyRequestAttrs(llmRequest)...)
+		}
+		finishLatencySpan(stageSpan, stageStarted, nil)
 	}
 	// Add tools to the request with optional filtering.
 	if invocation.Agent != nil {
@@ -1055,35 +1115,111 @@ func normalizeContextCompactionThresholdRatio(ratio float64) float64 {
 func (f *Flow) maybeCompactContextBeforeLLM(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
 	req *model.Request,
 	rebuildPlan *contextCompactionRebuildPlan,
 ) *model.Request {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanContextCheck,
+		latencyRequestAttrs(req)...,
+	)
+	defer func() {
+		finishLatencySpan(span, started, nil)
+	}()
 	if req == nil || !f.enableContextCompaction || invocation == nil ||
 		invocation.Session == nil || invocation.SessionService == nil ||
 		!f.supportsSyncSummaryRetry() || rebuildPlan == nil ||
 		rebuildPlan.beforeContent == nil || rebuildPlan.contentProcessor == nil {
+		if started {
+			span.SetAttributes(
+				attribute.Bool(
+					"llmflow.context_compaction.available",
+					false,
+				),
+			)
+		}
 		return req
 	}
-	if !shouldSyncCompactContext(
+	decision := syncCompactContextDecision(
 		ctx,
 		invocation,
 		req,
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
-	) {
+	)
+	if started {
+		span.SetAttributes(contextCompactionAttrs(decision, req)...)
+	}
+	if decision.err != nil {
+		if started {
+			span.RecordError(decision.err)
+			span.SetStatus(codes.Error, decision.err.Error())
+		}
+	}
+	if !decision.shouldCompact {
 		return req
 	}
 
 	filterKey := invocation.GetEventFilterKey()
 	before := snapshotSummary(invocation.Session, filterKey)
-	err := invocation.SessionService.CreateSessionSummary(
+	emitLatencyDiagnosticEvent(
 		ctx,
+		invocation,
+		eventChan,
+		event.LatencyDiagnostic{
+			Stage:         latencyDiagnosticStageCompact,
+			Status:        latencyDiagnosticStatusStart,
+			Summary:       "Context compaction is running.",
+			TokenCount:    decision.tokenCount,
+			Threshold:     decision.threshold,
+			ContextWindow: decision.contextWindow,
+			MessageCount:  len(req.Messages),
+			ToolCount:     len(req.Tools),
+			FilterKey:     filterKey,
+		},
+	)
+	summaryCtx, summarySpan, summaryStarted := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanContextSummary,
+		contextCompactionAttrs(decision, req)...,
+	)
+	err := invocation.SessionService.CreateSessionSummary(
+		summaryCtx,
 		invocation.Session,
 		filterKey,
 		false,
 	)
+	finishLatencySpan(summarySpan, summaryStarted, err)
 	after := snapshotSummary(invocation.Session, filterKey)
-	if !before.advanced(after) {
+	updated := before.advanced(after)
+	status := latencyDiagnosticStatusDone
+	if !updated {
+		status = latencyDiagnosticStatusSkip
+	}
+	if err != nil {
+		status = latencyDiagnosticStatusError
+	}
+	emitLatencyDiagnosticEvent(
+		ctx,
+		invocation,
+		eventChan,
+		event.LatencyDiagnostic{
+			Stage:         latencyDiagnosticStageCompact,
+			Status:        status,
+			Summary:       "Context compaction finished.",
+			TokenCount:    decision.tokenCount,
+			Threshold:     decision.threshold,
+			ContextWindow: decision.contextWindow,
+			MessageCount:  len(req.Messages),
+			ToolCount:     len(req.Tools),
+			FilterKey:     filterKey,
+			Updated:       &updated,
+		},
+	)
+	if !updated {
 		if err != nil {
 			log.DebugfContext(
 				ctx,
@@ -1095,11 +1231,20 @@ func (f *Flow) maybeCompactContextBeforeLLM(
 		return req
 	}
 
-	rebuilt := f.rebuildRequestForContextCompaction(
+	rebuildCtx, rebuildSpan, rebuildStarted := startLatencySpan(
 		ctx,
+		invocation,
+		latencySpanContextRebuild,
+	)
+	rebuilt := f.rebuildRequestForContextCompaction(
+		rebuildCtx,
 		invocation,
 		rebuildPlan,
 	)
+	if rebuildStarted && rebuilt != nil {
+		rebuildSpan.SetAttributes(latencyRequestAttrs(rebuilt)...)
+	}
+	finishLatencySpan(rebuildSpan, rebuildStarted, nil)
 	if rebuilt == nil {
 		log.DebugfContext(
 			ctx,
@@ -1382,23 +1527,44 @@ func shouldSyncCompactContext(
 	ratio float64,
 	counter model.TokenCounter,
 ) bool {
+	return syncCompactContextDecision(
+		ctx,
+		inv,
+		req,
+		ratio,
+		counter,
+	).shouldCompact
+}
+
+func syncCompactContextDecision(
+	ctx context.Context,
+	inv *agent.Invocation,
+	req *model.Request,
+	ratio float64,
+	counter model.TokenCounter,
+) contextCompactionDecision {
+	decision := contextCompactionDecision{}
 	if inv == nil || inv.Model == nil || req == nil || len(req.Messages) == 0 {
-		return false
+		return decision
 	}
 
+	decision.threshold = contextCompactionThreshold(inv, ratio)
+	decision.contextWindow = contextCompactionWindow(inv)
 	if counter == nil {
 		counter = model.NewSimpleTokenCounter()
 	}
 	tokens, err := counter.CountTokensRange(ctx, req.Messages, 0, len(req.Messages))
+	decision.tokenCount = tokens
 	if err != nil {
-		return false
+		decision.err = err
+		return decision
 	}
 
-	threshold := contextCompactionThreshold(inv, ratio)
-	return tokens >= threshold
+	decision.shouldCompact = tokens >= decision.threshold
+	return decision
 }
 
-func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
+func contextCompactionWindow(inv *agent.Invocation) int {
 	contextWindow := contextCompactionFallbackWindow
 	if inv != nil {
 		if window, ok := agent.ModelContextWindowFromRunOptions(
@@ -1415,7 +1581,11 @@ func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
 	if contextWindow <= 0 {
 		contextWindow = contextCompactionFallbackWindow
 	}
+	return contextWindow
+}
 
+func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
+	contextWindow := contextCompactionWindow(inv)
 	threshold := int(float64(contextWindow) * normalizeContextCompactionThresholdRatio(ratio))
 	if threshold < contextCompactionMinTokens {
 		threshold = contextCompactionMinTokens
@@ -1461,7 +1631,24 @@ type InvocationToolSurfaceProvider interface {
 //   - knowledge_search / agentic_knowledge_search (auto-added when Knowledge is configured)
 //
 // This method is called during the preprocess stage, before sending the request to the model.
-func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocation) []tool.Tool {
+func (f *Flow) getFilteredTools(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (resolved []tool.Tool) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanResolveTools,
+	)
+	defer func() {
+		if started {
+			span.SetAttributes(
+				attribute.Int("llmflow.tools.count", len(resolved)),
+			)
+		}
+		finishLatencySpan(span, started, nil)
+	}()
+
 	if invocation == nil || invocation.Agent == nil {
 		return nil
 	}

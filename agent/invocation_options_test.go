@@ -46,6 +46,18 @@ func TestWithModelRequestExtraFields(t *testing.T) {
 	assert.Equal(t, "tenant-a", opts.ModelRequestExtraFields["tenant"])
 }
 
+func TestWithLatencyDiagnostics(t *testing.T) {
+	var ro RunOptions
+	WithLatencyDiagnostics(true)(&ro)
+
+	require.True(t, ro.LatencyDiagnosticsEnabled)
+	require.True(t, ro.LatencyDiagnosticsEmitEvents)
+
+	WithLatencyDiagnosticsEvents(false)(&ro)
+	require.True(t, ro.LatencyDiagnosticsEnabled)
+	require.False(t, ro.LatencyDiagnosticsEmitEvents)
+}
+
 func TestWithInvocationBranch(t *testing.T) {
 	inv := NewInvocation(
 		WithInvocationBranch("test-branch"),
