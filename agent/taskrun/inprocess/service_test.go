@@ -44,6 +44,7 @@ type captureRunner struct {
 	message   model.Message
 	runOpts   agent.RunOptions
 	reply     string
+	events    []*event.Event
 	runErr    error
 }
 
@@ -65,6 +66,7 @@ func (r *captureRunner) Run(
 	}
 	r.runOpts = runOpts
 	reply := r.reply
+	events := append([]*event.Event(nil), r.events...)
 	runErr := r.runErr
 	r.mu.Unlock()
 
@@ -72,14 +74,20 @@ func (r *captureRunner) Run(
 		return nil, runErr
 	}
 
-	ch := make(chan *event.Event, 1)
-	ch <- &event.Event{
-		Response: &model.Response{
-			Object: model.ObjectTypeChatCompletion,
-			Choices: []model.Choice{{
-				Message: model.NewAssistantMessage(reply),
-			}},
-		},
+	if len(events) == 0 {
+		events = []*event.Event{{
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(reply),
+				}},
+			},
+		}}
+	}
+
+	ch := make(chan *event.Event, len(events))
+	for _, evt := range events {
+		ch <- evt
 	}
 	close(ch)
 	return ch, nil
@@ -282,6 +290,7 @@ func TestServiceSpawnCompletesRun(t *testing.T) {
 	run, err := svc.Spawn(context.Background(), SpawnRequest{
 		OwnerUserID:     "user-a",
 		ParentSessionID: "parent-a",
+		AppName:         "fallback-app",
 		AgentName:       "worker",
 		Task:            "review the patch",
 		Timeout:         time.Second,
@@ -289,6 +298,7 @@ func TestServiceSpawnCompletesRun(t *testing.T) {
 			"trace_id": "trace-1",
 		},
 		RunOptions: []agent.RunOption{
+			agent.WithAppName("child-app"),
 			agent.WithInstruction(testProfileInstruction),
 			agent.MergeRuntimeState(map[string]any{
 				testProfileRuntimeStateKey: "profile-a",
@@ -310,10 +320,12 @@ func TestServiceSpawnCompletesRun(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, StatusQueued, run.Status)
+	require.Equal(t, "child-app", run.AppName)
 
 	final, err := svc.Wait(context.Background(), run.ID)
 	require.NoError(t, err)
 	require.Equal(t, StatusCompleted, final.Status)
+	require.Equal(t, "child-app", final.AppName)
 	require.Equal(t, "finished delegated work", final.Result)
 	require.Equal(t, "finished delegated work", final.Summary)
 	require.NotEmpty(t, final.ChildSessionID)
@@ -340,6 +352,7 @@ func TestServiceSpawnCompletesRun(t *testing.T) {
 		runner.runOpts.RuntimeState[RuntimeStateKeyParentSessionID],
 	)
 	require.Equal(t, testProfileInstruction, runner.runOpts.Instruction)
+	require.Equal(t, "child-app", runner.runOpts.AppName)
 	require.Equal(
 		t,
 		"profile-a",
@@ -360,6 +373,194 @@ func TestServiceSpawnCompletesRun(t *testing.T) {
 	runner.mu.Unlock()
 
 	require.Contains(t, observer.statuses(), StatusCompleted)
+}
+
+func TestServiceRecordsRunProgress(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, 5, 26, 9, 0, 0, 0, time.UTC)
+	toolCallID := "call-1"
+	runner := &captureRunner{events: []*event.Event{
+		{
+			Timestamp: startedAt.Add(time.Second),
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Usage: &model.Usage{
+					PromptTokens:     2,
+					CompletionTokens: 1,
+					TotalTokens:      3,
+				},
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID: toolCallID,
+							Function: model.FunctionDefinitionParam{
+								Name: "lookup",
+							},
+						}},
+					},
+				}},
+			},
+		},
+		{
+			Timestamp: startedAt.Add(2 * time.Second),
+			Response: &model.Response{
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  toolCallID,
+						Content: "tool output",
+					},
+				}},
+			},
+		},
+		{
+			Timestamp: startedAt.Add(3 * time.Second),
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Usage: &model.Usage{
+					PromptTokens:     4,
+					CompletionTokens: 3,
+					TotalTokens:      7,
+				},
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("done"),
+				}},
+			},
+		},
+	}}
+	svc, err := NewService(runner)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		Task:            "collect progress",
+	})
+	require.NoError(t, err)
+
+	final, err := svc.Wait(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Equal(t, StatusCompleted, final.Status)
+	require.Equal(t, "done", final.Result)
+	require.NotNil(t, final.Progress)
+	require.Equal(t, 3, final.Progress.EventCount)
+	require.Equal(t, 1, final.Progress.ToolCallCount)
+	require.Equal(t, 1, final.Progress.ToolResultCount)
+	require.Equal(t, 6, final.Progress.PromptTokens)
+	require.Equal(t, 4, final.Progress.CompletionTokens)
+	require.Equal(t, 10, final.Progress.TotalTokens)
+	require.NotNil(t, final.Progress.LastEventAt)
+	require.Equal(t, startedAt.Add(3*time.Second), *final.Progress.LastEventAt)
+}
+
+func TestProgressAccumulatorHandlesSparseEvents(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
+	acc := progressAccumulator{}
+
+	require.False(t, acc.consume(nil, now))
+	require.Nil(t, acc.snapshot())
+
+	require.True(t, acc.consume(&event.Event{}, now))
+	require.True(t, acc.consume(&event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Usage: &model.Usage{
+				PromptTokens:     100,
+				CompletionTokens: 100,
+				TotalTokens:      200,
+			},
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					ToolCalls: []model.ToolCall{{
+						ID: "partial-call",
+						Function: model.FunctionDefinitionParam{
+							Name: "lookup",
+						},
+					}},
+				},
+			}},
+		},
+	}, now.Add(time.Second)))
+
+	got := acc.snapshot()
+	require.NotNil(t, got)
+	require.Equal(t, 2, got.EventCount)
+	require.Zero(t, got.ToolCallCount)
+	require.Zero(t, got.ToolResultCount)
+	require.Zero(t, got.PromptTokens)
+	require.Zero(t, got.CompletionTokens)
+	require.Zero(t, got.TotalTokens)
+	require.NotNil(t, got.LastEventAt)
+	require.Equal(t, now.Add(time.Second), *got.LastEventAt)
+}
+
+func TestServiceUpdateProgressIgnoresNilMissingAndTerminalRuns(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(&captureRunner{})
+	require.NoError(t, err)
+
+	runningRunID := "running-run"
+	terminalRunID := "terminal-run"
+	svc.runs[runningRunID] = &Run{ID: runningRunID, Status: StatusRunning}
+	svc.runs[terminalRunID] = &Run{ID: terminalRunID, Status: StatusCompleted}
+
+	svc.updateProgress(runningRunID, nil)
+	require.Nil(t, svc.runs[runningRunID].Progress)
+
+	lastEventAt := time.Date(2026, 5, 26, 11, 0, 0, 0, time.UTC)
+	progress := &Progress{
+		EventCount:  1,
+		LastEventAt: &lastEventAt,
+	}
+	svc.updateProgress("missing-run", progress)
+	svc.updateProgress(terminalRunID, progress)
+	require.Nil(t, svc.runs[terminalRunID].Progress)
+
+	svc.updateProgress(runningRunID, progress)
+	progress.EventCount = 2
+	require.NotNil(t, svc.runs[runningRunID].Progress)
+	require.Equal(t, 1, svc.runs[runningRunID].Progress.EventCount)
+	require.NotSame(t, progress, svc.runs[runningRunID].Progress)
+	require.NotSame(t, progress.LastEventAt, svc.runs[runningRunID].Progress.LastEventAt)
+}
+
+func TestServicePropagatesSpawnAppName(t *testing.T) {
+	t.Parallel()
+
+	runner := &captureRunner{reply: "ok"}
+	svc, err := NewService(runner)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	run, err := svc.Spawn(context.Background(), SpawnRequest{
+		OwnerUserID:     "user-a",
+		ParentSessionID: "parent-a",
+		AppName:         "tenant-app",
+		Task:            "run under tenant app",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "tenant-app", run.AppName)
+
+	final, err := svc.Wait(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Equal(t, "tenant-app", final.AppName)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, "tenant-app", runner.runOpts.AppName)
 }
 
 func TestServiceCustomRuntimeStateKeys(t *testing.T) {

@@ -741,10 +741,16 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 			"test-agent": {
 				Summary:   "step 1 completed successfully",
 				UpdatedAt: baseTime.Add(2 * time.Second),
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"test-agent",
+					baseTime.Add(2*time.Second),
+					"tool-result-1",
+				),
 			},
 		},
 		Events: []event.Event{
 			{
+				ID:           "user-1",
 				Author:       "user",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -756,6 +762,7 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 				},
 			},
 			{
+				ID:           "tool-call-1",
 				Author:       "test-agent",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -767,6 +774,7 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 				},
 			},
 			{
+				ID:           "tool-result-1",
 				Author:       "test-agent",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -1280,8 +1288,8 @@ func TestContentRequestProcessor_AggregatePrefixSummaries_Sorted(
 	got, updatedAt := p.aggregatePrefixSummaries(summaries, "app")
 	require.Equal(t, "root\n\na\n\nb", got)
 	require.Equal(t,
-		time.Date(2023, 1, 3, 12, 0, 0, 0, time.UTC),
-		updatedAt,
+		time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+		updatedAt.CutoffTime(),
 	)
 }
 

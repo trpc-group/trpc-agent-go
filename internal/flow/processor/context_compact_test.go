@@ -577,15 +577,15 @@ func TestShouldCompactCurrentInvocationToolResult_DisabledAndErrors(t *testing.T
 	))
 }
 
-func TestSnapshotSessionEvents(t *testing.T) {
-	require.Nil(t, snapshotSessionEvents(nil))
+func TestSessionEventsSnapshot(t *testing.T) {
+	require.Nil(t, sessionEventsSnapshot(nil))
 
 	sess := &session.Session{
 		Events: []event.Event{{
 			RequestID: "req1",
 		}},
 	}
-	events := snapshotSessionEvents(sess)
+	events := sessionEventsSnapshot(sess)
 
 	require.Len(t, events, 1)
 	require.Equal(t, "req1", events[0].RequestID)

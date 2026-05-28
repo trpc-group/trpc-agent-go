@@ -1432,6 +1432,81 @@ func TestRunToolWithEventContexts_NoRetryPolicyCallsToolOnCanceledContext(t *tes
 	require.Equal(t, toolCall.Function.Arguments, modifiedArgs)
 }
 
+func TestRunToolWithEventContexts_ToolPermissionPolicyDenySkipsExecution(
+	t *testing.T,
+) {
+	const (
+		toolName      = "delete_file"
+		toolCallID    = "call-deny"
+		denyReason    = "write access is disabled"
+		originalArgs  = `{"path":"unsafe"}`
+		rewrittenArgs = `{"path":"safe"}`
+	)
+
+	var (
+		beforeCalled bool
+		afterCalled  bool
+		policyCalled bool
+	)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		beforeCalled = true
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(rewrittenArgs),
+		}, nil
+	})
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		afterCalled = true
+		return &tool.AfterToolResult{}, nil
+	})
+	invocation := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+			func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+				policyCalled = true
+				require.Equal(t, toolName, req.ToolName)
+				require.Equal(t, toolCallID, req.ToolCallID)
+				require.JSONEq(t, rewrittenArgs, string(req.Arguments))
+				return tool.DenyPermission(denyReason), nil
+			},
+		)),
+	}
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	tl := &captureTool{name: toolName, result: map[string]any{"ok": true}}
+	toolCall := model.ToolCall{
+		ID: toolCallID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(originalArgs),
+		},
+	}
+
+	_, _, _, _, result, modifiedArgs, err := runToolWithEventContexts(
+		ctx,
+		toolCall,
+		callbacks,
+		tl,
+		State{},
+		nil,
+	)
+	require.NoError(t, err)
+	require.True(t, beforeCalled)
+	require.True(t, policyCalled)
+	require.False(t, afterCalled)
+	require.False(t, tl.called)
+	require.JSONEq(t, rewrittenArgs, string(modifiedArgs))
+	permissionResult, ok := result.(*tool.PermissionResult)
+	require.True(t, ok)
+	require.Equal(t, tool.PermissionResultStatusDenied, permissionResult.Status)
+	require.Equal(t, toolName, permissionResult.Tool)
+	require.Equal(t, denyReason, permissionResult.Reason)
+}
+
 func TestNewToolsNodeFunc_ToolCallbacksPrecedence(t *testing.T) {
 	// Test that node-configured callbacks take precedence over state callbacks.
 	var nodeCallbackUsed, stateCallbackUsed bool
