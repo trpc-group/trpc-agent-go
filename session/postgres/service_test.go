@@ -684,8 +684,8 @@ func TestGetSession_Success(t *testing.T) {
 			AddRow(key.SessionID, eventBytes))
 
 	// Mock: Batch load summaries with data
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary FROM session_summaries")).
-		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary, updated_at FROM session_summaries")).
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"}))
 
 	sess, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
@@ -946,8 +946,8 @@ func TestListSessions_WithTrackEvents(t *testing.T) {
 		WithArgs("test-app", "test-user", "{session-1}").
 		WillReturnRows(eventRows)
 
-	summaryRows := sqlmock.NewRows([]string{"session_id", "filter_key", "summary"})
-	mock.ExpectQuery("SELECT session_id, filter_key, summary FROM session_summaries").
+	summaryRows := sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"})
+	mock.ExpectQuery("SELECT session_id, filter_key, summary, updated_at FROM session_summaries").
 		WithArgs("test-app", "test-user", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(summaryRows)
 
@@ -1044,8 +1044,8 @@ func TestListSessions_Success(t *testing.T) {
 			AddRow("session-1", eventBytes))
 
 	// Mock: Batch load summaries (empty)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary FROM session_summaries")).
-		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary, updated_at FROM session_summaries")).
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"}))
 
 	sessions, err := s.ListSessions(ctx, userKey)
 	require.NoError(t, err)
@@ -1144,8 +1144,8 @@ func TestListSessions_WithMultipleSessions(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}))
 
 	// Mock: Batch load summaries
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary FROM session_summaries")).
-		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary, updated_at FROM session_summaries")).
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"}))
 
 	sessions, err := s.ListSessions(ctx, userKey)
 	require.NoError(t, err)
@@ -1186,8 +1186,8 @@ func TestListSessions_WithListSessionPage(t *testing.T) {
 
 	mock.ExpectQuery("SELECT session_id, event FROM").
 		WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary FROM session_summaries")).
-		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary, updated_at FROM session_summaries")).
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"}))
 
 	sessions, err := s.ListSessions(ctx, userKey, session.WithListSessionPage(1, 1))
 	require.NoError(t, err)

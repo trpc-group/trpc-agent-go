@@ -195,8 +195,8 @@ func searchCurrentHidden(
 	inv *agent.Invocation,
 	req *SearchSessionRequest,
 ) ([]session.EventSearchResult, error) {
-	cutoff := currentSummaryCutoff(inv)
-	if cutoff.IsZero() {
+	boundary := currentSummaryBoundary(inv)
+	if boundary == nil || boundary.CutoffTime().IsZero() {
 		return nil, nil
 	}
 
@@ -217,14 +217,15 @@ func searchCurrentHidden(
 			model.RoleAssistant,
 			model.RoleTool,
 		},
-		CreatedBefore: &cutoff,
+		CreatedBefore: ptrTime(boundary.CutoffTime()),
 		SearchMode:    normalizeSearchMode(req.SearchMode),
 	}
 	results, err := searchWithFallback(ctx, searchable, searchReq)
+	results = filterCurrentHiddenResults(inv.Session, boundary, results)
 	if err != nil || len(results) > 0 {
 		return results, err
 	}
-	return searchCurrentHiddenBySessionScan(ctx, inv, req, cutoff)
+	return searchCurrentHiddenBySessionScan(ctx, inv, req, boundary)
 }
 
 func searchOtherSessions(
@@ -422,23 +423,23 @@ func searchCurrentSessionByScan(
 	inv *agent.Invocation,
 	req *SearchSessionRequest,
 ) ([]session.EventSearchResult, error) {
-	return searchCurrentSessionScan(ctx, inv, req, time.Time{})
+	return searchCurrentSessionScan(ctx, inv, req, nil)
 }
 
 func searchCurrentHiddenBySessionScan(
 	ctx context.Context,
 	inv *agent.Invocation,
 	req *SearchSessionRequest,
-	cutoff time.Time,
+	boundary *session.SummaryBoundary,
 ) ([]session.EventSearchResult, error) {
-	return searchCurrentSessionScan(ctx, inv, req, cutoff)
+	return searchCurrentSessionScan(ctx, inv, req, boundary)
 }
 
 func searchCurrentSessionScan(
 	ctx context.Context,
 	inv *agent.Invocation,
 	req *SearchSessionRequest,
-	cutoff time.Time,
+	boundary *session.SummaryBoundary,
 ) ([]session.EventSearchResult, error) {
 	if inv == nil || inv.Session == nil || inv.SessionService == nil {
 		return nil, nil
@@ -465,7 +466,7 @@ func searchCurrentSessionScan(
 			key,
 			query,
 			invocationFilterKey(inv),
-			cutoff,
+			boundary,
 			topK,
 		)
 		merged = mergeSearchResults(merged, matches)
@@ -487,7 +488,7 @@ func lexicalScanSessionEvents(
 	key session.Key,
 	query string,
 	filterKey string,
-	cutoff time.Time,
+	boundary *session.SummaryBoundary,
 	topK int,
 ) []session.EventSearchResult {
 	if sess == nil || strings.TrimSpace(query) == "" {
@@ -504,12 +505,25 @@ func lexicalScanSessionEvents(
 	}
 
 	results := make([]session.EventSearchResult, 0)
+	hiddenIDs, hasEventBoundary := hiddenEventIDs(sess, "")
+	if boundary != nil {
+		hiddenIDs, hasEventBoundary = hiddenEventIDs(
+			sess,
+			boundary.LastEventID,
+		)
+	}
 	for _, evt := range sess.Events {
 		if filterKey != "" && !evt.Filter(filterKey) {
 			continue
 		}
+		if hasEventBoundary {
+			if _, ok := hiddenIDs[evt.ID]; !ok {
+				continue
+			}
+		}
 		createdAt := evt.Timestamp
-		if !cutoff.IsZero() && !createdAt.IsZero() && createdAt.After(cutoff) {
+		if !hasEventBoundary &&
+			!summaryBoundaryContainsEvent(boundary, createdAt) {
 			continue
 		}
 		text, role, ok := extractSessionMessageText(evt)
@@ -545,6 +559,72 @@ func lexicalScanSessionEvents(
 		results = results[:topK]
 	}
 	return results
+}
+
+func ptrTime(value time.Time) *time.Time {
+	return &value
+}
+
+func filterCurrentHiddenResults(
+	sess *session.Session,
+	boundary *session.SummaryBoundary,
+	results []session.EventSearchResult,
+) []session.EventSearchResult {
+	if len(results) == 0 || boundary == nil {
+		return results
+	}
+	hiddenIDs, ok := hiddenEventIDs(sess, boundary.LastEventID)
+	filtered := make([]session.EventSearchResult, 0, len(results))
+	for _, result := range results {
+		eventID := strings.TrimSpace(result.Event.ID)
+		if ok {
+			if eventID == "" {
+				continue
+			}
+			if _, hidden := hiddenIDs[eventID]; hidden {
+				filtered = append(filtered, result)
+			}
+			continue
+		}
+		if summaryBoundaryContainsEvent(boundary, result.EventCreatedAt) {
+			filtered = append(filtered, result)
+		}
+	}
+	return filtered
+}
+
+func hiddenEventIDs(
+	sess *session.Session,
+	lastEventID string,
+) (map[string]struct{}, bool) {
+	lastEventID = strings.TrimSpace(lastEventID)
+	if sess == nil || lastEventID == "" {
+		return nil, false
+	}
+	hidden := make(map[string]struct{})
+	for _, evt := range sess.Events {
+		if evt.ID != "" {
+			hidden[evt.ID] = struct{}{}
+		}
+		if evt.ID == lastEventID {
+			return hidden, true
+		}
+	}
+	return nil, false
+}
+
+func summaryBoundaryContainsEvent(
+	boundary *session.SummaryBoundary,
+	createdAt time.Time,
+) bool {
+	if boundary == nil {
+		return true
+	}
+	cutoff := boundary.CutoffTime()
+	if cutoff.IsZero() || createdAt.IsZero() {
+		return true
+	}
+	return !createdAt.After(cutoff)
 }
 
 func invocationFilterKey(inv *agent.Invocation) string {

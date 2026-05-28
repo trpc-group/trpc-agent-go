@@ -25,6 +25,12 @@ func TestClient_CreateSummary(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "u1", SessionID: "sum1"}
 
+	t.Run("nil summary returns error", func(t *testing.T) {
+		err := c.CreateSummary(ctx, key, "all", nil, time.Hour)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, summaryNilError)
+	})
+
 	t.Run("creates new summary", func(t *testing.T) {
 		now := time.Now()
 		sum := &session.Summary{Summary: "test summary", UpdatedAt: now}

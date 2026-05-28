@@ -506,6 +506,19 @@ func TestListSessions_WithListSessionOnlyMeta(t *testing.T) {
 
 	sess, err := service.CreateSession(ctx, key, session.StateMap{"session_key": []byte("session_value")})
 	require.NoError(t, err)
+	app, ok := service.getAppSessions(key.AppName)
+	require.True(t, ok)
+	app.mu.Lock()
+	stored := app.sessions[key.UserID][key.SessionID].session
+	stored.SummariesMu.Lock()
+	stored.Summaries = map[string]*session.Summary{
+		"nil": nil,
+		"valid": {
+			Summary: "summary",
+		},
+	}
+	stored.SummariesMu.Unlock()
+	app.mu.Unlock()
 
 	evt := event.New("test-invocation", "author")
 	evt.Response = &model.Response{
@@ -536,6 +549,9 @@ func TestListSessions_WithListSessionOnlyMeta(t *testing.T) {
 	assert.Equal(t, key.SessionID, got.ID)
 	assert.False(t, got.CreatedAt.IsZero())
 	assert.False(t, got.UpdatedAt.IsZero())
+	require.Len(t, got.Summaries, 1)
+	assert.NotContains(t, got.Summaries, "nil")
+	assert.Equal(t, "summary", got.Summaries["valid"].Summary)
 }
 
 func TestListSessions_WithListSessionPage(t *testing.T) {
