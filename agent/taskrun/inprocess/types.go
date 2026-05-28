@@ -15,6 +15,7 @@
 package inprocess
 
 import (
+	"context"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
@@ -34,11 +35,17 @@ const (
 	StatusQueued = taskrun.StatusQueued
 	// StatusRunning means the child agent is executing.
 	StatusRunning = taskrun.StatusRunning
+	// StatusFinalizing means the child agent exited and final metadata is
+	// being attached.
+	StatusFinalizing = taskrun.StatusFinalizing
+	// StatusCanceling means cancellation was requested and the child agent
+	// has not exited yet.
+	StatusCanceling = taskrun.StatusCanceling
 	// StatusCompleted means the child agent completed successfully.
 	StatusCompleted = taskrun.StatusCompleted
 	// StatusFailed means the child agent failed.
 	StatusFailed = taskrun.StatusFailed
-	// StatusCanceled means cancellation was requested or observed.
+	// StatusCanceled means the child agent exited after cancellation.
 	StatusCanceled = taskrun.StatusCanceled
 )
 
@@ -46,7 +53,8 @@ const (
 	defaultStoredResultRunes  = 4000
 	defaultStoredSummaryRunes = 240
 
-	statusCanceledSummary = "canceled"
+	statusCancelingSummary = "canceling"
+	statusCanceledSummary  = "canceled"
 )
 
 // ErrRunNotFound indicates that a task run does not exist.
@@ -81,6 +89,26 @@ type Observer = taskrun.Observer
 
 // ObserverFunc adapts a function into an Observer.
 type ObserverFunc = taskrun.ObserverFunc
+
+// Finalizer attaches metadata after the child agent exits and before the
+// terminal run is persisted and observed.
+type Finalizer interface {
+	FinalizeRun(ctx context.Context, run Run) map[string]string
+}
+
+// FinalizerFunc adapts a function into a Finalizer.
+type FinalizerFunc func(ctx context.Context, run Run) map[string]string
+
+// FinalizeRun implements Finalizer.
+func (f FinalizerFunc) FinalizeRun(
+	ctx context.Context,
+	run Run,
+) map[string]string {
+	if f == nil {
+		return nil
+	}
+	return f(ctx, run)
+}
 
 func cloneRun(r Run) Run {
 	out := r

@@ -3,7 +3,7 @@ name: gh-issues
 description: "Fetch GitHub issues, spawn sub-agents to implement fixes and open PRs, then monitor and address PR review comments. Usage: /gh-issues [owner/repo] [--label bug] [--limit 5] [--milestone v1.0] [--assignee @me] [--fork user/repo] [--watch] [--interval 5] [--reviews-only] [--cron] [--dry-run] [--model glm-5] [--notify-channel -1002381931352]"
 user-invocable: true
 metadata:
-  { "openclaw": { "requires": { "bins": ["curl", "git", "gh"] }, "primaryEnv": "GH_TOKEN" } }
+  { "openclaw": { "requires": { "bins": ["curl", "git", "jq", "node"] }, "primaryEnv": "GH_TOKEN" } }
 ---
 
 # gh-issues — Auto-fix GitHub Issues with Parallel Sub-agents
@@ -168,10 +168,9 @@ Run these checks sequentially via exec:
    git status --porcelain
    ```
 
-   If output is non-empty, warn the user:
+   If output is non-empty, stop and ask the user to commit, stash, or discard the local changes before spawning sub-agents:
 
-   > "Working tree has uncommitted changes. Sub-agents will create branches from HEAD — uncommitted changes will NOT be included. Continue?"
-   > Wait for confirmation. If declined, stop.
+   > "Working tree has uncommitted changes. Worktree-isolated sub-agents require a clean source checkout so each task starts from a reproducible HEAD. Please commit, stash, or discard the changes first."
 
 2. **Record base branch:**
 
@@ -311,7 +310,8 @@ Run these checks sequentially via exec:
 
 - If an eligible issue is found:
   1. Mark it as in_progress in the cursor file
-  2. Spawn a single sub-agent for that one issue with `cleanup: "keep"` and `runTimeoutSeconds: 3600`
+  2. Spawn a single sub-agent for that one issue with `isolation: "worktree"` and `timeout_seconds: 3600`
+     Clean worktrees are removed automatically; changed worktrees are preserved, so no cleanup input is needed.
   3. If `--model` was provided, include `model: "{MODEL}"` in the spawn config
   4. If `--notify-channel` was provided, include the channel in the task so the sub-agent can notify
   5. Do NOT await the sub-agent result — fire and forget
@@ -399,8 +399,8 @@ Only proceed if confidence >= 7.
 
 1. UNDERSTAND — Read the issue carefully. Identify what needs to change and where.
 
-2. BRANCH — Create a feature branch from the base branch:
-git checkout -b fix/issue-{number} {BASE_BRANCH}
+2. BRANCH — Create a PR branch inside the runtime-managed isolated worktree:
+git checkout -b fix/issue-{number}
 
 3. ANALYZE — Search the codebase to find relevant files:
 - Use grep/find via exec to locate code related to the issue
@@ -489,13 +489,15 @@ Files changed: {files_changed_list}"
 - Do NOT use the gh CLI — it is not available. Use curl + GitHub REST API for all GitHub operations.
 - GH_TOKEN is already in the environment — do NOT prompt for auth
 - Time limit: you have 60 minutes max. Be thorough — analyze properly, test your fix, don't rush.
+- Do not create or remove Git worktrees manually; `subagents_spawn` owns the isolated worktree lifecycle.
 </constraints>
 ```
 
 ### Spawn configuration per sub-agent:
 
-- runTimeoutSeconds: 3600 (60 minutes)
-- cleanup: "keep" (preserve transcripts for review)
+- timeout_seconds: 3600 (60 minutes)
+- isolation: "worktree" (preserve changed worktrees for review)
+- no cleanup input is needed; clean worktrees are removed and changed worktrees are preserved
 - If `--model` was provided, include `model: "{MODEL}"` in the spawn config
 
 ### Timeout Handling
@@ -572,7 +574,8 @@ When both `--cron` and `--reviews-only` are set:
 3. Fetch review comments (Step 6.2)
 4. **Analyze comment content for actionability** (Step 6.3)
 5. If actionable comments are found, spawn ONE review-fix sub-agent for the first PR with unaddressed comments — fire-and-forget (do NOT await result)
-   - Use `cleanup: "keep"` and `runTimeoutSeconds: 3600`
+   - Use `isolation: "worktree"` and `timeout_seconds: 3600`
+   - Clean worktrees are removed automatically; changed worktrees are preserved, so no cleanup input is needed
    - If `--model` was provided, include `model: "{MODEL}"` in the spawn config
 6. Report: "Spawned review handler for PR #{N} — will push fixes when complete"
 7. Exit the skill immediately. Do not proceed to Step 6.5 (Review Results).
@@ -813,13 +816,15 @@ For comments you could NOT address, reply explaining why:
 - Do NOT use the gh CLI — use curl + GitHub REST API
 - GH_TOKEN is already in the environment — do not prompt for auth
 - Time limit: 60 minutes max
+- Do not create or remove Git worktrees manually; `subagents_spawn` owns the isolated worktree lifecycle.
 </constraints>
 ```
 
 **Spawn configuration per sub-agent:**
 
-- runTimeoutSeconds: 3600 (60 minutes)
-- cleanup: "keep" (preserve transcripts for review)
+- timeout_seconds: 3600 (60 minutes)
+- isolation: "worktree" (preserve changed worktrees for review)
+- no cleanup input is needed; clean worktrees are removed and changed worktrees are preserved
 - If `--model` was provided, include `model: "{MODEL}"` in the spawn config
 
 ### Step 6.6 — Review Results
