@@ -94,11 +94,14 @@ func TestMemorySearchToolAndHelpers(t *testing.T) {
 	require.NotNil(t, memTool, "memory tool not found")
 	_, err = memTool.Call(context.Background(), []byte(`{"query":"hello"}`))
 	require.Error(t, err, "expected missing invocation error")
-	_, err = memTool.Call(context.Background(), []byte(`{"query":""}`))
-	require.Error(t, err, "expected query validation error")
+	assert.ErrorContains(t, err, "invocation")
 
 	sess := &session.Session{ID: "s1", AppName: "app", UserID: "u1"}
 	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{Session: sess}).Context
+	_, err = memTool.Call(ctx, []byte(`{"query":""}`))
+	require.Error(t, err, "expected query validation error")
+	assert.ErrorContains(t, err, "query")
+
 	raw, err := memTool.Call(ctx, []byte(`{"query":"profile","limit":99,"type":"L1","scene":"work"}`))
 	require.NoError(t, err, "Call")
 	rsp := raw.(*searchMemoriesToolResponse)
