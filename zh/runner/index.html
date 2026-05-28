@@ -3889,6 +3889,9 @@ Runner 会在每次请求里复用同一个 Agent 实例。</p>
 <ul>
 <li>每次调用 <code>Runner.Run(...)</code>，Factory 会被调用一次。</li>
 <li><code>agent.WithAgent(...)</code> 依然优先生效（测试时很方便）。</li>
+<li>Runner factory 用来选择本次 run 的 root Agent。如果你要配置父 Agent
+  可以委托的专家 Agent，请使用 <code>WithSubAgents</code>。请求级或懒加载 SubAgent
+  的写法见 <a href="../multiagent/#动态-subagent-与-agent-factory">动态 SubAgent 与 Agent Factory</a>。</li>
 </ul>
 <h4 id="agent-factory">Agent Factory 中的资源边界</h4>
 <p><code>AgentFactory</code> 适合按请求拼装 Agent 配置，但它<strong>不会改变资源所有权</strong>。</p>
@@ -5885,7 +5888,7 @@ runner 的消费循环也会正常结束，避免写端阻塞。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月26日 06:11:03 UTC">2026-05-26 06:11:03</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月28日 01:37:34 UTC">2026-05-28 01:37:34</span>
   </span>
 
     
