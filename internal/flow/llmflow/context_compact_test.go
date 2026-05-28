@@ -122,6 +122,57 @@ func (s *summaryPartialFailureService) Calls() int {
 	return s.calls
 }
 
+func TestSummarySnapshotAdvancedUsesBoundary(t *testing.T) {
+	cutoff := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"": {
+				Summary:   "same summary",
+				UpdatedAt: cutoff.Add(2 * time.Minute),
+				Boundary: session.NewSummaryBoundary(
+					"",
+					cutoff,
+				),
+			},
+		},
+	}
+	before := snapshotSummary(sess, "")
+
+	sess.Summaries[""].Boundary = session.NewSummaryBoundary(
+		"",
+		cutoff.Add(time.Minute),
+	)
+	after := snapshotSummary(sess, "")
+
+	require.True(t, before.advanced(after))
+}
+
+func TestSummarySnapshotAdvancedUsesBoundaryEventID(t *testing.T) {
+	cutoff := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"": {
+				Summary: "same summary",
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"",
+					cutoff,
+					"event-1",
+				),
+			},
+		},
+	}
+	before := snapshotSummary(sess, "")
+
+	sess.Summaries[""].Boundary = session.NewSummaryBoundaryWithEventID(
+		"",
+		cutoff,
+		"event-2",
+	)
+	after := snapshotSummary(sess, "")
+
+	require.True(t, before.advanced(after))
+}
+
 type countingRequestProcessor struct {
 	mu       sync.Mutex
 	calls    int

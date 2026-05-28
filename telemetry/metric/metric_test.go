@@ -357,16 +357,21 @@ func TestInitMeterProvider(t *testing.T) {
 	if itelemetry.WorkflowMetricGenAIClientOperationDuration == nil {
 		t.Error("WorkflowMetricGenAIClientOperationDuration was not created")
 	}
+	if itelemetry.WorkflowMetricGenAIWorkflowElapsedTime == nil {
+		t.Error("WorkflowMetricGenAIWorkflowElapsedTime was not created")
+	}
 }
 
 func TestInitMeterProvider_WorkflowMetricError(t *testing.T) {
 	originalMP := itelemetry.MeterProvider
 	originalWorkflowMeter := itelemetry.WorkflowMeter
 	originalWorkflowOpDur := itelemetry.WorkflowMetricGenAIClientOperationDuration
+	originalWorkflowElapsed := itelemetry.WorkflowMetricGenAIWorkflowElapsedTime
 	defer func() {
 		itelemetry.MeterProvider = originalMP
 		itelemetry.WorkflowMeter = originalWorkflowMeter
 		itelemetry.WorkflowMetricGenAIClientOperationDuration = originalWorkflowOpDur
+		itelemetry.WorkflowMetricGenAIWorkflowElapsedTime = originalWorkflowElapsed
 	}()
 
 	mp := &namedMockMeterProvider{
@@ -389,9 +394,11 @@ func TestInitMeterProvider_WorkflowMetricError(t *testing.T) {
 func TestInitWorkflowMetrics_ErrorHandling(t *testing.T) {
 	originalWorkflowMeter := itelemetry.WorkflowMeter
 	originalWorkflowOpDur := itelemetry.WorkflowMetricGenAIClientOperationDuration
+	originalWorkflowElapsed := itelemetry.WorkflowMetricGenAIWorkflowElapsedTime
 	defer func() {
 		itelemetry.WorkflowMeter = originalWorkflowMeter
 		itelemetry.WorkflowMetricGenAIClientOperationDuration = originalWorkflowOpDur
+		itelemetry.WorkflowMetricGenAIWorkflowElapsedTime = originalWorkflowElapsed
 	}()
 
 	if err := initWorkflowMetrics(nil); err == nil || !strings.Contains(err.Error(), "workflow meter provider is nil") {
@@ -409,6 +416,18 @@ func TestInitWorkflowMetrics_ErrorHandling(t *testing.T) {
 	if !strings.Contains(err.Error(), "failed to create trpc_agent_go.internal.workflow metric gen_ai.client.operation.duration") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
+	mp = &mockMeterProvider{meter: &mockMeter{
+		shouldFail: true,
+		failOn:     metrics.MetricGenAIWorkflowElapsedTime,
+	}}
+	err = initWorkflowMetrics(mp)
+	if err == nil {
+		t.Fatalf("expected workflow elapsed histogram creation error")
+	}
+	if !strings.Contains(err.Error(), "failed to create trpc_agent_go.internal.workflow metric gen_ai.workflow.elapsed_time") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
@@ -424,6 +443,7 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 	origInvokeTokenUsage := itelemetry.InvokeAgentMetricGenAIClientTokenUsage
 	origInvokeOpDur := itelemetry.InvokeAgentMetricGenAIClientOperationDuration
 	origWorkflowOpDur := itelemetry.WorkflowMetricGenAIClientOperationDuration
+	origWorkflowElapsed := itelemetry.WorkflowMetricGenAIWorkflowElapsedTime
 	defer func() {
 		itelemetry.MeterProvider = originalMP
 		itelemetry.ChatMetricGenAIClientOperationDuration = origChatOpDur
@@ -437,6 +457,7 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 		itelemetry.InvokeAgentMetricGenAIClientTokenUsage = origInvokeTokenUsage
 		itelemetry.InvokeAgentMetricGenAIClientOperationDuration = origInvokeOpDur
 		itelemetry.WorkflowMetricGenAIClientOperationDuration = origWorkflowOpDur
+		itelemetry.WorkflowMetricGenAIWorkflowElapsedTime = origWorkflowElapsed
 	}()
 
 	reset := func(t *testing.T) {
@@ -496,6 +517,8 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			switch metricName {
 			case metrics.MetricGenAIClientOperationDuration:
 				itelemetry.WorkflowMetricGenAIClientOperationDuration = nil
+			case metrics.MetricGenAIWorkflowElapsedTime:
+				itelemetry.WorkflowMetricGenAIWorkflowElapsedTime = nil
 			}
 		}
 	}
@@ -577,6 +600,12 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			name:       "workflow: operation duration",
 			meterName:  metrics.MeterNameWorkflow,
 			metricName: metrics.MetricGenAIClientOperationDuration,
+			boundaries: []float64{0.1, 1, 10},
+		},
+		{
+			name:       "workflow: elapsed time",
+			meterName:  metrics.MeterNameWorkflow,
+			metricName: metrics.MetricGenAIWorkflowElapsedTime,
 			boundaries: []float64{0.1, 1, 10},
 		},
 
@@ -719,6 +748,15 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			metricName:  metrics.MetricGenAIClientOperationDuration,
 			boundaries:  []float64{1},
 			before:      nilWorkflowMetric(metrics.MetricGenAIClientOperationDuration),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "workflow elapsed time not initialized",
+			meterName:   metrics.MeterNameWorkflow,
+			metricName:  metrics.MetricGenAIWorkflowElapsedTime,
+			boundaries:  []float64{1},
+			before:      nilWorkflowMetric(metrics.MetricGenAIWorkflowElapsedTime),
 			wantErr:     true,
 			errContains: "not initialized",
 		},

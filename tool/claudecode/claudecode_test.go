@@ -34,6 +34,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const testTrueCommand = "true"
+
 func TestNewToolSet_DefaultTools(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -2025,8 +2027,9 @@ func TestRunLocalRipgrepReturnsFalseWhenRipgrepIsUnavailable(t *testing.T) {
 
 func TestRunLocalRipgrepRejectsPathsOutsideBaseDir(t *testing.T) {
 	t.Parallel()
+	truePath := requireExecutablePath(t, testTrueCommand)
 	restore := withRipgrepForTest(func(string) (string, error) {
-		return "/bin/true", nil
+		return truePath, nil
 	})
 	defer restore()
 	_, ok, err := runLocalRipgrep(context.Background(), t.TempDir(), grepInput{
@@ -2077,7 +2080,8 @@ func TestBashAndProcessHelpersCoverTimeoutAndExitState(t *testing.T) {
 	require.Equal(t, 50, bashTimeout(nil))
 	require.Equal(t, defaultBashTimeoutMs, bashTimeout(intPtr(0)))
 	require.Equal(t, maxBashTimeoutMs, bashTimeout(intPtr(maxBashTimeoutMs+1)))
-	proc, err := os.StartProcess("/bin/true", []string{"true"}, &os.ProcAttr{
+	truePath := requireExecutablePath(t, testTrueCommand)
+	proc, err := os.StartProcess(truePath, []string{testTrueCommand}, &os.ProcAttr{
 		Env:   processEnv(nil),
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	})
@@ -2177,7 +2181,8 @@ func TestTaskStopAcceptsShellIDAndPropagatesKillErrors(t *testing.T) {
 	require.True(t, ok)
 	_, err = callToolRaw(callable, taskStopInput{ShellID: "missing"})
 	require.EqualError(t, err, "No task found with ID: missing")
-	proc, err := os.StartProcess("/bin/true", []string{"true"}, &os.ProcAttr{
+	truePath := requireExecutablePath(t, testTrueCommand)
+	proc, err := os.StartProcess(truePath, []string{testTrueCommand}, &os.ProcAttr{
 		Env:   processEnv(nil),
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	})
@@ -2241,19 +2246,37 @@ func TestPDFHelpersCoverRemainingBranches(t *testing.T) {
 	require.EqualError(t, err, `Page range "5-6" exceeds the PDF page count of 4.`)
 	scriptDir := t.TempDir()
 	successScript := filepath.Join(scriptDir, "pdftoppm-success")
-	require.NoError(t, os.WriteFile(successScript, []byte("#!/bin/bash\nprefix=\"${@: -1}\"\ntouch \"${prefix}-1.jpg\" \"${prefix}-2.jpg\"\n"), 0o755))
+	noImageScript := filepath.Join(scriptDir, "pdftoppm-empty")
+	failScript := filepath.Join(scriptDir, "pdftoppm-fail")
 	oldLookPath := pdftoppmLookPath
 	oldPath := pdftoppmPath
-	oldOnce := pdftoppmOnce
+	oldRun := pdftoppmRun
 	pdftoppmLookPath = func(string) (string, error) {
 		return successScript, nil
+	}
+	pdftoppmRun = func(path string, args ...string) ([]byte, error) {
+		require.NotEmpty(t, args)
+		outputPrefix := args[len(args)-1]
+		switch path {
+		case successScript:
+			require.NoError(t, os.WriteFile(outputPrefix+"-1.jpg", nil, 0o644))
+			require.NoError(t, os.WriteFile(outputPrefix+"-2.jpg", nil, 0o644))
+			return nil, nil
+		case noImageScript:
+			return nil, nil
+		case failScript:
+			return []byte("render failed\n"), errors.New("exit status 1")
+		default:
+			return nil, fmt.Errorf("unexpected pdftoppm path %q", path)
+		}
 	}
 	pdftoppmPath = ""
 	pdftoppmOnce = sync.Once{}
 	t.Cleanup(func() {
 		pdftoppmLookPath = oldLookPath
 		pdftoppmPath = oldPath
-		pdftoppmOnce = oldOnce
+		pdftoppmOnce = sync.Once{}
+		pdftoppmRun = oldRun
 	})
 	path, err := pdftoppmBinary()
 	require.NoError(t, err)
@@ -2268,8 +2291,6 @@ func TestPDFHelpersCoverRemainingBranches(t *testing.T) {
 	defer os.RemoveAll(outputDir)
 	_, statErr := os.Stat(filepath.Join(outputDir, "page-1.jpg"))
 	require.NoError(t, statErr)
-	noImageScript := filepath.Join(scriptDir, "pdftoppm-empty")
-	require.NoError(t, os.WriteFile(noImageScript, []byte("#!/bin/bash\nexit 0\n"), 0o755))
 	pdftoppmPath = noImageScript
 	_, _, err = extractPDFPages(filepath.Join(t.TempDir(), "fake.pdf"), pdfPageRange{
 		FirstPage: 1,
@@ -2277,8 +2298,6 @@ func TestPDFHelpersCoverRemainingBranches(t *testing.T) {
 		Count:     1,
 	})
 	require.EqualError(t, err, "failed to extract PDF pages: no rendered page images were produced")
-	failScript := filepath.Join(scriptDir, "pdftoppm-fail")
-	require.NoError(t, os.WriteFile(failScript, []byte("#!/bin/bash\necho render failed >&2\nexit 1\n"), 0o755))
 	pdftoppmPath = failScript
 	_, _, err = extractPDFPages(filepath.Join(t.TempDir(), "fake.pdf"), pdfPageRange{
 		FirstPage: 1,
@@ -2286,6 +2305,25 @@ func TestPDFHelpersCoverRemainingBranches(t *testing.T) {
 		Count:     1,
 	})
 	require.EqualError(t, err, "failed to extract PDF pages: render failed")
+}
+
+func TestPdftoppmRunUsesDefaultCommandRunner(t *testing.T) {
+	t.Parallel()
+	pdftoppmTestMu.Lock()
+	t.Cleanup(func() {
+		pdftoppmTestMu.Unlock()
+	})
+	output, err := pdftoppmRun(os.Args[0], "-test.run=TestPdftoppmRunHelperProcess", "--", "pdftoppm-run-helper")
+	require.NoError(t, err)
+	require.Equal(t, "pdftoppm helper\n", string(output))
+}
+
+func TestPdftoppmRunHelperProcess(t *testing.T) {
+	if len(os.Args) == 0 || os.Args[len(os.Args)-1] != "pdftoppm-run-helper" {
+		return
+	}
+	_, _ = fmt.Fprintln(os.Stdout, "pdftoppm helper")
+	os.Exit(0)
 }
 
 func TestExtractPDFPagesFailsWhenPdftoppmIsUnavailable(t *testing.T) {
@@ -2296,7 +2334,6 @@ func TestExtractPDFPagesFailsWhenPdftoppmIsUnavailable(t *testing.T) {
 	})
 	oldLookPath := pdftoppmLookPath
 	oldPath := pdftoppmPath
-	oldOnce := pdftoppmOnce
 	pdftoppmLookPath = func(string) (string, error) {
 		return "", errors.New("not found")
 	}
@@ -2305,7 +2342,7 @@ func TestExtractPDFPagesFailsWhenPdftoppmIsUnavailable(t *testing.T) {
 	t.Cleanup(func() {
 		pdftoppmLookPath = oldLookPath
 		pdftoppmPath = oldPath
-		pdftoppmOnce = oldOnce
+		pdftoppmOnce = sync.Once{}
 	})
 	_, _, err := extractPDFPages(filepath.Join(t.TempDir(), "missing.pdf"), pdfPageRange{
 		FirstPage: 1,
@@ -2391,7 +2428,19 @@ func newTestPDF(t *testing.T, pages []string) []byte {
 func writeExecutableFile(t *testing.T, dir string, name string, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	require.NoError(t, err)
+	_, err = f.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	require.NoError(t, os.Chmod(path, 0o555))
+	return path
+}
+
+func requireExecutablePath(t *testing.T, name string) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	require.NoError(t, err)
 	return path
 }
 

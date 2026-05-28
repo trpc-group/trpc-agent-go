@@ -390,7 +390,18 @@ func (e *CodeExecutor) ExecuteInline(
 }
 
 // Engine exposes the local runtime as an Engine for skills.
+//
+// The returned Engine advertises Capabilities{SupportsCleanEnv: true}
+// because the local runtime forwards spec.Env directly into
+// exec.Cmd.Env when spec.CleanEnv is true, giving the child
+// process the minimal env contract that tool/workspaceexec policy
+// mode relies on. Backends that have not yet been audited for
+// CleanEnv (container, e2b) keep the zero-valued Capabilities so
+// policy-gated tools fail closed there.
 func (e *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := e.ensureWS()
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return codeexecutor.NewEngineWithCapabilities(
+		rt, rt, rt,
+		codeexecutor.Capabilities{SupportsCleanEnv: true},
+	)
 }

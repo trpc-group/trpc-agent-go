@@ -13,7 +13,6 @@ package redis
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sync"
 
 	"github.com/google/uuid"
@@ -24,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/sessionopt"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/hashidx"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
@@ -453,7 +453,8 @@ func (s *Service) ListSessions(
 
 	// List zset (if zset awareness is enabled: transition or legacy)
 	if !s.compatEnabled() {
-		return hashidxSessions, nil
+		sessionopt.SortByUpdatedDesc(hashidxSessions)
+		return sessionopt.ApplyListPage(hashidxSessions, opt), nil
 	}
 
 	zsetSessions, err := s.zsetClient.ListSessions(ctx, userKey, eventLimit, opt.EventTime, opt.ListSessionOnlyMeta)
@@ -481,11 +482,9 @@ func (s *Service) ListSessions(
 	}
 
 	// Sort by UpdatedAt descending to match SQL-based implementations.
-	slices.SortFunc(sessions, func(a, b *session.Session) int {
-		return b.UpdatedAt.Compare(a.UpdatedAt)
-	})
+	sessionopt.SortByUpdatedDesc(sessions)
 
-	return sessions, nil
+	return sessionopt.ApplyListPage(sessions, opt), nil
 }
 
 // DeleteSession deletes a session.

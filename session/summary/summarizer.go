@@ -47,8 +47,9 @@ const (
 
 const (
 	// lastIncludedTsKey is the key for last included timestamp in summary.
-	// This key is used to store the last included timestamp in the session state.
-	lastIncludedTsKey = "summary:last_included_ts"
+	lastIncludedTsKey = session.SummaryLastIncludedTimestampStateKey
+	// lastIncludedEventIDKey is the key for last included event ID in summary.
+	lastIncludedEventIDKey = session.SummaryLastIncludedEventIDStateKey
 
 	// conversationTextVar is the prompt variable name for conversation text (without braces).
 	conversationTextVar = "conversation_text"
@@ -324,7 +325,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
 
-	s.recordLastIncludedTimestamp(sess, eventsToSummarize)
+	s.recordLastIncludedBoundary(sess, eventsToSummarize)
 
 	if s.postHook != nil {
 		hookCtx := &PostSummaryHookContext{
@@ -344,13 +345,19 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	return summaryText, nil
 }
 
-// recordLastIncludedTimestamp records the last included timestamp in the session state.
-func (s *sessionSummarizer) recordLastIncludedTimestamp(sess *session.Session, events []event.Event) {
+// recordLastIncludedBoundary records the last included summary boundary in the session state.
+func (s *sessionSummarizer) recordLastIncludedBoundary(sess *session.Session, events []event.Event) {
 	if sess == nil || len(events) == 0 {
 		return
 	}
-	last := events[len(events)-1].Timestamp.UTC()
-	sess.SetState(lastIncludedTsKey, []byte(last.Format(time.RFC3339Nano)))
+	last := events[len(events)-1]
+	lastTimestamp := last.Timestamp.UTC()
+	sess.SetState(lastIncludedTsKey, []byte(lastTimestamp.Format(time.RFC3339Nano)))
+	if last.ID == "" {
+		sess.DeleteState(lastIncludedEventIDKey)
+		return
+	}
+	sess.SetState(lastIncludedEventIDKey, []byte(last.ID))
 }
 
 func (s *sessionSummarizer) buildCheckSession(
@@ -363,9 +370,18 @@ func (s *sessionSummarizer) buildCheckSession(
 	delta := filterDeltaEvents(checkSess)
 	filtered := s.filterEventsForSummary(delta)
 	thresholdEvents := filterThresholdEventsForSession(filtered, checkSess)
+	thresholdMessage := extractTokenThresholdMessage(
+		thresholdEvents,
+		s.toolCallFormatter,
+		s.toolResultFormatter,
+	)
 	checkSess.SetState(
 		tokenThresholdConversationTextStateKey,
-		[]byte(s.extractConversationText(thresholdEvents)),
+		[]byte(thresholdMessage.Content),
+	)
+	checkSess.SetState(
+		tokenThresholdReasoningContentStateKey,
+		[]byte(thresholdMessage.ReasoningContent),
 	)
 	return checkSess
 }
@@ -602,6 +618,36 @@ func extractConversationText(
 		}
 	}
 
+	return strings.Join(parts, "\n")
+}
+
+func extractTokenThresholdMessage(
+	events []event.Event,
+	toolCallFmt ToolCallFormatter,
+	toolResultFmt ToolResultFormatter,
+) model.Message {
+	return model.Message{
+		Content: extractConversationText(
+			events,
+			toolCallFmt,
+			toolResultFmt,
+		),
+		ReasoningContent: extractReasoningContent(events),
+	}
+}
+
+func extractReasoningContent(events []event.Event) string {
+	var parts []string
+	for _, e := range events {
+		if e.Response == nil {
+			continue
+		}
+		for _, choice := range e.Response.Choices {
+			if trimmed := strings.TrimSpace(choice.Message.ReasoningContent); trimmed != "" {
+				parts = append(parts, trimmed)
+			}
+		}
+	}
 	return strings.Join(parts, "\n")
 }
 

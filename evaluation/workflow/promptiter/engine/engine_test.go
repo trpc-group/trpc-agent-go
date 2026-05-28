@@ -12,7 +12,10 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"runtime"
+	"sync"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/stretchr/testify/assert"
@@ -39,9 +42,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const testSurfaceID = "node_1#instruction"
+const (
+	testSurfaceID     = "node_1#instruction"
+	testToolSurfaceID = "node_1#tool"
+)
 
 type fakeBackwarder struct {
+	mu       sync.Mutex
 	requests []*backwarder.Request
 	fn       func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error)
 }
@@ -50,7 +57,9 @@ func (f *fakeBackwarder) Backward(
 	ctx context.Context,
 	request *backwarder.Request,
 ) (*backwarder.Result, error) {
+	f.mu.Lock()
 	f.requests = append(f.requests, request)
+	f.mu.Unlock()
 	if f.fn == nil {
 		return &backwarder.Result{}, nil
 	}
@@ -58,6 +67,7 @@ func (f *fakeBackwarder) Backward(
 }
 
 type fakeAggregator struct {
+	mu       sync.Mutex
 	requests []*aggregator.Request
 	fn       func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error)
 }
@@ -66,7 +76,9 @@ func (f *fakeAggregator) Aggregate(
 	ctx context.Context,
 	request *aggregator.Request,
 ) (*aggregator.Result, error) {
+	f.mu.Lock()
 	f.requests = append(f.requests, request)
+	f.mu.Unlock()
 	if f.fn == nil {
 		return &aggregator.Result{}, nil
 	}
@@ -74,6 +86,7 @@ func (f *fakeAggregator) Aggregate(
 }
 
 type fakeOptimizer struct {
+	mu       sync.Mutex
 	requests []*optimizer.Request
 	fn       func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error)
 }
@@ -82,7 +95,9 @@ func (f *fakeOptimizer) Optimize(
 	ctx context.Context,
 	request *optimizer.Request,
 ) (*optimizer.Result, error) {
+	f.mu.Lock()
 	f.requests = append(f.requests, request)
+	f.mu.Unlock()
 	if f.fn == nil {
 		return &optimizer.Result{}, nil
 	}
@@ -498,6 +513,82 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 	assert.Len(t, backward.requests, 2)
 	assert.Equal(t, "base prompt", *backward.requests[0].Surfaces[0].Value.Text)
 	assert.Equal(t, "accepted prompt", *backward.requests[1].Surfaces[0].Value.Text)
+}
+
+func TestRunAllowsToolSurfaceInTraceWhenTargetingInstruction(t *testing.T) {
+	backward := &fakeBackwarder{
+		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
+			_ = ctx
+			require.Len(t, request.Surfaces, 1)
+			assert.Equal(t, testSurfaceID, request.Surfaces[0].SurfaceID)
+			assert.Equal(t, []string{testSurfaceID}, request.AllowedGradientSurfaceIDs)
+			return &backwarder.Result{
+				Gradients: []promptiter.SurfaceGradient{
+					{
+						EvalSetID:  request.EvalSetID,
+						EvalCaseID: request.EvalCaseID,
+						StepID:     request.StepID,
+						SurfaceID:  testSurfaceID,
+						Severity:   promptiter.LossSeverityP1,
+						Gradient:   "improve prompt",
+					},
+				},
+			}, nil
+		},
+	}
+	aggregatorInstance := &fakeAggregator{
+		fn: func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error) {
+			_ = ctx
+			return &aggregator.Result{
+				Gradient: &promptiter.AggregatedSurfaceGradient{
+					SurfaceID: request.SurfaceID,
+					NodeID:    request.NodeID,
+					Type:      request.Type,
+					Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+				},
+			}, nil
+		},
+	}
+	optimizerInstance := &fakeOptimizer{
+		fn: func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error) {
+			_ = ctx
+			return &optimizer.Result{
+				Patch: &promptiter.SurfacePatch{
+					SurfaceID: request.Surface.SurfaceID,
+					Value: astructure.SurfaceValue{
+						Text: stringPtr("accepted prompt"),
+					},
+					Reason: "update prompt",
+				},
+			}, nil
+		},
+	}
+	evalService := newScriptedEvalService(func(evalSetID string, profileValue string) scriptedEvalOutcome {
+		outcome := scriptedOutcome(evalSetID, profileValue)
+		outcome.appliedSurfaceIDs = []string{testSurfaceID, testToolSurfaceID}
+		return outcome
+	})
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgentWithToolSurface(),
+		newTestAgentEvaluator(t, evalService),
+		backward,
+		aggregatorInstance,
+		optimizerInstance,
+	)
+	assert.NoError(t, err)
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{testSurfaceID},
+		AcceptancePolicy: AcceptancePolicy{
+			MinScoreGain: 0.1,
+		},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, backward.requests, 1)
 }
 
 func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
@@ -1173,6 +1264,61 @@ func TestBuildBackwardRequestKeepsContextSurfacesButRestrictsAllowedGradientSurf
 	}
 }
 
+func TestBuildBackwardRequestPreservesEmptyAllowedGradientSurfaceIDs(t *testing.T) {
+	instructionText := "base prompt"
+	instructionSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeInstruction)
+	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "node_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM, Name: "writer"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: instructionSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
+					Text: &instructionText,
+				},
+			},
+			{
+				SurfaceID: modelSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeModel,
+				Value: astructure.SurfaceValue{
+					Model: &astructure.ModelRef{Name: "gpt-test"},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	request, err := buildBackwardRequest(
+		structure,
+		nil,
+		map[string]indexedTraceStep{},
+		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
+		atrace.Step{
+			StepID:            "step_1",
+			NodeID:            "node_1",
+			AppliedSurfaceIDs: []string{instructionSurfaceID},
+		},
+		[]backwarder.GradientPacket{
+			{
+				FromStepID: "step_2",
+				Severity:   promptiter.LossSeverityP1,
+				Gradient:   "focus on the live call",
+			},
+		},
+		targetSurfaceSet{modelSurfaceID: {}},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, request)
+	assert.NotNil(t, request.AllowedGradientSurfaceIDs)
+	assert.Empty(t, request.AllowedGradientSurfaceIDs)
+}
+
 func TestAggregateRejectsOutOfScopeGradient(t *testing.T) {
 	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
 	structure, err := newStructureState(&astructure.Snapshot{
@@ -1212,7 +1358,7 @@ func TestAggregateRejectsOutOfScopeGradient(t *testing.T) {
 				},
 			},
 		},
-	}, targetSurfaceSet{testSurfaceID: {}})
+	}, targetSurfaceSet{testSurfaceID: {}}, AggregationOptions{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "outside target surfaces")
 	assert.Empty(t, aggregatorInstance.requests)
@@ -1223,13 +1369,13 @@ func TestAggregateValidatesDependenciesAndResponses(t *testing.T) {
 	require.NoError(t, err)
 	t.Run("nil aggregator", func(t *testing.T) {
 		engineInstance := &engine{}
-		result, runErr := engineInstance.aggregate(context.Background(), structure, nil, targetSurfaceSet{})
+		result, runErr := engineInstance.aggregate(context.Background(), structure, nil, targetSurfaceSet{}, AggregationOptions{})
 		assert.Nil(t, result)
 		assert.EqualError(t, runErr, "aggregator is nil")
 	})
 	t.Run("nil structure", func(t *testing.T) {
 		engineInstance := &engine{aggregator: &fakeAggregator{}}
-		result, runErr := engineInstance.aggregate(context.Background(), nil, nil, targetSurfaceSet{})
+		result, runErr := engineInstance.aggregate(context.Background(), nil, nil, targetSurfaceSet{}, AggregationOptions{})
 		assert.Nil(t, result)
 		assert.EqualError(t, runErr, "structure state is nil")
 	})
@@ -1250,7 +1396,7 @@ func TestAggregateValidatesDependenciesAndResponses(t *testing.T) {
 					},
 				},
 			},
-		}, targetSurfaceSet{"missing#instruction": {}})
+		}, targetSurfaceSet{"missing#instruction": {}}, AggregationOptions{})
 		assert.Nil(t, result)
 		assert.ErrorContains(t, runErr, "aggregated surface id")
 	})
@@ -1279,7 +1425,7 @@ func TestAggregateValidatesDependenciesAndResponses(t *testing.T) {
 					},
 				},
 			},
-		}, targetSurfaceSet{testSurfaceID: {}})
+		}, targetSurfaceSet{testSurfaceID: {}}, AggregationOptions{})
 		assert.Nil(t, result)
 		assert.ErrorContains(t, runErr, "aggregate surface")
 	})
@@ -1308,7 +1454,7 @@ func TestAggregateValidatesDependenciesAndResponses(t *testing.T) {
 					},
 				},
 			},
-		}, targetSurfaceSet{testSurfaceID: {}})
+		}, targetSurfaceSet{testSurfaceID: {}}, AggregationOptions{})
 		assert.Nil(t, result)
 		assert.ErrorContains(t, runErr, "returned empty result")
 	})
@@ -1344,7 +1490,7 @@ func TestOptimizeRejectsOutOfScopeSurface(t *testing.T) {
 				Type:      astructure.SurfaceTypeModel,
 			},
 		},
-	}, targetSurfaceSet{testSurfaceID: {}})
+	}, targetSurfaceSet{testSurfaceID: {}}, OptimizerOptions{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "outside target surfaces")
 	assert.Empty(t, optimizerInstance.requests)
@@ -1355,13 +1501,13 @@ func TestOptimizeValidatesDependenciesAndResponses(t *testing.T) {
 	require.NoError(t, err)
 	t.Run("nil optimizer", func(t *testing.T) {
 		engineInstance := &engine{}
-		patchSet, runErr := engineInstance.optimize(context.Background(), structure, nil, nil, targetSurfaceSet{})
+		patchSet, runErr := engineInstance.optimize(context.Background(), structure, nil, nil, targetSurfaceSet{}, OptimizerOptions{})
 		assert.Nil(t, patchSet)
 		assert.EqualError(t, runErr, "optimizer is nil")
 	})
 	t.Run("nil structure", func(t *testing.T) {
 		engineInstance := &engine{optimizer: &fakeOptimizer{}}
-		patchSet, runErr := engineInstance.optimize(context.Background(), nil, nil, nil, targetSurfaceSet{})
+		patchSet, runErr := engineInstance.optimize(context.Background(), nil, nil, nil, targetSurfaceSet{}, OptimizerOptions{})
 		assert.Nil(t, patchSet)
 		assert.EqualError(t, runErr, "structure state is nil")
 	})
@@ -1376,7 +1522,7 @@ func TestOptimizeValidatesDependenciesAndResponses(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: "missing#instruction", Gradient: "fix"}},
 				},
 			},
-		}, targetSurfaceSet{"missing#instruction": {}})
+		}, targetSurfaceSet{"missing#instruction": {}}, OptimizerOptions{})
 		assert.Nil(t, patchSet)
 		assert.ErrorContains(t, runErr, "surface id")
 	})
@@ -1399,7 +1545,7 @@ func TestOptimizeValidatesDependenciesAndResponses(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: testSurfaceID, Gradient: "fix"}},
 				},
 			},
-		}, targetSurfaceSet{testSurfaceID: {}})
+		}, targetSurfaceSet{testSurfaceID: {}}, OptimizerOptions{})
 		assert.Nil(t, patchSet)
 		assert.ErrorContains(t, runErr, "returned empty result")
 	})
@@ -1456,7 +1602,7 @@ func TestOptimizeValidatesDependenciesAndResponses(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: secondSurfaceID, Gradient: "fix global"}},
 				},
 			},
-		}, targetSurfaceSet{testSurfaceID: {}, secondSurfaceID: {}})
+		}, targetSurfaceSet{testSurfaceID: {}, secondSurfaceID: {}}, OptimizerOptions{})
 		require.NoError(t, runErr)
 		require.NotNil(t, patchSet)
 		require.Len(t, patchSet.Patches, 2)
@@ -1634,6 +1780,82 @@ func TestValidateEvalSetInputsRejectsInvalidInputs(t *testing.T) {
 			EvalCaseIDs: []string{""},
 		},
 	}), `train eval case id for eval set "train" is empty`)
+	assert.NoError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID:   "train",
+			EvalCaseIDs: []string{"case_1"},
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP1,
+					Reason:     "business reason",
+				},
+			},
+		},
+	}))
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Reason:     " ",
+				},
+			},
+		},
+	}), `train loss hint reason for eval set "train" case "case_1" metric "quality" is empty`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: " ",
+					MetricName: "quality",
+					Reason:     "business reason",
+				},
+			},
+		},
+	}), `train loss hint eval case id for eval set "train" is empty`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: " ",
+					Reason:     "business reason",
+				},
+			},
+		},
+	}), `train loss hint metric name for eval set "train" case "case_1" is empty`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverity("P4"),
+					Reason:     "business reason",
+				},
+			},
+		},
+	}), `train loss hint severity "P4" for eval set "train" case "case_1" metric "quality" is invalid`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID:   "train",
+			EvalCaseIDs: []string{"case_1"},
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_2",
+					MetricName: "quality",
+					Reason:     "business reason",
+				},
+			},
+		},
+	}), `train loss hint eval case "case_2" is not selected for eval set "train"`)
 }
 
 func TestRunRejectsNonPositiveMaxRounds(t *testing.T) {
@@ -1653,6 +1875,37 @@ func TestRunRejectsNonPositiveMaxRounds(t *testing.T) {
 	})
 	assert.Nil(t, result)
 	assert.EqualError(t, runErr, "max rounds must be greater than 0")
+}
+
+func TestRunRejectsNegativeStageOptions(t *testing.T) {
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
+		&fakeBackwarder{},
+		&fakeAggregator{},
+		&fakeOptimizer{},
+	)
+	require.NoError(t, err)
+	baseRequest := func() *RunRequest {
+		return &RunRequest{
+			Train:      testEvalSetInputs("train"),
+			Validation: testEvalSetInputs("validation"),
+			MaxRounds:  1,
+		}
+	}
+	request := baseRequest()
+	request.BackwardOptions = BackwardOptions{CaseParallelism: -1}
+	_, runErr := engineInstance.Run(context.Background(), request)
+	assert.EqualError(t, runErr, "backward case parallelism must be non-negative")
+	request = baseRequest()
+	request.AggregationOptions = AggregationOptions{SurfaceParallelism: -1}
+	_, runErr = engineInstance.Run(context.Background(), request)
+	assert.EqualError(t, runErr, "aggregation surface parallelism must be non-negative")
+	request = baseRequest()
+	request.OptimizerOptions = OptimizerOptions{SurfaceParallelism: -1}
+	_, runErr = engineInstance.Run(context.Background(), request)
+	assert.EqualError(t, runErr, "optimizer surface parallelism must be non-negative")
 }
 
 func TestRunRejectsInvalidInitialProfile(t *testing.T) {
@@ -1782,6 +2035,31 @@ func TestValidateTraceAgainstStructure(t *testing.T) {
 			},
 		},
 	}))
+}
+
+func TestValidateTraceAgainstStructureAllowsKnownUnsupportedSurface(t *testing.T) {
+	structure, err := newStructureState(testStructureSnapshotWithToolSurface(t))
+	assert.NoError(t, err)
+	err = validateTraceAgainstStructure(structure, &atrace.Trace{
+		Steps: []atrace.Step{
+			{
+				StepID:            "step_1",
+				NodeID:            "node_1",
+				AppliedSurfaceIDs: []string{testSurfaceID, testToolSurfaceID},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	err = validateTraceAgainstStructure(structure, &atrace.Trace{
+		Steps: []atrace.Step{
+			{
+				StepID:            "step_1",
+				NodeID:            "node_1",
+				AppliedSurfaceIDs: []string{"node_1#missing_tool"},
+			},
+		},
+	})
+	assert.EqualError(t, err, `execution trace step "step_1" references unknown surface id "node_1#missing_tool"`)
 }
 
 func TestExtractInferenceTraceDetails(t *testing.T) {
@@ -2042,6 +2320,61 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	assert.NotContains(t, state.surfaceIndex, "candidate#unsupported")
 }
 
+func TestBuildKnownSurfaceIDsValidation(t *testing.T) {
+	nodes := map[string]astructure.Node{
+		"node_1": {NodeID: "node_1"},
+	}
+	known, err := buildKnownSurfaceIDs([]astructure.Surface{
+		{
+			SurfaceID: "node_1#instruction",
+			NodeID:    "node_1",
+		},
+		{
+			SurfaceID: "node_1#tool",
+			NodeID:    "node_1",
+		},
+	}, nodes)
+	assert.NoError(t, err)
+	assert.Equal(t, map[string]struct{}{
+		"node_1#instruction": {},
+		"node_1#tool":        {},
+	}, known)
+	known, err = buildKnownSurfaceIDs([]astructure.Surface{
+		{
+			NodeID: "node_1",
+		},
+	}, nodes)
+	assert.Nil(t, known)
+	assert.EqualError(t, err, "surface id is empty")
+	known, err = buildKnownSurfaceIDs([]astructure.Surface{
+		{
+			SurfaceID: "node_1#instruction",
+		},
+	}, nodes)
+	assert.Nil(t, known)
+	assert.EqualError(t, err, "surface node id is empty")
+	known, err = buildKnownSurfaceIDs([]astructure.Surface{
+		{
+			SurfaceID: "unknown#instruction",
+			NodeID:    "unknown",
+		},
+	}, nodes)
+	assert.Nil(t, known)
+	assert.EqualError(t, err, `surface "unknown#instruction" references unknown node id "unknown"`)
+	known, err = buildKnownSurfaceIDs([]astructure.Surface{
+		{
+			SurfaceID: "node_1#instruction",
+			NodeID:    "node_1",
+		},
+		{
+			SurfaceID: "node_1#instruction",
+			NodeID:    "node_1",
+		},
+	}, nodes)
+	assert.Nil(t, known)
+	assert.EqualError(t, err, `duplicate surface id "node_1#instruction"`)
+}
+
 func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 	structure, err := newStructureState(testStructureSnapshot(t))
 	assert.NoError(t, err)
@@ -2199,16 +2532,16 @@ func TestBackwardCoversAdditionalBranches(t *testing.T) {
 	structure, err := newStructureState(testStructureSnapshot(t))
 	assert.NoError(t, err)
 	engineInstance := &engine{}
-	result, backwardErr := engineInstance.backward(context.Background(), structure, nil, nil, nil, nil)
+	result, backwardErr := engineInstance.backward(context.Background(), structure, nil, nil, nil, nil, BackwardOptions{})
 	assert.Nil(t, result)
 	assert.EqualError(t, backwardErr, "backwarder is nil")
 	engineInstance.backwarder = &fakeBackwarder{}
-	result, backwardErr = engineInstance.backward(context.Background(), nil, nil, nil, nil, nil)
+	result, backwardErr = engineInstance.backward(context.Background(), nil, nil, nil, nil, nil, BackwardOptions{})
 	assert.Nil(t, result)
 	assert.EqualError(t, backwardErr, "structure state is nil")
 	result, backwardErr = engineInstance.backward(context.Background(), structure, nil, &EvaluationResult{}, []promptiter.CaseLoss{
 		{EvalSetID: "train", EvalCaseID: "case_1"},
-	}, nil)
+	}, nil, BackwardOptions{})
 	assert.Nil(t, result)
 	assert.EqualError(t, backwardErr, `eval case "case_1" from eval set "train" is missing from training result`)
 	caseResult, backwardErr := engineInstance.backwardCase(context.Background(), structure, nil, CaseResult{
@@ -2317,7 +2650,7 @@ func TestBackwardCoversAdditionalBranches(t *testing.T) {
 	}, []promptiter.CaseLoss{
 		{EvalSetID: "set_b", EvalCaseID: "case_b", TerminalLosses: []promptiter.TerminalLoss{{StepID: "step_1", Loss: "b"}}},
 		{EvalSetID: "set_a", EvalCaseID: "case_a", TerminalLosses: []promptiter.TerminalLoss{{StepID: "step_1", Loss: "a"}}},
-	}, targetSurfaceSet{testSurfaceID: {}})
+	}, targetSurfaceSet{testSurfaceID: {}}, BackwardOptions{})
 	assert.NoError(t, backwardErr)
 	require.NotNil(t, result)
 	require.Len(t, result.Cases, 2)
@@ -2325,6 +2658,309 @@ func TestBackwardCoversAdditionalBranches(t *testing.T) {
 	assert.Equal(t, "case_a", result.Cases[0].EvalCaseID)
 	assert.Equal(t, "set_b", result.Cases[1].EvalSetID)
 	assert.Equal(t, "case_b", result.Cases[1].EvalCaseID)
+}
+
+func TestBackwardRunsEvalCasesInParallel(t *testing.T) {
+	structure, err := newStructureState(testStructureSnapshot(t))
+	require.NoError(t, err)
+	previousGOMAXPROCS := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(previousGOMAXPROCS)
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	engineInstance := &engine{
+		backwarder: &fakeBackwarder{
+			fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
+				started <- request.EvalCaseID
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				return &backwarder.Result{
+					Gradients: []promptiter.SurfaceGradient{{
+						EvalSetID:  request.EvalSetID,
+						EvalCaseID: request.EvalCaseID,
+						StepID:     request.StepID,
+						SurfaceID:  testSurfaceID,
+						Gradient:   "fix",
+					}},
+				}, nil
+			},
+		},
+	}
+	done := make(chan struct {
+		result *BackwardResult
+		err    error
+	}, 1)
+	go func() {
+		result, runErr := engineInstance.backward(
+			context.Background(),
+			structure,
+			nil,
+			parallelBackwardTrainResult(),
+			parallelBackwardLosses(),
+			targetSurfaceSet{testSurfaceID: {}},
+			BackwardOptions{CaseParallelismEnabled: true},
+		)
+		done <- struct {
+			result *BackwardResult
+			err    error
+		}{result: result, err: runErr}
+	}()
+	first := waitForParallelStart(t, started, releaseAll)
+	second := waitForParallelStart(t, started, releaseAll)
+	assert.ElementsMatch(t, []string{"case_a", "case_b"}, []string{first, second})
+	releaseAll()
+	select {
+	case output := <-done:
+		require.NoError(t, output.err)
+		require.NotNil(t, output.result)
+		require.Len(t, output.result.Cases, 2)
+		assert.Equal(t, "case_a", output.result.Cases[0].EvalCaseID)
+		assert.Equal(t, "case_b", output.result.Cases[1].EvalCaseID)
+	case <-time.After(time.Second):
+		require.FailNow(t, "parallel backward did not finish")
+	}
+}
+
+func TestAggregateRunsSurfacesInParallel(t *testing.T) {
+	structure, secondSurfaceID := twoSurfaceStructure(t)
+	previousGOMAXPROCS := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(previousGOMAXPROCS)
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	engineInstance := &engine{
+		aggregator: &fakeAggregator{
+			fn: func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error) {
+				started <- request.SurfaceID
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				return &aggregator.Result{
+					Gradient: &promptiter.AggregatedSurfaceGradient{
+						SurfaceID: request.SurfaceID,
+						NodeID:    request.NodeID,
+						Type:      request.Type,
+						Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+					},
+				}, nil
+			},
+		},
+	}
+	done := make(chan struct {
+		result *AggregationResult
+		err    error
+	}, 1)
+	go func() {
+		result, runErr := engineInstance.aggregate(
+			context.Background(),
+			structure,
+			twoSurfaceBackwardResult(secondSurfaceID),
+			targetSurfaceSet{testSurfaceID: {}, secondSurfaceID: {}},
+			AggregationOptions{SurfaceParallelismEnabled: true},
+		)
+		done <- struct {
+			result *AggregationResult
+			err    error
+		}{result: result, err: runErr}
+	}()
+	first := waitForParallelStart(t, started, releaseAll)
+	second := waitForParallelStart(t, started, releaseAll)
+	assert.ElementsMatch(t, []string{testSurfaceID, secondSurfaceID}, []string{first, second})
+	releaseAll()
+	select {
+	case output := <-done:
+		require.NoError(t, output.err)
+		require.NotNil(t, output.result)
+		require.Len(t, output.result.Surfaces, 2)
+		assert.Equal(t, secondSurfaceID, output.result.Surfaces[0].SurfaceID)
+		assert.Equal(t, testSurfaceID, output.result.Surfaces[1].SurfaceID)
+	case <-time.After(time.Second):
+		require.FailNow(t, "parallel aggregation did not finish")
+	}
+}
+
+func TestOptimizeRunsSurfacesInParallel(t *testing.T) {
+	structure, secondSurfaceID := twoSurfaceStructure(t)
+	previousGOMAXPROCS := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(previousGOMAXPROCS)
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	engineInstance := &engine{
+		optimizer: &fakeOptimizer{
+			fn: func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error) {
+				started <- request.Surface.SurfaceID
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				return &optimizer.Result{
+					Patch: &promptiter.SurfacePatch{
+						SurfaceID: request.Surface.SurfaceID,
+						Value:     request.Surface.Value,
+						Reason:    "keep",
+					},
+				}, nil
+			},
+		},
+	}
+	done := make(chan struct {
+		result *promptiter.PatchSet
+		err    error
+	}, 1)
+	go func() {
+		result, runErr := engineInstance.optimize(
+			context.Background(),
+			structure,
+			nil,
+			twoSurfaceAggregationResult(secondSurfaceID),
+			targetSurfaceSet{testSurfaceID: {}, secondSurfaceID: {}},
+			OptimizerOptions{SurfaceParallelismEnabled: true},
+		)
+		done <- struct {
+			result *promptiter.PatchSet
+			err    error
+		}{result: result, err: runErr}
+	}()
+	first := waitForParallelStart(t, started, releaseAll)
+	second := waitForParallelStart(t, started, releaseAll)
+	assert.ElementsMatch(t, []string{testSurfaceID, secondSurfaceID}, []string{first, second})
+	releaseAll()
+	select {
+	case output := <-done:
+		require.NoError(t, output.err)
+		require.NotNil(t, output.result)
+		require.Len(t, output.result.Patches, 2)
+		assert.Equal(t, secondSurfaceID, output.result.Patches[0].SurfaceID)
+		assert.Equal(t, testSurfaceID, output.result.Patches[1].SurfaceID)
+	case <-time.After(time.Second):
+		require.FailNow(t, "parallel optimization did not finish")
+	}
+}
+
+func TestRunIndexedParallelStopsSchedulingAfterErrorAndAggregatesErrors(t *testing.T) {
+	err0 := errors.New("index 0 failed")
+	err1 := errors.New("index 1 failed")
+	started := make(chan int, 3)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- runIndexedParallel(context.Background(), 3, 2, func(ctx context.Context, index int) error {
+			started <- index
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			if index == 0 {
+				return err0
+			}
+			if index == 1 {
+				return err1
+			}
+			return nil
+		})
+	}()
+	first := waitForParallelIndexStart(t, started, releaseAll)
+	second := waitForParallelIndexStart(t, started, releaseAll)
+	assert.ElementsMatch(t, []int{0, 1}, []int{first, second})
+	releaseAll()
+	select {
+	case runErr := <-done:
+		assert.ErrorIs(t, runErr, err0)
+		assert.ErrorIs(t, runErr, err1)
+	case <-time.After(time.Second):
+		require.FailNow(t, "parallel work did not finish")
+	}
+	select {
+	case index := <-started:
+		require.Failf(t, "unexpected work started", "index %d started after cancellation", index)
+	default:
+	}
+}
+
+func TestRunIndexedParallelDoesNotMaskBusinessErrorWithSiblingCancel(t *testing.T) {
+	businessErr := errors.New("business failed")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan int, 2)
+	indexZeroStarted := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- runIndexedParallel(ctx, 2, 2, func(ctx context.Context, index int) error {
+			started <- index
+			if index == 0 {
+				close(indexZeroStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			select {
+			case <-indexZeroStarted:
+				return businessErr
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}()
+	first := waitForParallelIndexStart(t, started, cancel)
+	second := waitForParallelIndexStart(t, started, cancel)
+	assert.ElementsMatch(t, []int{0, 1}, []int{first, second})
+	select {
+	case runErr := <-done:
+		assert.ErrorIs(t, runErr, businessErr)
+	case <-time.After(time.Second):
+		require.FailNow(t, "parallel work did not finish")
+	}
+}
+
+func TestRunIndexedParallelReturnsParentCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan int, 2)
+	done := make(chan error, 1)
+	go func() {
+		done <- runIndexedParallel(ctx, 2, 2, func(ctx context.Context, index int) error {
+			started <- index
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	first := waitForParallelIndexStart(t, started, cancel)
+	second := waitForParallelIndexStart(t, started, cancel)
+	assert.ElementsMatch(t, []int{0, 1}, []int{first, second})
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.ErrorIs(t, runErr, context.Canceled)
+	case <-time.After(time.Second):
+		require.FailNow(t, "parallel work did not finish")
+	}
 }
 
 func TestLossStopAndEventHelpers(t *testing.T) {
@@ -2413,7 +3049,7 @@ func TestOptimizeHelpersAndLossValidation(t *testing.T) {
 	structure, err := newStructureState(testStructureSnapshot(t))
 	assert.NoError(t, err)
 	engineInstance := &engine{optimizer: &fakeOptimizer{}}
-	patchSet, err := engineInstance.optimize(context.Background(), structure, nil, nil, nil)
+	patchSet, err := engineInstance.optimize(context.Background(), structure, nil, nil, nil, OptimizerOptions{})
 	assert.NoError(t, err)
 	require.NotNil(t, patchSet)
 	assert.Empty(t, patchSet.Patches)
@@ -2432,7 +3068,7 @@ func TestOptimizeHelpersAndLossValidation(t *testing.T) {
 				Type:      astructure.SurfaceTypeInstruction,
 			},
 		},
-	}, targetSurfaceSet{testSurfaceID: {}})
+	}, targetSurfaceSet{testSurfaceID: {}}, OptimizerOptions{})
 	assert.Nil(t, patchSet)
 	assert.EqualError(t, err, `optimize surface "node_1#instruction": boom`)
 	originalGradient := promptiter.AggregatedSurfaceGradient{
@@ -2626,6 +3262,21 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 		traceIndex,
 		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
 		atrace.Step{
+			StepID:            "step_2",
+			NodeID:            "node_1",
+			AppliedSurfaceIDs: []string{"node_1#missing"},
+		},
+		nil,
+		nil,
+	)
+	assert.Nil(t, request)
+	assert.EqualError(t, err, `surface id "node_1#missing" is unknown`)
+	request, err = buildBackwardRequest(
+		structure,
+		nil,
+		traceIndex,
+		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
+		atrace.Step{
 			StepID:             "step_2",
 			NodeID:             "node_1",
 			PredecessorStepIDs: []string{"missing"},
@@ -2650,6 +3301,29 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 	assert.NoError(t, err)
 	require.NotNil(t, request)
 	assert.NotNil(t, request.Input)
+}
+
+func TestBuildBackwardRequestSkipsUnsupportedAppliedSurfaces(t *testing.T) {
+	structure, err := newStructureState(testStructureSnapshotWithToolSurface(t))
+	assert.NoError(t, err)
+	request, err := buildBackwardRequest(
+		structure,
+		nil,
+		nil,
+		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
+		atrace.Step{
+			StepID:            "step_1",
+			NodeID:            "node_1",
+			AppliedSurfaceIDs: []string{testSurfaceID, testToolSurfaceID, testSurfaceID},
+		},
+		nil,
+		targetSurfaceSet{testSurfaceID: struct{}{}},
+	)
+	assert.NoError(t, err)
+	require.NotNil(t, request)
+	require.Len(t, request.Surfaces, 1)
+	assert.Equal(t, testSurfaceID, request.Surfaces[0].SurfaceID)
+	assert.Equal(t, []string{testSurfaceID}, request.AllowedGradientSurfaceIDs)
 }
 
 func TestRunRejectsEmptyTargetSurfaceIDs(t *testing.T) {
@@ -2920,6 +3594,347 @@ func TestLossExpandsMetricAcrossTraceTerminalSteps(t *testing.T) {
 	}
 }
 
+func TestMergeLossHintsAppendsToExistingFailedMetricLoss(t *testing.T) {
+	result := &EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Trace: &atrace.Trace{
+							Status: atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID: "step_1",
+									NodeID: "node_1",
+								},
+							},
+						},
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "needs improvement",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	losses, err := (&engine{}).loss(result)
+	require.NoError(t, err)
+	mergedLosses, err := mergeLossHints(losses, result, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP1,
+					Reason:     " hallucinated business answer ",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, mergedLosses, 1)
+	require.Len(t, mergedLosses[0].TerminalLosses, 2)
+	assert.Equal(t, promptiter.TerminalLoss{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+		MetricName: "quality",
+		Severity:   promptiter.LossSeverityP1,
+		StepID:     "step_1",
+		Loss:       "hallucinated business answer",
+	}, mergedLosses[0].TerminalLosses[0])
+	assert.Equal(t, "needs improvement", mergedLosses[0].TerminalLosses[1].Loss)
+}
+
+func TestMergeLossHintsReturnsOriginalLossesWhenHintsAreEmpty(t *testing.T) {
+	losses := []promptiter.CaseLoss{
+		{
+			EvalSetID:  "train",
+			EvalCaseID: "case_1",
+		},
+	}
+	mergedLosses, err := mergeLossHints(losses, nil, []EvalSetInput{{EvalSetID: "train"}})
+	assert.NoError(t, err)
+	assert.Equal(t, losses, mergedLosses)
+}
+
+func TestMergeLossHintsRejectsNilResultWhenHintsExist(t *testing.T) {
+	_, err := mergeLossHints(nil, nil, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Reason:     "manual concern",
+				},
+			},
+		},
+	})
+	assert.EqualError(t, err, "evaluation result is nil")
+}
+
+func TestMergeLossHintsRequiresCaseInTrainingResult(t *testing.T) {
+	_, err := mergeLossHints(nil, &EvaluationResult{}, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Reason:     "manual concern",
+				},
+			},
+		},
+	})
+	assert.EqualError(t, err, `loss hint case "case_1" from eval set "train" is missing from training result`)
+}
+
+func TestMergeLossHintsSkipsPassedMetric(t *testing.T) {
+	result := &EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusPassed,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	mergedLosses, err := mergeLossHints(nil, result, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP0,
+					Reason:     "manual concern",
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, mergedLosses)
+}
+
+func TestMergeLossHintsSkipsFailedMetricWithoutExistingLoss(t *testing.T) {
+	result := &EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "needs improvement",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	mergedLosses, err := mergeLossHints(nil, result, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP1,
+					Reason:     "manual concern",
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, mergedLosses)
+}
+
+func TestMergeLossHintsRequiresMetricInTrainingResult(t *testing.T) {
+	result := &EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Metrics: []MetricResult{
+							{
+								MetricName: "accuracy",
+								Status:     status.EvalStatusPassed,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	_, err := mergeLossHints(nil, result, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossHints: []LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					Reason:     "manual concern",
+				},
+			},
+		},
+	})
+	assert.EqualError(
+		t,
+		err,
+		`loss hint metric "quality" for eval case "case_1" from eval set "train" is missing from training result`,
+	)
+}
+
+func TestIndexLossHintTargetsDeduplicatesStepIDs(t *testing.T) {
+	_, stepIndex := indexLossHintTargets([]promptiter.CaseLoss{
+		{
+			EvalSetID:  "train",
+			EvalCaseID: "case_1",
+			TerminalLosses: []promptiter.TerminalLoss{
+				{
+					EvalSetID:  "train",
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					StepID:     "step_1",
+				},
+				{
+					EvalSetID:  "train",
+					EvalCaseID: "case_1",
+					MetricName: "quality",
+					StepID:     "step_1",
+				},
+			},
+		},
+	})
+	assert.Equal(t, []string{"step_1"}, stepIndex[lossHintMetricKey{
+		evalSetID:  "train",
+		evalCaseID: "case_1",
+		metricName: "quality",
+	}])
+}
+
+func TestSortCaseLossesOrdersCasesAndTerminalLosses(t *testing.T) {
+	losses := []promptiter.CaseLoss{
+		{
+			EvalSetID:  "train_b",
+			EvalCaseID: "case_2",
+			TerminalLosses: []promptiter.TerminalLoss{
+				{
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP2,
+					StepID:     "step_2",
+					Loss:       "z",
+				},
+				{
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_2",
+					Loss:       "y",
+				},
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_2",
+					Loss:       "y",
+				},
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_1",
+					Loss:       "y",
+				},
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_1",
+					Loss:       "x",
+				},
+			},
+		},
+		{
+			EvalSetID:  "train_a",
+			EvalCaseID: "case_1",
+		},
+		{
+			EvalSetID:  "train_b",
+			EvalCaseID: "case_1",
+		},
+	}
+	sortCaseLosses(losses)
+	assert.Equal(t, []promptiter.CaseLoss{
+		{
+			EvalSetID:  "train_a",
+			EvalCaseID: "case_1",
+		},
+		{
+			EvalSetID:  "train_b",
+			EvalCaseID: "case_1",
+		},
+		{
+			EvalSetID:  "train_b",
+			EvalCaseID: "case_2",
+			TerminalLosses: []promptiter.TerminalLoss{
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_1",
+					Loss:       "x",
+				},
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_1",
+					Loss:       "y",
+				},
+				{
+					MetricName: "accuracy",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_2",
+					Loss:       "y",
+				},
+				{
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP1,
+					StepID:     "step_2",
+					Loss:       "y",
+				},
+				{
+					MetricName: "quality",
+					Severity:   promptiter.LossSeverityP2,
+					StepID:     "step_2",
+					Loss:       "z",
+				},
+			},
+		},
+	}, losses)
+}
+
 func scriptedOutcome(evalSetID string, profileValue string) scriptedEvalOutcome {
 	switch evalSetID {
 	case "train":
@@ -2963,6 +3978,132 @@ func testStructureSnapshot(t *testing.T) *astructure.Snapshot {
 	return snapshot
 }
 
+func testStructureSnapshotWithToolSurface(t *testing.T) *astructure.Snapshot {
+	t.Helper()
+	snapshot, err := astructure.Export(context.Background(), testTargetAgentWithToolSurface())
+	assert.NoError(t, err)
+	return snapshot
+}
+
+func twoSurfaceStructure(t *testing.T) (*structureState, string) {
+	t.Helper()
+	secondSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeGlobalInstruction)
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "node_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM, Name: "writer"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: secondSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("global")},
+			},
+			{
+				SurfaceID: testSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
+			},
+		},
+	})
+	require.NoError(t, err)
+	return structure, secondSurfaceID
+}
+
+func parallelBackwardTrainResult() *EvaluationResult {
+	return &EvaluationResult{
+		EvalSets: []EvalSetResult{{
+			EvalSetID: "train",
+			Cases: []CaseResult{
+				parallelBackwardCase("case_b"),
+				parallelBackwardCase("case_a"),
+			},
+		}},
+	}
+}
+
+func parallelBackwardCase(evalCaseID string) CaseResult {
+	return CaseResult{
+		EvalSetID:  "train",
+		EvalCaseID: evalCaseID,
+		Trace: &atrace.Trace{
+			Steps: []atrace.Step{{
+				StepID:            "step_1",
+				NodeID:            "node_1",
+				AppliedSurfaceIDs: []string{testSurfaceID},
+			}},
+		},
+	}
+}
+
+func parallelBackwardLosses() []promptiter.CaseLoss {
+	return []promptiter.CaseLoss{
+		{EvalSetID: "train", EvalCaseID: "case_b", TerminalLosses: []promptiter.TerminalLoss{{StepID: "step_1", Loss: "b"}}},
+		{EvalSetID: "train", EvalCaseID: "case_a", TerminalLosses: []promptiter.TerminalLoss{{StepID: "step_1", Loss: "a"}}},
+	}
+}
+
+func twoSurfaceBackwardResult(secondSurfaceID string) *BackwardResult {
+	return &BackwardResult{
+		Cases: []CaseBackwardResult{{
+			StepGradients: []promptiter.StepGradient{{
+				StepID: "step_1",
+				NodeID: "node_1",
+				Gradients: []promptiter.SurfaceGradient{
+					{SurfaceID: testSurfaceID, Gradient: "fix instruction"},
+					{SurfaceID: secondSurfaceID, Gradient: "fix global"},
+				},
+			}},
+		}},
+	}
+}
+
+func twoSurfaceAggregationResult(secondSurfaceID string) *AggregationResult {
+	return &AggregationResult{
+		Surfaces: []promptiter.AggregatedSurfaceGradient{
+			{
+				SurfaceID: testSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeInstruction,
+				Gradients: []promptiter.SurfaceGradient{{SurfaceID: testSurfaceID, Gradient: "fix instruction"}},
+			},
+			{
+				SurfaceID: secondSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Gradients: []promptiter.SurfaceGradient{{SurfaceID: secondSurfaceID, Gradient: "fix global"}},
+			},
+		},
+	}
+}
+
+func waitForParallelStart(t *testing.T, started <-chan string, release func()) string {
+	t.Helper()
+	select {
+	case value := <-started:
+		return value
+	case <-time.After(time.Second):
+		release()
+		require.FailNow(t, "parallel work did not start")
+		return ""
+	}
+}
+
+func waitForParallelIndexStart(t *testing.T, started <-chan int, release func()) int {
+	t.Helper()
+	select {
+	case value := <-started:
+		return value
+	case <-time.After(time.Second):
+		release()
+		require.FailNow(t, "parallel work did not start")
+		return 0
+	}
+}
+
 func testTargetAgent() agent.Agent {
 	return &fakeStructureAgent{
 		snapshot: &astructure.Snapshot{
@@ -2980,6 +4121,42 @@ func testTargetAgent() agent.Agent {
 					Type:   astructure.SurfaceTypeInstruction,
 					Value: astructure.SurfaceValue{
 						Text: stringPtr("base prompt"),
+					},
+				},
+			},
+		},
+	}
+}
+
+func testTargetAgentWithToolSurface() agent.Agent {
+	return &fakeStructureAgent{
+		snapshot: &astructure.Snapshot{
+			EntryNodeID: "node_1",
+			Nodes: []astructure.Node{
+				{
+					NodeID: "node_1",
+					Kind:   astructure.NodeKindLLM,
+					Name:   "writer",
+				},
+			},
+			Surfaces: []astructure.Surface{
+				{
+					NodeID: "node_1",
+					Type:   astructure.SurfaceTypeInstruction,
+					Value: astructure.SurfaceValue{
+						Text: stringPtr("base prompt"),
+					},
+				},
+				{
+					NodeID: "node_1",
+					Type:   astructure.SurfaceTypeTool,
+					Value: astructure.SurfaceValue{
+						Tools: []astructure.ToolRef{
+							{
+								ID:          "bad_tool",
+								Description: "bad",
+							},
+						},
 					},
 				},
 			},

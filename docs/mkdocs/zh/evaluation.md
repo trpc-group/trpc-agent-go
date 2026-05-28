@@ -1610,7 +1610,7 @@ type RubricContent struct {
 
 `EvalCase.rubrics` 用于给单个用例补充额外评估细则。每条 rubric 通过 `metricName` 指向一个已配置的 metric；评估该 case 时，框架会在该 metric 的公共 rubrics 之后追加这些细则，只影响当前 case，不改变指标文件中的全局配置。合并后的 rubric `id` 需要保持唯一。
 
-目标 metric 使用 `criterion.llmJudge` 承载 rubric 列表。内置 rubric evaluator 会读取合并后的细则；自定义 rubric evaluator 按同一字段读取即可。
+目标 metric 使用 `criterion.llmJudge` 承载 rubric 列表。内置 rubric evaluator 会读取合并后的细则，并默认使用结构化输出让裁判按 `rubricScores` 返回逐条评分。每次 `Evaluate` 执行时，框架会先合并 metric 级 rubrics 与 `EvalCase.rubrics`，再在调用裁判模型前校验参与结构化输出的 merged rubric：每条 rubric 都必须具备非空且唯一的 `id`。如果校验失败，评估会返回类似 `llm judge rubric id is required for structured output` 或 `duplicate llm judge rubric id "accuracy"` 的错误。排查时请检查 metric 配置与 case 级 rubrics 合并后的 `criterion.llmJudge.rubrics` 及其 `id`。自定义 rubric evaluator 按同一字段读取即可。
 
 `template` 仅用于 `llm_judge_template`。它将模板化评估限制在“prompt 不同，但评估编排逻辑相同”的场景，不要求框架把所有评估器都表达成模板。模板评估器不读取 `rubrics`，评估标准应直接写入 `template.prompt`。
 
@@ -2089,10 +2089,22 @@ import (
 // MessagesConstructor 负责构造裁判输入
 type MessagesConstructor interface {
 	// ConstructMessages 构造裁判输入消息
+	// LLMBaseEvaluator 会传入按轮次截取的前缀切片：actuals[:i+1] 与 expecteds[:i+1]
 	ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 		evalMetric *metric.EvalMetric) ([]model.Message, error)
 }
+
+// StructuredOutputMessagesConstructor 在构造裁判输入之外提供结构化输出约束
+type StructuredOutputMessagesConstructor interface {
+	MessagesConstructor
+	// StructuredOutput 返回裁判模型的结构化输出 schema
+	// LLMBaseEvaluator 会使用与 ConstructMessages 相同的前缀切片调用该方法
+	StructuredOutput(ctx context.Context, actuals, expecteds []*evalset.Invocation,
+		evalMetric *metric.EvalMetric) (*model.StructuredOutput, error)
+}
 ```
+
+`StructuredOutputMessagesConstructor` 是可选扩展接口。若具体 LLM 评估器实现了该接口，框架会在每一轮构造完裁判输入后调用 `StructuredOutput`，并把返回的 schema 传给裁判模型或裁判 Runner。默认的模板评估器以及内置 `llm_rubric_*` 评估器都使用该机制；未实现该接口时，框架不会附加结构化输出约束。`StructuredOutput` 返回 `(nil, nil)` 是合法的，表示当前轮不附加结构化输出约束；如果返回非空 error，评估会停止并把该错误返回给调用方。
 
 框架内置了多种 `MessagesConstructor` 实现，分别对应不同内置评估器的打分目标。默认选择关系如下。
 
@@ -2130,8 +2142,7 @@ type ResponseScorer interface {
 - `responsescorer/finalresponse` 用于 `llm_final_response`，解析裁判输出中的 valid 或 invalid 并映射为 1 或 0，同时保留 reasoning 作为 `reason`
 - `responsescorer/hallucination` 用于 `llm_hallucinations`，逐句解析裁判结论；被证据支撑或无需事实支撑的句子记 1 分，其余句子记 0 分，再按句级平均值得到该轮分数
 - `responsescorer/singlescore` 用于 `llm_judge_template` 的 `single_score` 模式，解析 `score` 与 `reason`
-- `responsescorer/rubricscores` 用于 `llm_judge_template` 的 `rubric_scores` 模式，解析 `rubricScores`
-- `responsescorer/rubricresponse` 用于 `llm_rubric_critic`、`llm_rubric_reference_critic`、`llm_rubric_response` 与 `llm_rubric_knowledge_recall`，逐条解析评估细则的 verdict yes 或 no，将每条细则映射为 1 或 0 并取平均作为该轮分数，同时输出 `rubricScores`
+- `responsescorer/rubricscores` 用于 `llm_judge_template` 的 `rubric_scores` 模式，以及 `llm_rubric_critic`、`llm_rubric_reference_critic`、`llm_rubric_response` 与 `llm_rubric_knowledge_recall`，解析 `rubricScores` 并按逐条 `score` 平均得到该轮分数
 
 ##### 样本聚合算子 samplesaggregator
 
@@ -2181,7 +2192,7 @@ type InvocationsAggregator interface {
 
 LLM Judge 类评估器默认通过 `criterion.llmJudge.judgeModel` 直连裁判模型获取裁判输出。也可以通过 `evaluation.WithJudgeRunner` 注入一个裁判 Runner，用 runner 的最终 `*model.Response` 替代直连模型。
 
-启用后 `judgeModel` 被忽略，每个 invocation 默认调用 judge runner 1 次。
+启用后 `judgeModel` 被忽略，每个 invocation 默认调用 judge runner 1 次。可以通过 `evaluation.WithJudgeRunnerNumSamples(n)` 显式增加 runner 采样次数，`n` 必须大于等于 1，非正数会在 `evaluation.New(...)` 或 `Evaluate(...)` 合并选项时返回错误。多次采样会复用当前评估器的 sample aggregator，默认按多数票选出代表样本。
 
 示例片段如下：
 
@@ -2198,6 +2209,7 @@ agentEvaluator, err := evaluation.New(
 	appName,
 	agentRunner,
 	evaluation.WithJudgeRunner(judgeRunner),
+	evaluation.WithJudgeRunnerNumSamples(3),
 )
 ```
 
@@ -2393,9 +2405,9 @@ LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM
 
 LLM 细则批判评估器对应的指标名称为 `llm_rubric_critic`，属于 LLM Judge 类评估器。它把“参考答案约束”与“细则拆解”结合起来：一方面使用 [LLMCriterion](#llmcriterion) 配置裁判模型，并通过 `rubrics` 将一个指标拆成多条可独立验证的评估细则；另一方面要求 EvalSet 预期侧提供 `finalResponse` 作为 golden answer，再对实际最终回答逐条做批判式比较。
 
-该评估器适合这样的场景：`llm_final_response` 过于粗粒度，只能给出整体通过或失败；`llm_rubric_response` 又过于宽松，因为它只判断“是否满足细则”，不强制将参考答案作为对照目标。`llm_rubric_critic` 则要求裁判站在评估器本身的视角执行评分逻辑，以参考答案为权威目标，逐条判断实际输出是否在当前 rubric 上真正满足要求，并在存在实质缺陷、遗漏、矛盾或无法验证时返回 `no`。
+该评估器适合这样的场景：`llm_final_response` 过于粗粒度，只能给出整体通过或失败；`llm_rubric_response` 又过于宽松，因为它只判断“是否满足细则”，不强制将参考答案作为对照目标。`llm_rubric_critic` 则要求裁判站在评估器本身的视角执行评分逻辑，以参考答案为权威目标，逐条判断实际输出是否在当前 rubric 上真正满足要求，并在存在实质缺陷、遗漏、矛盾或无法验证时给出 0 分。
 
-评估器会基于用户输入、实际最终回答、预期最终回答以及 `criterion.llmJudge.rubrics` 构造裁判输入。默认提示词会强调以下几点：参考答案是 golden answer；判断应聚焦当前 rubric；允许语义等价；只有存在 material defect 时才判 `no`；不能吹毛求疵，也不能脑补隐藏要求。裁判模型对每条 rubric 返回 `yes` 或 `no`，单次采样得分为所有 rubric 得分的平均值；当配置 `numSamples` 进行多次采样时，评估器会使用 `samplesaggregator/majorityvote` 选择代表结果，再与 `threshold` 对比得到通过或失败。
+评估器会基于用户输入、实际最终回答、预期最终回答以及 `criterion.llmJudge.rubrics` 构造裁判输入。默认提示词会强调以下几点：参考答案是 golden answer；判断应聚焦当前 rubric；允许语义等价；只有存在 material defect 时才给出 0 分；不能吹毛求疵，也不能脑补隐藏要求。裁判模型通过结构化输出对每条 rubric 返回 `id`、`score` 与 `reason`，其中 `score` 只能为 0 或 1，单次采样得分为所有 rubric 得分的平均值；当配置 `numSamples` 进行多次采样时，评估器会使用 `samplesaggregator/majorityvote` 选择代表结果，再与 `threshold` 对比得到通过或失败。
 
 使用 `llm_rubric_critic` 时，建议将 rubric 写得足够原子化，并确保每条 rubric 都能从用户输入、参考答案和实际回答中直接验证。由于该评估器依赖 golden answer，通常要求 EvalSet 预期侧提供 `finalResponse`。出于安全考虑，建议不要在指标配置中明文写入 `judgeModel.apiKey` 和 `judgeModel.baseURL`，可使用环境变量引用以降低泄露风险。
 
@@ -2448,7 +2460,7 @@ LLM 细则批判评估指标配置示例如下：
 
 LLM 参考答案细则批判评估器对应的指标名称为 `llm_rubric_reference_critic`，属于 LLM Judge 类评估器。它同样会结合参考答案与细则做逐条打分，但没有 `llm_rubric_critic` 那么强的失败导向。这里的参考答案更像质量锚点，用来规定应该达到的 grounding、具体度与完整度，而不是要求实际回答逐字贴齐参考答案。
 
-评估器会基于用户输入、实际最终回答、预期最终回答以及 `criterion.llmJudge.rubrics` 构造裁判输入。默认提示词会要求裁判保留参考答案所体现的关键事实、决定性线索和有效细节，同时接受忠实的同义改写和不同句式，不因措辞不同就判失败。裁判模型对每条 rubric 返回 `yes` 或 `no`，单次采样得分为所有 rubric 得分的平均值；当配置 `numSamples` 进行多次采样时，评估器会使用 `samplesaggregator/majorityvote` 选择代表结果，再与 `threshold` 对比得到通过或失败。
+评估器会基于用户输入、实际最终回答、预期最终回答以及 `criterion.llmJudge.rubrics` 构造裁判输入。默认提示词会要求裁判保留参考答案所体现的关键事实、决定性线索和有效细节，同时接受忠实的同义改写和不同句式，不因措辞不同就判失败。裁判模型通过结构化输出对每条 rubric 返回 `id`、`score` 与 `reason`，其中 `score` 只能为 0 或 1，单次采样得分为所有 rubric 得分的平均值；当配置 `numSamples` 进行多次采样时，评估器会使用 `samplesaggregator/majorityvote` 选择代表结果，再与 `threshold` 对比得到通过或失败。
 
 当 `llm_final_response` 过于粗粒度，`llm_rubric_response` 又因为完全不看参考答案而偏宽松，而 `llm_rubric_critic` 又因为把参考答案当 golden answer 而过严时，可以使用 `llm_rubric_reference_critic`。rubric 仍然建议保持原子化，并确保每条都能从用户输入、参考答案和实际回答中直接验证。由于该评估器依赖参考答案，通常要求 EvalSet 预期侧提供 `finalResponse`。出于安全考虑，建议不要在指标配置中明文写入 `judgeModel.apiKey` 和 `judgeModel.baseURL`，可使用环境变量引用以降低泄露风险。
 
@@ -2501,7 +2513,7 @@ LLM 参考答案细则批判评估指标配置示例如下：
 
 LLM 细则响应评估器对应的指标名称为 `llm_rubric_response`，属于 LLM Judge 类评估器，使用 [LLMCriterion](#llmcriterion) 配置裁判模型，并通过 `rubrics` 将一个指标拆成多条可独立验证的评估细则。该评估器侧重判定最终回答是否满足各项细则要求，适合对正确性、相关性与合规性等难以用确定性规则覆盖的目标进行自动化评估。
 
-评估器会基于 `criterion.llmJudge.rubrics` 构造裁判输入，裁判模型对每条 rubric 给出 `yes` 或 `no` 判定。单次采样得分为所有 rubric 得分的平均值，其中 `yes` 记 1 分，`no` 记 0 分。当配置 `numSamples` 进行多次采样时，评估器会使用 `samplesaggregator/majorityvote` 选择代表结果，再与 `threshold` 对比得到通过或失败。
+评估器会基于 `criterion.llmJudge.rubrics` 构造裁判输入，裁判模型通过结构化输出对每条 rubric 返回 `id`、`score` 与 `reason`。单次采样得分为所有 rubric 得分的平均值，其中 `score=1` 表示通过，`score=0` 表示失败。当配置 `numSamples` 进行多次采样时，评估器会使用 `samplesaggregator/majorityvote` 选择代表结果，再与 `threshold` 对比得到通过或失败。
 
 rubric 的表述尽量具体，并且能够直接从用户输入与最终回答中验证，避免把多条要求揉在同一条 rubric 里，以降低裁判波动并便于定位问题。出于安全考虑，建议不要在指标配置中明文写入 `judgeModel.apiKey` 和 `judgeModel.baseURL`，可使用环境变量引用以降低泄露风险。
 
@@ -2556,7 +2568,7 @@ LLM 细则响应评估指标配置示例如下：
 
 LLM 细则知识库召回评估器对应的指标名称为 `llm_rubric_knowledge_recall`，属于 LLM Judge 类评估器，使用 [LLMCriterion](#llmcriterion) 配置裁判模型，并通过 `rubrics` 描述检索证据需要支撑的关键信息。该评估器侧重评估检索到的知识是否足以支撑用户问题或细则中的关键事实，适用于 RAG 类场景对召回质量进行自动化评估。
 
-评估器会从工具调用中提取 `knowledge_search` 和 `knowledge_search_with_agentic_filter` 等知识检索工具的响应作为检索结果证据，并结合 `criterion.llmJudge.rubrics` 构造裁判输入。裁判模型对每条 rubric 返回 `yes` 或 `no` 判定，单次采样得分为平均值，多次采样时使用多数表决确定代表结果，再与 `threshold` 对比得到通过或失败。
+评估器会从工具调用中提取 `knowledge_search` 和 `knowledge_search_with_agentic_filter` 等知识检索工具的响应作为检索结果证据，并结合 `criterion.llmJudge.rubrics` 构造裁判输入。裁判模型通过结构化输出对每条 rubric 返回 `id`、`score` 与 `reason`，单次采样得分为平均值，多次采样时使用多数表决确定代表结果，再与 `threshold` 对比得到通过或失败。
 
 该评估器要求实际轨迹中包含知识检索类工具调用并返回可用的检索结果，否则无法形成稳定的裁判输入。rubric 应尽量围绕证据是否包含并支撑关键事实来写，避免将最终回答质量要求混入召回评估目标。出于安全考虑，建议不要在指标配置中明文写入 `judgeModel.apiKey` 和 `judgeModel.baseURL`，可使用环境变量引用以降低泄露风险。
 

@@ -782,28 +782,29 @@ func (p *SkillsRequestProcessor) injectOverview(
 	rendered, truncated := p.applyOverviewCap(sums)
 	flags := p.toolFlagsForInvocation(inv)
 	protocol := p.protocolGuidanceText(flags)
-	overview := p.buildOverviewText(ctx, repo, sums, rendered, truncated, flags, protocol, topRecommendation)
-	mergeOverviewIntoRequest(req, overview, protocol != "")
+	availableSkills := p.availableSkillsText(ctx, inv, repo, sums, rendered, truncated, flags, topRecommendation)
+	overview, prepend := p.defaultOverviewText(flags, availableSkills, protocol)
+	p.mergeOverview(req, overview, prepend)
 }
 
-// buildOverviewText composes the full skills-overview block that gets
-// injected into the system prompt. It is split out of injectOverview to
-// keep cyclomatic complexity manageable.
-func (p *SkillsRequestProcessor) buildOverviewText(
+func (p *SkillsRequestProcessor) availableSkillsText(
 	ctx context.Context,
+	inv *agent.Invocation,
 	repo skill.Repository,
 	sums, rendered, truncated []skill.Summary,
 	flags skillprofile.Flags,
-	protocol string,
 	topRecommendation string,
 ) string {
-	var b strings.Builder
-	if protocol != "" {
-		b.WriteString(protocol)
-		b.WriteString("\n")
+	if renderer := availableSkillsRendererFromInvocation(inv); renderer != nil {
+		return normalizeSkillsOverviewText(
+			renderer(ctx, agent.AvailableSkillsRenderRequest{
+				Summaries: append([]skill.Summary(nil), sums...),
+			}),
+		)
 	}
+	var b strings.Builder
 	writeOverviewHeader(&b, len(rendered), len(sums), len(truncated))
-	if protocol == "" && flags.Load && !flags.Run {
+	if flags.Load && !flags.Run {
 		b.WriteString("The short lines below are routing summaries only. ")
 		b.WriteString("If one looks relevant, call skill_load before relying on it or repeating domain-specific tool work.\n")
 	}
@@ -820,21 +821,33 @@ func (p *SkillsRequestProcessor) buildOverviewText(
 			p.skillOverviewSuffix(ctx, repo, s.Name))
 	}
 	writeTruncatedTail(&b, truncated)
-	if protocol == "" {
-		p.appendDefaultGuidance(&b, flags)
-	}
 	return b.String()
 }
 
-func (p *SkillsRequestProcessor) appendDefaultGuidance(
-	b *strings.Builder, flags skillprofile.Flags,
-) {
+func (p *SkillsRequestProcessor) defaultOverviewText(
+	flags skillprofile.Flags,
+	availableSkills string,
+	protocol string,
+) (string, bool) {
+	var b strings.Builder
+	if protocol != "" {
+		b.WriteString(protocol)
+		if availableSkills != "" {
+			b.WriteString("\n")
+			b.WriteString(availableSkills)
+		}
+		return b.String(), true
+	}
+	if availableSkills != "" {
+		b.WriteString(availableSkills)
+	}
 	if capability := p.capabilityGuidanceText(flags); capability != "" {
 		b.WriteString(capability)
 	}
 	if guidance := p.toolingGuidanceText(flags); guidance != "" {
 		b.WriteString(guidance)
 	}
+	return b.String(), false
 }
 
 func writeOverviewHeader(b *strings.Builder, renderedN, totalN, truncatedN int) {
@@ -862,29 +875,65 @@ func writeTruncatedTail(b *strings.Builder, truncated []skill.Summary) {
 	b.WriteString("\n")
 }
 
-// mergeOverviewIntoRequest places the rendered overview in the request's
-// system message. When protocolFirst is true the overview is prepended to
-// the existing system content (matching protocol-driven layout); otherwise
-// it is appended.
-func mergeOverviewIntoRequest(req *model.Request, overview string, protocolFirst bool) {
+func availableSkillsRendererFromInvocation(
+	inv *agent.Invocation,
+) agent.AvailableSkillsRenderer {
+	if inv != nil && inv.RunOptions.AvailableSkillsRenderer != nil {
+		return inv.RunOptions.AvailableSkillsRenderer
+	}
+	return nil
+}
+
+func normalizeSkillsOverviewText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if startsWithSectionHeader(text, skillsOverviewHeader) {
+		return text
+	}
+	return skillsOverviewHeader + "\n" + text
+}
+
+func startsWithSectionHeader(text string, header string) bool {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		return strings.TrimSpace(line) == header
+	}
+	return false
+}
+
+func (p *SkillsRequestProcessor) mergeOverview(
+	req *model.Request,
+	overview string,
+	prepend bool,
+) {
+	if req == nil || overview == "" {
+		return
+	}
 	idx := findSystemMessageIndex(req.Messages)
-	if idx < 0 {
-		msg := model.NewSystemMessage(overview)
-		req.Messages = append([]model.Message{msg}, req.Messages...)
+	if idx >= 0 {
+		sys := &req.Messages[idx]
+		if !strings.Contains(sys.Content, skillsOverviewMergeMarker(overview)) {
+			if prepend {
+				if sys.Content != "" {
+					sys.Content = overview + "\n\n" + sys.Content
+				} else {
+					sys.Content = overview
+				}
+			} else if sys.Content != "" {
+				sys.Content += "\n\n" + overview
+			} else {
+				sys.Content = overview
+			}
+		}
 		return
 	}
-	sys := &req.Messages[idx]
-	if strings.Contains(sys.Content, skillsOverviewHeader) {
-		return
-	}
-	switch {
-	case sys.Content == "":
-		sys.Content = overview
-	case protocolFirst:
-		sys.Content = overview + "\n\n" + sys.Content
-	default:
-		sys.Content += "\n\n" + overview
-	}
+	msg := model.NewSystemMessage(overview)
+	req.Messages = append([]model.Message{msg}, req.Messages...)
 }
 
 // applyOverviewCap splits the available summaries into a "rendered"
@@ -1034,6 +1083,19 @@ func overviewMessageText(msg model.Message) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func skillsOverviewMergeMarker(overview string) string {
+	if strings.Contains(overview, skillsOverviewHeader) {
+		return skillsOverviewHeader
+	}
+	if strings.Contains(overview, skillsToolingGuidanceHeader) {
+		return skillsToolingGuidanceHeader
+	}
+	if strings.Contains(overview, skillsCapabilityHeader) {
+		return skillsCapabilityHeader
+	}
+	return strings.TrimSpace(overview)
 }
 
 func (p *SkillsRequestProcessor) toolFlagsForInvocation(

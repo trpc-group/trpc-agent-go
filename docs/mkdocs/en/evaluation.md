@@ -1607,7 +1607,7 @@ type RubricContent struct {
 
 `EvalCase.rubrics` adds extra evaluation criteria for a single case. Each rubric targets a configured metric through `metricName`; when that case is evaluated, the framework appends those criteria after the metric's shared rubrics. This affects only the current case and leaves the metric file's global configuration unchanged. Rubric `id` values must be unique after merging.
 
-The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in rubric evaluators read the merged criteria, and custom rubric evaluators can read the same field.
+The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in rubric evaluators read the merged criteria and use structured output by default to make the judge return per-rubric scores through `rubricScores`. During `Evaluate`, after metric-level rubrics and `EvalCase.rubrics` are merged and before the judge model is called, each merged rubric used by structured output must have a non-empty and unique `id`. If validation fails, evaluation returns an error such as `llm judge rubric id is required for structured output` or `duplicate llm judge rubric id "accuracy"`. To debug ID conflicts, inspect the merged `criterion.llmJudge.rubrics` from the metric configuration and case-level rubrics. Custom rubric evaluators can read the same field.
 
 `template` is used only by `llm_judge_template`. It keeps template-based evaluation focused on cases where the prompt changes while the evaluation orchestration stays the same. Template evaluators do not read `rubrics`; evaluation criteria should be written directly into `template.prompt`.
 
@@ -2086,10 +2086,22 @@ import (
 // MessagesConstructor builds judge input.
 type MessagesConstructor interface {
 	// ConstructMessages builds judge input messages.
+	// LLMBaseEvaluator passes per-invocation prefix slices: actuals[:i+1] and expecteds[:i+1].
 	ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 		evalMetric *metric.EvalMetric) ([]model.Message, error)
 }
+
+// StructuredOutputMessagesConstructor provides structured output constraints in addition to judge input construction.
+type StructuredOutputMessagesConstructor interface {
+	MessagesConstructor
+	// StructuredOutput returns the structured output schema for the judge model.
+	// LLMBaseEvaluator calls it with the same per-invocation prefix slices used for ConstructMessages.
+	StructuredOutput(ctx context.Context, actuals, expecteds []*evalset.Invocation,
+		evalMetric *metric.EvalMetric) (*model.StructuredOutput, error)
+}
 ```
+
+`StructuredOutputMessagesConstructor` is an optional extension interface. If a concrete LLM evaluator implements it, the framework calls `StructuredOutput` after constructing judge input for each turn and passes the returned schema to the judge model or judge Runner. The default template evaluator and built-in `llm_rubric_*` evaluators use this mechanism; when the interface is not implemented, the framework does not attach structured output constraints. Returning `(nil, nil)` from `StructuredOutput` is valid and means no structured output constraint is attached for that turn. Returning a non-nil error stops evaluation and returns that error to the caller.
 
 The framework includes multiple `MessagesConstructor` implementations for different built-in evaluators. Default selection is as follows:
 
@@ -2127,8 +2139,7 @@ The framework includes multiple `ResponseScorer` implementations. Default select
 - `responsescorer/finalresponse` for `llm_final_response`, parsing `valid` or `invalid` from judge output and mapping to 1 or 0, while preserving `reasoning` as `reason`.
 - `responsescorer/hallucination` for `llm_hallucinations`, parsing sentence-level judgments, scoring supported or non-factual sentences as 1 and the rest as 0, and averaging across sentences for the turn score.
 - `responsescorer/singlescore` for the `single_score` mode of `llm_judge_template`, parsing `score` and `reason`.
-- `responsescorer/rubricscores` for the `rubric_scores` mode of `llm_judge_template`, parsing `rubricScores`.
-- `responsescorer/rubricresponse` for `llm_rubric_critic`, `llm_rubric_reference_critic`, `llm_rubric_response`, and `llm_rubric_knowledge_recall`, parsing verdict `yes` or `no` for each rubric, mapping each to 1 or 0, averaging as the turn score, and outputting `rubricScores`.
+- `responsescorer/rubricscores` for the `rubric_scores` mode of `llm_judge_template`, and for `llm_rubric_critic`, `llm_rubric_reference_critic`, `llm_rubric_response`, and `llm_rubric_knowledge_recall`, parsing `rubricScores` and averaging per-item `score` values as the turn score.
 
 ##### Samples Aggregator Operator
 
@@ -2178,7 +2189,7 @@ The framework includes `invocationsaggregator/average`, which is the default for
 
 By default, LLM Judge evaluators call the judge model directly via `criterion.llmJudge.judgeModel`. You can also inject a judge runner with `evaluation.WithJudgeRunner`, and use the runner's final `*model.Response` instead of a direct model call.
 
-When enabled, `judgeModel` is ignored. Each invocation calls the judge runner once.
+When enabled, `judgeModel` is ignored. Each invocation calls the judge runner once by default. You can explicitly increase runner sampling with `evaluation.WithJudgeRunnerNumSamples(n)`, where `n` must be greater than or equal to 1; non-positive values return an error from `evaluation.New(...)` or `Evaluate(...)` option merging. Multiple samples reuse the evaluator's current sample aggregator, which selects a representative sample by majority vote by default.
 
 Example snippet:
 
@@ -2195,6 +2206,7 @@ agentEvaluator, err := evaluation.New(
 	appName,
 	agentRunner,
 	evaluation.WithJudgeRunner(judgeRunner),
+	evaluation.WithJudgeRunnerNumSamples(3),
 )
 ```
 
@@ -2390,7 +2402,7 @@ See [examples/evaluation/llm/template](https://github.com/trpc-group/trpc-agent-
 
 The LLM rubric critic evaluator has the metric name `llm_rubric_critic` and is an LLM Judge evaluator. It combines the strengths of reference-based checking and rubric-based decomposition: it compares the agent final answer against the reference final answer, but still scores per rubric item. This makes it suitable for scenarios where you want the judge to behave like a strict reviewer, explicitly look for defects, and fail on ambiguity, incompleteness, or unsupported claims.
 
-The evaluator constructs judge input from user input, actual final response, expected final response, and `criterion.llmJudge.rubrics`. The default prompt instructs the judge to adopt a skeptical, failure-oriented stance, treat the reference answer as authoritative, and return `no` whenever fulfillment is missing, partial, ambiguous, or unverifiable. The judge returns `yes` or `no` for each rubric. A single sample score is the average across rubrics, and with multiple samples the evaluator uses majority vote before comparing with `threshold`.
+The evaluator constructs judge input from user input, actual final response, expected final response, and `criterion.llmJudge.rubrics`. The default prompt emphasizes that the reference answer is the golden answer, judgment should focus on the current rubric, semantically equivalent wording is acceptable, score 0 should be assigned only when there is a material defect, and the judge should neither nitpick nor infer hidden requirements. Through structured output, the judge returns `id`, `score`, and `reason` for each rubric, where `score` must be 0 or 1. A single sample score is the average across all rubric scores, and with multiple samples the evaluator uses `samplesaggregator/majorityvote` to select the representative result before comparing with `threshold`.
 
 Use `llm_rubric_critic` when plain `llm_final_response` is too coarse-grained, but `llm_rubric_response` is too permissive because it does not compare against a reference answer. Rubrics should remain atomic and directly checkable. Because this evaluator depends on a reference answer, it usually requires `finalResponse` on the expected side. For security, avoid writing `judgeModel.apiKey` and `judgeModel.baseURL` in plain text, and use environment variables instead.
 
@@ -2443,7 +2455,7 @@ Example metric configuration for LLM rubric critic:
 
 The LLM rubric reference critic evaluator has the metric name `llm_rubric_reference_critic` and is an LLM Judge evaluator. It also compares the agent final answer against a reference final answer and scores by rubric item, but it is less failure-oriented than `llm_rubric_critic`. The reference answer serves as a quality anchor that defines the target level of grounding, specificity, and completeness, while still allowing faithful paraphrases and different sentence structure.
 
-The evaluator constructs judge input from user input, actual final response, expected final response, and `criterion.llmJudge.rubrics`. The default prompt tells the judge to preserve the same decisive facts, level of useful detail, and overall fidelity demonstrated by the reference answer, while avoiding exact-match bias. The judge returns `yes` or `no` for each rubric. A single sample score is the average across rubrics, and with multiple samples the evaluator uses majority vote before comparing with `threshold`.
+The evaluator constructs judge input from user input, actual final response, expected final response, and `criterion.llmJudge.rubrics`. The default prompt asks the judge to preserve the key facts, decisive clues, and useful details shown by the reference answer, while accepting faithful paraphrases and different sentence structures instead of failing only because the wording differs. Through structured output, the judge returns `id`, `score`, and `reason` for each rubric, where `score` must be 0 or 1. A single sample score is the average across all rubric scores, and with multiple samples the evaluator uses `samplesaggregator/majorityvote` to select the representative result before comparing with `threshold`.
 
 Use `llm_rubric_reference_critic` when `llm_final_response` is too coarse-grained, `llm_rubric_response` is too permissive because it ignores the reference answer, and `llm_rubric_critic` is too strict because it treats the reference as an authoritative golden answer. Rubrics should still remain atomic and directly checkable. Because this evaluator depends on a reference answer, it usually requires `finalResponse` on the expected side. For security, avoid writing `judgeModel.apiKey` and `judgeModel.baseURL` in plain text, and use environment variables instead.
 
@@ -2496,7 +2508,7 @@ Example metric configuration for LLM rubric reference critic:
 
 The LLM rubric response evaluator has the metric name `llm_rubric_response` and is an LLM Judge evaluator. It uses [LLMCriterion](#llmcriterion) to configure the judge model and splits a metric into multiple independent rubrics via `rubrics`. It focuses on whether the final answer satisfies each rubric, suitable for automated evaluation of correctness, relevance, compliance, and other goals that are hard to cover with deterministic rules.
 
-The evaluator constructs judge input based on `criterion.llmJudge.rubrics`, and the judge model returns `yes` or `no` for each rubric. The score for one sample is the average across rubrics, where `yes` is 1 and `no` is 0. When `numSamples` is configured, it uses `samplesaggregator/majorityvote` to select the representative result and then compares with `threshold` to determine pass or fail.
+The evaluator constructs judge input based on `criterion.llmJudge.rubrics`, and through structured output the judge model returns `id`, `score`, and `reason` for each rubric. The score for one sample is the average across rubrics, where `score=1` means pass and `score=0` means fail. When `numSamples` is configured, it uses `samplesaggregator/majorityvote` to select the representative result and then compares with `threshold` to determine pass or fail.
 
 Rubrics should be concrete and directly verifiable from user input and the final answer. Avoid combining multiple requirements into one rubric to reduce judge variance and make issues easier to locate. For security, avoid writing `judgeModel.apiKey` and `judgeModel.baseURL` in plain text, and use environment variables instead.
 
@@ -2551,7 +2563,7 @@ See [examples/evaluation/llm/rubricresponse](https://github.com/trpc-group/trpc-
 
 The LLM rubric knowledge recall evaluator has the metric name `llm_rubric_knowledge_recall` and is an LLM Judge evaluator. It uses [LLMCriterion](#llmcriterion) to configure the judge model and describes key information that retrieved evidence must support via `rubrics`. This evaluator focuses on whether retrieved knowledge is sufficient to support the user's question or key facts in rubrics, and is suitable for automated recall quality evaluation in RAG scenarios.
 
-The evaluator extracts responses from knowledge retrieval tools such as `knowledge_search` and `knowledge_search_with_agentic_filter` as evidence, and constructs judge input together with `criterion.llmJudge.rubrics`. The judge model returns `yes` or `no` for each rubric. A single sample score is the average. With multiple samples, it uses majority vote to select the representative result, then compares with `threshold` to determine pass or fail.
+The evaluator extracts responses from knowledge retrieval tools such as `knowledge_search` and `knowledge_search_with_agentic_filter` as evidence, and constructs judge input together with `criterion.llmJudge.rubrics`. Through structured output, the judge model returns `id`, `score`, and `reason` for each rubric. A single sample score is the average. With multiple samples, it uses majority vote to select the representative result, then compares with `threshold` to determine pass or fail.
 
 This evaluator requires knowledge retrieval tool calls in actual traces that return usable retrieval results, otherwise it cannot form stable judge input. Rubrics should focus on whether evidence contains and supports key facts, and avoid mixing final answer quality requirements into recall evaluation. For security, avoid writing `judgeModel.apiKey` and `judgeModel.baseURL` in plain text, and use environment variables instead.
 

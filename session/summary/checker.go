@@ -41,6 +41,8 @@ var (
 
 const tokenThresholdConversationTextStateKey = session.StateTempPrefix +
 	"summary:token_threshold_conversation_text"
+const tokenThresholdReasoningContentStateKey = session.StateTempPrefix +
+	"summary:token_threshold_reasoning_content"
 
 func getTokenCounter() model.TokenCounter {
 	defaultTokenCounterMu.RLock()
@@ -65,12 +67,21 @@ func SetTokenCounter(counter model.TokenCounter) {
 	defaultTokenCounterMu.Unlock()
 }
 
-// filterDeltaEvents returns events that occurred strictly after the last
-// summarized timestamp stored in session state. If the timestamp is not set
-// or invalid, it returns all events (first summarization scenario).
+// filterDeltaEvents returns events after the last summarized boundary stored
+// in session state. Exact boundaries use the last event ID when available;
+// timestamp-only boundaries keep same-timestamp events to avoid dropping
+// uncovered history.
 func filterDeltaEvents(sess *session.Session) []event.Event {
 	if sess == nil || len(sess.Events) == 0 {
 		return nil
+	}
+
+	if rawID, ok := sess.GetState(lastIncludedEventIDKey); ok && len(rawID) > 0 {
+		for i, e := range sess.Events {
+			if e.ID == string(rawID) {
+				return sess.Events[i+1:]
+			}
+		}
 	}
 
 	raw, ok := sess.GetState(lastIncludedTsKey)
@@ -91,7 +102,7 @@ func filterDeltaEvents(sess *session.Session) []event.Event {
 
 	out := make([]event.Event, 0, len(sess.Events))
 	for _, e := range sess.Events {
-		if e.Timestamp.After(lastTs) {
+		if !e.Timestamp.Before(lastTs) {
 			out = append(out, e)
 		}
 	}
@@ -202,13 +213,14 @@ func CheckTimeThreshold(interval time.Duration) Checker {
 	}
 }
 
-// checkTokenThresholdFromText checks if the token count of the given text exceeds the threshold.
-func checkTokenThresholdFromText(
+// checkTokenThresholdFromMessage checks if the token count of the given message exceeds the threshold.
+func checkTokenThresholdFromMessage(
 	ctx context.Context,
 	tokenCount int,
-	conversationText string,
+	message model.Message,
 ) bool {
-	if conversationText == "" {
+	if strings.TrimSpace(message.Content) == "" &&
+		strings.TrimSpace(message.ReasoningContent) == "" {
 		return false
 	}
 	if ctx == nil {
@@ -218,7 +230,7 @@ func checkTokenThresholdFromText(
 	// SimpleTokenCounter.CountTokens currently never returns an error.
 	tokens, _ := getTokenCounter().CountTokens(
 		ctx,
-		model.Message{Content: conversationText},
+		message,
 	)
 	return tokens > tokenCount
 }
@@ -258,11 +270,11 @@ func checkTokenThreshold(
 	tokenCount int,
 	sess *session.Session,
 ) bool {
-	if conversationText, ok := getInjectedTokenThresholdConversationText(sess); ok {
-		return checkTokenThresholdFromText(
+	if message, ok := getInjectedTokenThresholdMessage(sess); ok {
+		return checkTokenThresholdFromMessage(
 			ctx,
 			tokenCount,
-			conversationText,
+			message,
 		)
 	}
 	delta := filterDeltaEvents(sess)
@@ -273,27 +285,29 @@ func checkTokenThreshold(
 	if len(thresholdEvents) == 0 {
 		return false
 	}
-	conversationText := extractConversationText(
+	message := extractTokenThresholdMessage(
 		thresholdEvents, nil, nil,
 	)
-	return checkTokenThresholdFromText(
+	return checkTokenThresholdFromMessage(
 		ctx,
 		tokenCount,
-		conversationText,
+		message,
 	)
 }
 
-func getInjectedTokenThresholdConversationText(
-	sess *session.Session,
-) (string, bool) {
+func getInjectedTokenThresholdMessage(sess *session.Session) (model.Message, bool) {
 	if sess == nil {
-		return "", false
+		return model.Message{}, false
 	}
-	raw, ok := sess.GetState(tokenThresholdConversationTextStateKey)
-	if !ok {
-		return "", false
+	content, hasContent := sess.GetState(tokenThresholdConversationTextStateKey)
+	reasoning, hasReasoning := sess.GetState(tokenThresholdReasoningContentStateKey)
+	if !hasContent && !hasReasoning {
+		return model.Message{}, false
 	}
-	return string(raw), true
+	return model.Message{
+		Content:          string(content),
+		ReasoningContent: string(reasoning),
+	}, true
 }
 
 // ChecksAll composes multiple checkers using AND logic.

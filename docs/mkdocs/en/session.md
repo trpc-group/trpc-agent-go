@@ -1491,6 +1491,30 @@ for _, sess := range sessions {
 }
 ```
 
+```go
+// Fetch session metadata only, without Events or Tracks
+sessions, err := sessionService.ListSessions(ctx, session.UserKey{
+    AppName: "my-agent",
+    UserID:  "user123",
+}, session.WithListSessionOnlyMeta())
+```
+
+```go
+// Fetch the second page of sessions, ordered by UpdatedAt descending
+sessions, err := sessionService.ListSessions(ctx, session.UserKey{
+    AppName: "my-agent",
+    UserID:  "user123",
+}, session.WithListSessionPage(20, 20))
+```
+
+Notes:
+
+- `session.WithListSessionOnlyMeta()` is only for `ListSessions`
+- This optimization is currently supported only by the `inmemory` and `redis` backends
+- `session.WithListSessionPage(offset, limit)` is only for `ListSessions`; `offset` must be `>= 0`, and `limit == 0` means no session-level pagination
+- Session list pagination is independent from `session.WithEventNum()` and `session.WithEventTime()`, which filter events inside each returned session
+- Results are ordered by `UpdatedAt` descending, with session ID used as a deterministic tie-breaker
+
 #### Manually Delete Session
 
 ```go
@@ -1821,7 +1845,8 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds prompt-s
 
 - **Pass 1** — Historical tool results from older requests that exceed `ContextCompactionToolResultMaxTokens` (default 1024 tokens) are replaced with a placeholder while keeping `ToolID` and `ToolName`.
 - **Pass 2** — Any single tool result (including the current request) exceeding `ContextCompactionOversizedToolResultMaxTokens` is truncated using head+tail preservation with a `[...N characters truncated...]` marker. **Disabled by default (value `0`)** — you must explicitly call `WithContextCompactionOversizedToolResultMaxTokens(...)` and keep `WithEnableContextCompaction(true)` for Pass 2 to fire (recommended opt-in value: 8192 tokens).
-- The latest `ContextCompactionKeepRecentRequests` completed requests are exempt from Pass 1 (but if Pass 2 is opted into, they remain subject to Pass 2 truncation).
+- The latest `ContextCompactionKeepRecentRequests` completed requests are exempt from Pass 1. You can also use `WithToolResultCompactionConfig(...).SkipRecentFunc` to decide how many tail events are recent (but if Pass 2 is opted into, recent/current tool results remain subject to Pass 2 truncation).
+- `WithToolResultCompactionConfig(...)` also supports tool-name policy: `ForceCleanToolNames` forces selected historical tool results to be cleaned after current/recent protection, while `KeepToolNames` preserves selected tool results and has higher priority.
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model.
 - Model-layer token tailoring remains the final fallback.
 - Context compaction uses `SimpleTokenCounter` by default. For CJK-heavy
@@ -1841,6 +1866,13 @@ llmAgent := llmagent.New(
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
     llmagent.WithContextCompactionKeepRecentRequests(1),
     llmagent.WithContextCompactionTokenCounter(counter),
+    llmagent.WithToolResultCompactionConfig(&llmagent.ToolResultCompactionConfig{
+        ForceCleanToolNames: []string{"shell", "grep"},
+        KeepToolNames:       []string{"session_load", "session_search"},
+        SkipRecentFunc: func(events []event.Event) int {
+            return 3
+        },
+    }),
 )
 ```
 

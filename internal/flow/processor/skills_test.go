@@ -253,6 +253,26 @@ func TestSkillsRequestProcessor_NoDuplicateOverview(t *testing.T) {
 	require.Equal(t, 1, cnt)
 }
 
+func TestSkillsRequestProcessor_NoDuplicateOverviewWhenHeaderMentionedInline(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("Existing " + skillsOverviewHeader + " text."),
+		},
+	}
+	p := NewSkillsRequestProcessor(repo)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	sys := req.Messages[0].Content
+	require.NotContains(t, sys, "- x: d")
+	require.NotContains(t, sys, skillsToolingGuidanceHeader)
+}
+
 func TestSkillsRequestProcessor_ToolingGuidance_Disabled(t *testing.T) {
 	repo := &mockRepo{
 		sums: []skill.Summary{{Name: "x", Description: "d"}},
@@ -617,6 +637,273 @@ func TestSkillsRequestProcessor_ProtocolGuidanceOverride(t *testing.T) {
 	)
 	require.NotContains(t, sys, skillsCapabilityHeader)
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
+}
+
+func TestSkillsRequestProcessor_OverviewRendererOverride(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "alpha", Description: "alpha skill"},
+			{Name: "beta", Description: "beta skill"},
+		},
+		full: map[string]*skill.Skill{},
+	}
+	var got []skill.Summary
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			AvailableSkillsRenderer: func(
+				_ context.Context,
+				req agent.AvailableSkillsRenderRequest,
+			) string {
+				got = append([]skill.Summary(nil), req.Summaries...)
+				return "- alpha: compact\n"
+			},
+		},
+		Session: &session.Session{},
+	}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(repo)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Equal(t, repo.sums, got)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsOverviewHeader)
+	require.Contains(t, sys, "- alpha: compact")
+	require.NotContains(t, sys, "beta skill")
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+}
+
+func TestSkillsRequestProcessor_OverviewRendererReceivesVisibleSummaries(
+	t *testing.T,
+) {
+	base := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "alpha", Description: "alpha skill"},
+			{Name: "beta", Description: "beta skill"},
+		},
+		full: map[string]*skill.Skill{},
+	}
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			return userID == "user-a" && summary.Name == "alpha"
+		},
+	)
+	var got []skill.Summary
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+			AvailableSkillsRenderer: func(
+				_ context.Context,
+				req agent.AvailableSkillsRenderRequest,
+			) string {
+				got = append([]skill.Summary(nil), req.Summaries...)
+				return "- alpha: compact"
+			},
+		},
+		Session: &session.Session{},
+	}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(repo)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	p.ProcessRequest(ctx, inv, req, nil)
+	require.Equal(
+		t,
+		[]skill.Summary{{Name: "alpha", Description: "alpha skill"}},
+		got,
+	)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, "- alpha: compact")
+	require.NotContains(t, sys, "beta")
+}
+
+func TestSkillsRequestProcessor_OverviewRendererKeepsSingleHeader(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			AvailableSkillsRenderer: func(
+				context.Context,
+				agent.AvailableSkillsRenderRequest,
+			) string {
+				return skillsOverviewHeader + "\n- x: compact"
+			},
+		},
+		Session: &session.Session{},
+	}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(repo)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	sys := req.Messages[0].Content
+	require.Equal(t, 1, strings.Count(sys, skillsOverviewHeader))
+	require.Contains(t, sys, "- x: compact")
+}
+
+func TestSkillsRequestProcessor_OverviewRendererAddsHeaderWhenMentionedInBody(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			AvailableSkillsRenderer: func(
+				context.Context,
+				agent.AvailableSkillsRenderRequest,
+			) string {
+				return "- x: mention Available skills: in prose"
+			},
+		},
+		Session: &session.Session{},
+	}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(repo)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	sys := req.Messages[0].Content
+	require.True(t, strings.HasPrefix(sys, skillsOverviewHeader+"\n"))
+	require.Contains(t, sys, "- x: mention Available skills: in prose")
+}
+
+func TestSkillsRequestProcessor_OverviewRendererKeepsLoadedContent(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math ops"}},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Body:    "Calc body",
+			},
+		},
+	}
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		RunOptions: agent.RunOptions{
+			AvailableSkillsRenderer: func(
+				context.Context,
+				agent.AvailableSkillsRenderRequest,
+			) string {
+				return "- calc: compact"
+			},
+		},
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, "- calc: compact")
+	require.Contains(t, sys, "[Loaded] calc")
+	require.Contains(t, sys, "Calc body")
+}
+
+func TestSkillsRequestProcessor_OverviewRendererBlankOmitsAvailableSkillsOnly(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math ops"}},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Body:    "Calc body",
+			},
+		},
+	}
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		RunOptions: agent.RunOptions{
+			AvailableSkillsRenderer: func(
+				context.Context,
+				agent.AvailableSkillsRenderRequest,
+			) string {
+				return "  \n"
+			},
+		},
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.NotContains(t, sys, skillsOverviewHeader)
+	require.NotContains(t, sys, "math ops")
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.Contains(t, sys, "[Loaded] calc")
+	require.Contains(t, sys, "Calc body")
+}
+
+func TestSkillsRequestProcessor_OverviewRendererBlankDoesNotDuplicateGuidance(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math ops"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			AvailableSkillsRenderer: func(
+				context.Context,
+				agent.AvailableSkillsRenderRequest,
+			) string {
+				return "  \n"
+			},
+		},
+		Session: &session.Session{},
+	}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(repo)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	sys := req.Messages[0].Content
+	require.NotContains(t, sys, skillsOverviewHeader)
+	require.Equal(t, 1, strings.Count(sys, skillsToolingGuidanceHeader))
+}
+
+func TestSkillsRequestProcessor_OverviewRendererNotCalledWithoutSummaries(
+	t *testing.T,
+) {
+	repo := &mockRepo{full: map[string]*skill.Skill{}}
+	var called bool
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			AvailableSkillsRenderer: func(
+				context.Context,
+				agent.AvailableSkillsRenderRequest,
+			) string {
+				called = true
+				return "- x"
+			},
+		},
+		Session: &session.Session{},
+	}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(repo)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.False(t, called)
+	require.Empty(t, req.Messages)
 }
 
 func TestSkillsRequestProcessor_ExecToolsDisabled(t *testing.T) {

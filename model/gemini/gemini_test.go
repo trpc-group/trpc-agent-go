@@ -11,6 +11,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"iter"
@@ -26,6 +27,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type overflowTailoringStrategy struct {
+	tailored []model.Message
+}
+
+func (s overflowTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return s.tailored, errors.New("minimal protected context exceeds token budget")
+}
 
 func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
 	t.Run("request callback", func(t *testing.T) {
@@ -117,6 +130,28 @@ func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
 		})
 		assert.True(t, callbackCalled)
 	})
+}
+
+func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
+	tailored := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := &Model{
+		name:                 "test-model",
+		enableTokenTailoring: true,
+		maxInputTokens:       1,
+		tailoringStrategy:    overflowTailoringStrategy{tailored: tailored},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("old"),
+		model.NewUserMessage("q"),
+	}}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, tailored, req.Messages)
 }
 
 func TestModel_convertMessages(t *testing.T) {
@@ -487,6 +522,7 @@ func TestModel_buildChatConfig(t *testing.T) {
 		PresencePenalty  = 0.1
 		FrequencyPenalty = 0.1
 		ThinkingTokens   = 100
+		ThinkingLevel    = "low"
 		ThinkingEnabled  = true
 		Stop             = []string{"Stop"}
 	)
@@ -526,6 +562,7 @@ func TestModel_buildChatConfig(t *testing.T) {
 						FrequencyPenalty: &FrequencyPenalty,
 						Stop:             Stop,
 						ThinkingTokens:   &ThinkingTokens,
+						ThinkingLevel:    &ThinkingLevel,
 						ThinkingEnabled:  &ThinkingEnabled,
 					},
 				},
@@ -538,7 +575,7 @@ func TestModel_buildChatConfig(t *testing.T) {
 				PresencePenalty:  genai.Ptr(float32(PresencePenalty)),
 				FrequencyPenalty: genai.Ptr(float32(FrequencyPenalty)),
 				ThinkingConfig: &genai.ThinkingConfig{
-					ThinkingBudget:  genai.Ptr(int32(ThinkingTokens)),
+					ThinkingLevel:   genai.ThinkingLevel(ThinkingLevel),
 					IncludeThoughts: true,
 				},
 			},
@@ -592,6 +629,7 @@ func TestModel_buildFinalResponse(t *testing.T) {
 	now := time.Now()
 	functionArgs := map[string]any{"args": "1"}
 	functionArgsBytes, _ := json.Marshal(functionArgs)
+	thoughtSignature := []byte("thought-signature")
 
 	type fields struct {
 		m *Model
@@ -653,6 +691,7 @@ func TestModel_buildFinalResponse(t *testing.T) {
 											Name: "function_call",
 											Args: functionArgs,
 										},
+										ThoughtSignature: thoughtSignature,
 									},
 									{Text: "Answer"},
 								},
@@ -689,6 +728,9 @@ func TestModel_buildFinalResponse(t *testing.T) {
 									Function: model.FunctionDefinitionParam{
 										Name:      "function_call",
 										Arguments: functionArgsBytes,
+									},
+									ExtraFields: map[string]any{
+										geminiThoughtSignatureKey: thoughtSignature,
 									},
 								},
 							},
@@ -775,6 +817,7 @@ func TestModel_buildChunkResponse(t *testing.T) {
 	now := time.Now()
 	functionArgs := map[string]any{"args": "1"}
 	functionArgsBytes, _ := json.Marshal(functionArgs)
+	thoughtSignature := []byte("thought-signature")
 
 	type fields struct {
 		m *Model
@@ -818,6 +861,7 @@ func TestModel_buildChunkResponse(t *testing.T) {
 											Name: "function_call",
 											Args: functionArgs,
 										},
+										ThoughtSignature: thoughtSignature,
 									},
 									{Text: "Answer"},
 								},
@@ -855,6 +899,9 @@ func TestModel_buildChunkResponse(t *testing.T) {
 										Name:      "function_call",
 										Arguments: functionArgsBytes,
 									},
+									ExtraFields: map[string]any{
+										geminiThoughtSignatureKey: thoughtSignature,
+									},
 								},
 							},
 						},
@@ -878,6 +925,209 @@ func TestModel_buildChunkResponse(t *testing.T) {
 			assert.Equal(t, tt.want, response)
 		})
 	}
+}
+
+func TestModel_buildChatConfig_ThinkingTokensFallback(t *testing.T) {
+	thinkingTokens := 100
+	req := &model.Request{
+		GenerationConfig: model.GenerationConfig{
+			ThinkingTokens: &thinkingTokens,
+		},
+	}
+
+	cfg := (&Model{}).buildChatConfig(req)
+
+	require.NotNil(t, cfg.ThinkingConfig)
+	require.NotNil(t, cfg.ThinkingConfig.ThinkingBudget)
+	assert.Equal(t, int32(thinkingTokens), *cfg.ThinkingConfig.ThinkingBudget)
+	assert.Empty(t, cfg.ThinkingConfig.ThinkingLevel)
+}
+
+func TestModel_buildThinkingConfig_ThinkingLevelTakesPrecedenceOverBudget(t *testing.T) {
+	thinkingTokens := 100
+	thinkingLevel := "low"
+	req := &model.Request{
+		GenerationConfig: model.GenerationConfig{
+			ThinkingTokens: &thinkingTokens,
+			ThinkingLevel:  &thinkingLevel,
+		},
+	}
+
+	cfg := (&Model{}).buildThinkingConfig(req)
+
+	require.NotNil(t, cfg)
+	require.Nil(t, cfg.ThinkingBudget)
+	assert.Equal(t, genai.ThinkingLevel(thinkingLevel), cfg.ThinkingLevel)
+}
+
+func TestModel_buildFinalResponse_PreservesTextThoughtSignature(t *testing.T) {
+	now := time.Now()
+	thoughtSignature := []byte("text-thought-signature")
+	response := (&Model{}).buildFinalResponse(&genai.GenerateContentResponse{
+		ResponseID:   "3",
+		CreateTime:   now,
+		ModelVersion: "pro-v1",
+		Candidates: []*genai.Candidate{
+			{
+				Content: &genai.Content{
+					Parts: []*genai.Part{
+						{
+							Text:             "Answer",
+							ThoughtSignature: thoughtSignature,
+						},
+					},
+				},
+			},
+		},
+	})
+
+	require.Len(t, response.Choices, 1)
+	msg := response.Choices[0].Message
+	assert.Equal(t, "Answer", msg.Content)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(thoughtSignature), msg.ReasoningSignature)
+}
+
+func TestModel_convertMessageContent_PreservesTextThoughtSignature(t *testing.T) {
+	signature := []byte("text-thought-signature")
+	message := model.Message{
+		Role:               model.RoleAssistant,
+		Content:            "Answer",
+		ReasoningSignature: base64.StdEncoding.EncodeToString(signature),
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 1)
+	require.Equal(t, genai.RoleModel, contents[0].Role)
+	require.Len(t, contents[0].Parts, 1)
+	assert.Equal(t, "Answer", contents[0].Parts[0].Text)
+	assert.Equal(t, signature, contents[0].Parts[0].ThoughtSignature)
+}
+
+func TestModel_convertMessageContent_PreservesFunctionCallThoughtSignature(t *testing.T) {
+	signature := []byte("thought-signature")
+	args := []byte(`{"city":"shenzhen"}`)
+	message := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "weather",
+					Arguments: args,
+				},
+				ExtraFields: map[string]any{
+					geminiThoughtSignatureKey: signature,
+				},
+			},
+		},
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 1)
+	require.Equal(t, genai.RoleModel, contents[0].Role)
+	require.Len(t, contents[0].Parts, 1)
+	part := contents[0].Parts[0]
+	require.NotNil(t, part.FunctionCall)
+	assert.Equal(t, "call-1", part.FunctionCall.ID)
+	assert.Equal(t, "weather", part.FunctionCall.Name)
+	assert.Equal(t, signature, part.ThoughtSignature)
+}
+
+func TestModel_convertToolCallPart_EdgeCases(t *testing.T) {
+	t.Run("empty function name returns nil", func(t *testing.T) {
+		assert.Nil(t, (&Model{}).convertToolCallPart(model.ToolCall{}))
+	})
+
+	t.Run("invalid json args falls back to empty args", func(t *testing.T) {
+		part := (&Model{}).convertToolCallPart(model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "weather",
+				Arguments: []byte(`{"city"`),
+			},
+		})
+
+		require.NotNil(t, part)
+		require.NotNil(t, part.FunctionCall)
+		assert.Empty(t, part.FunctionCall.Args)
+	})
+}
+
+func TestThoughtSignatureFromExtraFields(t *testing.T) {
+	signature := []byte("thought-signature")
+	encoded := base64.StdEncoding.EncodeToString(signature)
+
+	tests := []struct {
+		name        string
+		extraFields map[string]any
+		want        []byte
+	}{
+		{
+			name: "nil extra fields",
+		},
+		{
+			name:        "missing signature key",
+			extraFields: map[string]any{"other": signature},
+		},
+		{
+			name:        "byte slice signature is copied",
+			extraFields: map[string]any{geminiThoughtSignatureKey: signature},
+			want:        signature,
+		},
+		{
+			name:        "base64 string signature decodes",
+			extraFields: map[string]any{geminiThoughtSignatureKey: encoded},
+			want:        signature,
+		},
+		{
+			name:        "plain string signature falls back to raw bytes",
+			extraFields: map[string]any{geminiThoughtSignatureKey: "plain-signature"},
+			want:        []byte("plain-signature"),
+		},
+		{
+			name:        "unsupported type returns nil",
+			extraFields: map[string]any{geminiThoughtSignatureKey: 123},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := thoughtSignatureFromExtraFields(tt.extraFields)
+			assert.Equal(t, tt.want, got)
+			if raw, ok := tt.extraFields[geminiThoughtSignatureKey].([]byte); ok && len(got) > 0 {
+				got[0] = 'X'
+				assert.NotEqual(t, got[0], raw[0], "expected signature bytes to be copied")
+			}
+		})
+	}
+}
+
+func TestThoughtSignatureFromString(t *testing.T) {
+	signature := []byte("text-thought-signature")
+	encoded := base64.StdEncoding.EncodeToString(signature)
+
+	tests := []struct {
+		name string
+		in   string
+		want []byte
+	}{
+		{name: "empty"},
+		{name: "whitespace", in: " \t\n "},
+		{name: "base64", in: " " + encoded + " ", want: signature},
+		{name: "plain", in: " plain-signature ", want: []byte("plain-signature")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, thoughtSignatureFromString(tt.in))
+		})
+	}
+}
+
+func TestNormalizeThinkingLevel_TrimsWhitespace(t *testing.T) {
+	assert.Equal(t, genai.ThinkingLevel("low"), normalizeThinkingLevel(" low "))
 }
 
 func TestNew(t *testing.T) {

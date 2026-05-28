@@ -202,6 +202,9 @@ _ = err
 
 - 每次调用 `Runner.Run(...)`，Factory 会被调用一次。
 - `agent.WithAgent(...)` 依然优先生效（测试时很方便）。
+- Runner factory 用来选择本次 run 的 root Agent。如果你要配置父 Agent
+  可以委托的专家 Agent，请使用 `WithSubAgents`。请求级或懒加载 SubAgent
+  的写法见 [动态 SubAgent 与 Agent Factory](./multiagent.md#动态-subagent-与-agent-factory)。
 
 #### Agent Factory 中的资源边界
 
@@ -568,6 +571,53 @@ Runner 会取以下两者中较早的时间作为真正的超时上限：
 
 - 父 `ctx` 的 deadline（如果存在）
 - `MaxRunDuration`（如果设置了）
+
+#### 持久化被中断的 Assistant 文本（显式开启）
+
+默认情况下，取消一个 streaming run 不会把 partial assistant chunk 写入
+Session。这样可以保留“取消等于丢弃未完成回复”的语义。
+
+如果你的产品形态需要“从上次被打断的位置继续”，可以显式开启该能力：
+当取消发生在模型产出正常 final assistant 消息之前，Runner 会聚合已经发出的
+assistant 文本 delta，合成一条非 partial 的 assistant 事件，经过 event plugin
+处理后写入 Session。
+
+作为 Runner 默认行为开启：
+
+```go
+r := runner.NewRunner("my-app", myAgent,
+    runner.WithPersistInterruptedAssistant(true),
+)
+```
+
+也可以只在单次 run 中开启：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithPersistInterruptedAssistant(true),
+)
+```
+
+如果 Runner 默认已经开启，也可以在单次 run 中关闭：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithPersistInterruptedAssistant(false),
+)
+```
+
+该选项只会持久化 assistant 文本 delta，不会把 tool-call delta、tool response
+或已经完成的 assistant 消息转换成 interrupted assistant 事件。GraphAgent 复用
+同一套 Runner event pipeline，因此 graph LLM 节点的文本 chunk 同样受该选项控制，
+不需要额外的 graph 专用开关。
 
 #### 中断恢复（工具优先继续执行）
 

@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/sessionopt"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
 
@@ -140,8 +141,9 @@ func cloneSessionListMetadata(sess *session.Session) *session.Session {
 			if sum == nil {
 				continue
 			}
-			copied := *sum
-			copiedSess.Summaries[key] = &copied
+			if copied := sum.Clone(); copied != nil {
+				copiedSess.Summaries[key] = copied
+			}
 		}
 	}
 	sess.SummariesMu.RUnlock()
@@ -442,7 +444,8 @@ func (s *SessionService) ListSessions(
 
 		sessList = append(sessList, mergeState(appState, userState, copiedSess))
 	}
-	return sessList, nil
+	sessionopt.SortByUpdatedDesc(sessList)
+	return sessionopt.ApplyListPage(sessList, opt), nil
 }
 
 // DeleteSession removes a session from storage.

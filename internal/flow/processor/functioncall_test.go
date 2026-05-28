@@ -18,6 +18,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,6 +102,40 @@ type mockCallableTool struct {
 func (m *mockCallableTool) Declaration() *tool.Declaration { return m.declaration }
 func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 	return m.callFn(ctx, args)
+}
+
+type permissionMockTool struct {
+	*mockCallableTool
+	metadata         tool.ToolMetadata
+	decision         tool.PermissionDecision
+	stateDelta       map[string][]byte
+	stateDeltaCalled bool
+	skipSummarize    bool
+}
+
+func (m *permissionMockTool) ToolMetadata() tool.ToolMetadata {
+	return m.metadata
+}
+
+func (m *permissionMockTool) CheckPermission(
+	_ context.Context,
+	_ *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return m.decision, nil
+}
+
+func (m *permissionMockTool) StateDeltaForInvocation(
+	_ *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	m.stateDeltaCalled = true
+	return m.stateDelta
+}
+
+func (m *permissionMockTool) SkipSummarization() bool {
+	return m.skipSummarize
 }
 
 type delayedLoadTool struct {
@@ -1829,6 +1864,7 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
 	assert.Equal(t, pc.ID, choices[0].Message.ToolID)
+	assert.Equal(t, "echo", choices[0].Message.ToolName)
 	assert.Equal(t, string(wantBytes), choices[0].Message.Content)
 }
 
@@ -1922,6 +1958,7 @@ func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithMultipleMessages
 
 	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
 	assert.Equal(t, pc.ID, choices[0].Message.ToolID)
+	assert.Equal(t, "echo", choices[0].Message.ToolName)
 	assert.Equal(t, `{"ok":true}`, choices[0].Message.Content)
 
 	assert.Equal(t, model.RoleUser, choices[1].Message.Role)
@@ -2227,6 +2264,146 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(
 		t.Fatalf("unexpected tool response event")
 	default:
 	}
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
+	t *testing.T,
+) {
+	const (
+		toolName = "external_tool"
+		callID   = "call-1"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	var callCount atomic.Int32
+	externalTool := &mockTool{
+		name: toolName,
+		callHook: func() {
+			callCount.Add(1)
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-external-tool",
+		AgentName:    "test-agent",
+		RunOptions: agent.NewRunOptions(
+			agent.WithExternalTools([]tool.Tool{externalTool}),
+		),
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			toolName: externalTool,
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   callID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      toolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case <-ch:
+		t.Fatalf("unexpected tool response event")
+	default:
+	}
+	assert.Zero(t, callCount.Load())
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_WithExternalTools_UnknownStops(
+	t *testing.T,
+) {
+	const (
+		externalToolName = "external_tool"
+		unknownToolName  = "unknown_tool"
+		externalCallID   = "call-external"
+		unknownCallID    = "call-unknown"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	var callCount atomic.Int32
+	externalTool := &mockTool{
+		name: externalToolName,
+		callHook: func() {
+			callCount.Add(1)
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv-external-tool-unknown",
+		AgentName:    "test-agent",
+		Model:        &mockModel{},
+		RunOptions: agent.NewRunOptions(
+			agent.WithExternalTools([]tool.Tool{externalTool}),
+		),
+	}
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			externalToolName: externalTool,
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   externalCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      externalToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							ID:   unknownCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      unknownToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case ev := <-ch:
+		require.NotNil(t, ev.Response)
+		require.Len(t, ev.Response.Choices, 1)
+		msg := ev.Response.Choices[0].Message
+		require.Equal(t, model.RoleTool, msg.Role)
+		require.Equal(t, unknownCallID, msg.ToolID)
+	case <-time.After(time.Second):
+		t.Fatalf("expected a tool error response event")
+	}
+	assert.Zero(t, callCount.Load())
 	require.True(t, inv.EndInvocation)
 }
 
@@ -3305,6 +3482,7 @@ type mockTool struct {
 	shouldPanic bool
 	delay       time.Duration
 	result      any
+	callHook    func()
 }
 
 func (m *mockTool) Declaration() *tool.Declaration {
@@ -3315,6 +3493,10 @@ func (m *mockTool) Declaration() *tool.Declaration {
 }
 
 func (m *mockTool) Call(ctx context.Context, args []byte) (any, error) {
+	if m.callHook != nil {
+		m.callHook()
+	}
+
 	// Add delay to simulate processing time
 	if m.delay > 0 {
 		select {
@@ -7574,6 +7756,332 @@ func TestExecuteTool_NamedTool(t *testing.T) {
 	require.JSONEq(t, string(b), string(mustJSON(res)))
 }
 
+func TestExecuteToolWithCallbacks_ToolPermissionPolicyDenySkipsExecution(
+	t *testing.T,
+) {
+	const (
+		toolName       = "delete_file"
+		toolCallID     = "call-deny"
+		denyReason     = "write access is disabled"
+		originalArgs   = `{"path":"unsafe"}`
+		rewrittenArgs  = `{"path":"safe"}`
+		permissionJSON = `{"status":"denied","tool":"delete_file","reason":"write access is disabled"}`
+	)
+
+	var (
+		calledTool     bool
+		calledCallback bool
+	)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		calledCallback = true
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(rewrittenArgs),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: toolName},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			calledTool = true
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+			func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+				require.Equal(t, toolName, req.ToolName)
+				require.Equal(t, toolCallID, req.ToolCallID)
+				require.JSONEq(t, rewrittenArgs, string(req.Arguments))
+				return tool.DenyPermission(denyReason), nil
+			},
+		)),
+	}
+
+	_, res, modifiedArgs, suppressDefault, _, err := p.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		model.ToolCall{
+			ID: toolCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      toolName,
+				Arguments: []byte(originalArgs),
+			},
+		},
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, suppressDefault)
+	require.False(t, calledTool)
+	require.True(t, calledCallback)
+	require.JSONEq(t, rewrittenArgs, string(modifiedArgs))
+	require.JSONEq(t, permissionJSON, string(mustJSON(res)))
+}
+
+func TestExecuteToolCall_ToolPermissionResultSkipsToolResultMessagesCallback(
+	t *testing.T,
+) {
+	const (
+		toolName       = "delete_file"
+		toolCallID     = "call-deny-message"
+		denyReason     = "write access is disabled"
+		permissionJSON = `{"status":"denied","tool":"delete_file","reason":"write access is disabled"}`
+	)
+
+	var (
+		calledTool           bool
+		calledResultMessages bool
+	)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		_ context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		calledResultMessages = true
+		return model.Message{
+			Role:    model.RoleUser,
+			Content: "overridden",
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: toolName},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			calledTool = true
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+			func(_ context.Context, _ *tool.PermissionRequest) (tool.PermissionDecision, error) {
+				return tool.DenyPermission(denyReason), nil
+			},
+		)),
+	}
+
+	_, choices, _, _, _, err := p.executeToolCall(
+		context.Background(),
+		inv,
+		model.ToolCall{
+			ID: toolCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      toolName,
+				Arguments: []byte(`{}`),
+			},
+		},
+		map[string]tool.Tool{toolName: tl},
+		0,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, calledTool)
+	require.False(t, calledResultMessages)
+	require.Len(t, choices, 1)
+	require.Equal(t, model.RoleTool, choices[0].Message.Role)
+	require.Equal(t, toolCallID, choices[0].Message.ToolID)
+	require.Equal(t, toolName, choices[0].Message.ToolName)
+	require.JSONEq(t, permissionJSON, choices[0].Message.Content)
+}
+
+func TestExecuteSingleToolCallSequential_ToolPermissionResultSkipsStateDelta(
+	t *testing.T,
+) {
+	const (
+		toolName       = "delete_file"
+		toolCallID     = "call-deny-delta"
+		denyReason     = "write access is disabled"
+		stateDeltaKey  = "denied_delta"
+		permissionJSON = `{"status":"denied","tool":"delete_file","reason":"write access is disabled"}`
+	)
+
+	var calledTool bool
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				calledTool = true
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		decision: tool.DenyPermission(denyReason),
+		stateDelta: map[string][]byte{
+			stateDeltaKey: []byte("should-not-persist"),
+		},
+	}
+	ev, err := NewFunctionCallResponseProcessor(false, nil).
+		executeSingleToolCallSequential(
+			context.Background(),
+			&agent.Invocation{AgentName: "a", Model: &mockModel{}},
+			&model.Response{Choices: []model.Choice{{}}},
+			map[string]tool.Tool{toolName: tl},
+			make(chan *event.Event, 1),
+			0,
+			model.ToolCall{
+				ID: toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			},
+		)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.False(t, calledTool)
+	require.False(t, tl.stateDeltaCalled)
+	require.NotContains(t, ev.StateDelta, stateDeltaKey)
+	require.Len(t, ev.Choices, 1)
+	require.JSONEq(t, permissionJSON, ev.Choices[0].Message.Content)
+}
+
+func TestExecuteSingleToolCallSequential_ToolPermissionResultIgnoresToolSkipSummarization(
+	t *testing.T,
+) {
+	const (
+		toolName       = "delete_file"
+		toolCallID     = "call-deny-skip"
+		denyReason     = "write access is disabled"
+		permissionJSON = `{"status":"denied","tool":"delete_file","reason":"write access is disabled"}`
+	)
+
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		decision:      tool.DenyPermission(denyReason),
+		skipSummarize: true,
+	}
+	ev, err := NewFunctionCallResponseProcessor(false, nil).
+		executeSingleToolCallSequential(
+			context.Background(),
+			&agent.Invocation{AgentName: "a", Model: &mockModel{}},
+			&model.Response{Choices: []model.Choice{{}}},
+			map[string]tool.Tool{toolName: tl},
+			make(chan *event.Event, 1),
+			0,
+			model.ToolCall{
+				ID: toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			},
+		)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.False(t, ev.Actions != nil && ev.Actions.SkipSummarization)
+	require.Len(t, ev.Choices, 1)
+	require.JSONEq(t, permissionJSON, ev.Choices[0].Message.Content)
+}
+
+func TestExecuteToolWithCallbacks_ToolPermissionCheckerAskSkipsRunPolicy(
+	t *testing.T,
+) {
+	const (
+		toolName       = "shell"
+		askReason      = "shell commands require review"
+		permissionJSON = `{"status":"approval_required","tool":"shell","reason":"shell commands require review"}`
+	)
+
+	var (
+		calledTool      bool
+		calledRunPolicy bool
+	)
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				calledTool = true
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		decision: tool.AskPermission(askReason),
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+			func(_ context.Context, _ *tool.PermissionRequest) (tool.PermissionDecision, error) {
+				calledRunPolicy = true
+				return tool.AllowPermission(), nil
+			},
+		)),
+	}
+
+	_, res, _, _, _, err := NewFunctionCallResponseProcessor(false, nil).
+		executeToolWithCallbacks(
+			context.Background(),
+			inv,
+			model.ToolCall{
+				ID: "call-ask",
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			},
+			tl,
+			nil,
+		)
+	require.NoError(t, err)
+	require.False(t, calledTool)
+	require.False(t, calledRunPolicy)
+	require.JSONEq(t, permissionJSON, string(mustJSON(res)))
+}
+
+func TestExecuteToolWithCallbacks_ToolPermissionReceivesMetadata(
+	t *testing.T,
+) {
+	const toolName = "web_search"
+	var calledRunPolicy bool
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		metadata: tool.ToolMetadata{
+			ReadOnly:     true,
+			SearchOrRead: true,
+			OpenWorld:    true,
+		},
+		decision: tool.AllowPermission(),
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+			func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+				calledRunPolicy = true
+				require.True(t, req.Metadata.ReadOnly)
+				require.True(t, req.Metadata.SearchOrRead)
+				require.True(t, req.Metadata.OpenWorld)
+				return tool.AllowPermission(), nil
+			},
+		)),
+	}
+
+	_, res, _, _, _, err := NewFunctionCallResponseProcessor(false, nil).
+		executeToolWithCallbacks(
+			context.Background(),
+			inv,
+			model.ToolCall{
+				ID: "call-allow",
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			},
+			tl,
+			nil,
+		)
+	require.NoError(t, err)
+	require.True(t, calledRunPolicy)
+	require.JSONEq(t, `{"ok":true}`, string(mustJSON(res)))
+}
+
 func TestExecuteToolCall_StreamableFinalStateOnlyResultAfterToolContextReplacementStillSkipsDefaultMessage(t *testing.T) {
 	ctx := context.Background()
 	callbacks := tool.NewCallbacks()
@@ -8164,4 +8672,187 @@ func TestExecuteCallableTool_DoesNotRetryStopError(t *testing.T) {
 	_, ok := agent.AsStopError(err)
 	require.True(t, ok)
 	require.Equal(t, 1, toolCalls)
+}
+
+// =============================================================================
+// Regression tests for marshalJSONNoHTMLEscape and its callers.
+// These verify that <, >, & in tool results are NOT HTML-escaped,
+// which previously caused LLMs to see \u003c instead of < in code output.
+// =============================================================================
+
+func TestMarshalJSONNoHTMLEscape_PreservesSpecialChars(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  string // expected substring that must appear un-escaped
+	}{
+		{
+			name:  "less than in Go channel receive",
+			input: map[string]string{"output": "<-done"},
+			want:  `"output":"<-done"`,
+		},
+		{
+			name:  "angle brackets in generic type",
+			input: map[string]string{"type": "map[string]<Value>"},
+			want:  `"type":"map[string]<Value>"`,
+		},
+		{
+			name:  "ampersand in shell command",
+			input: map[string]string{"cmd": "a && b"},
+			want:  `"cmd":"a && b"`,
+		},
+		{
+			name:  "greater than comparison",
+			input: map[string]string{"expr": "if x > 0"},
+			want:  `"expr":"if x > 0"`,
+		},
+		{
+			name:  "all three special chars together",
+			input: map[string]string{"code": "for i := 0; i < len(s) && s[i] > 0; i++ { <-ch }"},
+			want:  `< len(s) && s[i] > 0`,
+		},
+		{
+			name:  "HTML-like content preserved as-is",
+			input: map[string]string{"html": "<script>alert('x')</script>"},
+			want:  `<script>alert('x')</script>`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := marshalJSONNoHTMLEscape(tt.input)
+			require.NoError(t, err)
+			assert.Contains(t, string(got), tt.want,
+				"expected un-escaped chars, got: %s", string(got))
+			// Also verify the old json.Marshal WOULD have escaped them.
+			stdBytes, _ := json.Marshal(tt.input)
+			assert.NotContains(t, string(stdBytes), tt.want,
+				"std json.Marshal should escape these chars (sanity check)")
+		})
+	}
+}
+
+func TestMarshalJSONNoHTMLEscape_ValidJSON(t *testing.T) {
+	inputs := []any{
+		map[string]string{"k": "<value>"},
+		map[string]any{"nested": map[string]int{"a": 1}},
+		[]string{"<a>", "&b", ">c"},
+		"hello <world>",
+		42,
+		true,
+		nil,
+	}
+	for _, input := range inputs {
+		got, err := marshalJSONNoHTMLEscape(input)
+		require.NoError(t, err)
+		// Must be valid JSON — round-trip through json.Unmarshal.
+		var decoded any
+		err = json.Unmarshal(got, &decoded)
+		assert.NoError(t, err, "output is not valid JSON: %s", string(got))
+	}
+}
+
+func TestMarshalJSONNoHTMLEscape_MatchesMarshalForSafeInputs(t *testing.T) {
+	// For inputs without <, >, & the output must be byte-identical to json.Marshal.
+	inputs := []any{
+		map[string]string{"name": "hello", "value": "world"},
+		map[string]int{"a": 1, "b": 2},
+		"plain string",
+		123,
+		true,
+		[]int{1, 2, 3},
+		nil,
+	}
+	for _, input := range inputs {
+		got, err := marshalJSONNoHTMLEscape(input)
+		require.NoError(t, err)
+		stdBytes, err := json.Marshal(input)
+		require.NoError(t, err)
+		assert.Equal(t, string(stdBytes), string(got),
+			"for safe input %v, output should match json.Marshal", input)
+	}
+}
+
+func TestMarshalJSONNoHTMLEscape_ErrorOnNonSerializable(t *testing.T) {
+	_, err := marshalJSONNoHTMLEscape(func() {})
+	assert.Error(t, err, "function values should not be serializable")
+}
+
+func TestMarshalJSONNoHTMLEscape_Unicode(t *testing.T) {
+	input := map[string]string{"msg": "你好世界 <-ch"}
+	got, err := marshalJSONNoHTMLEscape(input)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "<-ch", "angle bracket must not be escaped")
+	// Unicode CJK characters are preserved (not ASCII-escaped) by json.Encoder default.
+	assert.Contains(t, string(got), "你好世界")
+}
+
+func TestBuildDefaultToolMessage_NoHTMLEscape(t *testing.T) {
+	// End-to-end test: tool returning Go source code with channel ops.
+	result := map[string]any{
+		"exit_code": 0,
+		"output":    "    <-done\n    for i := 0; i < 10; i++ {\n        fmt.Println(i)\n    }",
+		"status":    "exited",
+	}
+	msg, err := buildDefaultToolMessage("call-123", result)
+	require.NoError(t, err)
+	assert.Equal(t, "call-123", msg.ToolID)
+	assert.Contains(t, msg.Content, "<-done",
+		"channel receive must not be escaped to \\u003c-done")
+	assert.Contains(t, msg.Content, "i < 10",
+		"less-than in loop must not be escaped")
+	assert.NotContains(t, msg.Content, `\u003c`,
+		"must not contain HTML-escaped less-than")
+	assert.NotContains(t, msg.Content, `\u003e`,
+		"must not contain HTML-escaped greater-than")
+	assert.NotContains(t, msg.Content, `\u0026`,
+		"must not contain HTML-escaped ampersand")
+}
+
+func TestBuildDefaultToolMessage_BackwardCompat(t *testing.T) {
+	// Verify that normal tool results (without special chars) produce the
+	// exact same output as the old json.Marshal path would have.
+	tests := []struct {
+		name   string
+		result any
+	}{
+		{"string result", "success"},
+		{"map result", map[string]any{"message": "done", "count": 42}},
+		{"nil result", nil},
+		{"bool result", true},
+		{"nested result", map[string]any{
+			"todos": []map[string]string{
+				{"content": "step 1", "status": "completed"},
+				{"content": "step 2", "status": "pending"},
+			},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := buildDefaultToolMessage("id-1", tt.result)
+			require.NoError(t, err)
+			// Compare with what json.Marshal would produce (they should
+			// be identical for inputs without < > &).
+			expected, err := json.Marshal(tt.result)
+			require.NoError(t, err)
+			assert.Equal(t, string(expected), msg.Content)
+		})
+	}
+}
+
+func TestMarshalChunkToText_NoHTMLEscape(t *testing.T) {
+	// marshalChunkToText with a non-string value containing special chars.
+	chunk := map[string]string{"output": "<-ch && x > 0"}
+	text := marshalChunkToText(chunk)
+	assert.Contains(t, text, "<-ch",
+		"less-than must be preserved in streaming chunk")
+	assert.Contains(t, text, "&& x > 0",
+		"ampersand and greater-than must be preserved")
+	assert.NotContains(t, text, `\u003c`)
+	assert.NotContains(t, text, `\u0026`)
+}
+
+func TestMarshalChunkToText_StringPassthrough(t *testing.T) {
+	// String values bypass JSON marshaling entirely.
+	input := "<-done && x > 0"
+	assert.Equal(t, input, marshalChunkToText(input))
 }

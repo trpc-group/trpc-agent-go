@@ -194,7 +194,6 @@ func (a *LLMAgent) InvocationToolSurface(
 
 	allTools := append([]tool.Tool(nil), userTools...)
 	allTools = appendKnowledgeTools(allTools, &options)
-
 	effectiveSkills := a.skillRepositoryForInvocation(inv)
 	effectiveExec := a.codeExecutorForInvocation(inv)
 	workspaceExecEnabled := workspaceExecSurfaceEnabled(&options) &&
@@ -243,6 +242,7 @@ func (a *LLMAgent) InvocationToolSurface(
 		allTools = append(allTools, toolawaitreply.New())
 	}
 	if len(subAgents) == 0 {
+		allTools = appendExtensionTools(allTools, &options)
 		return allTools, userToolNames
 	}
 	agentInfos := make([]agent.Info, len(subAgents))
@@ -250,6 +250,16 @@ func (a *LLMAgent) InvocationToolSurface(
 		agentInfos[i] = subAgent.Info()
 	}
 	allTools = append(allTools, transfer.New(agentInfos))
+	// Extension-contributed tools (WithExtensions →
+	// extension.Registry.Tools) sit at the same logical layer as
+	// other framework-managed auto-injected tools: not folded into
+	// userToolNames, yet present on the outbound tool surface.
+	//
+	// Append them after every framework tool (knowledge, workspace,
+	// skills, session recall, await_user_reply and transfer) so
+	// earlier-wins dedup also protects later framework declarations
+	// from extension name collisions.
+	allTools = appendExtensionTools(allTools, &options)
 	return allTools, userToolNames
 }
 
@@ -257,9 +267,6 @@ func (a *LLMAgent) userToolsForInvocation(
 	ctx context.Context,
 	patch surfacepatch.Patch,
 ) ([]tool.Tool, map[string]bool) {
-	if patchedTools, ok := patch.Tools(); ok {
-		return patchedTools, collectUserToolNames(patchedTools)
-	}
 	a.mu.RLock()
 	refreshToolSets := a.option.RefreshToolSetsOnRun
 	staticTools := append([]tool.Tool(nil), a.tools...)
@@ -271,6 +278,9 @@ func (a *LLMAgent) userToolsForInvocation(
 	toolSets := append([]tool.ToolSet(nil), a.option.ToolSets...)
 	a.mu.RUnlock()
 
+	if patchedTools, ok := patch.Tools(); ok {
+		return patchedTools, collectUserToolNames(patchedTools)
+	}
 	if !refreshToolSets {
 		userTools := make([]tool.Tool, 0, len(userToolNames))
 		for _, t := range staticTools {
@@ -278,7 +288,7 @@ func (a *LLMAgent) userToolsForInvocation(
 				userTools = append(userTools, t)
 			}
 		}
-		return userTools, userToolNames
+		return applyUserToolPatch(userTools, userToolNames, patch)
 	}
 	userTools := append([]tool.Tool(nil), baseTools...)
 	userToolNames = collectUserToolNames(baseTools)
@@ -289,7 +299,19 @@ func (a *LLMAgent) userToolsForInvocation(
 			userToolNames[t.Declaration().Name] = true
 		}
 	}
-	return userTools, userToolNames
+	return applyUserToolPatch(userTools, userToolNames, patch)
+}
+
+func applyUserToolPatch(
+	userTools []tool.Tool,
+	userToolNames map[string]bool,
+	patch surfacepatch.Patch,
+) ([]tool.Tool, map[string]bool) {
+	patchedTools, ok := patch.ApplyTools(userTools)
+	if !ok {
+		return userTools, userToolNames
+	}
+	return patchedTools, collectUserToolNames(patchedTools)
 }
 
 func filterInvocationUserTools(

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -2267,6 +2268,18 @@ func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Mes
 	return append([]model.Message{messages[0]}, messages[2:]...), nil
 }
 
+type overflowTailoringStrategy struct {
+	tailored []model.Message
+}
+
+func (s overflowTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return s.tailored, errors.New("minimal protected context exceeds token budget")
+}
+
 type captureMaxTokensStrategy struct {
 	maxTokens int
 	called    bool
@@ -2313,6 +2326,27 @@ func TestWithTokenTailoring(t *testing.T) {
 	require.NotNil(t, captured, "expected request callback to capture request")
 	// After tailoring, OpenAI messages should be 1 user message (system omitted in this test).
 	require.Len(t, captured.Messages, 1, "expected 1 message after tailoring, got %d", len(captured.Messages))
+}
+
+func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
+	tailored := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := New("test-model",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(1),
+		WithTailoringStrategy(overflowTailoringStrategy{tailored: tailored}),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("old"),
+		model.NewUserMessage("q"),
+	}}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, tailored, req.Messages)
 }
 
 func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
@@ -2482,7 +2516,7 @@ func TestWithTokenTailoring_ClampsExplicitLimitToHardBudget(t *testing.T) {
 func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
 	// Capture the built OpenAI request to check messages count reflects tailoring.
 	var captured *openaigo.ChatCompletionNewParams
-	m := New("gpt-4o-mini", // Known model with 200000 context window
+	m := New("gpt-4o-mini", // Known model with 128000 context window
 		WithEnableTokenTailoring(true),
 		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
 			captured = req
@@ -2490,9 +2524,9 @@ func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
 	)
 
 	// Create many messages to trigger tailoring.
-	// With gpt-4o-mini (contextWindow=200000), maxInputTokens calculated as:
-	// safetyMargin = 200000 * 0.10 = 20000
-	// maxInputTokens = 200000 - 2048 - 512 - 20000 = 177440 (~88.7% of context)
+	// With gpt-4o-mini (contextWindow=128000), maxInputTokens calculated as:
+	// safetyMargin = 128000 * 0.10 = 12800
+	// maxInputTokens = 128000 - 2048 - 512 - 12800 = 112640 (88% of context)
 	// Need ~600 messages * 300 tokens each = ~180000 tokens to exceed limit.
 	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
 	for i := 0; i < 600; i++ {

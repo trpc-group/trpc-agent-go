@@ -741,10 +741,16 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 			"test-agent": {
 				Summary:   "step 1 completed successfully",
 				UpdatedAt: baseTime.Add(2 * time.Second),
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"test-agent",
+					baseTime.Add(2*time.Second),
+					"tool-result-1",
+				),
 			},
 		},
 		Events: []event.Event{
 			{
+				ID:           "user-1",
 				Author:       "user",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -756,6 +762,7 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 				},
 			},
 			{
+				ID:           "tool-call-1",
 				Author:       "test-agent",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -767,6 +774,7 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 				},
 			},
 			{
+				ID:           "tool-result-1",
 				Author:       "test-agent",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -945,6 +953,142 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 		)
 		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
 	})
+
+	t.Run("does not infer missing tool name from branch history", func(t *testing.T) {
+		reusedToolID := "call_reused"
+		toolCallEvent := func(filterKey, toolName string, ts time.Time) event.Event {
+			return event.Event{
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				FilterKey:    filterKey,
+				Timestamp:    ts,
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{Index: 0, Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID: reusedToolID,
+							Function: model.FunctionDefinitionParam{
+								Name:      toolName,
+								Arguments: []byte(`{}`),
+							},
+						}},
+					}}},
+				},
+			}
+		}
+		p := NewContentRequestProcessor(
+			WithBranchFilterMode(BranchFilterModeExact),
+			WithContextCompactionKeepToolNames("session_load"),
+		)
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationEventFilterKey("wanted"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					toolCallEvent("other", "session_load", baseTime),
+					toolCallEvent("wanted", "shell", baseTime.Add(time.Second)),
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						FilterKey:    "wanted",
+						Timestamp:    baseTime.Add(1500 * time.Millisecond),
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								reusedToolID,
+								"",
+								"result",
+							)}},
+						},
+					},
+				},
+			}),
+		)
+
+		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+
+	t.Run("ignores kept tool result", func(t *testing.T) {
+		p := NewContentRequestProcessor(
+			WithContextCompactionKeepToolNames("session_load"),
+		)
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.Message{
+								Role: model.RoleAssistant,
+								ToolCalls: []model.ToolCall{{
+									ID: "call_1",
+									Function: model.FunctionDefinitionParam{
+										Name:      "session_load",
+										Arguments: []byte(`{}`),
+									},
+								}},
+							}}},
+						},
+					},
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    baseTime.Add(time.Second),
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								"call_1",
+								"session_load",
+								"kept result",
+							)}},
+						},
+					},
+				},
+			}),
+		)
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+
+	t.Run("detects compacted tool result in later choice", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{
+								{Index: 0, Message: model.NewAssistantMessage("progress")},
+								{Index: 1, Message: model.NewToolMessage(
+									"call_1",
+									"worker",
+									"result",
+								)},
+							},
+						},
+					},
+				},
+			}),
+		)
+		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
 }
 
 // Test additional edge cases for session summary insertion.
@@ -1047,8 +1191,8 @@ func TestContentRequestProcessor_AggregatePrefixSummaries_Sorted(
 	got, updatedAt := p.aggregatePrefixSummaries(summaries, "app")
 	require.Equal(t, "root\n\na\n\nb", got)
 	require.Equal(t,
-		time.Date(2023, 1, 3, 12, 0, 0, 0, time.UTC),
-		updatedAt,
+		time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+		updatedAt.CutoffTime(),
 	)
 }
 

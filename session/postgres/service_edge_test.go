@@ -684,7 +684,7 @@ func TestListSessions(t *testing.T) {
 			WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		sessions, err := s.listSessions(context.Background(), userKey, 0, time.Time{})
+		sessions, err := s.listSessions(context.Background(), userKey, 0, time.Time{}, false, nil)
 		assert.Error(t, err)
 		assert.Nil(t, sessions)
 		assert.Contains(t, err.Error(), "unmarshal session state failed")
@@ -1041,6 +1041,71 @@ func TestGetSummariesList(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "unmarshal summary failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSummariesList_FiltersStaleAndPreservesBoundary(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{
+		AppName:   "app1",
+		UserID:    "user1",
+		SessionID: "sess1",
+	}
+	createdAt := time.Date(2026, 5, 27, 10, 0, 0, 0, time.UTC)
+	cutoffAt := createdAt.Add(time.Minute)
+	fresh := session.Summary{
+		Summary:   "fresh",
+		UpdatedAt: cutoffAt,
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			"filter1",
+			cutoffAt,
+			"event-fresh",
+		),
+	}
+	stale := session.Summary{
+		Summary:   "stale",
+		UpdatedAt: createdAt.Add(-time.Hour),
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			"filter2",
+			createdAt.Add(-time.Hour),
+			"event-stale",
+		),
+	}
+	freshBytes, err := json.Marshal(fresh)
+	require.NoError(t, err)
+	staleBytes, err := json.Marshal(stale)
+	require.NoError(t, err)
+
+	rows := sqlmock.NewRows([]string{
+		"session_id",
+		"filter_key",
+		"summary",
+		"updated_at",
+	}).
+		AddRow("sess1", "filter1", freshBytes, cutoffAt).
+		AddRow("sess1", "filter2", staleBytes, createdAt.Add(-time.Minute))
+
+	mock.ExpectQuery(
+		"SELECT session_id, filter_key, summary, updated_at FROM session_summaries",
+	).
+		WithArgs("app1", "user1", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(rows)
+
+	result, err := s.getSummariesList(
+		context.Background(),
+		[]session.Key{key},
+		[]time.Time{createdAt},
+	)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0]["filter1"])
+	assert.Equal(t, "fresh", result[0]["filter1"].Summary)
+	assert.Equal(t, "event-fresh", result[0]["filter1"].Boundary.LastEventID)
+	assert.Nil(t, result[0]["filter2"])
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

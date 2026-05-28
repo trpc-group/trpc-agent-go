@@ -319,7 +319,14 @@ func (s *Service) ListSessions(
 	if err := session.ValidateListSessionsOptions(opt); err != nil {
 		return nil, err
 	}
-	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
+	sessList, err := s.listSessions(
+		ctx,
+		userKey,
+		opt.EventNum,
+		opt.EventTime,
+		opt.ListSessionOnlyMeta,
+		opt.ListSessionPage,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse session service get session list failed: %w", err)
 	}
@@ -974,11 +981,11 @@ func (s *Service) softDeleteSessionSummaries(ctx context.Context, key session.Ke
 
 	if len(summaries) > 0 {
 		err = s.chClient.BatchInsert(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, deleted_at)`,
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, version_at, deleted_at)`,
 				s.tableSessionSummaries),
 			func(batch driver.Batch) error {
 				for _, sum := range summaries {
-					if err := batch.Append(key.AppName, key.UserID, key.SessionID, sum.filterKey, sum.summaryData, sum.createdAt, now, now); err != nil {
+					if err := batch.Append(key.AppName, key.UserID, key.SessionID, sum.filterKey, sum.summaryData, sum.createdAt, sum.updatedAt, now, now); err != nil {
 						return err
 					}
 				}

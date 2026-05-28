@@ -67,6 +67,156 @@ mainAgent := llmagent.New(
 )
 ```
 
+## 动态 SubAgent 与 Agent Factory
+
+在 trpc-agent-go 中，SubAgent 并不是一种新的运行时类型。它仍然只是普通的
+`agent.Agent`。所谓 SubAgent，只是描述它和父 Agent 的关系：它通过
+`WithSubAgents` 挂在某个父 Agent 下面，因此这个父 Agent 可以把任务委托给它。
+
+理解这个边界之后，动态创建 Agent 时就不容易选错 API。
+
+### Root Agent 与 SubAgent 的区别
+
+优先选择能解决问题的最小 API：
+
+| 需求 | 推荐 API | 原因 |
+| --- | --- | --- |
+| 本次请求要从某个命名 Agent 开始执行 | `runner.WithAgentFactory` + `agent.WithAgentByName` | Runner 在 run 开始前选择 root Agent。 |
+| 父 Agent 要委托给一批已经构建好的专家 Agent | `llmagent.WithSubAgents` | 父 Agent 可以直接把所有专家的名称和描述暴露给模型。 |
+| 父 Agent 要委托给某个专家，但这个专家构建成本较高，或需要请求级参数 | `agent.NewLazyAgent` + `WithSubAgents` | 父 Agent 先通过 `agent.Info` 暴露专家信息，真正调用时才构建具体 Agent。 |
+| 租户、项目或数据库决定有哪些专家 Agent | 在业务代码中构建 `[]agent.Agent`，再传给 `WithSubAgents` | 配置发现、鉴权、覆盖规则通常应由业务应用负责。 |
+
+`runner.WithAgentFactory` 面向的是 **root Agent 查找**。它回答的问题是：
+“这次 run 已经知道要用哪个 root Agent 名字，请帮我创建它。”
+
+`WithSubAgents` 面向的是 **父 Agent 作用域内的可见性**。它回答的问题是：
+“当前这个父 Agent 正在运行时，它可以委托给哪些专家？”
+
+因此，把一个 Agent factory 注册到 Runner 上，并不意味着所有父 Agent 都能
+自动委托给这个 Agent。这是有意设计的：不同父 Agent 往往需要不同的委托边界。
+
+### 按请求构建 root Agent 和 SubAgents
+
+如果整棵 Agent 树都依赖本次请求，推荐在 Runner factory 中构建父 Agent，
+再把请求级 SubAgents 显式传给 `WithSubAgents`。
+
+```go
+r := runner.NewRunnerWithAgentFactory(
+	"support-app",
+	"support-coordinator",
+	func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+		tenantID, _ := agent.GetRuntimeStateValue[string](&ro, "tenant_id")
+
+		billingAgent := llmagent.New(
+			"billing-agent",
+			llmagent.WithModel(modelInstance),
+			llmagent.WithDescription("Handles billing and invoice questions"),
+			llmagent.WithInstruction(
+				"Answer billing questions for tenant " + tenantID + ".",
+			),
+		)
+
+		coordinator := llmagent.New(
+			"support-coordinator",
+			llmagent.WithModel(modelInstance),
+			llmagent.WithDescription("Routes support requests to specialists"),
+			llmagent.WithInstruction(
+				"Decide whether to answer directly or transfer to a specialist.",
+			),
+			llmagent.WithSubAgents([]agent.Agent{billingAgent}),
+		)
+		return coordinator, nil
+	},
+)
+
+events, err := r.Run(
+	ctx,
+	userID,
+	sessionID,
+	model.NewUserMessage("Why was my invoice higher this month?"),
+	agent.MergeRuntimeState(map[string]any{
+		"tenant_id": "tenant-001",
+	}),
+)
+_ = events
+_ = err
+```
+
+这个模式把职责拆得很清楚：
+
+- 业务应用决定加载哪个租户或项目配置。
+- Runner 负责创建本次请求使用的 root Agent。
+- 父 Agent 显式声明本次允许委托的 SubAgents。
+
+### 懒加载 SubAgent
+
+有些专家 Agent 只有少数请求会用到。如果它会打开网络连接、初始化大型工具集、
+准备沙箱环境，那么每次都提前构建会造成浪费。
+
+`agent.NewLazyAgent` 解决的是这个很小的框架边界：父 Agent 可以先拿到
+`agent.Info`，因此 `transfer_to_agent` 工具能展示专家名称和描述；只有当这个
+懒加载 Agent 的 `Run` 方法真正被调用时，才会创建具体 Agent。
+
+```go
+lazyBillingAgent := agent.NewLazyAgent(
+	agent.Info{
+		Name:        "billing-agent",
+		Description: "Handles billing and invoice questions",
+	},
+	func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+		tenantID, _ := agent.GetRuntimeStateValue[string](&ro, "tenant_id")
+
+		return llmagent.New(
+			"billing-agent",
+			llmagent.WithModel(modelInstance),
+			llmagent.WithDescription("Handles billing and invoice questions"),
+			llmagent.WithInstruction(
+				"Answer billing questions for tenant " + tenantID + ".",
+			),
+		), nil
+	},
+)
+
+coordinator := llmagent.New(
+	"support-coordinator",
+	llmagent.WithModel(modelInstance),
+	llmagent.WithDescription("Routes support requests to specialists"),
+	llmagent.WithInstruction(
+		"Use transfer_to_agent when a specialist should handle the request.",
+	),
+	llmagent.WithSubAgents([]agent.Agent{lazyBillingAgent}),
+)
+```
+
+懒加载 Agent 仍然是普通的 `agent.Agent`。父 Agent 仍然通过标准
+`WithSubAgents` 机制看到它，`transfer_to_agent` 也仍然通过标准
+`FindSubAgent` 路径找到它。
+
+使用时注意：
+
+- `agent.Info.Name` 是稳定的委托目标名。factory 返回的具体 Agent 应使用相同
+  名字，便于事件、trace 和 session 分支保持一致。
+- `NewLazyAgent` 最适合叶子专家 Agent。如果这个专家内部还需要自己的
+  SubAgents，请在 factory 内部继续构建和配置。
+- 框架不会接管 factory 内部创建的资源。如果 factory 创建了请求级连接、
+  tool set 或沙箱，请在业务代码或 callback 中自行清理。
+
+### 业务侧负责发现配置
+
+框架不规定动态 SubAgent 的定义必须来自哪里。它们可以来自代码、数据库、
+租户配置服务、插件，或业务应用自己管理的文件。
+
+推荐边界是：
+
+1. 业务应用负责发现、校验和合并配置。
+2. 业务应用把配置转换成 `agent.Agent`，或者转换成 `agent.NewLazyAgent(...)`
+   描述。
+3. 框架通过 `WithSubAgents`、`transfer_to_agent`、AgentTool、ChainAgent、
+   ParallelAgent、CycleAgent 或 GraphAgent 运行这些 Agent。
+
+这样配置来源、鉴权、灰度策略仍然由业务掌控，同时框架继续保持一个统一的
+运行时抽象：`agent.Agent`。
+
 ## 核心协作模式
 
 所有协作模式都基于 SubAgent 概念，通过不同的执行策略实现：

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -417,6 +418,10 @@ type GenerationConfig struct {
 	// ThinkingTokens controls the fixed thinking token budget for providers that support it.
 	// Anthropic adaptive-thinking models ignore this field and use ReasoningEffort instead.
 	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
+
+	// ThinkingLevel controls the qualitative thinking level for providers that support it.
+	// Gemini 3 uses this field for thinkingConfig.thinkingLevel.
+	ThinkingLevel *string `json:"thinking_level,omitempty"`
 }
 
 // GenerationConfigPatch selectively overrides fields in GenerationConfig.
@@ -440,6 +445,7 @@ type GenerationConfigPatch struct {
 	ReasoningEffort  *string  `json:"reasoning_effort,omitempty"`
 	ThinkingEnabled  *bool    `json:"thinking_enabled,omitempty"`
 	ThinkingTokens   *int     `json:"thinking_tokens,omitempty"`
+	ThinkingLevel    *string  `json:"thinking_level,omitempty"`
 }
 
 // ApplyGenerationConfigPatch applies patch to base and returns the merged
@@ -478,6 +484,9 @@ func ApplyGenerationConfigPatch(
 	if patch.ThinkingTokens != nil {
 		base.ThinkingTokens = patch.ThinkingTokens
 	}
+	if patch.ThinkingLevel != nil {
+		base.ThinkingLevel = patch.ThinkingLevel
+	}
 	return base
 }
 
@@ -501,6 +510,36 @@ type Request struct {
 	ExtraFields map[string]any `json:"-"`
 
 	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
+}
+
+// RequestOption configures a Request.
+type RequestOption func(*Request)
+
+// NewRequest creates a model request from messages and applies options.
+func NewRequest(messages []Message, opts ...RequestOption) *Request {
+	req := &Request{
+		Messages: messages,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(req)
+		}
+	}
+	return req
+}
+
+// WithStructuredOutputJSON sets JSON schema structured output for a request.
+// The schema is constructed automatically from the provided example type.
+//
+// This configures provider-native structured output where supported. Direct
+// model callers still receive normal model.Response values and should unmarshal
+// the final JSON content themselves.
+func WithStructuredOutputJSON(examplePtr any, strict bool, description string) RequestOption {
+	return func(req *Request) {
+		if out := structuredOutputJSON(examplePtr, strict, description); out != nil {
+			req.StructuredOutput = out
+		}
+	}
 }
 
 // ToolCall represents a call to a tool (function) in the model response.
@@ -629,4 +668,20 @@ type StructuredOutput struct {
 	Type StructuredOutputType `json:"type"`
 	// JSONSchema is used when Type is StructuredOutputJSONSchema.
 	JSONSchema *JSONSchemaConfig `json:"json_schema,omitempty"`
+}
+
+func structuredOutputJSON(examplePtr any, strict bool, description string) *StructuredOutput {
+	name, schema, _ := structuredoutput.FromType(examplePtr, strict)
+	if schema == nil {
+		return nil
+	}
+	return &StructuredOutput{
+		Type: StructuredOutputJSONSchema,
+		JSONSchema: &JSONSchemaConfig{
+			Name:        name,
+			Schema:      schema,
+			Strict:      strict,
+			Description: description,
+		},
+	}
 }

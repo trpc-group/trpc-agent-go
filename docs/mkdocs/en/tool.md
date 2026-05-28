@@ -38,6 +38,70 @@ type CallableTool interface {
 
 > For Function Tools, set these via `function.WithName(...)` / `function.WithDescription(...)`. For custom Tools, set `Name` / `Description` on the `tool.Declaration` returned by `Declaration()`.
 
+#### 🛡️ Tool Metadata and Permission Policy
+
+Tool metadata is an optional description of execution behavior. It does not
+change the core `tool.Tool` interface.
+
+Use metadata when a host, policy, or UI needs to understand whether a tool is
+read-only, destructive, concurrency-safe, search/read-oriented, open-world, or
+has an advisory result size limit.
+
+```go
+type ToolMetadata struct {
+    ReadOnly        bool
+    Destructive     bool
+    ConcurrencySafe bool
+    SearchOrRead    bool
+    OpenWorld       bool
+    MaxResultSize   int
+}
+
+type MetadataProvider interface {
+    ToolMetadata() tool.ToolMetadata
+}
+```
+
+Permission policy is checked after the model requests a tool, after JSON repair
+and before-tool callbacks have finalized arguments, and immediately before the
+framework executes it:
+
+```go
+runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolPermissionPolicyFunc(
+        func(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+            if req.Metadata.Destructive {
+                return tool.AskPermission("destructive tools require approval"), nil
+            }
+            return tool.AllowPermission(), nil
+        },
+    ),
+)
+```
+
+Tools can also enforce their own rule by implementing `tool.PermissionChecker`.
+The tool-level checker runs before the per-run policy, and the first non-allow
+decision wins. Tools without their own checker are still evaluated by the
+per-run policy when one is configured. If neither a tool checker nor a per-run
+policy exists, the legacy allow-by-default behavior is preserved.
+
+Decision behavior:
+
+- `tool.AllowPermission()`: execute the tool.
+- `tool.DenyPermission(reason)`: skip execution and return a structured `denied` tool result to the model.
+- `tool.AskPermission(reason)`: skip execution and return a structured `approval_required` tool result to the model.
+
+If your application has an approval UI, ask the user inside the policy and
+return `tool.AllowPermission()` only after approval. The framework does not
+invent a UI flow for `ask`.
+
+Keep the boundaries clear:
+
+- `agent.WithToolFilter(...)`: controls which tools are visible to the model.
+- `agent.WithToolExecutionFilter(...)`: leaves selected visible tool calls for the caller to execute externally.
+- `agent.WithToolPermissionPolicy(...)`: checks permission for every tool the framework is about to execute.
+- Tool callbacks and guardrail plugins still work for authorization, audit, and review workflows. Use the permission policy for simple deterministic allow/deny/ask checks.
+
 #### 📦 ToolSet
 
 A ToolSet is a collection of related tools that implements the `tool.ToolSet` interface. A ToolSet manages the lifecycle of tools, connections, and resource cleanup.
@@ -635,6 +699,26 @@ agent := llmagent.New("todo-assistant",
 
 `todo.DefaultToolPrompt` is a ready-made system-instruction snippet that teaches the model when to call `todo_write` and how to phrase items. You can replace it with your own copy; the runtime checks below stay the same.
 
+#### Hard Compliance
+
+`todo_write` is advisory by default: the model can still decide to stop while items remain open. If an agent must finish the list before producing a final response, install the `todoenforcer` extension:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/extension/todoenforcer"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool/todo"
+)
+
+agent := llmagent.New("todo-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction(todo.DefaultToolPrompt),
+    llmagent.WithExtensions(todoenforcer.New()),
+)
+```
+
+The extension contributes both `todo_write` and `todo_declare_blocker`; do not also pass a separate `todo.New()` through `WithTools`. To reuse `tool/todo` options such as `WithStateKeyPrefix`, `WithClearOnAllDone`, or `WithNudgeHook`, construct the tool yourself and pass it with `todoenforcer.WithTodoTool(todo.New(...))`. `todo_declare_blocker` is the escape hatch for objective blockers such as missing permissions, credentials, infrastructure, or user decisions.
+
 #### Tool Result
 
 `todo_write` returns a structured result instead of free-form text, so any caller — terminal, AG-UI, a custom HTTP frontend — can render the same data without parsing prose:
@@ -697,7 +781,7 @@ todoTool := todo.New(
 )
 ```
 
-A complete runnable demo, including the multi-turn pause/resume scenario and an ASCII renderer, lives in [`examples/todo/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todo).
+A complete runnable demo of the base tool, including the multi-turn pause/resume scenario and an ASCII renderer, lives in [`examples/todo/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todo). A side-by-side enforcement demo lives in [`examples/todoenforcer/`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/todoenforcer).
 
 ## MCP Tools
 
@@ -1389,6 +1473,60 @@ childTool := agenttool.NewTool(
 )
 ```
 
+### Child Agent Context Visibility
+
+AgentTool runs the child Agent by reusing the current invocation and session.
+It helps to separate the nearby concepts first:
+
+| Concept | What it does | What it does not do |
+| --- | --- | --- |
+| `FilterKey` | Labels which conversation view an event belongs to; the content processor uses it to decide which historical messages enter a model request | It is not a permission boundary or a separate storage unit |
+| `Branch` | Records the Agent execution lineage, mainly for traces and cross-Agent message projection | It usually does not directly decide what history AgentTool can read |
+| `HistoryScope` | Controls how AgentTool builds the child Agent `FilterKey` | It does not shape the tool result and does not change the child Agent tool surface |
+| `MessageFilterMode` | A higher-level LLMAgent/GraphAgent preset that combines time filtering and `FilterKey` filtering | Most AgentTool users do not need to configure it directly |
+
+For historical reasons, `BranchFilterMode` contains the word `Branch`, but for
+current-version events it compares `Event.FilterKey` with the current
+invocation `FilterKey`. Legacy events written before `FilterKey` existed may
+still fall back to `Event.Branch` for compatibility.
+
+AgentTool currently has two history scopes:
+
+- `HistoryScopeIsolated` (default): the child Agent uses an independent
+  `FilterKey`, such as `math-specialist-<uuid>`. With normal Runner-generated
+  events, the child sees only the current tool arguments and does not inherit
+  parent Agent history. Child events are still stored in the same session, but
+  under a separate view.
+- `HistoryScopeParentBranch`: the child Agent uses a sub-key under the parent
+  key, such as `assistant/math-specialist-<uuid>`. The default prefix matching
+  treats ancestors and descendants as the same lineage. This means the child
+  can see parent history, and the parent may also see child events in later
+  context. This mode is for shared-lineage collaboration; it is not a snapshot
+  mode that reads parent history while hiding child details from the parent.
+
+In practice:
+
+- Use the default `HistoryScopeIsolated` when the child Agent should do
+  independent work and return only its tool result to the parent. Pass any
+  required context explicitly in the tool arguments.
+- Use `HistoryScopeParentBranch` when the child Agent should continue, edit, or
+  refine prior parent output, and it is acceptable for parent and child events
+  to share one lineage.
+
+`HistoryScope` only controls historical visibility. These behaviors do not
+change when you switch history scope:
+
+- `WithResponseMode` still controls which child assistant content becomes the
+  tool result.
+- `WithSkipSummarization` still controls whether the parent flow performs an
+  extra outer summarization call after the tool result.
+- The child Agent still inherits the current invocation's session, plugins, and
+  `RunOptions` through `Invocation.Clone(...)`; start a separate application
+  run when you need true background isolation.
+- If business code manually appends events with an empty `FilterKey`, those
+  events may be visible from multiple views for compatibility. Prefer setting
+  explicit app-prefixed `FilterKey` values for custom events.
+
 ### Options
 
 - WithSkipSummarization(bool):
@@ -1417,8 +1555,8 @@ childTool := agenttool.NewTool(
     message as the tool result
 
 - WithHistoryScope(HistoryScope):
-  - `HistoryScopeIsolated` (default): Keep the child Agent fully isolated; it only sees the current tool arguments (no inherited history).
-  - `HistoryScopeParentBranch`: Inherit parent conversation history by using a hierarchical filter key `parent/child-uuid`. This allows the content processor to include parent events via prefix matching while keeping child events isolated under a sub-branch. Typical use cases: “edit/optimize/continue previous output”.
+  - `HistoryScopeIsolated` (default): Use an independent child `FilterKey`; the child usually sees only the current tool arguments and does not inherit parent history.
+  - `HistoryScopeParentBranch`: Use a hierarchical `FilterKey` in the form `parent/child-uuid`. Parent and child events share one lineage, and prefix matching can include either side in the other's context. Typical use cases: edit, optimize, or continue previous output.
 
 Example:
 
@@ -1445,6 +1583,9 @@ child := agenttool.NewTool(
   `WithHistoryScope(agenttool.HistoryScopeIsolated)` controls what the child
   can read. `WithResponseMode(agenttool.ResponseModeFinalOnly)` controls what
   the parent receives as the tool result.
+- `HistoryScopeParentBranch` is shared lineage, not snapshot isolation. If child
+  details should not appear in later parent context, keep the default
+  `HistoryScopeIsolated` and pass the needed context through tool arguments.
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
 ## Tool Integration and Usage
@@ -1877,7 +2018,7 @@ tools automatically, then sends the tool results back to the model.
 In some systems, you may want the caller (for example, a client, an upstream
 service, or an external tool runtime such as Model Context Protocol (MCP)) to
 execute tools instead. You can interrupt tool execution with
-`agent.WithToolExecutionFilter(...)`.
+`agent.WithExternalTools(...)` or `agent.WithToolExecutionFilter(...)`.
 
 **Key idea:**
 
@@ -1885,21 +2026,44 @@ execute tools instead. You can interrupt tool execution with
   see and call).
 - `agent.WithToolExecutionFilter(...)` controls **tool execution** (what the
   framework will auto-run after the model requests it).
+- `agent.WithAdditionalTools(...)` appends temporary tools for one run.
+- `agent.WithExternalTools(...)` appends temporary tools and marks them as
+  caller-executed.
 
 #### Basic Flow
 
-1. Run the agent with `WithToolExecutionFilter` so the framework does **not**
-   execute selected tools.
+1. Run the agent with `WithExternalTools` so the model can see caller-owned
+   tools.
 2. Read `tool_calls` from the model response.
 3. Execute the tool externally.
 4. Send a `role=tool` message back so the model can continue.
 
 ```go
-execFilter := tool.NewExcludeToolNamesFilter("external_search")
+type declarationOnlyTool struct {
+    decl *tool.Declaration
+}
+
+func (t *declarationOnlyTool) Declaration() *tool.Declaration {
+    return t.decl
+}
+
+externalSearch := &declarationOnlyTool{
+    decl: &tool.Declaration{
+        Name:        "external_search",
+        Description: "Search a caller-owned system.",
+        InputSchema: &tool.Schema{
+            Type: "object",
+            Properties: map[string]*tool.Schema{
+                "query": {Type: "string"},
+            },
+            Required: []string{"query"},
+        },
+    },
+}
 
 // Step 1: model returns tool_calls, but the tool is NOT executed.
 ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("search ..."),
-    agent.WithToolExecutionFilter(execFilter),
+    agent.WithExternalTools([]tool.Tool{externalSearch}),
 )
 
 // Step 2: extract tool_call_id + arguments from events (omitted).
@@ -1909,9 +2073,19 @@ toolResultJSON := `{"status":"ok","data":"..."}`
 // Step 3/4: send tool result as role=tool, then model continues.
 toolMsg := model.NewToolMessage(toolCallID, "external_search", toolResultJSON)
 ch, err = r.Run(ctx, userID, sessionID, toolMsg,
-    agent.WithToolExecutionFilter(execFilter),
+    agent.WithExternalTools([]tool.Tool{externalSearch}),
 )
 ```
+
+If the tool is already registered on the Agent with `llmagent.WithTools(...)`
+and only its per-run execution policy should change, continue to use
+`agent.WithToolExecutionFilter(...)`. `WithExternalTools` is better for AG-UI,
+browser, mobile, or upstream-service callers that declare tools dynamically on
+each request. The AG-UI runner maps request `input.Tools` to `WithExternalTools`
+by default. If an external tool has the same name as an existing tool, the
+existing tool wins; the external declaration does not override or intercept it.
+This includes tools registered on the Agent and tools added with
+`WithAdditionalTools`.
 
 **Complete example:** `examples/toolinterrupt/`
 

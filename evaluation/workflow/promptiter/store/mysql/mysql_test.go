@@ -116,10 +116,14 @@ func TestClose_NilClient(t *testing.T) {
 func TestCreateValidationErrors(t *testing.T) {
 	ctx := context.Background()
 	store := &mysqlStore{}
-	err := store.Create(ctx, nil)
+	err := store.Create(ctx, "demo-app", nil)
 	assert.Error(t, err)
-	err = store.Create(ctx, &engine.RunResult{})
+	err = store.Create(ctx, "", &engine.RunResult{ID: "run-1"})
 	assert.Error(t, err)
+	err = store.Create(ctx, "demo-app", &engine.RunResult{})
+	assert.Error(t, err)
+	err = store.Create(ctx, "demo-app", &engine.RunResult{AppName: "other-app", ID: "run-1"})
+	assert.EqualError(t, err, `promptiter run app name "other-app" does not match "demo-app"`)
 }
 
 func TestCreateStoresRun(t *testing.T) {
@@ -127,17 +131,20 @@ func TestCreateStoresRun(t *testing.T) {
 	store, db, mock := newMySQLStore(t)
 	t.Cleanup(func() { _ = db.Close() })
 	run := &engine.RunResult{
-		ID:     "run-1",
-		Status: engine.RunStatusQueued,
+		AppName: "demo-app",
+		ID:      "run-1",
+		Status:  engine.RunStatusQueued,
 	}
+	payload, err := json.Marshal(run)
+	assert.NoError(t, err)
 	query := fmt.Sprintf(
-		"INSERT INTO %s \\(run_id, status, run_result\\) VALUES \\(\\?, \\?, \\?\\)",
+		"INSERT INTO %s \\(app_name, run_id, status, run_result\\) VALUES \\(\\?, \\?, \\?, \\?\\)",
 		regexp.QuoteMeta(store.tableName),
 	)
 	mock.ExpectExec(query).
-		WithArgs("run-1", string(engine.RunStatusQueued), sqlmock.AnyArg()).
+		WithArgs("demo-app", "run-1", string(engine.RunStatusQueued), string(payload)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	err := store.Create(ctx, run)
+	err = store.Create(ctx, "demo-app", run)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -147,25 +154,28 @@ func TestCreateDuplicateEntryReturnsFriendlyError(t *testing.T) {
 	store, db, mock := newMySQLStore(t)
 	t.Cleanup(func() { _ = db.Close() })
 	run := &engine.RunResult{
-		ID:     "run-1",
-		Status: engine.RunStatusQueued,
+		AppName: "demo-app",
+		ID:      "run-1",
+		Status:  engine.RunStatusQueued,
 	}
 	query := fmt.Sprintf(
-		"INSERT INTO %s \\(run_id, status, run_result\\) VALUES \\(\\?, \\?, \\?\\)",
+		"INSERT INTO %s \\(app_name, run_id, status, run_result\\) VALUES \\(\\?, \\?, \\?, \\?\\)",
 		regexp.QuoteMeta(store.tableName),
 	)
 	mock.ExpectExec(query).
-		WithArgs("run-1", string(engine.RunStatusQueued), sqlmock.AnyArg()).
+		WithArgs("demo-app", "run-1", string(engine.RunStatusQueued), sqlmock.AnyArg()).
 		WillReturnError(&mysqlerr.MySQLError{Number: sqldb.MySQLErrDuplicateEntry})
-	err := store.Create(ctx, run)
-	assert.EqualError(t, err, `run "run-1" already exists`)
+	err := store.Create(ctx, "demo-app", run)
+	assert.EqualError(t, err, `run "run-1" for app "demo-app" already exists`)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestGetValidationError(t *testing.T) {
 	ctx := context.Background()
 	store := &mysqlStore{}
-	_, err := store.Get(ctx, "")
+	_, err := store.Get(ctx, "", "run-1")
+	assert.Error(t, err)
+	_, err = store.Get(ctx, "demo-app", "")
 	assert.Error(t, err)
 }
 
@@ -174,6 +184,7 @@ func TestGetLoadsRun(t *testing.T) {
 	store, db, mock := newMySQLStore(t)
 	t.Cleanup(func() { _ = db.Close() })
 	run := &engine.RunResult{
+		AppName:      "demo-app",
 		ID:           "run-1",
 		Status:       engine.RunStatusRunning,
 		CurrentRound: 2,
@@ -182,13 +193,14 @@ func TestGetLoadsRun(t *testing.T) {
 	payload, err := json.Marshal(run)
 	assert.NoError(t, err)
 	query := fmt.Sprintf(
-		"SELECT run_result FROM %s WHERE run_id = \\?",
+		"SELECT run_result FROM %s WHERE app_name = \\? AND run_id = \\?",
 		regexp.QuoteMeta(store.tableName),
 	)
 	rows := sqlmock.NewRows([]string{"run_result"}).AddRow(payload)
-	mock.ExpectQuery(query).WithArgs("run-1").WillReturnRows(rows)
-	loaded, err := store.Get(ctx, "run-1")
+	mock.ExpectQuery(query).WithArgs("demo-app", "run-1").WillReturnRows(rows)
+	loaded, err := store.Get(ctx, "demo-app", "run-1")
 	assert.NoError(t, err)
+	assert.Equal(t, run.AppName, loaded.AppName)
 	assert.Equal(t, run.ID, loaded.ID)
 	assert.Equal(t, run.Status, loaded.Status)
 	assert.Equal(t, run.CurrentRound, loaded.CurrentRound)
@@ -201,11 +213,11 @@ func TestGetNotFound(t *testing.T) {
 	store, db, mock := newMySQLStore(t)
 	t.Cleanup(func() { _ = db.Close() })
 	query := fmt.Sprintf(
-		"SELECT run_result FROM %s WHERE run_id = \\?",
+		"SELECT run_result FROM %s WHERE app_name = \\? AND run_id = \\?",
 		regexp.QuoteMeta(store.tableName),
 	)
-	mock.ExpectQuery(query).WithArgs("run-1").WillReturnError(sql.ErrNoRows)
-	_, err := store.Get(ctx, "run-1")
+	mock.ExpectQuery(query).WithArgs("demo-app", "run-1").WillReturnError(sql.ErrNoRows)
+	_, err := store.Get(ctx, "demo-app", "run-1")
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -216,12 +228,12 @@ func TestGetUnmarshalError(t *testing.T) {
 	store, db, mock := newMySQLStore(t)
 	t.Cleanup(func() { _ = db.Close() })
 	query := fmt.Sprintf(
-		"SELECT run_result FROM %s WHERE run_id = \\?",
+		"SELECT run_result FROM %s WHERE app_name = \\? AND run_id = \\?",
 		regexp.QuoteMeta(store.tableName),
 	)
 	rows := sqlmock.NewRows([]string{"run_result"}).AddRow([]byte("{"))
-	mock.ExpectQuery(query).WithArgs("run-1").WillReturnRows(rows)
-	_, err := store.Get(ctx, "run-1")
+	mock.ExpectQuery(query).WithArgs("demo-app", "run-1").WillReturnRows(rows)
+	_, err := store.Get(ctx, "demo-app", "run-1")
 	assert.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -229,10 +241,14 @@ func TestGetUnmarshalError(t *testing.T) {
 func TestUpdateValidationErrors(t *testing.T) {
 	ctx := context.Background()
 	store := &mysqlStore{}
-	err := store.Update(ctx, nil)
+	err := store.Update(ctx, "demo-app", nil)
 	assert.Error(t, err)
-	err = store.Update(ctx, &engine.RunResult{})
+	err = store.Update(ctx, "", &engine.RunResult{ID: "run-1"})
 	assert.Error(t, err)
+	err = store.Update(ctx, "demo-app", &engine.RunResult{})
+	assert.Error(t, err)
+	err = store.Update(ctx, "demo-app", &engine.RunResult{AppName: "other-app", ID: "run-1"})
+	assert.EqualError(t, err, `promptiter run app name "other-app" does not match "demo-app"`)
 }
 
 func TestUpdatePersistsRun(t *testing.T) {
@@ -240,17 +256,20 @@ func TestUpdatePersistsRun(t *testing.T) {
 	store, db, mock := newMySQLStore(t)
 	t.Cleanup(func() { _ = db.Close() })
 	run := &engine.RunResult{
-		ID:     "run-1",
-		Status: engine.RunStatusSucceeded,
+		AppName: "demo-app",
+		ID:      "run-1",
+		Status:  engine.RunStatusSucceeded,
 	}
+	payload, err := json.Marshal(run)
+	assert.NoError(t, err)
 	query := fmt.Sprintf(
-		"UPDATE %s SET status = \\?, run_result = \\?, updated_at = CURRENT_TIMESTAMP\\(6\\) WHERE run_id = \\?",
+		"UPDATE %s SET status = \\?, run_result = \\?, updated_at = CURRENT_TIMESTAMP\\(6\\) WHERE app_name = \\? AND run_id = \\?",
 		regexp.QuoteMeta(store.tableName),
 	)
 	mock.ExpectExec(query).
-		WithArgs(string(engine.RunStatusSucceeded), sqlmock.AnyArg(), "run-1").
+		WithArgs(string(engine.RunStatusSucceeded), string(payload), "demo-app", "run-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	err := store.Update(ctx, run)
+	err = store.Update(ctx, "demo-app", run)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -260,17 +279,18 @@ func TestUpdateMissingRunReturnsNotFound(t *testing.T) {
 	store, db, mock := newMySQLStore(t)
 	t.Cleanup(func() { _ = db.Close() })
 	run := &engine.RunResult{
-		ID:     "run-1",
-		Status: engine.RunStatusSucceeded,
+		AppName: "demo-app",
+		ID:      "run-1",
+		Status:  engine.RunStatusSucceeded,
 	}
 	query := fmt.Sprintf(
-		"UPDATE %s SET status = \\?, run_result = \\?, updated_at = CURRENT_TIMESTAMP\\(6\\) WHERE run_id = \\?",
+		"UPDATE %s SET status = \\?, run_result = \\?, updated_at = CURRENT_TIMESTAMP\\(6\\) WHERE app_name = \\? AND run_id = \\?",
 		regexp.QuoteMeta(store.tableName),
 	)
 	mock.ExpectExec(query).
-		WithArgs(string(engine.RunStatusSucceeded), sqlmock.AnyArg(), "run-1").
+		WithArgs(string(engine.RunStatusSucceeded), sqlmock.AnyArg(), "demo-app", "run-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	err := store.Update(ctx, run)
+	err := store.Update(ctx, "demo-app", run)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -285,7 +305,7 @@ func TestEnsureSchemaIgnoresDuplicateIndexName(t *testing.T) {
 	tableName := sqldb.BuildTableName("test_", tableNameRuns)
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS\\s+" + regexp.QuoteMeta(tableName)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("CREATE UNIQUE INDEX\\s+" + regexp.QuoteMeta(runIDUniqueIndexName) + "\\s+ON\\s+" + regexp.QuoteMeta(tableName)).
+	mock.ExpectExec("CREATE UNIQUE INDEX\\s+" + regexp.QuoteMeta(appRunUniqueIndexName) + "\\s+ON\\s+" + regexp.QuoteMeta(tableName)).
 		WillReturnError(&mysqlerr.MySQLError{Number: sqldb.MySQLErrDuplicateKeyName})
 	err = ensureSchema(ctx, client, tableName)
 	assert.NoError(t, err)

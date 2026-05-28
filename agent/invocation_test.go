@@ -1108,6 +1108,28 @@ func TestWithModelSelector(t *testing.T) {
 	require.Equal(t, "selector-model", got.Info().Name)
 }
 
+func TestWithToolPermissionPolicy(t *testing.T) {
+	const (
+		toolName    = "dangerous_tool"
+		blockReason = "blocked"
+	)
+	opts := &RunOptions{}
+	WithToolPermissionPolicyFunc(
+		func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+			require.Equal(t, toolName, req.ToolName)
+			return tool.DenyPermission(blockReason), nil
+		},
+	)(opts)
+
+	require.NotNil(t, opts.ToolPermissionPolicy)
+	decision, err := opts.ToolPermissionPolicy.CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{ToolName: toolName},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+}
+
 func TestWithInstruction(t *testing.T) {
 	opts := &RunOptions{}
 	WithInstruction(testRunInstruction)(opts)

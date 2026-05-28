@@ -15,9 +15,11 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	iprofile "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/profile"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/store"
@@ -36,6 +38,7 @@ type Manager interface {
 }
 
 type manager struct {
+	appName              string
 	engine               engine.Engine
 	store                store.Store
 	storedResultSlimming engine.RunResultSlimming
@@ -44,13 +47,18 @@ type manager struct {
 	closed               bool
 }
 
-// New creates a PromptIter run manager.
-func New(engine engine.Engine, opts ...Option) (Manager, error) {
+// New creates a PromptIter run manager for one app.
+func New(appName string, engine engine.Engine, opts ...Option) (Manager, error) {
 	options := newOptions(opts...)
+	appName = strings.TrimSpace(appName)
+	if appName == "" {
+		return nil, errors.New("promptiter manager: app name must not be empty")
+	}
 	if engine == nil {
 		return nil, errors.New("promptiter manager: engine must not be nil")
 	}
 	return &manager{
+		appName:              appName,
 		engine:               engine,
 		store:                options.store,
 		storedResultSlimming: options.storedResultSlimming,
@@ -65,15 +73,16 @@ func (m *manager) Start(ctx context.Context, request *engine.RunRequest) (*engin
 	}
 	runID := uuid.NewString()
 	run := &engine.RunResult{
-		ID:     runID,
-		Status: engine.RunStatusQueued,
+		AppName: m.appName,
+		ID:      runID,
+		Status:  engine.RunStatusQueued,
 	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		return nil, errors.New("promptiter manager is closed")
 	}
-	if err := m.store.Create(ctx, m.slimStoredRun(run)); err != nil {
+	if err := m.store.Create(ctx, m.appName, m.slimStoredRun(run)); err != nil {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("create run %q: %w", runID, err)
 	}
@@ -86,7 +95,7 @@ func (m *manager) Start(ctx context.Context, request *engine.RunRequest) (*engin
 
 // Get loads one persisted PromptIter run.
 func (m *manager) Get(ctx context.Context, runID string) (*engine.RunResult, error) {
-	return m.store.Get(ctx, runID)
+	return m.store.Get(ctx, m.appName, runID)
 }
 
 // Cancel cancels one running PromptIter run.
@@ -98,14 +107,14 @@ func (m *manager) Cancel(ctx context.Context, runID string) error {
 		return fmt.Errorf("run %q is not running: %w", runID, os.ErrNotExist)
 	}
 	cancel()
-	run, err := m.store.Get(ctx, runID)
+	run, err := m.store.Get(ctx, m.appName, runID)
 	if err != nil {
 		return err
 	}
 	if run.Status == engine.RunStatusQueued || run.Status == engine.RunStatusRunning {
 		run.Status = engine.RunStatusCanceled
 		run.ErrorMessage = "run canceled"
-		if err := m.store.Update(ctx, m.slimStoredRun(run)); err != nil {
+		if err := m.store.Update(ctx, m.appName, m.slimStoredRun(run)); err != nil {
 			return err
 		}
 	}
@@ -133,13 +142,13 @@ func (m *manager) Close() error {
 }
 
 func (m *manager) run(ctx context.Context, runID string, request *engine.RunRequest) {
-	run, err := m.store.Get(context.Background(), runID)
+	run, err := m.store.Get(context.Background(), m.appName, runID)
 	if err != nil {
 		m.clearCancel(runID)
 		return
 	}
 	run.Status = engine.RunStatusRunning
-	if err := m.store.Update(context.Background(), m.slimStoredRun(run)); err != nil {
+	if err := m.store.Update(context.Background(), m.appName, m.slimStoredRun(run)); err != nil {
 		m.clearCancel(runID)
 		return
 	}
@@ -158,23 +167,24 @@ func (m *manager) run(ctx context.Context, runID string, request *engine.RunRequ
 			observer.run.Status = engine.RunStatusFailed
 			observer.run.ErrorMessage = err.Error()
 		}
-		_ = m.store.Update(context.Background(), m.slimStoredRun(observer.run))
+		_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(observer.run))
 		m.clearCancel(runID)
 		return
 	}
 	if result == nil {
 		observer.run.Status = engine.RunStatusFailed
 		observer.run.ErrorMessage = "engine returned nil run"
-		_ = m.store.Update(context.Background(), m.slimStoredRun(observer.run))
+		_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(observer.run))
 		m.clearCancel(runID)
 		return
 	}
 	result.ID = runID
+	result.AppName = m.appName
 	result.Status = engine.RunStatusSucceeded
-	if err := m.store.Update(context.Background(), m.slimStoredRun(result)); err != nil {
+	if err := m.store.Update(context.Background(), m.appName, m.slimStoredRun(result)); err != nil {
 		observer.run.Status = engine.RunStatusFailed
 		observer.run.ErrorMessage = err.Error()
-		_ = m.store.Update(context.Background(), m.slimStoredRun(observer.run))
+		_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(observer.run))
 	}
 	m.clearCancel(runID)
 }
@@ -207,6 +217,12 @@ func validateRunRequest(request *engine.RunRequest) error {
 		return errors.New("max rounds must be greater than 0")
 	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
+	case request.BackwardOptions.CaseParallelism < 0:
+		return errors.New("backward case parallelism must be non-negative")
+	case request.AggregationOptions.SurfaceParallelism < 0:
+		return errors.New("aggregation surface parallelism must be non-negative")
+	case request.OptimizerOptions.SurfaceParallelism < 0:
+		return errors.New("optimizer surface parallelism must be non-negative")
 	default:
 		return nil
 	}
@@ -240,8 +256,66 @@ func validateEvalSetInputs(role string, inputs []engine.EvalSetInput) error {
 		if slices.Contains(input.EvalCaseIDs, "") {
 			return fmt.Errorf("%seval case id for eval set %q is empty", prefix, input.EvalSetID)
 		}
+		selectedCaseIDs := make(map[string]struct{}, len(input.EvalCaseIDs))
+		for _, evalCaseID := range input.EvalCaseIDs {
+			selectedCaseIDs[evalCaseID] = struct{}{}
+		}
+		for _, hint := range input.LossHints {
+			hintEvalCaseID := strings.TrimSpace(hint.EvalCaseID)
+			switch {
+			case hintEvalCaseID == "":
+				return fmt.Errorf("%sloss hint eval case id for eval set %q is empty", prefix, input.EvalSetID)
+			case strings.TrimSpace(hint.MetricName) == "":
+				return fmt.Errorf(
+					"%sloss hint metric name for eval set %q case %q is empty",
+					prefix,
+					input.EvalSetID,
+					hint.EvalCaseID,
+				)
+			case strings.TrimSpace(hint.Reason) == "":
+				return fmt.Errorf(
+					"%sloss hint reason for eval set %q case %q metric %q is empty",
+					prefix,
+					input.EvalSetID,
+					hint.EvalCaseID,
+					hint.MetricName,
+				)
+			case !isValidLossHintSeverity(hint.Severity):
+				return fmt.Errorf(
+					"%sloss hint severity %q for eval set %q case %q metric %q is invalid",
+					prefix,
+					hint.Severity,
+					input.EvalSetID,
+					hint.EvalCaseID,
+					hint.MetricName,
+				)
+			}
+			if len(selectedCaseIDs) > 0 {
+				if _, ok := selectedCaseIDs[hintEvalCaseID]; !ok {
+					return fmt.Errorf(
+						"%sloss hint eval case %q is not selected for eval set %q",
+						prefix,
+						hint.EvalCaseID,
+						input.EvalSetID,
+					)
+				}
+			}
+		}
 	}
 	return nil
+}
+
+func isValidLossHintSeverity(severity promptiter.LossSeverity) bool {
+	switch severity {
+	case "",
+		promptiter.LossSeverityP0,
+		promptiter.LossSeverityP1,
+		promptiter.LossSeverityP2,
+		promptiter.LossSeverityP3:
+		return true
+	default:
+		return false
+	}
 }
 
 func cloneEvalSetInputs(inputs []engine.EvalSetInput) []engine.EvalSetInput {
@@ -253,6 +327,7 @@ func cloneEvalSetInputs(inputs []engine.EvalSetInput) []engine.EvalSetInput {
 		cloned = append(cloned, engine.EvalSetInput{
 			EvalSetID:   input.EvalSetID,
 			EvalCaseIDs: append([]string(nil), input.EvalCaseIDs...),
+			LossHints:   append([]engine.LossHint(nil), input.LossHints...),
 		})
 	}
 	return cloned
