@@ -733,6 +733,58 @@ func (f *Flow) processStreamingResponses(
 		}
 		finishLatencySpan(streamSpan, streamStarted, err)
 	}()
+	processor := newStreamingResponseProcessor(
+		f,
+		ctx,
+		invocation,
+		observabilityInvocation,
+		llmRequest,
+		eventChan,
+		span,
+		startedSpan,
+		&err,
+	)
+	if processor.tracker != nil {
+		defer processor.tracker.RecordMetrics()()
+	}
+	responseSeq(func(response *model.Response) bool {
+		responseCount++
+		return processor.process(response)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return processor.lastEvent, nil
+}
+
+type streamingResponseProcessor struct {
+	flow                    *Flow
+	ctx                     context.Context
+	invocation              *agent.Invocation
+	observabilityInvocation *agent.Invocation
+	currentInvocation       *agent.Invocation
+	llmRequest              *model.Request
+	eventChan               chan<- *event.Event
+	span                    oteltrace.Span
+	startedSpan             bool
+	tracker                 *itelemetry.ChatMetricsTracker
+	timingInfo              *model.TimingInfo
+	partialUsageState       responseusage.PartialState
+	lastEvent               *event.Event
+	err                     *error
+}
+
+func newStreamingResponseProcessor(
+	flow *Flow,
+	ctx context.Context,
+	invocation *agent.Invocation,
+	observabilityInvocation *agent.Invocation,
+	llmRequest *model.Request,
+	eventChan chan<- *event.Event,
+	span oteltrace.Span,
+	startedSpan bool,
+	err *error,
+) *streamingResponseProcessor {
 	currentInvocation := invocationFromContextOrDefault(ctx, invocation)
 	metricsInvocation := observabilityInvocation
 	if metricsInvocation == nil {
@@ -741,168 +793,198 @@ func (f *Flow) processStreamingResponses(
 	if metricsInvocation == nil {
 		metricsInvocation = currentInvocation
 	}
-	var tracker *itelemetry.ChatMetricsTracker
-	var timingInfo *model.TimingInfo
-	var partialUsageState responseusage.PartialState
+	processor := &streamingResponseProcessor{
+		flow:                    flow,
+		ctx:                     ctx,
+		invocation:              invocation,
+		observabilityInvocation: observabilityInvocation,
+		currentInvocation:       currentInvocation,
+		llmRequest:              llmRequest,
+		eventChan:               eventChan,
+		span:                    span,
+		startedSpan:             startedSpan,
+		err:                     err,
+	}
 	if metricsInvocation != nil {
-		timingInfo = responseUsageTimingInfo(currentInvocation)
-		tracker = itelemetry.NewChatMetricsTracker(
+		processor.timingInfo = responseUsageTimingInfo(currentInvocation)
+		processor.tracker = itelemetry.NewChatMetricsTracker(
 			ctx,
 			metricsInvocation,
 			llmRequest,
-			timingInfo,
+			processor.timingInfo,
 			nil,
-			&err,
+			err,
 		)
-		defer tracker.RecordMetrics()()
 	}
+	return processor
+}
 
-	responseSeq(func(response *model.Response) bool {
-		responseCount++
-		responseCtx, responseSpan, responseStarted := startLatencySpan(
-			ctx,
-			invocation,
-			latencySpanProcessResponse,
-			latencyResponseAttrs(response)...,
-		)
-		responseErr := error(nil)
-		finishResponseSpan := func() {
-			finishLatencySpan(responseSpan, responseStarted, responseErr)
-		}
-		ctx = responseCtx
-		currentInvocation = invocationFromContextOrDefault(
-			ctx,
-			currentInvocation,
-		)
-		timingInfo = responseUsageTimingInfo(currentInvocation)
-		if tracker != nil {
-			tracker.SetInvocationState(
-				metricsInvocationForCurrent(
-					currentInvocation,
-					observabilityInvocation,
-				),
-				timingInfo,
-			)
-		}
-		trackModelResponseTelemetry(
-			response,
-			tracker,
-		)
-		callbackTimingAttachment := responseusage.AttachTimingForCallback(
-			response,
-			timingInfo,
-			&partialUsageState,
-		)
-		eventInvocation := invocation
-		if eventInvocation == nil {
-			eventInvocation = currentInvocation
-		}
-		// Handle after model callbacks.
-		updatedCtx, customResp, cbErr := f.handleAfterModelCallbacks(
-			ctx,
-			eventInvocation,
-			currentInvocation,
-			llmRequest,
-			response,
-			eventChan,
-		)
-		if cbErr != nil {
-			err = cbErr
-			responseErr = cbErr
-			finishResponseSpan()
-			return false
-		}
-		ctx = updatedCtx
-		responseReplaced := customResp != nil
-		if responseReplaced {
-			callbackTimingAttachment.Restore()
-			response = customResp
-		}
-		currentInvocation = invocationFromContextOrDefault(
-			ctx,
-			currentInvocation,
-		)
-		timingInfo = responseUsageTimingInfo(currentInvocation)
-		if tracker != nil {
-			tracker.SetInvocationState(
-				metricsInvocationForCurrent(
-					currentInvocation,
-					observabilityInvocation,
-				),
-				timingInfo,
-			)
-		}
-		if !responseReplaced {
-			callbackTimingAttachment.RestoreIfTimingInfoChanged(timingInfo)
-		}
-		responseusage.AttachTiming(response, timingInfo, &partialUsageState)
-		// Repair tool call arguments in place when needed.
-		if currentInvocation != nil &&
-			jsonrepair.IsToolCallArgumentsJSONRepairEnabled(currentInvocation) {
-			jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, response)
-		}
-		// 4. Create and send LLM response using the clean constructor.
-		llmResponseEvent := f.createLLMResponseEvent(
-			eventInvocation,
-			currentInvocation,
-			response,
-			llmRequest,
-		)
-		emitCtx, emitSpan, emitStarted := startLatencySpan(
-			ctx,
-			eventInvocation,
-			latencySpanEmitResponse,
-			latencyResponseAttrs(response)...,
-		)
-		agent.EmitEvent(emitCtx, eventInvocation, eventChan, llmResponseEvent)
-		finishLatencySpan(emitSpan, emitStarted, nil)
-		lastEvent = llmResponseEvent
-		if tracker != nil {
-			tracker.SetLastEvent(lastEvent)
-		}
-		// 5. Check context cancellation.
-		if err = agent.CheckContextCancelled(ctx); err != nil {
-			responseErr = err
-			finishResponseSpan()
-			return false
-		}
-		// 6. Postprocess response.
-		f.postprocess(
-			ctx,
-			eventInvocation,
-			llmRequest,
-			response,
-			eventChan,
-		)
-		if ctxErr := agent.CheckContextCancelled(ctx); ctxErr != nil {
-			err = ctxErr
-			responseErr = ctxErr
-			finishResponseSpan()
-			return false
-		}
-		var ttfb time.Duration
-		if tracker != nil {
-			ttfb = tracker.FirstTokenTimeDuration()
-		}
-		if startedSpan {
-			itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
-				Invocation:       observabilityInvocationForCurrent(eventInvocation, observabilityInvocation),
-				Request:          llmRequest,
-				Response:         response,
-				EventID:          llmResponseEvent.ID,
-				TimeToFirstToken: ttfb,
-			})
-		}
-		if responseStarted && response != nil {
-			responseSpan.SetAttributes(latencyResponseAttrs(response)...)
-		}
-		finishResponseSpan()
-		return true
-	})
-	if err != nil {
-		return nil, err
+func (p *streamingResponseProcessor) process(
+	response *model.Response,
+) bool {
+	responseCtx, responseSpan, responseStarted := startLatencySpan(
+		p.ctx,
+		p.invocation,
+		latencySpanProcessResponse,
+		latencyResponseAttrs(response)...,
+	)
+	responseErr := error(nil)
+	defer func() {
+		finishLatencySpan(responseSpan, responseStarted, responseErr)
+	}()
+	p.ctx = responseCtx
+	p.currentInvocation = invocationFromContextOrDefault(
+		p.ctx,
+		p.currentInvocation,
+	)
+	p.updateMetricsState()
+	trackModelResponseTelemetry(response, p.tracker)
+	callbackTimingAttachment := responseusage.AttachTimingForCallback(
+		response,
+		p.timingInfo,
+		&p.partialUsageState,
+	)
+	eventInvocation := p.eventInvocation()
+	updatedCtx, customResp, cbErr := p.flow.handleAfterModelCallbacks(
+		p.ctx,
+		eventInvocation,
+		p.currentInvocation,
+		p.llmRequest,
+		response,
+		p.eventChan,
+	)
+	if cbErr != nil {
+		*p.err = cbErr
+		responseErr = cbErr
+		return false
 	}
-	return lastEvent, nil
+	p.ctx = updatedCtx
+	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
+	p.currentInvocation = invocationFromContextOrDefault(
+		p.ctx,
+		p.currentInvocation,
+	)
+	p.updateMetricsState()
+	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
+	p.repairToolCallArguments(response)
+	llmResponseEvent := p.emitLLMResponse(eventInvocation, response)
+	p.lastEvent = llmResponseEvent
+	if p.tracker != nil {
+		p.tracker.SetLastEvent(p.lastEvent)
+	}
+	if err := agent.CheckContextCancelled(p.ctx); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
+	p.flow.postprocess(
+		p.ctx,
+		eventInvocation,
+		p.llmRequest,
+		response,
+		p.eventChan,
+	)
+	if err := agent.CheckContextCancelled(p.ctx); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
+	p.traceChat(eventInvocation, response, llmResponseEvent)
+	if responseStarted && response != nil {
+		responseSpan.SetAttributes(latencyResponseAttrs(response)...)
+	}
+	return true
+}
+
+func (p *streamingResponseProcessor) updateMetricsState() {
+	p.timingInfo = responseUsageTimingInfo(p.currentInvocation)
+	if p.tracker == nil {
+		return
+	}
+	p.tracker.SetInvocationState(
+		metricsInvocationForCurrent(
+			p.currentInvocation,
+			p.observabilityInvocation,
+		),
+		p.timingInfo,
+	)
+}
+
+func (p *streamingResponseProcessor) eventInvocation() *agent.Invocation {
+	if p.invocation != nil {
+		return p.invocation
+	}
+	return p.currentInvocation
+}
+
+func (p *streamingResponseProcessor) applyCallbackResponse(
+	response *model.Response,
+	customResp *model.Response,
+	callbackTimingAttachment responseusage.TimingAttachment,
+) *model.Response {
+	if customResp != nil {
+		callbackTimingAttachment.Restore()
+		return customResp
+	}
+	callbackTimingAttachment.RestoreIfTimingInfoChanged(p.timingInfo)
+	return response
+}
+
+func (p *streamingResponseProcessor) repairToolCallArguments(
+	response *model.Response,
+) {
+	if p.currentInvocation == nil {
+		return
+	}
+	if !jsonrepair.IsToolCallArgumentsJSONRepairEnabled(p.currentInvocation) {
+		return
+	}
+	jsonrepair.RepairResponseToolCallArgumentsInPlace(p.ctx, response)
+}
+
+func (p *streamingResponseProcessor) emitLLMResponse(
+	eventInvocation *agent.Invocation,
+	response *model.Response,
+) *event.Event {
+	llmResponseEvent := p.flow.createLLMResponseEvent(
+		eventInvocation,
+		p.currentInvocation,
+		response,
+		p.llmRequest,
+	)
+	emitCtx, emitSpan, emitStarted := startLatencySpan(
+		p.ctx,
+		eventInvocation,
+		latencySpanEmitResponse,
+		latencyResponseAttrs(response)...,
+	)
+	agent.EmitEvent(emitCtx, eventInvocation, p.eventChan, llmResponseEvent)
+	finishLatencySpan(emitSpan, emitStarted, nil)
+	return llmResponseEvent
+}
+
+func (p *streamingResponseProcessor) traceChat(
+	eventInvocation *agent.Invocation,
+	response *model.Response,
+	llmResponseEvent *event.Event,
+) {
+	if !p.startedSpan {
+		return
+	}
+	var ttfb time.Duration
+	if p.tracker != nil {
+		ttfb = p.tracker.FirstTokenTimeDuration()
+	}
+	itelemetry.TraceChat(p.span, &itelemetry.TraceChatAttributes{
+		Invocation: observabilityInvocationForCurrent(
+			eventInvocation,
+			p.observabilityInvocation,
+		),
+		Request:          p.llmRequest,
+		Response:         response,
+		EventID:          llmResponseEvent.ID,
+		TimeToFirstToken: ttfb,
+	})
 }
 
 // handleAfterModelCallbacks processes after model callbacks.
@@ -1284,7 +1366,24 @@ func (f *Flow) maybeCompactContextBeforeLLM(
 	if !decision.shouldCompact {
 		return req
 	}
+	return f.runContextCompaction(
+		ctx,
+		invocation,
+		eventChan,
+		req,
+		rebuildPlan,
+		decision,
+	)
+}
 
+func (f *Flow) runContextCompaction(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	req *model.Request,
+	rebuildPlan *contextCompactionRebuildPlan,
+	decision contextCompactionDecision,
+) *model.Request {
 	filterKey := invocation.GetEventFilterKey()
 	before := snapshotSummary(invocation.Session, filterKey)
 	emitLatencyDiagnosticEvent(

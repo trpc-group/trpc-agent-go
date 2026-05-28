@@ -558,33 +558,14 @@ func (r *runner) Run(
 		return nil, err
 	}
 
-	eventFilterKey := effectiveAppName
-	if ro.EventFilterKey != "" {
-		eventFilterKey = ro.EventFilterKey
-	}
-
-	invocation := agent.NewInvocation(
-		agent.WithInvocationSession(sess),
-		agent.WithInvocationSessionService(r.sessionService),
-		agent.WithInvocationMessage(invocationMessage),
-		agent.WithInvocationAgent(ag),
-		agent.WithInvocationRunOptions(ro),
-		agent.WithInvocationStructuredOutput(ro.StructuredOutput),
-		agent.WithInvocationStructuredOutputType(ro.StructuredOutputType),
-		agent.WithInvocationMemoryService(r.memoryService),
-		agent.WithInvocationArtifactService(r.artifactService),
-		agent.WithInvocationEventFilterKey(eventFilterKey),
-		agent.WithInvocationPlugins(r.pluginManager),
-	)
-	if rootLookupName := r.selectedRootLookupName(
+	invocation := r.newRunInvocation(
+		sess,
+		invocationMessage,
+		ag,
 		ro,
+		effectiveAppName,
 		awaitUserReplyRootName,
-	); rootLookupName != "" {
-		agent.SetAwaitUserReplyRootLookupName(
-			invocation,
-			rootLookupName,
-		)
-	}
+	)
 	currentTurnSession, err := sessionroute.ResolveCurrentTurnSession(
 		execCtx,
 		r.sessionService,
@@ -656,27 +637,7 @@ func (r *runner) Run(
 	// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
 	flushChan := make(chan *flush.FlushRequest)
 	flush.Attach(execCtx, invocation, flushChan)
-	appender.Attach(invocation, func(ctx context.Context, e *event.Event) error {
-		if e == nil {
-			return nil
-		}
-		persistSession, ok := sessionroute.RouteEvent(
-			invocation,
-			e,
-		)
-		if !ok || persistSession == nil {
-			persistSession = sess
-		}
-		appendCtx, appendSpan, appendStarted := startRunnerLatencySpan(
-			ctx,
-			invocation,
-			runnerLatencySpanPersistEvent,
-			runnerEventAttrs(e)...,
-		)
-		err := r.sessionService.AppendEvent(appendCtx, persistSession, e)
-		finishRunnerLatencySpan(appendSpan, appendStarted, err)
-		return err
-	})
+	r.attachSessionAppender(invocation, sess)
 	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
@@ -689,22 +650,7 @@ func (r *runner) Run(
 	agentEventCh, err := agent.RunWithPlugins(startCtx, invocation, ag)
 	finishRunnerLatencySpan(startSpan, startStarted, err)
 	if err != nil {
-		// Attempt to persist the error event so the session reflects the failure.
-		errorEvent := event.NewErrorEvent(
-			invocation.InvocationID,
-			ag.Info().Name,
-			model.ErrorTypeRunError,
-			err.Error(),
-		)
-		// Populate content to ensure it is valid for persistence (and viewable by users).
-		ensureErrorEventContent(errorEvent)
-		errorEvent = r.applyEventPlugins(execCtx, invocation, errorEvent)
-
-		appendErr := r.sessionService.AppendEvent(execCtx, currentTurnSession, errorEvent)
-		if appendErr != nil {
-			log.Errorf("failed to append agent run error event: %v", appendErr)
-		}
-
+		r.persistAgentRunError(execCtx, currentTurnSession, invocation, ag, err)
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
 		execCancel()
@@ -721,6 +667,85 @@ func (r *runner) Run(
 		flushChan,
 		handle,
 	), nil
+}
+
+func (r *runner) newRunInvocation(
+	sess *session.Session,
+	message model.Message,
+	ag agent.Agent,
+	ro agent.RunOptions,
+	effectiveAppName string,
+	awaitUserReplyRootName string,
+) *agent.Invocation {
+	eventFilterKey := effectiveAppName
+	if ro.EventFilterKey != "" {
+		eventFilterKey = ro.EventFilterKey
+	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(r.sessionService),
+		agent.WithInvocationMessage(message),
+		agent.WithInvocationAgent(ag),
+		agent.WithInvocationRunOptions(ro),
+		agent.WithInvocationStructuredOutput(ro.StructuredOutput),
+		agent.WithInvocationStructuredOutputType(ro.StructuredOutputType),
+		agent.WithInvocationMemoryService(r.memoryService),
+		agent.WithInvocationArtifactService(r.artifactService),
+		agent.WithInvocationEventFilterKey(eventFilterKey),
+		agent.WithInvocationPlugins(r.pluginManager),
+	)
+	if rootLookupName := r.selectedRootLookupName(
+		ro,
+		awaitUserReplyRootName,
+	); rootLookupName != "" {
+		agent.SetAwaitUserReplyRootLookupName(invocation, rootLookupName)
+	}
+	return invocation
+}
+
+func (r *runner) attachSessionAppender(
+	invocation *agent.Invocation,
+	defaultSession *session.Session,
+) {
+	appender.Attach(invocation, func(ctx context.Context, e *event.Event) error {
+		if e == nil {
+			return nil
+		}
+		persistSession, ok := sessionroute.RouteEvent(invocation, e)
+		if !ok || persistSession == nil {
+			persistSession = defaultSession
+		}
+		appendCtx, appendSpan, appendStarted := startRunnerLatencySpan(
+			ctx,
+			invocation,
+			runnerLatencySpanPersistEvent,
+			runnerEventAttrs(e)...,
+		)
+		err := r.sessionService.AppendEvent(appendCtx, persistSession, e)
+		finishRunnerLatencySpan(appendSpan, appendStarted, err)
+		return err
+	})
+}
+
+func (r *runner) persistAgentRunError(
+	ctx context.Context,
+	currentTurnSession *session.Session,
+	invocation *agent.Invocation,
+	ag agent.Agent,
+	runErr error,
+) {
+	errorEvent := event.NewErrorEvent(
+		invocation.InvocationID,
+		ag.Info().Name,
+		model.ErrorTypeRunError,
+		runErr.Error(),
+	)
+	ensureErrorEventContent(errorEvent)
+	errorEvent = r.applyEventPlugins(ctx, invocation, errorEvent)
+	appendErr := r.sessionService.AppendEvent(ctx, currentTurnSession, errorEvent)
+	if appendErr != nil {
+		log.Errorf("failed to append agent run error event: %v", appendErr)
+	}
 }
 
 func (r *runner) applyRunnerRunDefaults(ro *agent.RunOptions) {
