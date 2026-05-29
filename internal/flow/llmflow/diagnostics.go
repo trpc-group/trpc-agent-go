@@ -116,6 +116,16 @@ func latencyResponseAttrs(resp *model.Response) []attribute.KeyValue {
 	return attrs
 }
 
+func latencyTraceResponseDetails(resp *model.Response) bool {
+	if resp == nil {
+		return true
+	}
+	return resp.Done ||
+		resp.Error != nil ||
+		resp.IsToolCallResponse() ||
+		resp.IsToolResultResponse()
+}
+
 func latencyInvocationAttrs(inv *agent.Invocation) []attribute.KeyValue {
 	if inv == nil {
 		return nil

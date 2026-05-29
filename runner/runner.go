@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
@@ -1083,6 +1084,13 @@ type eventLoopContext struct {
 	// It is used to avoid echoing the same final assistant message again in the
 	// runner-completion event when graph final model responses are emitted.
 	emittedAssistantResponseIDs map[string]struct{}
+
+	processedEventCount int
+	partialEventCount   int
+	doneEventCount      int
+	errorEventCount     int
+	emittedEventCount   int
+	detailSpanCount     int
 }
 
 type interruptedAssistantAccumulator struct {
@@ -1139,6 +1147,34 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		runnerInvocationAttrs(loop.invocation)...,
 	)
 	defer func() {
+		if started {
+			span.SetAttributes(
+				attribute.Int(
+					"runner.events.processed_count",
+					loop.processedEventCount,
+				),
+				attribute.Int(
+					"runner.events.partial_count",
+					loop.partialEventCount,
+				),
+				attribute.Int(
+					"runner.events.done_count",
+					loop.doneEventCount,
+				),
+				attribute.Int(
+					"runner.events.error_count",
+					loop.errorEventCount,
+				),
+				attribute.Int(
+					"runner.events.emitted_count",
+					loop.emittedEventCount,
+				),
+				attribute.Int(
+					"runner.events.detail_span_count",
+					loop.detailSpanCount,
+				),
+			)
+		}
 		finishRunnerLatencySpan(span, started, nil)
 		if rr := recover(); rr != nil {
 			log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
@@ -1194,13 +1230,28 @@ func (r *runner) processSingleAgentEvent(
 	loop *eventLoopContext,
 	agentEvent *event.Event,
 ) (err error) {
-	ctx, span, started := startRunnerLatencySpan(
-		ctx,
-		loop.invocation,
-		runnerLatencySpanProcessEvent,
-		runnerEventAttrs(agentEvent)...,
-	)
+	recordRunnerEventStats(loop, agentEvent)
+	traceDetails := runnerTraceEventDetails(agentEvent)
+	var span oteltrace.Span
+	started := false
+	if traceDetails {
+		loop.detailSpanCount++
+		ctx, span, started = startRunnerLatencySpan(
+			ctx,
+			loop.invocation,
+			runnerLatencySpanProcessEvent,
+			runnerEventAttrs(agentEvent)...,
+		)
+	}
 	defer func() {
+		if !started && err != nil {
+			_, span, started = startRunnerLatencySpan(
+				ctx,
+				loop.invocation,
+				runnerLatencySpanProcessEvent,
+				runnerEventAttrs(agentEvent)...,
+			)
+		}
 		finishRunnerLatencySpan(span, started, err)
 	}()
 	if agentEvent == nil {
@@ -1216,7 +1267,12 @@ func (r *runner) processSingleAgentEvent(
 	if shouldPersistInterruptedAssistant(loop) {
 		r.recordInterruptedAssistantDelta(loop, agentEvent, persistSession)
 	}
-	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
+	agentEvent = r.applyEventPluginsWithLatencySpan(
+		ctx,
+		loop.invocation,
+		agentEvent,
+		traceDetails,
+	)
 	if agentEvent == nil {
 		return nil
 	}
@@ -1283,19 +1339,52 @@ func (r *runner) processSingleAgentEvent(
 	}
 
 	// Emit event to output channel.
-	emitCtx, emitSpan, emitStarted := startRunnerLatencySpan(
-		ctx,
-		loop.invocation,
-		runnerLatencySpanEmitEvent,
-		runnerEventAttrs(agentEvent)...,
-	)
+	emitCtx := ctx
+	var emitSpan oteltrace.Span
+	emitStarted := false
+	if traceDetails {
+		emitCtx, emitSpan, emitStarted = startRunnerLatencySpan(
+			ctx,
+			loop.invocation,
+			runnerLatencySpanEmitEvent,
+			runnerEventAttrs(agentEvent)...,
+		)
+	}
 	if err := event.EmitEvent(emitCtx, loop.processedEventCh, agentEvent); err != nil {
+		if !emitStarted {
+			_, emitSpan, emitStarted = startRunnerLatencySpan(
+				ctx,
+				loop.invocation,
+				runnerLatencySpanEmitEvent,
+				runnerEventAttrs(agentEvent)...,
+			)
+		}
 		finishRunnerLatencySpan(emitSpan, emitStarted, err)
 		return fmt.Errorf("emit event to output channel: %w", err)
 	}
+	loop.emittedEventCount++
 	finishRunnerLatencySpan(emitSpan, emitStarted, nil)
 
 	return nil
+}
+
+func recordRunnerEventStats(loop *eventLoopContext, evt *event.Event) {
+	if loop == nil {
+		return
+	}
+	loop.processedEventCount++
+	if evt == nil {
+		return
+	}
+	if evt.IsPartial {
+		loop.partialEventCount++
+	}
+	if evt.Done {
+		loop.doneEventCount++
+	}
+	if evt.Response != nil && evt.Response.Error != nil {
+		loop.errorEventCount++
+	}
 }
 
 func (r *runner) recordPersistedAssistantEvent(
@@ -1433,6 +1522,18 @@ func (r *runner) applyEventPlugins(
 	invocation *agent.Invocation,
 	e *event.Event,
 ) *event.Event {
+	return r.applyEventPluginsWithLatencySpan(ctx, invocation, e, true)
+}
+
+func (r *runner) applyEventPluginsWithLatencySpan(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	e *event.Event,
+	traceDetails bool,
+) *event.Event {
+	if !traceDetails {
+		return r.applyEventPluginsNoSpan(ctx, invocation, e)
+	}
 	ctx, span, started := startRunnerLatencySpan(
 		ctx,
 		invocation,
@@ -1443,6 +1544,14 @@ func (r *runner) applyEventPlugins(
 	defer func() {
 		finishRunnerLatencySpan(span, started, err)
 	}()
+	return r.applyEventPluginsNoSpan(ctx, invocation, e)
+}
+
+func (r *runner) applyEventPluginsNoSpan(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	e *event.Event,
+) *event.Event {
 	if e == nil {
 		return nil
 	}

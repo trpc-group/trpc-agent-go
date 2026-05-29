@@ -724,15 +724,6 @@ func (f *Flow) processStreamingResponses(
 		latencySpanStreamResponses,
 		latencyRequestAttrs(llmRequest)...,
 	)
-	var responseCount int
-	defer func() {
-		if streamStarted {
-			streamSpan.SetAttributes(
-				attribute.Int("llmflow.response.count", responseCount),
-			)
-		}
-		finishLatencySpan(streamSpan, streamStarted, err)
-	}()
 	processor := newStreamingResponseProcessor(
 		f,
 		ctx,
@@ -744,11 +735,41 @@ func (f *Flow) processStreamingResponses(
 		startedSpan,
 		&err,
 	)
+	defer func() {
+		if streamStarted {
+			streamSpan.SetAttributes(
+				attribute.Int(
+					"llmflow.response.count",
+					processor.responseCount,
+				),
+				attribute.Int(
+					"llmflow.response.partial_count",
+					processor.partialResponseCount,
+				),
+				attribute.Int(
+					"llmflow.response.terminal_count",
+					processor.terminalResponseCount,
+				),
+				attribute.Int(
+					"llmflow.response.error_count",
+					processor.errorResponseCount,
+				),
+				attribute.Int(
+					"llmflow.response.tool_count",
+					processor.toolResponseCount,
+				),
+				attribute.Int(
+					"llmflow.response.detail_span_count",
+					processor.detailSpanCount,
+				),
+			)
+		}
+		finishLatencySpan(streamSpan, streamStarted, err)
+	}()
 	if processor.tracker != nil {
 		defer processor.tracker.RecordMetrics()()
 	}
 	responseSeq(func(response *model.Response) bool {
-		responseCount++
 		return processor.process(response)
 	})
 	if err != nil {
@@ -772,6 +793,12 @@ type streamingResponseProcessor struct {
 	partialUsageState       responseusage.PartialState
 	lastEvent               *event.Event
 	err                     *error
+	responseCount           int
+	partialResponseCount    int
+	terminalResponseCount   int
+	errorResponseCount      int
+	toolResponseCount       int
+	detailSpanCount         int
 }
 
 func newStreamingResponseProcessor(
@@ -822,12 +849,20 @@ func newStreamingResponseProcessor(
 func (p *streamingResponseProcessor) process(
 	response *model.Response,
 ) bool {
-	responseCtx, responseSpan, responseStarted := startLatencySpan(
-		p.ctx,
-		p.invocation,
-		latencySpanProcessResponse,
-		latencyResponseAttrs(response)...,
-	)
+	p.recordResponseStats(response)
+	traceDetails := latencyTraceResponseDetails(response)
+	responseCtx := p.ctx
+	var responseSpan oteltrace.Span
+	responseStarted := false
+	if traceDetails {
+		p.detailSpanCount++
+		responseCtx, responseSpan, responseStarted = startLatencySpan(
+			p.ctx,
+			p.invocation,
+			latencySpanProcessResponse,
+			latencyResponseAttrs(response)...,
+		)
+	}
 	responseErr := error(nil)
 	defer func() {
 		finishLatencySpan(responseSpan, responseStarted, responseErr)
@@ -852,6 +887,7 @@ func (p *streamingResponseProcessor) process(
 		p.llmRequest,
 		response,
 		p.eventChan,
+		traceDetails,
 	)
 	if cbErr != nil {
 		*p.err = cbErr
@@ -867,7 +903,11 @@ func (p *streamingResponseProcessor) process(
 	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
-	llmResponseEvent := p.emitLLMResponse(eventInvocation, response)
+	llmResponseEvent := p.emitLLMResponse(
+		eventInvocation,
+		response,
+		traceDetails,
+	)
 	p.lastEvent = llmResponseEvent
 	if p.tracker != nil {
 		p.tracker.SetLastEvent(p.lastEvent)
@@ -877,12 +917,13 @@ func (p *streamingResponseProcessor) process(
 		responseErr = err
 		return false
 	}
-	p.flow.postprocess(
+	p.flow.postprocessWithLatencySpans(
 		p.ctx,
 		eventInvocation,
 		p.llmRequest,
 		response,
 		p.eventChan,
+		traceDetails,
 	)
 	if err := agent.CheckContextCancelled(p.ctx); err != nil {
 		*p.err = err
@@ -894,6 +935,25 @@ func (p *streamingResponseProcessor) process(
 		responseSpan.SetAttributes(latencyResponseAttrs(response)...)
 	}
 	return true
+}
+
+func (p *streamingResponseProcessor) recordResponseStats(response *model.Response) {
+	p.responseCount++
+	if response == nil {
+		return
+	}
+	if response.IsPartial {
+		p.partialResponseCount++
+	}
+	if response.Done {
+		p.terminalResponseCount++
+	}
+	if response.Error != nil {
+		p.errorResponseCount++
+	}
+	if response.IsToolCallResponse() || response.IsToolResultResponse() {
+		p.toolResponseCount++
+	}
 }
 
 func (p *streamingResponseProcessor) updateMetricsState() {
@@ -945,6 +1005,7 @@ func (p *streamingResponseProcessor) repairToolCallArguments(
 func (p *streamingResponseProcessor) emitLLMResponse(
 	eventInvocation *agent.Invocation,
 	response *model.Response,
+	traceDetails bool,
 ) *event.Event {
 	llmResponseEvent := p.flow.createLLMResponseEvent(
 		eventInvocation,
@@ -952,12 +1013,17 @@ func (p *streamingResponseProcessor) emitLLMResponse(
 		response,
 		p.llmRequest,
 	)
-	emitCtx, emitSpan, emitStarted := startLatencySpan(
-		p.ctx,
-		eventInvocation,
-		latencySpanEmitResponse,
-		latencyResponseAttrs(response)...,
-	)
+	emitCtx := p.ctx
+	var emitSpan oteltrace.Span
+	emitStarted := false
+	if traceDetails {
+		emitCtx, emitSpan, emitStarted = startLatencySpan(
+			p.ctx,
+			eventInvocation,
+			latencySpanEmitResponse,
+			latencyResponseAttrs(response)...,
+		)
+	}
 	agent.EmitEvent(emitCtx, eventInvocation, p.eventChan, llmResponseEvent)
 	finishLatencySpan(emitSpan, emitStarted, nil)
 	return llmResponseEvent
@@ -995,7 +1061,23 @@ func (f *Flow) handleAfterModelCallbacks(
 	llmRequest *model.Request,
 	response *model.Response,
 	eventChan chan<- *event.Event,
+	traceDetails bool,
 ) (context.Context, *model.Response, error) {
+	if !traceDetails {
+		updatedCtx, customResp, err := f.runAfterModelCallbacks(
+			ctx,
+			invocation,
+			llmRequest,
+			response,
+		)
+		return f.handleAfterModelCallbackResult(
+			updatedCtx,
+			eventInvocation,
+			eventChan,
+			customResp,
+			err,
+		)
+	}
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
@@ -1018,6 +1100,22 @@ func (f *Flow) handleAfterModelCallbacks(
 		llmRequest,
 		response,
 	)
+	return f.handleAfterModelCallbackResult(
+		ctx,
+		eventInvocation,
+		eventChan,
+		customResp,
+		err,
+	)
+}
+
+func (f *Flow) handleAfterModelCallbackResult(
+	ctx context.Context,
+	eventInvocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	customResp *model.Response,
+	err error,
+) (context.Context, *model.Response, error) {
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return ctx, nil, err
@@ -2388,6 +2486,36 @@ func (f *Flow) postprocess(
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
 ) {
+	f.postprocessWithLatencySpans(
+		ctx,
+		invocation,
+		llmRequest,
+		llmResponse,
+		eventChan,
+		true,
+	)
+}
+
+func (f *Flow) postprocessWithLatencySpans(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+	llmResponse *model.Response,
+	eventChan chan<- *event.Event,
+	traceDetails bool,
+) {
+	if !traceDetails {
+		for _, processor := range f.responseProcessors {
+			processor.ProcessResponse(
+				ctx,
+				invocation,
+				llmRequest,
+				llmResponse,
+				eventChan,
+			)
+		}
+		return
+	}
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,

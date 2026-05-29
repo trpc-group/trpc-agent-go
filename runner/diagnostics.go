@@ -159,3 +159,18 @@ func runnerEventAttrs(evt *event.Event) []attribute.KeyValue {
 	}
 	return attrs
 }
+
+func runnerTraceEventDetails(evt *event.Event) bool {
+	if evt == nil {
+		return true
+	}
+	if evt.Response == nil {
+		return true
+	}
+	return evt.Done ||
+		evt.RequiresCompletion ||
+		len(evt.StateDelta) > 0 ||
+		evt.Response.Error != nil ||
+		evt.Response.IsToolCallResponse() ||
+		evt.Response.IsToolResultResponse()
+}
