@@ -535,7 +535,9 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 
 	baseline, baselineOK := compactedCurrentInvocationMessage(
 		msg,
-		ContextCompactionConfig{},
+		ContextCompactionConfig{
+			ToolResultMaxTokens: 10,
+		},
 	)
 	require.True(t, baselineOK)
 	require.Equal(t, compactedToolResultPlaceholder, baseline.Content)
@@ -543,6 +545,7 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 	compacted, ok := compactedCurrentInvocationMessage(
 		msg,
 		ContextCompactionConfig{
+			ToolResultMaxTokens: 10,
 			toolResultCompactionRules: toolResultCompactionRules{
 				keepToolNames: toolNameSet([]string{"session_load"}),
 			},
@@ -553,6 +556,42 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 	require.Equal(t, content, compacted.Content)
 	require.Equal(t, msg.ToolID, compacted.ToolID)
 	require.Equal(t, msg.ToolName, compacted.ToolName)
+}
+
+func TestShouldCompactCurrentInvocationToolResult_DisabledAndErrors(t *testing.T) {
+	msg := model.NewToolMessage("call_worker", "worker", "large result")
+
+	require.False(t, shouldCompactCurrentInvocationToolResult(
+		msg,
+		ContextCompactionConfig{ToolResultMaxTokens: 0},
+	))
+
+	require.False(t, shouldCompactCurrentInvocationToolResult(
+		msg,
+		ContextCompactionConfig{
+			ToolResultMaxTokens: 1,
+			TokenCounter: &sequenceTokenCounter{
+				errs: []error{errors.New("count tokens")},
+			},
+		},
+	))
+}
+
+func TestSessionEventsSnapshot(t *testing.T) {
+	require.Nil(t, sessionEventsSnapshot(nil))
+
+	sess := &session.Session{
+		Events: []event.Event{{
+			RequestID: "req1",
+		}},
+	}
+	events := sessionEventsSnapshot(sess)
+
+	require.Len(t, events, 1)
+	require.Equal(t, "req1", events[0].RequestID)
+
+	events[0].RequestID = "changed"
+	require.Equal(t, "req1", sess.Events[0].RequestID)
 }
 
 func TestContextCompactionToolResultOptions(t *testing.T) {
