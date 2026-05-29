@@ -680,9 +680,9 @@ func TestBuildSummaryUserMessages(t *testing.T) {
 	require.Equal(
 		t,
 		[]string{"Alice (replying to: previous question): what changed"},
-		BuildSummaryUserMessages(events),
+		buildSummaryUserMessages(events),
 	)
-	require.Nil(t, BuildSummaryUserMessages([]event.Event{
+	require.Nil(t, buildSummaryUserMessages([]event.Event{
 		assistantEvent("updated answer", time.Now()),
 	}))
 }

@@ -65,6 +65,6 @@ func PreSummaryHook(
 		return nil
 	}
 	in.Text = text
-	in.UserMessages = BuildSummaryUserMessages(in.Events)
+	in.UserMessages = buildSummaryUserMessages(in.Events)
 	return nil
 }

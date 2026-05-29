@@ -323,7 +323,8 @@ func TestSessionSummarizer_DetailedContinuityPrompt(t *testing.T) {
 		response := "<analysis>private scratch</analysis>\n<summary>kept summary</summary>"
 		s := NewSummarizer(
 			&staticResponseModel{content: response},
-			WithDetailedContinuityPrompt(),
+			WithPrompt(DetailedContinuityPrompt),
+			WithPreserveUserMessages(true),
 		)
 		textPart := "content part text"
 		sess := &session.Session{
@@ -370,7 +371,8 @@ func TestSessionSummarizer_DetailedContinuityPrompt(t *testing.T) {
 
 	t.Run("carries previous appendix and strips it from model input", func(t *testing.T) {
 		m := &recordingStaticModel{content: "new summary"}
-		s := NewSummarizer(m, WithDetailedContinuityPrompt())
+		s := NewSummarizer(m, WithPrompt(DetailedContinuityPrompt),
+			WithPreserveUserMessages(true))
 		previous := appendPreservedUserMessages("old summary", []string{"old ask"})
 		sess := &session.Session{
 			ID: "rolling",
@@ -406,7 +408,8 @@ func TestSessionSummarizer_DetailedContinuityPrompt(t *testing.T) {
 	t.Run("honors hook-provided user messages", func(t *testing.T) {
 		s := NewSummarizer(
 			&staticResponseModel{content: "hook summary"},
-			WithDetailedContinuityPrompt(),
+			WithPrompt(DetailedContinuityPrompt),
+			WithPreserveUserMessages(true),
 			WithPreSummaryHook(func(in *PreSummaryHookContext) error {
 				in.UserMessages = []string{"Speaker Alice: redacted request"}
 				return nil

@@ -280,7 +280,8 @@ func newSessionSummarizer(
 
 	options := make([]summary.Option, 0, 7)
 	options = append(options, summary.WithName(appName))
-	options = append(options, summary.WithDetailedContinuityPrompt())
+	options = append(options, summary.WithPrompt(summary.DetailedContinuityPrompt))
+	options = append(options, summary.WithPreserveUserMessages(true))
 	options = append(
 		options,
 		summary.WithPreSummaryHook(

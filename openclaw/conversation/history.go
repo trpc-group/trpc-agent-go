@@ -129,11 +129,11 @@ func BuildSummaryText(events []event.Event) string {
 	return strings.Join(lines, "\n")
 }
 
-// BuildSummaryUserMessages renders user turns as the exact user-message
+// buildSummaryUserMessages renders user turns as the exact user-message
 // appendix source for session summaries. It returns nil unless at least one
 // user event has OpenClaw speaker metadata, allowing generic framework
 // extraction to remain the fallback for unannotated sessions.
-func BuildSummaryUserMessages(events []event.Event) []string {
+func buildSummaryUserMessages(events []event.Event) []string {
 	out := make([]string, 0, len(events))
 	var hasAnnotatedUser bool
 	for i := range events {

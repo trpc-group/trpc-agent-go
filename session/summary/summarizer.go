@@ -43,8 +43,6 @@ const (
 	metadataKeyCheckFunctions = "check_functions"
 	// metadataKeySkipRecentEnabled indicates whether skip recent logic is configured.
 	metadataKeySkipRecentEnabled = "skip_recent_enabled"
-	// metadataKeyDetailedContinuityPrompt indicates whether the detailed continuity prompt is enabled.
-	metadataKeyDetailedContinuityPrompt = "detailed_continuity_prompt"
 	// metadataKeyPreserveUserMessages indicates whether verbatim user messages are appended to summaries.
 	metadataKeyPreserveUserMessages = "preserve_user_messages"
 )
@@ -192,45 +190,43 @@ func getDefaultSummarizerPrompt(maxWords int) string {
 		"Summary:"
 }
 
-// getDetailedContinuityPrompt returns a structured prompt for summaries that
-// need to preserve enough state to continue technical work after compaction.
-func getDetailedContinuityPrompt(maxWords int) string {
-	wordLimit := ""
-	if maxWords > 0 {
-		wordLimit = " Keep sections 1-5 and 7-9 within " +
-			maxSummaryWordsPlaceholder + " words total. Section 6 should " +
-			"point to the framework-appended verbatim user-message appendix, " +
-			"which is exempt from this word limit."
-	}
-
-	return "CRITICAL: Respond with TEXT ONLY. Do not call tools.\n\n" +
-		"Your task is to create a detailed summary of the conversation so far, " +
-		"paying close attention to the user's explicit requests and the " +
-		"assistant's previous actions. The summary should preserve technical " +
-		"details, code patterns, architectural decisions, errors, fixes, and " +
-		"the exact next step needed to continue the work." + wordLimit + "\n\n" +
-		"Before providing the final summary, write an <analysis> block to " +
-		"chronologically review the conversation and double-check accuracy. " +
-		"Then write a <summary> block with exactly these sections:\n\n" +
-		"1. Primary Request and Intent\n" +
-		"2. Key Technical Concepts\n" +
-		"3. Files and Code Sections\n" +
-		"4. Errors and fixes\n" +
-		"5. Problem Solving\n" +
-		"6. All user messages\n" +
-		"7. Pending Tasks\n" +
-		"8. Current Work\n" +
-		"9. Optional Next Step\n\n" +
-		"Section 6 must say that the exact source of truth is the " +
-		"Original User Messages appendix appended by the framework. Do not " +
-		"try to rewrite that appendix yourself.\n\n" +
-		"For section 9, include the next step only when it directly follows " +
-		"from the most recent explicit user request. Include direct quotes " +
-		"from the recent conversation when they help avoid task drift.\n\n" +
-		"<conversation>\n" + conversationTextPlaceholder + "\n" +
-		"</conversation>\n\n" +
-		"Summary:"
-}
+// DetailedContinuityPrompt is a structured summary prompt designed for
+// continuing long-running technical work after context compaction.
+//
+// Pass it to NewSummarizer via WithPrompt to enable a nine-section summary
+// that includes a verbatim list of all user messages in section 6. Pair
+// with WithSystemPrompt if you want to bound sections 1-5 and 7-9 by word
+// count; the model is instructed to leave section 6 unbounded so it can
+// preserve user intent verbatim.
+//
+// The template uses the standard {conversation_text} placeholder.
+const DetailedContinuityPrompt = "CRITICAL: Respond with TEXT ONLY. Do not call tools.\n\n" +
+	"Your task is to create a detailed summary of the conversation so far, " +
+	"paying close attention to the user's explicit requests and the " +
+	"assistant's previous actions. The summary should preserve technical " +
+	"details, code patterns, architectural decisions, errors, fixes, and " +
+	"the exact next step needed to continue the work.\n\n" +
+	"Before providing the final summary, write an <analysis> block to " +
+	"chronologically review the conversation and double-check accuracy. " +
+	"Then write a <summary> block with exactly these sections:\n\n" +
+	"1. Primary Request and Intent\n" +
+	"2. Key Technical Concepts\n" +
+	"3. Files and Code Sections\n" +
+	"4. Errors and fixes\n" +
+	"5. Problem Solving\n" +
+	"6. All user messages\n" +
+	"7. Pending Tasks\n" +
+	"8. Current Work\n" +
+	"9. Optional Next Step\n\n" +
+	"For section 6, list every user message that is not a tool result, in " +
+	"order, preserving original wording. Do not paraphrase or omit any " +
+	"user message; this section is intentionally exempt from any word " +
+	"limit so it can fully preserve user intent.\n\n" +
+	"For section 9, include the next step only when it directly follows " +
+	"from the most recent explicit user request. Include direct quotes " +
+	"from the recent conversation when they help avoid task drift.\n\n" +
+	"<conversation>\n{conversation_text}\n</conversation>\n\n" +
+	"Summary:"
 
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
@@ -241,15 +237,11 @@ type sessionSummarizer struct {
 	checks          []ContextChecker
 	maxSummaryWords int
 	skipRecentFunc  SkipRecentFunc
-	detailedPrompt  bool
 
 	preHook          PreSummaryHook
 	postHook         PostSummaryHook
 	hookAbortOnError bool
 
-	// stripSummaryAnalysis removes model scratchpad tags from summaries before
-	// they are persisted.
-	stripSummaryAnalysis bool
 	// preserveUserMessages appends a framework-generated verbatim user-message
 	// appendix to the summary and carries it across rolling summaries.
 	preserveUserMessages bool
@@ -279,11 +271,7 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 
 	// Set default prompt if none was provided.
 	if s.prompt == "" {
-		if s.detailedPrompt {
-			s.prompt = getDetailedContinuityPrompt(s.maxSummaryWords)
-		} else {
-			s.prompt = getDefaultSummarizerPrompt(s.maxSummaryWords)
-		}
+		s.prompt = getDefaultSummarizerPrompt(s.maxSummaryWords)
 	}
 	if err := validatePrompt(s.prompt); err != nil {
 		log.Warnf("invalid prompt in NewSummarizer: %v", err)
@@ -390,9 +378,12 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
-	if s.stripSummaryAnalysis {
-		summaryText = formatDetailedSummaryOutput(summaryText)
-	}
+	// Always strip the optional <analysis>...</analysis> scratchpad and
+	// extract the inner <summary>...</summary> block when present, so
+	// callers using DetailedContinuityPrompt-style templates do not leak
+	// model thinking into persisted summaries. For prompts that do not use
+	// these tags, this is a no-op.
+	summaryText = formatDetailedSummaryOutput(summaryText)
 
 	s.recordLastIncludedTimestamp(sess, eventsToSummarize)
 
@@ -606,14 +597,13 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 		modelAvailable = true
 	}
 	return map[string]any{
-		metadataKeyModelName:                modelName,
-		metadataKeySummarizerName:           s.name,
-		metadataKeyMaxSummaryWords:          s.maxSummaryWords,
-		metadataKeyModelAvailable:           modelAvailable,
-		metadataKeyCheckFunctions:           len(s.checks),
-		metadataKeySkipRecentEnabled:        s.skipRecentFunc != nil,
-		metadataKeyDetailedContinuityPrompt: s.detailedPrompt,
-		metadataKeyPreserveUserMessages:     s.preserveUserMessages,
+		metadataKeyModelName:            modelName,
+		metadataKeySummarizerName:       s.name,
+		metadataKeyMaxSummaryWords:      s.maxSummaryWords,
+		metadataKeyModelAvailable:       modelAvailable,
+		metadataKeyCheckFunctions:       len(s.checks),
+		metadataKeySkipRecentEnabled:    s.skipRecentFunc != nil,
+		metadataKeyPreserveUserMessages: s.preserveUserMessages,
 	}
 }
 
