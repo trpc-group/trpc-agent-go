@@ -149,6 +149,14 @@ func latencyProcessorName(processor any) string {
 	return name
 }
 
+func latencyProcessorStageSpanName(base string, processor any) string {
+	name := latencyProcessorName(processor)
+	if name == "" {
+		return base
+	}
+	return base + "." + name
+}
+
 func emitLatencyDiagnosticEvent(
 	ctx context.Context,
 	inv *agent.Invocation,

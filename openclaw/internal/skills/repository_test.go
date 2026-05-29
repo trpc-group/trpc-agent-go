@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -1369,6 +1370,66 @@ description: "Probe weather prerequisites"
 	require.Equal(t, "weather-probe", summaries[0].Name)
 }
 
+func TestRepositorySummaries_RefreshesAfterDirtyCheckTTL(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: old
+---
+
+# weather-probe
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	summaries := repo.Summaries()
+	require.Len(t, summaries, 1)
+	require.Equal(t, "old", summaries[0].Description)
+
+	summaries[0].Description = "mutated"
+	require.Equal(t, "old", repo.Summaries()[0].Description)
+
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: new description
+---
+
+# weather-probe
+`)
+
+	// The hot path stays cached until the lightweight dirty-check TTL expires.
+	require.Equal(t, "old", repo.Summaries()[0].Description)
+	expireSummaryCache(t, repo)
+	require.Equal(t, "new description", repo.Summaries()[0].Description)
+}
+
+func TestRepositorySummaries_DiscoversNewSkillAfterDirtyCheckTTL(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+	require.Empty(t, repo.Summaries())
+
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+
+	require.Empty(t, repo.Summaries())
+	expireSummaryCache(t, repo)
+
+	summaries := repo.Summaries()
+	require.Len(t, summaries, 1)
+	require.Equal(t, "weather-probe", summaries[0].Name)
+}
+
 func TestRepositorySetSkillEnabled_ReindexesEligibility(t *testing.T) {
 	t.Parallel()
 
@@ -1425,6 +1486,14 @@ func TestRepositoryRefreshAndSetSkillEnabled_ErrorGuards(t *testing.T) {
 		repo.SetSkillEnabled(" ", true),
 		"skill config key is required",
 	)
+}
+
+func expireSummaryCache(t *testing.T, repo *Repository) {
+	t.Helper()
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	repo.summaryCacheExpiresAt = time.Now().Add(-time.Second)
 }
 
 func TestRepositoryHelperNormalizersAndBundledDetection(t *testing.T) {

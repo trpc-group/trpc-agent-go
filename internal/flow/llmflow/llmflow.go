@@ -1281,7 +1281,10 @@ func (f *Flow) preprocess(
 		stageCtx, stageSpan, stageStarted := startLatencySpan(
 			ctx,
 			invocation,
-			latencySpanPreprocessStage,
+			latencyProcessorStageSpanName(
+				latencySpanPreprocessStage,
+				requestProcessor,
+			),
 			attribute.String(
 				"llmflow.preprocess.stage",
 				latencyProcessorName(requestProcessor),
@@ -2411,7 +2414,10 @@ func (f *Flow) postprocess(
 		stageCtx, stageSpan, stageStarted := startLatencySpan(
 			ctx,
 			invocation,
-			latencySpanPostprocessStage,
+			latencyProcessorStageSpanName(
+				latencySpanPostprocessStage,
+				processor,
+			),
 			attribute.String(
 				"llmflow.postprocess.stage",
 				latencyProcessorName(processor),

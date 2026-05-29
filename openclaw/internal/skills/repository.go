@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -45,7 +46,8 @@ const (
 		"missing anyBins (need one): %s; searched PATH dirs: %s; " +
 		"fix: %s"
 
-	emptySkillsSearchDirs = "(empty)"
+	emptySkillsSearchDirs     = "(empty)"
+	summaryCacheDirtyCheckTTL = 5 * time.Second
 )
 
 type SkillConfig struct {
@@ -54,14 +56,22 @@ type SkillConfig struct {
 	Env     map[string]string
 }
 
+type summaryFileFingerprint struct {
+	ModTime time.Time
+	Size    int64
+}
+
 type Repository struct {
 	mu sync.RWMutex
 
 	base  skill.Repository
 	roots []string
 
-	eligible map[string]struct{}
-	reasons  map[string]string
+	eligible              map[string]struct{}
+	reasons               map[string]string
+	summaries             []skill.Summary
+	summaryFingerprints   map[string]summaryFileFingerprint
+	summaryCacheExpiresAt time.Time
 
 	baseDirs map[string]string
 
@@ -145,21 +155,20 @@ func NewRepository(roots []string, opts ...Option) (*Repository, error) {
 }
 
 func (r *Repository) Summaries() []skill.Summary {
+	now := time.Now()
 	r.mu.RLock()
-	defer r.mu.RUnlock()
+	if !r.summaryCacheExpiredLocked(now) {
+		out := cloneSkillSummaries(r.summaries)
+		r.mu.RUnlock()
+		return out
+	}
+	r.mu.RUnlock()
 
-	if r.base == nil {
-		return nil
-	}
-	in := r.base.Summaries()
-	out := make([]skill.Summary, 0, len(in))
-	for _, s := range in {
-		if _, ok := r.eligible[s.Name]; !ok {
-			continue
-		}
-		out = append(out, s)
-	}
-	return out
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.refreshSummaryCacheIfDirtyLocked(now)
+	return cloneSkillSummaries(r.summaries)
 }
 
 func (r *Repository) Get(name string) (*skill.Skill, error) {
@@ -383,6 +392,9 @@ func (r *Repository) indexLocked() {
 	if r.base == nil {
 		r.eligible = map[string]struct{}{}
 		r.reasons = map[string]string{}
+		r.summaries = nil
+		r.summaryFingerprints = map[string]summaryFileFingerprint{}
+		r.summaryCacheExpiresAt = time.Now().Add(summaryCacheDirtyCheckTTL)
 		r.baseDirs = map[string]string{}
 		r.metas = map[string]*openClawMetadata{}
 		r.skillKey = map[string]string{}
@@ -391,17 +403,21 @@ func (r *Repository) indexLocked() {
 
 	eligibleSet := map[string]struct{}{}
 	reasons := map[string]string{}
+	eligibleSummaries := []skill.Summary{}
 	baseDirs := map[string]string{}
 	metas := map[string]*openClawMetadata{}
 	skillKeys := map[string]string{}
 
 	sums := r.base.Summaries()
+	summaryByName := make(map[string]skill.Summary, len(sums))
 	names := make([]string, 0, len(sums))
 	for _, s := range sums {
-		if strings.TrimSpace(s.Name) == "" {
+		name := strings.TrimSpace(s.Name)
+		if name == "" {
 			continue
 		}
-		names = append(names, s.Name)
+		summaryByName[name] = s
+		names = append(names, name)
 	}
 	sort.Strings(names)
 
@@ -463,13 +479,123 @@ func (r *Repository) indexLocked() {
 
 		eligibleSet[name] = struct{}{}
 		baseDirs[name] = baseDir
+		if summary, ok := summaryByName[name]; ok {
+			eligibleSummaries = append(eligibleSummaries, summary)
+		}
 	}
 
 	r.eligible = eligibleSet
 	r.reasons = reasons
+	r.summaries = eligibleSummaries
+	r.summaryFingerprints = scanSummaryFingerprints(
+		r.summaryScanRootsLocked(),
+	)
+	r.summaryCacheExpiresAt = time.Now().Add(summaryCacheDirtyCheckTTL)
 	r.baseDirs = baseDirs
 	r.metas = metas
 	r.skillKey = skillKeys
+}
+
+func (r *Repository) summaryCacheExpiredLocked(now time.Time) bool {
+	return r.summaryCacheExpiresAt.IsZero() ||
+		!now.Before(r.summaryCacheExpiresAt)
+}
+
+func (r *Repository) refreshSummaryCacheIfDirtyLocked(now time.Time) {
+	if !r.summaryCacheExpiredLocked(now) {
+		return
+	}
+	current := scanSummaryFingerprints(r.summaryScanRootsLocked())
+	if summaryFingerprintsEqual(current, r.summaryFingerprints) {
+		r.summaryCacheExpiresAt = now.Add(summaryCacheDirtyCheckTTL)
+		return
+	}
+	if refreshable, ok := r.base.(skill.RefreshableRepository); ok {
+		if err := refreshable.Refresh(); err != nil {
+			log.Warnf("skills summary refresh failed: %v", err)
+			r.summaryCacheExpiresAt = now.Add(summaryCacheDirtyCheckTTL)
+			return
+		}
+	}
+	r.indexLocked()
+}
+
+func (r *Repository) summaryScanRootsLocked() []string {
+	if r == nil || r.base == nil {
+		return nil
+	}
+	rooted, ok := r.base.(skill.RootedRepository)
+	if ok {
+		return rooted.Roots()
+	}
+	return append([]string(nil), r.roots...)
+}
+
+func scanSummaryFingerprints(
+	roots []string,
+) map[string]summaryFileFingerprint {
+	out := map[string]summaryFileFingerprint{}
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		_ = filepath.WalkDir(root, func(
+			path string,
+			entry os.DirEntry,
+			err error,
+		) error {
+			if err != nil || entry == nil {
+				return nil
+			}
+			if entry.IsDir() {
+				if isIgnoredWatchPath(path) && filepath.Clean(path) !=
+					filepath.Clean(root) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.EqualFold(entry.Name(), skillFileName) {
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			out[filepath.Clean(path)] = summaryFileFingerprint{
+				ModTime: info.ModTime(),
+				Size:    info.Size(),
+			}
+			return nil
+		})
+	}
+	return out
+}
+
+func summaryFingerprintsEqual(
+	a map[string]summaryFileFingerprint,
+	b map[string]summaryFileFingerprint,
+) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for path, left := range a {
+		right, ok := b[path]
+		if !ok || !left.ModTime.Equal(right.ModTime) ||
+			left.Size != right.Size {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneSkillSummaries(in []skill.Summary) []skill.Summary {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]skill.Summary, len(in))
+	copy(out, in)
+	return out
 }
 
 func evaluateSkill(
