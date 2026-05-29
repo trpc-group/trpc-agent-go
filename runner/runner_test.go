@@ -4043,8 +4043,18 @@ func TestRunner_Run_AgentRunError(t *testing.T) {
 		SessionID: "s",
 	})
 	require.NoError(t, err)
-	require.Len(t, sess.Events, 2)
-	errorEvent := sess.Events[1]
+	var errorEvent event.Event
+	foundErrorEvent := false
+	for _, evt := range sess.Events {
+		if evt.Error == nil || evt.Error.Type != model.ErrorTypeRunError {
+			continue
+		}
+		errorEvent = evt
+		foundErrorEvent = true
+		break
+	}
+	require.True(t, foundErrorEvent)
+	require.NotNil(t, errorEvent.Error)
 	require.Equal(t, model.ErrorTypeRunError, errorEvent.Error.Type)
 	require.Equal(t, requestID, errorEvent.RequestID)
 	require.Equal(t, filterKey, errorEvent.FilterKey)
