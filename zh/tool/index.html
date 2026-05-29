@@ -1401,6 +1401,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#mcp-annotations-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      MCP Annotations 与权限 Metadata
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#toolset_1" class="md-nav__link">
     <span class="md-ellipsis">
       ToolSet 生命周期与所有权
@@ -3583,6 +3592,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#mcp-annotations-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      MCP Annotations 与权限 Metadata
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#toolset_1" class="md-nav__link">
     <span class="md-ellipsis">
       ToolSet 生命周期与所有权
@@ -4187,6 +4205,39 @@
 </span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nx">ToolMetadata</span><span class="p">()</span><span class="w"> </span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolMetadata</span>
 </span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<p>直接使用 MCP ToolSet 暴露出来的工具，也会从显式 MCP annotations 生成
+metadata：</p>
+<table>
+<thead>
+<tr>
+<th>MCP annotation</th>
+<th>ToolMetadata 字段</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>readOnlyHint</code></td>
+<td><code>ReadOnly</code></td>
+</tr>
+<tr>
+<td><code>destructiveHint</code></td>
+<td><code>Destructive</code></td>
+</tr>
+<tr>
+<td><code>openWorldHint</code></td>
+<td><code>OpenWorld</code></td>
+</tr>
+</tbody>
+</table>
+<p>框架只映射 MCP server 显式返回的 hint。如果 MCP server 没有返回
+<code>destructiveHint</code> 或 <code>openWorldHint</code>，<code>ToolMetadata</code> 会保持 Go 零值
+（<code>false</code>）。这与 MCP 规范的默认 hint 语义不同：MCP 中非只读工具的
+<code>destructiveHint</code> 默认是 <code>true</code>，<code>openWorldHint</code> 默认也是 <code>true</code>。
+由于 <code>ToolMetadata</code> 使用普通 <code>bool</code> 字段，无法区分“未设置”和“显式
+false”。如果你的 permission policy 需要遵循 MCP 默认语义，请对非只读
+MCP 工具采用更保守的策略，除非业务侧还有额外的可信信号。</p>
+<p>MCP annotations 没有与 <code>SearchOrRead</code> 或 <code>ConcurrencySafe</code> 对应的字段。
+框架也不会把 <code>readOnlyHint</code> 或 <code>idempotentHint</code> 推断为并发安全信号。</p>
 <p>权限策略发生在模型已经发起 tool call、框架完成 JSON 修复和 before-tool callbacks 参数改写、并且即将真正执行工具之前：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
@@ -5252,6 +5303,15 @@ Invocation 一起改掉。</p>
 </span><span id="__span-22-21"><a id="__codelineno-22-21" name="__codelineno-22-21"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
 </span><span id="__span-22-22"><a id="__codelineno-22-22" name="__codelineno-22-22"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolSets</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span><span class="nx">mcpToolSet</span><span class="p">}))</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="mcp-annotations-metadata">MCP Annotations 与权限 Metadata</h3>
+<p>当远端 MCP server 在 <code>tools/list</code> 中返回 tool annotations 时，直接通过
+MCP ToolSet 暴露的工具会实现 <code>tool.MetadataProvider</code>。Permission policy
+可以直接读取 <code>req.Metadata.ReadOnly</code>、<code>req.Metadata.Destructive</code> 和
+<code>req.Metadata.OpenWorld</code>，无需再解析 MCP 专属结构。</p>
+<p>这个映射基于 <code>tools/list</code> 返回的工具快照。ToolSet 刷新工具列表时，会
+重新构造框架内的工具列表，而不是原地修改已有 <code>mcpTool</code> 实例。如果未来
+支持基于 MCP <code>ToolListChangedNotification</code> 的原地热更新，需要重新评估
+metadata 读取的线程安全性。</p>
 <h3 id="toolset_1">ToolSet 生命周期与所有权</h3>
 <p><code>ToolSet</code> 接口里显式提供了 <code>Close()</code>，这意味着它持有的连接、会话和缓存
 等资源需要由<strong>创建它的一方</strong>负责释放。</p>
@@ -5531,11 +5591,13 @@ Invocation 一起改掉。</p>
 <li><code>MCP ToolSet</code><ul>
 <li>在初始化或运行时先 <code>initialize + tools/list</code></li>
 <li>把远端每个 MCP tool 直接变成 Agent 可见 Tool</li>
+<li>把远端 MCP 工具显式声明的安全 annotations 映射到 <code>PermissionRequest.Metadata</code></li>
 </ul>
 </li>
 <li><code>mcpbroker</code><ul>
 <li>初始只暴露 4 个 broker 工具</li>
 <li>模型先发现 server，再发现 tool，再检查指定 tool 的 schema，最后再调用</li>
+<li>暴露的是 <code>mcp_call</code> 等 broker 工具，远端 tool annotations 不会自动进入 <code>PermissionRequest.Metadata</code></li>
 </ul>
 </li>
 </ul>
@@ -7220,7 +7282,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月28日 01:38:13 UTC">2026-05-28 01:38:13</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月29日 11:28:21 UTC">2026-05-29 11:28:21</span>
   </span>
 
     
