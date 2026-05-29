@@ -3987,7 +3987,10 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 	)
 	inv.AgentName = "test-agent"
 
-	p := NewContentRequestProcessor(WithAddSessionSummary(true))
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithContextCompactionToolResultMaxTokens(1),
+	)
 	messages := p.getIncrementMessagesAfterCutoff(
 		inv,
 		summaryHistoryCutoff{
