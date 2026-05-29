@@ -12,16 +12,16 @@ package query
 
 import "context"
 
-// Enhancer enhances user queries for better search results.
+// Enhancer enhances knowledge search queries for better search results.
 type Enhancer interface {
-	// EnhanceQuery improves a user query by expanding or rephrasing it.
+	// EnhanceQuery improves a knowledge search query by expanding or rephrasing it.
 	// Context includes conversation history for better understanding.
 	EnhanceQuery(ctx context.Context, req *Request) (*Enhanced, error)
 }
 
 // Request represents a query enhancement request with context.
 type Request struct {
-	// Query is the user's current query text.
+	// Query is the knowledge search query text, usually from an LLM tool call.
 	Query string
 
 	// History contains recent conversation messages for context.
