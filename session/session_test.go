@@ -190,6 +190,240 @@ func TestWithSummaryFilterKey(t *testing.T) {
 	}
 }
 
+func TestSummaryCutoffTimeAndClone(t *testing.T) {
+	updatedAt := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
+	cutoff := updatedAt.Add(-time.Minute)
+
+	t.Run("legacy summary falls back to updated time", func(t *testing.T) {
+		sum := &Summary{Summary: "legacy", UpdatedAt: updatedAt}
+		assert.True(t, sum.CutoffTime().Equal(updatedAt))
+	})
+
+	t.Run("boundary cutoff wins over updated time", func(t *testing.T) {
+		sum := &Summary{
+			Summary:   "bounded",
+			UpdatedAt: updatedAt,
+			Boundary: NewSummaryBoundaryWithEventID(
+				"branch",
+				cutoff,
+				"event-1",
+			),
+		}
+		assert.True(t, sum.CutoffTime().Equal(cutoff))
+		assert.Equal(t, SummaryBoundaryVersion, sum.Boundary.Version)
+		assert.Equal(t, "event-1", sum.CutoffBoundary().LastEventID)
+	})
+
+	t.Run("clone deep copies mutable fields", func(t *testing.T) {
+		sum := &Summary{
+			Summary: "bounded",
+			Topics:  []string{"topic-a"},
+			Boundary: NewSummaryBoundary(
+				"branch",
+				cutoff,
+			),
+		}
+		cloned := sum.Clone()
+		require.NotNil(t, cloned)
+
+		sum.Topics[0] = "changed"
+		sum.Boundary.FilterKey = "other"
+		sum.Boundary.LastEventID = "changed"
+
+		assert.Equal(t, "topic-a", cloned.Topics[0])
+		assert.Equal(t, "branch", cloned.Boundary.FilterKey)
+		assert.Empty(t, cloned.Boundary.LastEventID)
+	})
+
+	t.Run("clone deep copies empty topics backing array", func(t *testing.T) {
+		sum := &Summary{
+			Summary: "bounded",
+			Topics:  make([]string, 0, 1),
+		}
+		cloned := sum.Clone()
+		require.NotNil(t, cloned)
+
+		sum.Topics = append(sum.Topics, "original")
+		cloned.Topics = append(cloned.Topics, "clone")
+
+		assert.Equal(t, "original", sum.Topics[0])
+		assert.Equal(t, "clone", cloned.Topics[0])
+	})
+}
+
+func TestSummaryPrefixCutoff(t *testing.T) {
+	base := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
+
+	t.Run("uses earliest matching cutoff", func(t *testing.T) {
+		cutoff, ok := SummaryPrefixCutoff(
+			map[string]*Summary{
+				"root/a": {
+					Summary: "summary a",
+					Boundary: NewSummaryBoundary(
+						"root/a",
+						base,
+					),
+				},
+				"root/b": {
+					Summary: "summary b",
+					Boundary: NewSummaryBoundary(
+						"root/b",
+						base.Add(time.Minute),
+					),
+				},
+				"rooted/c": {
+					Summary: "summary c",
+					Boundary: NewSummaryBoundary(
+						"rooted/c",
+						base.Add(-time.Hour),
+					),
+				},
+			},
+			"root",
+		)
+
+		require.True(t, ok)
+		assert.True(t, cutoff.Equal(base))
+	})
+
+	t.Run("returns zero cutoff when metadata is missing", func(t *testing.T) {
+		cutoff, ok := SummaryPrefixCutoff(
+			map[string]*Summary{
+				"root/a": {
+					Summary: "summary a",
+					Boundary: NewSummaryBoundary(
+						"root/a",
+						base,
+					),
+				},
+				"root/b": {
+					Summary: "summary b",
+				},
+			},
+			"root",
+		)
+
+		require.True(t, ok)
+		assert.True(t, cutoff.IsZero())
+	})
+
+	t.Run("reports no match", func(t *testing.T) {
+		cutoff, ok := SummaryPrefixCutoff(
+			map[string]*Summary{
+				"other": {
+					Summary: "summary",
+					Boundary: NewSummaryBoundary(
+						"other",
+						base,
+					),
+				},
+			},
+			"root",
+		)
+
+		assert.False(t, ok)
+		assert.True(t, cutoff.IsZero())
+	})
+
+	t.Run("ignores whitespace-only summaries", func(t *testing.T) {
+		cutoff, ok := SummaryPrefixCutoff(
+			map[string]*Summary{
+				"root/a": {
+					Summary:   " \t\n",
+					UpdatedAt: base,
+				},
+			},
+			"root",
+		)
+
+		assert.False(t, ok)
+		assert.True(t, cutoff.IsZero())
+	})
+
+	t.Run("clears ambiguous event id for tied prefix cutoff", func(t *testing.T) {
+		boundary, ok := SummaryPrefixBoundary(
+			map[string]*Summary{
+				"root/a": {
+					Summary: "summary a",
+					Boundary: NewSummaryBoundaryWithEventID(
+						"root/a",
+						base,
+						"event-a",
+					),
+				},
+				"root/b": {
+					Summary: "summary b",
+					Boundary: NewSummaryBoundaryWithEventID(
+						"root/b",
+						base,
+						"event-b",
+					),
+				},
+			},
+			"root",
+		)
+
+		require.True(t, ok)
+		require.NotNil(t, boundary)
+		assert.True(t, boundary.CutoffTime().Equal(base))
+		assert.Empty(t, boundary.LastEventID)
+	})
+
+	t.Run("clears branch event id for single prefix match", func(t *testing.T) {
+		boundary, ok := SummaryPrefixBoundary(
+			map[string]*Summary{
+				"root/a": {
+					Summary: "summary a",
+					Boundary: NewSummaryBoundaryWithEventID(
+						"root/a",
+						base,
+						"event-a",
+					),
+				},
+			},
+			"root",
+		)
+
+		require.True(t, ok)
+		require.NotNil(t, boundary)
+		assert.True(t, boundary.CutoffTime().Equal(base))
+		assert.Empty(t, boundary.LastEventID)
+	})
+}
+
+func TestSummaryBoundaryJSONCompatibility(t *testing.T) {
+	cutoff := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
+
+	t.Run("round trip boundary", func(t *testing.T) {
+		sum := &Summary{
+			Summary: "bounded",
+			Boundary: NewSummaryBoundaryWithEventID(
+				"branch",
+				cutoff,
+				"event-1",
+			),
+		}
+		raw, err := json.Marshal(sum)
+		require.NoError(t, err)
+
+		var decoded Summary
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+		require.NotNil(t, decoded.Boundary)
+		assert.Equal(t, "branch", decoded.Boundary.FilterKey)
+		assert.Equal(t, "event-1", decoded.Boundary.LastEventID)
+		assert.True(t, decoded.CutoffTime().Equal(cutoff))
+	})
+
+	t.Run("old summary falls back to updated time", func(t *testing.T) {
+		raw := []byte(`{"summary":"legacy","updated_at":"2025-01-02T10:00:00Z"}`)
+
+		var decoded Summary
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+		require.Nil(t, decoded.Boundary)
+		assert.True(t, decoded.CutoffTime().Equal(cutoff))
+	})
+}
+
 func TestKey_CheckSessionKey(t *testing.T) {
 	tests := []struct {
 		name    string

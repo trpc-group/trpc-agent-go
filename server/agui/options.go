@@ -30,17 +30,18 @@ var (
 
 // options holds the options for the AG-UI server.
 type options struct {
-	basePath                string
-	path                    string
-	serviceFactory          ServiceFactory
-	aguiRunnerOptions       []aguirunner.Option
-	messagesSnapshotPath    string
-	messagesSnapshotEnabled bool
-	cancelPath              string
-	cancelEnabled           bool
-	heartbeatInterval       time.Duration
-	appName                 string
-	sessionService          session.Service
+	basePath                 string
+	path                     string
+	serviceFactory           ServiceFactory
+	aguiRunnerOptions        []aguirunner.Option
+	messagesSnapshotPath     string
+	messagesSnapshotEnabled  bool
+	cancelPath               string
+	cancelEnabled            bool
+	distributedCancelEnabled bool
+	heartbeatInterval        time.Duration
+	appName                  string
+	sessionService           session.Service
 }
 
 // newOptions creates a new options instance.
@@ -95,6 +96,21 @@ func WithCancelEnabled(e bool) Option {
 func WithCancelOnContextDoneEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithCancelOnContextDoneEnabled(enabled))
+	}
+}
+
+// WithDistributedCancelEnabled enables best-effort multi-instance cancel signaling through SessionState.
+func WithDistributedCancelEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.distributedCancelEnabled = enabled
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithDistributedCancelEnabled(enabled))
+	}
+}
+
+// WithDistributedCancelPollInterval sets how often owner runs poll cancel markers.
+func WithDistributedCancelPollInterval(d time.Duration) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithDistributedCancelPollInterval(d))
 	}
 }
 

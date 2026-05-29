@@ -208,6 +208,80 @@ func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {
 	require.NoError(t, envErr)
 }
 
+func TestBuildProgramEnv_CleanEnvDropsHostEnv(t *testing.T) {
+	t.Setenv("BASH_ENV", "/tmp/host-bashenv")
+	t.Setenv("LD_PRELOAD", "/tmp/host-preload.so")
+
+	rt := NewRuntime(t.TempDir())
+	ws := codeexecutor.Workspace{
+		ID:   "ws-clean-env",
+		Path: t.TempDir(),
+	}
+	env, err := rt.buildProgramEnv(
+		ws,
+		codeexecutor.RunProgramSpec{
+			CleanEnv: true,
+			Env: map[string]string{
+				"LANG": "en_US.UTF-8",
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	_, hasBashEnv := envValue(env, "BASH_ENV")
+	require.False(t, hasBashEnv)
+	_, hasPreload := envValue(env, "LD_PRELOAD")
+	require.False(t, hasPreload)
+	lang, hasLang := envValue(env, "LANG")
+	require.True(t, hasLang)
+	require.Equal(t, "en_US.UTF-8", lang)
+	path, hasPath := envValue(env, envPathKey)
+	require.True(t, hasPath)
+	require.Equal(t, cleanEnvPath(), path)
+	workspace, hasWorkspace := envValue(env, codeexecutor.WorkspaceEnvDirKey)
+	require.True(t, hasWorkspace)
+	require.Equal(t, ws.Path, workspace)
+}
+
+func TestBuildProgramEnv_DefaultInheritsHostEnv(t *testing.T) {
+	t.Setenv("BASH_ENV", "/tmp/host-bashenv")
+
+	rt := NewRuntime(t.TempDir())
+	ws := codeexecutor.Workspace{
+		ID:   "ws-default-env",
+		Path: t.TempDir(),
+	}
+	env, err := rt.buildProgramEnv(ws, codeexecutor.RunProgramSpec{})
+	require.NoError(t, err)
+
+	got, ok := envValue(env, "BASH_ENV")
+	require.True(t, ok)
+	require.Equal(t, "/tmp/host-bashenv", got)
+}
+
+func TestBuildProgramEnv_CleanEnvPreservesSpecPATH(t *testing.T) {
+	rt := NewRuntime(t.TempDir())
+	ws := codeexecutor.Workspace{
+		ID:   "ws-spec-path",
+		Path: t.TempDir(),
+	}
+	env, err := rt.buildProgramEnv(
+		ws,
+		codeexecutor.RunProgramSpec{
+			CleanEnv: true,
+			Env: map[string]string{
+				envPathKey: "/custom/bin",
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	got, ok := envValue(env, envPathKey)
+	require.True(t, ok)
+	require.Equal(t, "/custom/bin", got)
+	require.Equal(t, 1, countEnvKey(env, envPathKey))
+}
+
 func TestEnvValue_UsesLastAssignment(t *testing.T) {
 	value, ok := envValue([]string{
 		envPathKey + "=/first",
@@ -228,6 +302,17 @@ func TestEnvValue_WindowsPathCase(t *testing.T) {
 
 	require.True(t, ok)
 	require.Equal(t, "C:\\bin", value)
+}
+
+func countEnvKey(env []string, key string) int {
+	count := 0
+	for _, item := range env {
+		name, _, ok := strings.Cut(item, "=")
+		if ok && envKeyEqual(name, key) {
+			count++
+		}
+	}
+	return count
 }
 
 func TestEnvKeyEqualForGOOS(t *testing.T) {

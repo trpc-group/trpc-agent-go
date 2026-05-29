@@ -486,12 +486,12 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 			includeContents: BranchFilterModePrefix,
 			// The aggregated summary should contain both matching summaries.
 			// Note: map iteration order is not guaranteed, so we check for non-nil
-			// and verify the latest timestamp.
+			// and verify the conservative prefix cutoff.
 			expectedMsg: &model.Message{
 				Role: model.RoleSystem,
 				// Content will be checked separately due to non-deterministic order.
 			},
-			expectedTime: time.Date(2023, 1, 1, 14, 0, 0, 0, time.UTC),
+			expectedTime: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
 		},
 	}
 
@@ -2797,7 +2797,7 @@ func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
 	}
 }
 
-func TestContentRequestProcessor_getIncrementMessages_ForceCleanWithScopedTimeline(
+func TestContentRequestProcessor_getIncrementMessages_ForceCleanPreservesScopedCurrentTimeline(
 	t *testing.T,
 ) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -2908,7 +2908,7 @@ func TestContentRequestProcessor_getIncrementMessages_ForceCleanWithScopedTimeli
 			require.Equal(t, model.RoleTool, messages[1].Role)
 			require.Equal(t, messages[0].ToolCalls[0].ID, messages[1].ToolID)
 			require.Equal(t, "shell", messages[1].ToolName)
-			require.Equal(t, policyToolResultPlaceholder, messages[1].Content)
+			require.Equal(t, shellPayload, messages[1].Content)
 		})
 	}
 }
@@ -3089,7 +3089,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "timestamp equal since when not zero time, same invocation excluded",
+			name: "timestamp equal legacy cutoff included conservatively",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{}
 				evt := event.Event{
@@ -3110,7 +3110,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
 				return p, evt, inv, "", false, sinceTime
 			},
-			expected: false,
+			expected: true,
 		},
 		{
 			name: "timestamp before since when not zero time, different invocation excluded",
@@ -3848,7 +3848,18 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p, evt, inv, filter, isZeroTime, since := tt.setup()
-			result, isInvocationMessage := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
+			cutoff := summaryHistoryCutoffFromTime(since)
+			if isZeroTime {
+				cutoff = summaryHistoryCutoff{}
+			}
+			eventCutoff := newEventHistoryCutoff([]event.Event{evt}, cutoff)
+			result, isInvocationMessage := p.shouldIncludeEvent(
+				evt,
+				0,
+				inv,
+				filter,
+				eventCutoff,
+			)
 			if result != tt.expected {
 				t.Errorf("shouldIncludeEvent() = %v, want %v", result, tt.expected)
 			}
@@ -3904,6 +3915,7 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 		EventMu: sync.RWMutex{},
 		Events: []event.Event{
 			{
+				ID:           "user-1",
 				Author:       "user",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -3915,6 +3927,7 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 				},
 			},
 			{
+				ID:           "tool-call-1",
 				Author:       "test-agent",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -3926,6 +3939,7 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 				},
 			},
 			{
+				ID:           "tool-result-1",
 				Author:       "test-agent",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -3938,6 +3952,7 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 				},
 			},
 			{
+				ID:           "tool-call-2",
 				Author:       "test-agent",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -3949,6 +3964,7 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 				},
 			},
 			{
+				ID:           "tool-result-2",
 				Author:       "test-agent",
 				RequestID:    "req1",
 				InvocationID: "inv1",
@@ -3971,8 +3987,17 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 	)
 	inv.AgentName = "test-agent"
 
-	p := NewContentRequestProcessor(WithAddSessionSummary(true))
-	messages := p.getIncrementMessages(inv, baseTime.Add(2*time.Second))
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithContextCompactionToolResultMaxTokens(1),
+	)
+	messages := p.getIncrementMessagesAfterCutoff(
+		inv,
+		summaryHistoryCutoff{
+			at:          baseTime.Add(2 * time.Second),
+			lastEventID: "tool-result-1",
+		},
+	)
 
 	if assert.Len(t, messages, 5) {
 		assert.True(t, model.MessagesEqual(userMsg, messages[0]))
@@ -3982,11 +4007,230 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 		assert.Equal(t, model.RoleTool, messages[2].Role)
 		assert.Equal(t, toolResult1.ToolID, messages[2].ToolID)
 		assert.Equal(t, toolResult1.ToolName, messages[2].ToolName)
-		assert.Equal(t, compactedToolResultPlaceholder, messages[2].Content)
+		assert.Contains(t, messages[2].Content, compactedToolResultPlaceholder)
+		assert.Contains(t, messages[2].Content, "event_id: tool-result-1")
+		assert.Contains(t, messages[2].Content, "tool_call_id: call_1")
+		assert.Contains(t, messages[2].Content, "tool_name: step_worker")
 		assert.Equal(t, toolCall2.Content, messages[3].Content)
 		assert.Equal(t, toolCall2.ToolCalls, messages[3].ToolCalls)
 		assert.True(t, model.MessagesEqual(toolResult2, messages[4]))
 	}
+}
+
+func TestContentRequestProcessor_getIncrementMessages_ExactBoundaryKeepsSameTimestampTail(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				ID:        "covered",
+				Timestamp: baseTime,
+				Version:   event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{{Message: model.Message{
+						Role:    model.RoleUser,
+						Content: "covered",
+					}}},
+				},
+			},
+			{
+				ID:        "same-time-tail",
+				Timestamp: baseTime,
+				Version:   event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{{Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "same timestamp tail",
+					}}},
+				},
+			},
+		},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+	p := NewContentRequestProcessor(WithAddSessionSummary(true))
+
+	messages := p.getIncrementMessagesAfterCutoff(
+		inv,
+		summaryHistoryCutoff{
+			at:          baseTime,
+			lastEventID: "covered",
+		},
+	)
+
+	require.Len(t, messages, 1)
+	assert.Equal(t, "same timestamp tail", messages[0].Content)
+}
+
+func TestContentRequestProcessor_getIncrementMessages_RestoresNeededPreCutoffToolCall(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	toolCall := model.Message{
+		Role:             model.RoleAssistant,
+		Content:          "covered assistant text",
+		ReasoningContent: "covered reasoning",
+		ToolCalls: []model.ToolCall{
+			{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "lookup",
+					Arguments: []byte(`{"q":"covered"}`),
+				},
+			},
+			{
+				Type: "function",
+				ID:   "call_2",
+				Function: model.FunctionDefinitionParam{
+					Name:      "lookup",
+					Arguments: []byte(`{"q":"needed"}`),
+				},
+			},
+		},
+	}
+	coveredToolResult := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_1",
+		ToolName: "lookup",
+		Content:  "covered",
+	}
+	neededToolResult := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_2",
+		ToolName: "lookup",
+		Content:  "ok",
+	}
+	cutoff := baseTime.Add(time.Second)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Author:       "test-agent",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime,
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:    true,
+					Choices: []model.Choice{{Index: 0, Message: toolCall}},
+				},
+			},
+			{
+				Author:       "test-agent",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime.Add(500 * time.Millisecond),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:    true,
+					Object:  model.ObjectTypeToolResponse,
+					Choices: []model.Choice{{Index: 0, Message: coveredToolResult}},
+				},
+			},
+			{
+				Author:       "test-agent",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime.Add(2 * time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:   true,
+					Object: model.ObjectTypeToolResponse,
+					Choices: []model.Choice{
+						{Index: 0, Message: coveredToolResult},
+						{Index: 1, Message: neededToolResult},
+					},
+				},
+			},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv2"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req2"}),
+	)
+	inv.AgentName = "test-agent"
+
+	p := NewContentRequestProcessor(WithAddSessionSummary(true))
+	messages := p.getIncrementMessages(inv, cutoff)
+
+	require.Len(t, messages, 2)
+	assert.Equal(t, model.RoleAssistant, messages[0].Role)
+	assert.Empty(t, messages[0].Content)
+	assert.Empty(t, messages[0].ReasoningContent)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, "call_2", messages[0].ToolCalls[0].ID)
+	assert.Equal(t, model.RoleTool, messages[1].Role)
+	assert.Equal(t, "call_2", messages[1].ToolID)
+	assert.Equal(t, "ok", messages[1].Content)
+}
+
+func TestContentRequestProcessor_getIncrementMessages_DoesNotRestoreReusedToolCallID(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	makeToolCall := func(content string) model.Message {
+		return model.Message{
+			Role:    model.RoleAssistant,
+			Content: content,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "lookup",
+					Arguments: []byte(`{"q":"status"}`),
+				},
+			}},
+		}
+	}
+	makeToolResult := func(content string) model.Message {
+		return model.Message{
+			Role:     model.RoleTool,
+			ToolID:   "call_1",
+			ToolName: "lookup",
+			Content:  content,
+		}
+	}
+	makeEvent := func(ts time.Time, msg model.Message, object string) event.Event {
+		return event.Event{
+			Author:       "test-agent",
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Object:  object,
+				Choices: []model.Choice{{Index: 0, Message: msg}},
+			},
+		}
+	}
+	cutoff := baseTime.Add(time.Second)
+	sess := &session.Session{
+		Events: []event.Event{
+			makeEvent(baseTime, makeToolCall("old call"), ""),
+			makeEvent(
+				baseTime.Add(500*time.Millisecond),
+				makeToolResult("old result"),
+				model.ObjectTypeToolResponse,
+			),
+			makeEvent(baseTime.Add(2*time.Second), makeToolCall("new call"), ""),
+			makeEvent(
+				baseTime.Add(3*time.Second),
+				makeToolResult("new result"),
+				model.ObjectTypeToolResponse,
+			),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv2"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req2"}),
+	)
+	inv.AgentName = "test-agent"
+
+	p := NewContentRequestProcessor(WithAddSessionSummary(true))
+	messages := p.getIncrementMessages(inv, cutoff)
+
+	require.Len(t, messages, 2)
+	assert.Equal(t, "new call", messages[0].Content)
+	assert.Equal(t, model.RoleAssistant, messages[0].Role)
+	assert.Equal(t, model.RoleTool, messages[1].Role)
+	assert.Equal(t, "new result", messages[1].Content)
 }
 
 func TestContentRequestProcessor_getIncrementMessages_MixedToolContinuationPreservesRoundResults(t *testing.T) {
@@ -5356,6 +5600,34 @@ func TestContentRequestProcessor_AnnotatesUserFileInputs_HostRef(t *testing.T) {
 		assert.Contains(t, *first.Text, "application/pdf")
 		assert.NotContains(t, *first.Text, "/tmp/openclaw/report.pdf")
 	}
+}
+
+func TestCloneEventForContentSnapshotAllowsNilResponse(t *testing.T) {
+	const (
+		eventID      = "event-1"
+		toolCallID   = "call-1"
+		otherCallID  = "call-2"
+		stateKey     = "state"
+		stateValue   = "value"
+		changedValue = 'x'
+	)
+	evt := event.Event{
+		ID: eventID,
+		LongRunningToolIDs: map[string]struct{}{
+			toolCallID: {},
+		},
+		StateDelta: map[string][]byte{
+			stateKey: []byte(stateValue),
+		},
+	}
+
+	cloned := cloneEventForContentSnapshot(evt)
+
+	require.Nil(t, cloned.Response)
+	cloned.LongRunningToolIDs[otherCallID] = struct{}{}
+	cloned.StateDelta[stateKey][0] = changedValue
+	assert.NotContains(t, evt.LongRunningToolIDs, otherCallID)
+	assert.Equal(t, stateValue, string(evt.StateDelta[stateKey]))
 }
 
 func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {

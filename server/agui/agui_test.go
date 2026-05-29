@@ -167,6 +167,14 @@ func TestNewMessagesSnapshotRequiresSessionService(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestNewDistributedCancelRequiresSessionService(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r, WithDistributedCancelEnabled(true))
+	assert.Nil(t, srv)
+	assert.EqualError(t, err, "new service: agui: session service is required when distributed cancel is enabled")
+}
+
 func TestNewServiceRequiresServiceFactory(t *testing.T) {
 	opts := &options{serviceFactory: nil}
 	svc, err := newService(runner.NewRunner("demo", &mockAgent{info: agent.Info{Name: "demo"}}), opts)

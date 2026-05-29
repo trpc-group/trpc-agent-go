@@ -203,6 +203,10 @@ Notes:
 
 - The factory is called once per `Runner.Run(...)`.
 - `agent.WithAgent(...)` still overrides everything (useful for tests).
+- Runner factories select the root Agent for a run. To configure specialists
+  that a parent Agent can delegate to, use `WithSubAgents`. For request-scoped
+  or lazily constructed SubAgents, see
+  [Dynamic SubAgents and Agent Factories](./multiagent.md#dynamic-subagents-and-agent-factories).
 
 #### Resource Ownership Inside Agent Factories
 

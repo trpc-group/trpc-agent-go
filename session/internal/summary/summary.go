@@ -26,10 +26,10 @@ import (
 // authorSystem is the system author.
 const authorSystem = "system"
 
-// computeDeltaSince returns events that occurred strictly after the given
-// time and match the filterKey, along with the latest event timestamp among
-// the returned events. When since is zero, all events are considered. When
-// filterKey is empty, all events are considered (no filtering).
+// computeDeltaSince returns events that occurred strictly after the given time
+// and match the filterKey, along with the latest event timestamp among the
+// returned events. When since is zero, all events are considered. When filterKey
+// is empty, all events are considered.
 func computeDeltaSince(sess *session.Session, since time.Time, filterKey string) ([]event.Event, time.Time) {
 	sess.EventMu.RLock()
 	defer sess.EventMu.RUnlock()
@@ -50,6 +50,82 @@ func computeDeltaSince(sess *session.Session, since time.Time, filterKey string)
 		}
 	}
 	return out, latest
+}
+
+// computeDeltaAfterBoundary returns events after the structural summary
+// boundary. Exact boundaries use event order, while legacy timestamp-only
+// boundaries keep same-timestamp events to avoid dropping uncovered history.
+func computeDeltaAfterBoundary(
+	sess *session.Session,
+	boundary *session.SummaryBoundary,
+	filterKey string,
+) ([]event.Event, *session.SummaryBoundary) {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	startIndex := deltaStartIndex(sess.Events, boundary)
+	out := make([]event.Event, 0, len(sess.Events))
+	var latest *session.SummaryBoundary
+	for i, e := range sess.Events {
+		if !eventAfterBoundaryIndex(i, e, startIndex, boundary) {
+			continue
+		}
+		if filterKey != "" && !e.Filter(filterKey) {
+			continue
+		}
+		out = append(out, e)
+		latest = laterBoundary(filterKey, latest, e)
+	}
+	return out, latest
+}
+
+func deltaStartIndex(
+	events []event.Event,
+	boundary *session.SummaryBoundary,
+) int {
+	if boundary == nil || boundary.LastEventID == "" {
+		return -1
+	}
+	for i, e := range events {
+		if e.ID == boundary.LastEventID {
+			return i + 1
+		}
+	}
+	return -1
+}
+
+func eventAfterBoundaryIndex(
+	index int,
+	evt event.Event,
+	startIndex int,
+	boundary *session.SummaryBoundary,
+) bool {
+	if startIndex >= 0 {
+		return index >= startIndex
+	}
+	if boundary == nil {
+		return true
+	}
+	cutoff := boundary.CutoffTime()
+	if cutoff.IsZero() {
+		return true
+	}
+	return !evt.Timestamp.Before(cutoff)
+}
+
+func laterBoundary(
+	filterKey string,
+	current *session.SummaryBoundary,
+	evt event.Event,
+) *session.SummaryBoundary {
+	if current != nil && evt.Timestamp.Before(current.CutoffAt) {
+		return current
+	}
+	return session.NewSummaryBoundaryWithEventID(
+		filterKey,
+		evt.Timestamp,
+		evt.ID,
+	)
 }
 
 // prependPrevSummary returns a new slice that prepends the previous summary as
@@ -133,26 +209,34 @@ func SummarizeSession(
 		return false, nil
 	}
 
-	updatedAt := selectUpdatedAt(
+	boundary := selectSummaryBoundary(
 		input.session,
-		prev.updatedAt,
-		input.latestEventTime,
+		filterKey,
+		prev.boundary,
+		input.latestBoundary,
 		input.hasDelta,
 	)
-	writeSummary(base, filterKey, text, updatedAt)
+	updatedAt := boundary.CutoffTime()
+	writeSummary(
+		base,
+		filterKey,
+		text,
+		updatedAt,
+		boundary,
+	)
 	return true, nil
 }
 
 type previousSummary struct {
 	text             string
-	updatedAt        time.Time
+	boundary         *session.SummaryBoundary
 	needsPersistOnly bool
 }
 
 type summaryInput struct {
-	session         *session.Session
-	latestEventTime time.Time
-	hasDelta        bool
+	session        *session.Session
+	latestBoundary *session.SummaryBoundary
+	hasDelta       bool
 }
 
 // readPreviousSummary returns the current summary state for filterKey.
@@ -168,23 +252,56 @@ func readPreviousSummary(base *session.Session, filterKey string) previousSummar
 		return prev
 	}
 	prev.text = s.Summary
-	prev.updatedAt = s.UpdatedAt
+	prev.boundary = s.CutoffBoundary()
 	// Zero UpdatedAt indicates summary was copied and needs persistence.
-	prev.needsPersistOnly = prev.text != "" && prev.updatedAt.IsZero()
+	prev.needsPersistOnly = prev.text != "" && s.UpdatedAt.IsZero()
 	return prev
 }
 
 // persistCopiedSummary marks a copied in-memory summary as persisted-ready.
 func persistCopiedSummary(base *session.Session, filterKey string) {
-	_, latestTs := computeDeltaSince(base, time.Time{}, filterKey)
-	if latestTs.IsZero() {
-		latestTs = time.Now()
+	summary := readSummaryClone(base, filterKey)
+	if summary == nil {
+		return
+	}
+	boundary := summary.CutoffBoundary()
+	updatedAt := time.Time{}
+	if boundary != nil {
+		updatedAt = boundary.CutoffTime()
+	}
+	if updatedAt.IsZero() {
+		_, latestTs := computeDeltaSince(base, time.Time{}, filterKey)
+		updatedAt = latestTs
+	}
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
+	if boundary == nil {
+		boundary = session.NewSummaryBoundary(filterKey, updatedAt)
+	} else {
+		boundary.FilterKey = filterKey
+		if boundary.CutoffAt.IsZero() {
+			boundary.CutoffAt = updatedAt.UTC()
+		}
 	}
 	base.SummariesMu.Lock()
 	defer base.SummariesMu.Unlock()
 	if base.Summaries != nil && base.Summaries[filterKey] != nil {
-		base.Summaries[filterKey].UpdatedAt = latestTs.UTC()
+		base.Summaries[filterKey].UpdatedAt = updatedAt.UTC()
+		base.Summaries[filterKey].Boundary = boundary
 	}
+}
+
+func readSummaryClone(base *session.Session, filterKey string) *session.Summary {
+	if base == nil {
+		return nil
+	}
+	base.SummariesMu.RLock()
+	defer base.SummariesMu.RUnlock()
+	if base.Summaries == nil {
+		return nil
+	}
+	return base.Summaries[filterKey].Clone()
 }
 
 // buildSummaryInput prepares the temporary session used for summary generation.
@@ -196,7 +313,7 @@ func buildSummaryInput(
 	force bool,
 	prev previousSummary,
 ) (summaryInput, bool) {
-	delta, latestTs := computeDeltaSince(base, prev.updatedAt, filterKey)
+	delta, latestBoundary := computeDeltaAfterBoundary(base, prev.boundary, filterKey)
 	if !force && len(delta) == 0 {
 		return summaryInput{}, false
 	}
@@ -206,9 +323,9 @@ func buildSummaryInput(
 		return summaryInput{}, false
 	}
 	return summaryInput{
-		session:         tmp,
-		latestEventTime: latestTs,
-		hasDelta:        len(delta) > 0,
+		session:        tmp,
+		latestBoundary: latestBoundary,
+		hasDelta:       len(delta) > 0,
 	}, true
 }
 
@@ -235,7 +352,13 @@ func shouldGenerateSummary(
 }
 
 // writeSummary stores the generated summary under filterKey.
-func writeSummary(base *session.Session, filterKey, text string, updatedAt time.Time) {
+func writeSummary(
+	base *session.Session,
+	filterKey string,
+	text string,
+	updatedAt time.Time,
+	boundary *session.SummaryBoundary,
+) {
 	base.SummariesMu.Lock()
 	defer base.SummariesMu.Unlock()
 	if base.Summaries == nil {
@@ -244,24 +367,39 @@ func writeSummary(base *session.Session, filterKey, text string, updatedAt time.
 	base.Summaries[filterKey] = &session.Summary{
 		Summary:   text,
 		UpdatedAt: updatedAt,
+		Boundary:  boundary,
 	}
 }
 
 func selectUpdatedAt(tmp *session.Session, prevAt, latestTs time.Time, hasDelta bool) time.Time {
-	updatedAt := prevAt.UTC()
-	if !hasDelta || latestTs.IsZero() {
-		return updatedAt
-	}
-
-	if ts := readLastIncludedTimestamp(tmp); !ts.IsZero() {
-		return ts.UTC()
-	}
-	return latestTs.UTC()
+	prev := session.NewSummaryBoundary("", prevAt)
+	latest := session.NewSummaryBoundary("", latestTs)
+	return selectSummaryBoundary(tmp, "", prev, latest, hasDelta).CutoffTime()
 }
 
-// lastIncludedTsKey is the key for the last included timestamp.
-// This key is used to store the last included timestamp in the session state.
-const lastIncludedTsKey = "summary:last_included_ts"
+func selectSummaryBoundary(
+	tmp *session.Session,
+	filterKey string,
+	prevBoundary *session.SummaryBoundary,
+	latestBoundary *session.SummaryBoundary,
+	hasDelta bool,
+) *session.SummaryBoundary {
+	boundary := prevBoundary.Clone()
+	if boundary == nil {
+		boundary = session.NewSummaryBoundary(filterKey, time.Time{})
+	}
+	boundary.FilterKey = filterKey
+	if !hasDelta || latestBoundary == nil || latestBoundary.CutoffTime().IsZero() {
+		return boundary
+	}
+
+	if recorded := readLastIncludedBoundary(tmp, filterKey); recorded != nil {
+		return recorded
+	}
+	latest := latestBoundary.Clone()
+	latest.FilterKey = filterKey
+	return latest
+}
 
 type summaryTriggerFilterKeyContextKey struct{}
 
@@ -366,18 +504,33 @@ func summaryTriggerFilterKeyFromContext(ctx context.Context) string {
 }
 
 func readLastIncludedTimestamp(tmp *session.Session) time.Time {
-	if tmp == nil {
+	boundary := readLastIncludedBoundary(tmp, "")
+	if boundary == nil {
 		return time.Time{}
 	}
-	raw, ok := tmp.GetState(lastIncludedTsKey)
+	return boundary.CutoffTime()
+}
+
+func readLastIncludedBoundary(
+	tmp *session.Session,
+	filterKey string,
+) *session.SummaryBoundary {
+	if tmp == nil {
+		return nil
+	}
+	raw, ok := tmp.GetState(session.SummaryLastIncludedTimestampStateKey)
 	if !ok || len(raw) == 0 {
-		return time.Time{}
+		return nil
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, string(raw))
 	if err != nil {
-		return time.Time{}
+		return nil
 	}
-	return parsed
+	eventID := ""
+	if rawID, ok := tmp.GetState(session.SummaryLastIncludedEventIDStateKey); ok {
+		eventID = string(rawID)
+	}
+	return session.NewSummaryBoundaryWithEventID(filterKey, parsed, eventID)
 }
 
 // meetsTimeCriteria checks if a summary meets the minimum time requirement.
@@ -488,19 +641,18 @@ func copySummaryToKey(sess *session.Session, srcKey, dstKey string) {
 	if !ok || src == nil {
 		return
 	}
-	// Copy Topics slice to avoid sharing underlying array.
-	var topics []string
-	if len(src.Topics) > 0 {
-		topics = make([]string, len(src.Topics))
-		copy(topics, src.Topics)
+	copied := src.Clone()
+	if boundary := copied.CutoffBoundary(); boundary != nil {
+		boundary.FilterKey = dstKey
+		copied.Boundary = boundary
 	}
 	// Use zero UpdatedAt to mark as needing persistence.
 	// SummarizeSession will detect this and return updated=true.
-	sess.Summaries[dstKey] = &session.Summary{
-		Summary:   src.Summary,
-		Topics:    topics,
-		UpdatedAt: time.Time{},
+	copied.UpdatedAt = time.Time{}
+	if len(copied.Topics) == 0 {
+		copied.Topics = nil
 	}
+	sess.Summaries[dstKey] = copied
 }
 
 // CreateSessionSummaryWithCascade creates one or more session summaries for the

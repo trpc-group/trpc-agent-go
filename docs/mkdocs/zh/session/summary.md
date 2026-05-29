@@ -934,9 +934,9 @@ Pass 2 默认是关闭的（`0`），需要满足两个条件才会生效：(1) 
 
 如果需要按工具名控制行为，可以使用 `WithToolResultCompactionConfig(...)`：
 
-- `ForceCleanToolNames`：这些 tool 的结果在 context compaction 开启时会直接替换为策略占位符，适合 shell、grep、日志抓取等高噪声工具
+- `ForceCleanToolNames`：这些 tool 的历史结果在 context compaction 开启、且 current/recent 保护生效之后会直接替换为策略占位符，适合 shell、grep、日志抓取等高噪声工具
 - `KeepToolNames`：这些 tool 的结果不会被 context compaction 清理，适合 `session_load`、`session_search` 这类模型可能需要逐字读取的恢复工具
-- `SkipRecentFunc`：自定义尾部多少个 event 视为 recent，只影响 Pass 1 的"历史"判定；Pass 2 仍会处理 recent/current 中的超大 tool result
+- `SkipRecentFunc`：自定义尾部多少个 event 视为 recent，影响 Pass 0 强制清理和 Pass 1 的"历史"判定；Pass 2 仍会处理 recent/current 中的超大 tool result
 
 如果同一个 tool name 同时出现在 `ForceCleanToolNames` 和 `KeepToolNames` 中，`KeepToolNames` 优先。
 

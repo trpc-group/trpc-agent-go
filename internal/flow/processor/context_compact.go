@@ -233,13 +233,21 @@ func compactIncrementEvents(
 	copy(compacted, events)
 
 	var stats ContextCompactionStats
+	currentKey := compactionUnitKey(currentRequestID, currentInvocationID)
+	protectedRequestIDs := collectProtectedRequestIDs(
+		events,
+		currentKey,
+		cfg.KeepRecentRequests,
+		cfg.SkipRecentFunc,
+	)
 
 	// Pass 0: named tool results → full placeholder replacement.
-	// This is explicit user policy and applies before recency protection.
+	// This is explicit user policy and applies before threshold-based passes.
 	if forceCleanActive {
 		passEvents, passStats := applyForceCleanToolResultPass(
 			ctx,
 			compacted,
+			protectedRequestIDs,
 			cfg,
 		)
 		compacted = passEvents
@@ -249,13 +257,11 @@ func compactIncrementEvents(
 	// Pass 1: historical tool results → full placeholder replacement.
 	// Gated on Enabled (requires context compaction to be on).
 	if pass1Active {
-		currentKey := compactionUnitKey(currentRequestID, currentInvocationID)
 		if currentKey != "" {
 			passEvents, passStats := applyHistoricalToolResultPass(
 				ctx,
 				compacted,
-				currentKey,
-				cfg.KeepRecentRequests,
+				protectedRequestIDs,
 				cfg.ToolResultMaxTokens,
 				cfg,
 			)
@@ -305,10 +311,14 @@ func (cfg ContextCompactionConfig) forceCleanToolResult(msg model.Message) bool 
 func applyForceCleanToolResultPass(
 	ctx context.Context,
 	events []event.Event,
+	protectedRequestIDs map[string]struct{},
 	cfg ContextCompactionConfig,
 ) ([]event.Event, ContextCompactionStats) {
 	var stats ContextCompactionStats
 	for i := range events {
+		if isProtectedCompactionEvent(events[i], protectedRequestIDs) {
+			continue
+		}
 		evt, changed, compactedCount, savedTokens := rewriteToolResultEventMessages(
 			ctx,
 			events[i],
@@ -334,18 +344,10 @@ func applyForceCleanToolResultPass(
 func applyHistoricalToolResultPass(
 	ctx context.Context,
 	events []event.Event,
-	currentKey string,
-	keepRecentRequests int,
+	protectedRequestIDs map[string]struct{},
 	maxTokens int,
 	cfg ContextCompactionConfig,
 ) ([]event.Event, ContextCompactionStats) {
-	protectedRequestIDs := collectProtectedRequestIDs(
-		events,
-		currentKey,
-		keepRecentRequests,
-		cfg.SkipRecentFunc,
-	)
-
 	var stats ContextCompactionStats
 	for i := range events {
 		evt, changed, compactedCount, savedTokens := compactHistoricalToolResultEvent(
@@ -365,6 +367,18 @@ func applyHistoricalToolResultPass(
 	return events, stats
 }
 
+func isProtectedCompactionEvent(
+	evt event.Event,
+	protectedRequestIDs map[string]struct{},
+) bool {
+	unitKey := compactionUnitKey(evt.RequestID, evt.InvocationID)
+	if unitKey == "" {
+		return false
+	}
+	_, keep := protectedRequestIDs[unitKey]
+	return keep
+}
+
 func compactHistoricalToolResultEvent(
 	ctx context.Context,
 	evt event.Event,
@@ -372,11 +386,10 @@ func compactHistoricalToolResultEvent(
 	maxTokens int,
 	cfg ContextCompactionConfig,
 ) (event.Event, bool, int, int) {
-	unitKey := compactionUnitKey(evt.RequestID, evt.InvocationID)
-	if unitKey == "" {
+	if compactionUnitKey(evt.RequestID, evt.InvocationID) == "" {
 		return evt, false, 0, 0
 	}
-	if _, keep := protectedRequestIDs[unitKey]; keep {
+	if isProtectedCompactionEvent(evt, protectedRequestIDs) {
 		return evt, false, 0, 0
 	}
 	return rewriteToolResultEventMessages(
