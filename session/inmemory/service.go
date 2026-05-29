@@ -391,12 +391,37 @@ func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *s
 	return mergeState(appState, userState, copiedSess), nil
 }
 
+func (s *SessionService) getRawSession(key session.Key) (*session.Session, error) {
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	app, ok := s.getAppSessions(key.AppName)
+	if !ok {
+		return nil, nil
+	}
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	if _, ok := app.sessions[key.UserID]; !ok {
+		return nil, nil
+	}
+	sessWithTTL, ok := app.sessions[key.UserID][key.SessionID]
+	if !ok {
+		return nil, nil
+	}
+	sess := getValidSession(sessWithTTL)
+	if sess == nil {
+		return nil, nil
+	}
+	return sess.Clone(), nil
+}
+
 // GetEventWindow loads a small ordered event window around one anchor event.
 func (s *SessionService) GetEventWindow(
 	ctx context.Context,
 	req session.EventWindowRequest,
 ) (*session.EventWindow, error) {
-	sess, err := s.getSession(ctx, req.Key, &session.Options{})
+	sess, err := s.getRawSession(req.Key)
 	if err != nil {
 		return nil, err
 	}

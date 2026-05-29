@@ -1065,6 +1065,12 @@ func TestLoadToolDescriptionIsSearchNeutral(t *testing.T) {
 	assert.NotContains(t, desc, "session_search result")
 }
 
+func TestSearchToolDescriptionIsLoadNeutral(t *testing.T) {
+	desc := NewSearchTool().Declaration().Description
+	assert.Contains(t, desc, "Search relevant historical conversation details")
+	assert.NotContains(t, desc, "session_load")
+}
+
 func TestNormalizeWindowSize_PreservesExplicitZeroSide(t *testing.T) {
 	before, after := normalizeWindowSize(0, 3)
 	assert.Equal(t, 0, before)

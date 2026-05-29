@@ -53,6 +53,25 @@ func TestSessionService_GetEventWindow(t *testing.T) {
 	require.Equal(t, []string{"u1", "a1", "t1", "u2"}, windowTestIDs(got))
 }
 
+func TestSessionService_GetEventWindowUsesRawSessionEvents(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "assistant-only"}
+	svc := NewSessionService()
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	evt := windowTestEvent("a1", model.RoleAssistant, "leading assistant")
+	require.NoError(t, svc.AppendEvent(ctx, sess, &evt))
+
+	got, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: "a1",
+		Roles:         []model.Role{model.RoleAssistant},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a1"}, windowTestIDs(got))
+}
+
 func TestSessionService_GetEventWindowValidation(t *testing.T) {
 	ctx := context.Background()
 	svc := NewSessionService()
