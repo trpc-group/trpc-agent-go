@@ -7,30 +7,30 @@
 //
 //
 
-package source_test
+package golang_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
 )
 
-func TestGoFileWithFileSource(t *testing.T) {
+func TestGoReaderRegistersWithDocumentReaderRegistry(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeGoModuleFiles(t, tmpDir)
 	goFile := filepath.Join(tmpDir, "service.go")
 
-	src := file.New([]string{goFile})
-	docs, err := src.ReadDocuments(context.Background())
+	r, ok := reader.GetReader(".go")
+	if !ok {
+		t.Fatal("expected Go reader to be registered")
+	}
+	docs, err := r.ReadFromFile(goFile)
 	if err != nil {
 		t.Fatalf("failed to read go file: %v", err)
 	}
@@ -44,54 +44,6 @@ func TestGoFileWithFileSource(t *testing.T) {
 	}
 	if methodDoc.Metadata[source.MetaFilePath] != goFile {
 		t.Fatalf("file path = %v, want %s", methodDoc.Metadata[source.MetaFilePath], goFile)
-	}
-}
-
-func TestGoFileWithDirSource(t *testing.T) {
-	tmpDir := t.TempDir()
-	writeGoModuleFiles(t, tmpDir)
-
-	src := dir.New([]string{tmpDir})
-	docs, err := src.ReadDocuments(context.Background())
-	if err != nil {
-		t.Fatalf("failed to read go files from directory: %v", err)
-	}
-	if len(docs) == 0 {
-		t.Fatal("expected at least one document")
-	}
-
-	funcDoc := findSourceDocByFullName(t, docs, "example.com/demo.NewService")
-	if funcDoc.Metadata["trpc_ast_type"] != "Function" {
-		t.Fatalf("type = %v, want Function", funcDoc.Metadata["trpc_ast_type"])
-	}
-}
-
-func TestGoFileWithAutoSource(t *testing.T) {
-	tmpDir := t.TempDir()
-	writeGoModuleFiles(t, tmpDir)
-	goFile := filepath.Join(tmpDir, "service.go")
-
-	src := auto.New([]string{goFile})
-	docs, err := src.ReadDocuments(context.Background())
-	if err != nil {
-		t.Fatalf("failed to read go file with auto source: %v", err)
-	}
-	if len(docs) == 0 {
-		t.Fatal("expected at least one document")
-	}
-
-	doc := findSourceDocByFullName(t, docs, "example.com/demo.Service")
-	if doc.Metadata["trpc_ast_language"] != "go" {
-		t.Fatalf("language = %v, want go", doc.Metadata["trpc_ast_language"])
-	}
-	if doc.Metadata["trpc_ast_scope"] != "code" {
-		t.Fatalf("scope = %v, want code", doc.Metadata["trpc_ast_scope"])
-	}
-}
-
-func TestFileReaderTypeGo(t *testing.T) {
-	if source.FileReaderTypeGo != "go" {
-		t.Fatalf("expected FileReaderTypeGo='go', got %s", source.FileReaderTypeGo)
 	}
 }
 

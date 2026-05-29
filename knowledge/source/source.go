@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 )
 
@@ -110,6 +111,37 @@ type Source interface {
 
 	// GetMetadata returns the metadata that user set
 	GetMetadata() map[string]any
+}
+
+// ReadGraphOption configures graph source reading behavior.
+type ReadGraphOption func(*readGraphOptions)
+
+type readGraphOptions struct {
+	parseConcurrency int
+}
+
+// WithReadGraphParseConcurrency sets the parser concurrency for ReadGraph.
+// Zero or negative values mean use the parser's default.
+func WithReadGraphParseConcurrency(n int) ReadGraphOption {
+	return func(opts *readGraphOptions) {
+		opts.parseConcurrency = n
+	}
+}
+
+// ReadGraphParseConcurrency resolves the parse concurrency from the given options.
+// GraphSource implementors should call this to extract the configured value.
+func ReadGraphParseConcurrency(opts []ReadGraphOption) int {
+	cfg := &readGraphOptions{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return cfg.parseConcurrency
+}
+
+// GraphSource represents a knowledge source that can provide graph data directly.
+type GraphSource interface {
+	// ReadGraph reads and returns graph nodes and edges representing the source.
+	ReadGraph(ctx context.Context, opts ...ReadGraphOption) (*graph.Data, error)
 }
 
 // MetadataFieldPrefix is the prefix for metadata fields in filter conditions.

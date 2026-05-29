@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"runtime"
 	"slices"
 	"sort"
@@ -1178,6 +1179,16 @@ func calcETA(start time.Time, processed, total int) time.Duration {
 
 // convertToInt converts any to int, handling JSON unmarshaling type conversion
 func convertToInt(value any) (int, bool) {
+	if value == nil {
+		return 0, false
+	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if rv.IsNil() {
+			return 0, false
+		}
+	}
 	switch v := value.(type) {
 	case int:
 		return v, true
@@ -1186,6 +1197,9 @@ func convertToInt(value any) (int, bool) {
 	case float32:
 		return int(v), true
 	case string:
+		if v == "" || v == "<nil>" {
+			return 0, false
+		}
 		s, err := strconv.Atoi(v)
 		if err != nil {
 			log.Infof("convertToInt string to int error: %v", err)

@@ -128,6 +128,7 @@ The repo source targets code repository scenarios, suited for:
 
 ```go
 import (
+    _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
     reposource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo"
 )
 
@@ -142,6 +143,10 @@ repoSrc := reposource.New(
     reposource.WithFileExtensions([]string{".go", ".md"}),
 )
 ```
+
+The Go AST reader is an optional module. Import `knowledge/document/reader/golang`
+for side-effect registration when scanning `.go` files. Proto files are
+registered by default.
 
 ### Repository Struct
 

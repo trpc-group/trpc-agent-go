@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
-	codeproto "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast/proto"
+	codeproto "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/proto/internal/codeast/proto"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
