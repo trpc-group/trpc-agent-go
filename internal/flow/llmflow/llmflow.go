@@ -859,12 +859,12 @@ func (p *streamingResponseProcessor) process(
 		return false
 	}
 	p.ctx = updatedCtx
-	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
 	p.currentInvocation = invocationFromContextOrDefault(
 		p.ctx,
 		p.currentInvocation,
 	)
 	p.updateMetricsState()
+	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
 	llmResponseEvent := p.emitLLMResponse(eventInvocation, response)
