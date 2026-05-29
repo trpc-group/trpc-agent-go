@@ -21,7 +21,6 @@ import (
 	evalresultlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
@@ -110,18 +109,12 @@ func buildPromptIterRuntime(ctx context.Context, cfg serverConfig) (*promptIterR
 		metric.WithLocator(&sharedMetricLocator{metricFileID: sharedMetricFileID}),
 	)
 	evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(cfg.OutputDir))
-	registry := registry.New()
-	if err := registry.Register(commentaryLengthMetricName, newCommentaryLengthEvaluator()); err != nil {
-		closeAll()
-		return nil, fmt.Errorf("register commentary length evaluator: %w", err)
-	}
 	agentEvaluator, err := evaluation.New(
 		appName,
 		candidateRunner,
 		evaluation.WithEvalSetManager(evalSetManager),
 		evaluation.WithMetricManager(metricManager),
 		evaluation.WithEvalResultManager(evalResultManager),
-		evaluation.WithRegistry(registry),
 		evaluation.WithJudgeRunner(judgeRunner),
 		evaluation.WithNumRuns(1),
 		evaluation.WithEvalCaseParallelism(cfg.EvalCaseParallelism),

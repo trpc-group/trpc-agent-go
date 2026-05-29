@@ -1,40 +1,91 @@
 [
   {
-    "metricName": "llm_rubric_reference_critic",
-    "threshold": 0.9,
+    "metricName": "final_response_avg_score",
+    "threshold": 1.0,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "length": {
+            "min": 350,
+            "max": 850
+          },
+          "matchStrategy": "skip"
+        }
+      }
+    }
+  },
+  {
+    "metricName": "llm_rubric_critic",
+    "threshold": 0.98,
     "criterion": {
       "llmJudge": {
         "rubrics": [
           {
-            "id": "1",
-            "description": "The answer stays aligned with the same decisive play focus as the reference answer.",
+            "id": "source_grounding",
+            "description": "战报必须完全基于用户输入 JSON。",
             "type": "FINAL_RESPONSE_QUALITY",
             "content": {
-              "text": "Compared with the reference answer, the final answer must stay on the same current play and preserve the same decisive actor, action, or result when those details are explicit in the user prompt and the reference answer. Fail if it shifts to a different moment, becomes generic, or drops the core live-play focus."
+              "text": "实际战报只能使用用户输入 JSON 和参考战报支持的事实。若编造场馆、排名、连胜/连败、伤病、未来对手、晋级后果、战术意图、情绪、未被支持的原因、未被支持的翻译、改写参赛方名称，或任何没有证据支持的事实，则判为不通过。"
             }
           },
           {
-            "id": "2",
-            "description": "The answer keeps a similar level of grounded live detail as the reference answer.",
+            "id": "lead_main_story",
+            "description": "导语必须按参考战报的编辑优先级交代结果和主线。",
             "type": "FINAL_RESPONSE_QUALITY",
             "content": {
-              "text": "Compared with the reference answer, the final answer should include a similarly useful grounded cue when the user prompt supports it, such as clock, score state, margin, result, or a decisive recent event. Do not require identical wording, but fail if the final answer becomes materially less informative or loses an obviously important cue present in the reference answer."
+              "text": "正文开头段必须交代赛事背景、最终结果，以及参考战报重点突出的赢球/胜负主线。若导语只是泛泛写结果、罗列原始事实，或遗漏参考战报首要强调的主角度，则判为不通过。"
             }
           },
           {
-            "id": "3",
-            "description": "The answer matches the reference answer in live-call sharpness without requiring exact wording.",
+            "id": "decisive_sequence",
+            "description": "决定性过程必须按正确顺序保留。",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "实际战报必须按正确顺序保留参考战报中的决定性链条，包括但不限于末段关键回合、点球轮次、挽救盘点或赛点、安全车窗口进站、加时少防多、最后一个 over、冲刺前带冲与冲刺、救援投手失败等。若遗漏具名关键步骤、重排导致含义变化，或用含糊概括替代关键过程，则判为不通过。"
+            }
+          },
+          {
+            "id": "numbers_sport_logic",
+            "description": "比分、数字和项目专用记法必须准确。",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "实际战报中的所有比分、分差、时间点、局数、overs、剩余球数、wickets、抢七、节次、圈数、时间差、投篮/打击数据线和项目专用记法，都必须与用户 JSON 一致，并保留参考战报中的项目语义。若出现任何错误数字、比分方向错误、改变含义的比分格式错误，或将板球 overs 当作十进制球数等术语混用，则判为不通过。"
+            }
+          },
+          {
+            "id": "headline_angle",
+            "description": "标题必须可发布，并承载决定性角度。",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "第一行必须像可发布的体育新闻标题一样，将赛果与关键数字或决定性角度结合起来，效果应接近参考战报。若标题只是平铺直叙的结果句、遗漏参考战报的标题角度、包含无依据的阶段/结果结论，或在标题层面出现数字或时间错误，则判为不通过。"
+            }
+          },
+          {
+            "id": "data_player_interpretation",
+            "description": "数据和球员细节必须解释结果为何发生。",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "实际战报中的球员和球队数据必须经过选择和解读，用来解释比赛结果，达到与参考战报相近的信息层次。若主要是在堆砌数据，遗漏参考战报中的关键球员或决定性数据对比，或没有把数据与胜负主线关联起来，则判为不通过。"
+            }
+          },
+          {
+            "id": "reference_depth_style",
+            "description": "战报应接近参考战报的密度、顺序和体育新闻写法。",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "实际战报应接近参考战报的内容密度、叙述顺序和专业中文体育新闻风格。若用含糊总结替代具名过程、时间点和比分变化，变成单薄的字段搬运，或丢失多个构成参考战报编辑实质的细节，则判为不通过。"
+            }
+          },
+          {
+            "id": "production_copy",
+            "description": "中文文案必须成熟、流畅、可直接发布。",
             "type": "FORMAT_COMPLIANCE",
             "content": {
-              "text": "Compared with the reference answer, the final answer should sound comparably like a natural Chinese live basketball call: spoken, immediate, and ready for live audio. Do not require exact wording or sentence structure, but fail if it sounds much flatter, more recap-like, or more explanatory than the reference answer."
+              "text": "实际战报必须是简洁、流畅、专业的中文体育文案，不得包含 Markdown 样式、元话语、多版本改写、口号式煽动、翻译腔、比分空格格式错误、生硬的数据堆砌，或“ACE球”等不自然术语。若发布前还需要大幅编辑，则判为不通过。"
             }
           }
         ]
       }
     }
-  },
-  {
-    "metricName": "final_response_length_compliance",
-    "threshold": 1.0
   }
 ]
