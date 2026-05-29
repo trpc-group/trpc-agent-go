@@ -133,7 +133,11 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 		Summaries: map[string]*session.Summary{
 			session.SummaryFilterKeyAllContents: {
 				Summary:   "older history",
-				UpdatedAt: base,
+				UpdatedAt: base.Add(3 * time.Minute),
+				Boundary: session.NewSummaryBoundary(
+					session.SummaryFilterKeyAllContents,
+					base,
+				),
 			},
 		},
 		Events: []event.Event{
@@ -171,6 +175,73 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 	require.Contains(t, got[1].Content, "Message: latest question")
 	require.Equal(t, model.RoleAssistant, got[2].Role)
 	require.Equal(t, "latest answer", got[2].Content)
+}
+
+func TestBuildInjectedContextMessagesKeepsSameTimestampAfterBoundary(
+	t *testing.T,
+) {
+	base := time.Now().Add(-10 * time.Minute).UTC()
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {
+				Summary: "older history",
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					session.SummaryFilterKeyAllContents,
+					base,
+					"covered",
+				),
+			},
+		},
+		Events: []event.Event{
+			userEvent("u1", "Alice", "covered", base),
+			userEvent("u2", "Bob", "same timestamp visible", base),
+			assistantEvent("later answer", base.Add(time.Minute)),
+		},
+	}
+	sess.Events[0].ID = "covered"
+	sess.Events[1].ID = "visible"
+	sess.Events[2].ID = "later"
+
+	got := BuildInjectedContextMessages(sess, HistoryOptions{
+		AddSessionSummary: true,
+		MaxHistoryRuns:    10,
+	})
+
+	require.Len(t, got, 3)
+	require.Equal(t, model.RoleSystem, got[0].Role)
+	require.Contains(t, got[1].Content, "same timestamp visible")
+	require.Equal(t, "later answer", got[2].Content)
+}
+
+func TestBuildInjectedContextMessagesFallsBackToTimestampBoundary(
+	t *testing.T,
+) {
+	base := time.Now().Add(-10 * time.Minute).UTC()
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {
+				Summary: "older history",
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					session.SummaryFilterKeyAllContents,
+					base,
+					"missing",
+				),
+			},
+		},
+		Events: []event.Event{
+			userEvent("u1", "Alice", "same timestamp", base),
+			assistantEvent("later answer", base.Add(time.Minute)),
+		},
+	}
+
+	got := BuildInjectedContextMessages(sess, HistoryOptions{
+		AddSessionSummary: true,
+		MaxHistoryRuns:    10,
+	})
+
+	require.Len(t, got, 2)
+	require.Equal(t, model.RoleSystem, got[0].Role)
+	require.Equal(t, "later answer", got[1].Content)
 }
 
 func TestProjectEventMessage(t *testing.T) {
@@ -556,10 +627,10 @@ func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 			},
 		},
 	}
-	text, updatedAt, ok := sessionSummary(sess)
+	text, boundary, ok := sessionSummary(sess)
 	require.True(t, ok)
 	require.Equal(t, "summary", text)
-	require.Equal(t, base, updatedAt)
+	require.True(t, boundary.CutoffTime().Equal(base))
 }
 
 func TestBuildSummaryText(t *testing.T) {
@@ -803,10 +874,10 @@ func TestHistoryHelpers_SystemTurnsAndSummary(t *testing.T) {
 	}
 	require.Equal(t, "hello", messageText(msg))
 
-	text, ts, ok := sessionSummary(&session.Session{})
+	text, boundary, ok := sessionSummary(&session.Session{})
 	require.False(t, ok)
 	require.Empty(t, text)
-	require.True(t, ts.IsZero())
+	require.Nil(t, boundary)
 
 	sess := &session.Session{
 		Summaries: map[string]*session.Summary{

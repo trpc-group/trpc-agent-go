@@ -963,6 +963,78 @@ func TestLLMAgent_SkillRun_AllowedCommands_Enforced(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestLLMAgent_WorkspaceExec_DeniedCommands_Enforced confirms that
+// WithWorkspaceExecDeniedCommands threads through to workspace_exec
+// so command-level safety can be configured at agent construction
+// time without touching the workspaceexec package directly. This is
+// the wiring that addresses the recent prompt-injection / SSRF
+// reports where models invoked curl from inside the sandbox.
+func TestLLMAgent_WorkspaceExec_DeniedCommands_Enforced(t *testing.T) {
+	a := New(
+		"tester",
+		WithCodeExecutor(localexec.New()),
+		WithWorkspaceExecDeniedCommands("curl", "wget"),
+	)
+
+	tl := findTool(a.Tools(), "workspace_exec")
+	require.NotNil(t, tl)
+
+	args := map[string]any{
+		"command": "curl http://internal.example.com",
+		// Bound runtime so a future regression that lets curl through
+		// fails the assertion instead of hanging on external I/O.
+		"timeout": 1,
+	}
+	body, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	_, err = tl.(tool.CallableTool).Call(context.Background(), body)
+	require.Error(t, err)
+	require.True(t,
+		strings.Contains(err.Error(), "curl"),
+		"expected error to mention curl, got: %v", err,
+	)
+}
+
+// TestLLMAgent_WorkspaceExec_AllowedCommands_Enforced is the allow-
+// list flavor. It also asserts that bypass attempts using $() and
+// shell wrappers are rejected by shellsafe before workspace_exec
+// even spawns a process.
+func TestLLMAgent_WorkspaceExec_AllowedCommands_Enforced(t *testing.T) {
+	a := New(
+		"tester",
+		WithCodeExecutor(localexec.New()),
+		WithWorkspaceExecAllowedCommands("echo"),
+	)
+	tl := findTool(a.Tools(), "workspace_exec")
+	require.NotNil(t, tl)
+
+	allow := map[string]any{"command": "echo hello"}
+	allowB, err := json.Marshal(allow)
+	require.NoError(t, err)
+	_, err = tl.(tool.CallableTool).Call(context.Background(), allowB)
+	require.NoError(t, err)
+
+	for _, cmd := range []string{
+		"ls",
+		"echo $(curl http://x)",
+		"sh -c 'curl http://x'",
+	} {
+		args := map[string]any{
+			"command": cmd,
+			// Bound runtime so a regression that lets a bypass through
+			// fails the assertion instead of hanging on external I/O.
+			"timeout": 1,
+		}
+		b, err := json.Marshal(args)
+		require.NoError(t, err)
+		_, err = tl.(tool.CallableTool).Call(context.Background(), b)
+		require.Error(t, err,
+			"command %q should be rejected", cmd,
+		)
+	}
+}
+
 func TestLLMAgent_WithSkillsToolingGuidance_Disabled(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
@@ -1472,6 +1544,79 @@ func TestLLMAgent_WithSkills_InsertsOverview(t *testing.T) {
 	require.NotEmpty(t, sys)
 	require.Contains(t, sys, "Available skills:")
 	require.Contains(t, sys, "echoer")
+}
+
+func TestLLMAgent_RunAvailableSkillsRenderer_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	m := &captureModel{}
+	agt := New("tester", WithModel(m), WithSkills(repo))
+	gotSummaries := make(chan []skill.Summary, 1)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithAvailableSkillsRenderer(
+				func(
+					_ context.Context,
+					req agent.AvailableSkillsRenderRequest,
+				) string {
+					gotSummaries <- append([]skill.Summary(nil), req.Summaries...)
+					return "- echoer: compact"
+				},
+			),
+		)),
+	)
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	ctx := context.Background()
+	for evt := range ch {
+		if evt != nil && evt.RequiresCompletion {
+			key := agent.GetAppendEventNoticeKey(evt.ID)
+			_ = inv.AddNoticeChannel(ctx, key)
+			_ = inv.NotifyCompletion(ctx, key)
+		}
+	}
+	require.NotNil(t, m.got)
+	sys := findSystemMessageContaining(m.got, skillsOverviewHeader)
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "- echoer: compact")
+	require.NotContains(t, sys, "simple echo skill")
+	require.Len(t, gotSummaries, 1)
+	require.Equal(t, "echoer", (<-gotSummaries)[0].Name)
+}
+
+func TestLLMAgent_RunWorkspaceExecGuidance_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	m := &captureModel{}
+	agt := New("tester", WithModel(m), WithSkills(repo))
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithWorkspaceExecGuidance(
+				"Workspace shell guidance:\n- Compact workspace guidance.",
+			),
+		)),
+	)
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	ctx := context.Background()
+	for evt := range ch {
+		if evt != nil && evt.RequiresCompletion {
+			key := agent.GetAppendEventNoticeKey(evt.ID)
+			_ = inv.AddNoticeChannel(ctx, key)
+			_ = inv.NotifyCompletion(ctx, key)
+		}
+	}
+	require.NotNil(t, m.got)
+	sys := findSystemMessageContaining(m.got, workspaceExecGuidanceHeader)
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "Compact workspace guidance.")
+	require.NotContains(t, sys, "shell command tool for the current workspace")
 }
 
 func TestLLMAgent_WithSkillFilter_FiltersPromptAndDeclaration(t *testing.T) {

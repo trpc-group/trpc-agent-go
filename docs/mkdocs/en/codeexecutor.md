@@ -193,6 +193,15 @@ msg := model.NewUserMessage("Please process this file.")
 _ = msg.AddFileData("report.pdf", pdfBytes, "application/pdf")
 ```
 
+If the file content is meant only for tools or the code executor, configure the
+OpenAI model with `openai.WithOmitFileContentParts(true)` to omit file content
+parts from provider requests. This does not hide normal message text or
+file-name hints that you include in the prompt. The current OpenAI adapter uses
+the Chat Completions API, whose file content support is limited to the request
+shapes accepted by that endpoint. PDF file data can be sent as file content,
+but Markdown or plain-text content should be passed as normal message text, or
+staged only for tools, instead of being sent as file content parts.
+
 ### Option 2: Upload to Artifact First, Then Attach a Reference
 
 If the file is already stored in the artifact service, attach an
@@ -688,6 +697,284 @@ your callback as needed.
   best-effort.
 
 End-to-end example: [examples/workspace_io](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/workspace_io).
+
+## Restricting `workspace_exec` commands
+
+`workspace_exec` runs whatever shell command the model sends. In sandboxes
+with network egress this becomes a prompt-injection / SSRF surface: a
+user prompt can trick the model into running `curl <internal-url>` and
+the sandbox dutifully obliges.
+
+To shrink that surface you can attach an allow- and/or deny-list of
+executable names. When at least one list is non-empty, the command is
+parsed before execution and rejected if it does not pass.
+
+### Configure
+
+At the agent level:
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithCodeExecutor(executor),
+    llmagent.WithWorkspaceExecAllowedCommands("ls", "cat", "rg", "git"),
+    llmagent.WithWorkspaceExecDeniedCommands("curl", "wget", "nc"),
+)
+```
+
+Or directly on `ExecTool` if you build it yourself (the first argument
+is a `codeexecutor.CodeExecutor` such as `localexec.New()`):
+
+```go
+tool := workspaceexec.NewExecTool(
+    executor,
+    workspaceexec.WithAllowedCommands("ls", "cat", "rg", "git"),
+    workspaceexec.WithDeniedCommands("curl", "wget", "nc"),
+)
+```
+
+Or via environment, for deployment-time configuration (comma- or
+whitespace-separated):
+
+- `TRPC_AGENT_WORKSPACE_EXEC_ALLOWED_COMMANDS`
+- `TRPC_AGENT_WORKSPACE_EXEC_DENIED_COMMANDS`
+
+Explicit options take precedence over the environment. Leaving both
+unset disables the policy and preserves the historical behaviour.
+
+### What still works
+
+Pipelines made of allowed commands joined by the safe sequencing
+operators are accepted:
+
+```text
+ls | rg foo
+git status && git diff
+test -f x.txt || echo missing
+mkdir -p out; cp a.txt out/
+```
+
+Single-quoted, double-quoted and `\X`-escaped literals are accepted as
+arguments. `{}` is allowed as a literal so patterns like
+`find -exec {} \;` parse fine. Note that `xargs` itself is in the
+unconditional built-in deny set below — `xargs -I{}` will be rejected
+regardless of what is in the allow list.
+
+### What is rejected
+
+Whenever a policy is active the command is **structurally rejected**
+before any name lookup if it contains any of:
+
+- command, parameter, arithmetic or process substitution
+  (`$(…)`, `` `…` ``, `$VAR`, `${X}`, `$((…))`, `<(…)`, `>(…)`)
+- redirections of any kind (`>`, `>>`, `<`, `2>&1`, here-docs)
+- subshells, blocks, control flow, function definitions
+  (`(…)`, `{…}`, `if/for/while/case`, `f() { … }`)
+- backgrounding, `|&`, leading `VAR=… cmd`, glob characters, `!`, `#`,
+  bare or escaped newlines
+
+So a deny on `curl` cannot be sidestepped via `$(c\url)`,
+`echo \`curl http://x\``, `curl > /tmp/x`, `(curl http://x)`,
+`HOME=/tmp curl http://x`, etc.
+
+On top of the parser there is an **unconditional built-in deny set**
+of shell wrappers, re-executing builtins, process-launching
+wrappers, and stateful shell builtins. They are blocked whenever
+any policy is active because they can launch arbitrary code with
+an innocent `argv[0]` (e.g. `time curl http://x` would otherwise
+pass a deny on `curl`), register code to run later (e.g.
+`trap 'curl http://x' EXIT`) or mutate later-segment resolution
+(e.g. `export PATH=./bin && allowed_cmd`):
+
+- shell wrappers: `sh`, `bash`, `zsh`, `ash`, `dash`, `ksh`,
+  `mksh`, `fish`, `pwsh`, `powershell`, `cmd`, `busybox`, `toybox`
+- re-executing builtins: `eval`, `exec`, `command`, `source`, `.`,
+  `builtin`
+- process-launching wrappers: `xargs`, `env`, `nohup`, `timeout`,
+  `sudo`, `su`, `doas`, `setsid`, `unshare`, `chroot`, `runuser`,
+  `time`, `nice`, `ionice`, `taskset`, `stdbuf`, `strace`, `ltrace`,
+  `script`, `flock`
+- stateful shell builtins: `trap`, `alias`, `unalias`, `enable`,
+  `export`, `unset`, `readonly`, `local`, `declare`, `typeset`,
+  `set`, `shopt`, `hash`, `cd`, `pushd`, `popd`
+- variable-assigning builtins: `printf`, `read`, `getopts`, `let`,
+  `mapfile`, `readarray` — on a single-process shell these can
+  rewrite `PATH` or other resolution state before a later allowed
+  segment runs (e.g. `printf -v PATH ./work/bin; git` would
+  otherwise resolve `git` to `./work/bin/git` even when both
+  `printf` and `git` pass an `argv[0]`-only check). The bash
+  extensions matter because `/bin/sh` is bash on macOS and on
+  many container images.
+
+`workspace_exec` exposes a `cwd` parameter for the legitimate cwd-
+switching use case, so the model never needs to call `cd` itself.
+
+This deny set is **not overridable** by `WithWorkspaceExecAllowedCommands`
+— allow-list entries for these names are ignored. If you legitimately
+need one of them (rare, but possible), wrap the desired use in an
+auditable script under the workspace and put the script in
+`allowed_commands` instead. The auditable wrapper is also better
+practice: reviewers can see exactly what is being exposed.
+
+### Matching
+
+Matching is intentionally **asymmetric** so workspace-controlled
+binaries cannot smuggle past the allowlist:
+
+- **Allow** matches strictly. An entry `echo` admits bare `echo`
+  but rejects `./echo`, `work/bin/echo` and `/usr/bin/echo`. If you
+  want to permit a specific absolute or relative path, list that
+  exact path (e.g. `WithWorkspaceExecAllowedCommands("/usr/bin/echo")`).
+- **Deny** matches permissively. An entry `curl` rejects `curl`,
+  `/usr/bin/curl` and `./curl` alike, so an attacker cannot slip a
+  full path past the denylist.
+
+Case handling tracks the underlying file system's resolution
+rules so the allowlist cannot be silently widened on a case-
+sensitive FS:
+
+- **Deny and the built-in deny set** are case-folded on every OS.
+  A deny of `curl` rejects `curl`, `Curl` and `CURL` alike, and
+  the implicit deny on `sh` blocks `SH -c`, `Sh` and `Bash` too.
+  This matters on macOS's default case-insensitive APFS (where
+  `CURL` resolves to `/usr/bin/curl`) and on Windows's case-
+  insensitive resolver; on Linux the fold is defence-in-depth
+  against workspace-controlled upper-case binaries.
+- **Allow** is split by entry shape:
+    - **Pathful entries** (anything containing `/` or `\`, e.g.
+      `./safe`, `work/bin/echo`, `/usr/bin/echo`) are always
+      matched **exact-case** on every OS. We cannot reliably tell
+      whether the actual workspace volume is case-sensitive
+      (macOS APFS supports opt-in case-sensitive volumes, and
+      container layers can mix file systems), so folding would
+      silently widen `./safe` to admit a workspace-controlled
+      `./SAFE` on case-sensitive volumes. Operators who need both
+      list both.
+    - **Bare-name entries** (e.g. `echo`) resolve through `PATH`,
+      which the policy mode resets to a known-good default. They
+      follow the OS convention: case-folded on Windows and macOS,
+      exact-case on Linux. So `WithWorkspaceExecAllowedCommands("echo")`
+      admits `ECHO` on macOS / Windows but only `echo` on Linux.
+
+On Windows the basename match additionally strips common
+executable suffixes (`.exe`, `.cmd`, `.bat`, `.com`, `.ps1`) so
+`cmd` rejects `cmd.exe`, `curl` rejects `CURL.EXE`, and `echo`
+admits `ECHO.EXE`. The configured deny entries are folded through
+the same rules, so `WithWorkspaceExecDeniedCommands("CURL")` also
+blocks bare `curl` and `curl.exe`.
+
+### Precedence
+
+When the same name appears in both lists, **deny wins**:
+
+```text
+explicit Deny  >  implicit deny  >  explicit Allow  >  implicit allow
+```
+
+So `WithWorkspaceExecAllowedCommands("git") + WithWorkspaceExecDeniedCommands("git")`
+rejects `git`. If you also list `sh` in the allow list, it stays
+denied by the implicit-deny set; you cannot weaken the implicit
+deny by re-listing its members in `Allow`.
+
+### Spawn hardening
+
+When a policy is active, the spawn itself is also hardened to stop
+shell-startup tricks from re-arming a rejected command:
+
+- the shell invocation is `sh -c` instead of `sh -lc`, so
+  `/etc/profile` and `$HOME/.profile` are not sourced first;
+- per-call env is scrubbed: `HOME`, `ENV`, `BASH_ENV`,
+  `PROMPT_COMMAND`, `PS4`, `SHELL`, `SHELLOPTS`, `BASHOPTS`, `PATH`,
+  `IFS`, `CDPATH`, `GLOBIGNORE`, `LD_PRELOAD`, `LD_LIBRARY_PATH`,
+  `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`,
+  `DYLD_FORCE_FLAT_NAMESPACE`, and any `BASH_FUNC_*` entry (Shellshock)
+  are dropped. `LANG` and similar benign variables pass through
+  untouched.
+- `PATH` in particular is dropped because the policy only matches by
+  command name; a caller-controlled `PATH=./bin:$PATH` plus a
+  workspace-side `./bin/echo` would otherwise pass the policy and
+  execute attacker code. Allowed commands resolve against the shell's
+  default `PATH` instead.
+- on Windows the scrub folds env names to upper-case before
+  comparison, because Windows treats env keys case-insensitively at
+  runtime. A caller-supplied `Path=./bin`, `Home=.`, `Bash_Env=…` or
+  `bash_func_x%%=…` is therefore stripped just like its canonical
+  form would be.
+- env entries whose **key** is not a POSIX name
+  (`/^[A-Za-z_][A-Za-z0-9_]*$/`) are dropped outright. This catches
+  the obvious cases (`PATH=.` as a key, embedded `\n` / `\r` / `\0`)
+  and also closes the shell-metacharacter bypass on runtimes that
+  build env injection through a shell string (`env KEY=value <cmd>`):
+  a name like `"X; curl http://x #"` placed into that template
+  would otherwise execute `curl` before the checked command.
+- `RunEnvProvider` entries are subject to the same scrub when
+  policy mode is active. `codeexecutor.mergeProviderEnv` honors
+  `spec.CleanEnv` and runs provider-supplied keys through the same
+  `internal/envscrub` blocklist, so a `NewEnvInjectingCodeExecutor`
+  provider returning `PATH` / `BASH_ENV` / `LD_PRELOAD` cannot
+  reintroduce them after `workspace_exec` has removed them.
+
+Without a policy configured none of this kicks in: `sh -lc` and the
+caller-supplied env (including `PATH`) are preserved as before.
+
+!!! warning "Policy mode requires a CleanEnv-capable runtime"
+    The `sh -c` switch and the per-call env scrubbing above are
+    only safe when the underlying runtime actually honors
+    `RunProgramSpec.CleanEnv`. To avoid silently degrading the
+    contract on a backend that ignores `CleanEnv`, `workspace_exec`
+    **fails closed**: with `WithWorkspaceExecAllowedCommands` /
+    `WithWorkspaceExecDeniedCommands` configured, the tool refuses
+    to start a call when the runtime's
+    `codeexecutor.Capabilities.SupportsCleanEnv` is `false`, and
+    returns an error pointing the operator at a supported runtime.
+
+    Today only `codeexecutor/local` advertises
+    `SupportsCleanEnv: true`. `codeexecutor/container` and
+    `codeexecutor/e2b` keep the zero-valued capabilities, so policy
+    mode on those backends is currently refused at the gate.
+    Implementing `CleanEnv` for them (so the policy gate opens
+    automatically once they declare the capability) is tracked in
+    [#1845](https://github.com/trpc-group/trpc-agent-go/issues/1845).
+    Until then, run policy mode on the local backend, or drop the
+    policy lists and rely on the sandbox layer for env / network
+    isolation.
+
+### Scope
+
+Enforcement is at the **executable-name** level. If an allowed command
+itself shells out based on its arguments — for example
+`find . -exec curl …`, `awk 'BEGIN{system("curl …")}'`,
+`git -c protocol.ext.allow=…` — the inner command is the allowed
+command's own subprocess and is not re-checked. Per-command argument
+validators are a planned follow-up; until they land, treat the
+network-egress policy of the sandbox itself as the primary defence and
+the allow/deny list as defence-in-depth.
+
+!!! note "Allow-list is strictly stronger than deny-only"
+    `WithWorkspaceExecAllowedCommands(...)` produces a closed world:
+    everything outside the list (and the implicit deny set) is
+    rejected.
+    `WithWorkspaceExecDeniedCommands(...)` only blocks the named
+    tools. In a deny-only configuration, an attacker who finds *any*
+    binary outside the deny set — including a workspace-side script
+    they themselves staged via an allowed editor — can still execute
+    arbitrary code. Where possible, prefer an explicit allow list and
+    add deny entries only for extra defence-in-depth.
+
+    Known tool categories that are **not** in the built-in deny set
+    today but can launch arbitrary code from their own arguments:
+    debuggers / instrumentation (`gdb`, `lldb`, `valgrind`,
+    `perf`), language interpreters (`python`, `perl`, `ruby`,
+    `node`, `awk`, `lua`), package managers / `git` (`make`,
+    `npm`, `pip`, `cargo`, `go run`, `git -c …`,
+    `git --exec-path=…`), `find -exec`, and editor escape hatches
+    (`vim -c :!`, `less !`). If you choose deny-only mode, add the
+    ones you do not need to `denied_commands`, or switch to allow
+    mode.
+
+For lower-level (non-shell) skill execution, the equivalent knobs on
+`skill_run` are `WithSkillRunAllowedCommands` /
+`WithSkillRunDeniedCommands`; see [skill](skill.md).
 
 ## Environment Variables
 

@@ -187,6 +187,13 @@ msg := model.NewUserMessage("请处理这个文件")
 _ = msg.AddFileData("report.pdf", pdfBytes, "application/pdf")
 ```
 
+如果文件内容只给工具或代码执行器使用，可以为 OpenAI 模型配置
+`openai.WithOmitFileContentParts(true)`，让 provider 请求省略 file content
+parts。这个选项不会隐藏你放在 prompt 里的普通消息文本或文件名提示。当前
+OpenAI adapter 使用 Chat Completions API，它只支持该接口接受的文件内容请求
+形式。PDF 文件数据可以作为 file content 发送；Markdown 或纯文本内容应作为
+普通消息文本传入，或只 stage 给工具使用，而不是作为 file content part 发送。
+
 ### 方式 2：先上传到 artifact，再在消息里只放引用
 
 如果文件已经提前上传到 artifact，可以把 `artifact://...` 作为 `file_id`
@@ -649,6 +656,242 @@ args.Invocation.Session.AppendStateValue("last_report", ref.Ref)
   flush 想做 best-effort 的话自己 log 后吞掉。
 
 完整可运行示例：[examples/workspace_io](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/workspace_io)。
+
+## 限制 `workspace_exec` 可执行的命令
+
+`workspace_exec` 会执行模型发过来的任意 shell 命令。当沙箱允许出网时，
+这会变成一个 prompt-injection / SSRF 入口：用户 prompt 诱导模型跑
+`curl <内网域名>`，沙箱就老老实实地跑了。
+
+为了收敛这个面，可以给它配上可执行命令的白名单和/或黑名单。只要任意
+一个列表非空，命令在执行前会被解析，不通过就直接拒掉。
+
+### 怎么配
+
+在 Agent 级别：
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithCodeExecutor(executor),
+    llmagent.WithWorkspaceExecAllowedCommands("ls", "cat", "rg", "git"),
+    llmagent.WithWorkspaceExecDeniedCommands("curl", "wget", "nc"),
+)
+```
+
+也可以直接在 `ExecTool` 上配（第一个参数是 `codeexecutor.CodeExecutor`，
+例如 `localexec.New()`）：
+
+```go
+tool := workspaceexec.NewExecTool(
+    executor,
+    workspaceexec.WithAllowedCommands("ls", "cat", "rg", "git"),
+    workspaceexec.WithDeniedCommands("curl", "wget", "nc"),
+)
+```
+
+或通过环境变量做部署期配置（用逗号或空白分隔）：
+
+- `TRPC_AGENT_WORKSPACE_EXEC_ALLOWED_COMMANDS`
+- `TRPC_AGENT_WORKSPACE_EXEC_DENIED_COMMANDS`
+
+显式 Option 优先级高于环境变量。两个都不设就关闭策略，行为与历史完全一致。
+
+### 还能怎么写
+
+由白名单命令通过安全的顺序操作符串起来的管道是允许的：
+
+```text
+ls | rg foo
+git status && git diff
+test -f x.txt || echo missing
+mkdir -p out; cp a.txt out/
+```
+
+参数里允许单引号串、双引号串和 `\X` 转义字面量。`{}` 作为字面量是允许的，
+所以 `find -exec {} \;` 这种写法能正常解析。注意：`xargs` 本身在下文那一
+组**不可覆盖**的内置拒绝集合里，所以 `xargs -I{}` 不管 allow 列表里有
+没有 `xargs` 都会被拒掉。
+
+### 会被拒掉的写法
+
+只要策略开启，命令在做名称查表**之前**就会被结构性拒掉，前提是出现以下
+任意一种：
+
+- 命令替换、参数展开、算术展开、进程替换
+  （`$(…)`、`` `…` ``、`$VAR`、`${X}`、`$((…))`、`<(…)`、`>(…)`）
+- 任意形式的重定向（`>`、`>>`、`<`、`2>&1`、here-doc）
+- 子 shell、复合块、控制流、函数定义
+  （`(…)`、`{…}`、`if/for/while/case`、`f() { … }`）
+- 后台执行、`|&`、行首 `VAR=… cmd`、通配符、`!`、`#`、裸换行或转义换行
+
+所以即使 `curl` 在拒绝列表里，也没法通过 `$(c\url)`、
+`echo \`curl http://x\``、`curl > /tmp/x`、`(curl http://x)`、
+`HOME=/tmp curl http://x` 等方式绕开。
+
+在解析器之上还有一组**不可覆盖的内置拒绝集合**，涵盖 shell 包装器、
+会重新执行命令的 builtin、"拿后续 argv 当命令跑"的进程包装器，以及
+会注册延迟执行代码或改变后续解析状态的有状态 shell builtin。只要
+策略开启就会被无条件拒掉，因为它们能以人畜无害的 `argv[0]` 启动
+任意代码（如 `time curl http://x` 绕过对 `curl` 的 deny）、注册延迟
+执行的代码（如 `trap 'curl http://x' EXIT`），或者改写后续解析环境
+（如 `export PATH=./bin && allowed_cmd`）：
+
+- shell 包装器：`sh`、`bash`、`zsh`、`ash`、`dash`、`ksh`、`mksh`、
+  `fish`、`pwsh`、`powershell`、`cmd`、`busybox`、`toybox`
+- 会重执行命令的 builtin：`eval`、`exec`、`command`、`source`、`.`、
+  `builtin`
+- 进程包装器：`xargs`、`env`、`nohup`、`timeout`、`sudo`、`su`、`doas`、
+  `setsid`、`unshare`、`chroot`、`runuser`、`time`、`nice`、`ionice`、
+  `taskset`、`stdbuf`、`strace`、`ltrace`、`script`、`flock`
+- 有状态 shell builtin：`trap`、`alias`、`unalias`、`enable`、`export`、
+  `unset`、`readonly`、`local`、`declare`、`typeset`、`set`、`shopt`、
+  `hash`、`cd`、`pushd`、`popd`
+- 会给 shell 变量赋值的 builtin：`printf`、`read`、`getopts`、`let`、
+  `mapfile`、`readarray`。在同一进程里跑整条管道的 shell（macOS 以及
+  很多容器镜像里 `/bin/sh` 就是 bash）上，这些 builtin 可以在后续允许
+  的命令之前改写 `PATH` 等解析状态。例如 `printf -v PATH ./work/bin; git`
+  在不拦 `printf` 的策略下，`git` 会被解析成 `./work/bin/git`，即便
+  `printf` 与 `git` 的 `argv[0]` 都通过了 allow/deny 检查。
+
+`workspace_exec` 自带 `cwd` 参数来覆盖正常的 cwd 切换场景，所以模型
+不需要也不应该自己调 `cd`。
+
+这个集合 **不能** 通过 `WithWorkspaceExecAllowedCommands` 覆盖——把这些名字
+写进白名单也会被忽略。如果业务真的需要其中某一个（少见但合理），更稳妥
+的做法是写一个 workspace 下的脚本，把要做的事固化下来，再把这个脚本放进
+`allowed_commands`。脚本本身可审计，reviewer 一眼就能看明白到底放开了
+什么。
+
+### 匹配规则
+
+allow 和 deny 的匹配是**不对称的**，目的是防止工作区里被注入写入的同名
+文件绕过 allow 列表：
+
+- **Allow 是严格匹配**：写 `echo` 只能放过裸 `echo`，`./echo`、
+  `work/bin/echo`、`/usr/bin/echo` 都会被拒。要放开某个具体路径，就把
+  完整路径写进去（例如 `WithWorkspaceExecAllowedCommands("/usr/bin/echo")`）。
+- **Deny 是宽松匹配**：写 `curl` 会同时拦下 `curl`、`/usr/bin/curl`、
+  `./curl`，避免攻击者通过加路径绕过黑名单。
+
+大小写处理按底层文件系统的语义来，避免白名单在大小写敏感 FS 上被
+默默放宽：
+
+- **Deny 与内置 deny** 在所有 OS 上都做大小写折叠。`deny: ["curl"]`
+  同时拦下 `curl`、`Curl`、`CURL`；内置 deny 也能拦下 `SH -c`、
+  `Sh`、`Bash` 等变体。macOS 默认 APFS 大小写不敏感（`CURL` 解析到
+  `/usr/bin/curl`），Windows 同理；Linux 上折叠是对工作区里可能塞进
+  大写同名二进制的纵深防御。
+- **Allow** 按条目形式分开处理：
+    - **带路径的条目**（含 `/` 或 `\`，如 `./safe`、`work/bin/echo`、
+      `/usr/bin/echo`）在所有 OS 上都保持**精确大小写**匹配。我们没办法
+      可靠地判断工作区所在卷的大小写敏感性（macOS APFS 支持创建大小写
+      敏感卷，容器层也可能挂载不同的 FS），一旦折叠就会在这些卷上把
+      `./safe` 默默放宽到包含工作区里被注入写入的 `./SAFE`。需要两种
+      写法时请同时列出。
+    - **裸命令名条目**（如 `echo`）走 `PATH` 解析，而策略开启时 `PATH`
+      已经被重置为可信默认值。这一类按 OS 习惯：Windows 与 macOS 折叠
+      大小写，Linux 保持精确。所以 `WithWorkspaceExecAllowedCommands("echo")`
+      在 macOS / Windows 上能放过 `ECHO`，但在 Linux 上只放过 `echo`。
+
+Windows 下匹配时还会额外忽略常见可执行后缀（`.exe`、`.cmd`、`.bat`、
+`.com`、`.ps1`），所以 `cmd` 能拦住 `cmd.exe`、`curl` 能拦住
+`CURL.EXE`、`echo` 也能放过 `ECHO.EXE`。配置项本身也会走同一套规则，
+所以 `WithWorkspaceExecDeniedCommands("CURL")` 同样能拦住裸 `curl` 和
+`curl.exe`。
+
+### 优先级
+
+同一个名字同时出现在两个列表里时，**deny 赢**：
+
+```text
+explicit Deny  >  implicit deny  >  explicit Allow  >  implicit allow
+```
+
+也就是说 `WithWorkspaceExecAllowedCommands("git") + WithWorkspaceExecDeniedCommands("git")`
+仍然会拒掉 `git`。把 `sh` 写进 allow 列表也救不回来，它仍然在 implicit
+deny 里。
+
+### 拉起 shell 时的加固
+
+策略开启时，拉起 shell 这一步本身也会做加固，避免 shell 启动文件和搜索
+路径成为绕过通道：
+
+- 调用形式从 `sh -lc` 改为 `sh -c`，不再先 source `/etc/profile` 和
+  `$HOME/.profile`；
+- 单次调用的 env 会被清洗：`HOME`、`ENV`、`BASH_ENV`、`PROMPT_COMMAND`、
+  `PS4`、`SHELL`、`SHELLOPTS`、`BASHOPTS`、`PATH`、`IFS`、`CDPATH`、
+  `GLOBIGNORE`、`LD_PRELOAD`、`LD_LIBRARY_PATH`、`LD_AUDIT`、
+  `DYLD_INSERT_LIBRARIES`、`DYLD_LIBRARY_PATH`、`DYLD_FORCE_FLAT_NAMESPACE`
+  以及任何 `BASH_FUNC_*` 条目（Shellshock）都会被去掉。`LANG` 等无害
+  变量原样透传。
+- 之所以连 `PATH` 也丢，是因为策略只按命令名匹配；调用方推一个
+  `PATH=./bin:$PATH`、再在工作区里塞一个 `./bin/echo`，按名字校验是通的，
+  但实际跑的是攻击者代码。丢掉 `PATH` 之后，被允许的命令会按 shell 默认
+  `PATH` 解析。
+- Windows 下清洗时会先把 env key 折成大写再比对，因为 Windows 运行时本身
+  就把 env key 当作大小写不敏感。所以调用方传 `Path=./bin`、`Home=.`、
+  `Bash_Env=…` 或 `bash_func_x%%=…`，都会跟规范形式一样被清掉。
+- env 里 **key** 不符合 POSIX 名（`/^[A-Za-z_][A-Za-z0-9_]*$/`）的条目
+  会被直接丢掉。这覆盖最直接的几种绕过（key 含 `=`、嵌入 `\n` / `\r` /
+  `\0`），同时也挡掉 runtime 用 shell 字符串拼 env 注入（`env KEY=value
+  <cmd>`）时的 shell 元字符绕过：一个 key 写成 `"X; curl http://x #"`
+  放进那个模板，shell 会先跑 `curl` 再跑被校验过的命令。
+- 策略开启时 `RunEnvProvider` 返回的条目也走同一套清洗。
+  `codeexecutor.mergeProviderEnv` 会读 `spec.CleanEnv`，把 provider
+  给出的 key 过一遍 `internal/envscrub` 的黑名单，所以
+  `NewEnvInjectingCodeExecutor` 的 provider 即便返回 `PATH` /
+  `BASH_ENV` / `LD_PRELOAD`，也不能在 `workspace_exec` 清洗完之后
+  再把它们塞回去。
+
+不设策略时这套都不会生效：`sh -lc` 和调用方传入的 env（包括 `PATH`）
+都保持原样。
+
+!!! warning "策略模式要求 runtime 支持 CleanEnv"
+    上面的 `sh -c` 改写和 env 清洗只有在底层 runtime 真正 honor
+    `RunProgramSpec.CleanEnv` 时才安全。为了避免在忽略 `CleanEnv` 的后端
+    上悄悄降级安全契约，`workspace_exec` **fail-closed**：配置了
+    `WithWorkspaceExecAllowedCommands` / `WithWorkspaceExecDeniedCommands`
+    后，如果 runtime 的 `codeexecutor.Capabilities.SupportsCleanEnv`
+    是 `false`，工具会在 spawn 之前直接拒掉这次调用，错误信息指引
+    operator 切到支持的 runtime。
+
+    目前只有 `codeexecutor/local` 声明了 `SupportsCleanEnv: true`。
+    `codeexecutor/container` 和 `codeexecutor/e2b` 保持 zero-valued
+    capabilities，所以这两个后端上的策略模式当前会在闸门处被拒掉。
+    给它们实现 `CleanEnv`（让它们声明 capability 后闸门自动放开）
+    跟在 [#1845](https://github.com/trpc-group/trpc-agent-go/issues/1845)
+    里。在那之前，请在 local 后端上开策略模式，或者去掉 allow/deny
+    列表，把 env / 网络隔离交给沙箱层。
+
+### 边界
+
+强制点是**可执行文件名**这一级。如果一个被允许的命令本身会根据参数再去
+执行别的命令——比如 `find . -exec curl …`、
+`awk 'BEGIN{system("curl …")}'`、`git -c protocol.ext.allow=…` ——内层命令
+是它自己的子进程，不会再走一遍策略。按参数粒度做校验是后续迭代项；
+在那之前，请把沙箱出口网络策略当成主防线，把这里的 allow/deny 当成纵深
+防御的一层。
+
+!!! note "Allow 列表比 deny-only 严格得多"
+    `WithWorkspaceExecAllowedCommands(...)` 是闭集：列表（以及内置 deny
+    集合）之外的一切都会被拒掉。
+    `WithWorkspaceExecDeniedCommands(...)` 只挡明确列出的工具。如果只配
+    deny，攻击者只要能找到任何不在 deny 集合里的二进制——包括他自己
+    通过被放开的编辑器写进工作区的脚本——就能执行任意代码。条件允许的
+    话请优先用 allow 列表，deny 只作为额外的纵深防御。
+
+    一些**目前不在**内置 deny 集合里，但本身能根据参数执行任意代码的常见
+    工具类别：调试器 / 探针（`gdb`、`lldb`、`valgrind`、`perf`）、解释器
+    （`python`、`perl`、`ruby`、`node`、`awk`、`lua`）、构建 / 包管理 / git
+    （`make`、`npm`、`pip`、`cargo`、`go run`、`git -c …`、
+    `git --exec-path=…`）、`find -exec`，以及编辑器逃逸（`vim -c :!`、
+    `less !`）。如果你确实选了 deny-only 模式，请把这些里你不需要的也加进
+    `denied_commands`，或者改用 allow 模式。
+
+如果你需要的是更底层、不经 shell 的 skill 执行限制，可以看 `skill_run`
+上对应的 `WithSkillRunAllowedCommands` / `WithSkillRunDeniedCommands`，
+参考 [skill](skill.md)。
 
 ## 环境变量与执行环境
 

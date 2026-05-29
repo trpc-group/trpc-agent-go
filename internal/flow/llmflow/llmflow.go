@@ -129,9 +129,11 @@ type contextCompactionRebuildPlan struct {
 }
 
 type summarySnapshot struct {
-	exists    bool
-	summary   string
-	updatedAt time.Time
+	exists              bool
+	summary             string
+	updatedAt           time.Time
+	boundaryCutoff      time.Time
+	boundaryLastEventID string
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -1337,10 +1339,19 @@ func snapshotSummary(sess *session.Session, filterKey string) summarySnapshot {
 	if summary == nil {
 		return summarySnapshot{}
 	}
+	boundary := summary.CutoffBoundary()
+	var boundaryCutoff time.Time
+	var boundaryLastEventID string
+	if boundary != nil {
+		boundaryCutoff = boundary.CutoffTime()
+		boundaryLastEventID = boundary.LastEventID
+	}
 	return summarySnapshot{
-		exists:    true,
-		summary:   summary.Summary,
-		updatedAt: summary.UpdatedAt,
+		exists:              true,
+		summary:             summary.Summary,
+		updatedAt:           summary.UpdatedAt,
+		boundaryCutoff:      boundaryCutoff,
+		boundaryLastEventID: boundaryLastEventID,
 	}
 }
 
@@ -1349,6 +1360,13 @@ func (s summarySnapshot) advanced(next summarySnapshot) bool {
 		return false
 	}
 	if !s.exists {
+		return true
+	}
+	if next.boundaryCutoff.After(s.boundaryCutoff) {
+		return true
+	}
+	if next.boundaryCutoff.Equal(s.boundaryCutoff) &&
+		next.boundaryLastEventID != s.boundaryLastEventID {
 		return true
 	}
 	if next.updatedAt.After(s.updatedAt) {

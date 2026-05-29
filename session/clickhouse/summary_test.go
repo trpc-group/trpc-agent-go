@@ -128,7 +128,10 @@ func TestService_CreateSessionSummary_Error(t *testing.T) {
 		AppName:   "app1",
 		UserID:    "user1",
 		Summaries: make(map[string]*session.Summary),
-		Events:    []event.Event{{ID: "1"}},
+		Events: []event.Event{{
+			ID:        "1",
+			Timestamp: time.Now().Add(time.Hour),
+		}},
 	}
 
 	// Case 1: Summarize failed
@@ -171,12 +174,13 @@ func TestService_CreateSessionSummary_NoTTL(t *testing.T) {
 	assert.NoError(t, err)
 	s.chClient = mockCli
 
+	eventTime := time.Now().UTC().Add(-time.Minute)
 	sess := &session.Session{
 		ID:        "sess1",
 		AppName:   "app1",
 		UserID:    "user1",
 		Summaries: make(map[string]*session.Summary),
-		Events:    []event.Event{{ID: "1"}},
+		Events:    []event.Event{{ID: "1", Timestamp: eventTime}},
 	}
 
 	mockSum.summarizeFunc = func(ctx context.Context, sess *session.Session) (string, error) {
@@ -189,14 +193,63 @@ func TestService_CreateSessionSummary_NoTTL(t *testing.T) {
 		execCalled = true
 		assert.Contains(t, query, "INSERT INTO session_summaries")
 		// expires_at should be nil (last argument)
-		assert.Len(t, args, 8)
-		assert.Nil(t, args[7]) // expires_at should be nil
+		assert.Len(t, args, 9)
+		summary := sess.Summaries["key"]
+		if assert.NotNil(t, summary) {
+			updatedAt, ok := args[6].(time.Time)
+			if assert.True(t, ok) {
+				assert.True(t, updatedAt.Equal(summary.CutoffTime()))
+			}
+			writeVersion, ok := args[7].(time.Time)
+			if assert.True(t, ok) {
+				assert.True(t, writeVersion.After(summary.CutoffTime()))
+			}
+		}
+		assert.Nil(t, args[8]) // expires_at should be nil
 		return nil
 	}
 
 	err = s.CreateSessionSummary(context.Background(), sess, "key", true)
 	assert.NoError(t, err)
 	assert.True(t, execCalled)
+}
+
+func TestSummaryBoundaryBefore(t *testing.T) {
+	cutoff := time.Now().UTC()
+	events := []event.Event{
+		{ID: "event-1", Timestamp: cutoff},
+		{ID: "event-2", Timestamp: cutoff},
+	}
+	current := &session.Summary{
+		Summary:   "current",
+		UpdatedAt: cutoff,
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			"key",
+			cutoff,
+			"event-2",
+		),
+	}
+	olderEvent := &session.Summary{
+		Summary:   "older",
+		UpdatedAt: cutoff,
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			"key",
+			cutoff,
+			"event-1",
+		),
+	}
+	laterCutoff := &session.Summary{
+		Summary:   "later",
+		UpdatedAt: cutoff.Add(time.Second),
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			"key",
+			cutoff.Add(time.Second),
+			"event-3",
+		),
+	}
+
+	assert.True(t, summaryBoundaryBefore(olderEvent, current, events))
+	assert.False(t, summaryBoundaryBefore(laterCutoff, current, events))
 }
 
 func TestService_CreateSessionSummary_FilterAllowlistSkipsDisallowedKey(t *testing.T) {

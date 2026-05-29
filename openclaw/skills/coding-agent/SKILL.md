@@ -1,6 +1,6 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background host sessions. Use when: (1) building or creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat, or any work in ~/clawd workspace (never spawn agents here). Requires OpenClaw host tools with exec_command plus write_stdin.'
+description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background host sessions. Use when: (1) building or creating new features or apps, (2) reviewing PRs or parallel coding with managed worktree isolation when subagents are available, (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat, or any work in ~/clawd workspace (never spawn agents here). Requires OpenClaw host tools with exec_command plus write_stdin.'
 metadata:
   {
     "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] } },
@@ -116,7 +116,20 @@ exec_command tty:true workdir:~/project background:true command:"codex --yolo 'R
 ### Reviewing PRs
 
 **⚠️ CRITICAL: Never review PRs in OpenClaw's own project folder!**
-Clone to temp folder or use git worktree.
+When OpenClaw subagents are available, prefer managed worktree isolation:
+
+```json
+{
+  "task": "Review PR #130 against main. Inspect the diff, run focused checks, and report only actionable findings.",
+  "isolation": "worktree",
+  "timeout_seconds": 1800
+}
+```
+
+Managed worktree isolation requires a runtime profile with `workspace.workdir`.
+If that is not available, use the manual clone flow below.
+
+Use a manual clone only when launching an external CLI yourself.
 
 ```bash
 # Clone to temp for safe review
@@ -125,28 +138,21 @@ git clone https://github.com/user/repo.git $REVIEW_DIR
 cd $REVIEW_DIR && gh pr checkout 130
 exec_command tty:true workdir:$REVIEW_DIR command:"codex review --base origin/main"
 # Clean up after: trash $REVIEW_DIR
-
-# Or use git worktree (keeps main intact)
-git worktree add /tmp/pr-130-review pr-130-branch
-exec_command tty:true workdir:/tmp/pr-130-review command:"codex review --base main"
 ```
 
 ### Batch PR Reviews (parallel army!)
 
-```bash
-# Fetch all PR refs first
-git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'
+Use one managed subagent per PR:
 
-# Deploy the army - one Codex per PR (all with PTY!)
-exec_command tty:true workdir:~/project background:true command:"codex exec 'Review PR #86. git diff origin/main...origin/pr/86'"
-exec_command tty:true workdir:~/project background:true command:"codex exec 'Review PR #87. git diff origin/main...origin/pr/87'"
-
-# Monitor each returned session id
-write_stdin session_id:XXX chars:""
-
-# Post results to GitHub
-gh pr comment <PR#> --body "<review content>"
+```json
+{
+  "task": "Review PR #86 against main. Inspect the diff, run focused checks, and report only actionable findings.",
+  "isolation": "worktree",
+  "timeout_seconds": 1800
+}
 ```
+
+Monitor with `subagents_list` / `subagents_get` / `subagents_wait`.
 
 ---
 
@@ -187,30 +193,26 @@ exec_command tty:true command:"pi --provider openai --model gpt-4o-mini -p 'Your
 
 ---
 
-## Parallel Issue Fixing with git worktrees
+## Parallel Issue Fixing with managed worktrees
 
-For fixing multiple issues in parallel, use git worktrees:
+For fixing multiple issues in parallel, prefer OpenClaw-managed worktree
+isolation so the runtime owns creation, cleanup, and result paths:
 
-```bash
-# 1. Create worktrees for each issue
-git worktree add -b fix/issue-78 /tmp/issue-78 main
-git worktree add -b fix/issue-99 /tmp/issue-99 main
-
-# 2. Launch Codex in each (background + PTY!)
-exec_command tty:true workdir:/tmp/issue-78 background:true command:"pnpm install && codex --yolo 'Fix issue #78: <description>. Commit and push.'"
-exec_command tty:true workdir:/tmp/issue-99 background:true command:"pnpm install && codex --yolo 'Fix issue #99 from the approved ticket summary. Implement only the in-scope edits and commit after review.'"
-
-# 3. Monitor progress
-write_stdin session_id:XXX chars:""
-
-# 4. Create PRs after fixes
-cd /tmp/issue-78 && git push -u origin fix/issue-78
-gh pr create --repo user/repo --head fix/issue-78 --title "fix: ..." --body "..."
-
-# 5. Cleanup
-git worktree remove /tmp/issue-78
-git worktree remove /tmp/issue-99
+```json
+{
+  "task": "Fix issue #78 from the approved ticket summary. Keep the scope tight, run focused tests, and report changed files plus verification.",
+  "isolation": "worktree",
+  "timeout_seconds": 3600
+}
 ```
+
+Spawn one subagent per independent issue, then use `subagents_list` /
+`subagents_get` / `subagents_wait` to monitor results. If a subagent leaves
+changes, OpenClaw preserves the worktree path and branch in the run result.
+If a subagent leaves no file or commit changes, OpenClaw removes the managed
+worktree automatically.
+Only fall back to manual `git worktree` commands when the task explicitly
+requires an external CLI outside OpenClaw-managed subagents.
 
 ---
 

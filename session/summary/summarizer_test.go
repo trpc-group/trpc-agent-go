@@ -1768,13 +1768,14 @@ func TestSessionSummarizer_SummarizeWithSkipRecent(t *testing.T) {
 	})
 }
 
-func TestSessionSummarizer_RecordLastIncludedTimestamp(t *testing.T) {
+func TestSessionSummarizer_RecordLastIncludedBoundary(t *testing.T) {
 	now := time.Now().UTC()
 	keepTs := now.Add(-2 * time.Minute)
 	sess := &session.Session{
 		ID: "ts-session",
 		Events: []event.Event{
 			{
+				ID:        "keep-event",
 				Author:    "user",
 				Timestamp: keepTs,
 				Response: &model.Response{Choices: []model.Choice{{
@@ -1802,18 +1803,19 @@ func TestSessionSummarizer_RecordLastIncludedTimestamp(t *testing.T) {
 	got, err := time.Parse(time.RFC3339Nano, string(raw))
 	require.NoError(t, err)
 	assert.True(t, got.Equal(keepTs))
+	assert.Equal(t, "keep-event", string(sess.State[lastIncludedEventIDKey]))
 }
 
-func TestSessionSummarizer_RecordLastIncludedTimestamp_NoStateOrEvents(t *testing.T) {
+func TestSessionSummarizer_RecordLastIncludedBoundary_NoStateOrEvents(t *testing.T) {
 	s := &sessionSummarizer{}
 
 	t.Run("nil session", func(t *testing.T) {
-		s.recordLastIncludedTimestamp(nil, nil)
+		s.recordLastIncludedBoundary(nil, nil)
 	})
 
 	t.Run("empty events does nothing", func(t *testing.T) {
 		sess := &session.Session{}
-		s.recordLastIncludedTimestamp(sess, []event.Event{})
+		s.recordLastIncludedBoundary(sess, []event.Event{})
 		assert.Nil(t, sess.State)
 	})
 }
