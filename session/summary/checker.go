@@ -67,12 +67,21 @@ func SetTokenCounter(counter model.TokenCounter) {
 	defaultTokenCounterMu.Unlock()
 }
 
-// filterDeltaEvents returns events that occurred strictly after the last
-// summarized timestamp stored in session state. If the timestamp is not set
-// or invalid, it returns all events (first summarization scenario).
+// filterDeltaEvents returns events after the last summarized boundary stored
+// in session state. Exact boundaries use the last event ID when available;
+// timestamp-only boundaries keep same-timestamp events to avoid dropping
+// uncovered history.
 func filterDeltaEvents(sess *session.Session) []event.Event {
 	if sess == nil || len(sess.Events) == 0 {
 		return nil
+	}
+
+	if rawID, ok := sess.GetState(lastIncludedEventIDKey); ok && len(rawID) > 0 {
+		for i, e := range sess.Events {
+			if e.ID == string(rawID) {
+				return sess.Events[i+1:]
+			}
+		}
 	}
 
 	raw, ok := sess.GetState(lastIncludedTsKey)
@@ -93,7 +102,7 @@ func filterDeltaEvents(sess *session.Session) []event.Event {
 
 	out := make([]event.Event, 0, len(sess.Events))
 	for _, e := range sess.Events {
-		if e.Timestamp.After(lastTs) {
+		if !e.Timestamp.Before(lastTs) {
 			out = append(out, e)
 		}
 	}

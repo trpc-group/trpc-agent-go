@@ -33,6 +33,8 @@ const (
 	defaultToolResultInputTranslationEnabled      = false
 	defaultToolCallDeltaStreamingEnabled          = false
 	defaultStreamingToolResultActivityEnabled     = false
+	defaultDistributedCancelEnabled               = false
+	defaultDistributedCancelPollInterval          = time.Second
 )
 
 // Options holds the options for the runner.
@@ -64,6 +66,8 @@ type Options struct {
 	ToolResultInputTranslationEnabled         bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
 	ToolCallDeltaStreamingEnabled             bool                  // ToolCallDeltaStreamingEnabled streams partial tool-call arguments.
 	StreamingToolResultActivityEnabled        bool                  // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
+	DistributedCancelEnabled                  bool                  // DistributedCancelEnabled enables best-effort cancel signaling through SessionState.
+	DistributedCancelPollInterval             time.Duration         // DistributedCancelPollInterval controls how often owner runs poll cancel markers.
 }
 
 // NewOptions creates a new options instance.
@@ -88,6 +92,8 @@ func NewOptions(opt ...Option) *Options {
 		ToolResultInputTranslationEnabled:      defaultToolResultInputTranslationEnabled,
 		ToolCallDeltaStreamingEnabled:          defaultToolCallDeltaStreamingEnabled,
 		StreamingToolResultActivityEnabled:     defaultStreamingToolResultActivityEnabled,
+		DistributedCancelEnabled:               defaultDistributedCancelEnabled,
+		DistributedCancelPollInterval:          defaultDistributedCancelPollInterval,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -308,6 +314,20 @@ func WithToolCallDeltaStreamingEnabled(enabled bool) Option {
 func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.StreamingToolResultActivityEnabled = enabled
+	}
+}
+
+// WithDistributedCancelEnabled enables best-effort cancel signaling through SessionState.
+func WithDistributedCancelEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.DistributedCancelEnabled = enabled
+	}
+}
+
+// WithDistributedCancelPollInterval sets how often owner runs poll cancel markers.
+func WithDistributedCancelPollInterval(d time.Duration) Option {
+	return func(o *Options) {
+		o.DistributedCancelPollInterval = d
 	}
 }
 

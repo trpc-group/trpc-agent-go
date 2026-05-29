@@ -38,6 +38,91 @@ type CallableTool interface {
 
 > For Function Tools, set these via `function.WithName(...)` / `function.WithDescription(...)`. For custom Tools, set `Name` / `Description` on the `tool.Declaration` returned by `Declaration()`.
 
+#### 🛡️ Tool Metadata and Permission Policy
+
+Tool metadata is an optional description of execution behavior. It does not
+change the core `tool.Tool` interface.
+
+Use metadata when a host, policy, or UI needs to understand whether a tool is
+read-only, destructive, concurrency-safe, search/read-oriented, open-world, or
+has an advisory result size limit.
+
+```go
+type ToolMetadata struct {
+    ReadOnly        bool
+    Destructive     bool
+    ConcurrencySafe bool
+    SearchOrRead    bool
+    OpenWorld       bool
+    MaxResultSize   int
+}
+
+type MetadataProvider interface {
+    ToolMetadata() tool.ToolMetadata
+}
+```
+
+Direct MCP ToolSet tools also publish metadata from explicit MCP annotations:
+
+| MCP annotation | ToolMetadata field |
+| -------------- | ------------------ |
+| `readOnlyHint` | `ReadOnly`         |
+| `destructiveHint` | `Destructive`  |
+| `openWorldHint` | `OpenWorld`      |
+
+Only explicit MCP hints are mapped. If an MCP server omits
+`destructiveHint` or `openWorldHint`, the framework keeps the Go zero value
+(`false`) in `ToolMetadata`. This differs from MCP's default hint semantics,
+where `destructiveHint` defaults to `true` for non-read-only tools and
+`openWorldHint` defaults to `true`. `ToolMetadata` uses plain `bool` fields,
+so it cannot distinguish "missing" from "explicit false". If your policy must
+follow MCP's default semantics, treat non-read-only MCP tools conservatively
+unless your application has another trust signal.
+
+MCP annotations do not have matching fields for `SearchOrRead` or
+`ConcurrencySafe`. The framework also does not treat `readOnlyHint` or
+`idempotentHint` as a concurrency-safety signal.
+
+Permission policy is checked after the model requests a tool, after JSON repair
+and before-tool callbacks have finalized arguments, and immediately before the
+framework executes it:
+
+```go
+runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolPermissionPolicyFunc(
+        func(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+            if req.Metadata.Destructive {
+                return tool.AskPermission("destructive tools require approval"), nil
+            }
+            return tool.AllowPermission(), nil
+        },
+    ),
+)
+```
+
+Tools can also enforce their own rule by implementing `tool.PermissionChecker`.
+The tool-level checker runs before the per-run policy, and the first non-allow
+decision wins. Tools without their own checker are still evaluated by the
+per-run policy when one is configured. If neither a tool checker nor a per-run
+policy exists, the legacy allow-by-default behavior is preserved.
+
+Decision behavior:
+
+- `tool.AllowPermission()`: execute the tool.
+- `tool.DenyPermission(reason)`: skip execution and return a structured `denied` tool result to the model.
+- `tool.AskPermission(reason)`: skip execution and return a structured `approval_required` tool result to the model.
+
+If your application has an approval UI, ask the user inside the policy and
+return `tool.AllowPermission()` only after approval. The framework does not
+invent a UI flow for `ask`.
+
+Keep the boundaries clear:
+
+- `agent.WithToolFilter(...)`: controls which tools are visible to the model.
+- `agent.WithToolExecutionFilter(...)`: leaves selected visible tool calls for the caller to execute externally.
+- `agent.WithToolPermissionPolicy(...)`: checks permission for every tool the framework is about to execute.
+- Tool callbacks and guardrail plugins still work for authorization, audit, and review workflows. Use the permission policy for simple deterministic allow/deny/ask checks.
+
 #### 📦 ToolSet
 
 A ToolSet is a collection of related tools that implements the `tool.ToolSet` interface. A ToolSet manages the lifecycle of tools, connections, and resource cleanup.
@@ -757,6 +842,19 @@ agent := llmagent.New("mcp-assistant",
     llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}))
 ```
 
+### MCP Annotations and Permission Metadata
+
+When a remote MCP server returns tool annotations from `tools/list`, direct
+MCP ToolSet tools implement `tool.MetadataProvider`. Permission policies can
+read `req.Metadata.ReadOnly`, `req.Metadata.Destructive`, and
+`req.Metadata.OpenWorld` without inspecting MCP-specific data structures.
+
+The mapping uses the tool snapshot returned by `tools/list`. Refreshing a
+ToolSet rebuilds the framework tool list rather than mutating existing
+`mcpTool` instances. If future code adds in-place hot updates from MCP
+`ToolListChangedNotification`, metadata reads should be checked again for
+thread safety.
+
 ### ToolSet Lifecycle and Ownership
 
 The `ToolSet` interface explicitly includes `Close()`. That means the
@@ -1004,9 +1102,11 @@ The main difference is **when** remote MCP tools become visible:
 - `MCP ToolSet`
   - performs `initialize + tools/list`
   - expands remote MCP tools into model-visible Tools
+  - maps explicit remote MCP safety annotations into `PermissionRequest.Metadata`
 - `mcpbroker`
   - initially exposes only 4 broker tools
   - the model discovers servers, then tools, then inspects selected schemas, then calls a concrete tool
+  - exposes broker tools such as `mcp_call`; remote tool annotations are not automatically reflected in `PermissionRequest.Metadata`
 
 You can think of them as:
 
@@ -1409,6 +1509,60 @@ childTool := agenttool.NewTool(
 )
 ```
 
+### Child Agent Context Visibility
+
+AgentTool runs the child Agent by reusing the current invocation and session.
+It helps to separate the nearby concepts first:
+
+| Concept | What it does | What it does not do |
+| --- | --- | --- |
+| `FilterKey` | Labels which conversation view an event belongs to; the content processor uses it to decide which historical messages enter a model request | It is not a permission boundary or a separate storage unit |
+| `Branch` | Records the Agent execution lineage, mainly for traces and cross-Agent message projection | It usually does not directly decide what history AgentTool can read |
+| `HistoryScope` | Controls how AgentTool builds the child Agent `FilterKey` | It does not shape the tool result and does not change the child Agent tool surface |
+| `MessageFilterMode` | A higher-level LLMAgent/GraphAgent preset that combines time filtering and `FilterKey` filtering | Most AgentTool users do not need to configure it directly |
+
+For historical reasons, `BranchFilterMode` contains the word `Branch`, but for
+current-version events it compares `Event.FilterKey` with the current
+invocation `FilterKey`. Legacy events written before `FilterKey` existed may
+still fall back to `Event.Branch` for compatibility.
+
+AgentTool currently has two history scopes:
+
+- `HistoryScopeIsolated` (default): the child Agent uses an independent
+  `FilterKey`, such as `math-specialist-<uuid>`. With normal Runner-generated
+  events, the child sees only the current tool arguments and does not inherit
+  parent Agent history. Child events are still stored in the same session, but
+  under a separate view.
+- `HistoryScopeParentBranch`: the child Agent uses a sub-key under the parent
+  key, such as `assistant/math-specialist-<uuid>`. The default prefix matching
+  treats ancestors and descendants as the same lineage. This means the child
+  can see parent history, and the parent may also see child events in later
+  context. This mode is for shared-lineage collaboration; it is not a snapshot
+  mode that reads parent history while hiding child details from the parent.
+
+In practice:
+
+- Use the default `HistoryScopeIsolated` when the child Agent should do
+  independent work and return only its tool result to the parent. Pass any
+  required context explicitly in the tool arguments.
+- Use `HistoryScopeParentBranch` when the child Agent should continue, edit, or
+  refine prior parent output, and it is acceptable for parent and child events
+  to share one lineage.
+
+`HistoryScope` only controls historical visibility. These behaviors do not
+change when you switch history scope:
+
+- `WithResponseMode` still controls which child assistant content becomes the
+  tool result.
+- `WithSkipSummarization` still controls whether the parent flow performs an
+  extra outer summarization call after the tool result.
+- The child Agent still inherits the current invocation's session, plugins, and
+  `RunOptions` through `Invocation.Clone(...)`; start a separate application
+  run when you need true background isolation.
+- If business code manually appends events with an empty `FilterKey`, those
+  events may be visible from multiple views for compatibility. Prefer setting
+  explicit app-prefixed `FilterKey` values for custom events.
+
 ### Options
 
 - WithSkipSummarization(bool):
@@ -1437,8 +1591,8 @@ childTool := agenttool.NewTool(
     message as the tool result
 
 - WithHistoryScope(HistoryScope):
-  - `HistoryScopeIsolated` (default): Keep the child Agent fully isolated; it only sees the current tool arguments (no inherited history).
-  - `HistoryScopeParentBranch`: Inherit parent conversation history by using a hierarchical filter key `parent/child-uuid`. This allows the content processor to include parent events via prefix matching while keeping child events isolated under a sub-branch. Typical use cases: “edit/optimize/continue previous output”.
+  - `HistoryScopeIsolated` (default): Use an independent child `FilterKey`; the child usually sees only the current tool arguments and does not inherit parent history.
+  - `HistoryScopeParentBranch`: Use a hierarchical `FilterKey` in the form `parent/child-uuid`. Parent and child events share one lineage, and prefix matching can include either side in the other's context. Typical use cases: edit, optimize, or continue previous output.
 
 Example:
 
@@ -1465,6 +1619,9 @@ child := agenttool.NewTool(
   `WithHistoryScope(agenttool.HistoryScopeIsolated)` controls what the child
   can read. `WithResponseMode(agenttool.ResponseModeFinalOnly)` controls what
   the parent receives as the tool result.
+- `HistoryScopeParentBranch` is shared lineage, not snapshot isolation. If child
+  details should not appear in later parent context, keep the default
+  `HistoryScopeIsolated` and pass the needed context through tool arguments.
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
 ## Tool Integration and Usage

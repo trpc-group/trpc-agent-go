@@ -62,7 +62,7 @@ go run ./context_compaction \
   -skip-recent-events=3
 ```
 
-Force-clean a noisy tool by name:
+Force-clean historical results from a noisy tool by name:
 
 ```bash
 go run ./context_compaction \
