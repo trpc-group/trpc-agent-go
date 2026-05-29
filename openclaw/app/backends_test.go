@@ -10,6 +10,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -225,6 +226,83 @@ func TestNewSessionSummarizer_InvalidMode(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported session summary mode")
+}
+
+// promptCapturingModel records every prompt sent to GenerateContent so tests
+// can assert which summary prompt the summarizer selected.
+type promptCapturingModel struct {
+	prompts []string
+}
+
+func (m *promptCapturingModel) Info() model.Info {
+	return model.Info{Name: "prompt-capture"}
+}
+
+func (m *promptCapturingModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	for _, msg := range req.Messages {
+		m.prompts = append(m.prompts, msg.Content)
+	}
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{Content: "<summary>ok</summary>"},
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func TestNewSessionSummarizer_StructuredPromptGate(t *testing.T) {
+	t.Parallel()
+
+	newSess := func() *session.Session {
+		sess := session.NewSession("app", "user", "sess")
+		sess.Events = append(sess.Events, event.Event{
+			Author: "user",
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.NewUserMessage("do the thing"),
+			}}},
+			Timestamp: time.Now(),
+		})
+		return sess
+	}
+
+	t.Run("structured opt-in uses nine-section prompt", func(t *testing.T) {
+		mdl := &promptCapturingModel{}
+		summarizer, err := newSessionSummarizer(mdl, runOptions{
+			SessionSummaryEnabled:    true,
+			SessionSummaryEventCount: 1,
+			SessionSummaryStructured: true,
+		})
+		require.NoError(t, err)
+
+		_, err = summarizer.Summarize(context.Background(), newSess())
+		require.NoError(t, err)
+
+		joined := strings.Join(mdl.prompts, "\n")
+		require.Contains(t, joined, "6. All user messages")
+		require.NotContains(t, joined, "Analyze the following conversation")
+	})
+
+	t.Run("default keeps the concise prompt", func(t *testing.T) {
+		mdl := &promptCapturingModel{}
+		summarizer, err := newSessionSummarizer(mdl, runOptions{
+			SessionSummaryEnabled:    true,
+			SessionSummaryEventCount: 1,
+		})
+		require.NoError(t, err)
+
+		_, err = summarizer.Summarize(context.Background(), newSess())
+		require.NoError(t, err)
+
+		joined := strings.Join(mdl.prompts, "\n")
+		require.Contains(t, joined, "Analyze the following conversation")
+		require.NotContains(t, joined, "6. All user messages")
+	})
 }
 
 func TestNewAutoMemoryExtractor_RequiresModel(t *testing.T) {

@@ -43,8 +43,6 @@ const (
 	metadataKeyCheckFunctions = "check_functions"
 	// metadataKeySkipRecentEnabled indicates whether skip recent logic is configured.
 	metadataKeySkipRecentEnabled = "skip_recent_enabled"
-	// metadataKeyPreserveUserMessages indicates whether verbatim user messages are appended to summaries.
-	metadataKeyPreserveUserMessages = "preserve_user_messages"
 )
 
 const (
@@ -243,13 +241,6 @@ type sessionSummarizer struct {
 	postHook         PostSummaryHook
 	hookAbortOnError bool
 
-	// preserveUserMessages appends a framework-generated verbatim user-message
-	// appendix to the summary and carries it across rolling summaries.
-	preserveUserMessages bool
-	// userMessagesProvider customizes how verbatim user messages are
-	// collected. If nil, the summarizer falls back to default extraction.
-	userMessagesProvider UserMessagesProvider
-
 	// modelCallbacks configures before/after model callbacks for summarization.
 	modelCallbacks *model.Callbacks
 
@@ -339,13 +330,6 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		sess,
 	)
 	eventsForModel := eventsToSummarize
-	var userMessages []string
-	if s.preserveUserMessages {
-		eventsForModel, userMessages = prepareSummaryEventsAndUserMessages(
-			eventsToSummarize,
-		)
-		userMessages = s.collectUserMessages(eventsForModel, userMessages)
-	}
 
 	conversationText := s.extractConversationText(eventsForModel)
 	ctx, conversationText, err := s.runPreSummaryHook(ctx, sess, eventsForModel, conversationText)
@@ -373,32 +357,8 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	if err != nil {
 		return "", err
 	}
-	if s.preserveUserMessages {
-		summaryText = appendPreservedUserMessages(summaryText, userMessages)
-	}
 
 	return summaryText, nil
-}
-
-// collectUserMessages combines messages carried from previous summary
-// appendices with the current round's user messages. The current round comes
-// from the configured UserMessagesProvider when set, otherwise the
-// framework's default per-event extractor.
-func (s *sessionSummarizer) collectUserMessages(events []event.Event, carried []string) []string {
-	var current []string
-	if s.userMessagesProvider != nil {
-		current = s.userMessagesProvider(events)
-		if current == nil {
-			// Provider opted out for this round; keep only carried messages.
-			return carried
-		}
-	} else {
-		current = extractUserMessages(events)
-	}
-	if len(current) == 0 {
-		return carried
-	}
-	return append(carried, current...)
 }
 
 // runPreSummaryHook invokes the configured PreSummaryHook (if any) and
@@ -657,13 +617,12 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 		modelAvailable = true
 	}
 	return map[string]any{
-		metadataKeyModelName:            modelName,
-		metadataKeySummarizerName:       s.name,
-		metadataKeyMaxSummaryWords:      s.maxSummaryWords,
-		metadataKeyModelAvailable:       modelAvailable,
-		metadataKeyCheckFunctions:       len(s.checks),
-		metadataKeySkipRecentEnabled:    s.skipRecentFunc != nil,
-		metadataKeyPreserveUserMessages: s.preserveUserMessages,
+		metadataKeyModelName:         modelName,
+		metadataKeySummarizerName:    s.name,
+		metadataKeyMaxSummaryWords:   s.maxSummaryWords,
+		metadataKeyModelAvailable:    modelAvailable,
+		metadataKeyCheckFunctions:    len(s.checks),
+		metadataKeySkipRecentEnabled: s.skipRecentFunc != nil,
 	}
 }
 

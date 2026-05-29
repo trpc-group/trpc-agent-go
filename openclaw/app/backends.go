@@ -280,9 +280,16 @@ func newSessionSummarizer(
 
 	options := make([]summary.Option, 0, 8)
 	options = append(options, summary.WithName(appName))
-	options = append(options, summary.WithPrompt(summary.DetailedContinuityPrompt))
-	options = append(options, summary.WithPreserveUserMessages(true))
-	options = append(options, summary.WithUserMessagesProvider(conversation.UserMessagesProvider))
+	// The structured nine-section continuity prompt is opt-in so existing
+	// deployments keep the default concise summary behavior. User messages
+	// are preserved by section 6 of this prompt rather than a separate
+	// framework-generated appendix.
+	if opts.SessionSummaryStructured {
+		options = append(
+			options,
+			summary.WithPrompt(summary.DetailedContinuityPrompt),
+		)
+	}
 	options = append(
 		options,
 		summary.WithPreSummaryHook(

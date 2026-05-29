@@ -233,6 +233,7 @@ type runOptions struct {
 	SessionSummaryIdleThreshold       time.Duration
 	SessionSummaryMaxWords            int
 	SessionSummaryApproxRunesPerToken float64
+	SessionSummaryStructured          bool
 
 	EnableLocalExec      bool
 	EnableOpenClawTools  bool
@@ -785,6 +786,13 @@ func parseRunOptions(args []string) (runOptions, error) {
 			"(0 uses framework default 4.0; set ~2.0 for Chinese-heavy content)",
 	)
 	fs.BoolVar(
+		&opts.SessionSummaryStructured,
+		"session-summary-structured",
+		false,
+		"Use the structured nine-section continuity summary prompt "+
+			"instead of the default concise prompt (opt-in; off by default)",
+	)
+	fs.BoolVar(
 		&opts.EnableLocalExec,
 		"enable-local-exec",
 		false,
@@ -1167,6 +1175,7 @@ type summaryConfig struct {
 	IdleThreshold       *string  `yaml:"idle_threshold,omitempty"`
 	MaxWords            *int     `yaml:"max_words,omitempty"`
 	ApproxRunesPerToken *float64 `yaml:"approx_runes_per_token,omitempty"`
+	Structured          *bool    `yaml:"structured,omitempty"`
 }
 
 type memoryAuto struct {
@@ -1978,6 +1987,18 @@ func applySessionSummary(
 		}
 		opts.SessionSummaryIdleThreshold = dur
 	}
+	applySessionSummaryOutput(cfg, opts, set)
+	return nil
+}
+
+// applySessionSummaryOutput applies output-shaping summary settings (word
+// limit, token estimation heuristic, and prompt style) from YAML when the
+// matching CLI flag was not explicitly set.
+func applySessionSummaryOutput(
+	cfg *summaryConfig,
+	opts *runOptions,
+	set map[string]struct{},
+) {
 	if cfg.MaxWords != nil && !flagWasSet(set, "session-summary-max-words") {
 		opts.SessionSummaryMaxWords = *cfg.MaxWords
 	}
@@ -1985,7 +2006,10 @@ func applySessionSummary(
 		!flagWasSet(set, "session-summary-approx-runes-per-token") {
 		opts.SessionSummaryApproxRunesPerToken = *cfg.ApproxRunesPerToken
 	}
-	return nil
+	if cfg.Structured != nil &&
+		!flagWasSet(set, "session-summary-structured") {
+		opts.SessionSummaryStructured = *cfg.Structured
+	}
 }
 
 func applyMemoryAuto(

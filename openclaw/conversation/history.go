@@ -129,29 +129,6 @@ func BuildSummaryText(events []event.Event) string {
 	return strings.Join(lines, "\n")
 }
 
-// buildSummaryUserMessages renders user turns as the exact user-message
-// appendix source for session summaries. It returns nil unless at least one
-// user event has OpenClaw speaker metadata, allowing generic framework
-// extraction to remain the fallback for unannotated sessions.
-func buildSummaryUserMessages(events []event.Event) []string {
-	out := make([]string, 0, len(events))
-	var hasAnnotatedUser bool
-	for i := range events {
-		rendered, annotated := summaryUserMessagesFromEvent(
-			events[i],
-			nil,
-		)
-		if annotated {
-			hasAnnotatedUser = true
-		}
-		out = append(out, rendered...)
-	}
-	if !hasAnnotatedUser {
-		return nil
-	}
-	return out
-}
-
 func buildVisibleHistory(
 	events []event.Event,
 	boundary *session.SummaryBoundary,
@@ -512,42 +489,6 @@ func summaryLinesFromEvent(
 		}
 		return lines, false
 	}
-}
-
-func summaryUserMessagesFromEvent(
-	evt event.Event,
-	labelOverrides map[string]string,
-) ([]string, bool) {
-	if evt.Author != authorUser || evt.Response == nil ||
-		evt.IsPartial || len(evt.Response.Choices) == 0 {
-		return nil, false
-	}
-	annotation, ok, err := AnnotationFromEvent(evt)
-	if err != nil {
-		return nil, false
-	}
-	lines := make([]string, 0, len(evt.Response.Choices))
-	for _, choice := range evt.Response.Choices {
-		text := messageText(choice.Message)
-		if text == "" {
-			continue
-		}
-		speaker := speakerLabel(annotation, labelOverrides)
-		if quote := strings.TrimSpace(annotation.QuoteText); quote != "" {
-			lines = append(
-				lines,
-				fmt.Sprintf(
-					"%s (replying to: %s): %s",
-					speaker,
-					quote,
-					text,
-				),
-			)
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("%s: %s", speaker, text))
-	}
-	return lines, ok
 }
 
 func renderUserMessage(

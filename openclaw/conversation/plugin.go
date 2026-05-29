@@ -67,15 +67,3 @@ func PreSummaryHook(
 	in.Text = text
 	return nil
 }
-
-// UserMessagesProvider renders user turns as the verbatim user-message
-// appendix source for session summaries. It returns nil when no user event
-// carries OpenClaw speaker metadata, allowing the framework's default
-// extraction to remain the fallback for unannotated sessions.
-//
-// Wire it into a summarizer with summary.WithUserMessagesProvider. Combine
-// with summary.WithPreserveUserMessages to actually emit the verbatim
-// appendix.
-func UserMessagesProvider(events []event.Event) []string {
-	return buildSummaryUserMessages(events)
-}

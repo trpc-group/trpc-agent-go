@@ -830,6 +830,7 @@ session:
     token_threshold: 100
     idle_threshold: "5m"
     max_words: 200
+    structured: true
   config:
     dsn: "mysql://example"
 
@@ -984,6 +985,7 @@ memory:
 	require.Equal(t, 100, opts.SessionSummaryTokenCount)
 	require.Equal(t, 5*time.Minute, opts.SessionSummaryIdleThreshold)
 	require.Equal(t, 200, opts.SessionSummaryMaxWords)
+	require.True(t, opts.SessionSummaryStructured)
 
 	require.Equal(t, "redis", opts.MemoryBackend)
 	require.Equal(t, "redis://127.0.0.1:6379/0", opts.MemoryRedisURL)
