@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/spawnenv"
 )
 
 const (
@@ -363,6 +364,163 @@ func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
 	require.Contains(t, joined,
 		codeexecutor.WorkspaceEnvDirKey+"=")
 	require.Contains(t, joined, ws.Path)
+}
+
+// runProgramCaptureArgv runs spec through a fake-docker
+// workspaceRuntime and returns the bash argv handed to
+// ContainerExecCreate, so CleanEnv tests can assert how RunProgram
+// shapes the shell invocation without a real container.
+func runProgramCaptureArgv(
+	t *testing.T, spec codeexecutor.RunProgramSpec,
+) []string {
+	t.Helper()
+	var captured []string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			var payload struct {
+				Cmd []string `json:"Cmd"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			captured = payload.Cmd
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "OUT", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{
+			runHostBase:      t.TempDir(),
+			runContainerBase: testRunBase,
+		},
+	}
+	ws := codeexecutor.Workspace{ID: "wCE",
+		Path: path.Join(testRunBase, "wCE")}
+	_, err := rt.RunProgram(context.Background(), ws, spec)
+	require.NoError(t, err)
+	require.NotEmpty(t, captured)
+	return captured
+}
+
+// TestWorkspaceRuntime_RunProgram_CleanEnvUsesEnvIAndNoProfile guards
+// the container half of issue #1845: when spec.CleanEnv is set the
+// command must be spawned via `env -i ...` under a non-login
+// `bash --noprofile --norc`, so neither the inherited container
+// process env nor a sourced /etc/profile / ~/.bashrc can survive
+// into the spawned command. A minimal PATH is injected so `env -i`
+// can still resolve the command name.
+func TestWorkspaceRuntime_RunProgram_CleanEnvUsesEnvIAndNoProfile(
+	t *testing.T,
+) {
+	argv := runProgramCaptureArgv(t, codeexecutor.RunProgramSpec{
+		Cmd:      "echo",
+		Args:     []string{"hi"},
+		CleanEnv: true,
+		Timeout:  time.Duration(waitShortSec) * time.Second,
+	})
+	require.Equal(t,
+		[]string{"/bin/bash", "--noprofile", "--norc", "-c"},
+		argv[:len(argv)-1],
+		"clean mode must use a non-login shell",
+	)
+	cmdline := argv[len(argv)-1]
+	require.Contains(t, cmdline, "env -i ",
+		"clean mode must start the command from an empty env")
+	require.Contains(t, cmdline, spawnenv.MinimalPATH,
+		"clean mode must inject a minimal PATH for env -i")
+	require.Contains(t, cmdline,
+		codeexecutor.WorkspaceEnvDirKey+"=",
+		"workspace base vars must still be injected in clean mode")
+}
+
+// TestWorkspaceRuntime_RunProgram_CleanEnvKeepsSpecPATH verifies a
+// caller-supplied PATH is honored in clean mode and suppresses the
+// MinimalPATH fallback (so the tool/skill layer, which has already
+// vetted that PATH, stays authoritative).
+func TestWorkspaceRuntime_RunProgram_CleanEnvKeepsSpecPATH(
+	t *testing.T,
+) {
+	argv := runProgramCaptureArgv(t, codeexecutor.RunProgramSpec{
+		Cmd:      "echo",
+		CleanEnv: true,
+		Env:      map[string]string{"PATH": "/opt/vetted/bin"},
+		Timeout:  time.Duration(waitShortSec) * time.Second,
+	})
+	cmdline := argv[len(argv)-1]
+	require.Contains(t, cmdline, "/opt/vetted/bin")
+	require.NotContains(t, cmdline, spawnenv.MinimalPATH,
+		"caller PATH must suppress the MinimalPATH fallback")
+}
+
+// TestWorkspaceRuntime_RunProgram_NoCleanEnvKeepsLoginShell pins the
+// non-policy contract: without CleanEnv the runtime keeps the
+// historical login shell (`bash -lc`) and a plain `env ...` token,
+// so existing callers keep their profile-sourced environment.
+func TestWorkspaceRuntime_RunProgram_NoCleanEnvKeepsLoginShell(
+	t *testing.T,
+) {
+	argv := runProgramCaptureArgv(t, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Env:     map[string]string{"FOO": "bar"},
+		Timeout: time.Duration(waitShortSec) * time.Second,
+	})
+	require.Equal(t,
+		[]string{"/bin/bash", "-lc"}, argv[:len(argv)-1])
+	cmdline := argv[len(argv)-1]
+	require.Contains(t, cmdline, "env ")
+	require.NotContains(t, cmdline, "env -i")
+	require.NotContains(t, cmdline, spawnenv.MinimalPATH)
+}
+
+// TestContainer_EngineAdvertisesCleanEnv verifies the container
+// Engine opts into SupportsCleanEnv now that RunProgram honors the
+// flag, so tool/workspaceexec policy mode no longer fails closed on
+// this backend (issue #1845).
+func TestContainer_EngineAdvertisesCleanEnv(t *testing.T) {
+	cli, cleanup := fakeDocker(t,
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+	defer cleanup()
+	c := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: testCID},
+	}
+	c.ws = &workspaceRuntime{
+		ce: c,
+		cfg: runtimeConfig{
+			runHostBase:      t.TempDir(),
+			runContainerBase: testRunBase,
+		},
+	}
+	eng := c.Engine()
+	require.NotNil(t, eng)
+	require.True(t, eng.Describe().SupportsCleanEnv,
+		"container Engine must advertise SupportsCleanEnv (#1845)")
 }
 
 func TestWorkspaceRuntime_RunProgram_WithStdin(t *testing.T) {

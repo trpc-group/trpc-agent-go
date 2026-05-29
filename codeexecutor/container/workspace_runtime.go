@@ -33,6 +33,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/spawnenv"
 )
 
 const (
@@ -432,7 +433,6 @@ func (r *workspaceRuntime) RunProgram(
 		"run_"+time.Now().Format("20060102T150405.000"),
 	)
 	// Build env parts with defaults first, then overlay user env.
-	var envParts []string
 	baseEnv := map[string]string{
 		codeexecutor.WorkspaceEnvDirKey: ws.Path,
 		codeexecutor.EnvSkillsDir:       skillsDir,
@@ -440,16 +440,15 @@ func (r *workspaceRuntime) RunProgram(
 		codeexecutor.EnvOutputDir:       outDir,
 		codeexecutor.EnvRunDir:          runDir,
 	}
-	for k, v := range baseEnv {
-		if _, ok := spec.Env[k]; ok {
-			continue
-		}
-		envParts = append(envParts, k+"="+shellQuote(v))
-	}
-	for k, v := range spec.Env {
-		envParts = append(envParts, k+"="+shellQuote(v))
-	}
-	envStr := strings.Join(envParts, " ")
+	// envPrefix is the leading `env ...` token. When spec.CleanEnv
+	// is set (workspace_exec / skill_run policy mode) it becomes
+	// `env -i ...` so the spawned command starts from an empty
+	// environment plus the workspace base vars and a minimal PATH,
+	// honoring RunProgramSpec.CleanEnv on the container backend
+	// (issue #1845).
+	envPrefix := spawnenv.Prefix(
+		baseEnv, spec.Env, spec.CleanEnv, shellQuote,
+	)
 	var cmdline strings.Builder
 	// Ensure run/output dirs exist before cd/exec.
 	cmdline.WriteString("mkdir -p ")
@@ -459,17 +458,13 @@ func (r *workspaceRuntime) RunProgram(
 	cmdline.WriteString(" && cd ")
 	cmdline.WriteString(shellQuote(cwd))
 	cmdline.WriteString(" && ")
-	if envStr != "" {
-		cmdline.WriteString("env ")
-		cmdline.WriteString(envStr)
-		cmdline.WriteString(" ")
-	}
+	cmdline.WriteString(envPrefix)
 	cmdline.WriteString(shellQuote(spec.Cmd))
 	for _, a := range spec.Args {
 		cmdline.WriteString(" ")
 		cmdline.WriteString(shellQuote(a))
 	}
-	argv := []string{"/bin/bash", "-lc", cmdline.String()}
+	argv := programShellArgv(spec.CleanEnv, cmdline.String())
 	out, errOut, code, timed, err := r.execCmdWithStdin(
 		ctx,
 		argv,
@@ -1237,6 +1232,22 @@ func shellQuote(s string) string {
 	}
 	q := strings.ReplaceAll(s, "'", "'\\''")
 	return "'" + q + "'"
+}
+
+// programShellArgv selects the bash invocation used to run a
+// program. In CleanEnv (policy) mode the outer shell is started with
+// --noprofile --norc so /etc/profile and ~/.bashrc cannot execute
+// code or rewrite the environment at shell start-up; the inner
+// command is already pinned to a minimal env by the `env -i ...`
+// prefix. Otherwise the historical login shell (-lc) is preserved
+// so non-policy callers keep their profile-sourced environment.
+func programShellArgv(clean bool, cmdline string) []string {
+	if clean {
+		return []string{
+			"/bin/bash", "--noprofile", "--norc", "-c", cmdline,
+		}
+	}
+	return []string{"/bin/bash", "-lc", cmdline}
 }
 
 func tarFromFiles(files []codeexecutor.PutFile) (io.ReadCloser, error) {
