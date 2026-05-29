@@ -1147,7 +1147,7 @@ func TestLoadTool_CapsNeighborToolResultsWithContentLimit(t *testing.T) {
 	}
 	beforeEvent := makeToolEvent("evt-before", "call-before", "before0123456789")
 	anchorEvent := makeToolEvent("evt-anchor", "call-anchor", "0123456789abcdefghij")
-	afterEvent := makeToolEvent("evt-after", "call-after", "after0123456789")
+	afterEvent := makeToolEvent("evt-after", "call-after", "next0123456789")
 	svc := &mockSessionService{
 		Service: sessioninmemory.NewSessionService(),
 		window: &session.EventWindow{
@@ -1193,7 +1193,7 @@ func TestLoadTool_CapsNeighborToolResultsWithContentLimit(t *testing.T) {
 	assert.Equal(t, 10, resp.Messages[1].ContentOffset)
 	assert.Equal(t, 4, resp.Messages[1].ReturnedBytes)
 	assert.True(t, resp.Messages[1].ContentTruncated)
-	assert.Equal(t, "afte", resp.Messages[2].Content)
+	assert.Equal(t, "next", resp.Messages[2].Content)
 	assert.Equal(t, 0, resp.Messages[2].ContentOffset)
 	assert.Equal(t, 4, resp.Messages[2].ReturnedBytes)
 	assert.True(t, resp.Messages[2].ContentTruncated)
