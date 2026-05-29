@@ -1498,7 +1498,7 @@ func Test_HandleStreamingResponse_ServerToolInputDeltaOverridesStartInput(t *tes
 	assert.JSONEq(t, `{"query":"latest weather"}`, string(rawInput))
 }
 
-func Test_HandleStreamingResponse_InvalidToolInputDeltaReturnsError(t *testing.T) {
+func Test_HandleStreamingResponse_TruncatedToolInputDeltaIsRepaired(t *testing.T) {
 	sse := strings.Join([]string{
 		"event: message_start",
 		`data: {"type":"message_start","message":{"id":"msg_sse_tool_3","type":"message","role":"assistant","model":"claude-3-sonnet","content":[],"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":3,"output_tokens":0,"server_tool_use":{"web_search_requests":0}}}}`,
@@ -1511,6 +1511,9 @@ func Test_HandleStreamingResponse_InvalidToolInputDeltaReturnsError(t *testing.T
 		"",
 		"event: content_block_stop",
 		`data: {"type":"content_block_stop","index":0}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
 		"",
 	}, "\n")
 	orig := model.DefaultNewHTTPClient
@@ -1539,22 +1542,25 @@ func Test_HandleStreamingResponse_InvalidToolInputDeltaReturnsError(t *testing.T
 		GenerationConfig: model.GenerationConfig{Stream: true},
 	})
 	require.NoError(t, err)
-	var responses []*model.Response
+	var final *model.Response
 	for resp := range ch {
-		responses = append(responses, resp)
+		if resp.Done {
+			final = resp
+		}
 	}
-	require.Len(t, responses, 1)
-	require.NotNil(t, responses[0].Error)
-	assert.True(t, responses[0].Done)
-	assert.NotEmpty(t, responses[0].Error.Message)
+	require.NotNil(t, final)
+	require.Nil(t, final.Error)
 	select {
 	case <-callbackCalled:
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout waiting for stream complete callback")
 	}
-	assert.Nil(t, callbackAcc)
-	require.Error(t, callbackErr)
-	assert.Equal(t, responses[0].Error.Message, callbackErr.Error())
+	require.NoError(t, callbackErr)
+	require.NotNil(t, callbackAcc)
+	require.Len(t, callbackAcc.Content, 1)
+	toolUse, ok := callbackAcc.Content[0].AsAny().(anthropic.ToolUseBlock)
+	require.True(t, ok)
+	assert.JSONEq(t, `{"a":1}`, string(toolUse.Input))
 }
 
 func Test_StreamingMessageAccumulator_HelperGuards(t *testing.T) {
@@ -1629,14 +1635,40 @@ func Test_StreamingMessageAccumulator_ErrorPaths(t *testing.T) {
 		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}`)), "no content block")
 	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
 		`{"type":"content_block_stop","index":0}`)), "no content block")
+}
+
+func Test_repairToolUseInputIfNeeded(t *testing.T) {
+	t.Run("empty input becomes empty object", func(t *testing.T) {
+		block := anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("")}
+		repairToolUseInputIfNeeded(&block)
+		assert.JSONEq(t, `{}`, string(block.Input))
+	})
+	t.Run("truncated object is repaired", func(t *testing.T) {
+		block := anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}
+		repairToolUseInputIfNeeded(&block)
+		assert.JSONEq(t, `{}`, string(block.Input))
+		require.NoError(t, refreshContentBlockRawJSON(&block))
+	})
+	t.Run("valid input is unchanged", func(t *testing.T) {
+		block := anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage(`{"a":1}`)}
+		repairToolUseInputIfNeeded(&block)
+		assert.JSONEq(t, `{"a":1}`, string(block.Input))
+	})
+	t.Run("non tool blocks are ignored", func(t *testing.T) {
+		block := anthropic.ContentBlockUnion{Type: "text", Text: "hello"}
+		repairToolUseInputIfNeeded(&block)
+		assert.Equal(t, "hello", block.Text)
+	})
+}
+
+func Test_StreamingMessageAccumulator_IncompleteToolUseInputFinalizes(t *testing.T) {
+	acc := newStreamingMessageAccumulator()
 	acc.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}}
 	acc.inputDeltaStartedAt = []bool{false}
-	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
-		`{"type":"content_block_stop","index":0}`)), "error converting content block to JSON")
-	require.Error(t, refreshContentBlockRawJSON(&anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}))
-	require.Error(t, finalizeStreamingMessage(&anthropic.Message{
-		Content: []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}},
-	}))
+	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)))
+	require.NoError(t, acc.Finalize())
+	assert.JSONEq(t, `{}`, string(acc.message.Content[0].Input))
 }
 
 func mustMessageStreamEventUnion(t *testing.T, raw string) anthropic.MessageStreamEventUnion {
