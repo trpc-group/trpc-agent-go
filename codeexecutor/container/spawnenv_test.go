@@ -58,6 +58,19 @@ func TestEnvToken_CleanKeepsCallerPATH(t *testing.T) {
 		"caller PATH must suppress the minimal PATH fallback")
 }
 
+// TestEnvToken_CleanWithEmptyPATH documents that an explicit empty
+// PATH in spec is honored as the caller's deliberate choice: like
+// codeexecutor/local's key-presence check, hasPathKey keys off the
+// presence of "PATH", not its value, so the minimalCleanPATH
+// fallback is suppressed and the token carries an empty PATH.
+func TestEnvToken_CleanWithEmptyPATH(t *testing.T) {
+	got := envToken(nil, map[string]string{"PATH": ""}, true)
+	require.Contains(t, got, "env -i ")
+	require.Contains(t, got, "PATH=''")
+	require.NotContains(t, got, minimalCleanPATH,
+		"explicit empty PATH should suppress the fallback")
+}
+
 // TestEnvToken_CleanCaseSensitivePATH guards the Linux-only target:
 // a lowercase "Path" is a distinct variable and must not suppress
 // the minimal PATH injection, otherwise `env -i` would leave the
