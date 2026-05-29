@@ -62,6 +62,27 @@ type MetadataProvider interface {
 }
 ```
 
+Direct MCP ToolSet tools also publish metadata from explicit MCP annotations:
+
+| MCP annotation | ToolMetadata field |
+| -------------- | ------------------ |
+| `readOnlyHint` | `ReadOnly`         |
+| `destructiveHint` | `Destructive`  |
+| `openWorldHint` | `OpenWorld`      |
+
+Only explicit MCP hints are mapped. If an MCP server omits
+`destructiveHint` or `openWorldHint`, the framework keeps the Go zero value
+(`false`) in `ToolMetadata`. This differs from MCP's default hint semantics,
+where `destructiveHint` defaults to `true` for non-read-only tools and
+`openWorldHint` defaults to `true`. `ToolMetadata` uses plain `bool` fields,
+so it cannot distinguish "missing" from "explicit false". If your policy must
+follow MCP's default semantics, treat non-read-only MCP tools conservatively
+unless your application has another trust signal.
+
+MCP annotations do not have matching fields for `SearchOrRead` or
+`ConcurrencySafe`. The framework also does not treat `readOnlyHint` or
+`idempotentHint` as a concurrency-safety signal.
+
 Permission policy is checked after the model requests a tool, after JSON repair
 and before-tool callbacks have finalized arguments, and immediately before the
 framework executes it:
@@ -821,6 +842,19 @@ agent := llmagent.New("mcp-assistant",
     llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}))
 ```
 
+### MCP Annotations and Permission Metadata
+
+When a remote MCP server returns tool annotations from `tools/list`, direct
+MCP ToolSet tools implement `tool.MetadataProvider`. Permission policies can
+read `req.Metadata.ReadOnly`, `req.Metadata.Destructive`, and
+`req.Metadata.OpenWorld` without inspecting MCP-specific data structures.
+
+The mapping uses the tool snapshot returned by `tools/list`. Refreshing a
+ToolSet rebuilds the framework tool list rather than mutating existing
+`mcpTool` instances. If future code adds in-place hot updates from MCP
+`ToolListChangedNotification`, metadata reads should be checked again for
+thread safety.
+
 ### ToolSet Lifecycle and Ownership
 
 The `ToolSet` interface explicitly includes `Close()`. That means the
@@ -1068,9 +1102,11 @@ The main difference is **when** remote MCP tools become visible:
 - `MCP ToolSet`
   - performs `initialize + tools/list`
   - expands remote MCP tools into model-visible Tools
+  - maps explicit remote MCP safety annotations into `PermissionRequest.Metadata`
 - `mcpbroker`
   - initially exposes only 4 broker tools
   - the model discovers servers, then tools, then inspects selected schemas, then calls a concrete tool
+  - exposes broker tools such as `mcp_call`; remote tool annotations are not automatically reflected in `PermissionRequest.Metadata`
 
 You can think of them as:
 
