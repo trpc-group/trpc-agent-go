@@ -323,6 +323,8 @@ revisions/
 |------|------|--------|
 | `WithManagedSkillsDir(dir)` | evolution **写入** SKILL.md 的目录（Publisher 目标） | 必填 |
 | `WithSkillRepository(repo)` | 技能仓库（供 reviewer **读取**已有技能做去重；应与 agent 共享同一实例） | 必填 |
+| `WithSkillRepositoryProvider(p)` | 按 `SkillScope` 动态解析技能仓库（多租户隔离，见下文） | nil |
+| `WithSkillScopeMode(mode)` | 技能隔离粒度：`SkillScopeApp`（按 app 共享）/ `SkillScopeUser`（按 app+user 隔离） | `SkillScopeNone`（不隔离） |
 | `WithPolicy(p)` | 触发策略 | `DefaultPolicy`（≥4 tool calls） |
 | `WithCandidateStore(store)` | 不可变 revision store | nil（不启用 revision 追踪） |
 | `WithActivePointer(ptr)` | Active revision 指针 | nil |
@@ -357,13 +359,55 @@ evolution.WithQueueSize(32),  // 每个 worker 32 job 缓冲
 
 这确保 evolution 不会意外修改用户手写技能或内置技能。
 
-## Metrics
+## 多租户隔离
 
-通过 `ServiceWithWorker` 接口读取门禁活动指标：
+默认情况下（`SkillScopeNone`），所有 session 共享同一套技能库与 revision 目录。在多 app / 多用户场景中，可以让 evolution 按 **app** 或 **app+user** 维度隔离技能，避免不同租户互相污染学到的技能。
+
+### 隔离粒度（`SkillScopeMode`）
+
+| 模式 | 说明 | 文件布局 |
+|------|------|----------|
+| `SkillScopeNone`（默认） | 不隔离，全局共享 | `<root>/...` |
+| `SkillScopeApp` | 按 app 共享，同一 app 下所有用户共用 | `<root>/apps/<app>/...` |
+| `SkillScopeUser` | 按 app+user 隔离，每个用户独立技能库 | `<root>/users/<app>/<user>/...` |
+
+`SkillScope` 由 session 的 `AppName` / `UserID` 推导（也可通过 `LearningJob.Scope` 显式指定）。app/user 标识会被做文件系统安全化处理：非法字符或过长的标识会被替换为稳定的哈希片段（`id-<hash>`），既避免路径穿越也保证幂等。
+
+### 接入方式
+
+技能仓库的解析通过 `skill.RepositoryProvider` 完成。它根据传入的 `SkillScope` 返回对应的 `skill.Repository`：
 
 ```go
-if svcW, ok := evoSvc.(evolution.ServiceWithWorker); ok {
-    m := svcW.Worker().ApprovalGateMetricsJSON()
+// 按 scope 动态解析技能仓库（实现自行决定按 app 还是按 user 切目录）。
+provider := skill.RepositoryProviderFunc(
+    func(ctx context.Context, scope skill.SkillScope) (skill.Repository, error) {
+        roots, err := resolveScopedRoots(scope) // 你的目录映射逻辑
+        if err != nil {
+            return nil, err
+        }
+        return skill.NewFSRepository(roots...)
+    },
+)
+
+evoSvc := evolution.NewService(reviewModel,
+    evolution.WithManagedSkillsDir(managedDir),
+    evolution.WithSkillRepositoryProvider(provider),
+    evolution.WithSkillScopeMode(skill.SkillScopeUser), // 按 app+user 隔离
+    // ...
+)
+```
+
+LLMAgent 侧使用对应的 `llmagent.WithSkillRepositoryProvider` / `llmagent.WithSkillScopeMode`，保证 agent 注入提示词时看到的技能与 evolution 写入的技能处于同一 scope。
+
+> 说明：`Publisher`、`CandidateStore`、`ActivePointer` 接口本身保持简洁（不带 `SkillScope` 参数），由 worker 负责根据 scope 把文件型后端路由到对应子目录。因此默认的文件实现无需改动即可获得多租户隔离能力。
+
+## Metrics
+
+通过 `ApprovalGateMetricsProvider` 接口读取门禁活动指标（只读快照，不暴露内部 worker 实现）：
+
+```go
+if mp, ok := evoSvc.(evolution.ApprovalGateMetricsProvider); ok {
+    m := mp.ApprovalGateMetrics()
     fmt.Printf("Candidates seen:      %d\n", m.CandidatesSeen)
     fmt.Printf("Revisions promoted:   %d\n", m.RevisionsPromoted)
     fmt.Printf("Spec-gate rejected:   %d\n", m.SpecGateRejected)

@@ -37,6 +37,26 @@ func (m *stubModel) GenerateContent(_ context.Context, _ *model.Request) (<-chan
 
 func (m *stubModel) Info() model.Info { return model.Info{Name: "stub"} }
 
+func TestService_ApprovalGateMetrics(t *testing.T) {
+	mdl := &stubModel{response: `{"skip_reason":"nothing useful"}`}
+	svc := NewService(mdl,
+		WithManagedSkillsDir(t.TempDir()),
+		WithPolicy(alwaysPolicy{}),
+	)
+	require.NotNil(t, svc)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	provider, ok := svc.(ApprovalGateMetricsProvider)
+	require.True(t, ok, "service should expose approval-gate metrics")
+
+	metrics := provider.ApprovalGateMetrics()
+	// A freshly-created service has no gate activity yet.
+	assert.Equal(t, 0, metrics.CandidatesSeen)
+	assert.Equal(t, 0, metrics.SpecGateRejected)
+	assert.Equal(t, 0, metrics.SafetyGateRejected)
+	assert.Equal(t, 0, metrics.HumanGateHeld)
+}
+
 func TestNewService_EnqueueAndClose(t *testing.T) {
 	dir := t.TempDir()
 	mdl := &stubModel{response: `{"skip_reason":"nothing useful"}`}

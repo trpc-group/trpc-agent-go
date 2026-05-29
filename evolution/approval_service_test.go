@@ -195,6 +195,56 @@ func TestApprovalService_ListPending_WithLimit(t *testing.T) {
 	assert.Len(t, pending, 2)
 }
 
+func TestApprovalService_ListPending_NilStore(t *testing.T) {
+	svc := NewApprovalService(nil, nil, nil)
+	pending, err := svc.ListPending(context.Background(), ListPendingOpts{})
+	require.NoError(t, err)
+	assert.Nil(t, pending)
+}
+
+func TestApprovalService_Decide_NilStore(t *testing.T) {
+	svc := NewApprovalService(nil, nil, nil)
+	err := svc.Decide(context.Background(), ApprovalDecision{
+		RevisionID: "r", SkillID: "s", Approved: true,
+	})
+	require.Error(t, err)
+}
+
+func TestApprovalService_Decide_ReadRevisionError(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	svc := NewApprovalService(store, nil, nil)
+	// Revision does not exist → read error.
+	err := svc.Decide(context.Background(), ApprovalDecision{
+		RevisionID: "missing", SkillID: "missing", Approved: true,
+	})
+	require.Error(t, err)
+}
+
+func TestApprovalService_Decide_PublisherError(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	pub := &mockPublisher{err: fmt.Errorf("publish failed")}
+	ctx := context.Background()
+
+	rev := &Revision{
+		SkillID:    "skill",
+		RevisionID: "rev",
+		Source:     "reviewer",
+		Action:     "create",
+		Status:     RevisionPendingApproval,
+		Spec:       &SkillSpec{Name: "Skill", Description: "d", WhenToUse: "w", Steps: []string{"s1", "s2"}},
+		CreatedAt:  time.Now().UTC(),
+	}
+	require.NoError(t, store.WriteRevision(ctx, rev))
+
+	svc := NewApprovalService(store, nil, pub)
+	err := svc.Decide(ctx, ApprovalDecision{
+		RevisionID: "rev", SkillID: "skill", Approved: true, Reviewer: "x",
+	})
+	require.Error(t, err)
+}
+
 func TestFileCandidateStore_ListSkills(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileCandidateStore(dir)

@@ -526,4 +526,30 @@ func TestWordOverlap(t *testing.T) {
 	a := map[string]struct{}{"geopolitical": {}, "market": {}, "analysis": {}}
 	b := map[string]struct{}{"geopolitical": {}, "market": {}, "snapshot": {}}
 	assert.Equal(t, 2, wordOverlap(a, b))
+	// No overlap.
+	assert.Equal(t, 0, wordOverlap(a, map[string]struct{}{"unrelated": {}}))
+}
+
+func TestNormalizeNameSet(t *testing.T) {
+	set := normalizeNameSet([]*SkillUpdate{
+		{Name: "Weather Snapshot"},
+		nil, // nil entries must be skipped
+		{Name: "weather   snapshot"},
+	})
+	// Case + whitespace normalization collapses these into one key.
+	require.Len(t, set, 1)
+	_, ok := set[normalizeSkillName("Weather Snapshot")]
+	assert.True(t, ok)
+}
+
+func TestNormalizeStringSet(t *testing.T) {
+	set := normalizeStringSet([]string{"Weather Snapshot", "weather   snapshot", "Other"})
+	require.Len(t, set, 2)
+}
+
+func TestIsStopWord(t *testing.T) {
+	assert.True(t, isStopWord("the"))
+	assert.True(t, isStopWord("multiple"))
+	assert.False(t, isStopWord("weather"))
+	assert.False(t, isStopWord(""))
 }

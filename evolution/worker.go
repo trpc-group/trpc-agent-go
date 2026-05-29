@@ -469,6 +469,9 @@ func (w *worker) scopedRoot(root string, scope skill.SkillScope, scoped bool) (s
 }
 
 func (w *worker) publisherForScope(scope skill.SkillScope, scoped bool) (Publisher, error) {
+	if !scoped {
+		return w.publisher, nil
+	}
 	root, err := w.scopedRoot(w.publisherBaseDir, scope, scoped)
 	if err != nil {
 		return nil, err
@@ -491,6 +494,9 @@ func (w *worker) publisherForScope(scope skill.SkillScope, scoped bool) (Publish
 }
 
 func (w *worker) candidateStoreForScope(scope skill.SkillScope, scoped bool) (CandidateStore, error) {
+	if !scoped {
+		return w.candidateStore, nil
+	}
 	root, err := w.scopedRoot(w.candidateStoreRoot, scope, scoped)
 	if err != nil {
 		return nil, err
@@ -513,6 +519,9 @@ func (w *worker) candidateStoreForScope(scope skill.SkillScope, scoped bool) (Ca
 }
 
 func (w *worker) activePointerForScope(scope skill.SkillScope, scoped bool) (ActivePointer, error) {
+	if !scoped {
+		return w.activePointer, nil
+	}
 	root, err := w.scopedRoot(w.activePointerRoot, scope, scoped)
 	if err != nil {
 		return nil, err

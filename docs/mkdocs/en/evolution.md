@@ -280,6 +280,8 @@ revisions/
 |--------|-------------|---------|
 | `WithManagedSkillsDir(dir)` | Directory where evolution **writes** SKILL.md files (Publisher target) | Required |
 | `WithSkillRepository(repo)` | Skill repo for **reading** existing skills for dedup; should be the same instance shared with the agent | Required |
+| `WithSkillRepositoryProvider(p)` | Resolve the skill repository per `SkillScope` (multi-tenant isolation, see below) | nil |
+| `WithSkillScopeMode(mode)` | Isolation granularity: `SkillScopeApp` (share per app) / `SkillScopeUser` (isolate per app+user) | `SkillScopeNone` (no isolation) |
 | `WithPolicy(p)` | Trigger policy | `DefaultPolicy` (≥4 tool calls) |
 | `WithCandidateStore(store)` | Immutable revision store | nil (no tracking) |
 | `WithActivePointer(ptr)` | Active revision pointer | nil |
@@ -305,13 +307,71 @@ When `ManagedSkillsDir` is configured, evolution enforces write isolation:
 
 This ensures evolution never accidentally modifies hand-written or built-in skills.
 
-## Metrics
+## Multi-Tenant Isolation
 
-Read gate activity metrics via the `ServiceWithWorker` interface:
+By default (`SkillScopeNone`) all sessions share one skill library and revision
+directory. In multi-app / multi-user deployments, evolution can isolate skills
+per **app** or per **app+user** so that one tenant's learned skills never
+pollute another's.
+
+### Isolation granularity (`SkillScopeMode`)
+
+| Mode | Description | File layout |
+|------|-------------|-------------|
+| `SkillScopeNone` (default) | No isolation, globally shared | `<root>/...` |
+| `SkillScopeApp` | Shared per app across that app's users | `<root>/apps/<app>/...` |
+| `SkillScopeUser` | Isolated per app+user | `<root>/users/<app>/<user>/...` |
+
+The `SkillScope` is derived from the session's `AppName` / `UserID` (or set
+explicitly via `LearningJob.Scope`). App/user identifiers are sanitized for
+filesystem safety: illegal or overly long identifiers are replaced with a
+stable hash segment (`id-<hash>`), preventing path traversal while staying
+idempotent.
+
+### Wiring
+
+Repository resolution goes through `skill.RepositoryProvider`, which returns
+the `skill.Repository` for a given `SkillScope`:
 
 ```go
-if svcW, ok := evoSvc.(evolution.ServiceWithWorker); ok {
-    m := svcW.Worker().ApprovalGateMetricsJSON()
+// Resolve the skill repository per scope (the implementation decides whether
+// to switch directories per app or per user).
+provider := skill.RepositoryProviderFunc(
+    func(ctx context.Context, scope skill.SkillScope) (skill.Repository, error) {
+        roots, err := resolveScopedRoots(scope) // your directory mapping
+        if err != nil {
+            return nil, err
+        }
+        return skill.NewFSRepository(roots...)
+    },
+)
+
+evoSvc := evolution.NewService(reviewModel,
+    evolution.WithManagedSkillsDir(managedDir),
+    evolution.WithSkillRepositoryProvider(provider),
+    evolution.WithSkillScopeMode(skill.SkillScopeUser), // isolate per app+user
+    // ...
+)
+```
+
+On the agent side, use the matching `llmagent.WithSkillRepositoryProvider` /
+`llmagent.WithSkillScopeMode` so the skills injected into the prompt and the
+skills evolution writes share the same scope.
+
+> Note: the `Publisher`, `CandidateStore`, and `ActivePointer` interfaces stay
+> simple (no `SkillScope` parameter); the worker routes the file-backed
+> implementations into the corresponding sub-directory based on the resolved
+> scope. The default file implementations therefore gain multi-tenant
+> isolation without any change.
+
+## Metrics
+
+Read gate activity metrics via the `ApprovalGateMetricsProvider` interface (a
+read-only snapshot that does not expose the internal worker):
+
+```go
+if mp, ok := evoSvc.(evolution.ApprovalGateMetricsProvider); ok {
+    m := mp.ApprovalGateMetrics()
     fmt.Printf("Candidates seen:      %d\n", m.CandidatesSeen)
     fmt.Printf("Revisions promoted:   %d\n", m.RevisionsPromoted)
     fmt.Printf("Spec-gate rejected:   %d\n", m.SpecGateRejected)

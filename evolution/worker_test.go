@@ -241,6 +241,156 @@ func scopedTestDir(root string, mode skill.SkillScopeMode, scope skill.SkillScop
 	return filepath.Join(append([]string{root}, parts...)...), nil
 }
 
+func TestWorker_ResolveJobScope(t *testing.T) {
+	t.Run("unscoped service with zero job scope", func(t *testing.T) {
+		w := newWorker(workerConfig{Reviewer: &mockReviewer{}})
+		scope, scoped, err := w.resolveJobScope(LearningJob{Session: newTestSession()})
+		require.NoError(t, err)
+		require.False(t, scoped)
+		require.True(t, scope.IsZero())
+	})
+	t.Run("app mode derives scope from session", func(t *testing.T) {
+		w := newWorker(workerConfig{
+			Reviewer:       &mockReviewer{},
+			SkillScopeMode: skill.SkillScopeApp,
+		})
+		scope, scoped, err := w.resolveJobScope(LearningJob{Session: newTestSession()})
+		require.NoError(t, err)
+		require.True(t, scoped)
+		require.Equal(t, skill.SkillScope{AppName: "test-app"}, scope)
+	})
+	t.Run("user mode derives app+user from session", func(t *testing.T) {
+		w := newWorker(workerConfig{
+			Reviewer:       &mockReviewer{},
+			SkillScopeMode: skill.SkillScopeUser,
+		})
+		scope, scoped, err := w.resolveJobScope(LearningJob{Session: newTestSession()})
+		require.NoError(t, err)
+		require.True(t, scoped)
+		require.Equal(t, skill.SkillScope{AppName: "test-app", UserID: "user-1"}, scope)
+	})
+	t.Run("explicit job scope wins over session", func(t *testing.T) {
+		w := newWorker(workerConfig{
+			Reviewer:       &mockReviewer{},
+			SkillScopeMode: skill.SkillScopeApp,
+		})
+		scope, scoped, err := w.resolveJobScope(LearningJob{
+			Session: newTestSession(),
+			Scope:   skill.SkillScope{AppName: "other-app"},
+		})
+		require.NoError(t, err)
+		require.True(t, scoped)
+		require.Equal(t, skill.SkillScope{AppName: "other-app"}, scope)
+	})
+	t.Run("none mode auto-detects user scope from explicit job UserID", func(t *testing.T) {
+		w := newWorker(workerConfig{Reviewer: &mockReviewer{}})
+		scope, scoped, err := w.resolveJobScope(LearningJob{
+			Scope: skill.SkillScope{AppName: "app", UserID: "u-9"},
+		})
+		require.NoError(t, err)
+		require.True(t, scoped)
+		require.Equal(t, skill.SkillScope{AppName: "app", UserID: "u-9"}, scope)
+	})
+	t.Run("scoped service with nil session and zero scope", func(t *testing.T) {
+		w := newWorker(workerConfig{
+			Reviewer:       &mockReviewer{},
+			SkillScopeMode: skill.SkillScopeApp,
+		})
+		scope, scoped, err := w.resolveJobScope(LearningJob{})
+		require.NoError(t, err)
+		require.False(t, scoped)
+		require.True(t, scope.IsZero())
+	})
+}
+
+func TestWorker_ScopedRoot(t *testing.T) {
+	w := newWorker(workerConfig{
+		Reviewer:       &mockReviewer{},
+		SkillScopeMode: skill.SkillScopeApp,
+	})
+	// Not scoped → root returned unchanged.
+	got, err := w.scopedRoot("/base", skill.SkillScope{AppName: "app"}, false)
+	require.NoError(t, err)
+	require.Equal(t, "/base", got)
+	// Empty root → returned unchanged regardless of scoping.
+	got, err = w.scopedRoot("", skill.SkillScope{AppName: "app"}, true)
+	require.NoError(t, err)
+	require.Equal(t, "", got)
+	// Scoped → app path parts appended.
+	got, err = w.scopedRoot("/base", skill.SkillScope{AppName: "app"}, true)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join("/base", "apps", "app"), got)
+	// Invalid scope (app mode without app name) → error.
+	_, err = w.scopedRoot("/base", skill.SkillScope{}, true)
+	require.Error(t, err)
+}
+
+func TestWorker_ScopedBackends_CacheAndFallback(t *testing.T) {
+	root := t.TempDir()
+	w := newWorker(workerConfig{
+		Reviewer:         &mockReviewer{},
+		SkillScopeMode:   skill.SkillScopeApp,
+		Publisher:        newFilePublisher(root),
+		PublisherBaseDir: root,
+		CandidateStore:   NewFileCandidateStore(root),
+		ActivePointer:    NewFileActivePointer(root),
+	})
+	scope := skill.SkillScope{AppName: "app"}
+
+	pub1, err := w.publisherForScope(scope, true)
+	require.NoError(t, err)
+	pub2, err := w.publisherForScope(scope, true)
+	require.NoError(t, err)
+	require.Same(t, pub1, pub2, "scoped publisher should be cached per root")
+
+	store1, err := w.candidateStoreForScope(scope, true)
+	require.NoError(t, err)
+	store2, err := w.candidateStoreForScope(scope, true)
+	require.NoError(t, err)
+	require.Same(t, store1, store2)
+
+	ptr1, err := w.activePointerForScope(scope, true)
+	require.NoError(t, err)
+	ptr2, err := w.activePointerForScope(scope, true)
+	require.NoError(t, err)
+	require.Same(t, ptr1, ptr2)
+
+	// Not scoped → fall back to the static backends.
+	pubStatic, err := w.publisherForScope(scope, false)
+	require.NoError(t, err)
+	require.Same(t, w.publisher, pubStatic)
+	storeStatic, err := w.candidateStoreForScope(scope, false)
+	require.NoError(t, err)
+	require.Same(t, w.candidateStore, storeStatic)
+	ptrStatic, err := w.activePointerForScope(scope, false)
+	require.NoError(t, err)
+	require.Same(t, w.activePointer, ptrStatic)
+}
+
+func TestWorker_RepositoryForScope(t *testing.T) {
+	staticRepo := &mockSkillRepo{}
+	scopedRepo := &mockSkillRepo{}
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, _ skill.SkillScope) (skill.Repository, error) {
+			return scopedRepo, nil
+		},
+	)
+	w := newWorker(workerConfig{
+		Reviewer:          &mockReviewer{},
+		SkillScopeMode:    skill.SkillScopeApp,
+		SkillRepo:         staticRepo,
+		SkillRepoProvider: provider,
+	})
+	// Not scoped → static repo.
+	repo, err := w.repositoryForScope(context.Background(), skill.SkillScope{AppName: "app"}, false)
+	require.NoError(t, err)
+	require.Same(t, staticRepo, repo)
+	// Scoped → provider repo.
+	repo, err = w.repositoryForScope(context.Background(), skill.SkillScope{AppName: "app"}, true)
+	require.NoError(t, err)
+	require.Same(t, scopedRepo, repo)
+}
+
 func TestWorker_ProcessJob_SkipReason(t *testing.T) {
 	pub := &mockPublisher{}
 	rev := &mockReviewer{

@@ -10,6 +10,7 @@ package llmagent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -23,6 +24,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+var errAlwaysFails = errors.New("provider failure")
 
 func TestLLMAgent_SurfacePatch_OverridesInstructionAndSystemPrompt(t *testing.T) {
 	agt := New(
@@ -235,6 +238,110 @@ func TestLLMAgent_SurfaceRuntimeHelpers_CoverPatchAndFallbackBranches(t *testing
 	require.Len(t, filteredTools, 1)
 	require.Equal(t, "keep", filteredTools[0].Declaration().Name)
 	require.Equal(t, map[string]bool{"keep": true}, filteredNames)
+}
+
+func TestLLMAgent_SkillRepositoryForInvocation_ScopedProvider(t *testing.T) {
+	repoA := &mockSkillRepository{
+		summaries: []skill.Summary{{Name: "app-a-skill"}},
+	}
+	repoB := &mockSkillRepository{
+		summaries: []skill.Summary{{Name: "app-b-skill"}},
+	}
+	var gotScopes []skill.SkillScope
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, scope skill.SkillScope) (skill.Repository, error) {
+			gotScopes = append(gotScopes, scope)
+			if scope.UserID == "u-b" {
+				return repoB, nil
+			}
+			return repoA, nil
+		},
+	)
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithSkillRepositoryProvider(provider),
+		WithSkillScopeMode(skill.SkillScopeUser),
+	)
+
+	invA := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app", UserID: "u-a"}),
+	)
+	invB := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app", UserID: "u-b"}),
+	)
+
+	// Different users resolve to isolated repositories.
+	require.Same(t, repoA, agt.skillRepositoryForInvocation(context.Background(), invA))
+	require.Same(t, repoB, agt.skillRepositoryForInvocation(context.Background(), invB))
+	require.Equal(t, []skill.SkillScope{
+		{AppName: "app", UserID: "u-a"},
+		{AppName: "app", UserID: "u-b"},
+	}, gotScopes)
+}
+
+func TestLLMAgent_SkillRepositoryForInvocation_UserModeFailsClosed(t *testing.T) {
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, _ skill.SkillScope) (skill.Repository, error) {
+			t.Fatal("provider must not be called when scope cannot be derived")
+			return nil, nil
+		},
+	)
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithSkillRepositoryProvider(provider),
+		WithSkillScopeMode(skill.SkillScopeUser),
+	)
+	// Missing UserID in user mode → scope derivation fails → nil (isolated).
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app"}),
+	)
+	require.Nil(t, agt.skillRepositoryForInvocation(context.Background(), inv))
+}
+
+func TestLLMAgent_SkillRepositoryForInvocation_AppModeFallsBackToStatic(t *testing.T) {
+	staticRepo := &mockSkillRepository{summaries: []skill.Summary{{Name: "static"}}}
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, _ skill.SkillScope) (skill.Repository, error) {
+			return nil, errAlwaysFails
+		},
+	)
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithSkills(staticRepo),
+		WithSkillRepositoryProvider(provider),
+		WithSkillScopeMode(skill.SkillScopeApp),
+	)
+	// Provider error in app mode → fall back to the static repository.
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app"}),
+	)
+	require.Same(t, staticRepo, agt.skillRepositoryForInvocation(context.Background(), inv))
+
+	// A nil session yields a zero scope → static fallback as well.
+	require.Same(
+		t,
+		staticRepo,
+		agt.skillRepositoryForInvocation(context.Background(), agent.NewInvocation()),
+	)
+}
+
+func TestSkillScopeForInvocation(t *testing.T) {
+	// Nil session → zero scope, no error.
+	scope, err := skillScopeForInvocation(skill.SkillScopeApp, nil)
+	require.NoError(t, err)
+	require.True(t, scope.IsZero())
+
+	scope, err = skillScopeForInvocation(
+		skill.SkillScopeUser,
+		agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{AppName: "app", UserID: "u"}),
+		),
+	)
+	require.NoError(t, err)
+	require.Equal(t, skill.SkillScope{AppName: "app", UserID: "u"}, scope)
 }
 
 func TestLLMAgent_RunOptions_OverrideStaticInstructionAndSystemPrompt(

@@ -61,3 +61,61 @@ func TestRepositoryProviderFunc(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, repo, got)
 }
+
+func TestRepositoryProviderFunc_Nil(t *testing.T) {
+	var provider RepositoryProviderFunc
+	got, err := provider.Repository(context.Background(), SkillScope{})
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+func TestNormalizeSkillScopeMode(t *testing.T) {
+	require.Equal(t, SkillScopeApp, NormalizeSkillScopeMode(SkillScopeNone))
+	require.Equal(t, SkillScopeApp, NormalizeSkillScopeMode(SkillScopeApp))
+	require.Equal(t, SkillScopeUser, NormalizeSkillScopeMode(SkillScopeUser))
+	// Case-insensitive and trimmed.
+	require.Equal(t, SkillScopeUser, NormalizeSkillScopeMode("  USER "))
+	require.Equal(t, SkillScopeApp, NormalizeSkillScopeMode("APP"))
+	// Unknown modes fall back to app-level sharing.
+	require.Equal(t, SkillScopeApp, NormalizeSkillScopeMode("tenant"))
+}
+
+func TestNewSkillScope_Errors(t *testing.T) {
+	_, err := NewSkillScope(SkillScopeApp, "  ", "user")
+	require.Error(t, err)
+
+	_, err = NewSkillScope(SkillScopeUser, "", "user")
+	require.Error(t, err)
+
+	_, err = NewSkillScope(SkillScopeUser, "app", "   ")
+	require.Error(t, err)
+}
+
+func TestNewSkillScope_TrimsAndDropsUserInAppMode(t *testing.T) {
+	scope, err := NewSkillScope(SkillScopeApp, "  app ", " user ")
+	require.NoError(t, err)
+	require.Equal(t, SkillScope{AppName: "app"}, scope)
+}
+
+func TestSkillScope_IsZero(t *testing.T) {
+	require.True(t, SkillScope{}.IsZero())
+	require.True(t, SkillScope{AppName: "  "}.IsZero())
+	require.False(t, SkillScope{AppName: "app"}.IsZero())
+	require.False(t, SkillScope{UserID: "u"}.IsZero())
+}
+
+func TestScopePathParts_Errors(t *testing.T) {
+	// App mode without an app name is invalid.
+	_, err := ScopePathParts(SkillScopeApp, SkillScope{})
+	require.Error(t, err)
+
+	// User mode without a user id is invalid.
+	_, err = ScopePathParts(SkillScopeUser, SkillScope{AppName: "app"})
+	require.Error(t, err)
+}
+
+func TestScopePathParts_NoneModeFallsBackToApp(t *testing.T) {
+	parts, err := ScopePathParts(SkillScopeNone, SkillScope{AppName: "app"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"apps", "app"}, parts)
+}

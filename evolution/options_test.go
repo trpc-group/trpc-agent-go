@@ -10,10 +10,13 @@
 package evolution
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 func TestWithManagedSkillsDir(t *testing.T) {
@@ -137,4 +140,28 @@ func TestWithApprovalGateShadow(t *testing.T) {
 
 	WithApprovalGateShadow(false)(&opts)
 	assert.False(t, opts.approvalGateShadow)
+}
+
+func TestWithHumanGate(t *testing.T) {
+	g := &errorHumanGate{}
+	var opts serviceOpts
+	WithHumanGate(g)(&opts)
+	assert.Equal(t, g, opts.humanGate)
+}
+
+func TestWithSkillScopeMode(t *testing.T) {
+	var opts serviceOpts
+	WithSkillScopeMode(skill.SkillScopeUser)(&opts)
+	assert.Equal(t, skill.SkillScopeUser, opts.skillScopeMode)
+}
+
+func TestWithSkillRepositoryProvider(t *testing.T) {
+	provider := skill.RepositoryProviderFunc(
+		func(context.Context, skill.SkillScope) (skill.Repository, error) {
+			return nil, nil
+		},
+	)
+	var opts serviceOpts
+	WithSkillRepositoryProvider(provider)(&opts)
+	assert.NotNil(t, opts.skillRepoProvider)
 }

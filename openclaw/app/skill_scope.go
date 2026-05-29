@@ -94,14 +94,6 @@ func scopedManagedSkillsDir(stateDir string, mode skill.SkillScopeMode, scope sk
 	return filepath.Join(append([]string{stateDir, defaultSkillsDir, "evolution"}, parts...)...), nil
 }
 
-func scopedRevisionDir(stateDir string, mode skill.SkillScopeMode, scope skill.SkillScope) (string, error) {
-	parts, err := skill.ScopePathParts(mode, scope)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(append([]string{stateDir, "evolution", "revisions"}, parts...)...), nil
-}
-
 func scopedSkillKey(mode skill.SkillScopeMode, scope skill.SkillScope) (string, error) {
 	parts, err := skill.ScopePathParts(mode, scope)
 	if err != nil {
