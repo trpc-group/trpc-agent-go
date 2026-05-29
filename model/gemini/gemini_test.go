@@ -1044,6 +1044,20 @@ func TestModel_GenerateContentError(t *testing.T) {
 	}
 }
 
+func TestModel_GenerateContent_NoContentAfterConversion(t *testing.T) {
+	m := &Model{name: "gemini-test"}
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleAssistant},
+		},
+	}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.Error(t, err)
+	require.EqualError(t, err, "gemini: no content after message conversion")
+	require.Nil(t, ch)
+}
+
 func TestModel_GenerateContentNoStream(t *testing.T) {
 	subText := "subText"
 	now := time.Now()

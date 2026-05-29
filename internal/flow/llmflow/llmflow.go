@@ -47,6 +47,7 @@ const (
 	queuedUserAuthor          = "user"
 
 	errMsgNoModelResponse = "no response received from model"
+	errMsgNoLLMMessages   = "no messages available for LLM call"
 
 	flowRunPanicLogFmt = "Flow execution panic (invocation: %s, " +
 		"agent: %s): %v\n%s"
@@ -1547,6 +1548,9 @@ func (f *Flow) generateContentSeq(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 ) (model.Seq[*model.Response], error) {
+	if llmRequest == nil || len(llmRequest.Messages) == 0 {
+		return nil, errors.New(errMsgNoLLMMessages)
+	}
 	if iterModel, ok := invocation.Model.(model.IterModel); ok {
 		seq, err := iterModel.GenerateContentIter(ctx, llmRequest)
 		if err != nil {
