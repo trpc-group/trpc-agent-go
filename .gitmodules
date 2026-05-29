@@ -1,0 +1,4 @@
+[submodule "benchmark"]
+	path = benchmark
+	url = https://github.com/trpc-group/trpc-agent-go-benchmark
+	branch = main
